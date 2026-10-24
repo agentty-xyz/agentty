@@ -4,7 +4,7 @@ use std::sync::Arc;
 
 use serde_json::{Value, json};
 
-use super::support::{command_output, inspection_file_system};
+use super::support::{command_output, inspection_file_system, unbounded};
 use crate::comparison::support::COMPARISON_OID;
 use crate::read::command::MockRepositoryCommandRunner;
 use crate::read::output::{InspectionError, ReadError};
@@ -106,11 +106,11 @@ async fn list_and_search_reject_paths_that_match_no_repository_file() {
 
     // Act
     let list_error = list_tool
-        .execute_inspection(&list)
+        .execute_inspection(&list, &unbounded)
         .await
         .expect_err("a missing list path should be rejected");
     let search_error = search_tool
-        .execute_inspection(&search)
+        .execute_inspection(&search, &unbounded)
         .await
         .expect_err("a missing search path should be rejected");
 
@@ -167,7 +167,7 @@ async fn lists_bounded_repository_paths_with_one_read_action() {
 
     // Act
     let (result, summary) = tool
-        .execute_inspection(&arguments)
+        .execute_inspection(&arguments, &unbounded)
         .await
         .expect("list inspection should succeed");
     let result: Value = serde_json::from_str(&result).expect("list result should be JSON");
@@ -214,7 +214,7 @@ async fn searches_literal_repository_text_and_accepts_no_matches() {
 
     // Act
     let (result, summary) = tool
-        .execute_inspection(&arguments)
+        .execute_inspection(&arguments, &unbounded)
         .await
         .expect("empty search should succeed");
     let result: Value = serde_json::from_str(&result).expect("search result should be JSON");
@@ -229,12 +229,13 @@ async fn searches_literal_repository_text_and_accepts_no_matches() {
 fn bounds_escaping_heavy_inspection_results_after_json_encoding() {
     // Arrange
     let items = (0..1_000).map(|_| "\u{1}".repeat(100)).collect::<Vec<_>>();
-    let text = "\u{1}".repeat(MAX_READ_BYTES);
+    let text = format!("{}\n", "\u{1}".repeat(99)).repeat(MAX_READ_BYTES / 100);
 
     // Act
-    let items = ReadTool::bounded_items_result("list", &items, false);
-    let text = ReadTool::bounded_text_result("diff", &text, false, Some(COMPARISON_OID))
-        .expect("text result should encode");
+    let items = ReadTool::bounded_items_result("list", &items, false, &unbounded);
+    let text =
+        ReadTool::bounded_text_result("diff", &text, false, Some(COMPARISON_OID), &unbounded)
+            .expect("text result should encode");
     let items_value: Value = serde_json::from_str(&items).expect("items should be JSON");
     let text_value: Value = serde_json::from_str(&text).expect("text should be JSON");
 
@@ -243,5 +244,10 @@ fn bounds_escaping_heavy_inspection_results_after_json_encoding() {
     assert!(text.len() <= MAX_TOOL_RESULT_BYTES);
     assert_eq!(items_value["truncated"], true);
     assert_eq!(text_value["truncated"], true);
+    assert!(
+        text_value["result"]
+            .as_str()
+            .is_some_and(|result| !result.is_empty() && result.ends_with('\n'))
+    );
     assert_eq!(text_value["comparison_base"], COMPARISON_OID);
 }

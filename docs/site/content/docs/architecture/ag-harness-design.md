@@ -85,26 +85,28 @@ ran again. Their notices name the superseding call. A read answered by the repea
 note below supersedes nothing. Staleness is weighed only while a request exceeds the
 budget, and a cleared result stays cleared, so the shared prefix changes only when
 fitting already changes it. Every remaining tool result above 25% of that capacity is
-then cut to a head and tail excerpt of that size, and the latest round's largest results
-are cut to one common size while the round's results together exceed 50%, so one
-oversized output never pushes earlier rounds out. The request is then reduced to 70% of
-its capacity, in order: the other older tool results become tool-aware notices (oldest
-first, replayed history before the current turn; a `read` notice names its target), then
-older assistant reasoning becomes a non-empty placeholder (providers that replay
-reasoning still receive the field), then older `write` patches become a note on their
-recorded outcome, then the oldest replayed turns are dropped, then the current turn's
-oldest tool rounds are dropped whole, each call message with all its results, behind one
-bounded note that counts the removed calls, names the writes they applied and the
-commands they ran, and lists their distinct read targets to re-read only if still
-needed. Tool calls keep their identifiers, so tool groups stay well-formed, and the text
-the model wrote beside them is never cleared, so its notes on what it found outlive the
-cleared results and leave only with their dropped round. The latest tool round is never
-reduced by these steps. Each step is a watermark into the append-only canonical messages
-that later requests replay, so successive requests share a stable prefix and reduce
-further only when the budget is exceeded again; each reduced message is cached, so a
-request between watermark advances only weighs and appends its new messages. If the
-request still does not fit, the latest round's largest results are cut further to a head
-and tail excerpt that asks for a narrower read, and as the last resort its `write`
+then cut to that size, and the latest round's largest results are cut to one common size
+while the round's results together exceed 50%, so one oversized output never pushes
+earlier rounds out. A `read` result is cut by the rules that bounded it when it ran
+(below), and any other result to a head and tail excerpt; `read` results already meet
+both shares when they run, so only a budget that calibration lowered since cuts one. The
+request is then reduced to 70% of its capacity, in order: the other older tool results
+become tool-aware notices (oldest first, replayed history before the current turn; a
+`read` notice names its target), then older assistant reasoning becomes a non-empty
+placeholder (providers that replay reasoning still receive the field), then older
+`write` patches become a note on their recorded outcome, then the oldest replayed turns
+are dropped, then the current turn's oldest tool rounds are dropped whole, each call
+message with all its results, behind one bounded note that counts the removed calls,
+names the writes they applied and the commands they ran, and lists their distinct read
+targets to re-read only if still needed. Tool calls keep their identifiers, so tool
+groups stay well-formed, and the text the model wrote beside them is never cleared, so
+its notes on what it found outlive the cleared results and leave only with their dropped
+round. The latest tool round is never reduced by these steps. Each step is a watermark
+into the append-only canonical messages that later requests replay, so successive
+requests share a stable prefix and reduce further only when the budget is exceeded
+again; each reduced message is cached, so a request between watermark advances only
+weighs and appends its new messages. If the request still does not fit, the latest
+round's largest results are cut further the same way, and as the last resort its `write`
 patches are replaced by their recorded outcome; only when even that fails does the turn
 fail typed. Each `ModelRequestActivity` reports the reductions its request carried.
 
@@ -135,6 +137,24 @@ is classified as `Model` when a request failed at the provider or in transport (
 `ModelRequestFailed` carries the class and HTTP status), `InvalidOutput` when
 corrections ran out or the model answered with a tool call, `Rejected` when a valid
 summary did not fit, or `Cancelled`.
+
+Every `read` result is bounded as it runs, against the calibrated budget of the request
+it joins, so it enters history at the size later requests send. One result may weigh 25%
+of the capacity left after reserved output: a `file` or `show` read keeps its longest
+run of leading whole lines and states, before the content, the lines it shows, the
+file's line count when the read could count it within its scan limit, and the exact
+`offset` and `limit` that fetch the next page; a first line too long to show whole shows
+its first bytes and says that `read` cannot return the rest of it. A `list` or `search`
+keeps whole items and a `diff` whole lines, or the first bytes of the first one when
+none fits whole, marked `truncated`. The results of one response's calls may weigh 50%
+together: results are kept in call order while they fit, and from the first `read`
+result that does not, every `read` of the response is answered with a `deferred` result
+that repeats its exact arguments, so the model fetches it in a later response. The read
+that crossed the share ran to be measured; later ones do not run. The turn report lists
+them as `ToolActivity::ReadDeferred`. A deferred read, like a repeat answered by the
+note below, neither supersedes an earlier result nor is superseded, and runs when the
+model asks for it again. Results of other tools count toward the share but are always
+kept.
 
 Before running a `read`, the engine compares its canonical arguments with the reads
 already run in the turn. When an identical read ran earlier, no `write` or `bash` call
@@ -298,11 +318,12 @@ workspace fencing.
 
 All tools are denied by default; per-turn policy enables them explicitly.
 
-- `read` — bounded file, list, search, and `show(head)` inspection. Line `offset` and
-  `limit` also accept canonical decimal strings, though the schema advertises integers.
-  A `list` or `search` path that matches no repository file returns a corrective tool
-  error instead of an empty result, so an invented path is not mistaken for an empty
-  directory.
+- `read` — bounded file, list, search, and `show(head)` inspection. A `file` or `show`
+  result names its line window before the content and, when cut, the file's line count
+  and the exact `offset` and `limit` to continue. Line `offset` and `limit` also accept
+  canonical decimal strings, though the schema advertises integers. A `list` or `search`
+  path that matches no repository file returns a corrective tool error instead of an
+  empty result, so an invented path is not mistaken for an empty directory.
 - `write` — applies one bounded git-style unified diff atomically. Hunk counts are
   recounted from the body. A hunk applies at its header line when it matches there
   exactly or ignoring trailing whitespace; otherwise it is relocated only to a unique

@@ -6,6 +6,7 @@ use serde_json::{Value, json};
 
 use super::support::{
     arguments, command_output, file_system, inspection_file_system, truncated_command_output,
+    unbounded,
 };
 use crate::comparison::support::COMPARISON_OID;
 use crate::read::command::MockRepositoryCommandRunner;
@@ -22,7 +23,7 @@ async fn dispatches_worktree_file_through_read_action() {
 
     // Act
     let (result, summary) = tool
-        .execute_inspection(&arguments)
+        .execute_inspection(&arguments, &unbounded)
         .await
         .expect("file action should succeed");
     let result: Value = serde_json::from_str(&result).expect("file result should be JSON");
@@ -85,7 +86,7 @@ async fn reads_host_bound_diff_with_path_filter() {
 
     // Act
     let (result, summary) = tool
-        .execute_inspection(&arguments)
+        .execute_inspection(&arguments, &unbounded)
         .await
         .expect("diff inspection should succeed");
     let result: Value = serde_json::from_str(&result).expect("diff result should be JSON");
@@ -165,7 +166,7 @@ async fn includes_untracked_files_in_host_bound_diff() {
 
     // Act
     let (result, _) = tool
-        .execute_inspection(&arguments)
+        .execute_inspection(&arguments, &unbounded)
         .await
         .expect("diff inspection should succeed");
     let result: Value = serde_json::from_str(&result).expect("diff result should be JSON");
@@ -207,11 +208,11 @@ async fn bounds_large_diffs_and_untracked_path_discovery() {
 
     // Act
     let (large_result, _) = large_diff_tool
-        .execute_inspection(&arguments)
+        .execute_inspection(&arguments, &unbounded)
         .await
         .expect("large diff should be bounded");
     let (untracked_result, _) = untracked_tool
-        .execute_inspection(&arguments)
+        .execute_inspection(&arguments, &unbounded)
         .await
         .expect("large untracked set should be bounded");
     let large_result: Value =
@@ -253,7 +254,7 @@ async fn stops_untracked_diff_collection_after_a_truncated_patch() {
 
     // Act
     let (result, _) = tool
-        .execute_inspection(&arguments)
+        .execute_inspection(&arguments, &unbounded)
         .await
         .expect("truncated untracked diff should be bounded");
     let result: Value = serde_json::from_str(&result).expect("diff result should be JSON");

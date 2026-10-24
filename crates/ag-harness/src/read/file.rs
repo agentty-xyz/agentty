@@ -69,6 +69,8 @@ impl ReadTool {
         let mut current_line = start_line;
         let mut lines_read = 0_u64;
         let mut next_offset = None;
+        // The line that stopped a read at the byte limit was consumed.
+        let mut held_lines = 0_u64;
         while lines_read < selected_lines {
             let Some(line) =
                 Self::next_line(&mut reader, current_line, &path, &mut remaining_scan_bytes)
@@ -91,6 +93,7 @@ impl ReadTool {
                 .is_none_or(|bytes| bytes > MAX_READ_BYTES)
             {
                 next_offset = Some(current_line);
+                held_lines = 1;
                 break;
             }
             if separator_bytes > 0 {
@@ -116,14 +119,27 @@ impl ReadTool {
         let end_line = lines_read
             .checked_sub(1)
             .and_then(|additional_lines| start_line.checked_add(additional_lines));
+        let total_lines = match next_offset {
+            None => Some(current_line - 1),
+            Some(_) if source_truncated => None,
+            Some(next_offset) => Self::count_lines(&mut reader, &mut remaining_scan_bytes)
+                .await
+                .map(|rest| {
+                    (next_offset - 1)
+                        .saturating_add(held_lines)
+                        .saturating_add(rest)
+                }),
+        };
 
         Ok(ReadOutput {
             comparison_base: None,
             content,
             end_line,
+            line_bytes: None,
             next_offset,
             path,
             start_line,
+            total_lines,
             truncated: next_offset.is_some(),
         })
     }
@@ -248,6 +264,34 @@ impl ReadTool {
                 path: path.to_string(),
                 source,
             })
+    }
+
+    /// Counts the lines left in `reader`, or returns `None` when they exceed
+    /// the remaining scan allowance or cannot be read. Unlike a selected
+    /// line, a counted line is neither bounded nor decoded, and failing to
+    /// count fails no read.
+    async fn count_lines(
+        reader: &mut BufReader<Box<dyn AsyncRead + Send + Unpin>>,
+        remaining_scan_bytes: &mut usize,
+    ) -> Option<u64> {
+        let mut lines = 0_u64;
+        let mut open_line = false;
+        loop {
+            let bytes = reader.fill_buf().await.ok()?;
+            if bytes.is_empty() {
+                return Some(lines.saturating_add(u64::from(open_line)));
+            }
+            let length = bytes.len();
+            if length > *remaining_scan_bytes {
+                return None;
+            }
+            *remaining_scan_bytes -= length;
+            lines = bytes
+                .iter()
+                .fold(lines, |lines, byte| lines + u64::from(*byte == b'\n'));
+            open_line = bytes.last() != Some(&b'\n');
+            reader.consume(length);
+        }
     }
 
     fn decode_line(mut line: Vec<u8>, line_number: u64, path: &str) -> Result<String, ReadError> {

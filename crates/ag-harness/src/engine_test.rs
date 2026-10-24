@@ -9,14 +9,14 @@ use crate::context::{
 };
 use crate::context_budget_fixture::unbounded_context_budget;
 use crate::effect::Effects;
-use crate::engine::{Engine, MAX_OUTPUT_CORRECTIONS, RepeatedReads};
+use crate::engine::{Engine, MAX_OUTPUT_CORRECTIONS, RepeatedReads, RoundShare};
 use crate::file_system::{FileSystem, LocalFileSystem};
 use crate::lifecycle::LifecycleEmitter;
 use crate::model::{
     MockModel, Model, ModelCompletion, ModelError, ModelMessage, ModelRequest, ModelResponse,
     ReasoningEffort,
 };
-use crate::tool::ToolCall;
+use crate::tool::{ToolCall, ToolDefinition};
 use crate::turn::{ModelRequestActivity, TurnError};
 use crate::{OutputSchema, ToolPolicy, TurnOptions};
 
@@ -344,4 +344,57 @@ fn repeated_reads_run_again_once_the_earlier_result_was_reduced() {
 
     // Assert
     assert_eq!(repeated, None);
+}
+
+/// Weighs a `bash` result at 100 and every other message at 1, as an
+/// estimator that weighs results by their tool might.
+struct ToolNameEstimator;
+
+impl ContextEstimator for ToolNameEstimator {
+    fn message_weight(&self, message: &ModelMessage) -> u64 {
+        match message {
+            ModelMessage::ToolResult { name, .. } if name == "bash" => 100,
+            _ => 1,
+        }
+    }
+
+    fn tool_definition_weight(&self, _tool: &ToolDefinition) -> u64 {
+        0
+    }
+
+    fn request_weight(&self, _schema: &OutputSchema) -> u64 {
+        0
+    }
+}
+
+#[test]
+fn round_share_weighs_each_result_under_its_own_tool() {
+    // Arrange
+    let budget = ContextBudget::new(NonZeroU64::new(200).expect("nonzero budget"));
+    let bash = ToolCall::from_json(
+        "bash_0".to_string(),
+        "bash",
+        &json!({"command": "cargo test"}).to_string(),
+        None,
+    )
+    .expect("bash call");
+    let read = ToolCall::from_json(
+        "read_1".to_string(),
+        "read",
+        &json!({"path": "src/lib.rs"}).to_string(),
+        None,
+    )
+    .expect("read call");
+    let mut share = RoundShare::new(&ToolNameEstimator, budget);
+
+    // Act
+    let kept_bash = share.keeps(&bash, "{}", false);
+    let kept_read = share.keeps(&read, "{}", true);
+
+    // Assert
+    // The bash result takes the whole half of the 200 capacity that one round
+    // may use, so the read after it no longer fits.
+    assert!(kept_bash);
+    assert!(!kept_read);
+    assert!(share.deferring);
 }

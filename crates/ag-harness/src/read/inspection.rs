@@ -4,16 +4,17 @@ use std::path::{Path, PathBuf};
 use serde::Serialize;
 
 use super::command::RepositoryCommandOutput;
+use super::output::{fitting_prefix, longest_fitting};
 use super::runtime::{
     DEFAULT_RESULT_LINES, MAX_READ_BYTES, MAX_READ_LINES, MAX_UNTRACKED_DIFF_FILES, ReadTool,
 };
-use super::{InspectionError, ReadError};
+use super::{InspectionError, ReadError, ResultFits};
 use crate::tool::{MAX_TOOL_RESULT_BYTES, ReadArguments, ReadSide};
 use crate::{ComparisonBase, schema_contract};
 
 #[derive(Serialize)]
 struct InspectionOutput<'a, T> {
-    action: &'static str,
+    action: &'a str,
     #[serde(skip_serializing_if = "Option::is_none")]
     comparison_base: Option<&'a str>,
     result: T,
@@ -24,6 +25,7 @@ impl ReadTool {
     pub(super) async fn list(
         &self,
         arguments: &ReadArguments,
+        fits: ResultFits<'_>,
     ) -> Result<(String, String), InspectionError> {
         let mut command = vec![
             "ls-files".to_string(),
@@ -60,7 +62,7 @@ impl ReadTool {
         let summary = arguments.path_filter().unwrap_or(".").to_string();
 
         Ok((
-            Self::bounded_items_result("list", &paths, truncated),
+            Self::bounded_items_result("list", &paths, truncated, fits),
             summary,
         ))
     }
@@ -69,6 +71,7 @@ impl ReadTool {
         &self,
         arguments: &ReadArguments,
         query: &str,
+        fits: ResultFits<'_>,
     ) -> Result<(String, String), InspectionError> {
         let mut command = vec![
             "grep".to_string(),
@@ -94,7 +97,8 @@ impl ReadTool {
             self.ensure_path_matches(&root, path).await?;
         }
         let (matches, limited) = Self::limit_items(matches, arguments.limit());
-        let result = Self::bounded_items_result("search", &matches, limited || output.truncated);
+        let result =
+            Self::bounded_items_result("search", &matches, limited || output.truncated, fits);
 
         Ok((result, query.to_string()))
     }
@@ -126,6 +130,7 @@ impl ReadTool {
     pub(super) async fn diff(
         &self,
         arguments: &ReadArguments,
+        fits: ResultFits<'_>,
     ) -> Result<(String, String), InspectionError> {
         let base = self.comparison_oid()?;
         let root = self.repository_root().await?;
@@ -199,37 +204,53 @@ impl ReadTool {
         }
 
         Ok((
-            Self::bounded_text_result("diff", &text, truncated, Some(base))?,
+            Self::bounded_text_result("diff", &text, truncated, Some(base), fits)?,
             base.to_string(),
         ))
     }
 
+    /// Encodes `items` within [`MAX_TOOL_RESULT_BYTES`] and as a result
+    /// `fits` accepts, keeping the longest run of leading whole items, else
+    /// the first bytes of the first item, and marks a cut result truncated.
+    /// The result is empty only when not even one byte fits.
     pub(super) fn bounded_items_result(
-        action: &'static str,
+        action: &str,
         items: &[String],
         truncated: bool,
+        fits: ResultFits<'_>,
     ) -> String {
+        let accepts = |encoded: &str| encoded.len() <= MAX_TOOL_RESULT_BYTES && fits(encoded);
         let encoded = Self::encode_items_result(action, items, truncated);
-        if encoded.len() <= MAX_TOOL_RESULT_BYTES {
+        if accepts(&encoded) {
             return encoded;
         }
 
-        let mut fitting_items = 0_usize;
-        let mut candidate_items = items.len();
-        while fitting_items < candidate_items {
-            let midpoint = fitting_items + (candidate_items - fitting_items).div_ceil(2);
-            let candidate = Self::encode_items_result(action, &items[..midpoint], true);
-            if candidate.len() <= MAX_TOOL_RESULT_BYTES {
-                fitting_items = midpoint;
-            } else {
-                candidate_items = midpoint - 1;
-            }
+        let fitting_items = longest_fitting(items.len(), |count| {
+            accepts(&Self::encode_items_result(action, &items[..count], true))
+        });
+        if fitting_items == 0
+            && let Some(first) = items.first()
+        {
+            let bytes = fitting_prefix(first, |prefix| {
+                accepts(&Self::encode_items_result(
+                    action,
+                    &[prefix.to_string()],
+                    true,
+                ))
+            });
+
+            let shown = (bytes > 0)
+                .then(|| first[..bytes].to_string())
+                .into_iter()
+                .collect::<Vec<_>>();
+
+            return Self::encode_items_result(action, &shown, true);
         }
 
         Self::encode_items_result(action, &items[..fitting_items], true)
     }
 
-    fn encode_items_result(action: &'static str, items: &[String], truncated: bool) -> String {
+    fn encode_items_result(action: &str, items: &[String], truncated: bool) -> String {
         serde_json::json!({
             "action": action,
             "result": items,
@@ -238,52 +259,50 @@ impl ReadTool {
         .to_string()
     }
 
+    /// Encodes `text` within [`MAX_TOOL_RESULT_BYTES`] and as a result
+    /// `fits` accepts, keeping its longest run of leading whole lines, else
+    /// the first bytes of its first line, and marks a cut result truncated.
+    /// The result is empty only when not even one byte fits.
     pub(super) fn bounded_text_result(
-        action: &'static str,
+        action: &str,
         text: &str,
         truncated: bool,
         comparison_base: Option<&str>,
+        fits: ResultFits<'_>,
     ) -> Result<String, ReadError> {
-        let result = InspectionOutput {
-            action,
-            comparison_base,
-            result: &text,
-            truncated,
+        let accepts = |encoded: &str| encoded.len() <= MAX_TOOL_RESULT_BYTES && fits(encoded);
+        let encode = |result: &str, truncated| {
+            serde_json::to_string(&InspectionOutput {
+                action,
+                comparison_base,
+                result,
+                truncated,
+            })
         };
-        let encoded = serde_json::to_string(&result)?;
-        if encoded.len() <= MAX_TOOL_RESULT_BYTES {
+        let encoded = encode(text, truncated)?;
+        if accepts(&encoded) {
             return Ok(encoded);
         }
 
-        let boundaries = text
-            .char_indices()
-            .map(|(index, _)| index)
+        let boundaries = std::iter::once(0)
+            .chain(text.match_indices('\n').map(|(index, _)| index + 1))
+            .filter(|boundary| *boundary < text.len())
             .chain(std::iter::once(text.len()))
             .collect::<Vec<_>>();
-        let mut fitting_boundary = 0_usize;
-        let mut candidate_boundary = boundaries.len() - 1;
-        while fitting_boundary < candidate_boundary {
-            let midpoint = fitting_boundary + (candidate_boundary - fitting_boundary).div_ceil(2);
-            let candidate = InspectionOutput {
-                action,
-                comparison_base,
-                result: &text[..boundaries[midpoint]],
-                truncated: true,
-            };
-            if serde_json::to_string(&candidate)?.len() <= MAX_TOOL_RESULT_BYTES {
-                fitting_boundary = midpoint;
-            } else {
-                candidate_boundary = midpoint - 1;
-            }
-        }
-        let result = InspectionOutput {
-            action,
-            comparison_base,
-            result: &text[..boundaries[fitting_boundary]],
-            truncated: true,
+        let fitting_boundary = longest_fitting(boundaries.len() - 1, |index| {
+            encode(&text[..boundaries[index]], true).is_ok_and(|candidate| accepts(&candidate))
+        });
+        let end = if fitting_boundary == 0 {
+            let first_line = text.split('\n').next().unwrap_or_default();
+
+            fitting_prefix(first_line, |prefix| {
+                encode(prefix, true).is_ok_and(|candidate| accepts(&candidate))
+            })
+        } else {
+            boundaries[fitting_boundary]
         };
 
-        serde_json::to_string(&result).map_err(ReadError::from)
+        encode(&text[..end], true).map_err(ReadError::from)
     }
 
     pub(super) fn bounded_inspection_text(
@@ -332,6 +351,7 @@ impl ReadTool {
         arguments: &ReadArguments,
         path: &str,
         side: ReadSide,
+        fits: ResultFits<'_>,
     ) -> Result<(String, String), InspectionError> {
         let revision = match side {
             ReadSide::Base => self.comparison_oid()?,
@@ -360,7 +380,9 @@ impl ReadTool {
             output.comparison_base = Some(revision.to_string());
         }
 
-        Ok((output.to_tool_result()?, format!("{revision}:{path}")))
+        let (result, _) = output.to_tool_result_within(fits)?;
+
+        Ok((result, format!("{revision}:{path}")))
     }
 
     fn comparison_oid(&self) -> Result<&str, InspectionError> {

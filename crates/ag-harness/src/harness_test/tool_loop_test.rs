@@ -6,7 +6,10 @@ use std::sync::{Arc, Mutex};
 use serde_json::{Value, json};
 
 use super::support::{model, object_schema, response_without_metadata, write_call};
-use crate::context::{ContextBudget, ContextEstimator, HeuristicContextEstimator};
+use crate::calibration::UNCALIBRATED_CAPACITY_PERCENT;
+use crate::context::{
+    ContextBudget, ContextEstimator, HeuristicContextEstimator, RESULT_CAP_PERCENT,
+};
 use crate::context_budget_fixture::unbounded_context_budget;
 use crate::file_system::MockFileSystem;
 use crate::harness::Harness;
@@ -205,7 +208,7 @@ async fn superseded_reads_are_cleared_first_and_reported() {
         ))),
         Ok(ModelResponse::ToolCall(read_of(
             "other",
-            &json!({"path": "other.txt", "limit": 5}),
+            &json!({"path": "other.txt"}),
         ))),
         Ok(ModelResponse::ToolCall(read_of(
             "all_lines",
@@ -213,7 +216,7 @@ async fn superseded_reads_are_cleared_first_and_reported() {
         ))),
         Ok(ModelResponse::ToolCall(read_of(
             "latest",
-            &json!({"path": "latest.txt", "limit": 5}),
+            &json!({"path": "latest.txt"}),
         ))),
         Ok(output()),
     ]);
@@ -224,7 +227,7 @@ async fn superseded_reads_are_cleared_first_and_reported() {
             model,
             ModelCapabilities {
                 image_input: false,
-                profile: ModelProfile::new(1_350),
+                profile: ModelProfile::new(2_200),
                 tool_calls: true,
             },
         )
@@ -256,6 +259,168 @@ async fn superseded_reads_are_cleared_first_and_reported() {
     };
     let notice: Value = serde_json::from_str(content).expect("notice");
     assert_eq!(notice["superseded_by"], json!("all_lines"));
+}
+
+/// Returns a read-only harness for `model` whose registered profile declares
+/// a window of `budget` tokens, serving every file from `file_system`.
+fn budgeted_harness(
+    model: crate::model::MockModel,
+    budget: u64,
+    file_system: MockFileSystem,
+) -> Harness {
+    let mut registry = ModelRegistry::new();
+    registry
+        .register(
+            ExecutionIdentity::new("budgeted", "1").expect("identity"),
+            model,
+            ModelCapabilities {
+                image_input: false,
+                profile: ModelProfile::new(budget),
+                tool_calls: true,
+            },
+        )
+        .expect("register");
+
+    Harness::from_registry(&registry, "budgeted")
+        .expect("harness")
+        .repository(Repository::fixture("repo"))
+        .allow(Tool::Read)
+        .file_system(file_system)
+}
+
+#[tokio::test]
+async fn read_results_enter_the_request_as_whole_line_pages_within_one_result_share() {
+    // Arrange
+    let (model, requests) = scripted(vec![
+        Ok(ModelResponse::ToolCall(read_of(
+            "read_0",
+            &json!({"path": "notes.txt"}),
+        ))),
+        Ok(ModelResponse::ToolCall(read_of(
+            "read_1",
+            &json!({"path": "notes.txt", "offset": 2}),
+        ))),
+        Ok(output()),
+    ]);
+    let content: Vec<u8> = (1..=400)
+        .flat_map(|line| format!("line {line} of the notes\n").into_bytes())
+        .collect();
+    let budget = 6_000;
+    let opened = Arc::new(AtomicUsize::new(0));
+    let harness = budgeted_harness(model, budget, counting_file_system(content, &opened));
+
+    // Act
+    let outcome = harness
+        .run_once("read the notes", object_schema())
+        .await
+        .expect("turn succeeds");
+
+    // Assert
+    let requests = requests.lock().expect("requests lock");
+    let page = result_for(&requests[1], "read_0");
+    let end_line = page["end_line"].as_u64().expect("end line");
+    assert!(end_line < 400);
+    assert_eq!(page["total_lines"], 400);
+    assert_eq!(
+        page["continuation"],
+        format!(
+            "Showing lines 1-{end_line} of 400. Use offset={} limit={end_line} to continue.",
+            end_line + 1
+        )
+    );
+    let result_cap = budget * UNCALIBRATED_CAPACITY_PERCENT / 100 * RESULT_CAP_PERCENT / 100;
+    assert!(
+        HeuristicContextEstimator::DEFAULT
+            .message_weight(requests[1].messages().last().expect("result"))
+            <= result_cap
+    );
+    // The page entered the request already bounded, so no request cut it.
+    assert!(
+        outcome
+            .report()
+            .model_requests()
+            .iter()
+            .all(|request| request.context().truncated_results() == 0)
+    );
+    // A different window of the same file runs again.
+    assert_eq!(opened.load(Ordering::SeqCst), 2);
+    assert!(matches!(
+        outcome.report().tool_calls()[0],
+        ToolActivity::Read { end_line: Some(end), truncated: true, .. } if end == end_line
+    ));
+}
+
+#[tokio::test]
+async fn an_oversized_batch_keeps_its_first_whole_results_and_defers_the_rest() {
+    // Arrange
+    let paths = ["a.txt", "b.txt", "c.txt", "d.txt"];
+    let (model, requests) = scripted(vec![
+        Ok(ModelResponse::ToolCalls(
+            paths
+                .iter()
+                .enumerate()
+                .map(|(index, path)| read_of(&format!("read_{index}"), &json!({"path": path})))
+                .collect(),
+        )),
+        Ok(ModelResponse::ToolCall(read_of(
+            "again",
+            &json!({"path": "c.txt"}),
+        ))),
+        Ok(output()),
+    ]);
+    let opened = Arc::new(AtomicUsize::new(0));
+    let harness = budgeted_harness(model, 2_200, counting_file_system(file_content(), &opened));
+
+    // Act
+    let outcome = harness
+        .run_once("read four files at once", object_schema())
+        .await
+        .expect("turn succeeds");
+
+    // Assert
+    let activities = outcome.report().tool_calls();
+    let kept = activities
+        .iter()
+        .take_while(|activity| {
+            matches!(
+                activity,
+                ToolActivity::Read {
+                    truncated: false,
+                    ..
+                }
+            )
+        })
+        .count();
+    assert_eq!(kept, 2, "{activities:?}");
+    assert!(
+        activities[kept..paths.len()]
+            .iter()
+            .all(|activity| matches!(
+                activity,
+                ToolActivity::ReadDeferred {
+                    action: ReadAction::File,
+                    ..
+                }
+            ))
+    );
+    // The read past the share ran to measure it; the later ones did not.
+    assert_eq!(opened.load(Ordering::SeqCst), kept + 1 + 1);
+    let requests = requests.lock().expect("requests lock");
+    for (index, path) in paths.iter().enumerate().skip(kept) {
+        let stub = result_for(&requests[1], &format!("read_{index}"));
+        assert_eq!(stub["call"], json!({"path": path}));
+        assert!(stub["deferred"].is_string());
+    }
+    // A deferred read asked for again runs instead of pointing to its stub.
+    assert!(matches!(
+        &activities[paths.len()],
+        ToolActivity::Read { path, .. } if path == "c.txt"
+    ));
+    assert!(
+        result_for(&requests[2], "again")["content"]
+            .as_str()
+            .is_some_and(|content| content.starts_with("line 0 of the notes"))
+    );
 }
 
 #[tokio::test]

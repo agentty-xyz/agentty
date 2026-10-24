@@ -10,7 +10,7 @@ use mockall::Sequence;
 use serde_json::{Value, json};
 
 use super::support::{
-    FailingReader, command_output, inspection_file_system, truncated_command_output,
+    FailingReader, command_output, inspection_file_system, truncated_command_output, unbounded,
 };
 use crate::file_system::LocalFileSystem;
 use crate::read::command::{
@@ -63,11 +63,11 @@ async fn propagates_command_truncation_for_list_and_search() {
 
     // Act
     let (list_result, _) = list_tool
-        .execute_inspection(&list_arguments)
+        .execute_inspection(&list_arguments, &unbounded)
         .await
         .expect("truncated list should return its retained paths");
     let (search_result, _) = search_tool
-        .execute_inspection(&search_arguments)
+        .execute_inspection(&search_arguments, &unbounded)
         .await
         .expect("truncated search should return its retained matches");
     let list_result: Value =
@@ -101,7 +101,7 @@ async fn truncated_repository_command_still_rejects_failed_status() {
 
     // Act
     let error = tool
-        .execute_inspection(&arguments)
+        .execute_inspection(&arguments, &unbounded)
         .await
         .expect_err("rejected Git command should fail");
 
@@ -145,7 +145,7 @@ async fn large_repository_command_rejection_returns_bounded_diagnostic() {
 
     // Act
     let error = tool
-        .execute_inspection(&arguments)
+        .execute_inspection(&arguments, &unbounded)
         .await
         .expect_err("rejected Git object read should fail");
 
@@ -300,7 +300,7 @@ async fn treats_repository_path_filters_as_literal() {
 
     // Act
     let error = tool
-        .execute_inspection(&arguments)
+        .execute_inspection(&arguments, &unbounded)
         .await
         .expect_err("a literal path naming no file should be rejected");
 

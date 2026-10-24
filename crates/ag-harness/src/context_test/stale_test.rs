@@ -5,8 +5,9 @@ use super::support::{
     result_json, sent, tool_result, write_call,
 };
 use crate::context::{
-    CallRecords, ContextFit, FitMessage, ReadSpan, Supersession, SupersessionCause, elided_result,
-    find_superseded, read_shows_path, repeated_read_result, rereads,
+    CallRecords, ContextFit, FitMessage, ReadSpan, Supersession, SupersessionCause,
+    deferred_read_result, elided_result, find_superseded, read_shows_path, repeated_read_result,
+    rereads,
 };
 use crate::model::{ModelMessage, ModelRequest};
 use crate::tool::{ReadArguments, ToolCall};
@@ -408,6 +409,38 @@ fn later_rereads_writes_and_reruns_supersede_history_and_current_results() {
         &read_call_of("r5", "docs.md"),
         repeated_read_result("r3"),
     );
+    // A search its round had no room for supersedes nothing either.
+    let search = json!({"action": "search", "query": "fn fit"});
+    record(
+        &mut request,
+        &read_of("s1", &search),
+        json!({"action": "search", "result": ["src/lib.rs:1:fn fit"], "truncated": false})
+            .to_string(),
+    );
+    record(
+        &mut request,
+        &read_of("s2", &search),
+        deferred_read_result(&arguments(&search)),
+    );
+    // Nor is one superseded when the model fetches it later: only the run
+    // search before it is.
+    record(
+        &mut request,
+        &read_of("s3", &search),
+        json!({"action": "search", "result": ["src/lib.rs:1:fn fit"], "truncated": false})
+            .to_string(),
+    );
+    let notes = json!({"path": "notes.md"});
+    record(
+        &mut request,
+        &read_of("n1", &notes),
+        deferred_read_result(&arguments(&notes)),
+    );
+    record(
+        &mut request,
+        &read_of("n2", &notes),
+        file_result("notes.md", 1, 4),
+    );
 
     // Act
     let superseded = superseded(request.messages());
@@ -419,6 +452,7 @@ fn later_rereads_writes_and_reruns_supersede_history_and_current_results() {
             (3, "r1".to_string(), SupersessionCause::Reread),
             (7, "b2".to_string(), SupersessionCause::Rerun),
             (9, "w1".to_string(), SupersessionCause::Write),
+            (19, "s3".to_string(), SupersessionCause::Reread),
         ]
     );
 }
@@ -491,6 +525,29 @@ fn repeated_read_results_point_to_the_earlier_call() {
             .as_str()
             .expect("note")
             .contains("nothing was written or run since")
+    );
+}
+
+#[test]
+fn deferred_read_results_repeat_the_exact_call() {
+    // Arrange
+    let arguments = arguments(&json!({"path": "src/lib.rs", "offset": 40, "limit": 20}));
+
+    // Act
+    let result = deferred_read_result(&arguments);
+
+    // Assert
+    let parsed: Value = serde_json::from_str(&result).expect("JSON result");
+    assert!(result.starts_with(r#"{"deferred":"#));
+    assert_eq!(
+        parsed["call"],
+        json!({"limit": 20, "offset": 40, "path": "src/lib.rs"})
+    );
+    assert!(
+        parsed["deferred"]
+            .as_str()
+            .expect("note")
+            .contains("Call read with these arguments in a later response")
     );
 }
 

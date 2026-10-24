@@ -2,7 +2,7 @@ use std::path::PathBuf;
 use std::sync::Arc;
 
 use super::command::{LocalRepositoryCommandRunner, RepositoryCommandRunner};
-use super::{InspectionError, ReadError, ReadOutput};
+use super::{InspectionError, ReadError, ReadOutput, ResultFits};
 use crate::ComparisonBase;
 use crate::file_system::FileSystem;
 use crate::tool::{ReadAction, ReadArguments, ReadSide};
@@ -41,21 +41,25 @@ impl ReadTool {
         self.execute_file(arguments, arguments.path()).await
     }
 
+    /// Runs one read action and returns its result, bounded to what `fits`
+    /// accepts, with its summary.
     pub(crate) async fn execute_inspection(
         &self,
         arguments: &ReadArguments,
+        fits: ResultFits<'_>,
     ) -> Result<(String, String), InspectionError> {
         match arguments.action() {
-            ReadAction::Diff => self.diff(arguments).await,
+            ReadAction::Diff => self.diff(arguments, fits).await,
             ReadAction::File => {
                 let output = self.execute_file(arguments, arguments.path()).await?;
                 let summary = output.path().to_string();
+                let (result, _) = output.to_tool_result_within(fits)?;
 
-                Ok((output.to_tool_result()?, summary))
+                Ok((result, summary))
             }
-            ReadAction::List => self.list(arguments).await,
+            ReadAction::List => self.list(arguments, fits).await,
             ReadAction::Search => {
-                self.search(arguments, arguments.query().unwrap_or_default())
+                self.search(arguments, arguments.query().unwrap_or_default(), fits)
                     .await
             }
             ReadAction::Show => {
@@ -63,6 +67,7 @@ impl ReadTool {
                     arguments,
                     arguments.path(),
                     arguments.side().unwrap_or(ReadSide::Head),
+                    fits,
                 )
                 .await
             }

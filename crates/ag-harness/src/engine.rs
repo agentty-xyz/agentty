@@ -18,7 +18,7 @@ use crate::model::{
     CompletionMetadata, Model, ModelError, ModelMessage, ModelRequest, ModelResponse,
     ReasoningEffort, ensure_unique_tool_call_ids,
 };
-use crate::read::{self, ReadError, ReadTool};
+use crate::read::{self, ReadError, ReadTool, ResultFits};
 use crate::repetition::{self, RepeatedCalls, Repetition};
 use crate::repository::Repository;
 use crate::reservation::WriteJournal;
@@ -280,6 +280,11 @@ impl Engine<'_> {
 
     /// Journals one response's `calls`, then executes them in order and
     /// journals each result, returning the strongest repetition among them.
+    /// Each `read` result is bounded as it runs to the share of the
+    /// calibrated budget one result may take, and the round's results
+    /// together to the share one round may take: the first results that fit
+    /// are kept whole, and every later `read` is answered with the exact call
+    /// that fetches it in a later response (see [`RoundShare`]).
     async fn execute_tool_calls(
         &self,
         calls: &[ToolCall],
@@ -294,17 +299,38 @@ impl Engine<'_> {
             _ => request.record_tool_calls(calls.to_vec()),
         };
         Self::persist(rounds.recorder.as_ref(), call_message).await?;
+        let (budget, _) = self
+            .context_calibration
+            .effective_budget(self.context_budget);
+        let mut share = RoundShare::new(self.context_estimator, budget);
         let mut repetition = Repetition::None;
         for call in calls {
             let repeated = rounds.reads.repeat_of(call, context_fit);
-            let (result, activity) = self
-                .execute_tool_call(
-                    call,
-                    &rounds.tools,
-                    turn_id,
-                    repeated.as_ref().map(|(call_id, _)| call_id.as_str()),
-                )
+            let shortcut = match &repeated {
+                Some((call_id, _)) => Some(ReadShortcut::Repeat(call_id)),
+                None if share.deferring => Some(ReadShortcut::Defer),
+                None => None,
+            };
+            let is_read = call.read_arguments().is_some();
+            let ran_read = is_read && shortcut.is_none();
+            let mut deferred = is_read && matches!(shortcut, Some(ReadShortcut::Defer));
+            let (mut result, mut activity) = self
+                .execute_tool_call(call, &rounds.tools, turn_id, shortcut, &|content: &str| {
+                    share.result_fits(call, content)
+                })
                 .await?;
+            if !share.keeps(call, &result, ran_read)
+                && let Some(arguments) = call.read_arguments()
+            {
+                result = context::deferred_read_result(arguments);
+                activity = ToolActivity::ReadDeferred {
+                    action: arguments.action(),
+                    duration: activity.duration(),
+                    summary: sanitize_report_text(read_summary(arguments)),
+                };
+                share.keeps(call, &result, false);
+                deferred = true;
+            }
             let result_bytes = result.len();
             // A read answered as a repeat returned the earlier result.
             let digest = repeated
@@ -320,7 +346,7 @@ impl Engine<'_> {
                 call,
                 result_index,
                 (result_bytes, digest),
-                repeated.is_some(),
+                repeated.is_some() || deferred,
             );
             repetition = repetition.max(rounds.repeated_calls.record(call, digest));
             rounds.activity.push(activity);
@@ -612,14 +638,16 @@ impl Engine<'_> {
         Ok((response, activity, reasoning_content))
     }
 
-    /// Runs `call` under the turn's tool policy, or, when `repeats` names
-    /// the earlier call an allowed `read` repeats, answers it without running.
+    /// Runs `call` under the turn's tool policy, bounding a `read` result to
+    /// what `fits` accepts, or answers an allowed `read` with `shortcut`
+    /// without running it.
     async fn execute_tool_call(
         &self,
         call: &ToolCall,
         tools: &Tools,
         turn_id: Option<LifecycleId>,
-        repeats: Option<&str>,
+        shortcut: Option<ReadShortcut<'_>>,
+        fits: ResultFits<'_>,
     ) -> Result<(String, ToolActivity), TurnError> {
         let mut tool_lifecycle =
             self.lifecycle
@@ -629,9 +657,12 @@ impl Engine<'_> {
                 .bash
                 .as_ref()
                 .map(|tool| ToolExecution::Bash(tool, arguments)),
-            ToolCallArguments::Read(arguments) => tools.read.as_ref().map(|tool| match repeats {
-                Some(earlier) => ToolExecution::RepeatedRead(arguments, earlier),
-                None => ToolExecution::Read(tool, arguments),
+            ToolCallArguments::Read(arguments) => tools.read.as_ref().map(|tool| match shortcut {
+                Some(ReadShortcut::Repeat(earlier)) => {
+                    ToolExecution::RepeatedRead(arguments, earlier)
+                }
+                Some(ReadShortcut::Defer) => ToolExecution::DeferredRead(arguments),
+                None => ToolExecution::Read(tool, arguments, fits),
             }),
             ToolCallArguments::Write(arguments) => tools
                 .write
@@ -904,17 +935,17 @@ impl RepeatedReads {
     /// `result_digest` is the request message at `result_index`: an
     /// executed `read` as the latest
     /// for its arguments, and any `write` or `bash` call as a possible
-    /// change. A `read` answered as a repeat and a malformed call change
-    /// nothing.
+    /// change. A `read` `answered` without its own content, as a repeat or
+    /// deferred, and a malformed call change nothing.
     fn record(
         &mut self,
         call: &ToolCall,
         result_index: usize,
         (result_bytes, result_digest): (usize, u64),
-        repeated: bool,
+        answered: bool,
     ) {
         match Self::key(call) {
-            Some(_) if repeated => {}
+            Some(_) if answered => {}
             Some(key) => {
                 self.executed.insert(
                     key,
@@ -970,9 +1001,84 @@ impl Tools {
     }
 }
 
+/// How a `read` call is answered without running it.
+#[derive(Clone, Copy)]
+enum ReadShortcut<'a> {
+    /// The call repeats the named earlier call, whose result is unchanged.
+    Repeat(&'a str),
+    /// The round's earlier results already fill its share.
+    Defer,
+}
+
+/// How much of the calibrated budget the `read` results of one tool round
+/// take as they run. One result may weigh at most
+/// [`context::RESULT_CAP_PERCENT`] of the capacity and is cut to fit as it
+/// runs, so it enters the request already bounded. The round's results
+/// together may weigh [`context::LATEST_ROUND_CAP_PERCENT`]: the first
+/// `read` result that would exceed it, and every `read` after it, is
+/// replaced by the exact call that fetches it in a later response. Results
+/// of other tools count toward the share but are always kept.
+struct RoundShare<'a> {
+    /// Whether a `read` of this round no longer fits the share.
+    deferring: bool,
+    estimator: &'a dyn context::ContextEstimator,
+    result_cap: u64,
+    round_cap: u64,
+    used: u64,
+}
+
+impl<'a> RoundShare<'a> {
+    fn new(estimator: &'a dyn context::ContextEstimator, budget: context::ContextBudget) -> Self {
+        let capacity = budget.max_request_weight().get() - budget.reserved_output_weight();
+
+        Self {
+            deferring: false,
+            estimator,
+            result_cap: capacity.saturating_mul(context::RESULT_CAP_PERCENT) / 100,
+            round_cap: capacity.saturating_mul(context::LATEST_ROUND_CAP_PERCENT) / 100,
+            used: 0,
+        }
+    }
+
+    /// Whether a `read` result `content` for `call` weighs at most the
+    /// share one result may take.
+    fn result_fits(&self, call: &ToolCall, content: &str) -> bool {
+        self.weight(call, content) <= self.result_cap
+    }
+
+    /// Counts the `result` of `call` toward the round and returns whether
+    /// the round keeps it: always, except the result of a `read` that `ran`,
+    /// once the round's results would exceed the share, after which later
+    /// reads are deferred.
+    fn keeps(&mut self, call: &ToolCall, result: &str, ran: bool) -> bool {
+        let used = self.used.saturating_add(self.weight(call, result));
+        if ran && used > self.round_cap {
+            self.deferring = true;
+
+            return false;
+        }
+        self.used = used;
+
+        true
+    }
+
+    /// Weighs `content` as the result message the request records for
+    /// `call`, under that call's own tool name.
+    fn weight(&self, call: &ToolCall, content: &str) -> u64 {
+        self.estimator.message_weight(&ModelMessage::ToolResult {
+            call_id: call.id().to_string(),
+            content: content.to_string(),
+            name: call.name().to_string(),
+        })
+    }
+}
+
 enum ToolExecution<'a> {
     Bash(&'a BashTool, &'a BashArguments),
-    Read(&'a ReadTool, &'a ReadArguments),
+    /// A `read` whose round had no room for its result, answered with the
+    /// exact call that fetches it, without running.
+    DeferredRead(&'a ReadArguments),
+    Read(&'a ReadTool, &'a ReadArguments, ResultFits<'a>),
     /// A call whose arguments its tool could not decode, answered with an
     /// error result that lists the tool's argument fields.
     Malformed(&'a MalformedArguments, &'a TurnOptions),
@@ -999,8 +1105,16 @@ async fn execute_tool(
                 },
             ))
         }
-        ToolExecution::Read(read_tool, arguments) => {
-            execute_read_tool(read_tool, arguments, started_at).await
+        ToolExecution::DeferredRead(arguments) => Ok((
+            context::deferred_read_result(arguments),
+            ToolActivity::ReadDeferred {
+                action: arguments.action(),
+                duration: started_at.elapsed(),
+                summary: sanitize_report_text(read_summary(arguments)),
+            },
+        )),
+        ToolExecution::Read(read_tool, arguments, fits) => {
+            execute_read_tool(read_tool, arguments, fits, started_at).await
         }
         ToolExecution::Malformed(arguments, options) => Ok((
             malformed_arguments_result(arguments, options),
@@ -1027,16 +1141,17 @@ async fn execute_tool(
 async fn execute_read_tool(
     read_tool: &ReadTool,
     arguments: &ReadArguments,
+    fits: ResultFits<'_>,
     started_at: Instant,
 ) -> Result<(String, ToolActivity), TurnError> {
     if let Some(error) = arguments.validation_error() {
         return reject_invalid_read_arguments(arguments, error, started_at);
     }
     if arguments.action() == ReadAction::File {
-        return execute_file_read(read_tool, arguments, started_at).await;
+        return execute_file_read(read_tool, arguments, fits, started_at).await;
     }
 
-    execute_repository_inspection(read_tool, arguments, started_at).await
+    execute_repository_inspection(read_tool, arguments, fits, started_at).await
 }
 
 fn reject_invalid_read_arguments(
@@ -1065,18 +1180,19 @@ fn reject_invalid_read_arguments(
 async fn execute_file_read(
     read_tool: &ReadTool,
     arguments: &ReadArguments,
+    fits: ResultFits<'_>,
     started_at: Instant,
 ) -> Result<(String, ToolActivity), TurnError> {
     match read_tool.execute(arguments).await {
-        Ok(output) => match output.to_tool_result() {
-            Ok(result) => Ok((
+        Ok(output) => match output.to_tool_result_within(fits) {
+            Ok((result, shown)) => Ok((
                 result,
                 ToolActivity::Read {
                     duration: started_at.elapsed(),
-                    end_line: output.end_line(),
-                    path: sanitize_report_text(output.path()),
-                    start_line: output.start_line(),
-                    truncated: output.truncated(),
+                    end_line: shown.end_line(),
+                    path: sanitize_report_text(shown.path()),
+                    start_line: shown.start_line(),
+                    truncated: shown.truncated(),
                 },
             )),
             Err(error) => error
@@ -1113,10 +1229,11 @@ async fn execute_file_read(
 async fn execute_repository_inspection(
     read_tool: &ReadTool,
     arguments: &ReadArguments,
+    fits: ResultFits<'_>,
     started_at: Instant,
 ) -> Result<(String, ToolActivity), TurnError> {
     let fallback_summary = read_summary(arguments);
-    match read_tool.execute_inspection(arguments).await {
+    match read_tool.execute_inspection(arguments, fits).await {
         Ok((result, summary)) => Ok((
             result,
             ToolActivity::ReadInspection {
