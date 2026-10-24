@@ -156,11 +156,17 @@ impl BuilderEnv {
     /// run here keeps the painted version independent of host load.
     fn warm_agent_cli_stubs(stub_bin: &Path) -> std::io::Result<()> {
         for executable_name in STUB_AGENT_EXECUTABLES {
-            std::process::Command::new(stub_bin.join(executable_name))
+            let status = std::process::Command::new(stub_bin.join(executable_name))
                 .arg("--version")
+                .stdin(std::process::Stdio::null())
                 .stdout(std::process::Stdio::null())
                 .stderr(std::process::Stdio::null())
                 .status()?;
+            if !status.success() {
+                return Err(std::io::Error::other(format!(
+                    "{executable_name} test stub failed `--version` with {status}"
+                )));
+            }
         }
 
         Ok(())
