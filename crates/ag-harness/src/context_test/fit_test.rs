@@ -829,3 +829,38 @@ fn each_fit_that_drops_rounds_appends_its_own_note() {
         assert_eq!(fitted[index].0.messages()[..previous.len()], *previous);
     }
 }
+
+#[test]
+fn the_notes_of_a_long_turn_are_merged_once_no_round_is_left_to_drop() {
+    // Arrange
+    let mut request = request(Vec::new(), Vec::new(), "loop");
+    let mut fit = ContextFit::default();
+    let mut fits = Vec::new();
+
+    // Act
+    // Every reduction drops rounds behind a new note, until the notes alone
+    // would outgrow the budget.
+    for index in 0..30 {
+        let call = bash_command_call(
+            &format!("c{index}"),
+            &format!("echo {index} {}", "x".repeat(990)),
+        );
+        request.record_tool_call(call.clone());
+        request.record_tool_result(&call, r#"{"exit_code":0}"#.to_string());
+        fits.push(fit_owned(&mut fit, budget(4000), &request).map(|(fitted, _)| fitted));
+    }
+
+    // Assert
+    assert!(fits.iter().all(Result::is_ok));
+    let last = fits
+        .pop()
+        .and_then(Result::ok)
+        .flatten()
+        .expect("reduced copy");
+    assert!(weigh(&last) <= 4000);
+    let ModelMessage::User(note) = &last.messages()[1] else {
+        std::panic::resume_unwind(Box::new("merged note expected"));
+    };
+    assert!(note.contains("`echo 0 "));
+    assert!(note.contains("more."));
+}

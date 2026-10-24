@@ -1200,8 +1200,27 @@ impl ContextFit {
         {
             changed = true;
         }
+        // With every earlier round dropped, the notes are what remains.
+        if base.saturating_add(self.required) > drop_target && self.dropped_rounds.notes.len() > 1 {
+            self.merge_notes(estimator);
+            changed = true;
+        }
 
         changed
+    }
+
+    /// Replaces the dropped-round notes with one note naming everything they
+    /// name and carrying the latest summary, which bounds what the notes of a
+    /// long turn weigh.
+    fn merge_notes(&mut self, estimator: &dyn ContextEstimator) {
+        let mut note = RoundNote::merged(&self.dropped_rounds.notes);
+        note.summary.clone_from(&self.dropped_rounds.summary);
+        note.weight = estimator.message_weight(&note.message());
+        self.required = self
+            .required
+            .saturating_sub(self.dropped_rounds.weight())
+            .saturating_add(note.weight);
+        self.dropped_rounds.notes = vec![note];
     }
 
     /// Returns where the current turn's recent rounds start: the latest
@@ -1696,36 +1715,42 @@ impl ContextFit {
             .collect();
         results.sort_by_key(|(index, ..)| Reverse(self.messages[*index].weight));
         let mut cut = Vec::new();
-        // A second pass cuts further when a cleared repeated-read result
-        // outweighs the note it replaced.
-        for &(index, call_id, content, name) in results.iter().chain(&results) {
-            let required = base.saturating_add(self.required);
-            if required <= budget_weight {
-                break;
-            }
-            let current = self.messages[index].weight;
-            let allowed = current.saturating_sub(required - budget_weight);
-            let excerpt = Self::excerpt_within(estimator, (call_id, content, name), allowed);
-            let weight = estimator.message_weight(&excerpt);
-            // A repeated-read result cleared with the result it points to
-            // keeps its notice.
-            let cleared = self.messages[index].changes & Reduction::ElideResult.flag() != 0;
-            if weight < current && !cleared {
-                self.required -= current - weight;
-                let entry = &mut self.messages[index];
-                if entry.changes & CAPPED_FLAG == 0 {
-                    entry.changes |= CAPPED_FLAG;
-                    self.capped_results += 1;
+        // Passes repeat while they cut, since a cleared repeated-read result
+        // can outweigh the note it replaced.
+        loop {
+            let cut_before = cut.len();
+            for &(index, call_id, content, name) in &results {
+                let required = base.saturating_add(self.required);
+                if required <= budget_weight {
+                    break;
                 }
-                entry.reduced = Some(excerpt);
-                entry.weight = weight;
-                cut.push(index);
-                self.clear_repeats(
-                    estimator,
-                    request.messages(),
-                    |pointed| pointed == index,
-                    None,
-                );
+                let current = self.messages[index].weight;
+                let allowed = current.saturating_sub(required - budget_weight);
+                let excerpt = Self::excerpt_within(estimator, (call_id, content, name), allowed);
+                let weight = estimator.message_weight(&excerpt);
+                // A repeated-read result cleared with the result it points to
+                // keeps its notice.
+                let cleared = self.messages[index].changes & Reduction::ElideResult.flag() != 0;
+                if weight < current && !cleared {
+                    self.required -= current - weight;
+                    let entry = &mut self.messages[index];
+                    if entry.changes & CAPPED_FLAG == 0 {
+                        entry.changes |= CAPPED_FLAG;
+                        self.capped_results += 1;
+                    }
+                    entry.reduced = Some(excerpt);
+                    entry.weight = weight;
+                    cut.push(index);
+                    self.clear_repeats(
+                        estimator,
+                        request.messages(),
+                        |pointed| pointed == index,
+                        None,
+                    );
+                }
+            }
+            if cut.len() == cut_before || base.saturating_add(self.required) <= budget_weight {
+                break;
             }
         }
 

@@ -109,18 +109,18 @@ all its results, down to 70%; a dropped round also loses the text the model wrot
 its calls, so dropping stops short of the clearing target. Each reduction that drops
 rounds names them in one bounded note appended after the earlier notes, which counts the
 removed calls, names the writes they applied and the commands they ran, and lists their
-distinct read targets to re-read only if still needed. A repeated-read note whose
-earlier result is cleared, cut, or summarized becomes a notice that it is no longer
-shown whole, naming the newer read when one returned it again. Tool calls keep their
-identifiers, so tool groups stay well-formed, and the text the model wrote beside them
-is never cleared, so its notes on what it found outlive the cleared results and leave
-only with their dropped round. Each reduction step is a watermark into the append-only
-canonical messages, and each reduced message is cached, so a request between reductions
-only weighs and appends its new messages. If the request still does not fit, the latest
-round's largest results are cut further the same way, and as the last resort its `write`
-patches are replaced by their recorded outcome; both stay cut in later requests. Only
-when even that fails does the turn fail typed. Each `ModelRequestActivity` reports the
-reductions its request carried.
+distinct read targets to re-read only if still needed; once no earlier round is left to
+drop, the notes merge into one. A repeated-read note whose earlier result is cleared,
+cut, or summarized becomes a notice that it is no longer shown whole, naming the newer
+read when one returned it again. Tool calls keep their identifiers, so tool groups stay
+well-formed, and the text the model wrote beside them is never cleared, so its notes on
+what it found outlive the cleared results and leave only with their dropped round. Each
+reduction step is a watermark into the append-only canonical messages, and each reduced
+message is cached, so a request between reductions only weighs and appends its new
+messages. If the request still does not fit, the latest round's largest results are cut
+further the same way, and as the last resort its `write` patches are replaced by their
+recorded outcome; both stay cut in later requests. Only when even that fails does the
+turn fail typed. Each `ModelRequestActivity` reports the reductions its request carried.
 
 With `ContextSummaryPolicy::Enabled`, a request that still exceeds 50% of its capacity
 after superseded results are cleared and oversized results capped first summarizes the
