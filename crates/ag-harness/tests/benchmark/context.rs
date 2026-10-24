@@ -2,6 +2,7 @@
 
 mod fixture;
 mod metric;
+mod probe;
 mod record;
 mod runner;
 

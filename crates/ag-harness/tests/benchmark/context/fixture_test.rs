@@ -6,8 +6,8 @@ use ag_harness::OutputSchema;
 use serde_json::{Value, json};
 
 use crate::fixture::{
-    FixtureFile, HugeResultFixture, LARGE_CODE, PART_CODES, ReadLoopFixture, WriteFixture,
-    answer_schema,
+    FixtureFile, HugeResultFixture, LARGE_CODE, PART_CODES, ReadLoopFixture, SessionReadsFixture,
+    WriteFixture, answer_schema,
 };
 
 const DEFAULT_RESULT_LINES: usize = 200;
@@ -115,6 +115,95 @@ fn read_loop_score_counts_each_wrong_file() {
     assert_eq!(score.passed, score.total - 2);
     assert_eq!(score.failures.len(), 2);
     assert!(score.correctness() < 1.0);
+}
+
+/// Answers the session fixture's reading turns, two files each, then its
+/// recall turn with every file, from an independent parse.
+fn session_answers(fixture: &SessionReadsFixture) -> Vec<Value> {
+    let entry = |file: &FixtureFile| json!({ "path": file.path, "public_functions": public_functions(file) });
+    let largest = |files: &[FixtureFile]| {
+        files
+            .iter()
+            .max_by_key(|file| public_functions(file).len())
+            .map(|file| file.path.clone())
+    };
+    let mut answers = fixture
+        .files()
+        .chunks(2)
+        .map(|files| {
+            json!({
+                "files": files.iter().map(entry).collect::<Vec<_>>(),
+                "most_public_functions": largest(files),
+            })
+        })
+        .collect::<Vec<_>>();
+    answers.push(json!({
+        "files": fixture.files().iter().map(entry).collect::<Vec<_>>(),
+        "most_public_functions": largest(fixture.files()),
+    }));
+
+    answers
+}
+
+#[test]
+fn session_reads_ground_truth_matches_an_independent_parse() {
+    // Arrange
+    let fixture = SessionReadsFixture::generate();
+    let answers = session_answers(&fixture);
+
+    // Act
+    let score = fixture.score(&answers);
+
+    // Assert
+    assert!(score.is_perfect(), "{:?}", score.failures);
+    assert_eq!(score.total, 8 * 3 + fixture.files().len() + 1);
+    assert_eq!(fixture.prompts().len(), 9);
+    assert!(OutputSchema::new(SessionReadsFixture::schema()).is_ok());
+    for (prompt, files) in fixture.prompts().iter().zip(fixture.files().chunks(2)) {
+        assert!(files.iter().all(|file| prompt.contains(&file.path)));
+    }
+}
+
+#[test]
+fn session_reads_history_outgrows_a_small_byte_budget_within_a_few_turns() {
+    // Arrange
+    let fixture = SessionReadsFixture::generate();
+
+    // Act
+    let per_turn = fixture
+        .files()
+        .chunks(2)
+        .map(|files| files.iter().map(|file| file.contents.len()).sum::<usize>())
+        .collect::<Vec<_>>();
+
+    // Assert
+    assert!(
+        per_turn.iter().all(|bytes| (3_000..12_000).contains(bytes)),
+        "{per_turn:?}"
+    );
+    assert!(
+        per_turn.iter().sum::<usize>() > 2 * 24 * 1024,
+        "{per_turn:?}"
+    );
+}
+
+#[test]
+fn session_reads_score_fails_missing_and_wrong_turns() {
+    // Arrange
+    let fixture = SessionReadsFixture::generate();
+    let mut answers = session_answers(&fixture);
+    // The first file of the first pair declares fewer public functions.
+    answers[0]["most_public_functions"] = json!(fixture.files()[0].path);
+    answers.truncate(7);
+
+    // Act
+    let score = fixture.score(&answers);
+
+    // Assert
+    let missing_turn = 3;
+    let missing_recall = fixture.files().len() + 1;
+    assert_eq!(score.failures.len(), 1 + missing_turn + missing_recall);
+    assert_eq!(score.total - score.passed, score.failures.len());
 }
 
 #[test]
