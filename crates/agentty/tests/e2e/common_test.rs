@@ -2,14 +2,39 @@ use std::path::{Path, PathBuf};
 
 use ag_git::{GitClient, RealGitClient};
 use testty::feature::{GifMode, GifStatus};
+use testty::frame::TerminalFrame;
+use testty::proof::report::ProofReport;
 
 use super::{
     BuilderEnv, FeatureTest, NO_COLOR_ENV_VALUE, NO_COLOR_ENV_VAR, PINNED_CLOCK_ENV_VAR,
     PINNED_CLOCK_UNIX_SECONDS, PINNED_CLOCK_UTC_OFFSET_ENV_VAR, PINNED_CLOCK_UTC_OFFSET_SECONDS,
     PINNED_DISPLAY_VERSION_ENV_VAR, STUB_AGENT_EXECUTABLES, VHS_REPLAY_ENV_VAR,
-    VHS_SETUP_SCRIPT_NAME, feature_gif_mode_for_artifacts, gif_exists_on_disk, parse_gif_mode,
-    tab_page_marker,
+    VHS_SETUP_SCRIPT_NAME, capture_frames_text, feature_gif_mode_for_artifacts, gif_exists_on_disk,
+    parse_gif_mode, tab_page_marker,
 };
+
+#[test]
+fn capture_frames_text_labels_every_capture() {
+    // Arrange
+    let mut report = ProofReport::new("flaky_feature");
+    report.add_capture(
+        "first",
+        "First view",
+        &TerminalFrame::new(20, 2, b"gemini 0.0.1"),
+    );
+    report.add_capture(
+        "second",
+        "Second view",
+        &TerminalFrame::new(20, 2, b"version unknown"),
+    );
+
+    // Act
+    let text = capture_frames_text(&report);
+
+    // Assert
+    assert!(text.contains("--- capture `first` ---\ngemini 0.0.1"));
+    assert!(text.contains("--- capture `second` ---\nversion unknown"));
+}
 
 #[test]
 fn tab_page_marker_maps_supported_tabs() {

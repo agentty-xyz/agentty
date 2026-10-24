@@ -131,6 +131,7 @@ impl BuilderEnv {
             std::fs::set_permissions(&stub_agent_path, std::fs::Permissions::from_mode(0o750))?;
         }
         Self::create_gemini_cli_stub(&stub_bin)?;
+        Self::warm_agent_cli_stubs(&stub_bin)?;
 
         // Keep host CPU and memory out of feature-recording hashes. Resource
         // scenarios replace this stub with a deterministic process table.
@@ -144,6 +145,25 @@ impl BuilderEnv {
             stub_bin,
             workdir,
         })
+    }
+
+    /// Runs every agent CLI stub once before the app starts.
+    ///
+    /// macOS scans a new executable on its first run, which can take seconds
+    /// under parallel test load. The app gives each `--version` probe two
+    /// seconds, so a stub first run inside that window could paint
+    /// `version unknown` and stale the GIF freshness hash. Paying the first
+    /// run here keeps the painted version independent of host load.
+    fn warm_agent_cli_stubs(stub_bin: &Path) -> std::io::Result<()> {
+        for executable_name in STUB_AGENT_EXECUTABLES {
+            std::process::Command::new(stub_bin.join(executable_name))
+                .arg("--version")
+                .stdout(std::process::Stdio::null())
+                .stderr(std::process::Stdio::null())
+                .status()?;
+        }
+
+        Ok(())
     }
 
     /// Creates an npm-global Gemini CLI fixture whose package-manager update
@@ -867,6 +887,26 @@ pub(crate) fn frame_from_capture(capture: &ProofCapture) -> TerminalFrame {
     TerminalFrame::new(capture.cols, capture.rows, &capture.frame_bytes)
 }
 
+/// Renders every proof capture as labeled plain text.
+///
+/// A stale freshness hash only reports two numbers. Appending the frames
+/// that produced the current hash lets a CI failure be compared against a
+/// local run of the same scenario, so a flaky capture can be traced to the
+/// screen region that moved.
+fn capture_frames_text(report: &ProofReport) -> String {
+    report
+        .captures
+        .iter()
+        .map(|capture| {
+            format!(
+                "--- capture `{}` ---\n{}",
+                capture.label, capture.frame_text
+            )
+        })
+        .collect::<Vec<_>>()
+        .join("\n")
+}
+
 // ---------------------------------------------------------------------------
 // Zola feature page generation
 // ---------------------------------------------------------------------------
@@ -1183,7 +1223,15 @@ impl FeatureTest {
         })
         .await??;
 
-        self.validate_gif_status(&result.gif_status)?;
+        self.validate_gif_status(&result.gif_status).map_err(
+            |error| -> Box<dyn std::error::Error> {
+                if result.gif_status.is_stale() {
+                    format!("{error}\n{}", capture_frames_text(&result.report)).into()
+                } else {
+                    error
+                }
+            },
+        )?;
 
         assert(&result.frame, &result.report).await;
 
