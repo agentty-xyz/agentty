@@ -545,6 +545,9 @@ impl ChatCompletionBackend {
         reasoning_content: Option<&str>,
         calls: Vec<ChatCompletionToolCall>,
     ) -> Result<Vec<tool::ToolCall>, model::ModelError> {
+        if let Some(content) = content {
+            schema_contract::ensure_content_size(content).map_err(model::ModelError::from)?;
+        }
         if calls.is_empty() {
             return Err(model::ModelError::MissingToolCall);
         }
