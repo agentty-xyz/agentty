@@ -376,11 +376,12 @@ struct LoadedHistory {
 }
 
 impl LoadedHistory {
-    /// Summarizes the turns the store loads within the session's byte budget.
-    fn new(has_finished_turn: bool, turns: &[HistoryTurn]) -> Self {
+    /// Summarizes the turns the store loads within the session's byte
+    /// budget, oldest first with their positions.
+    fn new(has_finished_turn: bool, turns: &[(i64, HistoryTurn)]) -> Self {
         let input_digests = turns
             .iter()
-            .map(|turn| match turn.messages.first() {
+            .map(|(_, turn)| match turn.messages.first() {
                 Some(ModelMessage::User(text)) => Some(input_digest(text)),
                 _ => None,
             })

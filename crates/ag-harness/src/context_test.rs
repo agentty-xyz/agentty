@@ -6,6 +6,8 @@ mod cap;
 mod fit;
 #[path = "context_test/history_test.rs"]
 mod history;
+#[path = "context_test/projection_test.rs"]
+mod projection;
 #[path = "context_test/stale_test.rs"]
 mod stale;
 #[path = "context_test/summary_test.rs"]

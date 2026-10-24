@@ -17,7 +17,7 @@ pub use crate::admission::{
 pub use crate::compaction::{
     CheckpointError, CompactionSource, MAX_SUMMARY_BYTES, SessionCheckpoint,
 };
-pub use crate::context::{HistoryTurn, TurnStop};
+pub use crate::context::{HistoryProjection, HistoryTurn, TurnStop};
 pub use crate::memory_store::MemoryStore;
 use crate::model::{ModelMessage, ModelMetadata};
 use crate::recovery::HostTurnRecord;
@@ -34,10 +34,11 @@ pub use crate::write_journal::{WriteRecord, WriteStatus};
 /// Stores supply atomic record operations; the harness applies admission
 /// rules and owns every reservation's lease. Owner-scoped mutations validate
 /// ownership in the transaction applying their effects. History returned by
-/// loads and reservations contains the most recent finished turns within the
-/// stored byte budget, as [`LoadedSession::turns`] describes, and, when a
-/// compaction checkpoint exists, only turns after its covered boundary; both
-/// return the current checkpoint alongside that history. Implementations
+/// loads and reservations contains the finished turns the session's stored
+/// [`HistoryProjection`] replays within the stored byte budget, as
+/// [`LoadedSession::turns`] describes, and, when a compaction checkpoint
+/// exists, only turns after its covered boundary; both return the current
+/// checkpoint and the projection that history follows. Implementations
 /// preserve the existing options codec and fingerprints.
 #[async_trait]
 pub trait SessionStore: Send + Sync {
@@ -109,7 +110,9 @@ pub trait SessionStore: Send + Sync {
     /// budget, so unsupported history is reported before stale or busy
     /// admission. Then read [`AdmissionState`], apply [`ModelSwitch::admit`]
     /// for the generation to record, and record it with the switch's identity
-    /// and metadata in the same mutation.
+    /// and metadata in the same mutation, resetting the history projection
+    /// to [`HistoryProjection::default`], since the new model shares no
+    /// cached prefix with the old one.
     /// Rejections leave model selection unchanged; never rewrite turn
     /// snapshots.
     async fn switch_model(
@@ -172,15 +175,16 @@ pub trait SessionStore: Send + Sync {
         host_id: &str,
     ) -> Result<Option<HostTurnRecord>, SessionError>;
 
-    /// Commit the complete result together with the final messages and
-    /// terminal state under live ownership, as [`Self::complete_turn`] does.
-    /// An acknowledgment failure must not overwrite a committed result during
-    /// subsequent interrupt/cleanup.
+    /// Commit the complete result together with the final messages,
+    /// projection, and terminal state under live ownership, as
+    /// [`Self::complete_turn`] does. An acknowledgment failure must not
+    /// overwrite a committed result during subsequent interrupt/cleanup.
     async fn complete_request(
         &self,
         owner: &TurnOwner,
         messages: &[ModelMessage],
         outcome: &TurnOutcome,
+        projection: HistoryProjection,
     ) -> Result<(), SessionError>;
 
     /// Renew only an unexpired owner; return a conservative confirmed deadline.
@@ -194,11 +198,13 @@ pub trait SessionStore: Send + Sync {
         messages: &[ModelMessage],
     ) -> Result<(), SessionError>;
     /// Atomically appends the final messages after the turn's persisted
-    /// messages and marks it completed under an unexpired owner.
+    /// messages, marks it completed, and keeps `projection` as the session's
+    /// history projection under an unexpired owner.
     async fn complete_turn(
         &self,
         owner: &TurnOwner,
         messages: &[ModelMessage],
+        projection: HistoryProjection,
     ) -> Result<(), SessionError>;
     /// Marks an unexpired owned turn failed.
     async fn fail_turn(&self, owner: &TurnOwner, error: &TurnError) -> Result<(), SessionError>;

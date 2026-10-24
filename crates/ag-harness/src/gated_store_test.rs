@@ -16,7 +16,8 @@ use crate::input::TurnInput;
 use crate::model::{ModelMessage, ModelMetadata};
 use crate::session::{Database, LoadedSession, NewSession, SessionError, StoreIdentity, TurnOwner};
 use crate::store::{
-    AcquiredTurn, ModelSwitch, Reservation, SessionStore, TurnAdmission, WriteRecord,
+    AcquiredTurn, HistoryProjection, ModelSwitch, Reservation, SessionStore, TurnAdmission,
+    WriteRecord,
 };
 use crate::store_fixture::{options, schema};
 
@@ -151,9 +152,10 @@ impl SessionStore for GatedStore {
         owner: &TurnOwner,
         messages: &[ModelMessage],
         outcome: &TurnOutcome,
+        projection: HistoryProjection,
     ) -> Result<(), SessionError> {
         self.database
-            .complete_request(owner, messages, outcome)
+            .complete_request(owner, messages, outcome, projection)
             .await
     }
 
@@ -178,9 +180,10 @@ impl SessionStore for GatedStore {
         &self,
         owner: &TurnOwner,
         messages: &[ModelMessage],
+        projection: HistoryProjection,
     ) -> Result<(), SessionError> {
         self.pause(PauseAt::Completion).await;
-        SessionStore::complete_turn(&self.database, owner, messages).await?;
+        SessionStore::complete_turn(&self.database, owner, messages, projection).await?;
         self.pause(PauseAt::CompletionAcknowledgement).await;
 
         Ok(())

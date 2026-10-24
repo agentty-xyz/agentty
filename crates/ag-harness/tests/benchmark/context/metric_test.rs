@@ -199,10 +199,72 @@ fn cache_reuse_attributes_lost_prefixes_to_reductions_or_the_provider() {
             "cache_hit_tokens": 8_014,
             "cached_share": 0.3206,
             "reduction_events": 1,
+            "rewritten_prefixes": 0,
+            "turn_boundaries": { "pairs": 0, "held": 0, "rewritten": 0 },
             "held_prefixes": 2,
             "lost_prefixes": { "harness": 1, "provider": 1 },
             "lost_cache_tokens": { "harness": 2_976, "provider": 5_000 },
         })
+    );
+}
+
+#[test]
+fn cache_reuse_charges_the_harness_only_for_rewritten_messages() {
+    // Arrange
+    let none = json!({});
+    let cut = json!({ "truncated_results": 1 });
+    let sent = |turn: usize, digests: &[u64], input: u64, hit: u64, reductions: &Value| {
+        let mut request = turn_request(input, hit, reductions);
+        request["turn"] = json!(turn);
+        request["sent"] = json!(digests);
+
+        request
+    };
+    let mut requests = vec![
+        sent(0, &[1, 2], 1_000, 0, &none),
+        // Newly cuts its latest round but keeps every earlier message.
+        sent(0, &[1, 2, 3, 4], 3_000, 0, &cut),
+        // The next turn replays the first turn with message 3 rewritten.
+        sent(1, &[1, 2, 5, 4, 6, 7], 4_000, 500, &none),
+        sent(1, &[1, 2, 5, 4, 6, 7, 8], 4_500, 4_000, &none),
+    ];
+
+    // Act
+    let totals = record_cache_reuse(&mut requests);
+
+    // Assert
+    let pairs = requests
+        .iter()
+        .map(|request| {
+            (
+                request["prefix_messages"].clone(),
+                request["prefix_rewritten"].clone(),
+                request.get("sent").cloned(),
+            )
+        })
+        .collect::<Vec<_>>();
+    assert_eq!(
+        pairs,
+        [
+            (Value::Null, Value::Null, None),
+            (json!(2), json!(false), None),
+            (json!(2), json!(true), None),
+            (json!(6), json!(false), None),
+        ]
+    );
+    assert_eq!(totals["reduction_events"], json!(2));
+    assert_eq!(totals["rewritten_prefixes"], json!(1));
+    assert_eq!(
+        totals["turn_boundaries"],
+        json!({ "pairs": 1, "held": 0, "rewritten": 1 })
+    );
+    assert_eq!(
+        totals["lost_prefixes"],
+        json!({ "harness": 1, "provider": 1 })
+    );
+    assert_eq!(
+        totals["lost_cache_tokens"],
+        json!({ "harness": 2_500, "provider": 1_000 })
     );
 }
 

@@ -22,7 +22,7 @@ use tokio::time::Instant;
 use crate::admission::{ModelSwitch, Reservation, ReservedTurn, TurnAdmission};
 use crate::cancellation::{Settlement, SettlementLease};
 use crate::compaction::SessionCheckpoint;
-use crate::context::HistoryTurn;
+use crate::context::{HistoryProjection, HistoryTurn};
 use crate::effect::Effects;
 use crate::input::TurnInput;
 use crate::model::{ModelMessage, ModelMetadata};
@@ -156,7 +156,8 @@ pub(crate) fn lease_deadline() -> Instant {
 pub struct AcquiredTurn {
     pub(crate) checkpoint: Option<SessionCheckpoint>,
     pub(crate) guard: TurnGuard,
-    pub(crate) turns: Vec<HistoryTurn>,
+    pub(crate) projection: HistoryProjection,
+    pub(crate) turns: Vec<(i64, HistoryTurn)>,
 }
 
 impl AcquiredTurn {
@@ -239,6 +240,7 @@ impl AcquiredTurn {
             checkpoint,
             deadline,
             owner,
+            projection,
             turns,
         } = reserved;
         if owner.store_identity() != store.identity() || owner.session_id() != session_id {
@@ -252,6 +254,7 @@ impl AcquiredTurn {
         Ok(Self {
             checkpoint,
             guard,
+            projection,
             turns,
         })
     }
@@ -454,10 +457,14 @@ impl TurnGuard {
 
     /// Renewal and finalization cannot race their acknowledgements. Waiting
     /// for a stalled renewal remains bounded by its last confirmed deadline.
-    pub(crate) async fn complete(&mut self, messages: &[ModelMessage]) -> Result<(), SessionError> {
+    pub(crate) async fn complete(
+        &mut self,
+        messages: &[ModelMessage],
+        projection: HistoryProjection,
+    ) -> Result<(), SessionError> {
         let database = Arc::clone(&self.database);
         let owner = self.owner.clone();
-        self.finalize(database.complete_turn(&owner, messages))
+        self.finalize(database.complete_turn(&owner, messages, projection))
             .await
     }
 
@@ -465,10 +472,11 @@ impl TurnGuard {
         &mut self,
         messages: &[ModelMessage],
         outcome: &TurnOutcome,
+        projection: HistoryProjection,
     ) -> Result<(), SessionError> {
         let database = Arc::clone(&self.database);
         let owner = self.owner.clone();
-        self.finalize(database.complete_request(&owner, messages, outcome))
+        self.finalize(database.complete_request(&owner, messages, outcome, projection))
             .await
     }
 
@@ -779,8 +787,13 @@ impl SessionStore for AdmittedStore {
         owner: &TurnOwner,
         messages: &[ModelMessage],
         outcome: &TurnOutcome,
+        projection: HistoryProjection,
     ) -> Result<(), SessionError> {
-        self.settled(self.store.complete_request(owner, messages, outcome).await)
+        self.settled(
+            self.store
+                .complete_request(owner, messages, outcome, projection)
+                .await,
+        )
     }
 
     async fn append_messages(
@@ -799,8 +812,9 @@ impl SessionStore for AdmittedStore {
         &self,
         owner: &TurnOwner,
         messages: &[ModelMessage],
+        projection: HistoryProjection,
     ) -> Result<(), SessionError> {
-        self.settled(self.store.complete_turn(owner, messages).await)
+        self.settled(self.store.complete_turn(owner, messages, projection).await)
     }
 
     async fn fail_turn(&self, owner: &TurnOwner, error: &TurnError) -> Result<(), SessionError> {

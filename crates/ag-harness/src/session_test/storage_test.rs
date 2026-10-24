@@ -179,8 +179,8 @@ ORDER BY turn_position, message_position
     assert_eq!(
         loaded.turns,
         vec![
-            HistoryTurn::from(turn("first", "one")),
-            HistoryTurn::from(turn("second", "two")),
+            (3, HistoryTurn::from(turn("first", "one"))),
+            (8, HistoryTurn::from(turn("second", "two"))),
         ]
     );
 }
@@ -267,7 +267,7 @@ LIMIT 1
         loaded.system_prompt.as_deref(),
         Some("persistent instructions")
     );
-    assert_eq!(loaded.turns, vec![HistoryTurn::from(messages)]);
+    assert_eq!(loaded.turns, vec![(0, HistoryTurn::from(messages))]);
     assert_eq!(timestamps.message_timestamp, 456);
     assert_eq!(timestamps.session_created_at, 456);
     assert_eq!(timestamps.session_updated_at, 456);

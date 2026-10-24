@@ -4,7 +4,7 @@
 use std::collections::BTreeMap;
 use std::fs::OpenOptions;
 use std::io::{self, Write as _};
-use std::num::NonZeroU64;
+use std::num::{NonZeroU64, NonZeroUsize};
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex, PoisonError};
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
@@ -17,9 +17,11 @@ use ag_harness::{Harness, OutputSchema, Tool};
 use tempfile::TempDir;
 
 use super::fixture::{
-    FixtureFile, HugeResultFixture, ReadLoopFixture, Score, WriteFixture, answer_schema,
+    FixtureFile, HugeResultFixture, ReadLoopFixture, Score, SessionReadsFixture, WriteFixture,
+    answer_schema,
 };
-use super::record::{Activity, Observed, RunRecord};
+use super::probe::{ProbedModel, SentRequests};
+use super::record::{Activity, MeasuredTurn, Observed, RunRecord};
 use crate::{DynError, GIT_EXECUTABLE_ENV, Provider, benchmark_repository, summary};
 
 const DEFAULT_WINDOW: u64 = 32_000;
@@ -46,14 +48,18 @@ const DECLARED_PROFILES: [(&str, u64, u64, u64, &str); 5] = [
 ];
 
 type ScenarioFuture = std::pin::Pin<Box<dyn Future<Output = Result<Measured, DynError>>>>;
-type ScenarioRunner = fn(Harness) -> ScenarioFuture;
+type ScenarioRunner = fn(Harness, SentRequests) -> ScenarioFuture;
 
-const SCENARIOS: [(&str, ScenarioRunner); 4] = [
+const SCENARIOS: [(&str, ScenarioRunner); 5] = [
     ("long_read_loop", long_read_loop),
     ("doc_comment_writes", doc_comment_writes),
     ("huge_result", huge_result),
     ("sequential_writes", sequential_writes),
+    ("session_reads", session_reads),
 ];
+
+/// Session identifier of the multi-turn scenario's durable session.
+const SESSION_ID: &str = "context-benchmark-session";
 
 /// Runs the selected scenarios for exactly one provider and appends one JSON
 /// line per run to the results file.
@@ -106,6 +112,9 @@ struct Config {
     case: Option<String>,
     context_summaries: bool,
     estimate: Option<String>,
+    /// Retained history byte budget of durable sessions, or the harness
+    /// default.
+    history_bytes: Option<NonZeroUsize>,
     provider: Provider,
     repetitions: usize,
     results: PathBuf,
@@ -139,6 +148,14 @@ impl Config {
             context_summaries: std::env::var("AG_HARNESS_CONTEXT_SUMMARIES")
                 .is_ok_and(|value| matches!(value.as_str(), "1" | "true" | "on")),
             estimate: std::env::var("AG_HARNESS_CONTEXT_ESTIMATE").ok(),
+            history_bytes: std::env::var("AG_HARNESS_CONTEXT_HISTORY_BYTES")
+                .ok()
+                .map(|value| {
+                    value.parse().map_err(|_| {
+                        format!("AG_HARNESS_CONTEXT_HISTORY_BYTES must be positive, got {value:?}")
+                    })
+                })
+                .transpose()?,
             provider,
             repetitions: number_env("AG_HARNESS_BENCHMARK_REPETITIONS", 1)?,
             results,
@@ -203,7 +220,8 @@ impl Config {
         };
         let observed = Arc::new(Mutex::new(Observed::default()));
         let recorder = Arc::clone(&observed);
-        let harness = Harness::new(self.provider.client()?, context.budget)
+        let (model, sent) = ProbedModel::new(self.provider.client()?);
+        let mut harness = Harness::new(model, context.budget)
             .context_estimator(context.estimator)
             .context_summaries(policy)
             .with_lifecycle_observer(move |event: LifecycleEvent| {
@@ -212,11 +230,14 @@ impl Config {
                     .unwrap_or_else(PoisonError::into_inner)
                     .observe(event.kind());
             });
+        if let Some(history_bytes) = self.history_bytes {
+            harness = harness.max_history_bytes(history_bytes);
+        }
         let started_at = SystemTime::now()
             .duration_since(UNIX_EPOCH)
             .map_or(0, |elapsed| elapsed.as_secs());
         let started = Instant::now();
-        let result = tokio::time::timeout(self.timeout, runner(harness)).await;
+        let result = tokio::time::timeout(self.timeout, runner(harness, sent.clone())).await;
         let wall_ms = started.elapsed().as_millis();
         let (activity, score, detail) = match result {
             Ok(Ok(measured)) => {
@@ -229,7 +250,12 @@ impl Config {
                     .lock()
                     .unwrap_or_else(PoisonError::into_inner)
                     .take_failed_report()
-                    .map(|report| Activity::from_report(&report)),
+                    .map(|report| {
+                        Activity::from_turns(&[MeasuredTurn {
+                            report: &report,
+                            sent: &sent.take(),
+                        }])
+                    }),
                 Score::default(),
                 Some(summary::sanitize_detail(&error.to_string())),
             ),
@@ -245,6 +271,7 @@ impl Config {
             context_summaries: self.context_summaries,
             correctness: score.correctness(),
             estimate: context.estimate,
+            history_bytes: self.history_bytes.map(NonZeroUsize::get),
             detail,
             model: self.provider.model(),
             observed: std::mem::take(&mut *observed.lock().unwrap_or_else(PoisonError::into_inner)),
@@ -315,7 +342,7 @@ struct Measured {
     score: Score,
 }
 
-fn long_read_loop(harness: Harness) -> ScenarioFuture {
+fn long_read_loop(harness: Harness, sent: SentRequests) -> ScenarioFuture {
     Box::pin(async move {
         let fixture = ReadLoopFixture::generate();
         let workspace = Workspace::create(fixture.files()).await?;
@@ -329,21 +356,21 @@ fn long_read_loop(harness: Harness) -> ScenarioFuture {
             .await?;
 
         Ok(Measured {
-            activity: Activity::from_outcome(&outcome),
+            activity: Activity::from_outcome(&outcome, &sent.take()),
             score: fixture.score(outcome.output()),
         })
     })
 }
 
-fn doc_comment_writes(harness: Harness) -> ScenarioFuture {
-    write_scenario(harness, WriteFixture::generate())
+fn doc_comment_writes(harness: Harness, sent: SentRequests) -> ScenarioFuture {
+    write_scenario(harness, sent, WriteFixture::generate())
 }
 
-fn sequential_writes(harness: Harness) -> ScenarioFuture {
-    write_scenario(harness, WriteFixture::sequential())
+fn sequential_writes(harness: Harness, sent: SentRequests) -> ScenarioFuture {
+    write_scenario(harness, sent, WriteFixture::sequential())
 }
 
-fn write_scenario(harness: Harness, fixture: WriteFixture) -> ScenarioFuture {
+fn write_scenario(harness: Harness, sent: SentRequests, fixture: WriteFixture) -> ScenarioFuture {
     Box::pin(async move {
         let workspace = Workspace::create(fixture.files()).await?;
         let outcome = harness
@@ -362,13 +389,13 @@ fn write_scenario(harness: Harness, fixture: WriteFixture) -> ScenarioFuture {
         let status = workspace.git(&["status", "--porcelain"]).await?;
 
         Ok(Measured {
-            activity: Activity::from_outcome(&outcome),
+            activity: Activity::from_outcome(&outcome, &sent.take()),
             score: fixture.score(&contents, &status),
         })
     })
 }
 
-fn huge_result(harness: Harness) -> ScenarioFuture {
+fn huge_result(harness: Harness, sent: SentRequests) -> ScenarioFuture {
     Box::pin(async move {
         let fixture = HugeResultFixture::generate();
         let workspace = Workspace::create(fixture.files()).await?;
@@ -382,8 +409,64 @@ fn huge_result(harness: Harness) -> ScenarioFuture {
             .await?;
 
         Ok(Measured {
-            activity: Activity::from_outcome(&outcome),
+            activity: Activity::from_outcome(&outcome, &sent.take()),
             score: HugeResultFixture::score(outcome.output()),
+        })
+    })
+}
+
+/// Runs every turn of [`SessionReadsFixture`] in one SQLite session,
+/// resuming it before each turn as a host process would. A failed turn ends
+/// the run; its checks and the later turns' fail.
+fn session_reads(harness: Harness, sent: SentRequests) -> ScenarioFuture {
+    Box::pin(async move {
+        let fixture = SessionReadsFixture::generate();
+        let workspace = Workspace::create(fixture.files()).await?;
+        let database = tempfile::tempdir()?;
+        let harness = harness
+            .repository(benchmark_repository(workspace.root())?)
+            .allow(Tool::Read)
+            .database(database.path().join("sessions.db"));
+        harness
+            .session(
+                SESSION_ID,
+                OutputSchema::new(SessionReadsFixture::schema())?,
+            )
+            .create()
+            .await?;
+        let mut outcomes = Vec::new();
+        let mut failure = None;
+        for prompt in fixture.prompts() {
+            let mut session = harness.resume(SESSION_ID).await?;
+            match session.send(prompt).await {
+                Ok(outcome) => outcomes.push((outcome, sent.take())),
+                Err(error) => {
+                    failure = Some(format!(
+                        "turn {} failed: {}",
+                        outcomes.len() + 1,
+                        summary::sanitize_detail(&error.to_string())
+                    ));
+                    break;
+                }
+            }
+        }
+        let outputs = outcomes
+            .iter()
+            .map(|(outcome, _)| outcome.output().clone())
+            .collect::<Vec<_>>();
+        let mut score = fixture.score(&outputs);
+        score.failures.extend(failure);
+        let turns = outcomes
+            .iter()
+            .map(|(outcome, sent)| MeasuredTurn {
+                report: outcome.report(),
+                sent,
+            })
+            .collect::<Vec<_>>();
+
+        Ok(Measured {
+            activity: Activity::from_turns(&turns),
+            score,
         })
     })
 }

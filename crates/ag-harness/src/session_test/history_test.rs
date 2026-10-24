@@ -3,13 +3,14 @@ use std::sync::atomic::{AtomicI64, Ordering};
 
 use tempfile::tempdir;
 
-use super::support::{schema, turn};
-use crate::context::HistoryTurn;
+use super::support::{create_version_one_database, read_call, schema, turn, turn_options};
+use crate::context::{HistoryProjection, HistoryTurn};
+use crate::input::TurnInput;
 use crate::model::ModelMessage;
 use crate::session::{
     Database, NewSession, SessionError, TimestampSource, TurnSizeRow, load_turn_size_page,
 };
-use crate::store::SessionStore as _;
+use crate::store::{AcquiredTurn, SessionStore as _};
 
 #[tokio::test]
 async fn database_loads_only_newest_complete_turns_within_budget() {
@@ -40,11 +41,11 @@ async fn database_loads_only_newest_complete_turns_within_budget() {
         .expect("session should load");
 
     // Assert
-    assert_eq!(loaded.turns, vec![HistoryTurn::from(latest_turn)]);
+    assert_eq!(loaded.turns, vec![(1, HistoryTurn::from(latest_turn))]);
 }
 
 #[tokio::test]
-async fn database_paginates_turn_sizes_until_the_history_budget_is_filled() {
+async fn database_paginates_turn_sizes_until_the_history_outgrows_its_budget() {
     // Arrange
     let database = Database::open_in_memory()
         .await
@@ -57,12 +58,27 @@ async fn database_paginates_turn_sizes_until_the_history_budget_is_filled() {
             )
         })
         .collect::<Vec<_>>();
-    let expected_turns = turns[5..].to_vec();
-    let max_history_bytes = expected_turns
+    let bytes = |messages: &Vec<ModelMessage>| {
+        messages
+            .iter()
+            .map(ModelMessage::retained_bytes)
+            .sum::<usize>()
+    };
+    // The newest 65 turns fill the budget, so the 66th, on the second size
+    // page, outgrows it.
+    let max_history_bytes = turns[5..].iter().map(bytes).sum::<usize>();
+    // Re-projection then keeps the newest turns that fit half the budget.
+    let mut used = 0;
+    let kept = turns
         .iter()
-        .flatten()
-        .map(ModelMessage::retained_bytes)
-        .sum();
+        .rev()
+        .take_while(|messages| {
+            used += bytes(messages);
+            used <= max_history_bytes / 2
+        })
+        .count();
+    let first_kept = turns.len() - kept;
+    let expected_turns = turns[first_kept..].to_vec();
     database
         .create_session(
             &NewSession::new("session-a", schema()),
@@ -85,12 +101,17 @@ async fn database_paginates_turn_sizes_until_the_history_budget_is_filled() {
         .expect("session should load");
 
     // Assert
+    assert!((30..35).contains(&kept), "{kept}");
+    let first_kept = i64::try_from(first_kept).expect("position fits i64");
     assert_eq!(
         loaded.turns,
-        expected_turns
-            .into_iter()
-            .map(HistoryTurn::from)
+        (first_kept..)
+            .zip(expected_turns.into_iter().map(HistoryTurn::from))
             .collect::<Vec<_>>()
+    );
+    assert_eq!(
+        loaded.projection,
+        HistoryProjection::new(first_kept, first_kept, first_kept)
     );
 }
 
@@ -157,6 +178,128 @@ VALUES (?, ?, 0, 'user', '"boundary"', ?, 1)
 }
 
 #[tokio::test]
+async fn reprojection_reads_older_size_pages_for_turns_it_keeps_briefly() {
+    // Arrange
+    let database = Database::open_in_memory()
+        .await
+        .expect("database should open");
+    let tool_turn = |position: usize, bytes: usize| {
+        vec![
+            ModelMessage::User(format!("question {position}")),
+            ModelMessage::AssistantToolCall(read_call(&format!("call {position}"))),
+            ModelMessage::ToolResult {
+                call_id: format!("call {position}"),
+                content: "x".repeat(bytes),
+                name: "read".to_string(),
+            },
+            ModelMessage::Assistant(format!("answer {position}")),
+        ]
+    };
+    // Seventy small tool turns, then one that alone outgrows the budget and
+    // is too large to elide.
+    let mut turns = (0..70)
+        .map(|position| tool_turn(position, 40))
+        .collect::<Vec<_>>();
+    turns.push(tool_turn(70, 100_000));
+    database
+        .create_session(&NewSession::new("session-a", schema()), None, 10_000)
+        .await
+        .expect("session should be created");
+    for messages in &turns {
+        database
+            .append_turn("session-a", messages)
+            .await
+            .expect("turn should be appended");
+    }
+
+    // Act
+    let loaded = database
+        .load_session("session-a")
+        .await
+        .expect("session should load");
+
+    // Assert
+    // The oversized newest turn replays brief, so the size pages its first
+    // pass never read hold every older turn, each brief as well.
+    assert_eq!(loaded.turns.len(), turns.len());
+    assert!(
+        loaded
+            .turns
+            .iter()
+            .all(|(_, turn)| turn.messages.len() == 2)
+    );
+    assert_eq!(loaded.projection, HistoryProjection::new(0, 71, 71));
+}
+
+#[tokio::test]
+async fn sessions_stored_before_projections_start_whole_and_keep_their_derived_projection() {
+    // Arrange
+    let directory = tempdir().expect("temporary directory");
+    let database_path = directory.path().join("legacy.db");
+    create_version_one_database(&database_path).await;
+    let database = Database::open(&database_path)
+        .await
+        .expect("migrated database");
+    let whole = database
+        .load_session("session-a")
+        .await
+        .expect("legacy session");
+    // Both stored turns, at positions 3 and 8, retain 45 bytes together.
+    sqlx::query("UPDATE session SET max_history_bytes = 30")
+        .execute(database.pool())
+        .await
+        .expect("smaller budget");
+
+    // Act
+    let derived = database
+        .load_session("session-a")
+        .await
+        .expect("outgrown session");
+    let mut acquired = AcquiredTurn::begin(
+        Arc::new(database.clone()),
+        "session-a",
+        &TurnInput::from("new"),
+        &turn_options(),
+        0,
+    )
+    .await
+    .expect("new turn");
+    acquired
+        .guard
+        .complete(&[], acquired.projection)
+        .await
+        .expect("completion");
+    let stored: (i64, i64, i64) = sqlx::query_as(
+        "SELECT history_start, history_brief_before, history_elided_before FROM session",
+    )
+    .fetch_one(database.pool())
+    .await
+    .expect("stored projection");
+
+    // Assert
+    assert_eq!(whole.projection, HistoryProjection::default());
+    assert_eq!(
+        whole
+            .turns
+            .iter()
+            .map(|(position, _)| *position)
+            .collect::<Vec<_>>(),
+        [3, 8]
+    );
+    assert_eq!(derived.projection, HistoryProjection::new(8, 8, 8));
+    assert_eq!(
+        derived
+            .turns
+            .iter()
+            .map(|(position, _)| *position)
+            .collect::<Vec<_>>(),
+        [8]
+    );
+    assert_eq!(acquired.projection, derived.projection);
+    assert_eq!(stored, (8, 8, 8));
+}
+
+#[tokio::test]
 async fn database_excludes_a_newest_turn_larger_than_the_budget() {
     // Arrange
     let database = Database::open_in_memory()
@@ -178,7 +321,7 @@ async fn database_excludes_a_newest_turn_larger_than_the_budget() {
         .expect("session should load");
 
     // Assert
-    assert_eq!(loaded.turns, Vec::<HistoryTurn>::new());
+    assert_eq!(loaded.turns, Vec::<(i64, HistoryTurn)>::new());
 }
 
 #[tokio::test]

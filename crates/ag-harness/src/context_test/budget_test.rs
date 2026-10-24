@@ -1,11 +1,9 @@
-use std::collections::VecDeque;
-
 use serde_json::json;
 
 use super::support::{FixedEstimator, budget, read_call, result};
 use crate::context::{
     ContextBudgetError, ContextEstimator, HeuristicContextEstimator, HistoryTurn, TurnStop,
-    admit_mandatory_content, advertised_tools, select_recent_turns,
+    admit_mandatory_content, advertised_tools,
 };
 use crate::input::{ImageContent, ImageMediaType, InputBlock, TurnInput};
 use crate::model::ModelMessage;
@@ -247,65 +245,6 @@ fn oversized_mandatory_content_returns_a_typed_error() {
     ));
 }
 
-#[test]
-fn selection_keeps_the_most_recent_whole_turns() {
-    // Arrange
-    let turns = VecDeque::from(vec![
-        HistoryTurn::from(vec![
-            ModelMessage::User("old".into()),
-            ModelMessage::Assistant("old answer".into()),
-        ]),
-        HistoryTurn::from(vec![ModelMessage::User("middle".into())]),
-        HistoryTurn::from(vec![
-            ModelMessage::ToolResult {
-                call_id: "call".into(),
-                content: "result".into(),
-                name: "read".into(),
-            },
-            ModelMessage::Assistant("new answer".into()),
-        ]),
-    ]);
-
-    // Act
-    let (projected, evicted) = select_recent_turns(&FixedEstimator, &turns, 21);
-
-    // Assert
-    // The two-message oldest turn is dropped wholesale.
-    assert_eq!(evicted, 1);
-    assert_eq!(projected.len(), 2);
-    assert_eq!(projected[0], [ModelMessage::User("middle".into())]);
-    assert!(matches!(
-        &projected[1][0],
-        ModelMessage::ToolResult { call_id, .. } if call_id == "call"
-    ));
-}
-
-#[test]
-fn selection_stops_at_the_first_turn_that_does_not_fit() {
-    // Arrange
-    let turns = VecDeque::from(vec![
-        HistoryTurn::from(vec![ModelMessage::User("small".into())]),
-        HistoryTurn::from(vec![
-            ModelMessage::User("large".into()),
-            ModelMessage::Assistant("large answer".into()),
-        ]),
-        HistoryTurn::from(vec![ModelMessage::User("recent".into())]),
-    ]);
-
-    // Act
-    let partial = select_recent_turns(&FixedEstimator, &turns, 8);
-    let empty = select_recent_turns(&FixedEstimator, &turns, 0);
-
-    // Assert
-    // The older single-message turn would fit, but selection never skips the
-    // two-message turn between it and the retained suffix.
-    assert_eq!(
-        partial,
-        (vec![vec![ModelMessage::User("recent".into())]], 2)
-    );
-    assert_eq!(empty, (Vec::<Vec<ModelMessage>>::new(), 3));
-}
-
 fn placeholder(id: &str) -> ModelMessage {
     ModelMessage::ToolResult {
         call_id: id.to_string(),
@@ -415,41 +354,4 @@ fn completed_turns_replay_verbatim_and_briefly_as_input_and_output() {
             ModelMessage::Assistant("answer".to_string()),
         ]
     );
-}
-
-#[test]
-fn selection_keeps_only_input_and_note_of_a_stopped_turn_that_does_not_fit() {
-    // Arrange
-    let stopped = HistoryTurn {
-        messages: vec![
-            ModelMessage::User("stopped".to_string()),
-            ModelMessage::AssistantToolCall(read_call("call")),
-            result("call"),
-        ],
-        stop: Some(interrupted()),
-    };
-    let turns = VecDeque::from(vec![
-        HistoryTurn::from(vec![ModelMessage::User("older".to_string())]),
-        stopped.clone(),
-    ]);
-
-    // Act
-    // The full and elided stopped replays weigh 28 and its brief form 14;
-    // nothing older fits after the brief form.
-    let (projected, evicted) = select_recent_turns(&FixedEstimator, &turns, 20);
-    let (full, full_evicted) = select_recent_turns(&FixedEstimator, &turns, 35);
-    let (empty, empty_evicted) = select_recent_turns(&FixedEstimator, &turns, 13);
-
-    // Assert
-    assert_eq!(projected, [stopped.brief().replay()]);
-    assert_eq!(evicted, 1);
-    assert_eq!(
-        full,
-        [
-            vec![ModelMessage::User("older".to_string())],
-            stopped.replay()
-        ]
-    );
-    assert_eq!(full_evicted, 0);
-    assert_eq!((empty, empty_evicted), (Vec::<Vec<ModelMessage>>::new(), 2));
 }

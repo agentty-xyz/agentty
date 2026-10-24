@@ -8,8 +8,8 @@ use serde_json::{Map, Value, json};
 
 use super::metric;
 
-/// Content-free activity summed over every accepted request of one turn,
-/// with one record per request.
+/// Content-free activity summed over every accepted request of a run's
+/// turns, with one record per request and, for a session, one per turn.
 pub(super) struct Activity {
     cache: Map<String, Value>,
     context: [(&'static str, usize); 9],
@@ -26,60 +26,91 @@ pub(super) struct Activity {
     summary_calls: usize,
     summary_failures: usize,
     tool_calls: usize,
+    turns: Vec<Value>,
+}
+
+/// One measured turn of a run: its report and the message digests of the
+/// requests the report records.
+pub(super) struct MeasuredTurn<'a> {
+    pub(super) report: &'a TurnReport,
+    pub(super) sent: &'a [Vec<u64>],
 }
 
 impl Activity {
-    /// Measures a finished turn from its public report.
-    pub(super) fn from_outcome(outcome: &TurnOutcome) -> Self {
-        Self::from_report(outcome.report())
+    /// Measures one finished turn from its public report.
+    pub(super) fn from_outcome(outcome: &TurnOutcome, sent: &[Vec<u64>]) -> Self {
+        Self::from_turns(&[MeasuredTurn {
+            report: outcome.report(),
+            sent,
+        }])
     }
 
-    /// Measures a turn from its report, which a failed turn also carries on
-    /// its failure event.
-    pub(super) fn from_report(report: &TurnReport) -> Self {
+    /// Measures a run's turns, in order, from their reports; a failed turn
+    /// carries its report on its failure event.
+    pub(super) fn from_turns(turns: &[MeasuredTurn<'_>]) -> Self {
         let mut context = ContextCounts::default();
         let mut input_tokens = None::<u64>;
         let mut output_tokens = None::<u64>;
-        for request in report.model_requests() {
-            context.add(request.context());
-            let usage = request
-                .completion()
-                .and_then(|completion| completion.usage());
-            if let Some(tokens) = usage.and_then(|usage| usage.input_tokens()) {
-                input_tokens = Some(input_tokens.unwrap_or(0).saturating_add(tokens));
+        let mut requests = Vec::new();
+        let mut tool_calls = Vec::new();
+        let mut turn_records = Vec::new();
+        for (index, turn) in turns.iter().enumerate() {
+            let reported = turn.report.model_requests();
+            for request in reported {
+                context.add(request.context());
+                let usage = request
+                    .completion()
+                    .and_then(|completion| completion.usage());
+                if let Some(tokens) = usage.and_then(|usage| usage.input_tokens()) {
+                    input_tokens = Some(input_tokens.unwrap_or(0).saturating_add(tokens));
+                }
+                if let Some(tokens) = usage.and_then(|usage| usage.output_tokens()) {
+                    output_tokens = Some(output_tokens.unwrap_or(0).saturating_add(tokens));
+                }
             }
-            if let Some(tokens) = usage.and_then(|usage| usage.output_tokens()) {
-                output_tokens = Some(output_tokens.unwrap_or(0).saturating_add(tokens));
-            }
-        }
+            // Digests that do not pair one-to-one with the reported requests
+            // are left out rather than attributed to the wrong request.
+            let aligned = turn.sent.len() == reported.len();
+            requests.extend(reported.iter().enumerate().map(|(position, request)| {
+                let sent = turn.sent.get(position).filter(|_| aligned);
 
-        let mut requests = report
-            .model_requests()
-            .iter()
-            .map(request_record)
-            .collect::<Vec<_>>();
+                request_record(request, index, sent)
+            }));
+            tool_calls.extend_from_slice(turn.report.tool_calls());
+            let history = turn.report.history();
+            turn_records.push(json!({
+                "model_calls": reported.len(),
+                "replayed_turns": history.replayed_turns(),
+                "evicted_turns": history.evicted_turns(),
+                "checkpoint_replayed": history.checkpoint_replayed(),
+            }));
+        }
         let cache = metric::record_cache_reuse(&mut requests);
+        let reports = turns.iter().map(|turn| turn.report);
 
         Self {
             cache,
             context: context.0,
-            context_overflow_recoveries: report.context_overflow_recoveries(),
-            deferred_reads: metric::deferred_reads(report.tool_calls()),
-            duplicate_reads: metric::duplicate_reads(report.tool_calls()),
+            context_overflow_recoveries: reports
+                .clone()
+                .map(TurnReport::context_overflow_recoveries)
+                .sum(),
+            deferred_reads: metric::deferred_reads(&tool_calls),
+            duplicate_reads: metric::duplicate_reads(&tool_calls),
             input_tokens,
-            malformed_tool_calls: report.malformed_tool_calls(),
-            model_calls: report.model_requests().len(),
-            output_corrections: report.output_corrections(),
+            malformed_tool_calls: reports.clone().map(TurnReport::malformed_tool_calls).sum(),
+            model_calls: requests.len(),
+            output_corrections: reports.clone().map(TurnReport::output_corrections).sum(),
             output_tokens,
-            repetition_nudges: report.repetition_nudges(),
-            requests,
-            summary_calls: report
-                .model_requests()
+            repetition_nudges: reports.clone().map(TurnReport::repetition_nudges).sum(),
+            summary_calls: requests
                 .iter()
-                .filter(|request| request.purpose() == ModelRequestPurpose::ContextSummary)
+                .filter(|request| request["purpose"] == "context_summary")
                 .count(),
-            summary_failures: report.context_summary_failures(),
-            tool_calls: report.tool_calls().len(),
+            summary_failures: reports.map(TurnReport::context_summary_failures).sum(),
+            requests,
+            tool_calls: tool_calls.len(),
+            turns: turn_records,
         }
     }
 
@@ -106,6 +137,7 @@ impl Activity {
             json!(self.context_overflow_recoveries),
         );
         line.insert("requests".into(), json!(self.requests));
+        line.insert("turns".into(), json!(self.turns));
         for (name, count) in self.context {
             line.insert(name.into(), json!(count));
         }
@@ -168,6 +200,7 @@ pub(super) struct RunRecord {
     pub(super) correctness: f64,
     pub(super) detail: Option<String>,
     pub(super) estimate: Option<String>,
+    pub(super) history_bytes: Option<usize>,
     pub(super) model: String,
     pub(super) observed: Observed,
     pub(super) provider: &'static str,
@@ -198,6 +231,7 @@ impl RunRecord {
         line.insert("reserved_output".into(), json!(self.reserved_output));
         line.insert("context_summaries".into(), json!(self.context_summaries));
         line.insert("estimate".into(), json!(self.estimate));
+        line.insert("history_bytes".into(), json!(self.history_bytes));
         line.insert("success".into(), json!(self.success));
         line.insert("correctness".into(), json!(self.correctness));
         line.insert("wall_ms".into(), json!(self.wall_ms));
@@ -216,7 +250,7 @@ impl RunRecord {
     }
 }
 
-const ACTIVITY_FIELDS: [&str; 19] = [
+const ACTIVITY_FIELDS: [&str; 22] = [
     "model_calls",
     "output_corrections",
     "tool_calls",
@@ -227,6 +261,8 @@ const ACTIVITY_FIELDS: [&str; 19] = [
     "cache_hit_tokens",
     "cached_share",
     "reduction_events",
+    "rewritten_prefixes",
+    "turn_boundaries",
     "held_prefixes",
     "lost_prefixes",
     "lost_cache_tokens",
@@ -236,6 +272,7 @@ const ACTIVITY_FIELDS: [&str; 19] = [
     "malformed_tool_calls",
     "context_overflow_recoveries",
     "requests",
+    "turns",
 ];
 const CONTEXT_FIELDS: [&str; 9] = [
     "elided_results",
@@ -279,8 +316,9 @@ impl ContextCounts {
 /// One reported request: why it was sent, whether its output was rejected,
 /// how long it took, what the provider reported, the capacity it was fitted
 /// into, what the harness estimated before and after reduction, and how it
-/// was reduced.
-fn request_record(request: &ModelRequestActivity) -> Value {
+/// was reduced, with the index of its `turn` in the run and the digests of
+/// the messages it `sent`, which [`metric::record_cache_reuse`] consumes.
+fn request_record(request: &ModelRequestActivity, turn: usize, sent: Option<&Vec<u64>>) -> Value {
     let completion = request.completion();
     let usage = completion.and_then(|completion| completion.usage());
     let mut reductions = ContextCounts::default();
@@ -293,6 +331,7 @@ fn request_record(request: &ModelRequestActivity) -> Value {
         .collect();
 
     json!({
+        "turn": turn,
         "purpose": match request.purpose() {
             ModelRequestPurpose::Turn => "turn",
             ModelRequestPurpose::ContextSummary => "context_summary",
@@ -309,5 +348,6 @@ fn request_record(request: &ModelRequestActivity) -> Value {
         "estimated_weight": request.estimated_weight(),
         "calibrated_weight": request.calibrated_weight(),
         "reductions": reductions,
+        "sent": sent,
     })
 }

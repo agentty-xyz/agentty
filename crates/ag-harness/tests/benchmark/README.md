@@ -54,16 +54,20 @@ See `results/2026-09-03.md` for the completed live persistence and compatibility
 
 ## Context suite
 
-The context suite measures in-turn context management at a forced small `ContextBudget`
-or at the model's declared window. Each scenario runs as one `run_once` turn against a
-committed Git fixture generated from a fixed seed, so every run reads the same bytes:
+The context suite measures context management at a forced small `ContextBudget` or at
+the model's declared window. Each scenario runs against a committed Git fixture
+generated from a fixed seed, so every run reads the same bytes. All but `session_reads`
+run as one `run_once` turn; `session_reads` runs nine turns of one SQLite session,
+resumed before each turn as a host process does, so it measures history projection
+across turns:
 
-| Scenario             | Task                                                                                                  | Correctness checks                                     |
-| -------------------- | ----------------------------------------------------------------------------------------------------- | ------------------------------------------------------ |
-| `long_read_loop`     | Read 16 varied Rust-like files and list each file's `pub fn` names plus the file with the most.       | One per file (exact name set) plus the maximum file.   |
-| `doc_comment_writes` | Apply three named doc-comment edits across two files of about 250 lines; one target is past line 200. | One per edit plus the exact final contents and status. |
-| `huge_result`        | Read six small notes, then one 48 KB single-line file; return all seven code words in order.          | One per code word.                                     |
-| `sequential_writes`  | Edit eight long files one at a time (read, then write), so applied writes supersede earlier reads.    | One per edit plus the exact final contents and status. |
+| Scenario             | Task                                                                                                  | Correctness checks                                      |
+| -------------------- | ----------------------------------------------------------------------------------------------------- | ------------------------------------------------------- |
+| `long_read_loop`     | Read 16 varied Rust-like files and list each file's `pub fn` names plus the file with the most.       | One per file (exact name set) plus the maximum file.    |
+| `doc_comment_writes` | Apply three named doc-comment edits across two files of about 250 lines; one target is past line 200. | One per edit plus the exact final contents and status.  |
+| `huge_result`        | Read six small notes, then one 48 KB single-line file; return all seven code words in order.          | One per code word.                                      |
+| `sequential_writes`  | Edit eight long files one at a time (read, then write), so applied writes supersede earlier reads.    | One per edit plus the exact final contents and status.  |
+| `session_reads`      | Read the `long_read_loop` files two per turn for eight turns, then recall every file in a ninth turn. | Per reading turn: each file and the larger one; recall. |
 
 Select it with `AG_HARNESS_BENCHMARK_SUITE=context` and exactly one provider per
 process. Set `QWEN_MODEL` to compare Qwen models:
@@ -88,10 +92,12 @@ Muse Spark 1.3, as declared in `crates/ag-agent/src/agent/model_profile.rs`).
 model's profile as Agentty declares it: its window, its maximum output plus estimate
 margin as the reservation, and its fitted estimator unless `AG_HARNESS_CONTEXT_ESTIMATE`
 overrides it. `AG_HARNESS_CONTEXT_TIMEOUT_SECS` (default `900`) bounds each run; a run
-that exceeds it is recorded as failed. `AG_HARNESS_CONTEXT_SUMMARIES=1` enables
-`ContextSummaryPolicy::Enabled`, so outgrown requests summarize earlier tool rounds.
-Kimi is not paced in this suite, so its three-request-per-minute limit makes it
-unsuitable without a higher quota.
+that exceeds it is recorded as failed. `AG_HARNESS_CONTEXT_HISTORY_BYTES` sets the
+session's retained history byte limit (default 256 KiB), which `session_reads` outgrows
+at the declared window only when it is lowered, for example to `32768`.
+`AG_HARNESS_CONTEXT_SUMMARIES=1` enables `ContextSummaryPolicy::Enabled`, so outgrown
+requests summarize earlier tool rounds. Kimi is not paced in this suite, so its
+three-request-per-minute limit makes it unsuitable without a higher quota.
 
 Run both regimes when a change can affect context fitting or prompt caching. The forced
 budget makes every reduction tier fire within a few rounds; the declared window shows
@@ -134,27 +140,38 @@ Each run appends one JSON object to `AG_HARNESS_CONTEXT_RESULTS` (default
   `reasoning_tokens`, and `finish_reason`, the calibrated capacity it was fitted into
   (`budget_weight`), its weight before (`unreduced_weight`) and after
   (`estimated_weight`) reduction, the calibrated token prediction (`calibrated_weight`),
-  and its non-zero `reductions`. `model_calls` counts these requests. Each turn request
-  after the first also compares itself with the previous turn request:
-  `cache_expected_tokens` is the smaller of the two inputs, which an append-only cache
-  could reuse, `prefix_held` is whether the provider reused at least 85% of it, and
-  `reduction_event` is whether its `reductions` differ from the previous one's, so the
-  harness rewrote earlier bytes or newly cut the latest round.
+  and its non-zero `reductions`, and the index of its `turn` in the run. `model_calls`
+  counts these requests. Each turn request after the first also compares itself with the
+  previous turn request: `cache_expected_tokens` is the smaller of the two inputs, which
+  an append-only cache could reuse, `prefix_held` is whether the provider reused at
+  least 85% of it, and `reduction_event` is whether its `reductions` differ from the
+  previous one's. The suite wraps the provider client to digest the messages each
+  request sent: `prefix_messages` counts the leading messages both requests sent alike,
+  and `prefix_rewritten` is whether the request left out or changed any message of the
+  previous one, so the harness rewrote earlier bytes.
 - `cache_hit_tokens` and `cached_share` sum and divide provider-reported cache hits over
-  every request. `reduction_events` and `held_prefixes` count turn-request pairs, and
-  `lost_prefixes` and `lost_cache_tokens` (each expected token not reused) split the
-  pairs that lost the prefix into `harness`, at a reduction event, and `provider`.
+  every request. `reduction_events`, `rewritten_prefixes`, and `held_prefixes` count
+  turn-request pairs, and `lost_prefixes` and `lost_cache_tokens` (each expected token
+  not reused) split the pairs that lost the prefix into `harness`, where the request
+  rewrote earlier messages (or, without digests, at a reduction event), and `provider`.
+  `turn_boundaries` counts the pairs whose requests belong to different turns of a
+  session (`pairs`), and of those, the ones whose prefix `held` and the ones the harness
+  `rewritten`. `turns` lists each turn's `model_calls` and its `HistoryActivity`
+  (`replayed_turns`, `evicted_turns`, `checkpoint_replayed`).
 - `elided_results`, `cleared_reasoning`, `shrunk_write_calls`, `dropped_history_turns`,
   `dropped_tool_calls`, `truncated_results`, `shrunk_latest_write_calls`,
   `summarized_tool_calls`, and `superseded_results` sum `ContextActivity` over every
   accepted request. A reduction carried into later requests is counted once per request,
   so these measure sustained pressure rather than distinct items.
 - `revision`, `model`, `window`, `window_mode` (`fixed` or `declared`),
-  `reserved_output`, `context_summaries`, and `estimate` (the
+  `reserved_output`, `context_summaries`, `history_bytes` (the
+  `AG_HARNESS_CONTEXT_HISTORY_BYTES` value or `null`), and `estimate` (the
   `AG_HARNESS_CONTEXT_ESTIMATE` value or the declared estimator, or `null` for
   `DEFAULT`) identify the configuration. A failed turn's activity fields come from the
   report on its `TurnFailed` event; they are `null` only when the turn failed before
-  preparing its first request or timed out. `detail` holds the error or failed checks.
+  preparing its first request or timed out. `detail` holds the error or failed checks. A
+  failed `session_reads` turn ends the run: its activity covers the finished turns only,
+  and `detail` names the failed turn among the failed checks.
 
 To compare runs, aggregate per scenario, model, and window with `jq`:
 

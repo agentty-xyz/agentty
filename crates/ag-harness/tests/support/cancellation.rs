@@ -13,8 +13,8 @@ use ag_harness::model::{
 };
 use ag_harness::recovery::HostTurnRecord;
 use ag_harness::store::{
-    LoadedSession, MemoryStore, ModelSwitch, NewSession, Reservation, SessionStore, SqliteStore,
-    StoreIdentity, TurnAdmission, TurnOwner, WriteRecord, WriteStatus,
+    HistoryProjection, LoadedSession, MemoryStore, ModelSwitch, NewSession, Reservation,
+    SessionStore, SqliteStore, StoreIdentity, TurnAdmission, TurnOwner, WriteRecord, WriteStatus,
 };
 use ag_harness::tool::{FileSystem, LocalFileSystem, ToolCall};
 use ag_harness::turn::SettlementPhase;
@@ -50,7 +50,7 @@ fn completed_turns(loaded: &LoadedSession) -> usize {
     loaded
         .turns
         .iter()
-        .filter(|turn| turn.stop.is_none())
+        .filter(|(_, turn)| turn.stop.is_none())
         .count()
 }
 
@@ -243,10 +243,11 @@ impl SessionStore for Gate {
         owner: &TurnOwner,
         messages: &[ModelMessage],
         outcome: &TurnOutcome,
+        projection: HistoryProjection,
     ) -> Result<(), SessionError> {
         self.pause(Phase::Complete).await;
         self.store
-            .complete_request(owner, messages, outcome)
+            .complete_request(owner, messages, outcome, projection)
             .await?;
         self.pause(Phase::CompleteAck).await;
 
@@ -276,9 +277,12 @@ impl SessionStore for Gate {
         &self,
         owner: &TurnOwner,
         messages: &[ModelMessage],
+        projection: HistoryProjection,
     ) -> Result<(), SessionError> {
         self.pause(Phase::Complete).await;
-        self.store.complete_turn(owner, messages).await?;
+        self.store
+            .complete_turn(owner, messages, projection)
+            .await?;
         self.pause(Phase::CompleteAck).await;
         Ok(())
     }

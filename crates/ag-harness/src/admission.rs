@@ -8,7 +8,7 @@
 use tokio::time::Instant;
 
 use crate::compaction::SessionCheckpoint;
-use crate::context::HistoryTurn;
+use crate::context::{HistoryProjection, HistoryTurn};
 use crate::input::TurnInput;
 use crate::model::{ModelCapabilities, ModelMessage, ModelMetadata};
 use crate::recovery::{ExecutionIdentity, HostRequest, HostTurnRecord};
@@ -145,21 +145,32 @@ pub struct ReservedTurn {
     pub(crate) checkpoint: Option<SessionCheckpoint>,
     pub(crate) deadline: Instant,
     pub(crate) owner: TurnOwner,
-    pub(crate) turns: Vec<HistoryTurn>,
+    pub(crate) projection: HistoryProjection,
+    pub(crate) turns: Vec<(i64, HistoryTurn)>,
 }
 
 impl ReservedTurn {
     /// Describes a committed reservation. `deadline` must not exceed the
     /// stored lease expiry; `turns` holds finished history bounded by the
-    /// stored budget, oldest first, as [`crate::store::LoadedSession::turns`]
-    /// describes.
-    pub fn new(owner: TurnOwner, deadline: Instant, turns: Vec<HistoryTurn>) -> Self {
+    /// stored budget, oldest first with each turn's position, as
+    /// [`crate::store::LoadedSession::turns`] describes.
+    pub fn new(owner: TurnOwner, deadline: Instant, turns: Vec<(i64, HistoryTurn)>) -> Self {
         Self {
             checkpoint: None,
             deadline,
             owner,
+            projection: HistoryProjection::default(),
             turns,
         }
+    }
+
+    /// Attaches the projection `turns` follow, as
+    /// [`crate::store::LoadedSession::projection`] describes.
+    #[must_use]
+    pub fn with_projection(mut self, projection: HistoryProjection) -> Self {
+        self.projection = projection;
+
+        self
     }
 
     /// Attaches the session's current compaction checkpoint; `turns` must

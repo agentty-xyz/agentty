@@ -104,27 +104,29 @@ is not available until read again), then each assistant message loses its reason
 (providers that replay reasoning still receive a non-empty placeholder) and its `write`
 patches (a note on their recorded outcome) in one rewrite. The rounds holding the newest
 five results keep their results, reasoning, and patches until everything older is
-cleared, and the latest round is never reduced by these steps. Clearing reasoning starts
-at the oldest assistant message the first time it is needed, so that one reduction
-rewrites the request from there. If clearing cannot reach 50%, the oldest replayed turns
-and then the current turn's oldest tool rounds are dropped whole, each call message with
-all its results, down to 70%; a dropped round also loses the text the model wrote beside
-its calls, so dropping stops short of the clearing target. Each reduction that drops
-rounds names them in one bounded note appended after the earlier notes, which counts the
-removed calls, lists the files they modified and read (up to 64 paths each, as the
-harness recorded them), the commands they ran, and their other read targets, and says
-what they showed is not available until read again; once no earlier round is left to
-drop, the notes merge into one. A repeated-read note whose earlier result is cleared,
-cut, or summarized becomes a notice that it is no longer shown whole, naming the newer
-read when one returned it again. Tool calls keep their identifiers, so tool groups stay
-well-formed, and the text the model wrote beside them is never cleared, so its notes on
-what it found outlive the cleared results and leave only with their dropped round. Each
-reduction step is a watermark into the append-only canonical messages, and each reduced
-message is cached, so a request between reductions only weighs and appends its new
-messages. If the request still does not fit, the latest round's largest results are cut
-further the same way, and as the last resort its `write` patches are replaced by their
-recorded outcome; both stay cut in later requests. Only when even that fails does the
-turn fail typed. Each `ModelRequestActivity` reports the reductions its request carried.
+cleared, and the latest round is never reduced by these steps. A replayed history turn
+that clearing reaches is cleared whole, so the next turn can replay it as sent. Clearing
+reasoning starts at the oldest assistant message the first time it is needed, so that
+one reduction rewrites the request from there. If clearing cannot reach 50%, the oldest
+replayed turns and then the current turn's oldest tool rounds are dropped whole, each
+call message with all its results, down to 70%; a dropped round also loses the text the
+model wrote beside its calls, so dropping stops short of the clearing target. Each
+reduction that drops rounds names them in one bounded note appended after the earlier
+notes, which counts the removed calls, lists the files they modified and read (up to 64
+paths each, as the harness recorded them), the commands they ran, and their other read
+targets, and says what they showed is not available until read again; once no earlier
+round is left to drop, the notes merge into one. A repeated-read note whose earlier
+result is cleared, cut, or summarized becomes a notice that it is no longer shown whole,
+naming the newer read when one returned it again. Tool calls keep their identifiers, so
+tool groups stay well-formed, and the text the model wrote beside them is never cleared,
+so its notes on what it found outlive the cleared results and leave only with their
+dropped round. Each reduction step is a watermark into the append-only canonical
+messages, and each reduced message is cached, so a request between reductions only
+weighs and appends its new messages. If the request still does not fit, the latest
+round's largest results are cut further the same way, and as the last resort its `write`
+patches are replaced by their recorded outcome; both stay cut in later requests. Only
+when even that fails does the turn fail typed. Each `ModelRequestActivity` reports the
+reductions its request carried.
 
 With `ContextSummaryPolicy::Enabled`, a request that still exceeds 50% of its capacity
 after superseded results are cleared and oversized results capped first summarizes the
@@ -325,17 +327,31 @@ a stopped turn keeps everything it already did.
   turns, so the rest stay uncovered for a later call. A summary that is no smaller than
   its source is rejected.
 - Every harness has an approximate `ContextBudget`, passed to `Harness::new` or derived
-  from its registration's `ModelProfile`: requests keep the most recent turns that fit,
-  each whole, with its tool traffic replaced by notices, or as its input and final
-  output (input and stop note for a stopped turn), and mandatory content that cannot fit
-  fails with a typed error before any provider call.
-- The byte-based history limit keeps each turn too large to load whole in its elided or
-  brief form, so one oversized turn no longer hides itself and every older turn. Every
-  store selects the same forms; SQLite decides whole and brief turns from stored sizes
-  and loads a turn's full payload only when its elided form might fit. A turn larger
-  than eight times the limit is never elided, so loading one turn stays bounded. Every
-  turn acquisition reloads history from the store, so live and resumed sessions replay
-  the same turns.
+  from its registration's `ModelProfile`, and mandatory content that cannot fit fails
+  with a typed error before any provider call. Replayed history is bounded twice: by the
+  stored byte limit when it is loaded and by the weight the budget leaves for history in
+  each turn's first request.
+- History replays through a sticky `HistoryProjection`: turn-position boundaries before
+  which older turns are left out, replayed as their input and final output (input and
+  stop note for a stopped turn), or replayed with their tool traffic replaced by
+  notices; later turns, including each new one, replay whole. While the projected turns
+  fit both limits, a new turn's first request repeats the previous turn's history and
+  appends that turn, so the provider keeps its cached prefix across turns. Only when
+  they outgrow a limit are they re-projected, newest first, down to half of it: each
+  turn in the most complete form that fits what is left, never more complete than before
+  or than the newer turn after it, until a turn fits in no form. Boundaries only
+  advance, so a shortened turn is never restored. The projection a completed turn leaves
+  also keeps the history turns its own requests dropped left out, and those they sent
+  exactly in their elided form elided, so the next turn continues what was last sent.
+  The store keeps that projection with the completed turn (SQLite in the `session` row),
+  and a model switch resets it. Sessions stored before projections were kept start from
+  the default, which replays every turn whole, and are re-projected once their history
+  outgrows a limit.
+- A turn larger than eight times the byte limit is never elided but replayed in brief
+  form, so loading one turn stays bounded. Every store projects the same forms; SQLite
+  decides whole and brief turns from stored sizes and loads a turn's full payload only
+  when it may replay elided. Every turn acquisition reloads history from the store, so
+  live and resumed sessions replay the same turns.
 - Each durable turn's `TurnReport` carries a `HistoryActivity` stating how many loaded
   turns were replayed or evicted and whether a checkpoint summary was replayed, so hosts
   observe context projection instead of inferring it from model answers.

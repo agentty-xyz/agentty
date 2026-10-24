@@ -209,7 +209,7 @@ async fn checkpoint_projects_summary_and_survives_reopen() {
             "checkpoint bounds replay to uncovered turns"
         );
         assert!(
-            matches!(&loaded.turns[0].messages[0], ModelMessage::User(text) if text == "third")
+            matches!(&loaded.turns[0].1.messages[0], ModelMessage::User(text) if text == "third")
         );
         let requests = requests.lock().expect("requests");
         let third = requests.last().expect("third request");
@@ -485,7 +485,9 @@ async fn model_switch_keeps_checkpoints_and_journals_intact() {
         );
         let loaded = store.load_session("switch").await.expect("load");
         assert_eq!(loaded.turns.len(), 1);
-        assert!(matches!(&loaded.turns[0].messages[0], ModelMessage::User(text) if text == "two"));
+        assert!(
+            matches!(&loaded.turns[0].1.messages[0], ModelMessage::User(text) if text == "two")
+        );
     }
 }
 

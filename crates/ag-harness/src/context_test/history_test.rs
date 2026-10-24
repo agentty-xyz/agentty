@@ -1,14 +1,7 @@
-use std::collections::VecDeque;
-
 use serde_json::json;
 
-use super::support::{
-    ByteEstimator, read_call, reasoned_read_call, result_json, tool_result, write_call,
-};
-use crate::context::{
-    CLEARED_REASONING, ContextEstimator, ELIDED_SOURCE_LIMIT_FACTOR, HistoryTurn, TurnStop,
-    fit_history_bytes, select_recent_turns,
-};
+use super::support::{read_call, reasoned_read_call, result_json, tool_result, write_call};
+use crate::context::{CLEARED_REASONING, ELIDED_SOURCE_LIMIT_FACTOR, HistoryTurn, TurnStop};
 use crate::model::ModelMessage;
 use crate::tool::ToolCall;
 
@@ -159,45 +152,4 @@ fn byte_fitting_skips_the_elided_form_of_a_turn_beyond_the_load_bound() {
     // Assert
     assert_eq!(within_bound, Some(turn.elided()));
     assert_eq!(beyond_bound, Some(turn.brief()));
-}
-
-#[test]
-fn history_byte_fitting_keeps_newest_turns_until_one_does_not_fit_briefly() {
-    // Arrange
-    let oldest = HistoryTurn::from(vec![ModelMessage::User("o".repeat(100))]);
-    let middle = HistoryTurn::from(vec![ModelMessage::User("m".repeat(100))]);
-    let newest = tool_heavy_turn("newest");
-    let elided = retained(&newest.elided());
-
-    // Act
-    let kept = fit_history_bytes(
-        [newest.clone(), middle.clone(), oldest],
-        elided + retained(&middle) + 50,
-    );
-
-    // Assert
-    assert_eq!(kept, [middle, newest.elided()]);
-}
-
-#[test]
-fn selection_replays_an_oversized_turn_elided_before_briefly() {
-    // Arrange
-    let turn = tool_heavy_turn("work");
-    let weigh = |messages: Vec<ModelMessage>| -> u64 {
-        messages
-            .iter()
-            .map(|message| ByteEstimator.message_weight(message))
-            .sum()
-    };
-    let elided_weight = weigh(turn.elided().replay());
-    let brief_weight = weigh(turn.brief().replay());
-    let turns = VecDeque::from(vec![turn.clone()]);
-
-    // Act
-    let (elided, elided_evicted) = select_recent_turns(&ByteEstimator, &turns, elided_weight);
-    let (brief, brief_evicted) = select_recent_turns(&ByteEstimator, &turns, brief_weight);
-
-    // Assert
-    assert_eq!((elided, elided_evicted), (vec![turn.elided().replay()], 0));
-    assert_eq!((brief, brief_evicted), (vec![turn.brief().replay()], 0));
 }

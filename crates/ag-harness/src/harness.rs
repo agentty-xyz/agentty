@@ -1,4 +1,3 @@
-use std::collections::VecDeque;
 use std::future::{Future, IntoFuture};
 use std::hash::{BuildHasher, RandomState};
 use std::num::NonZeroUsize;
@@ -17,10 +16,10 @@ use crate::cancellation::{ControlledTurn, TurnControl};
 use crate::compaction::{self, CompactionSource, MAX_SUMMARY_BYTES, SessionCheckpoint};
 use crate::context::{
     self, ContextBudget, ContextEstimator, ContextSummaryPolicy, HeuristicContextEstimator,
-    HistoryTurn,
+    HistoryLimit, HistoryProjection, HistoryTurn, ReplayedHistory,
 };
 use crate::effect::Effects;
-use crate::engine::{Engine, EngineFailure};
+use crate::engine::{Engine, EngineFailure, FinishedTurn};
 use crate::file_system::{FileSystem, LocalFileSystem};
 use crate::input::{InputBlock, TurnInput};
 use crate::lifecycle::{LifecycleEmitter, LifecycleObserver, TurnErrorType, TurnLifecycle};
@@ -478,6 +477,7 @@ impl Session {
         let AcquiredTurn {
             checkpoint,
             mut guard,
+            projection,
             turns,
         } = match acquired {
             HostTurnAcquisition::Acquired(acquired) => acquired,
@@ -489,8 +489,8 @@ impl Session {
             *turn = self.harness.lifecycle.start_turn();
         }
         let turn_id = turn.as_ref().map(TurnLifecycle::id);
-        self.history.replace(turns);
-        let (request, retained_messages, history) =
+        self.history.replace(&turns, projection);
+        let (request, retained_messages, history, replayed) =
             self.build_request(input, options, available_history_weight);
         let journal = guard.write_journal();
         let mut engine = self.harness.engine(options);
@@ -505,7 +505,11 @@ impl Session {
             }
             result = engine.run(request, turn_id, Some(journal)) => result,
         };
-        let (mut outcome, mut messages) = match result {
+        let FinishedTurn {
+            history: sent_history,
+            mut messages,
+            mut outcome,
+        } = match result {
             Ok(result) => result,
             Err(EngineFailure { error, report }) => {
                 if let Some(turn) = turn.as_mut() {
@@ -527,12 +531,14 @@ impl Session {
         outcome.set_history(history);
         let turn = messages.split_off(retained_messages);
         // Earlier exchanges were appended as they finished; the final output
-        // commits atomically with completion.
+        // commits atomically with completion, with the projection the next
+        // turn continues.
         let output = turn.last().map_or(&[][..], std::slice::from_ref);
+        let projection = replayed.after_turn(&sent_history);
         let persistence = if host_request {
-            guard.complete_request(output, &outcome).await
+            guard.complete_request(output, &outcome, projection).await
         } else {
-            guard.complete(output).await
+            guard.complete(output, projection).await
         };
         if let Err(error) = persistence {
             guard.mark_interrupted();
@@ -545,14 +551,14 @@ impl Session {
 
     /// Projects the checkpoint summary and loaded uncovered history into one
     /// request under the effective context budget, keeping the count of
-    /// retained messages that precede new output and the observable
-    /// projection facts.
+    /// retained messages that precede new output, the observable projection
+    /// facts, and the replayed turns with the projection they follow.
     fn build_request(
         &self,
         input: TurnInput,
         options: &TurnOptions,
         available_history_weight: u64,
-    ) -> (ModelRequest, usize, HistoryActivity) {
+    ) -> (ModelRequest, usize, HistoryActivity, ReplayedHistory) {
         let estimator = self.harness.context_estimator.as_ref();
         let checkpoint_message = self
             .checkpoint
@@ -572,13 +578,14 @@ impl Session {
             }
             None => (None, available_history_weight),
         };
-        let (turns, evicted_turns) =
-            context::select_recent_turns(estimator, self.history.turns(), remaining_weight);
-        let history = HistoryActivity::new(
-            checkpoint_message.is_some(),
-            evicted_turns,
-            loaded_turns.saturating_sub(evicted_turns),
+        let (turns, projection) = context::project_history(
+            self.history.turns(),
+            self.history.projection,
+            &HistoryLimit::weight(remaining_weight, estimator),
         );
+        let evicted_turns = loaded_turns.saturating_sub(turns.len());
+        let history =
+            HistoryActivity::new(checkpoint_message.is_some(), evicted_turns, turns.len());
         let mut messages: Vec<ModelMessage> = self
             .system_prompt
             .iter()
@@ -586,16 +593,21 @@ impl Session {
             .chain(checkpoint_message)
             .collect();
         let mut history_turn_starts = Vec::with_capacity(turns.len());
-        for turn in turns {
+        for (_, turn) in &turns {
             history_turn_starts.push(messages.len());
-            messages.extend(turn);
+            messages.extend(turn.replay());
         }
         let retained_messages = messages.len();
         let request = ModelRequest::with_history(messages, input, options.schema().clone())
             .with_history_turn_starts(history_turn_starts)
             .with_cache_key(self.cache_key());
 
-        (request, retained_messages, history)
+        (
+            request,
+            retained_messages,
+            history,
+            ReplayedHistory { projection, turns },
+        )
     }
 
     /// Returns the prompt-cache key shared by every turn request of this
@@ -715,30 +727,35 @@ impl SessionBuilder {
     }
 }
 
-/// Finished history replayed by the next turn. Every turn acquisition and
-/// session resume replaces it with the turns the store loads, so a live
-/// session and a resumed one replay the same history.
+/// Finished history replayed by the next turn, with the projection it
+/// follows. Every turn acquisition and session resume replaces it with the
+/// turns and projection the store loads, so a live session and a resumed
+/// one replay the same history.
 pub(crate) struct SessionHistory {
     max_bytes: usize,
-    turns: VecDeque<HistoryTurn>,
+    projection: HistoryProjection,
+    turns: Vec<(i64, HistoryTurn)>,
 }
 
 impl SessionHistory {
     pub(crate) fn new(max_bytes: usize) -> Self {
         Self {
             max_bytes,
-            turns: VecDeque::new(),
+            projection: HistoryProjection::default(),
+            turns: Vec::new(),
         }
     }
 
-    pub(crate) fn turns(&self) -> &VecDeque<HistoryTurn> {
+    pub(crate) fn turns(&self) -> &[(i64, HistoryTurn)] {
         &self.turns
     }
 
-    /// Replaces the history with the most recent loaded turns that fit the
-    /// byte limit, each in its most complete fitting form.
-    fn replace(&mut self, turns: Vec<HistoryTurn>) {
-        self.turns = context::fit_history_bytes(turns.into_iter().rev(), self.max_bytes).into();
+    /// Replaces the history with loaded `turns`, oldest first with their
+    /// positions, projected within the byte limit from `projection`, as the
+    /// store loads them.
+    fn replace(&mut self, turns: &[(i64, HistoryTurn)], projection: HistoryProjection) {
+        (self.turns, self.projection) =
+            context::project_history(turns, projection, &HistoryLimit::bytes(self.max_bytes));
     }
 }
 
@@ -1130,7 +1147,7 @@ impl Harness {
         let loaded = database.load_session(id).await?;
         self.validate_session_model(id, &loaded)?;
         let mut history = SessionHistory::new(loaded.max_history_bytes);
-        history.replace(loaded.turns);
+        history.replace(&loaded.turns, loaded.projection);
 
         Ok(Session {
             checkpoint: loaded.checkpoint,
@@ -1245,10 +1262,10 @@ impl Harness {
     /// turn did before failing, and returns its outcome.
     fn finish_turn(
         turn: Option<TurnLifecycle>,
-        result: Result<(TurnOutcome, Vec<ModelMessage>), EngineFailure>,
+        result: Result<FinishedTurn, EngineFailure>,
     ) -> Result<TurnOutcome, TurnError> {
         match result {
-            Ok((outcome, _)) => {
+            Ok(FinishedTurn { outcome, .. }) => {
                 if let Some(turn) = turn {
                     turn.completed();
                 }

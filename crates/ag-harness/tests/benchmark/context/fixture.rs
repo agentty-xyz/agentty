@@ -107,6 +107,13 @@ impl Score {
         self.total > 0 && self.passed == self.total
     }
 
+    /// Adds another scored part's checks to these.
+    fn merge(&mut self, other: Self) {
+        self.failures.extend(other.failures);
+        self.passed += other.passed;
+        self.total += other.total;
+    }
+
     fn check(&mut self, passed: bool, failure: impl FnOnce() -> String) {
         self.total += 1;
         if passed {
@@ -218,6 +225,19 @@ impl ReadLoopFixture {
     /// Scores one check per file (exact public-function set) plus the
     /// maximum file.
     pub(super) fn score(&self, output: &Value) -> Score {
+        let paths = self.public_functions.keys().map(String::as_str);
+
+        self.score_paths(output, paths, &self.most_public_functions)
+    }
+
+    /// Scores one check per path in `paths` (exact public-function set)
+    /// plus `most_public_functions` naming `most`.
+    fn score_paths<'a>(
+        &self,
+        output: &Value,
+        paths: impl IntoIterator<Item = &'a str>,
+        most: &str,
+    ) -> Score {
         let mut answered = BTreeMap::<String, BTreeSet<String>>::new();
         for entry in output["files"].as_array().into_iter().flatten() {
             let path = normalize_path(entry["path"].as_str().unwrap_or_default());
@@ -231,21 +251,120 @@ impl ReadLoopFixture {
             answered.entry(path).or_default().extend(names);
         }
         let mut score = Score::default();
-        for (path, expected) in &self.public_functions {
+        for path in paths {
+            let expected = self.public_functions.get(path);
             let actual = answered.get(path);
-            score.check(actual == Some(expected), || {
+            score.check(actual == expected, || {
                 format!("{path}: expected {expected:?}, got {actual:?}")
             });
         }
-        let most = normalize_path(output["most_public_functions"].as_str().unwrap_or_default());
-        score.check(most == self.most_public_functions, || {
-            format!(
-                "most_public_functions: expected {}, got {most}",
-                self.most_public_functions
-            )
+        let answered_most =
+            normalize_path(output["most_public_functions"].as_str().unwrap_or_default());
+        score.check(answered_most == most, || {
+            format!("most_public_functions: expected {most}, got {answered_most}")
         });
 
         score
+    }
+}
+
+/// The read-loop files read two per turn across one durable session, then
+/// recalled together in a last turn, so the session's replayed history
+/// outgrows its budget and older turns are projected into shorter forms.
+pub(crate) struct SessionReadsFixture {
+    read_loop: ReadLoopFixture,
+}
+
+impl SessionReadsFixture {
+    /// Files each reading turn reads.
+    const FILES_PER_TURN: usize = 2;
+
+    /// Generates the read-loop files on every call.
+    pub(crate) fn generate() -> Self {
+        Self {
+            read_loop: ReadLoopFixture::generate(),
+        }
+    }
+
+    /// Returns the files to commit before the run.
+    pub(crate) fn files(&self) -> &[FixtureFile] {
+        self.read_loop.files()
+    }
+
+    /// Returns the output schema every turn answers, without any expected
+    /// answer.
+    pub(super) fn schema() -> Value {
+        ReadLoopFixture::schema()
+    }
+
+    /// Returns the turn inputs in order: one per pair of files, then the
+    /// recall turn.
+    pub(super) fn prompts(&self) -> Vec<String> {
+        let mut prompts = self
+            .turn_paths()
+            .map(|paths| {
+                format!(
+                    "Read `{}` and `{}` with the read tool. A public function is one declared \
+                     with exactly `pub fn`, including methods inside `impl` blocks; `pub(crate) \
+                     fn` and plain `fn` are not public. Return one entry per file with its path \
+                     exactly as given and the names of its public functions, and set \
+                     `most_public_functions` to the path of the one of these two files that \
+                     declares more public functions.",
+                    paths[0], paths[1]
+                )
+            })
+            .collect::<Vec<_>>();
+        prompts.push(
+            "Return one entry for every file read in this conversation, with its path and the \
+             names of its public functions, and set `most_public_functions` to the path of the \
+             file among all of them that declares the most public functions. Use your earlier \
+             answers; read a file again only if neither its earlier result nor your earlier \
+             answer about it is still available to you."
+                .to_string(),
+        );
+
+        prompts
+    }
+
+    /// Scores each reading turn's files and larger file, then every file
+    /// and the largest one in the recall turn. `outputs` holds the turns'
+    /// outputs in order; a missing output fails its checks.
+    pub(super) fn score(&self, outputs: &[Value]) -> Score {
+        let mut score = Score::default();
+        let missing = Value::Null;
+        for (turn, paths) in self.turn_paths().enumerate() {
+            let most = paths
+                .iter()
+                .max_by_key(|path| {
+                    self.read_loop
+                        .public_functions
+                        .get(**path)
+                        .map(BTreeSet::len)
+                })
+                .copied()
+                .unwrap_or_default();
+            let output = outputs.get(turn).unwrap_or(&missing);
+            score.merge(
+                self.read_loop
+                    .score_paths(output, paths.iter().copied(), most),
+            );
+        }
+        let recall = outputs.get(self.turn_count()).unwrap_or(&missing);
+        score.merge(self.read_loop.score(recall));
+
+        score
+    }
+
+    /// Returns how many turns read files, before the recall turn.
+    fn turn_count(&self) -> usize {
+        self.files().len() / Self::FILES_PER_TURN
+    }
+
+    /// Returns each reading turn's file paths in order.
+    fn turn_paths(&self) -> impl Iterator<Item = Vec<&str>> {
+        self.files()
+            .chunks(Self::FILES_PER_TURN)
+            .map(|files| files.iter().map(|file| file.path.as_str()).collect())
     }
 }
 

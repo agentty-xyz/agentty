@@ -9,9 +9,9 @@ use std::time::Duration;
 use ag_harness::bash::{CommandCleanupScope, CommandIntent, CommandOutcome, CommandTermination};
 use ag_harness::model::{ModelCompletion, ModelMessage, ModelRequest, ModelResponse};
 use ag_harness::store::{
-    AcquiredTurn, CompactionSource, HistoryTurn, MemoryStore, ModelSwitch, NewSession,
-    SessionCheckpoint, SessionStore, SqliteStore, StoreIdentity, StoredTurnOptions, TurnOwner,
-    TurnStop, WriteStatus,
+    AcquiredTurn, CompactionSource, HistoryProjection, HistoryTurn, MemoryStore, ModelSwitch,
+    NewSession, SessionCheckpoint, SessionStore, SqliteStore, StoreIdentity, StoredTurnOptions,
+    TurnOwner, TurnStop, WriteStatus,
 };
 use ag_harness::tool::ToolCall;
 use ag_harness::{Harness, Model, ModelError, SessionError, TurnError, TurnInput};
@@ -227,7 +227,11 @@ async fn all_backends_complete_after_appended_exchanges() {
 
         // Act
         store
-            .complete_turn(turn.owner(), &[ModelMessage::Assistant("{}".to_string())])
+            .complete_turn(
+                turn.owner(),
+                &[ModelMessage::Assistant("{}".to_string())],
+                HistoryProjection::default(),
+            )
             .await
             .expect("complete");
         let late = store
@@ -239,12 +243,15 @@ async fn all_backends_complete_after_appended_exchanges() {
         assert!(matches!(late, Err(SessionError::OwnershipLost { .. })));
         assert_eq!(
             store.load_session("appended").await.expect("history").turns,
-            vec![HistoryTurn::from(vec![
-                ModelMessage::User("done".to_string()),
-                call,
-                result,
-                ModelMessage::Assistant("{}".to_string()),
-            ])]
+            vec![(
+                0,
+                HistoryTurn::from(vec![
+                    ModelMessage::User("done".to_string()),
+                    call,
+                    result,
+                    ModelMessage::Assistant("{}".to_string()),
+                ])
+            )]
         );
     }
 }
@@ -310,17 +317,20 @@ async fn journaled_backends_replay_stopped_turn_messages_and_unfinished_effects(
         assert_eq!(loaded.latest_finished_turn, Some(0));
         assert_eq!(
             loaded.turns,
-            vec![HistoryTurn {
-                messages: vec![
-                    ModelMessage::User("work".to_string()),
-                    ModelMessage::AssistantToolCall(write_call("work-call")),
-                ],
-                stop: Some(TurnStop {
-                    unfinished_commands: vec!["cargo test".to_string()],
-                    unfinished_writes: vec!["src/lib.rs".to_string()],
-                    ..failed_stop()
-                }),
-            }]
+            vec![(
+                0,
+                HistoryTurn {
+                    messages: vec![
+                        ModelMessage::User("work".to_string()),
+                        ModelMessage::AssistantToolCall(write_call("work-call")),
+                    ],
+                    stop: Some(TurnStop {
+                        unfinished_commands: vec!["cargo test".to_string()],
+                        unfinished_writes: vec!["src/lib.rs".to_string()],
+                        ..failed_stop()
+                    }),
+                }
+            )]
         );
     }
 }
@@ -390,10 +400,13 @@ async fn journaled_backends_keep_running_turn_effects_out_of_stopped_turn_notes(
         // Assert
         assert_eq!(
             loaded.turns,
-            vec![HistoryTurn {
-                messages: vec![ModelMessage::User("work".to_string())],
-                stop: Some(failed_stop()),
-            }]
+            vec![(
+                0,
+                HistoryTurn {
+                    messages: vec![ModelMessage::User("work".to_string())],
+                    stop: Some(failed_stop()),
+                }
+            )]
         );
     }
 }
@@ -416,7 +429,7 @@ async fn journaled_backends_keep_only_the_input_of_a_stopped_turn_over_the_byte_
         .await
         .expect("older turn");
         store
-            .complete_turn(older.owner(), &[])
+            .complete_turn(older.owner(), &[], HistoryProjection::default())
             .await
             .expect("complete");
         drop(older);
@@ -451,10 +464,13 @@ async fn journaled_backends_keep_only_the_input_of_a_stopped_turn_over_the_byte_
         // Assert
         assert_eq!(
             loaded.turns,
-            vec![HistoryTurn {
-                messages: vec![ModelMessage::User("work".to_string())],
-                stop: Some(failed_stop()),
-            }]
+            vec![(
+                1,
+                HistoryTurn {
+                    messages: vec![ModelMessage::User("work".to_string())],
+                    stop: Some(failed_stop()),
+                }
+            )]
         );
     }
 }
@@ -492,7 +508,11 @@ async fn complete_tool_heavy_turn(store: &Arc<dyn SessionStore>, id: &str) {
             .await
             .expect("append");
         store
-            .complete_turn(turn.owner(), &[ModelMessage::Assistant("{}".to_string())])
+            .complete_turn(
+                turn.owner(),
+                &[ModelMessage::Assistant("{}".to_string())],
+                HistoryProjection::default(),
+            )
             .await
             .expect("complete");
     }
@@ -525,19 +545,22 @@ async fn journaled_backends_keep_an_oversized_completed_turn_elided_or_brief() {
         // The older turn still loads, and the oversized turn keeps its tool
         // group with the result replaced by a cleared notice.
         assert_eq!(elided.len(), 2);
-        assert_eq!(elided[0], old);
-        assert_eq!(elided[1].messages.len(), 4);
+        assert_eq!(elided[0], (0, old.clone()));
+        assert_eq!(elided[1].1.messages.len(), 4);
         assert!(matches!(
-            &elided[1].messages[2],
+            &elided[1].1.messages[2],
             ModelMessage::ToolResult { call_id, content, .. }
                 if call_id == "r1" && content.starts_with(r#"{"context_cleared":"#)
         ));
         let briefly = vec![
-            old,
-            HistoryTurn::from(vec![
-                ModelMessage::User("work".to_string()),
-                ModelMessage::Assistant("{}".to_string()),
-            ]),
+            (0, old),
+            (
+                1,
+                HistoryTurn::from(vec![
+                    ModelMessage::User("work".to_string()),
+                    ModelMessage::Assistant("{}".to_string()),
+                ]),
+            ),
         ];
         assert_eq!(brief, briefly);
         assert_eq!(bounded, briefly);
@@ -556,9 +579,226 @@ async fn complete_turn(store: &Arc<dyn SessionStore>, id: &str, input: &str) {
     .await
     .expect("turn");
     store
-        .complete_turn(turn.owner(), &[ModelMessage::Assistant("{}".to_string())])
+        .complete_turn(
+            turn.owner(),
+            &[ModelMessage::Assistant("{}".to_string())],
+            HistoryProjection::default(),
+        )
         .await
         .expect("complete");
+}
+
+/// Completes one turn with `input` that reads one file of 500 bytes,
+/// keeping `projection` as the session's history projection, and returns
+/// its messages.
+async fn complete_read_turn(
+    store: &Arc<dyn SessionStore>,
+    id: &str,
+    input: &str,
+    projection: HistoryProjection,
+) -> HistoryTurn {
+    complete_sized_read_turn(store, id, (input, 500), projection).await
+}
+
+/// Returns the completed turn with `input` that reads one file of `bytes`
+/// bytes and answers `{}`.
+fn read_turn(input: &str, bytes: usize) -> HistoryTurn {
+    let call = ToolCall::from_json(
+        format!("read {input}"),
+        "read",
+        &json!({ "path": format!("{input}.txt") }).to_string(),
+        None,
+    )
+    .expect("read call");
+
+    HistoryTurn::from(vec![
+        ModelMessage::User(input.to_string()),
+        ModelMessage::AssistantToolCall(call),
+        ModelMessage::ToolResult {
+            call_id: format!("read {input}"),
+            content: "x".repeat(bytes),
+            name: "read".to_string(),
+        },
+        ModelMessage::Assistant("{}".to_string()),
+    ])
+}
+
+/// Completes [`read_turn`] of `input` and `bytes`, keeping `projection` as
+/// the session's history projection, and returns its messages.
+async fn complete_sized_read_turn(
+    store: &Arc<dyn SessionStore>,
+    id: &str,
+    (input, bytes): (&str, usize),
+    projection: HistoryProjection,
+) -> HistoryTurn {
+    let completed = read_turn(input, bytes);
+    let exchange = &completed.messages[1..3];
+    let answer = &completed.messages[3..];
+    let turn = AcquiredTurn::begin(
+        Arc::clone(store),
+        id,
+        &TurnInput::from(input),
+        &options(),
+        0,
+    )
+    .await
+    .expect("turn");
+    store
+        .append_messages(turn.owner(), exchange)
+        .await
+        .expect("append");
+    store
+        .complete_turn(turn.owner(), answer, projection)
+        .await
+        .expect("complete");
+
+    completed
+}
+
+#[tokio::test]
+async fn journaled_backends_replay_history_in_the_projection_the_last_turn_kept() {
+    for store in journaled_stores().await {
+        // Arrange
+        store
+            .create_session(&NewSession::new("projected", schema()), None, 100_000)
+            .await
+            .expect("create");
+        let mut turns = Vec::new();
+        for input in ["zero", "one", "two"] {
+            turns.push(
+                complete_read_turn(&store, "projected", input, HistoryProjection::default()).await,
+            );
+        }
+        let projection = HistoryProjection::new(1, 2, 3);
+        turns.push(complete_read_turn(&store, "projected", "three", projection).await);
+
+        // Act
+        let loaded = store.load_session("projected").await.expect("history");
+        let reserved = AcquiredTurn::begin(
+            Arc::clone(&store),
+            "projected",
+            &TurnInput::from("four"),
+            &options(),
+            0,
+        )
+        .await
+        .expect("turn");
+
+        // Assert
+        assert_eq!(loaded.projection, projection);
+        let positions = loaded
+            .turns
+            .iter()
+            .map(|(position, _)| *position)
+            .collect::<Vec<_>>();
+        assert_eq!(positions, [1, 2, 3]);
+        assert_eq!(
+            loaded.turns[0].1.messages,
+            [
+                ModelMessage::User("one".to_string()),
+                ModelMessage::Assistant("{}".to_string()),
+            ]
+        );
+        assert_eq!(loaded.turns[1].1.messages.len(), 4);
+        assert!(matches!(
+            &loaded.turns[1].1.messages[2],
+            ModelMessage::ToolResult { content, .. } if content.starts_with(r#"{"context_cleared":"#)
+        ));
+        assert_eq!(loaded.turns[2].1, turns[3]);
+        assert_eq!(reserved.owner().turn_position(), 4);
+    }
+}
+
+#[tokio::test]
+async fn journaled_backends_reproject_outgrown_history_no_more_completely_than_before() {
+    for store in journaled_stores().await {
+        // Arrange
+        let retained = |turn: &HistoryTurn| {
+            turn.messages
+                .iter()
+                .map(ModelMessage::retained_bytes)
+                .sum::<usize>()
+        };
+        let mut turns = Vec::new();
+        let sizes = [("zero", 300), ("one", 300), ("two", 2000), ("three", 300)];
+        // The newest two turns whole outgrow the budget by a byte.
+        let budget = retained(&read_turn("two", 2000)) + retained(&read_turn("three", 300)) - 1;
+        store
+            .create_session(&NewSession::new("capped", schema()), None, budget)
+            .await
+            .expect("create");
+        for (input, bytes) in sizes {
+            let projection = if input == "three" {
+                HistoryProjection::new(0, 1, 2)
+            } else {
+                HistoryProjection::default()
+            };
+            turns
+                .push(complete_sized_read_turn(&store, "capped", (input, bytes), projection).await);
+        }
+
+        // Act
+        let loaded = store.load_session("capped").await.expect("history");
+
+        // Assert
+        // Half the budget holds the newest turn whole and the others shorter;
+        // the brief and elided turns stay so although their full forms fit.
+        assert!(retained(&turns[2]) + retained(&turns[3]) > budget);
+        assert_eq!(loaded.projection, HistoryProjection::new(0, 1, 3));
+        let positions = loaded
+            .turns
+            .iter()
+            .map(|(position, _)| *position)
+            .collect::<Vec<_>>();
+        assert_eq!(positions, [0, 1, 2, 3]);
+        assert_eq!(loaded.turns[0].1.messages.len(), 2);
+        for (_, elided) in &loaded.turns[1..3] {
+            assert_eq!(elided.messages.len(), 4);
+            assert!(matches!(
+                &elided.messages[2],
+                ModelMessage::ToolResult { content, .. }
+                    if content.starts_with(r#"{"context_cleared":"#)
+            ));
+        }
+        assert_eq!(loaded.turns[3].1, turns[3]);
+    }
+}
+
+#[tokio::test]
+async fn all_backends_reset_the_history_projection_when_the_model_switches() {
+    for store in stores().await {
+        // Arrange
+        store
+            .create_session(&NewSession::new("switched", schema()), None, 100_000)
+            .await
+            .expect("create");
+        let first = complete_read_turn(&store, "switched", "zero", HistoryProjection::default());
+        let first = first.await;
+        complete_read_turn(&store, "switched", "one", HistoryProjection::new(1, 1, 1)).await;
+        let identity = ag_harness::recovery::ExecutionIdentity::new("next", "1").expect("identity");
+        let capabilities = ag_harness::model::ModelCapabilities {
+            image_input: false,
+            profile: unbounded_model_profile(),
+            tool_calls: true,
+        };
+        let projected = store.load_session("switched").await.expect("history");
+
+        // Act
+        store
+            .switch_model(
+                "switched",
+                &ModelSwitch::new(identity, None, capabilities, 0),
+            )
+            .await
+            .expect("switch");
+        let switched = store.load_session("switched").await.expect("history");
+
+        // Assert
+        assert_eq!(projected.turns.len(), 1);
+        assert_eq!(switched.projection, HistoryProjection::default());
+        assert_eq!(switched.turns.len(), 2);
+        assert_eq!(switched.turns[0], (0, first));
+    }
 }
 
 #[tokio::test]
@@ -702,7 +942,7 @@ async fn journaled_backends_size_a_brief_turn_with_its_final_reasoning_cleared()
     for store in journaled_stores().await {
         // Arrange
         store
-            .create_session(&NewSession::new("reasoned", schema()), None, 100)
+            .create_session(&NewSession::new("reasoned", schema()), None, 120)
             .await
             .expect("create");
         for (input, final_message) in [
@@ -742,7 +982,7 @@ async fn journaled_backends_size_a_brief_turn_with_its_final_reasoning_cleared()
                 .await
                 .expect("append");
             store
-                .complete_turn(turn.owner(), &[final_message])
+                .complete_turn(turn.owner(), &[final_message], HistoryProjection::default())
                 .await
                 .expect("complete");
         }
@@ -753,22 +993,28 @@ async fn journaled_backends_size_a_brief_turn_with_its_final_reasoning_cleared()
         // Assert
         // Only the brief form fits the newest turn, and it counts the final
         // reasoning as the cleared placeholder it replays, leaving room for
-        // the older turn in brief form too.
+        // the older turn in brief form too within half the outgrown budget.
         assert_eq!(
             loaded.turns,
             vec![
-                HistoryTurn::from(vec![
-                    ModelMessage::User("old".to_string()),
-                    ModelMessage::Assistant("{}".to_string()),
-                ]),
-                HistoryTurn::from(vec![
-                    ModelMessage::User("work".to_string()),
-                    ModelMessage::AssistantReasoning {
-                        content: "{}".to_string(),
-                        reasoning_content: "[reasoning cleared to fit the context window]"
-                            .to_string(),
-                    },
-                ]),
+                (
+                    0,
+                    HistoryTurn::from(vec![
+                        ModelMessage::User("old".to_string()),
+                        ModelMessage::Assistant("{}".to_string()),
+                    ])
+                ),
+                (
+                    1,
+                    HistoryTurn::from(vec![
+                        ModelMessage::User("work".to_string()),
+                        ModelMessage::AssistantReasoning {
+                            content: "{}".to_string(),
+                            reasoning_content: "[reasoning cleared to fit the context window]"
+                                .to_string(),
+                        },
+                    ])
+                ),
             ]
         );
     }
@@ -792,6 +1038,7 @@ async fn all_backends_preserve_ordered_image_input_in_history() {
             .complete_turn(
                 acquired.owner(),
                 &[ModelMessage::Assistant("described".to_string())],
+                HistoryProjection::default(),
             )
             .await
             .expect("complete");
@@ -801,10 +1048,13 @@ async fn all_backends_preserve_ordered_image_input_in_history() {
         let loaded = store.load_session("images").await.expect("load");
         assert_eq!(
             loaded.turns,
-            vec![HistoryTurn::from(vec![
-                ModelMessage::UserInput(input),
-                ModelMessage::Assistant("described".to_string()),
-            ])]
+            vec![(
+                0,
+                HistoryTurn::from(vec![
+                    ModelMessage::UserInput(input),
+                    ModelMessage::Assistant("described".to_string()),
+                ])
+            )]
         );
     }
 }
@@ -831,6 +1081,7 @@ async fn all_backends_bound_history_to_the_checkpoint_and_reject_stale_publicati
                 .complete_turn(
                     acquired.owner(),
                     &[ModelMessage::Assistant(format!("{turn}-answer"))],
+                    HistoryProjection::default(),
                 )
                 .await
                 .expect("complete");
@@ -878,7 +1129,7 @@ async fn all_backends_bound_history_to_the_checkpoint_and_reject_stale_publicati
             "turn zero is covered by the checkpoint"
         );
         assert!(matches!(
-            &loaded.turns[0].messages[0],
+            &loaded.turns[0].1.messages[0],
             ModelMessage::User(text) if text == "one"
         ));
     }
@@ -922,7 +1173,7 @@ async fn write_settlement_retries_preserve_terminal_outcomes() {
                 .expect("idempotent retry");
             let active_conflict = store.finish_write(turn.owner(), write, !applied).await;
             store
-                .complete_turn(turn.owner(), &[])
+                .complete_turn(turn.owner(), &[], HistoryProjection::default())
                 .await
                 .expect("complete");
             let successor = AcquiredTurn::begin(
@@ -1226,13 +1477,16 @@ async fn expired_renewal_acknowledgment_cancels_a_short_lease_turn() {
     assert_eq!(store.renewals.load(Ordering::SeqCst), 1);
     assert_eq!(
         store.load_session("expired").await.expect("history").turns,
-        vec![HistoryTurn {
-            messages: vec![ModelMessage::User("work".to_string())],
-            stop: Some(TurnStop {
-                error_type: "interrupted".to_string(),
-                ..TurnStop::default()
-            }),
-        }]
+        vec![(
+            0,
+            HistoryTurn {
+                messages: vec![ModelMessage::User("work".to_string())],
+                stop: Some(TurnStop {
+                    error_type: "interrupted".to_string(),
+                    ..TurnStop::default()
+                }),
+            }
+        )]
     );
 }
 
@@ -1317,7 +1571,7 @@ async fn bounded_history_policy_is_shared() {
             loaded
                 .turns
                 .iter()
-                .flat_map(|turn| &turn.messages)
+                .flat_map(|(_, turn)| &turn.messages)
                 .map(ModelMessage::retained_bytes)
                 .sum::<usize>()
                 <= 50
@@ -1526,8 +1780,8 @@ async fn abandoned_acquisition_retains_admission_and_never_executes() {
                 .expect("owner cleanup and successor");
             let loaded = store.load_session(&id).await.expect("history");
             assert_eq!(loaded.turns.len(), 2);
-            assert!(loaded.turns[0].stop.is_some());
-            assert!(loaded.turns[1].stop.is_none());
+            assert!(loaded.turns[0].1.stop.is_some());
+            assert!(loaded.turns[1].1.stop.is_none());
         }
     }
 }

@@ -11,7 +11,7 @@ use crate::model_profile_fixture::unbounded_model_profile;
 use crate::recovery::ExecutionIdentity;
 use crate::session::tests::support::{schema, turn_options};
 use crate::session::{Database, LoadedSession, ReservationObserver};
-use crate::store::{AcquiredTurn, ModelSwitch, NewSession, SessionStore};
+use crate::store::{AcquiredTurn, HistoryProjection, ModelSwitch, NewSession, SessionStore};
 
 struct Validated {
     entered: Notify,
@@ -116,6 +116,7 @@ async fn switch_across_concurrent_unsupported_history(
                 content: "answer".into(),
                 reasoning_content: "provider state".into(),
             }],
+            HistoryProjection::default(),
         )
         .await
         .expect("complete");

@@ -8,7 +8,7 @@ use std::time::Duration;
 use async_trait::async_trait;
 use tokio::time::Instant;
 
-use crate::context::{self, HistoryTurn, TurnStop};
+use crate::context::{self, HistoryLimit, HistoryProjection, HistoryTurn, TurnStop};
 use crate::model::{ModelMessage, ModelMetadata};
 use crate::recovery::{HostRequest, HostTurnRecord, HostTurnStatus};
 use crate::reservation::TURN_LEASE_SECONDS;
@@ -47,6 +47,7 @@ impl MemoryStore {
         owner: &TurnOwner,
         messages: &[ModelMessage],
         outcome: Option<&TurnOutcome>,
+        projection: HistoryProjection,
     ) -> Result<(), SessionError> {
         self.validate_identity(owner)?;
         let mut state = self.lock();
@@ -60,6 +61,7 @@ impl MemoryStore {
         turn.outcome = outcome.cloned();
         turn.messages.extend_from_slice(messages);
         turn.status = Status::Completed;
+        session.configuration.projection = projection;
 
         Ok(())
     }
@@ -202,6 +204,7 @@ impl SessionStore for MemoryStore {
                     model_generation: 0,
                     max_history_bytes,
                     model: metadata.as_ref().map(|value| value.model().to_string()),
+                    projection: HistoryProjection::default(),
                     provider: metadata.as_ref().map(|value| value.provider().to_string()),
                     registration_identity: config.registration_identity().cloned(),
                     schema: config.schema().clone(),
@@ -226,7 +229,7 @@ impl SessionStore for MemoryStore {
         session.recover();
         let mut loaded = session.configuration.clone();
         loaded.latest_finished_turn = session.latest_finished_turn();
-        loaded.turns = session.history();
+        (loaded.turns, loaded.projection) = session.history();
 
         Ok(loaded)
     }
@@ -293,6 +296,7 @@ impl SessionStore for MemoryStore {
         )?;
         let next = switch.admit(id, &session.admission_state(None))?;
         session.configuration.model_generation = next;
+        session.configuration.projection = HistoryProjection::default();
         session.configuration.registration_identity = Some(switch.identity().clone());
         session.configuration.provider =
             switch.metadata().map(|value| value.provider().to_string());
@@ -332,7 +336,7 @@ impl SessionStore for MemoryStore {
             position.to_le_bytes().to_vec(),
         );
         let deadline = Instant::now() + Duration::from_secs(TURN_LEASE_SECONDS.unsigned_abs());
-        let history = session.history();
+        let (history, projection) = session.history();
         session.turns.push(TurnRecord {
             model: session.configuration.recorded_model(),
             deadline,
@@ -347,7 +351,8 @@ impl SessionStore for MemoryStore {
 
         Ok(Reservation::Reserved(
             ReservedTurn::new(owner, deadline, history)
-                .with_checkpoint(session.configuration.checkpoint.clone()),
+                .with_checkpoint(session.configuration.checkpoint.clone())
+                .with_projection(projection),
         ))
     }
 
@@ -373,8 +378,9 @@ impl SessionStore for MemoryStore {
         owner: &TurnOwner,
         messages: &[ModelMessage],
         outcome: &TurnOutcome,
+        projection: HistoryProjection,
     ) -> Result<(), SessionError> {
-        self.complete(owner, messages, Some(outcome))
+        self.complete(owner, messages, Some(outcome), projection)
     }
 
     async fn renew(&self, owner: &TurnOwner) -> Result<Instant, SessionError> {
@@ -406,8 +412,9 @@ impl SessionStore for MemoryStore {
         &self,
         owner: &TurnOwner,
         messages: &[ModelMessage],
+        projection: HistoryProjection,
     ) -> Result<(), SessionError> {
-        self.complete(owner, messages, None)
+        self.complete(owner, messages, None, projection)
     }
 
     async fn fail_turn(&self, owner: &TurnOwner, error: &TurnError) -> Result<(), SessionError> {
@@ -607,23 +614,37 @@ impl Record {
             .max()
     }
 
-    fn history(&self) -> Vec<HistoryTurn> {
+    /// Returns the finished turns the stored projection replays within the
+    /// byte budget, oldest first with their positions, and the projection
+    /// they follow.
+    fn history(&self) -> (Vec<(i64, HistoryTurn)>, HistoryProjection) {
+        let projection = self.configuration.projection;
         let boundary = self
             .configuration
             .checkpoint
             .as_ref()
-            .map_or(-1, crate::store::SessionCheckpoint::covered_through);
-        let newest_first = self
+            .map_or(-1, crate::store::SessionCheckpoint::covered_through)
+            .max(projection.start().saturating_sub(1));
+        let turns = self
             .turns
             .iter()
-            .rev()
             .filter(|turn| turn.status != Status::Running && turn.owner.turn_position() > boundary)
-            .map(|turn| HistoryTurn {
-                messages: turn.messages.clone(),
-                stop: self.stop(turn),
-            });
+            .map(|turn| {
+                (
+                    turn.owner.turn_position(),
+                    HistoryTurn {
+                        messages: turn.messages.clone(),
+                        stop: self.stop(turn),
+                    },
+                )
+            })
+            .collect::<Vec<_>>();
 
-        context::fit_history_bytes(newest_first, self.configuration.max_history_bytes)
+        context::project_history(
+            &turns,
+            projection,
+            &HistoryLimit::bytes(self.configuration.max_history_bytes),
+        )
     }
 
     fn compaction_source(&self, max_history_bytes: usize) -> CompactionSource {

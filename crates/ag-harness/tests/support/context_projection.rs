@@ -8,7 +8,7 @@ use ag_harness::model::{
     ModelProfile, ModelRegistry, ModelRequest, ModelResponse,
 };
 use ag_harness::recovery::{ExecutionIdentity, HostTurnStatus};
-use ag_harness::store::{AcquiredTurn, SessionStore, WriteStatus};
+use ag_harness::store::{AcquiredTurn, HistoryProjection, SessionStore, WriteStatus};
 use ag_harness::tool::{ToolCall, ToolDefinition};
 use ag_harness::{Harness, Model, ModelError, OutputSchema, SessionError, TurnError, TurnInput};
 use async_trait::async_trait;
@@ -142,10 +142,14 @@ async fn projection_bounds_requests_on_every_handle() {
             .expect("third turn");
 
         // Assert
-        let loaded = store.load_session("projected").await.expect("canonical");
-        assert_eq!(loaded.turns.len(), 3);
+        // Projection only shortens requests; the store keeps every turn.
+        let stored = store
+            .load_compaction_source("projected", 1 << 20)
+            .await
+            .expect("canonical");
+        assert_eq!(stored.turns.len(), 3);
         assert!(matches!(
-            &loaded.turns[0].messages[0],
+            &stored.turns[0].1.messages[0],
             ModelMessage::User(text) if text == "one"
         ));
         let recovered = session
@@ -336,6 +340,7 @@ async fn seed_tool_and_text_turns(store: &Arc<dyn SessionStore>) {
                 },
                 ModelMessage::Assistant(r#"{"answer":"seeded"}"#.to_string()),
             ],
+            HistoryProjection::default(),
         )
         .await
         .expect("complete tool turn");
@@ -354,6 +359,7 @@ async fn seed_tool_and_text_turns(store: &Arc<dyn SessionStore>) {
             &[ModelMessage::Assistant(
                 r#"{"answer":"seeded"}"#.to_string(),
             )],
+            HistoryProjection::default(),
         )
         .await
         .expect("complete text turn");
@@ -384,9 +390,12 @@ async fn image_history_projects_at_its_encoded_weight() {
         let oversized = session.send(image_input("look", &[1_u8; 200], "now")).await;
 
         // Assert
-        let loaded = store.load_session("imaged").await.expect("canonical");
+        let stored = store
+            .load_compaction_source("imaged", 1 << 20)
+            .await
+            .expect("canonical");
         assert!(matches!(
-            &loaded.turns[0].messages[0],
+            &stored.turns[0].1.messages[0],
             ModelMessage::UserInput(input) if input.has_images()
         ));
         let requests = requests.lock().expect("requests");

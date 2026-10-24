@@ -35,7 +35,7 @@ use crate::recovery::HostTurnRecord;
 use crate::repository::Repository;
 use crate::schema_contract::OutputSchema;
 use crate::session::{LoadedSession, NewSession, SessionError, StoreIdentity, TurnOwner};
-use crate::store::{ModelSwitch, Reservation, SessionStore, TurnAdmission};
+use crate::store::{HistoryProjection, ModelSwitch, Reservation, SessionStore, TurnAdmission};
 use crate::telemetry;
 use crate::tool::{ReadArguments, Tool, ToolCall};
 use crate::turn::{TurnError, TurnOutcome};
@@ -1025,8 +1025,11 @@ impl SessionStore for TracedWriteStore {
         owner: &TurnOwner,
         messages: &[ModelMessage],
         outcome: &TurnOutcome,
+        projection: HistoryProjection,
     ) -> Result<(), SessionError> {
-        self.store.complete_request(owner, messages, outcome).await
+        self.store
+            .complete_request(owner, messages, outcome, projection)
+            .await
     }
 
     async fn renew(&self, owner: &TurnOwner) -> Result<Instant, SessionError> {
@@ -1045,8 +1048,9 @@ impl SessionStore for TracedWriteStore {
         &self,
         owner: &TurnOwner,
         messages: &[ModelMessage],
+        projection: HistoryProjection,
     ) -> Result<(), SessionError> {
-        self.store.complete_turn(owner, messages).await
+        self.store.complete_turn(owner, messages, projection).await
     }
 
     async fn fail_turn(&self, owner: &TurnOwner, error: &TurnError) -> Result<(), SessionError> {

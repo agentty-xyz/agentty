@@ -19,7 +19,7 @@ use crate::session::{
     StoreIdentity, TimestampSource, TurnOwner, connect_options, next_turn_position,
     system_timestamp_source,
 };
-use crate::store::{AcquiredTurn, SessionStore};
+use crate::store::{AcquiredTurn, HistoryProjection, SessionStore};
 use crate::tool::{ReadArguments, ToolCall, WriteArguments};
 
 pub(super) struct SessionTimestampsRow {
@@ -255,7 +255,13 @@ impl Database {
         messages: &[ModelMessage],
     ) -> Result<(), SessionError> {
         let owner = active_turn_owner(self, session_id, turn_position).await;
-        crate::store::SessionStore::complete_turn(self, &owner, messages).await
+        crate::store::SessionStore::complete_turn(
+            self,
+            &owner,
+            messages,
+            HistoryProjection::default(),
+        )
+        .await
     }
 
     pub(crate) async fn fail_turn(

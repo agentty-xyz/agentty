@@ -186,7 +186,7 @@ async fn handles_capture_configuration_and_isolate_explicit_turn_options() {
     }
     assert_eq!(new_resumed.history.max_bytes, 1024);
     assert_eq!(new_session.history.max_bytes, 1);
-    assert!(new_session.history.turns().is_empty());
+    assert_eq!(new_session.history.turns(), []);
     assert_eq!(
         new_resumed.harness.repository,
         Some(Repository::fixture("new"))

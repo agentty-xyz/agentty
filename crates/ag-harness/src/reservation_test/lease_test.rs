@@ -5,6 +5,7 @@ use std::time::Duration;
 use tokio::sync::Notify;
 
 use crate::TurnError;
+use crate::context::HistoryProjection;
 use crate::gated_store_test::{GatedStore, PauseAt};
 use crate::input::TurnInput;
 use crate::model::{ModelError, ModelMessage};
@@ -44,7 +45,10 @@ async fn terminal_persistence_is_bounded_and_keeps_cleanup_armed() {
         let (store, mut acquired) = GatedStore::fixture(phase).await;
         let task = tokio::spawn(async move {
             let result = if phase == PauseAt::Completion {
-                acquired.guard.complete(&[]).await
+                acquired
+                    .guard
+                    .complete(&[], HistoryProjection::default())
+                    .await
             } else {
                 acquired
                     .guard
@@ -76,7 +80,10 @@ async fn completion_acknowledgement_excludes_renewal_and_preserves_success() {
     let task = tokio::spawn(async move {
         let result = acquired
             .guard
-            .complete(&[ModelMessage::Assistant("answer".into())])
+            .complete(
+                &[ModelMessage::Assistant("answer".into())],
+                HistoryProjection::default(),
+            )
             .await;
 
         (result, acquired)
@@ -103,7 +110,12 @@ async fn terminal_acknowledgement_loss_cannot_interrupt_a_successor() {
     // Arrange
     let (store, mut acquired) = GatedStore::fixture(PauseAt::CompletionAcknowledgement).await;
     let owner = acquired.guard.owner().clone();
-    let task = tokio::spawn(async move { acquired.guard.complete(&[]).await });
+    let task = tokio::spawn(async move {
+        acquired
+            .guard
+            .complete(&[], HistoryProjection::default())
+            .await
+    });
     store.entered.notified().await;
     let mut successor = AcquiredTurn::begin(
         Arc::new(store.database.clone()),
@@ -116,7 +128,7 @@ async fn terminal_acknowledgement_loss_cannot_interrupt_a_successor() {
     .expect("successor");
     successor
         .guard
-        .complete(&[])
+        .complete(&[], HistoryProjection::default())
         .await
         .expect("successor completion");
 
@@ -149,7 +161,10 @@ async fn finalization_uses_the_deadline_confirmed_by_a_slow_renewal() {
         ready.notify_one();
         let result = acquired
             .guard
-            .complete(&[ModelMessage::Assistant("answer".into())])
+            .complete(
+                &[ModelMessage::Assistant("answer".into())],
+                HistoryProjection::default(),
+            )
             .await;
 
         (result, acquired)
@@ -190,7 +205,10 @@ async fn finalization_waiting_for_renewal_stops_at_the_confirmed_deadline() {
     let ready = started.clone();
     let task = tokio::spawn(async move {
         ready.notify_one();
-        acquired.guard.complete(&[]).await
+        acquired
+            .guard
+            .complete(&[], HistoryProjection::default())
+            .await
     });
     started.notified().await;
 
@@ -243,7 +261,10 @@ async fn finalization_rechecks_expiry_even_when_the_monitor_has_not_reported() {
     let ready = started.clone();
     let task = tokio::spawn(async move {
         ready.notify_one();
-        acquired.guard.complete(&[]).await
+        acquired
+            .guard
+            .complete(&[], HistoryProjection::default())
+            .await
     });
     started.notified().await;
 

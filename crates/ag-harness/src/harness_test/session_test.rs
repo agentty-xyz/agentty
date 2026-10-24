@@ -10,7 +10,7 @@ use super::support::{
     model, object_schema, read_call, read_harness, readable_file_system, response_without_metadata,
     send_with_resumed_session, turn_started_id, wait_for_stored_turn_state,
 };
-use crate::context::{self, HistoryTurn};
+use crate::context::{self, HistoryProjection, HistoryTurn};
 use crate::context_budget_fixture::unbounded_context_budget;
 use crate::harness::{Harness, SessionHistory};
 use crate::lifecycle::{LifecycleEventKind, TurnErrorType};
@@ -201,15 +201,18 @@ fn chat_history_evicts_complete_tool_turns() {
     let mut history = SessionHistory::new(max_bytes);
 
     // Act
-    history.replace(vec![
-        HistoryTurn::from(tool_turn),
-        HistoryTurn::from(latest_turn.clone()),
-    ]);
+    history.replace(
+        &[
+            (0, HistoryTurn::from(tool_turn)),
+            (1, HistoryTurn::from(latest_turn.clone())),
+        ],
+        HistoryProjection::default(),
+    );
 
     // Assert
     assert_eq!(
-        history.turns().iter().cloned().collect::<Vec<_>>(),
-        vec![HistoryTurn::from(latest_turn)]
+        history.turns().to_vec(),
+        vec![(1, HistoryTurn::from(latest_turn))]
     );
 }
 
@@ -230,29 +233,40 @@ fn history_keeps_an_oversized_turn_briefly_and_clears_when_none_fits() {
     let mut history = SessionHistory::new(20);
 
     // Act
-    history.replace(vec![
-        HistoryTurn::from(older.clone()),
-        HistoryTurn::from(oversized.clone()),
-    ]);
-    let reduced = history.turns().iter().cloned().collect::<Vec<_>>();
-    history.replace(vec![
-        HistoryTurn::from(older.clone()),
-        HistoryTurn::from(oversized),
-        HistoryTurn::from(vec![ModelMessage::User("y".repeat(21))]),
-    ]);
+    history.replace(
+        &[
+            (0, HistoryTurn::from(older.clone())),
+            (1, HistoryTurn::from(oversized.clone())),
+        ],
+        HistoryProjection::default(),
+    );
+    let reduced = history.turns().to_vec();
+    history.replace(
+        &[
+            (0, HistoryTurn::from(older)),
+            (1, HistoryTurn::from(oversized)),
+            (
+                2,
+                HistoryTurn::from(vec![ModelMessage::User("y".repeat(21))]),
+            ),
+        ],
+        HistoryProjection::default(),
+    );
 
     // Assert
+    // The outgrown history is re-projected to half the limit, which the
+    // brief newest turn fills before the older one.
     assert_eq!(
         reduced,
-        vec![
-            HistoryTurn::from(older),
+        vec![(
+            1,
             HistoryTurn::from(vec![
                 ModelMessage::User("work".to_string()),
                 ModelMessage::Assistant("{}".to_string()),
-            ]),
-        ]
+            ])
+        )]
     );
-    assert!(history.turns().is_empty());
+    assert_eq!(history.turns(), []);
 }
 
 #[tokio::test]

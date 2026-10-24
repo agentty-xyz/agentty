@@ -6,7 +6,7 @@ use super::support::{
 };
 use crate::context::{
     CLEARED_REASONING, ContextBudget, ContextEstimator, ContextFit, DROP_TARGET_PERCENT,
-    FIT_TARGET_PERCENT, HeuristicContextEstimator, KEEP_RECENT_RESULTS,
+    FIT_TARGET_PERCENT, HeuristicContextEstimator, HistoryTurn, KEEP_RECENT_RESULTS, SentHistory,
 };
 use crate::model::{ModelMessage, ModelRequest};
 use crate::tool::ToolCall;
@@ -344,6 +344,49 @@ fn fit_shrinks_older_write_patches_to_their_recorded_outcome() {
 }
 
 #[test]
+fn fit_clears_a_replayed_history_turn_whole_once_clearing_reaches_it() {
+    // Arrange
+    // Each turn reads its own file, so no later read supersedes it.
+    let history_turn = |id: &str| {
+        let call = ToolCall::from_json(
+            id.to_string(),
+            "read",
+            &json!({"action": "file", "path": format!("{id}.txt")}).to_string(),
+            Some("r".repeat(100)),
+        )
+        .expect("read call");
+        vec![
+            ModelMessage::User(format!("turn {id}")),
+            ModelMessage::AssistantToolCall(call),
+            tool_result(id, "read", &"x".repeat(4000)),
+            ModelMessage::Assistant("{}".to_string()),
+        ]
+    };
+    let history = vec![history_turn("h0"), history_turn("h1"), history_turn("h2")];
+    let mut request = request(Vec::new(), history.clone(), "inspect");
+    record_read_round(&mut request, "r0", 500);
+    let mut fit = ContextFit::default();
+
+    // Act
+    // Clearing the first two results reaches half of 12,000 inside the
+    // second turn, whose reasoning is then cleared with the first one's.
+    let (fitted, _) = fit_owned(&mut fit, budget(12_000), &request).expect("fits");
+    let sent = fit.sent_history(&request);
+
+    // Assert
+    assert!(fitted.is_some());
+    assert_eq!(sent.dropped_turns, 0);
+    assert_eq!(
+        sent.turns,
+        [
+            HistoryTurn::from(history[0].clone()).elided().replay(),
+            HistoryTurn::from(history[1].clone()).elided().replay(),
+            history[2].clone(),
+        ]
+    );
+}
+
+#[test]
 fn fit_drops_the_oldest_history_turns_and_keeps_doing_so() {
     // Arrange
     let turn = |text: &str| {
@@ -377,6 +420,13 @@ fn fit_drops_the_oldest_history_turns_and_keeps_doing_so() {
     );
     assert_eq!(second, Some(first));
     assert_eq!(second_activity, first_activity);
+    assert_eq!(
+        fit.sent_history(&request),
+        SentHistory {
+            dropped_turns: 1,
+            turns: vec![request.messages()[3..5].to_vec()],
+        }
+    );
 }
 
 #[test]
