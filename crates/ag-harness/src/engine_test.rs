@@ -106,7 +106,7 @@ async fn run_scripted(
     let outcome = engine
         .run(ModelRequest::new("reply", object_schema()), None, None)
         .await
-        .map(|(outcome, _)| outcome)
+        .map(|finished| finished.outcome)
         .map_err(|failure| failure.error);
     let requests = requests.lock().expect("requests lock").clone();
 

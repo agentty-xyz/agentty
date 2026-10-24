@@ -6,7 +6,7 @@ use serde_json::{Value, json};
 
 use crate::bash::{BashArguments, BashError};
 use crate::calibration::{Calibration, ContextCalibration};
-use crate::context::{ContextSummaryPolicy, FitStep};
+use crate::context::{ContextSummaryPolicy, FitStep, SentHistory};
 use crate::effect::Effects;
 use crate::execution::BashTool;
 use crate::file_system::FileSystem;
@@ -83,7 +83,7 @@ impl Engine<'_> {
         request: ModelRequest,
         turn_id: Option<LifecycleId>,
         journal: Option<WriteJournal>,
-    ) -> Result<(TurnOutcome, Vec<ModelMessage>), EngineFailure> {
+    ) -> Result<FinishedTurn, EngineFailure> {
         let started_at = Instant::now();
         let recorder = journal.clone();
         let (request, tools) = self
@@ -97,10 +97,15 @@ impl Engine<'_> {
             context::ContextFit::new(shared_prefix_summaries),
         );
         match self.drive(request, turn_id, &mut state).await {
-            Ok((output, messages)) => {
+            Ok((output, request)) => {
+                let history = state.context_fit.sent_history(&request);
                 let report = state.into_report(started_at.elapsed());
 
-                Ok((TurnOutcome::new(output, report), messages))
+                Ok(FinishedTurn {
+                    history,
+                    messages: request.into_messages(),
+                    outcome: TurnOutcome::new(output, report),
+                })
             }
             Err(error) => Err(EngineFailure {
                 error,
@@ -116,7 +121,7 @@ impl Engine<'_> {
         mut request: ModelRequest,
         turn_id: Option<LifecycleId>,
         state: &mut TurnState,
-    ) -> Result<(Value, Vec<ModelMessage>), TurnError> {
+    ) -> Result<(Value, ModelRequest), TurnError> {
         let summary_trigger = (self.context_summaries == ContextSummaryPolicy::Enabled)
             .then_some(ContextSummaryTrigger::Proactive);
 
@@ -187,7 +192,7 @@ impl Engine<'_> {
                 ModelResponse::Output(output) => {
                     request.record_output_with_reasoning(&output, reasoning_content);
 
-                    return Ok((output, request.into_messages()));
+                    return Ok((output, request));
                 }
                 ModelResponse::ToolCall(call) => (vec![call], false),
                 ModelResponse::ToolCalls(calls) => {
@@ -782,6 +787,14 @@ impl RequestFailure {
             activity: Box::new(activity),
         }
     }
+}
+
+/// A finished turn's outcome, its canonical messages, and how its last
+/// request carried the history its first request replayed.
+pub(crate) struct FinishedTurn {
+    pub(crate) history: SentHistory,
+    pub(crate) messages: Vec<ModelMessage>,
+    pub(crate) outcome: TurnOutcome,
 }
 
 /// A failed turn's error with the report of what it did before failing,

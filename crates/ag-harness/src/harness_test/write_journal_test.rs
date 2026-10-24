@@ -94,8 +94,8 @@ async fn session_exposes_writes_after_failed_or_evicted_turns_and_reopen() {
                 .expect("file"),
             b"new\n"
         );
-        assert_eq!(history.turns, Vec::<HistoryTurn>::new());
-        assert!(reopened.history.turns().is_empty());
+        assert_eq!(history.turns, Vec::<(i64, HistoryTurn)>::new());
+        assert_eq!(reopened.history.turns(), []);
     }
 }
 

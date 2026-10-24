@@ -574,14 +574,17 @@ async fn database_recovers_expired_active_turns_as_interrupted() {
     assert_eq!(
         loaded.turns,
         vec![
-            HistoryTurn::from(turn("first", "first")),
-            HistoryTurn {
-                messages: vec![ModelMessage::User("abandoned".to_string())],
-                stop: Some(TurnStop {
-                    error_type: "interrupted".to_string(),
-                    ..TurnStop::default()
-                }),
-            },
+            (0, HistoryTurn::from(turn("first", "first"))),
+            (
+                1,
+                HistoryTurn {
+                    messages: vec![ModelMessage::User("abandoned".to_string())],
+                    stop: Some(TurnStop {
+                        error_type: "interrupted".to_string(),
+                        ..TurnStop::default()
+                    }),
+                }
+            ),
         ]
     );
     assert_eq!(status, "interrupted");

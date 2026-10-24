@@ -8,7 +8,8 @@ use std::sync::{Arc, Mutex};
 
 use ag_harness::model::{ModelCompletion, ModelMessage, ModelRequest, ModelResponse};
 use ag_harness::store::{
-    AcquiredTurn, MemoryStore, NewSession, SessionStore, SqliteStore, WriteStatus,
+    AcquiredTurn, HistoryProjection, MemoryStore, NewSession, SessionStore, SqliteStore,
+    WriteStatus,
 };
 use ag_harness::{
     Harness, ImageContent, ImageMediaType, InputBlock, Model, ModelError, OutputSchema,
@@ -116,7 +117,11 @@ pub(crate) async fn lifecycle(store: Arc<dyn SessionStore>) {
         .await
         .expect("intent");
     store
-        .complete_turn(&owner, &[ModelMessage::Assistant("answer".to_string())])
+        .complete_turn(
+            &owner,
+            &[ModelMessage::Assistant("answer".to_string())],
+            HistoryProjection::default(),
+        )
         .await
         .expect("complete");
     store
@@ -163,6 +168,7 @@ pub(crate) async fn lifecycle(store: Arc<dyn SessionStore>) {
     assert_eq!(failed.turns.len(), 2);
     assert!(
         failed.turns[1]
+            .1
             .stop
             .as_ref()
             .is_some_and(|stop| stop.failed)

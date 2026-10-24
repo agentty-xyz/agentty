@@ -12,8 +12,8 @@ use crate::model::{ModelMessage, ModelMetadata};
 use crate::recovery::{HostRequest, HostTurnAcquisition, HostTurnStatus};
 use crate::session::Database;
 use crate::store::{
-    AcquiredTurn, HistoryTurn, MemoryStore, NewSession, SessionStore, StoreIdentity, TurnOwner,
-    TurnStop, WriteRecord, WriteStatus,
+    AcquiredTurn, HistoryProjection, HistoryTurn, MemoryStore, NewSession, SessionStore,
+    StoreIdentity, TurnOwner, TurnStop, WriteRecord, WriteStatus,
 };
 use crate::store_fixture::{harness, options, schema};
 use crate::{ModelError, SessionError, TurnError, TurnInput};
@@ -75,7 +75,7 @@ async fn clones_share_state_independent_stores_and_one_shot_are_isolated() {
             .await
             .expect("independent")
             .turns,
-        Vec::<HistoryTurn>::new()
+        Vec::<(i64, HistoryTurn)>::new()
     );
 }
 
@@ -128,7 +128,12 @@ async fn creation_and_unknown_owner_errors_leave_state_unchanged() {
         .await
         .expect("idempotent missing cleanup");
     let empty = TurnOwner::new(store.identity().clone(), "session".to_string(), 0, vec![0]);
-    assert!(store.complete_turn(&empty, &[]).await.is_err());
+    assert!(
+        store
+            .complete_turn(&empty, &[], HistoryProjection::default())
+            .await
+            .is_err()
+    );
     store
         .interrupt(&empty)
         .await
@@ -162,7 +167,12 @@ async fn foreign_owners_cannot_mutate() {
         turn.owner().token().to_vec(),
     );
     assert!(store.renew(&foreign).await.is_err());
-    assert!(store.complete_turn(&foreign, &[]).await.is_err());
+    assert!(
+        store
+            .complete_turn(&foreign, &[], HistoryProjection::default())
+            .await
+            .is_err()
+    );
     assert!(
         store
             .fail_turn(&foreign, &TurnError::Model(ModelError::InvalidResponse))
@@ -232,7 +242,7 @@ async fn journal_ids_are_store_wide_and_paths_and_terminal_prompts_are_retained(
 
         // Assert
         let loaded = store.load_session(name).await.expect("load");
-        assert_eq!(loaded.turns, Vec::<HistoryTurn>::new());
+        assert_eq!(loaded.turns, Vec::<(i64, HistoryTurn)>::new());
         let writes = store.load_writes(name).await.expect("writes");
         assert_eq!(writes[0].repository_root, root);
         assert_eq!(writes[0].status, WriteStatus::Failed);
@@ -274,7 +284,7 @@ async fn bounded_projection_keeps_complete_groups_and_canonical_records() {
         .await
         .expect("turn");
         store
-            .complete_turn(turn.owner(), &[])
+            .complete_turn(turn.owner(), &[], HistoryProjection::default())
             .await
             .expect("complete");
     }
@@ -285,9 +295,10 @@ async fn bounded_projection_keeps_complete_groups_and_canonical_records() {
     // Assert
     assert_eq!(
         loaded.turns,
-        vec![HistoryTurn::from(vec![ModelMessage::User(
-            "last".to_string()
-        )])]
+        vec![(
+            2,
+            HistoryTurn::from(vec![ModelMessage::User("last".to_string())])
+        )]
     );
     assert_eq!(store.lock().sessions["session"].turns.len(), 3);
     store
@@ -303,7 +314,7 @@ async fn bounded_projection_keeps_complete_groups_and_canonical_records() {
             .await
             .expect("zero budget")
             .turns,
-        Vec::<HistoryTurn>::new()
+        Vec::<(i64, HistoryTurn)>::new()
     );
 }
 
@@ -368,7 +379,7 @@ async fn allocation_exhaustion_and_invalid_snapshots_never_reserve() {
         Vec::<WriteRecord>::new()
     );
     store
-        .complete_turn(turn.owner(), &[])
+        .complete_turn(turn.owner(), &[], HistoryProjection::default())
         .await
         .expect("complete");
     assert_eq!(store.lock().sessions["session"].turns.len(), 1);
@@ -392,7 +403,7 @@ async fn expiry_and_stale_cleanup_match_sqlite() {
                 .await
                 .expect("first");
             store
-                .complete_turn(first.owner(), &[])
+                .complete_turn(first.owner(), &[], HistoryProjection::default())
                 .await
                 .expect("complete first");
             let old = AcquiredTurn::begin(store.clone(), "expiry", &expired_input, &options(), 0)
@@ -406,7 +417,12 @@ async fn expiry_and_stale_cleanup_match_sqlite() {
             // Act
             expire();
             assert!(store.renew(old.owner()).await.is_err());
-            assert!(store.complete_turn(old.owner(), &[]).await.is_err());
+            assert!(
+                store
+                    .complete_turn(old.owner(), &[], HistoryProjection::default())
+                    .await
+                    .is_err()
+            );
             assert!(
                 store
                     .fail_turn(old.owner(), &TurnError::Model(ModelError::InvalidResponse))
@@ -433,7 +449,7 @@ async fn expiry_and_stale_cleanup_match_sqlite() {
                 .await
                 .expect("recover acquisition");
             store
-                .complete_turn(next.owner(), &[])
+                .complete_turn(next.owner(), &[], HistoryProjection::default())
                 .await
                 .expect("complete successor");
             store.interrupt(old.owner()).await.expect("stale interrupt");
@@ -451,13 +467,16 @@ async fn expiry_and_stale_cleanup_match_sqlite() {
             assert_eq!(loaded.turns.len(), 3);
             assert_eq!(
                 loaded.turns[1],
-                HistoryTurn {
-                    messages: vec![ModelMessage::User("expired".to_string())],
-                    stop: Some(TurnStop {
-                        error_type: "interrupted".to_string(),
-                        ..TurnStop::default()
-                    }),
-                }
+                (
+                    1,
+                    HistoryTurn {
+                        messages: vec![ModelMessage::User("expired".to_string())],
+                        stop: Some(TurnStop {
+                            error_type: "interrupted".to_string(),
+                            ..TurnStop::default()
+                        }),
+                    }
+                )
             );
             assert_ne!(old.owner(), next.owner());
             assert_eq!(
@@ -541,7 +560,9 @@ async fn host_recovery_requires_atomic_terminal_output() {
     };
 
     // Act
-    let result = store.complete_turn(turn.owner(), &[]).await;
+    let result = store
+        .complete_turn(turn.owner(), &[], HistoryProjection::default())
+        .await;
     let record = store
         .load_request("host", "id")
         .await

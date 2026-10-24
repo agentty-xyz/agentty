@@ -1,7 +1,7 @@
 //! Model-aware projection of bounded session history into provider requests.
 
 use std::cmp::Reverse;
-use std::collections::{HashMap, VecDeque};
+use std::collections::HashMap;
 use std::fmt::Write as _;
 use std::num::NonZeroU64;
 use std::ops::Range;
@@ -146,16 +146,16 @@ pub(crate) const ELIDED_SOURCE_LIMIT_FACTOR: usize = 8;
 /// pass it to `Harness::new` or derive it from a registration's
 /// [`crate::model::ModelProfile`]. Like the profile, the budget never enters
 /// request fingerprints or stored history. The budget governs
-/// every provider request of a turn: the initial request keeps the most recent
-/// turns that fit, each whole, with its tool traffic cleared, or as its input
-/// and final output. Within a turn, requests only append until one exceeds
-/// the budget; that request is reduced once, deeply, by clearing older tool
-/// results that a later call superseded, capping the new round's oversized
-/// tool results (a `read` result by whole lines, as when it ran, any other to
-/// a head and tail excerpt), clearing the other older tool results, then
-/// reasoning and write patches, keeping the newest results whole longest,
-/// dropping the oldest history turns, then the current turn's oldest tool
-/// rounds behind an appended note, and finally cutting the latest results
+/// every provider request of a turn: the initial request replays the session's
+/// history in its sticky [`HistoryProjection`], re-projected only once that
+/// history outgrows what the budget leaves for it. Within a turn, requests only
+/// append until one exceeds the budget; that request is reduced once, deeply,
+/// by clearing older tool results that a later call superseded, capping the new
+/// round's oversized tool results (a `read` result by whole lines, as when it
+/// ran, any other to a head and tail excerpt), clearing the other older tool
+/// results, then reasoning and write patches, keeping the newest results whole
+/// longest, dropping the oldest history turns, then the current turn's oldest
+/// tool rounds behind an appended note, and finally cutting the latest results
 /// further and the latest write patches to their outcome. Every reduced
 /// message keeps its reduced form, so the following requests append to it.
 /// With [`ContextSummaryPolicy::Enabled`], earlier tool rounds may instead be
@@ -517,6 +517,22 @@ impl HistoryTurn {
         }
     }
 
+    /// Returns this turn in `form`, with the form it took: brief instead of
+    /// elided when the turn retains more than `elided_source_bytes`.
+    pub(crate) fn in_form(
+        &self,
+        form: ReplayForm,
+        elided_source_bytes: usize,
+    ) -> (Self, ReplayForm) {
+        match form {
+            ReplayForm::Full => (self.clone(), form),
+            ReplayForm::Elided if retained_bytes(&self.messages) <= elided_source_bytes => {
+                (self.elided(), form)
+            }
+            ReplayForm::Elided | ReplayForm::Brief => (self.brief(), ReplayForm::Brief),
+        }
+    }
+
     /// Returns the most complete form of this turn, full, then elided, then
     /// brief, whose retained bytes fit `max_bytes`. The elided form is only
     /// considered while the full turn stays within
@@ -557,6 +573,274 @@ impl From<Vec<ModelMessage>> for HistoryTurn {
             stop: None,
         }
     }
+}
+
+/// Sticky boundaries, by turn position, of the forms in which a session's
+/// finished turns replay in later requests.
+///
+/// Turns before [`Self::start`] are left out, the following turns before
+/// [`Self::brief_before`] replay in brief form, the following turns before
+/// [`Self::elided_before`] replay with their tool traffic cleared, and every
+/// later turn, including each new one, replays in full. Each turn request
+/// replays its history in these forms, so a new turn only appends to the
+/// previous turn's history. Only once that history outgrows its byte or
+/// weight limit are the boundaries moved, and then deeply (see
+/// [`HISTORY_REPROJECT_PERCENT`]); they only ever advance, so a turn once
+/// replayed in a shorter form is never replayed more completely again. A
+/// session's store keeps the projection its latest completed turn left, and
+/// a new session or one stored before projections were kept starts from
+/// [`Self::default`], which replays every turn in full.
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
+pub struct HistoryProjection {
+    brief_before: i64,
+    elided_before: i64,
+    start: i64,
+}
+
+impl HistoryProjection {
+    /// Restores stored boundaries, raising `brief_before` to at least
+    /// `start` and `elided_before` to at least `brief_before`, so each form
+    /// covers contiguous turns.
+    pub fn new(start: i64, brief_before: i64, elided_before: i64) -> Self {
+        let brief_before = brief_before.max(start);
+
+        Self {
+            brief_before,
+            elided_before: elided_before.max(brief_before),
+            start,
+        }
+    }
+
+    /// Position of the oldest turn later requests may replay.
+    pub fn start(self) -> i64 {
+        self.start
+    }
+
+    /// Position before which replayed turns appear in brief form.
+    pub fn brief_before(self) -> i64 {
+        self.brief_before
+    }
+
+    /// Position before which replayed turns appear with their tool traffic
+    /// cleared; later turns replay in full.
+    pub fn elided_before(self) -> i64 {
+        self.elided_before
+    }
+
+    /// Returns the form the turn at `position` replays in, or `None` when it
+    /// is left out.
+    pub(crate) fn form(self, position: i64) -> Option<ReplayForm> {
+        if position < self.start {
+            None
+        } else if position < self.brief_before {
+            Some(ReplayForm::Brief)
+        } else if position < self.elided_before {
+            Some(ReplayForm::Elided)
+        } else {
+            Some(ReplayForm::Full)
+        }
+    }
+
+    /// Returns this projection with every turn before `position` left out.
+    #[must_use]
+    pub(crate) fn drop_before(self, position: i64) -> Self {
+        Self::new(
+            self.start.max(position),
+            self.brief_before,
+            self.elided_before,
+        )
+    }
+
+    /// Returns this projection with every turn before `position` replayed
+    /// at most with its tool traffic cleared.
+    #[must_use]
+    pub(crate) fn elide_before(self, position: i64) -> Self {
+        Self::new(
+            self.start,
+            self.brief_before,
+            self.elided_before.max(position),
+        )
+    }
+
+    /// Returns the boundaries that replay exactly the `kept` turns, newest
+    /// first with forms never more complete than a newer turn's, after
+    /// which `next` is the first position replayed in full; no boundary
+    /// moves back.
+    pub(crate) fn reprojected(self, kept: &[(i64, ReplayForm)], next: i64) -> Self {
+        let oldest_at_least = |form: ReplayForm| {
+            kept.iter()
+                .filter(|(_, kept_form)| *kept_form >= form)
+                .map(|(position, _)| *position)
+                .min()
+                .unwrap_or(next)
+        };
+
+        Self::new(
+            oldest_at_least(ReplayForm::Brief).max(self.start),
+            oldest_at_least(ReplayForm::Elided).max(self.brief_before),
+            oldest_at_least(ReplayForm::Full).max(self.elided_before),
+        )
+    }
+}
+
+/// Form in which one finished turn replays, from least to most complete.
+#[derive(Clone, Copy, Debug, Eq, Ord, PartialEq, PartialOrd)]
+pub(crate) enum ReplayForm {
+    /// Input and, for a completed turn, final output.
+    Brief,
+    /// Every message, with tool traffic cleared.
+    Elided,
+    /// Every message.
+    Full,
+}
+
+impl ReplayForm {
+    /// Returns this form and every shorter one, most complete first.
+    fn and_shorter(self) -> impl Iterator<Item = Self> {
+        [Self::Full, Self::Elided, Self::Brief]
+            .into_iter()
+            .filter(move |form| *form <= self)
+    }
+}
+
+/// Share, in percent, of a history limit that re-projected history is cut
+/// down to once the projected history outgrows the limit, so the following
+/// turns append to one projection for several turns before the next one.
+pub(crate) const HISTORY_REPROJECT_PERCENT: u64 = 50;
+
+/// Returns the share of a history `limit` re-projected history is cut down
+/// to (see [`HISTORY_REPROJECT_PERCENT`]).
+pub(crate) fn reprojection_target(limit: u64) -> u64 {
+    limit.saturating_mul(HISTORY_REPROJECT_PERCENT) / 100
+}
+
+/// Returns the room re-projection gives the next older turn once newer
+/// turns `used` part of the `target`: the whole `limit` for the newest
+/// turn, which keeps its most complete form that fits, and what the target
+/// leaves for every other turn.
+pub(crate) fn reprojection_room(limit: u64, target: u64, used: u64, newest: bool) -> u64 {
+    if newest {
+        limit
+    } else {
+        target.saturating_sub(used)
+    }
+}
+
+/// Bound on the history one request replays: the largest total measure of
+/// its turns, in their replayed forms.
+pub(crate) struct HistoryLimit<'a> {
+    /// Retained bytes above which a turn is never elided but replayed in
+    /// brief form, so a store never loads more of one turn than this.
+    elided_source_bytes: usize,
+    limit: u64,
+    /// Weighs each turn's replay, or counts its retained bytes when `None`.
+    estimator: Option<&'a dyn ContextEstimator>,
+}
+
+impl<'a> HistoryLimit<'a> {
+    /// Bounds the retained bytes of history kept for replay, as a store
+    /// loads it.
+    pub(crate) fn bytes(max_bytes: usize) -> Self {
+        Self {
+            elided_source_bytes: max_bytes.saturating_mul(ELIDED_SOURCE_LIMIT_FACTOR),
+            estimator: None,
+            limit: u64::try_from(max_bytes).unwrap_or(u64::MAX),
+        }
+    }
+
+    /// Bounds the weight `estimator` gives the turns' replays to the
+    /// `available_weight` one turn's first request leaves for history.
+    pub(crate) fn weight(available_weight: u64, estimator: &'a dyn ContextEstimator) -> Self {
+        Self {
+            elided_source_bytes: usize::MAX,
+            estimator: Some(estimator),
+            limit: available_weight,
+        }
+    }
+
+    fn measure(&self, turn: &HistoryTurn) -> u64 {
+        match self.estimator {
+            Some(estimator) => weigh_messages(estimator, &turn.replay()),
+            None => u64::try_from(retained_bytes(&turn.messages)).unwrap_or(u64::MAX),
+        }
+    }
+}
+
+/// Projects finished `turns`, oldest first with their positions and each in
+/// at least the form `projection` replays it in, under `limit`.
+///
+/// Turns from [`HistoryProjection::start`] replay in the forms `projection`
+/// gives them while they fit `limit` together, so a new turn only appends.
+/// Once they no longer fit, they are re-projected newest first down to
+/// [`HISTORY_REPROJECT_PERCENT`] of the limit: each turn in the most complete
+/// form that fits what is left, never more complete than its projected form
+/// or than the newer turn after it, until a turn does not fit even in brief
+/// form; it and every older turn are left out. Returns the replayed turns,
+/// oldest first, with the projection they follow.
+pub(crate) fn project_history(
+    turns: &[(i64, HistoryTurn)],
+    projection: HistoryProjection,
+    limit: &HistoryLimit<'_>,
+) -> (Vec<(i64, HistoryTurn)>, HistoryProjection) {
+    let candidates = || {
+        turns
+            .iter()
+            .rev()
+            .take_while(|(position, _)| *position >= projection.start)
+    };
+    let mut kept = Vec::new();
+    let mut total = 0_u64;
+    for (position, turn) in candidates() {
+        let form = projection.form(*position).unwrap_or(ReplayForm::Brief);
+        let (turn, _) = turn.in_form(form, limit.elided_source_bytes);
+        total = total.saturating_add(limit.measure(&turn));
+        if total > limit.limit {
+            return reproject(turns, projection, limit);
+        }
+        kept.push((*position, turn));
+    }
+    kept.reverse();
+
+    (kept, projection)
+}
+
+/// Re-projects `turns` that outgrew `limit` in their projected forms, as
+/// [`project_history`] describes.
+fn reproject(
+    turns: &[(i64, HistoryTurn)],
+    projection: HistoryProjection,
+    limit: &HistoryLimit<'_>,
+) -> (Vec<(i64, HistoryTurn)>, HistoryProjection) {
+    let target = reprojection_target(limit.limit);
+    let mut used = 0_u64;
+    let mut cap = ReplayForm::Full;
+    let mut kept = Vec::new();
+    let mut forms = Vec::new();
+    for (position, turn) in turns.iter().rev() {
+        let Some(projected) = projection.form(*position) else {
+            break;
+        };
+        let room = reprojection_room(limit.limit, target, used, kept.is_empty());
+        let fitting = cap.min(projected).and_shorter().find_map(|form| {
+            let (turn, form) = turn.in_form(form, limit.elided_source_bytes);
+            let measure = limit.measure(&turn);
+
+            (measure <= room).then_some((turn, form, measure))
+        });
+        let Some((turn, form, measure)) = fitting else {
+            break;
+        };
+        used = used.saturating_add(measure);
+        cap = form;
+        kept.push((*position, turn));
+        forms.push((*position, form));
+    }
+    kept.reverse();
+    let next = turns
+        .last()
+        .map_or(projection.start, |(position, _)| position.saturating_add(1));
+
+    (kept, projection.reprojected(&forms, next))
 }
 
 /// Why a replayed turn stopped and which of its effects have no recorded
@@ -716,6 +1000,49 @@ pub(crate) struct ContextFit {
     unreduced_weight: u64,
 }
 
+/// How a turn's last request carried the history turns its first request
+/// replayed, oldest first.
+#[derive(Debug, Default, Eq, PartialEq)]
+pub(crate) struct SentHistory {
+    /// Oldest replayed turns the turn's requests left out.
+    pub(crate) dropped_turns: usize,
+    /// Messages of each following replayed turn, as last sent.
+    pub(crate) turns: Vec<Vec<ModelMessage>>,
+}
+
+/// The finished turns one turn's first request replayed, oldest first with
+/// their positions and in their replayed forms, and the projection they
+/// follow.
+#[derive(Debug, Default)]
+pub(crate) struct ReplayedHistory {
+    pub(crate) projection: HistoryProjection,
+    pub(crate) turns: Vec<(i64, HistoryTurn)>,
+}
+
+impl ReplayedHistory {
+    /// Returns the projection the next turn continues once this turn's
+    /// requests carried its history as `sent` reports. Turns they left out
+    /// stay left out, and the oldest following turns they sent exactly as
+    /// their elided replay stay elided, so the next turn's first request
+    /// repeats what this turn last sent instead of restoring it.
+    pub(crate) fn after_turn(&self, sent: &SentHistory) -> HistoryProjection {
+        let (dropped, kept) = self
+            .turns
+            .split_at(sent.dropped_turns.min(self.turns.len()));
+        let mut projection = dropped.last().map_or(self.projection, |(position, _)| {
+            self.projection.drop_before(position.saturating_add(1))
+        });
+        for ((position, turn), messages) in kept.iter().zip(&sent.turns) {
+            if *messages != turn.elided().replay() {
+                break;
+            }
+            projection = projection.elide_before(position.saturating_add(1));
+        }
+
+        projection
+    }
+}
+
 /// What a turn does next to send its grown request within the budget.
 #[derive(Debug)]
 pub(crate) enum FitStep<'fit> {
@@ -753,6 +1080,33 @@ impl ContextFit {
     /// Returns how many summaries of this turn failed or were rejected.
     pub(crate) fn summary_failures(&self) -> usize {
         self.summary_failures
+    }
+
+    /// Returns how the last request this fit returned carried the
+    /// projected history turns of `request`, the turn's canonical request:
+    /// how many of the oldest it left out, then each remaining turn's
+    /// messages as sent.
+    pub(crate) fn sent_history(&self, request: &ModelRequest) -> SentHistory {
+        let starts = request.history_turn_starts();
+        let end = request.input_index();
+        let turns = (self.dropped_history_turns..starts.len())
+            .map(|turn| {
+                let next = starts.get(turn + 1).copied().unwrap_or(end);
+                (starts[turn]..next)
+                    .map(|index| {
+                        self.messages
+                            .get(index)
+                            .and_then(|message| message.reduced.clone())
+                            .unwrap_or_else(|| request.messages()[index].clone())
+                    })
+                    .collect()
+            })
+            .collect();
+
+        SentHistory {
+            dropped_turns: self.dropped_history_turns,
+            turns,
+        }
     }
 
     /// Returns the copy of `request` to send in its place, or `None` when the
@@ -1289,6 +1643,14 @@ impl ContextFit {
                 self.elide_results(&mut tier, self.elided_results_before, end);
             self.cleared_calls_before = self.clear_calls(&mut tier, self.cleared_calls_before, end);
         }
+        // A replayed history turn that clearing reached is cleared whole, so
+        // the next turn can replay it as this request sent it.
+        if let Some(end) = self.history_turn_end(layout) {
+            tier.target = 0;
+            self.elided_results_before =
+                self.elide_results(&mut tier, self.elided_results_before, end);
+            self.cleared_calls_before = self.clear_calls(&mut tier, self.cleared_calls_before, end);
+        }
         let drop_target = Self::target(budget, DROP_TARGET_PERCENT);
         while base.saturating_add(self.required) > drop_target && self.drop_history_turn(layout) {
             changed = true;
@@ -1324,6 +1686,25 @@ impl ContextFit {
     /// Returns where the current turn's recent rounds start: the latest
     /// round, and each round before it, newest first, until together they
     /// hold [`KEEP_RECENT_RESULTS`] tool results.
+    /// Returns the end of the replayed history turn that clearing reached
+    /// without clearing it whole, or of all replayed history once clearing
+    /// passed it, when either watermark still lags behind that end.
+    fn history_turn_end(&self, layout: &Layout<'_>) -> Option<usize> {
+        let reached = self.elided_results_before.max(self.cleared_calls_before);
+        let history_start = *layout.history_turn_starts.get(self.dropped_history_turns)?;
+        if reached <= history_start {
+            return None;
+        }
+        let end = layout.history_turn_starts[self.dropped_history_turns..]
+            .iter()
+            .copied()
+            .chain([layout.input_index])
+            .find(|start| *start >= reached)
+            .unwrap_or(layout.input_index);
+
+        (self.elided_results_before.min(self.cleared_calls_before) < end).then_some(end)
+    }
+
     fn recent_start(&self, messages: &[ModelMessage], layout: &Layout<'_>) -> usize {
         let floor = self.dropped_rounds.end.max(layout.input_index + 1);
         let results = |range: Range<usize>| {
@@ -1900,29 +2281,6 @@ impl ContextFit {
     }
 }
 
-/// Selects the most recent finished turns that fit `max_bytes` of retained
-/// history, newest first, each in the most complete form that fits what is
-/// left, and stops at the first turn that does not fit even in brief form.
-/// A turn larger than [`ELIDED_SOURCE_LIMIT_FACTOR`] times `max_bytes` is
-/// never elided. Returns the kept turns oldest first.
-pub(crate) fn fit_history_bytes(
-    newest_first: impl IntoIterator<Item = HistoryTurn>,
-    max_bytes: usize,
-) -> Vec<HistoryTurn> {
-    let mut remaining = max_bytes;
-    let mut kept = Vec::new();
-    for turn in newest_first {
-        let Some(turn) = turn.fit_bytes(remaining, max_bytes) else {
-            break;
-        };
-        remaining -= retained_bytes(&turn.messages);
-        kept.push(turn);
-    }
-    kept.reverse();
-
-    kept
-}
-
 /// Returns the oldest of `oldest_first` turns, keyed by position, that fit
 /// `max_bytes` in order, each in the most complete form that fits what is
 /// left, stopping at the first turn that fits in no form. The first turn is
@@ -1944,45 +2302,6 @@ pub(crate) fn fit_oldest_history_bytes(
     }
 
     kept
-}
-
-/// Returns, oldest first, the replays of the most recent finished turns whose
-/// combined weight fits `available_weight`, dropping every turn older than
-/// the first that does not fit, so a turn's tool groups are never split. Each
-/// turn replays in full, else with its tool traffic cleared, else as its input
-/// and final output or stop note. Returns the projected turns with the number
-/// of loaded turns that projection evicted.
-pub(crate) fn select_recent_turns(
-    estimator: &dyn ContextEstimator,
-    turns: &VecDeque<HistoryTurn>,
-    available_weight: u64,
-) -> (Vec<Vec<ModelMessage>>, usize) {
-    let mut kept = Vec::new();
-    let mut remaining = available_weight;
-    for turn in turns.iter().rev() {
-        let forms: [&dyn Fn() -> Vec<ModelMessage>; 3] =
-            [&|| turn.replay(), &|| turn.elided().replay(), &|| {
-                turn.brief().replay()
-            }];
-        let Some((replay, weight)) = forms
-            .iter()
-            .map(|form| {
-                let replay = form();
-                let weight = weigh_messages(estimator, &replay);
-
-                (replay, weight)
-            })
-            .find(|(_, weight)| *weight <= remaining)
-        else {
-            break;
-        };
-        remaining -= weight;
-        kept.push(replay);
-    }
-    let dropped_turns = turns.len().saturating_sub(kept.len());
-    kept.reverse();
-
-    (kept, dropped_turns)
 }
 
 /// Returns the definitions the engine advertises for these options, in order.

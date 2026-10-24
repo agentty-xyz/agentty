@@ -9,9 +9,9 @@ use std::time::Duration;
 use ag_harness::model::{ModelMessage, ModelMetadata};
 use ag_harness::recovery::{HostTurnRecord, HostTurnStatus};
 use ag_harness::store::{
-    Admission, AdmissionState, CompactionSource, HistoryTurn, LoadedSession, ModelSwitch,
-    NewSession, Reservation, ReservedTurn, SessionCheckpoint, SessionStore, StoreIdentity,
-    TurnAdmission, TurnOwner, TurnStop, WriteRecord, WriteStatus,
+    Admission, AdmissionState, CompactionSource, HistoryProjection, HistoryTurn, LoadedSession,
+    ModelSwitch, NewSession, Reservation, ReservedTurn, SessionCheckpoint, SessionStore,
+    StoreIdentity, TurnAdmission, TurnOwner, TurnStop, WriteRecord, WriteStatus,
 };
 use ag_harness::{SessionError, TurnError, TurnOutcome};
 use async_trait::async_trait;
@@ -33,7 +33,6 @@ struct Record {
     next_turn: i64,
     owner: Option<(TurnOwner, Instant)>,
     pending: Vec<ModelMessage>,
-    positions: Vec<i64>,
     requests: Vec<HostTurnRecord>,
     writes: Vec<(Vec<u8>, WriteRecord)>,
 }
@@ -80,18 +79,18 @@ impl Record {
         let boundary = loaded
             .checkpoint
             .as_ref()
-            .map_or(-1, SessionCheckpoint::covered_through);
-        loaded.latest_finished_turn = self.positions.iter().copied().max();
-        let mut turns: Vec<HistoryTurn> = self
-            .positions
+            .map_or(-1, SessionCheckpoint::covered_through)
+            .max(loaded.projection.start().saturating_sub(1));
+        loaded.latest_finished_turn = self.latest_finished_turn();
+        let mut turns: Vec<(i64, HistoryTurn)> = loaded
+            .turns
             .iter()
-            .zip(loaded.turns.iter())
-            .filter(|(position, _)| **position > boundary)
-            .map(|(_, turn)| turn.clone())
+            .filter(|(position, _)| *position > boundary)
+            .cloned()
             .collect();
         while turns
             .iter()
-            .flat_map(|turn| &turn.messages)
+            .flat_map(|(_, turn)| &turn.messages)
             .map(ModelMessage::retained_bytes)
             .sum::<usize>()
             > loaded.max_history_bytes
@@ -103,6 +102,14 @@ impl Record {
         loaded
     }
 
+    fn latest_finished_turn(&self) -> Option<i64> {
+        self.loaded
+            .turns
+            .iter()
+            .map(|(position, _)| *position)
+            .max()
+    }
+
     /// Returns the oldest uncovered turns, whole, that fit `max_bytes`; the
     /// oldest is always returned.
     fn compaction_source(&self, max_bytes: usize) -> CompactionSource {
@@ -112,7 +119,7 @@ impl Record {
             .map_or(-1, SessionCheckpoint::covered_through);
         let mut remaining = max_bytes;
         let mut turns = Vec::new();
-        for (position, turn) in self.positions.iter().zip(self.loaded.turns.iter()) {
+        for (position, turn) in &self.loaded.turns {
             let bytes = turn
                 .messages
                 .iter()
@@ -146,11 +153,13 @@ impl Record {
                 .collect(),
             ..stop
         });
-        self.loaded.turns.push(HistoryTurn {
-            messages: std::mem::take(&mut self.pending),
-            stop,
-        });
-        self.positions.push(owner.turn_position());
+        self.loaded.turns.push((
+            owner.turn_position(),
+            HistoryTurn {
+                messages: std::mem::take(&mut self.pending),
+                stop,
+            },
+        ));
         self.owner = None;
     }
 
@@ -196,6 +205,7 @@ impl ExternalStore {
         owner: &TurnOwner,
         messages: &[ModelMessage],
         outcome: Option<&TurnOutcome>,
+        projection: HistoryProjection,
     ) -> Result<(), SessionError> {
         let mut sessions = self.sessions.lock().expect("sessions");
         let session = sessions.get_mut(owner.session_id()).expect("session");
@@ -205,6 +215,7 @@ impl ExternalStore {
             session.set_status(owner, HostTurnStatus::Completed(outcome.clone()));
         }
         session.finish(owner, None);
+        session.loaded.projection = projection;
 
         Ok(())
     }
@@ -252,6 +263,7 @@ impl SessionStore for ExternalStore {
                     model_generation: 0,
                     max_history_bytes,
                     model: metadata.as_ref().map(|value| value.model().to_string()),
+                    projection: HistoryProjection::default(),
                     provider: metadata.as_ref().map(|value| value.provider().to_string()),
                     registration_identity: config.registration_identity().cloned(),
                     schema: config.schema().clone(),
@@ -261,7 +273,6 @@ impl SessionStore for ExternalStore {
                 next_turn: 0,
                 owner: None,
                 pending: Vec::new(),
-                positions: Vec::new(),
                 requests: Vec::new(),
                 writes: Vec::new(),
             },
@@ -286,9 +297,16 @@ impl SessionStore for ExternalStore {
             .get_mut(id)
             .ok_or_else(|| SessionError::NotFound { id: id.to_string() })?;
         session.recover();
-        switch.check_history(session.loaded.turns.iter().flat_map(|turn| &turn.messages))?;
+        switch.check_history(
+            session
+                .loaded
+                .turns
+                .iter()
+                .flat_map(|(_, turn)| &turn.messages),
+        )?;
         let next = switch.admit(id, &session.admission_state(None))?;
         session.loaded.model_generation = next;
+        session.loaded.projection = HistoryProjection::default();
         session.loaded.registration_identity = Some(switch.identity().clone());
         session.loaded.provider = switch.metadata().map(|value| value.provider().to_string());
         session.loaded.model = switch.metadata().map(|value| value.model().to_string());
@@ -333,7 +351,9 @@ impl SessionStore for ExternalStore {
         session.pending = vec![turn.message().clone()];
 
         Ok(Reservation::Reserved(
-            ReservedTurn::new(owner, deadline, bounded.turns).with_checkpoint(bounded.checkpoint),
+            ReservedTurn::new(owner, deadline, bounded.turns)
+                .with_checkpoint(bounded.checkpoint)
+                .with_projection(bounded.projection),
         ))
     }
 
@@ -363,7 +383,7 @@ impl SessionStore for ExternalStore {
                 id: session_id.to_string(),
             })?;
         session.recover();
-        let latest_finished = session.positions.iter().copied().max();
+        let latest_finished = session.latest_finished_turn();
         let stale =
             session.loaded.model_generation != checkpoint.model_generation()
                 || latest_finished
@@ -400,8 +420,9 @@ impl SessionStore for ExternalStore {
         owner: &TurnOwner,
         messages: &[ModelMessage],
         outcome: &TurnOutcome,
+        projection: HistoryProjection,
     ) -> Result<(), SessionError> {
-        self.complete(owner, messages, Some(outcome))
+        self.complete(owner, messages, Some(outcome), projection)
     }
 
     async fn renew(&self, owner: &TurnOwner) -> Result<Instant, SessionError> {
@@ -433,8 +454,9 @@ impl SessionStore for ExternalStore {
         &self,
         owner: &TurnOwner,
         messages: &[ModelMessage],
+        projection: HistoryProjection,
     ) -> Result<(), SessionError> {
-        self.complete(owner, messages, None)
+        self.complete(owner, messages, None, projection)
     }
 
     async fn fail_turn(&self, owner: &TurnOwner, error: &TurnError) -> Result<(), SessionError> {

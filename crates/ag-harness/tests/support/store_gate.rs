@@ -7,8 +7,8 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use ag_harness::model::{ModelMessage, ModelMetadata};
 use ag_harness::recovery::HostTurnRecord;
 use ag_harness::store::{
-    LoadedSession, ModelSwitch, NewSession, Reservation, SessionStore, StoreIdentity,
-    TurnAdmission, TurnOwner, WriteRecord,
+    HistoryProjection, LoadedSession, ModelSwitch, NewSession, Reservation, SessionStore,
+    StoreIdentity, TurnAdmission, TurnOwner, WriteRecord,
 };
 use ag_harness::{SessionError, TurnError, TurnOutcome};
 use async_trait::async_trait;
@@ -139,8 +139,11 @@ impl SessionStore for Gate {
         owner: &TurnOwner,
         messages: &[ModelMessage],
         outcome: &TurnOutcome,
+        projection: HistoryProjection,
     ) -> Result<(), SessionError> {
-        self.store.complete_request(owner, messages, outcome).await
+        self.store
+            .complete_request(owner, messages, outcome, projection)
+            .await
     }
 
     async fn renew(&self, owner: &TurnOwner) -> Result<Instant, SessionError> {
@@ -159,8 +162,9 @@ impl SessionStore for Gate {
         &self,
         owner: &TurnOwner,
         messages: &[ModelMessage],
+        projection: HistoryProjection,
     ) -> Result<(), SessionError> {
-        self.store.complete_turn(owner, messages).await
+        self.store.complete_turn(owner, messages, projection).await
     }
 
     async fn fail_turn(&self, owner: &TurnOwner, error: &TurnError) -> Result<(), SessionError> {

@@ -10,7 +10,7 @@ use crate::lifecycle::ModelResponseType;
 use crate::recovery::{HostRequest, HostTurnAcquisition, HostTurnStatus};
 use crate::session::tests::support::{schema, turn_options};
 use crate::session::{Database, SessionError};
-use crate::store::{AcquiredTurn, NewSession, SessionStore};
+use crate::store::{AcquiredTurn, HistoryProjection, NewSession, SessionStore};
 use crate::turn::{ModelRequestActivity, TurnReport};
 
 #[tokio::test]
@@ -80,12 +80,17 @@ async fn recovery_rejects_corrupt_terminal_data_instead_of_reexecuting() {
 
     // Act / Assert
     assert!(
-        SessionStore::complete_turn(database.as_ref(), turn.owner(), &[])
-            .await
-            .is_err()
+        SessionStore::complete_turn(
+            database.as_ref(),
+            turn.owner(),
+            &[],
+            HistoryProjection::default()
+        )
+        .await
+        .is_err()
     );
     database
-        .complete_request(turn.owner(), &[], &outcome)
+        .complete_request(turn.owner(), &[], &outcome, HistoryProjection::default())
         .await
         .expect("complete");
     for payload in [
@@ -217,7 +222,7 @@ async fn migration_drops_removed_resume_activities_from_recorded_outcomes() {
         ),
     );
     database
-        .complete_request(turn.owner(), &[], &outcome)
+        .complete_request(turn.owner(), &[], &outcome, HistoryProjection::default())
         .await
         .expect("complete");
     drop(turn);

@@ -20,7 +20,7 @@ use crate::admission::{
     Admission, AdmissionState, ModelSwitch, Reservation, ReservedTurn, TurnAdmission,
 };
 use crate::compaction::{CheckpointError, CompactionSource, SessionCheckpoint};
-use crate::context::{self, HistoryTurn, TurnStop};
+use crate::context::{self, HistoryProjection, HistoryTurn, ReplayForm, TurnStop};
 use crate::input::{StoredTurnInput, TurnInput};
 use crate::model::{ModelMessage, ModelMetadata};
 use crate::recovery::{ExecutionIdentity, HostRequest, HostTurnRecord, HostTurnStatus};
@@ -120,6 +120,12 @@ struct ModelIdentityRow {
     registration_revision: Option<String>,
 }
 
+struct ProjectionRow {
+    brief_before: i64,
+    elided_before: i64,
+    start: i64,
+}
+
 struct SessionMessageRow {
     error_type: Option<String>,
     kind: String,
@@ -154,16 +160,6 @@ struct TurnSizeRow {
     turn_position: i64,
 }
 
-/// Which end of the uncovered history a window keeps when not every turn
-/// fits.
-#[derive(Clone, Copy)]
-enum WindowEnd {
-    /// The most recent turns, replayed with later requests.
-    Newest,
-    /// The oldest turns, which the next compaction checkpoint covers.
-    Oldest,
-}
-
 /// Form in which one turn of the history window replays.
 enum WindowForm {
     /// Every message, loaded after the window is chosen.
@@ -172,6 +168,16 @@ enum WindowForm {
     Elided(HistoryTurn),
     /// Only the input and final message, loaded after the window is chosen.
     Brief,
+}
+
+impl WindowForm {
+    fn replay_form(&self) -> ReplayForm {
+        match self {
+            Self::Full => ReplayForm::Full,
+            Self::Elided(_) => ReplayForm::Elided,
+            Self::Brief => ReplayForm::Brief,
+        }
+    }
 }
 
 struct UnfinishedEffectRow {
@@ -450,7 +456,7 @@ impl Database {
         let turn_position = next_turn_position(&mut transaction, session_id).await?;
         let latest_finished_turn = latest_finished_turn(&mut transaction, session_id).await?;
         let checkpoint = load_checkpoint_from(&mut transaction, session_id).await?;
-        let turns = load_turns_from(
+        let (turns, projection) = load_turns_from(
             &mut transaction,
             session_id,
             max_history_bytes,
@@ -466,6 +472,7 @@ impl Database {
             checkpoint,
             configuration,
             latest_finished_turn,
+            projection,
             turn_position,
             turns,
         })
@@ -476,6 +483,7 @@ impl Database {
         owner: &TurnOwner,
         messages: &[ModelMessage],
         outcome: Option<&TurnOutcome>,
+        projection: HistoryProjection,
     ) -> Result<(), SessionError> {
         let terminal_outcome = outcome
             .map(|outcome| serde_json::json!({"version": 1, "outcome": outcome}).to_string());
@@ -522,12 +530,18 @@ WHERE session_id = ? AND turn_position = ? AND status = 'running'
             "complete persistent session turn",
         )
         .await?;
-        sqlx::query("UPDATE session SET updated_at = ? WHERE id = ?")
-            .bind(now)
-            .bind(session_id)
-            .execute(&mut *transaction)
-            .await
-            .session_context("complete persistent session turn")?;
+        sqlx::query(
+            "UPDATE session SET updated_at = ?, history_start = ?, history_brief_before = ?, \
+             history_elided_before = ? WHERE id = ?",
+        )
+        .bind(now)
+        .bind(projection.start())
+        .bind(projection.brief_before())
+        .bind(projection.elided_before())
+        .bind(session_id)
+        .execute(&mut *transaction)
+        .await
+        .session_context("complete persistent session turn")?;
         transaction
             .commit()
             .await
@@ -636,7 +650,8 @@ RETURNING owner_token AS "owner_token!: Vec<u8>"
 
         Ok(Some(Reservation::Reserved(
             ReservedTurn::new(owner, deadline, acquisition.turns)
-                .with_checkpoint(acquisition.checkpoint),
+                .with_checkpoint(acquisition.checkpoint)
+                .with_projection(acquisition.projection),
         )))
     }
 
@@ -673,7 +688,7 @@ RETURNING owner_token AS "owner_token!: Vec<u8>"
         &self,
         session_id: &str,
         max_history_bytes: usize,
-    ) -> Result<(Option<SessionCheckpoint>, Option<i64>, Vec<HistoryTurn>), SessionError> {
+    ) -> Result<StoredHistory, SessionError> {
         let mut connection = self
             .pool
             .acquire()
@@ -681,7 +696,7 @@ RETURNING owner_token AS "owner_token!: Vec<u8>"
             .session_context("load persistent session history")?;
         let checkpoint = load_checkpoint_from(&mut connection, session_id).await?;
         let latest_finished_turn = latest_finished_turn(&mut connection, session_id).await?;
-        let turns = load_turns_from(
+        let (turns, projection) = load_turns_from(
             &mut connection,
             session_id,
             max_history_bytes,
@@ -689,7 +704,12 @@ RETURNING owner_token AS "owner_token!: Vec<u8>"
         )
         .await?;
 
-        Ok((checkpoint, latest_finished_turn, turns))
+        Ok(StoredHistory {
+            checkpoint,
+            latest_finished_turn,
+            projection,
+            turns,
+        })
     }
 
     fn validate_owner(&self, owner: &TurnOwner) -> Result<(), SessionError> {
@@ -912,22 +932,22 @@ WHERE id = ?
         if let Some(snapshot) = row.turn_options {
             StoredTurnOptions::decode(&snapshot)?;
         }
-        let (checkpoint, latest_finished_turn, turns) =
-            self.load_history(id, max_history_bytes).await?;
+        let history = self.load_history(id, max_history_bytes).await?;
         let registration_identity =
             decode_registration_identity(id, row.registration_key, row.registration_revision)?;
 
         Ok(LoadedSession {
-            checkpoint,
-            latest_finished_turn,
+            checkpoint: history.checkpoint,
+            latest_finished_turn: history.latest_finished_turn,
             model_generation: row.model_generation,
             max_history_bytes,
             model: row.model,
+            projection: history.projection,
             provider: row.provider,
             registration_identity,
             schema,
             system_prompt: row.system_prompt,
-            turns,
+            turns: history.turns,
         })
     }
 
@@ -939,14 +959,14 @@ WHERE id = ?
         let operation = "load session compaction source";
         let mut transaction = self.pool.begin().await.session_context(operation)?;
         let checkpoint = load_checkpoint_from(&mut transaction, session_id).await?;
-        let turns = load_window_turns(
+        let window = oldest_window(
             &mut transaction,
             session_id,
             max_history_bytes,
             checkpoint_boundary(checkpoint.as_ref()),
-            WindowEnd::Oldest,
         )
         .await?;
+        let turns = load_window_turns(&mut transaction, session_id, window).await?;
         transaction.commit().await.session_context(operation)?;
 
         Ok(CompactionSource { checkpoint, turns })
@@ -1045,7 +1065,9 @@ ON CONFLICT(session_id) DO UPDATE SET
             let model = switch.metadata().map(ModelMetadata::model);
             sqlx::query!(
                 "UPDATE session SET model_generation = ?, registration_key = ?, \
-                 registration_revision = ?, provider = ?, model = ?, updated_at = ? WHERE id = ?",
+                 registration_revision = ?, provider = ?, model = ?, updated_at = ?, \
+                 history_start = 0, history_brief_before = 0, history_elided_before = 0 WHERE id \
+                 = ?",
                 next,
                 key,
                 registration_revision,
@@ -1107,8 +1129,10 @@ ON CONFLICT(session_id) DO UPDATE SET
         owner: &TurnOwner,
         messages: &[ModelMessage],
         outcome: &TurnOutcome,
+        projection: HistoryProjection,
     ) -> Result<(), SessionError> {
-        self.complete(owner, messages, Some(outcome)).await
+        self.complete(owner, messages, Some(outcome), projection)
+            .await
     }
 
     async fn append_messages(
@@ -1152,8 +1176,9 @@ ON CONFLICT(session_id) DO UPDATE SET
         &self,
         owner: &TurnOwner,
         messages: &[ModelMessage],
+        projection: HistoryProjection,
     ) -> Result<(), SessionError> {
-        self.complete(owner, messages, None).await
+        self.complete(owner, messages, None, projection).await
     }
 
     async fn fail_turn(&self, owner: &TurnOwner, error: &TurnError) -> Result<(), SessionError> {
@@ -1534,6 +1559,10 @@ pub struct LoadedSession {
     pub model: Option<String>,
     /// Monotonic model selection generation used to reject stale handles.
     pub model_generation: i64,
+    /// Projection `turns` follow: the session's stored projection, or, once
+    /// the turns it replays outgrow the byte budget, the projection they
+    /// were re-projected to.
+    pub projection: HistoryProjection,
     /// Provider paired with the stored model name.
     pub provider: Option<String>,
     /// Current registration key/revision, or `None` for direct/legacy
@@ -1543,12 +1572,15 @@ pub struct LoadedSession {
     pub schema: OutputSchema,
     /// Session's retained system prompt.
     pub system_prompt: Option<String>,
-    /// Recent finished turns after the checkpoint boundary, oldest first,
-    /// each in the most complete form that fits the byte budget: all its
-    /// messages, its tool traffic replaced by notices, or only its input and,
-    /// for a completed turn, its final output with reasoning cleared. A failed
-    /// or interrupted turn also carries its stop record.
-    pub turns: Vec<HistoryTurn>,
+    /// Recent finished turns after the checkpoint boundary that `projection`
+    /// replays, oldest first with each turn's position, each in the form it
+    /// gives the turn: all its messages, its tool traffic replaced by
+    /// notices, or only its input and, for a completed turn, its final
+    /// output with reasoning cleared. The turns it replays are kept while
+    /// they fit the byte budget together; once they outgrow it, they are
+    /// re-projected as [`HistoryProjection`] describes. A failed or
+    /// interrupted turn also carries its stop record.
+    pub turns: Vec<(i64, HistoryTurn)>,
 }
 
 impl LoadedSession {
@@ -1563,12 +1595,21 @@ impl LoadedSession {
     }
 }
 
+/// A session's stored history as loads return it.
+struct StoredHistory {
+    checkpoint: Option<SessionCheckpoint>,
+    latest_finished_turn: Option<i64>,
+    projection: HistoryProjection,
+    turns: Vec<(i64, HistoryTurn)>,
+}
+
 struct TurnAcquisition {
     checkpoint: Option<SessionCheckpoint>,
     configuration: TurnConfigurationRow,
     latest_finished_turn: Option<i64>,
+    projection: HistoryProjection,
     turn_position: i64,
-    turns: Vec<HistoryTurn>,
+    turns: Vec<(i64, HistoryTurn)>,
 }
 
 impl TurnAcquisition {
@@ -2047,34 +2088,64 @@ FROM session WHERE id = ?
     })
 }
 
+/// Loads the finished turns after `after_turn` that the session's stored
+/// projection replays within `max_history_bytes`, oldest first with their
+/// positions, and the projection they follow.
 async fn load_turns_from(
     connection: &mut SqliteConnection,
     session_id: &str,
     max_history_bytes: usize,
     after_turn: Option<i64>,
-) -> Result<Vec<HistoryTurn>, SessionError> {
-    let turns = load_window_turns(
+) -> Result<(Vec<(i64, HistoryTurn)>, HistoryProjection), SessionError> {
+    let projection = load_projection(connection, session_id).await?;
+    let (window, projection) = projected_window(
         connection,
         session_id,
         max_history_bytes,
         after_turn,
-        WindowEnd::Newest,
+        projection,
     )
     .await?;
+    let turns = load_window_turns(connection, session_id, window).await?;
 
-    Ok(turns.into_iter().map(|(_, turn)| turn).collect())
+    Ok((turns, projection))
 }
 
-/// Loads the history window kept from `end`, oldest first, with each turn's
-/// position.
+/// Loads the session's stored history projection.
+async fn load_projection(
+    connection: &mut SqliteConnection,
+    session_id: &str,
+) -> Result<HistoryProjection, SessionError> {
+    let row = sqlx::query_as!(
+        ProjectionRow,
+        r#"
+SELECT history_start AS "start!: i64",
+       history_brief_before AS "brief_before!: i64",
+       history_elided_before AS "elided_before!: i64"
+FROM session WHERE id = ?
+"#,
+        session_id
+    )
+    .fetch_optional(connection)
+    .await
+    .session_context("load persistent session history projection")?
+    .ok_or_else(|| SessionError::NotFound {
+        id: session_id.to_string(),
+    })?;
+
+    Ok(HistoryProjection::new(
+        row.start,
+        row.brief_before,
+        row.elided_before,
+    ))
+}
+
+/// Loads the turns of `window`, oldest first with each turn's position.
 async fn load_window_turns(
     connection: &mut SqliteConnection,
     session_id: &str,
-    max_history_bytes: usize,
-    after_turn: Option<i64>,
-    end: WindowEnd,
+    window: Vec<(i64, WindowForm)>,
 ) -> Result<Vec<(i64, HistoryTurn)>, SessionError> {
-    let window = history_window(connection, session_id, max_history_bytes, after_turn, end).await?;
     let Some(oldest_turn) = window.first().map(|(position, _)| *position) else {
         return Ok(Vec::new());
     };
@@ -2241,63 +2312,132 @@ fn loaded_stop(turns: &mut [(i64, HistoryTurn)], position: i64) -> Option<&mut T
         .and_then(|(_, turn)| turn.stop.as_mut())
 }
 
-/// Returns, oldest first, the finished turns after `after_turn` that fit
-/// `max_history_bytes` when taken from `end`, each in the most complete form
-/// that fits what is left, exactly as [`context::fit_history_bytes`] and
-/// [`context::fit_oldest_history_bytes`] select them, stopping at the first
-/// turn that does not fit even in brief form; from the oldest end, the first
-/// turn is always kept, briefly when no form fits. Stored sizes decide whole
-/// and brief turns without loading them; only a turn that fits briefly but
-/// not whole, and stays within [`context::ELIDED_SOURCE_LIMIT_FACTOR`] times
-/// `max_history_bytes`, is loaded here, to weigh its elided form.
-async fn history_window(
+/// Returns, oldest first, the finished turns after `after_turn` that
+/// `projection` replays within `max_history_bytes`, each in its replayed
+/// form, with the projection they follow, exactly as
+/// [`context::project_history`] projects them under
+/// [`context::HistoryLimit::bytes`]. Stored sizes decide whole and brief
+/// turns without loading them; only a turn that may replay elided, and stays
+/// within [`context::ELIDED_SOURCE_LIMIT_FACTOR`] times `max_history_bytes`,
+/// is loaded here, to weigh its elided form.
+async fn projected_window(
     connection: &mut SqliteConnection,
     session_id: &str,
     max_history_bytes: usize,
     after_turn: Option<i64>,
-    end: WindowEnd,
-) -> Result<Vec<(i64, WindowForm)>, SessionError> {
-    let mut remaining = max_history_bytes;
+    projection: HistoryProjection,
+) -> Result<(Vec<(i64, WindowForm)>, HistoryProjection), SessionError> {
+    let mut sizes = TurnSizes::after(after_turn.max(projection.start().checked_sub(1)));
+    let mut seen = Vec::new();
     let mut window = Vec::new();
-    let mut oldest_last = Vec::new();
-    let mut before_turn = None;
-
-    'pages: loop {
-        let turn_sizes =
-            load_turn_size_page(connection, session_id, before_turn, after_turn).await?;
-        let page_is_full =
-            turn_sizes.len() == usize::try_from(TURN_SIZE_PAGE_SIZE).unwrap_or(usize::MAX);
-        let Some(last) = turn_sizes.last() else {
-            break;
-        };
-        before_turn = Some(last.turn_position);
-        match end {
-            WindowEnd::Newest => {
-                for turn_size in turn_sizes {
-                    let Some((form, bytes)) = window_form(
-                        connection,
-                        session_id,
-                        &turn_size,
-                        remaining,
-                        max_history_bytes,
-                    )
-                    .await?
-                    else {
-                        break 'pages;
-                    };
-                    remaining -= bytes;
-                    window.push((turn_size.turn_position, form));
-                }
+    let mut total = 0_usize;
+    while let Some(turn_size) = sizes.next(connection, session_id).await? {
+        let position = turn_size.turn_position;
+        let form = projection.form(position).unwrap_or(ReplayForm::Brief);
+        let projected_form = window_form(
+            connection,
+            session_id,
+            &turn_size,
+            usize::MAX,
+            max_history_bytes,
+            form,
+        )
+        .await?;
+        seen.push(turn_size);
+        match projected_form {
+            Some((form, bytes)) if total.saturating_add(bytes) <= max_history_bytes => {
+                total += bytes;
+                window.push((position, form));
             }
-            WindowEnd::Oldest => oldest_last.extend(turn_sizes),
-        }
-
-        if !page_is_full {
-            break;
+            _ => {
+                return reproject_window(
+                    connection,
+                    session_id,
+                    max_history_bytes,
+                    projection,
+                    (seen, sizes),
+                )
+                .await;
+            }
         }
     }
-
     window.reverse();
+
+    Ok((window, projection))
+}
+
+/// Re-projects the turns that outgrew `max_history_bytes` in their projected
+/// forms, as [`context::project_history`] re-projects them: first the
+/// already `seen` sizes, newest first, then those `sizes` still holds.
+async fn reproject_window(
+    connection: &mut SqliteConnection,
+    session_id: &str,
+    max_history_bytes: usize,
+    projection: HistoryProjection,
+    (seen, mut sizes): (Vec<TurnSizeRow>, TurnSizes),
+) -> Result<(Vec<(i64, WindowForm)>, HistoryProjection), SessionError> {
+    let next = seen.first().map_or(projection.start(), |turn_size| {
+        turn_size.turn_position.saturating_add(1)
+    });
+    let limit = u64::try_from(max_history_bytes).unwrap_or(u64::MAX);
+    let target = context::reprojection_target(limit);
+    let mut used = 0_u64;
+    let mut cap = ReplayForm::Full;
+    let mut window = Vec::new();
+    let mut forms = Vec::new();
+    let mut seen = seen.into_iter();
+    loop {
+        let next_size = match seen.next() {
+            Some(turn_size) => Some(turn_size),
+            None => sizes.next(connection, session_id).await?,
+        };
+        let Some(turn_size) = next_size else {
+            break;
+        };
+        let projected = projection
+            .form(turn_size.turn_position)
+            .unwrap_or(ReplayForm::Brief);
+        let room = context::reprojection_room(limit, target, used, window.is_empty());
+        let Some((form, bytes)) = window_form(
+            connection,
+            session_id,
+            &turn_size,
+            usize::try_from(room).unwrap_or(usize::MAX),
+            max_history_bytes,
+            cap.min(projected),
+        )
+        .await?
+        else {
+            break;
+        };
+        used = used.saturating_add(u64::try_from(bytes).unwrap_or(u64::MAX));
+        cap = form.replay_form();
+        forms.push((turn_size.turn_position, cap));
+        window.push((turn_size.turn_position, form));
+    }
+    window.reverse();
+
+    Ok((window, projection.reprojected(&forms, next)))
+}
+
+/// Returns, oldest first, the oldest finished turns after `after_turn` that
+/// fit `max_history_bytes` in order, each in the most complete form that
+/// fits what is left, exactly as [`context::fit_oldest_history_bytes`]
+/// selects them, stopping at the first turn that does not fit even in brief
+/// form; the first turn is always kept, briefly when no form fits.
+async fn oldest_window(
+    connection: &mut SqliteConnection,
+    session_id: &str,
+    max_history_bytes: usize,
+    after_turn: Option<i64>,
+) -> Result<Vec<(i64, WindowForm)>, SessionError> {
+    let mut sizes = TurnSizes::after(after_turn);
+    let mut oldest_last = Vec::new();
+    while let Some(turn_size) = sizes.next(connection, session_id).await? {
+        oldest_last.push(turn_size);
+    }
+    let mut remaining = max_history_bytes;
+    let mut window = Vec::new();
     for turn_size in oldest_last.into_iter().rev() {
         let form = match window_form(
             connection,
@@ -2305,6 +2445,7 @@ async fn history_window(
             &turn_size,
             remaining,
             max_history_bytes,
+            ReplayForm::Full,
         )
         .await?
         {
@@ -2324,14 +2465,16 @@ async fn history_window(
     Ok(window)
 }
 
-/// Returns the most complete form of one sized turn whose retained bytes fit
-/// `remaining`, with those bytes, or `None` when no form fits.
+/// Returns the most complete form, at most `cap`, of one sized turn whose
+/// retained bytes fit `remaining`, with those bytes, or `None` when no form
+/// fits.
 async fn window_form(
     connection: &mut SqliteConnection,
     session_id: &str,
     turn_size: &TurnSizeRow,
     remaining: usize,
     max_history_bytes: usize,
+    cap: ReplayForm,
 ) -> Result<Option<(WindowForm, usize)>, SessionError> {
     let decode = |bytes: i64| {
         usize::try_from(bytes).map_err(|_| SessionError::InvalidData {
@@ -2341,13 +2484,15 @@ async fn window_form(
     let full_bytes = decode(turn_size.retained_bytes)?;
     let brief_bytes =
         decode(turn_size.input_bytes)?.saturating_add(decode(turn_size.output_bytes)?);
-    if full_bytes <= remaining {
+    if cap == ReplayForm::Full && full_bytes <= remaining {
         return Ok(Some((WindowForm::Full, full_bytes)));
     }
     if brief_bytes > remaining {
         return Ok(None);
     }
-    if full_bytes <= max_history_bytes.saturating_mul(context::ELIDED_SOURCE_LIMIT_FACTOR) {
+    if cap >= ReplayForm::Elided
+        && full_bytes <= max_history_bytes.saturating_mul(context::ELIDED_SOURCE_LIMIT_FACTOR)
+    {
         let full_turn = Value::from(vec![turn_size.turn_position]).to_string();
         let elided = load_turn_messages(connection, session_id, &full_turn, "[]")
             .await?
@@ -2362,6 +2507,53 @@ async fn window_form(
     }
 
     Ok(Some((WindowForm::Brief, brief_bytes)))
+}
+
+/// Sizes of the finished turns after a boundary, read newest first one page
+/// at a time.
+struct TurnSizes {
+    after_turn: Option<i64>,
+    before_turn: Option<i64>,
+    exhausted: bool,
+    page: std::vec::IntoIter<TurnSizeRow>,
+}
+
+impl TurnSizes {
+    /// Reads the turns after `after_turn`, or every finished turn.
+    fn after(after_turn: Option<i64>) -> Self {
+        Self {
+            after_turn,
+            before_turn: None,
+            exhausted: false,
+            page: Vec::new().into_iter(),
+        }
+    }
+
+    /// Returns the next older turn's sizes, or `None` once none is left.
+    async fn next(
+        &mut self,
+        connection: &mut SqliteConnection,
+        session_id: &str,
+    ) -> Result<Option<TurnSizeRow>, SessionError> {
+        loop {
+            if let Some(turn_size) = self.page.next() {
+                return Ok(Some(turn_size));
+            }
+            if self.exhausted {
+                return Ok(None);
+            }
+            let page =
+                load_turn_size_page(connection, session_id, self.before_turn, self.after_turn)
+                    .await?;
+            self.exhausted =
+                page.len() < usize::try_from(TURN_SIZE_PAGE_SIZE).unwrap_or(usize::MAX);
+            self.before_turn = page
+                .last()
+                .map(|turn_size| turn_size.turn_position)
+                .or(self.before_turn);
+            self.page = page.into_iter();
+        }
+    }
 }
 
 async fn load_turn_size_page(

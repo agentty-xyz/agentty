@@ -4,21 +4,24 @@ use ag_harness::store::HistoryTurn;
 use super::{BootstrapMarker, LoadedHistory, input_digest};
 use crate::agent::instruction_bootstrap_key;
 
-/// Builds a completed history turn from `messages`.
-fn history_turn(messages: Vec<ModelMessage>) -> HistoryTurn {
-    HistoryTurn {
-        messages,
-        stop: None,
-    }
+/// Builds a completed history turn at `position` from `messages`.
+fn history_turn(position: i64, messages: Vec<ModelMessage>) -> (i64, HistoryTurn) {
+    (
+        position,
+        HistoryTurn {
+            messages,
+            stop: None,
+        },
+    )
 }
 
 #[test]
 fn loaded_history_ages_the_newest_turn_with_a_matching_input() {
     // Arrange
     let turns = [
-        history_turn(vec![ModelMessage::User("bootstrap".to_string())]),
-        history_turn(vec![ModelMessage::Assistant("no input".to_string())]),
-        history_turn(vec![ModelMessage::User("follow-up".to_string())]),
+        history_turn(0, vec![ModelMessage::User("bootstrap".to_string())]),
+        history_turn(1, vec![ModelMessage::Assistant("no input".to_string())]),
+        history_turn(2, vec![ModelMessage::User("follow-up".to_string())]),
     ];
 
     // Act

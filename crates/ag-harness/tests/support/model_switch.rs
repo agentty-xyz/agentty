@@ -7,7 +7,7 @@ use ag_harness::model::{
     ModelRequest, ModelResponse,
 };
 use ag_harness::recovery::ExecutionIdentity;
-use ag_harness::store::{AcquiredTurn, ModelSwitch, NewSession, SqliteStore};
+use ag_harness::store::{AcquiredTurn, HistoryProjection, ModelSwitch, NewSession, SqliteStore};
 use ag_harness::tool::ToolCall;
 use ag_harness::{Harness, Model, ModelError, SessionError, TurnInput};
 use async_trait::async_trait;
@@ -221,7 +221,11 @@ async fn switch_rejections_preserve_selection() {
             Err(SessionError::Busy { .. })
         ));
         store
-            .complete_turn(acquired.owner(), &[ModelMessage::Assistant("done".into())])
+            .complete_turn(
+                acquired.owner(),
+                &[ModelMessage::Assistant("done".into())],
+                HistoryProjection::default(),
+            )
             .await
             .expect("complete");
         drop(acquired);
@@ -293,7 +297,7 @@ async fn switches_validate_canonical_tool_and_reasoning_history() {
             .await
             .expect("acquire");
             store
-                .complete_turn(acquired.owner(), messages)
+                .complete_turn(acquired.owner(), messages, HistoryProjection::default())
                 .await
                 .expect("complete");
             drop(acquired);
@@ -355,6 +359,7 @@ async fn unsupported_history_precedes_stale_and_busy_switch_rejections() {
                     content: "answer".into(),
                     reasoning_content: "provider state".into(),
                 }],
+                HistoryProjection::default(),
             )
             .await
             .expect("complete");
@@ -391,7 +396,7 @@ async fn unsupported_history_precedes_stale_and_busy_switch_rejections() {
             Err(SessionError::UnsupportedModelHistory { .. })
         ));
         store
-            .complete_turn(active.owner(), &[])
+            .complete_turn(active.owner(), &[], HistoryProjection::default())
             .await
             .expect("complete active");
         assert_eq!(
@@ -434,6 +439,7 @@ async fn switches_validate_image_history_against_target_capabilities() {
             .complete_turn(
                 acquired.owner(),
                 &[ModelMessage::Assistant("described".into())],
+                HistoryProjection::default(),
             )
             .await
             .expect("complete");
@@ -762,7 +768,7 @@ async fn independent_store_admission_checks_generation_atomically() {
                 (Ok(1), Err(SessionError::StaleModel { .. })) => {}
                 (Err(SessionError::Busy { .. }), Ok(acquired)) => {
                     store
-                        .complete_turn(acquired.owner(), &[])
+                        .complete_turn(acquired.owner(), &[], HistoryProjection::default())
                         .await
                         .expect("complete");
                 }
@@ -882,7 +888,7 @@ async fn switching_preserves_tool_groups_and_explicit_execution_identity() {
         .await
         .expect("acquire");
         store
-            .complete_turn(acquired.owner(), &messages)
+            .complete_turn(acquired.owner(), &messages, HistoryProjection::default())
             .await
             .expect("complete");
         drop(acquired);

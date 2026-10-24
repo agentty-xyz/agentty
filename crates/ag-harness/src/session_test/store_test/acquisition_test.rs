@@ -6,6 +6,7 @@ use tempfile::tempdir;
 use tokio::sync::Notify;
 
 use super::support::{AcquisitionGate, CommitGate};
+use crate::context::HistoryProjection;
 use crate::input::TurnInput;
 use crate::session::tests::support::{schema, turn_options};
 use crate::session::{Database, NewSession, ReservationObserver, SessionError};
@@ -71,7 +72,7 @@ async fn abandoned_acquisition_acknowledgement_is_recovered_across_reopen() {
     .expect("replacement");
     replacement
         .guard
-        .complete(&[])
+        .complete(&[], HistoryProjection::default())
         .await
         .expect("complete replacement");
     let states = sqlx::query_as::<_, (i64, String)>(

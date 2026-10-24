@@ -58,17 +58,18 @@ let mut session = harness.resume("review-42").await?;
 let outcome = session.send("Now focus on error handling").await?;
 ```
 
-Every request replays the most recent finished turns that fit the context budget; the
-provider never holds conversation state. A turn too large to replay whole replays with
-its tool results, reasoning, and `write` patches replaced by short notices, or else as
-its input and final answer; the history byte limit applies the same forms when loading,
-and a turn larger than eight times that limit loads only as its input and final answer.
-Each model response and tool result is stored as soon as it finishes. A failed or
-interrupted turn replays what it recorded plus a note naming why it stopped and any
-writes or commands whose outcome is unknown; when it does not fit, it replays with its
-tool traffic replaced by notices, or else as only its input and note. Sessions run
-concurrently, with one active turn per session. The library never picks a database
-location for you.
+Every request replays finished turns within the context budget and the history byte
+limit; the provider never holds conversation state. An older turn may replay with its
+tool results, reasoning, and `write` patches replaced by short notices, or else as its
+input and final answer, and a turn larger than eight times the byte limit loads only as
+its input and final answer. Those forms are sticky: each turn repeats the history the
+previous turn sent and appends that turn, so provider prompt caches keep the prefix, and
+only history that outgrows a limit is shortened, newest first, to half of it. Each model
+response and tool result is stored as soon as it finishes. A failed or interrupted turn
+replays what it recorded plus a note naming why it stopped and any writes or commands
+whose outcome is unknown; when it does not fit, it replays with its tool traffic
+replaced by notices, or else as only its input and note. Sessions run concurrently, with
+one active turn per session. The library never picks a database location for you.
 
 ## Turns
 
@@ -290,9 +291,9 @@ let harness = Harness::from_registry(&models, "review-model")?;
 - Capabilities are host declarations, not detection. The required `ModelProfile`
   declares the model's context window, reserved tokens, and estimator; registration
   derives the `ContextBudget` from it and rejects a profile that leaves no input
-  capacity. The budget keeps the most recent turns that fit and fails before any
-  provider call when mandatory content cannot fit. `TurnReport::history` says what was
-  replayed or dropped.
+  capacity. The budget bounds replayed history as above and fails before any provider
+  call when mandatory content cannot fit. `TurnReport::history` says what was replayed
+  or dropped.
 - `session.switch_model(&models, key)` changes the model of an idle session.
   `session.compact()` stores a schema-validated summary of the oldest uncovered turns
   that fit, which later turns replay first; call it again to cover the rest.
@@ -315,8 +316,9 @@ SQLite is the default (`Harness::database`, or `store::SqliteStore` explicitly).
 implement `store::SessionStore` and are injected with `Harness::store`. A store supplies
 atomic record operations: `reserve_turn` and `switch_model` read an `AdmissionState` and
 record the decision from `TurnAdmission::admit` or `ModelSwitch::admit`, while the
-harness owns the admission rules and every lease. The shared conformance suite is in
-`tests/support/store_conformance.rs`.
+harness owns the admission rules and every lease. `complete_turn` also hands the store
+the session's `store::HistoryProjection`, which later loads apply and a model switch
+resets. The shared conformance suite is in `tests/support/store_conformance.rs`.
 
 ## Observability
 
