@@ -1,12 +1,12 @@
 use serde_json::json;
 
 use super::support::{
-    ByteEstimator, FixedEstimator, bash_call, budget, read_call, reasoned_read_call,
-    record_read_round, request, result_json, sent, tool_result, write_call,
+    ByteEstimator, FixedEstimator, bash_call, bash_command_call, budget, read_call,
+    reasoned_read_call, record_read_round, request, result_json, sent, tool_result, write_call,
 };
 use crate::context::{
-    CLEARED_REASONING, ContextBudget, ContextEstimator, ContextFit, FIT_TARGET_PERCENT,
-    HeuristicContextEstimator,
+    CLEARED_REASONING, ContextBudget, ContextEstimator, ContextFit, DROP_TARGET_PERCENT,
+    FIT_TARGET_PERCENT, HeuristicContextEstimator, KEEP_RECENT_RESULTS,
 };
 use crate::model::{ModelMessage, ModelRequest};
 use crate::tool::ToolCall;
@@ -22,6 +22,10 @@ fn weigh(request: &ModelRequest) -> u64 {
 
 fn target(budget_weight: u64) -> u64 {
     budget_weight * FIT_TARGET_PERCENT / 100
+}
+
+fn drop_target(budget_weight: u64) -> u64 {
+    budget_weight * DROP_TARGET_PERCENT / 100
 }
 
 fn read_rounds(sizes: &[usize]) -> ModelRequest {
@@ -104,7 +108,7 @@ fn fit_elides_oldest_results_down_to_the_target_and_keeps_the_latest_round() {
     // Assert
     let fitted = fitted.expect("reduced copy");
     assert!(weigh(&fitted) <= target(budget_weight));
-    assert_eq!(activity.elided_results(), 2);
+    assert_eq!(activity.elided_results(), 3);
     let notice = result_json(&fitted.messages()[2]);
     assert_eq!(notice["original_bytes"], json!(1000));
     assert_eq!(notice["read"], json!("file r0.txt"));
@@ -114,17 +118,19 @@ fn fit_elides_oldest_results_down_to_the_target_and_keeps_the_latest_round() {
             .expect("notice text")
             .contains("offset/limit")
     );
-    assert!(
-        result_json(&fitted.messages()[4])
-            .get("context_cleared")
-            .is_some()
-    );
-    assert_eq!(fitted.messages()[5..], request.messages()[5..]);
+    for index in [4, 6] {
+        assert!(
+            result_json(&fitted.messages()[index])
+                .get("context_cleared")
+                .is_some()
+        );
+    }
+    assert_eq!(fitted.messages()[7..], request.messages()[7..]);
     assert_eq!(request.messages()[2].retained_bytes(), 1006);
 }
 
 #[test]
-fn later_requests_reuse_the_reduced_prefix_until_the_budget_is_exceeded_again() {
+fn later_requests_append_to_the_reduced_prefix_until_the_budget_is_exceeded_again() {
     // Arrange
     let mut request = read_rounds(&[1000, 1000, 1000, 1000]);
     let budget_weight = weigh(&request) - 1;
@@ -136,26 +142,28 @@ fn later_requests_reuse_the_reduced_prefix_until_the_budget_is_exceeded_again() 
     record_read_round(&mut request, "small", 600);
     let (second, second_activity) =
         fit_owned(&mut fit, budget(budget_weight), &request).expect("second fit");
-    record_read_round(&mut request, "large", 1000);
+    record_read_round(&mut request, "large0", 1000);
+    record_read_round(&mut request, "large1", 1000);
     let (third, third_activity) =
         fit_owned(&mut fit, budget(budget_weight), &request).expect("third fit");
 
     // Assert
-    // The second request is over the target but within the budget, so it
-    // only replays the first request's elisions behind a shared prefix.
+    // The second request is within the budget, so it only appends its round
+    // to the first request's reduced copy.
     let second = second.expect("second reduced copy");
-    assert!(weigh(&second) > target(budget_weight));
-    assert_eq!(second_activity.elided_results(), 2);
     assert_eq!(
-        second.messages()[..first.messages().len()],
-        *first.messages()
+        second.messages(),
+        [first.messages(), &request.messages()[9..11]].concat()
     );
-    // The third exceeds the budget again and elides older results down to
-    // the target, keeping its newest round whole.
+    assert_eq!(second_activity.elided_results(), 3);
+    // The third exceeds the budget again and elides from where the first
+    // stopped down to the target, keeping its newest round whole.
     let third = third.expect("third reduced copy");
-    assert!(weigh(&third) <= target(budget_weight));
-    assert_eq!(third_activity.elided_results(), 4);
-    assert_eq!(third.messages()[..5], first.messages()[..5]);
+    assert!(weigh(&third) <= drop_target(budget_weight));
+    assert_eq!(third_activity.elided_results(), 6);
+    assert_eq!(third_activity.dropped_tool_calls(), 0);
+    assert_eq!(third.messages()[..8], first.messages()[..8]);
+    assert_ne!(third.messages()[8], first.messages()[8]);
     assert_eq!(third.messages().last(), request.messages().last());
 }
 
@@ -198,7 +206,7 @@ fn cleared_bash_and_write_results_keep_their_outcome_and_forbid_repeats() {
     // Assert
     let fitted = fitted.expect("reduced copy");
     assert_eq!(activity.truncated_results(), 0);
-    assert_eq!(activity.elided_results(), 3);
+    assert_eq!(activity.elided_results(), 4);
     let bash_notice = result_json(&fitted.messages()[2]);
     assert!(
         bash_notice["context_cleared"]
@@ -283,9 +291,14 @@ fn fit_shrinks_older_write_patches_to_their_recorded_outcome() {
         json!({"bytes_written": 3000, "path": "src/lib.rs", "status": "applied"}).to_string(),
     ];
     for (index, outcome) in outcomes.iter().enumerate() {
-        let call = write_call(&format!("w{index}"), &patch)
-            .with_assistant_text(Some(format!("writing step {index}")))
-            .expect("bounded text");
+        let call = ToolCall::from_json(
+            format!("w{index}"),
+            "write",
+            &json!({"patch": patch, "path": "src/lib.rs"}).to_string(),
+            (index == 0).then(|| "r".repeat(1000)),
+        )
+        .and_then(|call| call.with_assistant_text(Some(format!("writing step {index}"))))
+        .expect("write call");
         request.record_tool_call(call.clone());
         request.record_tool_result(&call, outcome.clone());
     }
@@ -297,6 +310,12 @@ fn fit_shrinks_older_write_patches_to_their_recorded_outcome() {
     // Assert
     let fitted = fitted.expect("reduced copy");
     assert_eq!(activity.shrunk_write_calls(), 3);
+    // The first call loses its reasoning and its patch in one rewrite.
+    assert_eq!(activity.cleared_reasoning(), 1);
+    assert_eq!(
+        call_of(&fitted.messages()[1]).reasoning_content(),
+        Some(CLEARED_REASONING)
+    );
     let patches: Vec<String> = [1, 3, 5]
         .iter()
         .map(|index| {
@@ -375,7 +394,7 @@ fn fit_caps_each_oversized_latest_result_to_a_quarter_of_the_budget() {
 
     // Assert
     let fitted = fitted.expect("reduced copy");
-    assert!(weigh(&fitted) <= target(2000));
+    assert!(weigh(&fitted) <= drop_target(2000));
     assert_eq!(activity.truncated_results(), 2);
     assert_eq!(activity.elided_results(), 0);
     for message in &fitted.messages()[2..] {
@@ -500,7 +519,8 @@ fn fit_drops_the_oldest_rounds_of_a_long_turn_behind_one_note() {
         fit_owned(&mut fit, budget(budget_weight), &request).expect("fits with the same prefix");
 
     // Assert
-    assert!(weigh(&first) <= target(budget_weight));
+    assert!(weigh(&first) <= drop_target(budget_weight));
+    assert!(weigh(&first) > target(budget_weight));
     let ModelMessage::User(note) = &first.messages()[1] else {
         std::panic::resume_unwind(Box::new("dropped-round note expected"));
     };
@@ -661,7 +681,7 @@ fn fit_drops_feedback_that_precedes_a_dropped_round_with_that_round() {
 
     // Assert
     let fitted = fitted.expect("reduced copy");
-    assert!(weigh(&fitted) <= target(budget_weight));
+    assert!(weigh(&fitted) <= drop_target(budget_weight));
     let ModelMessage::User(note) = &fitted.messages()[1] else {
         std::panic::resume_unwind(Box::new("dropped-round note expected"));
     };
@@ -680,4 +700,132 @@ fn fit_drops_feedback_that_precedes_a_dropped_round_with_that_round() {
             .iter()
             .any(|message| matches!(message, ModelMessage::User(text) if text.starts_with('f')))
     );
+}
+
+#[test]
+fn the_newest_rounds_keep_their_results_and_reasoning_until_older_reasoning_is_cleared() {
+    // Arrange
+    let mut request = request(Vec::new(), Vec::new(), "inspect");
+    for index in 0..10 {
+        let reasoning = "r".repeat(if index < 5 { 3000 } else { 200 });
+        let call = ToolCall::from_json(
+            format!("r{index}"),
+            "read",
+            &json!({"action": "file", "path": format!("{index}.txt")}).to_string(),
+            Some(reasoning),
+        )
+        .expect("read call");
+        request.record_tool_call(call.clone());
+        request.record_tool_result(&call, "x".repeat(300));
+    }
+    let budget_weight = weigh(&request) - 1;
+
+    // Act
+    let (fitted, activity) = fit_owned(&mut ContextFit::default(), budget(budget_weight), &request)
+        .expect("fits after clearing older reasoning");
+
+    // Assert
+    let fitted = fitted.expect("reduced copy");
+    assert!(weigh(&fitted) <= target(budget_weight));
+    let recent = 1 + 2 * (10 - KEEP_RECENT_RESULTS);
+    assert_eq!(fitted.messages()[recent..], request.messages()[recent..]);
+    assert_eq!(activity.elided_results(), 10 - KEEP_RECENT_RESULTS);
+    assert!(activity.cleared_reasoning() >= 1);
+    assert_eq!(
+        call_of(&fitted.messages()[1]).reasoning_content(),
+        Some(CLEARED_REASONING)
+    );
+}
+
+#[test]
+fn a_latest_write_shrunk_as_the_last_resort_loses_only_its_reasoning_later() {
+    // Arrange
+    let patch = format!("@@ -1 +1 @@\n-a\n+{}\n", "b".repeat(5000));
+    let mut request = request(Vec::new(), Vec::new(), "edit");
+    let write = ToolCall::from_json(
+        "w1".to_string(),
+        "write",
+        &json!({"patch": patch, "path": "src/lib.rs"}).to_string(),
+        Some("r".repeat(2000)),
+    )
+    .expect("write call");
+    request.record_tool_call(write.clone());
+    request.record_tool_result(
+        &write,
+        json!({"path": "src/lib.rs", "status": "applied"}).to_string(),
+    );
+    let mut fit = ContextFit::default();
+    let (first, first_activity) =
+        fit_owned(&mut fit, budget(3000), &request).expect("fits after shrinking the patch");
+    let first = first.expect("reduced copy");
+
+    // Act
+    record_read_round(&mut request, "next", 1500);
+    let (second, second_activity) =
+        fit_owned(&mut fit, budget(3000), &request).expect("fits after clearing reasoning");
+
+    // Assert
+    assert_eq!(first_activity.shrunk_latest_write_calls(), 1);
+    assert_eq!(first_activity.shrunk_write_calls(), 0);
+    let shrunk = call_of(&first.messages()[1]);
+    assert!(
+        shrunk
+            .write_arguments()
+            .expect("write arguments")
+            .patch()
+            .contains("was applied")
+    );
+    assert_eq!(shrunk.reasoning_content(), Some("r".repeat(2000).as_str()));
+    let second = second.expect("reduced copy");
+    let cleared = call_of(&second.messages()[1]);
+    assert_eq!(cleared.reasoning_content(), Some(CLEARED_REASONING));
+    assert_eq!(cleared.write_arguments(), shrunk.write_arguments());
+    assert_eq!(second_activity.shrunk_latest_write_calls(), 0);
+    assert_eq!(second_activity.shrunk_write_calls(), 1);
+    assert_eq!(second_activity.cleared_reasoning(), 1);
+}
+
+#[test]
+fn each_fit_that_drops_rounds_appends_its_own_note() {
+    // Arrange
+    let mut request = request(Vec::new(), Vec::new(), "loop");
+    let mut fit = ContextFit::default();
+    let mut fitted = Vec::new();
+
+    // Act
+    // Commands are never shortened, so only dropping rounds fits them.
+    for index in 0..6 {
+        let call = bash_command_call(&format!("c{index}"), &"echo ".repeat(200));
+        request.record_tool_call(call.clone());
+        request.record_tool_result(&call, r#"{"exit_code":0}"#.to_string());
+        let (copy, activity) = fit_owned(&mut fit, budget(4000), &request).expect("fits");
+        fitted.push((copy.unwrap_or_else(|| request.clone()), activity));
+    }
+
+    // Assert
+    let drops: Vec<usize> = (1..fitted.len())
+        .filter(|index| {
+            fitted[*index].1.dropped_tool_calls() != fitted[index - 1].1.dropped_tool_calls()
+        })
+        .collect();
+    assert_eq!(drops.len(), 2);
+    let (first, first_activity) = &fitted[drops[0]];
+    let (second, second_activity) = &fitted[drops[1]];
+    let note = |message: &ModelMessage| match message {
+        ModelMessage::User(note) => note.clone(),
+        other => std::panic::resume_unwind(Box::new(format!("note expected, got {other:?}"))),
+    };
+    assert!(note(&first.messages()[1]).starts_with(&format!(
+        "[harness] {} earlier",
+        first_activity.dropped_tool_calls()
+    )));
+    assert_eq!(second.messages()[..2], first.messages()[..2]);
+    assert!(note(&second.messages()[2]).starts_with(&format!(
+        "[harness] {} earlier",
+        second_activity.dropped_tool_calls() - first_activity.dropped_tool_calls()
+    )));
+    for index in drops[0] + 1..drops[1] {
+        let previous = fitted[index - 1].0.messages();
+        assert_eq!(fitted[index].0.messages()[..previous.len()], *previous);
+    }
 }

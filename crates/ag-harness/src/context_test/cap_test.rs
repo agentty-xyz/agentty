@@ -7,7 +7,7 @@ use super::support::{
     result_json, sent, tool_result, write_call,
 };
 use crate::context::{
-    ContextBudget, ContextEstimator, ContextFit, FIT_TARGET_PERCENT, HeuristicContextEstimator,
+    ContextBudget, ContextEstimator, ContextFit, DROP_TARGET_PERCENT, HeuristicContextEstimator,
     LATEST_ROUND_CAP_PERCENT, RESULT_CAP_PERCENT, cleared_result_notice, read_target,
 };
 use crate::model::{ModelMessage, ModelRequest};
@@ -81,8 +81,9 @@ fn fit_caps_the_latest_round_to_half_the_budget_at_one_common_size() {
         request.messages()[request.messages().len() - 2..]
     );
     assert_eq!(activity.truncated_results(), 2);
+    assert_eq!(activity.elided_results(), 2);
     assert_eq!(activity.dropped_tool_calls(), 0);
-    assert!(weigh(&ByteEstimator, fitted.messages()) <= budget_weight * FIT_TARGET_PERCENT / 100);
+    assert!(weigh(&ByteEstimator, fitted.messages()) <= budget_weight * DROP_TARGET_PERCENT / 100);
 }
 
 #[test]
@@ -135,12 +136,13 @@ fn capped_read_results_keep_whole_lines_and_say_where_to_continue() {
         ByteEstimator.message_weight(fitted.messages().last().expect("latest result"))
             <= budget_weight * RESULT_CAP_PERCENT / 100
     );
-    assert!(
-        result_json(&fitted.messages()[2])
-            .get("context_truncated")
-            .is_some()
+    // The older result was sent before, so it is elided rather than cut.
+    assert_eq!(
+        result_json(&fitted.messages()[2])["read"],
+        json!("file older.txt")
     );
-    assert_eq!(activity.truncated_results(), 2);
+    assert_eq!(activity.truncated_results(), 1);
+    assert_eq!(activity.elided_results(), 1);
 }
 
 #[test]
@@ -196,12 +198,20 @@ fn fit_cuts_latest_results_further_only_when_capping_is_not_enough() {
     capped.record_tool_result(&calls[1], "y".repeat(100));
     let mut whole = request(Vec::new(), Vec::new(), &"i".repeat(1700));
     record_read_round(&mut whole, "medium", 400);
+    let mut capped_fitter = ContextFit::default();
 
     // Act
-    let (capped_fit, capped_activity) = ContextFit::default()
+    let (capped_fit, capped_activity) = capped_fitter
         .fit(&ByteEstimator, budget(2000), &capped, None)
         .map(sent)
         .expect("fits after cutting the capped result further");
+    // The cut fills the budget exactly; a little more room fits the next
+    // round.
+    record_read_round(&mut capped, "next", 10);
+    let (later, later_activity) = capped_fitter
+        .fit(&ByteEstimator, budget(2100), &capped, None)
+        .map(sent)
+        .expect("the next request fits");
     let (whole_fit, whole_activity) = ContextFit::default()
         .fit(&ByteEstimator, budget(2000), &whole, None)
         .map(sent)
@@ -213,6 +223,13 @@ fn fit_cuts_latest_results_further_only_when_capping_is_not_enough() {
     assert_eq!(capped_activity.truncated_results(), 1);
     assert!(ByteEstimator.message_weight(&capped_fit.messages()[2]) < 500);
     assert_eq!(capped_fit.messages()[3], capped.messages()[3]);
+    // The cut result stays cut, so the next request only appends.
+    let later = later.expect("reduced copy");
+    assert_eq!(
+        later.messages(),
+        [capped_fit.messages(), &capped.messages()[4..]].concat()
+    );
+    assert_eq!(later_activity, capped_activity);
     let whole_fit = whole_fit.expect("reduced copy");
     assert!(weigh(&ByteEstimator, whole_fit.messages()) <= 2000);
     assert_eq!(whole_activity.truncated_results(), 1);
@@ -309,6 +326,9 @@ fn dropping_a_round_releases_its_capped_result() {
     // Arrange
     let mut request = request(Vec::new(), Vec::new(), "loop");
     let outcome = "o".repeat(250);
+    let mut fit = ContextFit::default();
+    // Each result is capped while its round is the latest, and its notice,
+    // which keeps the long outcome fields, never weighs less than the cut.
     for index in 0..4 {
         let bash = bash_command_call(&format!("b{index}"), &format!("cargo test {index}"));
         request.record_tool_call(bash.clone());
@@ -324,12 +344,15 @@ fn dropping_a_round_releases_its_capped_result() {
             })
             .to_string(),
         );
+        fit.fit(&ByteEstimator, budget(2500), &request, None)
+            .map(sent)
+            .expect("each round fits after capping");
     }
     record_read_round(&mut request, "latest", 10);
 
     // Act
-    let (fitted, activity) = ContextFit::default()
-        .fit(&ByteEstimator, budget(4000), &request, None)
+    let (fitted, activity) = fit
+        .fit(&ByteEstimator, budget(2500), &request, None)
         .map(sent)
         .expect("fits after dropping rounds");
 

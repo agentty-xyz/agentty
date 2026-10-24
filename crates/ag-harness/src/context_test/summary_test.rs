@@ -144,7 +144,7 @@ fn rounds_offered_to_a_summary_are_not_offered_again() {
         .fit(&ByteEstimator, budget(20_000), &request, PROACTIVE)
         .map(sent)
         .expect("deterministic fallback fits");
-    for index in 0..8 {
+    for index in 0..12 {
         record_read_round(&mut request, &format!("more{index}"), 1000);
     }
     let retried = matches!(

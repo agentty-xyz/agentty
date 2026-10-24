@@ -513,6 +513,8 @@ impl ContextActivity {
 
     /// Latest-round `write` calls whose patch was replaced by a note on
     /// their recorded outcome, as the last resort before the request fails.
+    /// Later requests carry the shrunk patch as one of
+    /// [`Self::shrunk_write_calls`].
     pub fn shrunk_latest_write_calls(self) -> usize {
         self.shrunk_latest_write_calls
     }
@@ -537,8 +539,10 @@ impl ContextActivity {
         self.superseded_results
     }
 
-    /// Tool results cut to a head and tail excerpt: oversized results capped
-    /// before other reductions, and latest-round results cut further.
+    /// Tool results cut to an excerpt while their round was the latest:
+    /// oversized results capped before other reductions, and results cut
+    /// further to fit. A cut result stays cut in later requests until it is
+    /// cleared.
     pub fn truncated_results(self) -> usize {
         self.truncated_results
     }

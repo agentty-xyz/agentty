@@ -100,26 +100,29 @@ let outcome = session
   writes, and command cleanup have finished. A failure names its `SettlementPhase`;
   `retry_settlement()` retries persistence and command cleanup.
 - **Turns have no tool-call limit.** Cancellation and the `ContextBudget` bound a turn.
-  Once tool traffic grows a request past the budget, the request is sent as a reduced
-  copy without an extra model call. First, older tool results that a later call
-  superseded (a re-read of the same target, an applied write to the file read, or a
-  rerun of the same command) become notices naming that call. Then any tool result above
-  25% of the input budget is cut (a `read` result by whole lines or items, any other to
-  a head and tail excerpt), and the latest round's largest results are cut to one common
-  size while together they exceed 50%; a cut result stays the same in later requests.
-  Then the other older tool results become notices (`read` notices name the target and
-  may be re-read; `bash`/`write` notices keep the outcome and say not to repeat), then
-  older reasoning and `write` patches are cleared (the text a model wrote beside its
-  calls, `ToolCall::assistant_text`, is kept), then the oldest replayed turns are
-  dropped, then the current turn's oldest tool rounds are dropped whole behind one note
-  naming the writes they applied, the commands they ran, and the reads to redo only if
-  still needed, down to 70% of the budget so later requests share a stable prefix. Only
-  as a last resort are the latest tool round's results cut further and its `write`
-  patches replaced by their recorded outcome. Stored messages are never changed;
+  Within a turn, requests only append, so they share one cached prefix, until tool
+  traffic grows a request past the budget. That request is sent as a reduced copy
+  without an extra model call, reduced deeply once so several later requests append to
+  it unchanged. First, older tool results that a later call superseded (a re-read of the
+  same target, an applied write to the file read, or a rerun of the same command) become
+  notices naming that call. Then the new round's results above 25% of the input budget
+  are cut (a `read` result by whole lines or items, any other to a head and tail
+  excerpt), and its largest results are cut to one common size while together they
+  exceed 50%. Then, down to 50% of the budget and oldest first, the other older tool
+  results become notices (`read` notices name the target and may be re-read;
+  `bash`/`write` notices keep the outcome and say not to repeat), then older reasoning
+  and `write` patches are cleared (the text a model wrote beside its calls,
+  `ToolCall::assistant_text`, is kept); the rounds holding the newest five results are
+  reduced only after everything older. If that is not enough, the oldest replayed turns
+  and then the current turn's oldest tool rounds are dropped whole, down to 70%, behind
+  an appended note naming the writes they applied, the commands they ran, and the reads
+  to redo only if still needed. Only as a last resort are the latest tool round's
+  results cut further and its `write` patches replaced by their recorded outcome. Every
+  reduced message keeps that form in later requests. Stored messages are never changed;
   `ModelRequestActivity::context` reports each reduction. A request that still cannot
   fit fails with `TurnError::ContextBudgetExceeded`.
 - **Earlier rounds can be summarized instead.** `Harness::context_summaries` with
-  `ContextSummaryPolicy::Enabled` lets a request that still exceeds 70% of the budget
+  `ContextSummaryPolicy::Enabled` lets a request that still exceeds 50% of the budget
   after superseded results are cleared and oversized results capped first ask the model,
   in one tool-free request, to summarize the current turn's earlier tool rounds. The
   latest round and the rounds before it within a quarter of the budget stay whole; the
