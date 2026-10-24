@@ -80,6 +80,9 @@ pub(crate) struct ChatCompletionProviderPolicy {
     pub(crate) context_overflow_markers: &'static [&'static str],
     pub(crate) display_name: &'static str,
     pub(crate) image_input: bool,
+    /// Whether the provider accepts `prompt_cache_key`; providers that
+    /// reject unknown body fields must leave it off.
+    pub(crate) prompt_cache_key: bool,
     pub(crate) reasoning_format: ReasoningFormat,
     pub(crate) response_format_with_tools: bool,
     pub(crate) structured_output: StructuredOutputMode,
@@ -202,6 +205,11 @@ impl ChatCompletionBackend {
             enable_thinking: self.enable_thinking(request),
             messages: self.messages(request)?,
             model: &self.model,
+            prompt_cache_key: self
+                .policy
+                .prompt_cache_key
+                .then_some(request.options.prompt_cache_key.as_deref())
+                .flatten(),
             reasoning_effort: self.reasoning_effort(request),
             response_format,
             thinking: self.thinking(request),
@@ -880,6 +888,8 @@ struct ChatCompletionPayload<'a> {
     enable_thinking: Option<bool>,
     messages: Vec<ChatCompletionMessagePayload>,
     model: &'a str,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    prompt_cache_key: Option<&'a str>,
     #[serde(skip_serializing_if = "Option::is_none")]
     reasoning_effort: Option<&'static str>,
     #[serde(skip_serializing_if = "Option::is_none")]

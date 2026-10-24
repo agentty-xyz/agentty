@@ -160,6 +160,12 @@ let outcome = session
   within the window while its real tokens run `under_count_percent` over the estimate.
   Declare the estimator's largest measured under-count plus a buffer; denser content is
   left to calibration and overflow recovery.
+- **Requests carry a prompt-cache key.** Every turn request of a durable session carries
+  one key derived from a hash of the session ID, stable across handles and resume; each
+  stateless turn gets a fresh key shared by its tool loop. `ModelRequest::cache_key`
+  exposes it to `Model` adapters. Built-in providers send it as `prompt_cache_key` to
+  Muse and Kimi, which route requests sharing a key to the backend holding their cached
+  prefix, and leave it off for Qwen. Checkpoint and round-summary requests carry none.
 - **Identical reads are answered from the earlier result.** A `read` whose arguments
   match an earlier read of the same turn returns a short note naming that call instead
   of running again, while the last request still carried the earlier result whole, no

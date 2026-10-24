@@ -992,7 +992,7 @@ fn converts_oversized_content_error() {
 }
 
 #[test]
-fn routed_request_preserves_image_batch_and_all_reasoning_efforts() {
+fn routed_request_preserves_image_batch_cache_key_and_all_reasoning_efforts() {
     // Arrange
     let client = ModelClient::kimi(KimiConfig {
         api_key: "test-key".to_string(),
@@ -1035,11 +1035,16 @@ fn routed_request_preserves_image_batch_and_all_reasoning_efforts() {
     for (effort, expected) in efforts {
         let request = ModelRequest::with_history(history.clone(), "follow up", schema.clone())
             .with_model_reasoning_effort(effort)
-            .with_tool(tool::ToolDefinition::read());
+            .with_tool(tool::ToolDefinition::read())
+            .with_cache_key("session-key".to_string());
         let routed = client
             .to_router_request(&request)
             .expect("valid history must route");
         assert_eq!(routed.options.reasoning_effort, Some(expected));
+        assert_eq!(
+            routed.options.prompt_cache_key.as_deref(),
+            Some("session-key")
+        );
         assert!(matches!(
             routed.messages()[0],
             ag_router::ModelMessage::UserInput(_)

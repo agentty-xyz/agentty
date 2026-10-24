@@ -269,6 +269,10 @@ impl ModelClient {
                 ReasoningEffort::XHigh => ag_router::ReasoningEffort::XHigh,
                 ReasoningEffort::Max => ag_router::ReasoningEffort::Max,
             });
+        routed
+            .options
+            .prompt_cache_key
+            .clone_from(&request.cache_key);
         Ok(routed)
     }
 
@@ -516,6 +520,7 @@ pub enum ModelMetadataError {
 /// Provider-neutral input for one model request.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct ModelRequest {
+    cache_key: Option<String>,
     history_turn_starts: Vec<usize>,
     input_index: usize,
     lifecycle_observed: bool,
@@ -547,6 +552,7 @@ impl ModelRequest {
         messages.push(input.into_user_message());
 
         Self {
+            cache_key: None,
             history_turn_starts: Vec::new(),
             input_index,
             lifecycle_observed: false,
@@ -605,6 +611,22 @@ impl ModelRequest {
         self.model_reasoning_effort
     }
 
+    /// Returns the stable key the harness assigns to requests that share a
+    /// prompt prefix: one per durable session, or one per stateless turn.
+    ///
+    /// Adapters may forward it to providers that route prompt-cache hits by
+    /// such a key; it carries no conversation content.
+    pub fn cache_key(&self) -> Option<&str> {
+        self.cache_key.as_deref()
+    }
+
+    /// Groups this request with others sharing its prompt prefix.
+    pub(crate) fn with_cache_key(mut self, cache_key: String) -> Self {
+        self.cache_key = Some(cache_key);
+
+        self
+    }
+
     /// Marks where each projected history turn starts among the leading
     /// messages, so context fitting can drop the oldest turns whole.
     pub(crate) fn with_history_turn_starts(mut self, history_turn_starts: Vec<usize>) -> Self {
@@ -628,6 +650,7 @@ impl ModelRequest {
     /// canonical conversation.
     pub(crate) fn with_fitted_messages(&self, messages: Vec<ModelMessage>) -> Self {
         Self {
+            cache_key: self.cache_key.clone(),
             history_turn_starts: Vec::new(),
             input_index: self.input_index,
             lifecycle_observed: self.lifecycle_observed,

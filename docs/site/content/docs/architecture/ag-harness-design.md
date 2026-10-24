@@ -332,6 +332,18 @@ built-in tool requests and responses at this boundary and retains tool permissio
 sessions, lifecycle events, and telemetry. The router currently covers chat completion;
 it has no streaming or automatic provider fallback.
 
+Providers cache prompt prefixes per backend, so cache hits depend on routing related
+requests together. The harness gives every turn request of a durable session one key,
+hashed from the session ID so it is stable across handles and resume and bounded in
+length, and each stateless turn a fresh random key shared by its tool loop. Checkpoint
+and round-summary requests, whose prefixes differ, carry none. `ag-router` sends the key
+as `prompt_cache_key` only where the provider policy enables it: Muse and Kimi, whose
+documentation routes by it (Moonshot asks coding agents for a session key). Qwen ignores
+the field, and the Meta Model API rejects body fields it does not know, so each provider
+policy opts in explicitly. Live, a keyed Muse sequence missed the cache on none of 43
+warm requests against 9 of 57 without a key; `user` and session headers showed no effect
+and are not sent.
+
 Built-in Chat Completions clients bound one provider request to three minutes, because
 reasoning models can spend more than a minute on one completion; a timed-out request is
 reported as a transport failure without a retry, while a connection failure is retried

@@ -172,6 +172,7 @@ fn policy(provider: Provider, model: &str) -> ChatCompletionProviderPolicy {
                 model,
                 "kimi-k2.6" | "kimi-k2.7-code" | "kimi-k2.7-code-highspeed" | "kimi-k3"
             ),
+            prompt_cache_key: true,
             reasoning_format: match model {
                 "kimi-k2.6" => ReasoningFormat::Thinking {
                     disable_supported: true,
@@ -199,6 +200,7 @@ fn policy(provider: Provider, model: &str) -> ChatCompletionProviderPolicy {
             context_overflow_markers: &[MUSE_CONTEXT_OVERFLOW],
             display_name: "Meta Model API",
             image_input: matches!(model, "muse-spark-1.3" | "muse-spark-1.3-contributor"),
+            prompt_cache_key: true,
             reasoning_format: ReasoningFormat::Effort(muse_effort),
             response_format_with_tools: true,
             structured_output: StructuredOutputMode::JsonSchema,
@@ -216,6 +218,7 @@ fn policy(provider: Provider, model: &str) -> ChatCompletionProviderPolicy {
                         model,
                         "qwen-plus" | "qwen3.8-27b" | "qwen3.8-flash" | "qwen3.8-max"
                     ),
+                prompt_cache_key: false,
                 reasoning_format: if preserves_reasoning {
                     ReasoningFormat::Effort(qwen_effort)
                 } else if model == "qwen-plus" {
