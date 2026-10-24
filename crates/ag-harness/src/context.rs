@@ -1422,7 +1422,9 @@ impl ContextFit {
             tier.estimator,
             tier.messages,
             |pointed| pointed == index,
-            supersession.map(|supersession| supersession.by),
+            supersession
+                .filter(|supersession| supersession.cause == SupersessionCause::Reread)
+                .map(|supersession| supersession.by),
         );
 
         true
@@ -1694,7 +1696,9 @@ impl ContextFit {
             .collect();
         results.sort_by_key(|(index, ..)| Reverse(self.messages[*index].weight));
         let mut cut = Vec::new();
-        for (index, call_id, content, name) in results {
+        // A second pass cuts further when a cleared repeated-read result
+        // outweighs the note it replaced.
+        for &(index, call_id, content, name) in results.iter().chain(&results) {
             let required = base.saturating_add(self.required);
             if required <= budget_weight {
                 break;

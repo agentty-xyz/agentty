@@ -633,6 +633,45 @@ fn a_repeat_of_a_superseded_result_points_to_the_newer_read() {
 }
 
 #[test]
+fn a_repeat_of_a_result_a_write_changed_says_to_read_again() {
+    // Arrange
+    let mut request = request(Vec::new(), Vec::new(), "edit");
+    record(
+        &mut request,
+        &read_call_of("a1", "src/lib.rs"),
+        "x".repeat(3000),
+    );
+    record(
+        &mut request,
+        &read_call_of("a2", "src/lib.rs"),
+        repeated_read_result("a1"),
+    );
+    record(
+        &mut request,
+        &write_call("w1", "@@ -1 +1 @@\n-a\n+b\n"),
+        json!({"path": "src/lib.rs", "status": "applied"}).to_string(),
+    );
+    for index in 0..KEEP_RECENT_RESULTS {
+        record_read_round(&mut request, &format!("n{index}"), 10);
+    }
+    let budget_weight = weigh(&request) - 1;
+
+    // Act
+    let (fitted, activity) = fit_owned(&mut ContextFit::default(), budget_weight, &request);
+
+    // Assert
+    assert_eq!(activity.superseded_results(), 1);
+    let repeat = result_json(&fitted.messages()[4]);
+    assert_eq!(repeat.get("superseded_by"), None);
+    assert!(
+        repeat["context_cleared"]
+            .as_str()
+            .expect("notice text")
+            .contains("read it again")
+    );
+}
+
+#[test]
 fn deferred_read_results_repeat_the_exact_call() {
     // Arrange
     let arguments = arguments(&json!({"path": "src/lib.rs", "offset": 40, "limit": 20}));

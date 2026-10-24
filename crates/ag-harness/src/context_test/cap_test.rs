@@ -546,3 +546,39 @@ fn a_repeat_of_a_result_cut_as_the_last_resort_is_cleared() {
             .contains("cleared or cut")
     );
 }
+
+#[test]
+fn a_cleared_repeat_heavier_than_its_note_never_fails_the_fit() {
+    // Arrange
+    // The cleared notice names the long path, so it outweighs the note.
+    let path = format!("{}.txt", "p".repeat(150));
+    let calls = vec![read_call_of("a1", &path), read_call_of("a2", &path)];
+    let requests: Vec<ModelRequest> = (700..1500)
+        .map(|input_bytes| {
+            let mut request = request(Vec::new(), Vec::new(), &"i".repeat(input_bytes));
+            request.record_tool_calls(calls.clone());
+            request.record_tool_result(&calls[0], "x".repeat(450));
+            request.record_tool_result(&calls[1], repeated_read_result("a1"));
+
+            request
+        })
+        .collect();
+
+    // Act
+    let failures: Vec<usize> = requests
+        .iter()
+        .enumerate()
+        .filter(|(_, request)| {
+            ContextFit::default()
+                .fit(&ByteEstimator, budget(2000), request, None)
+                .is_err()
+        })
+        .map(|(offset, _)| 700 + offset)
+        .collect();
+
+    // Assert
+    // Only inputs that leave no room for the cleared repeat beside the
+    // shortest cut of the result fail; a single cutting pass also failed
+    // from 974 bytes.
+    assert_eq!(failures.first(), Some(&1030), "{failures:?}");
+}
