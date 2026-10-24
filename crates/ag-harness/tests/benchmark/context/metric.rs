@@ -14,6 +14,8 @@ const HELD_PREFIX_PERCENT: u64 = 85;
 /// Counts reads that repeat an earlier read target in the same turn: a file
 /// read at the same path and starting line, an inspection with the same
 /// canonical arguments, or a repeat the harness answered without running.
+/// An inspection from a report recorded before arguments were reported
+/// falls back to its action and summary.
 pub(super) fn duplicate_reads(tool_calls: &[ToolActivity]) -> usize {
     let mut seen = BTreeSet::new();
     let mut duplicates = 0;
@@ -22,6 +24,12 @@ pub(super) fn duplicate_reads(tool_calls: &[ToolActivity]) -> usize {
             ToolActivity::Read {
                 path, start_line, ..
             } => format!("file:{path}:{start_line}"),
+            ToolActivity::ReadInspection {
+                action,
+                arguments,
+                summary,
+                ..
+            } if arguments.is_empty() => format!("{action:?}:{summary}"),
             ToolActivity::ReadInspection { arguments, .. } => format!("inspection:{arguments}"),
             ToolActivity::ReadRepeated { .. } => {
                 duplicates += 1;

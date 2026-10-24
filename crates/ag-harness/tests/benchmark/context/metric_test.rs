@@ -27,6 +27,15 @@ fn search(path: &str) -> ToolActivity {
     }
 }
 
+fn legacy_search(path: &str) -> ToolActivity {
+    ToolActivity::ReadInspection {
+        action: ReadAction::Search,
+        arguments: String::new(),
+        duration: Duration::ZERO,
+        summary: format!("pub fn in {path}"),
+    }
+}
+
 fn turn_request(input: u64, hit: u64, reductions: &Value) -> Value {
     json!({
         "purpose": "turn",
@@ -48,6 +57,16 @@ fn duplicate_reads_key_inspections_by_their_arguments() {
         (
             "the same search twice",
             vec![search("src/a.rs"), search("src/b.rs"), search("src/a.rs")],
+            1,
+        ),
+        (
+            "legacy inspections without arguments key on their summary",
+            vec![
+                legacy_search("src/a.rs"),
+                legacy_search("src/b.rs"),
+                legacy_search("src/a.rs"),
+                search("src/a.rs"),
+            ],
             1,
         ),
         (
