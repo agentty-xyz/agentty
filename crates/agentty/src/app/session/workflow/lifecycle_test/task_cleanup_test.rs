@@ -71,6 +71,75 @@ async fn deletion_retains_task_history_ownership_before_cascade() {
 }
 
 #[tokio::test]
+async fn graph_runtime_cleanup_uses_the_durable_host_uuid_before_cascade() {
+    for context_id in ["aaaaaaaa-0000-0000-0000-000000000001", "invalid-context"] {
+        // Arrange
+        let session = test_session("", Status::Review, None, "");
+        let (repositories, _pool) = database_with_session_and_pool(&session).await;
+        let mut graph = crate::app::execution_graph::tests::graph();
+        graph.session_id = session.id.clone();
+        graph.nodes.truncate(1);
+        graph.nodes[0].env_id = ag_session::EnvId::SessionWorktree(session.id.clone());
+        repositories
+            .graphs()
+            .save_graph(&graph, None)
+            .await
+            .expect("graph");
+        repositories
+            .graph_dispatch()
+            .claim(
+                "graph",
+                graph.revision,
+                "first",
+                context_id,
+                std::path::Path::new("workspace"),
+            )
+            .await
+            .expect("claim");
+
+        // Act
+        let result = SessionManager::load_task_runtime_ids(&repositories, &session.id).await;
+        if context_id == "invalid-context" {
+            // Assert: corrupt identities must fail before cleanup selects
+            // paths.
+            assert!(
+                result
+                    .expect_err("invalid runtime identity")
+                    .to_string()
+                    .contains("UUID")
+            );
+            assert!(
+                repositories
+                    .sessions()
+                    .load_session(&session.id)
+                    .await
+                    .expect("retained session")
+                    .is_some()
+            );
+            continue;
+        }
+        let ids = result.expect("runtime ownership");
+        repositories
+            .sessions()
+            .delete_session(&session.id)
+            .await
+            .expect("cascade");
+
+        // Assert
+        assert_eq!(ids, ["task-aaaaaaaa-0000-0000-0000-000000000001"]);
+        assert_eq!(
+            repositories
+                .graphs()
+                .list_task_context_ids(&session.id)
+                .await
+                .expect("cleared")
+                .len(),
+            0
+        );
+    }
+}
+
+#[tokio::test]
 async fn corrupted_task_ownership_blocks_deletion_without_removing_state() {
     // Arrange
     for corruption in ["uuid", "role", "database"] {

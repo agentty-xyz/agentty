@@ -59,6 +59,7 @@ fn config(data_root: &Path, environment: BTreeMap<String, String>) -> NativeHarn
 /// Builds a session turn request for `folder`.
 fn turn_request(folder: &Path, model: &str, prompt: &str) -> TurnRequest {
     TurnRequest {
+        provider_call_budget: None,
         continuation: TurnContinuation::fresh(),
         execution_policy: ExecutionPolicy::default(),
         folder: folder.to_path_buf(),
@@ -338,6 +339,32 @@ async fn stale_instruction_key_resends_the_full_session_contract() {
     assert!(bodies[1].contains("First answer"));
     assert_eq!(bodies[1].matches(FULL_CONTRACT).count(), 2);
     assert!(!bodies[1].contains(REFRESH_REMINDER));
+}
+
+#[tokio::test]
+async fn session_provider_budget_is_enforced_by_the_native_harness() {
+    // Arrange
+    let server = MockServer::start().await;
+    respond(&server, "Budgeted question", answer("Answer"), 1).await;
+    let data_root = tempfile::tempdir().expect("data root");
+    let worktree = tempfile::tempdir().expect("worktree");
+    let config = config(data_root.path(), environment(&server));
+    let channel = create_agent_channel(AgentKind::Harness, None, Some(&config));
+    let budget = ProviderCallBudget::new(1);
+    let mut first = turn_request(worktree.path(), MUSE_MODEL, "Budgeted question");
+    first.provider_call_budget = Some(budget.clone());
+
+    // Act
+    let (result, _) = run_turn(&channel, "budgeted-session", first).await;
+    let mut second = turn_request(worktree.path(), MUSE_MODEL, "Budgeted question again");
+    second.provider_call_budget = Some(budget.clone());
+    let (exhausted, _) = run_turn(&channel, "budgeted-session", second).await;
+
+    // Assert
+    result.expect("initial call succeeds");
+    assert!(exhausted.is_err());
+    assert_eq!(budget.remaining(), 0);
+    assert_eq!(request_bodies(&server).await.len(), 1);
 }
 
 #[tokio::test]

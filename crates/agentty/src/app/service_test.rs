@@ -5,7 +5,7 @@ use std::time::Duration;
 
 use ag_contracts::{AgentRequestKind, OneShotRequest, PermissionMode, ReasoningLevel, SpeedMode};
 use ag_worker::test_support::{AppServerTurnResponse, MockAppServerClient, RealOneShotClient};
-use ag_worker::{HeartbeatClock, RunWorker};
+use ag_worker::{HeartbeatClock, RunWorker, RuntimeConfig};
 use tokio::task::JoinHandle;
 use tokio::time;
 use tokio_util::sync::CancellationToken;
@@ -14,7 +14,7 @@ use tracing::instrument::WithSubscriber;
 use crate::analytics::TurnOutcome;
 use crate::app::branch_publish::BranchPublishTaskFailure;
 use crate::app::prompt_intent::PromptImagePasteUpdate;
-use crate::app::service::AppServices;
+use crate::app::service::{AppServices, RealSessionRunFactory, SessionRunFactory};
 use crate::app::session::{SyncSessionStartError, TurnAppliedState};
 use crate::app::sync::{ProjectSyncContext, SyncMainCompletion};
 use crate::app::{AppEvent, UpdateStatus};
@@ -30,6 +30,32 @@ mod shutdown;
 /// Exercises failure while cancellation drops a task-owned resource.
 struct CleanupResource {
     should_succeed: bool,
+}
+
+#[tokio::test]
+async fn production_graph_factory_validates_identity_and_owns_isolated_cleanup() {
+    // Arrange
+    let mut provider = MockAppServerClient::new();
+    provider.expect_shutdown_session().once().returning(|id| {
+        assert_eq!(id, "task-aaaaaaaa-0000-0000-0000-000000000001");
+        Box::pin(async {})
+    });
+    let factory = RealSessionRunFactory::new(RuntimeConfig::with_app_server(Arc::new(provider)));
+    let owner = SessionId::from("owner");
+
+    // Act
+    let invalid = factory.create_graph_task("invalid-context", &owner, AgentKind::Codex);
+    let client = factory
+        .create_graph_task(
+            "aaaaaaaa-0000-0000-0000-000000000001",
+            &owner,
+            AgentKind::Codex,
+        )
+        .expect("isolated graph runtime");
+
+    // Assert
+    assert!(invalid.is_err());
+    client.shutdown().await.expect("isolated cleanup");
 }
 
 impl Drop for CleanupResource {

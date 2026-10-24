@@ -289,6 +289,7 @@ async fn prepare(
         if persistent { None } else { replay },
     );
     let prepared = TurnRequest {
+        provider_call_budget: None,
         continuation,
         execution_policy: ag_contracts::ExecutionPolicy::default(),
         folder: env.folder,

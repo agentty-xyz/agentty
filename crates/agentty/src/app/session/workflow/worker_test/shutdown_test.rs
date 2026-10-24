@@ -13,7 +13,7 @@ use super::super::{
 };
 use super::support::{
     auto_commit_run_client, insert_in_progress_test_session, queue_test_context, queued_message,
-    queued_review_request_command, resume_command,
+    queued_review_request_command, resume_command, test_graph_resources,
 };
 use crate::app::AppEvent;
 use crate::domain::session::Status;
@@ -47,6 +47,8 @@ async fn app_cleanup_waits_for_active_turn_and_cancels_paused_queue_traces() {
     )])));
     let worker = SessionWorkerHandle::spawn(
         SessionWorkerHost {
+            graph_resources: test_graph_resources(),
+            graph_wake: tokio::sync::watch::channel(0).0,
             context,
             message_traces: Arc::clone(&message_traces),
             run_client: auto_commit_run_client(),
@@ -149,6 +151,8 @@ async fn forcing_a_paused_worker_releases_its_shared_message_traces() {
     ])));
     let worker = SessionWorkerHandle::spawn(
         SessionWorkerHost {
+            graph_resources: test_graph_resources(),
+            graph_wake: tokio::sync::watch::channel(0).0,
             context,
             message_traces: Arc::clone(&message_traces),
             run_client: auto_commit_run_client(),
@@ -195,6 +199,8 @@ async fn shutdown_releases_only_the_stopped_sessions_queued_traces() {
         ),
     ])));
     let host = SessionWorkerHost {
+        graph_resources: test_graph_resources(),
+        graph_wake: tokio::sync::watch::channel(0).0,
         context,
         message_traces: Arc::clone(&message_traces),
         run_client: auto_commit_run_client(),
@@ -266,6 +272,8 @@ async fn closed_worker_settles_paused_operations_and_notifies_callers() {
         let (event_tx, mut event_rx) = mpsc::unbounded_channel();
         context.app_event_tx = event_tx;
         let host = SessionWorkerHost {
+            graph_resources: test_graph_resources(),
+            graph_wake: tokio::sync::watch::channel(0).0,
             message_traces: Arc::default(),
             context,
             run_client: auto_commit_run_client(),

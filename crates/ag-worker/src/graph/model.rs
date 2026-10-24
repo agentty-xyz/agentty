@@ -102,6 +102,14 @@ pub trait GraphNodeRunner: Send + Sync {
     /// Rejects unsupported profiles before *any* node is admitted.
     fn supports(&self, node: &GraphNode) -> bool;
 
+    /// Serial session adapters acquire the Env lease after selecting the
+    /// command, so an earlier command never waits behind a queued node's lease.
+    /// Such adapters must retain that lease through authoritative settlement.
+    fn manages_environment(&self, node: &GraphNode) -> bool {
+        let _ = node;
+        false
+    }
+
     /// Executes one freshly claimed node under the executor's resource lease.
     async fn run(&self, request: GraphRunRequest) -> Result<String, OneShotError>;
 }

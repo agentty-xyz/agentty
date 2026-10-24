@@ -12,6 +12,7 @@ use crate::OneShotError;
 /// including repairs and restart retries. Failed attempts also consume a slot.
 #[derive(Clone, Debug)]
 pub struct ProviderCallBudget {
+    ceiling: Option<Box<ProviderCallBudget>>,
     remaining: Arc<AtomicUsize>,
     reservation: Option<Arc<ReservedCall>>,
 }
@@ -20,6 +21,7 @@ impl ProviderCallBudget {
     /// Creates a budget shared by all clones.
     pub fn new(limit: usize) -> Self {
         Self {
+            ceiling: None,
             remaining: Arc::new(AtomicUsize::new(limit)),
             reservation: None,
         }
@@ -28,13 +30,31 @@ impl ProviderCallBudget {
     /// Returns available shared calls plus this budget's reserved initial call.
     /// Calls reserved by other budgets are unavailable to this budget.
     pub fn remaining(&self) -> usize {
-        self.remaining
+        let remaining = self
+            .remaining
             .load(Ordering::Relaxed)
             .saturating_add(usize::from(
                 self.reservation
                     .as_ref()
                     .is_some_and(|call| call.available.load(Ordering::Relaxed)),
-            ))
+            ));
+
+        self.ceiling
+            .as_ref()
+            .map_or(remaining, |ceiling| remaining.min(ceiling.remaining()))
+    }
+
+    /// Adds an enclosing workflow ceiling while preserving the caller's own
+    /// limit. Each distinct shared counter charges every provider attempt once.
+    #[must_use]
+    pub fn with_ceiling(mut self, ceiling: Self) -> Self {
+        let mut next = Some(ceiling);
+        while let Some(mut counter) = next {
+            next = counter.ceiling.take().map(|ceiling| *ceiling);
+            self.merge_counter(counter);
+        }
+
+        self
     }
 
     /// Atomically reserves one initial attempt in a child budget.
@@ -50,13 +70,21 @@ impl ProviderCallBudget {
     pub fn reserve(&self) -> Result<Self, OneShotError> {
         let source = self.take_call()?;
 
-        Ok(Self {
+        let mut reserved = Self {
+            ceiling: None,
             remaining: self.remaining.clone(),
             reservation: Some(Arc::new(ReservedCall {
                 available: AtomicBool::new(true),
                 source,
             })),
-        })
+        };
+        reserved.ceiling = self
+            .ceiling
+            .as_ref()
+            .map(|ceiling| ceiling.reserve().map(Box::new))
+            .transpose()?;
+
+        Ok(reserved)
     }
 
     /// Checks for exhaustion without charging a turn at an outer boundary.
@@ -76,8 +104,46 @@ impl ProviderCallBudget {
     ///
     /// # Errors
     /// Returns an input-size reduction error before execution when exhausted.
+    /// Failed consumption refunds every debit, including reserved credit.
     pub fn consume(&self) -> Result<(), OneShotError> {
-        self.take_call().map(|_| ())
+        // Reservation rolls back earlier counters if a later ceiling loses a
+        // race. Redeem only after every counter has supplied its credit.
+        let reservation = self.reserve()?;
+        let mut counter = Some(&reservation);
+        while let Some(reserved) = counter {
+            reserved.take_call()?;
+            counter = reserved.ceiling.as_deref();
+        }
+
+        Ok(())
+    }
+
+    /// Incoming chains are flattened before merging so overlapping tails cannot
+    /// charge a counter twice. Retain available reserved credit when present.
+    fn merge_counter(&mut self, counter: Self) {
+        let mut current = self;
+        loop {
+            if Arc::ptr_eq(&current.remaining, &counter.remaining) {
+                if let Some(reservation) = counter.reservation
+                    && reservation.available.load(Ordering::Relaxed)
+                    && !current
+                        .reservation
+                        .as_ref()
+                        .is_some_and(|call| call.available.load(Ordering::Relaxed))
+                {
+                    current.reservation = Some(reservation);
+                }
+
+                return;
+            }
+            if let Some(ref mut ceiling) = current.ceiling {
+                current = ceiling;
+            } else {
+                current.ceiling = Some(Box::new(counter));
+
+                return;
+            }
+        }
     }
 
     fn take_call(&self) -> Result<CallSource, OneShotError> {

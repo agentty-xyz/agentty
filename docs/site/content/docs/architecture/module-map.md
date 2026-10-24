@@ -69,8 +69,9 @@ contracts.
   bindings. `ag-store` owns immutable revision snapshots, execution links, output
   bodies, validation/acceptance evidence, and atomic static-node admission. `ag-worker`
   owns deterministic graph dispatch, shared resource leases, and worker adapters behind
-  `GraphNodeRunner`. Existing workflow coordinators and execution records retain their
-  authority until their consumers migrate.
+  `GraphNodeRunner`. The application owns explicit graph launch, wakeups, and the
+  adapter into ordered session workers. Existing workflow coordinators and execution
+  records retain their authority until their consumers migrate.
 - Environment identity and resolved location contracts belong to `ag-session`. The host
   resolves the shared local Env through existing worktree isolation checks; session
   workflows retain provisioning and cleanup ownership. Conversations and permissions

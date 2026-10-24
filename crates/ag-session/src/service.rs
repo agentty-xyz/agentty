@@ -86,6 +86,31 @@ pub enum DurableMessageVisibility {
 /// programmatic session capability without depending on a concrete frontend.
 #[async_trait]
 pub trait SessionBackend: Send + Sync {
+    /// Saves and starts a static graph. Existing admitted nodes are never
+    /// replayed. Named budgets are shared within this graph's live driver.
+    async fn start_execution_graph(
+        &self,
+        request: StartExecutionGraphRequest,
+    ) -> Result<(), SessionError> {
+        let _ = request;
+
+        Err(SessionError::Operation(
+            "Host does not support execution graphs".into(),
+        ))
+    }
+
+    /// Records explicit acceptance of an exact graph output and wakes ready
+    /// dependents. Model output must never call this trusted host boundary.
+    async fn accept_execution_graph_result(
+        &self,
+        reference: crate::GraphResultRef,
+    ) -> Result<(), SessionError> {
+        let _ = reference;
+
+        Err(SessionError::Operation(
+            "Host does not support execution graphs".into(),
+        ))
+    }
     /// Admits a role-bound attempt with its own isolated conversation.
     async fn submit_agent_task(
         &self,
@@ -284,7 +309,41 @@ pub struct SessionService {
     backend: Arc<dyn SessionBackend>,
 }
 
+/// Explicit static-graph launch, separate from ordinary chat and `/plan`.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct StartExecutionGraphRequest {
+    /// Validated immutable snapshot to save before admitting nodes.
+    pub graph: crate::ExecutionGraph,
+    /// Provider calls shared by nodes naming the same budget, including
+    /// repairs. These limits cannot be replenished by redelivering an
+    /// active launch.
+    pub provider_call_limits: std::collections::BTreeMap<String, usize>,
+}
+
 impl SessionService {
+    /// Starts an explicit static graph without waiting for model execution.
+    ///
+    /// # Errors
+    /// Rejects unsupported profiles, stale/conflicting identities, missing
+    /// budgets, ineligible sessions, and failed persistence or delivery.
+    pub async fn start_execution_graph(
+        &self,
+        request: StartExecutionGraphRequest,
+    ) -> Result<(), SessionError> {
+        self.backend.start_execution_graph(request).await
+    }
+
+    /// Accepts one exact validated output and releases its acceptance gate.
+    ///
+    /// # Errors
+    /// Rejects stale or unvalidated references and failed persistence.
+    pub async fn accept_execution_graph_result(
+        &self,
+        reference: crate::GraphResultRef,
+    ) -> Result<(), SessionError> {
+        self.backend.accept_execution_graph_result(reference).await
+    }
+
     /// Accepts a standalone Planner version from durable task history.
     ///
     /// # Errors

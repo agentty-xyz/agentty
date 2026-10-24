@@ -26,6 +26,20 @@ use crate::infra::db::{SessionMessageRow, SessionReviewRequestRow, SessionRow};
 
 #[async_trait]
 impl SessionBackend for SessionRuntimeHandle {
+    async fn start_execution_graph(
+        &self,
+        request: ag_session::StartExecutionGraphRequest,
+    ) -> Result<(), ApiSessionError> {
+        SessionRuntimeHandle::start_execution_graph(self, request).await
+    }
+
+    async fn accept_execution_graph_result(
+        &self,
+        reference: ag_session::GraphResultRef,
+    ) -> Result<(), ApiSessionError> {
+        SessionRuntimeHandle::accept_execution_graph_result(self, reference).await
+    }
+
     async fn submit_agent_task(
         &self,
         session_id: &SessionId,
@@ -244,35 +258,20 @@ impl App {
     /// Routes mutations to shared admission and keeps reads on the query path.
     pub(crate) async fn apply_session_runtime_command(&mut self, command: SessionRuntimeCommand) {
         match command {
+            SessionRuntimeCommand::RunGraphNode {
+                admitted_tx,
+                cancellation,
+                request,
+                response_tx,
+            } => {
+                self.enqueue_graph_node(*request, cancellation, admitted_tx, response_tx)
+                    .await;
+            }
             SessionRuntimeCommand::GetAgentTaskHistory {
                 response_tx,
                 task_id,
             } => {
-                let result = self
-                    .services
-                    .db()
-                    .tasks()
-                    .load_agent_history(&task_id)
-                    .await
-                    .map(|history| {
-                        history.map(|history| ag_session::TaskAgentHistory {
-                            context: history.context.context,
-                            input: history.context.input,
-                            turns: history
-                                .turns
-                                .into_iter()
-                                .map(|turn| ag_session::TaskAgentTurn {
-                                    assistant_message: turn.assistant_message,
-                                    attempt_id: turn.attempt_id,
-                                    input: turn.input,
-                                    input_tokens: turn.input_tokens,
-                                    output_tokens: turn.output_tokens,
-                                })
-                                .collect(),
-                        })
-                    })
-                    .map_err(|error| ApiSessionError::Operation(error.to_string()));
-                let _ = response_tx.send(result);
+                let _ = response_tx.send(self.load_api_task_history(&task_id).await);
             }
             SessionRuntimeCommand::GetTaskChain {
                 chain_id,
@@ -336,6 +335,36 @@ impl App {
                 let _ = self.admit_session_command(command).await;
             }
         }
+    }
+
+    /// Projects isolated task history without exposing storage metadata.
+    async fn load_api_task_history(
+        &self,
+        task_id: &str,
+    ) -> Result<Option<ag_session::TaskAgentHistory>, ApiSessionError> {
+        self.services
+            .db()
+            .tasks()
+            .load_agent_history(task_id)
+            .await
+            .map(|history| {
+                history.map(|history| ag_session::TaskAgentHistory {
+                    context: history.context.context,
+                    input: history.context.input,
+                    turns: history
+                        .turns
+                        .into_iter()
+                        .map(|turn| ag_session::TaskAgentTurn {
+                            assistant_message: turn.assistant_message,
+                            attempt_id: turn.attempt_id,
+                            input: turn.input,
+                            input_tokens: turn.input_tokens,
+                            output_tokens: turn.output_tokens,
+                        })
+                        .collect(),
+                })
+            })
+            .map_err(|error| ApiSessionError::Operation(error.to_string()))
     }
 
     /// Validates one creation request and captures its launch settings. Drafts

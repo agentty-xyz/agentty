@@ -10,6 +10,7 @@ mod command_gateway;
 mod core;
 mod diff_prompt;
 mod error;
+mod execution_graph;
 mod merge_queue;
 mod message_admission;
 mod project;

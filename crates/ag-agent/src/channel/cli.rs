@@ -219,6 +219,11 @@ impl AgentChannel for CliAgentChannel {
                 let mut build_request = build_command_request(&req, &prompt_text);
                 build_request.replay_transcript = replay.text.as_deref();
                 let observer = CliTurnObserver::new(events.clone(), kind, true);
+                if let Some(budget) = &req.provider_call_budget {
+                    budget
+                        .consume()
+                        .map_err(|error| AgentError::Backend(error.to_string()))?;
+                }
                 let output = execution::execute_cli_command(
                     backend.as_ref(),
                     kind,
@@ -361,6 +366,9 @@ async fn execute_cli_repair_turn(
     events: &mpsc::UnboundedSender<TurnEvent>,
 ) -> Result<String, String> {
     let prompt_payload = TurnPrompt::from_agent_data(repair_prompt.to_string());
+    if let Some(budget) = &request.provider_call_budget {
+        budget.consume().map_err(|error| error.to_string())?;
+    }
     let build_request = BuildCommandRequest {
         execution_policy: &request.execution_policy,
         attachments: &prompt_payload.attachments,

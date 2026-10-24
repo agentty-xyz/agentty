@@ -375,6 +375,7 @@ async fn configured_session_workers_construct_and_release_inert_provider_runtime
 
 fn turn_request() -> TurnRequest {
     TurnRequest {
+        provider_call_budget: None,
         execution_policy: ag_contracts::ExecutionPolicy::default(),
         continuation: TurnContinuation::fresh(),
         folder: ".".into(),

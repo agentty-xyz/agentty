@@ -138,7 +138,7 @@ impl AgentChannel for AppServerAgentChannel {
             let continuation = req.continuation.into_parts();
             let request = AppServerTurnRequest {
                 execution_policy: req.execution_policy,
-                provider_call_budget: None,
+                provider_call_budget: req.provider_call_budget,
                 folder: req.folder,
                 live_transcript: continuation.live_transcript,
                 main_checkout_root: req.main_checkout_root,

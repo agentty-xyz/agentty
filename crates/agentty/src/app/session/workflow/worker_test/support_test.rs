@@ -1,4 +1,4 @@
-use std::collections::VecDeque;
+use std::collections::{HashMap, VecDeque};
 use std::path::PathBuf;
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
@@ -33,6 +33,14 @@ use crate::domain::session_message::{SessionMessageKind, SessionTranscript};
 use crate::domain::turn_prompt::TurnPrompt;
 use crate::infra::db::{AppRepositories, PersistedSessionCreation};
 use crate::infra::fs;
+
+/// Shared Env gates for stand-alone worker host tests.
+pub(super) fn test_graph_resources() -> Arc<ag_worker::GraphResources> {
+    Arc::new(ag_worker::GraphResources::new(
+        std::num::NonZeroUsize::MIN,
+        HashMap::new(),
+    ))
+}
 
 /// Builds one filesystem mock that treats every probed path as an
 /// existing directory.
@@ -1659,6 +1667,8 @@ pub(super) fn spawn_session_worker(
 ) {
     tokio::spawn(ag_worker::run(
         super::super::SessionWorkerHost {
+            graph_resources: test_graph_resources(),
+            graph_wake: tokio::sync::watch::channel(0).0,
             message_traces: Arc::default(),
             context,
             run_client,

@@ -449,7 +449,7 @@ pub(crate) async fn start_review_assist(
     let (review_selection, reasoning_level, speed_mode) = normalize_review_agent(review_agent);
 
     let run_client = ag_worker::scoped_client(
-        services.run_client(),
+        services.background_run_client(session_id, services.run_client()),
         ag_worker::RunScope {
             session_id: Some(session_id.to_string()),
             purpose: Some("focused review".to_string()),

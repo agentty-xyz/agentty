@@ -64,6 +64,7 @@ fn test_cli_turn_observer_ignores_blank_progress_text() {
 fn test_build_command_request_uses_agent_facing_prompt_text() {
     // Arrange
     let request = TurnRequest {
+        provider_call_budget: None,
         execution_policy: ag_contracts::ExecutionPolicy {
             max_concurrent_subagents: std::num::NonZeroUsize::new(7),
             ..ag_contracts::ExecutionPolicy::default()
