@@ -1,6 +1,7 @@
 //! Live context-management benchmark for the native harness.
 
 mod fixture;
+mod metric;
 mod record;
 mod runner;
 

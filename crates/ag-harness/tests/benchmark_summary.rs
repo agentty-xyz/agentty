@@ -1,10 +1,14 @@
-//! Regression coverage for the manual benchmark's process result and
-//! deterministic context fixtures.
+//! Regression coverage for the manual benchmark's process result,
+//! deterministic context fixtures, and context metrics.
 
 #[path = "benchmark/context/fixture.rs"]
 mod fixture;
 #[path = "benchmark/context/fixture_test.rs"]
 mod fixture_test;
+#[path = "benchmark/context/metric.rs"]
+mod metric;
+#[path = "benchmark/context/metric_test.rs"]
+mod metric_test;
 #[path = "benchmark/summary.rs"]
 mod summary;
 

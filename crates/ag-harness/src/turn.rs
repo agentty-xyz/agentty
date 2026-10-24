@@ -604,6 +604,12 @@ pub enum ToolActivity {
     ReadInspection {
         /// Selected inspection action.
         action: ReadAction,
+        /// The call's canonical JSON arguments, as replayed to the provider:
+        /// identical inspections have identical arguments, while the
+        /// summary omits fields such as a search's path filter. Empty in
+        /// reports recorded before it existed.
+        #[serde(default)]
+        arguments: String,
         /// Elapsed tool-execution time.
         duration: Duration,
         /// Bounded path, query, or revision summary.
@@ -742,6 +748,7 @@ impl fmt::Display for ToolActivity {
                 action,
                 duration,
                 summary,
+                ..
             } => write!(
                 formatter,
                 "read {} {} (completed; {})",

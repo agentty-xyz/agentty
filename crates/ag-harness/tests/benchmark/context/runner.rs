@@ -1,4 +1,5 @@
-//! Live context-management scenarios at a forced small context budget.
+//! Live context-management scenarios at a forced small context budget or
+//! at the model's declared window.
 
 use std::collections::BTreeMap;
 use std::fs::OpenOptions;
@@ -9,7 +10,9 @@ use std::sync::{Arc, Mutex, PoisonError};
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
 use ag_harness::lifecycle::LifecycleEvent;
-use ag_harness::model::{ContextBudget, ContextSummaryPolicy, HeuristicContextEstimator};
+use ag_harness::model::{
+    ContextBudget, ContextSummaryPolicy, HeuristicContextEstimator, ModelProfile,
+};
 use ag_harness::{Harness, OutputSchema, Tool};
 use tempfile::TempDir;
 
@@ -23,6 +26,24 @@ const DEFAULT_WINDOW: u64 = 32_000;
 const DEFAULT_RESERVED_OUTPUT: u64 = 16_384;
 const DEFAULT_TIMEOUT_SECS: u64 = 900;
 const DEFAULT_RESULTS: &str = "target/ag-harness-context-benchmark.jsonl";
+const DECLARED_WINDOW: &str = "declared";
+/// Agentty's declared context profiles of the benchmarked models, as
+/// `crates/ag-agent/src/agent/model_profile.rs` declares them: the model,
+/// its window, maximum output, and estimate margin's under-count percent,
+/// and its fitted estimator as an `AG_HARNESS_CONTEXT_ESTIMATE` value.
+const DECLARED_PROFILES: [(&str, u64, u64, u64, &str); 5] = [
+    (
+        "muse-spark-1.3",
+        1_048_576,
+        131_072,
+        18,
+        "225,44,339,0,420,1",
+    ),
+    ("qwen3.8-max", 1_000_000, 131_072, 15, "239,33,373,0,250,1"),
+    ("qwen-plus", 1_000_000, 32_768, 16, "236,24,372,0,70,1"),
+    ("kimi-k3", 1_048_576, 131_072, 17, "223,54,307,0,55,1"),
+    ("kimi-k2.6", 262_144, 32_768, 17, "224,25,312,0,0,1"),
+];
 
 type ScenarioFuture = std::pin::Pin<Box<dyn Future<Output = Result<Measured, DynError>>>>;
 type ScenarioRunner = fn(Harness) -> ScenarioFuture;
@@ -87,10 +108,9 @@ struct Config {
     estimate: Option<String>,
     provider: Provider,
     repetitions: usize,
-    reserved_output: u64,
     results: PathBuf,
     timeout: Duration,
-    window: u64,
+    window: Window,
 }
 
 impl Config {
@@ -121,16 +141,50 @@ impl Config {
             estimate: std::env::var("AG_HARNESS_CONTEXT_ESTIMATE").ok(),
             provider,
             repetitions: number_env("AG_HARNESS_BENCHMARK_REPETITIONS", 1)?,
-            reserved_output: number_env(
-                "AG_HARNESS_CONTEXT_RESERVED_OUTPUT",
-                DEFAULT_RESERVED_OUTPUT,
-            )?,
             results,
             timeout: Duration::from_secs(number_env(
                 "AG_HARNESS_CONTEXT_TIMEOUT_SECS",
                 DEFAULT_TIMEOUT_SECS,
             )?),
-            window: number_env("AG_HARNESS_CONTEXT_WINDOW", DEFAULT_WINDOW)?,
+            window: Window::from_env()?,
+        })
+    }
+
+    /// Resolves the request budget, the declared estimator, and the window
+    /// and reservation they came from.
+    fn context(&self) -> Result<ContextConfig, DynError> {
+        let (window, reserved_output, estimate) = match self.window {
+            Window::Fixed {
+                reserved_output,
+                window,
+            } => (window, reserved_output, self.estimate.clone()),
+            Window::Declared => {
+                let model = self.provider.model();
+                let &(_, window, max_output, under_count_percent, declared) = DECLARED_PROFILES
+                    .iter()
+                    .find(|(name, ..)| *name == model)
+                    .ok_or_else(|| format!("no declared context profile for model {model:?}"))?;
+                let profile =
+                    ModelProfile::new(window).with_estimate_margin(max_output, under_count_percent);
+                let estimate = self.estimate.clone().unwrap_or_else(|| declared.into());
+
+                (window, profile.reserved_tokens(), Some(estimate))
+            }
+        };
+        let budget = ContextBudget::new(
+            NonZeroU64::new(window).ok_or("AG_HARNESS_CONTEXT_WINDOW must be positive")?,
+        )
+        .with_reserved_output(reserved_output)?;
+        let estimator = estimate
+            .as_deref()
+            .map_or(Ok(HeuristicContextEstimator::DEFAULT), estimator)?;
+
+        Ok(ContextConfig {
+            budget,
+            estimate,
+            estimator,
+            reserved_output,
+            window,
         })
     }
 
@@ -141,10 +195,7 @@ impl Config {
         repetition: usize,
         revision: Option<String>,
     ) -> Result<RunRecord, DynError> {
-        let budget = ContextBudget::new(
-            NonZeroU64::new(self.window).ok_or("AG_HARNESS_CONTEXT_WINDOW must be positive")?,
-        )
-        .with_reserved_output(self.reserved_output)?;
+        let context = self.context()?;
         let policy = if self.context_summaries {
             ContextSummaryPolicy::Enabled
         } else {
@@ -152,12 +203,8 @@ impl Config {
         };
         let observed = Arc::new(Mutex::new(Observed::default()));
         let recorder = Arc::clone(&observed);
-        let estimator = self
-            .estimate
-            .as_deref()
-            .map_or(Ok(HeuristicContextEstimator::DEFAULT), estimator)?;
-        let harness = Harness::new(self.provider.client()?, budget)
-            .context_estimator(estimator)
+        let harness = Harness::new(self.provider.client()?, context.budget)
+            .context_estimator(context.estimator)
             .context_summaries(policy)
             .with_lifecycle_observer(move |event: LifecycleEvent| {
                 recorder
@@ -197,21 +244,70 @@ impl Config {
             activity,
             context_summaries: self.context_summaries,
             correctness: score.correctness(),
-            estimate: self.estimate.clone(),
+            estimate: context.estimate,
             detail,
             model: self.provider.model(),
             observed: std::mem::take(&mut *observed.lock().unwrap_or_else(PoisonError::into_inner)),
             provider: self.provider.as_str(),
             repetition,
-            reserved_output: self.reserved_output,
+            reserved_output: context.reserved_output,
             revision,
             scenario,
             started_at,
             success: score.is_perfect(),
             wall_ms,
-            window: self.window,
+            window: context.window,
+            window_mode: self.window.mode(),
         })
     }
+}
+
+/// How the suite sizes each request's context budget.
+#[derive(Clone, Copy)]
+enum Window {
+    /// The model's declared window, reservation, and estimator.
+    Declared,
+    /// `AG_HARNESS_CONTEXT_WINDOW` tokens, of which
+    /// `AG_HARNESS_CONTEXT_RESERVED_OUTPUT` are reserved.
+    Fixed { reserved_output: u64, window: u64 },
+}
+
+impl Window {
+    fn from_env() -> Result<Self, DynError> {
+        if std::env::var("AG_HARNESS_CONTEXT_WINDOW").as_deref() != Ok(DECLARED_WINDOW) {
+            return Ok(Self::Fixed {
+                reserved_output: number_env(
+                    "AG_HARNESS_CONTEXT_RESERVED_OUTPUT",
+                    DEFAULT_RESERVED_OUTPUT,
+                )?,
+                window: number_env("AG_HARNESS_CONTEXT_WINDOW", DEFAULT_WINDOW)?,
+            });
+        }
+        if std::env::var_os("AG_HARNESS_CONTEXT_RESERVED_OUTPUT").is_some() {
+            return Err(
+                "AG_HARNESS_CONTEXT_RESERVED_OUTPUT cannot be combined with a declared window"
+                    .into(),
+            );
+        }
+
+        Ok(Self::Declared)
+    }
+
+    fn mode(self) -> &'static str {
+        match self {
+            Self::Declared => DECLARED_WINDOW,
+            Self::Fixed { .. } => "fixed",
+        }
+    }
+}
+
+/// One run's resolved context configuration.
+struct ContextConfig {
+    budget: ContextBudget,
+    estimate: Option<String>,
+    estimator: HeuristicContextEstimator,
+    reserved_output: u64,
+    window: u64,
 }
 
 struct Measured {
