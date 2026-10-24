@@ -141,14 +141,15 @@ cache key, plus an appended instruction naming the first and last covered calls 
 stating the summary schema; `ModelRequest::prefix_schema` keeps the turn's schema in the
 leading message, so the provider serves the request from the turn's cached prefix, and
 the model summarizes the rounds as it last saw them, its replayed reasoning included.
-Live, Qwen3.8-Max cached 92–93% of such requests; changing the tools, the reasoning
-effort, or the stated schema instead dropped the cache to zero for both Qwen and Muse,
-and Muse, which constrains output to the `response_format` schema, cannot answer another
-schema without changing it, so Muse keeps the other form. Otherwise the source is
-rendered as its own tool-free request at low reasoning effort, since restating rounds
-needs no deliberation and a reasoning model at the turn's effort can outlast the request
-timeout on a large source: the task, any earlier summary to carry forward, and each
-round as bounded JSON with superseded results as their notices, its text cut at
+Live, Qwen3.8-Max cached 94% of such requests' input, against none for the tool-free
+form, though each took about 35–55 s against 25–33 s at low effort; changing the tools,
+the reasoning effort, or the stated schema instead dropped the cache to zero for both
+Qwen and Muse, and Muse, which constrains output to the `response_format` schema, cannot
+answer another schema without changing it, so Muse keeps the other form. Otherwise the
+source is rendered as its own tool-free request at low reasoning effort, since restating
+rounds needs no deliberation and a reasoning model at the turn's effort can outlast the
+request timeout on a large source: the task, any earlier summary to carry forward, and
+each round as bounded JSON with superseded results as their notices, its text cut at
 shrinking levels, then its oldest rounds left out, until the request fits the budget.
 Both instructions ask to record only what the rounds show and to name what a cleared or
 cut result no longer shows instead of filling it in. The engine re-requests invalid
@@ -168,6 +169,10 @@ requests. A failure is classified as `Model` when a request failed at the provid
 transport (its own `ModelRequestFailed` carries the class and HTTP status),
 `InvalidOutput` when corrections ran out or the model answered a tool-free summary
 request with a tool call, `Rejected` when a valid summary did not fit, or `Cancelled`.
+Summaries stay disabled by default: no declared profile's window is small enough for
+these turns to reduce, and at the 32k stress budget, where reductions without summaries
+already answered every benchmark check, summaries cost Qwen3.8-Max and Muse more
+requests and input tokens and up to three times the wall time.
 
 Every `read` result is bounded as it runs, against the calibrated budget of the request
 it joins, so it enters history at the size later requests send. One result may weigh 25%
