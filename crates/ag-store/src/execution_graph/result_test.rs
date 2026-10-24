@@ -3,7 +3,7 @@ use std::num::NonZeroU64;
 use ag_session::{GraphExecutionRef, GraphResultState};
 use ag_worker::RunState;
 
-use super::support_test::{evidence, graph, produced, record, reference, run};
+use crate::execution_graph::support_test::{evidence, graph, produced, record, reference, run};
 use crate::test_support::task_database_fixture;
 
 #[tokio::test]

@@ -56,6 +56,13 @@ pub trait RunRepository: Send + Sync {
     /// sessions whose admission was closed, even after their host record is
     /// deleted.
     async fn create(&self, run: &RunInfo) -> Result<(), OneShotError>;
+    /// Claims an exact preadmitted utility once. Unsupported adapters reject
+    /// this path; terminal or already running records must never be replayed.
+    async fn claim_queued(&self, _run: &RunInfo) -> Result<bool, OneShotError> {
+        Err(OneShotError::new(
+            "Preadmitted utility runs are unsupported",
+        ))
+    }
     /// Permanently closes utility admission for a session identity. Idempotent;
     /// hosts must not reuse session IDs. Closure survives session deletion.
     async fn close_session(&self, session_id: &str) -> Result<(), OneShotError>;
@@ -71,3 +78,7 @@ pub trait RunRepository: Send + Sync {
     /// Fails abandoned records after exclusive startup recovery.
     async fn recover(&self) -> Result<(), OneShotError>;
 }
+
+#[cfg(test)]
+#[path = "run_mock_test.rs"]
+pub(crate) mod mock;

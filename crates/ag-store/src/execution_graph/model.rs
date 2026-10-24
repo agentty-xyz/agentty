@@ -1,21 +1,5 @@
-use std::num::NonZeroU64;
-
-use ag_session::{GraphExecutionRef, GraphResolvedInput, GraphResult};
-
-/// Immutable attachment to an existing attempt or utility run, not admission.
-#[derive(Clone, Debug, Eq, PartialEq)]
-pub struct GraphExecutionRecord {
-    /// Existing execution authority; its status is never copied here.
-    pub execution: GraphExecutionRef,
-    /// Owning graph instance.
-    pub graph_id: String,
-    /// Revision used for this execution.
-    pub graph_revision: NonZeroU64,
-    /// Every declared input resolved to a persisted exact version.
-    pub inputs: Vec<GraphResolvedInput>,
-    /// Node within the captured revision.
-    pub node_id: String,
-}
+use ag_session::GraphResult;
+pub use ag_worker::GraphExecutionRecord;
 
 /// Trusted host evidence for an exact result, supplied separately from output.
 ///

@@ -3,8 +3,8 @@ use std::num::NonZeroU64;
 use ag_protocol::TurnPromptAttachment;
 use ag_session::EnvId;
 
-use super::support_test::{graph, produced};
 use crate::connection::{Database, MIGRATOR};
+use crate::execution_graph::support_test::{graph, produced};
 use crate::test_support::task_database_fixture;
 
 #[tokio::test]

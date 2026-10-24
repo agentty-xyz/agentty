@@ -507,6 +507,13 @@ settlement. Hosts supply question policy and ordered Git/forge effects. Closing 
 retiring a mailbox settles or cancels outstanding work and notifies callers, including
 those using retained handle clones.
 
+The static `GraphExecutor` separately drains dependency-ready branches through injected
+worker adapters. Storage admits each node once with pinned inputs and its existing
+execution authority. Shared Env leases and provider budgets constrain parallel branches;
+all prerequisite gates must hold before a join runs. The existing `/plan` and focused
+review coordinators have not migrated. See
+[Execution Graphs](@/docs/architecture/execution-graphs.md).
+
 Channel owners clean up provider processes after cancellation. Operation completion
 includes post-processing, not just model completion. Heartbeat failures are reported
 without abandoning live work; startup recovery requires exclusive application ownership.

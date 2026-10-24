@@ -38,6 +38,27 @@ pub struct RunWorker {
 }
 
 impl RunWorker {
+    /// Submits an exact utility run already admitted by a durable coordinator.
+    /// The repository claims its queued identity before runtime invocation;
+    /// redelivery and terminal records are rejected without changing them.
+    ///
+    /// # Errors
+    /// Rejects mismatched or unclaimable records, closed admission, and runtime
+    /// or persistence failures.
+    pub async fn submit_recorded(
+        &self,
+        request: OneShotRequest,
+        run: RunInfo,
+    ) -> Result<OneShotSubmission, OneShotError> {
+        if request.folder != run.folder {
+            return Err(OneShotError::new(
+                "Recorded run folder does not match request",
+            ));
+        }
+
+        self.submit_inner(request, Some(run)).await
+    }
+
     /// Creates provider runtimes inside the worker, retaining host storage and
     /// clock injection.
     pub fn new(
@@ -140,6 +161,16 @@ impl Drop for RunWorker {
 #[async_trait]
 impl RunClient for RunWorker {
     async fn submit(&self, request: OneShotRequest) -> Result<OneShotSubmission, OneShotError> {
+        self.submit_inner(request, None).await
+    }
+}
+
+impl RunWorker {
+    async fn submit_inner(
+        &self,
+        request: OneShotRequest,
+        recorded: Option<RunInfo>,
+    ) -> Result<OneShotSubmission, OneShotError> {
         let (sender, receiver) = oneshot::channel();
         {
             let admission = self
@@ -150,7 +181,13 @@ impl RunClient for RunWorker {
                 return Err(OneShotError::new("Run worker has shut down"));
             }
             let execution = Arc::clone(&self.execution);
-            let scope = RunContext::current();
+            let mut scope = RunContext::current();
+            if let Some(run) = &recorded {
+                scope.scope.session_id.clone_from(&run.session_id);
+                scope.scope.parent_id.clone_from(&run.parent_id);
+                scope.scope.project_id = run.project_id;
+                scope.scope.purpose = Some(run.purpose.clone());
+            }
             let trace = scope.trace.clone();
             let session = scope
                 .scope
@@ -169,7 +206,7 @@ impl RunClient for RunWorker {
                     tokio::select! {
                         biased;
                         () = execution.force_shutdown.cancelled() => {},
-                        () = execution.execute(request, scope, &id, cancellation, sender) => {},
+                        () = execution.execute(request, scope, &id, recorded, cancellation, sender) => {},
                     }
                     if let (Some(session_id), Some((session, task))) = (session_id, session) {
                         drop(task);
@@ -246,11 +283,12 @@ impl Execution {
         request: OneShotRequest,
         context: RunContext,
         id: &str,
+        recorded: Option<RunInfo>,
         session_cancellation: CancellationToken,
         mut sender: oneshot::Sender<Result<OneShotSubmission, OneShotError>>,
     ) {
         let scope = context.scope.clone();
-        let run = RunInfo {
+        let run = recorded.clone().unwrap_or_else(|| RunInfo {
             folder: request.folder.clone(),
             id: id.to_string(),
             parent_id: scope.parent_id,
@@ -259,7 +297,7 @@ impl Execution {
                 .purpose
                 .unwrap_or_else(|| format!("{:?}", request.request_kind)),
             session_id: scope.session_id,
-        };
+        });
         let span = Span::child("utility.run");
         if let Some(phase) = &context.phase_trace {
             span.link(phase);
@@ -275,7 +313,23 @@ impl Execution {
         span.attribute("agentty.run.id", run.id.clone());
         span.attribute("agentty.purpose", run.purpose.clone());
         let trace = span.context();
-        if let Err(error) = self.repository.create(&run).await {
+        let admitted = if recorded.is_some() {
+            self.repository
+                .claim_queued(&run)
+                .await
+                .and_then(|claimed| {
+                    if claimed {
+                        Ok(())
+                    } else {
+                        Err(OneShotError::new(
+                            "Recorded run is not queued or does not match",
+                        ))
+                    }
+                })
+        } else {
+            self.repository.create(&run).await
+        };
+        if let Err(error) = admitted {
             span.finish(Outcome::Failed);
             let _ = sender.send(Err(error));
             return;
