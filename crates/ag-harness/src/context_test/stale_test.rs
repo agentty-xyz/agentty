@@ -566,6 +566,73 @@ fn a_repeat_result_is_cleared_with_the_result_it_points_to() {
 }
 
 #[test]
+fn a_cut_repeat_result_is_cleared_with_the_result_it_points_to() {
+    // Arrange
+    // A long call identifier makes the repeat note heavy enough to cut.
+    let first = format!("call_{}", "1".repeat(80));
+    let mut request = request(Vec::new(), Vec::new(), "inspect");
+    record(
+        &mut request,
+        &read_call_of(&first, "a.txt"),
+        "x".repeat(3000),
+    );
+    record(
+        &mut request,
+        &read_call_of("a2", "a.txt"),
+        repeated_read_result(&first),
+    );
+    let mut fit = ContextFit::default();
+
+    // Act
+    // The repeat is the new latest round, so it is cut to a quarter of the
+    // budget before the result it points to is elided.
+    let (fitted, activity) = fit_owned(&mut fit, 1000, &request);
+
+    // Assert
+    let repeat = result_json(&fitted.messages()[4]);
+    assert!(
+        repeat["context_cleared"]
+            .as_str()
+            .expect("notice text")
+            .contains("repeated an earlier read")
+    );
+    assert_eq!(activity.elided_results(), 2);
+    assert_eq!(activity.truncated_results(), 0);
+}
+
+#[test]
+fn a_repeat_of_a_superseded_result_points_to_the_newer_read() {
+    // Arrange
+    let mut request = request(Vec::new(), Vec::new(), "inspect");
+    record(&mut request, &read_call_of("a1", "a.txt"), "x".repeat(3000));
+    record(
+        &mut request,
+        &read_call_of("a2", "a.txt"),
+        repeated_read_result("a1"),
+    );
+    record(&mut request, &read_call_of("a3", "a.txt"), "y".repeat(500));
+    for index in 0..KEEP_RECENT_RESULTS {
+        record_read_round(&mut request, &format!("n{index}"), 10);
+    }
+    let budget_weight = weigh(&request) - 1;
+
+    // Act
+    let (fitted, activity) = fit_owned(&mut ContextFit::default(), budget_weight, &request);
+
+    // Assert
+    assert_eq!(activity.superseded_results(), 1);
+    let repeat = result_json(&fitted.messages()[4]);
+    assert_eq!(repeat["superseded_by"], json!("a3"));
+    assert!(
+        repeat["context_cleared"]
+            .as_str()
+            .expect("notice text")
+            .contains("Use that newer result")
+    );
+    assert_eq!(fitted.messages()[6], request.messages()[6]);
+}
+
+#[test]
 fn deferred_read_results_repeat_the_exact_call() {
     // Arrange
     let arguments = arguments(&json!({"path": "src/lib.rs", "offset": 40, "limit": 20}));

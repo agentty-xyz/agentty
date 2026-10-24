@@ -9,6 +9,7 @@ use super::support::{
 use crate::context::{
     ContextBudget, ContextEstimator, ContextFit, DROP_TARGET_PERCENT, HeuristicContextEstimator,
     LATEST_ROUND_CAP_PERCENT, RESULT_CAP_PERCENT, cleared_result_notice, read_target,
+    repeated_read_result,
 };
 use crate::model::{ModelMessage, ModelRequest};
 use crate::tool::ToolCall;
@@ -442,4 +443,106 @@ fn read_notice_without_a_known_target_omits_the_target() {
     let notice: serde_json::Value = serde_json::from_str(&notice).expect("notice json");
     assert!(notice.get("read").is_none());
     assert_eq!(notice["original_bytes"], content.len());
+}
+
+#[test]
+fn a_refit_under_a_lower_budget_caps_the_latest_round_instead_of_dropping_rounds() {
+    // Arrange
+    let mut request = request(Vec::new(), Vec::new(), "inspect");
+    record_read_round(&mut request, "older0", 300);
+    record_read_round(&mut request, "older1", 300);
+    let bash = bash_command_call("b0", "cargo test");
+    request.record_tool_call(bash.clone());
+    request.record_tool_result(
+        &bash,
+        json!({"exit_code": 0, "stdout": "y".repeat(2000)}).to_string(),
+    );
+    let mut fit = ContextFit::default();
+    let (whole, _) = fit
+        .fit(&ByteEstimator, budget(3000), &request, None)
+        .map(sent)
+        .expect("the request fits whole");
+
+    // Act
+    // The provider rejected the request, so the same request is fitted again
+    // under a lower ceiling.
+    let (fitted, activity) = fit
+        .fit(&ByteEstimator, budget(2400), &request, None)
+        .map(sent)
+        .expect("fits after capping the latest result");
+
+    // Assert
+    assert_eq!(whole, None);
+    let fitted = fitted.expect("reduced copy");
+    assert_eq!(activity.truncated_results(), 1);
+    assert_eq!(activity.dropped_tool_calls(), 0);
+    assert_eq!(calls_in(fitted.messages()).len(), 3);
+    assert!(ByteEstimator.message_weight(fitted.messages().last().expect("bash result")) <= 600);
+}
+
+#[test]
+fn a_repeat_of_a_cut_result_is_cleared() {
+    // Arrange
+    let mut request = request(Vec::new(), Vec::new(), "inspect");
+    let calls = vec![read_call_of("a1", "a.txt"), read_call_of("a2", "a.txt")];
+    request.record_tool_calls(calls.clone());
+    request.record_tool_result(&calls[0], "x".repeat(5000));
+    request.record_tool_result(&calls[1], repeated_read_result("a1"));
+
+    // Act
+    let (fitted, activity) = ContextFit::default()
+        .fit(&ByteEstimator, budget(2000), &request, None)
+        .map(sent)
+        .expect("fits after capping");
+
+    // Assert
+    let fitted = fitted.expect("reduced copy");
+    assert_eq!(activity.truncated_results(), 1);
+    assert!(
+        result_json(&fitted.messages()[2])
+            .get("context_truncated")
+            .is_some()
+    );
+    let repeat = result_json(&fitted.messages()[3]);
+    assert!(
+        repeat["context_cleared"]
+            .as_str()
+            .expect("notice text")
+            .contains("cleared or cut")
+    );
+}
+
+#[test]
+fn a_repeat_of_a_result_cut_as_the_last_resort_is_cleared() {
+    // Arrange
+    // A long call identifier makes the repeat note weigh more than the
+    // notice that replaces it.
+    let first = format!("call_{}", "1".repeat(80));
+    let mut request = request(Vec::new(), Vec::new(), &"i".repeat(1100));
+    let calls = vec![read_call_of(&first, "a.txt"), read_call_of("a2", "a.txt")];
+    request.record_tool_calls(calls.clone());
+    request.record_tool_result(&calls[0], "x".repeat(400));
+    request.record_tool_result(&calls[1], repeated_read_result(&first));
+
+    // Act
+    let (fitted, activity) = ContextFit::default()
+        .fit(&ByteEstimator, budget(2000), &request, None)
+        .map(sent)
+        .expect("fits after cutting the latest result");
+
+    // Assert
+    let fitted = fitted.expect("reduced copy");
+    assert!(weigh(&ByteEstimator, fitted.messages()) <= 2000);
+    assert_eq!(activity.truncated_results(), 1);
+    assert!(
+        result_json(&fitted.messages()[2])
+            .get("context_truncated")
+            .is_some()
+    );
+    assert!(
+        result_json(&fitted.messages()[3])["context_cleared"]
+            .as_str()
+            .expect("notice text")
+            .contains("cleared or cut")
+    );
 }

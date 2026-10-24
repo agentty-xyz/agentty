@@ -97,8 +97,7 @@ tail excerpt; `read` results already meet both shares when they run, so only a b
 that calibration lowered since cuts one. A result sent whole before is never cut, only
 cleared. The request is then reduced to 50% of its capacity, oldest first, with replayed
 history before the current turn: the other tool results become tool-aware notices (a
-`read` notice names its target, and a repeated-read note pointing to a cleared result
-becomes a notice to read again), then each assistant message loses its reasoning
+`read` notice names its target), then each assistant message loses its reasoning
 (providers that replay reasoning still receive a non-empty placeholder) and its `write`
 patches (a note on their recorded outcome) in one rewrite. The rounds holding the newest
 five results keep their results, reasoning, and patches until everything older is
@@ -110,7 +109,9 @@ all its results, down to 70%; a dropped round also loses the text the model wrot
 its calls, so dropping stops short of the clearing target. Each reduction that drops
 rounds names them in one bounded note appended after the earlier notes, which counts the
 removed calls, names the writes they applied and the commands they ran, and lists their
-distinct read targets to re-read only if still needed. Tool calls keep their
+distinct read targets to re-read only if still needed. A repeated-read note whose
+earlier result is cleared, cut, or summarized becomes a notice that it is no longer
+shown whole, naming the newer read when one returned it again. Tool calls keep their
 identifiers, so tool groups stay well-formed, and the text the model wrote beside them
 is never cleared, so its notes on what it found outlive the cleared results and leave
 only with their dropped round. Each reduction step is a watermark into the append-only

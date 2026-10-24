@@ -5,6 +5,7 @@ use super::support::{
 };
 use crate::context::{
     ContextBudget, ContextFit, FitStep, MAX_SUMMARY_FAILURES_PER_TURN, SUMMARY_KEEP_TAIL_PERCENT,
+    repeated_read_result,
 };
 use crate::lifecycle::ContextSummaryTrigger;
 use crate::model::{ModelMessage, ModelRequest};
@@ -449,4 +450,98 @@ fn reductions_after_an_overflow_summary_skip_the_summarized_rounds() {
     assert!(weigh(fitted.messages()) <= 8_000);
     assert!(note_text(&fitted.messages()[1]).contains("alpha in r0"));
     assert_eq!(activity.summarized_tool_calls(), 5);
+}
+
+#[test]
+fn a_summary_merges_the_notes_of_earlier_drops_into_its_note() {
+    // Arrange
+    let mut request = request(Vec::new(), Vec::new(), "loop");
+    let mut fit = ContextFit::default();
+    // Commands are never shortened, so only dropping rounds fits them, one
+    // note per fit that drops.
+    for index in 0..10 {
+        let call = bash_command_call(
+            &format!("c{index}"),
+            &format!("echo {index} {}", "x".repeat(990)),
+        );
+        request.record_tool_call(call.clone());
+        request.record_tool_result(&call, r#"{"exit_code":0}"#.to_string());
+        fit.fit(&ByteEstimator, budget(6000), &request, None)
+            .map(sent)
+            .expect("fits after dropping rounds");
+    }
+    let (before, before_activity) = fit
+        .fit(&ByteEstimator, budget(6000), &request, None)
+        .map(sent)
+        .expect("refits");
+    let before = before.expect("reduced copy");
+    assert!(matches!(&before.messages()[2], ModelMessage::User(_)));
+    let job = summary_job(
+        &mut fit,
+        budget(6000),
+        &request,
+        Some(ContextSummaryTrigger::ContextOverflow),
+    );
+
+    // Act
+    let summarized = fit
+        .install_summary(&ByteEstimator, &request, &job, summary("all echoed"))
+        .expect("summary installed");
+    let (fitted, activity) = fit
+        .fit(&ByteEstimator, budget(6000), &request, None)
+        .map(sent)
+        .expect("fits after the summary");
+
+    // Assert
+    let fitted = fitted.expect("reduced copy");
+    let note = note_text(&fitted.messages()[1]);
+    assert!(note.contains("all echoed"));
+    let dropped = before_activity.dropped_tool_calls();
+    assert!(note.starts_with(&format!("[harness] {} earlier", dropped + summarized)));
+    // Commands of both drop notes and of the summarized rounds, within the
+    // bound on named effects.
+    for index in 0..8 {
+        assert!(note.contains(&format!("`echo {index} ")));
+    }
+    assert!(note.contains("and 1 more"));
+    assert!(!matches!(&fitted.messages()[2], ModelMessage::User(_)));
+    // The summary covers only the rounds still sent; the earlier ones keep
+    // counting as dropped without one.
+    assert_eq!(activity.summarized_tool_calls(), summarized);
+    assert_eq!(activity.dropped_tool_calls(), dropped);
+}
+
+#[test]
+fn a_repeat_of_a_summarized_result_is_cleared() {
+    // Arrange
+    let mut request = read_rounds(20, 1000);
+    let repeat = read_call_of("again", "r0.txt");
+    request.record_tool_call(repeat.clone());
+    request.record_tool_result(&repeat, repeated_read_result("r0"));
+    record_read_round(&mut request, "latest", 10);
+    let mut fit = ContextFit::default();
+    let job = summary_job(&mut fit, budget(20_000), &request, PROACTIVE);
+    assert!(job.range().contains(&round_start(0)));
+
+    // Act
+    fit.install_summary(&ByteEstimator, &request, &job, summary("alpha in r0"))
+        .expect("summary installed");
+    let (fitted, _) = fit
+        .fit(&ByteEstimator, budget(20_000), &request, PROACTIVE)
+        .map(sent)
+        .expect("fits after the summary");
+
+    // Assert
+    let fitted = fitted.expect("reduced copy");
+    let repeat_result = &fitted.messages()[fitted.messages().len() - 3];
+    let ModelMessage::ToolResult {
+        call_id, content, ..
+    } = repeat_result
+    else {
+        std::panic::resume_unwind(Box::new(format!(
+            "repeat result expected, got {repeat_result:?}"
+        )));
+    };
+    assert_eq!(call_id, "again");
+    assert!(content.contains("repeated an earlier read whose result was since cleared or cut"));
 }

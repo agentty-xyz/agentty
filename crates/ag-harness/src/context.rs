@@ -97,9 +97,16 @@ const DEFERRED_READ_PREFIX: &str = r#"{"deferred":"#;
 
 /// Notice that replaces a repeated-read result once the earlier result it
 /// points to was cleared.
-const CLEARED_REPEAT_NOTICE: &str =
-    "This read repeated an earlier read whose result was since cleared to fit the context window, \
-     so it is no longer shown. If you still need it, read it again, narrowed with offset/limit.";
+const CLEARED_REPEAT_NOTICE: &str = "This read repeated an earlier read whose result was since \
+                                     cleared or cut to fit the context window, so it is not shown \
+                                     whole. If you still need it, read it again, narrowed with \
+                                     offset/limit.";
+
+/// Notice that replaces a repeated-read result once the earlier result it
+/// points to was cleared because a later read returned it again.
+const SUPERSEDED_REPEAT_NOTICE: &str =
+    "This read repeated an earlier read whose result was since cleared because a later read, \
+     named in superseded_by, returned it again. Use that newer result instead of reading it again.";
 
 /// Outcome fields of a `bash` or `write` result kept in its cleared notice.
 const OUTCOME_KEYS: [&str; 6] = [
@@ -659,6 +666,9 @@ pub(crate) struct ContextFit {
     /// Weight of the canonical messages synced so far, before any reduction.
     canonical_weight: u64,
     capped_results: usize,
+    /// Canonical index before which every result was considered for
+    /// capping by a fit that exceeded the budget.
+    capped_results_before: usize,
     /// Canonical index before which every call message's reasoning and
     /// `write` patches were considered for clearing.
     cleared_calls_before: usize,
@@ -786,7 +796,7 @@ impl ContextFit {
         let layout = Layout::new(request);
         let over = base.saturating_add(self.required) > budget_weight;
         let mut changed =
-            over && self.clear_stale_and_cap(estimator, budget, request, &layout, (base, synced));
+            over && self.clear_stale_and_cap(estimator, budget, request, &layout, base);
         if let Some(trigger) = summary
             && (forced
                 || (over
@@ -919,9 +929,16 @@ impl ContextFit {
         self.dropped_rounds.summary = Some(summary);
         self.dropped_rounds.end = range.end;
         self.reduced = true;
+        self.clear_repeats(
+            estimator,
+            request.messages(),
+            |pointed| range.contains(&pointed),
+            None,
+        );
         // Left-out messages are never reduced again, or their savings would
         // count twice.
         for watermark in [
+            &mut self.capped_results_before,
             &mut self.cleared_calls_before,
             &mut self.elided_results_before,
         ] {
@@ -962,18 +979,19 @@ impl ContextFit {
             .saturating_add(Self::capacity(budget).saturating_mul(percent) / 100)
     }
 
-    /// Elides superseded older results, then caps the oversized results the
-    /// latest round appended since the last fit, the reductions that precede
-    /// any summary, and returns whether any sent message changed. A result
-    /// sent before is never capped: that would rewrite the cached prefix
-    /// only to rewrite it again once the result is elided.
+    /// Elides superseded older results, then caps the oversized results of
+    /// the latest round that no earlier over-budget fit considered, the
+    /// reductions that precede any summary, and returns whether any sent
+    /// message changed. An older result is never capped: it was sent whole,
+    /// so capping it would rewrite the cached prefix only to rewrite it again
+    /// once the result is elided.
     fn clear_stale_and_cap(
         &mut self,
         estimator: &dyn ContextEstimator,
         budget: ContextBudget,
         request: &ModelRequest,
         layout: &Layout<'_>,
-        (base, synced): (u64, usize),
+        base: u64,
     ) -> bool {
         let mut changed = false;
         let mut tier = Tier {
@@ -988,7 +1006,7 @@ impl ContextFit {
         if self.cap_results(
             estimator,
             request,
-            (layout.latest_round, synced),
+            layout.latest_round,
             Self::capacity(budget),
         ) {
             changed = true;
@@ -1213,18 +1231,20 @@ impl ContextFit {
         start
     }
 
-    /// Cuts the latest round's tool results appended since the last fit,
-    /// from `synced`, to one common weight that keeps the round's results
+    /// Cuts the latest round's tool results that no earlier over-budget fit
+    /// considered to one common weight that keeps the round's results
     /// together within [`LATEST_ROUND_CAP_PERCENT`] of `capacity`, and each
     /// to at most [`RESULT_CAP_PERCENT`] (see [`Self::excerpt_within`]);
-    /// caches each excerpt so later requests carry it unchanged, and returns
-    /// whether any result was cut. Older results are only ever elided, so
+    /// caches each excerpt so later requests carry it unchanged, clears the
+    /// repeated-read results pointing to a cut result, and returns whether
+    /// any result was cut. A fit that only retries a rejected request still
+    /// considers its latest round. Older results are only ever elided, so
     /// none is rewritten twice.
     fn cap_results(
         &mut self,
         estimator: &dyn ContextEstimator,
         request: &ModelRequest,
-        (latest_round, synced): (usize, usize),
+        latest_round: usize,
         capacity: u64,
     ) -> bool {
         let messages = request.messages();
@@ -1238,8 +1258,10 @@ impl ContextFit {
             capacity.saturating_mul(LATEST_ROUND_CAP_PERCENT) / 100,
         )
         .min(result_cap);
-        let mut changed = false;
-        for (index, message) in messages.iter().enumerate().skip(synced.max(latest_round)) {
+        let start = self.capped_results_before.max(latest_round);
+        self.capped_results_before = messages.len();
+        let mut cut = Vec::new();
+        for (index, message) in messages.iter().enumerate().skip(start) {
             let ModelMessage::ToolResult {
                 call_id,
                 content,
@@ -1248,8 +1270,9 @@ impl ContextFit {
             else {
                 continue;
             };
-            let current = self.messages[index].weight;
-            if current <= cap {
+            let entry = &self.messages[index];
+            let current = entry.weight;
+            if current <= cap || entry.changes & Reduction::ElideResult.flag() != 0 {
                 continue;
             }
             let excerpt = Self::excerpt_within(estimator, (call_id, content, name), cap);
@@ -1261,11 +1284,12 @@ impl ContextFit {
                 entry.changes |= CAPPED_FLAG;
                 entry.reduced = Some(excerpt);
                 entry.weight = weight;
-                changed = true;
+                cut.push(index);
             }
         }
+        self.clear_repeats(estimator, messages, |pointed| cut.contains(&pointed), None);
 
-        changed
+        !cut.is_empty()
     }
 
     /// Returns the largest weight that, applied as a cap to each of
@@ -1377,8 +1401,8 @@ impl ContextFit {
     }
 
     /// Replaces the tool result at `index` with the notice that stands in
-    /// for it (see [`elided_result`]), and every unreduced repeated-read
-    /// result pointing to it with a notice that it is no longer shown;
+    /// for it (see [`elided_result`]), and every repeated-read result, whole
+    /// or cut, pointing to it with a notice that it is no longer shown;
     /// returns whether the result was elided.
     fn elide(
         &mut self,
@@ -1394,33 +1418,55 @@ impl ContextFit {
         if !self.replace(tier, index, reduced, &[Reduction::ElideResult]) {
             return false;
         }
-        let repeats: Vec<(usize, &str)> = (index + 1..tier.messages.len())
-            .filter_map(
-                |repeat| match (&self.messages[repeat], &tier.messages[repeat]) {
-                    (entry, ModelMessage::ToolResult { call_id, .. })
-                        if entry.changes == 0 && entry.repeats == Some(index) =>
-                    {
-                        Some((repeat, call_id.as_str()))
-                    }
-                    _ => None,
-                },
-            )
+        self.clear_repeats(
+            tier.estimator,
+            tier.messages,
+            |pointed| pointed == index,
+            supersession.map(|supersession| supersession.by),
+        );
+
+        true
+    }
+
+    /// Replaces every repeated-read result still in the request, and not yet
+    /// cleared, that points to an earlier result `pointed` selects with a
+    /// notice that the result is no longer shown whole, naming
+    /// `superseded_by` when a later read returned it again.
+    fn clear_repeats(
+        &mut self,
+        estimator: &dyn ContextEstimator,
+        messages: &[ModelMessage],
+        pointed: impl Fn(usize) -> bool,
+        superseded_by: Option<&str>,
+    ) {
+        let repeats: Vec<(usize, &str)> = (self.dropped_rounds.end..messages.len())
+            .filter_map(|repeat| match (&self.messages[repeat], &messages[repeat]) {
+                (entry, ModelMessage::ToolResult { call_id, .. })
+                    if entry.changes & Reduction::ElideResult.flag() == 0
+                        && entry.repeats.is_some_and(&pointed) =>
+                {
+                    Some((repeat, call_id.as_str()))
+                }
+                _ => None,
+            })
             .collect();
         for (repeat, call_id) in repeats {
-            let notice = cleared_repeat_result(call_id, &self.records);
-            let weight = tier.estimator.message_weight(&notice);
+            let notice = cleared_repeat_result(call_id, &self.records, superseded_by);
+            let weight = estimator.message_weight(&notice);
             let entry = &mut self.messages[repeat];
             self.required = self
                 .required
                 .saturating_sub(entry.weight)
                 .saturating_add(weight);
             self.reduced_counts[Reduction::ElideResult.slot()] += 1;
+            if entry.changes & CAPPED_FLAG != 0 {
+                entry.changes &= !CAPPED_FLAG;
+                self.capped_results -= 1;
+            }
             entry.changes |= Reduction::ElideResult.flag();
             entry.reduced = Some(notice);
             entry.weight = weight;
         }
-
-        true
     }
 
     /// Clears the reasoning and `write` patches of the call messages, and
@@ -1619,7 +1665,8 @@ impl ContextFit {
     /// Cuts the latest round's tool results, largest first, to the longest
     /// excerpt (see [`Self::excerpt_within`]) that brings the request within
     /// `budget_weight`, caches each cut so later requests carry it
-    /// unchanged, and returns whether any result was cut.
+    /// unchanged, clears the repeated-read results pointing to a cut result,
+    /// and returns whether any result was cut.
     fn cut_latest_round(
         &mut self,
         estimator: &dyn ContextEstimator,
@@ -1644,12 +1691,9 @@ impl ContextFit {
                 )),
                 _ => None,
             })
-            .filter(|(index, ..)| {
-                self.messages[*index].changes & Reduction::ElideResult.flag() == 0
-            })
             .collect();
         results.sort_by_key(|(index, ..)| Reverse(self.messages[*index].weight));
-        let mut changed = false;
+        let mut cut = Vec::new();
         for (index, call_id, content, name) in results {
             let required = base.saturating_add(self.required);
             if required <= budget_weight {
@@ -1659,7 +1703,10 @@ impl ContextFit {
             let allowed = current.saturating_sub(required - budget_weight);
             let excerpt = Self::excerpt_within(estimator, (call_id, content, name), allowed);
             let weight = estimator.message_weight(&excerpt);
-            if weight < current {
+            // A repeated-read result cleared with the result it points to
+            // keeps its notice.
+            let cleared = self.messages[index].changes & Reduction::ElideResult.flag() != 0;
+            if weight < current && !cleared {
                 self.required -= current - weight;
                 let entry = &mut self.messages[index];
                 if entry.changes & CAPPED_FLAG == 0 {
@@ -1668,11 +1715,17 @@ impl ContextFit {
                 }
                 entry.reduced = Some(excerpt);
                 entry.weight = weight;
-                changed = true;
+                cut.push(index);
+                self.clear_repeats(
+                    estimator,
+                    request.messages(),
+                    |pointed| pointed == index,
+                    None,
+                );
             }
         }
 
-        changed
+        !cut.is_empty()
     }
 
     /// Replaces the patches of the latest round's `write` calls with a note
@@ -2324,17 +2377,23 @@ fn repeated_call(message: &ModelMessage) -> Option<String> {
 }
 
 /// Returns the notice that replaces the result of the repeated read
-/// `call_id` once the earlier result it points to was cleared, naming the
-/// read's target.
-fn cleared_repeat_result(call_id: &str, records: &CallRecords) -> ModelMessage {
+/// `call_id` once the earlier result it points to is no longer shown whole,
+/// naming the read's target and any later call that returned it again.
+fn cleared_repeat_result(
+    call_id: &str,
+    records: &CallRecords,
+    superseded_by: Option<&str>,
+) -> ModelMessage {
     let mut notice = Map::new();
-    notice.insert("context_cleared".to_string(), CLEARED_REPEAT_NOTICE.into());
+    let text = superseded_by.map_or(CLEARED_REPEAT_NOTICE, |_| SUPERSEDED_REPEAT_NOTICE);
+    notice.insert("context_cleared".to_string(), text.into());
     notice.extend(
         records
             .read_targets
             .get(call_id)
             .map(|target| ("read".to_string(), Value::from(target.as_str()))),
     );
+    notice.extend(superseded_by.map(|by| ("superseded_by".to_string(), Value::from(by))));
 
     ModelMessage::ToolResult {
         call_id: call_id.to_string(),
