@@ -342,6 +342,7 @@ impl ModelClient {
             &call.arguments_json().map_err(ModelError::request)?,
             call.reasoning_content().map(str::to_string),
         )
+        .and_then(|routed| routed.with_assistant_text(call.assistant_text().map(str::to_string)))
         .map_err(Self::from_router_error)
     }
 
@@ -364,7 +365,8 @@ impl ModelClient {
                             call.name(),
                             &call.arguments_json(),
                             call.reasoning_content().map(str::to_string),
-                        )
+                        )?
+                        .with_assistant_text(call.assistant_text().map(str::to_string))
                     })
                     .collect::<Result<Vec<_>, _>>()?;
                 let response = if calls.len() == 1 {
@@ -829,6 +831,7 @@ impl ModelMessage {
                     .saturating_add(call.name().len())
                     .saturating_add(arguments)
                     .saturating_add(call.reasoning_content().map_or(0, str::len))
+                    .saturating_add(call.assistant_text().map_or(0, str::len))
             }
             Self::AssistantToolCalls(calls) => calls.iter().fold(0, |bytes, call| {
                 let arguments = call
@@ -840,6 +843,7 @@ impl ModelMessage {
                     .saturating_add(call.name().len())
                     .saturating_add(arguments)
                     .saturating_add(call.reasoning_content().map_or(0, str::len))
+                    .saturating_add(call.assistant_text().map_or(0, str::len))
             }),
             Self::ToolResult {
                 call_id,

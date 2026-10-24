@@ -414,8 +414,9 @@ impl HistoryTurn {
     /// Returns this turn with its tool traffic reduced the way an
     /// over-budget request reduces older rounds: tool results become
     /// tool-aware notices, assistant reasoning a placeholder, and `write`
-    /// patches a note on their outcome. Tool calls keep their identifiers and
-    /// other arguments, so tool groups stay well-formed.
+    /// patches a note on their outcome. Tool calls keep their identifiers,
+    /// other arguments, and assistant text, so tool groups stay well-formed
+    /// and the model's notes on what it found survive.
     pub(crate) fn elided(&self) -> Self {
         let records = CallRecords::new(&self.messages);
         let messages = self
@@ -2201,7 +2202,8 @@ fn reduce_calls(
 }
 
 /// Rebuilds a tool call with its provider reasoning replaced by
-/// [`CLEARED_REASONING`], keeping its identifier and arguments.
+/// [`CLEARED_REASONING`], keeping its identifier, arguments, and assistant
+/// text.
 fn cleared_reasoning_call(call: &ToolCall) -> Option<ToolCall> {
     call.reasoning_content()
         .filter(|reasoning| reasoning.len() > CLEARED_REASONING.len())?;
@@ -2212,11 +2214,13 @@ fn cleared_reasoning_call(call: &ToolCall) -> Option<ToolCall> {
         &call.arguments_json().ok()?,
         Some(CLEARED_REASONING.to_string()),
     )
+    .and_then(|cleared| cleared.with_assistant_text(call.assistant_text().map(str::to_string)))
     .ok()
 }
 
 /// Rebuilds a `write` call with its patch replaced by a note on the outcome
-/// its result recorded, keeping its identifier, path, and reasoning.
+/// its result recorded, keeping its identifier, path, reasoning, and
+/// assistant text.
 fn shrunk_write_call(
     call: &ToolCall,
     write_outcomes: &HashMap<String, String>,
@@ -2242,6 +2246,7 @@ fn shrunk_write_call(
         &json!({"patch": patch, "path": arguments.path()}).to_string(),
         call.reasoning_content().map(str::to_string),
     )
+    .and_then(|shrunk| shrunk.with_assistant_text(call.assistant_text().map(str::to_string)))
     .ok()
 }
 

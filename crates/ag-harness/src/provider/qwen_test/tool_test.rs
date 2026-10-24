@@ -255,7 +255,7 @@ async fn rejects_unsupported_tool_type_and_name() {
 }
 
 #[tokio::test]
-async fn accepts_bounded_content_with_tool_calls() {
+async fn keeps_bounded_content_with_tool_calls_as_assistant_text() {
     // Arrange
     let server = MockServer::start().await;
     mount_tool_response(
@@ -276,14 +276,12 @@ async fn accepts_bounded_content_with_tool_calls() {
     let response = qwen(&server)
         .complete(read_request("inspect the manifest"))
         .await
-        .expect("incidental tool-call content should be ignored");
+        .expect("tool-call content should be kept");
 
     // Assert
-    assert_eq!(
-        response
-            .call()
-            .expect("response should contain a tool call")
-            .id(),
-        "call_content"
-    );
+    let call = response
+        .call()
+        .expect("response should contain a tool call");
+    assert_eq!(call.id(), "call_content");
+    assert_eq!(call.assistant_text(), Some("I will inspect the manifest."));
 }

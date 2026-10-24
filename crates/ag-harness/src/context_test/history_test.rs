@@ -12,12 +12,16 @@ use crate::context::{
 use crate::model::ModelMessage;
 use crate::tool::ToolCall;
 
+const NOTES: &str = "name.txt holds the name; next I edit src/lib.rs.";
+
 fn retained(turn: &HistoryTurn) -> usize {
     turn.messages.iter().map(ModelMessage::retained_bytes).sum()
 }
 
 fn tool_heavy_turn(text: &str) -> HistoryTurn {
-    let read = reasoned_read_call("r1", Some(&"r".repeat(500)));
+    let read = reasoned_read_call("r1", Some(&"r".repeat(500)))
+        .with_assistant_text(Some(NOTES.to_string()))
+        .expect("bounded text");
     let write = write_call("w1", &format!("@@ -1 +1 @@\n-a\n+{}\n", "b".repeat(500)));
     HistoryTurn::from(vec![
         ModelMessage::User(text.to_string()),
@@ -54,6 +58,7 @@ fn elided_turns_clear_tool_traffic_but_keep_well_formed_groups() {
         ["r1", "w1"]
     );
     assert_eq!(calls[0].reasoning_content(), Some(CLEARED_REASONING));
+    assert_eq!(calls[0].assistant_text(), Some(NOTES));
     assert!(
         calls[1]
             .write_arguments()

@@ -57,6 +57,7 @@ const MALFORMED_ARGUMENTS_KEY: &str = "malformed_arguments";
 pub struct ToolCall {
     arguments: Arguments,
     arguments_json: String,
+    assistant_text: Option<String>,
     id: String,
     name: String,
     reasoning_content: Option<String>,
@@ -74,6 +75,10 @@ impl fmt::Debug for ToolCall {
             .debug_struct("ToolCall")
             .field("arguments", &self.arguments)
             .field("arguments_json", &self.arguments_json)
+            .field(
+                "assistant_text",
+                &self.assistant_text.as_ref().map(|_| "[REDACTED]"),
+            )
             .field("id", &self.id)
             .field("name", &self.name)
             .field(
@@ -120,10 +125,29 @@ impl ToolCall {
         Ok(Self {
             arguments,
             arguments_json,
+            assistant_text: None,
             id,
             name: name.to_string(),
             reasoning_content,
         })
+    }
+
+    /// Attaches the assistant text the model wrote beside its calls, such as
+    /// running notes on what it found so far. Text that is empty or only
+    /// whitespace is not kept.
+    ///
+    /// A response's text belongs to its first call, like its reasoning, and
+    /// is replayed as the `content` of that assistant tool-call message.
+    ///
+    /// # Errors
+    /// Returns [`ModelError::ResponseContentTooLarge`] for oversized text.
+    pub fn with_assistant_text(mut self, text: Option<String>) -> Result<Self, ModelError> {
+        if let Some(text) = &text {
+            schema::ensure_content_size(text).map_err(ModelError::from)?;
+        }
+        self.assistant_text = text.filter(|text| !text.trim().is_empty());
+
+        Ok(self)
     }
 
     /// Returns the parsed arguments object, or `None` when the arguments
@@ -174,6 +198,11 @@ impl ToolCall {
     /// Returns provider-specific reasoning content for history replay.
     pub fn reasoning_content(&self) -> Option<&str> {
         self.reasoning_content.as_deref()
+    }
+
+    /// Returns the assistant text written beside this call, if any.
+    pub fn assistant_text(&self) -> Option<&str> {
+        self.assistant_text.as_deref()
     }
 }
 

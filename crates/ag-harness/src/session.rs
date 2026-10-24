@@ -1803,9 +1803,14 @@ struct StoredAssistantReasoningOwned {
 /// One durable tool call. Decoded arguments are stored as their JSON object;
 /// malformed arguments are stored as a JSON string holding the model's raw
 /// text, so replay keeps them verbatim.
+///
+/// Assistant text is optional and omitted when absent, so payloads stored
+/// before it existed decode unchanged.
 #[derive(Deserialize, Serialize)]
 struct StoredToolCall {
     arguments: Value,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    assistant_text: Option<String>,
     id: String,
     name: String,
     reasoning_content: Option<String>,
@@ -1830,13 +1835,24 @@ impl StoredToolCall {
     fn with_arguments(call: &ToolCall, arguments: Value) -> Self {
         Self {
             arguments,
+            assistant_text: call.assistant_text().map(str::to_string),
             id: call.id().to_string(),
             name: call.name().to_string(),
             reasoning_content: call.reasoning_content().map(str::to_string),
         }
     }
 
-    fn into_call(self) -> Result<ToolCall, SessionError> {
+    fn into_call(mut self) -> Result<ToolCall, SessionError> {
+        let assistant_text = self.assistant_text.take();
+
+        self.into_call_without_text()?
+            .with_assistant_text(assistant_text)
+            .map_err(|error| SessionError::InvalidData {
+                reason: error.to_string(),
+            })
+    }
+
+    fn into_call_without_text(self) -> Result<ToolCall, SessionError> {
         if let Value::String(raw) = &self.arguments {
             return ToolCall::from_json(self.id, &self.name, raw, self.reasoning_content).map_err(
                 |error| SessionError::InvalidData {

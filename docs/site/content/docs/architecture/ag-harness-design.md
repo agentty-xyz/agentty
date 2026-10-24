@@ -96,16 +96,17 @@ recorded outcome, then the oldest replayed turns are dropped, then the current t
 oldest tool rounds are dropped whole, each call message with all its results, behind one
 bounded note that counts the removed calls, names the writes they applied and the
 commands they ran, and lists their distinct read targets to re-read only if still
-needed. Tool calls keep their identifiers, so tool groups stay well-formed, and the
-latest tool round is never reduced by these steps. Each step is a watermark into the
-append-only canonical messages that later requests replay, so successive requests share
-a stable prefix and reduce further only when the budget is exceeded again; each reduced
-message is cached, so a request between watermark advances only weighs and appends its
-new messages. If the request still does not fit, the latest round's largest results are
-cut further to a head and tail excerpt that asks for a narrower read, and as the last
-resort its `write` patches are replaced by their recorded outcome; only when even that
-fails does the turn fail typed. Each `ModelRequestActivity` reports the reductions its
-request carried.
+needed. Tool calls keep their identifiers, so tool groups stay well-formed, and the text
+the model wrote beside them is never cleared, so its notes on what it found outlive the
+cleared results and leave only with their dropped round. The latest tool round is never
+reduced by these steps. Each step is a watermark into the append-only canonical messages
+that later requests replay, so successive requests share a stable prefix and reduce
+further only when the budget is exceeded again; each reduced message is cached, so a
+request between watermark advances only weighs and appends its new messages. If the
+request still does not fit, the latest round's largest results are cut further to a head
+and tail excerpt that asks for a narrower read, and as the last resort its `write`
+patches are replaced by their recorded outcome; only when even that fails does the turn
+fail typed. Each `ModelRequestActivity` reports the reductions its request carried.
 
 With `ContextSummaryPolicy::Enabled`, a request that still exceeds 70% of its capacity
 after superseded results are cleared and oversized results capped first summarizes the
@@ -262,10 +263,11 @@ a stopped turn keeps everything it already did.
   bounds every later request. `compact` publishes a schema-validated summary checkpoint
   that request projection replays ahead of the remaining recent turns. Its source is the
   previous summary and the oldest uncovered turns, loaded oldest first within the
-  history byte limit and rendered as JSON lines that keep tool-call arguments and bound
-  every text. The newest turns are dropped until the source fits the context budget, and
-  the checkpoint covers exactly the rendered turns, so the rest stay uncovered for a
-  later call. A summary that is no smaller than its source is rejected.
+  history byte limit and rendered as JSON lines that keep tool-call arguments and the
+  assistant text beside them and bound every text. The newest turns are dropped until
+  the source fits the context budget, and the checkpoint covers exactly the rendered
+  turns, so the rest stay uncovered for a later call. A summary that is no smaller than
+  its source is rejected.
 - Every harness has an approximate `ContextBudget`, passed to `Harness::new` or derived
   from its registration's `ModelProfile`: requests keep the most recent turns that fit,
   each whole, with its tool traffic replaced by notices, or as its input and final
@@ -360,15 +362,20 @@ API's generic "The request contains invalid parameters" message, which it return
 for an overflow while every other validation failure names its parameter. Model content
 is parsed as one JSON object; content that wraps the object in Markdown fences or
 surrounding prose is accepted when the embedded object parses, and every accepted value
-is still validated against the requested schema. Invalid content is reported with the
-parser diagnostic, the leading character, and the length, never the content itself. A
-final output rejected as invalid JSON or for violating the schema is re-requested up to
-twice in the same turn: the engine appends a request-only feedback message carrying that
-bounded diagnostic and asking for a single JSON value, and the follow-up request goes
-through the same context fitting. Neither the rejected output nor the feedback is
-journaled, because only finished, accepted exchanges belong in replayed history;
-`TurnReport::output_corrections` counts the retries, and a third rejection fails the
-turn with the original error type.
+is still validated against the requested schema. Text a model writes beside its tool
+calls, such as running notes, is kept on the response's first call as
+`ToolCall::assistant_text` within the same content limit; blank text is not kept. It is
+journaled with the call, weighed in its message (declared estimator parameters were
+fitted without it; their margins absorb it), and replayed as that assistant message's
+`content`, which Kimi, Muse, and Qwen all accept beside `tool_calls`. Invalid content is
+reported with the parser diagnostic, the leading character, and the length, never the
+content itself. A final output rejected as invalid JSON or for violating the schema is
+re-requested up to twice in the same turn: the engine appends a request-only feedback
+message carrying that bounded diagnostic and asking for a single JSON value, and the
+follow-up request goes through the same context fitting. Neither the rejected output nor
+the feedback is journaled, because only finished, accepted exchanges belong in replayed
+history; `TurnReport::output_corrections` counts the retries, and a third rejection
+fails the turn with the original error type.
 
 A tool call whose arguments fail local decoding, such as invalid JSON, an unknown or
 misspelled field, or a wrong type beyond the numeric-string coercion, is kept as a

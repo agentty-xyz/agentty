@@ -299,11 +299,17 @@ fn render_messages_bounds_text_results_and_arguments() {
     // Arrange
     let long_command = format!("echo {}", "a".repeat(3 * MAX_SOURCE_ARGUMENT_BYTES));
     let arguments = json!({"command": long_command}).to_string();
-    let call = ToolCall::from_json("call-1".to_string(), "bash", &arguments, None).expect("call");
     let long_text = format!("start {} end", "b".repeat(2 * MAX_SOURCE_TEXT_BYTES));
+    let call = ToolCall::from_json("call-1".to_string(), "bash", &arguments, None)
+        .and_then(|call| call.with_assistant_text(Some(long_text.clone())))
+        .expect("call");
     let messages = [
         ModelMessage::User(long_text.clone()),
         ModelMessage::AssistantToolCall(call),
+        ModelMessage::AssistantToolCalls(vec![
+            ToolCall::from_json("call-2".to_string(), "bash", r#"{"command":"ls"}"#, None)
+                .expect("call"),
+        ]),
         ModelMessage::ToolResult {
             call_id: "call-1".to_string(),
             content: long_text,
@@ -330,9 +336,14 @@ fn render_messages_bounds_text_results_and_arguments() {
         .expect("command");
     assert!(command.len() < MAX_SOURCE_ARGUMENT_BYTES + 64);
     assert!(command.starts_with("echo "));
-    let result = rendered[2]["result"].as_str().expect("result");
+    let notes = rendered[1]["text"].as_str().expect("assistant text");
+    assert!(notes.len() < MAX_SOURCE_TEXT_BYTES + 64);
+    assert!(notes.starts_with("start "));
+    assert_eq!(rendered[2]["text"], Value::Null);
+    assert_eq!(rendered[2]["tool_calls"][0]["call"], json!(2));
+    let result = rendered[3]["result"].as_str().expect("result");
     assert!(result.len() < MAX_SOURCE_TEXT_BYTES + 64);
-    assert_eq!(rendered[3]["call"], Value::Null);
+    assert_eq!(rendered[4]["call"], Value::Null);
 }
 
 #[test]

@@ -273,6 +273,91 @@ async fn returns_malformed_tool_calls_and_replays_them_as_json_objects()
         serde_json::from_str::<Value>(wire)?,
         json!({"malformed_arguments": raw})
     );
+    assert!(replayed["content"].is_null());
+
+    Ok(())
+}
+
+#[tokio::test]
+async fn keeps_assistant_text_beside_tool_calls_and_replays_it_as_content()
+-> Result<(), Box<dyn std::error::Error>> {
+    // Arrange
+    let notes = "Notes: src/a.rs defines alpha_one. Next I read src/b.rs.";
+    let cases = [
+        (Provider::Kimi, "kimi/kimi-k2.6", Some("session-1")),
+        (Provider::Muse, "muse/muse-spark-1.3", Some("session-1")),
+        (Provider::Qwen, "qwen/qwen3.8-max", None),
+    ];
+    for (provider, model, sent_cache_key) in cases {
+        let server = MockServer::start().await;
+        Mock::given(method("POST"))
+            .and(path("/v1/chat/completions"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(json!({
+                "choices": [{
+                    "finish_reason": "tool_calls",
+                    "message": {"content": notes, "tool_calls": [
+                        {"id": "call-1", "type": "function",
+                         "function": {"name": "lookup", "arguments": "{\"id\":1}"}},
+                        {"id": "call-2", "type": "function",
+                         "function": {"name": "lookup", "arguments": "{\"id\":2}"}}
+                    ]}
+                }]
+            })))
+            .expect(2)
+            .mount(&server)
+            .await;
+        let mut request = request(model)?;
+        if let ag_router::Task::Chat(chat) = &mut request.task {
+            chat.tools.push(ToolDefinition::new(
+                "lookup",
+                "Look up a record",
+                json!({"type":"object"}),
+            ));
+        }
+        request.options.prompt_cache_key = Some("session-1".to_string());
+        let router = router(provider, &server)?;
+
+        // Act
+        let Completion::ToolCalls { calls, .. } = router.execute(request.clone()).await? else {
+            return Err("expected tool calls".into());
+        };
+        if let ag_router::Task::Chat(chat) = &mut request.task {
+            chat.messages
+                .push(ModelMessage::AssistantToolCalls(calls.clone()));
+            for call in &calls {
+                chat.messages.push(ModelMessage::ToolResult {
+                    call_id: call.id().to_string(),
+                    content: "cleared".to_string(),
+                    name: "lookup".to_string(),
+                });
+            }
+        }
+        router.execute(request).await?;
+        let requests = server
+            .received_requests()
+            .await
+            .ok_or("request recording disabled")?;
+        let body: Value = serde_json::from_slice(&requests[1].body)?;
+        let replayed = body["messages"]
+            .as_array()
+            .and_then(|messages| {
+                messages
+                    .iter()
+                    .find(|message| message["tool_calls"].is_array())
+            })
+            .ok_or("replayed tool call missing")?;
+
+        // Assert
+        assert_eq!(calls[0].assistant_text(), Some(notes), "{model}");
+        assert_eq!(calls[1].assistant_text(), None, "{model}");
+        assert_eq!(replayed["content"], notes, "{model}");
+        assert_eq!(replayed["tool_calls"].as_array().map(Vec::len), Some(2));
+        assert_eq!(
+            body.get("prompt_cache_key").and_then(Value::as_str),
+            sent_cache_key,
+            "{model}"
+        );
+    }
 
     Ok(())
 }

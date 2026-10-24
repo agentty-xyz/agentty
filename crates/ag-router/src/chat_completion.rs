@@ -418,7 +418,10 @@ impl ChatCompletionBackend {
             .collect();
 
         ChatCompletionMessagePayload::AssistantToolCall {
-            content: None,
+            content: calls
+                .first()
+                .and_then(tool::ToolCall::assistant_text)
+                .map(str::to_string),
             reasoning_content,
             role: "assistant",
             tool_calls,
@@ -550,11 +553,15 @@ impl ChatCompletionBackend {
         }
         let mut decoded = Vec::with_capacity(calls.len());
         for (index, call) in calls.into_iter().enumerate() {
-            decoded.push(Self::decode_one_tool_call(
-                request,
-                call,
-                (index == 0).then_some(reasoning_content).flatten(),
-            )?);
+            let first = index == 0;
+            decoded.push(
+                Self::decode_one_tool_call(
+                    request,
+                    call,
+                    first.then_some(reasoning_content).flatten(),
+                )?
+                .with_assistant_text(first.then_some(content).flatten().map(str::to_string))?,
+            );
         }
         model::ensure_unique_tool_call_ids(&decoded)?;
 

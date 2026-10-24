@@ -350,6 +350,10 @@ async fn advertises_and_decodes_read_tool_call() {
         .expect("response should contain a tool call");
     assert_eq!(call.id(), "call_muse_read");
     assert_eq!(call.name(), "read");
+    assert_eq!(
+        call.assistant_text(),
+        Some("I will inspect the manifest before answering.")
+    );
     let arguments = call
         .read_arguments()
         .expect("provider should decode read arguments");
@@ -359,7 +363,7 @@ async fn advertises_and_decodes_read_tool_call() {
 }
 
 #[tokio::test]
-async fn continues_after_read_tool_result() {
+async fn continues_after_read_tool_result_with_assistant_text() {
     // Arrange
     let server = MockServer::start().await;
     Mock::given(method("POST"))
@@ -377,7 +381,7 @@ async fn continues_after_read_tool_result() {
             "choices": [{
                 "finish_reason": "tool_calls",
                 "message": {
-                    "content": null,
+                    "content": "Notes: reading Cargo.toml.",
                     "tool_calls": [{
                         "id": "call_muse_read",
                         "type": "function",
@@ -414,7 +418,7 @@ async fn continues_after_read_tool_result() {
             "messages": [
                 {"content": "inspect the manifest", "role": "user"},
                 {
-                    "content": null,
+                    "content": "Notes: reading Cargo.toml.",
                     "role": "assistant",
                     "tool_calls": [{
                         "function": {

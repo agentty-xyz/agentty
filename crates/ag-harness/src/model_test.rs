@@ -633,7 +633,9 @@ fn batched_tool_message_retained_bytes_sums_each_call() {
             serde_json::from_value(json!({"path": "Cargo.toml"}))
                 .expect("read arguments should be valid"),
             Some("reasoning".to_string()),
-        ),
+        )
+        .with_assistant_text(Some("notes".to_string()))
+        .expect("bounded text"),
         tool::ToolCall::read(
             "call_readme".to_string(),
             serde_json::from_value(json!({"path": "README.md"}))
@@ -641,20 +643,21 @@ fn batched_tool_message_retained_bytes_sums_each_call() {
             None,
         ),
     ];
+    let single = ModelMessage::AssistantToolCall(calls[0].clone());
     let message = ModelMessage::AssistantToolCalls(calls);
-    let expected = "call_manifest".len()
+    let first = "call_manifest".len()
         + "read".len()
         + r#"{"path":"Cargo.toml"}"#.len()
         + "reasoning".len()
-        + "call_readme".len()
-        + "read".len()
-        + r#"{"path":"README.md"}"#.len();
+        + "notes".len();
+    let expected = first + "call_readme".len() + "read".len() + r#"{"path":"README.md"}"#.len();
 
     // Act
     let retained_bytes = message.retained_bytes();
 
     // Assert
     assert_eq!(retained_bytes, expected);
+    assert_eq!(single.retained_bytes(), first);
 }
 
 #[test]

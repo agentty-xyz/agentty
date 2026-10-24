@@ -92,3 +92,26 @@ fn keeps_malformed_arguments_verbatim_and_wraps_them_on_the_wire() {
         );
     }
 }
+
+#[test]
+fn keeps_bounded_assistant_text_and_drops_blank_text() {
+    // Arrange
+    let call = || ToolCall::from_json("id".to_string(), "lookup", "{}", None).expect("valid call");
+    let oversized = "x".repeat(crate::schema::RESPONSE_CONTENT_LIMIT_BYTES + 1);
+
+    // Act
+    let noted = call()
+        .with_assistant_text(Some("a.rs defines alpha_one".to_string()))
+        .expect("bounded text");
+    let blank = call()
+        .with_assistant_text(Some(" \n".to_string()))
+        .expect("blank text");
+    let error = call().with_assistant_text(Some(oversized));
+
+    // Assert
+    assert_eq!(noted.assistant_text(), Some("a.rs defines alpha_one"));
+    assert!(!format!("{noted:?}").contains("alpha_one"));
+    assert_eq!(blank.assistant_text(), None);
+    assert_eq!(call().assistant_text(), None);
+    assert!(matches!(error, Err(ModelError::ResponseContentTooLarge)));
+}

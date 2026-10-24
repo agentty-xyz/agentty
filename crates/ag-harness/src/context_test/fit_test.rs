@@ -230,7 +230,9 @@ fn fit_clears_older_reasoning_once_results_cannot_shrink() {
     ];
     let mut request = request(Vec::new(), vec![history], "inspect");
     let batch = vec![
-        reasoned_read_call("r1", Some(&reasoning)),
+        reasoned_read_call("r1", Some(&reasoning))
+            .with_assistant_text(Some("name.txt names Ada".to_string()))
+            .expect("bounded text"),
         reasoned_read_call("r2", None),
     ];
     request.record_tool_calls(batch.clone());
@@ -260,6 +262,7 @@ fn fit_clears_older_reasoning_once_results_cannot_shrink() {
         std::panic::resume_unwind(Box::new("batch expected"));
     };
     assert_eq!(calls[0].reasoning_content(), Some(CLEARED_REASONING));
+    assert_eq!(calls[0].assistant_text(), Some("name.txt names Ada"));
     assert_eq!(
         calls[0].arguments_json().ok(),
         batch[0].arguments_json().ok()
@@ -280,7 +283,9 @@ fn fit_shrinks_older_write_patches_to_their_recorded_outcome() {
         json!({"bytes_written": 3000, "path": "src/lib.rs", "status": "applied"}).to_string(),
     ];
     for (index, outcome) in outcomes.iter().enumerate() {
-        let call = write_call(&format!("w{index}"), &patch);
+        let call = write_call(&format!("w{index}"), &patch)
+            .with_assistant_text(Some(format!("writing step {index}")))
+            .expect("bounded text");
         request.record_tool_call(call.clone());
         request.record_tool_result(&call, outcome.clone());
     }
@@ -311,6 +316,10 @@ fn fit_shrinks_older_write_patches_to_their_recorded_outcome() {
             .expect("write arguments")
             .path(),
         "src/lib.rs"
+    );
+    assert_eq!(
+        call_of(&fitted.messages()[1]).assistant_text(),
+        Some("writing step 0")
     );
     assert_eq!(fitted.messages()[7], request.messages()[7]);
 }
@@ -455,7 +464,9 @@ fn count_calls(messages: &[ModelMessage]) -> usize {
 fn fit_drops_the_oldest_rounds_of_a_long_turn_behind_one_note() {
     // Arrange
     let mut request = request(Vec::new(), Vec::new(), "loop");
-    let bash = bash_call("b0");
+    let bash = bash_call("b0")
+        .with_assistant_text(Some("dropped with its round".to_string()))
+        .expect("bounded text");
     request.record_tool_call(bash.clone());
     request.record_tool_result(
         &bash,
@@ -511,6 +522,10 @@ fn fit_drops_the_oldest_rounds_of_a_long_turn_behind_one_note() {
     assert_eq!(first_activity.dropped_tool_calls(), dropped);
     assert!(note.starts_with(&format!("[harness] {dropped} earlier")));
     assert_eq!(first_activity.elided_results(), 0);
+    assert!(first.messages().iter().all(|message| {
+        !matches!(message, ModelMessage::AssistantToolCall(call)
+            if call.assistant_text().is_some())
+    }));
     let second = second.expect("second reduced copy");
     assert_eq!(
         second.messages()[..first.messages().len()],

@@ -108,10 +108,11 @@ let outcome = session
   largest results are cut to one common size while together they exceed 50%; an excerpt
   stays the same in later requests. Then the other older tool results become notices
   (`read` notices name the target and may be re-read; `bash`/`write` notices keep the
-  outcome and say not to repeat), then older reasoning and `write` patches are cleared,
-  then the oldest replayed turns are dropped, then the current turn's oldest tool rounds
-  are dropped whole behind one note naming the writes they applied, the commands they
-  ran, and the reads to redo only if still needed, down to 70% of the budget so later
+  outcome and say not to repeat), then older reasoning and `write` patches are cleared
+  (the text a model wrote beside its calls, `ToolCall::assistant_text`, is kept), then
+  the oldest replayed turns are dropped, then the current turn's oldest tool rounds are
+  dropped whole behind one note naming the writes they applied, the commands they ran,
+  and the reads to redo only if still needed, down to 70% of the budget so later
   requests share a stable prefix. Only as a last resort are the latest tool round's
   results cut further and its `write` patches replaced by their recorded outcome. Stored
   messages are never changed; `ModelRequestActivity::context` reports each reduction. A
