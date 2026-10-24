@@ -104,19 +104,20 @@ let outcome = session
   copy without an extra model call. First, older tool results that a later call
   superseded (a re-read of the same target, an applied write to the file read, or a
   rerun of the same command) become notices naming that call. Then any tool result above
-  25% of the input budget is cut to a head and tail excerpt, and the latest round's
-  largest results are cut to one common size while together they exceed 50%; an excerpt
-  stays the same in later requests. Then the other older tool results become notices
-  (`read` notices name the target and may be re-read; `bash`/`write` notices keep the
-  outcome and say not to repeat), then older reasoning and `write` patches are cleared
-  (the text a model wrote beside its calls, `ToolCall::assistant_text`, is kept), then
-  the oldest replayed turns are dropped, then the current turn's oldest tool rounds are
-  dropped whole behind one note naming the writes they applied, the commands they ran,
-  and the reads to redo only if still needed, down to 70% of the budget so later
-  requests share a stable prefix. Only as a last resort are the latest tool round's
-  results cut further and its `write` patches replaced by their recorded outcome. Stored
-  messages are never changed; `ModelRequestActivity::context` reports each reduction. A
-  request that still cannot fit fails with `TurnError::ContextBudgetExceeded`.
+  25% of the input budget is cut (a `read` result by whole lines or items, any other to
+  a head and tail excerpt), and the latest round's largest results are cut to one common
+  size while together they exceed 50%; a cut result stays the same in later requests.
+  Then the other older tool results become notices (`read` notices name the target and
+  may be re-read; `bash`/`write` notices keep the outcome and say not to repeat), then
+  older reasoning and `write` patches are cleared (the text a model wrote beside its
+  calls, `ToolCall::assistant_text`, is kept), then the oldest replayed turns are
+  dropped, then the current turn's oldest tool rounds are dropped whole behind one note
+  naming the writes they applied, the commands they ran, and the reads to redo only if
+  still needed, down to 70% of the budget so later requests share a stable prefix. Only
+  as a last resort are the latest tool round's results cut further and its `write`
+  patches replaced by their recorded outcome. Stored messages are never changed;
+  `ModelRequestActivity::context` reports each reduction. A request that still cannot
+  fit fails with `TurnError::ContextBudgetExceeded`.
 - **Earlier rounds can be summarized instead.** `Harness::context_summaries` with
   `ContextSummaryPolicy::Enabled` lets a request that still exceeds 70% of the budget
   after superseded results are cleared and oversized results capped first ask the model,
@@ -167,6 +168,14 @@ let outcome = session
   exposes it to `Model` adapters. Built-in providers send it as `prompt_cache_key` to
   Muse and Kimi, which route requests sharing a key to the backend holding their cached
   prefix, and leave it off for Qwen. Checkpoint and round-summary requests carry none.
+- **Read results are bounded as they run.** One `read` result may weigh 25% of the
+  calibrated input budget: a `file` or `show` read keeps its leading whole lines and
+  states the lines shown, the file's line count, and the exact `offset` and `limit` that
+  fetch the next page (a first line too long to show whole shows its first bytes). A
+  `list` or `search` keeps whole items, a `diff` whole lines. One response's results may
+  weigh 50% together: the first that fit are kept, and every later `read` is answered
+  with a `deferred` result repeating its exact arguments, reported as
+  `ToolActivity::ReadDeferred`, for the model to fetch in a later response.
 - **Identical reads are answered from the earlier result.** A `read` whose arguments
   match an earlier read of the same turn returns a short note naming that call instead
   of running again, while the last request still carried the earlier result whole, no

@@ -722,9 +722,9 @@ async fn long_tool_loop(provider: Provider) -> Result<String, DynError> {
         )?;
     }
     // The large file's code word opens its only line, which alone outweighs
-    // the budget. Reads return whole lines, so any result naming the code
-    // word must be cut to a head and tail excerpt, whatever offset, limit,
-    // or search the model chooses.
+    // the budget. A read that cannot show that line whole shows its first
+    // bytes, so any result naming the code word must be cut, whatever offset,
+    // limit, or search the model chooses.
     let large = format!(
         "The code word of the large file is ivory-97. {}\n",
         filler(3, 36_000)
@@ -784,11 +784,15 @@ async fn long_tool_loop(provider: Provider) -> Result<String, DynError> {
         requests.len()
     );
     // Eight parts outweigh the budget, so reading them forces elision; the
-    // large file's code word only arrives in a truncated result.
+    // large file's code word only arrives in a result cut as the read ran or
+    // later to fit a request.
     if elided == 0 {
         return Err(format!("older results were never elided: {summary}").into());
     }
-    if found.contains("ivory-97") && truncated == 0 {
+    let cut_as_read = outcome.report().tool_calls().iter().any(|activity| {
+        matches!(activity, ToolActivity::Read { path, truncated: true, .. } if path == "large.txt")
+    });
+    if found.contains("ivory-97") && truncated == 0 && !cut_as_read {
         return Err(format!("the large result arrived without truncation: {summary}").into());
     }
     if !missing.is_empty() {

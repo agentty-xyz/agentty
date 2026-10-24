@@ -6,6 +6,8 @@ mod diff;
 mod file;
 #[path = "read_test/inspection_test.rs"]
 mod inspection;
+#[path = "read_test/output_test.rs"]
+mod output;
 #[path = "read_test/revision_test.rs"]
 mod revision;
 #[path = "read_test/support_test.rs"]

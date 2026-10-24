@@ -7,6 +7,8 @@ mod runtime;
 #[path = "read/read_test.rs"]
 mod tests;
 
-pub(crate) use output::{InspectionError, invalid_arguments_tool_result};
+pub(crate) use output::{
+    InspectionError, ResultFits, fit_tool_result, invalid_arguments_tool_result,
+};
 pub use output::{ReadError, ReadOutput};
 pub(crate) use runtime::ReadTool;

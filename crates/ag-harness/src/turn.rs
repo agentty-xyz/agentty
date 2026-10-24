@@ -644,6 +644,18 @@ pub enum ToolActivity {
         /// Bounded path, query, or action summary.
         summary: String,
     },
+    /// A `read` of a tool round whose earlier results already filled the
+    /// share of the context budget one round may take, answered with the
+    /// exact call that fetches its result in a later response instead of
+    /// its result. A read that ran past that share reports this too.
+    ReadDeferred {
+        /// Selected inspection action.
+        action: ReadAction,
+        /// Elapsed tool-handling time.
+        duration: Duration,
+        /// Bounded path, query, or action summary.
+        summary: String,
+    },
     /// A call whose arguments its tool could not decode, answered with an
     /// error result naming the problem instead of running.
     MalformedArguments {
@@ -682,6 +694,7 @@ impl ToolActivity {
             | Self::ReadInspectionRejected { duration, .. }
             | Self::ReadRejected { duration, .. }
             | Self::ReadRepeated { duration, .. }
+            | Self::ReadDeferred { duration, .. }
             | Self::MalformedArguments { duration, .. }
             | Self::Write { duration, .. }
             | Self::WriteRejected { duration, .. } => *duration,
@@ -695,7 +708,8 @@ impl ToolActivity {
             | Self::ReadInspection { .. }
             | Self::ReadInspectionRejected { .. }
             | Self::ReadRejected { .. }
-            | Self::ReadRepeated { .. } => "read",
+            | Self::ReadRepeated { .. }
+            | Self::ReadDeferred { .. } => "read",
             Self::Write { .. } | Self::WriteRejected { .. } => "write",
             Self::Bash { .. } => "bash",
             Self::MalformedArguments { tool, .. } => tool.name(),
@@ -713,7 +727,8 @@ impl ToolActivity {
             | Self::WriteRejected { path, .. } => path,
             Self::ReadInspection { summary, .. }
             | Self::ReadInspectionRejected { summary, .. }
-            | Self::ReadRepeated { summary, .. } => summary,
+            | Self::ReadRepeated { summary, .. }
+            | Self::ReadDeferred { summary, .. } => summary,
         }
     }
 }
@@ -749,39 +764,41 @@ impl fmt::Display for ToolActivity {
                 duration,
                 summary,
                 ..
-            } => write!(
-                formatter,
-                "read {} {} (completed; {})",
-                action.as_str(),
-                sanitize_report_text(summary),
-                format_report_duration(*duration)
-            ),
-            Self::ReadInspectionRejected {
+            }
+            | Self::ReadInspectionRejected {
                 action,
                 duration,
                 summary,
-            } => write!(
-                formatter,
-                "read {} {} (rejected; {})",
-                action.as_str(),
-                sanitize_report_text(summary),
-                format_report_duration(*duration)
-            ),
+            }
+            | Self::ReadRepeated {
+                action,
+                duration,
+                summary,
+            }
+            | Self::ReadDeferred {
+                action,
+                duration,
+                summary,
+            } => {
+                let outcome = match self {
+                    Self::ReadInspection { .. } => "completed",
+                    Self::ReadInspectionRejected { .. } => "rejected",
+                    Self::ReadRepeated { .. } => "repeated",
+                    _ => "deferred",
+                };
+
+                write!(
+                    formatter,
+                    "read {} {} ({outcome}; {})",
+                    action.as_str(),
+                    sanitize_report_text(summary),
+                    format_report_duration(*duration)
+                )
+            }
             Self::ReadRejected { duration, path } => write!(
                 formatter,
                 "read {} (rejected; {})",
                 sanitize_report_text(path),
-                format_report_duration(*duration)
-            ),
-            Self::ReadRepeated {
-                action,
-                duration,
-                summary,
-            } => write!(
-                formatter,
-                "read {} {} (repeated; {})",
-                action.as_str(),
-                sanitize_report_text(summary),
                 format_report_duration(*duration)
             ),
             Self::MalformedArguments {

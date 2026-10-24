@@ -3,8 +3,8 @@ use std::num::NonZeroU64;
 use serde_json::json;
 
 use super::support::{
-    ByteEstimator, bash_command_call, budget, read_call, record_read_round, request, result_json,
-    sent, tool_result, write_call,
+    ByteEstimator, bash_command_call, budget, read_call, read_call_of, record_read_round, request,
+    result_json, sent, tool_result, write_call,
 };
 use crate::context::{
     ContextBudget, ContextEstimator, ContextFit, FIT_TARGET_PERCENT, HeuristicContextEstimator,
@@ -83,6 +83,64 @@ fn fit_caps_the_latest_round_to_half_the_budget_at_one_common_size() {
     assert_eq!(activity.truncated_results(), 2);
     assert_eq!(activity.dropped_tool_calls(), 0);
     assert!(weigh(&ByteEstimator, fitted.messages()) <= budget_weight * FIT_TARGET_PERCENT / 100);
+}
+
+#[test]
+fn capped_read_results_keep_whole_lines_and_say_where_to_continue() {
+    // Arrange
+    let mut request = request(Vec::new(), Vec::new(), "inspect");
+    record_read_round(&mut request, "older", 2600);
+    let content = (1..=200)
+        .map(|line| format!("line {line}"))
+        .collect::<Vec<_>>()
+        .join("\n");
+    let call = read_call_of("big", "big.txt");
+    request.record_tool_call(call.clone());
+    request.record_tool_result(
+        &call,
+        json!({
+            "path": "big.txt",
+            "start_line": 1,
+            "end_line": 200,
+            "total_lines": 200,
+            "truncated": false,
+            "content": content,
+        })
+        .to_string(),
+    );
+    let budget_weight = 4000;
+
+    // Act
+    let (fitted, activity) = ContextFit::default()
+        .fit(&ByteEstimator, budget(budget_weight), &request, None)
+        .map(sent)
+        .expect("fits after capping");
+
+    // Assert
+    let fitted = fitted.expect("reduced copy");
+    let page = result_json(fitted.messages().last().expect("latest result"));
+    let shown = page["content"].as_str().expect("content");
+    let end_line = page["end_line"].as_u64().expect("end line");
+    assert!(page.get("context_truncated").is_none());
+    assert!(shown.ends_with(&format!("line {end_line}")));
+    assert_eq!(page["next_offset"], end_line + 1);
+    assert_eq!(
+        page["continuation"],
+        format!(
+            "Showing lines 1-{end_line} of 200. Use offset={} limit={end_line} to continue.",
+            end_line + 1
+        )
+    );
+    assert!(
+        ByteEstimator.message_weight(fitted.messages().last().expect("latest result"))
+            <= budget_weight * RESULT_CAP_PERCENT / 100
+    );
+    assert!(
+        result_json(&fitted.messages()[2])
+            .get("context_truncated")
+            .is_some()
+    );
+    assert_eq!(activity.truncated_results(), 2);
 }
 
 #[test]

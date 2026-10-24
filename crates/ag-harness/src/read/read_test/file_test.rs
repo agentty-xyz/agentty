@@ -6,7 +6,7 @@ use mockall::Sequence;
 use serde_json::Value;
 
 use super::support::{
-    ContentThenFailReader, FailingReader, arguments, file_system, file_system_reader,
+    ContentThenFailReader, FailingReader, arguments, file_system, file_system_reader, unbounded,
 };
 use crate::file_system::MockFileSystem;
 use crate::read::output::ReadError;
@@ -60,10 +60,14 @@ async fn reads_requested_lines_and_reports_continuation() {
     assert_eq!(output.start_line(), 2);
     assert_eq!(output.end_line(), Some(3));
     assert_eq!(output.next_offset(), Some(4));
+    assert_eq!(output.total_lines(), Some(4));
     assert!(output.truncated());
     assert_eq!(
-        output.to_tool_result().expect("output should serialize"),
-        r#"{"content":"two\nthree","end_line":3,"next_offset":4,"path":"input.txt","start_line":2,"truncated":true}"#
+        output
+            .to_tool_result_within(&unbounded)
+            .expect("output should serialize")
+            .0,
+        r#"{"path":"input.txt","start_line":2,"end_line":3,"total_lines":4,"truncated":true,"next_offset":4,"continuation":"Showing lines 2-3 of 4. Use offset=4 limit=2 to continue.","content":"two\nthree"}"#
     );
 }
 
@@ -79,8 +83,8 @@ async fn bounds_serialized_read_result_with_escaping_heavy_content() {
         .execute(&arguments)
         .await
         .expect("raw read should succeed");
-    let result = output
-        .to_tool_result()
+    let (result, _) = output
+        .to_tool_result_within(&unbounded)
         .expect("encoded read should be bounded");
     let result_value: Value =
         serde_json::from_str(&result).expect("bounded read result should be JSON");
@@ -96,7 +100,7 @@ async fn bounds_serialized_read_result_with_escaping_heavy_content() {
 }
 
 #[tokio::test]
-async fn rejects_one_escaping_heavy_line_that_cannot_fit_encoded_result() {
+async fn shows_the_first_bytes_of_one_escaping_heavy_line_that_cannot_fit_encoded_result() {
     // Arrange
     let tool = ReadTool::new(file_system("\u{1}".repeat(20_000)), "repo".into());
     let arguments = arguments(serde_json::json!({ "path": "input.txt" }));
@@ -106,15 +110,25 @@ async fn rejects_one_escaping_heavy_line_that_cannot_fit_encoded_result() {
         .execute(&arguments)
         .await
         .expect("raw line should fit the read limit");
-    let error = output
-        .to_tool_result()
-        .expect_err("encoded line should be rejected without aborting the turn");
+    let (result, shown) = output
+        .to_tool_result_within(&unbounded)
+        .expect("the line's first bytes should fit");
 
     // Assert
-    assert!(matches!(
-        error,
-        ReadError::LineTooLong { line: 1, path } if path == "input.txt"
-    ));
+    let result: Value = serde_json::from_str(&result).expect("result JSON");
+    assert!(shown.content().len() < 20_000);
+    assert_eq!(shown.end_line(), Some(1));
+    assert_eq!(shown.next_offset(), None);
+    assert!(shown.truncated());
+    assert_eq!(result["line_bytes"], 20_000);
+    assert_eq!(
+        result["continuation"],
+        format!(
+            "Showing only the first {} of 20000 bytes of line 1 of 1, which does not fit whole; \
+             read cannot return the rest of that line.",
+            shown.content().len()
+        )
+    );
 }
 
 #[tokio::test]
@@ -221,7 +235,51 @@ async fn bounds_output_by_bytes() {
     // Assert
     assert_eq!(output.content(), first_line);
     assert_eq!(output.next_offset(), Some(2));
+    assert_eq!(output.total_lines(), Some(2));
     assert!(output.truncated());
+}
+
+#[tokio::test]
+async fn counts_the_lines_of_a_file_past_its_page() {
+    // Arrange
+    let cases = [("one\ntwo\nthree\n", Some(3)), ("one\ntwo", Some(2))];
+
+    for (content, total_lines) in cases {
+        let tool = ReadTool::new(file_system(content), "repo".into());
+        let arguments = arguments(serde_json::json!({ "path": "input.txt", "limit": 1 }));
+
+        // Act
+        let output = tool.execute(&arguments).await.expect("first page");
+
+        // Assert
+        assert_eq!(output.total_lines(), total_lines, "{content:?}");
+    }
+}
+
+#[tokio::test]
+async fn leaves_the_line_count_unknown_past_the_scan_limit_or_a_failed_count() {
+    // Arrange
+    let past_scan_limit = format!("one\n{}", "x".repeat(MAX_SCAN_BYTES));
+    let failing_count = ContentThenFailReader {
+        content: Some(b"one\ntwo\n".to_vec()),
+    };
+    let file_systems = [
+        file_system(past_scan_limit),
+        file_system_reader(Box::new(failing_count)),
+    ];
+
+    for file_system in file_systems {
+        let tool = ReadTool::new(file_system, "repo".into());
+        let arguments = arguments(serde_json::json!({ "path": "input.txt", "limit": 1 }));
+
+        // Act
+        let output = tool.execute(&arguments).await.expect("first page");
+
+        // Assert
+        assert_eq!(output.content(), "one");
+        assert_eq!(output.next_offset(), Some(2));
+        assert_eq!(output.total_lines(), None);
+    }
 }
 
 #[tokio::test]

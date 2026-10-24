@@ -229,6 +229,11 @@ fn tool_activity_display_formats_every_outcome_safely() {
         duration: Duration::from_millis(5),
         summary: "src/lib.rs".to_string(),
     };
+    let deferred_read = ToolActivity::ReadDeferred {
+        action: ReadAction::Search,
+        duration: Duration::from_millis(6),
+        summary: "needle".to_string(),
+    };
 
     // Act
     let displays = [
@@ -239,6 +244,7 @@ fn tool_activity_display_formats_every_outcome_safely() {
         write.to_string(),
         rejected_write.to_string(),
         repeated_read.to_string(),
+        deferred_read.to_string(),
     ];
 
     // Assert
@@ -252,8 +258,12 @@ fn tool_activity_display_formats_every_outcome_safely() {
             "write src/lib.rs (4 bytes; 3 ms)",
             "write src/main.rs (rejected; 4 ms)",
             "read file src/lib.rs (repeated; 5 ms)",
+            "read search needle (deferred; 6 ms)",
         ]
     );
+    assert_eq!(deferred_read.duration(), Duration::from_millis(6));
+    assert_eq!(deferred_read.name(), "read");
+    assert_eq!(deferred_read.path(), "needle");
     assert_eq!(repeated_read.duration(), Duration::from_millis(5));
     assert_eq!(repeated_read.name(), "read");
     assert_eq!(repeated_read.path(), "src/lib.rs");

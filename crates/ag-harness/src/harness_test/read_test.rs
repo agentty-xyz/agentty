@@ -157,7 +157,7 @@ async fn completes_repository_inspection_round_trip() {
 }
 
 #[tokio::test]
-async fn returns_encoded_file_result_rejection_to_model() {
+async fn returns_the_first_bytes_of_a_line_too_long_to_encode_to_model() {
     // Arrange
     let mut model = model();
     let call_count = Arc::new(AtomicUsize::new(0));
@@ -172,16 +172,16 @@ async fn returns_encoded_file_result_rejection_to_model() {
                 message,
                 ModelMessage::ToolResult { content, .. }
                     if serde_json::from_str::<Value>(content).is_ok_and(|value| {
-                        value["status"] == "rejected"
-                            && value["error"]
+                        value["line_bytes"] == 16 * 1024
+                            && value["continuation"]
                                 .as_str()
-                                .is_some_and(|error| error.contains("exceeds the read size limit"))
+                                .is_some_and(|note| note.contains("of 16384 bytes of line 1"))
                     })
             )
         }));
 
         Ok(response_without_metadata(ModelResponse::Output(json!({
-            "summary": "recovered"
+            "summary": "partial"
         }))))
     });
     let content = "\u{1}".repeat(16 * 1024).into_bytes();
@@ -191,13 +191,13 @@ async fn returns_encoded_file_result_rejection_to_model() {
     let outcome = harness
         .run_once("read the manifest", object_schema())
         .await
-        .expect("model should recover from an encoded-size rejection");
+        .expect("model should receive the line's first bytes");
 
     // Assert
-    assert_eq!(outcome.output(), &json!({ "summary": "recovered" }));
+    assert_eq!(outcome.output(), &json!({ "summary": "partial" }));
     assert!(matches!(
         &outcome.report().tool_calls()[0],
-        ToolActivity::ReadRejected { path, .. } if path == "Cargo.toml"
+        ToolActivity::Read { path, end_line: Some(1), truncated: true, .. } if path == "Cargo.toml"
     ));
 }
 

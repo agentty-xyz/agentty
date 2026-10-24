@@ -4,7 +4,9 @@ use std::sync::Arc;
 
 use serde_json::{Value, json};
 
-use super::support::{arguments, command_output, inspection_file_system, truncated_command_output};
+use super::support::{
+    arguments, command_output, inspection_file_system, truncated_command_output, unbounded,
+};
 use crate::comparison::support::{COMPARISON_OID, ComparisonRepository};
 use crate::file_system::LocalFileSystem;
 use crate::read::command::MockRepositoryCommandRunner;
@@ -51,7 +53,7 @@ async fn shows_selected_lines_from_base_revision() {
 
     // Act
     let (result, summary) = tool
-        .execute_inspection(&arguments)
+        .execute_inspection(&arguments, &unbounded)
         .await
         .expect("show inspection should succeed");
     let result: Value = serde_json::from_str(&result).expect("show result should be JSON");
@@ -96,7 +98,7 @@ async fn shows_head_revision_and_rejects_an_offset_beyond_end() {
 
     // Act
     let error = tool
-        .execute_inspection(&arguments)
+        .execute_inspection(&arguments, &unbounded)
         .await
         .expect_err("offset beyond the revision file should fail");
 
@@ -139,7 +141,7 @@ async fn shows_revision_file_beyond_normal_command_capture_limit() {
 
     // Act
     let (result, _) = tool
-        .execute_inspection(&arguments)
+        .execute_inspection(&arguments, &unbounded)
         .await
         .expect("a later revision-file page should be readable");
     let result: Value = serde_json::from_str(&result).expect("show result should be JSON");
@@ -149,6 +151,44 @@ async fn shows_revision_file_beyond_normal_command_capture_limit() {
     assert_eq!(result["start_line"], 5500);
     assert_eq!(result["end_line"], 5500);
     assert_eq!(result["next_offset"], 5501);
+    assert_eq!(result["total_lines"], 6000);
+}
+
+#[tokio::test]
+async fn leaves_the_line_count_of_a_truncated_revision_capture_unknown() {
+    // Arrange
+    let mut runner = MockRepositoryCommandRunner::new();
+    runner
+        .expect_run()
+        .times(1)
+        .returning(|_, _| Ok(command_output(0, Vec::new())));
+    runner
+        .expect_run_large()
+        .times(1)
+        .returning(|_, _| Ok(truncated_command_output(0, "one\ntwo\nthree\n")));
+    let tool = ReadTool::new(inspection_file_system(), PathBuf::from("repo"))
+        .with_command_runner(Arc::new(runner));
+    let arguments = serde_json::from_value(json!({
+        "action": "show",
+        "side": "head",
+        "path": "large.txt",
+        "limit": 1
+    }))
+    .expect("show arguments should be valid");
+
+    // Act
+    let (result, _) = tool
+        .execute_inspection(&arguments, &unbounded)
+        .await
+        .expect("the first page of a truncated capture should be readable");
+    let result: Value = serde_json::from_str(&result).expect("show result should be JSON");
+
+    // Assert
+    assert!(result.get("total_lines").is_none());
+    assert_eq!(
+        result["continuation"],
+        "Showing lines 1-1. More lines follow. Use offset=2 limit=1 to continue."
+    );
 }
 
 #[tokio::test]
@@ -181,7 +221,7 @@ async fn reports_scan_limit_when_revision_page_exceeds_large_capture() {
 
     // Act
     let error = tool
-        .execute_inspection(&arguments)
+        .execute_inspection(&arguments, &unbounded)
         .await
         .expect_err("paging beyond a truncated capture should fail safely");
 
@@ -236,7 +276,7 @@ async fn show_scopes_tree_path_to_configured_subdirectory_root() {
 
     // Act
     let (result, summary) = tool
-        .execute_inspection(&arguments)
+        .execute_inspection(&arguments, &unbounded)
         .await
         .expect("subdirectory-root show should succeed");
     let result: Value = serde_json::from_str(&result).expect("show result should be JSON");
@@ -277,7 +317,7 @@ async fn rejects_invalid_git_prefix_before_reading_revision_file() {
 
     // Act
     let error = tool
-        .execute_inspection(&arguments)
+        .execute_inspection(&arguments, &unbounded)
         .await
         .expect_err("invalid Git prefix should be rejected");
 
@@ -312,7 +352,7 @@ async fn rejects_truncated_git_prefix_before_reading_revision_file() {
 
     // Act
     let error = tool
-        .execute_inspection(&arguments)
+        .execute_inspection(&arguments, &unbounded)
         .await
         .expect_err("truncated Git prefix should be rejected");
 
@@ -355,8 +395,14 @@ async fn comparisons_keep_the_selected_oid_after_branch_movement_and_with_nested
     tokio::fs::write(replacements.join(&fixture.base), &fixture.next)
         .await
         .expect("replacement commit");
-    let (shown, summary) = tool.execute_inspection(&show).await.expect("pinned show");
-    let (patch, diff_summary) = tool.execute_inspection(&diff).await.expect("pinned diff");
+    let (shown, summary) = tool
+        .execute_inspection(&show, &unbounded)
+        .await
+        .expect("pinned show");
+    let (patch, diff_summary) = tool
+        .execute_inspection(&diff, &unbounded)
+        .await
+        .expect("pinned diff");
     let shown: Value = serde_json::from_str(&shown).expect("show JSON");
     let patch: Value = serde_json::from_str(&patch).expect("diff JSON");
 
@@ -410,7 +456,10 @@ async fn head_reads_follow_replacements_with_and_without_a_comparison_base() {
                 test_git_executable(),
                 comparison_base,
             );
-            let (result, _) = tool.execute_inspection(&show).await.expect("live HEAD");
+            let (result, _) = tool
+                .execute_inspection(&show, &unbounded)
+                .await
+                .expect("live HEAD");
             results.push(serde_json::from_str::<Value>(&result).expect("show JSON"));
         }
     }
@@ -445,8 +494,11 @@ async fn missing_comparison_base_only_rejects_comparison_actions() {
     let mut results = Vec::new();
     for request in requests {
         results.push(
-            tool.execute_inspection(&serde_json::from_value(request).expect("arguments"))
-                .await,
+            tool.execute_inspection(
+                &serde_json::from_value(request).expect("arguments"),
+                &unbounded,
+            )
+            .await,
         );
     }
 

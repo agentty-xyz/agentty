@@ -10,7 +10,6 @@ use serde::Deserialize;
 use serde_json::{Map, Value, json};
 use thiserror::Error;
 
-use crate::compaction;
 use crate::input::TurnInput;
 use crate::lifecycle::ContextSummaryTrigger;
 use crate::model::{ModelMessage, ModelRequest};
@@ -18,6 +17,7 @@ use crate::round_summary::{self, RoundSummaryJob, SOURCE_TEXT_LEVELS};
 use crate::schema_contract::OutputSchema;
 use crate::tool::{ReadAction, ReadArguments, Tool, ToolCall, ToolCallArguments, ToolDefinition};
 use crate::turn::{ContextActivity, TurnError, TurnOptions};
+use crate::{compaction, read};
 
 /// Share, in percent, of the request capacity left after reserved output
 /// that an over-budget request is reduced to. Reducing below the budget
@@ -26,18 +26,19 @@ use crate::turn::{ContextActivity, TurnError, TurnOptions};
 pub(crate) const FIT_TARGET_PERCENT: u64 = 70;
 
 /// Share, in percent, of the request capacity left after reserved output
-/// that one tool result may keep once a request exceeds the budget; a
-/// larger result is cut to a head and tail excerpt of this size before any
-/// other reduction except clearing superseded results. A quarter still holds a
-/// large file excerpt, while two capped results stay within
+/// that one tool result may keep. A `read` result is cut to it as it runs; any
+/// result still larger once a request exceeds the budget is cut to it before
+/// any other reduction except clearing superseded results. A quarter still
+/// holds a large file page, while two capped results stay within
 /// [`FIT_TARGET_PERCENT`] beside instructions and elided older rounds, so one
 /// oversized output never forces earlier rounds out of the request.
 pub(crate) const RESULT_CAP_PERCENT: u64 = 25;
 
 /// Share, in percent, of the request capacity left after reserved output
-/// that the latest round's results may keep together once a request exceeds
-/// the budget; beyond it, its largest results are cut to one common size.
-/// Half leaves a fifth of the capacity below [`FIT_TARGET_PERCENT`] for
+/// that the latest round's results may keep together. A `read` that runs
+/// past it is deferred with the call that fetches it; once a request exceeds
+/// the budget, the round's largest results are cut to one common size within
+/// it. Half leaves a fifth of the capacity below [`FIT_TARGET_PERCENT`] for
 /// instructions and the older rounds' elided notices.
 pub(crate) const LATEST_ROUND_CAP_PERCENT: u64 = 50;
 
@@ -77,6 +78,10 @@ const CLEARED_RESULT_PREFIX: &str = r#"{"context_cleared":"#;
 /// running it, so that result never supersedes the read it points to.
 const REPEATED_READ_PREFIX: &str = r#"{"unchanged":true,"#;
 
+/// Leading bytes of the result that stands in for a `read` whose result its
+/// round had no room for, so that result never supersedes an earlier read.
+const DEFERRED_READ_PREFIX: &str = r#"{"deferred":"#;
+
 /// Outcome fields of a `bash` or `write` result kept in its cleared notice.
 const OUTCOME_KEYS: [&str; 6] = [
     "execution_failure",
@@ -107,8 +112,9 @@ pub(crate) const ELIDED_SOURCE_LIMIT_FACTOR: usize = 8;
 /// turns that fit, each whole, with its tool traffic cleared, or as its input
 /// and final output, and a request grown by in-turn tool traffic is reduced
 /// before each follow-up model call by clearing older tool results that a
-/// later call superseded, capping oversized tool results to head and tail
-/// excerpts, clearing the other older tool results, reasoning, and write
+/// later call superseded, capping oversized tool results (a `read` result by
+/// whole lines, as when it ran, any other to a head and tail excerpt),
+/// clearing the other older tool results, reasoning, and write
 /// patches, dropping the oldest history turns, then the current turn's oldest
 /// tool rounds behind one note, and finally cutting the latest results further
 /// and the latest write patches to their outcome. With
@@ -689,7 +695,7 @@ impl ContextFit {
     /// [`Self::elide_superseded`]). It then caps every remaining tool result
     /// above [`RESULT_CAP_PERCENT`] of its capacity, and the latest round's
     /// largest results while together they exceed
-    /// [`LATEST_ROUND_CAP_PERCENT`], to a head and tail excerpt, and is
+    /// [`LATEST_ROUND_CAP_PERCENT`] (see [`Self::excerpt_within`]), and is
     /// reduced to [`FIT_TARGET_PERCENT`] of its capacity, in order: the other
     /// older tool results (oldest first, replayed history before the current
     /// turn), then assistant reasoning, then
@@ -1156,11 +1162,11 @@ impl ContextFit {
     }
 
     /// Cuts each tool result not yet considered whose weight exceeds
-    /// [`RESULT_CAP_PERCENT`] of `capacity` to a head and tail excerpt of
-    /// that weight, and the latest round's results to one common weight
-    /// that keeps them together within [`LATEST_ROUND_CAP_PERCENT`]; caches
-    /// each excerpt so later requests carry it unchanged, and returns whether
-    /// any result was cut.
+    /// [`RESULT_CAP_PERCENT`] of `capacity` to an excerpt of that weight
+    /// (see [`Self::excerpt_within`]), and the latest round's results to one
+    /// common weight that keeps them together within
+    /// [`LATEST_ROUND_CAP_PERCENT`]; caches each excerpt so later requests
+    /// carry it unchanged, and returns whether any result was cut.
     fn cap_results(
         &mut self,
         estimator: &dyn ContextEstimator,
@@ -1245,19 +1251,29 @@ impl ContextFit {
             .unwrap_or(0)
     }
 
-    /// Returns the tool result `(call_id, content, name)` cut to the longest
-    /// head and tail excerpt that weighs at most `allowed`, or to the bare
-    /// notice when none does.
+    /// Returns the tool result `(call_id, content, name)` cut to weigh at
+    /// most `allowed`: a `read` result to its leading whole lines or items,
+    /// marked as cut, as when the read ran, and any other result, or a read
+    /// result no whole line of which fits, to the longest head and tail
+    /// excerpt that fits, or to the bare notice when none does.
     fn excerpt_within(
         estimator: &dyn ContextEstimator,
         (call_id, content, name): (&str, &str, &str),
         allowed: u64,
     ) -> ModelMessage {
-        let excerpt = |kept_bytes| ModelMessage::ToolResult {
+        let result = |content: String| ModelMessage::ToolResult {
             call_id: call_id.to_string(),
-            content: truncated_result(content, kept_bytes),
+            content,
             name: name.to_string(),
         };
+        if name == Tool::Read.name()
+            && let Some(page) = read::fit_tool_result(content, &|candidate| {
+                estimator.message_weight(&result(candidate.to_string())) <= allowed
+            })
+        {
+            return result(page);
+        }
+        let excerpt = |kept_bytes| result(truncated_result(content, kept_bytes));
         let (mut low, mut high) = (0, content.len());
         while low < high {
             let middle = low + (high - low).div_ceil(2);
@@ -1482,9 +1498,9 @@ impl ContextFit {
     }
 
     /// Cuts the latest round's tool results in `fitted`, largest first, to
-    /// the longest head and tail excerpt that brings the request within the
-    /// budget, records how to restore them, and returns how many results not
-    /// already capped it cut.
+    /// the longest excerpt (see [`Self::excerpt_within`]) that brings the
+    /// request within the budget, records how to restore them, and returns
+    /// how many results not already capped it cut.
     fn truncate_latest_round(
         &mut self,
         estimator: &dyn ContextEstimator,
@@ -2055,7 +2071,7 @@ fn supersession_cause(
 ) -> Option<SupersessionCause> {
     match (earlier.arguments(), later.arguments()) {
         (ToolCallArguments::Read(earlier), ToolCallArguments::Read(later))
-            if !is_repeated_read(later_result)
+            if !is_contentless_read(later_result)
                 && rereads(earlier, earlier_cached.span, later, later_cached.span) =>
         {
             Some(SupersessionCause::Reread)
@@ -2121,11 +2137,13 @@ fn read_shows_path(read: &ReadArguments, path: &str) -> bool {
     }
 }
 
-/// Whether `message` answers a repeated `read` without having run it.
-fn is_repeated_read(message: &ModelMessage) -> bool {
+/// Whether `message` answers a `read` without content of its own: a repeat
+/// answered without running, or a read its round had no room for.
+fn is_contentless_read(message: &ModelMessage) -> bool {
     matches!(
         message,
-        ModelMessage::ToolResult { content, .. } if content.starts_with(REPEATED_READ_PREFIX)
+        ModelMessage::ToolResult { content, .. }
+            if content.starts_with(REPEATED_READ_PREFIX) || content.starts_with(DEFERRED_READ_PREFIX)
     )
 }
 
@@ -2351,6 +2369,24 @@ pub(crate) fn repeated_read_result(same_as_call: &str) -> String {
     format!(
         "{REPEATED_READ_PREFIX}\"same_as_call\":{},\"note\":{}}}",
         Value::from(same_as_call),
+        Value::from(note)
+    )
+}
+
+/// Renders the result that stands in for a `read` with `arguments` whose
+/// result its round had no room for: the round's earlier results already
+/// fill [`LATEST_ROUND_CAP_PERCENT`] of the capacity. It repeats the call's
+/// exact arguments, so the model can fetch the result in a later response.
+pub(crate) fn deferred_read_result(arguments: &ReadArguments) -> String {
+    let note = "This read's result is not shown: the earlier results of this response already \
+                fill the share of the context window that one round of tool calls may use. Call \
+                read again with exactly these arguments in a later response to see it.";
+    let call = serde_json::to_string(arguments).unwrap_or_else(|_| "{}".to_string());
+
+    // Fields are written in this order so the result starts with
+    // `DEFERRED_READ_PREFIX`.
+    format!(
+        "{DEFERRED_READ_PREFIX}{},\"call\":{call}}}",
         Value::from(note)
     )
 }

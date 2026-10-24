@@ -46,6 +46,12 @@ impl AsyncRead for ContentThenFailReader {
     }
 }
 
+/// Accepts every rendered result, so a read is bounded only by its own
+/// limits.
+pub(super) fn unbounded(_result: &str) -> bool {
+    true
+}
+
 pub(super) fn arguments(mut value: serde_json::Value) -> ReadArguments {
     value
         .as_object_mut()
