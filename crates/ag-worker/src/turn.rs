@@ -54,12 +54,28 @@ impl SessionRunClient {
         context: &ag_session::TaskAgentContext,
         config: &crate::RuntimeConfig,
     ) -> Result<Self, AgentError> {
-        let runtime_id = Self::task_runtime_id(context)?;
-        let mut client = Self::new(
-            context.session_id.to_string(),
+        Self::for_isolated_context(
+            &context.id,
+            &context.session_id,
             context.assignment.agent.kind(),
             config,
-        );
+        )
+    }
+
+    /// Creates an isolated conversation without assigning a workflow role.
+    /// The host supplies a durable UUID and submits through the owning serial
+    /// worker. Provider history and cleanup use this UUID rather than chat.
+    ///
+    /// # Errors
+    /// Rejects an invalid context UUID before runtime composition.
+    pub fn for_isolated_context(
+        context_id: &str,
+        session_id: &ag_session::SessionId,
+        kind: ag_session::AgentKind,
+        config: &crate::RuntimeConfig,
+    ) -> Result<Self, AgentError> {
+        let runtime_id = Self::isolated_runtime_id(context_id)?;
+        let mut client = Self::new(session_id.to_string(), kind, config);
         client.runtime_id = runtime_id;
 
         Ok(client)
@@ -72,7 +88,15 @@ impl SessionRunClient {
     /// # Errors
     /// Returns an error when the host-allocated context ID is not a UUID.
     pub fn task_runtime_id(context: &ag_session::TaskAgentContext) -> Result<String, AgentError> {
-        let context_id = Uuid::parse_str(&context.id)
+        Self::isolated_runtime_id(&context.id)
+    }
+
+    /// Returns a safe runtime resource key for a durable host context UUID.
+    ///
+    /// # Errors
+    /// Rejects caller-controlled paths and other non-UUID identities.
+    pub fn isolated_runtime_id(context_id: &str) -> Result<String, AgentError> {
+        let context_id = Uuid::parse_str(context_id)
             .map_err(|_| AgentError::Runtime("Task context ID must be a UUID".to_string()))?;
 
         Ok(format!("task-{context_id}"))

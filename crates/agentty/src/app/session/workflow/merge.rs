@@ -717,6 +717,7 @@ impl SessionMergeService {
         let session = manager
             .session_or_err(session_id)
             .map_err(|_| SessionError::NotFound)?;
+        let environment = services.try_environment_write(session_id)?;
         if !(session.status.allows_review_actions() || session.status == Status::Queued) {
             return Err(SessionError::Workflow(
                 "Session must be in review or queued status".to_string(),
@@ -804,6 +805,7 @@ impl SessionMergeService {
             transcript,
         };
         tokio::spawn(async move {
+            let _environment = environment;
             SessionManager::run_merge_task(merge_task_input).await;
         });
 

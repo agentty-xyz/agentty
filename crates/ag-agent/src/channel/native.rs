@@ -143,6 +143,7 @@ async fn run_session_turn(
         environment: &environment,
         events: &events,
         profile,
+        provider_call_budget: req.provider_call_budget.as_ref(),
         reasoning_level: req.reasoning_level,
         repository: &repository,
         session_id: &session_id,
@@ -261,6 +262,7 @@ struct SessionOpener<'a> {
     environment: &'a BTreeMap<String, String>,
     events: &'a mpsc::UnboundedSender<TurnEvent>,
     profile: ProtocolRequestProfile,
+    provider_call_budget: Option<&'a ag_contracts::ProviderCallBudget>,
     reasoning_level: ReasoningLevel,
     repository: &'a Repository,
     session_id: &'a str,
@@ -316,7 +318,7 @@ impl SessionOpener<'_> {
         stored_selection: &ModelSelection,
         selection: &ModelSelection,
     ) -> Result<Session, String> {
-        let registry = selection.registry(self.environment, None)?;
+        let registry = selection.registry(self.environment, self.provider_call_budget)?;
         let harness = self.build_harness(|context, observer| {
             stored_selection.resume_only_harness(context, observer)
         })?;
@@ -353,7 +355,7 @@ impl SessionOpener<'_> {
         let harness = build(
             &HarnessContext {
                 environment: self.environment,
-                provider_call_budget: None,
+                provider_call_budget: self.provider_call_budget,
                 reasoning_level: self.reasoning_level,
                 repository: self.repository,
             },

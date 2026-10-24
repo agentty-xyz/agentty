@@ -34,6 +34,13 @@ const SESSION_RUNTIME_UNAVAILABLE: &str = "Session runtime is unavailable";
 
 /// A read query or an enveloped mutation awaiting foreground admission.
 pub(crate) enum SessionRuntimeCommand {
+    /// Trusted handoff of an already admitted graph task to its serial owner.
+    RunGraphNode {
+        admitted_tx: oneshot::Sender<()>,
+        cancellation: CancellationToken,
+        request: Box<ag_worker::GraphRunRequest>,
+        response_tx: oneshot::Sender<Result<String, ag_contracts::OneShotError>>,
+    },
     GetAgentTaskHistory {
         response_tx: oneshot::Sender<Result<Option<ag_session::TaskAgentHistory>, SessionError>>,
         task_id: String,
@@ -70,6 +77,62 @@ pub(crate) struct SessionRuntimeHandle {
 }
 
 impl SessionRuntimeHandle {
+    pub(crate) async fn run_graph_node(
+        &self,
+        request: ag_worker::GraphRunRequest,
+        cancellation: CancellationToken,
+    ) -> Result<String, ag_contracts::OneShotError> {
+        // The executor already owns durable admission. This handoff only asks
+        // the foreground owner to enqueue it, and completion belongs to the
+        // worker.
+        let mut consumer_rx = self.consumer_state.subscribe();
+        if !*consumer_rx.borrow_and_update() {
+            return Err(ag_contracts::OneShotError::new(SESSION_RUNTIME_UNAVAILABLE));
+        }
+        let (response_tx, response_rx) = oneshot::channel();
+        let (admitted_tx, admitted_rx) = oneshot::channel();
+        let command = SessionRuntimeCommand::RunGraphNode {
+            admitted_tx,
+            cancellation,
+            request: Box::new(request),
+            response_tx,
+        };
+        tokio::select! {
+            biased;
+            _ = consumer_rx.wait_for(|active| !*active) => return Err(ag_contracts::OneShotError::new(SESSION_RUNTIME_UNAVAILABLE)),
+            result = self.command_tx.send(command) => result.map_err(|_| ag_contracts::OneShotError::new(SESSION_RUNTIME_UNAVAILABLE))?,
+        }
+        // Only the worker may acknowledge settlement once it owns delivery.
+        tokio::select! {
+            biased;
+            result = admitted_rx => result.map_err(|_| ag_contracts::OneShotError::new(SESSION_RUNTIME_UNAVAILABLE))?,
+            _ = consumer_rx.wait_for(|active| !*active) => return Err(ag_contracts::OneShotError::new(SESSION_RUNTIME_UNAVAILABLE)),
+        }
+        response_rx
+            .await
+            .map_err(|_| ag_contracts::OneShotError::new(SESSION_RUNTIME_UNAVAILABLE))?
+    }
+
+    pub(crate) async fn start_execution_graph(
+        &self,
+        request: ag_session::StartExecutionGraphRequest,
+    ) -> Result<(), SessionError> {
+        self.request_admission(SessionMutation::StartExecutionGraph {
+            request: Box::new(request),
+        })
+        .await
+    }
+
+    pub(crate) async fn accept_execution_graph_result(
+        &self,
+        reference: ag_session::GraphResultRef,
+    ) -> Result<(), SessionError> {
+        self.request_admission(SessionMutation::AcceptExecutionGraphResult {
+            reference: Box::new(reference),
+        })
+        .await
+    }
+
     /// Admits an isolated task through the same foreground gateway.
     pub(crate) async fn submit_agent_task(
         &self,

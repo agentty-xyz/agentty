@@ -288,6 +288,8 @@ pub struct TurnRequest {
     pub agent_profile: AgentDefinitionPrompt,
     /// Structured prompt payload for the turn.
     pub prompt: TurnPrompt,
+    /// Shared provider-call ceiling, including retries and protocol repairs.
+    pub provider_call_budget: Option<crate::ProviderCallBudget>,
     /// Reasoning effort preference for the turn.
     ///
     /// Ignored by providers/models that do not support reasoning effort.

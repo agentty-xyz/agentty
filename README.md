@@ -219,6 +219,11 @@ submitting attempts, and explicitly accepting outcomes. See the
 [task contract](https://agentty.xyz/docs/core-components/durable-components/task/) for
 session ownership, concurrency, and current limits.
 
+It also supports explicit static execution graphs with isolated task conversations,
+exact output acceptance, and shared execution limits. See
+[execution graphs](https://agentty.xyz/docs/architecture/execution-graphs/) for
+supported profiles and lifecycle limits.
+
 Documentation for installation and workflows is available at
 [agentty.xyz/docs](https://agentty.xyz/docs/).
 

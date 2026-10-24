@@ -22,6 +22,7 @@ use super::support::{
     apply_worker_turn_result, auto_commit_run_client, empty_transcript,
     preparation_test_worker_context, queue_helper_context, queue_saved_stacked_prompt,
     queue_test_context, queued_message, resume_command, successful_turn_result,
+    test_graph_resources,
 };
 use crate::analytics::TurnOutcome;
 use crate::app::AppEvent;
@@ -691,6 +692,8 @@ async fn root_span_reports_cancellation_during_successful_post_processing() {
         .await
         .expect("operation");
     let host = SessionWorkerHost {
+        graph_resources: test_graph_resources(),
+        graph_wake: tokio::sync::watch::channel(0).0,
         context,
         message_traces: Arc::default(),
         run_client,
@@ -749,6 +752,8 @@ async fn untracked_queued_message_gets_a_completed_turn_trace() {
     let (context, db, _queue, _directory) =
         queue_test_context(channel, VecDeque::new(), Status::InProgress).await;
     let host = SessionWorkerHost {
+        graph_resources: test_graph_resources(),
+        graph_wake: tokio::sync::watch::channel(0).0,
         context,
         message_traces: Arc::default(),
         run_client: auto_commit_run_client(),

@@ -1,3 +1,4 @@
+use std::collections::BTreeMap;
 use std::sync::Arc;
 
 use super::support::FakeBackend;
@@ -7,6 +8,44 @@ use crate::{
     SessionError, SessionId, SessionService, StartPlanThenImplementRequest, SubmitAgentTaskRequest,
     SubmitTaskRequest, TaskAgentAssignment, TaskAgentInput, TaskAgentRole,
 };
+
+#[tokio::test]
+async fn existing_hosts_reject_graph_capabilities_without_admitting_work() {
+    // Arrange
+    let service = SessionService::new(Arc::new(FakeBackend::default()));
+    let graph = crate::ExecutionGraph {
+        id: "graph".into(),
+        nodes: Vec::new(),
+        revision: std::num::NonZeroU64::MIN,
+        session_id: "session".into(),
+    };
+    let reference = crate::GraphResultRef {
+        execution: crate::GraphExecutionRef::UtilityRun {
+            run_id: "run".into(),
+        },
+        graph_id: "graph".into(),
+        graph_revision: std::num::NonZeroU64::MIN,
+        id: "result".into(),
+        node_id: "node".into(),
+        output_name: "output".into(),
+        schema: ag_protocol::ProtocolRequestProfile::UtilityPrompt,
+        version: std::num::NonZeroU64::MIN,
+    };
+
+    // Act
+    let started = service
+        .start_execution_graph(crate::StartExecutionGraphRequest {
+            graph,
+            provider_call_limits: BTreeMap::default(),
+        })
+        .await;
+    let accepted = service.accept_execution_graph_result(reference).await;
+
+    // Assert
+    let expected = SessionError::Operation("Host does not support execution graphs".into());
+    assert_eq!(started, Err(expected.clone()));
+    assert_eq!(accepted, Err(expected));
+}
 
 #[tokio::test]
 async fn existing_hosts_report_unsupported_task_capability() {

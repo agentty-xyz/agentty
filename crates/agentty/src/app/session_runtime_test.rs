@@ -9,6 +9,70 @@ use super::{
 
 fn assert_clone_send_sync<T: Clone + Send + Sync>() {}
 
+#[tokio::test]
+async fn graph_handoff_keeps_worker_completion_owned_after_foreground_shutdown()
+-> Result<(), Box<dyn std::error::Error>> {
+    for (handed_off, drop_reply) in [(false, false), (true, false), (true, true)] {
+        // Arrange
+        let mut runtime = SessionRuntime::new(crate::test_support::session_manager_with_handles(
+            Vec::new(),
+            std::collections::HashMap::new(),
+        ));
+        let handle = runtime.handle();
+        let consumer = runtime.foreground_consumer();
+        let work = tokio::spawn(async move {
+            handle
+                .run_graph_node(
+                    crate::app::execution_graph::tests::run_request(),
+                    tokio_util::sync::CancellationToken::new(),
+                )
+                .await
+        });
+        let crate::app::SessionRuntimeCommand::RunGraphNode {
+            admitted_tx,
+            response_tx,
+            ..
+        } = runtime.next_command().await
+        else {
+            return Err("graph handoff expected".into());
+        };
+
+        // Act
+        if handed_off {
+            admitted_tx.send(()).expect("handoff");
+            drop(consumer);
+            tokio::task::yield_now().await;
+            assert!(!work.is_finished(), "the worker still owns settlement");
+            if drop_reply {
+                drop(response_tx);
+                assert_eq!(
+                    work.await
+                        .expect("driver")
+                        .expect_err("lost worker reply")
+                        .to_string(),
+                    SESSION_RUNTIME_UNAVAILABLE
+                );
+                continue;
+            }
+            response_tx
+                .send(Ok("settled".into()))
+                .expect("worker completion");
+        } else {
+            drop(consumer);
+            // Keep the command's senders alive: only losing the consumer
+            // should reject delivery before worker ownership is established.
+            assert!(work.await.expect("driver").is_err());
+            drop((admitted_tx, response_tx));
+            continue;
+        }
+
+        // Assert
+        assert_eq!(work.await.expect("driver").expect("settlement"), "settled");
+    }
+
+    Ok(())
+}
+
 #[test]
 fn runtime_handle_is_cloneable_send_and_sync() {
     // Arrange / Act / Assert
@@ -36,6 +100,15 @@ async fn handle_reports_unavailable_after_runtime_drops() {
     assert_eq!(
         error,
         SessionError::Operation(SESSION_RUNTIME_UNAVAILABLE.to_string())
+    );
+    assert!(
+        handle
+            .run_graph_node(
+                crate::app::execution_graph::tests::run_request(),
+                tokio_util::sync::CancellationToken::new()
+            )
+            .await
+            .is_err()
     );
 }
 
@@ -74,6 +147,15 @@ async fn live_undriven_runtime_rejects_requests_without_waiting() {
         std::collections::HashMap::new(),
     ));
     let handle = runtime.handle();
+    assert!(
+        handle
+            .run_graph_node(
+                crate::app::execution_graph::tests::run_request(),
+                tokio_util::sync::CancellationToken::new()
+            )
+            .await
+            .is_err()
+    );
 
     // Act
     let error = tokio::time::timeout(

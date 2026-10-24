@@ -155,6 +155,14 @@ pub(crate) struct TaskChainReplyAction {
 
 /// Application inputs for workflows that return an admission result.
 pub(crate) enum SessionMutation {
+    /// Starts an explicit static graph using existing worker paths.
+    StartExecutionGraph {
+        request: Box<ag_session::StartExecutionGraphRequest>,
+    },
+    /// Accepts one exact output through the trusted host admission path.
+    AcceptExecutionGraphResult {
+        reference: Box<ag_session::GraphResultRef>,
+    },
     /// Admits one role-bound attempt with an isolated conversation.
     SubmitAgentTask {
         request: Box<ag_session::SubmitAgentTaskRequest>,
@@ -228,6 +236,10 @@ impl SessionMutation {
     /// Describes the routing target without exposing message or answer content.
     pub(super) fn target(&self) -> (&'static str, Option<&SessionId>) {
         match self {
+            Self::StartExecutionGraph { request } => {
+                ("start_execution_graph", Some(&request.graph.session_id))
+            }
+            Self::AcceptExecutionGraphResult { .. } => ("accept_execution_graph_result", None),
             Self::SubmitAgentTask { session_id, .. } => ("submit_agent_task", Some(session_id)),
             Self::AcceptAgentPlan { session_id, .. } => ("accept_agent_plan", Some(session_id)),
             Self::StartTaskChain { session_id, .. } => ("start_task_chain", Some(session_id)),
