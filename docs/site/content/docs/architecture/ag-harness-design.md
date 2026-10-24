@@ -75,42 +75,54 @@ the required `ContextBudget` bound a turn.
 
 Before every model request the engine fits the request to the budget without a model
 call. Fitting works on a copy, so canonical turn messages, the durable journal, and
-replayed history keep the original content. Once a request exceeds the budget, older
-tool results that a later call of the request superseded are cleared first, oldest
-first, down to 70% of the capacity left after reserved output: a `read` whose target a
-later read returned again over at least the same lines (a covering line window for
-`file` and `show`, the same or a larger limit otherwise), a `file` read or `diff`
+replayed history keep the original content. Within a turn the sent requests only append:
+a request within the budget is the previous request's copy with the new messages
+appended, so requests between two reductions share a byte-identical prefix that provider
+prompt caches reuse. Only a request that exceeds the budget is reduced, and then deeply,
+so the following rounds append for several requests before the next reduction. Every
+reduced message keeps its reduced form in later requests, and no message is rewritten
+twice, so a reduction rewrites the request only from its first newly reduced message.
+
+A reduction first clears older tool results that a later call of the request superseded,
+oldest first, down to 50% of the capacity left after reserved output: a `read` whose
+target a later read returned again over at least the same lines (a covering line window
+for `file` and `show`, the same or a larger limit otherwise), a `file` read or `diff`
 showing a path a later applied `write` changed, or a `bash` result whose exact command
 ran again. Their notices name the superseding call. A read answered by the repeated-read
-note below supersedes nothing. Staleness is weighed only while a request exceeds the
-budget, and a cleared result stays cleared, so the shared prefix changes only when
-fitting already changes it. Every remaining tool result above 25% of that capacity is
-then cut to that size, and the latest round's largest results are cut to one common size
-while the round's results together exceed 50%, so one oversized output never pushes
-earlier rounds out. A `read` result is cut by the rules that bounded it when it ran
-(below), and any other result to a head and tail excerpt; `read` results already meet
-both shares when they run, so only a budget that calibration lowered since cuts one. The
-request is then reduced to 70% of its capacity, in order: the other older tool results
-become tool-aware notices (oldest first, replayed history before the current turn; a
-`read` notice names its target), then older assistant reasoning becomes a non-empty
-placeholder (providers that replay reasoning still receive the field), then older
-`write` patches become a note on their recorded outcome, then the oldest replayed turns
-are dropped, then the current turn's oldest tool rounds are dropped whole, each call
-message with all its results, behind one bounded note that counts the removed calls,
-names the writes they applied and the commands they ran, and lists their distinct read
-targets to re-read only if still needed. Tool calls keep their identifiers, so tool
-groups stay well-formed, and the text the model wrote beside them is never cleared, so
-its notes on what it found outlive the cleared results and leave only with their dropped
-round. The latest tool round is never reduced by these steps. Each step is a watermark
-into the append-only canonical messages that later requests replay, so successive
-requests share a stable prefix and reduce further only when the budget is exceeded
-again; each reduced message is cached, so a request between watermark advances only
-weighs and appends its new messages. If the request still does not fit, the latest
-round's largest results are cut further the same way, and as the last resort its `write`
-patches are replaced by their recorded outcome; only when even that fails does the turn
-fail typed. Each `ModelRequestActivity` reports the reductions its request carried.
+note below supersedes nothing. The results the latest round added are then cut while the
+round is new, so the cut costs no cached prefix: each to 25% of that capacity, and the
+round's largest to one common size while together they exceed 50%. A `read` result is
+cut by the rules that bounded it when it ran (below), and any other result to a head and
+tail excerpt; `read` results already meet both shares when they run, so only a budget
+that calibration lowered since cuts one. A result sent whole before is never cut, only
+cleared. The request is then reduced to 50% of its capacity, oldest first, with replayed
+history before the current turn: the other tool results become tool-aware notices (a
+`read` notice names its target), then each assistant message loses its reasoning
+(providers that replay reasoning still receive a non-empty placeholder) and its `write`
+patches (a note on their recorded outcome) in one rewrite. The rounds holding the newest
+five results keep their results, reasoning, and patches until everything older is
+cleared, and the latest round is never reduced by these steps. Clearing reasoning starts
+at the oldest assistant message the first time it is needed, so that one reduction
+rewrites the request from there. If clearing cannot reach 50%, the oldest replayed turns
+and then the current turn's oldest tool rounds are dropped whole, each call message with
+all its results, down to 70%; a dropped round also loses the text the model wrote beside
+its calls, so dropping stops short of the clearing target. Each reduction that drops
+rounds names them in one bounded note appended after the earlier notes, which counts the
+removed calls, names the writes they applied and the commands they ran, and lists their
+distinct read targets to re-read only if still needed; once no earlier round is left to
+drop, the notes merge into one. A repeated-read note whose earlier result is cleared,
+cut, or summarized becomes a notice that it is no longer shown whole, naming the newer
+read when one returned it again. Tool calls keep their identifiers, so tool groups stay
+well-formed, and the text the model wrote beside them is never cleared, so its notes on
+what it found outlive the cleared results and leave only with their dropped round. Each
+reduction step is a watermark into the append-only canonical messages, and each reduced
+message is cached, so a request between reductions only weighs and appends its new
+messages. If the request still does not fit, the latest round's largest results are cut
+further the same way, and as the last resort its `write` patches are replaced by their
+recorded outcome; both stay cut in later requests. Only when even that fails does the
+turn fail typed. Each `ModelRequestActivity` reports the reductions its request carried.
 
-With `ContextSummaryPolicy::Enabled`, a request that still exceeds 70% of its capacity
+With `ContextSummaryPolicy::Enabled`, a request that still exceeds 50% of its capacity
 after superseded results are cleared and oversized results capped first summarizes the
 current turn's earlier tool rounds. The latest round and the rounds before it within a
 quarter of the capacity stay whole; the rounds before them that no summary or note
@@ -125,15 +137,16 @@ a reasoning model at the turn's effort can outlast the request timeout on a larg
 source. It re-requests invalid output like a final output and accepts a summary that
 matches the checkpoint summary schema, fits 15% of the capacity, and is smaller than its
 source. The covered rounds then become one note carrying the summary as data beside the
-dropped-round ledger of their writes, commands, and read targets, and every reduction
-watermark moves past them. Like every reduction, the summary exists only in sent copies:
-canonical messages, the journal, and replayed history keep the rounds, and a resumed or
-later turn never sees it. A failed, rejected, or cancelled summary falls back to the
-steps above for that fit, and a turn stops asking after two failures. Summary requests
-are reported with `ModelRequestPurpose::ContextSummary`, calibrate later estimates, and
-emit `ContextSummaryStarted`/`Completed`/`Failed` lifecycle events that the trace
-observer projects as an `agent.compaction` span around their model requests. A failure
-is classified as `Model` when a request failed at the provider or in transport (its own
+dropped-round ledger of their writes, commands, and read targets, which replaces the
+earlier notes, and every reduction watermark moves past them. Like every reduction, the
+summary exists only in sent copies: canonical messages, the journal, and replayed
+history keep the rounds, and a resumed or later turn never sees it. A failed, rejected,
+or cancelled summary falls back to the steps above for that fit, and a turn stops asking
+after two failures. Summary requests are reported with
+`ModelRequestPurpose::ContextSummary`, calibrate later estimates, and emit
+`ContextSummaryStarted`/`Completed`/`Failed` lifecycle events that the trace observer
+projects as an `agent.compaction` span around their model requests. A failure is
+classified as `Model` when a request failed at the provider or in transport (its own
 `ModelRequestFailed` carries the class and HTTP status), `InvalidOutput` when
 corrections ran out or the model answered with a tool call, `Rejected` when a valid
 summary did not fit, or `Cancelled`.

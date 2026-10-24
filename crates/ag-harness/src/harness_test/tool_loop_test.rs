@@ -1,3 +1,4 @@
+use std::collections::HashMap;
 use std::io::Cursor;
 use std::num::NonZeroU64;
 use std::sync::atomic::{AtomicUsize, Ordering};
@@ -22,7 +23,7 @@ use crate::repository::Repository;
 use crate::session::SessionError;
 use crate::store::MemoryStore;
 use crate::tool::{ReadAction, Tool, ToolCall};
-use crate::turn::{ToolActivity, TurnError, TurnOutcome};
+use crate::turn::{ContextActivity, ToolActivity, TurnError, TurnOutcome};
 
 /// Scripts the model's responses in order and records every request it
 /// received.
@@ -1127,4 +1128,102 @@ async fn requests_share_one_cache_key_per_session_and_per_stateless_turn() {
     assert!(keys[8].starts_with("ag-session-"));
     assert!(keys[9].starts_with("ag-turn-"));
     assert_ne!(keys[9], keys[10]);
+}
+
+/// Whether `current` carries a reduction that `previous` did not.
+fn reduces_further(previous: ContextActivity, current: ContextActivity) -> bool {
+    let counts = |context: ContextActivity| {
+        [
+            context.cleared_reasoning(),
+            context.dropped_history_turns(),
+            context.dropped_tool_calls(),
+            context.elided_results(),
+            context.shrunk_latest_write_calls(),
+            context.shrunk_write_calls(),
+            context.summarized_tool_calls(),
+            context.truncated_results(),
+        ]
+    };
+
+    counts(previous)
+        .iter()
+        .zip(counts(current))
+        .any(|(previous, current)| current > *previous)
+}
+
+#[tokio::test]
+async fn requests_only_append_between_rare_context_reductions() {
+    // Arrange
+    // Each response reads one new file with reasoning beside its call, as
+    // Qwen does, so the turn outgrows its budget again and again.
+    let reasoning =
+        "This file defines the names I listed; next I read the following one. ".repeat(5);
+    let mut responses: Vec<Result<ModelResponse, ModelError>> = (0..24)
+        .map(|round| {
+            Ok(ModelResponse::ToolCall(
+                ToolCall::from_json(
+                    format!("read_{round}"),
+                    "read",
+                    &json!({"path": format!("notes_{round}.txt")}).to_string(),
+                    Some(reasoning.clone()),
+                )
+                .expect("read call"),
+            ))
+        })
+        .collect();
+    responses.push(Ok(output()));
+    let (model, requests) = scripted(responses);
+    let content = (0..200)
+        .flat_map(|line| format!("line {line} of the notes\n").into_bytes())
+        .collect();
+    let opened = Arc::new(AtomicUsize::new(0));
+    let harness = budgeted_harness(model, 12_000, counting_file_system(content, &opened));
+
+    // Act
+    let outcome = harness
+        .run_once("list the names every notes file defines", object_schema())
+        .await
+        .expect("turn succeeds");
+
+    // Assert
+    let requests = requests.lock().expect("requests lock");
+    let reports = outcome.report().model_requests();
+    assert_eq!(requests.len(), reports.len());
+    let mut reductions = 0;
+    for index in 1..requests.len() {
+        let previous = requests[index - 1].messages();
+        if reduces_further(reports[index - 1].context(), reports[index].context()) {
+            reductions += 1;
+        } else {
+            assert_eq!(
+                requests[index].messages()[..previous.len()],
+                *previous,
+                "request {index} rewrote earlier messages without a new reduction"
+            );
+        }
+    }
+    // Each reduction clears deeply enough to leave room for several rounds.
+    assert!(reductions >= 2, "only {reductions} reductions");
+    assert!(
+        reductions * 6 <= requests.len(),
+        "{reductions} reductions in {} requests",
+        requests.len()
+    );
+    // No message is rewritten twice: each result is sent whole, then at most
+    // in one reduced form.
+    let mut forms: HashMap<&str, Vec<&str>> = HashMap::new();
+    for request in requests.iter() {
+        for message in request.messages() {
+            if let ModelMessage::ToolResult {
+                call_id, content, ..
+            } = message
+            {
+                let seen = forms.entry(call_id.as_str()).or_default();
+                if !seen.contains(&content.as_str()) {
+                    seen.push(content.as_str());
+                }
+            }
+        }
+    }
+    assert!(forms.values().all(|seen| seen.len() <= 2));
 }

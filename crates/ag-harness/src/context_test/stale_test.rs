@@ -5,9 +5,9 @@ use super::support::{
     result_json, sent, tool_result, write_call,
 };
 use crate::context::{
-    CallRecords, ContextFit, FitMessage, ReadSpan, Supersession, SupersessionCause,
-    deferred_read_result, elided_result, find_superseded, read_shows_path, repeated_read_result,
-    rereads,
+    CallRecords, ContextFit, FitMessage, KEEP_RECENT_RESULTS, ReadSpan, Supersession,
+    SupersessionCause, deferred_read_result, elided_result, find_superseded, read_shows_path,
+    repeated_read_result, rereads,
 };
 use crate::model::{ModelMessage, ModelRequest};
 use crate::tool::{ReadArguments, ToolCall};
@@ -73,6 +73,7 @@ fn cached(messages: &[ModelMessage]) -> Vec<FitMessage> {
         .map(|message| FitMessage {
             changes: 0,
             reduced: None,
+            repeats: None,
             span: ReadSpan::parse(message),
             weight: 0,
         })
@@ -525,6 +526,148 @@ fn repeated_read_results_point_to_the_earlier_call() {
             .as_str()
             .expect("note")
             .contains("nothing was written or run since")
+    );
+}
+
+#[test]
+fn a_repeat_result_is_cleared_with_the_result_it_points_to() {
+    // Arrange
+    let mut request = request(Vec::new(), Vec::new(), "inspect");
+    record(&mut request, &read_call_of("a1", "a.txt"), "x".repeat(3000));
+    record(
+        &mut request,
+        &read_call_of("a2", "a.txt"),
+        repeated_read_result("a1"),
+    );
+    for index in 0..KEEP_RECENT_RESULTS {
+        record_read_round(&mut request, &format!("n{index}"), 10);
+    }
+    let budget_weight = weigh(&request) - 1;
+    let mut fit = ContextFit::default();
+
+    // Act
+    let (fitted, activity) = fit_owned(&mut fit, budget_weight, &request);
+
+    // Assert
+    assert_eq!(
+        result_json(&fitted.messages()[2])["read"],
+        json!("file a.txt")
+    );
+    let repeat = result_json(&fitted.messages()[4]);
+    assert!(
+        repeat["context_cleared"]
+            .as_str()
+            .expect("notice text")
+            .contains("repeated an earlier read whose result was since cleared")
+    );
+    assert_eq!(repeat["read"], json!("file a.txt"));
+    assert_eq!(activity.elided_results(), 2);
+    assert!(!fit.sends_whole(4));
+}
+
+#[test]
+fn a_cut_repeat_result_is_cleared_with_the_result_it_points_to() {
+    // Arrange
+    // A long call identifier makes the repeat note heavy enough to cut.
+    let first = format!("call_{}", "1".repeat(80));
+    let mut request = request(Vec::new(), Vec::new(), "inspect");
+    record(
+        &mut request,
+        &read_call_of(&first, "a.txt"),
+        "x".repeat(3000),
+    );
+    record(
+        &mut request,
+        &read_call_of("a2", "a.txt"),
+        repeated_read_result(&first),
+    );
+    let mut fit = ContextFit::default();
+
+    // Act
+    // The repeat is the new latest round, so it is cut to a quarter of the
+    // budget before the result it points to is elided.
+    let (fitted, activity) = fit_owned(&mut fit, 1000, &request);
+
+    // Assert
+    let repeat = result_json(&fitted.messages()[4]);
+    assert!(
+        repeat["context_cleared"]
+            .as_str()
+            .expect("notice text")
+            .contains("repeated an earlier read")
+    );
+    assert_eq!(activity.elided_results(), 2);
+    assert_eq!(activity.truncated_results(), 0);
+}
+
+#[test]
+fn a_repeat_of_a_superseded_result_points_to_the_newer_read() {
+    // Arrange
+    let mut request = request(Vec::new(), Vec::new(), "inspect");
+    record(&mut request, &read_call_of("a1", "a.txt"), "x".repeat(3000));
+    record(
+        &mut request,
+        &read_call_of("a2", "a.txt"),
+        repeated_read_result("a1"),
+    );
+    record(&mut request, &read_call_of("a3", "a.txt"), "y".repeat(500));
+    for index in 0..KEEP_RECENT_RESULTS {
+        record_read_round(&mut request, &format!("n{index}"), 10);
+    }
+    let budget_weight = weigh(&request) - 1;
+
+    // Act
+    let (fitted, activity) = fit_owned(&mut ContextFit::default(), budget_weight, &request);
+
+    // Assert
+    assert_eq!(activity.superseded_results(), 1);
+    let repeat = result_json(&fitted.messages()[4]);
+    assert_eq!(repeat["superseded_by"], json!("a3"));
+    assert!(
+        repeat["context_cleared"]
+            .as_str()
+            .expect("notice text")
+            .contains("Use that newer result")
+    );
+    assert_eq!(fitted.messages()[6], request.messages()[6]);
+}
+
+#[test]
+fn a_repeat_of_a_result_a_write_changed_says_to_read_again() {
+    // Arrange
+    let mut request = request(Vec::new(), Vec::new(), "edit");
+    record(
+        &mut request,
+        &read_call_of("a1", "src/lib.rs"),
+        "x".repeat(3000),
+    );
+    record(
+        &mut request,
+        &read_call_of("a2", "src/lib.rs"),
+        repeated_read_result("a1"),
+    );
+    record(
+        &mut request,
+        &write_call("w1", "@@ -1 +1 @@\n-a\n+b\n"),
+        json!({"path": "src/lib.rs", "status": "applied"}).to_string(),
+    );
+    for index in 0..KEEP_RECENT_RESULTS {
+        record_read_round(&mut request, &format!("n{index}"), 10);
+    }
+    let budget_weight = weigh(&request) - 1;
+
+    // Act
+    let (fitted, activity) = fit_owned(&mut ContextFit::default(), budget_weight, &request);
+
+    // Assert
+    assert_eq!(activity.superseded_results(), 1);
+    let repeat = result_json(&fitted.messages()[4]);
+    assert_eq!(repeat.get("superseded_by"), None);
+    assert!(
+        repeat["context_cleared"]
+            .as_str()
+            .expect("notice text")
+            .contains("read it again")
     );
 }
 
