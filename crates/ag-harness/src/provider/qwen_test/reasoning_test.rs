@@ -10,7 +10,7 @@ use crate::provider::test_support::STRUCTURED_OUTPUT_INSTRUCTION;
 use crate::tool;
 
 #[tokio::test]
-async fn sends_tool_result_history_for_continuation() {
+async fn sends_tool_result_history_with_assistant_text_for_continuation() {
     // Arrange
     let server = MockServer::start().await;
     let prompt = "inspect the manifest";
@@ -21,7 +21,10 @@ async fn sends_tool_result_history_for_continuation() {
         "limit": 12
     }))
     .expect("read arguments should be valid");
-    let call = tool::ToolCall::read("call_qwen_read".to_string(), arguments, None);
+    let notes = "Notes: the manifest is a workspace.";
+    let call = tool::ToolCall::read("call_qwen_read".to_string(), arguments, None)
+        .with_assistant_text(Some(notes.to_string()))
+        .expect("bounded text");
     let mut model_request = read_request(prompt);
     model_request.record_tool_call(call.clone());
     model_request.record_tool_result(&call, result.to_string());
@@ -39,7 +42,7 @@ async fn sends_tool_result_history_for_continuation() {
                 },
                 {"content": prompt, "role": "user"},
                 {
-                    "content": null,
+                    "content": notes,
                     "role": "assistant",
                     "tool_calls": [{
                         "function": {

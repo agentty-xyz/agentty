@@ -7,8 +7,8 @@ use serde_json::json;
 use tempfile::tempdir;
 
 use super::support::{
-    model, object_schema, read_call, response_without_metadata, send_with_resumed_session,
-    turn_started_id, wait_for_stored_turn_state,
+    model, object_schema, read_call, read_harness, readable_file_system, response_without_metadata,
+    send_with_resumed_session, turn_started_id, wait_for_stored_turn_state,
 };
 use crate::context::{self, HistoryTurn};
 use crate::context_budget_fixture::unbounded_context_budget;
@@ -371,6 +371,76 @@ async fn sequential_resumed_handles_reload_completed_canonical_history() {
     // Assert
     assert_eq!(first.output(), &json!({"summary": "one"}));
     assert_eq!(second.output(), &json!({"summary": "two"}));
+}
+
+#[tokio::test]
+async fn assistant_text_beside_tool_calls_replays_after_reopen() {
+    // Arrange
+    let notes = "The manifest declares a workspace; next I answer.";
+    let mut model = model();
+    let mut sequence = Sequence::new();
+    model
+        .expect_complete()
+        .times(1)
+        .in_sequence(&mut sequence)
+        .returning(move |_| {
+            let call = read_call("call_read")
+                .with_assistant_text(Some(notes.to_string()))
+                .expect("bounded text");
+
+            Ok(response_without_metadata(ModelResponse::ToolCall(call)))
+        });
+    model
+        .expect_complete()
+        .times(1)
+        .in_sequence(&mut sequence)
+        .returning(|_| {
+            Ok(response_without_metadata(ModelResponse::Output(
+                json!({"summary": "workspace"}),
+            )))
+        });
+    model
+        .expect_complete()
+        .times(1)
+        .in_sequence(&mut sequence)
+        .withf(move |request| {
+            matches!(
+                &request.messages()[1],
+                ModelMessage::AssistantToolCall(call)
+                    if call.id() == "call_read" && call.assistant_text() == Some(notes)
+            )
+        })
+        .returning(|_| {
+            Ok(response_without_metadata(ModelResponse::Output(
+                json!({"summary": "recalled"}),
+            )))
+        });
+    let directory = tempdir().expect("temporary directory should be created");
+    let harness =
+        read_harness(model, readable_file_system()).database(directory.path().join("harness.db"));
+    let mut session = harness
+        .session("session-a", object_schema())
+        .create()
+        .await
+        .expect("session should be created");
+    session
+        .send("inspect the manifest")
+        .await
+        .expect("first turn should succeed");
+    drop(session);
+
+    // Act
+    let mut resumed = harness
+        .resume("session-a")
+        .await
+        .expect("session should reopen");
+    let recalled = resumed
+        .send("what did you find?")
+        .await
+        .expect("replayed turn should succeed");
+
+    // Assert
+    assert_eq!(recalled.output(), &json!({"summary": "recalled"}));
 }
 
 #[tokio::test]

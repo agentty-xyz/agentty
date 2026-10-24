@@ -12,17 +12,18 @@ use crate::provider::test_support::STRUCTURED_OUTPUT_INSTRUCTION;
 use crate::{model, schema_contract};
 
 #[tokio::test]
-async fn preserves_reasoning_and_named_tool_result_for_continuation() {
+async fn preserves_reasoning_text_and_named_tool_result_for_continuation() {
     // Arrange
     let server = MockServer::start().await;
     let prompt = "inspect the manifest";
     let result = r#"{"content":"[workspace]","end_line":1,"next_offset":null,"path":"Cargo.toml","start_line":1,"truncated":false}"#;
     let reasoning_content = "I should inspect the manifest before answering.";
+    let notes = "Notes: reading Cargo.toml for the name.";
     mount_tool_response(
         &server,
         prompt,
         json!({
-            "content": null,
+            "content": notes,
             "reasoning_content": reasoning_content,
             "tool_calls": [{
                 "id": "call_kimi_read",
@@ -49,7 +50,7 @@ async fn preserves_reasoning_and_named_tool_result_for_continuation() {
                 },
                 {"content": prompt, "role": "user"},
                 {
-                    "content": null,
+                    "content": notes,
                     "reasoning_content": reasoning_content,
                     "role": "assistant",
                     "tool_calls": [{

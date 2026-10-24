@@ -214,6 +214,7 @@ fn nullable_schema(mut schema: Value) -> Value {
 #[derive(Clone, Eq, PartialEq)]
 pub struct ToolCall {
     arguments: ToolArguments,
+    assistant_text: Option<String>,
     id: String,
     reasoning_content: Option<String>,
 }
@@ -276,9 +277,29 @@ impl ToolCall {
 
         Ok(Self {
             arguments,
+            assistant_text: None,
             id,
             reasoning_content,
         })
+    }
+
+    /// Attaches the assistant text the model wrote beside its calls, such as
+    /// running notes on what it found so far. Text that is empty or only
+    /// whitespace is not kept.
+    ///
+    /// A response's text belongs to its first call, like its reasoning. It
+    /// is stored with the call, replayed beside it, and weighed in its
+    /// message; context fitting keeps it while the call's round is sent.
+    ///
+    /// # Errors
+    /// Returns [`crate::ModelError`] for oversized text.
+    pub fn with_assistant_text(mut self, text: Option<String>) -> Result<Self, model::ModelError> {
+        if let Some(text) = &text {
+            schema_contract::ensure_content_size(text).map_err(model::ModelError::from)?;
+        }
+        self.assistant_text = text.filter(|text| !text.trim().is_empty());
+
+        Ok(self)
     }
 
     /// Returns the typed arguments for this native tool call.
@@ -349,6 +370,12 @@ impl ToolCall {
         self.reasoning_content.as_deref()
     }
 
+    /// Returns the assistant text written beside this call, if any. This
+    /// model content is redacted from debug output.
+    pub fn assistant_text(&self) -> Option<&str> {
+        self.assistant_text.as_deref()
+    }
+
     pub(crate) fn read(
         id: String,
         arguments: ReadArguments,
@@ -356,6 +383,7 @@ impl ToolCall {
     ) -> Self {
         Self {
             arguments: ToolArguments::Read(arguments),
+            assistant_text: None,
             id,
             reasoning_content,
         }
@@ -368,6 +396,7 @@ impl ToolCall {
     ) -> Self {
         Self {
             arguments: ToolArguments::Write(arguments),
+            assistant_text: None,
             id,
             reasoning_content,
         }
@@ -379,6 +408,10 @@ impl fmt::Debug for ToolCall {
         formatter
             .debug_struct("ToolCall")
             .field("arguments", &self.arguments)
+            .field(
+                "assistant_text",
+                &self.assistant_text.as_ref().map(|_| "[REDACTED]"),
+            )
             .field("id", &self.id)
             .field("name", &self.name())
             .field(

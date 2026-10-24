@@ -758,3 +758,30 @@ fn malformed_arguments_keep_the_decoding_failure() {
     assert!(malformed.reason().starts_with("unknown field `path src/`"));
     assert!(matches!(call.arguments(), ToolCallArguments::Malformed(found) if found == malformed));
 }
+
+#[test]
+fn keeps_bounded_assistant_text_and_drops_blank_text() {
+    // Arrange
+    let call =
+        || ToolCall::from_json("id".to_string(), "read", r#"{"path":"a.rs"}"#, None).expect("read");
+    let oversized = "x".repeat(schema_contract::RESPONSE_CONTENT_LIMIT_BYTES + 1);
+
+    // Act
+    let noted = call()
+        .with_assistant_text(Some("a.rs defines alpha_one".to_string()))
+        .expect("bounded text");
+    let blank = call()
+        .with_assistant_text(Some("\t ".to_string()))
+        .expect("blank text");
+    let error = call().with_assistant_text(Some(oversized));
+
+    // Assert
+    assert_eq!(noted.assistant_text(), Some("a.rs defines alpha_one"));
+    assert!(!format!("{noted:?}").contains("alpha_one"));
+    assert_eq!(blank.assistant_text(), None);
+    assert_eq!(call().assistant_text(), None);
+    assert!(matches!(
+        error,
+        Err(model::ModelError::ResponseContentTooLarge)
+    ));
+}

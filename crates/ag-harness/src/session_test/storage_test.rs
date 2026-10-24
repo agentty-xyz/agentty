@@ -204,13 +204,22 @@ async fn database_round_trips_every_persistent_message_kind() {
             content: r#"{"summary":"thinking"}"#.to_string(),
             reasoning_content: "I should inspect before editing.".to_string(),
         },
-        ModelMessage::AssistantToolCall(read_call("read-one")),
+        ModelMessage::AssistantToolCall(
+            read_call("read-one")
+                .with_assistant_text(Some("The manifest names the crate.".to_string()))
+                .expect("bounded text"),
+        ),
         ModelMessage::ToolResult {
             call_id: "read-one".to_string(),
             content: "manifest".to_string(),
             name: "read".to_string(),
         },
-        ModelMessage::AssistantToolCalls(vec![read_call("read-two"), write_call("write-one")]),
+        ModelMessage::AssistantToolCalls(vec![
+            read_call("read-two")
+                .with_assistant_text(Some("Next I read the source.".to_string()))
+                .expect("bounded text"),
+            write_call("write-one"),
+        ]),
         ModelMessage::ToolResult {
             call_id: "read-two".to_string(),
             content: "source".to_string(),
@@ -596,4 +605,52 @@ fn persisted_bash_calls_preserve_arguments_reasoning_and_validate_input() {
     let invalid =
         r#"{"id":"bash-call","name":"bash","arguments":{"command":""},"reasoning_content":null}"#;
     assert!(EncodedMessage::into_message("assistant_tool_call", invalid).is_err());
+}
+
+#[test]
+fn persisted_calls_store_assistant_text_only_when_present() {
+    // Arrange
+    let legacy =
+        r#"{"arguments":{"command":"ls"},"id":"call","name":"bash","reasoning_content":null}"#;
+    let oversized = serde_json::json!({
+        "arguments": {"command": "ls"},
+        "assistant_text": "x".repeat(crate::schema_contract::RESPONSE_CONTENT_LIMIT_BYTES + 1),
+        "id": "call",
+        "name": "bash",
+        "reasoning_content": null
+    })
+    .to_string();
+    let noted = ModelMessage::AssistantToolCall(
+        read_call("read-one")
+            .with_assistant_text(Some("notes".to_string()))
+            .expect("bounded text"),
+    );
+
+    // Act
+    let decoded_legacy = EncodedMessage::into_message("assistant_tool_call", legacy);
+    let encoded_plain =
+        EncodedMessage::from_message(&ModelMessage::AssistantToolCall(read_call("read-two")))
+            .expect("encode");
+    let encoded_noted = EncodedMessage::from_message(&noted).expect("encode");
+    let decoded_oversized = EncodedMessage::into_message("assistant_tool_call", &oversized);
+
+    // Assert
+    assert!(matches!(
+        decoded_legacy,
+        Ok(ModelMessage::AssistantToolCall(call)) if call.assistant_text().is_none()
+    ));
+    assert!(!encoded_plain.payload.contains("assistant_text"));
+    assert!(
+        encoded_noted
+            .payload
+            .contains(r#""assistant_text":"notes""#)
+    );
+    assert_eq!(
+        EncodedMessage::into_message(encoded_noted.kind, &encoded_noted.payload).expect("decode"),
+        noted
+    );
+    assert!(matches!(
+        decoded_oversized,
+        Err(SessionError::InvalidData { .. })
+    ));
 }

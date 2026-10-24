@@ -337,8 +337,9 @@ pub(crate) fn render_source(
 }
 
 /// Renders messages as bounded JSON values, each text cut to
-/// `max_text_bytes`. Tool calls keep their bounded arguments and are numbered
-/// in order, and each tool result names the number of its call. Image content
+/// `max_text_bytes`. Tool calls keep their bounded arguments and assistant
+/// text and are numbered in order, and each tool result names the number of
+/// its call. Image content
 /// is identified by digest and provider reasoning is never carried forward.
 pub(crate) fn render_messages(messages: &[ModelMessage], max_text_bytes: usize) -> Vec<Value> {
     let mut call_numbers: HashMap<&str, usize> = HashMap::new();
@@ -348,10 +349,14 @@ pub(crate) fn render_messages(messages: &[ModelMessage], max_text_bytes: usize) 
             ModelMessage::Assistant(content) | ModelMessage::AssistantReasoning { content, .. } => {
                 json!({ "role": "assistant", "text": bounded_text(content, max_text_bytes) })
             }
-            ModelMessage::AssistantToolCall(call) => {
-                render_calls(std::slice::from_ref(call), &mut call_numbers)
+            ModelMessage::AssistantToolCall(call) => render_calls(
+                std::slice::from_ref(call),
+                &mut call_numbers,
+                max_text_bytes,
+            ),
+            ModelMessage::AssistantToolCalls(calls) => {
+                render_calls(calls, &mut call_numbers, max_text_bytes)
             }
-            ModelMessage::AssistantToolCalls(calls) => render_calls(calls, &mut call_numbers),
             ModelMessage::System(content) => {
                 json!({ "role": "system", "text": bounded_text(content, max_text_bytes) })
             }
@@ -395,10 +400,12 @@ pub(crate) fn render_messages(messages: &[ModelMessage], max_text_bytes: usize) 
 }
 
 /// Renders one assistant tool-call message, numbering each call after those
-/// already in `call_numbers`.
+/// already in `call_numbers`, with its assistant text cut to
+/// `max_text_bytes`.
 fn render_calls<'call>(
     calls: &'call [ToolCall],
     call_numbers: &mut HashMap<&'call str, usize>,
+    max_text_bytes: usize,
 ) -> Value {
     let rendered: Vec<Value> = calls
         .iter()
@@ -414,7 +421,12 @@ fn render_calls<'call>(
         })
         .collect();
 
-    json!({ "role": "assistant", "tool_calls": rendered })
+    let mut message = json!({ "role": "assistant", "tool_calls": rendered });
+    if let Some(text) = calls.first().and_then(ToolCall::assistant_text) {
+        message["text"] = Value::String(bounded_text(text, max_text_bytes));
+    }
+
+    message
 }
 
 /// Returns a call's arguments as JSON with every string bounded to
