@@ -450,14 +450,18 @@ impl Engine<'_> {
             let (_, calibration) = self
                 .context_calibration
                 .effective_budget(self.context_budget);
-            // A continued request states the turn's schema in its prompt.
+            // A continued request states the turn's schema in its prompt and
+            // advertises the turn's tools.
             let prompt_schema = request.prefix_schema().unwrap_or(request.schema());
-            let estimated_weight = request.messages().iter().fold(
+            let fixed = request.tools().iter().fold(
                 self.context_estimator.request_weight(prompt_schema),
-                |weight, message| {
-                    weight.saturating_add(self.context_estimator.message_weight(message))
+                |weight, tool| {
+                    weight.saturating_add(self.context_estimator.tool_definition_weight(tool))
                 },
             );
+            let estimated_weight = request.messages().iter().fold(fixed, |weight, message| {
+                weight.saturating_add(self.context_estimator.message_weight(message))
+            });
             let completed = self
                 .complete_model_request(&request, *model_request_index, turn_id)
                 .await;

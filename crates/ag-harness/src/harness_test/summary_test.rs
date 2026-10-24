@@ -9,7 +9,9 @@ use serde_json::{Value, json};
 
 use super::support::object_schema;
 use crate::compaction::summary_schema;
-use crate::context::{ContextBudget, ContextSummaryPolicy};
+use crate::context::{
+    ContextBudget, ContextEstimator, ContextSummaryPolicy, HeuristicContextEstimator,
+};
 use crate::file_system::MockFileSystem;
 use crate::harness::Harness;
 use crate::lifecycle::{
@@ -310,6 +312,26 @@ async fn summaries_continue_the_last_turn_request_for_a_model_that_keeps_its_pre
     assert_eq!(summary.schema(), &summary_schema().expect("summary schema"));
     assert!(carries(&last_turn_request(&requests), "cobalt-41"));
     assert_eq!(outcome.report().context_summary_failures(), 0);
+    // The estimate that calibrates later requests weighs the turn's tools.
+    let estimator = HeuristicContextEstimator::DEFAULT;
+    let weight = summary
+        .messages()
+        .iter()
+        .map(|message| estimator.message_weight(message))
+        .chain(
+            summary
+                .tools()
+                .iter()
+                .map(|tool| estimator.tool_definition_weight(tool)),
+        )
+        .sum::<u64>();
+    let reported = outcome
+        .report()
+        .model_requests()
+        .iter()
+        .find(|request| request.purpose() == ModelRequestPurpose::ContextSummary)
+        .expect("a reported summary request");
+    assert_eq!(reported.estimated_weight(), weight);
 }
 
 #[tokio::test]
