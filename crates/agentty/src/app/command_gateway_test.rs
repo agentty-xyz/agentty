@@ -440,6 +440,7 @@ async fn terminal_and_api_mailbox_requests_retain_their_initiators() {
         let envelope = match &command {
             SessionRuntimeCommand::Mutation(envelope) => Some(envelope),
             SessionRuntimeCommand::Get { .. }
+            | SessionRuntimeCommand::RunGraphNode { .. }
             | SessionRuntimeCommand::GetTask { .. }
             | SessionRuntimeCommand::ListTasks { .. }
             | SessionRuntimeCommand::GetTaskChain { .. }

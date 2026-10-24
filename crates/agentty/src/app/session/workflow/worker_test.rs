@@ -44,3 +44,6 @@ mod task_agent;
 
 #[path = "worker_test/task_chain_test.rs"]
 mod task_chain;
+
+#[path = "worker_test/graph_test.rs"]
+mod graph;

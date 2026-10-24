@@ -63,12 +63,16 @@ async fn test_run_turn_allows_image_attachments() {
         .times(1)
         .returning(|request, _stream_tx| {
             assert_eq!(request.prompt.attachments.len(), 1);
+            let budget = request.provider_call_budget.expect("forwarded turn budget");
+            budget.consume().expect("initial call");
+            assert!(budget.consume().is_err());
 
             Box::pin(async { Ok(make_ok_response(r#"{"answer":"codex ok","questions":[]}"#)) })
         });
     let channel = AppServerAgentChannel::new(Arc::new(mock_client), AgentKind::Codex);
     let (events_tx, _events_rx) = mpsc::unbounded_channel();
     let mut request = make_turn_request();
+    request.provider_call_budget = Some(ag_contracts::ProviderCallBudget::new(1));
     request.prompt.attachments.push(TurnPromptAttachment {
         placeholder: "[Image #1]".to_string(),
         local_image_path: PathBuf::from("/tmp/image.png"),

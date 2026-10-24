@@ -514,6 +514,23 @@ all prerequisite gates must hold before a join runs. The existing `/plan` and fo
 review coordinators have not migrated. See
 [Execution Graphs](@/docs/architecture/execution-graphs.md).
 
+Explicit graph launches use the same foreground admission gateway. Graph task handoffs
+enter the owning session's ordered mailbox with a completion reply retained through
+operation settlement. The selected graph command publishes active ownership before
+waiting for Env access, so sync queues behind it. Gate waits observe cancellation;
+completion retains acquired leases through settlement. Queued nodes cannot hold a lease
+ahead of earlier commands. Utilities retain their concurrent worker path. Graph writers
+also exclude detached focused-review readers, while legacy reviews retain their overlap
+with ordinary session work and conflict-free sync. Acceptance and Env release wake
+active graph drivers without polling or startup replay. Each settled graph node also
+wakes drivers after releasing shared capacity and its Env lease, independently of the
+rest of its dispatch wave. Returning capacity or an Env lease from an unclaimed check
+wakes only drivers waiting for that resource, avoiding unconditional broadcasts. Failed
+drivers retain their launch and remaining budgets. Identical explicit relaunches restart
+dispatch without replaying failed nodes; active launches remain deduplicated. Detached
+utilities retain their Env leases in worker-owned scopes through cancellation cleanup.
+Ordinary worker leases release and notify on early returns as well as normal completion.
+
 Channel owners clean up provider processes after cancellation. Operation completion
 includes post-processing, not just model completion. Heartbeat failures are reported
 without abandoning live work; startup recovery requires exclusive application ownership.

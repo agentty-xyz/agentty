@@ -29,7 +29,7 @@ pub use provider::{
 };
 pub use run::{RunInfo, RunRepository, RunState};
 pub use scheduler::{ScheduledCommand, ScheduledWork, WorkQueue, WorkerHost, next_work, run};
-pub use scope::{RunScope, in_scope, scoped_client};
+pub use scope::{RunScope, in_scope, scoped_client, with_execution_resource};
 #[cfg(any(test, feature = "test-utils"))]
 pub use store::MockOperationRepository;
 pub use store::{OperationRepository, SessionOperationRow};

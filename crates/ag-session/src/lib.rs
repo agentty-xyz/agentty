@@ -73,6 +73,7 @@ pub use review::{
 pub use service::{
     AnswerQuestionsRequest, CreateSessionMode, CreateSessionRequest, DurableMessageRequest,
     DurableMessageVisibility, QuestionAnswer, SessionBackend, SessionService,
+    StartExecutionGraphRequest,
 };
 pub use setting::SettingName;
 pub use task::{CreateTaskRequest, SubmitTaskRequest, Task, TaskAttempt, TaskAttemptStatus};

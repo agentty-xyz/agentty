@@ -11,7 +11,7 @@ use ag_worker::{MockRunClient, RunClient, SessionRunClient, WorkerHost as _};
 use opentelemetry::global;
 use opentelemetry_sdk::trace::{InMemorySpanExporter, SdkTracerProvider};
 use tempfile::{TempDir, tempdir};
-use tokio::sync::mpsc;
+use tokio::sync::{mpsc, oneshot, watch};
 use tokio_util::sync::CancellationToken;
 
 use super::super::{
@@ -22,6 +22,7 @@ use super::support::{
     apply_worker_turn_result, auto_commit_run_client, empty_transcript,
     preparation_test_worker_context, queue_helper_context, queue_saved_stacked_prompt,
     queue_test_context, queued_message, resume_command, successful_turn_result,
+    test_graph_resources,
 };
 use crate::analytics::TurnOutcome;
 use crate::app::AppEvent;
@@ -31,6 +32,51 @@ use crate::domain::session::Status;
 use crate::infra::db::AppRepositories;
 use crate::infra::fs;
 use crate::test_support::telemetry::TRACER_PROVIDER_LOCK;
+
+#[tokio::test]
+async fn abandoned_foreground_gate_releases_its_writer_before_waking_graph_drivers() {
+    // Arrange
+    let context = queue_helper_context(Arc::default()).await;
+    let resources = test_graph_resources();
+    let environment = resources.environment(&ag_session::EnvId::SessionWorktree(
+        context.session_id.clone(),
+    ));
+    let (wake, mut awakened) = watch::channel(0);
+    let host = SessionWorkerHost {
+        context,
+        graph_resources: resources,
+        graph_wake: wake,
+        message_traces: Arc::default(),
+        run_client: auto_commit_run_client(),
+    };
+    let (ready, ready_rx) = oneshot::channel();
+    let mut command = ScheduledSessionCommand::immediate(resume_command("not-persisted"));
+    command.ready_rx = Some(ready_rx);
+    let work = host.execute(ScheduledSessionWork::Command(command));
+    tokio::pin!(work);
+    let waiting = tokio::select! {
+        biased;
+        () = &mut work => false,
+        () = std::future::ready(()) => true,
+    };
+    assert!(waiting);
+    assert!(environment.try_read().is_err());
+
+    // Act
+    drop(ready);
+    work.await;
+    awakened
+        .changed()
+        .await
+        .expect("failed gate wakes waiting graphs");
+
+    // Assert
+    assert!(
+        environment.try_write().is_ok(),
+        "writer releases before notification"
+    );
+    assert!(!awakened.has_changed().expect("one release notification"));
+}
 
 #[tokio::test]
 /// Verifies that the scheduler clears every queued prompt once the
@@ -691,6 +737,8 @@ async fn root_span_reports_cancellation_during_successful_post_processing() {
         .await
         .expect("operation");
     let host = SessionWorkerHost {
+        graph_resources: test_graph_resources(),
+        graph_wake: tokio::sync::watch::channel(0).0,
         context,
         message_traces: Arc::default(),
         run_client,
@@ -749,6 +797,8 @@ async fn untracked_queued_message_gets_a_completed_turn_trace() {
     let (context, db, _queue, _directory) =
         queue_test_context(channel, VecDeque::new(), Status::InProgress).await;
     let host = SessionWorkerHost {
+        graph_resources: test_graph_resources(),
+        graph_wake: tokio::sync::watch::channel(0).0,
         context,
         message_traces: Arc::default(),
         run_client: auto_commit_run_client(),

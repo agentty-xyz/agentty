@@ -24,7 +24,7 @@ use super::merge::{
     ExistingSessionRebaseAssistClient, RebaseAssistFuture, RebaseAssistMode, RebaseCommandInput,
 };
 use super::task::SessionTranscriptMessageAppend;
-use super::{SessionTaskService, isolation, session_folder, task_turn, turn};
+use super::{SessionTaskService, graph_turn, isolation, session_folder, task_turn, turn};
 use crate::analytics::TurnOutcome;
 use crate::app::branch_publish::{
     BranchPublishTaskContext, BranchPublishTaskSession, review_request_from_publish_result,
@@ -83,6 +83,8 @@ pub(super) struct TurnMetadata {
 /// `StartPrompt`, `StartPromptAppServer`) with a single provider-agnostic
 /// variant. The underlying channel adapter handles transport-specific details.
 pub(super) enum SessionCommand {
+    /// Runs an already admitted graph task and retains its settlement reply.
+    RunGraphTask(Box<graph_turn::GraphTaskCommand>),
     /// Runs a role-bound task through its independently owned runtime.
     RunAgentTask {
         cancellation: Arc<CancellationToken>,
@@ -144,6 +146,7 @@ impl SessionCommand {
     /// Returns the persisted operation identifier for this command.
     fn operation_id(&self) -> &str {
         match self {
+            Self::RunGraphTask(task) => &task.operation_id,
             Self::CreateReviewRequest { operation_id, .. }
             | Self::Rebase { operation_id, .. }
             | Self::Run { operation_id, .. }
@@ -154,6 +157,7 @@ impl SessionCommand {
     /// Returns the captured selection for a model turn's live accounting.
     fn turn_agent(&self) -> Option<AgentSelection> {
         match self {
+            Self::RunGraphTask(task) => Some(task.request.dispatch.node.agent),
             Self::Run {
                 request_kind: AgentRequestKind::SessionStart | AgentRequestKind::SessionResume,
                 turn_metadata,
@@ -167,6 +171,7 @@ impl SessionCommand {
     /// Returns the operation kind persisted in the operations table.
     fn kind(&self) -> &'static str {
         match self {
+            Self::RunGraphTask(_) => "graph_node",
             Self::RunAgentTask { .. } => "agent_task",
             Self::CreateReviewRequest { .. } => CREATE_REVIEW_REQUEST_OPERATION_KIND,
             Self::Rebase { .. } => REBASE_OPERATION_KIND,
@@ -214,7 +219,9 @@ pub(super) struct ScheduledSessionCommand {
 impl ScheduledSessionCommand {
     fn trace(command: &SessionCommand) -> QueuedTrace {
         let name = match command {
-            SessionCommand::Run { .. } | SessionCommand::RunAgentTask { .. } => "session.turn",
+            SessionCommand::Run { .. }
+            | SessionCommand::RunAgentTask { .. }
+            | SessionCommand::RunGraphTask(_) => "session.turn",
             SessionCommand::Rebase { .. } => "session.sync",
             SessionCommand::CreateReviewRequest { .. } => "session.publish",
         };
@@ -235,6 +242,9 @@ impl ScheduledSessionCommand {
 
     /// Returns whether this command can make a questioned session runnable.
     fn can_run_while_question(&self) -> bool {
+        if let SessionCommand::RunGraphTask(task) = &self.command {
+            return task.cancellation.is_cancelled();
+        }
         if let SessionCommand::RunAgentTask { cancellation, .. } = &self.command {
             return cancellation.is_cancelled();
         }
@@ -313,6 +323,8 @@ struct SessionWorkerHost {
     context: SessionWorkerContext,
     message_traces: Arc<Mutex<HashMap<(SessionId, u64), QueuedTrace>>>,
     run_client: Arc<dyn RunClient>,
+    graph_resources: Arc<ag_worker::GraphResources>,
+    graph_wake: tokio::sync::watch::Sender<u64>,
 }
 
 impl Drop for SessionWorkerHost {
@@ -344,11 +356,35 @@ impl ag_worker::WorkQueue for SessionWorkerHost {
 #[async_trait::async_trait]
 impl ag_worker::WorkerHost for SessionWorkerHost {
     async fn execute(&self, work: ScheduledSessionWork) {
+        let environment = self
+            .graph_resources
+            .environment(&ag_session::EnvId::SessionWorktree(
+                self.context.session_id.clone(),
+            ));
+        // Graph turns publish active ownership before acquiring their leases;
+        // completion retains those leases through operation settlement.
+        let writer = if matches!(
+            &work,
+            ScheduledSessionWork::Command(ScheduledSessionCommand {
+                command: SessionCommand::RunGraphTask(_),
+                ..
+            })
+        ) {
+            None
+        } else {
+            Some(environment.write_owned().await)
+        };
+        let _environment_lease = crate::app::execution_graph::EnvironmentLease::from_writer(
+            writer,
+            self.graph_wake.clone(),
+        );
         let is_turn = matches!(
             &work,
             ScheduledSessionWork::Message(_)
                 | ScheduledSessionWork::Command(ScheduledSessionCommand {
-                    command: SessionCommand::Run { .. } | SessionCommand::RunAgentTask { .. },
+                    command: SessionCommand::Run { .. }
+                        | SessionCommand::RunAgentTask { .. }
+                        | SessionCommand::RunGraphTask(_),
                     ..
                 })
         );
@@ -421,6 +457,7 @@ impl ag_worker::WorkerHost for SessionWorkerHost {
             .retain(|(session_id, order), _| {
                 session_id != &self.context.session_id || orders.contains(order)
             });
+        drop(queued_messages);
     }
 
     async fn abandon(&self, work: ScheduledSessionWork) {
@@ -644,6 +681,7 @@ impl SessionWorkerRebaseAssistClient {
             .ok()
             .flatten();
         let req = TurnRequest {
+            provider_call_budget: None,
             execution_policy: ag_contracts::ExecutionPolicy::default(),
             continuation: TurnContinuation::provider(
                 Some(turn::live_transcript_source(&self.transcript)),
@@ -881,7 +919,8 @@ impl SessionWorkerService {
         session_id: &SessionId,
         command: &mut ScheduledSessionCommand,
     ) {
-        let mutating_task = matches!(&command.command, SessionCommand::RunAgentTask { request, .. } if request.assignment.role == ag_session::TaskAgentRole::Implementer);
+        let mutating_task = matches!(&command.command, SessionCommand::RunAgentTask { request, .. } if request.assignment.role == ag_session::TaskAgentRole::Implementer)
+            || matches!(&command.command, SessionCommand::RunGraphTask(task) if task.request.dispatch.node.execution.workspace_access == ag_session::GraphWorkspaceAccess::ExclusiveWrite);
         if !command.command.is_preparation_prompt(session_id) && !mutating_task {
             return;
         }
@@ -1232,6 +1271,8 @@ impl SessionWorkerService {
         };
         let worker = SessionWorkerHandle::spawn(
             SessionWorkerHost {
+                graph_resources: Arc::clone(&services.graph_resources),
+                graph_wake: services.graph_wake.clone(),
                 context,
                 message_traces: Arc::clone(&self.message_traces),
                 run_client: services.session_run_client(&runtime.session_id),
@@ -1319,6 +1360,10 @@ impl SessionWorkerService {
     ) -> Option<Result<(), SessionError>> {
         let operation_id = command.operation_id().to_string();
         let is_agent_task = matches!(&command, SessionCommand::RunAgentTask { .. });
+        let graph_completion = match &command {
+            SessionCommand::RunGraphTask(task) => Some(task.completion.clone()),
+            _ => None,
+        };
         ag_telemetry::current_attribute("agentty.operation.id", operation_id.clone());
         ag_telemetry::current_attribute("agentty.purpose", command.kind());
         if let SessionCommand::Run { turn_metadata, .. } = &command {
@@ -1393,6 +1438,10 @@ impl SessionWorkerService {
             |error| tracing::warn!(%error, "Worker operation tracking failed"),
         )
         .await;
+
+        if let Some(completion) = graph_completion {
+            completion.finish(result.as_ref().copied().map_err(ToString::to_string));
+        }
 
         if is_agent_task {
             Self::emit_queue_session_updated(context);
@@ -1543,6 +1592,12 @@ impl SessionWorkerService {
     /// Resolves external observers when a queued command is canceled or
     /// otherwise finishes before worker execution begins.
     fn complete_skipped_session_command(context: &SessionWorkerContext, command: &SessionCommand) {
+        if let SessionCommand::RunGraphTask(task) = command {
+            task.completion
+                .finish(Err("Graph task was canceled or already settled before \
+                             execution"
+                    .into()));
+        }
         if let SessionCommand::Run { turn_metadata, .. } = command
             && !turn_metadata.review_comment_thread_ids.is_empty()
         {
@@ -1640,6 +1695,9 @@ impl SessionWorkerService {
         command: SessionCommand,
     ) -> Result<(), SessionError> {
         match command {
+            SessionCommand::RunGraphTask(task) => {
+                graph_turn::run(context, Arc::clone(run_client), &task).await
+            }
             SessionCommand::RunAgentTask {
                 request,
                 factory,
@@ -1916,6 +1974,114 @@ impl SessionWorkerService {
 }
 
 impl SessionManager {
+    /// Queues an admitted graph task without reclaiming its operation.
+    pub(in crate::app) async fn enqueue_claimed_graph_task(
+        &mut self,
+        services: &AppServices,
+        request: ag_worker::GraphRunRequest,
+        cancellation: CancellationToken,
+        response_tx: oneshot::Sender<Result<String, ag_contracts::OneShotError>>,
+    ) {
+        let completion = graph_turn::GraphTaskCompletion::new(response_tx);
+        let result = async {
+            let node = &request.dispatch.node;
+            let record = &request.dispatch.record;
+            let ag_session::GraphExecutionRef::TaskAttempt {
+                task_id,
+                attempt_id,
+                operation_id,
+            } = &record.execution
+            else {
+                return Err(SessionError::Workflow(
+                    "Graph handoff requires a task attempt".into(),
+                ));
+            };
+            let ag_session::EnvId::SessionWorktree(session_id) = &node.env_id;
+            self.state.sync_from_handles();
+            let session = self.session_or_err(session_id)?;
+            if !matches!(
+                session.status,
+                Status::Draft
+                    | Status::Review
+                    | Status::AgentReview
+                    | Status::InProgress
+                    | Status::Question
+            ) || request.folder != session.folder
+            {
+                return Err(SessionError::Workflow(
+                    "Graph session is unavailable or its Env changed".into(),
+                ));
+            }
+            if node.execution.workspace_access == ag_session::GraphWorkspaceAccess::ExclusiveWrite
+                && !self.can_reply_to_session_in_stack(session_id)
+            {
+                return Err(SessionError::Workflow(
+                    "Graph writer requires an idle session stack".into(),
+                ));
+            }
+            let graph = services
+                .db()
+                .graphs()
+                .load_graph(&record.graph_id, Some(record.graph_revision))
+                .await?
+                .ok_or_else(|| SessionError::Workflow("Graph snapshot is missing".into()))?;
+            if graph.session_id != *session_id
+                || !graph.nodes.contains(node)
+                || services
+                    .db()
+                    .graphs()
+                    .load_execution(&record.execution)
+                    .await?
+                    .as_ref()
+                    != Some(record)
+            {
+                return Err(SessionError::Workflow(
+                    "Graph task differs from its durable claim".into(),
+                ));
+            }
+            let queued = services
+                .db()
+                .tasks()
+                .load_task(task_id)
+                .await?
+                .is_some_and(|task| {
+                    task.attempts.iter().any(|attempt| {
+                        attempt.id == *attempt_id
+                            && attempt.status == ag_session::TaskAttemptStatus::Queued
+                    })
+                });
+            if !queued {
+                return Err(SessionError::Workflow("Graph task is not queued".into()));
+            }
+            self.validate_agent_task_workspace(services, session_id)?;
+            let runtime = self.session_worker_runtime_or_err(services, session_id)?;
+            let owner = session_id.clone();
+            let operation_id = operation_id.clone();
+            let command = SessionCommand::RunGraphTask(Box::new(graph_turn::GraphTaskCommand {
+                cancellation: Arc::new(cancellation),
+                completion: completion.clone(),
+                factory: services.task_run_factory(),
+                operation_id,
+                request,
+                resources: services.graph_resources.clone(),
+            }));
+            let worker = self
+                .worker_service_mut()
+                .ensure_session_worker(services, &runtime);
+            let order = worker.next_queued_work_order();
+            let mut scheduled = ScheduledSessionCommand::queued(command, order);
+            self.worker_service_mut()
+                .reserve_preparation_command(&owner, &mut scheduled);
+            self.worker_service_mut()
+                .send_persisted_command(services.db().operations(), &owner, worker, scheduled)
+                .await
+        }
+        .await;
+        if let Err(error) = result {
+            completion.finish(Err(error.to_string()));
+        }
+    }
+
     /// Checks live readiness and stack ownership before isolated admission.
     /// Reading every handle prevents delayed reducer events from hiding an
     /// active sibling's branch work.

@@ -158,6 +158,12 @@ impl App {
         request: SessionMutation,
     ) -> Result<(), SessionError> {
         match request {
+            SessionMutation::StartExecutionGraph { request } => {
+                self.start_api_execution_graph(*request).await
+            }
+            SessionMutation::AcceptExecutionGraphResult { reference } => {
+                self.accept_api_execution_graph_result(*reference).await
+            }
             SessionMutation::SubmitAgentTask {
                 request,
                 session_id,

@@ -12,6 +12,24 @@ use crate::{DbError, TimestampSource};
 #[cfg_attr(any(test, feature = "test-utils"), mockall::automock)]
 #[async_trait]
 pub trait GraphRepository: Send + Sync {
+    /// Returns static task dispatch context UUIDs before session deletion
+    /// cascades their receipts. Legacy links never allocate runtime resources.
+    async fn list_task_context_ids(&self, session_id: &str) -> Result<Vec<String>, DbError>;
+    /// Records an isolated task's observed response and provider continuation
+    /// before ordered effects. Requires the exact running graph claim; usage
+    /// is accounted once. This does not settle execution or release gates.
+    async fn record_task_turn(
+        &self,
+        dispatch: &ag_worker::GraphDispatch,
+        metadata: &crate::TaskAgentTurnMetadata,
+    ) -> Result<bool, DbError>;
+
+    /// Reads an observed task turn, including a response whose effects failed.
+    /// The immutable graph receipt retains its request, inputs and assignment.
+    async fn load_task_turn(
+        &self,
+        execution: &GraphExecutionRef,
+    ) -> Result<Option<crate::TaskAgentTurnMetadata>, DbError>;
     /// Saves a complete validated snapshot atomically. Creation requires
     /// revision one and no expected revision; updates require the current
     /// revision and its immediate successor. Identical historical redelivery
@@ -175,6 +193,65 @@ impl SqliteGraphRepository {
 
 #[async_trait]
 impl GraphRepository for SqliteGraphRepository {
+    async fn list_task_context_ids(&self, session_id: &str) -> Result<Vec<String>, DbError> {
+        sqlx::query_scalar(
+            "SELECT a.id FROM execution_graph_execution e JOIN task_attempt a ON a.id = \
+             e.task_attempt_id JOIN task t ON t.id = a.task_id WHERE t.session_id = ? AND \
+             e.is_dispatch_claimed = 1 ORDER BY e.id",
+        )
+        .bind(session_id)
+        .fetch_all(&self.pool)
+        .await
+        .map_err(Into::into)
+    }
+
+    async fn record_task_turn(
+        &self,
+        dispatch: &ag_worker::GraphDispatch,
+        metadata: &crate::TaskAgentTurnMetadata,
+    ) -> Result<bool, DbError> {
+        self.save_task_turn(dispatch, metadata).await
+    }
+
+    async fn load_task_turn(
+        &self,
+        execution: &GraphExecutionRef,
+    ) -> Result<Option<crate::TaskAgentTurnMetadata>, DbError> {
+        let mut connection = self.pool.acquire().await?;
+        let Some((id, _)) = Self::execution(&mut connection, execution).await? else {
+            return Ok(None);
+        };
+        let metadata: Option<String> = sqlx::query_scalar(
+            "SELECT metadata FROM execution_graph_task_turn WHERE execution_graph_execution_id = ?",
+        )
+        .bind(id)
+        .fetch_optional(&mut *connection)
+        .await?;
+
+        metadata
+            .map(|metadata| {
+                let (
+                    assistant_message,
+                    harness_turn_report,
+                    instruction_conversation_id,
+                    input_tokens,
+                    output_tokens,
+                    provider_conversation_id,
+                ) = serde_json::from_str(&metadata)
+                    .map_err(|error| Self::invalid(error.to_string()))?;
+
+                Ok(crate::TaskAgentTurnMetadata {
+                    assistant_message,
+                    harness_turn_report,
+                    instruction_conversation_id,
+                    input_tokens,
+                    output_tokens,
+                    provider_conversation_id,
+                })
+            })
+            .transpose()
+    }
+
     async fn save_graph(
         &self,
         graph: &ExecutionGraph,

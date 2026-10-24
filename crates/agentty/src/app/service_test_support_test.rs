@@ -55,6 +55,15 @@ impl TestSessionRunFactory {
 }
 
 impl SessionRunFactory for TestSessionRunFactory {
+    fn create_graph_task(
+        &self,
+        context_id: &str,
+        _session_id: &SessionId,
+        kind: AgentKind,
+    ) -> Result<SessionRunClient, AgentError> {
+        Ok(self.create(&SessionId::from(context_id), kind))
+    }
+
     fn create_task(
         &self,
         context: &ag_session::TaskAgentContext,

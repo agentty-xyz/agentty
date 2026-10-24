@@ -51,10 +51,12 @@ before execution. Retries and protocol repairs remain attempts within the same
 supervised run and retain its per-turn filesystem permissions and provider-call budget.
 Coordinators can reserve an initial provider call before durable admission. The request
 and its clones share that reservation: the first attempt redeems it, retries charge the
-shared pool, and dropping all unused owners refunds the call. Commit generation prepares
-bounded evidence deterministically; primary and fallback requests share their budget,
-including transport repairs. Captured utility ownership remains authoritative when an
-active host phase supplies a trace link.
+shared pool, and dropping all unused owners refunds the call. Combining overlapping
+budget chains charges each shared counter once and retains reserved credit. Consumption
+reserves every counter before committing; rejected attempts refund all credits even
+under contention. Commit generation prepares bounded evidence deterministically; primary
+and fallback requests share their budget, including transport repairs. Captured utility
+ownership remains authoritative when an active host phase supplies a trace link.
 
 `SessionRunClient::for_task_context` binds retained provider resources and native
 history to a host-allocated task-context UUID. Session ownership, shared capacity, and
@@ -78,10 +80,13 @@ remove ownership records. Cancellation and deletion wait for the owning serial w
 and utility cleanup before reclaiming task-native history outside the worktree.
 
 Caller drop, parent cancellation, or shutdown stops owned execution. Nested scopes
-retain parent cancellation. Cleanup precedes terminal bookkeeping and resource deletion;
-durable admission closures reject late session work. Shutdown has one shared five-second
-grace period before forcing unfinished runtime work to stop. Startup recovery fails
-abandoned runs rather than replaying potentially mutating requests.
+retain parent cancellation. Detached utility hosts attach Env leases with
+`with_execution_resource` so worker ownership retains them through cancellation cleanup
+and terminal bookkeeping, even after a caller or review deadline stops waiting. Cleanup
+precedes resource deletion; durable admission closures reject late session work.
+Shutdown has one shared five-second grace period before forcing unfinished runtime work
+to stop. Startup recovery fails abandoned runs rather than replaying potentially
+mutating requests.
 
 ### Execution Policy
 
@@ -146,8 +151,12 @@ requests; external harnesses manage their own model integrations.
 ## Supporting Boundaries
 
 `ag-session` owns session models and model selection; `ag-store` supplies persistence.
-Only `ag-worker` depends on `ag-runtime`, and only `ag-runtime` depends on `ag-agent`.
-Only `ag-harness-cli` and `ag-agent` may depend on `ag-harness`. Applications configure
+Static graph tasks enter the existing serial session worker with isolated runtime
+identities and captured instructions. Their completion includes ordered session effects.
+Shared provider-call budgets pass through session turns, retries, repairs, and utility
+children; a child's own call limit remains an additional ceiling. Only `ag-worker`
+depends on `ag-runtime`, and only `ag-runtime` depends on `ag-agent`. Only
+`ag-harness-cli` and `ag-agent` may depend on `ag-harness`. Applications configure
 worker handles and import shared types from `ag-contracts`. The
 `check-execution-boundary` hook enforces this boundary on every commit: dependency rules
 cover all workspace dependencies, including test code, and source checks keep raw

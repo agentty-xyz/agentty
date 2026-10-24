@@ -125,6 +125,7 @@ async fn native_harness_configuration_runs_harness_work_in_process() {
     let config = RuntimeConfig::default().with_native_harness(data_root.path().to_path_buf());
     let (events, _events_rx) = tokio::sync::mpsc::unbounded_channel();
     let turn = TurnRequest {
+        provider_call_budget: None,
         continuation: TurnContinuation::fresh(),
         execution_policy: ExecutionPolicy::default(),
         folder: data_root.path().to_path_buf(),

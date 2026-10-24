@@ -414,6 +414,7 @@ async fn prepare_turn_request(
 
                 Ok(PreparedTurnRequest {
                     request: TurnRequest {
+                        provider_call_budget: None,
                         execution_policy: ag_contracts::ExecutionPolicy::default(),
                         continuation,
                         folder: env.folder.clone(),
