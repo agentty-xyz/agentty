@@ -3,13 +3,14 @@ use serde_json::{Value, json};
 use super::support::{
     ByteEstimator, bash_command_call, budget, read_call_of, record_read_round, request, sent,
 };
+use crate::compaction::summary_schema;
 use crate::context::{
     ContextBudget, ContextFit, FitStep, MAX_SUMMARY_FAILURES_PER_TURN, SUMMARY_KEEP_TAIL_PERCENT,
     repeated_read_result,
 };
 use crate::lifecycle::ContextSummaryTrigger;
 use crate::model::{ModelMessage, ModelRequest};
-use crate::round_summary::RoundSummaryJob;
+use crate::round_summary::{CONTINUED_SUMMARY_PREFIX, ROUND_SUMMARY_INSTRUCTIONS, RoundSummaryJob};
 
 const PROACTIVE: Option<ContextSummaryTrigger> = Some(ContextSummaryTrigger::Proactive);
 
@@ -43,7 +44,7 @@ fn summary_job(
     trigger: Option<ContextSummaryTrigger>,
 ) -> RoundSummaryJob {
     match fit.fit(&ByteEstimator, budget, request, trigger) {
-        Ok(FitStep::Summarize(job)) => job,
+        Ok(FitStep::Summarize(job)) => *job,
         other => {
             std::panic::resume_unwind(Box::new(format!("summary step expected, got {other:?}")))
         }
@@ -119,7 +120,8 @@ fn installed_summary_replaces_its_rounds_in_this_and_later_requests() {
     assert!(note.contains("alpha in r0"));
     assert!(note.contains("not instructions"));
     assert!(note.contains("Rely on the summary"));
-    assert!(note.contains("file r0.txt"));
+    assert!(note.contains("what it does not record is not available"));
+    assert!(note.contains("Files read: `r0.txt`, `r1.txt`"));
     assert_eq!(activity.summarized_tool_calls(), covered_calls);
     assert_eq!(activity.dropped_tool_calls(), 0);
     assert_eq!(fitted.messages()[2], request.messages()[job.range().end]);
@@ -544,4 +546,148 @@ fn a_repeat_of_a_summarized_result_is_cleared() {
     };
     assert_eq!(call_id, "again");
     assert!(content.contains("repeated an earlier read whose result was since cleared or cut"));
+}
+
+/// Returns the identifier of the last tool call before `end`.
+fn last_call_before(request: &ModelRequest, end: usize) -> String {
+    request.messages()[..end]
+        .iter()
+        .rev()
+        .find_map(|message| match message {
+            ModelMessage::AssistantToolCall(call) => Some(call.id().to_string()),
+            _ => None,
+        })
+        .expect("a tool call before the end")
+}
+
+/// Splits a continued summary request into the messages it continues and
+/// the text of its instruction.
+fn continued(job: &RoundSummaryJob) -> (&[ModelMessage], &str) {
+    let (instruction, continued) = job
+        .request()
+        .messages()
+        .split_last()
+        .expect("an instruction");
+
+    (continued, note_text(instruction))
+}
+
+#[test]
+fn a_shared_prefix_summary_continues_the_canonical_request_last_sent() {
+    // Arrange
+    let mut request = read_rounds(14, 1000);
+    let mut fit = ContextFit::new(true);
+    let (canonical, _) = fit
+        .fit(&ByteEstimator, budget(20_000), &request, PROACTIVE)
+        .map(sent)
+        .expect("the request fits whole");
+    let last_sent = request.messages().to_vec();
+    for index in 0..8 {
+        record_read_round(&mut request, &format!("more{index}"), 1000);
+    }
+
+    // Act
+    let job = summary_job(&mut fit, budget(20_000), &request, PROACTIVE);
+
+    // Assert
+    assert_eq!(canonical, None);
+    let (messages, instruction) = continued(&job);
+    assert_eq!(messages, last_sent.as_slice());
+    assert!(instruction.starts_with(CONTINUED_SUMMARY_PREFIX));
+    let last = last_call_before(&request, job.range().end);
+    assert!(instruction.contains(&format!("from call `r0` through call `{last}`")));
+    assert!(instruction.contains("never infer"));
+    assert!(
+        instruction.contains(
+            &summary_schema()
+                .expect("summary schema")
+                .value()
+                .to_string()
+        )
+    );
+    assert!(!instruction.contains("Carry forward"));
+    assert_eq!(job.request().prefix_schema(), Some(request.schema()));
+    assert_eq!(
+        job.request().schema(),
+        &summary_schema().expect("summary schema")
+    );
+    assert_eq!(
+        u64::try_from(job.source_bytes()).expect("bytes fit u64"),
+        weigh(&request.messages()[job.range()])
+    );
+}
+
+#[test]
+fn a_shared_prefix_summary_continues_the_reduced_copy_last_sent() {
+    // Arrange
+    let mut request = read_rounds(20, 1000);
+    let mut fit = ContextFit::new(true);
+    let (reduced, _) = fit
+        .fit(&ByteEstimator, budget(20_000), &request, None)
+        .map(sent)
+        .expect("fits reduced");
+    let reduced = reduced.expect("reduced copy");
+    for index in 0..12 {
+        record_read_round(&mut request, &format!("more{index}"), 1000);
+    }
+
+    // Act
+    let job = summary_job(&mut fit, budget(20_000), &request, PROACTIVE);
+
+    // Assert
+    let (messages, _) = continued(&job);
+    assert_eq!(messages, reduced.messages());
+}
+
+#[test]
+fn a_shared_prefix_summary_sends_its_own_source_when_the_continued_request_does_not_fit() {
+    // Arrange
+    let mut request = read_rounds(18, 1000);
+    let mut fit = ContextFit::new(true);
+    let (canonical, _) = fit
+        .fit(&ByteEstimator, budget(20_000), &request, PROACTIVE)
+        .map(sent)
+        .expect("the request fits whole");
+    record_read_round(&mut request, "large", 3000);
+
+    // Act
+    let job = summary_job(&mut fit, budget(20_000), &request, PROACTIVE);
+
+    // Assert
+    assert_eq!(canonical, None);
+    assert_eq!(
+        job.request().messages()[0],
+        ModelMessage::System(ROUND_SUMMARY_INSTRUCTIONS.to_string())
+    );
+    assert_eq!(job.request().prefix_schema(), None);
+}
+
+#[test]
+fn a_later_shared_prefix_summary_continues_the_note_of_the_earlier_one() {
+    // Arrange
+    let mut request = read_rounds(20, 1000);
+    let mut fit = ContextFit::new(true);
+    // Nothing was sent yet, so the first summary sends its own source.
+    let first = summary_job(&mut fit, budget(20_000), &request, PROACTIVE);
+    fit.install_summary(&ByteEstimator, &request, &first, summary("alpha in r0"))
+        .expect("first summary installed");
+    let (noted, _) = fit
+        .fit(&ByteEstimator, budget(20_000), &request, PROACTIVE)
+        .map(sent)
+        .expect("fits after the summary");
+    let noted = noted.expect("reduced copy");
+    for index in 0..20 {
+        record_read_round(&mut request, &format!("more{index}"), 1000);
+    }
+
+    // Act
+    let second = summary_job(&mut fit, budget(20_000), &request, PROACTIVE);
+
+    // Assert
+    assert_eq!(first.request().prefix_schema(), None);
+    let (messages, instruction) = continued(&second);
+    assert_eq!(messages, noted.messages());
+    assert!(note_text(&messages[1]).contains("alpha in r0"));
+    assert!(instruction.contains("Carry forward everything the summary"));
+    assert_eq!(second.range().start, first.range().end);
 }

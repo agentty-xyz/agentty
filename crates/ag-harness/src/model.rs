@@ -71,6 +71,17 @@ pub trait Model: Send + Sync {
         Ok(())
     }
 
+    /// Returns whether a request carrying [`ModelRequest::prefix_schema`]
+    /// keeps the provider's cached prefix of the conversation it continues:
+    /// the adapter states that schema where the conversation's requests
+    /// stated theirs and leaves the request's own schema to its last
+    /// message. The harness then asks for round summaries with the turn's
+    /// last request and an appended instruction; otherwise, as by default,
+    /// with a compact request of their own.
+    fn keeps_prefix_across_schemas(&self) -> bool {
+        false
+    }
+
     /// Completes one model request with optional provider metadata.
     ///
     /// # Errors
@@ -273,6 +284,10 @@ impl ModelClient {
             .options
             .prompt_cache_key
             .clone_from(&request.cache_key);
+        routed
+            .options
+            .prefix_schema
+            .clone_from(&request.prefix_schema);
         Ok(routed)
     }
 
@@ -463,6 +478,12 @@ impl Model for ModelClient {
             .map_err(Self::from_router_error)
     }
 
+    fn keeps_prefix_across_schemas(&self) -> bool {
+        self.router
+            .keeps_prefix_across_schemas(&self.router_model)
+            .unwrap_or(false)
+    }
+
     async fn complete(&self, request: ModelRequest) -> Result<ModelCompletion, ModelError> {
         ModelClient::complete(self, request).await
     }
@@ -528,6 +549,7 @@ pub struct ModelRequest {
     lifecycle_observed: bool,
     messages: Vec<ModelMessage>,
     model_reasoning_effort: Option<ReasoningEffort>,
+    prefix_schema: Option<OutputSchema>,
     prompt: String,
     schema: OutputSchema,
     tools: Vec<tool::ToolDefinition>,
@@ -560,6 +582,7 @@ impl ModelRequest {
             lifecycle_observed: false,
             messages,
             model_reasoning_effort: None,
+            prefix_schema: None,
             prompt,
             schema,
             tools: Vec::new(),
@@ -592,6 +615,16 @@ impl ModelRequest {
     /// Returns the schema that the response must match.
     pub fn schema(&self) -> &OutputSchema {
         &self.schema
+    }
+
+    /// Returns the schema of the conversation this request continues when it
+    /// asks for another one, as a round summary does. Adapters whose prompt
+    /// states the output schema in a leading message state this one there,
+    /// so the request keeps the conversation's cached prefix (see
+    /// [`Model::keeps_prefix_across_schemas`]); the request's own schema is
+    /// then stated in its last message and still validates the response.
+    pub fn prefix_schema(&self) -> Option<&OutputSchema> {
+        self.prefix_schema.as_ref()
     }
 
     /// Returns the native function tools explicitly advertised by the caller.
@@ -658,10 +691,28 @@ impl ModelRequest {
             lifecycle_observed: self.lifecycle_observed,
             messages,
             model_reasoning_effort: self.model_reasoning_effort,
+            prefix_schema: self.prefix_schema.clone(),
             prompt: self.prompt.clone(),
             schema: self.schema.clone(),
             tools: self.tools.clone(),
         }
+    }
+
+    /// Returns a copy of this request that appends `message` and asks for
+    /// `schema`, keeping its tools, reasoning depth, and cache key, and
+    /// naming its own schema as [`Self::prefix_schema`], so a provider can
+    /// serve the copy from this request's cached prefix.
+    pub(crate) fn continued_with(&self, message: ModelMessage, schema: OutputSchema) -> Self {
+        let mut continued = self.with_fitted_messages(self.messages.clone());
+        continued.messages.push(message);
+        continued.prefix_schema = Some(
+            self.prefix_schema
+                .clone()
+                .unwrap_or_else(|| self.schema.clone()),
+        );
+        continued.schema = schema;
+
+        continued
     }
 
     /// Returns this request's messages for in-place maintenance of a fitted

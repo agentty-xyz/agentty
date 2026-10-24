@@ -499,6 +499,10 @@ impl Model for BudgetedModel {
         Model::validate_input(&self.inner, input)
     }
 
+    fn keeps_prefix_across_schemas(&self) -> bool {
+        Model::keeps_prefix_across_schemas(&self.inner)
+    }
+
     async fn complete(&self, request: ModelRequest) -> Result<ModelCompletion, ModelError> {
         self.budget.consume().map_err(ModelError::request)?;
 

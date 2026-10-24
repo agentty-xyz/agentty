@@ -586,7 +586,7 @@ fn a_cut_repeat_result_is_cleared_with_the_result_it_points_to() {
     // Act
     // The repeat is the new latest round, so it is cut to a quarter of the
     // budget before the result it points to is elided.
-    let (fitted, activity) = fit_owned(&mut fit, 1000, &request);
+    let (fitted, activity) = fit_owned(&mut fit, 1100, &request);
 
     // Assert
     let repeat = result_json(&fitted.messages()[4]);
@@ -633,6 +633,51 @@ fn a_repeat_of_a_superseded_result_points_to_the_newer_read() {
 }
 
 #[test]
+fn notices_naming_a_newer_result_stay_true_once_that_result_is_cleared_too() {
+    // Arrange
+    let mut request = request(Vec::new(), Vec::new(), "inspect");
+    record(&mut request, &read_call_of("a1", "a.txt"), "x".repeat(6000));
+    record(&mut request, &read_call_of("a2", "a.txt"), "x".repeat(1500));
+    record(
+        &mut request,
+        &read_call_of("a3", "a.txt"),
+        repeated_read_result("a1"),
+    );
+    record_read_round(&mut request, "b", 10);
+    let budget_weight = weigh(&request) - 1;
+    let mut fit = ContextFit::default();
+    let (first, _) = fit_owned(&mut fit, budget_weight, &request);
+    for index in 0..7 {
+        record_read_round(&mut request, &format!("n{index}"), 900);
+    }
+
+    // Act
+    let (second, activity) = fit_owned(&mut fit, budget_weight, &request);
+
+    // Assert
+    for (index, call) in [(2, "a1"), (6, "a3")] {
+        let notice = result_json(&first.messages()[index]);
+        assert_eq!(notice["superseded_by"], json!("a2"), "{call}");
+        let text = notice["context_cleared"].as_str().expect("notice text");
+        assert!(
+            text.contains("Use that newer result while it is shown; if it was cleared or cut too"),
+            "{call}: {text}"
+        );
+        // A sent notice is never rewritten, so it must hold either way.
+        assert_eq!(second.messages()[index], first.messages()[index], "{call}");
+    }
+    assert_eq!(first.messages()[4], request.messages()[4]);
+    let newer = result_json(&second.messages()[4]);
+    assert!(
+        newer["context_cleared"]
+            .as_str()
+            .expect("notice text")
+            .contains("so its content is not available")
+    );
+    assert_eq!(activity.dropped_tool_calls(), 0);
+}
+
+#[test]
 fn a_repeat_of_a_result_a_write_changed_says_to_read_again() {
     // Arrange
     let mut request = request(Vec::new(), Vec::new(), "edit");
@@ -663,12 +708,9 @@ fn a_repeat_of_a_result_a_write_changed_says_to_read_again() {
     assert_eq!(activity.superseded_results(), 1);
     let repeat = result_json(&fitted.messages()[4]);
     assert_eq!(repeat.get("superseded_by"), None);
-    assert!(
-        repeat["context_cleared"]
-            .as_str()
-            .expect("notice text")
-            .contains("read it again")
-    );
+    let text = repeat["context_cleared"].as_str().expect("notice text");
+    assert!(text.contains("is not available"));
+    assert!(text.contains("Read it again"));
 }
 
 #[test]

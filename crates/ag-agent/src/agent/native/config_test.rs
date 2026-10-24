@@ -355,6 +355,7 @@ async fn budgeted_model_charges_before_each_request() {
     );
     assert!(model.validate_schema(&schema).is_ok());
     assert!(model.validate_input(&TurnInput::from("Hi")).is_ok());
+    assert!(!model.keeps_prefix_across_schemas());
     let error = completion.expect_err("an exhausted budget should refuse the request");
     assert!(
         error.to_string().contains("provider call limit reached"),

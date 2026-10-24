@@ -8,7 +8,7 @@ use super::support::{
 };
 use crate::context::{
     ContextBudget, ContextEstimator, ContextFit, DROP_TARGET_PERCENT, HeuristicContextEstimator,
-    LATEST_ROUND_CAP_PERCENT, RESULT_CAP_PERCENT, cleared_result_notice, read_target,
+    LATEST_ROUND_CAP_PERCENT, RESULT_CAP_PERCENT, RoundNote, cleared_result_notice, read_target,
     repeated_read_result,
 };
 use crate::model::{ModelMessage, ModelRequest};
@@ -197,7 +197,7 @@ fn fit_cuts_latest_results_further_only_when_capping_is_not_enough() {
     capped.record_tool_calls(calls.clone());
     capped.record_tool_result(&calls[0], "x".repeat(5000));
     capped.record_tool_result(&calls[1], "y".repeat(100));
-    let mut whole = request(Vec::new(), Vec::new(), &"i".repeat(1700));
+    let mut whole = request(Vec::new(), Vec::new(), &"i".repeat(1680));
     record_read_round(&mut whole, "medium", 400);
     let mut capped_fitter = ContextFit::default();
 
@@ -366,26 +366,34 @@ fn dropping_a_round_releases_its_capped_result() {
         4 - activity.dropped_tool_calls()
     );
     assert!(dropped_note(&fitted).contains("Commands run: `cargo test 0`"));
-    assert!(!dropped_note(&fitted).contains("Reads whose results"));
+    assert!(!dropped_note(&fitted).contains("reads showed"));
 }
 
 #[test]
-fn dropped_round_note_lists_distinct_read_targets_within_a_bound() {
+fn dropped_round_note_lists_every_distinct_file_read_and_other_reads_within_a_bound() {
     // Arrange
-    let mut request = request(Vec::new(), Vec::new(), "loop");
-    for index in 0..12 {
-        let call = read_of(
-            &format!("r{index}"),
-            &json!({"path": format!("p{}.txt", index.max(1) - 1), "offset": 3, "limit": 5}),
-        );
-        request.record_tool_call(call.clone());
-        request.record_tool_result(&call, "x".repeat(150));
-    }
-    let mut fit = ContextFit::default();
+    let rounds = |arguments: &dyn Fn(usize) -> serde_json::Value| {
+        let mut request = request(Vec::new(), Vec::new(), "loop");
+        for index in 0..12 {
+            let call = read_of(&format!("r{index}"), &arguments(index));
+            request.record_tool_call(call.clone());
+            request.record_tool_result(&call, "x".repeat(150));
+        }
+
+        request
+    };
+    let file_reads = rounds(
+        &|index| json!({"path": format!("p{}.txt", index.max(1) - 1), "offset": 3, "limit": 5}),
+    );
+    let searches = rounds(&|index| json!({"action": "search", "query": format!("q{index}")}));
 
     // Act
-    let (fitted, activity) = fit
-        .fit(&ByteEstimator, budget(1500), &request, None)
+    let (fitted, activity) = ContextFit::default()
+        .fit(&ByteEstimator, budget(1500), &file_reads, None)
+        .map(sent)
+        .expect("fits after dropping rounds");
+    let (inspected, _) = ContextFit::default()
+        .fit(&ByteEstimator, budget(1500), &searches, None)
         .map(sent)
         .expect("fits after dropping rounds");
 
@@ -394,10 +402,41 @@ fn dropped_round_note_lists_distinct_read_targets_within_a_bound() {
     assert_eq!(activity.dropped_tool_calls(), 10);
     let note = dropped_note(&fitted);
     assert!(note.contains("removed with their results to fit the context window"));
-    assert!(note.contains("Reads whose results were removed: `file p0.txt offset=3 limit=5`, "));
-    assert!(note.contains("`file p7.txt offset=3 limit=5`, and 1 more."));
+    let files: Vec<String> = (0..9).map(|index| format!("`p{index}.txt`")).collect();
+    assert!(note.contains(&format!("Files read: {}.", files.join(", "))));
     assert_eq!(note.matches("p0.txt").count(), 1);
-    assert!(note.contains("Re-read only what you still need"));
+    assert!(note.contains("What those reads showed is not available"));
+    let other_reads = dropped_note(inspected.as_ref().expect("reduced copy"));
+    assert!(other_reads.contains("Other reads: `search \"q0\"`, "));
+    assert!(other_reads.contains("`search \"q7\"`, and "));
+    assert!(!other_reads.contains("Files read"));
+}
+
+#[test]
+fn dropped_round_notes_name_at_most_a_bounded_number_of_files() {
+    // Arrange
+    let paths: Vec<String> = (0..RoundNote::MAX_NAMED_FILES + 3)
+        .map(|index| format!("src/f{index}.rs"))
+        .collect();
+    let note = RoundNote {
+        calls: paths.len() * 2,
+        files_modified: paths.clone(),
+        files_read: paths,
+        ..RoundNote::default()
+    };
+
+    // Act
+    let ModelMessage::User(text) = note.message() else {
+        std::panic::resume_unwind(Box::new("the note is a user message"));
+    };
+
+    // Assert
+    let last = RoundNote::MAX_NAMED_FILES - 1;
+    assert!(text.contains("Files modified: `src/f0.rs`, `src/f1.rs`, "));
+    assert!(text.contains(&format!(
+        "`src/f{last}.rs`, and 3 more. Files read: `src/f0.rs`"
+    )));
+    assert!(!text.contains(&format!("`src/f{}.rs`", last + 1)));
 }
 
 #[test]
@@ -557,7 +596,7 @@ fn a_cleared_repeat_heavier_than_its_note_never_fails_the_fit() {
         .map(|input_bytes| {
             let mut request = request(Vec::new(), Vec::new(), &"i".repeat(input_bytes));
             request.record_tool_calls(calls.clone());
-            request.record_tool_result(&calls[0], "x".repeat(450));
+            request.record_tool_result(&calls[0], "x".repeat(600));
             request.record_tool_result(&calls[1], repeated_read_result("a1"));
 
             request
@@ -577,8 +616,8 @@ fn a_cleared_repeat_heavier_than_its_note_never_fails_the_fit() {
         .collect();
 
     // Assert
-    // Only inputs that leave no room for the cleared repeat beside the
-    // shortest cut of the result fail; a single cutting pass also failed
-    // from 974 bytes.
-    assert_eq!(failures.first(), Some(&1030), "{failures:?}");
+    // Inputs from 824 bytes overflow whole, and only those that leave no
+    // room for the cleared repeat beside the shortest cut of the result
+    // fail.
+    assert_eq!(failures.first(), Some(&986), "{failures:?}");
 }

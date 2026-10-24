@@ -124,6 +124,16 @@ impl JsonSchemaFormat {
 /// Optional generation settings.
 #[derive(Clone, Debug, Default, Eq, PartialEq)]
 pub struct GenerationOptions {
+    /// Output schema of the conversation this request continues, when the
+    /// request asks for a different one. Providers that state the output
+    /// schema in a leading prompt message (see
+    /// [`crate::Router::keeps_prefix_across_schemas`]) state this one there
+    /// instead, so the request keeps the conversation's cached prefix; the
+    /// caller then states the request's own schema after the conversation.
+    /// Every provider still validates the response against the request's own
+    /// schema, and providers that constrain output natively send only that
+    /// one.
+    pub prefix_schema: Option<OutputSchema>,
     /// Stable key grouping requests that share a prompt prefix, sent as
     /// `prompt_cache_key` only to providers that route prompt-cache hits by it.
     pub prompt_cache_key: Option<String>,

@@ -68,6 +68,10 @@ impl Model for Muse {
         self.client.validate_input(input)
     }
 
+    fn keeps_prefix_across_schemas(&self) -> bool {
+        Model::keeps_prefix_across_schemas(&self.client)
+    }
+
     async fn complete(&self, request: ModelRequest) -> Result<ModelCompletion, ModelError> {
         self.client.complete(request).await
     }
