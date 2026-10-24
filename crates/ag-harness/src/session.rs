@@ -2111,7 +2111,8 @@ async fn load_turns_from(
     Ok((turns, projection))
 }
 
-/// Loads the session's stored history projection.
+/// Loads the stored history projection of a session the caller already
+/// found.
 async fn load_projection(
     connection: &mut SqliteConnection,
     session_id: &str,
@@ -2126,12 +2127,9 @@ FROM session WHERE id = ?
 "#,
         session_id
     )
-    .fetch_optional(connection)
+    .fetch_one(connection)
     .await
-    .session_context("load persistent session history projection")?
-    .ok_or_else(|| SessionError::NotFound {
-        id: session_id.to_string(),
-    })?;
+    .session_context("load persistent session history projection")?;
 
     Ok(HistoryProjection::new(
         row.start,

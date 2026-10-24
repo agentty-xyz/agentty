@@ -24,16 +24,16 @@ use crate::tool::{Tool, ToolCall};
 /// several times.
 const TURNS: usize = 30;
 
-/// Scripts `turns` turns that each read one new file and then answer, and
-/// records every request.
-fn scripted_turns(turns: usize) -> (MockModel, Arc<Mutex<Vec<ModelRequest>>>) {
+/// Scripts `turns` turns that each read one of `files` files in turn and
+/// then answer, and records every request.
+fn scripted_turns(turns: usize, files: usize) -> (MockModel, Arc<Mutex<Vec<ModelRequest>>>) {
     let requests = Arc::new(Mutex::new(Vec::new()));
     let recorded = Arc::clone(&requests);
-    let responses = Mutex::new((0..turns).flat_map(|turn| {
+    let responses = Mutex::new((0..turns).flat_map(move |turn| {
         let read = ToolCall::from_json(
             format!("read_{turn}"),
             "read",
-            &json!({ "path": format!("notes_{turn}.txt") }).to_string(),
+            &json!({ "path": format!("notes_{}.txt", turn % files) }).to_string(),
             Some(format!("Turn {turn} needs the notes; I read them next.")),
         )
         .expect("read call");
@@ -140,7 +140,7 @@ fn assert_previous_turn_replayed_whole(requests: &[ModelRequest]) {
 #[tokio::test]
 async fn turns_append_to_the_history_earlier_turns_sent_within_the_byte_budget() {
     // Arrange
-    let (model, requests) = scripted_turns(TURNS);
+    let (model, requests) = scripted_turns(TURNS, TURNS);
     let directory = tempdir().expect("temporary directory");
     let harness = Harness::new(model, unbounded_context_budget())
         .repository(Repository::fixture("repo"))
@@ -170,7 +170,9 @@ async fn turns_append_to_the_history_earlier_turns_sent_within_the_byte_budget()
 #[tokio::test]
 async fn turns_append_to_the_history_earlier_turns_sent_within_the_context_budget() {
     // Arrange
-    let (model, requests) = scripted_turns(TURNS);
+    // Later turns read the same three files again, so the current turn's
+    // read supersedes a result in replayed history.
+    let (model, requests) = scripted_turns(TURNS, 3);
     let harness = Harness::new(
         model,
         ContextBudget::new(NonZeroU64::new(6_000).expect("nonzero")),
@@ -189,6 +191,19 @@ async fn turns_append_to_the_history_earlier_turns_sent_within_the_context_budge
     let rewriting = rewriting_requests(&requests);
     assert!(rewriting.len() >= 2, "history never outgrew its budget");
     assert!(rewriting.len() * 6 <= 2 * TURNS, "{rewriting:?}");
+    // A turn's own reduction clears replayed history, and the next turn
+    // starts from exactly what that reduction last sent.
+    let in_turn = rewriting
+        .iter()
+        .filter(|index| *index % 2 == 1)
+        .collect::<Vec<_>>();
+    assert!(!in_turn.is_empty(), "{rewriting:?}");
+    assert!(
+        in_turn
+            .iter()
+            .all(|index| !rewriting.contains(&(*index + 1))),
+        "{rewriting:?}"
+    );
     assert_results_rewritten_at_most_once(&requests);
     assert_previous_turn_replayed_whole(&requests);
 }

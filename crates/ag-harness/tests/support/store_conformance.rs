@@ -588,15 +588,21 @@ async fn complete_turn(store: &Arc<dyn SessionStore>, id: &str, input: &str) {
         .expect("complete");
 }
 
-/// Completes one turn with `input` that reads one file, keeping
-/// `projection` as the session's history projection, and returns its
-/// messages.
+/// Completes one turn with `input` that reads one file of 500 bytes,
+/// keeping `projection` as the session's history projection, and returns
+/// its messages.
 async fn complete_read_turn(
     store: &Arc<dyn SessionStore>,
     id: &str,
     input: &str,
     projection: HistoryProjection,
 ) -> HistoryTurn {
+    complete_sized_read_turn(store, id, (input, 500), projection).await
+}
+
+/// Returns the completed turn with `input` that reads one file of `bytes`
+/// bytes and answers `{}`.
+fn read_turn(input: &str, bytes: usize) -> HistoryTurn {
     let call = ToolCall::from_json(
         format!("read {input}"),
         "read",
@@ -604,15 +610,30 @@ async fn complete_read_turn(
         None,
     )
     .expect("read call");
-    let exchange = vec![
+
+    HistoryTurn::from(vec![
+        ModelMessage::User(input.to_string()),
         ModelMessage::AssistantToolCall(call),
         ModelMessage::ToolResult {
             call_id: format!("read {input}"),
-            content: "x".repeat(500),
+            content: "x".repeat(bytes),
             name: "read".to_string(),
         },
-    ];
-    let answer = ModelMessage::Assistant("{}".to_string());
+        ModelMessage::Assistant("{}".to_string()),
+    ])
+}
+
+/// Completes [`read_turn`] of `input` and `bytes`, keeping `projection` as
+/// the session's history projection, and returns its messages.
+async fn complete_sized_read_turn(
+    store: &Arc<dyn SessionStore>,
+    id: &str,
+    (input, bytes): (&str, usize),
+    projection: HistoryProjection,
+) -> HistoryTurn {
+    let completed = read_turn(input, bytes);
+    let exchange = &completed.messages[1..3];
+    let answer = &completed.messages[3..];
     let turn = AcquiredTurn::begin(
         Arc::clone(store),
         id,
@@ -623,22 +644,15 @@ async fn complete_read_turn(
     .await
     .expect("turn");
     store
-        .append_messages(turn.owner(), &exchange)
+        .append_messages(turn.owner(), exchange)
         .await
         .expect("append");
     store
-        .complete_turn(turn.owner(), std::slice::from_ref(&answer), projection)
+        .complete_turn(turn.owner(), answer, projection)
         .await
         .expect("complete");
 
-    HistoryTurn::from(
-        [
-            vec![ModelMessage::User(input.to_string())],
-            exchange,
-            vec![answer],
-        ]
-        .concat(),
-    )
+    completed
 }
 
 #[tokio::test]
@@ -692,6 +706,61 @@ async fn journaled_backends_replay_history_in_the_projection_the_last_turn_kept(
         ));
         assert_eq!(loaded.turns[2].1, turns[3]);
         assert_eq!(reserved.owner().turn_position(), 4);
+    }
+}
+
+#[tokio::test]
+async fn journaled_backends_reproject_outgrown_history_no_more_completely_than_before() {
+    for store in journaled_stores().await {
+        // Arrange
+        let retained = |turn: &HistoryTurn| {
+            turn.messages
+                .iter()
+                .map(ModelMessage::retained_bytes)
+                .sum::<usize>()
+        };
+        let mut turns = Vec::new();
+        let sizes = [("zero", 300), ("one", 300), ("two", 2000), ("three", 300)];
+        // The newest two turns whole outgrow the budget by a byte.
+        let budget = retained(&read_turn("two", 2000)) + retained(&read_turn("three", 300)) - 1;
+        store
+            .create_session(&NewSession::new("capped", schema()), None, budget)
+            .await
+            .expect("create");
+        for (input, bytes) in sizes {
+            let projection = if input == "three" {
+                HistoryProjection::new(0, 1, 2)
+            } else {
+                HistoryProjection::default()
+            };
+            turns
+                .push(complete_sized_read_turn(&store, "capped", (input, bytes), projection).await);
+        }
+
+        // Act
+        let loaded = store.load_session("capped").await.expect("history");
+
+        // Assert
+        // Half the budget holds the newest turn whole and the others shorter;
+        // the brief and elided turns stay so although their full forms fit.
+        assert!(retained(&turns[2]) + retained(&turns[3]) > budget);
+        assert_eq!(loaded.projection, HistoryProjection::new(0, 1, 3));
+        let positions = loaded
+            .turns
+            .iter()
+            .map(|(position, _)| *position)
+            .collect::<Vec<_>>();
+        assert_eq!(positions, [0, 1, 2, 3]);
+        assert_eq!(loaded.turns[0].1.messages.len(), 2);
+        for (_, elided) in &loaded.turns[1..3] {
+            assert_eq!(elided.messages.len(), 4);
+            assert!(matches!(
+                &elided.messages[2],
+                ModelMessage::ToolResult { content, .. }
+                    if content.starts_with(r#"{"context_cleared":"#)
+            ));
+        }
+        assert_eq!(loaded.turns[3].1, turns[3]);
     }
 }
 

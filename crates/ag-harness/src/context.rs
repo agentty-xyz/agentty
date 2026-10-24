@@ -975,6 +975,9 @@ pub(crate) struct ContextFit {
     dropped_rounds: DroppedRounds,
     elided_results_before: usize,
     fitted: Option<ModelRequest>,
+    /// Canonical index of the current turn's input; replayed history before
+    /// it is only ever cleared to the elided form a later turn replays.
+    history_end: usize,
     /// Index of the round whose `write` patches were shrunk as the last
     /// resort while it was the latest, with how many calls changed.
     latest_shrunk_writes: Option<(usize, usize)>,
@@ -1156,6 +1159,7 @@ impl ContextFit {
         summary: Option<ContextSummaryTrigger>,
     ) -> Result<FitStep<'_>, TurnError> {
         let synced = self.sync(estimator, request);
+        self.history_end = request.input_index();
         self.dropped_rounds.open = false;
         let fixed = budget
             .reserved_output_weight()
@@ -1683,28 +1687,28 @@ impl ContextFit {
         self.dropped_rounds.notes = vec![note];
     }
 
-    /// Returns where the current turn's recent rounds start: the latest
-    /// round, and each round before it, newest first, until together they
-    /// hold [`KEEP_RECENT_RESULTS`] tool results.
     /// Returns the end of the replayed history turn that clearing reached
     /// without clearing it whole, or of all replayed history once clearing
     /// passed it, when either watermark still lags behind that end.
     fn history_turn_end(&self, layout: &Layout<'_>) -> Option<usize> {
         let reached = self.elided_results_before.max(self.cleared_calls_before);
-        let history_start = *layout.history_turn_starts.get(self.dropped_history_turns)?;
-        if reached <= history_start {
-            return None;
-        }
-        let end = layout.history_turn_starts[self.dropped_history_turns..]
+        let starts = layout
+            .history_turn_starts
+            .get(self.dropped_history_turns..)?;
+        let end = starts
             .iter()
             .copied()
             .chain([layout.input_index])
             .find(|start| *start >= reached)
             .unwrap_or(layout.input_index);
+        let lagging = self.elided_results_before.min(self.cleared_calls_before);
 
-        (self.elided_results_before.min(self.cleared_calls_before) < end).then_some(end)
+        (starts.first().is_some_and(|start| reached > *start) && lagging < end).then_some(end)
     }
 
+    /// Returns where the current turn's recent rounds start: the latest
+    /// round, and each round before it, newest first, until together they
+    /// hold [`KEEP_RECENT_RESULTS`] tool results.
     fn recent_start(&self, messages: &[ModelMessage], layout: &Layout<'_>) -> usize {
         let floor = self.dropped_rounds.end.max(layout.input_index + 1);
         let results = |range: Range<usize>| {
@@ -1863,10 +1867,12 @@ impl ContextFit {
     /// a request exceeds the budget, and a result elided this way stays
     /// elided, so later requests keep sharing the reduced prefix.
     fn elide_superseded(&mut self, tier: &mut Tier<'_>, latest_round: usize) {
+        // Replayed history is cleared with the plain notices of its elided
+        // form, so the next turn can replay it as sent.
         let superseded = find_superseded(
             tier.messages,
             &self.messages,
-            self.elided_results_before..latest_round,
+            self.elided_results_before.max(self.history_end)..latest_round,
         );
         for (index, supersession) in superseded {
             if tier.base.saturating_add(self.required) <= tier.target {
@@ -1939,7 +1945,8 @@ impl ContextFit {
         pointed: impl Fn(usize) -> bool,
         superseded_by: Option<&str>,
     ) {
-        let repeats: Vec<(usize, &str)> = (self.dropped_rounds.end..messages.len())
+        let repeats: Vec<(usize, &str)> = (self.dropped_rounds.end.max(self.history_end)
+            ..messages.len())
             .filter_map(|repeat| match (&self.messages[repeat], &messages[repeat]) {
                 (entry, ModelMessage::ToolResult { call_id, .. })
                     if entry.changes & Reduction::ElideResult.flag() == 0
@@ -2018,10 +2025,15 @@ impl ContextFit {
     ) -> bool {
         let weight = tier.estimator.message_weight(&reduced);
         let entry = &mut self.messages[index];
-        if weight >= entry.weight {
+        // A replayed history message takes its elided form even when that
+        // weighs no less, as the next turn replays it.
+        if weight >= entry.weight && index >= self.history_end {
             return false;
         }
-        self.required -= entry.weight - weight;
+        self.required = self
+            .required
+            .saturating_sub(entry.weight)
+            .saturating_add(weight);
         if entry.changes & CAPPED_FLAG != 0 {
             entry.changes &= !CAPPED_FLAG;
             self.capped_results -= 1;

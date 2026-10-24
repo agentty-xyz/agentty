@@ -169,7 +169,9 @@ Each run appends one JSON object to `AG_HARNESS_CONTEXT_RESULTS` (default
   `AG_HARNESS_CONTEXT_ESTIMATE` value or the declared estimator, or `null` for
   `DEFAULT`) identify the configuration. A failed turn's activity fields come from the
   report on its `TurnFailed` event; they are `null` only when the turn failed before
-  preparing its first request or timed out. `detail` holds the error or failed checks.
+  preparing its first request or timed out. `detail` holds the error or failed checks. A
+  failed `session_reads` turn ends the run: its activity covers the finished turns only,
+  and `detail` names the failed turn among the failed checks.
 
 To compare runs, aggregate per scenario, model, and window with `jq`:
 
