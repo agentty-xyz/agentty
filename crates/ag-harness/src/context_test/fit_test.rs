@@ -914,3 +914,327 @@ fn the_notes_of_a_long_turn_are_merged_once_no_round_is_left_to_drop() {
     assert!(note.contains("`echo 0 "));
     assert!(note.contains("more."));
 }
+
+/// Records one round of `read` calls of distinct files, one per entry of
+/// `results` with that many bytes of content, whose first call carries
+/// `reasoning`.
+fn record_noted_round(
+    request: &mut ModelRequest,
+    id: &str,
+    reasoning: Option<&str>,
+    results: &[usize],
+) {
+    let calls: Vec<ToolCall> = results
+        .iter()
+        .enumerate()
+        .map(|(position, _)| {
+            ToolCall::from_json(
+                format!("{id}_{position}"),
+                "read",
+                &json!({"action": "file", "path": format!("{id}_{position}.txt")}).to_string(),
+                reasoning.filter(|_| position == 0).map(str::to_string),
+            )
+            .expect("read call")
+        })
+        .collect();
+    if let [call] = calls.as_slice() {
+        request.record_tool_call(call.clone());
+    } else {
+        request.record_tool_calls(calls.clone());
+    }
+    for (call, bytes) in calls.iter().zip(results) {
+        request.record_tool_result(call, "x".repeat(*bytes));
+    }
+}
+
+/// Returns the reasoning of the first call of the tool-call message at
+/// `index`.
+fn reasoning_at(request: &ModelRequest, index: usize) -> Option<&str> {
+    match &request.messages()[index] {
+        ModelMessage::AssistantToolCall(call) => call.reasoning_content(),
+        ModelMessage::AssistantToolCalls(calls) => calls[0].reasoning_content(),
+        other => std::panic::resume_unwind(Box::new(format!("tool call expected, got {other:?}"))),
+    }
+}
+
+#[test]
+fn the_newest_rounds_keep_their_reasoning_after_their_results_are_cleared() {
+    // Arrange
+    // Five earlier rounds with short notes in their reasoning, then a latest
+    // round heavy enough that clearing never reaches the target.
+    let notes = "n".repeat(700);
+    let mut request = request(Vec::new(), Vec::new(), "inspect");
+    for round in 0..5 {
+        record_noted_round(&mut request, &format!("r{round}"), Some(&notes), &[2000]);
+    }
+    record_noted_round(&mut request, "latest", Some(&notes), &[4500, 4500]);
+    let budget_weight = 20_000;
+    assert!(weigh(&request) > budget_weight);
+
+    // Act
+    let (fitted, activity) = fit_owned(&mut ContextFit::default(), budget(budget_weight), &request)
+        .expect("fits after clearing");
+
+    // Assert
+    let fitted = fitted.expect("reduced copy");
+    assert!(weigh(&fitted) <= drop_target(budget_weight));
+    assert_eq!(activity.dropped_tool_calls(), 0);
+    // Every earlier result is cleared, the latest round is whole.
+    assert_eq!(activity.elided_results(), 5);
+    assert_eq!(fitted.messages()[11..], request.messages()[11..]);
+    // The two newest earlier rounds fit a tenth of the budget, so they keep
+    // their reasoning; the older rounds lose it.
+    assert_eq!(activity.cleared_reasoning(), 3);
+    for call_index in [1, 3, 5] {
+        assert_eq!(reasoning_at(&fitted, call_index), Some(CLEARED_REASONING));
+    }
+    for call_index in [7, 9] {
+        assert_eq!(
+            fitted.messages()[call_index],
+            request.messages()[call_index]
+        );
+        assert_ne!(
+            fitted.messages()[call_index + 1],
+            request.messages()[call_index + 1]
+        );
+    }
+}
+
+#[test]
+fn kept_reasoning_is_cleared_once_newer_rounds_push_it_out_of_its_share() {
+    // Arrange
+    let notes = "n".repeat(700);
+    let mut request = request(Vec::new(), Vec::new(), "inspect");
+    for round in 0..5 {
+        record_noted_round(&mut request, &format!("r{round}"), Some(&notes), &[2000]);
+    }
+    record_noted_round(&mut request, "r5", Some(&notes), &[4500, 4500]);
+    let mut fit = ContextFit::default();
+    let (first, _) = fit_owned(&mut fit, budget(20_000), &request).expect("first fit");
+    let first = first.expect("reduced copy");
+    record_noted_round(&mut request, "r6", Some(&notes), &[3000, 3000]);
+    let (appended, appended_activity) =
+        fit_owned(&mut fit, budget(20_000), &request).expect("appending fit");
+    let appended = appended.expect("reduced copy");
+    record_noted_round(&mut request, "r7", Some(&notes), &[3000, 3000]);
+
+    // Act
+    let (second, activity) = fit_owned(&mut fit, budget(20_000), &request).expect("second fit");
+
+    // Assert
+    assert_eq!(
+        appended.messages()[..first.messages().len()],
+        *first.messages()
+    );
+    assert_eq!(appended_activity.cleared_reasoning(), 3);
+    let second = second.expect("reduced copy");
+    // The rounds that kept their reasoning lose it in one rewrite once the
+    // two newer rounds fill the share; everything older is sent as before.
+    assert_eq!(second.messages()[..7], first.messages()[..7]);
+    for call_index in [7, 9] {
+        assert_eq!(reasoning_at(&first, call_index), Some(notes.as_str()));
+        assert_eq!(reasoning_at(&second, call_index), Some(CLEARED_REASONING));
+        assert_eq!(
+            second.messages()[call_index + 1],
+            first.messages()[call_index + 1]
+        );
+    }
+    assert_eq!(activity.cleared_reasoning(), 5);
+    for call_index in [11, 14] {
+        assert_eq!(
+            second.messages()[call_index],
+            request.messages()[call_index]
+        );
+    }
+    assert_eq!(second.messages()[17..], request.messages()[17..]);
+}
+
+#[test]
+fn a_newer_write_without_reasoning_ends_the_rounds_that_keep_it() {
+    // Arrange
+    let notes = "n".repeat(700);
+    let mut request = request(Vec::new(), Vec::new(), "edit");
+    for round in 0..4 {
+        record_noted_round(&mut request, &format!("r{round}"), Some(&notes), &[2000]);
+    }
+    let write = write_call("w4", &"+b\n".repeat(500));
+    request.record_tool_call(write.clone());
+    request.record_tool_result(
+        &write,
+        json!({"path": "src/lib.rs", "status": "applied"}).to_string(),
+    );
+    record_noted_round(&mut request, "latest", Some(&notes), &[4500, 4500]);
+
+    // Act
+    let (fitted, activity) =
+        fit_owned(&mut ContextFit::default(), budget(20_000), &request).expect("fits");
+
+    // Assert
+    let fitted = fitted.expect("reduced copy");
+    // The write's patch is cleared as before, and so is the older
+    // reasoning behind it.
+    assert_eq!(activity.shrunk_write_calls(), 1);
+    assert_eq!(activity.cleared_reasoning(), 4);
+    for call_index in [1, 3, 5, 7] {
+        assert_eq!(reasoning_at(&fitted, call_index), Some(CLEARED_REASONING));
+    }
+}
+
+#[test]
+fn a_round_whose_reasoning_repeats_the_cleared_placeholder_is_passed_over() {
+    // Arrange
+    // Models that see cleared reasoning sometimes answer with the
+    // placeholder as their own reasoning; that round has nothing to clear.
+    let notes = "n".repeat(700);
+    let mut request = request(Vec::new(), Vec::new(), "inspect");
+    for round in 0..4 {
+        record_noted_round(&mut request, &format!("r{round}"), Some(&notes), &[2000]);
+    }
+    record_noted_round(&mut request, "r4", Some(CLEARED_REASONING), &[2000]);
+    record_noted_round(&mut request, "latest", Some(&notes), &[4500, 4500]);
+
+    // Act
+    let (fitted, activity) =
+        fit_owned(&mut ContextFit::default(), budget(20_000), &request).expect("fits");
+
+    // Assert
+    let fitted = fitted.expect("reduced copy");
+    assert_eq!(activity.cleared_reasoning(), 2);
+    for call_index in [1, 3] {
+        assert_eq!(reasoning_at(&fitted, call_index), Some(CLEARED_REASONING));
+    }
+    for call_index in [5, 7, 9] {
+        assert_eq!(
+            fitted.messages()[call_index],
+            request.messages()[call_index]
+        );
+    }
+}
+
+/// Returns the reasoning of every tool-call message `request` sends.
+fn sent_reasoning(request: &ModelRequest) -> Vec<Option<&str>> {
+    (0..request.messages().len())
+        .filter(|index| {
+            matches!(
+                request.messages()[*index],
+                ModelMessage::AssistantToolCall(_) | ModelMessage::AssistantToolCalls(_)
+            )
+        })
+        .map(|index| reasoning_at(request, index))
+        .collect()
+}
+
+#[test]
+fn rounds_that_keep_their_reasoning_are_dropped_only_to_fit_the_budget() {
+    // Arrange
+    // Twelve earlier rounds outweigh the drop share even once cleared.
+    let notes = "n".repeat(700);
+    let mut request = request(Vec::new(), Vec::new(), "inspect");
+    for round in 0..12 {
+        record_noted_round(&mut request, &format!("r{round}"), Some(&notes), &[2000]);
+    }
+    record_noted_round(&mut request, "latest", Some(&notes), &[4900, 4900]);
+
+    // Act
+    let (fitted, activity) =
+        fit_owned(&mut ContextFit::default(), budget(20_000), &request).expect("fits");
+
+    // Assert
+    let fitted = fitted.expect("reduced copy");
+    assert!(activity.dropped_tool_calls() >= 1);
+    assert!(weigh(&fitted) <= drop_target(20_000));
+    // The oldest rounds go first; the two newest earlier rounds keep their
+    // notes.
+    let reasoning = sent_reasoning(&fitted);
+    assert_eq!(reasoning.len(), 13 - activity.dropped_tool_calls());
+    assert!(
+        reasoning[..reasoning.len() - 3]
+            .iter()
+            .all(|kept| *kept == Some(CLEARED_REASONING))
+    );
+    assert!(
+        reasoning[reasoning.len() - 3..]
+            .iter()
+            .all(|kept| *kept == Some(notes.as_str()))
+    );
+}
+
+#[test]
+fn kept_reasoning_is_cleared_before_a_history_turn_is_dropped() {
+    // Arrange
+    let notes = "n".repeat(700);
+    let history = vec![
+        ModelMessage::User("earlier".to_string()),
+        ModelMessage::Assistant("{}".to_string()),
+    ];
+    let mut request = request(Vec::new(), vec![history], "inspect");
+    // Even cleared, seven earlier rounds and the kept notes of the two newest
+    // outweigh the drop share; without those notes they fit it.
+    for round in 0..7 {
+        record_noted_round(&mut request, &format!("r{round}"), Some(&notes), &[2000]);
+    }
+    record_noted_round(&mut request, "latest", Some(&notes), &[4900, 4900]);
+
+    // Act
+    let (fitted, activity) =
+        fit_owned(&mut ContextFit::default(), budget(20_000), &request).expect("fits");
+
+    // Assert
+    let fitted = fitted.expect("reduced copy");
+    assert_eq!(activity.dropped_history_turns(), 0);
+    assert_eq!(activity.dropped_tool_calls(), 0);
+    assert!(weigh(&fitted) <= drop_target(20_000));
+    let reasoning = sent_reasoning(&fitted);
+    assert!(reasoning[5..7].contains(&Some(CLEARED_REASONING)));
+    assert_eq!(reasoning[7], Some(notes.as_str()));
+}
+
+#[test]
+fn a_round_that_keeps_its_reasoning_is_dropped_when_nothing_else_fits() {
+    // Arrange
+    let notes = "n".repeat(700);
+    let mut request = request(Vec::new(), Vec::new(), "inspect");
+    for round in 0..2 {
+        record_noted_round(&mut request, &format!("r{round}"), Some(&notes), &[2000]);
+    }
+    record_noted_round(&mut request, "latest", Some(&"l".repeat(18_000)), &[500]);
+
+    // Act
+    let (fitted, activity) =
+        fit_owned(&mut ContextFit::default(), budget(20_000), &request).expect("fits");
+
+    // Assert
+    let fitted = fitted.expect("reduced copy");
+    assert_eq!(activity.dropped_tool_calls(), 1);
+    assert_eq!(activity.truncated_results(), 0);
+    assert!(weigh(&fitted) <= 20_000);
+    // The newer earlier round still keeps its notes beside the latest one.
+    let reasoning = sent_reasoning(&fitted);
+    assert_eq!(reasoning.len(), 2);
+    assert_eq!(reasoning[0], Some(notes.as_str()));
+}
+
+#[test]
+fn a_dropped_kept_round_is_never_reduced_again() {
+    // Arrange
+    let notes = "n".repeat(700);
+    let mut request = request(Vec::new(), Vec::new(), "inspect");
+    for round in 0..2 {
+        record_noted_round(&mut request, &format!("r{round}"), Some(&notes), &[2000]);
+    }
+    record_noted_round(&mut request, "long", Some(&"l".repeat(18_000)), &[500]);
+    let mut fit = ContextFit::default();
+    let (first, first_activity) = fit_owned(&mut fit, budget(20_000), &request).expect("fits");
+    record_noted_round(&mut request, "next", Some(&notes), &[2000]);
+
+    // Act
+    let (second, _) = fit_owned(&mut fit, budget(20_000), &request).expect("fits again");
+
+    // Assert
+    assert_eq!(first_activity.dropped_tool_calls(), 1);
+    assert!(first.is_some());
+    // The weight the fit reports is the weight it sends.
+    let second = second.expect("reduced copy");
+    assert_eq!(fit.sent_weight(), weigh(&second));
+    assert!(weigh(&second) <= 20_000);
+}

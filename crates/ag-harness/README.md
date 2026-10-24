@@ -114,15 +114,19 @@ let outcome = session
   available until read again; `bash`/`write` notices keep the outcome and say not to
   repeat), then older reasoning and `write` patches are cleared (the text a model wrote
   beside its calls, `ToolCall::assistant_text`, is kept); the rounds holding the newest
-  five results are reduced only after everything older. If that is not enough, the
-  oldest replayed turns and then the current turn's oldest tool rounds are dropped
-  whole, down to 70%, behind an appended note listing the files they modified and read,
-  the commands they ran, and their other reads, whose results are not available until
-  read again. Only as a last resort are the latest tool round's results cut further and
-  its `write` patches replaced by their recorded outcome. Every reduced message keeps
-  that form in later requests. Stored messages are never changed;
-  `ModelRequestActivity::context` reports each reduction. A request that still cannot
-  fit fails with `TurnError::ContextBudgetExceeded`.
+  five results are reduced only after everything older, and the newest rounds'
+  reasoning, within 10% of the input budget, is kept after their results are cleared, so
+  a model's notes in reasoning outlive the results they describe (it is cleared before a
+  replayed turn would be dropped, and those rounds are dropped below only when the
+  request would not fit otherwise). If that is not enough, the oldest replayed turns and
+  then the current turn's oldest tool rounds are dropped whole, down to 70%, behind an
+  appended note listing the files they modified and read, the commands they ran, and
+  their other reads, whose results are not available until read again. Only as a last
+  resort are the latest tool round's results cut further and its `write` patches
+  replaced by their recorded outcome. Every reduced message keeps that form in later
+  requests. Stored messages are never changed; `ModelRequestActivity::context` reports
+  each reduction. A request that still cannot fit fails with
+  `TurnError::ContextBudgetExceeded`.
 - **Earlier rounds can be summarized instead.** `Harness::context_summaries` with
   `ContextSummaryPolicy::Enabled` lets a request that still exceeds 50% of the budget
   after superseded results are cleared and oversized results capped first ask the model,
