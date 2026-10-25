@@ -425,9 +425,13 @@ async fn attestations_reject_forged_missing_stale_and_blank_evidence() {
     stale.graph_revision = NonZeroU64::new(2).expect("revision");
     let mut missing = reference();
     missing.id = "missing".into();
+    let mut unlinked = reference();
+    unlinked.execution = GraphExecutionRef::UtilityRun {
+        run_id: "unlinked".into(),
+    };
 
     // Act / Assert
-    for invalid in [forged, stale, missing] {
+    for invalid in [forged, stale, missing, unlinked] {
         assert!(
             database
                 .graphs()

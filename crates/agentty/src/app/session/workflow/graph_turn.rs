@@ -307,17 +307,31 @@ async fn prepare(
         request.permission_mode,
         node.execution.permission_mode(&node.definition, permission),
     );
+    let history = context
+        .db
+        .graphs()
+        .execution_history(&request.dispatch.record.execution)
+        .await?;
+    let mut prompt = graph_prompt(request);
+    if history.is_some() {
+        prompt.text.push_str(
+            "\n\nContinue this node using the explicit retry or clarification reply in its \
+             isolated history.",
+        );
+    }
     Ok(TurnRequest {
         agent_profile: AgentDefinitionPrompt::active(node.definition.prompt.clone(), true),
-        continuation: TurnContinuation::fresh(),
+        continuation: history.map_or_else(TurnContinuation::fresh, TurnContinuation::replaying),
         execution_policy: ag_contracts::ExecutionPolicy::default(),
         folder: env.folder,
         main_checkout_root: env.main_checkout,
         model: node.agent.model().provider_model_str().to_string(),
         permission_mode,
-        prompt: graph_prompt(request),
+        prompt,
         provider_call_budget: request.provider_call_budget.clone(),
         reasoning_level: turn::load_session_reasoning_level(&context.db, &context.session_id).await,
+        // Each graph attempt owns a fresh provider context, even when it
+        // replays this node's persisted transcript.
         request_kind: AgentRequestKind::SessionStart,
         response_style: turn::load_session_response_style(&context.db, &context.session_id).await,
         speed_mode: turn::load_session_speed_mode(&context.db, &context.session_id).await,

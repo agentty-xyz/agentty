@@ -238,6 +238,13 @@ cached successful call is reusable only for the same evidence and profile.
 
 See [Execution](@/docs/core-components/execution.md) for the mandatory worker path.
 
+Graph repositories project progress from operation/run authorities and retain explicit
+continuation intent separately. In-memory storage tests cover gate reasons, competing
+retry claims, exact clarification sets, cancellation fences, and pinned inputs. Public
+durability tests reopen the database without dispatching work. Application tests drive
+the session API and scripted workers to verify isolated continuation and explicit resume
+without replenishing live budgets.
+
 ## Prompt Behavior
 
 Contract tests cover schemas, native policy delivery, evidence encoding, and

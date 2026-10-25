@@ -15,6 +15,131 @@ use ag_store::{Database, GraphEvidence, GraphExecutionRecord};
 use ag_worker::{RunInfo, RunState};
 
 #[tokio::test]
+async fn explicit_graph_continuation_and_cancellation_survive_reopening_without_replay()
+-> Result<(), Box<dyn Error>> {
+    // Arrange
+    let directory = tempfile::Builder::new()
+        .prefix("graph-lifecycle-")
+        .tempdir_in(".")?;
+    let path = directory.path().join("graph.sqlite");
+    let (database, snapshot) = open_lifecycle_graph(&path).await?;
+    let admission = database
+        .graph_dispatch()
+        .claim(
+            "graph",
+            snapshot.revision,
+            "plan",
+            &uuid::Uuid::new_v4().to_string(),
+            std::path::Path::new("workspace"),
+        )
+        .await?;
+    let dispatch = match admission {
+        ag_worker::GraphAdmission::Claimed(dispatch) => Some(dispatch),
+        _ => None,
+    }
+    .expect("claim");
+    database
+        .graph_dispatch()
+        .fail(&dispatch.record, "Interrupted by application restart")
+        .await?;
+    let request = ag_session::ContinueGraphNodeRequest {
+        action_id: uuid::Uuid::new_v4().to_string(),
+        execution: dispatch.record.execution.clone(),
+        graph_id: "graph".into(),
+        kind: ag_session::GraphNodeContinuation::Retry,
+        node_id: "plan".into(),
+        revision: snapshot.revision,
+    };
+    database.graphs().continue_node(&request).await?;
+    database.pool().close().await;
+    drop(database);
+
+    // Act: reopening projects pending intent but never creates an attempt.
+    let reopened = Database::open(&path).await?;
+    let progress = reopened.graphs().progress("graph").await?.expect("graph");
+
+    // Assert
+    assert_eq!(
+        progress.nodes[0].status,
+        ag_session::GraphNodeStatus::Pending
+    );
+    assert_eq!(
+        progress.nodes[0].executions,
+        vec![dispatch.record.execution.clone()]
+    );
+    assert!(!reopened.graphs().continue_node(&request).await?);
+    let admission = reopened
+        .graph_dispatch()
+        .claim(
+            "graph",
+            snapshot.revision,
+            "plan",
+            "ignored-redelivery-id",
+            std::path::Path::new("workspace"),
+        )
+        .await?;
+    let retry = match admission {
+        ag_worker::GraphAdmission::Claimed(dispatch) => Some(dispatch),
+        _ => None,
+    }
+    .expect("explicit dispatch");
+    assert_ne!(retry.record.execution, dispatch.record.execution);
+    assert!(
+        matches!(&retry.record.execution, GraphExecutionRef::TaskAttempt { attempt_id, .. } if attempt_id == &request.action_id)
+    );
+    reopened
+        .graphs()
+        .cancel(&ag_session::GraphControlRequest {
+            graph_id: "graph".into(),
+            revision: snapshot.revision,
+        })
+        .await?;
+    reopened.pool().close().await;
+    drop(reopened);
+    let reopened = Database::open(&path).await?;
+    assert_eq!(
+        reopened
+            .graphs()
+            .progress("graph")
+            .await?
+            .expect("graph")
+            .status,
+        ag_session::ExecutionGraphStatus::Cancelled
+    );
+    assert!(matches!(
+        reopened
+            .graph_dispatch()
+            .claim(
+                "graph",
+                snapshot.revision,
+                "review",
+                "never-dispatched",
+                std::path::Path::new("workspace")
+            )
+            .await?,
+        ag_worker::GraphAdmission::Blocked
+    ));
+    reopened.pool().close().await;
+
+    Ok(())
+}
+
+async fn open_lifecycle_graph(
+    path: &std::path::Path,
+) -> Result<(Database, ExecutionGraph), Box<dyn Error>> {
+    let database = Database::open(path).await?;
+    let project = database.projects().upsert_project("project", None).await?;
+    database
+        .sessions()
+        .insert_session("session", "gpt-6.1-sol", "main", "Review", project)
+        .await?;
+    let snapshot = graph();
+    database.graphs().save_graph(&snapshot, None).await?;
+
+    Ok((database, snapshot))
+}
+
+#[tokio::test]
 async fn competing_revision_writes_have_one_winner() {
     // Arrange
     let directory = tempfile::Builder::new()

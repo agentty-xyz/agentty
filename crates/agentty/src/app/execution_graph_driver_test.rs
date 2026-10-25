@@ -2,7 +2,6 @@ use std::collections::{BTreeMap, HashMap};
 use std::num::NonZeroU64;
 use std::path::Path;
 use std::sync::Arc;
-use std::sync::atomic::Ordering;
 use std::time::Duration;
 
 use ag_contracts::{OneShotError, ProviderCallBudget};
@@ -23,7 +22,7 @@ use super::{graph, seed_session};
 use crate::app::AppServices;
 
 #[tokio::test]
-async fn explicit_relaunch_restarts_stopped_dispatch_without_refilling_its_budget() {
+async fn explicit_relaunch_preserves_failed_receipts_and_remaining_budget() {
     // Arrange
     let (mut app, _directory) = crate::test_support::new_test_app().await;
     seed_session(&mut app.sessions, app.services.db()).await;
@@ -73,21 +72,11 @@ async fn explicit_relaunch_restarts_stopped_dispatch_without_refilling_its_budge
     assert_eq!(observed.recv().await, Some(("failure".into(), 1)));
 
     // Act: active redelivery does not create another driver. The failed node
-    // then stops dispatch; explicit redelivery restarts its independent peer.
+    // does not replay failed work or refill the independent peer's budget.
     app.start_api_execution_graph(request.clone())
         .await
         .expect("active redelivery");
     runner.release.notify_one();
-    let running = app.services.graph_drivers.lock().expect("drivers")["restart"]
-        .running
-        .clone();
-    tokio::time::timeout(Duration::from_secs(5), async {
-        while running.load(Ordering::Acquire) {
-            tokio::task::yield_now().await;
-        }
-    })
-    .await
-    .expect("driver stopped after failure");
     app.start_api_execution_graph(request)
         .await
         .expect("restart stopped launch");

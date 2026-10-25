@@ -746,6 +746,14 @@ See [Backend Selection](@/docs/agents/backends.md#selecting-a-backend) for agent
 refresh. Use `agentty --help` for launch options and `agentty --version` for the
 installed version.
 
+## Programmatic Execution Graphs
+
+`SessionService` can query graph progress, cancel a graph, answer a node's questions,
+retry failed work, or explicitly resume dispatch after restart. Cancellation is terminal
+for that graph. Resume does not retry previous attempts, and repeated live launches do
+not refill shared budgets. These controls are currently programmatic; `/plan` retains
+its existing workflow. See [Execution Graphs](@/docs/architecture/execution-graphs.md).
+
 ## Data Location
 
 <a id="usage-data-location"></a> Agentty keeps its database, logs, and worktrees in its

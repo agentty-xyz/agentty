@@ -362,6 +362,10 @@ the marker for retry; successful ordinary-turn persistence replaces it without l
 chat history or task definitions. CLI command construction preserves that update through
 stdin prompt rendering when resuming a provider conversation.
 
+Explicit transcript replay does not require provider-native resume. Each graph attempt
+starts a fresh provider conversation and supplies only its node's persisted history;
+Claude graph attempts never select the latest worktree conversation with `-c`.
+
 Codex and Antigravity retain resident runtimes between turns. Gemini shuts down after
 each turn and replays stored history. Managed runtime cleanup owns provider subprocesses
 and their descendants.
@@ -525,11 +529,15 @@ with ordinary session work and conflict-free sync. Acceptance and Env release wa
 active graph drivers without polling or startup replay. Each settled graph node also
 wakes drivers after releasing shared capacity and its Env lease, independently of the
 rest of its dispatch wave. Returning capacity or an Env lease from an unclaimed check
-wakes only drivers waiting for that resource, avoiding unconditional broadcasts. Failed
-drivers retain their launch and remaining budgets. Identical explicit relaunches restart
-dispatch without replaying failed nodes; active launches remain deduplicated. Detached
-utilities retain their Env leases in worker-owned scopes through cancellation cleanup.
-Ordinary worker leases release and notify on early returns as well as normal completion.
+wakes only drivers waiting for that resource, avoiding unconditional broadcasts. Drivers
+retain their launch and remaining budgets while waiting for explicit retry or
+clarification intent. Progress queries do not dispatch work. Cancellation closes durable
+admission before signaling workers, and startup never recreates drivers. Explicit resume
+uses the saved revision; retry and clarification actions append new executions against
+the exact source receipt. Completion requires every node's question-free settlement.
+Detached utilities retain their Env leases in worker-owned scopes through cancellation
+cleanup. Ordinary worker leases release and notify on early returns as well as normal
+completion.
 
 Channel owners clean up provider processes after cancellation. Operation completion
 includes post-processing, not just model completion. Heartbeat failures are reported

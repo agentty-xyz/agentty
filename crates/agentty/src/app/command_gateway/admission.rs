@@ -158,6 +158,15 @@ impl App {
         request: SessionMutation,
     ) -> Result<(), SessionError> {
         match request {
+            SessionMutation::CancelExecutionGraph { request } => {
+                self.cancel_api_execution_graph(request).await
+            }
+            SessionMutation::ResumeExecutionGraph { request } => {
+                self.resume_api_execution_graph(request).await
+            }
+            SessionMutation::ContinueExecutionGraphNode { request } => {
+                self.continue_api_execution_graph_node(*request).await
+            }
             SessionMutation::StartExecutionGraph { request } => {
                 self.start_api_execution_graph(*request).await
             }

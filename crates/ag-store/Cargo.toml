@@ -20,6 +20,7 @@ sqlx = { workspace = true, features = ["sqlx-toml"] }
 thiserror.workspace = true
 tokio.workspace = true
 tracing.workspace = true
+uuid.workspace = true
 
 [dev-dependencies]
 ag-session = { workspace = true, features = ["test-utils"] }

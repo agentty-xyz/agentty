@@ -1,7 +1,7 @@
 use std::ffi::OsStr;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 
-use ag_contracts::ReasoningLevel;
+use ag_contracts::{AgentRequestKind, ReasoningLevel};
 use ag_protocol::{ProtocolSchemaInstructionMode, TurnPromptAttachment};
 use serde_json::Value;
 use tempfile::tempdir;
@@ -10,6 +10,66 @@ use super::support::{session_start_request_kind, settings_argument, utility_requ
 use crate::agent::backend::{AgentBackend, BuildCommandRequest};
 use crate::agent::claude::ClaudeBackend;
 use crate::agent::prompt as shared_prompt;
+
+#[test]
+fn transcript_replay_is_independent_of_claude_native_resume() {
+    // Arrange
+    for (request_kind, replay_transcript, native_resume) in [
+        (AgentRequestKind::SessionStart, None, false),
+        (
+            AgentRequestKind::SessionStart,
+            Some("assistant: Which target?\nuser: Local only"),
+            false,
+        ),
+        (AgentRequestKind::SessionResume, None, true),
+        (
+            AgentRequestKind::SessionResume,
+            Some("assistant: Which target?\nuser: Local only"),
+            true,
+        ),
+    ] {
+        let request = BuildCommandRequest {
+            execution_policy: &ag_contracts::ExecutionPolicy::default(),
+            attachments: &[],
+            folder: Path::new("worktree"),
+            main_checkout_root: None,
+            replay_transcript,
+            model: "claude-sonnet-5-5",
+            permission_mode: ag_contracts::PermissionMode::ReadOnly,
+            agent_profile_prompt: Some("Follow this node's captured instructions"),
+            agent_profile_update: &ag_contracts::AgentDefinitionPromptUpdate::Unchanged,
+            prompt: "Continue this node",
+            reasoning_level: ReasoningLevel::default(),
+            request_kind: &request_kind,
+            speed_mode: ag_contracts::SpeedMode::default(),
+        };
+
+        // Act
+        let command = ClaudeBackend
+            .build_command(request)
+            .expect("Claude command");
+        let payload = shared_prompt::build_prompt_stdin_payload(
+            request,
+            ProtocolSchemaInstructionMode::TransportSchema,
+            "Claude",
+        )
+        .expect("Claude stdin");
+        let prompt = String::from_utf8(payload).expect("UTF-8 prompt");
+
+        // Assert
+        assert_eq!(
+            command.get_args().any(|argument| argument == "-c"),
+            native_resume,
+        );
+        assert!(prompt.contains("Continue this node"));
+        assert!(prompt.contains("Follow this node's captured instructions"));
+        assert_eq!(
+            prompt.contains("Which target?"),
+            replay_transcript.is_some()
+        );
+        assert_eq!(prompt.contains("Local only"), replay_transcript.is_some());
+    }
+}
 
 #[test]
 /// Verifies Claude fast sessions enable the noninteractive `fastMode`

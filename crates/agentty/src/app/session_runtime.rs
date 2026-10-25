@@ -34,6 +34,11 @@ const SESSION_RUNTIME_UNAVAILABLE: &str = "Session runtime is unavailable";
 
 /// A read query or an enveloped mutation awaiting foreground admission.
 pub(crate) enum SessionRuntimeCommand {
+    GetExecutionGraph {
+        graph_id: String,
+        response_tx:
+            oneshot::Sender<Result<Option<ag_session::ExecutionGraphProgress>, SessionError>>,
+    },
     /// Trusted handoff of an already admitted graph task to its serial owner.
     RunGraphNode {
         admitted_tx: oneshot::Sender<()>,
@@ -77,6 +82,43 @@ pub(crate) struct SessionRuntimeHandle {
 }
 
 impl SessionRuntimeHandle {
+    pub(crate) async fn get_execution_graph(
+        &self,
+        graph_id: &str,
+    ) -> Result<Option<ag_session::ExecutionGraphProgress>, SessionError> {
+        self.request(|response_tx| SessionRuntimeCommand::GetExecutionGraph {
+            graph_id: graph_id.into(),
+            response_tx,
+        })
+        .await
+    }
+
+    pub(crate) async fn cancel_execution_graph(
+        &self,
+        request: ag_session::GraphControlRequest,
+    ) -> Result<(), SessionError> {
+        self.request_admission(SessionMutation::CancelExecutionGraph { request })
+            .await
+    }
+
+    pub(crate) async fn resume_execution_graph(
+        &self,
+        request: ag_session::ResumeExecutionGraphRequest,
+    ) -> Result<(), SessionError> {
+        self.request_admission(SessionMutation::ResumeExecutionGraph { request })
+            .await
+    }
+
+    pub(crate) async fn continue_execution_graph_node(
+        &self,
+        request: ag_session::ContinueGraphNodeRequest,
+    ) -> Result<(), SessionError> {
+        self.request_admission(SessionMutation::ContinueExecutionGraphNode {
+            request: Box::new(request),
+        })
+        .await
+    }
+
     pub(crate) async fn run_graph_node(
         &self,
         request: ag_worker::GraphRunRequest,

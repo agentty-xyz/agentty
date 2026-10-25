@@ -155,6 +155,15 @@ pub(crate) struct TaskChainReplyAction {
 
 /// Application inputs for workflows that return an admission result.
 pub(crate) enum SessionMutation {
+    CancelExecutionGraph {
+        request: ag_session::GraphControlRequest,
+    },
+    ResumeExecutionGraph {
+        request: ag_session::ResumeExecutionGraphRequest,
+    },
+    ContinueExecutionGraphNode {
+        request: Box<ag_session::ContinueGraphNodeRequest>,
+    },
     /// Starts an explicit static graph using existing worker paths.
     StartExecutionGraph {
         request: Box<ag_session::StartExecutionGraphRequest>,
@@ -239,6 +248,9 @@ impl SessionMutation {
             Self::StartExecutionGraph { request } => {
                 ("start_execution_graph", Some(&request.graph.session_id))
             }
+            Self::CancelExecutionGraph { .. } => ("cancel_execution_graph", None),
+            Self::ResumeExecutionGraph { .. } => ("resume_execution_graph", None),
+            Self::ContinueExecutionGraphNode { .. } => ("continue_execution_graph_node", None),
             Self::AcceptExecutionGraphResult { .. } => ("accept_execution_graph_result", None),
             Self::SubmitAgentTask { session_id, .. } => ("submit_agent_task", Some(session_id)),
             Self::AcceptAgentPlan { session_id, .. } => ("accept_agent_plan", Some(session_id)),

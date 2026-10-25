@@ -37,6 +37,9 @@ mod driver;
 #[path = "execution_graph_boundary_test.rs"]
 mod boundary;
 
+#[path = "execution_graph_lifecycle_test.rs"]
+mod lifecycle;
+
 #[tokio::test]
 async fn background_utilities_preserve_host_overlap_and_exclude_graph_writers() {
     for permission in [PermissionMode::ReadOnly, PermissionMode::AutoEdit] {

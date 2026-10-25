@@ -86,6 +86,54 @@ pub enum DurableMessageVisibility {
 /// programmatic session capability without depending on a concrete frontend.
 #[async_trait]
 pub trait SessionBackend: Send + Sync {
+    /// Reads durable progress without launching or retrying work.
+    async fn get_execution_graph(
+        &self,
+        graph_id: &str,
+    ) -> Result<Option<crate::ExecutionGraphProgress>, SessionError> {
+        let _ = graph_id;
+
+        Err(SessionError::Operation(
+            "Host does not support execution graphs".into(),
+        ))
+    }
+
+    /// Closes graph admission durably, then signals its owned workers.
+    async fn cancel_execution_graph(
+        &self,
+        request: crate::GraphControlRequest,
+    ) -> Result<(), SessionError> {
+        let _ = request;
+
+        Err(SessionError::Operation(
+            "Host does not support execution graphs".into(),
+        ))
+    }
+
+    /// Explicitly restarts dispatch without replaying admitted executions.
+    async fn resume_execution_graph(
+        &self,
+        request: crate::ResumeExecutionGraphRequest,
+    ) -> Result<(), SessionError> {
+        let _ = request;
+
+        Err(SessionError::Operation(
+            "Host does not support execution graphs".into(),
+        ))
+    }
+
+    /// Authorizes one new attempt against an exact failed/question execution.
+    async fn continue_execution_graph_node(
+        &self,
+        request: crate::ContinueGraphNodeRequest,
+    ) -> Result<(), SessionError> {
+        let _ = request;
+
+        Err(SessionError::Operation(
+            "Host does not support execution graphs".into(),
+        ))
+    }
+
     /// Saves and starts a static graph. Existing admitted nodes are never
     /// replayed. Named budgets are shared within this graph's live driver.
     async fn start_execution_graph(
@@ -321,6 +369,51 @@ pub struct StartExecutionGraphRequest {
 }
 
 impl SessionService {
+    /// Reads graph/node progress and immutable execution history.
+    ///
+    /// # Errors
+    /// Returns failed persistence or query delivery errors.
+    pub async fn get_execution_graph(
+        &self,
+        graph_id: &str,
+    ) -> Result<Option<crate::ExecutionGraphProgress>, SessionError> {
+        self.backend.get_execution_graph(graph_id).await
+    }
+
+    /// Permanently cancels this graph without canceling unrelated session work.
+    ///
+    /// # Errors
+    /// Rejects missing/stale graphs and failed durable cancellation.
+    pub async fn cancel_execution_graph(
+        &self,
+        request: crate::GraphControlRequest,
+    ) -> Result<(), SessionError> {
+        self.backend.cancel_execution_graph(request).await
+    }
+
+    /// Resumes dispatch explicitly; failed nodes still require a new action.
+    ///
+    /// # Errors
+    /// Rejects canceled/stale graphs, invalid limits, or ineligible sessions.
+    pub async fn resume_execution_graph(
+        &self,
+        request: crate::ResumeExecutionGraphRequest,
+    ) -> Result<(), SessionError> {
+        self.backend.resume_execution_graph(request).await
+    }
+
+    /// Retries a failed node or answers its exact settled clarification set.
+    ///
+    /// # Errors
+    /// Rejects stale sources, partial answers, conflicting action identities,
+    /// canceled graphs, and failed persistence or delivery.
+    pub async fn continue_execution_graph_node(
+        &self,
+        request: crate::ContinueGraphNodeRequest,
+    ) -> Result<(), SessionError> {
+        self.backend.continue_execution_graph_node(request).await
+    }
+
     /// Starts an explicit static graph without waiting for model execution.
     ///
     /// # Errors

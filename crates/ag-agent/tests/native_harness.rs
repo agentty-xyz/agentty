@@ -690,30 +690,36 @@ async fn read_only_turn_denies_writes() {
 
 #[tokio::test]
 async fn missing_history_restarts_from_the_replay_transcript() {
-    // Arrange
-    let server = MockServer::start().await;
-    respond(&server, "Continue please", answer("Continued"), 1).await;
-    let data_root = tempfile::tempdir().expect("data root");
-    let worktree = tempfile::tempdir().expect("worktree");
-    let config = config(data_root.path(), environment(&server));
-    let channel = create_agent_channel(AgentKind::Harness, None, Some(&config));
-    let mut request = turn_request(worktree.path(), MUSE_MODEL, "Continue please");
-    request.request_kind = AgentRequestKind::SessionResume;
-    request.continuation = TurnContinuation::replaying("Earlier we renamed parse_config".into());
+    for request_kind in [
+        AgentRequestKind::SessionStart,
+        AgentRequestKind::SessionResume,
+    ] {
+        // Arrange
+        let server = MockServer::start().await;
+        respond(&server, "Continue please", answer("Continued"), 1).await;
+        let data_root = tempfile::tempdir().expect("data root");
+        let worktree = tempfile::tempdir().expect("worktree");
+        let config = config(data_root.path(), environment(&server));
+        let channel = create_agent_channel(AgentKind::Harness, None, Some(&config));
+        let mut request = turn_request(worktree.path(), MUSE_MODEL, "Continue please");
+        request.request_kind = request_kind;
+        request.continuation =
+            TurnContinuation::replaying("Earlier we renamed parse_config".into());
 
-    // Act
-    let (result, _) = run_turn(&channel, "session-replay", request).await;
+        // Act
+        let (result, _) = run_turn(&channel, "session-replay", request).await;
 
-    // Assert
-    assert_eq!(
-        result
-            .expect("replayed turn should succeed")
-            .assistant_message
-            .answer,
-        "Continued"
-    );
-    let bodies = request_bodies(&server).await;
-    assert!(bodies[0].contains("Earlier we renamed parse_config"));
+        // Assert
+        assert_eq!(
+            result
+                .expect("replayed turn should succeed")
+                .assistant_message
+                .answer,
+            "Continued"
+        );
+        let bodies = request_bodies(&server).await;
+        assert!(bodies[0].contains("Earlier we renamed parse_config"));
+    }
 }
 
 #[tokio::test]

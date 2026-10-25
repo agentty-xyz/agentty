@@ -12,6 +12,30 @@ use crate::{DbError, TimestampSource};
 #[cfg_attr(any(test, feature = "test-utils"), mockall::automock)]
 #[async_trait]
 pub trait GraphRepository: Send + Sync {
+    /// Projects operation/run status, gates, results and clarification from
+    /// one database snapshot. Never admits or recovers work.
+    async fn progress(
+        &self,
+        graph_id: &str,
+    ) -> Result<Option<ag_session::ExecutionGraphProgress>, DbError>;
+
+    /// Revision-checked terminal cancellation. Admission closes atomically;
+    /// active workers still own cleanup and resource release.
+    async fn cancel(&self, request: &ag_session::GraphControlRequest) -> Result<(), DbError>;
+
+    /// Records one explicit retry/answer against the latest execution. It is
+    /// consumed by a later atomic claim, retaining the original exact inputs.
+    async fn continue_node(
+        &self,
+        request: &ag_session::ContinueGraphNodeRequest,
+    ) -> Result<bool, DbError>;
+
+    /// Replays only this node's immutable attempts and explicit replies.
+    async fn execution_history(
+        &self,
+        execution: &GraphExecutionRef,
+    ) -> Result<Option<String>, DbError>;
+
     /// Returns static task dispatch context UUIDs before session deletion
     /// cascades their receipts. Legacy links never allocate runtime resources.
     async fn list_task_context_ids(&self, session_id: &str) -> Result<Vec<String>, DbError>;
@@ -193,6 +217,31 @@ impl SqliteGraphRepository {
 
 #[async_trait]
 impl GraphRepository for SqliteGraphRepository {
+    async fn progress(
+        &self,
+        graph_id: &str,
+    ) -> Result<Option<ag_session::ExecutionGraphProgress>, DbError> {
+        self.graph_progress(graph_id).await
+    }
+
+    async fn cancel(&self, request: &ag_session::GraphControlRequest) -> Result<(), DbError> {
+        self.cancel_graph(request).await
+    }
+
+    async fn continue_node(
+        &self,
+        request: &ag_session::ContinueGraphNodeRequest,
+    ) -> Result<bool, DbError> {
+        self.continue_graph_node(request).await
+    }
+
+    async fn execution_history(
+        &self,
+        execution: &GraphExecutionRef,
+    ) -> Result<Option<String>, DbError> {
+        self.node_history(execution).await
+    }
+
     async fn list_task_context_ids(&self, session_id: &str) -> Result<Vec<String>, DbError> {
         sqlx::query_scalar(
             "SELECT a.id FROM execution_graph_execution e JOIN task_attempt a ON a.id = \
