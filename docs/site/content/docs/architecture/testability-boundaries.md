@@ -38,9 +38,16 @@ replay. Static dispatch tests use real SQLite admission and scripted providers b
 the real utility worker to prove parallel branches, joins, exact inputs, shared budgets,
 and permissions. `GraphNodeRunner` supplies the host execution boundary; shared
 `GraphResources` leases make Env contention deterministic without real processes. Budget
-contract tests cover reservation ownership, refunds, and retry accounting. A scripted
-utility occupying worker capacity reproduces delayed provider consumption while graph
-admission proceeds.
+contract tests cover reservation ownership, refunds, overlapping ceilings, and retry
+accounting under concurrent consumption. A scripted utility occupying worker capacity
+reproduces delayed provider consumption while graph admission proceeds.
+
+Application graph tests inject `SessionRunFactory` clients to verify isolated task
+requests, attachments, and completion after ordered effects. The ordinary session
+transcript and pending questions remain independent. Injected readiness reads make
+driver pauses, wakeups, and cancellation deterministic. Failure and cancellation cases
+use the same worker bookkeeping; no live provider is needed to establish these
+boundaries.
 
 The `ag-session` `test-utils` feature supplies pinned model selections for unrelated
 workflow tests and demos. Model catalog, default, and retirement tests keep independent,

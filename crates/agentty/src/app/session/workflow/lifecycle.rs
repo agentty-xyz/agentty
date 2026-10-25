@@ -4110,6 +4110,16 @@ impl SessionManager {
                 );
             }
         }
+        for context_id in repositories
+            .graphs()
+            .list_task_context_ids(session_id)
+            .await?
+        {
+            ids.push(
+                ag_worker::SessionRunClient::isolated_runtime_id(&context_id)
+                    .map_err(|error| SessionError::Workflow(error.to_string()))?,
+            );
+        }
 
         Ok(ids)
     }

@@ -81,6 +81,7 @@ async fn configured_session_policy_replaces_request_policy_and_survives_repair()
 
 fn request() -> TurnRequest {
     TurnRequest {
+        provider_call_budget: None,
         execution_policy: ag_contracts::ExecutionPolicy::default(),
         continuation: TurnContinuation::fresh(),
         folder: ".".into(),

@@ -111,6 +111,7 @@ async fn task_runtime_keys_are_stable_and_separate_from_ordinary_chat() {
 
 fn request() -> TurnRequest {
     TurnRequest {
+        provider_call_budget: None,
         continuation: TurnContinuation::fresh(),
         execution_policy: ag_contracts::ExecutionPolicy::default(),
         folder: ".".into(),

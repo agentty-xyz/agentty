@@ -13,7 +13,7 @@ use std::sync::Arc;
 use ag_contracts::{PermissionMode, ProviderCallBudget};
 use ag_protocol::ProtocolRequestProfile;
 use ag_session::{GraphContext, GraphResultState, GraphWorkspaceAccess};
-use ag_store::{Database, GraphEvidence};
+use ag_store::{Database, GraphEvidence, TaskAgentTurnMetadata};
 use ag_worker::{
     GraphAdmission, GraphExecutor, GraphResources, GraphUtilityRunner, HeartbeatClock, RunScope,
     RunWorker, in_scope,
@@ -23,6 +23,255 @@ use support::{
     assert_panicked_execution_failed, graph, populate,
 };
 use tokio::sync::Notify;
+
+#[tokio::test]
+async fn graph_task_history_is_immutable_and_accounts_usage_before_effects()
+-> Result<(), Box<dyn Error>> {
+    // Arrange
+    let TaskHistoryFixture {
+        database,
+        dispatch,
+        graph,
+        metadata,
+    } = task_history_fixture().await?;
+
+    // Act / Assert: a missing receipt cannot create observed task history.
+    let mut missing = dispatch.clone();
+    missing.record.execution = ag_session::GraphExecutionRef::UtilityRun {
+        run_id: "missing".into(),
+    };
+    assert!(
+        database
+            .graphs()
+            .record_task_turn(&missing, &metadata)
+            .await
+            .is_err()
+    );
+    assert_task_turn_admission(&database, &dispatch, &metadata).await?;
+
+    // Act: effects fail after the observed response was saved.
+    database
+        .graph_dispatch()
+        .fail(&dispatch.record, "effects failed")
+        .await?;
+    let retained = database
+        .graphs()
+        .load_task_turn(&dispatch.record.execution)
+        .await?;
+    let usage: (i64, i64) = sqlx::query_as(
+        "SELECT input_tokens, output_tokens FROM session_usage WHERE session_id = 'session'",
+    )
+    .fetch_one(database.pool())
+    .await?;
+
+    // Assert
+    assert_eq!(retained, Some(metadata.clone()));
+    assert_eq!(usage, (3, 7));
+    assert_eq!(
+        database
+            .graphs()
+            .list_results("graph", "first", "response")
+            .await?
+            .len(),
+        0
+    );
+    assert_eq!(
+        database
+            .sessions()
+            .load_session_messages("session")
+            .await?
+            .len(),
+        0
+    );
+    sqlx::query("UPDATE execution_graph_task_turn SET metadata = 'invalid'")
+        .execute(database.pool())
+        .await?;
+    assert!(
+        database
+            .graphs()
+            .load_task_turn(&dispatch.record.execution)
+            .await
+            .is_err()
+    );
+    let mut utility = graph;
+    utility.id = "utility-graph".into();
+    utility.nodes[0].execution.context = GraphContext::Fresh;
+    utility.nodes[0].execution.response_profile = ProtocolRequestProfile::UtilityPrompt;
+    utility.nodes[0].outputs[0].schema = ProtocolRequestProfile::UtilityPrompt;
+    database.graphs().save_graph(&utility, None).await?;
+    let GraphAdmission::Claimed(utility) = database
+        .graph_dispatch()
+        .claim(
+            "utility-graph",
+            utility.revision,
+            "first",
+            "utility",
+            Path::new("workspace"),
+        )
+        .await?
+    else {
+        return Err("utility was not admitted".into());
+    };
+    assert!(
+        database
+            .graphs()
+            .record_task_turn(&utility, &metadata)
+            .await
+            .is_err()
+    );
+
+    Ok(())
+}
+
+struct TaskHistoryFixture {
+    database: Database,
+    dispatch: ag_worker::GraphDispatch,
+    graph: ag_session::ExecutionGraph,
+    metadata: TaskAgentTurnMetadata,
+}
+
+async fn task_history_fixture() -> Result<TaskHistoryFixture, Box<dyn Error>> {
+    let database = Database::open_in_memory().await?;
+    populate(&database).await?;
+    let mut graph = graph();
+    graph.nodes.truncate(1);
+    graph.nodes[0].execution.context = GraphContext::TaskConversation {
+        task_id: "task".into(),
+    };
+    graph.nodes[0].execution.response_profile = ProtocolRequestProfile::SessionTurn;
+    graph.nodes[0].outputs[0].schema = ProtocolRequestProfile::SessionTurn;
+    database.graphs().save_graph(&graph, None).await?;
+    let GraphAdmission::Claimed(dispatch) = database
+        .graph_dispatch()
+        .claim(
+            "graph",
+            graph.revision,
+            "first",
+            "attempt",
+            Path::new("workspace"),
+        )
+        .await?
+    else {
+        return Err("task was not admitted".into());
+    };
+    let metadata = TaskAgentTurnMetadata {
+        assistant_message: serde_json::json!(ag_protocol::AgentResponse::plain("response"))
+            .to_string(),
+        harness_turn_report: None,
+        instruction_conversation_id: Some("task-instructions".into()),
+        input_tokens: 3,
+        output_tokens: 7,
+        provider_conversation_id: Some("task-provider".into()),
+    };
+
+    Ok(TaskHistoryFixture {
+        database,
+        dispatch: *dispatch,
+        graph,
+        metadata,
+    })
+}
+
+async fn assert_task_turn_admission(
+    database: &Database,
+    dispatch: &ag_worker::GraphDispatch,
+    metadata: &TaskAgentTurnMetadata,
+) -> Result<(), Box<dyn Error>> {
+    assert_eq!(
+        database.graphs().list_task_context_ids("session").await?,
+        ["attempt"]
+    );
+    assert_eq!(
+        database
+            .graphs()
+            .list_task_context_ids("other-session")
+            .await?
+            .len(),
+        0
+    );
+
+    // Act / Assert: only matching running claims can record a response.
+    assert_eq!(
+        database
+            .graphs()
+            .load_task_turn(&dispatch.record.execution)
+            .await?,
+        None
+    );
+    assert_eq!(
+        database
+            .graphs()
+            .load_task_turn(&ag_session::GraphExecutionRef::UtilityRun {
+                run_id: "missing".into()
+            })
+            .await?,
+        None
+    );
+    assert!(
+        database
+            .graphs()
+            .record_task_turn(dispatch, metadata)
+            .await
+            .is_err()
+    );
+    let mut invalid = dispatch.clone();
+    invalid.node.objective.push_str("changed");
+    assert!(
+        database
+            .graphs()
+            .record_task_turn(&invalid, metadata)
+            .await
+            .is_err()
+    );
+    let ag_session::GraphExecutionRef::TaskAttempt { operation_id, .. } =
+        &dispatch.record.execution
+    else {
+        return Err("task execution expected".into());
+    };
+    database
+        .operations()
+        .mark_session_operation_running(operation_id)
+        .await?;
+    let mut malformed = metadata.clone();
+    malformed.assistant_message = "invalid".into();
+    assert!(
+        database
+            .graphs()
+            .record_task_turn(dispatch, &malformed)
+            .await
+            .is_err()
+    );
+    assert!(
+        database
+            .graphs()
+            .record_task_turn(dispatch, metadata)
+            .await?
+    );
+    assert!(
+        !database
+            .graphs()
+            .record_task_turn(dispatch, metadata)
+            .await?
+    );
+    assert_eq!(
+        database
+            .graphs()
+            .load_task_turn(&dispatch.record.execution)
+            .await?,
+        Some(metadata.clone())
+    );
+    let mut conflicting = metadata.clone();
+    conflicting.provider_conversation_id = None;
+    assert!(
+        database
+            .graphs()
+            .record_task_turn(dispatch, &conflicting)
+            .await
+            .is_err()
+    );
+
+    Ok(())
+}
 
 #[tokio::test]
 async fn queued_readers_reserve_calls_before_admission_and_resume_with_a_fresh_budget()

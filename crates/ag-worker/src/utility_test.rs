@@ -20,7 +20,7 @@ use crate::run::mock::MockRunRepository;
 use crate::test_support::{AppServerTurnResponse, MockAppServerClient, TRACER_PROVIDER_LOCK};
 use crate::{
     HeartbeatClock, RunClient, RunInfo, RunRepository, RunScope, RunState, RunWorker,
-    RuntimeConfig, in_scope, scoped_client,
+    RuntimeConfig, in_scope, scoped_client, with_execution_resource,
 };
 
 #[tokio::test]
@@ -604,6 +604,56 @@ struct CleanupRuntime {
     started: CancellationToken,
     cleaning: CancellationToken,
     finish: CancellationToken,
+}
+
+#[tokio::test]
+async fn execution_resources_survive_caller_drop_until_cleanup_and_terminal_persistence() {
+    // Arrange
+    let runtime = Arc::new(CleanupRuntime {
+        started: CancellationToken::new(),
+        cleaning: CancellationToken::new(),
+        finish: CancellationToken::new(),
+    });
+    let repository = Arc::new(Repository::default());
+    let worker = Arc::new(RunWorker::with_client(
+        runtime.clone(),
+        repository.clone(),
+        Arc::new(HeartbeatClock),
+        NonZeroUsize::MIN,
+    ));
+    let gate = Arc::new(tokio::sync::RwLock::new(()));
+    let lease = gate.clone().write_owned().await;
+    let client = scoped_client(worker.clone(), RunScope::default());
+    let caller = tokio::spawn(async move {
+        with_execution_resource(
+            lease,
+            in_scope(RunScope::default(), client.submit(request())),
+        )
+        .await
+    });
+    runtime.started.cancelled().await;
+
+    // Act
+    caller.abort();
+    assert!(caller.await.is_err());
+    runtime.cleaning.cancelled().await;
+
+    // Assert
+    assert!(
+        gate.try_write().is_err(),
+        "worker cleanup retains the resource"
+    );
+    assert_eq!(
+        repository.states.lock().expect("states").last(),
+        Some(&RunState::Running)
+    );
+    runtime.finish.cancel();
+    worker.shutdown().await;
+    assert!(gate.try_write().is_ok());
+    assert_eq!(
+        repository.states.lock().expect("states").last(),
+        Some(&RunState::Canceled)
+    );
 }
 
 #[async_trait]

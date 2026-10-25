@@ -6,9 +6,10 @@ weight = 8
 
 `ag-session` provides pure contracts for arbitrary static execution graphs. `ag-store`
 persists their revisions, execution links, and exact result versions. `ag-worker`
-provides a deterministic static executor with atomic storage admission and a fresh
-utility worker adapter. `/plan` still uses `TaskChain`, and focused review retains its
-existing coordinator; neither workflow has migrated to this executor.
+provides a deterministic static executor with atomic storage admission. Agentty adapts
+task conversations to its serial session workers and fresh utilities to the concurrent
+utility worker. `/plan` still uses `TaskChain`, and focused review retains its existing
+coordinator; neither workflow has migrated to this executor.
 
 ## Graph and Node Identity
 
@@ -110,29 +111,56 @@ conflicts, and exact inputs in the same transaction that creates the operation-b
 task attempt or utility run. Competing admissions return the original receipt without
 dispatching again, including after a restart or failed execution.
 
-The executor intersects session and definition permissions, retains worker policy and
-capacity ceilings, and holds shared-reader or exclusive-writer Env leases through
-settlement. Hosts share one `GraphResources` pool with other work using those Envs; the
-database also excludes conflicting active operations and utilities across graphs.
-Dropping a driver leaves admitted work owned through cleanup. Inherited cancellation
-still reaches workers. Runner panics follow the same durable failure path as returned
-errors before resource leases are released.
+The executor intersects session and definition permissions and retains worker policy and
+capacity ceilings. Utility nodes retain their Env lease through settlement. Session
+adapters publish active ownership before waiting for Env access after serial selection,
+so concurrent sync queues behind the turn. Queued nodes cannot hold a lease needed by
+earlier work. Gate waits observe cancellation, and completion retains acquired leases
+through ordered effects and operation settlement. Hosts share one `GraphResources` pool
+with other work using those Envs; the database also excludes conflicting active
+operations and utilities across graphs. Dropping a driver leaves admitted work owned
+through cleanup. Inherited cancellation still reaches workers. Runner panics follow the
+same durable failure path as returned errors before resource leases are released.
 
 Successful settlement saves the complete schema-valid response, even for nodes without
 named outputs. Question-free outputs receive validation evidence; user acceptance and
 desired-outcome task completion remain separate actions. A failed or clarification
 response cannot release an execution-success gate. A wave drains admitted peers before
-reporting a failure.
+reporting a failure. Each settled node releases its capacity and Env lease before
+notifying other graph drivers, so available resources can be reused while unrelated
+peers are still running. Failed nodes signal release through the same path.
+Resource-blocked drivers also receive targeted wakeups when an unclaimed admission check
+returns its capacity or Env lease. Hosts wait on `GraphExecutor::capacity_released` and
+`GraphExecutor::environment_released` alongside `GraphResources::subscribe_releases`.
+Idle scans do not broadcast resource changes to one another. They reuse capacity across
+unclaimed checks, so competing drivers cannot repeatedly interrupt and restart each
+other's idle scans.
 
 The supplied `GraphUtilityRunner` supports fresh text, focused-review, and
 review-metadata nodes through the existing utility worker, retaining their preadmitted
-identities. It rejects attachments. Hosts implement `GraphNodeRunner` for task
-conversations and ordered session effects; unsupported profiles are rejected before any
-node is admitted. Task identities must be unused when first admitted. The captured graph
-node and exact inputs remain the runner's source of assignment and context.
+identities. It rejects attachments; Agentty currently admits fresh nodes as shared
+readers, routing writers through task conversations and session stack policy. Agentty's
+task adapter retains attachments, captured instructions and model selection, and exact
+bound inputs. Each static task starts an isolated conversation using its durable attempt
+UUID for runtime resources. Observed responses, provider continuation, and usage persist
+before effects; failed effects cannot publish a validated output. Ordinary chat history,
+provider continuation, and pending questions remain separate. Task identities must be
+unused at first admission.
+
+`SessionService::start_execution_graph` explicitly saves and starts a static graph in a
+prepared session. Named provider-call limits remain shared across the launch, including
+retries, repairs, and ordered utility children. Identical active launches do not refill
+those limits. Acceptance uses `accept_execution_graph_result` with an exact validated
+reference. Acceptance and Env release wake the active drivers; launch-time snapshots are
+never discovered and replayed automatically at startup. Graph writers exclude ordinary
+session work, merge workflows, and detached focused-review readers. Legacy focused
+reviews retain their existing overlap with ordinary session work, including
+conflict-free sync; they do not hold the ordinary session writer gate.
 
 An empty dispatch result means no work was admitted, not that the graph is complete.
-Hosts call again when gates or resource availability change. Graph cancellation,
+Hosts wake dispatch when gates or resource availability change. Graph cancellation,
 explicit retry/resume, workflow migration, graph proposals, and runtime expansion remain
-separate work. Storage provides no automatic replay or permission to revise started
-work.
+separate work. A dispatch failure stops that launch's driver. An identical explicit
+launch restarts dispatch using its retained executor and remaining budgets; it does not
+retry failed nodes or refill credits. Storage provides no automatic replay or permission
+to revise started work.

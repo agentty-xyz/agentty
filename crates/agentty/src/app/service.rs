@@ -30,6 +30,9 @@ use crate::infra::fs::FsClient;
 /// Shared app dependencies used by managers and background workflows.
 #[derive(Clone)]
 pub struct AppServices {
+    pub(super) graph_drivers: Arc<Mutex<HashMap<String, crate::app::execution_graph::GraphDriver>>>,
+    pub(super) graph_resources: Arc<ag_worker::GraphResources>,
+    pub(super) graph_wake: tokio::sync::watch::Sender<u64>,
     analytics: Option<Analytics>,
     available_agent_clis: Arc<Mutex<Vec<AgentCliInfo>>>,
     available_agent_kinds: Arc<[AgentKind]>,
@@ -92,6 +95,12 @@ impl AppServices {
             .unwrap_or_else(|| Arc::new(RealAgentCatalogClient));
 
         Self {
+            graph_resources: Arc::new(ag_worker::GraphResources::new(
+                NonZeroUsize::new(8).unwrap_or(NonZeroUsize::MIN),
+                HashMap::new(),
+            )),
+            graph_wake: tokio::sync::watch::channel(0).0,
+            graph_drivers: Arc::default(),
             analytics: None,
             available_agent_clis: Arc::new(Mutex::new(available_agent_clis)),
             available_agent_kinds: Arc::<[AgentKind]>::from(available_agent_kinds),
@@ -219,6 +228,7 @@ impl AppServices {
 
     /// Stops detached and nested utility runs owned by a canceled session.
     pub(crate) fn cancel_agent_runs(&self, session_id: &str) {
+        self.stop_graph_drivers(Some(session_id));
         self.run_worker.cancel_session(session_id);
         let worker = Arc::clone(&self.run_worker);
         let session_id = session_id.to_string();
@@ -229,6 +239,7 @@ impl AppServices {
 
     /// Stops the owning serial worker and utilities before removing resources.
     pub(crate) async fn finish_session_agent_runs(&self, session_id: &str) {
+        self.stop_graph_drivers(Some(session_id));
         let tasks: Vec<_> = self
             .session_worker_tasks
             .lock()
@@ -249,6 +260,10 @@ impl AppServices {
     /// Returns the worker submission handle for isolated agent runs.
     pub(crate) fn run_client(&self) -> Arc<dyn RunClient> {
         Arc::clone(&self.run_client)
+    }
+
+    pub(super) fn graph_run_worker(&self) -> Arc<RunWorker> {
+        Arc::clone(&self.run_worker)
     }
 
     /// Captures session ownership before handing work to a background task.
@@ -356,6 +371,7 @@ impl AppServices {
         &self,
         pending_events: Option<&mut mpsc::UnboundedReceiver<AppEvent>>,
     ) {
+        self.stop_graph_drivers(None);
         let deadline = Instant::from_std(self.clock.now_instant()) + CLEANUP_TASK_SHUTDOWN_TIMEOUT;
         let session_tasks = std::mem::take(
             &mut *self
@@ -601,6 +617,13 @@ pub(crate) struct AppServiceDeps {
 /// requests.
 #[cfg_attr(test, mockall::automock)]
 pub(crate) trait SessionRunFactory: Send + Sync {
+    /// Uses the durable graph claim's host UUID for isolated runtime resources.
+    fn create_graph_task(
+        &self,
+        context_id: &str,
+        session_id: &SessionId,
+        kind: AgentKind,
+    ) -> Result<SessionRunClient, ag_contracts::AgentError>;
     /// Creates a worker client for the session and selected provider.
     fn create(&self, session_id: &SessionId, kind: AgentKind) -> SessionRunClient;
 
@@ -624,6 +647,15 @@ impl RealSessionRunFactory {
 }
 
 impl SessionRunFactory for RealSessionRunFactory {
+    fn create_graph_task(
+        &self,
+        context_id: &str,
+        session_id: &SessionId,
+        kind: AgentKind,
+    ) -> Result<SessionRunClient, ag_contracts::AgentError> {
+        SessionRunClient::for_isolated_context(context_id, session_id, kind, &self.config)
+    }
+
     fn create(&self, session_id: &SessionId, kind: AgentKind) -> SessionRunClient {
         SessionRunClient::new(session_id.to_string(), kind, &self.config)
     }

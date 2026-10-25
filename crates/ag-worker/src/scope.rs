@@ -35,6 +35,7 @@ pub(crate) struct RunContext {
     pub(crate) scope: RunScope,
     pub(crate) trace: Context,
     cancellations: Vec<CancellationToken>,
+    resources: Vec<Arc<dyn Send + Sync>>,
 }
 
 impl RunContext {
@@ -42,6 +43,7 @@ impl RunContext {
         Self {
             phase_trace: None,
             cancellations: scope.cancellation.iter().cloned().collect(),
+            resources: Vec::new(),
             scope,
             trace: Context::current(),
         }
@@ -71,6 +73,7 @@ impl RunContext {
             self.trace = self.trace.with_value(policy);
         }
         self.cancellations.extend(parent.cancellations);
+        self.resources.extend(parent.resources);
         self.scope = RunScope {
             cancellation: self.scope.cancellation.or(parent.scope.cancellation),
             parent_id: self.scope.parent_id.or(parent.scope.parent_id),
@@ -114,6 +117,19 @@ pub async fn in_scope<T>(scope: RunScope, work: impl Future<Output = T>) -> T {
     CURRENT
         .scope(context.clone(), work.with_context(context.trace))
         .await
+}
+
+/// Attaches a host resource to inherited utility-worker scopes. `RunWorker`
+/// retains it after submission through cancellation cleanup and terminal
+/// bookkeeping, even when the submitting caller stops waiting.
+pub async fn with_execution_resource<T>(
+    resource: impl Send + Sync + 'static,
+    work: impl Future<Output = T>,
+) -> T {
+    let mut context = RunContext::current();
+    context.resources.push(Arc::new(resource));
+
+    in_context(context, work).await
 }
 
 /// Retains all enclosing cancellation sources and trace state across a

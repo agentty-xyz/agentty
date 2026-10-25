@@ -15,6 +15,37 @@ use crate::channel::cli::{
 };
 
 #[tokio::test]
+async fn session_call_budget_blocks_cli_execution_and_protocol_repair() {
+    for limit in [0, 1] {
+        // Arrange
+        let mut request = make_turn_request("workspace".into());
+        request.provider_call_budget = Some(ag_contracts::ProviderCallBudget::new(limit));
+        let mut backend = MockAgentBackend::new();
+        if limit == 1 {
+            backend.expect_build_command().once().returning(|_| {
+                let mut command = std::process::Command::new("sh");
+                command.arg("-c").arg("printf invalid");
+                Ok(command)
+            });
+        }
+        let channel = CliAgentChannel::with_backend(Arc::new(backend), AgentKind::Claude);
+
+        // Act
+        let result = channel
+            .run_turn("session".into(), request, mpsc::unbounded_channel().0)
+            .await;
+
+        // Assert
+        assert!(
+            result
+                .expect_err("budget blocks the next provider attempt")
+                .to_string()
+                .contains("budget")
+        );
+    }
+}
+
+#[tokio::test]
 async fn test_parse_or_repair_cli_response_reports_repair_transport_failure() {
     // Arrange
     let folder = tempdir().expect("failed to create temp dir");
