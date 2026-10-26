@@ -158,7 +158,7 @@ async fn run_session_turn(
         &req.request_kind,
         bootstrap_age.is_some().then_some(session_id.as_str()),
         bootstrap.as_ref().map(|bootstrap| bootstrap.key.as_str()),
-        !history.has_finished_turn && replay_transcript.is_some() && req.request_kind.is_resume(),
+        !history.has_finished_turn && replay_transcript.is_some(),
     );
     let input = NativePrompt {
         delivery,

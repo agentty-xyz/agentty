@@ -8,7 +8,9 @@ use std::sync::atomic::{AtomicBool, Ordering};
 
 use ag_contracts::{OneShotError, PermissionMode, ProviderCallBudget};
 use ag_session::{
-    ExecutionGraph, GraphContext, GraphNode, GraphResultRef, StartExecutionGraphRequest,
+    ContinueGraphNodeRequest, ExecutionGraph, ExecutionGraphProgress, ExecutionGraphStatus,
+    GraphBlockedReason, GraphContext, GraphControlRequest, GraphNode, GraphNodeStatus,
+    GraphResultRef, ResumeExecutionGraphRequest, StartExecutionGraphRequest,
 };
 use ag_worker::{GraphExecutor, GraphNodeRunner, GraphRunRequest, GraphUtilityRunner, RunClient};
 use async_trait::async_trait;
@@ -27,6 +29,137 @@ pub(super) struct GraphDriver {
 }
 
 impl App {
+    pub(super) async fn execution_graph_progress(
+        &self,
+        graph_id: &str,
+    ) -> Result<Option<ExecutionGraphProgress>, ag_session::SessionError> {
+        let Some(mut progress) = self
+            .services
+            .db()
+            .graphs()
+            .progress(graph_id)
+            .await
+            .map_err(|error| ag_session::SessionError::Operation(error.to_string()))?
+        else {
+            return Ok(None);
+        };
+        let drivers = self
+            .services
+            .graph_drivers
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        let driver = drivers.get(graph_id).filter(|driver| {
+            driver.running.load(Ordering::Acquire) && !driver.cancellation.is_cancelled()
+        });
+        for node in &mut progress.nodes {
+            if node.status != GraphNodeStatus::Pending {
+                continue;
+            }
+            if let Some(driver) = driver {
+                let budget = driver
+                    .request
+                    .graph
+                    .nodes
+                    .iter()
+                    .find(|definition| definition.id == node.node_id)
+                    .and_then(|definition| definition.execution.shared_budget_id.as_ref());
+                if let Some(id) = budget
+                    && driver.executor.remaining_provider_calls(id) == Some(0)
+                {
+                    node.blocked
+                        .push(GraphBlockedReason::BudgetExhausted(id.clone()));
+                }
+            } else {
+                node.blocked.push(GraphBlockedReason::ResumeRequired);
+            }
+        }
+        if matches!(
+            progress.status,
+            ExecutionGraphStatus::Running | ExecutionGraphStatus::Blocked
+        ) {
+            if driver.is_none() {
+                progress.status = ExecutionGraphStatus::Paused;
+            } else if progress.nodes.iter().all(|node| {
+                node.status != GraphNodeStatus::Pending
+                    || node
+                        .blocked
+                        .iter()
+                        .any(|reason| !matches!(reason, GraphBlockedReason::AwaitingDispatch))
+            }) && !progress.nodes.iter().any(|node| {
+                matches!(
+                    node.status,
+                    GraphNodeStatus::Queued | GraphNodeStatus::Running
+                )
+            }) {
+                progress.status = ExecutionGraphStatus::Blocked;
+            }
+        }
+
+        Ok(Some(progress))
+    }
+
+    pub(super) async fn cancel_api_execution_graph(
+        &mut self,
+        request: GraphControlRequest,
+    ) -> Result<(), ag_session::SessionError> {
+        self.services
+            .db()
+            .graphs()
+            .cancel(&request)
+            .await
+            .map_err(|error| ag_session::SessionError::Operation(error.to_string()))?;
+        if let Some(driver) = self
+            .services
+            .graph_drivers
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .get(&request.graph_id)
+        {
+            driver.cancellation.cancel();
+        }
+        self.services.wake_graphs();
+
+        Ok(())
+    }
+
+    pub(super) async fn resume_api_execution_graph(
+        &mut self,
+        request: ResumeExecutionGraphRequest,
+    ) -> Result<(), ag_session::SessionError> {
+        let graph = self
+            .services
+            .db()
+            .graphs()
+            .load_graph(&request.graph.graph_id, None)
+            .await
+            .map_err(|error| ag_session::SessionError::Operation(error.to_string()))?
+            .filter(|graph| graph.revision == request.graph.revision)
+            .ok_or_else(|| ag_session::SessionError::Operation("Missing or stale graph".into()))?;
+        self.start_api_execution_graph(StartExecutionGraphRequest {
+            graph,
+            provider_call_limits: request.provider_call_limits,
+        })
+        .await
+    }
+
+    pub(super) async fn continue_api_execution_graph_node(
+        &mut self,
+        request: ContinueGraphNodeRequest,
+    ) -> Result<(), ag_session::SessionError> {
+        self.services
+            .db()
+            .graphs()
+            .continue_node(&request)
+            .await
+            .map_err(|error| ag_session::SessionError::Operation(error.to_string()))?;
+        // Durable intent survives restart. Dispatch only wakes an explicitly
+        // launched driver; recording a retry cannot recreate budgets on its
+        // own.
+        self.services.wake_graphs();
+
+        Ok(())
+    }
+
     pub(super) async fn start_api_execution_graph(
         &mut self,
         request: StartExecutionGraphRequest,
@@ -36,6 +169,17 @@ impl App {
             .graph
             .validate()
             .map_err(|error| invalid(error.to_string()))?;
+        if self
+            .services
+            .db()
+            .graphs()
+            .progress(&request.graph.id)
+            .await
+            .map_err(|error| invalid(error.to_string()))?
+            .is_some_and(|progress| progress.status == ExecutionGraphStatus::Cancelled)
+        {
+            return Err(invalid("Canceled graphs cannot be resumed".into()));
+        }
         self.sessions
             .sync_session_from_handle(&request.graph.session_id);
         let session = self
@@ -52,33 +196,16 @@ impl App {
             ));
         }
         let folder = session.folder.clone();
-        let _: ag_contracts::PermissionMode = self
-            .services
-            .db()
-            .sessions()
-            .load_session(&request.graph.session_id)
-            .await
-            .map_err(|error| invalid(error.to_string()))?
-            .ok_or_else(|| invalid("Graph session is missing".into()))?
-            .permission_mode
-            .parse()
-            .map_err(|error| invalid(format!("Invalid session permissions: {error}")))?;
+        self.services
+            .validate_graph_session_permissions(&request.graph.session_id)
+            .await?;
         let cancellation = CancellationToken::new();
         let runner = Arc::new(SessionGraphRunner {
             cancellation: cancellation.clone(),
             runtime: self.sessions.handle(),
             utility: GraphUtilityRunner::new(self.services.graph_run_worker()),
         });
-        for node in &request.graph.nodes {
-            if !runner.supports(node) {
-                return Err(invalid(format!("Unsupported graph node: {}", node.id)));
-            }
-            if let Some(id) = &node.execution.shared_budget_id
-                && !request.provider_call_limits.contains_key(id)
-            {
-                return Err(invalid(format!("Unknown graph provider budget: {id}")));
-            }
-        }
+        runner.validate_launch(&request)?;
         let previous = {
             let drivers = self
                 .services
@@ -197,6 +324,26 @@ impl App {
 }
 
 impl AppServices {
+    async fn validate_graph_session_permissions(
+        &self,
+        session_id: &str,
+    ) -> Result<(), ag_session::SessionError> {
+        let invalid = ag_session::SessionError::Operation;
+        let session = self
+            .db()
+            .sessions()
+            .load_session(session_id)
+            .await
+            .map_err(|error| invalid(error.to_string()))?
+            .ok_or_else(|| invalid("Graph session is missing".into()))?;
+        let _: PermissionMode = session
+            .permission_mode
+            .parse()
+            .map_err(|error| invalid(format!("Invalid session permissions: {error}")))?;
+
+        Ok(())
+    }
+
     /// Retains a launch's executor and budgets across dispatch exits. Only an
     /// explicit relaunch restarts a stopped driver.
     fn spawn_graph_driver(
@@ -292,9 +439,43 @@ impl AppServices {
                 Ok(_) => {}
                 Err(error) => {
                     tracing::warn!(graph_id = graph.id, %error, "Graph dispatch failed");
-                    self.wake_graphs();
-                    break;
+                    // Keep the driver subscribed for explicit retry intent.
+                    // Existing receipts still prevent automatic node replay.
+                    let has_execution = self
+                        .db()
+                        .graphs()
+                        .progress(&graph.id)
+                        .await
+                        .ok()
+                        .flatten()
+                        .is_some_and(|progress| {
+                            progress
+                                .nodes
+                                .iter()
+                                .any(|node| !node.executions.is_empty())
+                        });
+                    if !has_execution {
+                        break;
+                    }
                 }
+            }
+            // Dispatch can be idle at an acceptance or clarification gate;
+            // only a persisted complete projection proves completion.
+            if self
+                .db()
+                .graphs()
+                .progress(&graph.id)
+                .await
+                .ok()
+                .flatten()
+                .is_some_and(|progress| {
+                    matches!(
+                        progress.status,
+                        ExecutionGraphStatus::Completed | ExecutionGraphStatus::Cancelled
+                    )
+                })
+            {
+                break;
             }
             tokio::select! {
                 biased;
@@ -457,6 +638,31 @@ struct SessionGraphRunner {
     cancellation: CancellationToken,
     runtime: SessionRuntimeHandle,
     utility: GraphUtilityRunner,
+}
+
+impl SessionGraphRunner {
+    fn validate_launch(
+        &self,
+        request: &StartExecutionGraphRequest,
+    ) -> Result<(), ag_session::SessionError> {
+        for node in &request.graph.nodes {
+            if !self.supports(node) {
+                return Err(ag_session::SessionError::Operation(format!(
+                    "Unsupported graph node: {}",
+                    node.id
+                )));
+            }
+            if let Some(id) = &node.execution.shared_budget_id
+                && !request.provider_call_limits.contains_key(id)
+            {
+                return Err(ag_session::SessionError::Operation(format!(
+                    "Unknown graph provider budget: {id}"
+                )));
+            }
+        }
+
+        Ok(())
+    }
 }
 
 #[async_trait]

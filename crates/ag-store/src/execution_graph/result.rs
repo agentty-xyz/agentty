@@ -168,6 +168,10 @@ impl SqliteGraphRepository {
         let stored = Self::result(&mut transaction, &reference.id)
             .await?
             .ok_or_else(|| Self::invalid("Result does not exist"))?;
+        let (_, record) = Self::execution(&mut transaction, &reference.execution)
+            .await?
+            .ok_or_else(|| Self::invalid("Result execution is missing"))?;
+        Self::ensure_live_execution(&mut transaction, &graph, &record).await?;
         if stored.result.reference != *reference {
             return Err(Self::invalid(
                 "Evidence must name the exact persisted reference",

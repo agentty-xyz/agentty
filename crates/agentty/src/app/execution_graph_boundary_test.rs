@@ -8,7 +8,9 @@ use std::sync::atomic::{AtomicUsize, Ordering};
 use ag_contracts::{OneShotError, PermissionMode};
 use ag_protocol::ProtocolRequestProfile;
 use ag_session::{
-    GraphContext, GraphExecutionRef, GraphNode, GraphResultRef, StartExecutionGraphRequest,
+    ContinueGraphNodeRequest, ExecutionGraphStatus, GraphBlockedReason, GraphContext,
+    GraphControlRequest, GraphExecutionRef, GraphNode, GraphNodeContinuation, GraphNodeStatus,
+    GraphResultRef, ResumeExecutionGraphRequest, StartExecutionGraphRequest,
 };
 use ag_worker::test_support::{AppServerTurnResponse, MockAppServerClient};
 use ag_worker::{GraphExecutor, GraphNodeRunner, GraphRunRequest};
@@ -350,6 +352,195 @@ async fn paused_graph_drivers_resume_or_cancel_without_dispatching_early() {
             checks.load(Ordering::Relaxed),
             usize::from(scenario == "resume")
         );
+    }
+}
+
+#[tokio::test]
+async fn graph_lifecycle_storage_errors_do_not_signal_or_admit_work() {
+    // Arrange
+    let (mut app, pool, _directory) = app_with_pool().await;
+    let control = GraphControlRequest {
+        graph_id: "graph".into(),
+        revision: NonZeroU64::MIN,
+    };
+    let continuation = ContinueGraphNodeRequest {
+        action_id: uuid::Uuid::new_v4().to_string(),
+        execution: run_request().dispatch.record.execution,
+        graph_id: "graph".into(),
+        kind: GraphNodeContinuation::Retry,
+        node_id: "first".into(),
+        revision: NonZeroU64::MIN,
+    };
+    let wake = app.services.graph_wake.subscribe();
+    pool.close().await;
+
+    // Act
+    let results = [
+        app.execution_graph_progress("graph").await.map(|_| ()),
+        app.cancel_api_execution_graph(control.clone()).await,
+        app.resume_api_execution_graph(ResumeExecutionGraphRequest {
+            graph: control,
+            provider_call_limits: BTreeMap::new(),
+        })
+        .await,
+        app.continue_api_execution_graph_node(continuation).await,
+        app.services
+            .validate_graph_session_permissions("sess")
+            .await,
+    ];
+
+    // Assert
+    for result in results {
+        assert!(
+            result
+                .expect_err("closed storage")
+                .to_string()
+                .contains("closed")
+        );
+    }
+    assert!(!wake.has_changed().expect("unchanged wake"));
+    assert_eq!(app.services.graph_drivers.lock().expect("drivers").len(), 0);
+    app.services.wait_for_cleanup_tasks(None).await;
+}
+
+#[tokio::test]
+async fn graph_lifecycle_direct_progress_exposes_budget_exhaustion_and_cancellation() {
+    // Arrange
+    let (mut app, _pool, _directory) = app_with_pool().await;
+    let mut snapshot = graph();
+    snapshot.nodes.truncate(1);
+    app.start_api_execution_graph(StartExecutionGraphRequest {
+        graph: snapshot,
+        provider_call_limits: BTreeMap::from([("calls".into(), 0)]),
+    })
+    .await
+    .expect("launch without credit");
+
+    // Act
+    let progress = app
+        .execution_graph_progress("graph")
+        .await
+        .expect("progress")
+        .expect("graph");
+    app.cancel_api_execution_graph(GraphControlRequest {
+        graph_id: "graph".into(),
+        revision: NonZeroU64::MIN,
+    })
+    .await
+    .expect("cancel");
+
+    // Assert
+    assert_eq!(progress.status, ExecutionGraphStatus::Blocked);
+    assert!(
+        progress.nodes[0]
+            .blocked
+            .contains(&GraphBlockedReason::BudgetExhausted("calls".into()))
+    );
+    let cancelled = app.services.graph_drivers.lock().expect("driver")["graph"]
+        .cancellation
+        .is_cancelled();
+    assert!(cancelled);
+    app.services.wait_for_cleanup_tasks(None).await;
+}
+
+#[tokio::test]
+async fn graph_lifecycle_progress_preserves_dispatchable_and_queued_work() {
+    for scenario in ["unstarted", "available-budget", "no-budget", "queued"] {
+        // Arrange
+        let (mut app, _pool, _directory) = app_with_pool().await;
+        let mut snapshot = graph();
+        snapshot.nodes.truncate(1);
+        let node = &mut snapshot.nodes[0];
+        node.execution.context = GraphContext::Fresh;
+        node.execution.response_profile = ProtocolRequestProfile::UtilityPrompt;
+        node.outputs[0].schema = ProtocolRequestProfile::UtilityPrompt;
+        node.request.attachments.clear();
+        if scenario == "no-budget" {
+            node.execution.shared_budget_id = None;
+        }
+        let environment = app
+            .services
+            .graph_resources
+            .environment(&node.env_id)
+            .write_owned()
+            .await;
+        if scenario == "unstarted" {
+            app.services
+                .db()
+                .graphs()
+                .save_graph(&snapshot, None)
+                .await
+                .expect("saved graph");
+        } else {
+            app.start_api_execution_graph(StartExecutionGraphRequest {
+                graph: snapshot,
+                provider_call_limits: BTreeMap::from([(
+                    "calls".into(),
+                    usize::from(scenario != "queued"),
+                )]),
+            })
+            .await
+            .expect("active driver");
+        }
+        if scenario == "queued" {
+            let receipt = app
+                .services
+                .db()
+                .graph_dispatch()
+                .claim(
+                    "graph",
+                    NonZeroU64::MIN,
+                    "first",
+                    &uuid::Uuid::new_v4().to_string(),
+                    Path::new("workspace"),
+                )
+                .await
+                .expect("queued claim");
+            assert!(matches!(receipt, ag_worker::GraphAdmission::Claimed(_)));
+        }
+
+        // Act
+        let progress = app
+            .execution_graph_progress("graph")
+            .await
+            .expect("progress")
+            .expect("graph");
+        app.cancel_api_execution_graph(GraphControlRequest {
+            graph_id: "graph".into(),
+            revision: NonZeroU64::MIN,
+        })
+        .await
+        .expect("cancel with or without a driver");
+        let cancelled = app
+            .execution_graph_progress("graph")
+            .await
+            .expect("cancelled progress")
+            .expect("graph");
+
+        // Assert
+        let expected_status = if scenario == "unstarted" {
+            ExecutionGraphStatus::Paused
+        } else {
+            ExecutionGraphStatus::Running
+        };
+        assert_eq!(progress.status, expected_status, "{scenario}");
+        assert_eq!(
+            progress.nodes[0].status,
+            if scenario == "queued" {
+                GraphNodeStatus::Queued
+            } else {
+                GraphNodeStatus::Pending
+            }
+        );
+        assert!(
+            !progress.nodes[0]
+                .blocked
+                .iter()
+                .any(|reason| matches!(reason, GraphBlockedReason::BudgetExhausted(_)))
+        );
+        assert_eq!(cancelled.status, ExecutionGraphStatus::Cancelled);
+        drop(environment);
+        app.services.wait_for_cleanup_tasks(None).await;
     }
 }
 

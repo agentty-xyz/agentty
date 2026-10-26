@@ -8,6 +8,8 @@ use std::time::Duration;
 
 use ag_session::SettingName;
 use testty::assertion;
+use testty::frame::TerminalFrame;
+use testty::locator::MatchedSpan;
 use testty::proof::report::ProofReport;
 use testty::region::Region;
 use testty::step::Step;
@@ -609,6 +611,38 @@ async fn seed_discovery_invitation(env: &BuilderEnv) -> Result<(), Box<dyn std::
     Ok(())
 }
 
+/// Identifies the selected button without matching a bold home-path substring.
+fn selected_discovery_no(frame: &TerminalFrame) -> Option<MatchedSpan> {
+    let title = frame
+        .find_text("Discover repositories?")
+        .into_iter()
+        .next()?;
+
+    frame
+        .find_text(" No ")
+        .into_iter()
+        .find(|choice| choice.style.bold() && choice.background == title.foreground)
+}
+
+#[test]
+fn test_project_discovery_no_locator_ignores_bold_paths() {
+    // Arrange
+    let frame = TerminalFrame::new(
+        80,
+        4,
+        b"\x1b[1;38;2;1;2;3mDiscover repositories?\r\n/home/ No /fixture\x1b[0m\r\n Yes \
+          \x1b[1;38;2;4;5;6;48;2;1;2;3m No \x1b[0m |",
+    );
+
+    // Act
+    let selected = selected_discovery_no(&frame).expect("selected No button");
+
+    // Assert
+    assert_eq!(frame.find_text(" No ").len(), 2);
+    assert_eq!(selected.rect.row, 2);
+    assert_eq!(selected.rect.col, 5);
+}
+
 #[tokio::test]
 async fn test_project_discovery_startup_skip() -> Result<(), Box<dyn std::error::Error>> {
     // Arrange, Act, Assert
@@ -670,11 +704,7 @@ async fn test_project_discovery_startup_skip() -> Result<(), Box<dyn std::error:
                         invitation.fg_color(path_row, 28),
                         invitation.fg_color(title.row, title.col)
                     );
-                    let no = invitation
-                        .find_text("No")
-                        .into_iter()
-                        .find(|choice| choice.style.bold())
-                        .expect("selected No choice");
+                    let no = selected_discovery_no(&invitation).expect("selected No button");
                     assert_eq!(invitation.cell_text(no.rect.row + 2, 25), "╰");
                     assert!(no.rect.row + 3 - title.row < 20, "popup fits its content");
                 })
@@ -717,12 +747,7 @@ async fn test_project_discovery_startup_short_viewport() -> Result<(), Box<dyn s
                     for expected in ["Yes", "No"] {
                         assertion::assert_text_in_region(&invitation, expected, &full);
                     }
-                    assert!(
-                        invitation
-                            .find_text("No")
-                            .iter()
-                            .any(|choice| choice.style.bold())
-                    );
+                    assert!(selected_discovery_no(&invitation).is_some());
                 })
             },
         )

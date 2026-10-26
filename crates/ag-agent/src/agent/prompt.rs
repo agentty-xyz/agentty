@@ -174,7 +174,7 @@ pub(crate) fn build_cli_prompt_text(
         render_prompt_with_local_images(request.prompt, request.attachments, backend_display_name)?;
 
     prepare_prompt_text(PromptPreparationRequest {
-        instruction_delivery_mode: if request.request_kind.is_resume() {
+        instruction_delivery_mode: if request.replay_transcript.is_some() {
             InstructionDeliveryMode::BootstrapWithReplay
         } else {
             InstructionDeliveryMode::BootstrapFull

@@ -39,11 +39,36 @@ async fn existing_hosts_reject_graph_capabilities_without_admitting_work() {
             provider_call_limits: BTreeMap::default(),
         })
         .await;
+    let action = crate::ContinueGraphNodeRequest {
+        action_id: "new-execution".into(),
+        execution: reference.execution.clone(),
+        graph_id: reference.graph_id.clone(),
+        kind: crate::GraphNodeContinuation::Retry,
+        node_id: reference.node_id.clone(),
+        revision: reference.graph_revision,
+    };
+    let control = crate::GraphControlRequest {
+        graph_id: "graph".into(),
+        revision: std::num::NonZeroU64::MIN,
+    };
+    let progress = service.get_execution_graph("graph").await;
+    let cancelled = service.cancel_execution_graph(control.clone()).await;
+    let resumed = service
+        .resume_execution_graph(crate::ResumeExecutionGraphRequest {
+            graph: control,
+            provider_call_limits: BTreeMap::new(),
+        })
+        .await;
+    let continued = service.continue_execution_graph_node(action).await;
     let accepted = service.accept_execution_graph_result(reference).await;
 
     // Assert
     let expected = SessionError::Operation("Host does not support execution graphs".into());
     assert_eq!(started, Err(expected.clone()));
+    assert_eq!(progress, Err(expected.clone()));
+    assert_eq!(cancelled, Err(expected.clone()));
+    assert_eq!(resumed, Err(expected.clone()));
+    assert_eq!(continued, Err(expected.clone()));
     assert_eq!(accepted, Err(expected));
 }
 

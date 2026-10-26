@@ -12,6 +12,26 @@ use crate::graph::model::{MockGraphDispatchRepository, MockGraphNodeRunner};
 use crate::graph::support_test::{dispatch, graph};
 use crate::graph::{GraphAdmission, GraphExecutor, GraphResources};
 
+#[test]
+fn budget_progress_observes_shared_credit_without_reserving_it() {
+    // Arrange
+    let budget = ProviderCallBudget::new(1);
+    let executor = GraphExecutor::new(
+        Arc::new(MockGraphDispatchRepository::new()),
+        Arc::new(GraphResources::new(
+            NonZeroUsize::MIN,
+            HashMap::from([("calls".into(), budget.clone())]),
+        )),
+        Arc::new(MockGraphNodeRunner::new()),
+    );
+
+    // Act / Assert
+    assert_eq!(executor.remaining_provider_calls("missing"), None);
+    assert_eq!(executor.remaining_provider_calls("calls"), Some(1));
+    budget.consume().expect("consume");
+    assert_eq!(executor.remaining_provider_calls("calls"), Some(0));
+}
+
 #[tokio::test]
 async fn capacity_releases_notify_only_registered_waiters_once() {
     // Arrange

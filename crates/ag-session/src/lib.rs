@@ -48,10 +48,12 @@ pub use discovery::{
 pub use env::{EnvId, ResolvedEnv};
 pub use error::SessionError;
 pub use execution_graph::{
-    ExecutionGraph, GraphCompletionGate, GraphContext, GraphContractError, GraphDependency,
-    GraphExecutionProfile, GraphExecutionRef, GraphInputBinding, GraphNode, GraphOutput,
-    GraphPostProcessing, GraphResolvedInput, GraphResult, GraphResultRef, GraphResultState,
-    GraphWorkspaceAccess,
+    ContinueGraphNodeRequest, ExecutionGraph, ExecutionGraphProgress, ExecutionGraphStatus,
+    GraphBlockedReason, GraphCompletionGate, GraphContext, GraphContractError, GraphControlRequest,
+    GraphDependency, GraphExecutionProfile, GraphExecutionRef, GraphInputBinding, GraphNode,
+    GraphNodeContinuation, GraphNodeProgress, GraphNodeStatus, GraphOutput, GraphPostProcessing,
+    GraphQuestionAnswer, GraphResolvedInput, GraphResult, GraphResultRef, GraphResultState,
+    GraphWorkspaceAccess, ResumeExecutionGraphRequest,
 };
 pub use message::{
     AgentAnswerContent, SessionMessage, SessionMessageKind, SessionMessageKindParseError,

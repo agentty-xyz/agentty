@@ -4,8 +4,9 @@ use std::path::Path;
 use ag_contracts::OneShotError;
 use ag_protocol::parse_protocol_response_strict;
 use ag_session::{
-    DurableMessageVisibility, ExecutionGraph, GraphCompletionGate, GraphContext, GraphExecutionRef,
-    GraphNode, GraphResultRef, GraphResultState, GraphWorkspaceAccess, SubmitTaskRequest,
+    DurableMessageVisibility, ExecutionGraph, GraphCompletionGate, GraphContext, GraphDependency,
+    GraphExecutionRef, GraphNode, GraphResultRef, GraphResultState, GraphWorkspaceAccess,
+    SubmitTaskRequest,
 };
 use ag_worker::{
     GraphAdmission, GraphDispatch, GraphDispatchRepository, GraphExecutionRecord, GraphInputValue,
@@ -79,16 +80,103 @@ impl SqliteGraphRepository {
             .iter()
             .find(|node| node.id == node_id)
             .ok_or_else(|| Self::invalid("Dispatch node does not exist"))?;
-        if let Some(record) = Self::node_execution(&mut transaction, &graph, node_id).await? {
-            return Ok(GraphAdmission::Existing(record));
-        }
-        let Some(inputs) = Self::ready_inputs(&mut transaction, &graph, node).await? else {
+        if Self::cancelled(&mut transaction, graph_id).await? {
             return Ok(GraphAdmission::Blocked);
+        }
+        let previous = Self::node_execution(&mut transaction, &graph, node_id).await?;
+        let continuation: Option<String> = sqlx::query_scalar(
+            "SELECT id FROM execution_graph_continuation WHERE execution_graph_id = ? AND \
+             revision = ? AND node_id = ? AND execution_graph_execution_id IS NULL",
+        )
+        .bind(graph_id)
+        .bind(Self::integer(revision)?)
+        .bind(node_id)
+        .fetch_optional(&mut *transaction)
+        .await?;
+        let inputs = if let Some(record) = &previous {
+            if continuation.is_none() {
+                return Ok(GraphAdmission::Existing(record.clone()));
+            }
+            let mut inputs = Vec::new();
+            for reference in &record.inputs {
+                let result = Self::result(&mut transaction, &reference.result.id)
+                    .await?
+                    .ok_or_else(|| Self::invalid("Pinned input is missing"))?;
+                inputs.push(GraphInputValue {
+                    body: result.body,
+                    reference: reference.clone(),
+                });
+            }
+
+            inputs
+        } else {
+            let Some(inputs) = Self::ready_inputs(&mut transaction, &graph, node).await? else {
+                return Ok(GraphAdmission::Blocked);
+            };
+
+            inputs
         };
         if Self::env_busy(&mut transaction, &graph, node).await? {
             return Ok(GraphAdmission::Blocked);
         }
+        let execution_id = continuation.as_deref().unwrap_or(execution_id);
+        if let Some(continuation) = &continuation {
+            sqlx::query("UPDATE execution_graph_continuation SET is_admitting = 1 WHERE id = ?")
+                .bind(continuation)
+                .execute(&mut *transaction)
+                .await?;
+        }
         let now = self.timestamp_source.now_timestamp_seconds();
+        let execution = Self::create_node_execution(
+            &mut transaction,
+            &graph,
+            node,
+            execution_id,
+            folder,
+            previous.is_some(),
+            now,
+        )
+        .await?;
+        let record = GraphExecutionRecord {
+            execution,
+            graph_id: graph.id.clone(),
+            graph_revision: graph.revision,
+            inputs: inputs.iter().map(|input| input.reference.clone()).collect(),
+            node_id: node.id.clone(),
+        };
+        Self::link(&mut transaction, &record, now).await?;
+        Self::mark_dispatch_claim(&mut transaction, &record.execution).await?;
+        if let Some(continuation) = &continuation {
+            let (id, _) = Self::execution(&mut transaction, &record.execution)
+                .await?
+                .ok_or_else(|| Self::invalid("Continuation execution is missing"))?;
+            sqlx::query(
+                "UPDATE execution_graph_continuation SET execution_graph_execution_id = ?, \
+                 is_admitting = 0 WHERE id = ?",
+            )
+            .bind(id)
+            .bind(continuation)
+            .execute(&mut *transaction)
+            .await?;
+        }
+        transaction.commit().await?;
+
+        Ok(GraphAdmission::Claimed(Box::new(GraphDispatch {
+            inputs,
+            node: node.clone(),
+            record,
+        })))
+    }
+
+    async fn create_node_execution(
+        connection: &mut SqliteConnection,
+        graph: &ExecutionGraph,
+        node: &GraphNode,
+        execution_id: &str,
+        folder: &Path,
+        continuation: bool,
+        now: i64,
+    ) -> Result<GraphExecutionRef, DbError> {
         let execution = match &node.execution.context {
             GraphContext::Fresh => {
                 let purpose = format!("graph:{}", node.id);
@@ -106,7 +194,7 @@ impl SqliteGraphRepository {
                 .bind(purpose)
                 .bind(now)
                 .bind(graph.session_id.as_str())
-                .execute(&mut *transaction)
+                .execute(&mut *connection)
                 .await?;
                 if inserted.rows_affected() != 1 {
                     return Err(Self::invalid("Session utility admission is closed"));
@@ -119,9 +207,9 @@ impl SqliteGraphRepository {
                 let exists: bool =
                     sqlx::query_scalar("SELECT EXISTS(SELECT 1 FROM task WHERE id = ?)")
                         .bind(task_id)
-                        .fetch_one(&mut *transaction)
+                        .fetch_one(&mut *connection)
                         .await?;
-                if exists {
+                if exists && !continuation {
                     return Err(Self::invalid("Graph task identity is already in use"));
                 }
                 let request = SubmitTaskRequest {
@@ -132,7 +220,7 @@ impl SqliteGraphRepository {
                     visibility: DurableMessageVisibility::Hidden,
                 };
                 SqliteTaskRepository::claim_attempt_in_transaction(
-                    &mut transaction,
+                    connection,
                     graph.session_id.as_str(),
                     &request,
                     "graph_node",
@@ -147,22 +235,8 @@ impl SqliteGraphRepository {
                 }
             }
         };
-        let record = GraphExecutionRecord {
-            execution,
-            graph_id: graph.id.clone(),
-            graph_revision: graph.revision,
-            inputs: inputs.iter().map(|input| input.reference.clone()).collect(),
-            node_id: node.id.clone(),
-        };
-        Self::link(&mut transaction, &record, now).await?;
-        Self::mark_dispatch_claim(&mut transaction, &record.execution).await?;
-        transaction.commit().await?;
 
-        Ok(GraphAdmission::Claimed(Box::new(GraphDispatch {
-            inputs,
-            node: node.clone(),
-            record,
-        })))
+        Ok(execution)
     }
 
     async fn mark_dispatch_claim(
@@ -180,7 +254,7 @@ impl SqliteGraphRepository {
         Ok(())
     }
 
-    async fn node_execution(
+    pub(super) async fn node_execution(
         connection: &mut SqliteConnection,
         graph: &ExecutionGraph,
         node_id: &str,
@@ -205,36 +279,13 @@ impl SqliteGraphRepository {
             .map(|(_, record)| record))
     }
 
-    async fn ready_inputs(
+    pub(super) async fn ready_inputs(
         connection: &mut SqliteConnection,
         graph: &ExecutionGraph,
         node: &GraphNode,
     ) -> Result<Option<Vec<GraphInputValue>>, DbError> {
         for dependency in &node.dependencies {
-            let Some(record) = Self::node_execution(connection, graph, &dependency.node_id).await?
-            else {
-                return Ok(None);
-            };
-            let satisfied = match &dependency.gate {
-                GraphCompletionGate::ExecutionSucceeded => {
-                    Self::settled_response(connection, graph, &record).await?
-                }
-                GraphCompletionGate::ResultValidated { output_name } => Self::eligible_result(
-                    connection,
-                    graph,
-                    &dependency.node_id,
-                    output_name,
-                    false,
-                )
-                .await?
-                .is_some(),
-                GraphCompletionGate::ResultAccepted { output_name } => {
-                    Self::eligible_result(connection, graph, &dependency.node_id, output_name, true)
-                        .await?
-                        .is_some()
-                }
-            };
-            if !satisfied {
+            if !Self::dependency_satisfied(connection, graph, dependency).await? {
                 return Ok(None);
             }
         }
@@ -268,7 +319,38 @@ impl SqliteGraphRepository {
         Ok(Some(inputs))
     }
 
-    async fn settled_response(
+    pub(super) async fn dependency_satisfied(
+        connection: &mut SqliteConnection,
+        graph: &ExecutionGraph,
+        dependency: &GraphDependency,
+    ) -> Result<bool, DbError> {
+        let Some(record) = Self::node_execution(connection, graph, &dependency.node_id).await?
+        else {
+            return Ok(false);
+        };
+        match &dependency.gate {
+            GraphCompletionGate::ExecutionSucceeded => {
+                Self::settled_response(connection, graph, &record).await
+            }
+            GraphCompletionGate::ResultValidated { output_name }
+            | GraphCompletionGate::ResultAccepted { output_name } => {
+                let accepted =
+                    matches!(dependency.gate, GraphCompletionGate::ResultAccepted { .. });
+
+                Ok(Self::eligible_result(
+                    connection,
+                    graph,
+                    &dependency.node_id,
+                    output_name,
+                    accepted,
+                )
+                .await?
+                .is_some())
+            }
+        }
+    }
+
+    pub(super) async fn settled_response(
         connection: &mut SqliteConnection,
         graph: &ExecutionGraph,
         record: &GraphExecutionRecord,
@@ -297,7 +379,7 @@ impl SqliteGraphRepository {
         Ok(response.questions.is_empty())
     }
 
-    async fn eligible_result(
+    pub(super) async fn eligible_result(
         connection: &mut SqliteConnection,
         graph: &ExecutionGraph,
         node_id: &str,
@@ -336,7 +418,7 @@ impl SqliteGraphRepository {
 
     /// Durable graph claims exclude conflicting active work across graphs.
     /// Other host work must also use the shared `GraphResources` Env lease.
-    async fn env_busy(
+    pub(super) async fn env_busy(
         connection: &mut SqliteConnection,
         graph: &ExecutionGraph,
         node: &GraphNode,
@@ -390,6 +472,7 @@ impl SqliteGraphRepository {
         if existing != *record || !graph.nodes.iter().any(|node| node == &dispatch.node) {
             return Err(Self::invalid("Settlement differs from admitted execution"));
         }
+        Self::ensure_live_execution(&mut transaction, &graph, record).await?;
         if !Self::authority(
             &mut transaction,
             &record.execution,

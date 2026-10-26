@@ -125,6 +125,14 @@ pub struct GraphExecutor {
 }
 
 impl GraphExecutor {
+    /// Reads a named live budget without replenishing it or reserving calls.
+    pub fn remaining_provider_calls(&self, id: &str) -> Option<usize> {
+        self.resources
+            .budgets
+            .get(id)
+            .map(ProviderCallBudget::remaining)
+    }
+
     /// Composes durable admission, shared resources, and a trusted worker
     /// adapter.
     pub fn new(

@@ -22,6 +22,7 @@ impl SqliteGraphRepository {
         if existing != *record || !graph.nodes.contains(&dispatch.node) {
             return Err(Self::invalid("Task response differs from graph claim"));
         }
+        Self::ensure_live_execution(&mut transaction, &graph, record).await?;
         let GraphExecutionRef::TaskAttempt { operation_id, .. } = &record.execution else {
             return Err(Self::invalid("Task response requires a task attempt"));
         };

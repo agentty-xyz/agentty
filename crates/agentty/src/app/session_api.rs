@@ -26,6 +26,34 @@ use crate::infra::db::{SessionMessageRow, SessionReviewRequestRow, SessionRow};
 
 #[async_trait]
 impl SessionBackend for SessionRuntimeHandle {
+    async fn get_execution_graph(
+        &self,
+        graph_id: &str,
+    ) -> Result<Option<ag_session::ExecutionGraphProgress>, ApiSessionError> {
+        SessionRuntimeHandle::get_execution_graph(self, graph_id).await
+    }
+
+    async fn cancel_execution_graph(
+        &self,
+        request: ag_session::GraphControlRequest,
+    ) -> Result<(), ApiSessionError> {
+        SessionRuntimeHandle::cancel_execution_graph(self, request).await
+    }
+
+    async fn resume_execution_graph(
+        &self,
+        request: ag_session::ResumeExecutionGraphRequest,
+    ) -> Result<(), ApiSessionError> {
+        SessionRuntimeHandle::resume_execution_graph(self, request).await
+    }
+
+    async fn continue_execution_graph_node(
+        &self,
+        request: ag_session::ContinueGraphNodeRequest,
+    ) -> Result<(), ApiSessionError> {
+        SessionRuntimeHandle::continue_execution_graph_node(self, request).await
+    }
+
     async fn start_execution_graph(
         &self,
         request: ag_session::StartExecutionGraphRequest,
@@ -258,6 +286,12 @@ impl App {
     /// Routes mutations to shared admission and keeps reads on the query path.
     pub(crate) async fn apply_session_runtime_command(&mut self, command: SessionRuntimeCommand) {
         match command {
+            SessionRuntimeCommand::GetExecutionGraph {
+                graph_id,
+                response_tx,
+            } => {
+                let _ = response_tx.send(self.execution_graph_progress(&graph_id).await);
+            }
             SessionRuntimeCommand::RunGraphNode {
                 admitted_tx,
                 cancellation,

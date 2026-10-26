@@ -4,5 +4,7 @@ mod dispatch_test;
 mod execution_test;
 #[path = "graph_test.rs"]
 mod graph_test;
+#[path = "lifecycle_test.rs"]
+mod lifecycle_test;
 #[path = "result_test.rs"]
 mod result_test;

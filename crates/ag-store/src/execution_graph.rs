@@ -3,7 +3,9 @@
 
 mod dispatch;
 mod execution;
+mod lifecycle;
 mod model;
+mod progress;
 mod repository;
 mod result;
 mod task_turn;

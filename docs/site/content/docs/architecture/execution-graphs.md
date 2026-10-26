@@ -157,10 +157,35 @@ session work, merge workflows, and detached focused-review readers. Legacy focus
 reviews retain their existing overlap with ordinary session work, including
 conflict-free sync; they do not hold the ordinary session writer gate.
 
-An empty dispatch result means no work was admitted, not that the graph is complete.
-Hosts wake dispatch when gates or resource availability change. Graph cancellation,
-explicit retry/resume, workflow migration, graph proposals, and runtime expansion remain
-separate work. A dispatch failure stops that launch's driver. An identical explicit
-launch restarts dispatch using its retained executor and remaining budgets; it does not
-retry failed nodes or refill credits. Storage provides no automatic replay or permission
-to revise started work.
+## Lifecycle and Explicit Recovery
+
+`SessionService::get_execution_graph` returns node progress, unsatisfied dependency
+gates, exact outputs, clarification questions, execution history, and failure details.
+It also reports whether dispatch requires explicit resume or a named live budget is
+exhausted. An empty dispatch result never means completion. A graph completes only when
+every node has settled successfully without questions; this does not accept task
+outcomes or automatically complete their tasks.
+
+`cancel_execution_graph` closes durable admission before signaling the graph's workers.
+Cancellation is terminal for that graph identity, including nodes not yet started.
+Already completed graphs retain their completion state. Workers retain their resources
+through cleanup; unrelated session work is unaffected. Late responses and acceptance
+actions cannot advance a canceled graph.
+
+`continue_execution_graph_node` records either a retry or the complete ordered answers
+to a settled task turn. The request names the current revision, exact source execution,
+and a new execution UUID. A retry requires failed, canceled, or incompletely settled
+work. Clarification continues the same isolated task with a new attempt and its own
+runtime context, replaying only that node's retained responses and explicit replies.
+Neither action rewrites previous attempts or changes their pinned inputs. Identical
+delivery never executes twice; conflicting identities and stale sources are rejected.
+Failed predecessors keep dependent nodes blocked while independent branches may proceed.
+
+Startup restores records without dispatching them. `resume_execution_graph` explicitly
+starts dispatch for the saved revision; admitted nodes require a separate continuation
+action before another execution. Live launches retain their original shared limits and
+remaining credits across resume calls. After process restart, explicit resume supplies
+new limits for that live execution period; budget counters are not durable usage
+ledgers. Recording continuation intent alone never recreates a driver or replenishes
+credits. Workflow migration, graph proposals, and runtime expansion remain separate
+work.
