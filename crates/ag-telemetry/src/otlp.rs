@@ -52,20 +52,17 @@ pub struct EventLog(SdkLogger);
 
 impl EventLog {
     /// Emits one named event at the current time, with the name as both the
-    /// record's event name and body. Pass only bounded, allowlisted values;
-    /// never prompts, paths or error messages.
-    pub fn emit(&self, name: &'static str, attributes: &[(&'static str, &str)]) {
+    /// record's event name and body. Values must be static strings, which
+    /// limits callers to fixed vocabularies rather than runtime text such as
+    /// prompts, paths or error messages.
+    pub fn emit(&self, name: &'static str, attributes: &[(&'static str, &'static str)]) {
         let mut record = self.0.create_log_record();
         record.set_event_name(name);
         record.set_body(AnyValue::from(name));
         record.set_severity_number(Severity::Info);
         record.set_severity_text("INFO");
         record.set_timestamp(SystemTime::now());
-        record.add_attributes(
-            attributes
-                .iter()
-                .map(|&(key, value)| (key, value.to_string())),
-        );
+        record.add_attributes(attributes.iter().copied());
         self.0.emit(record);
     }
 }

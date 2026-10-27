@@ -334,7 +334,7 @@ impl Analytics {
         })
     }
 
-    async fn send(&self, name: &'static str, event_properties: &[(&'static str, &str)]) {
+    async fn send(&self, name: &'static str, event_properties: &[(&'static str, &'static str)]) {
         let mut properties = vec![
             ("app_source", "cli"),
             ("app_version", env!("CARGO_PKG_VERSION")),
