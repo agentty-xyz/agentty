@@ -8,6 +8,8 @@ use agentty::app::{App, AppError, agentty_home};
 use agentty::infra::db::{DB_DIR, DB_FILE, acquire_instance_lock};
 use clap::Parser;
 use clap::error::ErrorKind;
+use opentelemetry_proto::tonic::collector::logs::v1::ExportLogsServiceRequest;
+use prost::Message as _;
 use wiremock::{Mock, MockServer, ResponseTemplate};
 
 use super::{Cli, ExperimentalFeatures, map_runtime_result, run, run_with_analytics};
@@ -490,13 +492,28 @@ async fn startup_runs_application_through_telemetry_wrapper() {
             stderr.contains("OTLP export reported"),
             response_status == Some(503)
         );
-        assert_eq!(
-            server
-                .received_requests()
-                .await
-                .expect("requests")
-                .is_empty(),
-            response_status.is_none()
-        );
+        let requests = server.received_requests().await.expect("requests");
+        assert_eq!(requests.is_empty(), response_status.is_none());
+        let mut events: Vec<String> = requests
+            .iter()
+            .filter(|request| request.url.path() == "/v1/logs")
+            .flat_map(|request| {
+                ExportLogsServiceRequest::decode(request.body.as_slice())
+                    .expect("OTLP logs")
+                    .resource_logs
+            })
+            .flat_map(|resource| resource.scope_logs)
+            .flat_map(|scope| scope.log_records)
+            .map(|record| record.event_name)
+            .collect();
+        // Rejected exports are retried, so compare the distinct event names.
+        events.sort();
+        events.dedup();
+        let expected_events = if response_status.is_some() {
+            vec!["agentty_failure", "agentty_launch"]
+        } else {
+            Vec::new()
+        };
+        assert_eq!(events, expected_events);
     }
 }

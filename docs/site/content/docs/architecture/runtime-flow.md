@@ -587,3 +587,6 @@ counters discard stale baselines before fallback usage can be counted again. A l
 complete snapshot establishes a fresh baseline; missing counters remain unknown in
 telemetry. Exporter shutdown follows worker cleanup and terminal restoration. See
 [Session Traces](@/docs/usage/workflow.md#session-traces) for enablement and data scope.
+The same export owns an optional event log; the analytics sender emits each usage event
+to it before, and independently of, the `PostHog` request. See
+[Local Usage Events](@/docs/usage/workflow.md#local-usage-events).

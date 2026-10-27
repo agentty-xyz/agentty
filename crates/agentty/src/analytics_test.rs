@@ -1,14 +1,28 @@
+use std::collections::BTreeMap;
 use std::fs;
 #[cfg(unix)]
 use std::os::unix::fs::symlink;
 use std::path::PathBuf;
 
+use ag_telemetry::otlp::{OtlpExport, Service};
+use opentelemetry_proto::tonic::collector::logs::v1::ExportLogsServiceRequest;
+use opentelemetry_proto::tonic::common::v1::any_value;
+use prost::Message as _;
 use tempfile::Builder;
 use uuid::Uuid;
+use wiremock::matchers::method;
+use wiremock::{Mock, MockServer, ResponseTemplate};
 
-use super::{Analytics, InstallMethod};
+use super::{Analytics, InstallMethod, SessionType, TurnOutcome};
+use crate::app::AppError;
+use crate::domain::agent::{AgentKind, AgentModel, AgentSelection, AgentSelectionMetadata as _};
 use crate::domain::setting::SettingName;
 use crate::infra::db::AppRepositories;
+
+const SERVICE: Service = Service {
+    name: "agentty-test",
+    version: "0.0.0",
+};
 
 #[tokio::test]
 async fn posthog_sender_uses_bundled_destination_and_stored_installation_id() {
@@ -21,16 +35,161 @@ async fn posthog_sender_uses_bundled_destination_and_stored_installation_id() {
         .expect("bundled destination");
 
     // Assert
-    assert_eq!(analytics.endpoint, "https://us.i.posthog.com/i/v0/e/");
-    assert!(analytics.token.starts_with("phc_"));
+    let posthog = analytics.posthog.expect("PostHog destination");
+    assert!(analytics.event_log.is_none());
+    assert_eq!(posthog.endpoint, "https://us.i.posthog.com/i/v0/e/");
+    assert!(posthog.token.starts_with("phc_"));
     assert_eq!(
         repositories
             .settings()
             .get_setting(SettingName::TelemetryInstallationId)
             .await
             .expect("stored installation ID"),
-        Some(analytics.distinct_id)
+        Some(posthog.distinct_id)
     );
+}
+
+#[tokio::test]
+async fn mirror_without_posthog_exports_every_event_with_posthog_properties() {
+    // Arrange
+    let server = MockServer::start().await;
+    Mock::given(method("POST"))
+        .respond_with(ResponseTemplate::new(200))
+        .mount(&server)
+        .await;
+    let endpoint = format!("{}/v1/traces", server.uri());
+    let export = OtlpExport::start_with_events(Some(&endpoint), SERVICE)
+        .await
+        .expect("start")
+        .expect("enabled");
+    let analytics = Analytics::mirror(None, export.event_log()).expect("mirror-only sender");
+    let agent = AgentSelection::new(AgentKind::Codex, AgentModel::Gpt61Sol);
+
+    // Act
+    analytics.record_launch().await;
+    analytics
+        .record_session_start(SessionType::Stacked, agent)
+        .await;
+    analytics.record_turn_start(agent).await;
+    analytics
+        .record_turn_end(agent, TurnOutcome::Finished)
+        .await;
+    analytics
+        .record_turn_end(agent, TurnOutcome::Interrupted)
+        .await;
+    analytics
+        .record_failure(&AppError::Workflow("private failure".to_string()))
+        .await;
+    let warnings = export.shutdown().await;
+
+    // Assert
+    assert_eq!(warnings, 0);
+    assert!(analytics.posthog.is_none());
+    let requests = server.received_requests().await.expect("requests");
+    assert!(
+        requests
+            .iter()
+            .all(|request| request.url.path() == "/v1/logs")
+    );
+    let records: Vec<_> = requests
+        .iter()
+        .flat_map(|request| {
+            ExportLogsServiceRequest::decode(request.body.as_slice())
+                .expect("OTLP logs")
+                .resource_logs
+        })
+        .flat_map(|resource| resource.scope_logs)
+        .flat_map(|scope| scope.log_records)
+        .map(|record| {
+            let attributes: BTreeMap<String, Option<any_value::Value>> = record
+                .attributes
+                .into_iter()
+                .map(|attribute| (attribute.key, attribute.value.and_then(|value| value.value)))
+                .collect();
+
+            (record.event_name, attributes)
+        })
+        .collect();
+    let common = [
+        ("app_source", "cli"),
+        ("app_version", env!("CARGO_PKG_VERSION")),
+        ("install_method", analytics.install_method.as_str()),
+    ];
+    let expected_event = |name: &str, properties: &[(&str, &str)]| {
+        let attributes = common
+            .iter()
+            .chain(properties)
+            .map(|&(key, value)| {
+                (
+                    key.to_string(),
+                    Some(any_value::Value::StringValue(value.to_string())),
+                )
+            })
+            .collect::<BTreeMap<_, _>>();
+
+        (name.to_string(), attributes)
+    };
+    let selection = [
+        ("agent", agent.kind().name()),
+        ("model", agent.model().as_str()),
+    ];
+    assert_eq!(
+        records,
+        vec![
+            expected_event("agentty_launch", &[]),
+            expected_event(
+                "agentty_session_start",
+                &[
+                    ("session_type", "stacked"),
+                    ("agent", agent.kind().name()),
+                    ("model", agent.model().as_str()),
+                ],
+            ),
+            expected_event("agentty_turn_start", &selection),
+            expected_event("agentty_turn_finish", &selection),
+            expected_event("agentty_turn_interrupt", &selection),
+            expected_event("agentty_failure", &[("failure_category", "application")]),
+        ]
+    );
+}
+
+#[test]
+fn mirror_keeps_posthog_and_adds_only_a_supplied_event_log() {
+    // Arrange
+    let posthog = Analytics::new("token", "https://example.com", "installation");
+
+    // Act
+    let unchanged = Analytics::mirror(posthog, None).expect("PostHog sender");
+    let disabled = Analytics::mirror(None, None);
+
+    // Assert
+    assert!(unchanged.event_log.is_none());
+    assert_eq!(
+        unchanged.posthog.expect("PostHog destination").endpoint,
+        "https://example.com/i/v0/e/"
+    );
+    assert!(disabled.is_none());
+}
+
+#[tokio::test]
+async fn mirror_with_posthog_keeps_both_destinations() {
+    // Arrange
+    let export = OtlpExport::start_with_events(Some("http://127.0.0.1:9/v1/traces"), SERVICE)
+        .await
+        .expect("start")
+        .expect("enabled");
+    let posthog = Analytics::new("token", "https://example.com", "installation");
+
+    // Act
+    let analytics = Analytics::mirror(posthog, export.event_log()).expect("mirrored sender");
+
+    // Assert
+    assert!(analytics.event_log.is_some());
+    assert_eq!(
+        analytics.posthog.expect("PostHog destination").distinct_id,
+        "installation"
+    );
+    export.shutdown().await;
 }
 
 #[tokio::test]

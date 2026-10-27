@@ -2,12 +2,15 @@ use std::sync::Arc;
 use std::sync::atomic::{AtomicU64, Ordering};
 
 use opentelemetry::trace::{Span as _, Tracer as _, TracerProvider as _};
+use opentelemetry_proto::tonic::collector::logs::v1::ExportLogsServiceRequest;
 use opentelemetry_proto::tonic::collector::trace::v1::ExportTraceServiceRequest;
-use opentelemetry_proto::tonic::common::v1::any_value;
+use opentelemetry_proto::tonic::common::v1::{KeyValue, any_value};
+use opentelemetry_proto::tonic::logs::v1::SeverityNumber;
 use prost::Message as _;
 use tracing_subscriber::Registry;
 use tracing_subscriber::layer::SubscriberExt as _;
-use wiremock::matchers::{method, path};
+use url::Url;
+use wiremock::matchers::{method, path, query_param};
 use wiremock::{Mock, MockServer, ResponseTemplate};
 
 use super::{Diagnostics, OtlpError, OtlpExport, Service};
@@ -35,7 +38,7 @@ async fn initialization_worker_failure_returns_a_bounded_error() {
 #[test]
 fn exporter_configuration_failure_does_not_echo_the_endpoint() {
     // Arrange / Act
-    let error = OtlpExport::build("http://host/private invalid endpoint", SERVICE)
+    let error = OtlpExport::build("http://host/private invalid endpoint", None, SERVICE)
         .err()
         .expect("invalid exporter configuration");
 
@@ -209,6 +212,175 @@ async fn unicode_endpoint_paths_are_normalized_before_exporter_configuration() {
     let requests = server.received_requests().await.expect("requests");
     assert_eq!(requests.len(), 1);
     assert_eq!(requests[0].url.path(), "/%C3%A4");
+}
+
+#[tokio::test]
+async fn event_log_exports_records_beside_traces_with_one_resource_identity() {
+    // Arrange
+    let server = MockServer::start().await;
+    for signal in ["traces", "logs"] {
+        Mock::given(method("POST"))
+            .and(path(format!("/otlp/v1/{signal}")))
+            .and(query_param("tenant", "local"))
+            .respond_with(ResponseTemplate::new(200))
+            .expect(1)
+            .mount(&server)
+            .await;
+    }
+    let endpoint = format!("{}/otlp/v1/traces?tenant=local", server.uri());
+    let export = OtlpExport::start_with_events(Some(&endpoint), SERVICE)
+        .await
+        .expect("start")
+        .expect("enabled");
+    let event_log = export.event_log().expect("event log");
+
+    // Act
+    event_log.emit(
+        "agentty_turn_start",
+        &[("agent", "codex"), ("model", "gpt-5.5")],
+    );
+    let mut span = export.provider.tracer("event-test").start("session.turn");
+    span.end();
+    let warnings = export.shutdown().await;
+
+    // Assert
+    assert_eq!(warnings, 0);
+    let requests = server.received_requests().await.expect("requests");
+    let body = |signal: &str| {
+        requests
+            .iter()
+            .find(|request| request.url.path().ends_with(signal))
+            .expect("signal request")
+            .body
+            .as_slice()
+    };
+    let logs = ExportLogsServiceRequest::decode(body("/v1/logs")).expect("OTLP logs");
+    let traces = ExportTraceServiceRequest::decode(body("/v1/traces")).expect("OTLP traces");
+    let record = &logs.resource_logs[0].scope_logs[0].log_records[0];
+    let string = |value: &str| Some(any_value::Value::StringValue(value.to_string()));
+    let attribute = |attributes: &[KeyValue], key: &str| {
+        attributes
+            .iter()
+            .find(|attribute| attribute.key == key)
+            .and_then(|attribute| attribute.value.as_ref())
+            .and_then(|value| value.value.clone())
+    };
+    assert_eq!(record.event_name, "agentty_turn_start");
+    assert_eq!(
+        record.body.as_ref().and_then(|body| body.value.clone()),
+        string("agentty_turn_start")
+    );
+    assert_eq!(record.severity_number, SeverityNumber::Info as i32);
+    assert_eq!(record.severity_text, "INFO");
+    assert!(record.time_unix_nano > 0);
+    assert_eq!(attribute(&record.attributes, "agent"), string("codex"));
+    assert_eq!(attribute(&record.attributes, "model"), string("gpt-5.5"));
+    assert_eq!(record.attributes.len(), 2);
+    let log_resource = &logs.resource_logs[0]
+        .resource
+        .as_ref()
+        .expect("log resource")
+        .attributes;
+    let trace_resource = &traces.resource_spans[0]
+        .resource
+        .as_ref()
+        .expect("trace resource")
+        .attributes;
+    assert_eq!(attribute(log_resource, "service.name"), string("otlp-test"));
+    assert!(attribute(log_resource, "service.instance.id").is_some());
+    assert_eq!(
+        attribute(log_resource, "service.instance.id"),
+        attribute(trace_resource, "service.instance.id")
+    );
+}
+
+#[tokio::test]
+async fn event_log_requires_opt_in_and_a_standard_traces_path() {
+    // Arrange
+    let standard = "http://localhost:4318/v1/traces";
+    let custom = "http://localhost:4318/custom/traces";
+
+    // Act
+    let traces_only = OtlpExport::start(Some(standard), SERVICE)
+        .await
+        .expect("start")
+        .expect("enabled");
+    let custom_path = OtlpExport::start_with_events(Some(custom), SERVICE)
+        .await
+        .expect("start")
+        .expect("enabled");
+    let disabled = OtlpExport::start_with_events(None, SERVICE)
+        .await
+        .expect("disabled startup");
+
+    // Assert
+    assert!(traces_only.event_log().is_none());
+    assert!(custom_path.event_log().is_none());
+    assert!(disabled.is_none());
+    assert_eq!(traces_only.shutdown().await, 0);
+    assert_eq!(custom_path.shutdown().await, 0);
+}
+
+#[test]
+fn events_endpoint_replaces_only_the_traces_signal_path() {
+    // Arrange
+    let endpoints = [
+        ("http://host/v1/traces", Some("http://host/v1/logs")),
+        (
+            "https://host/otlp/v1/traces?tenant=a",
+            Some("https://host/otlp/v1/logs?tenant=a"),
+        ),
+        ("http://host/v1/traces/", None),
+        ("http://host/traces", None),
+    ];
+
+    // Act / Assert
+    for (traces, expected) in endpoints {
+        let traces = Url::parse(traces).expect("traces URL");
+        assert_eq!(
+            OtlpExport::events_endpoint(&traces)
+                .as_ref()
+                .map(Url::as_str),
+            expected
+        );
+    }
+}
+
+#[test]
+fn event_exporter_configuration_failure_does_not_echo_the_endpoint() {
+    // Arrange / Act
+    let error = OtlpExport::build(
+        "http://host/v1/traces",
+        Some("http://host/private invalid endpoint"),
+        SERVICE,
+    )
+    .err()
+    .expect("invalid event exporter configuration");
+
+    // Assert
+    assert_eq!(error, OtlpError::Configuration);
+    assert!(!error.to_string().contains("private"));
+}
+
+#[tokio::test]
+async fn event_shutdown_failure_is_counted() {
+    // Arrange
+    let export = OtlpExport::start_with_events(Some("http://localhost:4318/v1/traces"), SERVICE)
+        .await
+        .expect("start")
+        .expect("enabled");
+    export
+        .events
+        .as_ref()
+        .expect("event provider")
+        .shutdown()
+        .expect("first event shutdown");
+
+    // Act
+    let warnings = export.shutdown().await;
+
+    // Assert
+    assert_eq!(warnings, 1);
 }
 
 #[test]

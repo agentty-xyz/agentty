@@ -7,7 +7,7 @@ use std::process::ExitCode;
 use std::time::Duration;
 
 use ag_git::{GitClient, RealGitClient};
-use ag_telemetry::otlp::{OtlpExport, Service};
+use ag_telemetry::otlp::{EventLog, OtlpExport, Service};
 use ag_telemetry::{CaptureToolContent, Context, FutureExt as _};
 use agentty::analytics::Analytics;
 #[cfg(not(debug_assertions))]
@@ -80,7 +80,7 @@ async fn run(
     cli: Cli,
     runtime: impl for<'a> AsyncFnOnce(&'a mut App) -> io::Result<()>,
 ) -> Result<(), AppError> {
-    let telemetry = OtlpExport::start(
+    let telemetry = OtlpExport::start_with_events(
         cli.otlp_endpoint.as_deref(),
         Service {
             name: "agentty",
@@ -92,9 +92,12 @@ async fn run(
     if let Some(telemetry) = &telemetry {
         telemetry.install();
     }
+    let event_log = telemetry.as_ref().and_then(OtlpExport::event_log);
     let result = async {
         let context = Context::current().with_value(CaptureToolContent(cli.otlp_capture_content));
-        run_application(cli, runtime).with_context(context).await
+        run_application(cli, event_log, runtime)
+            .with_context(context)
+            .await
     }
     .await;
     if let Some(telemetry) = telemetry {
@@ -102,7 +105,8 @@ async fn run(
         if warnings > 0 {
             let _ = writeln!(
                 io::stderr().lock(),
-                "OTLP export reported {warnings} warnings or failures; some traces may be missing."
+                "OTLP export reported {warnings} warnings or failures; some traces or usage \
+                 events may be missing."
             );
         }
     }
@@ -156,6 +160,7 @@ fn map_runtime_result(result: io::Result<()>) -> Result<(), AppError> {
 
 async fn run_application(
     cli: Cli,
+    event_log: Option<EventLog>,
     runtime: impl for<'a> AsyncFnOnce(&'a mut App) -> io::Result<()>,
 ) -> Result<(), AppError> {
     let home = agentty_home();
@@ -190,6 +195,7 @@ async fn run_application(
     } else {
         None
     };
+    let analytics = Analytics::mirror(analytics, event_log);
 
     run_with_analytics(
         Box::pin(async {

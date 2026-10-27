@@ -83,7 +83,7 @@ ag-store = { workspace = true, features = ["test-utils"] }
 assert_cmd.workspace = true
 testty.workspace = true
 mockall.workspace = true
-opentelemetry-proto.workspace = true
+opentelemetry-proto = { workspace = true, features = ["logs"] }
 prost.workspace = true
 wiremock.workspace = true
 tempfile.workspace = true
