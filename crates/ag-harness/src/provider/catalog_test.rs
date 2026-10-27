@@ -1,9 +1,10 @@
 use std::env;
 
 use super::{
-    ModelConfiguration, ModelConfigurationError, ModelProvider, ModelProviderParseError, kimi, muse,
+    ModelConfiguration, ModelConfigurationError, ModelProvider, ModelProviderParseError, kimi,
+    muse, openai_compatible,
 };
-use crate::model::ModelMetadataError;
+use crate::model::{ModelMetadataError, ModelProfile};
 
 fn missing_environment(_: &str) -> Result<String, env::VarError> {
     Err(env::VarError::NotPresent)
@@ -20,7 +21,8 @@ fn catalog_exposes_every_provider_and_known_model() {
         &[
             ModelProvider::Muse,
             ModelProvider::Kimi,
-            ModelProvider::Qwen
+            ModelProvider::Qwen,
+            ModelProvider::OpenAiCompatible
         ]
     );
     assert_eq!(
@@ -58,7 +60,7 @@ fn provider_identifiers_round_trip_and_display() {
 
     // Assert
     assert_eq!(parsed, ModelProvider::all());
-    assert_eq!(displayed, ["muse", "kimi", "qwen"]);
+    assert_eq!(displayed, ["muse", "kimi", "qwen", "openai-compatible"]);
     assert_eq!(
         "unknown".parse::<ModelProvider>(),
         Err(ModelProviderParseError {
@@ -71,8 +73,9 @@ fn provider_identifiers_round_trip_and_display() {
 fn configuration_uses_provider_environment() {
     // Arrange and Act
     for provider in ModelProvider::all() {
+        let model = provider.known_models().first().unwrap_or(&"served-model");
         let mut requested_environment = Vec::new();
-        let client = ModelConfiguration::new(*provider, provider.known_models()[0])
+        let client = ModelConfiguration::new(*provider, *model)
             .client_from_environment(|name| {
                 requested_environment.push(name.to_string());
                 if name == provider.api_key_environment() {
@@ -93,8 +96,79 @@ fn configuration_uses_provider_environment() {
                 provider.base_url_environment().to_string()
             ]
         );
-        assert_eq!(client.metadata().model(), provider.known_models()[0]);
+        assert_eq!(client.metadata().model(), *model);
     }
+}
+
+#[test]
+fn openai_compatible_defaults_to_unauthenticated_ollama() {
+    // Arrange
+    let blank_key = |name: &str| {
+        if name == openai_compatible::OPENAI_COMPATIBLE_API_KEY_ENV {
+            Ok(" ".to_string())
+        } else {
+            Err(env::VarError::NotPresent)
+        }
+    };
+
+    // Act
+    let unset = ModelConfiguration::new(ModelProvider::OpenAiCompatible, "qwen3:latest")
+        .client_from_environment(missing_environment)
+        .expect("a missing optional key should configure a client");
+    let blank = ModelConfiguration::new(ModelProvider::OpenAiCompatible, "qwen3:latest")
+        .client_from_environment(blank_key)
+        .expect("a blank optional key should configure a client");
+    let invalid = ModelConfiguration::new(ModelProvider::OpenAiCompatible, "qwen3:latest")
+        .client_from_environment(|_| Err(env::VarError::NotUnicode("invalid".into())))
+        .err()
+        .expect("a non-Unicode optional key should be rejected");
+
+    // Assert
+    assert_eq!(
+        ModelProvider::OpenAiCompatible.known_models(),
+        &[] as &[&str]
+    );
+    assert!(!ModelProvider::OpenAiCompatible.requires_api_key());
+    assert!(ModelProvider::Muse.requires_api_key());
+    assert_eq!(
+        ModelProvider::OpenAiCompatible.default_base_url(),
+        Some("http://127.0.0.1:11434/v1")
+    );
+    assert_eq!(unset.metadata().provider(), "openai_compatible");
+    assert_eq!(blank.metadata().model(), "qwen3:latest");
+    assert!(matches!(
+        invalid,
+        ModelConfigurationError::ApiKey {
+            name: openai_compatible::OPENAI_COMPATIBLE_API_KEY_ENV
+        }
+    ));
+}
+
+#[test]
+fn only_openai_compatible_declares_its_profile_in_the_environment() {
+    // Arrange and Act
+    let declared = ModelProvider::OpenAiCompatible
+        .environment_profile(|name| {
+            if name == openai_compatible::OPENAI_COMPATIBLE_CONTEXT_WINDOW_ENV {
+                Ok("40960".to_string())
+            } else {
+                Err(env::VarError::NotPresent)
+            }
+        })
+        .expect("declared window should be valid");
+    let hosted = ModelProvider::all()
+        .iter()
+        .filter(|provider| **provider != ModelProvider::OpenAiCompatible)
+        .map(|provider| provider.environment_profile(missing_environment))
+        .collect::<Result<Vec<_>, _>>()
+        .expect("hosted providers read no profile");
+
+    // Assert
+    assert_eq!(
+        declared.map(ModelProfile::context_window_tokens),
+        Some(40_960)
+    );
+    assert!(hosted.iter().all(Option::is_none));
 }
 
 #[test]

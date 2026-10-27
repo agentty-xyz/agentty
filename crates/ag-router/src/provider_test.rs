@@ -9,7 +9,7 @@ use crate::schema::OutputSchema;
 fn router(provider: Provider) -> Router {
     Router::new([ProviderConfig {
         provider,
-        api_key: "test-key".to_string(),
+        api_key: Some("test-key".to_string()),
         base_url: "https://example.com/v1".to_string(),
     }])
     .expect("valid provider config")
@@ -20,7 +20,7 @@ fn rejects_duplicate_or_blank_provider_config() {
     // Arrange
     let config = || ProviderConfig {
         provider: Provider::Muse,
-        api_key: "test-key".to_string(),
+        api_key: Some("test-key".to_string()),
         base_url: "https://example.com/v1".to_string(),
     };
 
@@ -31,10 +31,19 @@ fn rejects_duplicate_or_blank_provider_config() {
     ));
     let schema = OutputSchema::new(json!({"type":"object"})).expect("valid schema");
     let blank_key = Router::new([ProviderConfig {
-        api_key: " ".to_string(),
+        api_key: Some(" ".to_string()),
         ..config()
     }])
     .expect("single provider is accepted");
+    let missing_key = Router::new([ProviderConfig {
+        api_key: None,
+        ..config()
+    }])
+    .expect("single provider is accepted");
+    assert!(matches!(
+        missing_key.validate_schema("muse/muse-spark-1.3", &schema),
+        Err(ModelError::InvalidProviderConfig)
+    ));
     let blank_url = Router::new([ProviderConfig {
         base_url: " ".to_string(),
         ..config()
@@ -109,6 +118,52 @@ fn selects_provider_policies_and_reasoning_wire_values() {
     ));
     assert!(!qwen_plus.response_format_with_tools);
     assert!(muse.response_format_with_tools);
+}
+
+#[test]
+fn openai_compatible_policy_sends_only_portable_fields() {
+    // Arrange
+    let model = "qwen3:latest";
+
+    // Act
+    let generic = policy(Provider::OpenAiCompatible, model);
+
+    // Assert
+    assert_eq!(Provider::OpenAiCompatible.as_str(), "openai-compatible");
+    assert!(!generic.prompt_cache_key);
+    assert!(!generic.image_input);
+    assert!(!generic.response_format_with_tools);
+    assert!(matches!(generic.reasoning_format, ReasoningFormat::None));
+    assert!(matches!(
+        generic.structured_output,
+        StructuredOutputMode::SchemaPrompt
+    ));
+}
+
+#[test]
+fn openai_compatible_accepts_a_missing_but_not_a_blank_api_key() {
+    // Arrange
+    let schema = OutputSchema::new(json!({"type":"object"})).expect("valid schema");
+    let config = |api_key: Option<&str>| ProviderConfig {
+        provider: Provider::OpenAiCompatible,
+        api_key: api_key.map(str::to_string),
+        base_url: "http://127.0.0.1:11434/v1".to_string(),
+    };
+
+    // Act
+    let unauthenticated = Router::new([config(None)]).expect("valid provider config");
+    let blank = Router::new([config(Some(" "))]).expect("single provider is accepted");
+
+    // Assert
+    assert!(
+        unauthenticated
+            .validate_schema("openai-compatible/qwen3:latest", &schema)
+            .is_ok()
+    );
+    assert!(matches!(
+        blank.validate_schema("openai-compatible/qwen3:latest", &schema),
+        Err(ModelError::InvalidProviderConfig)
+    ));
 }
 
 #[test]

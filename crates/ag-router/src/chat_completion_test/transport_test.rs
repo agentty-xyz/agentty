@@ -57,7 +57,7 @@ fn wraps_transport_error_with_its_source() {
 fn normalizes_transport_error_classification() {
     // Arrange
     let backend = ChatCompletionBackend::with_client(
-        "test-key".to_string(),
+        Some("test-key".to_string()),
         "https://example.com/v1".to_string(),
         "model".to_string(),
         ChatCompletionProviderPolicy {
@@ -186,7 +186,7 @@ async fn retries_rate_limit_response_before_decoding_success() {
         retry_delay: Duration::from_millis(1),
     };
     let request = ChatCompletionRequest::new(
-        "test-key",
+        Some("test-key"),
         format!("http://{address}"),
         serde_json::json!({}),
     );
@@ -252,7 +252,7 @@ async fn retries_transport_failure_before_decoding_success() {
         retry_delay: Duration::from_millis(1),
     };
     let request = ChatCompletionRequest::new(
-        "test-key",
+        Some("test-key"),
         format!("http://{address}"),
         serde_json::json!({}),
     );
@@ -302,7 +302,7 @@ async fn timed_out_request_is_reported_without_a_retry() {
         retry_delay: Duration::from_millis(1),
     };
     let request = ChatCompletionRequest::new(
-        "test-key",
+        Some("test-key"),
         format!("http://{address}"),
         serde_json::json!({}),
     );
@@ -373,7 +373,7 @@ async fn retains_http_status_when_error_body_read_fails() {
         retry_delay: Duration::from_millis(1),
     };
     let request = ChatCompletionRequest::new(
-        "test-key",
+        Some("test-key"),
         format!("http://{address}"),
         serde_json::json!({}),
     );
@@ -436,7 +436,7 @@ async fn reports_error_body_read_failure_without_partial_body() {
         retry_delay: Duration::from_millis(1),
     };
     let request = ChatCompletionRequest::new(
-        "test-key",
+        Some("test-key"),
         format!("http://{address}"),
         serde_json::json!({}),
     );

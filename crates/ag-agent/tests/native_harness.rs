@@ -830,6 +830,95 @@ async fn model_change_switches_the_stored_session_with_only_the_target_key() {
     assert!(bodies[1].contains(&format!(r#""model":"{QWEN_MODEL}""#)));
 }
 
+/// Returns a keyless environment pointing the OpenAI-compatible provider at
+/// `server` and naming `served_model`.
+fn local_environment(server: &MockServer, served_model: &str) -> BTreeMap<String, String> {
+    BTreeMap::from([
+        ("HOME".to_string(), "/tmp".to_string()),
+        ("OPENAI_COMPATIBLE_BASE_URL".to_string(), server.uri()),
+        (
+            "OPENAI_COMPATIBLE_CONTEXT_WINDOW".to_string(),
+            "40960".to_string(),
+        ),
+        (
+            "OPENAI_COMPATIBLE_MODEL".to_string(),
+            served_model.to_string(),
+        ),
+        (
+            "PATH".to_string(),
+            std::env::var("PATH").unwrap_or_default(),
+        ),
+    ])
+}
+
+#[tokio::test]
+async fn openai_compatible_turn_reads_without_a_key_and_follows_the_served_model() {
+    // Arrange
+    let server = MockServer::start().await;
+    respond(&server, "Ask llama", answer("From llama"), 1).await;
+    respond(
+        &server,
+        r#""tool_call_id":"call-read""#,
+        answer("Notes read"),
+        2,
+    )
+    .await;
+    respond(
+        &server,
+        "Read the notes",
+        tool_call("call-read", "read", &json!({"path": "notes.txt"})),
+        3,
+    )
+    .await;
+    let data_root = tempfile::tempdir().expect("data root");
+    let worktree = tempfile::tempdir().expect("worktree");
+    std::fs::write(worktree.path().join("notes.txt"), "local notes\n").expect("notes");
+    let qwen_config = config(data_root.path(), local_environment(&server, "qwen3:latest"));
+    let llama_config = config(data_root.path(), local_environment(&server, "llama3.2"));
+    let qwen_channel = create_agent_channel(AgentKind::Harness, None, Some(&qwen_config));
+    let llama_channel = create_agent_channel(AgentKind::Harness, None, Some(&llama_config));
+
+    // Act
+    let (first, _) = run_turn(
+        &qwen_channel,
+        "session-local",
+        turn_request(worktree.path(), "openai-compatible", "Read the notes"),
+    )
+    .await;
+    let mut follow_up = turn_request(worktree.path(), "openai-compatible", "Ask llama");
+    follow_up.request_kind = AgentRequestKind::SessionResume;
+    let (second, _) = run_turn(&llama_channel, "session-local", follow_up).await;
+
+    // Assert
+    assert_eq!(
+        first
+            .expect("local turn should succeed")
+            .assistant_message
+            .answer,
+        "Notes read"
+    );
+    assert_eq!(
+        second
+            .expect("served-model change should switch the session")
+            .assistant_message
+            .answer,
+        "From llama"
+    );
+    let requests = server.received_requests().await.unwrap_or_default();
+    assert_eq!(requests.len(), 3);
+    assert!(
+        requests
+            .iter()
+            .all(|request| !request.headers.contains_key("authorization"))
+    );
+    let bodies = request_bodies(&server).await;
+    assert!(bodies[0].contains(r#""model":"qwen3:latest""#));
+    assert!(bodies[1].contains("local notes"));
+    assert!(bodies[2].contains(r#""model":"llama3.2""#));
+    assert!(bodies.iter().all(|body| !body.contains("prompt_cache_key")));
+    assert!(bodies.iter().all(|body| !body.contains("reasoning_effort")));
+}
+
 #[tokio::test]
 async fn configuration_failures_stop_before_any_provider_call() {
     // Arrange

@@ -465,10 +465,17 @@ fn assert_observer<Observer: ag_harness::lifecycle::LifecycleObserver>(_observer
 #[test]
 fn external_consumer_configures_every_catalog_provider() {
     // Arrange and Act
+    let model = |provider: &ModelProvider| {
+        provider
+            .known_models()
+            .first()
+            .copied()
+            .unwrap_or("served-model")
+    };
     let clients = ModelProvider::all()
         .iter()
         .map(|provider| {
-            ModelConfiguration::new(*provider, provider.known_models()[0])
+            ModelConfiguration::new(*provider, model(provider))
                 .base_url("https://models.example/v1")
                 .client_from_environment(|_| Ok("test-key".to_string()))
                 .expect("catalog provider should construct a client")
@@ -478,8 +485,34 @@ fn external_consumer_configures_every_catalog_provider() {
     // Assert
     assert_eq!(clients.len(), ModelProvider::all().len());
     for (client, provider) in clients.iter().zip(ModelProvider::all()) {
-        assert_eq!(client.metadata().model(), provider.known_models()[0]);
+        assert_eq!(client.metadata().model(), model(provider));
     }
+}
+
+#[test]
+fn external_consumer_configures_a_local_server_from_the_environment() {
+    // Arrange
+    let environment = |name: &str| match name {
+        "OPENAI_COMPATIBLE_CONTEXT_WINDOW" => Ok("40960".to_string()),
+        _ => Err(std::env::VarError::NotPresent),
+    };
+
+    // Act
+    let client = ModelConfiguration::new(ModelProvider::OpenAiCompatible, "qwen3:latest")
+        .client_from_environment(environment)
+        .expect("Ollama defaults need no key or endpoint");
+    let profile = ModelProvider::OpenAiCompatible
+        .environment_profile(environment)
+        .expect("declared window should be valid")
+        .expect("OpenAI-compatible models declare their profile");
+
+    // Assert
+    assert_eq!(client.metadata().model(), "qwen3:latest");
+    assert_eq!(profile.context_window_tokens(), 40_960);
+    assert_eq!(
+        ModelProvider::OpenAiCompatible.default_base_url(),
+        Some("http://127.0.0.1:11434/v1")
+    );
 }
 
 #[test]

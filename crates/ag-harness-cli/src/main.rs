@@ -10,10 +10,14 @@ use std::{env, io};
 
 use ag_harness::lifecycle::LifecycleTraceObserver;
 use ag_harness::model::{
-    ContextBudget, ContextBudgetError, ModelCapabilities, ModelProfile, ModelRegistry,
-    ModelRegistryError, ReasoningEffort,
+    ContextBudgetError, ModelCapabilities, ModelProfile, ModelRegistry, ModelRegistryError,
+    ReasoningEffort,
 };
-use ag_harness::provider::{ModelConfiguration, ModelConfigurationError, ModelProvider};
+use ag_harness::provider::{
+    DEFAULT_CONTEXT_WINDOW_TOKENS, DEFAULT_MAX_OUTPUT_TOKENS, ModelConfiguration,
+    ModelConfigurationError, ModelProvider, OPENAI_COMPATIBLE_CONTEXT_WINDOW_ENV,
+    OPENAI_COMPATIBLE_MAX_OUTPUT_TOKENS_ENV,
+};
 use ag_harness::recovery::ExecutionIdentity;
 use ag_harness::store::SessionInfo;
 use ag_harness::{
@@ -33,9 +37,10 @@ const CHAT_COMMAND_HELP: &str = concat!(
     "  /model <MODEL>    switch later turns to a list number, provider/model, or model ID\n",
     "  /help             show commands\n"
 );
-/// Context profile assumed for every chat model. The built-in catalog
-/// declares no context windows, so this assumes a conservative 128k-token
-/// window and keeps 16,384 tokens free for the model's response.
+/// Context profile assumed for every hosted chat model. The built-in catalog
+/// declares no context windows for them, so this assumes a conservative
+/// 128k-token window and keeps 16,384 tokens free for the model's response.
+/// OpenAI-compatible models declare theirs in the environment.
 const MODEL_PROFILE: ModelProfile = ModelProfile::new(128_000).with_reserved_tokens(16_384);
 /// Revision of the CLI's built-in model registrations. Sessions record it and
 /// require the same value on resume.
@@ -195,7 +200,11 @@ fn provider_help() -> String {
         help.push_str("  ");
         help.push_str(provider.as_str());
         help.push_str(": ");
-        help.push_str(&provider.known_models().join(", "));
+        if provider.known_models().is_empty() {
+            help.push_str("any model the server serves, such as qwen3:latest");
+        } else {
+            help.push_str(&provider.known_models().join(", "));
+        }
         help.push('\n');
     }
     help.push_str("\nCredentials:\n");
@@ -204,17 +213,27 @@ fn provider_help() -> String {
         help.push_str(provider.as_str());
         help.push_str(": ");
         help.push_str(provider.api_key_environment());
-        if provider.default_base_url().is_some() {
+        if !provider.requires_api_key() {
+            help.push_str(" optional");
+        }
+        if let Some(default_base_url) = provider.default_base_url() {
             help.push_str(" (");
             help.push_str(provider.base_url_environment());
-            help.push_str(" optional)");
+            help.push_str(" optional, default ");
+            help.push_str(default_base_url);
+            help.push(')');
         } else {
             help.push_str(", ");
             help.push_str(provider.base_url_environment());
         }
         help.push('\n');
     }
-    help.pop();
+    let _ = write!(
+        help,
+        "\nOpenAI-compatible context, matching the server's own window:\n  \
+         {OPENAI_COMPATIBLE_CONTEXT_WINDOW_ENV} (default {DEFAULT_CONTEXT_WINDOW_TOKENS} tokens), \
+         {OPENAI_COMPATIBLE_MAX_OUTPUT_TOKENS_ENV} (default {DEFAULT_MAX_OUTPUT_TOKENS})"
+    );
 
     help
 }
@@ -316,6 +335,7 @@ impl ModelSelection {
     fn registry(
         identity: ExecutionIdentity,
         client: impl Model + 'static,
+        profile: ModelProfile,
     ) -> Result<ModelRegistry, CliError> {
         let mut registry = ModelRegistry::new();
         registry.register(
@@ -323,19 +343,16 @@ impl ModelSelection {
             client,
             ModelCapabilities {
                 tool_calls: true,
-                ..ModelCapabilities::new(MODEL_PROFILE)
+                ..ModelCapabilities::new(profile)
             },
         )?;
 
         Ok(registry)
     }
-
-    fn context_budget() -> Result<ContextBudget, ContextBudgetError> {
-        MODEL_PROFILE.context_budget()
-    }
 }
 
-/// Current chat model and the connector that builds clients for switches.
+/// Current chat model and the connector that builds clients, with their
+/// context profiles, for switches.
 struct ModelSwitcher<Connect> {
     connect: Connect,
     selection: ModelSelection,
@@ -343,19 +360,19 @@ struct ModelSwitcher<Connect> {
 
 impl<Connect, Client> ModelSwitcher<Connect>
 where
-    Connect: FnMut(&ModelSelection) -> Result<Client, CliError>,
+    Connect: FnMut(&ModelSelection) -> Result<(Client, ModelProfile), CliError>,
     Client: Model + 'static,
 {
     /// Builds a harness for the current model. A registered harness records
     /// its identity for resume; a direct harness resumes sessions stored
     /// without one and serves models too long to register.
     fn harness(&mut self, registered: bool) -> Result<Harness, CliError> {
-        let client = (self.connect)(&self.selection)?;
+        let (client, profile) = (self.connect)(&self.selection)?;
         let Some(identity) = self.selection.identity().filter(|_| registered) else {
-            return Ok(Harness::new(client, ModelSelection::context_budget()?));
+            return Ok(Harness::new(client, profile.context_budget()?));
         };
         let key = identity.key().to_string();
-        let registry = ModelSelection::registry(identity, client)?;
+        let registry = ModelSelection::registry(identity, client, profile)?;
 
         Ok(Harness::from_registry(&registry, &key)?)
     }
@@ -367,7 +384,8 @@ where
             .ok_or_else(|| CliError::ModelKeyTooLong {
                 key: selection.key(),
             })?;
-        let registry = ModelSelection::registry(identity, (self.connect)(&selection)?)?;
+        let (client, profile) = (self.connect)(&selection)?;
+        let registry = ModelSelection::registry(identity, client, profile)?;
         session.switch_model(&registry, &selection.key()).await?;
         self.selection = selection;
 
@@ -654,19 +672,28 @@ fn repository_from_path(root: &Path, path: Option<&OsStr>) -> Result<Repository,
     Err(CliError::GitExecutableNotFound)
 }
 
-/// Builds clients for the starting model and later `/model` switches. An
-/// explicit base URL applies only to the provider it was given for.
+/// Builds clients and context profiles for the starting model and later
+/// `/model` switches. An explicit base URL applies only to the provider it
+/// was given for. A provider that declares its profile in the environment
+/// uses it; the others assume [`MODEL_PROFILE`].
 fn model_connector(
     provider: ModelProvider,
     base_url: Option<String>,
     environment: &mut impl FnMut(&str) -> Result<String, env::VarError>,
-) -> impl FnMut(&ModelSelection) -> Result<ag_harness::model::ModelClient, CliError> {
+) -> impl FnMut(&ModelSelection) -> Result<(ag_harness::model::ModelClient, ModelProfile), CliError>
+{
     move |selection| {
         let base_url = base_url
             .as_deref()
             .filter(|_| selection.provider == provider);
+        let client = model_client(selection.provider, &selection.model, base_url, environment)?;
+        let profile = selection
+            .provider
+            .environment_profile(&mut *environment)
+            .map_err(CliError::from)?
+            .unwrap_or(MODEL_PROFILE);
 
-        model_client(selection.provider, &selection.model, base_url, environment)
+        Ok((client, profile))
     }
 }
 
@@ -743,6 +770,7 @@ fn stored_model_identity_parts(
         Some("meta") => ModelProvider::Muse,
         Some("moonshot_ai") => ModelProvider::Kimi,
         Some("alibaba_cloud") => ModelProvider::Qwen,
+        Some("openai_compatible") => ModelProvider::OpenAiCompatible,
         _ => return Err(CliError::MissingModelIdentity),
     };
 
@@ -759,7 +787,7 @@ async fn run_chat<Connect, Client, Input, Output>(
     options: TurnOptions,
 ) -> Result<(), CliError>
 where
-    Connect: FnMut(&ModelSelection) -> Result<Client, CliError>,
+    Connect: FnMut(&ModelSelection) -> Result<(Client, ModelProfile), CliError>,
     Client: Model + 'static,
     Input: AsyncBufRead + Unpin,
     Output: AsyncWrite + Unpin,
@@ -825,7 +853,7 @@ async fn run_command<Connect, Client>(
     output: &mut (impl AsyncWrite + Unpin),
 ) -> Result<(), CliError>
 where
-    Connect: FnMut(&ModelSelection) -> Result<Client, CliError>,
+    Connect: FnMut(&ModelSelection) -> Result<(Client, ModelProfile), CliError>,
     Client: Model + 'static,
 {
     let text = match command {

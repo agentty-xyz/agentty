@@ -110,7 +110,8 @@ const QWEN_PLUS_ESTIMATOR: HeuristicContextEstimator = HeuristicContextEstimator
     .with_output_schema_in_prompt();
 
 /// Returns the declared context profile of `model`, or `None` when its
-/// provider CLI manages context itself.
+/// provider CLI manages context itself or, for the OpenAI-compatible model,
+/// the environment declares it.
 pub(crate) const fn declared(model: AgentModel) -> Option<ModelProfile> {
     match model {
         AgentModel::Gpt6Astra
@@ -123,7 +124,8 @@ pub(crate) const fn declared(model: AgentModel) -> Option<ModelProfile> {
         AgentModel::KimiK26 => Some(KIMI_K2_6),
         AgentModel::Qwen38Max => Some(QWEN3_8_MAX),
         AgentModel::QwenPlus => Some(QWEN_PLUS),
-        AgentModel::Gemini4Argon
+        AgentModel::OpenAiCompatible
+        | AgentModel::Gemini4Argon
         | AgentModel::Gemini31Pro
         | AgentModel::Gemini38Flash
         | AgentModel::Gemini35FlashLite

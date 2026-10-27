@@ -88,6 +88,15 @@ fn structured_output_instruction() -> String {
     )
 }
 
+fn tool_aware_structured_output_instruction() -> String {
+    format!(
+        "Call the offered tools whenever you need them. When you give your final answer, return \
+         only one JSON object that validates against this JSON Schema, with no Markdown fences or \
+         other text.\n\nJSON Schema:\n{}",
+        chat_schema()
+    )
+}
+
 fn read_tool() -> serde_json::Value {
     let definition = ToolDefinition::read_with_comparison_base(None);
 
@@ -177,6 +186,11 @@ fn help_describes_the_chat_interface() {
     for provider in ModelProvider::all() {
         assert!(stdout.contains(provider.api_key_environment()));
     }
+    assert!(stdout.contains(
+        "openai-compatible: OPENAI_COMPATIBLE_API_KEY optional (OPENAI_COMPATIBLE_BASE_URL \
+         optional, default http://127.0.0.1:11434/v1)"
+    ));
+    assert!(stdout.contains("OPENAI_COMPATIBLE_CONTEXT_WINDOW (default 32768 tokens)"));
     assert!(!stdout.contains("Get started:"));
     assert!(!stdout.contains("Examples:"));
 }
@@ -387,11 +401,12 @@ async fn kimi_custom_models_use_supported_reasoning_formats() {
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn provider_flags_select_kimi_and_qwen_wire_formats() {
+async fn provider_flags_select_alternate_wire_formats() {
     // Arrange and Act
     for (provider, model) in [
         (ModelProvider::Kimi, KIMI_K2_6),
         (ModelProvider::Qwen, QWEN_PLUS),
+        (ModelProvider::OpenAiCompatible, "qwen3:latest"),
     ] {
         let server = MockServer::start().await;
         let mut expected_request = json!({
@@ -409,6 +424,10 @@ async fn provider_flags_select_kimi_and_qwen_wire_formats() {
             }
             ModelProvider::Qwen => {
                 expected_request["enable_thinking"] = json!(false);
+            }
+            ModelProvider::OpenAiCompatible => {
+                expected_request["messages"][0]["content"] =
+                    json!(tool_aware_structured_output_instruction());
             }
             ModelProvider::Muse => unreachable!("the test covers alternate providers"),
         }
@@ -452,6 +471,62 @@ async fn provider_flags_select_kimi_and_qwen_wire_formats() {
         );
         assert_eq!(body, expected_request);
     }
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn openai_compatible_provider_runs_without_a_key_and_resumes() {
+    // Arrange
+    let server = MockServer::start().await;
+    Mock::given(method("POST"))
+        .and(path("/v1/chat/completions"))
+        .respond_with(response("local response", 4, 2))
+        .expect(2)
+        .mount(&server)
+        .await;
+    let (storage, mut command) = harness_command().expect("temporary storage should exist");
+    let base_url = format!("{}/v1", server.uri());
+
+    // Act
+    let run = command
+        .args([
+            "run",
+            "qwen3:latest",
+            "Hello",
+            "--provider",
+            "openai-compatible",
+            "--session",
+            "local-session",
+        ])
+        .env("OPENAI_COMPATIBLE_BASE_URL", &base_url)
+        .env("OPENAI_COMPATIBLE_CONTEXT_WINDOW", "40960")
+        .output()
+        .expect("local provider run should execute");
+    let resumed = Command::new(cargo_bin!("ag-harness"))
+        .args(["resume", "local-session", "Again"])
+        .env("AG_HARNESS_ROOT", storage.path())
+        .env("OPENAI_COMPATIBLE_BASE_URL", &base_url)
+        .env("OPENAI_COMPATIBLE_CONTEXT_WINDOW", "40960")
+        .output()
+        .expect("local provider resume should execute");
+
+    // Assert
+    for output in [&run, &resumed] {
+        assert!(
+            output.status.success(),
+            "local provider CLI failed: {}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+        assert!(String::from_utf8_lossy(&output.stdout).contains("assistant> local response"));
+    }
+    let requests = server
+        .received_requests()
+        .await
+        .expect("provider requests should be recorded");
+    assert!(
+        requests
+            .iter()
+            .all(|request| !request.headers.contains_key("authorization"))
+    );
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]

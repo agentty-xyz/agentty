@@ -121,7 +121,7 @@ async fn run_session_turn(
     execution_policy::validate(AgentKind::Harness, &req.execution_policy)
         .map_err(|error| error.to_string())?;
     let environment = config.environment();
-    let selection = ModelSelection::resolve(&req.model)?;
+    let selection = ModelSelection::resolve(&req.model, &environment)?;
     let profile = req.request_kind.protocol_profile();
     let options = turn_options(profile, req.permission_mode, &environment)?;
     let repository = repository(&req.folder, &environment)?;

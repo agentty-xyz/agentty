@@ -140,7 +140,7 @@ pub(crate) async fn run_one_shot(
     execution_policy::validate(AgentKind::Harness, &request.execution_policy)
         .map_err(|error| error.to_string())?;
     let environment = config.environment();
-    let selection = ModelSelection::resolve(&request.model)?;
+    let selection = ModelSelection::resolve(&request.model, &environment)?;
     let profile = request.request_kind.protocol_profile();
     let options = config::turn_options(profile, request.permission_mode, &environment)?;
     let repository = config::repository(&request.folder, &environment)?;

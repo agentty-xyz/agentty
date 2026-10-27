@@ -18,6 +18,7 @@ fn model_inference_preserves_current_retired_and_unknown_family_routing() {
         ("muse-spark-1.3", "harness"),
         ("kimi-k3", "harness"),
         ("qwen-plus", "harness"),
+        ("openai-compatible", "harness"),
         ("kimi-unlisted", "antigravity"),
         ("unrecognized-model", "antigravity"),
     ];

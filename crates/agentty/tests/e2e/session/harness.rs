@@ -302,3 +302,62 @@ async fn test_harness_only_launch_defaults_to_harness_session() -> E2eResult {
         )
         .await
 }
+
+#[tokio::test]
+async fn test_harness_session_runs_on_a_local_openai_compatible_server() -> E2eResult {
+    // Arrange
+    let server = scripted_provider().await;
+    let git_directory = git_only_path()?;
+
+    // Act, Assert
+    FeatureTest::new("harness_local_model")
+        .with_git()
+        .with_stub_only_path()
+        .env("PATH", git_directory.path().to_string_lossy())
+        .args(["--experimental-harness".to_string()])
+        .env("DASHSCOPE_API_KEY", "")
+        .env("KIMI_API_KEY", "")
+        .env("MODEL_API_KEY", "")
+        .env("OPENAI_COMPATIBLE_BASE_URL", server.uri())
+        .env("OPENAI_COMPATIBLE_MODEL", "qwen3:latest")
+        .run(
+            |scenario| {
+                scenario
+                    .compose(&common::wait_for_agentty_startup())
+                    .compose(&common::switch_to_tab("Sessions"))
+                    .press_key("a")
+                    .wait_for_text("Install an agent CLI", 5000)
+                    .press_key("Enter")
+                    .wait_for_stable_frame(300, 5000)
+                    .write_text("Create notes")
+                    .wait_for_text("Create notes", 3000)
+                    .press_key("Enter")
+                    .eventually(
+                        Duration::from_secs(30),
+                        Duration::from_millis(100),
+                        |frame| {
+                            let full = Region::full(frame.cols(), frame.rows());
+
+                            assertion::match_text_in_region(frame, HARNESS_ANSWER, &full)
+                        },
+                    )
+            },
+            |frame, _report| {
+                Box::pin(async move {
+                    let full = Region::full(frame.cols(), frame.rows());
+                    assertion::assert_text_in_region(frame, "harness/openai-compatible", &full);
+                })
+            },
+        )
+        .await?;
+
+    let requests = server.received_requests().await.unwrap_or_default();
+    let session_request = requests
+        .iter()
+        .find(|request| String::from_utf8_lossy(&request.body).contains("Create notes"))
+        .ok_or("the session turn should reach the local server")?;
+    assert!(!session_request.headers.contains_key("authorization"));
+    assert!(String::from_utf8_lossy(&session_request.body).contains(r#""model":"qwen3:latest""#));
+
+    Ok(())
+}

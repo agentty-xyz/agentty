@@ -67,14 +67,49 @@ choosing an authentication method permitted for your account, plan, and usage pa
 
 <a id="backends-harness"></a> Start Agentty with `agentty --experimental-harness` to add
 a **Harness** session type that runs Agentty's built-in agent loop instead of an
-external CLI. It talks directly to a model provider using an API key from the
-environment:
+external CLI. It talks directly to a model provider configured in the environment:
 
-| Provider | Key                 | Endpoint                      |
-| -------- | ------------------- | ----------------------------- |
-| Muse     | `MODEL_API_KEY`     | Optional `MODEL_API_BASE_URL` |
-| Kimi     | `KIMI_API_KEY`      | Required `KIMI_BASE_URL`      |
-| Qwen     | `DASHSCOPE_API_KEY` | Required `DASHSCOPE_BASE_URL` |
+| Provider          | Key                                  | Endpoint                              |
+| ----------------- | ------------------------------------ | ------------------------------------- |
+| Muse              | `MODEL_API_KEY`                      | Optional `MODEL_API_BASE_URL`         |
+| Kimi              | `KIMI_API_KEY`                       | Required `KIMI_BASE_URL`              |
+| Qwen              | `DASHSCOPE_API_KEY`                  | Required `DASHSCOPE_BASE_URL`         |
+| OpenAI-compatible | Optional `OPENAI_COMPATIBLE_API_KEY` | Optional `OPENAI_COMPATIBLE_BASE_URL` |
+
+### Local and Self-Hosted Models
+
+<a id="backends-harness-local"></a> The `openai-compatible` harness model runs any model
+served by an OpenAI-compatible Chat Completions endpoint, such as Ollama, llama.cpp
+`llama-server`, LM Studio, or vLLM. Name the served model and declare its window:
+
+```sh
+OLLAMA_CONTEXT_LENGTH=40960 ollama serve   # or raise the Ollama app's context length
+export OPENAI_COMPATIBLE_MODEL=qwen3:latest
+export OPENAI_COMPATIBLE_CONTEXT_WINDOW=40960
+agentty --experimental-harness
+```
+
+| Variable                              | Default                     | Meaning                                    |
+| ------------------------------------- | --------------------------- | ------------------------------------------ |
+| `OPENAI_COMPATIBLE_MODEL`             | Required                    | Model id the server serves                 |
+| `OPENAI_COMPATIBLE_BASE_URL`          | `http://127.0.0.1:11434/v1` | Endpoint including `/v1`; Ollama's default |
+| `OPENAI_COMPATIBLE_API_KEY`           | None                        | Bearer token, such as vLLM's `--api-key`   |
+| `OPENAI_COMPATIBLE_CONTEXT_WINDOW`    | `32768`                     | Tokens the server runs the model with      |
+| `OPENAI_COMPATIBLE_MAX_OUTPUT_TOKENS` | `8192`                      | Tokens reserved for each response          |
+
+- The model must support tool calls. Use base URLs such as `http://127.0.0.1:8080/v1`
+  for `llama-server`, `http://127.0.0.1:1234/v1` for LM Studio, and
+  `http://127.0.0.1:8000/v1` for vLLM.
+- Declare the window the server actually runs, not the model's maximum. Ollama loads
+  models with a 4,096-token window unless `OLLAMA_CONTEXT_LENGTH` or the app setting
+  raises it, and silently truncates longer requests; Agentty's protocol alone needs
+  several thousand tokens, so give it at least 16,384.
+- Agentty has no measured token estimate for unknown models, so it budgets input with a
+  50% margin: a 32,768-token window with the default reserve leaves a 17,246-token input
+  budget. The reasoning level is not sent, since servers reject it for models without
+  thinking; the model uses its server default.
+- Changing `OPENAI_COMPATIBLE_MODEL` switches existing sessions to the new model on
+  their next turn.
 
 Without the flag the session type is hidden; with the flag but no configured provider it
 is shown disabled. With a configured provider, Agentty starts even when no backend CLI
@@ -247,6 +282,8 @@ whose provider is configured:
 - `kimi-k2.6`: Previous Kimi model.
 - `qwen3.8-max`: Most capable Qwen model.
 - `qwen-plus`: Balanced Qwen model.
+- `openai-compatible`: The model `OPENAI_COMPATIBLE_MODEL` names on a local or
+  self-hosted server; see [Local and Self-Hosted Models](#backends-harness-local).
 
 Each request stays within an input budget below the model's context window. Because
 Agentty estimates tokens from text size, it holds back the model's output reserve plus a
@@ -261,6 +298,8 @@ next turn fits history to that model's budget.
 | `kimi-k2.6`      | 262,144        | 206,366      |
 | `qwen3.8-max`    | 1,000,000      | 795,357      |
 | `qwen-plus`      | 1,000,000      | 877,705      |
+
+`openai-compatible` takes its window and output reserve from the environment.
 
 ### Stored Model Upgrades
 

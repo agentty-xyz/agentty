@@ -375,7 +375,7 @@ fn provider_config(provider: Provider) -> Result<ProviderConfig, DynError> {
 
     Ok(ProviderConfig {
         provider,
-        api_key,
+        api_key: Some(api_key),
         base_url,
     })
 }

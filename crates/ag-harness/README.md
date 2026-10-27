@@ -269,6 +269,28 @@ let kimi = ModelConfiguration::new(ModelProvider::Kimi, KIMI_K3)
     .client_from_environment(|name| std::env::var(name))?;
 ```
 
+`ModelProvider::OpenAiCompatible` serves any model of a local or self-hosted
+OpenAI-compatible server (Ollama, llama.cpp, LM Studio, vLLM). Its API key
+(`OPENAI_COMPATIBLE_API_KEY`) is optional and its base URL
+(`OPENAI_COMPATIBLE_BASE_URL`) defaults to Ollama's `http://127.0.0.1:11434/v1`. The
+harness cannot know such a model, so `ModelProvider::environment_profile` returns the
+profile the environment declares (`OPENAI_COMPATIBLE_CONTEXT_WINDOW`, default 32,768;
+`OPENAI_COMPATIBLE_MAX_OUTPUT_TOKENS`, default 8,192) under the default estimator with a
+50% margin, and `None` for hosted providers:
+
+```rust
+let local = ModelConfiguration::new(ModelProvider::OpenAiCompatible, "qwen3:latest")
+    .client_from_environment(|name| std::env::var(name))?;
+let profile = ModelProvider::OpenAiCompatible
+    .environment_profile(|name| std::env::var(name))?
+    .expect("OpenAI-compatible models declare their profile");
+```
+
+Its requests carry only portable fields: the schema is stated in the prompt (with the
+`json_schema` response format when no tools are offered), reasoning is neither requested
+nor replayed, and no prompt cache key or image input is sent. The server must support
+tool calls.
+
 Built-in clients call `ag-router` for provider transport and schema validation. Hosts
 can also use `ag-router` directly for structured chat calls without a harness. Implement
 the `model::Model` trait to bring any other provider into `ag-harness`.
@@ -343,7 +365,7 @@ The crate root holds what a typical host needs: `Harness`, `Session`, `TurnOptio
 
 | Module      | Contents                                                 |
 | ----------- | -------------------------------------------------------- |
-| `provider`  | Built-in Muse, Kimi, and Qwen clients                    |
+| `provider`  | Muse, Kimi, Qwen, and OpenAI-compatible clients          |
 | `model`     | The `Model` trait, requests, registry, context budgets   |
 | `tool`      | Tool arguments, results, and the `FileSystem` seam       |
 | `bash`      | Sandboxed Bash configuration, executors, command records |

@@ -4,7 +4,7 @@ use ag_harness::provider::ModelProvider;
 use serde_json::json;
 
 use super::support::FixedModel;
-use crate::{ChatCommand, CliError, ModelSelection, model_connector};
+use crate::{ChatCommand, CliError, MODEL_PROFILE, ModelSelection, model_connector};
 
 fn muse_selection(model: &str) -> ModelSelection {
     ModelSelection {
@@ -128,6 +128,41 @@ fn model_connector_applies_an_explicit_base_url_only_to_its_provider() {
 }
 
 #[test]
+fn model_connector_reads_openai_compatible_profiles_from_the_environment() {
+    // Arrange
+    let mut environment = |name: &str| match name {
+        "OPENAI_COMPATIBLE_CONTEXT_WINDOW" => Ok("40960".to_string()),
+        "OPENAI_COMPATIBLE_MAX_OUTPUT_TOKENS" => Ok("many".to_string()),
+        _ => Err(env::VarError::NotPresent),
+    };
+    let mut valid_environment = |name: &str| match name {
+        "OPENAI_COMPATIBLE_CONTEXT_WINDOW" => Ok("40960".to_string()),
+        "MODEL_API_KEY" => Ok("test-key".to_string()),
+        _ => Err(env::VarError::NotPresent),
+    };
+    let local = ModelSelection {
+        model: "qwen3:latest".to_string(),
+        provider: ModelProvider::OpenAiCompatible,
+    };
+
+    // Act
+    let invalid = model_connector(ModelProvider::OpenAiCompatible, None, &mut environment)(&local);
+    let mut connect = model_connector(
+        ModelProvider::OpenAiCompatible,
+        None,
+        &mut valid_environment,
+    );
+    let (_, local_profile) = connect(&local).expect("Ollama defaults should connect");
+    let (_, hosted_profile) =
+        connect(&muse_selection("muse-spark-1.3")).expect("Muse key should connect");
+
+    // Assert
+    assert!(matches!(invalid, Err(CliError::ModelConfiguration(_))));
+    assert_eq!(local_profile.context_window_tokens(), 40_960);
+    assert_eq!(hosted_profile, MODEL_PROFILE);
+}
+
+#[test]
 fn model_identity_is_absent_beyond_the_identity_limit() {
     // Arrange
     let longest = muse_selection(&"m".repeat(256 - "muse/".len()));
@@ -140,6 +175,6 @@ fn model_identity_is_absent_beyond_the_identity_limit() {
     // Assert
     let identity = identity.expect("a 256-byte key should be registrable");
     assert_eq!(identity.key(), longest.key());
-    assert!(ModelSelection::registry(identity, FixedModel(json!({}))).is_ok());
+    assert!(ModelSelection::registry(identity, FixedModel(json!({})), MODEL_PROFILE).is_ok());
     assert_eq!(missing, None);
 }

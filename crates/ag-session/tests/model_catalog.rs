@@ -57,6 +57,7 @@ fn provider_catalog_preserves_wire_ids_order_and_defaults() {
                 "kimi-k2.6",
                 "qwen3.8-max",
                 "qwen-plus",
+                "openai-compatible",
             ],
             "muse-spark-1.3",
         ),
