@@ -210,6 +210,8 @@ pub(super) struct RunRecord {
     pub(super) scenario: &'static str,
     pub(super) started_at: u64,
     pub(super) success: bool,
+    /// The run's exported trace, when OTLP export is enabled.
+    pub(super) trace_id: Option<String>,
     pub(super) wall_ms: u128,
     pub(super) window: u64,
     pub(super) window_mode: &'static str,
@@ -222,6 +224,7 @@ impl RunRecord {
         let mut line = Map::new();
         line.insert("started_at".into(), json!(self.started_at));
         line.insert("revision".into(), json!(self.revision));
+        line.insert("trace_id".into(), json!(self.trace_id));
         line.insert("provider".into(), json!(self.provider));
         line.insert("model".into(), json!(self.model));
         line.insert("scenario".into(), json!(self.scenario));

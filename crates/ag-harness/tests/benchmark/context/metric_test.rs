@@ -179,18 +179,19 @@ fn cache_reuse_attributes_lost_prefixes_to_reductions_or_the_provider() {
                 request["cache_expected_tokens"].clone(),
                 request["prefix_held"].clone(),
                 request["reduction_event"].clone(),
+                request["lost_to"].clone(),
             )
         })
         .collect::<Vec<_>>();
     assert_eq!(
         pairs,
         [
-            (Value::Null, Value::Null, Value::Null),
-            (json!(1_000), json!(true), json!(false)),
-            (json!(4_000), json!(false), json!(true)),
-            (Value::Null, Value::Null, Value::Null),
-            (json!(5_000), json!(false), json!(false)),
-            (json!(5_000), json!(true), json!(false)),
+            (Value::Null, Value::Null, Value::Null, Value::Null),
+            (json!(1_000), json!(true), json!(false), Value::Null),
+            (json!(4_000), json!(false), json!(true), json!("harness")),
+            (Value::Null, Value::Null, Value::Null, Value::Null),
+            (json!(5_000), json!(false), json!(false), json!("provider")),
+            (json!(5_000), json!(true), json!(false), Value::Null),
         ]
     );
     assert_eq!(
@@ -250,6 +251,18 @@ fn cache_reuse_charges_the_harness_only_for_rewritten_messages() {
             (json!(2), json!(false), None),
             (json!(2), json!(true), None),
             (json!(6), json!(false), None),
+        ]
+    );
+    assert_eq!(
+        requests
+            .iter()
+            .map(|request| request["lost_to"].clone())
+            .collect::<Vec<_>>(),
+        [
+            Value::Null,
+            json!("provider"),
+            json!("harness"),
+            Value::Null
         ]
     );
     assert_eq!(totals["reduction_events"], json!(2));

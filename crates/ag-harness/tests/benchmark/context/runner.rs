@@ -2,18 +2,20 @@
 //! at the model's declared window.
 
 use std::collections::BTreeMap;
-use std::fs::OpenOptions;
+use std::fs::{File, OpenOptions};
 use std::io::{self, Write as _};
 use std::num::{NonZeroU64, NonZeroUsize};
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex, PoisonError};
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
-use ag_harness::lifecycle::LifecycleEvent;
+use ag_harness::lifecycle::{LifecycleEvent, LifecycleObserverSet};
 use ag_harness::model::{
     ContextBudget, ContextSummaryPolicy, HeuristicContextEstimator, ModelProfile,
 };
 use ag_harness::{Harness, OutputSchema, Tool};
+use ag_telemetry::otlp::{OtlpError, OtlpExport, Service};
+use ag_telemetry::{Context, FutureExt as _};
 use tempfile::TempDir;
 
 use super::fixture::{
@@ -22,6 +24,7 @@ use super::fixture::{
 };
 use super::probe::{ProbedModel, SentRequests};
 use super::record::{Activity, MeasuredTurn, Observed, RunRecord};
+use super::trace::RunTrace;
 use crate::{DynError, GIT_EXECUTABLE_ENV, Provider, benchmark_repository, summary};
 
 const DEFAULT_WINDOW: u64 = 32_000;
@@ -29,6 +32,13 @@ const DEFAULT_RESERVED_OUTPUT: u64 = 16_384;
 const DEFAULT_TIMEOUT_SECS: u64 = 900;
 const DEFAULT_RESULTS: &str = "target/ag-harness-context-benchmark.jsonl";
 const DECLARED_WINDOW: &str = "declared";
+/// Selects the OTLP HTTP/protobuf traces URL; export is off without it.
+const OTLP_ENDPOINT_ENV: &str = "AG_HARNESS_BENCHMARK_OTLP_ENDPOINT";
+/// Resource identity of the exported benchmark traces.
+const SERVICE: Service = Service {
+    name: "ag-harness-benchmark",
+    version: env!("CARGO_PKG_VERSION"),
+};
 /// Agentty's declared context profiles of the benchmarked models, as
 /// `crates/ag-agent/src/agent/model_profile.rs` declares them: the model,
 /// its window, maximum output, and estimate margin's under-count percent,
@@ -79,25 +89,24 @@ pub(crate) async fn run() -> Result<(), DynError> {
         .create(true)
         .append(true)
         .open(&config.results)?;
-    let revision = revision().await;
-    let mut passed = 0;
-    let mut total = 0;
-
-    for repetition in 1..=config.repetitions {
-        for &(scenario, runner) in &scenarios {
-            let record = config
-                .run_scenario(scenario, runner, repetition, revision.clone())
-                .await?;
-            passed += usize::from(record.success);
-            total += 1;
-            let line = serde_json::to_string(&record.to_json())?;
-            writeln!(results, "{line}")?;
-            results.flush()?;
-            let mut stdout = io::stdout().lock();
-            writeln!(stdout, "CONTEXT {line}")?;
-            stdout.flush()?;
-        }
+    let export = OtlpExport::start(config.otlp_endpoint.as_deref(), SERVICE)
+        .await
+        .map_err(|error| match error {
+            OtlpError::Endpoint => format!(
+                "{OTLP_ENDPOINT_ENV} must be a complete HTTP(S) traces URL, such as \
+                 http://127.0.0.1:4318/v1/traces"
+            ),
+            error => format!("{OTLP_ENDPOINT_ENV}: {error}"),
+        })?;
+    if let Some(export) = &export {
+        export.install();
     }
+    let runs = config.run_scenarios(&scenarios, &mut results).await;
+    if let Some(export) = export {
+        let warnings = export.shutdown().await;
+        writeln!(io::stdout().lock(), "OTLP warnings={warnings}")?;
+    }
+    let (passed, total) = runs?;
     writeln!(
         io::stdout().lock(),
         "SUMMARY passed={passed} total={total} results={}",
@@ -115,6 +124,8 @@ struct Config {
     /// Retained history byte budget of durable sessions, or the harness
     /// default.
     history_bytes: Option<NonZeroUsize>,
+    /// OTLP traces URL that enables one exported trace per run.
+    otlp_endpoint: Option<String>,
     provider: Provider,
     repetitions: usize,
     results: PathBuf,
@@ -156,6 +167,7 @@ impl Config {
                     })
                 })
                 .transpose()?,
+            otlp_endpoint: std::env::var(OTLP_ENDPOINT_ENV).ok(),
             provider,
             repetitions: number_env("AG_HARNESS_BENCHMARK_REPETITIONS", 1)?,
             results,
@@ -205,6 +217,35 @@ impl Config {
         })
     }
 
+    /// Runs every repetition of `scenarios`, appending each record to
+    /// `results`, and returns how many runs passed of how many ran.
+    async fn run_scenarios(
+        &self,
+        scenarios: &[(&'static str, ScenarioRunner)],
+        results: &mut File,
+    ) -> Result<(usize, usize), DynError> {
+        let revision = revision().await;
+        let mut passed = 0;
+        let mut total = 0;
+        for repetition in 1..=self.repetitions {
+            for &(scenario, runner) in scenarios {
+                let record = self
+                    .run_scenario(scenario, runner, repetition, revision.clone())
+                    .await?;
+                passed += usize::from(record.success);
+                total += 1;
+                let line = serde_json::to_string(&record.to_json())?;
+                writeln!(results, "{line}")?;
+                results.flush()?;
+                let mut stdout = io::stdout().lock();
+                writeln!(stdout, "CONTEXT {line}")?;
+                stdout.flush()?;
+            }
+        }
+
+        Ok((passed, total))
+    }
+
     async fn run_scenario(
         &self,
         scenario: &'static str,
@@ -221,15 +262,23 @@ impl Config {
         let observed = Arc::new(Mutex::new(Observed::default()));
         let recorder = Arc::clone(&observed);
         let (model, sent) = ProbedModel::new(self.provider.client()?);
+        let trace = self
+            .otlp_endpoint
+            .is_some()
+            .then(|| RunTrace::start(scenario));
+        let mut observers = LifecycleObserverSet::new(move |event: LifecycleEvent| {
+            recorder
+                .lock()
+                .unwrap_or_else(PoisonError::into_inner)
+                .observe(event.kind());
+        });
+        if trace.is_some() {
+            observers = observers.with_observer(RunTrace::observer());
+        }
         let mut harness = Harness::new(model, context.budget)
             .context_estimator(context.estimator)
             .context_summaries(policy)
-            .with_lifecycle_observer(move |event: LifecycleEvent| {
-                recorder
-                    .lock()
-                    .unwrap_or_else(PoisonError::into_inner)
-                    .observe(event.kind());
-            });
+            .with_lifecycle_observer(observers);
         if let Some(history_bytes) = self.history_bytes {
             harness = harness.max_history_bytes(history_bytes);
         }
@@ -237,7 +286,14 @@ impl Config {
             .duration_since(UNIX_EPOCH)
             .map_or(0, |elapsed| elapsed.as_secs());
         let started = Instant::now();
-        let result = tokio::time::timeout(self.timeout, runner(harness, sent.clone())).await;
+        let run_context = trace
+            .as_ref()
+            .map_or_else(Context::current, RunTrace::context);
+        let result = tokio::time::timeout(
+            self.timeout,
+            runner(harness, sent.clone()).with_context(run_context),
+        )
+        .await;
         let wall_ms = started.elapsed().as_millis();
         let (activity, score, detail) = match result {
             Ok(Ok(measured)) => {
@@ -266,7 +322,7 @@ impl Config {
             ),
         };
 
-        Ok(RunRecord {
+        let record = RunRecord {
             activity,
             context_summaries: self.context_summaries,
             correctness: score.correctness(),
@@ -282,10 +338,16 @@ impl Config {
             scenario,
             started_at,
             success: score.is_perfect(),
+            trace_id: trace.as_ref().map(RunTrace::trace_id),
             wall_ms,
             window: context.window,
             window_mode: self.window.mode(),
-        })
+        };
+        if let Some(trace) = trace {
+            trace.finish(&record.to_json(), sent.take_spans());
+        }
+
+        Ok(record)
     }
 }
 

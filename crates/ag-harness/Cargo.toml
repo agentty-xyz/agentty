@@ -63,6 +63,7 @@ libc.workspace = true
 libproc.workspace = true
 
 [dev-dependencies]
+ag-telemetry = { workspace = true, features = ["otlp"] }
 jsonschema.workspace = true
 mockall.workspace = true
 opentelemetry-otlp.workspace = true

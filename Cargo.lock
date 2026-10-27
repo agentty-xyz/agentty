@@ -92,6 +92,7 @@ name = "ag-harness"
 version = "0.18.1"
 dependencies = [
  "ag-router",
+ "ag-telemetry",
  "async-trait",
  "base64 0.23.1",
  "close_fds",

@@ -65,11 +65,11 @@ pub(super) fn deferred_reads(tool_calls: &[ToolActivity]) -> usize {
 /// digests of the messages they `sent` (consumed here), `prefix_messages`
 /// counts the leading messages they share and `prefix_rewritten` marks a
 /// request that did not keep every message of the previous one, so the
-/// harness rewrote earlier bytes. A lost prefix is charged to the harness
-/// when the request rewrote it, or, without digests, at a reduction event,
-/// and to the provider otherwise. A pair whose requests belong to different
-/// `turn`s of a session is a turn boundary. Context summary requests are
-/// left out of the pairs but count toward the cached share.
+/// harness rewrote earlier bytes. A lost prefix is charged (`lost_to`) to
+/// the harness when the request rewrote it, or, without digests, at a
+/// reduction event, and to the provider otherwise. A pair whose requests belong
+/// to different `turn`s of a session is a turn boundary. Context summary
+/// requests are left out of the pairs but count toward the cached share.
 pub(super) fn record_cache_reuse(requests: &mut [Value]) -> Map<String, Value> {
     let mut totals = CacheTotals::default();
     let mut previous: Option<PreviousRequest> = None;
@@ -105,6 +105,7 @@ pub(super) fn record_cache_reuse(requests: &mut [Value]) -> Map<String, Value> {
                 });
             let rewritten = pair.kept.map(|(_, rewritten)| rewritten);
             totals.rewritten_prefixes += usize::from(rewritten == Some(true));
+            let charged_to_harness = rewritten.unwrap_or(event);
             pair.expected = previous
                 .input
                 .zip(input)
@@ -112,7 +113,12 @@ pub(super) fn record_cache_reuse(requests: &mut [Value]) -> Map<String, Value> {
             pair.held = pair
                 .expected
                 .zip(hit)
-                .map(|(expected, hit)| totals.add_pair(expected, hit, rewritten.unwrap_or(event)));
+                .map(|(expected, hit)| totals.add_pair(expected, hit, charged_to_harness));
+            pair.lost_to = (pair.held == Some(false)).then_some(if charged_to_harness {
+                "harness"
+            } else {
+                "provider"
+            });
             pair.reduced = Some(event);
             if previous.turn != turn {
                 totals.add_boundary(pair.held, rewritten);
@@ -121,6 +127,7 @@ pub(super) fn record_cache_reuse(requests: &mut [Value]) -> Map<String, Value> {
         if let Some(record) = request.as_object_mut() {
             record.insert("cache_expected_tokens".into(), json!(pair.expected));
             record.insert("prefix_held".into(), json!(pair.held));
+            record.insert("lost_to".into(), json!(pair.lost_to));
             record.insert("reduction_event".into(), json!(pair.reduced));
             record.insert(
                 "prefix_messages".into(),
@@ -158,6 +165,8 @@ struct Pair {
     /// Leading messages shared with the previous request, and whether that
     /// left any of its messages out.
     kept: Option<(usize, bool)>,
+    /// Who a lost prefix is charged to: `harness` or `provider`.
+    lost_to: Option<&'static str>,
     reduced: Option<bool>,
 }
 

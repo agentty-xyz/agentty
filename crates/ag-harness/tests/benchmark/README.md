@@ -47,8 +47,9 @@ turn report is available only after a successful turn.
 
 The benchmark captures OpenTelemetry metrics and spans in-process. It verifies client
 duration/token metrics plus lifecycle duration/call metrics, and requires one correlated
-agent and model span for every persistent-session turn. It does not export telemetry,
-estimate missing tokens, or calculate cost.
+agent and model span for every persistent-session turn. It does not export telemetry
+(the context suite can; see [Trace export](#trace-export)), estimate missing tokens, or
+calculate cost.
 
 See `results/2026-09-03.md` for the completed live persistence and compatibility report.
 
@@ -144,11 +145,12 @@ Each run appends one JSON object to `AG_HARNESS_CONTEXT_RESULTS` (default
   counts these requests. Each turn request after the first also compares itself with the
   previous turn request: `cache_expected_tokens` is the smaller of the two inputs, which
   an append-only cache could reuse, `prefix_held` is whether the provider reused at
-  least 85% of it, and `reduction_event` is whether its `reductions` differ from the
-  previous one's. The suite wraps the provider client to digest the messages each
-  request sent: `prefix_messages` counts the leading messages both requests sent alike,
-  and `prefix_rewritten` is whether the request left out or changed any message of the
-  previous one, so the harness rewrote earlier bytes.
+  least 85% of it, `lost_to` charges a prefix that was not held to `harness` or
+  `provider` as `lost_prefixes` does, and `reduction_event` is whether its `reductions`
+  differ from the previous one's. The suite wraps the provider client to digest the
+  messages each request sent: `prefix_messages` counts the leading messages both
+  requests sent alike, and `prefix_rewritten` is whether the request left out or changed
+  any message of the previous one, so the harness rewrote earlier bytes.
 - `cache_hit_tokens` and `cached_share` sum and divide provider-reported cache hits over
   every request. `reduction_events`, `rewritten_prefixes`, and `held_prefixes` count
   turn-request pairs, and `lost_prefixes` and `lost_cache_tokens` (each expected token
@@ -167,11 +169,12 @@ Each run appends one JSON object to `AG_HARNESS_CONTEXT_RESULTS` (default
   `reserved_output`, `context_summaries`, `history_bytes` (the
   `AG_HARNESS_CONTEXT_HISTORY_BYTES` value or `null`), and `estimate` (the
   `AG_HARNESS_CONTEXT_ESTIMATE` value or the declared estimator, or `null` for
-  `DEFAULT`) identify the configuration. A failed turn's activity fields come from the
-  report on its `TurnFailed` event; they are `null` only when the turn failed before
-  preparing its first request or timed out. `detail` holds the error or failed checks. A
-  failed `session_reads` turn ends the run: its activity covers the finished turns only,
-  and `detail` names the failed turn among the failed checks.
+  `DEFAULT`) identify the configuration, and `trace_id` the run's exported trace (`null`
+  without trace export). A failed turn's activity fields come from the report on its
+  `TurnFailed` event; they are `null` only when the turn failed before preparing its
+  first request or timed out. `detail` holds the error or failed checks. A failed
+  `session_reads` turn ends the run: its activity covers the finished turns only, and
+  `detail` names the failed turn among the failed checks.
 
 To compare runs, aggregate per scenario, model, and window with `jq`:
 
@@ -189,6 +192,37 @@ jq -s -r 'group_by([.scenario, .model, .window, .context_summaries])[] | {
   } | [.scenario, .model, .window, .summaries, "\(.success)/\(.runs)", .calls, .duplicates,
        .input_tokens, .cached, .lost, .wall_s] | @tsv' results.jsonl
 ```
+
+### Trace export
+
+Set `AG_HARNESS_BENCHMARK_OTLP_ENDPOINT` to an OTLP HTTP/protobuf traces URL to export
+one trace per run through `ag-telemetry`, as service `ag-harness-benchmark`. Export is
+off without it; `OTEL_*` variables alone never enable it, though
+`OTEL_EXPORTER_OTLP_TRACES_HEADERS` still supplies authentication headers. To send runs
+to a local Grafana stack whose collector or Tempo accepts OTLP on port 4318:
+
+```sh
+AG_HARNESS_GIT_EXECUTABLE=/absolute/path/to/git \
+AG_HARNESS_BENCHMARK_SUITE=context \
+AG_HARNESS_BENCHMARK_PROVIDER=qwen \
+AG_HARNESS_BENCHMARK_OTLP_ENDPOINT=http://127.0.0.1:4318/v1/traces \
+  cargo test --locked -p ag-harness --test benchmark
+```
+
+Each trace's root span is named after the scenario and carries the run's JSON record,
+apart from the `requests` and `turns` lists, as `benchmark.*` attributes (for example
+`benchmark.correctness`, `benchmark.duplicate_reads`, and
+`benchmark.lost_prefixes.harness`); a run that is not a `success` ends with an error
+status. The harness's own `LifecycleTraceObserver` spans nest beneath it: `invoke_agent`
+per turn, `execute_tool` per tool call, `agent.compaction` per summary, and one
+`chat <model>` span per model request with its `gen_ai.*` usage. Each reported request's
+span additionally carries its `requests` entry as `benchmark.*` attributes, such as
+`benchmark.request` (its index), `benchmark.prefix_held`, `benchmark.lost_to`,
+`benchmark.reduction_event`, and `benchmark.reductions.*`; a rejected output's span
+keeps only the harness's error. Look a run up by the `trace_id` its record prints, or
+query attributes with TraceQL, such as `{ span.benchmark.lost_to = "harness" }`. The
+process prints `OTLP warnings=<n>` after flushing; a nonzero count means some spans were
+not delivered.
 
 Committed baselines live under `results/` as `*-context*.jsonl`.
 `results/2026-10-23-context-regimes.jsonl` holds two runs per model and scenario of

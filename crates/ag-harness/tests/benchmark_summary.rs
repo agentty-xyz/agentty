@@ -1,5 +1,5 @@
 //! Regression coverage for the manual benchmark's process result,
-//! deterministic context fixtures, and context metrics.
+//! deterministic context fixtures, context metrics, and run traces.
 
 #[path = "benchmark/context/fixture.rs"]
 mod fixture;
@@ -9,8 +9,18 @@ mod fixture_test;
 mod metric;
 #[path = "benchmark/context/metric_test.rs"]
 mod metric_test;
+#[path = "benchmark/context/probe.rs"]
+mod probe;
+#[cfg(test)]
+#[path = "support/repository.rs"]
+mod repository_fixture;
 #[path = "benchmark/summary.rs"]
 mod summary;
+#[path = "benchmark/context/trace.rs"]
+mod trace;
+#[cfg(test)]
+#[path = "benchmark/context/trace_test.rs"]
+mod trace_test;
 
 #[test]
 fn accepts_complete_benchmark_summary() {
