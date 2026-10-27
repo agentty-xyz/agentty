@@ -12,6 +12,7 @@ use ag_store::Database;
 use ag_worker::{MockRunClient, RunClient};
 
 use super::ReviewResumeClient;
+use crate::app::review_graph::test_support::ReviewGraphFixture;
 
 fn request() -> OneShotRequest {
     OneShotRequest {
@@ -453,6 +454,7 @@ async fn budget_retries_advance_past_cached_size_rejections_and_completed_batche
     for id in 0..15_000 {
         writeln!(diff, "+original changed line {id:05}").expect("string write");
     }
+    let fixture = ReviewGraphFixture::with_database(database.clone());
     // Act
     let mut complete = false;
     for attempt in 0..10 {
@@ -466,16 +468,17 @@ async fn budget_retries_advance_past_cached_size_rejections_and_completed_batche
         )
         .await
         .expect("review admission");
-        let text = crate::app::review_prompt::submit(
-            &client,
-            request(),
-            &diff,
-            "",
-            |diff, context, _| Ok(format!("{context}\n{diff}")),
-            |_| {},
-        )
-        .await
-        .expect("review result");
+        let text = fixture
+            .review(
+                client,
+                request(),
+                &diff,
+                "",
+                |diff, context, _| Ok(format!("{context}\n{diff}")),
+                |_| {},
+            )
+            .await
+            .expect("review result");
         if attempt == 0 {
             assert_eq!(
                 FocusedReviewStatus::for_text(&text),

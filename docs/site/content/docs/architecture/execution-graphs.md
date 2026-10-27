@@ -8,8 +8,7 @@ weight = 8
 persists their revisions, execution links, and exact result versions. `ag-worker`
 provides a deterministic static executor with atomic storage admission. Agentty adapts
 task conversations to its serial session workers and fresh utilities to the concurrent
-utility worker. `/plan` still uses `TaskChain`, and focused review retains its existing
-coordinator; neither workflow has migrated to this executor.
+utility worker. Focused review runs on this executor; `/plan` still uses `TaskChain`.
 
 ## Graph and Node Identity
 
@@ -36,10 +35,13 @@ context for each run and uses an existing utility response schema, such as
 another execution status.
 
 `SharedRead` requires read-only execution and no host mutation effects. Multiple readers
-may share an Env. `ExclusiveWrite` requires serialization against every other operation
-in that Env, including readers; it cannot relax session permissions, definition
-restrictions, or worker policy. Ordered session effects are explicit and remain part of
-execution settlement. Read-only definitions cannot request those effects.
+may share an Env. `BackgroundRead` is a read-only fresh utility that may also overlap
+ordinary session work, such as turns and sync, but never graph writers; use it only when
+observing a changing workspace is acceptable. `ExclusiveWrite` requires serialization
+against every other operation in that Env, including both kinds of readers; it cannot
+relax session permissions, definition restrictions, or worker policy. Ordered session
+effects are explicit and remain part of execution settlement. Read-only definitions
+cannot request those effects.
 
 A shared budget ID names a host-owned provider-call budget covering retries and protocol
 repairs. The static executor resolves that ID to the same shared counter for every
@@ -134,18 +136,27 @@ returns its capacity or Env lease. Hosts wait on `GraphExecutor::capacity_releas
 `GraphExecutor::environment_released` alongside `GraphResources::subscribe_releases`.
 Idle scans do not broadcast resource changes to one another. They reuse capacity across
 unclaimed checks, so competing drivers cannot repeatedly interrupt and restart each
-other's idle scans.
+other's idle scans. `GraphExecutor::with_wave_limit` bounds the nodes one wave admits
+below the shared capacity; each wave still settles before the next begins.
+
+A fresh node may coordinate several child utility calls through
+`RunWorker::coordinate_recorded`. The node's preadmitted run is claimed before the work
+starts, receives heartbeats, and settles after it returns. It holds no utility slot, so
+its children never queue behind it; they record the node's run as their parent.
+Cancellation of the session, worker, or caller drops the work and its children. The node
+settles only after every child, including canceled or timed-out ones, finishes cleanup,
+so its Env lease still excludes graph writers during that cleanup.
 
 The supplied `GraphUtilityRunner` supports fresh text, focused-review, and
 review-metadata nodes through the existing utility worker, retaining their preadmitted
-identities. It rejects attachments; Agentty currently admits fresh nodes as shared
-readers, routing writers through task conversations and session stack policy. Agentty's
-task adapter retains attachments, captured instructions and model selection, and exact
-bound inputs. Each static task starts an isolated conversation using its durable attempt
-UUID for runtime resources. Observed responses, provider continuation, and usage persist
-before effects; failed effects cannot publish a validated output. Ordinary chat history,
-provider continuation, and pending questions remain separate. Task identities must be
-unused at first admission.
+identities. It rejects attachments; explicitly launched graphs admit fresh nodes only as
+shared readers, routing writers through task conversations and session stack policy.
+Agentty's task adapter retains attachments, captured instructions and model selection,
+and exact bound inputs. Each static task starts an isolated conversation using its
+durable attempt UUID for runtime resources. Observed responses, provider continuation,
+and usage persist before effects; failed effects cannot publish a validated output.
+Ordinary chat history, provider continuation, and pending questions remain separate.
+Task identities must be unused at first admission.
 
 `SessionService::start_execution_graph` explicitly saves and starts a static graph in a
 prepared session. Named provider-call limits remain shared across the launch, including
@@ -153,9 +164,28 @@ retries, repairs, and ordered utility children. Identical active launches do not
 those limits. Acceptance uses `accept_execution_graph_result` with an exact validated
 reference. Acceptance and Env release wake the active drivers; launch-time snapshots are
 never discovered and replayed automatically at startup. Graph writers exclude ordinary
-session work, merge workflows, and detached focused-review readers. Legacy focused
-reviews retain their existing overlap with ordinary session work, including
-conflict-free sync; they do not hold the ordinary session writer gate.
+session work, merge workflows, and focused-review readers.
+
+## Focused Review Graph
+
+Each focused-review generation launches its own static graph. History summarization,
+when needed, runs first under a background-reader lease. The captured diff is then split
+exactly as the prompt budget would reject it, without provider calls, into one node per
+fragment. A cross-file node joins every fragment's validated review, and a consolidation
+node joins both phases through exact pinned inputs. Every node is a `BackgroundRead`
+fresh utility, so reviews still overlap ordinary session work and conflict-free sync.
+
+Fragment nodes run in waves of at most three, and at most three provider calls run at
+once across the whole review, including size-driven subdivision. A failure drains its
+running peers and stops later waves; completed findings remain in the partial review.
+Nodes coordinate their phase's existing retries, subdivision, and history repairs. The
+review budget is enforced by those phases rather than reserved per node, so exhaustion
+is reported by the phase that ran out. The review deadline bounds provider calls, Env
+waits, and dispatch waits. Each active review registers as a graph driver:
+`cancel_execution_graph` or session cleanup cancels its running calls, and an
+interrupted fragment stays unfinished. Fragment text stays with the host instead of the
+snapshot. An incomplete generation's graph is canceled; retries start a new graph and
+reuse successful calls through review checkpoints.
 
 ## Lifecycle and Explicit Recovery
 
@@ -187,5 +217,4 @@ action before another execution. Live launches retain their original shared limi
 remaining credits across resume calls. After process restart, explicit resume supplies
 new limits for that live execution period; budget counters are not durable usage
 ledgers. Recording continuation intent alone never recreates a driver or replenishes
-credits. Workflow migration, graph proposals, and runtime expansion remain separate
-work.
+credits. `/plan` migration, graph proposals, and runtime expansion remain separate work.

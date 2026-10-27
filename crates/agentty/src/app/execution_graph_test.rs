@@ -3,10 +3,7 @@ use std::num::NonZeroU64;
 use std::path::PathBuf;
 use std::sync::Arc;
 
-use ag_contracts::{
-    ExecutionPolicy, MockAgentChannel, PermissionMode, ReasoningLevel, SessionStats, SpeedMode,
-    TurnRequest, TurnResult,
-};
+use ag_contracts::{MockAgentChannel, PermissionMode, TurnRequest, TurnResult};
 use ag_git::MockGitClient;
 use ag_protocol::{
     AgentResponse, ProtocolRequestProfile, QuestionItem, TurnPrompt, TurnPromptAttachment,
@@ -39,88 +36,6 @@ mod boundary;
 
 #[path = "execution_graph_lifecycle_test.rs"]
 mod lifecycle;
-
-#[tokio::test]
-async fn background_utilities_preserve_host_overlap_and_exclude_graph_writers() {
-    for permission in [PermissionMode::ReadOnly, PermissionMode::AutoEdit] {
-        // Arrange
-        let (app, _directory) = crate::test_support::new_test_app().await;
-        let environment = app
-            .services
-            .graph_resources
-            .environment(&EnvId::SessionWorktree("sess".into()));
-        let held = environment.clone().write_owned().await;
-        let background_readers = app
-            .services
-            .graph_resources
-            .background_readers(&EnvId::SessionWorktree("sess".into()));
-        let background_writer = background_readers.clone().write_owned().await;
-        assert!(app.services.try_environment_write("sess").is_err());
-        let mut run_client = ag_worker::MockRunClient::new();
-        let checked_environment = environment.clone();
-        let checked_background = background_readers.clone();
-        run_client.expect_submit().once().returning(move |_| {
-            if permission.is_read_only() {
-                assert!(checked_background.clone().try_write_owned().is_err());
-                assert!(checked_environment.clone().try_write_owned().is_ok());
-            } else {
-                assert!(checked_environment.clone().try_read_owned().is_err());
-            }
-
-            Ok(ag_contracts::OneShotSubmission {
-                response: AgentResponse::plain("result"),
-                stats: SessionStats::default(),
-            })
-        });
-        let client = app
-            .services
-            .background_run_client("sess", Arc::new(run_client));
-        let mut wake = app.services.graph_wake.subscribe();
-        let request = background_request(permission);
-        let work = client.submit(request);
-        tokio::pin!(work);
-
-        // Act / Assert: graph writers exclude every detached utility, while
-        // background readers allow ordinary session mutations such as sync.
-        let waiting = tokio::select! {
-            biased;
-            _ = &mut work => false,
-            () = std::future::ready(()) => true,
-        };
-        assert!(waiting, "utility must wait for Env release");
-        drop(held);
-        drop(background_writer);
-        work.await.expect("utility finishes after release");
-        assert!(wake.has_changed().expect("wake channel"));
-        wake.borrow_and_update();
-        let merge_lease = app
-            .services
-            .try_environment_write("sess")
-            .expect("merge lease");
-        assert!(environment.clone().try_read_owned().is_err());
-        drop(merge_lease);
-        assert!(wake.has_changed().expect("merge release wakes dispatch"));
-        assert!(environment.try_write_owned().is_ok());
-        assert!(background_readers.try_write_owned().is_ok());
-    }
-}
-
-fn background_request(permission_mode: PermissionMode) -> ag_contracts::OneShotRequest {
-    ag_contracts::OneShotRequest {
-        activity_tx: None,
-        child_pid: None,
-        execution_policy: ExecutionPolicy::default(),
-        folder: "workspace".into(),
-        harness: "codex".into(),
-        model: "gpt-6.1-sol".into(),
-        permission_mode,
-        prompt: "detached work".into(),
-        provider_call_budget: None,
-        reasoning_level: ReasoningLevel::default(),
-        request_kind: ag_contracts::AgentRequestKind::UtilityPrompt,
-        speed_mode: SpeedMode::default(),
-    }
-}
 
 #[tokio::test]
 async fn graph_launch_rejects_missing_budgets_and_unsupported_profiles_before_persistence() {

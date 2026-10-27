@@ -433,6 +433,132 @@ async fn graph_writers_exclude_background_readers_and_release_partial_leases() {
 }
 
 #[tokio::test]
+async fn background_graph_readers_overlap_host_writers_but_not_graph_writers() {
+    // Arrange
+    let mut node = graph().nodes.remove(0);
+    node.execution.workspace_access = ag_session::GraphWorkspaceAccess::BackgroundRead;
+    let mut writer = node.clone();
+    writer.execution.workspace_access = ag_session::GraphWorkspaceAccess::ExclusiveWrite;
+    let resources = Arc::new(GraphResources::new(NonZeroUsize::MIN, HashMap::new()));
+    let executor = || {
+        GraphExecutor::new(
+            Arc::new(MockGraphDispatchRepository::new()),
+            resources.clone(),
+            Arc::new(MockGraphNodeRunner::new()),
+        )
+    };
+    let (reviewer, waiting) = (executor(), executor());
+    let environment = resources.environment(&node.env_id);
+    let host_writer = environment.clone().write_owned().await;
+
+    // Act: ordinary session work keeps the Env writer while a reader runs.
+    let first = reviewer.try_environment(&node).expect("background reader");
+    let second = reviewer.try_environment(&node).expect("peer reader");
+
+    // Assert
+    assert!(waiting.try_environment(&writer).is_err());
+    drop(host_writer);
+    drop(first);
+    drop(second);
+    waiting.environment_released().await;
+    let graph_writer = waiting.try_environment(&writer).expect("graph writer");
+    assert!(reviewer.try_environment(&node).is_err());
+    drop(graph_writer);
+    reviewer.environment_released().await;
+    assert!(reviewer.try_environment(&node).is_ok());
+}
+
+#[tokio::test]
+async fn wave_limit_settles_each_wave_before_admitting_more_ready_nodes() {
+    // Arrange
+    let mut graph = graph();
+    for id in ["second", "third"] {
+        let mut node = graph.nodes[0].clone();
+        node.id = id.into();
+        graph.nodes.push(node);
+    }
+    let mut repository = MockGraphDispatchRepository::new();
+    repository
+        .expect_graph()
+        .once()
+        .return_const(Ok(graph.clone()));
+    let scans = Arc::new(std::sync::Mutex::new(Vec::new()));
+    let observed = scans.clone();
+    repository
+        .expect_claim()
+        .returning(move |_, _, node_id, _, _| {
+            let mut scans = observed.lock().expect("claims");
+            let existing = scans.iter().any(|(claimed, _)| claimed == node_id);
+            scans.push((node_id.to_string(), !existing));
+            if existing {
+                return Ok(GraphAdmission::Existing(dispatch().record));
+            }
+            let mut admitted = dispatch();
+            admitted.node.id = node_id.into();
+            admitted.record.node_id = node_id.into();
+
+            Ok(GraphAdmission::Claimed(Box::new(admitted)))
+        });
+    repository.expect_finish().times(3).return_const(Ok(()));
+    let mut runner = MockGraphNodeRunner::new();
+    runner.expect_supports().return_const(true);
+    runner
+        .expect_run()
+        .times(3)
+        .returning(|_| Ok("response".into()));
+    let executor = GraphExecutor::new(
+        Arc::new(repository),
+        Arc::new(GraphResources::new(
+            NonZeroUsize::new(3).expect("capacity"),
+            HashMap::new(),
+        )),
+        Arc::new(runner),
+    )
+    .with_wave_limit(NonZeroUsize::MIN);
+
+    // Act
+    let receipts = executor
+        .run_ready(
+            "graph",
+            graph.revision,
+            Path::new("workspace"),
+            PermissionMode::ReadOnly,
+        )
+        .await
+        .expect("waves");
+
+    // Assert: each wave stops after one claim, settles, then rescans.
+    assert_eq!(
+        receipts
+            .iter()
+            .map(|receipt| receipt.node_id.as_str())
+            .collect::<Vec<_>>(),
+        ["reader", "second", "third"]
+    );
+    let claims: Vec<_> = scans
+        .lock()
+        .expect("claims")
+        .iter()
+        .map(|(node, claimed)| (node.clone(), *claimed))
+        .collect();
+    let expected: Vec<_> = [
+        ("reader", true),
+        ("reader", false),
+        ("second", true),
+        ("reader", false),
+        ("second", false),
+        ("third", true),
+        ("reader", false),
+        ("second", false),
+        ("third", false),
+    ]
+    .into_iter()
+    .map(|(node, claimed)| (node.to_string(), claimed))
+    .collect();
+    assert_eq!(claims, expected);
+}
+
+#[tokio::test]
 async fn panicked_node_settles_failure_before_releasing_resource_leases() {
     for settlement_fails in [false, true] {
         // Arrange

@@ -448,8 +448,10 @@ pub(crate) async fn start_review_assist(
     let request_id = Uuid::new_v4();
     let (review_selection, reasoning_level, speed_mode) = normalize_review_agent(review_agent);
 
+    // Review graph nodes hold background-reader leases, so child calls use
+    // the unleased client; nested leases could wait behind a queued writer.
     let run_client = ag_worker::scoped_client(
-        services.background_run_client(session_id, services.run_client()),
+        services.run_client(),
         ag_worker::RunScope {
             session_id: Some(session_id.to_string()),
             purpose: Some("focused review".to_string()),
@@ -459,10 +461,10 @@ pub(crate) async fn start_review_assist(
     task::TaskService::spawn_review_assist_task_with_client(
         task::ReviewAssistTaskInput {
             request_id,
-            repositories: services.db().clone(),
             app_event_tx: services.event_sender(),
             diff_hash,
             fs_client: services.fs_client(),
+            graph_host: services.review_graph_host(),
             reasoning_level,
             review_diff: review_diff.to_string(),
             review_selection,

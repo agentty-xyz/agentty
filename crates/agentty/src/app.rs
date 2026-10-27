@@ -19,6 +19,7 @@ pub(crate) mod prompt_intent;
 mod reducer;
 mod review;
 mod review_diff;
+mod review_graph;
 mod review_prompt;
 mod review_request;
 mod review_resume;
