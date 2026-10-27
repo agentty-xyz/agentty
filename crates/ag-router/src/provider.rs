@@ -17,18 +17,30 @@ pub enum Provider {
     Kimi,
     /// Meta Model API Muse.
     Muse,
+    /// Any server implementing the `OpenAI` Chat Completions API, such as
+    /// Ollama, llama.cpp, LM Studio, or vLLM, under a conservative policy.
+    OpenAiCompatible,
     /// Alibaba Cloud Model Studio Qwen.
     Qwen,
 }
 
 impl Provider {
+    const ALL: [Self; 4] = [Self::Kimi, Self::Muse, Self::OpenAiCompatible, Self::Qwen];
+
     /// Prefix used in a `provider/model` request identifier.
     pub const fn as_str(self) -> &'static str {
         match self {
             Self::Kimi => "kimi",
             Self::Muse => "muse",
+            Self::OpenAiCompatible => "openai-compatible",
             Self::Qwen => "qwen",
         }
+    }
+
+    /// Returns whether requests need an API key; local OpenAI-compatible
+    /// servers usually accept unauthenticated requests.
+    const fn requires_api_key(self) -> bool {
+        !matches!(self, Self::OpenAiCompatible)
     }
 }
 
@@ -36,8 +48,10 @@ impl Provider {
 pub struct ProviderConfig {
     /// Built-in provider implementation.
     pub provider: Provider,
-    /// Bearer token sent to the provider.
-    pub api_key: String,
+    /// Bearer token sent to the provider, or `None` to send no
+    /// `Authorization` header. Only [`Provider::OpenAiCompatible`] accepts
+    /// `None`; every provider rejects a blank key.
+    pub api_key: Option<String>,
     /// API base URL, including its version path.
     pub base_url: String,
 }
@@ -139,17 +153,19 @@ impl Router {
         if model.trim().is_empty() || prefix.trim().is_empty() {
             return Err(ModelError::InvalidModelId);
         }
-        let provider = match prefix {
-            "kimi" => Provider::Kimi,
-            "muse" => Provider::Muse,
-            "qwen" => Provider::Qwen,
-            _ => return Err(ModelError::UnknownProvider),
-        };
+        let provider = Provider::ALL
+            .into_iter()
+            .find(|provider| provider.as_str() == prefix)
+            .ok_or(ModelError::UnknownProvider)?;
         let config = self
             .providers
             .get(&provider)
             .ok_or(ModelError::UnknownProvider)?;
-        if config.api_key.trim().is_empty() || config.base_url.trim().is_empty() {
+        let api_key_valid = config
+            .api_key
+            .as_deref()
+            .map_or(!provider.requires_api_key(), |key| !key.trim().is_empty());
+        if !api_key_valid || config.base_url.trim().is_empty() {
             return Err(ModelError::InvalidProviderConfig);
         }
         Ok(ChatCompletionBackend::with_client(
@@ -171,6 +187,12 @@ const KIMI_CONTEXT_OVERFLOW: &str = "exceeded model token limit";
 /// names the offending parameter instead, so only an overflow carries it.
 const MUSE_CONTEXT_OVERFLOW: &str = "the request contains invalid parameters. check the request \
                                      body for any errors or inconsistencies.";
+
+/// llama.cpp server's `400` error type for input over the window, as in
+/// "the request exceeds the available context size, try increasing it".
+/// vLLM reports the shared `OpenAI` markers, while Ollama truncates
+/// oversized input silently instead of failing.
+const LLAMA_CPP_CONTEXT_OVERFLOW: &str = "exceed_context_size_error";
 
 /// `DashScope`'s `400` message for input over the window, as in "Range of
 /// input length should be [1, 983616]".
@@ -219,6 +241,17 @@ fn policy(provider: Provider, model: &str) -> ChatCompletionProviderPolicy {
             structured_output: StructuredOutputMode::JsonSchema,
             unsupported_schema_reason: "Muse structured output requires an explicit object root \
                                         schema",
+        },
+        Provider::OpenAiCompatible => ChatCompletionProviderPolicy {
+            context_overflow_markers: &[LLAMA_CPP_CONTEXT_OVERFLOW],
+            display_name: "OpenAI-compatible server",
+            image_input: false,
+            prompt_cache_key: false,
+            reasoning_format: ReasoningFormat::None,
+            response_format_with_tools: false,
+            structured_output: StructuredOutputMode::SchemaPrompt,
+            unsupported_schema_reason: "OpenAI-compatible structured output requires an explicit \
+                                        object root schema",
         },
         Provider::Qwen => {
             let preserves_reasoning = model.starts_with("qwen3.8-");

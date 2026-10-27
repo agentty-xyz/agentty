@@ -29,8 +29,8 @@ flowchart LR
 - **Structured output** — every turn validates against a caller-supplied JSON schema.
 - **Durable sessions** — SQLite by default; memory and custom stores share the same
   public contract.
-- **Provider-neutral models** — built-in Muse, Kimi, and Qwen clients use `ag-router`
-  behind the object-safe `Model` trait.
+- **Provider-neutral models** — built-in Muse, Kimi, Qwen, and generic OpenAI-compatible
+  clients use `ag-router` behind the object-safe `Model` trait.
 - **Typed lifecycle events** — content-free turn, model, and tool observations.
 
 ## Crates
@@ -419,6 +419,28 @@ validated against the request's own schema. The harness converts its built-in to
 requests and responses at this boundary and retains tool permissions, sessions,
 lifecycle events, and telemetry. The router currently covers chat completion; it has no
 streaming or automatic provider fallback.
+
+The `openai-compatible` provider serves local and self-hosted models (Ollama, llama.cpp,
+LM Studio, vLLM) under one conservative policy instead of one adapter per server,
+because these servers share the Chat Completions wire format but differ in every
+extension. Requests send only `model`, `messages`, `tools`, and, without tools, a
+`json_schema` response format, the structured-output form all four accept; Ollama's
+`json_schema` constraint needed the schema in the prompt to answer reliably, and LM
+Studio documents no `json_object` mode. The schema is therefore also stated in a leading
+system message, so the provider keeps prefixes across schemas like Kimi and Qwen. That
+message invites tool calls before the final JSON answer: under the Kimi and Qwen
+wording, "return only one JSON object", Qwen3 8B on Ollama never called a tool (0 of 2
+live prompts), and under the tool-aware wording it called `read` in 4 of 4. No reasoning
+control is sent, because Ollama rejects `reasoning_effort` for models without thinking,
+and returned reasoning is not replayed, which keeps history portable across served
+models. The API key is optional, and an unset key sends no `Authorization` header. The
+host declares the context window and output reserve
+(`ModelProvider::environment_profile`), since a server's runtime window can be far below
+the model's trained one: Ollama loads models with 4,096 tokens by default and silently
+truncates longer input rather than rejecting it, so neither discovery nor overflow
+recovery can be relied on. Without a fitted estimator, requests are weighed by the
+default estimator, counting the schema in the prompt, under a 50% under-count margin.
+llama.cpp's `exceed_context_size_error` joins the shared overflow markers.
 
 Providers cache prompt prefixes per backend, so cache hits depend on routing related
 requests together. The harness gives every turn request of a durable session one key,

@@ -1,20 +1,25 @@
 use std::env;
 use std::sync::atomic::AtomicUsize;
 
+use ag_harness::model::ModelProfile;
 use ag_harness::provider::ModelProvider;
 use ag_harness::{Harness, Repository, Tool, ToolPolicy, TurnOptions};
 use serde_json::json;
 use tokio::io::BufReader;
 
 use super::support::{FailOnceModel, FixedModel, test_git_executable};
-use crate::{ChatMode, CliError, ModelSelection, ModelSwitcher, chat_schema, run_chat};
+use crate::{
+    ChatMode, CliError, MODEL_PROFILE, ModelSelection, ModelSwitcher, chat_schema, run_chat,
+};
 
 /// Switcher whose clients answer with the selected model identifier.
-fn test_models() -> ModelSwitcher<impl FnMut(&ModelSelection) -> Result<FixedModel, CliError>> {
+fn test_models()
+-> ModelSwitcher<impl FnMut(&ModelSelection) -> Result<(FixedModel, ModelProfile), CliError>> {
     ModelSwitcher {
         connect: |selection: &ModelSelection| {
-            Ok(FixedModel(
-                json!({"message": format!("from {}", selection.model)}),
+            Ok((
+                FixedModel(json!({"message": format!("from {}", selection.model)})),
+                MODEL_PROFILE,
             ))
         },
         selection: ModelSelection {
@@ -36,7 +41,7 @@ async fn interactive_chat_prints_prompts_and_handles_blank_input() {
         .expect("repository fixture should be valid");
     let harness = Harness::new(
         FixedModel(json!({"message": "hello"})),
-        ModelSelection::context_budget().expect("CLI context budget"),
+        MODEL_PROFILE.context_budget().expect("CLI context budget"),
     )
     .database(directory.path().join("harness.db"))
     .repository(repository)
@@ -83,7 +88,7 @@ async fn interactive_chat_continues_after_a_failed_turn() {
         FailOnceModel {
             requests: AtomicUsize::new(0),
         },
-        ModelSelection::context_budget().expect("CLI context budget"),
+        MODEL_PROFILE.context_budget().expect("CLI context budget"),
     )
     .database(directory.path().join("harness.db"));
     let mut session = harness
@@ -125,7 +130,7 @@ async fn noninteractive_chat_reports_a_failure_before_retrying() {
         FailOnceModel {
             requests: AtomicUsize::new(0),
         },
-        ModelSelection::context_budget().expect("CLI context budget"),
+        MODEL_PROFILE.context_budget().expect("CLI context budget"),
     )
     .database(directory.path().join("harness.db"));
     let mut session = harness
@@ -167,7 +172,7 @@ async fn noninteractive_chat_returns_the_last_failure_at_eof() {
         FailOnceModel {
             requests: AtomicUsize::new(0),
         },
-        ModelSelection::context_budget().expect("CLI context budget"),
+        MODEL_PROFILE.context_budget().expect("CLI context budget"),
     )
     .database(directory.path().join("harness.db"));
     let mut session = harness
@@ -208,7 +213,7 @@ async fn chat_rejects_model_output_that_violates_schema() {
     let directory = tempfile::tempdir().expect("temporary directory should be created");
     let harness = Harness::new(
         FixedModel(json!({"unexpected": true})),
-        ModelSelection::context_budget().expect("CLI context budget"),
+        MODEL_PROFILE.context_budget().expect("CLI context budget"),
     )
     .database(directory.path().join("harness.db"));
     let mut session = harness
@@ -253,7 +258,7 @@ async fn one_shot_chat_does_not_read_follow_up_terminal_input() {
     let directory = tempfile::tempdir().expect("temporary directory should be created");
     let harness = Harness::new(
         FixedModel(json!({"message": "hello"})),
-        ModelSelection::context_budget().expect("CLI context budget"),
+        MODEL_PROFILE.context_budget().expect("CLI context budget"),
     )
     .database(directory.path().join("harness.db"));
     let mut session = harness
@@ -295,7 +300,7 @@ async fn one_shot_chat_returns_turn_failures() {
         FailOnceModel {
             requests: AtomicUsize::new(0),
         },
-        ModelSelection::context_budget().expect("CLI context budget"),
+        MODEL_PROFILE.context_budget().expect("CLI context budget"),
     )
     .database(directory.path().join("harness.db"));
     let mut session = harness

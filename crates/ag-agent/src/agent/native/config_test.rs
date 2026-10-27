@@ -57,12 +57,111 @@ fn default_model_follows_the_first_configured_provider() {
             ]),
             Some(AgentModel::MuseSpark13),
         ),
+        (environment(&[("OPENAI_COMPATIBLE_MODEL", " ")]), None),
+        (
+            environment(&[("OPENAI_COMPATIBLE_MODEL", "qwen3:latest")]),
+            Some(AgentModel::OpenAiCompatible),
+        ),
+        (
+            environment(&[
+                ("OPENAI_COMPATIBLE_MODEL", "qwen3:latest"),
+                ("MODEL_API_KEY", "key"),
+            ]),
+            Some(AgentModel::MuseSpark13),
+        ),
     ];
 
     // Act / Assert
     for (environment, expected) in cases {
         assert_eq!(default_model(&environment), expected, "{environment:?}");
     }
+}
+
+#[test]
+/// Resolves `openai-compatible` to the served model the environment names
+/// and recorded keys for any served model.
+fn openai_compatible_selection_names_the_served_model() {
+    // Arrange
+    let configured = environment(&[("OPENAI_COMPATIBLE_MODEL", " qwen3:latest ")]);
+
+    // Act
+    let selection = ModelSelection::resolve("openai-compatible", &configured)
+        .expect("a named served model should resolve");
+    let missing = ModelSelection::resolve("openai-compatible", &environment(&[]))
+        .expect_err("an unnamed served model should fail");
+
+    // Assert
+    assert_eq!(selection.key(), "openai-compatible/qwen3:latest");
+    assert_eq!(
+        ModelSelection::from_key("openai-compatible/llama3.3:70b").map(|other| other.key()),
+        Some("openai-compatible/llama3.3:70b".to_string())
+    );
+    assert_eq!(ModelSelection::from_key("openai-compatible/ "), None);
+    assert!(missing.contains("OPENAI_COMPATIBLE_MODEL"), "{missing}");
+    assert!(missing.contains("before starting Agentty"), "{missing}");
+}
+
+#[test]
+/// Registers the OpenAI-compatible model with the profile the environment
+/// declares, without an API key, and reports invalid declarations.
+fn openai_compatible_registration_uses_the_declared_profile() {
+    // Arrange
+    let configured = environment(&[
+        ("OPENAI_COMPATIBLE_MODEL", "qwen3:latest"),
+        ("OPENAI_COMPATIBLE_CONTEXT_WINDOW", "40960"),
+    ]);
+    let invalid_window = environment(&[
+        ("OPENAI_COMPATIBLE_MODEL", "qwen3:latest"),
+        ("OPENAI_COMPATIBLE_CONTEXT_WINDOW", "lots"),
+    ]);
+    let selection =
+        ModelSelection::resolve("openai-compatible", &configured).expect("served model");
+
+    // Act
+    let registry = selection.registry(&configured, None).expect("registry");
+    let invalid = selection
+        .registry(&invalid_window, None)
+        .err()
+        .expect("an invalid window should fail");
+
+    // Assert
+    let registration = registry.resolve(&selection.key()).expect("registration");
+    assert_eq!(
+        registration.capabilities().profile.context_window_tokens(),
+        40_960
+    );
+    assert_eq!(
+        registration.metadata().map(|metadata| metadata.provider()),
+        Some("openai_compatible")
+    );
+    assert!(
+        invalid.starts_with("Invalid harness model profile"),
+        "{invalid}"
+    );
+}
+
+#[test]
+/// Names the model and endpoint variables, not an optional key, when a
+/// keyless provider cannot be configured.
+fn openai_compatible_configuration_failures_name_the_model_and_endpoint() {
+    // Arrange
+    let blank = ModelSelection {
+        model: " ".to_string(),
+        provider: ModelProvider::OpenAiCompatible,
+    };
+
+    // Act
+    let error = blank
+        .registry(&environment(&[]), None)
+        .err()
+        .expect("a blank served model should fail");
+
+    // Assert
+    assert!(
+        error.contains("Check OPENAI_COMPATIBLE_MODEL and OPENAI_COMPATIBLE_BASE_URL"),
+        "{error}"
+    );
+    assert!(!error.contains("OPENAI_COMPATIBLE_API_KEY"), "{error}");
 }
 
 #[test]
@@ -116,7 +215,8 @@ async fn resume_only_model_never_sends_requests() {
 /// Resolves catalog models and rejects mismatched registration keys.
 fn model_selection_round_trips_registration_keys() {
     // Arrange
-    let selection = ModelSelection::resolve("kimi-k3").expect("kimi-k3 should resolve");
+    let selection =
+        ModelSelection::resolve("kimi-k3", &environment(&[])).expect("kimi-k3 should resolve");
 
     // Act
     let key = selection.key();
@@ -126,7 +226,7 @@ fn model_selection_round_trips_registration_keys() {
     assert_eq!(ModelSelection::from_key(&key), Some(selection));
     assert_eq!(ModelSelection::from_key("kimi-k3"), None);
     assert_eq!(ModelSelection::from_key("qwen/kimi-k3"), None);
-    assert!(ModelSelection::resolve("claude-opus-5-5").is_err());
+    assert!(ModelSelection::resolve("claude-opus-5-5", &environment(&[])).is_err());
 }
 
 #[test]
@@ -147,7 +247,7 @@ fn registrations_declare_revision_and_per_model_context_profiles() {
 
     // Act / Assert
     for model in models {
-        let selection = ModelSelection::resolve(model).expect("served model");
+        let selection = ModelSelection::resolve(model, &environment).expect("served model");
         let registry = selection.registry(&environment, None).expect("registry");
         let registration = registry.resolve(&selection.key()).expect("registration");
         let expected = AgentModel::parse_persisted(model)
@@ -212,6 +312,7 @@ fn bash_environment_orders_essentials_and_drops_provider_variables() {
         ("HOME", "/home/test"),
         ("KIMI_BASE_URL", "http://kimi"),
         ("MODEL_API_KEY", "secret"),
+        ("OPENAI_COMPATIBLE_API_KEY", "secret"),
         ("PATH", "/usr/bin"),
     ]);
 

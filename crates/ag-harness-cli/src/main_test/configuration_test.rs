@@ -202,6 +202,7 @@ fn stored_model_identity_maps_supported_providers_and_rejects_incomplete_identit
     let muse = stored_model_identity_parts(Some("meta"), Some("muse-model"));
     let kimi = stored_model_identity_parts(Some("moonshot_ai"), Some("kimi-model"));
     let qwen = stored_model_identity_parts(Some("alibaba_cloud"), Some("qwen-model"));
+    let local = stored_model_identity_parts(Some("openai_compatible"), Some("qwen3:latest"));
     let unknown = stored_model_identity_parts(Some("unknown"), Some("model"));
     let missing_model = stored_model_identity_parts(Some("meta"), None);
 
@@ -209,6 +210,9 @@ fn stored_model_identity_maps_supported_providers_and_rejects_incomplete_identit
     assert!(matches!(muse, Ok((ModelProvider::Muse, model)) if model == "muse-model"));
     assert!(matches!(kimi, Ok((ModelProvider::Kimi, model)) if model == "kimi-model"));
     assert!(matches!(qwen, Ok((ModelProvider::Qwen, model)) if model == "qwen-model"));
+    assert!(
+        matches!(local, Ok((ModelProvider::OpenAiCompatible, model)) if model == "qwen3:latest")
+    );
     assert!(matches!(unknown, Err(CliError::MissingModelIdentity)));
     assert!(matches!(missing_model, Err(CliError::MissingModelIdentity)));
 }

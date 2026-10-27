@@ -331,7 +331,11 @@ async fn registered_builtin_configurations_execute_through_the_selected_client()
     for provider in ModelProvider::all() {
         // Arrange
         let server = MockServer::start().await;
-        let model = provider.known_models()[0];
+        let model = provider
+            .known_models()
+            .first()
+            .copied()
+            .unwrap_or("served-model");
         Mock::given(method("POST"))
             .and(path("/chat/completions"))
             .and(body_partial_json(json!({"model":model})))

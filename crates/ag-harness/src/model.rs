@@ -26,7 +26,7 @@ pub use crate::model_profile::ModelProfile;
 pub use crate::model_registry::{
     ModelCapabilities, ModelRegistration, ModelRegistry, ModelRegistryError,
 };
-use crate::provider::{KimiConfig, MuseConfig, QwenConfig};
+use crate::provider::{KimiConfig, MuseConfig, OpenAiCompatibleConfig, QwenConfig};
 use crate::schema_contract::{OutputSchema, OutputValidationError, bounded_diagnostic};
 use crate::{telemetry, tool};
 
@@ -113,7 +113,7 @@ impl ModelClient {
     pub fn kimi(config: KimiConfig) -> Result<Self, ModelMetadataError> {
         Self::routed(
             ag_router::Provider::Kimi,
-            config.api_key,
+            Some(config.api_key),
             config.base_url,
             &config.model,
         )
@@ -128,6 +128,25 @@ impl ModelClient {
     pub fn muse(config: MuseConfig) -> Result<Self, ModelMetadataError> {
         Self::routed(
             ag_router::Provider::Muse,
+            Some(config.api_key),
+            config.base_url,
+            &config.model,
+        )
+    }
+
+    /// Creates a client backed by a local or self-hosted server implementing
+    /// the `OpenAI` Chat Completions API, such as Ollama, llama.cpp, LM
+    /// Studio, or vLLM. Requests carry only portable fields: no prompt cache
+    /// key, reasoning controls, or image input, and the output schema is
+    /// stated in the prompt. Tool calls must be supported by the server.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`ModelMetadataError`] when the configured model identifier is
+    /// empty or contains only whitespace.
+    pub fn openai_compatible(config: OpenAiCompatibleConfig) -> Result<Self, ModelMetadataError> {
+        Self::routed(
+            ag_router::Provider::OpenAiCompatible,
             config.api_key,
             config.base_url,
             &config.model,
@@ -143,7 +162,7 @@ impl ModelClient {
     pub fn qwen(config: QwenConfig) -> Result<Self, ModelMetadataError> {
         Self::routed(
             ag_router::Provider::Qwen,
-            config.api_key,
+            Some(config.api_key),
             config.base_url,
             &config.model,
         )
@@ -228,7 +247,7 @@ impl ModelClient {
 
     fn routed(
         provider: ag_router::Provider,
-        api_key: String,
+        api_key: Option<String>,
         base_url: String,
         model: &str,
     ) -> Result<Self, ModelMetadataError> {
@@ -455,6 +474,7 @@ fn provider_telemetry_name(provider: ag_router::Provider) -> &'static str {
     match provider {
         ag_router::Provider::Kimi => telemetry::PROVIDER_MOONSHOT_AI,
         ag_router::Provider::Muse => telemetry::PROVIDER_META,
+        ag_router::Provider::OpenAiCompatible => telemetry::PROVIDER_OPENAI_COMPATIBLE,
         ag_router::Provider::Qwen => telemetry::PROVIDER_ALIBABA_CLOUD,
     }
 }

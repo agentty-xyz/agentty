@@ -183,6 +183,13 @@ define_model_catalog! {
             description: "Balanced Qwen model served through the native harness.",
             fast: false,
         },
+        /// Model named by `OPENAI_COMPATIBLE_MODEL`, served by a local or
+        /// self-hosted OpenAI-compatible endpoint such as Ollama.
+        OpenAiCompatible = 18 => {
+            id: "openai-compatible",
+            description: "Local or self-hosted model from OPENAI_COMPATIBLE_MODEL, such as Ollama.",
+            fast: false,
+        },
     }
 }
 

@@ -3,8 +3,8 @@ use std::{env, fmt};
 
 use thiserror::Error;
 
-use super::{kimi, muse, qwen};
-use crate::model::{ModelClient, ModelMetadataError};
+use super::{kimi, muse, openai_compatible, qwen};
+use crate::model::{ModelClient, ModelMetadataError, ModelProfile};
 
 /// Provider supported by the built-in model client catalog.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -13,12 +13,15 @@ pub enum ModelProvider {
     Kimi,
     /// Meta's Model API for Muse models.
     Muse,
+    /// Any server implementing the `OpenAI` Chat Completions API, such as
+    /// Ollama, llama.cpp, LM Studio, or vLLM, serving a host-named model.
+    OpenAiCompatible,
     /// Alibaba Cloud Model Studio's Qwen API.
     Qwen,
 }
 
 impl ModelProvider {
-    const ALL: [Self; 3] = [Self::Muse, Self::Kimi, Self::Qwen];
+    const ALL: [Self; 4] = [Self::Muse, Self::Kimi, Self::Qwen, Self::OpenAiCompatible];
 
     /// Returns every built-in provider in display order.
     pub fn all() -> &'static [Self] {
@@ -30,15 +33,18 @@ impl ModelProvider {
         match self {
             Self::Kimi => "kimi",
             Self::Muse => "muse",
+            Self::OpenAiCompatible => "openai-compatible",
             Self::Qwen => "qwen",
         }
     }
 
-    /// Returns representative model identifiers known to this provider.
+    /// Returns representative model identifiers known to this provider, or
+    /// none for [`Self::OpenAiCompatible`], whose server names its models.
     pub const fn known_models(self) -> &'static [&'static str] {
         match self {
             Self::Kimi => &[kimi::KIMI_K3, kimi::KIMI_K2_6],
             Self::Muse => &[muse::MUSE_SPARK_1_3, muse::MUSE_SPARK_1_3_CONTRIBUTOR],
+            Self::OpenAiCompatible => &[],
             Self::Qwen => &[qwen::QWEN3_8_MAX, qwen::QWEN_PLUS],
         }
     }
@@ -48,8 +54,16 @@ impl ModelProvider {
         match self {
             Self::Kimi => kimi::KIMI_API_KEY_ENV,
             Self::Muse => muse::MODEL_API_KEY_ENV,
+            Self::OpenAiCompatible => openai_compatible::OPENAI_COMPATIBLE_API_KEY_ENV,
             Self::Qwen => qwen::DASHSCOPE_API_KEY_ENV,
         }
+    }
+
+    /// Returns whether the provider needs an API key. A local
+    /// OpenAI-compatible server usually accepts unauthenticated requests, so
+    /// its key is optional.
+    pub const fn requires_api_key(self) -> bool {
+        !matches!(self, Self::OpenAiCompatible)
     }
 
     /// Returns the environment variable containing the provider base URL.
@@ -57,37 +71,73 @@ impl ModelProvider {
         match self {
             Self::Kimi => kimi::KIMI_BASE_URL_ENV,
             Self::Muse => muse::MODEL_API_BASE_URL_ENV,
+            Self::OpenAiCompatible => openai_compatible::OPENAI_COMPATIBLE_BASE_URL_ENV,
             Self::Qwen => qwen::DASHSCOPE_BASE_URL_ENV,
         }
     }
 
-    /// Returns the built-in base URL used when the environment has no override.
+    /// Returns the built-in base URL used when the environment has no
+    /// override: Ollama's local endpoint for [`Self::OpenAiCompatible`].
     pub const fn default_base_url(self) -> Option<&'static str> {
         match self {
             Self::Muse => Some(muse::DEFAULT_BASE_URL),
+            Self::OpenAiCompatible => Some(openai_compatible::DEFAULT_BASE_URL),
             Self::Kimi | Self::Qwen => None,
+        }
+    }
+
+    /// Returns the model profile the environment declares for this
+    /// provider's models, or `None` for providers whose catalog models the
+    /// host profiles itself.
+    ///
+    /// [`Self::OpenAiCompatible`] serves models the harness cannot know, so
+    /// its profile comes from `OPENAI_COMPATIBLE_CONTEXT_WINDOW` (default
+    /// 32,768 tokens) and `OPENAI_COMPATIBLE_MAX_OUTPUT_TOKENS` (default
+    /// 8,192), weighed by the default estimator under a 50% margin.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`ModelConfigurationError`] for a token count that is not a
+    /// positive integer, a reservation filling the whole window, or a value
+    /// that is not valid Unicode.
+    pub fn environment_profile(
+        self,
+        environment: impl FnMut(&str) -> Result<String, env::VarError>,
+    ) -> Result<Option<ModelProfile>, ModelConfigurationError> {
+        match self {
+            Self::OpenAiCompatible => {
+                openai_compatible::profile_from_environment(environment).map(Some)
+            }
+            Self::Kimi | Self::Muse | Self::Qwen => Ok(None),
         }
     }
 
     fn client(
         self,
-        api_key: String,
+        api_key: Option<String>,
         base_url: String,
         model: String,
     ) -> Result<ModelClient, ModelMetadataError> {
         match self {
             Self::Kimi => ModelClient::kimi(kimi::KimiConfig {
-                api_key,
+                api_key: api_key.unwrap_or_default(),
                 base_url,
                 model,
             }),
             Self::Muse => ModelClient::muse(muse::MuseConfig {
-                api_key,
+                api_key: api_key.unwrap_or_default(),
                 base_url,
                 model,
             }),
+            Self::OpenAiCompatible => {
+                ModelClient::openai_compatible(openai_compatible::OpenAiCompatibleConfig {
+                    api_key,
+                    base_url,
+                    model,
+                })
+            }
             Self::Qwen => ModelClient::qwen(qwen::QwenConfig {
-                api_key,
+                api_key: api_key.unwrap_or_default(),
                 base_url,
                 model,
             }),
@@ -148,6 +198,8 @@ impl ModelConfiguration {
     }
 
     /// Constructs the configured client through an injected environment lookup.
+    /// A provider whose key is optional sends no key when its variable is
+    /// unset or blank.
     ///
     /// # Errors
     ///
@@ -158,10 +210,17 @@ impl ModelConfiguration {
         mut environment: impl FnMut(&str) -> Result<String, env::VarError>,
     ) -> Result<ModelClient, ModelConfigurationError> {
         let api_key_environment = self.provider.api_key_environment();
-        let api_key =
-            environment(api_key_environment).map_err(|_| ModelConfigurationError::ApiKey {
-                name: api_key_environment,
-            })?;
+        let api_key = match environment(api_key_environment) {
+            Ok(api_key) if self.provider.requires_api_key() || !api_key.trim().is_empty() => {
+                Some(api_key)
+            }
+            Ok(_) | Err(env::VarError::NotPresent) if !self.provider.requires_api_key() => None,
+            _ => {
+                return Err(ModelConfigurationError::ApiKey {
+                    name: api_key_environment,
+                });
+            }
+        };
         let base_url_environment = self.provider.base_url_environment();
         let base_url = if let Some(base_url) = self.base_url {
             base_url
@@ -213,9 +272,28 @@ pub enum ModelConfigurationError {
         /// Environment lookup failure.
         source: env::VarError,
     },
+    /// A declared token count is not a positive integer.
+    #[error("{name} must be a positive token count, not `{value}`")]
+    InvalidTokenCount {
+        /// Environment variable holding the count.
+        name: &'static str,
+        /// Rejected value.
+        value: String,
+    },
     /// The selected model identifier is invalid.
     #[error(transparent)]
     Metadata(#[from] ModelMetadataError),
+    /// The declared response reservation leaves no room for input.
+    #[error(
+        "the {max_output_tokens}-token output reservation must be smaller than the \
+         {context_window}-token context window"
+    )]
+    OutputExceedsContextWindow {
+        /// Declared context window in tokens.
+        context_window: u64,
+        /// Declared response reservation in tokens.
+        max_output_tokens: u64,
+    },
 }
 
 #[cfg(test)]

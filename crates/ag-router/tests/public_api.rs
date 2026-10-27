@@ -32,9 +32,31 @@ fn request(model: &str) -> Result<ModelRequest, Box<dyn std::error::Error>> {
 fn router(provider: Provider, server: &MockServer) -> Result<Router, ModelError> {
     Router::new([ProviderConfig {
         provider,
-        api_key: "test-key".to_string(),
+        api_key: Some("test-key".to_string()),
         base_url: format!("{}/v1/", server.uri()),
     }])
+}
+
+fn openai_compatible_router(server: &MockServer, api_key: Option<&str>) -> Router {
+    Router::single(ProviderConfig {
+        provider: Provider::OpenAiCompatible,
+        api_key: api_key.map(str::to_string),
+        base_url: format!("{}/v1", server.uri()),
+    })
+}
+
+/// Returns the JSON body of the `index`th request `server` received.
+async fn received_body(
+    server: &MockServer,
+    index: usize,
+) -> Result<Value, Box<dyn std::error::Error>> {
+    let requests = server
+        .received_requests()
+        .await
+        .ok_or("request recording disabled")?;
+    let request = requests.get(index).ok_or("request missing")?;
+
+    Ok(serde_json::from_slice(&request.body)?)
 }
 
 fn completion(content: &str) -> Value {
@@ -622,6 +644,11 @@ async fn classifies_live_context_overflow_bodies_per_provider()
             "qwen/qwen-plus",
             include_str!("fixtures/context_overflow/qwen-plus.json"),
         ),
+        (
+            Provider::OpenAiCompatible,
+            "openai-compatible/qwen3:latest",
+            include_str!("fixtures/context_overflow/llama.cpp-qwen3.json"),
+        ),
     ];
 
     for (provider, model, body) in cases {
@@ -674,6 +701,176 @@ async fn keeps_other_provider_failures_out_of_context_overflow()
         assert_eq!(error.error_class(), ErrorClass::Provider, "{error}");
         assert!(!error.is_context_overflow(), "{error}");
     }
+
+    Ok(())
+}
+
+#[tokio::test]
+async fn openai_compatible_sends_only_portable_fields_without_a_key()
+-> Result<(), Box<dyn std::error::Error>> {
+    // Arrange
+    let server = MockServer::start().await;
+    Mock::given(method("POST"))
+        .and(path("/v1/chat/completions"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(completion(r#"{"name":"Ada"}"#)))
+        .expect(1)
+        .mount(&server)
+        .await;
+    let mut request = request("openai-compatible/qwen3:latest")?;
+    request.options.prompt_cache_key = Some("session-1".to_string());
+    request.options.reasoning_effort = Some(ag_router::ReasoningEffort::High);
+
+    // Act
+    let response = openai_compatible_router(&server, None)
+        .execute(request)
+        .await?;
+    let requests = server
+        .received_requests()
+        .await
+        .ok_or("request recording disabled")?;
+    let body: Value = serde_json::from_slice(&requests[0].body)?;
+
+    // Assert
+    assert!(matches!(response, Completion::Output { value, .. } if value == json!({"name":"Ada"})));
+    assert!(!requests[0].headers.contains_key("authorization"));
+    assert_eq!(body["model"], "qwen3:latest");
+    let mut fields = body
+        .as_object()
+        .ok_or("body must be an object")?
+        .keys()
+        .cloned()
+        .collect::<Vec<_>>();
+    fields.sort();
+    assert_eq!(fields, ["messages", "model", "response_format"]);
+    let schema_text = schema()?.value().to_string();
+    assert_eq!(body["messages"][0]["role"], "system");
+    assert!(
+        body["messages"][0]["content"]
+            .as_str()
+            .is_some_and(|content| content
+                .starts_with("Call the offered tools whenever you need them.")
+                && content.ends_with(&schema_text))
+    );
+    assert_eq!(
+        body["response_format"],
+        json!({"type": "json_schema", "json_schema": {"name": "person", "schema": schema()?.value()}})
+    );
+
+    Ok(())
+}
+
+#[tokio::test]
+async fn openai_compatible_sends_a_configured_key_as_a_bearer_token()
+-> Result<(), Box<dyn std::error::Error>> {
+    // Arrange
+    let server = MockServer::start().await;
+    Mock::given(method("POST"))
+        .and(path("/v1/chat/completions"))
+        .and(bearer_token("vllm-key"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(completion(r#"{"name":"Ada"}"#)))
+        .expect(1)
+        .mount(&server)
+        .await;
+
+    // Act
+    let response = openai_compatible_router(&server, Some("vllm-key"))
+        .execute(request("openai-compatible/Qwen/Qwen3-8B")?)
+        .await?;
+
+    // Assert
+    assert!(matches!(response, Completion::Output { value, .. } if value == json!({"name":"Ada"})));
+    assert_eq!(received_body(&server, 0).await?["model"], "Qwen/Qwen3-8B");
+
+    Ok(())
+}
+
+#[tokio::test]
+async fn openai_compatible_decodes_ollama_tool_calls_and_replays_portable_history()
+-> Result<(), Box<dyn std::error::Error>> {
+    // Arrange
+    let server = MockServer::start().await;
+    Mock::given(method("POST"))
+        .and(path("/v1/chat/completions"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(json!({
+            "id": "chatcmpl-367",
+            "object": "chat.completion",
+            "model": "qwen3:latest",
+            "system_fingerprint": "fp_ollama",
+            "choices": [{
+                "index": 0,
+                "message": {
+                    "role": "assistant",
+                    "content": "",
+                    "reasoning": "The user wants README.md, so I call read.",
+                    "tool_calls": [{
+                        "id": "call_r9jfrfbr",
+                        "index": 0,
+                        "type": "function",
+                        "function": {"name": "lookup", "arguments": "{\"id\":7}"}
+                    }]
+                },
+                "finish_reason": "tool_calls"
+            }],
+            "usage": {
+                "prompt_tokens": 136,
+                "prompt_tokens_details": {"cached_tokens": 12},
+                "completion_tokens": 112,
+                "total_tokens": 248
+            }
+        })))
+        .expect(2)
+        .mount(&server)
+        .await;
+    let mut request = request("openai-compatible/qwen3:latest")?;
+    if let ag_router::Task::Chat(chat) = &mut request.task {
+        chat.tools.push(ToolDefinition::new(
+            "lookup",
+            "Look up a record",
+            json!({"type":"object","properties":{"id":{"type":"integer"}}}),
+        ));
+    }
+    let router = openai_compatible_router(&server, None);
+
+    // Act
+    let Completion::ToolCalls { calls, metadata } = router.execute(request.clone()).await? else {
+        return Err("expected tool calls".into());
+    };
+    if let ag_router::Task::Chat(chat) = &mut request.task {
+        chat.messages
+            .push(ModelMessage::AssistantToolCalls(calls.clone()));
+        chat.messages.push(ModelMessage::ToolResult {
+            call_id: calls[0].id().to_string(),
+            content: "record 7".to_string(),
+            name: "lookup".to_string(),
+        });
+    }
+    router.execute(request).await?;
+    let first = received_body(&server, 0).await?;
+    let second = received_body(&server, 1).await?;
+    let messages = second["messages"]
+        .as_array()
+        .ok_or("messages must be an array")?;
+
+    // Assert
+    assert_eq!(calls[0].id(), "call_r9jfrfbr");
+    assert_eq!(calls[0].arguments(), Some(&json!({"id":7})));
+    assert_eq!(calls[0].reasoning_content(), None);
+    let usage = metadata.usage().ok_or("usage missing")?;
+    assert_eq!(usage.input_tokens(), Some(136));
+    assert_eq!(usage.cache_hit_tokens(), Some(12));
+    assert_eq!(usage.output_tokens(), Some(112));
+    assert!(first.get("response_format").is_none());
+    assert_eq!(first["tools"][0]["function"]["name"], "lookup");
+    let replayed = messages
+        .iter()
+        .find(|message| message["tool_calls"].is_array())
+        .ok_or("replayed tool call missing")?;
+    assert!(replayed.get("reasoning_content").is_none());
+    let result = messages.last().ok_or("tool result missing")?;
+    assert_eq!(
+        result,
+        &json!({"content": "record 7", "role": "tool", "tool_call_id": "call_r9jfrfbr"})
+    );
 
     Ok(())
 }

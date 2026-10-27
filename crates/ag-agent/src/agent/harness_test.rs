@@ -104,13 +104,15 @@ fn test_harness_parsers_return_no_content() {
 }
 
 #[test]
-/// Verifies every Agentty harness model is a model the harness catalog knows.
+/// Verifies every Agentty harness model is a model the harness catalog
+/// knows, or the OpenAI-compatible provider whose server names its models.
 fn test_harness_models_match_harness_catalog() {
     // Arrange
     let known_models = ModelProvider::all()
         .iter()
         .flat_map(|provider| provider.known_models())
         .copied()
+        .chain([ModelProvider::OpenAiCompatible.as_str()])
         .collect::<Vec<_>>();
 
     // Act

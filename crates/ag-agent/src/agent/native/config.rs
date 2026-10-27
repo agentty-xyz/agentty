@@ -49,9 +49,13 @@ const BASH_POLICY_REVISION: &str = "agentty-unsandboxed-1";
 const BASH_TIMEOUT: Duration = Duration::from_secs(600);
 /// Output bytes kept from one `bash` call, the harness maximum.
 const BASH_CAPTURE_BYTES: usize = 8192;
+/// Environment variable naming the model the OpenAI-compatible server serves
+/// for [`AgentModel::OpenAiCompatible`], such as Ollama's `qwen3:latest`.
+const OPENAI_COMPATIBLE_MODEL_ENV: &str = "OPENAI_COMPATIBLE_MODEL";
 /// Environment prefixes that carry provider keys and endpoints, withheld from
 /// `bash`.
-const PROVIDER_ENVIRONMENT_PREFIXES: [&str; 3] = ["DASHSCOPE_", "KIMI_", "MODEL_"];
+const PROVIDER_ENVIRONMENT_PREFIXES: [&str; 4] =
+    ["DASHSCOPE_", "KIMI_", "MODEL_", "OPENAI_COMPATIBLE_"];
 /// Variables granted to `bash` first, so the harness environment limit never
 /// drops them.
 const PRIORITY_ENVIRONMENT: [&str; 17] = [
@@ -148,13 +152,26 @@ pub(crate) fn process_environment() -> BTreeMap<String, String> {
     unicode_environment(env::vars_os())
 }
 
-/// Returns the first harness model whose provider has an API key and a
-/// reachable endpoint, or `None` when no provider is configured.
+/// Returns the first harness model whose provider has its required API key
+/// and an endpoint, or `None` when no provider is configured. The
+/// OpenAI-compatible model also needs `OPENAI_COMPATIBLE_MODEL`.
 pub(crate) fn default_model(environment: &BTreeMap<String, String>) -> Option<AgentModel> {
     AgentKind::Harness.models().iter().copied().find(|model| {
-        ModelSelection::resolve(model.as_str())
+        ModelSelection::resolve(model.as_str(), environment)
             .is_ok_and(|selection| provider_configured(selection.provider, environment))
     })
+}
+
+/// Reads `environment` as the lookup the harness provider catalog expects.
+fn lookup(
+    environment: &BTreeMap<String, String>,
+) -> impl FnMut(&str) -> Result<String, env::VarError> + '_ {
+    |name| {
+        environment
+            .get(name)
+            .cloned()
+            .ok_or(env::VarError::NotPresent)
+    }
 }
 
 /// Keeps the variables whose name and value are both valid Unicode.
@@ -167,19 +184,29 @@ fn unicode_environment(
         .collect()
 }
 
-/// Returns whether one provider has a nonempty key and a base URL.
+/// Returns whether one provider has a nonempty key, unless its key is
+/// optional, and a base URL.
 fn provider_configured(provider: ModelProvider, environment: &BTreeMap<String, String>) -> bool {
-    let has_value = |name: &str| {
-        environment
-            .get(name)
-            .is_some_and(|value| !value.trim().is_empty())
-    };
-
-    has_value(provider.api_key_environment())
-        && (provider.default_base_url().is_some() || has_value(provider.base_url_environment()))
+    (!provider.requires_api_key() || has_value(environment, provider.api_key_environment()))
+        && (provider.default_base_url().is_some()
+            || has_value(environment, provider.base_url_environment()))
 }
 
-/// One harness model resolved to its built-in provider.
+/// Returns the trimmed value of `name`, or `None` when it is unset or blank.
+fn nonblank<'a>(environment: &'a BTreeMap<String, String>, name: &str) -> Option<&'a str> {
+    environment
+        .get(name)
+        .map(|value| value.trim())
+        .filter(|value| !value.is_empty())
+}
+
+/// Returns whether `name` holds a nonblank value.
+fn has_value(environment: &BTreeMap<String, String>, name: &str) -> bool {
+    nonblank(environment, name).is_some()
+}
+
+/// One harness model resolved to its built-in provider and the model id
+/// sent to it.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub(crate) struct ModelSelection {
     model: String,
@@ -187,11 +214,53 @@ pub(crate) struct ModelSelection {
 }
 
 impl ModelSelection {
-    /// Resolves an Agentty harness model id to its provider.
+    /// Resolves an Agentty harness model id to its provider. The
+    /// `openai-compatible` id resolves to the model `OPENAI_COMPATIBLE_MODEL`
+    /// names.
     ///
     /// # Errors
-    /// Returns an error when no built-in provider serves `model`.
-    pub(crate) fn resolve(model: &str) -> Result<Self, String> {
+    /// Returns an error when no built-in provider serves `model`, or when
+    /// `OPENAI_COMPATIBLE_MODEL` is unset for `openai-compatible`.
+    pub(crate) fn resolve(
+        model: &str,
+        environment: &BTreeMap<String, String>,
+    ) -> Result<Self, String> {
+        if model != AgentModel::OpenAiCompatible.as_str() {
+            return Self::resolve_known(model);
+        }
+        let served = nonblank(environment, OPENAI_COMPATIBLE_MODEL_ENV).ok_or_else(|| {
+            format!(
+                "Cannot use harness model `{model}`: {OPENAI_COMPATIBLE_MODEL_ENV} is unset. Set \
+                 it to the model your OpenAI-compatible server serves, such as `qwen3:latest`, \
+                 before starting Agentty."
+            )
+        })?;
+
+        Ok(Self {
+            model: served.to_string(),
+            provider: ModelProvider::OpenAiCompatible,
+        })
+    }
+
+    /// Resolves a recorded registration key such as `kimi/kimi-k3` or
+    /// `openai-compatible/qwen3:latest`, or `None` for a key without a known
+    /// provider and model.
+    pub(crate) fn from_key(key: &str) -> Option<Self> {
+        let (provider, model) = key.split_once('/')?;
+        if provider == ModelProvider::OpenAiCompatible.as_str() {
+            return (!model.trim().is_empty()).then(|| Self {
+                model: model.to_string(),
+                provider: ModelProvider::OpenAiCompatible,
+            });
+        }
+
+        Self::resolve_known(model)
+            .ok()
+            .filter(|selection| selection.key() == key)
+    }
+
+    /// Resolves a catalog model id to the built-in provider listing it.
+    fn resolve_known(model: &str) -> Result<Self, String> {
         ModelProvider::all()
             .iter()
             .copied()
@@ -201,16 +270,6 @@ impl ModelSelection {
                 provider,
             })
             .ok_or_else(|| format!("The harness does not serve model `{model}`."))
-    }
-
-    /// Resolves a recorded registration key such as `kimi/kimi-k3`, or
-    /// `None` for a key without a known provider and model.
-    pub(crate) fn from_key(key: &str) -> Option<Self> {
-        let (_, model) = key.split_once('/')?;
-
-        Self::resolve(model)
-            .ok()
-            .filter(|selection| selection.key() == key)
     }
 
     /// Returns the stable registry key.
@@ -229,26 +288,32 @@ impl ModelSelection {
         provider_call_budget: Option<&ProviderCallBudget>,
     ) -> Result<ModelRegistry, String> {
         let client = ModelConfiguration::new(self.provider, &self.model)
-            .client_from_environment(|name| {
-                environment
-                    .get(name)
-                    .cloned()
-                    .ok_or(env::VarError::NotPresent)
-            })
+            .client_from_environment(lookup(environment))
             .map_err(|error| {
+                let remedy = if self.provider.requires_api_key() {
+                    format!("Set {}", self.provider.api_key_environment())
+                } else {
+                    format!(
+                        "Check {OPENAI_COMPATIBLE_MODEL_ENV} and {}",
+                        self.provider.base_url_environment()
+                    )
+                };
+
                 format!(
-                    "Cannot use harness model `{}`: {error}. Set {} before starting Agentty.",
-                    self.model,
-                    self.provider.api_key_environment()
+                    "Cannot use harness model `{}`: {error}. {remedy} before starting Agentty.",
+                    self.model
                 )
             })?;
 
         match provider_call_budget {
-            Some(budget) => self.register(BudgetedModel {
-                budget: budget.clone(),
-                inner: client,
-            }),
-            None => self.register(client),
+            Some(budget) => self.register(
+                BudgetedModel {
+                    budget: budget.clone(),
+                    inner: client,
+                },
+                environment,
+            ),
+            None => self.register(client, environment),
         }
     }
 
@@ -283,18 +348,22 @@ impl ModelSelection {
             .map_err(failure("Invalid resume-only harness model"))?
             .metadata()
             .clone();
-        let registry = self.register(ResumeOnlyModel { metadata })?;
+        let registry = self.register(ResumeOnlyModel { metadata }, context.environment)?;
 
         self.harness_from(&registry, context, observer)
     }
 
     /// Registers `model` under this selection's key and declared capabilities.
-    fn register(&self, model: impl Model + 'static) -> Result<ModelRegistry, String> {
+    fn register(
+        &self,
+        model: impl Model + 'static,
+        environment: &BTreeMap<String, String>,
+    ) -> Result<ModelRegistry, String> {
         let identity = ExecutionIdentity::new(self.key(), REGISTRATION_REVISION)
             .map_err(failure("Invalid harness model registration"))?;
         let capabilities = ModelCapabilities {
             tool_calls: true,
-            ..ModelCapabilities::new(self.profile())
+            ..ModelCapabilities::new(self.profile(environment)?)
         };
         let mut registry = ModelRegistry::new();
         registry
@@ -322,12 +391,25 @@ impl ModelSelection {
             .with_lifecycle_observer(traced(observer)))
     }
 
-    /// Returns the declared context profile for this model.
-    fn profile(&self) -> ModelProfile {
-        AgentKind::Harness
-            .parse_model(&self.model)
-            .and_then(model_profile::declared)
-            .unwrap_or(FALLBACK_MODEL_PROFILE)
+    /// Returns the context profile the environment declares for this
+    /// provider's models, else the catalog model's declared profile, else
+    /// the conservative fallback.
+    ///
+    /// # Errors
+    /// Returns an error for an invalid environment-declared profile.
+    fn profile(&self, environment: &BTreeMap<String, String>) -> Result<ModelProfile, String> {
+        let declared = self
+            .provider
+            .environment_profile(lookup(environment))
+            .map_err(failure("Invalid harness model profile"))?;
+
+        Ok(declared
+            .or_else(|| {
+                AgentKind::Harness
+                    .parse_model(&self.model)
+                    .and_then(model_profile::declared)
+            })
+            .unwrap_or(FALLBACK_MODEL_PROFILE))
     }
 }
 

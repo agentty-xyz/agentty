@@ -33,6 +33,15 @@ pub(crate) const STRUCTURED_OUTPUT_INSTRUCTION: &str = concat!(
     "Return only one JSON object. The object must validate against this JSON Schema. ",
     "Do not include Markdown fences or any other text.\n\nJSON Schema:\n",
 );
+/// Schema instruction for [`StructuredOutputMode::SchemaPrompt`]. Small local
+/// models read an unconditional "return only one JSON object" as forbidding
+/// tool calls: live, Qwen3 8B on Ollama answered 0 of 2 tool-requiring
+/// prompts with a call under it and 4 of 4 under this wording.
+pub(crate) const TOOL_AWARE_STRUCTURED_OUTPUT_INSTRUCTION: &str = concat!(
+    "Call the offered tools whenever you need them. When you give your final answer, ",
+    "return only one JSON object that validates against this JSON Schema, with no Markdown ",
+    "fences or other text.\n\nJSON Schema:\n",
+);
 
 /// Structured-output representation selected by one Chat Completions provider.
 #[derive(Clone, Copy)]
@@ -42,6 +51,11 @@ pub(crate) enum StructuredOutputMode {
         tool_result_name: bool,
     },
     JsonSchema,
+    /// States the schema in a leading system message, like `JsonObject`,
+    /// and constrains requests without tools by the `json_schema` format,
+    /// the one structured-output form every common OpenAI-compatible server
+    /// accepts. History carries no reasoning and no tool-result names.
+    SchemaPrompt,
 }
 
 impl StructuredOutputMode {
@@ -154,7 +168,7 @@ impl GeneratedResponse {
 /// Shared structured-output backend for OpenAI-compatible Chat Completions
 /// APIs.
 pub(crate) struct ChatCompletionBackend {
-    api_key: String,
+    api_key: Option<String>,
     base_url: String,
     client: Arc<dyn ChatCompletionClient>,
     model: String,
@@ -179,7 +193,7 @@ impl ChatCompletionBackend {
     pub(crate) fn keeps_prefix_across_schemas(&self) -> bool {
         matches!(
             self.policy.structured_output,
-            StructuredOutputMode::JsonObject { .. }
+            StructuredOutputMode::JsonObject { .. } | StructuredOutputMode::SchemaPrompt
         )
     }
 
@@ -228,7 +242,7 @@ impl ChatCompletionBackend {
         let completion = self
             .client
             .complete(ChatCompletionRequest::new(
-                &self.api_key,
+                self.api_key.as_deref(),
                 endpoint(&self.base_url),
                 payload,
             ))
@@ -278,7 +292,7 @@ impl ChatCompletionBackend {
 
     /// Creates a structured-output backend with an injected transport client.
     pub(crate) fn with_client(
-        api_key: String,
+        api_key: Option<String>,
         base_url: String,
         model: String,
         policy: ChatCompletionProviderPolicy,
@@ -304,8 +318,14 @@ impl ChatCompletionBackend {
                 .prefix_schema
                 .as_ref()
                 .unwrap_or_else(|| request.schema());
+            let instruction = match self.policy.structured_output {
+                StructuredOutputMode::SchemaPrompt => TOOL_AWARE_STRUCTURED_OUTPUT_INSTRUCTION,
+                StructuredOutputMode::JsonObject { .. } | StructuredOutputMode::JsonSchema => {
+                    STRUCTURED_OUTPUT_INSTRUCTION
+                }
+            };
             messages.push(ChatCompletionMessagePayload::Text {
-                content: format!("{STRUCTURED_OUTPUT_INSTRUCTION}{}", schema.value()),
+                content: format!("{instruction}{}", schema.value()),
                 role: "system",
             });
         }
@@ -442,13 +462,15 @@ impl ChatCompletionBackend {
                 json_schema: None,
                 kind: "json_object",
             },
-            StructuredOutputMode::JsonSchema => ResponseFormat {
-                json_schema: Some(JsonSchemaResponseFormat {
-                    name: format.name(),
-                    schema: format.schema().value(),
-                }),
-                kind: "json_schema",
-            },
+            StructuredOutputMode::JsonSchema | StructuredOutputMode::SchemaPrompt => {
+                ResponseFormat {
+                    json_schema: Some(JsonSchemaResponseFormat {
+                        name: format.name(),
+                        schema: format.schema().value(),
+                    }),
+                    kind: "json_schema",
+                }
+            }
         }
     }
 
@@ -610,14 +632,14 @@ fn reasoning_enabled(reasoning_effort: model::ReasoningEffort) -> bool {
 
 /// One provider-authenticated request using the Chat Completions wire API.
 pub(crate) struct ChatCompletionRequest<'a> {
-    api_key: &'a str,
+    api_key: Option<&'a str>,
     endpoint: String,
     payload: Value,
 }
 
 impl<'a> ChatCompletionRequest<'a> {
     /// Creates a request from provider-owned authentication and payload data.
-    pub(crate) fn new(api_key: &'a str, endpoint: String, payload: Value) -> Self {
+    pub(crate) fn new(api_key: Option<&'a str>, endpoint: String, payload: Value) -> Self {
         Self {
             api_key,
             endpoint,
@@ -625,8 +647,9 @@ impl<'a> ChatCompletionRequest<'a> {
         }
     }
 
-    /// Returns the provider authentication token.
-    pub(crate) fn api_key(&self) -> &str {
+    /// Returns the provider bearer token, or `None` for an unauthenticated
+    /// request.
+    pub(crate) fn api_key(&self) -> Option<&str> {
         self.api_key
     }
 
@@ -721,10 +744,11 @@ impl ChatCompletionClient for ReqwestChatCompletionClient {
         let mut rate_limit_retries = 0_usize;
         let mut transport_retries = 0_usize;
         let mut response = loop {
-            let response = self
-                .client
-                .post(request.endpoint())
-                .bearer_auth(request.api_key())
+            let mut builder = self.client.post(request.endpoint());
+            if let Some(api_key) = request.api_key() {
+                builder = builder.bearer_auth(api_key);
+            }
+            let response = builder
                 .timeout(self.request_timeout)
                 .json(request.payload())
                 .send()
