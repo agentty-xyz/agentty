@@ -3,7 +3,7 @@ use std::{env, fmt};
 
 use thiserror::Error;
 
-use super::{kimi, muse, openai_compatible, qwen};
+use super::{kimi, muse, openai, openai_compatible, qwen};
 use crate::model::{ModelClient, ModelMetadataError, ModelProfile};
 
 /// Provider supported by the built-in model client catalog.
@@ -13,6 +13,8 @@ pub enum ModelProvider {
     Kimi,
     /// Meta's Model API for Muse models.
     Muse,
+    /// `OpenAI`'s Responses API, serving the GPT models Codex runs.
+    OpenAi,
     /// Any server implementing the `OpenAI` Chat Completions API, such as
     /// Ollama, llama.cpp, LM Studio, or vLLM, serving a host-named model.
     OpenAiCompatible,
@@ -21,7 +23,13 @@ pub enum ModelProvider {
 }
 
 impl ModelProvider {
-    const ALL: [Self; 4] = [Self::Muse, Self::Kimi, Self::Qwen, Self::OpenAiCompatible];
+    const ALL: [Self; 5] = [
+        Self::Muse,
+        Self::Kimi,
+        Self::Qwen,
+        Self::OpenAi,
+        Self::OpenAiCompatible,
+    ];
 
     /// Returns every built-in provider in display order.
     pub fn all() -> &'static [Self] {
@@ -33,6 +41,7 @@ impl ModelProvider {
         match self {
             Self::Kimi => "kimi",
             Self::Muse => "muse",
+            Self::OpenAi => "openai",
             Self::OpenAiCompatible => "openai-compatible",
             Self::Qwen => "qwen",
         }
@@ -44,6 +53,13 @@ impl ModelProvider {
         match self {
             Self::Kimi => &[kimi::KIMI_K3, kimi::KIMI_K2_6],
             Self::Muse => &[muse::MUSE_SPARK_1_3, muse::MUSE_SPARK_1_3_CONTRIBUTOR],
+            Self::OpenAi => &[
+                openai::GPT_6_1_SOL,
+                openai::GPT_6_ASTRA,
+                openai::GPT_6_LUNA,
+                openai::GPT_5_6_TERRA,
+                openai::GPT_5_3_CODEX,
+            ],
             Self::OpenAiCompatible => &[],
             Self::Qwen => &[qwen::QWEN3_8_MAX, qwen::QWEN_PLUS],
         }
@@ -54,6 +70,7 @@ impl ModelProvider {
         match self {
             Self::Kimi => kimi::KIMI_API_KEY_ENV,
             Self::Muse => muse::MODEL_API_KEY_ENV,
+            Self::OpenAi => openai::OPENAI_API_KEY_ENV,
             Self::OpenAiCompatible => openai_compatible::OPENAI_COMPATIBLE_API_KEY_ENV,
             Self::Qwen => qwen::DASHSCOPE_API_KEY_ENV,
         }
@@ -71,6 +88,7 @@ impl ModelProvider {
         match self {
             Self::Kimi => kimi::KIMI_BASE_URL_ENV,
             Self::Muse => muse::MODEL_API_BASE_URL_ENV,
+            Self::OpenAi => openai::OPENAI_BASE_URL_ENV,
             Self::OpenAiCompatible => openai_compatible::OPENAI_COMPATIBLE_BASE_URL_ENV,
             Self::Qwen => qwen::DASHSCOPE_BASE_URL_ENV,
         }
@@ -81,30 +99,35 @@ impl ModelProvider {
     pub const fn default_base_url(self) -> Option<&'static str> {
         match self {
             Self::Muse => Some(muse::DEFAULT_BASE_URL),
+            Self::OpenAi => Some(openai::DEFAULT_BASE_URL),
             Self::OpenAiCompatible => Some(openai_compatible::DEFAULT_BASE_URL),
             Self::Kimi | Self::Qwen => None,
         }
     }
 
-    /// Returns the model profile the environment declares for this
-    /// provider's models, or `None` for providers whose catalog models the
-    /// host profiles itself.
+    /// Returns the context profile this catalog declares for `model`, or
+    /// `None` when the host profiles the provider's models itself.
     ///
-    /// [`Self::OpenAiCompatible`] serves models the harness cannot know, so
-    /// its profile comes from `OPENAI_COMPATIBLE_CONTEXT_WINDOW` (default
-    /// 32,768 tokens) and `OPENAI_COMPATIBLE_MAX_OUTPUT_TOKENS` (default
-    /// 8,192), weighed by the default estimator under a 50% margin.
+    /// [`Self::OpenAi`] declares the documented window and output limit of
+    /// each cataloged model, weighed by the default estimator under a 50%
+    /// margin, and `None` for other models. [`Self::OpenAiCompatible`] serves
+    /// models the harness cannot know, so its profile comes from
+    /// `OPENAI_COMPATIBLE_CONTEXT_WINDOW` (default 32,768 tokens) and
+    /// `OPENAI_COMPATIBLE_MAX_OUTPUT_TOKENS` (default 8,192), weighed the
+    /// same way.
     ///
     /// # Errors
     ///
     /// Returns [`ModelConfigurationError`] for a token count that is not a
     /// positive integer, a reservation filling the whole window, or a value
     /// that is not valid Unicode.
-    pub fn environment_profile(
+    pub fn declared_profile(
         self,
+        model: &str,
         environment: impl FnMut(&str) -> Result<String, env::VarError>,
     ) -> Result<Option<ModelProfile>, ModelConfigurationError> {
         match self {
+            Self::OpenAi => Ok(openai::profile(model)),
             Self::OpenAiCompatible => {
                 openai_compatible::profile_from_environment(environment).map(Some)
             }
@@ -125,6 +148,11 @@ impl ModelProvider {
                 model,
             }),
             Self::Muse => ModelClient::muse(muse::MuseConfig {
+                api_key: api_key.unwrap_or_default(),
+                base_url,
+                model,
+            }),
+            Self::OpenAi => ModelClient::openai(openai::OpenAiConfig {
                 api_key: api_key.unwrap_or_default(),
                 base_url,
                 model,

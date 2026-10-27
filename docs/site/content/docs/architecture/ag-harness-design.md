@@ -29,8 +29,8 @@ flowchart LR
 - **Structured output** — every turn validates against a caller-supplied JSON schema.
 - **Durable sessions** — SQLite by default; memory and custom stores share the same
   public contract.
-- **Provider-neutral models** — built-in Muse, Kimi, Qwen, and generic OpenAI-compatible
-  clients use `ag-router` behind the object-safe `Model` trait.
+- **Provider-neutral models** — built-in Muse, Kimi, Qwen, OpenAI, and generic
+  OpenAI-compatible clients use `ag-router` behind the object-safe `Model` trait.
 - **Typed lifecycle events** — content-free turn, model, and tool observations.
 
 ## Crates
@@ -409,16 +409,39 @@ the containing worktree; the library never searches `PATH`.
 
 ## Provider transport
 
-`ag-router` owns built-in Chat Completions transport, provider wire policies, and local
-JSON Schema validation. Its public `Router::execute` request names a `provider/model`
-and always includes a `JsonSchemaFormat`; terminal output is validated JSON, while
-intermediate function calls return to the caller for execution. A request may name the
-schema of the conversation it continues (`GenerationOptions::prefix_schema`); Kimi and
-Qwen state that one in their leading schema message while the response is still
-validated against the request's own schema. The harness converts its built-in tool
-requests and responses at this boundary and retains tool permissions, sessions,
-lifecycle events, and telemetry. The router currently covers chat completion; it has no
-streaming or automatic provider fallback.
+`ag-router` owns built-in Chat Completions and `OpenAI` Responses transports, provider
+wire policies, and local JSON Schema validation. Its public `Router::execute` request
+names a `provider/model` and always includes a `JsonSchemaFormat`; terminal output is
+validated JSON, while intermediate function calls return to the caller for execution. A
+request may name the schema of the conversation it continues
+(`GenerationOptions::prefix_schema`); Kimi and Qwen state that one in their leading
+schema message while the response is still validated against the request's own schema.
+The harness converts its built-in tool requests and responses at this boundary and
+retains tool permissions, sessions, lifecycle events, and telemetry. The router
+currently covers chat completion; it has no token streaming to callers or automatic
+provider fallback.
+
+The `openai` provider runs `OpenAI` models through the Responses API, because the GPT
+models Codex uses accept function tools only there. Requests are stateless
+(`store: false`), so the harness keeps owning history and compaction: each request
+resends the conversation, system messages travel as `developer` messages, and output is
+constrained natively by a non-strict `json_schema` text format beside non-strict
+function tools, since strict mode would reject the optional properties of Agentty's
+schemas; local validation stays authoritative. Reasoning returns encrypted. A response's
+reasoning items are kept, as one JSON array, in the provider-neutral reasoning content
+of its first call or output, which the harness already stores, counts, and clears under
+context pressure; replay sends them verbatim before that assistant turn, and reasoning
+content that is not such an array, such as cleared text or another provider's reasoning,
+is omitted. Responses are streamed and read as server-sent events, keeping only
+completed output items and the terminal response, because the plan-usage route OpenAI
+documents for open-source clients requires streaming, a long reasoning response would
+otherwise sit silent past a whole-request bound, and an overflow detected after the
+stream starts arrives as `response.failed` rather than an HTTP error. The stream fails
+after five minutes of silence, Codex CLI's idle bound, and the whole request after
+thirty. The prompt cache key is sent, `max` effort maps to `xhigh` for models before
+GPT-5.6, and OpenAI models declare their documented windows in the provider catalog
+(`ModelProvider::declared_profile`) under the default estimator with a 50% margin until
+a live calibration fits one.
 
 The `openai-compatible` provider serves local and self-hosted models (Ollama, llama.cpp,
 LM Studio, vLLM) under one conservative policy instead of one adapter per server,
@@ -434,13 +457,13 @@ live prompts), and under the tool-aware wording it called `read` in 4 of 4. No r
 control is sent, because Ollama rejects `reasoning_effort` for models without thinking,
 and returned reasoning is not replayed, which keeps history portable across served
 models. The API key is optional, and an unset key sends no `Authorization` header. The
-host declares the context window and output reserve
-(`ModelProvider::environment_profile`), since a server's runtime window can be far below
-the model's trained one: Ollama loads models with 4,096 tokens by default and silently
-truncates longer input rather than rejecting it, so neither discovery nor overflow
-recovery can be relied on. Without a fitted estimator, requests are weighed by the
-default estimator, counting the schema in the prompt, under a 50% under-count margin.
-llama.cpp's `exceed_context_size_error` joins the shared overflow markers.
+host declares the context window and output reserve (`ModelProvider::declared_profile`),
+since a server's runtime window can be far below the model's trained one: Ollama loads
+models with 4,096 tokens by default and silently truncates longer input rather than
+rejecting it, so neither discovery nor overflow recovery can be relied on. Without a
+fitted estimator, requests are weighed by the default estimator, counting the schema in
+the prompt, under a 50% under-count margin. llama.cpp's `exceed_context_size_error`
+joins the shared overflow markers.
 
 Providers cache prompt prefixes per backend, so cache hits depend on routing related
 requests together. The harness gives every turn request of a durable session one key,
@@ -448,12 +471,12 @@ hashed from the session ID so it is stable across handles and resume and bounded
 length, and each stateless turn a fresh random key shared by its tool loop. A round
 summary that continues the turn's request carries its key; checkpoint and tool-free
 round-summary requests, whose prefixes differ, carry none. `ag-router` sends the key as
-`prompt_cache_key` only where the provider policy enables it: Muse and Kimi, whose
-documentation routes by it (Moonshot asks coding agents for a session key). Qwen ignores
-the field, and the Meta Model API rejects body fields it does not know, so each provider
-policy opts in explicitly. Live, a keyed Muse sequence missed the cache on none of 43
-warm requests against 9 of 57 without a key; `user` and session headers showed no effect
-and are not sent.
+`prompt_cache_key` only where the provider policy enables it: Muse, Kimi, and OpenAI,
+whose documentation routes by it (Moonshot asks coding agents for a session key). Qwen
+ignores the field, and the Meta Model API rejects body fields it does not know, so each
+provider policy opts in explicitly. Live, a keyed Muse sequence missed the cache on none
+of 43 warm requests against 9 of 57 without a key; `user` and session headers showed no
+effect and are not sent.
 
 Built-in Chat Completions clients bound one provider request to three minutes, because
 reasoning models can spend more than a minute on one completion; a timed-out request is
@@ -464,27 +487,30 @@ per-minute quota can be waited out. A provider rejection of input beyond the mod
 context window is classified as `ErrorClass::ContextOverflow` in `ag-router` and
 `ModelErrorType::ContextOverflow` in the harness, so the engine can shrink and retry
 instead of failing (see the calibration above): any `413`, or a `400` or `422` whose
-body carries a known marker. Shared markers are OpenAI's `context_length_exceeded` code
-and "maximum context length" message; each provider policy adds its own, captured live:
-Kimi's "exceeded model token limit", Qwen's "Range of input length", and the Meta Model
-API's generic "The request contains invalid parameters" message, which it returns only
-for an overflow while every other validation failure names its parameter. Model content
-is parsed as one JSON object; content that wraps the object in Markdown fences or
-surrounding prose is accepted when the embedded object parses, and every accepted value
-is still validated against the requested schema. Text a model writes beside its tool
-calls, such as running notes, is kept on the response's first call as
-`ToolCall::assistant_text` within the same content limit; blank text is not kept. It is
-journaled with the call, weighed in its message (declared estimator parameters were
-fitted without it; their margins absorb it), and replayed as that assistant message's
-`content`, which Kimi, Muse, and Qwen all accept beside `tool_calls`. Invalid content is
-reported with the parser diagnostic, the leading character, and the length, never the
-content itself. A final output rejected as invalid JSON or for violating the schema is
-re-requested up to twice in the same turn: the engine appends a request-only feedback
-message carrying that bounded diagnostic and asking for a single JSON value, and the
-follow-up request goes through the same context fitting. Neither the rejected output nor
-the feedback is journaled, because only finished, accepted exchanges belong in replayed
-history; `TurnReport::output_corrections` counts the retries, and a third rejection
-fails the turn with the original error type.
+body carries a known marker, or a streamed Responses `response.failed` whose error
+carries one. Shared markers are OpenAI's `context_length_exceeded` code and "maximum
+context length" message, and the Responses API adds "exceeds the context window", taken
+from Codex CLI's stream fixtures rather than a live capture. Each other provider policy
+adds its own, captured live: Kimi's "exceeded model token limit", Qwen's "Range of input
+length", and the Meta Model API's generic "The request contains invalid parameters"
+message, which it returns only for an overflow while every other validation failure
+names its parameter. Model content is parsed as one JSON object; content that wraps the
+object in Markdown fences or surrounding prose is accepted when the embedded object
+parses, and every accepted value is still validated against the requested schema. Text a
+model writes beside its tool calls, such as running notes, is kept on the response's
+first call as `ToolCall::assistant_text` within the same content limit; blank text is
+not kept. It is journaled with the call, weighed in its message (declared estimator
+parameters were fitted without it; their margins absorb it), and replayed as that
+assistant message's `content`, which Kimi, Muse, and Qwen all accept beside
+`tool_calls`. Invalid content is reported with the parser diagnostic, the leading
+character, and the length, never the content itself. A final output rejected as invalid
+JSON or for violating the schema is re-requested up to twice in the same turn: the
+engine appends a request-only feedback message carrying that bounded diagnostic and
+asking for a single JSON value, and the follow-up request goes through the same context
+fitting. Neither the rejected output nor the feedback is journaled, because only
+finished, accepted exchanges belong in replayed history;
+`TurnReport::output_corrections` counts the retries, and a third rejection fails the
+turn with the original error type.
 
 A tool call whose arguments fail local decoding, such as invalid JSON, an unknown or
 misspelled field, or a wrong type beyond the numeric-string coercion, is kept as a

@@ -35,7 +35,10 @@ fn declared_profiles_preserve_proactive_compaction_budgets() {
         assert_eq!(profile.reserved_tokens(), expected.1, "{model:?}");
         assert_eq!(profile.input_token_budget(), expected.2, "{model:?}");
     }
-    assert_eq!(AgentKind::Harness.models().len(), harness_models.len() + 1);
+    assert_eq!(
+        AgentKind::Harness.models().len(),
+        harness_models.len() + codex_models.len()
+    );
     assert_eq!(declared(AgentModel::OpenAiCompatible), None);
     for provider in [AgentKind::Gemini, AgentKind::Antigravity, AgentKind::Claude] {
         assert!(
@@ -50,10 +53,14 @@ fn declared_profiles_preserve_proactive_compaction_budgets() {
 #[test]
 fn harness_models_weigh_requests_with_measured_estimators() {
     // Arrange
+    // The harness profiles the shared Codex models from its provider catalog
+    // and OpenAI-compatible models from the environment.
     let harness_models = AgentKind::Harness
         .models()
         .iter()
-        .filter(|model| **model != AgentModel::OpenAiCompatible)
+        .filter(|model| {
+            **model != AgentModel::OpenAiCompatible && !AgentKind::Codex.supports_model(**model)
+        })
         .collect::<Vec<_>>();
 
     // Act

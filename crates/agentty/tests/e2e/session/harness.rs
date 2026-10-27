@@ -1,5 +1,6 @@
 //! Preview Harness sessions behind `--experimental-harness`.
 
+use std::fmt::Write as _;
 use std::os::unix::fs::symlink;
 use std::time::Duration;
 
@@ -318,6 +319,7 @@ async fn test_harness_session_runs_on_a_local_openai_compatible_server() -> E2eR
         .env("DASHSCOPE_API_KEY", "")
         .env("KIMI_API_KEY", "")
         .env("MODEL_API_KEY", "")
+        .env("OPENAI_API_KEY", "")
         .env("OPENAI_COMPATIBLE_BASE_URL", server.uri())
         .env("OPENAI_COMPATIBLE_MODEL", "qwen3:latest")
         .run(
@@ -358,6 +360,162 @@ async fn test_harness_session_runs_on_a_local_openai_compatible_server() -> E2eR
         .ok_or("the session turn should reach the local server")?;
     assert!(!session_request.headers.contains_key("authorization"));
     assert!(String::from_utf8_lossy(&session_request.body).contains(r#""model":"qwen3:latest""#));
+
+    Ok(())
+}
+
+/// Returns one streamed Responses API response completing with `items`.
+fn responses_stream(items: &[serde_json::Value]) -> ResponseTemplate {
+    let mut events = items
+        .iter()
+        .map(|item| json!({"type": "response.output_item.done", "item": item}))
+        .collect::<Vec<_>>();
+    events.push(json!({
+        "type": "response.completed",
+        "response": {
+            "id": "resp_e2e",
+            "status": "completed",
+            "usage": {"input_tokens": 30, "output_tokens": 7, "total_tokens": 37}
+        }
+    }));
+    let body = events.iter().fold(String::new(), |mut body, event| {
+        let _ = write!(body, "data: {event}\n\n");
+
+        body
+    });
+
+    ResponseTemplate::new(200).set_body_raw(body, "text/event-stream")
+}
+
+/// Returns one assistant message item carrying `output` as JSON text.
+fn responses_message(output: &serde_json::Value) -> serde_json::Value {
+    json!({
+        "type": "message",
+        "role": "assistant",
+        "content": [{"type": "output_text", "text": output.to_string()}]
+    })
+}
+
+/// Scripts an `OpenAI` Responses server that writes `notes.txt` and answers,
+/// with the commit-message utility, whose prompt repeats the session
+/// request, answered on its own.
+async fn scripted_openai_provider() -> MockServer {
+    let server = MockServer::start().await;
+    Mock::given(method("POST"))
+        .and(path("/v1/responses"))
+        .and(body_string_contains(
+            "Generate the canonical session commit message",
+        ))
+        .respond_with(responses_stream(&[responses_message(
+            &json!({"answer": "Add harness notes"}),
+        )]))
+        .with_priority(1)
+        .mount(&server)
+        .await;
+    Mock::given(method("POST"))
+        .and(path("/v1/responses"))
+        .and(body_string_contains(r#""type":"function_call_output""#))
+        .respond_with(responses_stream(&[responses_message(
+            &json!({"answer": HARNESS_ANSWER, "questions": []}),
+        )]))
+        .with_priority(2)
+        .mount(&server)
+        .await;
+    Mock::given(method("POST"))
+        .and(path("/v1/responses"))
+        .and(body_string_contains("Create notes"))
+        .respond_with(responses_stream(&[
+            json!({
+                "type": "reasoning",
+                "id": "rs_e2e",
+                "summary": [],
+                "encrypted_content": "gAAAA-e2e"
+            }),
+            json!({
+                "type": "function_call",
+                "call_id": "call-write",
+                "name": "write",
+                "arguments": json!({
+                    "path": "notes.txt",
+                    "patch": "--- /dev/null\n+++ b/notes.txt\n@@ -0,0 +1 @@\n+harness\n"
+                })
+                .to_string()
+            }),
+        ]))
+        .with_priority(3)
+        .mount(&server)
+        .await;
+
+    server
+}
+
+#[tokio::test]
+async fn test_harness_session_runs_on_openai_with_an_api_key() -> E2eResult {
+    // Arrange
+    let server = scripted_openai_provider().await;
+    let git_directory = git_only_path()?;
+
+    // Act, Assert
+    FeatureTest::new("harness_openai_model")
+        .with_git()
+        .with_stub_only_path()
+        .env("PATH", git_directory.path().to_string_lossy())
+        .args(["--experimental-harness".to_string()])
+        .env("DASHSCOPE_API_KEY", "")
+        .env("KIMI_API_KEY", "")
+        .env("MODEL_API_KEY", "")
+        .env("OPENAI_COMPATIBLE_MODEL", "")
+        .env("OPENAI_API_KEY", "test-openai-key")
+        .env("OPENAI_BASE_URL", format!("{}/v1", server.uri()))
+        .run(
+            |scenario| {
+                scenario
+                    .compose(&common::wait_for_agentty_startup())
+                    .compose(&common::switch_to_tab("Sessions"))
+                    .press_key("a")
+                    .wait_for_text("Install an agent CLI", 5000)
+                    .press_key("Enter")
+                    .wait_for_stable_frame(300, 5000)
+                    .write_text("Create notes")
+                    .wait_for_text("Create notes", 3000)
+                    .press_key("Enter")
+                    .eventually(
+                        Duration::from_secs(30),
+                        Duration::from_millis(100),
+                        |frame| {
+                            let full = Region::full(frame.cols(), frame.rows());
+
+                            assertion::match_text_in_region(frame, HARNESS_ANSWER, &full)
+                        },
+                    )
+            },
+            |frame, _report| {
+                Box::pin(async move {
+                    let full = Region::full(frame.cols(), frame.rows());
+                    assertion::assert_text_in_region(frame, "harness/gpt-6.1-sol", &full);
+                })
+            },
+        )
+        .await?;
+
+    let requests = server.received_requests().await.unwrap_or_default();
+    let tool_result_request = requests
+        .iter()
+        .find(|request| {
+            String::from_utf8_lossy(&request.body).contains(r#""type":"function_call_output""#)
+        })
+        .ok_or("the write result should reach the OpenAI server")?;
+    let body = String::from_utf8_lossy(&tool_result_request.body);
+    assert_eq!(
+        tool_result_request
+            .headers
+            .get("authorization")
+            .map(wiremock::http::HeaderValue::as_bytes),
+        Some(b"Bearer test-openai-key".as_slice())
+    );
+    assert!(body.contains(r#""model":"gpt-6.1-sol""#));
+    assert!(body.contains(r#""encrypted_content":"gAAAA-e2e""#));
+    assert!(body.contains(r#""store":false"#));
 
     Ok(())
 }

@@ -27,6 +27,10 @@ cargo run --locked -p ag-harness-cli -- run muse-spark-1.3 --allow-write
 cargo run --locked -p ag-harness-cli -- \
   run muse-spark-1.3 --read-dir /path/to/repository
 
+# Chat with an OpenAI model (paid API key)
+OPENAI_API_KEY=sk-... cargo run --locked -p ag-harness-cli -- \
+  run gpt-6.1-sol --provider openai
+
 # Chat with a local Ollama model (no key; server running with a 40,960-token window)
 OPENAI_COMPATIBLE_CONTEXT_WINDOW=40960 cargo run --locked -p ag-harness-cli -- \
   run qwen3:latest --provider openai-compatible
@@ -59,11 +63,12 @@ Sessions whose history contains provider reasoning cannot switch models. A model
   those explicit locations is required.
 - The first valid Git in `PATH` is used; `--git-executable <FILE>` overrides it.
 - Muse is the default provider. Run `cargo run --locked -p ag-harness-cli -- run --help`
-  for Kimi, Qwen, OpenAI-compatible, model, and credential options.
+  for Kimi, Qwen, OpenAI, OpenAI-compatible, model, and credential options.
 - Chats default to low model reasoning to reduce latency; pass
   `--reasoning-effort <LEVEL>` to select deeper reasoning.
-- Hosted models are assumed to have a 128k-token context window; OpenAI-compatible
-  models use `OPENAI_COMPATIBLE_CONTEXT_WINDOW` (default 32,768) and
+- Muse, Kimi, and Qwen models are assumed to have a 128k-token context window; cataloged
+  OpenAI models use their documented windows; OpenAI-compatible models use
+  `OPENAI_COMPATIBLE_CONTEXT_WINDOW` (default 32,768) and
   `OPENAI_COMPATIBLE_MAX_OUTPUT_TOKENS` (default 8,192). Each request replays the most
   recent turns that fit, and a turn fails once its own tool traffic no longer fits.
 

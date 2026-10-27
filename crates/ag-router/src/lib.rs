@@ -1,14 +1,17 @@
-//! Provider-neutral routing for structured LLM chat requests.
+//! Provider-neutral routing for structured LLM chat requests over the Chat
+//! Completions and `OpenAI` Responses wire APIs.
 //!
 //! A request names a `provider/model`, supplies a JSON Schema response format,
 //! and receives either locally validated JSON or function calls for the caller
 //! to execute. Provider credentials are supplied by the host.
 
 mod chat_completion;
+mod http;
 mod input;
 mod model;
 mod provider;
 mod response_error;
+mod responses;
 mod schema;
 mod tool;
 

@@ -2,6 +2,7 @@
 //! utility runs against a scripted Chat Completions provider.
 
 use std::collections::BTreeMap;
+use std::fmt::Write as _;
 use std::path::Path;
 use std::sync::Arc;
 use std::time::Duration;
@@ -919,6 +920,164 @@ async fn openai_compatible_turn_reads_without_a_key_and_follows_the_served_model
     assert!(bodies.iter().all(|body| !body.contains("reasoning_effort")));
 }
 
+/// Returns one streamed Responses API response completing with `items`.
+fn responses_stream(items: &[Value]) -> ResponseTemplate {
+    let mut events = items
+        .iter()
+        .map(|item| json!({"type": "response.output_item.done", "item": item}))
+        .collect::<Vec<_>>();
+    events.push(json!({
+        "type": "response.completed",
+        "response": {
+            "id": "resp_turn",
+            "status": "completed",
+            "usage": {
+                "input_tokens": 40,
+                "input_tokens_details": {"cached_tokens": 32},
+                "output_tokens": 8,
+                "total_tokens": 48
+            }
+        }
+    }));
+    let body = events.iter().fold(String::new(), |mut body, event| {
+        let _ = write!(body, "data: {event}\n\n");
+
+        body
+    });
+
+    ResponseTemplate::new(200).set_body_raw(body, "text/event-stream")
+}
+
+/// Mounts one streamed Responses API response for requests containing
+/// `marker`.
+async fn respond_streamed(server: &MockServer, marker: &str, items: &[Value], priority: u8) {
+    Mock::given(method("POST"))
+        .and(path("/v1/responses"))
+        .and(body_string_contains(marker))
+        .respond_with(responses_stream(items))
+        .with_priority(priority)
+        .mount(server)
+        .await;
+}
+
+/// Returns an `OpenAI` key and an endpoint at `server`.
+fn openai_environment(server: &MockServer) -> BTreeMap<String, String> {
+    BTreeMap::from([
+        ("HOME".to_string(), "/tmp".to_string()),
+        ("OPENAI_API_KEY".to_string(), "sk-openai".to_string()),
+        (
+            "OPENAI_BASE_URL".to_string(),
+            format!("{}/v1", server.uri()),
+        ),
+        (
+            "PATH".to_string(),
+            std::env::var("PATH").unwrap_or_default(),
+        ),
+    ])
+}
+
+#[tokio::test]
+async fn openai_turn_streams_responses_and_replays_reasoning_with_tool_results() {
+    // Arrange
+    let server = MockServer::start().await;
+    let reasoning = json!({
+        "type": "reasoning",
+        "id": "rs_turn",
+        "summary": [],
+        "encrypted_content": "gAAAA-encrypted-turn-reasoning"
+    });
+    respond_streamed(
+        &server,
+        r#""type":"function_call_output""#,
+        &[json!({
+            "type": "message",
+            "role": "assistant",
+            "content": [{
+                "type": "output_text",
+                "text": json!({"answer": "Notes read", "questions": []}).to_string()
+            }]
+        })],
+        1,
+    )
+    .await;
+    respond_streamed(
+        &server,
+        "Read the notes",
+        &[
+            reasoning.clone(),
+            json!({
+                "type": "function_call",
+                "call_id": "call_notes",
+                "name": "read",
+                "arguments": json!({"path": "notes.txt"}).to_string()
+            }),
+        ],
+        2,
+    )
+    .await;
+    let data_root = tempfile::tempdir().expect("data root");
+    let worktree = tempfile::tempdir().expect("worktree");
+    std::fs::write(worktree.path().join("notes.txt"), "hosted notes\n").expect("notes");
+    let channel = create_agent_channel(
+        AgentKind::Harness,
+        None,
+        Some(&config(data_root.path(), openai_environment(&server))),
+    );
+
+    // Act
+    let (result, _) = run_turn(
+        &channel,
+        "session-openai",
+        turn_request(worktree.path(), "gpt-6.1-sol", "Read the notes"),
+    )
+    .await;
+
+    // Assert
+    let result = result.expect("OpenAI turn should succeed");
+    assert_eq!(result.assistant_message.answer, "Notes read");
+    let requests = server.received_requests().await.unwrap_or_default();
+    assert_eq!(requests.len(), 2);
+    assert!(requests.iter().all(|request| {
+        request
+            .headers
+            .get("authorization")
+            .is_some_and(|value| value == "Bearer sk-openai")
+    }));
+    let bodies = requests
+        .iter()
+        .map(|request| serde_json::from_slice::<Value>(&request.body).expect("JSON body"))
+        .collect::<Vec<_>>();
+    for body in &bodies {
+        assert_eq!(body["model"], "gpt-6.1-sol");
+        assert_eq!(body["store"], false);
+        assert_eq!(body["stream"], true);
+        assert_eq!(body["reasoning"], json!({"effort": "low"}));
+        assert_eq!(body["input"][0]["role"], "developer");
+        assert!(
+            body["prompt_cache_key"]
+                .as_str()
+                .is_some_and(|key| key.starts_with("ag-session-"))
+        );
+    }
+    let replayed = bodies[1]["input"]
+        .as_array()
+        .expect("input items")
+        .iter()
+        .collect::<Vec<_>>();
+    let reasoning_at = replayed
+        .iter()
+        .position(|item| **item == reasoning)
+        .expect("the turn's reasoning should be replayed");
+    assert_eq!(replayed[reasoning_at + 1]["type"], "function_call");
+    assert_eq!(replayed[reasoning_at + 1]["call_id"], "call_notes");
+    assert_eq!(replayed[reasoning_at + 2]["type"], "function_call_output");
+    assert!(
+        replayed[reasoning_at + 2]["output"]
+            .as_str()
+            .is_some_and(|output| output.contains("hosted notes"))
+    );
+}
+
 #[tokio::test]
 async fn configuration_failures_stop_before_any_provider_call() {
     // Arrange
@@ -954,6 +1113,12 @@ async fn configuration_failures_stop_before_any_provider_call() {
     let (model_error, _) = run_turn(
         &channel,
         "session-model",
+        turn_request(worktree.path(), "gpt-5.3-codex-spark", "Hi"),
+    )
+    .await;
+    let (openai_key_error, _) = run_turn(
+        &channel,
+        "session-openai-key",
         turn_request(worktree.path(), "gpt-6.1-sol", "Hi"),
     )
     .await;
@@ -972,6 +1137,11 @@ async fn configuration_failures_stop_before_any_provider_call() {
         model_error
             .expect_err("unknown model should fail")
             .contains("does not serve model")
+    );
+    let openai_key_error = openai_key_error.expect_err("missing OpenAI key should fail");
+    assert!(
+        openai_key_error.contains("Set OPENAI_API_KEY"),
+        "{openai_key_error}"
     );
     assert!(
         id_error

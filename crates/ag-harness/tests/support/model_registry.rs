@@ -336,15 +336,34 @@ async fn registered_builtin_configurations_execute_through_the_selected_client()
             .first()
             .copied()
             .unwrap_or("served-model");
+        let (endpoint, response) = if *provider == ModelProvider::OpenAi {
+            let completed = json!({"type":"response.completed","response":{
+                "id":"response", "model":model, "status":"completed",
+                "output":[{"type":"message","role":"assistant","content":[
+                    {"type":"output_text","text":"{\"answer\":\"fixture\"}"}
+                ]}]
+            }});
+            (
+                "/responses",
+                ResponseTemplate::new(200)
+                    .set_body_raw(format!("data: {completed}\n\n"), "text/event-stream"),
+            )
+        } else {
+            (
+                "/chat/completions",
+                ResponseTemplate::new(200).set_body_json(json!({
+                    "id":"response", "model":model,
+                    "choices":[{"finish_reason":"stop","message":{"content":"{\"answer\":\"fixture\"}"}}]
+                })),
+            )
+        };
         Mock::given(method("POST"))
-            .and(path("/chat/completions"))
+            .and(path(endpoint))
             .and(body_partial_json(json!({"model":model})))
-            .respond_with(ResponseTemplate::new(200).set_body_json(json!({
-                "id":"response", "model":model,
-                "choices":[{"finish_reason":"stop","message":{"content":"{\"answer\":\"fixture\"}"}}]
-            })))
+            .respond_with(response)
             .expect(1)
-            .mount(&server).await;
+            .mount(&server)
+            .await;
         let client = ModelConfiguration::new(*provider, model)
             .base_url(server.uri())
             .client_from_environment(|_| Ok("fixture-key".into()))

@@ -206,6 +206,6 @@ async fn returns_request_error_for_malformed_response() {
     assert!(
         error
             .to_string()
-            .starts_with("model request failed: Chat Completions returned an invalid response:")
+            .starts_with("model request failed: model API returned an invalid response:")
     );
 }

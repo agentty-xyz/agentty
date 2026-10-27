@@ -3,20 +3,36 @@ use std::io::{Read as _, Write as _};
 use std::net::TcpListener;
 use std::time::Duration;
 
-use crate::chat_completion::{
-    ChatCompletionBackend, ChatCompletionClient as _, ChatCompletionError,
-    ChatCompletionProviderPolicy, ChatCompletionRequest, MAX_PROVIDER_RETRY_DELAY,
-    MAX_RATE_LIMIT_RETRIES, MAX_RETRY_DELAY, REQUEST_TIMEOUT, RETRY_DELAY, ReasoningFormat,
-    ReqwestChatCompletionClient, SUCCESS_BODY_LIMIT_BYTES, StructuredOutputMode,
-    append_success_chunk, default_client, rate_limit_retry_delay,
+use serde_json::Value;
+
+use super::{
+    HttpTransport, MAX_PROVIDER_RETRY_DELAY, MAX_RATE_LIMIT_RETRIES, MAX_RETRY_DELAY,
+    ProviderRequest, RETRY_DELAY, SUCCESS_BODY_LIMIT_BYTES, TransportError, append_success_chunk,
+    has_context_overflow_marker, rate_limit_retry_delay,
 };
 use crate::model;
 
-fn max_as_xhigh(effort: model::ReasoningEffort) -> &'static str {
-    match effort {
-        model::ReasoningEffort::Max => "xhigh",
-        _ => effort.as_str(),
+const REQUEST_TIMEOUT: Duration = Duration::from_mins(3);
+
+/// Returns a transport with millisecond retry delays.
+fn transport(request_timeout: Duration) -> HttpTransport {
+    let _ = rustls::crypto::ring::default_provider().install_default();
+
+    HttpTransport {
+        client: reqwest::Client::new(),
+        max_retry_delay: Duration::from_millis(5),
+        request_timeout,
+        retry_delay: Duration::from_millis(1),
     }
+}
+
+/// Returns an authenticated request with an empty body to `address`.
+fn request(address: std::net::SocketAddr) -> ProviderRequest<'static> {
+    ProviderRequest::new(
+        Some("test-key"),
+        format!("http://{address}"),
+        serde_json::json!({}),
+    )
 }
 
 #[test]
@@ -29,7 +45,7 @@ fn rejects_success_chunk_that_exceeds_remaining_capacity() {
         .expect_err("chunk exceeding the limit should fail");
 
     // Assert
-    assert!(matches!(error, ChatCompletionError::ResponseBodyTooLarge));
+    assert!(matches!(error, TransportError::ResponseBodyTooLarge));
 }
 
 #[test]
@@ -38,12 +54,12 @@ fn wraps_transport_error_with_its_source() {
     let source = io::Error::other("connection reset");
 
     // Act
-    let error = ChatCompletionError::transport(source);
+    let error = TransportError::transport(source);
 
     // Assert
     assert_eq!(
         error.to_string(),
-        "Chat Completions transport failed: connection reset"
+        "model API transport failed: connection reset"
     );
     assert_eq!(
         std::error::Error::source(&error)
@@ -56,34 +72,47 @@ fn wraps_transport_error_with_its_source() {
 #[test]
 fn normalizes_transport_error_classification() {
     // Arrange
-    let backend = ChatCompletionBackend::with_client(
-        Some("test-key".to_string()),
-        "https://example.com/v1".to_string(),
-        "model".to_string(),
-        ChatCompletionProviderPolicy {
-            context_overflow_markers: &[],
-            display_name: "Provider",
-            image_input: false,
-            prompt_cache_key: false,
-            reasoning_format: ReasoningFormat::Effort(max_as_xhigh),
-            response_format_with_tools: true,
-            structured_output: StructuredOutputMode::JsonSchema,
-            unsupported_schema_reason: "object schema required",
-        },
-        default_client(),
-    );
-    let transport_error = ChatCompletionError::transport(io::Error::other("offline"));
+    let transport_error = TransportError::transport(io::Error::other("offline"));
+    let oversized = TransportError::ResponseBodyTooLarge;
 
     // Act
-    let error = backend.map_completion_error(transport_error);
+    let error = transport_error.into_model_error("Provider", &[]);
+    let oversized = oversized.into_model_error("Provider", &[]);
 
     // Assert
     assert_eq!(error.error_class(), model::ErrorClass::Transport);
     assert_eq!(error.http_status(), None);
     assert_eq!(
         error.to_string(),
-        "model request failed: Chat Completions transport failed: offline"
+        "model request failed: model API transport failed: offline"
     );
+    assert_eq!(oversized.error_class(), model::ErrorClass::ResponseTooLarge);
+}
+
+#[test]
+fn context_overflow_markers_match_case_insensitively() {
+    // Arrange
+    let shared = "Error code: CONTEXT_LENGTH_EXCEEDED";
+    let provider = "Your input Exceeds The Context Window of this model";
+
+    // Act / Assert
+    assert!(has_context_overflow_marker(shared, &[]));
+    assert!(has_context_overflow_marker(
+        provider,
+        &["exceeds the context window"]
+    ));
+    assert!(!has_context_overflow_marker(provider, &[]));
+}
+
+#[test]
+fn streaming_transport_keeps_the_whole_request_bound() {
+    // Arrange / Act
+    let transport = HttpTransport::streaming(Duration::from_secs(7), Duration::from_secs(70));
+
+    // Assert
+    assert_eq!(transport.request_timeout, Duration::from_secs(70));
+    assert_eq!(transport.retry_delay, RETRY_DELAY);
+    assert_eq!(transport.max_retry_delay, MAX_RETRY_DELAY);
 }
 
 #[test]
@@ -178,29 +207,17 @@ async fn retries_rate_limit_response_before_decoding_success() {
             }
         }
     });
-    let _ = rustls::crypto::ring::default_provider().install_default();
-    let client = ReqwestChatCompletionClient {
-        client: reqwest::Client::new(),
-        max_retry_delay: Duration::from_millis(5),
-        request_timeout: REQUEST_TIMEOUT,
-        retry_delay: Duration::from_millis(1),
-    };
-    let request = ChatCompletionRequest::new(
-        Some("test-key"),
-        format!("http://{address}"),
-        serde_json::json!({}),
-    );
+    let client = transport(REQUEST_TIMEOUT);
 
     // Act
-    let completion = client
-        .complete(request)
+    let body = client
+        .post_json::<Value>(&request(address))
         .await
-        .expect("retry should recover")
-        .expect("response should contain one choice");
+        .expect("retry should recover");
     server.await.expect("retry server should finish");
 
     // Assert
-    assert_eq!(completion.content.as_deref(), Some(r#"{"message":"ok"}"#));
+    assert_eq!(body["choices"][0]["finish_reason"], "stop");
 }
 
 #[tokio::test]
@@ -244,29 +261,17 @@ async fn retries_transport_failure_before_decoding_success() {
         )
         .expect("success response should be written");
     });
-    let _ = rustls::crypto::ring::default_provider().install_default();
-    let client = ReqwestChatCompletionClient {
-        client: reqwest::Client::new(),
-        max_retry_delay: Duration::from_millis(5),
-        request_timeout: REQUEST_TIMEOUT,
-        retry_delay: Duration::from_millis(1),
-    };
-    let request = ChatCompletionRequest::new(
-        Some("test-key"),
-        format!("http://{address}"),
-        serde_json::json!({}),
-    );
+    let client = transport(REQUEST_TIMEOUT);
 
     // Act
-    let completion = client
-        .complete(request)
+    let body = client
+        .post_json::<Value>(&request(address))
         .await
-        .expect("transport retry should recover")
-        .expect("response should contain one choice");
+        .expect("transport retry should recover");
     server.await.expect("retry server should finish");
 
     // Assert
-    assert_eq!(completion.content.as_deref(), Some(r#"{"message":"ok"}"#));
+    assert_eq!(body["choices"][0]["finish_reason"], "stop");
 }
 
 #[tokio::test]
@@ -294,22 +299,11 @@ async fn timed_out_request_is_reported_without_a_retry() {
 
         accepted.len()
     });
-    let _ = rustls::crypto::ring::default_provider().install_default();
-    let client = ReqwestChatCompletionClient {
-        client: reqwest::Client::new(),
-        max_retry_delay: Duration::from_millis(5),
-        request_timeout: Duration::from_millis(50),
-        retry_delay: Duration::from_millis(1),
-    };
-    let request = ChatCompletionRequest::new(
-        Some("test-key"),
-        format!("http://{address}"),
-        serde_json::json!({}),
-    );
+    let client = transport(Duration::from_millis(50));
 
     // Act
     let error = client
-        .complete(request)
+        .post_json::<Value>(&request(address))
         .await
         .map(|_| ())
         .expect_err("a stalled server must time out");
@@ -323,7 +317,7 @@ async fn timed_out_request_is_reported_without_a_retry() {
     assert!(
         matches!(
             &error,
-            ChatCompletionError::Transport(source)
+            TransportError::Transport(source)
                 if source
                     .downcast_ref::<reqwest::Error>()
                     .is_some_and(reqwest::Error::is_timeout)
@@ -365,33 +359,19 @@ async fn retains_http_status_when_error_body_read_fails() {
                 .expect("truncated-response server should write the response");
         }
     });
-    let _ = rustls::crypto::ring::default_provider().install_default();
-    let client = ReqwestChatCompletionClient {
-        client: reqwest::Client::new(),
-        max_retry_delay: Duration::from_millis(5),
-        request_timeout: REQUEST_TIMEOUT,
-        retry_delay: Duration::from_millis(1),
-    };
-    let request = ChatCompletionRequest::new(
-        Some("test-key"),
-        format!("http://{address}"),
-        serde_json::json!({}),
-    );
+    let client = transport(REQUEST_TIMEOUT);
 
     // Act
-    let result = client.complete(request).await;
+    let result = client.post_json::<Value>(&request(address)).await;
     server
         .await
         .expect("truncated-response server should finish");
 
     // Assert
-    assert!(result.is_err(), "truncated HTTP error response should fail");
-    let error = result
-        .err()
-        .expect("truncated HTTP error response should contain an error");
+    let error = result.expect_err("truncated HTTP error response should fail");
     assert!(matches!(
         &error,
-        ChatCompletionError::Http { status, .. }
+        TransportError::Http { status, .. }
             if *status == reqwest::StatusCode::TOO_MANY_REQUESTS
     ));
     assert!(error.to_string().contains("error body read failed"));
@@ -428,28 +408,17 @@ async fn reports_error_body_read_failure_without_partial_body() {
             )
             .expect("server should write headers");
     });
-    let _ = rustls::crypto::ring::default_provider().install_default();
-    let client = ReqwestChatCompletionClient {
-        client: reqwest::Client::new(),
-        max_retry_delay: Duration::from_millis(5),
-        request_timeout: REQUEST_TIMEOUT,
-        retry_delay: Duration::from_millis(1),
-    };
-    let request = ChatCompletionRequest::new(
-        Some("test-key"),
-        format!("http://{address}"),
-        serde_json::json!({}),
-    );
+    let client = transport(REQUEST_TIMEOUT);
 
     // Act
-    let result = client.complete(request).await;
+    let result = client.post_json::<Value>(&request(address)).await;
     server.await.expect("server should finish");
-    let error = result.err().expect("empty truncated response should fail");
+    let error = result.expect_err("empty truncated response should fail");
 
     // Assert
     assert!(matches!(
         &error,
-        ChatCompletionError::Http { status, .. }
+        TransportError::Http { status, .. }
             if *status == reqwest::StatusCode::INTERNAL_SERVER_ERROR
     ));
     assert!(error.to_string().contains("[error body read failed:"));

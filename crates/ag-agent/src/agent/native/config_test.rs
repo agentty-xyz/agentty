@@ -57,6 +57,26 @@ fn default_model_follows_the_first_configured_provider() {
             ]),
             Some(AgentModel::MuseSpark13),
         ),
+        (environment(&[("OPENAI_API_KEY", " ")]), None),
+        (
+            environment(&[("OPENAI_API_KEY", "sk-key")]),
+            Some(AgentModel::Gpt61Sol),
+        ),
+        (
+            environment(&[
+                ("DASHSCOPE_API_KEY", "key"),
+                ("DASHSCOPE_BASE_URL", "http://qwen"),
+                ("OPENAI_API_KEY", "sk-key"),
+            ]),
+            Some(AgentModel::Qwen38Max),
+        ),
+        (
+            environment(&[
+                ("OPENAI_API_KEY", "sk-key"),
+                ("OPENAI_COMPATIBLE_MODEL", "qwen3:latest"),
+            ]),
+            Some(AgentModel::OpenAiCompatible),
+        ),
         (environment(&[("OPENAI_COMPATIBLE_MODEL", " ")]), None),
         (
             environment(&[("OPENAI_COMPATIBLE_MODEL", "qwen3:latest")]),
@@ -231,7 +251,8 @@ fn model_selection_round_trips_registration_keys() {
 
 #[test]
 /// Registers each served model under the current revision with its declared
-/// context profile, and uncataloged models with the conservative fallback.
+/// context profile: the provider catalog's for `OpenAI` models, Agentty's for
+/// the others, and the conservative fallback for uncataloged models.
 fn registrations_declare_revision_and_per_model_context_profiles() {
     // Arrange
     let environment = environment(&[
@@ -240,23 +261,45 @@ fn registrations_declare_revision_and_per_model_context_profiles() {
         ("KIMI_API_KEY", "key"),
         ("KIMI_BASE_URL", "http://kimi"),
         ("MODEL_API_KEY", "key"),
+        ("OPENAI_API_KEY", "sk-key"),
     ]);
-    let models = ModelProvider::all()
-        .iter()
-        .flat_map(|provider| provider.known_models().iter().copied());
+    let models = ModelProvider::all().iter().flat_map(|provider| {
+        provider
+            .known_models()
+            .iter()
+            .map(move |model| (*provider, *model))
+    });
 
     // Act / Assert
-    for model in models {
+    for (provider, model) in models {
         let selection = ModelSelection::resolve(model, &environment).expect("served model");
         let registry = selection.registry(&environment, None).expect("registry");
         let registration = registry.resolve(&selection.key()).expect("registration");
-        let expected = AgentModel::parse_persisted(model)
-            .ok()
-            .and_then(model_profile::declared)
-            .unwrap_or(FALLBACK_MODEL_PROFILE);
+        let expected = if provider == ModelProvider::OpenAi {
+            provider
+                .declared_profile(model, |_| Err(std::env::VarError::NotPresent))
+                .expect("OpenAI profiles read no environment")
+        } else {
+            AgentModel::parse_persisted(model)
+                .ok()
+                .and_then(model_profile::declared)
+        }
+        .unwrap_or(FALLBACK_MODEL_PROFILE);
         assert_eq!(registration.identity().revision(), "agentty-native-2");
         assert_eq!(registration.capabilities().profile, expected, "{model}");
     }
+    let sol = ModelSelection::resolve("gpt-6.1-sol", &environment).expect("served model");
+    let sol_registry = sol.registry(&environment, None).expect("registry");
+    let sol_profile = sol_registry
+        .resolve("openai/gpt-6.1-sol")
+        .expect("registration")
+        .capabilities()
+        .profile;
+    assert_ne!(
+        Some(sol_profile),
+        model_profile::declared(AgentModel::Gpt61Sol),
+        "the harness must not reuse the Codex app-server compaction profile"
+    );
     assert_eq!(FALLBACK_MODEL_PROFILE.context_window_tokens(), 128_000);
     assert_eq!(FALLBACK_MODEL_PROFILE.reserved_tokens(), 49_673);
     assert_eq!(FALLBACK_MODEL_PROFILE.input_token_budget(), 78_327);
@@ -312,6 +355,8 @@ fn bash_environment_orders_essentials_and_drops_provider_variables() {
         ("HOME", "/home/test"),
         ("KIMI_BASE_URL", "http://kimi"),
         ("MODEL_API_KEY", "secret"),
+        ("OPENAI_API_KEY", "secret"),
+        ("OPENAI_BASE_URL", "https://proxy.example/v1"),
         ("OPENAI_COMPATIBLE_API_KEY", "secret"),
         ("PATH", "/usr/bin"),
     ]);
