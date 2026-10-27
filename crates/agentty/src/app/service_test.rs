@@ -730,6 +730,9 @@ fn background_event_labels_preserve_variant_identity() {
         AppEvent::AgentCliVersionsUpdated {
             agent_clis: Vec::new(),
         },
+        AppEvent::HarnessModelsUpdated {
+            options: Vec::new(),
+        },
         AppEvent::UpdateStatusChanged {
             update_status: UpdateStatus::InProgress {
                 version: "1.0".to_string(),

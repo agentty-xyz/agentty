@@ -15,8 +15,8 @@ use wiremock::{Mock, MockServer, ResponseTemplate};
 
 use super::{
     BudgetedModel, FALLBACK_MODEL_PROFILE, ModelSelection, NativeHarnessConfig, ResumeOnlyModel,
-    bash_environment, harness_models, output_schema, reasoning_effort, repository,
-    running_context_window, turn_options, unicode_environment,
+    bash_environment, harness_models, output_schema, provider_display_name, reasoning_effort,
+    repository, running_context_window, turn_options, unicode_environment,
 };
 use crate::agent::model_profile;
 
@@ -143,6 +143,19 @@ async fn harness_models_list_local_then_paid_models_with_their_status() {
             .declared_profile("gpt-6.1-sol", |_| Err(std::env::VarError::NotPresent))
             .expect("OpenAI profiles read no environment")
             .map(ModelProfile::context_window_tokens)
+    );
+}
+
+#[test]
+/// Names every provider the way users know it.
+fn providers_have_display_names() {
+    // Arrange, Act, Assert
+    assert_eq!(
+        ModelProvider::all()
+            .iter()
+            .map(|provider| provider_display_name(*provider))
+            .collect::<Vec<_>>(),
+        ["Muse", "Kimi", "Qwen", "OpenAI-compatible server"]
     );
 }
 

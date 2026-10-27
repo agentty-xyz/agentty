@@ -178,10 +178,11 @@ pub(crate) async fn harness_models(
 /// Returns the served local models, with the configured model first when the
 /// server does not list it.
 async fn local_models(environment: &BTreeMap<String, String>) -> Vec<HarnessModelOption> {
-    let inventory = match ModelProvider::OpenAiCompatible.local_server(lookup(environment)) {
-        Ok(Some(server)) => server.inventory().await.ok(),
-        Ok(None) | Err(_) => None,
-    };
+    let server = ModelProvider::OpenAiCompatible
+        .local_server(lookup(environment))
+        .ok()
+        .flatten();
+    let inventory = async { server?.inventory().await.ok() }.await;
     let provider = inventory
         .as_ref()
         .map_or(LocalServerKind::OpenAiCompatible, |inventory| {
@@ -509,10 +510,8 @@ impl ModelSelection {
             .map_err(failure("Invalid resume-only harness model"))?
             .metadata()
             .clone();
-        let registry = self.register(
-            ResumeOnlyModel { metadata },
-            self.profile(context.environment, None)?,
-        )?;
+        let profile = self.profile(context.environment, None)?;
+        let registry = self.register(ResumeOnlyModel { metadata }, profile)?;
 
         self.harness_from(&registry, context, observer)
     }

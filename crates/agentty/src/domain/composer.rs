@@ -491,6 +491,24 @@ impl PromptSlashState {
         }
     }
 
+    /// Opens `/model` on its agent list, or, in a Harness session, which
+    /// offers only Harness models, straight on the harness model list.
+    ///
+    /// Returns whether the harness model list opened, so the caller can
+    /// refresh it.
+    pub fn open_model_stage(&mut self) -> bool {
+        let is_harness_session = self.available_agent_kinds == [AgentKind::Harness];
+        self.selected_agent = is_harness_session.then_some(AgentKind::Harness);
+        self.selected_index = 0;
+        self.stage = if is_harness_session {
+            PromptSlashStage::Model
+        } else {
+            PromptSlashStage::Agent
+        };
+
+        is_harness_session
+    }
+
     /// Resets slash state back to command selection.
     pub fn reset(&mut self) {
         self.selected_agent = None;

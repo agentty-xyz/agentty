@@ -945,7 +945,11 @@ async fn handle_prompt_slash_submit(app: &mut App, prompt_context: &PromptContex
             open_prompt_response_style_stage(app, prompt_context.session_index);
         }
         Some(PromptSuggestionSelection::Command(_)) => {
-            open_prompt_model_stage(app);
+            if let AppMode::Prompt { slash_state, .. } = &mut app.mode
+                && slash_state.open_model_stage()
+            {
+                app.refresh_harness_models();
+            }
         }
         Some(PromptSuggestionSelection::Agent(selected_agent)) => {
             if let AppMode::Prompt { slash_state, .. } = &mut app.mode {
@@ -1079,26 +1083,6 @@ fn open_prompt_permission_mode_stage(app: &mut App, session_index: usize) {
         slash_state.selected_agent = None;
         slash_state.selected_index = selected_index;
     }
-}
-
-/// Opens `/model` on its agent list, or, in a Harness session, which offers
-/// only Harness models, straight on the harness model list while a
-/// background refresh updates it.
-fn open_prompt_model_stage(app: &mut App) {
-    let AppMode::Prompt { slash_state, .. } = &mut app.mode else {
-        return;
-    };
-    let is_harness_session = slash_state.available_agent_kinds == [AgentKind::Harness];
-    slash_state.selected_index = 0;
-    if is_harness_session {
-        slash_state.selected_agent = Some(AgentKind::Harness);
-        slash_state.stage = PromptSlashStage::Model;
-        app.refresh_harness_models();
-
-        return;
-    }
-    slash_state.selected_agent = None;
-    slash_state.stage = PromptSlashStage::Agent;
 }
 
 /// Opens `/reasoning` with the effective session level preselected.
