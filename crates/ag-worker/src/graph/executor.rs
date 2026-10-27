@@ -122,6 +122,7 @@ pub struct GraphExecutor {
     repository: Arc<dyn GraphDispatchRepository>,
     resources: Arc<GraphResources>,
     runner: Arc<dyn GraphNodeRunner>,
+    wave_limit: Option<NonZeroUsize>,
 }
 
 impl GraphExecutor {
@@ -146,7 +147,18 @@ impl GraphExecutor {
             repository,
             resources,
             runner,
+            wave_limit: None,
         }
+    }
+
+    /// Bounds the nodes one wave admits, below the shared graph capacity.
+    /// Each wave still settles before the next begins, so a failure stops
+    /// later waves after draining its admitted peers.
+    #[must_use]
+    pub fn with_wave_limit(mut self, limit: NonZeroUsize) -> Self {
+        self.wave_limit = Some(limit);
+
+        self
     }
 
     /// Dispatches ready branches concurrently, then reevaluates joins. Returns
@@ -177,6 +189,12 @@ impl GraphExecutor {
             let initial_receipt_count = receipts.len();
             let mut reusable_capacity = None;
             for node in &graph.nodes {
+                if self
+                    .wave_limit
+                    .is_some_and(|limit| receipts.len() - initial_receipt_count >= limit.get())
+                {
+                    break;
+                }
                 let Some(capacity) = reusable_capacity
                     .take()
                     .or_else(|| self.resources.try_capacity(&self.capacity_wake))
@@ -532,13 +550,12 @@ impl EnvironmentGuard {
 
         match node.execution.workspace_access {
             GraphWorkspaceAccess::SharedRead => Ok(Self::Read {
-                _lease: environment.clone().try_read_owned().map_err(|error| {
-                    EnvironmentContention {
-                        error,
-                        gate: environment,
-                        writer: false,
-                    }
-                })?,
+                _lease: EnvironmentContention::acquire_reader(environment)?,
+            }),
+            GraphWorkspaceAccess::BackgroundRead => Ok(Self::Read {
+                _lease: EnvironmentContention::acquire_reader(
+                    resources.background_readers(&node.env_id),
+                )?,
             }),
             GraphWorkspaceAccess::ExclusiveWrite => Ok(Self::Write {
                 _background: EnvironmentContention::acquire_writer(
@@ -557,6 +574,16 @@ struct EnvironmentContention {
 }
 
 impl EnvironmentContention {
+    fn acquire_reader(
+        gate: Arc<RwLock<()>>,
+    ) -> Result<tokio::sync::OwnedRwLockReadGuard<()>, Self> {
+        gate.clone().try_read_owned().map_err(|error| Self {
+            error,
+            gate,
+            writer: false,
+        })
+    }
+
     fn acquire_writer(
         gate: Arc<RwLock<()>>,
     ) -> Result<tokio::sync::OwnedRwLockWriteGuard<()>, Self> {

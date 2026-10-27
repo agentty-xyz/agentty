@@ -1,5 +1,6 @@
 //! Total elapsed-time budget for focused-review provider submissions.
 
+use std::sync::Arc;
 use std::time::Duration;
 
 use ag_contracts::{OneShotError, OneShotRequest, OneShotSubmission};
@@ -7,29 +8,36 @@ use ag_worker::RunClient;
 use async_trait::async_trait;
 use tokio::time::{Instant, timeout_at};
 
-/// Applies one deadline to every summary, batch, repair, and cross-file call.
-pub(crate) struct ReviewDeadlineClient<'a> {
-    client: &'a dyn RunClient,
+/// Applies one deadline to every summary, batch, repair, and cross-file call,
+/// including calls made by concurrent review graph nodes.
+pub(crate) struct ReviewDeadlineClient {
+    client: Arc<dyn RunClient>,
     deadline: Instant,
 }
 
-impl<'a> ReviewDeadlineClient<'a> {
+impl ReviewDeadlineClient {
     /// Starts a total time budget. Tests supply short budgets through the same
     /// boundary used for the production review deadline.
-    pub(crate) fn new(client: &'a dyn RunClient, duration: Duration) -> Self {
+    pub(crate) fn new(client: Arc<dyn RunClient>, duration: Duration) -> Self {
         Self {
             client,
             deadline: Instant::now() + duration,
         }
     }
 
-    fn expired() -> OneShotError {
+    /// Absolute instant after which no review work may start or wait.
+    pub(crate) fn deadline(&self) -> Instant {
+        self.deadline
+    }
+
+    /// Reported for every review phase or wait stopped by the deadline.
+    pub(crate) fn expired() -> OneShotError {
         OneShotError::new("Focused review deadline exceeded. Press `f` to retry.")
     }
 }
 
 #[async_trait]
-impl RunClient for ReviewDeadlineClient<'_> {
+impl RunClient for ReviewDeadlineClient {
     async fn submit(&self, request: OneShotRequest) -> Result<OneShotSubmission, OneShotError> {
         if Instant::now() >= self.deadline {
             return Err(Self::expired());

@@ -18,16 +18,47 @@ use tokio::sync::mpsc;
 use tokio::time::{Instant, sleep};
 
 use super::{
-    MockVersionTaskRunner, RealVersionTaskRunner, ReviewAssistTaskInput, SessionDiffTaskInput,
-    SessionDiffTaskSource, TaskService, VERSION_CHECK_INTERVAL, VersionTaskRunner,
-    review_comment_anchor_side_order,
+    MockVersionTaskRunner, REVIEW_DEADLINE, RealVersionTaskRunner, ReviewAssistLaunch,
+    ReviewAssistTaskInput, SessionDiffTaskInput, SessionDiffTaskSource, TaskService,
+    VERSION_CHECK_INTERVAL, VersionTaskRunner, review_comment_anchor_side_order,
 };
 use crate::app::error::AppError;
+use crate::app::review_graph::test_support::{ReviewGraphFixture, SESSION_ID};
 use crate::app::review_rules::ReviewRules;
 use crate::app::{AppEvent, UpdateStatus};
 use crate::domain::agent::{AgentCliInfo, AgentKind, AgentModel, AgentSelection, ReasoningLevel};
 use crate::domain::file_entry::FileEntry;
 use crate::infra::fs::MockFsClient;
+
+/// Generates review text through the production graph with a fresh session.
+async fn review_assist_text(
+    session_folder: &Path,
+    review_agent: crate::app::review::ReviewAgent,
+    review_diff: &str,
+    session_chat_history: Option<&str>,
+    rules: ReviewRules,
+    client: impl RunClient + 'static,
+    progress: impl Fn(crate::app::review::ReviewProgress) + Send + Sync + 'static,
+) -> Result<String, AppError> {
+    let fixture = ReviewGraphFixture::new().await;
+
+    TaskService::review_assist_text_with_client(
+        &fixture.host,
+        ReviewAssistLaunch {
+            deadline: REVIEW_DEADLINE,
+            graph_id: "focused-review:task".into(),
+            review_agent,
+            review_diff: review_diff.to_string(),
+            session_chat_history: session_chat_history.map(str::to_string),
+            session_folder: session_folder.to_path_buf(),
+            session_id: SESSION_ID.into(),
+        },
+        rules,
+        Arc::new(client),
+        progress,
+    )
+    .await
+}
 
 async fn project_review_rules(config: serde_json::Value) -> ReviewRules {
     let mut fs = MockFsClient::new();
@@ -51,7 +82,7 @@ async fn oversized_selected_criteria_fail_before_provider_submission() {
     client.expect_submit().never();
 
     // Act
-    let result = TaskService::review_assist_text_with_client(
+    let result = review_assist_text(
         Path::new("project"),
         (
             AgentSelection::new(AgentKind::Claude, AgentModel::ClaudeSonnet55),
@@ -60,8 +91,8 @@ async fn oversized_selected_criteria_fail_before_provider_submission() {
         ),
         "diff --git a/src/x.rs b/src/x.rs\n@@ -1 +1 @@\n-old\n+new\n",
         None,
-        &rules,
-        &client,
+        rules,
+        client,
         |_| {},
     )
     .await;
@@ -135,7 +166,7 @@ async fn final_passes_keep_original_criteria_when_summaries_retain_only_some_pat
     });
 
     // Act
-    let result = TaskService::review_assist_text_with_client(
+    let result = review_assist_text(
         Path::new("project"),
         (
             AgentSelection::new(AgentKind::Claude, AgentModel::ClaudeSonnet55),
@@ -144,8 +175,8 @@ async fn final_passes_keep_original_criteria_when_summaries_retain_only_some_pat
         ),
         &diff,
         None,
-        &rules,
-        &client,
+        rules,
+        client,
         |_| {},
     )
     .await
@@ -191,7 +222,7 @@ async fn oversized_review_batches_original_diff_and_discloses_summarized_history
     });
 
     // Act
-    let result = TaskService::review_assist_text_with_client(
+    let result = review_assist_text(
         Path::new("."),
         (
             AgentSelection::new(AgentKind::Claude, AgentModel::ClaudeSonnet55),
@@ -200,8 +231,8 @@ async fn oversized_review_batches_original_diff_and_discloses_summarized_history
         ),
         &"+change\n".repeat(160_000),
         Some(&"decision\n".repeat(20_000)),
-        &crate::app::review_rules::ReviewRules::default(),
-        &client,
+        crate::app::review_rules::ReviewRules::default(),
+        client,
         |_| {},
     )
     .await
@@ -939,10 +970,7 @@ async fn spawn_review_assist_task_with_client_emits_completed_review() {
     let input = ReviewAssistTaskInput {
         fs_client: Arc::new(crate::infra::fs::RealFsClient),
         request_id,
-        repositories: crate::infra::db::Database::in_memory()
-            .await
-            .expect("database")
-            .into(),
+        graph_host: ReviewGraphFixture::new().await.host,
         app_event_tx,
         diff_hash: 42,
         reasoning_level: ReasoningLevel::XHigh,
@@ -950,7 +978,7 @@ async fn spawn_review_assist_task_with_client_emits_completed_review() {
         review_selection: AgentSelection::new(AgentKind::Gemini, AgentModel::Gemini31Pro),
         session_chat_history: None,
         session_folder: PathBuf::from("/tmp/review-assist"),
-        session_id: "session-42".into(),
+        session_id: SESSION_ID.into(),
         speed_mode: crate::domain::agent::SpeedMode::Fast,
     };
 
@@ -1003,7 +1031,7 @@ async fn spawn_review_assist_task_with_client_emits_completed_review() {
     // Assert
     assert!(matches!(app_event, AppEvent::ReviewPrepared {
         diff_hash, review_text, session_id, request_id: completed_id,
-    } if diff_hash == 42 && session_id.as_str() == "session-42" && completed_id == request_id
+    } if diff_hash == 42 && session_id.as_str() == SESSION_ID && completed_id == request_id
         && review_text.contains("Review completed.") && review_text.contains("Processed files: 1/1.")));
 }
 
@@ -1038,7 +1066,7 @@ async fn review_assist_text_with_client_returns_one_shot_error_on_submit_failure
         .returning(|_| Err(OneShotError::new("submit failed")));
 
     // Act
-    let result = TaskService::review_assist_text_with_client(
+    let result = review_assist_text(
         session_folder,
         (
             review_selection,
@@ -1047,8 +1075,8 @@ async fn review_assist_text_with_client_returns_one_shot_error_on_submit_failure
         ),
         review_diff,
         None,
-        &crate::app::review_rules::ReviewRules::default(),
-        &run_client,
+        crate::app::review_rules::ReviewRules::default(),
+        run_client,
         |_| {},
     )
     .await;
@@ -1090,7 +1118,7 @@ async fn review_assist_text_with_client_preserves_review_selection_provider() {
     });
 
     // Act
-    let result = TaskService::review_assist_text_with_client(
+    let result = review_assist_text(
         session_folder,
         (
             review_selection,
@@ -1099,8 +1127,8 @@ async fn review_assist_text_with_client_preserves_review_selection_provider() {
         ),
         review_diff,
         None,
-        &crate::app::review_rules::ReviewRules::default(),
-        &run_client,
+        crate::app::review_rules::ReviewRules::default(),
+        run_client,
         |_| {},
     )
     .await;
@@ -1130,34 +1158,58 @@ impl RunClient for DelayedReviewClient {
     }
 }
 
-#[tokio::test(start_paused = true)]
-async fn focused_review_allows_eighteen_minutes_but_caps_all_phases_at_thirty() {
-    for (delay_minutes, elapsed_minutes, partial) in [(6, 18, false), (11, 30, true)] {
+#[test]
+fn focused_review_phases_share_a_thirty_minute_deadline() {
+    // Arrange / Act / Assert
+    assert_eq!(REVIEW_DEADLINE, Duration::from_mins(30));
+}
+
+#[tokio::test]
+async fn one_deadline_allows_every_phase_within_it_but_caps_their_total() {
+    // Scaled from the production budget: 3 x 6 of 30 minutes completes, while
+    // 3 x 11 stops consolidation at the shared deadline. Persistence runs on
+    // the real clock, so the scale keeps margins well above storage latency.
+    for (delay, partial) in [(200, false), (450, true)] {
         // Arrange
+        let fixture = ReviewGraphFixture::new().await;
         let client = DelayedReviewClient {
-            delay: Duration::from_mins(delay_minutes),
+            delay: Duration::from_millis(delay),
         };
+        let deadline = Duration::from_millis(1_000);
         let started = Instant::now();
 
         // Act
         let text = TaskService::review_assist_text_with_client(
-            Path::new("project"),
-            (
-                AgentSelection::new(AgentKind::Claude, AgentModel::ClaudeSonnet55),
-                ReasoningLevel::Medium,
-                crate::domain::agent::SpeedMode::Normal,
-            ),
-            "diff --git a/src/lib.rs b/src/lib.rs\n@@ -1 +1 @@\n-old\n+new\n",
-            None,
-            &ReviewRules::default(),
-            &client,
+            &fixture.host,
+            ReviewAssistLaunch {
+                deadline,
+                graph_id: "focused-review:deadline".into(),
+                review_agent: (
+                    AgentSelection::new(AgentKind::Claude, AgentModel::ClaudeSonnet55),
+                    ReasoningLevel::Medium,
+                    crate::domain::agent::SpeedMode::Normal,
+                ),
+                review_diff: "diff --git a/src/lib.rs b/src/lib.rs\n@@ -1 +1 @@\n-old\n+new\n"
+                    .into(),
+                session_chat_history: None,
+                session_folder: PathBuf::from("project"),
+                session_id: SESSION_ID.into(),
+            },
+            ReviewRules::default(),
+            Arc::new(client),
             |_| {},
         )
         .await
         .expect("review output");
 
         // Assert
-        assert_eq!(started.elapsed(), Duration::from_mins(elapsed_minutes));
+        let elapsed = started.elapsed();
+        if partial {
+            assert!(elapsed >= deadline, "{elapsed:?}");
+        } else {
+            assert!(elapsed >= Duration::from_millis(delay * 3), "{elapsed:?}");
+            assert!(elapsed < deadline, "{elapsed:?}");
+        }
         assert_eq!(text.contains("Partial review:"), partial);
         assert_eq!(text.contains("deadline exceeded"), partial);
         if partial {
@@ -1557,7 +1609,7 @@ async fn completed_review_retains_checkpoints_until_persistence() {
     let input = ReviewAssistTaskInput {
         fs_client: Arc::new(crate::infra::fs::RealFsClient),
         request_id: uuid::Uuid::nil(),
-        repositories: database.clone().into(),
+        graph_host: ReviewGraphFixture::with_database(database.clone()).host,
         app_event_tx,
         diff_hash: 42,
         reasoning_level: ReasoningLevel::Low,
@@ -1620,7 +1672,7 @@ async fn review_admission_failure_emits_failure_without_submitting_provider_work
     let input = ReviewAssistTaskInput {
         fs_client: Arc::new(crate::infra::fs::RealFsClient),
         request_id,
-        repositories: database.into(),
+        graph_host: ReviewGraphFixture::with_database(database).host,
         app_event_tx,
         diff_hash: 42,
         reasoning_level: ReasoningLevel::Low,
@@ -1670,10 +1722,7 @@ async fn invalid_project_rules_fail_before_submitting_model_work() {
         let input = ReviewAssistTaskInput {
             fs_client: Arc::new(fs),
             request_id: uuid::Uuid::nil(),
-            repositories: crate::infra::db::Database::in_memory()
-                .await
-                .expect("database")
-                .into(),
+            graph_host: ReviewGraphFixture::new().await.host,
             app_event_tx,
             diff_hash: 42,
             reasoning_level: ReasoningLevel::Low,

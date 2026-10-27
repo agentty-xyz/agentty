@@ -70,8 +70,9 @@ contracts.
   bodies, validation/acceptance evidence, and atomic static-node admission. `ag-worker`
   owns deterministic graph dispatch, shared resource leases, and worker adapters behind
   `GraphNodeRunner`. The application owns explicit graph launch, wakeups, and the
-  adapter into ordered session workers. Existing workflow coordinators and execution
-  records retain their authority until their consumers migrate.
+  adapter into ordered session workers. Focused review owns its graph construction and
+  phase runner; phase semantics stay in the review prompt module. The `/plan`
+  coordinator and its execution records retain their authority until it migrates.
 - Environment identity and resolved location contracts belong to `ag-session`. The host
   resolves the shared local Env through existing worktree isolation checks; session
   workflows retain provisioning and cleanup ownership. Conversations and permissions

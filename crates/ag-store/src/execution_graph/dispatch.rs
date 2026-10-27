@@ -418,6 +418,7 @@ impl SqliteGraphRepository {
 
     /// Durable graph claims exclude conflicting active work across graphs.
     /// Other host work must also use the shared `GraphResources` Env lease.
+    /// Writers exclude every active execution, including background readers.
     pub(super) async fn env_busy(
         connection: &mut SqliteConnection,
         graph: &ExecutionGraph,
@@ -439,7 +440,13 @@ impl SqliteGraphRepository {
             if node.execution.workspace_access == GraphWorkspaceAccess::ExclusiveWrite {
                 return Ok(true);
             }
+            // Background readers overlap ordinary operations and utilities;
+            // only active graph writers exclude them.
             let Some(reference) = reference else {
+                if node.execution.workspace_access == GraphWorkspaceAccess::BackgroundRead {
+                    continue;
+                }
+
                 return Ok(true);
             };
             let execution = serde_json::from_str(&reference)

@@ -33,7 +33,7 @@ use crate::infra::fs::FsClient;
 /// Shared app dependencies used by managers and background workflows.
 #[derive(Clone)]
 pub struct AppServices {
-    pub(super) graph_drivers: Arc<Mutex<HashMap<String, crate::app::execution_graph::GraphDriver>>>,
+    pub(super) graph_drivers: crate::app::execution_graph::GraphDrivers,
     pub(super) graph_resources: Arc<ag_worker::GraphResources>,
     pub(super) graph_wake: tokio::sync::watch::Sender<u64>,
     analytics: Option<Analytics>,

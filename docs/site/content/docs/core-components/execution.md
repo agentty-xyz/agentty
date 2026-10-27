@@ -82,11 +82,13 @@ and utility cleanup before reclaiming task-native history outside the worktree.
 Caller drop, parent cancellation, or shutdown stops owned execution. Nested scopes
 retain parent cancellation. Detached utility hosts attach Env leases with
 `with_execution_resource` so worker ownership retains them through cancellation cleanup
-and terminal bookkeeping, even after a caller or review deadline stops waiting. Cleanup
-precedes resource deletion; durable admission closures reject late session work.
-Shutdown has one shared five-second grace period before forcing unfinished runtime work
-to stop. Startup recovery fails abandoned runs rather than replaying potentially
-mutating requests.
+and terminal bookkeeping, even after a caller or deadline stops waiting. A recorded
+coordinating run, such as a focused-review graph node, holds no utility slot while its
+children run; its record settles only after every child, including canceled ones,
+finishes cleanup. Cleanup precedes resource deletion; durable admission closures reject
+late session work. Shutdown has one shared five-second grace period before forcing
+unfinished runtime work to stop. Startup recovery fails abandoned runs rather than
+replaying potentially mutating requests.
 
 ### Execution Policy
 

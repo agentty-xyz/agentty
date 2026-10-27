@@ -287,6 +287,73 @@ async fn read_branches_share_env_but_writers_and_other_host_work_exclude_them() 
 }
 
 #[tokio::test]
+async fn background_readers_overlap_host_work_but_writers_exclude_them() {
+    // Arrange
+    let database = crate::test_support::task_database_fixture().await;
+    let mut graph = graph();
+    graph.nodes = vec![reader("background"), reader("writer")];
+    graph.nodes[0].execution.workspace_access = GraphWorkspaceAccess::BackgroundRead;
+    graph.nodes[1].execution.workspace_access = GraphWorkspaceAccess::ExclusiveWrite;
+    let mut writers = graph.clone();
+    writers.id = "writers".into();
+    writers.nodes = vec![graph.nodes[1].clone()];
+    let mut late = graph.clone();
+    late.id = "late".into();
+    late.nodes = vec![graph.nodes[0].clone()];
+    for graph in [&graph, &writers, &late] {
+        database
+            .graphs()
+            .save_graph(graph, None)
+            .await
+            .expect("graph");
+    }
+    run(&database, "host", Some("session"), RunState::Running).await;
+    let claim_in = |graph: &'static str, node: &'static str, id: &'static str| {
+        let database = &database;
+        async move {
+            database
+                .graph_dispatch()
+                .claim(graph, NonZeroU64::MIN, node, id, Path::new("workspace"))
+                .await
+                .expect("admission")
+        }
+    };
+
+    // Act
+    let background = dispatched(claim(&database, "background", "reader").await);
+
+    // Assert
+    assert_eq!(
+        claim(&database, "writer", "blocked").await,
+        GraphAdmission::Blocked
+    );
+    database
+        .runs()
+        .transition("host", RunState::Completed, None)
+        .await
+        .expect("host settled");
+    assert_eq!(
+        claim(&database, "writer", "still-blocked").await,
+        GraphAdmission::Blocked
+    );
+    finish(&database, &background, r#"{"answer":"done"}"#).await;
+    let writer = dispatched(claim_in("writers", "writer", "writer-run").await);
+    assert_eq!(
+        claim_in("late", "background", "blocked").await,
+        GraphAdmission::Blocked
+    );
+    database
+        .graph_dispatch()
+        .fail(&writer.record, "dispatch failed")
+        .await
+        .expect("failed");
+    assert!(matches!(
+        claim_in("late", "background", "late-run").await,
+        GraphAdmission::Claimed(_)
+    ));
+}
+
+#[tokio::test]
 async fn task_admission_is_atomic_and_failures_never_reopen_terminal_authorities() {
     // Arrange
     let database = crate::test_support::task_database_fixture().await;

@@ -3,8 +3,8 @@
 use std::collections::HashMap;
 use std::future::Future;
 use std::path::Path;
-use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::{Arc, Mutex};
 
 use ag_contracts::{OneShotError, PermissionMode, ProviderCallBudget};
 use ag_session::{
@@ -12,10 +12,11 @@ use ag_session::{
     GraphBlockedReason, GraphContext, GraphControlRequest, GraphNode, GraphNodeStatus,
     GraphResultRef, ResumeExecutionGraphRequest, StartExecutionGraphRequest,
 };
-use ag_worker::{GraphExecutor, GraphNodeRunner, GraphRunRequest, GraphUtilityRunner, RunClient};
+use ag_worker::{GraphExecutor, GraphNodeRunner, GraphRunRequest, GraphUtilityRunner};
 use async_trait::async_trait;
 use tokio_util::sync::CancellationToken;
 
+use crate::app::review_graph::ReviewGraphHost;
 use crate::app::{App, AppServices, SessionRuntimeHandle};
 use crate::domain::session::Status;
 use crate::infra::db::GraphEvidence;
@@ -26,6 +27,61 @@ pub(super) struct GraphDriver {
     executor: Arc<GraphExecutor>,
     request: StartExecutionGraphRequest,
     running: Arc<AtomicBool>,
+}
+
+/// Active graph drivers keyed by graph identity, shared with lifecycle
+/// controls and session cleanup.
+pub(super) type GraphDrivers = Arc<Mutex<HashMap<String, GraphDriver>>>;
+
+/// Publishes a host-driven graph to lifecycle cancellation and session
+/// cleanup while it dispatches. Dropping it unregisters the driver.
+pub(super) struct GraphDriverRegistration {
+    /// Canceled by `cancel_execution_graph` or by stopping the session.
+    pub(super) cancellation: CancellationToken,
+    drivers: GraphDrivers,
+    graph_id: String,
+}
+
+impl GraphDriverRegistration {
+    /// Registers a running driver without provider limits; host phases
+    /// enforce their own budgets.
+    pub(super) fn register(
+        drivers: &GraphDrivers,
+        graph: &ExecutionGraph,
+        executor: Arc<GraphExecutor>,
+    ) -> Self {
+        let cancellation = CancellationToken::new();
+        drivers
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .insert(
+                graph.id.clone(),
+                GraphDriver {
+                    cancellation: cancellation.clone(),
+                    executor,
+                    request: StartExecutionGraphRequest {
+                        graph: graph.clone(),
+                        provider_call_limits: std::collections::BTreeMap::new(),
+                    },
+                    running: Arc::new(AtomicBool::new(true)),
+                },
+            );
+
+        Self {
+            cancellation,
+            drivers: drivers.clone(),
+            graph_id: graph.id.clone(),
+        }
+    }
+}
+
+impl Drop for GraphDriverRegistration {
+    fn drop(&mut self) {
+        self.drivers
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .remove(&self.graph_id);
+    }
 }
 
 impl App {
@@ -502,24 +558,16 @@ impl AppServices {
         }
     }
 
-    /// Legacy background readers retain their overlap with ordinary session
-    /// work while excluding graph writers. Nested children use their serial
-    /// worker's retained lease instead.
-    pub(super) fn background_run_client(
-        &self,
-        session_id: &str,
-        client: Arc<dyn RunClient>,
-    ) -> Arc<dyn RunClient> {
-        Arc::new(BackgroundRunClient {
-            background_readers: self
-                .graph_resources
-                .background_readers(&ag_session::EnvId::SessionWorktree(session_id.into())),
-            client,
-            environment: self
-                .graph_resources
-                .environment(&ag_session::EnvId::SessionWorktree(session_id.into())),
+    /// Focused reviews run as background-reader graphs that overlap ordinary
+    /// session work while excluding graph writers.
+    pub(super) fn review_graph_host(&self) -> ReviewGraphHost {
+        ReviewGraphHost {
+            drivers: self.graph_drivers.clone(),
+            repositories: self.db().clone(),
+            resources: self.graph_resources.clone(),
+            runs: self.graph_run_worker(),
             wake: self.graph_wake.clone(),
-        })
+        }
     }
 
     pub(super) fn try_environment_write(
@@ -580,6 +628,19 @@ pub(super) struct EnvironmentLease {
 }
 
 impl EnvironmentLease {
+    /// Holds a background-reader lease, which overlaps ordinary session work
+    /// but excludes graph writers, and wakes graph drivers on release.
+    pub(super) fn background_reader(
+        reader: tokio::sync::OwnedRwLockReadGuard<()>,
+        wake: tokio::sync::watch::Sender<u64>,
+    ) -> Self {
+        Self {
+            reader: Some(reader),
+            wake,
+            writer: None,
+        }
+    }
+
     /// Releases the writer before notifying graph drivers, including when a
     /// selected command returns early or is dropped during a gate wait.
     pub(super) fn from_writer(
@@ -600,37 +661,6 @@ impl Drop for EnvironmentLease {
         drop(self.writer.take());
         self.wake
             .send_modify(|version| *version = version.wrapping_add(1));
-    }
-}
-
-struct BackgroundRunClient {
-    background_readers: Arc<tokio::sync::RwLock<()>>,
-    client: Arc<dyn RunClient>,
-    environment: Arc<tokio::sync::RwLock<()>>,
-    wake: tokio::sync::watch::Sender<u64>,
-}
-
-#[async_trait]
-impl RunClient for BackgroundRunClient {
-    async fn submit(
-        &self,
-        request: ag_contracts::OneShotRequest,
-    ) -> Result<ag_contracts::OneShotSubmission, OneShotError> {
-        let (reader, writer) = if request.permission_mode.is_read_only() {
-            (
-                Some(self.background_readers.clone().read_owned().await),
-                None,
-            )
-        } else {
-            (None, Some(self.environment.clone().write_owned().await))
-        };
-        let lease = EnvironmentLease {
-            reader,
-            writer,
-            wake: self.wake.clone(),
-        };
-
-        ag_worker::with_execution_resource(lease, self.client.submit(request)).await
     }
 }
 

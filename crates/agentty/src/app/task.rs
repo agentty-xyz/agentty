@@ -5,7 +5,7 @@
 //! orchestrator (`app/sync.rs`); this module keeps the remaining background
 //! tasks.
 
-use std::path::{Path, PathBuf};
+use std::path::PathBuf;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::Duration;
@@ -23,6 +23,7 @@ use tracing::warn;
 use crate::app::error::AppError;
 use crate::app::prompt_intent::PromptImagePasteUpdate;
 use crate::app::review::FocusedReviewPersistenceRetry;
+use crate::app::review_graph::{ReviewGraphHost, ReviewGraphRequest};
 use crate::app::session_diff::DeferredAutoReviewPersistenceRetry;
 use crate::app::{AppEvent, UpdateStatus, at_mention_task};
 use crate::domain::agent::{AgentCliInfo, AgentKind, AgentSelection, ReasoningLevel};
@@ -38,6 +39,9 @@ const AT_MENTION_LOAD_DEBOUNCE: Duration = Duration::from_millis(75);
 /// Delay before a failed focused-review persistence write is retried through
 /// the foreground event reducer.
 const FOCUSED_REVIEW_PERSISTENCE_RETRY_BASE_DELAY: Duration = Duration::from_millis(250);
+
+/// Total elapsed time shared by every phase of one focused review.
+const REVIEW_DEADLINE: Duration = Duration::from_mins(30);
 
 /// Interval between background checks for a newer Agentty release.
 const VERSION_CHECK_INTERVAL: Duration = Duration::from_hours(1);
@@ -139,8 +143,9 @@ pub(super) struct ReviewAssistTaskInput {
     /// completion event so the reducer can store it without re-reading cache.
     pub(super) diff_hash: u64,
     pub(super) fs_client: Arc<dyn crate::infra::fs::FsClient>,
+    /// Graph persistence, Env gates, and recorded runs shared with the app.
+    pub(super) graph_host: ReviewGraphHost,
     pub(super) reasoning_level: ReasoningLevel,
-    pub(super) repositories: crate::infra::db::AppRepositories,
     /// Unique invocation token propagated to checkpoint writes and events.
     pub(super) request_id: uuid::Uuid,
     pub(super) review_diff: String,
@@ -149,6 +154,19 @@ pub(super) struct ReviewAssistTaskInput {
     pub(super) session_folder: PathBuf,
     pub(super) session_id: SessionId,
     pub(super) speed_mode: crate::domain::agent::SpeedMode,
+}
+
+/// One review generation's captured inputs, independent of event delivery.
+pub(super) struct ReviewAssistLaunch {
+    /// Total elapsed time shared by every review phase and provider call.
+    pub(super) deadline: Duration,
+    /// Unique graph identity for this generation.
+    pub(super) graph_id: String,
+    pub(super) review_agent: crate::app::review::ReviewAgent,
+    pub(super) review_diff: String,
+    pub(super) session_chat_history: Option<String>,
+    pub(super) session_folder: PathBuf,
+    pub(super) session_id: SessionId,
 }
 
 /// Askama view model for rendering review assist prompts.
@@ -571,10 +589,10 @@ impl TaskService {
     ) {
         let ReviewAssistTaskInput {
             request_id,
-            repositories,
             app_event_tx,
             diff_hash,
             fs_client,
+            graph_host,
             reasoning_level,
             review_diff,
             review_selection,
@@ -586,7 +604,7 @@ impl TaskService {
 
         let client = crate::app::review_resume::ReviewResumeClient::new(
             run_client,
-            &repositories,
+            &graph_host.repositories,
             &session_id,
             diff_hash,
             session_chat_history.as_deref().unwrap_or_default(),
@@ -599,19 +617,27 @@ impl TaskService {
                 super::review_rules::ReviewRules::load(fs_client.as_ref(), &session_folder).await;
             let review_result = match (client, rules) {
                 (Ok(client), Ok(rules)) => {
+                    let progress_session_id = session_id.clone();
+                    let progress_tx = app_event_tx.clone();
                     Self::review_assist_text_with_client(
-                        &session_folder,
-                        (review_selection, reasoning_level, speed_mode),
-                        &review_diff,
-                        session_chat_history.as_deref(),
-                        &rules,
-                        &client,
-                        |progress| {
-                            let _ = app_event_tx.send(AppEvent::ReviewProgressUpdated {
+                        &graph_host,
+                        ReviewAssistLaunch {
+                            deadline: REVIEW_DEADLINE,
+                            graph_id: format!("focused-review:{request_id}"),
+                            review_agent: (review_selection, reasoning_level, speed_mode),
+                            review_diff,
+                            session_chat_history,
+                            session_folder,
+                            session_id: session_id.clone(),
+                        },
+                        rules,
+                        Arc::new(client),
+                        move |progress| {
+                            let _ = progress_tx.send(AppEvent::ReviewProgressUpdated {
                                 request_id,
                                 diff_hash,
                                 progress,
-                                session_id: session_id.clone(),
+                                session_id: progress_session_id.clone(),
                             });
                         },
                     )
@@ -640,54 +666,71 @@ impl TaskService {
     }
 
     /// Generates review assist text through a provider-enforced read-only
-    /// worker boundary so review generation cannot modify the worktree.
+    /// worker boundary so review generation cannot modify the worktree. The
+    /// review runs as a static graph whose phases share one deadline.
     async fn review_assist_text_with_client(
-        session_folder: &Path,
-        review_agent: crate::app::review::ReviewAgent,
-        review_diff: &str,
-        session_chat_history: Option<&str>,
-        rules: &super::review_rules::ReviewRules,
-        run_client: &dyn RunClient,
-        progress: impl Fn(crate::app::review::ReviewProgress) + Sync,
+        graph_host: &ReviewGraphHost,
+        launch: ReviewAssistLaunch,
+        rules: super::review_rules::ReviewRules,
+        run_client: Arc<dyn RunClient>,
+        progress: impl Fn(crate::app::review::ReviewProgress) + Send + Sync + 'static,
     ) -> Result<String, AppError> {
-        let (review_selection, reasoning_level, speed_mode) = review_agent;
-        let client = ReviewDeadlineClient::new(run_client, Duration::from_mins(30));
-        let all_criteria = rules.for_diff(review_diff)?;
-        let review = crate::app::review_prompt::submit(
-            &client,
-            ag_contracts::OneShotRequest {
-                activity_tx: None,
-                execution_policy: ag_contracts::ExecutionPolicy::default(),
-                provider_call_budget: None,
-                harness: (review_selection.kind()).to_string(),
-                child_pid: None,
-                folder: session_folder.to_path_buf(),
-                model: (review_selection.model()).as_str().to_string(),
-                permission_mode: ag_contracts::PermissionMode::ReadOnly,
-                prompt: String::new(),
-                request_kind: ag_contracts::AgentRequestKind::FocusedReview,
-                reasoning_level,
-                speed_mode,
-            },
+        let ReviewAssistLaunch {
+            deadline,
+            graph_id,
+            review_agent: (review_selection, reasoning_level, speed_mode),
             review_diff,
-            session_chat_history.unwrap_or_default(),
-            |diff, history, criteria_diff| {
-                let criteria = if criteria_diff == review_diff
-                    || crate::app::review_diff::paths(criteria_diff).is_empty()
-                {
-                    all_criteria.clone()
-                } else {
-                    rules.for_diff(criteria_diff)?
-                };
-                crate::app::diff_prompt::render_result(Self::review_assist_prompt(
-                    diff,
-                    Some(history),
-                    &criteria,
-                ))
-            },
-            progress,
-        )
-        .await?;
+            session_chat_history,
+            session_folder,
+            session_id,
+        } = launch;
+        let client = Arc::new(ReviewDeadlineClient::new(run_client, deadline));
+        let deadline = client.deadline();
+        let all_criteria = rules.for_diff(&review_diff)?;
+        let captured_diff = review_diff.clone();
+        let render = move |diff: &str, history: &str, criteria_diff: &str| {
+            let criteria = if criteria_diff == captured_diff
+                || crate::app::review_diff::paths(criteria_diff).is_empty()
+            {
+                all_criteria.clone()
+            } else {
+                rules.for_diff(criteria_diff)?
+            };
+            crate::app::diff_prompt::render_result(Self::review_assist_prompt(
+                diff,
+                Some(history),
+                &criteria,
+            ))
+        };
+        let review = graph_host
+            .submit(
+                client,
+                ReviewGraphRequest {
+                    agent: review_selection,
+                    context: session_chat_history.unwrap_or_default(),
+                    deadline,
+                    diff: review_diff,
+                    graph_id,
+                    request: ag_contracts::OneShotRequest {
+                        activity_tx: None,
+                        execution_policy: ag_contracts::ExecutionPolicy::default(),
+                        provider_call_budget: None,
+                        harness: (review_selection.kind()).to_string(),
+                        child_pid: None,
+                        folder: session_folder,
+                        model: (review_selection.model()).as_str().to_string(),
+                        permission_mode: ag_contracts::PermissionMode::ReadOnly,
+                        prompt: String::new(),
+                        request_kind: ag_contracts::AgentRequestKind::FocusedReview,
+                        reasoning_level,
+                        speed_mode,
+                    },
+                    session_id: session_id.to_string(),
+                },
+                Arc::new(render),
+                Arc::new(progress),
+            )
+            .await?;
         Ok(review)
     }
 

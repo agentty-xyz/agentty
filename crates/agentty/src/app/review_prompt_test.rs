@@ -18,10 +18,11 @@ use tokio::sync::{mpsc, oneshot};
 
 use super::{
     MAX_REVIEW_PROVIDER_CALLS, REVIEW_CONCURRENCY, cross_file_review, file_headers, merge,
-    reduce_review, split_candidates, submit,
+    reduce_review, split_candidates,
 };
 use crate::app::diff_prompt::PROMPT_BUDGET;
 use crate::app::review::ReviewProgress;
+use crate::app::review_graph::test_support::ReviewGraphFixture;
 use crate::app::review_resume::ReviewResumeClient;
 use crate::infra::review_deadline::ReviewDeadlineClient;
 
@@ -69,6 +70,21 @@ fn accounted(request: &OneShotRequest, mut submission: OneShotSubmission) -> One
     submission
 }
 
+/// Reviews through the production graph with a fresh owning session.
+async fn submit(
+    client: impl RunClient + 'static,
+    request: OneShotRequest,
+    diff: &str,
+    context: &str,
+    render: impl Fn(&str, &str, &str) -> Result<String, OneShotError> + Send + Sync + 'static,
+    progress: impl Fn(ReviewProgress) + Send + Sync + 'static,
+) -> Result<String, OneShotError> {
+    ReviewGraphFixture::new()
+        .await
+        .review(client, request, diff, context, render, progress)
+        .await
+}
+
 fn render(diff: &str, context: &str) -> String {
     let fence = diff_fence(diff);
     format!("{context}\n{fence}diff\n{diff}\n{fence}")
@@ -90,7 +106,7 @@ async fn unaudited_reduction_cannot_silently_remove_a_discovered_risk() {
 
     // Act
     let text = submit(
-        &client,
+        client,
         request(),
         "diff --git a/x.rs b/x.rs\n@@ -1 +1 @@\n-old\n+new\n",
         "",
@@ -122,7 +138,7 @@ async fn omitted_suggestion_index_preserves_the_discovered_candidates() {
 
     // Act
     let text = submit(
-        &client,
+        client,
         request(),
         "diff --git a/x.rs b/x.rs\n@@ -1 +1 @@\n-old\n+new\n",
         "",
@@ -154,7 +170,7 @@ async fn unlinked_consolidation_output_preserves_the_discovered_candidates() {
 
     // Act
     let text = submit(
-        &client,
+        client,
         request(),
         "diff --git a/x.rs b/x.rs\n@@ -1 +1 @@\n-old\n+new\n",
         "",
@@ -218,7 +234,7 @@ async fn forty_source_fragments_complete_both_passes_and_consolidation() {
 
     // Act
     let text = submit(
-        &client,
+        client,
         request(),
         &diff,
         "",
@@ -273,7 +289,7 @@ async fn boundary_fragments_share_changes_that_only_interact_across_files() {
 
     // Act
     let text = submit(
-        &client,
+        client,
         request(),
         &diff,
         "",
@@ -330,7 +346,7 @@ async fn partial_boundary_pass_keeps_both_original_and_new_findings() {
 
     // Act
     let text = submit(
-        &client,
+        client,
         request(),
         &diff,
         "",
@@ -492,7 +508,7 @@ async fn single_batch_verifies_candidates_and_repairs_captured_source_citations(
 
     // Act
     let text = submit(
-        &client,
+        client,
         request(),
         diff,
         "",
@@ -533,7 +549,7 @@ async fn single_batch_verification_failure_preserves_candidates_as_partial() {
 
     // Act
     let text = submit(
-        &client,
+        client,
         request(),
         diff,
         "",
@@ -579,7 +595,7 @@ async fn coverage_includes_spaced_metadata_paths_and_unresolved_identities() {
             .times(3)
             .returning(|request| Ok(accounted(&request, response())));
         let text = submit(
-            &client,
+            client,
             request(),
             &format!("{known}{additional}"),
             "",
@@ -619,7 +635,7 @@ async fn file_coverage_does_not_count_an_unfinished_file_as_processed() {
 
     // Act
     let text = submit(
-        &client,
+        client,
         request(),
         &diff,
         "",
@@ -699,7 +715,7 @@ async fn expired_review_deadline_does_not_admit_worker_submissions() {
     // Arrange
     let mut worker = MockRunClient::new();
     worker.expect_submit().never();
-    let client = ReviewDeadlineClient::new(&worker, Duration::ZERO);
+    let client = ReviewDeadlineClient::new(Arc::new(worker), Duration::ZERO);
 
     // Act
     let error = client
@@ -716,12 +732,12 @@ async fn deadline_keeps_finished_findings_and_reports_unreviewed_fragments() {
     // Arrange
     let (requests, mut pending) = mpsc::unbounded_channel();
     let client = ControlledReviewClient { requests };
-    let client = ReviewDeadlineClient::new(&client, Duration::from_millis(250));
+    let client = ReviewDeadlineClient::new(Arc::new(client), Duration::from_millis(250));
     let diff = "x".repeat(250_000);
 
     // Act
     let review = submit(
-        &client,
+        client,
         request(),
         &diff,
         "",
@@ -760,7 +776,7 @@ async fn reviews_three_batches_concurrently_and_merges_in_input_order() {
 
     // Act
     let review = submit(
-        &client,
+        client,
         request(),
         &diff,
         "",
@@ -850,7 +866,7 @@ async fn failed_batch_drains_running_peers_and_stops_queued_work() {
 
     // Act
     let review = submit(
-        &client,
+        client,
         request(),
         &diff,
         "",
@@ -939,7 +955,7 @@ async fn nested_size_retries_keep_source_order_in_complete_and_partial_reviews()
 
         // Act
         let text = submit(
-            &client,
+            client,
             request(),
             &diff,
             "",
@@ -999,7 +1015,7 @@ async fn batches_original_unicode_diff_then_checks_cross_file_interactions() {
 
     // Act
     let text = submit(
-        &client,
+        client,
         request(),
         &diff,
         "Accepted decision",
@@ -1055,7 +1071,7 @@ async fn splits_fencing_overhead_and_provider_size_rejections_without_summaries(
 
     // Act
     let text = submit(
-        &client,
+        client,
         request(),
         &"`".repeat(32_768),
         "",
@@ -1090,7 +1106,7 @@ async fn failed_later_batch_retains_findings_and_identifies_unreviewed_files() {
 
     // Act
     let text = submit(
-        &client,
+        client,
         request(),
         &diff,
         "",
@@ -1123,7 +1139,7 @@ async fn failed_cross_file_pass_preserves_all_batch_findings() {
 
     // Act
     let text = submit(
-        &client,
+        client,
         request(),
         &"x".repeat(90_000),
         "",
@@ -1187,16 +1203,17 @@ async fn final_reduction_replaces_candidates_and_normalizes_the_complete_review(
             }
             Ok(accounted(&request, response()))
         });
-        let progress = Mutex::new(Vec::new());
+        let progress = Arc::new(Mutex::new(Vec::new()));
+        let observed = progress.clone();
 
         // Act
         let text = submit(
-            &client,
+            client,
             request(),
             &format!("diff --git a/source b/source\n{}", "x".repeat(90_000)),
             "Accepted decision",
             |diff, context, _| Ok(render(diff, context)),
-            |update| progress.lock().expect("progress").push(update),
+            move |update| observed.lock().expect("progress").push(update),
         )
         .await
         .expect("consolidated review");
@@ -1246,7 +1263,7 @@ async fn failed_or_invalid_reduction_keeps_candidates_with_coverage_notice() {
 
         // Act
         let text = submit(
-            &client,
+            client,
             request(),
             &"x".repeat(90_000),
             "",
@@ -1271,12 +1288,12 @@ async fn final_reduction_uses_the_existing_review_deadline() {
     // Arrange
     let (requests, mut pending) = mpsc::unbounded_channel();
     let client = ControlledReviewClient { requests };
-    let client = ReviewDeadlineClient::new(&client, Duration::from_millis(250));
+    let client = ReviewDeadlineClient::new(Arc::new(client), Duration::from_millis(250));
     let diff = "x".repeat(90_000);
 
     // Act
     let review = submit(
-        &client,
+        client,
         request(),
         &diff,
         "",
@@ -1354,7 +1371,7 @@ async fn reduction_respects_remaining_budget_and_never_summarizes_oversized_cand
 
         // Act
         let text = submit(
-            &client,
+            client,
             request(),
             &format!("{}LAST SOURCE BYTE", "x".repeat(90_000)),
             "",
@@ -1423,7 +1440,7 @@ async fn exhausted_shared_budget_preserves_completed_batches() {
 
     // Act
     let text = submit(
-        &client,
+        client,
         request(),
         &"x".repeat(8_000_000),
         "",
@@ -1453,7 +1470,7 @@ async fn errors_before_any_completed_review_propagate() {
 
         // Act
         let error = submit(
-            &client,
+            client,
             request(),
             "tiny",
             "",
@@ -1481,7 +1498,7 @@ async fn render_and_invalid_response_errors_propagate() {
 
     // Act
     let invalid = submit(
-        &client,
+        client,
         request(),
         "tiny",
         "",
@@ -1490,8 +1507,10 @@ async fn render_and_invalid_response_errors_propagate() {
     )
     .await
     .expect_err("invalid review");
+    let mut unused = MockRunClient::new();
+    unused.expect_submit().never();
     let render_error = submit(
-        &client,
+        unused,
         request(),
         "tiny",
         "",
@@ -1586,7 +1605,7 @@ async fn smaller_provider_limit_reduces_history_without_summarizing_diff() {
 
     // Act
     let text = submit(
-        &client,
+        client,
         request(),
         "ORIGINAL DIFF",
         &"Accepted decision\n".repeat(200),
@@ -1646,7 +1665,7 @@ async fn cross_file_pass_uses_bounded_original_source_without_discarding_finding
 
     // Act
     let text = submit(
-        &client,
+        client,
         request(),
         &"x".repeat(90_000),
         "",
@@ -1683,15 +1702,16 @@ async fn large_history_reports_preparation_and_keeps_review_reasoning() {
         assert_eq!(request.reasoning_level, ReasoningLevel::Medium);
         Ok(accounted(&request, response()))
     });
-    let progress = Mutex::new(Vec::new());
+    let progress = Arc::new(Mutex::new(Vec::new()));
+    let observed = progress.clone();
     // Act
     let result = submit(
-        &client,
+        client,
         request(),
         "original changes",
         &"history ".repeat(10_000),
         |diff, context, _| Ok(render(diff, context)),
-        |update| progress.lock().expect("progress").push(update),
+        move |update| observed.lock().expect("progress").push(update),
     )
     .await
     .expect("review");
@@ -1879,8 +1899,7 @@ async fn irreducible_final_passes_stop_without_discarding_distinct_evidence() {
         &budget,
     )
     .await
-    .err()
-    .expect("minimum input still rejected");
+    .expect_err("minimum input still rejected");
     // Assert
     assert!(
         reduction
