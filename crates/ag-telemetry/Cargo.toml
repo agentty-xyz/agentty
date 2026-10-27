@@ -12,10 +12,13 @@ workspace = true
 
 [features]
 default = ["otlp"]
-# OTLP HTTP/protobuf exporter setup for host composition roots.
+# OTLP HTTP/protobuf trace and event-log exporter setup for host composition roots.
 otlp = [
   "dep:opentelemetry-otlp",
   "dep:opentelemetry_sdk",
+  "opentelemetry/logs",
+  "opentelemetry-otlp/logs",
+  "opentelemetry_sdk/logs",
   "dep:rustls",
   "dep:thiserror",
   "dep:tokio",
@@ -38,7 +41,7 @@ url = { workspace = true, optional = true }
 uuid = { workspace = true, optional = true }
 
 [dev-dependencies]
-opentelemetry-proto.workspace = true
+opentelemetry-proto = { workspace = true, features = ["logs"] }
 opentelemetry_sdk = { workspace = true, features = ["testing"] }
 prost.workspace = true
 tokio.workspace = true

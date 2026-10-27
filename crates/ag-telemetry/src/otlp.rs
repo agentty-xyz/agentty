@@ -1,12 +1,15 @@
-//! Opt-in OTLP HTTP/protobuf trace export for host composition roots.
+//! Opt-in OTLP HTTP/protobuf trace and event-log export for host composition
+//! roots.
 
 use std::sync::Arc;
 use std::sync::atomic::{AtomicU64, Ordering};
-use std::time::Duration;
+use std::time::{Duration, SystemTime};
 
+use opentelemetry::logs::{AnyValue, LogRecord as _, Logger as _, LoggerProvider as _, Severity};
 use opentelemetry::{KeyValue, global};
-use opentelemetry_otlp::{Protocol, SpanExporter, WithExportConfig};
+use opentelemetry_otlp::{LogExporter, Protocol, SpanExporter, WithExportConfig};
 use opentelemetry_sdk::Resource;
+use opentelemetry_sdk::logs::{SdkLogger, SdkLoggerProvider};
 use opentelemetry_sdk::trace::{
     BatchConfigBuilder, BatchSpanProcessor, Sampler, SdkTracerProvider,
 };
@@ -43,9 +46,31 @@ pub enum OtlpError {
     Initialization,
 }
 
-/// Owns the exporter and its diagnostics until host work has stopped.
+/// Emits content-free host events as OTLP log records.
+#[derive(Clone)]
+pub struct EventLog(SdkLogger);
+
+impl EventLog {
+    /// Emits one named event at the current time, with the name as both the
+    /// record's event name and body. Values must be static strings, which
+    /// limits callers to fixed vocabularies rather than runtime text such as
+    /// prompts, paths or error messages.
+    pub fn emit(&self, name: &'static str, attributes: &[(&'static str, &'static str)]) {
+        let mut record = self.0.create_log_record();
+        record.set_event_name(name);
+        record.set_body(AnyValue::from(name));
+        record.set_severity_number(Severity::Info);
+        record.set_severity_text("INFO");
+        record.set_timestamp(SystemTime::now());
+        record.add_attributes(attributes.iter().copied());
+        self.0.emit(record);
+    }
+}
+
+/// Owns the exporters and their diagnostics until host work has stopped.
 pub struct OtlpExport {
     diagnostics: Arc<AtomicU64>,
+    events: Option<SdkLoggerProvider>,
     provider: SdkTracerProvider,
 }
 
@@ -61,14 +86,29 @@ impl OtlpExport {
         endpoint: Option<&str>,
         service: Service,
     ) -> Result<Option<Self>, OtlpError> {
-        let Some(endpoint) = endpoint else {
-            return Ok(None);
-        };
-        let endpoint = Self::validate_endpoint(endpoint)?.to_string();
+        Self::start_signals(endpoint, service, false).await
+    }
 
-        Self::initialize(move || Self::build(&endpoint, service))
-            .await
-            .map(Some)
+    /// Starts trace export like [`Self::start`] and, when the traces URL path
+    /// ends in `/v1/traces`, also exports [`EventLog`] records to the sibling
+    /// `/v1/logs` path with the same resource identity. Other traces URLs
+    /// export traces only. Event-log authentication headers come from
+    /// `OTEL_EXPORTER_OTLP_LOGS_HEADERS` or `OTEL_EXPORTER_OTLP_HEADERS`.
+    ///
+    /// # Errors
+    /// Returns a bounded error for an invalid endpoint or exporter setup.
+    pub async fn start_with_events(
+        endpoint: Option<&str>,
+        service: Service,
+    ) -> Result<Option<Self>, OtlpError> {
+        Self::start_signals(endpoint, service, true).await
+    }
+
+    /// Returns the event log when this export includes one.
+    pub fn event_log(&self) -> Option<EventLog> {
+        self.events
+            .as_ref()
+            .map(|events| EventLog(events.logger("ag-telemetry")))
     }
 
     /// Installs the process-wide provider and, when no subscriber exists yet,
@@ -82,19 +122,47 @@ impl OtlpExport {
         global::set_tracer_provider(self.provider.clone());
     }
 
-    /// Flushes finished spans. Export failure never changes the host result.
-    /// Returns a coalesced diagnostic count.
+    /// Flushes finished spans and events concurrently. Export failure never
+    /// changes the host result. Returns a coalesced diagnostic count.
     pub async fn shutdown(self) -> u64 {
-        let diagnostics = Arc::clone(&self.diagnostics);
-        let result = tokio::task::spawn_blocking(move || {
-            self.provider.shutdown_with_timeout(Duration::from_secs(3))
-        })
-        .await;
-        if !matches!(result, Ok(Ok(()))) {
-            diagnostics.fetch_add(1, Ordering::Relaxed);
+        let provider = self.provider;
+        let traces = tokio::task::spawn_blocking(move || {
+            provider.shutdown_with_timeout(Duration::from_secs(3))
+        });
+        let events = self.events.map(|events| {
+            tokio::task::spawn_blocking(move || {
+                events.shutdown_with_timeout(Duration::from_secs(3))
+            })
+        });
+        let mut failures = u64::from(!matches!(traces.await, Ok(Ok(()))));
+        if let Some(events) = events {
+            failures += u64::from(!matches!(events.await, Ok(Ok(()))));
         }
 
-        diagnostics.load(Ordering::Relaxed)
+        self.diagnostics.fetch_add(failures, Ordering::Relaxed) + failures
+    }
+
+    async fn start_signals(
+        endpoint: Option<&str>,
+        service: Service,
+        events: bool,
+    ) -> Result<Option<Self>, OtlpError> {
+        let Some(endpoint) = endpoint else {
+            return Ok(None);
+        };
+        let endpoint = Self::validate_endpoint(endpoint)?;
+        let events_endpoint = events.then(|| Self::events_endpoint(&endpoint)).flatten();
+        let endpoint = endpoint.to_string();
+
+        Self::initialize(move || {
+            Self::build(
+                &endpoint,
+                events_endpoint.as_ref().map(Url::as_str),
+                service,
+            )
+        })
+        .await
+        .map(Some)
     }
 
     /// Isolates blocking exporter construction from the async runtime.
@@ -121,7 +189,21 @@ impl OtlpExport {
         Ok(url)
     }
 
-    fn build(endpoint: &str, service: Service) -> Result<Self, OtlpError> {
+    /// Maps a standard signal path to its logs sibling, keeping any prefix
+    /// and query; other paths have no unambiguous logs URL.
+    fn events_endpoint(traces: &Url) -> Option<Url> {
+        let prefix = traces.path().strip_suffix("/v1/traces")?;
+        let mut events = traces.clone();
+        events.set_path(&format!("{prefix}/v1/logs"));
+
+        Some(events)
+    }
+
+    fn build(
+        endpoint: &str,
+        events_endpoint: Option<&str>,
+        service: Service,
+    ) -> Result<Self, OtlpError> {
         let _ = rustls::crypto::ring::default_provider().install_default();
         let exporter = SpanExporter::builder()
             .with_http()
@@ -146,9 +228,27 @@ impl OtlpExport {
                 KeyValue::new("service.instance.id", uuid::Uuid::new_v4().to_string()),
             ])
             .build();
+        let events = events_endpoint
+            .map(|events_endpoint| {
+                LogExporter::builder()
+                    .with_http()
+                    .with_protocol(Protocol::HttpBinary)
+                    .with_endpoint(events_endpoint)
+                    .with_timeout(Duration::from_secs(2))
+                    .build()
+            })
+            .transpose()
+            .map_err(|_| OtlpError::Configuration)?
+            .map(|exporter| {
+                SdkLoggerProvider::builder()
+                    .with_resource(resource.clone())
+                    .with_batch_exporter(exporter)
+                    .build()
+            });
 
         Ok(Self {
             diagnostics: Arc::new(AtomicU64::new(0)),
+            events,
             provider: SdkTracerProvider::builder()
                 .with_resource(resource)
                 .with_sampler(Sampler::AlwaysOn)

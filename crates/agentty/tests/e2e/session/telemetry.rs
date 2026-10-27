@@ -6,14 +6,16 @@ use std::os::unix::fs::PermissionsExt;
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
+use opentelemetry_proto::tonic::collector::logs::v1::ExportLogsServiceRequest;
 use opentelemetry_proto::tonic::collector::trace::v1::ExportTraceServiceRequest;
 use opentelemetry_proto::tonic::common::v1::any_value;
+use opentelemetry_proto::tonic::logs::v1::LogRecord;
 use opentelemetry_proto::tonic::trace::v1::Span;
 use prost::Message;
 use testty::assertion;
 use testty::region::Region;
 use testty::step::Step;
-use wiremock::matchers::method;
+use wiremock::matchers::{method, path};
 use wiremock::{Mock, MockServer, ResponseTemplate};
 
 use super::fixture::{run_git, seed_session_title_candidate_project};
@@ -50,7 +52,7 @@ async fn project_sync_assistance_excludes_tool_content_by_default()
 
 async fn run_sync_assistance_scenario(capture: bool) -> Result<(), Box<dyn std::error::Error>> {
     // Arrange
-    let (server, exported) = trace_receiver().await;
+    let (server, exported, _events) = trace_receiver().await;
     let observed = Arc::clone(&exported);
     let mut args = vec![
         "--otlp-endpoint".to_string(),
@@ -175,10 +177,11 @@ async fn seed_sync_tool_trace_project(env: &BuilderEnv) -> Result<(), Box<dyn st
 
 async fn run_timing_scenario(capture: bool) -> Result<(), Box<dyn std::error::Error>> {
     // Arrange
-    let (server, exported) = trace_receiver().await;
+    let (server, exported, events) = trace_receiver().await;
     let endpoint = format!("{}/v1/traces", server.uri());
 
     let observed = Arc::clone(&exported);
+    let observed_events = Arc::clone(&events);
     let mut args = vec!["--otlp-endpoint".to_string(), endpoint];
     if capture {
         args.push("--otlp-capture-content".to_string());
@@ -211,7 +214,12 @@ async fn run_timing_scenario(capture: bool) -> Result<(), Box<dyn std::error::Er
                     move |frame| {
                         let ready = observed
                             .lock()
-                            .is_ok_and(|spans| has_completed_trace(&spans));
+                            .is_ok_and(|spans| has_completed_trace(&spans))
+                            && observed_events.lock().is_ok_and(|events| {
+                                events
+                                    .iter()
+                                    .any(|event| event.event_name == "agentty_turn_finish")
+                            });
                         if ready {
                             return Ok(());
                         }
@@ -247,8 +255,56 @@ async fn run_timing_scenario(capture: bool) -> Result<(), Box<dyn std::error::Er
         .clone();
     assert_timing_spans(&spans)?;
     assert_tool_content(&spans, capture)?;
+    let events = events
+        .lock()
+        .map_err(|_| io::Error::other("event receiver poisoned"))?
+        .clone();
+    assert_usage_events(&events);
 
     Ok(())
+}
+
+/// Checks that usage events mirror the `PostHog` allowlist without turn
+/// content.
+fn assert_usage_events(events: &[LogRecord]) {
+    for name in [
+        "agentty_launch",
+        "agentty_session_start",
+        "agentty_turn_start",
+        "agentty_turn_finish",
+    ] {
+        assert!(
+            events.iter().any(|event| event.event_name == name),
+            "missing usage event {name}"
+        );
+    }
+    let allowed = [
+        "app_source",
+        "app_version",
+        "install_method",
+        "session_type",
+        "agent",
+        "model",
+    ];
+    for event in events {
+        assert!(
+            event
+                .attributes
+                .iter()
+                .all(|attribute| allowed.contains(&attribute.key.as_str())),
+            "unexpected usage event attribute in {event:?}"
+        );
+    }
+    assert!(
+        events
+            .iter()
+            .filter(|event| event.event_name == "agentty_turn_start")
+            .all(|event| event
+                .attributes
+                .iter()
+                .any(|attribute| attribute.key == "agent"))
+    );
+    assert!(!format!("{events:?}").contains("Private timing prompt"));
 }
 
 async fn seed_tool_trace_project(env: &BuilderEnv) -> Result<(), Box<dyn std::error::Error>> {
@@ -416,7 +472,7 @@ fn string_attribute<'a>(span: &'a Span, key: &str) -> Option<&'a str> {
 #[tokio::test]
 async fn quit_exports_active_and_queued_turn_outcomes() -> Result<(), Box<dyn std::error::Error>> {
     // Arrange
-    let (server, exported) = trace_receiver().await;
+    let (server, exported, _events) = trace_receiver().await;
     let observed = Arc::clone(&exported);
 
     // Act
@@ -548,11 +604,36 @@ const EXPECTED_STEPS: [&str; 9] = [
     "postprocess",
 ];
 
-async fn trace_receiver() -> (MockServer, Arc<Mutex<Vec<Span>>>) {
+type ExportedEvents = Arc<Mutex<Vec<LogRecord>>>;
+
+async fn trace_receiver() -> (MockServer, Arc<Mutex<Vec<Span>>>, ExportedEvents) {
     let server = MockServer::start().await;
     let exported = Arc::new(Mutex::new(Vec::<Span>::new()));
     let received = Arc::clone(&exported);
+    let events = ExportedEvents::default();
+    let received_events = Arc::clone(&events);
     Mock::given(method("POST"))
+        .and(path("/v1/logs"))
+        .respond_with(move |request: &wiremock::Request| {
+            let Ok(payload) = ExportLogsServiceRequest::decode(request.body.as_slice()) else {
+                return ResponseTemplate::new(400);
+            };
+            let Ok(mut events) = received_events.lock() else {
+                return ResponseTemplate::new(500);
+            };
+            events.extend(
+                payload
+                    .resource_logs
+                    .into_iter()
+                    .flat_map(|resource| resource.scope_logs)
+                    .flat_map(|scope| scope.log_records),
+            );
+            ResponseTemplate::new(200)
+        })
+        .mount(&server)
+        .await;
+    Mock::given(method("POST"))
+        .and(path("/v1/traces"))
         .respond_with(move |request: &wiremock::Request| {
             let Ok(payload) = ExportTraceServiceRequest::decode(request.body.as_slice()) else {
                 return ResponseTemplate::new(400);
@@ -572,5 +653,5 @@ async fn trace_receiver() -> (MockServer, Arc<Mutex<Vec<Span>>>) {
         .mount(&server)
         .await;
 
-    (server, exported)
+    (server, exported, events)
 }

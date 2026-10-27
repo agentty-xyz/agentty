@@ -1,10 +1,12 @@
-//! Optional application events sent to `PostHog`.
+//! Optional application events sent to `PostHog` and mirrored to a local
+//! OTLP event log.
 
 use std::ffi::OsStr;
 use std::fs;
 use std::path::{Path, PathBuf};
 use std::time::Duration;
 
+use ag_telemetry::otlp::EventLog;
 use reqwest::Client;
 use serde_json::{Value, json};
 use uuid::Uuid;
@@ -23,14 +25,14 @@ const POSTHOG_API_HOST: &str = "https://us.i.posthog.com";
 /// Environment variable that controls telemetry; `0` disables it.
 pub const TELEMETRY_ENABLED_ENV: &str = "AGENTTY_TELEMETRY_ENABLED";
 
-/// A telemetry sender. Callers check [`Analytics::is_enabled`] before use.
+/// A telemetry sender for `PostHog`, a local OTLP event log, or both.
+/// Callers check [`Analytics::is_enabled`] before building the `PostHog`
+/// destination.
 #[derive(Clone)]
 pub struct Analytics {
-    client: Client,
-    distinct_id: String,
-    endpoint: String,
+    event_log: Option<EventLog>,
     install_method: InstallMethod,
-    token: String,
+    posthog: Option<PostHog>,
 }
 
 /// Bounded creation types reported without session or project identifiers.
@@ -239,6 +241,26 @@ impl Analytics {
         Self::with_client(token, host, distinct_id, client)
     }
 
+    /// Adds a local OTLP event log that receives every event with the same
+    /// name and properties, whether or not `PostHog` is enabled.
+    pub fn mirror(analytics: Option<Self>, event_log: Option<EventLog>) -> Option<Self> {
+        let Some(event_log) = event_log else {
+            return analytics;
+        };
+
+        Some(match analytics {
+            Some(analytics) => Self {
+                event_log: Some(event_log),
+                ..analytics
+            },
+            None => Self {
+                event_log: Some(event_log),
+                install_method: InstallMethod::detect(),
+                posthog: None,
+            },
+        })
+    }
+
     /// Records one application launch attempt.
     pub async fn record_launch(&self) {
         self.send("agentty_launch", &[]).await;
@@ -301,21 +323,46 @@ impl Analytics {
         let client = client?;
 
         Some(Self {
-            client,
-            distinct_id: distinct_id.to_string(),
-            endpoint: format!("{}/i/v0/e/", host.trim_end_matches('/')),
+            event_log: None,
             install_method: InstallMethod::detect(),
-            token: token.to_string(),
+            posthog: Some(PostHog {
+                client,
+                distinct_id: distinct_id.to_string(),
+                endpoint: format!("{}/i/v0/e/", host.trim_end_matches('/')),
+                token: token.to_string(),
+            }),
         })
     }
 
+    async fn send(&self, name: &'static str, event_properties: &[(&'static str, &'static str)]) {
+        let mut properties = vec![
+            ("app_source", "cli"),
+            ("app_version", env!("CARGO_PKG_VERSION")),
+            ("install_method", self.install_method.as_str()),
+        ];
+        properties.extend_from_slice(event_properties);
+
+        if let Some(event_log) = &self.event_log {
+            event_log.emit(name, &properties);
+        }
+        if let Some(posthog) = &self.posthog {
+            posthog.send(name, &properties).await;
+        }
+    }
+}
+
+/// The bundled or explicitly configured `PostHog` ingestion destination.
+#[derive(Clone)]
+struct PostHog {
+    client: Client,
+    distinct_id: String,
+    endpoint: String,
+    token: String,
+}
+
+impl PostHog {
     async fn send(&self, name: &str, event_properties: &[(&str, &str)]) {
-        let mut properties = json!({
-            "$process_person_profile": false,
-            "app_source": "cli",
-            "app_version": env!("CARGO_PKG_VERSION"),
-            "install_method": self.install_method.as_str(),
-        });
+        let mut properties = json!({ "$process_person_profile": false });
         for &(key, value) in event_properties {
             properties[key] = Value::String(value.to_string());
         }

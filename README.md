@@ -201,7 +201,9 @@ timings, tool identities, available executable names, exit codes, and output siz
 at most 4 KiB each. Common credential markers suppress the entire affected preview;
 arbitrary secrets may still appear. Prompts and reasoning are excluded. See the
 [session tracing documentation](https://agentty.xyz/docs/usage/workflow/#session-traces)
-for provider limitations.
+for provider limitations. A traces URL ending in `/v1/traces` also sends the usage
+events below as OTLP log records to the sibling `/v1/logs` URL, even when PostHog
+telemetry is disabled.
 
 Only one Agentty instance can use a given Agentty root at a time. Close the running
 instance before launching another. Separate `AGENTTY_ROOT` directories can run

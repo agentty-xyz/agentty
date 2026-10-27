@@ -618,7 +618,7 @@ or opens a selector if several commands exist.
 
 <a id="telemetry"></a> Telemetry is enabled by default and sends events to the Agentty
 PostHog project at `https://us.i.posthog.com`. Release builds bundle its public,
-write-only project token; debug builds, including tests, send nothing. Set
+write-only project token; debug builds, including tests, send nothing to PostHog. Set
 `AGENTTY_TELEMETRY_ENABLED=0` before launching Agentty to disable it; unset or `1` keeps
 it enabled, and any other value disables it.
 
@@ -655,6 +655,27 @@ method is inferred from the npm package path, the shell install receipt, or Carg
 install metadata. It is `unknown` when no signal is available. These values describe
 launches, not installation counts; metadata left behind after replacing a binary can
 report an older method.
+
+### Local Usage Events
+
+When `--otlp-endpoint` ends in `/v1/traces`, Agentty also exports each event above as an
+OTLP log record to the sibling `/v1/logs` URL, keeping any path prefix and query. For
+example, `http://localhost:4318/v1/traces` sends events to
+`http://localhost:4318/v1/logs`. Other traces URLs export traces only. This mirror is
+independent of PostHog: it runs in debug builds and with `AGENTTY_TELEMETRY_ENABLED=0`.
+
+Each record uses the event name as its body and OTLP event name, `INFO` severity, and
+the same properties as the PostHog event, plus the trace resource's `service.name`,
+`service.version`, and per-launch `service.instance.id`. It omits the installation ID
+and `$process_person_profile`. Collectors without a logs pipeline reject these records,
+which counts toward the export diagnostic summary. For authenticated endpoints, set
+`OTEL_EXPORTER_OTLP_LOGS_HEADERS`, falling back to `OTEL_EXPORTER_OTLP_HEADERS`.
+
+With a collector that forwards logs to Loki, count turns by model in Grafana with:
+
+```logql
+sum by (agent, model) (count_over_time({service_name="agentty"} |= "agentty_turn_start" [$__auto]))
+```
 
 ### Session Traces
 
