@@ -101,6 +101,28 @@ fn bounds_one_event_and_one_line() {
 }
 
 #[test]
+fn bounds_the_completed_items_kept_across_events() {
+    // Arrange
+    let mut events = EventStream::default();
+    let text = "x".repeat(SUCCESS_BODY_LIMIT_BYTES / 3);
+    let item = json!({
+        "type": "response.output_item.done",
+        "item": {"type": "message", "content": [{"type": "output_text", "text": text}]}
+    });
+    let event = format!("data: {item}\n\n");
+
+    // Act
+    let kept = (0..3)
+        .map(|_| events.push(event.as_bytes()))
+        .collect::<Vec<_>>();
+
+    // Assert
+    assert!(matches!(kept[0], Ok(None)));
+    assert!(matches!(kept[1], Ok(None)));
+    assert!(matches!(kept[2], Err(TransportError::ResponseBodyTooLarge)));
+}
+
+#[test]
 fn replays_only_nonempty_arrays_of_reasoning_items() {
     // Arrange
     let reasoning = json!([{"type": "reasoning", "id": "rs_1", "encrypted_content": "gAAAA"}]);

@@ -203,6 +203,8 @@ define_model_catalog! {
 /// configured. The `OpenAI` models come last because `OPENAI_API_KEY` is
 /// often set for other tools, so its mere presence must not move sessions
 /// from a deliberately configured harness provider to paid `OpenAI` usage.
+/// The harness library also catalogs the deprecated `gpt-5.3-codex`, which
+/// Agentty retires to [`AgentModel::Gpt61Sol`] instead of offering it.
 const HARNESS_MODELS: &[AgentModel] = &[
     AgentModel::MuseSpark13,
     AgentModel::KimiK3,

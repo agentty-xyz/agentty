@@ -438,13 +438,16 @@ fn replayed_reasoning(reasoning_content: Option<&str>) -> Vec<InputItem> {
 }
 
 /// Incremental reader of a Responses server-sent event stream that keeps
-/// only completed output items and the terminal response, so memory stays
-/// bounded by one event rather than the whole stream.
+/// only completed output items and the terminal response. Each pending event
+/// and the completed items together stay within the success body limit, so
+/// memory is bounded however long the stream runs.
 #[derive(Default)]
 struct EventStream {
     buffer: Vec<u8>,
     data: String,
     items: Vec<Value>,
+    /// Serialized bytes of the events behind `items`.
+    items_bytes: usize,
 }
 
 impl EventStream {
@@ -498,6 +501,10 @@ impl EventStream {
         let event =
             serde_json::from_str::<StreamEvent>(&data).map_err(TransportError::InvalidResponse)?;
         if event.kind == "response.output_item.done" {
+            self.items_bytes = self.items_bytes.saturating_add(data.len());
+            if self.items_bytes > SUCCESS_BODY_LIMIT_BYTES {
+                return Err(TransportError::ResponseBodyTooLarge);
+            }
             self.items.extend(event.item);
 
             return Ok(None);
