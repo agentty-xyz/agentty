@@ -519,3 +519,52 @@ only when Agentty starts with `--experimental-harness` and a provider is configu
 Planned: a comparison base pinned to the session's base commit, idempotent host request
 IDs for Agentty operations, the native Bash sandbox, proactive compaction, and one
 correlator shared by `LifecycleTraceObserver` and `LifecycleMetrics`.
+
+### Proposed: Agentty as the meta-harness
+
+Not decided or shipped. Agentty would act as the meta-harness: it picks the worker (a
+vendor CLI or `ag-harness`) and model for each task, plans and runs execution graphs,
+isolates workspaces, shares budgets, merges and reviews results, and owns telemetry and
+evaluation across workers. `ag-harness` stays the lightweight model runtime: one agent
+loop for one model, with context fitting, tools, permissions, sandboxing, sessions,
+provider transports, model profiles, and structured output. Work that needs more than
+one model conversation belongs to Agentty.
+
+Open decisions; **(recommended)** marks the suggested option:
+
+- **Delegation requested by a native turn.**
+  - **(recommended)** Host-provided tools: `ag-harness` forwards a delegation call to
+    the host, which runs it as a graph node on any worker and returns the result.
+  - Built-in subagents inside `ag-harness`.
+  - No model-requested delegation; only graphs the host plans.
+- **Worker contract.**
+  - **(recommended)** One contract for vendor CLIs and `ag-harness`: a task in, a
+    schema-validated result out, plus events, usage, and cancellation.
+  - Separate adapters per worker, as today.
+- **Per-model knowledge.**
+  - **(recommended)** How to run a model (window, estimator, prompt variant, edit
+    format, reasoning replay, cache hints) lives in `ag-harness` model profiles from one
+    source; which model suits a task is Agentty's choice.
+  - Both live in Agentty.
+- **What passes between graph nodes.**
+  - **(recommended)** Schema-validated outputs and artifacts such as diffs.
+  - Full transcripts.
+- **Evaluation.**
+  - **(recommended)** Agentty compares workers and models, offline first; live runs only
+    with an approved spend limit.
+  - Evaluation stays inside the `ag-harness` benchmark.
+
+### Proposed: testing without paid model calls
+
+Not decided or shipped. Options, cheapest first:
+
+- **(recommended)** Scripted and replayed providers for harness mechanics such as prefix
+  stability, reductions, and notices: deterministic, free, and safe for CI.
+- **(recommended)** An OpenAI-compatible local provider (Ollama, llama.cpp) for
+  live-loop smoke tests on small open models. It checks behavior, not model quality, and
+  needs a model that supports tool calls.
+- Cheaper API models, such as Muse's contributor tier, with a hard spend limit in the
+  benchmark.
+- Subscription-backed vendor CLIs, such as Codex signed in with ChatGPT, as benchmark
+  workers at the Agentty level. A subscription sign-in is not an API key, so it is not
+  an `ag-harness` model backend.
