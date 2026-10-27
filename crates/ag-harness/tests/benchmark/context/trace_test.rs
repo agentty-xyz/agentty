@@ -3,6 +3,7 @@
 use std::num::NonZeroU64;
 use std::sync::atomic::{AtomicUsize, Ordering};
 
+use ag_harness::lifecycle::{LifecycleObserver, LifecycleTraceObserver};
 use ag_harness::model::{ContextBudget, ModelClient};
 use ag_harness::provider::QwenConfig;
 use ag_harness::{Harness, OutputSchema, Tool};
@@ -141,9 +142,21 @@ impl TracedRun {
     }
 }
 
-/// Runs one read turn of the scripted provider in a run trace and finishes
-/// the trace with a record of its three requests.
-async fn traced_scripted_run() -> TracedRun {
+/// Records of the scripted run's three requests, in order.
+fn scripted_records() -> Value {
+    json!([
+        { "purpose": "turn", "rejected_output": true },
+        { "purpose": "turn", "input_tokens": 100, "prefix_held": null },
+        { "purpose": "turn", "input_tokens": 150, "prefix_held": false, "lost_to": "provider" },
+    ])
+}
+
+/// Runs one read turn of the scripted provider under `observer` in a run
+/// trace and finishes the trace with `requests` as the record's requests.
+async fn traced_scripted_run(
+    observer: impl LifecycleObserver + 'static,
+    requests: Value,
+) -> TracedRun {
     let (provider, exporter) = install_provider();
     let server = MockServer::start().await;
     Mock::given(method("POST"))
@@ -175,7 +188,7 @@ async fn traced_scripted_run() -> TracedRun {
     let harness = Harness::new(model, ContextBudget::new(NonZeroU64::MAX))
         .repository(repository_with_host_git(workspace.path()))
         .allow(Tool::Read)
-        .with_lifecycle_observer(RunTrace::observer());
+        .with_lifecycle_observer(observer);
     let record = json!({
         "scenario": "trace_scenario",
         "success": true,
@@ -183,11 +196,7 @@ async fn traced_scripted_run() -> TracedRun {
         "duplicate_reads": 0,
         "lost_prefixes": { "harness": 0, "provider": 1 },
         "summary_outcomes": [],
-        "requests": [
-            { "purpose": "turn", "rejected_output": true },
-            { "purpose": "turn", "input_tokens": 100, "prefix_held": null },
-            { "purpose": "turn", "input_tokens": 150, "prefix_held": false, "lost_to": "provider" },
-        ],
+        "requests": requests,
     });
     let outcome = harness
         .run_once("Read notes.txt.", schema)
@@ -213,7 +222,7 @@ async fn run_trace_nests_the_harness_spans_under_one_root() {
     let _provider_guard = PROVIDER_LOCK.lock().await;
 
     // Act
-    let run = traced_scripted_run().await;
+    let run = traced_scripted_run(RunTrace::observer(), scripted_records()).await;
 
     // Assert
     let root = run.root();
@@ -243,7 +252,7 @@ async fn run_trace_annotates_the_root_and_completed_requests_with_their_records(
     let _provider_guard = PROVIDER_LOCK.lock().await;
 
     // Act
-    let run = traced_scripted_run().await;
+    let run = traced_scripted_run(RunTrace::observer(), scripted_records()).await;
 
     // Assert
     let root = run.root();
@@ -293,6 +302,68 @@ async fn run_trace_annotates_the_root_and_completed_requests_with_their_records(
         attribute(requests[2], "benchmark.prefix_held"),
         Some(&false.into())
     );
+}
+
+#[tokio::test]
+async fn run_trace_keeps_the_response_attributes_the_harness_sets() {
+    // Arrange
+    let _provider_guard = PROVIDER_LOCK.lock().await;
+    let harness_run = traced_scripted_run(LifecycleTraceObserver::new(), scripted_records()).await;
+
+    // Act
+    let benchmark_run = traced_scripted_run(RunTrace::observer(), scripted_records()).await;
+
+    // Assert
+    let gen_ai_attributes = |span: &SpanData| {
+        let mut attributes = span
+            .attributes
+            .iter()
+            .filter(|attribute| attribute.key.as_str().starts_with("gen_ai."))
+            .map(|attribute| (attribute.key.to_string(), attribute.value.to_string()))
+            .collect::<Vec<_>>();
+        attributes.sort();
+
+        attributes
+    };
+    let expected = harness_run
+        .requests()
+        .into_iter()
+        .map(gen_ai_attributes)
+        .collect::<Vec<_>>();
+    let actual = benchmark_run
+        .requests()
+        .into_iter()
+        .map(gen_ai_attributes)
+        .collect::<Vec<_>>();
+    assert_eq!(actual, expected);
+    assert!(
+        expected[2]
+            .iter()
+            .any(|(key, _)| key == "gen_ai.usage.cache_read.input_tokens")
+    );
+}
+
+#[tokio::test]
+async fn run_trace_leaves_out_records_of_other_requests() {
+    // Arrange
+    let _provider_guard = PROVIDER_LOCK.lock().await;
+    let mut shifted = scripted_records();
+    shifted
+        .as_array_mut()
+        .expect("records should be a list")
+        .remove(0);
+
+    // Act
+    let run = traced_scripted_run(RunTrace::observer(), shifted).await;
+
+    // Assert
+    let requests = run.requests();
+    for request in &requests[1..] {
+        assert!(attribute(request, "benchmark.request").is_some());
+        assert!(attribute(request, "gen_ai.usage.input_tokens").is_some());
+        assert_eq!(attribute(request, "benchmark.input_tokens"), None);
+        assert_eq!(attribute(request, "benchmark.lost_to"), None);
+    }
 }
 
 #[tokio::test]

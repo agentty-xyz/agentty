@@ -116,8 +116,10 @@ impl RequestSpan {
 
     /// Adds the completion attributes the harness would have added, the
     /// request's position in the run, and its record, then ends the span
-    /// when the request returned. A span the harness already ended (a
-    /// rejected output) is left unchanged.
+    /// when the request returned. A record whose reported input tokens differ
+    /// from this request's is left out rather than attributed to the wrong
+    /// request. A span the harness already ended (a rejected output) is left
+    /// unchanged.
     fn end(self, index: usize, record: Option<&Value>) {
         let span = self.context.span();
         let mut attributes = vec![KeyValue::new(
@@ -127,7 +129,14 @@ impl RequestSpan {
         if let Some(completion) = &self.completion {
             completion_attributes(completion, &mut attributes);
         }
-        if let Some(record) = record {
+        let input_tokens = self
+            .completion
+            .as_ref()
+            .and_then(CompletionMetadata::usage)
+            .and_then(|usage| usage.input_tokens());
+        if let Some(record) =
+            record.filter(|record| record["input_tokens"].as_u64() == input_tokens)
+        {
             flatten(ATTRIBUTE_PREFIX.to_string(), record, &mut attributes);
         }
         span.set_attributes(attributes);

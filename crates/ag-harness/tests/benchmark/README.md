@@ -209,20 +209,22 @@ AG_HARNESS_BENCHMARK_OTLP_ENDPOINT=http://127.0.0.1:4318/v1/traces \
   cargo test --locked -p ag-harness --test benchmark
 ```
 
-Each trace's root span is named after the scenario and carries the run's JSON record,
-apart from the `requests` and `turns` lists, as `benchmark.*` attributes (for example
-`benchmark.correctness`, `benchmark.duplicate_reads`, and
-`benchmark.lost_prefixes.harness`); a run that is not a `success` ends with an error
-status. The harness's own `LifecycleTraceObserver` spans nest beneath it: `invoke_agent`
-per turn, `execute_tool` per tool call, `agent.compaction` per summary, and one
-`chat <model>` span per model request with its `gen_ai.*` usage. Each reported request's
-span additionally carries its `requests` entry as `benchmark.*` attributes, such as
-`benchmark.request` (its index), `benchmark.prefix_held`, `benchmark.lost_to`,
-`benchmark.reduction_event`, and `benchmark.reductions.*`; a rejected output's span
-keeps only the harness's error. Look a run up by the `trace_id` its record prints, or
-query attributes with TraceQL, such as `{ span.benchmark.lost_to = "harness" }`. The
-process prints `OTLP warnings=<n>` after flushing; a nonzero count means some spans were
-not delivered.
+Each trace's root span is named after the scenario and carries the run's JSON record as
+`benchmark.*` attributes, such as `benchmark.correctness`, `benchmark.duplicate_reads`,
+and `benchmark.lost_prefixes.harness`. Nested objects become dotted names; `null`
+fields, empty lists, and the `requests` and `turns` lists are left out. A run that is
+not a `success` ends with an error status. The harness's own `LifecycleTraceObserver`
+spans nest beneath it: `invoke_agent` per turn, `execute_tool` per tool call,
+`agent.compaction` per summary, and one `chat <model>` span per model request with its
+`gen_ai.*` usage. Each reported request's span additionally carries its `requests` entry
+as `benchmark.*` attributes, such as `benchmark.request` (its index),
+`benchmark.prefix_held`, `benchmark.lost_to`, `benchmark.reduction_event`, and
+`benchmark.reductions.*`. Entries pair with spans in request order, and an entry whose
+`input_tokens` differ from its span's reported usage is left out rather than
+misattributed. A rejected output's span keeps only the harness's error. Look a run up by
+the `trace_id` its record prints, or query attributes with TraceQL, such as
+`{ span.benchmark.lost_to = "harness" }`. The process prints `OTLP warnings=<n>` after
+flushing; a nonzero count means some spans were not delivered.
 
 Committed baselines live under `results/` as `*-context*.jsonl`.
 `results/2026-10-23-context-regimes.jsonl` holds two runs per model and scenario of
