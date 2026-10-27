@@ -1,7 +1,9 @@
 use std::fmt;
 use std::str::FromStr;
+use std::sync::{Mutex, OnceLock, PoisonError};
 
 use ag_contracts::{ReasoningLevel, SpeedMode};
+use rustc_hash::FxHashMap;
 
 /// Supported agent provider families.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -35,13 +37,21 @@ macro_rules! define_model_catalog {
         /// Gemini ids are shared by Gemini and Antigravity; provider ownership
         /// lives on [`AgentSelection`]. Removing a variant is a Rust source API
         /// change even when [`AgentModel::retired_replacement`] preserves saved ids.
-        #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+        #[derive(Debug, Clone, Copy, Hash, PartialEq, Eq)]
+        #[repr(u8)]
         pub enum AgentModel {
             $($( $(#[$attribute])* $model = $discriminant, )*)*
+            /// Model a local or self-hosted OpenAI-compatible server, such as
+            /// Ollama, serves to the native harness. Its id is
+            /// `openai-compatible/<served model>`, such as
+            /// `openai-compatible/qwen3:latest`.
+            OpenAiCompatible(ServedModel) = 18,
         }
 
         impl AgentModel {
-            /// All selectable models, grouped in catalog provider order.
+            /// All fixed catalog models, grouped in catalog provider order.
+            /// Served [`AgentModel::OpenAiCompatible`] models are discovered at
+            /// runtime and never listed here.
             pub const ALL: &[Self] = &[$($(Self::$model,)*)*];
 
             const fn descriptor(self) -> ModelDescriptor {
@@ -51,6 +61,12 @@ macro_rules! define_model_catalog {
                         id: $id,
                         supports_fast_mode: $fast,
                     },)*)*
+                    Self::OpenAiCompatible(served) => ModelDescriptor {
+                        description: "Model served by a local or self-hosted \
+                                      OpenAI-compatible server, such as Ollama.",
+                        id: served.id(),
+                        supports_fast_mode: false,
+                    },
                 }
             }
         }
@@ -184,26 +200,20 @@ define_model_catalog! {
             description: "Balanced Qwen model served through the native harness.",
             fast: false,
         },
-        /// Model named by `OPENAI_COMPATIBLE_MODEL`, served by a local or
-        /// self-hosted OpenAI-compatible endpoint such as Ollama.
-        OpenAiCompatible = 18 => {
-            id: "openai-compatible",
-            description: "Local or self-hosted model from OPENAI_COMPATIBLE_MODEL, such as Ollama.",
-            fast: false,
-        },
     }
 }
 
-/// Models the native harness serves, in display order: its own catalog
-/// models, then the Codex models `OpenAI`'s Responses API also serves, which
-/// the harness shares with [`AgentKind::Codex`] like Antigravity shares the
-/// Gemini models.
+/// Hosted models the native harness serves, in display order: its own
+/// catalog models, then the Codex models `OpenAI`'s Responses API also
+/// serves, which the harness shares with [`AgentKind::Codex`] like
+/// Antigravity shares the Gemini models. Served
+/// [`AgentModel::OpenAiCompatible`] models are discovered at runtime and
+/// listed before these.
 ///
-/// A new harness session starts on the first model whose provider is
-/// configured. The `OpenAI` models come last because `OPENAI_API_KEY` is
-/// often set for other tools, so its mere presence must not move sessions
-/// from a deliberately configured harness provider to paid `OpenAI` usage.
-/// The harness library also catalogs the deprecated `gpt-5.3-codex`, which
+/// The `OpenAI` models come last because `OPENAI_API_KEY` is often set for
+/// other tools, so its mere presence must not move sessions from a
+/// deliberately configured harness provider to paid `OpenAI` usage. The
+/// harness library also catalogs the deprecated `gpt-5.3-codex`, which
 /// Agentty retires to [`AgentModel::Gpt61Sol`] instead of offering it.
 const HARNESS_MODELS: &[AgentModel] = &[
     AgentModel::MuseSpark13,
@@ -211,17 +221,88 @@ const HARNESS_MODELS: &[AgentModel] = &[
     AgentModel::KimiK26,
     AgentModel::Qwen38Max,
     AgentModel::QwenPlus,
-    AgentModel::OpenAiCompatible,
     AgentModel::Gpt61Sol,
     AgentModel::Gpt6Astra,
     AgentModel::Gpt6Luna,
     AgentModel::Gpt56Terra,
 ];
 
+/// Id prefix of every [`AgentModel::OpenAiCompatible`] model.
+const OPENAI_COMPATIBLE_ID: &str = "openai-compatible";
+
 struct ModelDescriptor {
     description: &'static str,
     id: &'static str,
     supports_fast_mode: bool,
+}
+
+/// Model an OpenAI-compatible server serves, identified as
+/// `openai-compatible/<served model>`.
+///
+/// Servers name their models at runtime, so each distinct id is interned once
+/// and kept for the process lifetime, which keeps [`AgentModel`] `Copy` and
+/// one pointer wide. A process interns only the names its servers report and
+/// its sessions store.
+#[derive(Clone, Copy, Debug, Eq, Hash, PartialEq)]
+pub struct ServedModel(&'static &'static str);
+
+impl ServedModel {
+    /// Model named by the host's `OPENAI_COMPATIBLE_MODEL`, stored under the
+    /// bare `openai-compatible` id.
+    pub const CONFIGURED: Self = Self(&OPENAI_COMPATIBLE_ID);
+
+    /// Returns the served model `name`, such as `qwen3:latest`, or `None`
+    /// for a blank name.
+    #[must_use]
+    pub fn new(name: &str) -> Option<Self> {
+        let name = name.trim();
+        if name.is_empty() {
+            return None;
+        }
+
+        Some(Self(intern(format!("{OPENAI_COMPATIBLE_ID}/{name}"))))
+    }
+
+    /// Returns the stable model id, such as `openai-compatible/qwen3:latest`.
+    #[must_use]
+    pub const fn id(self) -> &'static str {
+        self.0
+    }
+
+    /// Returns the name the server serves, or `None` for
+    /// [`Self::CONFIGURED`], whose name the host environment supplies.
+    #[must_use]
+    pub fn name(self) -> Option<&'static str> {
+        self.id()
+            .strip_prefix(OPENAI_COMPATIBLE_ID)?
+            .strip_prefix('/')
+    }
+
+    /// Parses an `openai-compatible` or `openai-compatible/<name>` id.
+    fn parse(id: &str) -> Option<Self> {
+        if id == OPENAI_COMPATIBLE_ID {
+            return Some(Self::CONFIGURED);
+        }
+
+        Self::new(id.strip_prefix(OPENAI_COMPATIBLE_ID)?.strip_prefix('/')?)
+    }
+}
+
+/// Returns the process-lifetime copy of `id`, leaking it on first use.
+fn intern(id: String) -> &'static &'static str {
+    static INTERNED: OnceLock<Mutex<FxHashMap<&'static str, &'static &'static str>>> =
+        OnceLock::new();
+    let mut interned = INTERNED
+        .get_or_init(Mutex::default)
+        .lock()
+        .unwrap_or_else(PoisonError::into_inner);
+    if let Some(existing) = interned.get(id.as_str()) {
+        return existing;
+    }
+    let leaked: &'static &'static str = Box::leak(Box::new(&*Box::leak(id.into_boxed_str())));
+    interned.insert(leaked, leaked);
+
+    leaked
 }
 
 /// Session-level agent selection that keeps provider kind and model together.
@@ -557,13 +638,19 @@ impl FromStr for AgentModel {
             .iter()
             .copied()
             .find(|model| model.as_str() == value)
+            .or_else(|| ServedModel::parse(value).map(Self::OpenAiCompatible))
             .ok_or_else(|| format!("unknown model: {value}"))
     }
 }
 
 impl AgentSelectionMetadata for AgentModel {
+    /// Returns the model id, or the bare served name of an
+    /// [`AgentModel::OpenAiCompatible`] model, such as `qwen3:latest`.
     fn name(&self) -> &'static str {
-        (*self).provider_model_str()
+        match self {
+            Self::OpenAiCompatible(served) => served.name().unwrap_or(served.id()),
+            _ => (*self).provider_model_str(),
+        }
     }
 
     fn description(&self) -> &'static str {
@@ -637,9 +724,14 @@ impl AgentKind {
         Some(model)
     }
 
-    /// Returns whether this provider can run the given model.
+    /// Returns whether this provider can run the given model. Only
+    /// [`AgentKind::Harness`] runs served [`AgentModel::OpenAiCompatible`]
+    /// models.
     pub fn supports_model(self, model: AgentModel) -> bool {
-        self.models().contains(&model)
+        match model {
+            AgentModel::OpenAiCompatible(_) => self == Self::Harness,
+            _ => self.models().contains(&model),
+        }
     }
 
     /// Returns whether this provider exposes a response-speed control.

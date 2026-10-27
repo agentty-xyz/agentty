@@ -265,7 +265,9 @@ impl App {
                 result = &mut request => return result,
                 event = async {
                     if self.pending_session_creations.is_empty() {
-                        crate::app::AppRuntimeEvent::Session(self.sessions.next_command().await)
+                        crate::app::AppRuntimeEvent::Session(Box::new(
+                            self.sessions.next_command().await,
+                        ))
                     } else {
                         self.next_runtime_event().await
                     }
@@ -275,7 +277,7 @@ impl App {
                             Box::pin(self.apply_app_events(*event)).await;
                         }
                         crate::app::AppRuntimeEvent::Session(command) => {
-                            self.apply_session_runtime_command(command).await;
+                            self.apply_session_runtime_command(*command).await;
                         }
                     }
                 }
@@ -502,9 +504,10 @@ impl App {
             && !self.services.harness_availability().is_available()
         {
             return Err(ApiSessionError::Operation(
-                "Harness sessions need `agentty --experimental-harness` and a configured \
-                 provider: `MODEL_API_KEY`, `KIMI_API_KEY` with `KIMI_BASE_URL`, or \
-                 `DASHSCOPE_API_KEY` with `DASHSCOPE_BASE_URL`."
+                "Harness sessions need `agentty --experimental-harness` and a runnable model: a \
+                 local Ollama or OpenAI-compatible server serving a model, `MODEL_API_KEY`, \
+                 `KIMI_API_KEY` with `KIMI_BASE_URL`, or `DASHSCOPE_API_KEY` with \
+                 `DASHSCOPE_BASE_URL`."
                     .to_string(),
             ));
         }

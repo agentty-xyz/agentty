@@ -13,9 +13,11 @@ use uuid::Uuid;
 use wiremock::matchers::method;
 use wiremock::{Mock, MockServer, ResponseTemplate};
 
-use super::{Analytics, InstallMethod, SessionType, TurnOutcome};
+use super::{Analytics, InstallMethod, SessionType, TurnOutcome, reported_model};
 use crate::app::AppError;
-use crate::domain::agent::{AgentKind, AgentModel, AgentSelection, AgentSelectionMetadata as _};
+use crate::domain::agent::{
+    AgentKind, AgentModel, AgentSelection, AgentSelectionMetadata as _, ServedModel,
+};
 use crate::domain::setting::SettingName;
 use crate::infra::db::AppRepositories;
 
@@ -477,4 +479,18 @@ fn cargo_metadata_must_identify_this_binary_and_version() {
         InstallMethod::from_paths(&executable, None),
         InstallMethod::Unknown
     );
+}
+
+#[test]
+fn served_local_model_names_report_only_their_family() {
+    // Arrange
+    let local = AgentSelection::new(
+        AgentKind::Harness,
+        AgentModel::OpenAiCompatible(ServedModel::new("private-finetune:latest").expect("name")),
+    );
+    let hosted = AgentSelection::new(AgentKind::Harness, AgentModel::KimiK3);
+
+    // Act / Assert
+    assert_eq!(reported_model(local), "openai-compatible");
+    assert_eq!(reported_model(hosted), "kimi-k3");
 }

@@ -1,4 +1,4 @@
-use crate::agent::{AgentKind, AgentModel, AgentSelectionMetadata};
+use crate::agent::{AgentKind, AgentModel, AgentSelectionMetadata, ServedModel};
 
 #[test]
 /// Ensures model parsing is constrained to the selected provider.
@@ -342,4 +342,62 @@ fn test_harness_models_include_its_own_and_shared_codex_models() {
     assert!(AgentKind::Codex.supports_model(AgentModel::Gpt61Sol));
     assert!(!AgentKind::Harness.supports_model(AgentModel::Gpt53CodexSpark));
     assert_eq!(AgentKind::Antigravity.declared_models(), &[]);
+}
+
+#[test]
+/// Ensures served model ids round-trip and only Harness runs them.
+fn test_served_model_ids_parse_for_harness_only() {
+    // Arrange
+    let served = ServedModel::new(" qwen3:latest ").expect("nonblank served name");
+
+    // Act
+    let parsed = AgentKind::Harness.parse_model("openai-compatible/qwen3:latest");
+    let configured = AgentKind::Harness.parse_model("openai-compatible");
+    let parsed_by_claude = AgentKind::Claude.parse_model("openai-compatible/qwen3:latest");
+
+    // Assert
+    assert_eq!(parsed, Some(AgentModel::OpenAiCompatible(served)));
+    assert_eq!(served.id(), "openai-compatible/qwen3:latest");
+    assert_eq!(served.name(), Some("qwen3:latest"));
+    assert_eq!(AgentModel::OpenAiCompatible(served).name(), "qwen3:latest");
+    assert_eq!(
+        AgentModel::OpenAiCompatible(served).as_str(),
+        "openai-compatible/qwen3:latest"
+    );
+    assert_eq!(
+        configured,
+        Some(AgentModel::OpenAiCompatible(ServedModel::CONFIGURED))
+    );
+    assert_eq!(ServedModel::CONFIGURED.name(), None);
+    assert_eq!(
+        AgentModel::OpenAiCompatible(ServedModel::CONFIGURED).name(),
+        "openai-compatible"
+    );
+    assert_eq!(parsed_by_claude, None);
+    assert_eq!(
+        AgentModel::OpenAiCompatible(served).description(),
+        "Model served by a local or self-hosted OpenAI-compatible server, such as Ollama."
+    );
+}
+
+#[test]
+/// Ensures blank or foreign served model ids are rejected.
+fn test_served_model_rejects_blank_and_foreign_ids() {
+    // Arrange, Act, Assert
+    assert_eq!(ServedModel::new("  "), None);
+    assert!("openai-compatible/ ".parse::<AgentModel>().is_err());
+    assert!("openai-compatiblex".parse::<AgentModel>().is_err());
+    assert!("openai-compatiblex/qwen3".parse::<AgentModel>().is_err());
+}
+
+#[test]
+/// Ensures equal served names intern to one shared id.
+fn test_served_model_interns_equal_names_once() {
+    // Arrange, Act
+    let first = ServedModel::new("llama3.2:3b").expect("served name");
+    let second = ServedModel::new("llama3.2:3b").expect("served name");
+
+    // Assert
+    assert_eq!(first, second);
+    assert!(std::ptr::eq(first.id(), second.id()));
 }

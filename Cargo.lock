@@ -173,6 +173,7 @@ dependencies = [
  "ag-agent",
  "ag-contracts",
  "ag-session",
+ "async-trait",
  "tokio",
  "tokio-util",
 ]

@@ -1,5 +1,7 @@
 use std::env;
 
+use ag_router::LocalServer;
+
 use super::catalog::ModelConfigurationError;
 use crate::model::{HeuristicContextEstimator, ModelProfile};
 
@@ -46,18 +48,38 @@ pub struct OpenAiCompatibleConfig {
 /// [`HeuristicContextEstimator::DEFAULT`], counting the output schema the
 /// provider states in the prompt, under a 50% estimate margin.
 pub(crate) fn profile_from_environment(
-    mut environment: impl FnMut(&str) -> Result<String, env::VarError>,
+    environment: impl FnMut(&str) -> Result<String, env::VarError>,
 ) -> Result<ModelProfile, ModelConfigurationError> {
-    let context_window = token_count(
-        &mut environment,
-        OPENAI_COMPATIBLE_CONTEXT_WINDOW_ENV,
-        DEFAULT_CONTEXT_WINDOW_TOKENS,
-    )?;
-    let max_output_tokens = token_count(
-        &mut environment,
-        OPENAI_COMPATIBLE_MAX_OUTPUT_TOKENS_ENV,
-        DEFAULT_MAX_OUTPUT_TOKENS,
-    )?;
+    profile(environment, None)
+}
+
+/// Returns the profile of an OpenAI-compatible model the server runs with a
+/// `running_context_window`-token window. A declared window larger than the
+/// running one is capped to it, so requests never exceed what the server
+/// keeps; without a declared reservation, a quarter of the window, at most
+/// [`DEFAULT_MAX_OUTPUT_TOKENS`], is reserved for the response.
+pub(crate) fn running_profile(
+    environment: impl FnMut(&str) -> Result<String, env::VarError>,
+    running_context_window: u64,
+) -> Result<ModelProfile, ModelConfigurationError> {
+    profile(environment, Some(running_context_window))
+}
+
+/// Builds the profile from declared counts and the server's running window.
+fn profile(
+    mut environment: impl FnMut(&str) -> Result<String, env::VarError>,
+    running_context_window: Option<u64>,
+) -> Result<ModelProfile, ModelConfigurationError> {
+    let declared_context_window =
+        token_count(&mut environment, OPENAI_COMPATIBLE_CONTEXT_WINDOW_ENV)?;
+    let context_window = match (declared_context_window, running_context_window) {
+        (Some(declared), Some(running)) => declared.min(running),
+        (declared, running) => declared
+            .or(running)
+            .unwrap_or(DEFAULT_CONTEXT_WINDOW_TOKENS),
+    };
+    let max_output_tokens = token_count(&mut environment, OPENAI_COMPATIBLE_MAX_OUTPUT_TOKENS_ENV)?
+        .unwrap_or_else(|| DEFAULT_MAX_OUTPUT_TOKENS.min(context_window / 4));
     if max_output_tokens >= context_window {
         return Err(ModelConfigurationError::OutputExceedsContextWindow {
             context_window,
@@ -70,17 +92,16 @@ pub(crate) fn profile_from_environment(
         .with_estimator(HeuristicContextEstimator::DEFAULT.with_output_schema_in_prompt()))
 }
 
-/// Reads a positive token count from `name`, or `default` when it is unset
-/// or blank.
+/// Reads a positive token count from `name`, or `None` when it is unset or
+/// blank.
 fn token_count(
     environment: &mut impl FnMut(&str) -> Result<String, env::VarError>,
     name: &'static str,
-    default: u64,
-) -> Result<u64, ModelConfigurationError> {
+) -> Result<Option<u64>, ModelConfigurationError> {
     let value = match environment(name) {
-        Ok(value) if value.trim().is_empty() => return Ok(default),
+        Ok(value) if value.trim().is_empty() => return Ok(None),
         Ok(value) => value,
-        Err(env::VarError::NotPresent) => return Ok(default),
+        Err(env::VarError::NotPresent) => return Ok(None),
         Err(source) => return Err(ModelConfigurationError::Environment { name, source }),
     };
 
@@ -89,7 +110,31 @@ fn token_count(
         .parse::<u64>()
         .ok()
         .filter(|count| *count > 0)
+        .map(Some)
         .ok_or(ModelConfigurationError::InvalidTokenCount { name, value })
+}
+
+/// Returns a client for the OpenAI-compatible server at
+/// [`OPENAI_COMPATIBLE_BASE_URL_ENV`], defaulting to Ollama's local
+/// endpoint, with the optional [`OPENAI_COMPATIBLE_API_KEY_ENV`] key.
+pub(crate) fn local_server(
+    mut environment: impl FnMut(&str) -> Result<String, env::VarError>,
+) -> Result<LocalServer, ModelConfigurationError> {
+    let base_url = match environment(OPENAI_COMPATIBLE_BASE_URL_ENV) {
+        Ok(base_url) if !base_url.trim().is_empty() => base_url.trim().to_string(),
+        Ok(_) | Err(env::VarError::NotPresent) => DEFAULT_BASE_URL.to_string(),
+        Err(source) => {
+            return Err(ModelConfigurationError::Environment {
+                name: OPENAI_COMPATIBLE_BASE_URL_ENV,
+                source,
+            });
+        }
+    };
+
+    Ok(LocalServer::new(
+        base_url,
+        environment(OPENAI_COMPATIBLE_API_KEY_ENV).ok(),
+    ))
 }
 
 #[cfg(test)]

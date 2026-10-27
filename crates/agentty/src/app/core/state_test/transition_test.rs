@@ -16,9 +16,12 @@ use crate::app;
 use crate::app::branch_publish::BranchPublishTaskSuccess;
 use crate::app::core::event::AppEvent;
 use crate::app::{AppError, session};
-use crate::domain::agent::{AgentKind, AgentModel, AgentSelection, AgentSelectionMetadata};
+use crate::domain::agent::{
+    AgentKind, AgentModel, AgentSelection, AgentSelectionMetadata, ServedModel,
+};
 use crate::domain::harness::HarnessAvailability;
 use crate::domain::session::{PublishBranchAction, SESSION_DATA_DIR, SessionDiffState, Status};
+use crate::domain::setting::SettingName;
 use crate::infra::db::AppRepositories;
 use crate::infra::tmux::MockTmuxClient;
 use crate::presentation::app_mode::{
@@ -647,6 +650,37 @@ async fn test_new_with_clients_starts_with_only_an_available_harness() {
     assert_eq!(
         app.services.harness_availability(),
         HarnessAvailability::Available(AgentModel::KimiK3)
+    );
+}
+
+#[tokio::test]
+async fn test_new_with_clients_starts_harness_sessions_on_the_remembered_local_model() {
+    // Arrange
+    let base_dir = tempdir().expect("failed to create temp dir");
+    let base_path = base_dir.path().to_path_buf();
+    let database = AppRepositories::in_memory().await.expect("db should open");
+    database
+        .settings()
+        .upsert_setting(
+            SettingName::DefaultHarnessModel,
+            "openai-compatible/qwen3:latest",
+        )
+        .await
+        .expect("seed remembered harness model");
+    let clients = crate::test_support::harness_only_test_app_clients(base_path.join("harness"))
+        .with_tmux_client(Arc::new(MockTmuxClient::new()));
+
+    // Act
+    let app = App::new_with_clients(base_path.clone(), base_path, None, database, clients)
+        .await
+        .expect("a remembered harness model should allow startup");
+
+    // Assert
+    assert_eq!(
+        app.services.harness_availability(),
+        HarnessAvailability::Available(AgentModel::OpenAiCompatible(
+            ServedModel::new("qwen3:latest").expect("name")
+        ))
     );
 }
 

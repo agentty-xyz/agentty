@@ -2007,7 +2007,9 @@ impl SessionManager {
     ///
     /// When `LastUsedModelAsDefault` is enabled, this also persists the chosen
     /// session agent/model pair as `DefaultSmartAgent` and
-    /// `DefaultSmartModel`, except for Harness selections.
+    /// `DefaultSmartModel`, except for Harness selections. A Harness
+    /// selection always persists as `DefaultHarnessModel`, which new Harness
+    /// sessions start on.
     ///
     /// When the model changes, this also clears any persisted provider-native
     /// conversation identifier so incompatible runtimes do not attempt resume
@@ -2196,6 +2198,16 @@ impl SessionManager {
             .sessions()
             .apply_session_agent_model(session_id, session_agent, agent_changed, default_project_id)
             .await?;
+        // An explicit Harness choice becomes the model new Harness sessions
+        // start on, so an auto-detected paid provider never replaces it.
+        if persist_last_used_model_as_default && session_agent.kind() == AgentKind::Harness {
+            services
+                .db()
+                .settings()
+                .upsert_setting(SettingName::DefaultHarnessModel, session_model.as_str())
+                .await?;
+            services.remember_harness_model(session_model);
+        }
         if let Some(paused_worker) = paused_worker {
             self.clear_session_worker(session_id);
             paused_worker.shutdown().await;

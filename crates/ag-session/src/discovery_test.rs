@@ -1,4 +1,7 @@
-use crate::{AgentAvailabilityProbe, AgentCliVersion, AgentKind, StaticAgentAvailabilityProbe};
+use crate::{
+    AgentAvailabilityProbe, AgentCliVersion, AgentKind, HarnessModelOption,
+    StaticAgentAvailabilityProbe,
+};
 
 #[test]
 fn static_discovery_preserves_provider_order_without_inventing_versions() {
@@ -22,16 +25,16 @@ fn static_discovery_preserves_provider_order_without_inventing_versions() {
     );
 }
 
-#[test]
-fn probes_without_credential_discovery_report_no_harness_credentials() {
+#[tokio::test]
+async fn probes_without_harness_discovery_report_no_harness_models() {
     // Arrange
     let probe = StaticAgentAvailabilityProbe {
         available_agent_kinds: AgentKind::ALL.to_vec(),
     };
 
     // Act
-    let default_model = probe.native_harness_default_model();
+    let models = probe.native_harness_models().await;
 
     // Assert
-    assert_eq!(default_model, None);
+    assert_eq!(models, Vec::<HarnessModelOption>::new());
 }

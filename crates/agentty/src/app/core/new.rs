@@ -14,7 +14,8 @@ use crate::app::setting::SettingsManager;
 use crate::app::startup::{AppStartup, StartupProjectContext, StartupSessionLoadContext};
 use crate::app::{AppError, review, sync, task};
 use crate::domain::agent::{AgentCliInfo, AgentKind};
-use crate::domain::harness::HarnessAvailability;
+use crate::domain::harness::HarnessModelCatalog;
+use crate::domain::setting::SettingName;
 use crate::infra::clock::{self, Clock};
 use crate::infra::db;
 use crate::infra::db::AppRepositories;
@@ -386,19 +387,10 @@ impl App {
             &clients.agent_availability_probe,
         ))
         .await;
-        let harness_default_model = clients
-            .experimental_harness
-            .then(|| {
-                clients
-                    .agent_availability_probe
-                    .native_harness_default_model()
-            })
-            .flatten();
-        let harness_availability =
-            HarnessAvailability::resolve(clients.experimental_harness, harness_default_model);
+        let harness_models = Self::load_harness_models(clients, &repositories).await;
         AppStartup::validate_startup_agent_availability(
             &available_agent_kinds,
-            harness_availability,
+            harness_models.availability(),
         )?;
         let available_agent_clis = AgentCliInfo::loading_from_kinds(&available_agent_kinds);
 
@@ -422,9 +414,37 @@ impl App {
             },
             available_agent_clis,
         );
-        services.set_harness_availability(harness_availability);
+        services.set_harness_models(
+            harness_models,
+            Arc::clone(&clients.agent_availability_probe),
+        );
 
         Ok(services)
+    }
+
+    /// Lists the harness models a launch with `--experimental-harness`
+    /// offers, with the user's remembered choice. The probe bounds the local
+    /// server listing with short timeouts; other launches skip it.
+    async fn load_harness_models(
+        clients: &AppClients,
+        repositories: &AppRepositories,
+    ) -> HarnessModelCatalog {
+        if !clients.experimental_harness {
+            return HarnessModelCatalog::default();
+        }
+        let options = clients
+            .agent_availability_probe
+            .native_harness_models()
+            .await;
+        let remembered = repositories
+            .settings()
+            .get_setting(SettingName::DefaultHarnessModel)
+            .await
+            .ok()
+            .flatten()
+            .and_then(|model| AgentKind::Harness.parse_model(&model));
+
+        HarnessModelCatalog::new(true, options, remembered)
     }
 
     /// Completes durable operation recovery before startup admits sessions.

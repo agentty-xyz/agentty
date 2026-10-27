@@ -10,7 +10,10 @@ use super::{
     current_line_delete_range, drain_prompt_submission, insert_prompt_local_image,
     insert_prompt_local_image_at, prompt_slash_option_count, resolve_prompt_slash_selection,
 };
-use crate::domain::agent::{AgentKind, AgentModel, AgentSelection, ReasoningLevel, ResponseStyle};
+use crate::domain::agent::{
+    AgentKind, AgentModel, AgentSelection, HarnessModelOption, HarnessModelStatus, ModelBilling,
+    ReasoningLevel, ResponseStyle, ServedModel,
+};
 use crate::domain::input::{INPUT_HISTORY_LIMIT, InputState};
 use crate::domain::permission::PermissionMode;
 
@@ -970,5 +973,272 @@ fn test_style_stage_lists_descriptions_and_returns_selected_style() {
     assert_eq!(
         selection,
         Some(PromptSuggestionSelection::Style(ResponseStyle::Detailed))
+    );
+}
+
+/// Returns one harness model option.
+fn harness_option(
+    model: AgentModel,
+    billing: ModelBilling,
+    provider: &str,
+    status: HarnessModelStatus,
+) -> HarnessModelOption {
+    HarnessModelOption {
+        billing,
+        context_window: None,
+        loaded_context_window: None,
+        model,
+        provider: provider.to_string(),
+        status,
+    }
+}
+
+/// Returns the served local model `name`.
+fn served(name: &str) -> AgentModel {
+    AgentModel::OpenAiCompatible(ServedModel::new(name).expect("served name"))
+}
+
+/// Returns a Harness `/model` stage over `harness_models`.
+fn harness_model_stage(
+    harness_models: Vec<HarnessModelOption>,
+    selected_index: usize,
+) -> PromptSlashState {
+    PromptSlashState {
+        harness_models,
+        selected_agent: Some(AgentKind::Harness),
+        selected_index,
+        stage: PromptSlashStage::Model,
+        ..PromptSlashState::with_available_agent_kinds(vec![AgentKind::Harness])
+    }
+}
+
+/// Returns local and paid models covering every row label shape.
+fn labeled_harness_models() -> Vec<HarnessModelOption> {
+    vec![
+        HarnessModelOption {
+            context_window: Some(40_960),
+            loaded_context_window: Some(32_768),
+            ..harness_option(
+                served("qwen3:latest"),
+                ModelBilling::Local,
+                "Ollama",
+                HarnessModelStatus::Ready,
+            )
+        },
+        HarnessModelOption {
+            loaded_context_window: Some(4096),
+            ..harness_option(
+                served("llama3.2:3b"),
+                ModelBilling::Local,
+                "Ollama",
+                HarnessModelStatus::Ready,
+            )
+        },
+        harness_option(
+            served("gemma:latest"),
+            ModelBilling::Local,
+            "Ollama",
+            HarnessModelStatus::NoToolSupport,
+        ),
+        HarnessModelOption {
+            context_window: Some(262_144),
+            ..harness_option(
+                AgentModel::MuseSpark13,
+                ModelBilling::Paid,
+                "Muse",
+                HarnessModelStatus::Ready,
+            )
+        },
+        harness_option(
+            AgentModel::KimiK3,
+            ModelBilling::Paid,
+            "Kimi",
+            HarnessModelStatus::MissingConfiguration("KIMI_API_KEY"),
+        ),
+        HarnessModelOption {
+            context_window: Some(512),
+            ..harness_option(
+                served("tiny"),
+                ModelBilling::Local,
+                "OpenAI-compatible server",
+                HarnessModelStatus::Ready,
+            )
+        },
+        harness_option(
+            served("plain"),
+            ModelBilling::Local,
+            "OpenAI-compatible server",
+            HarnessModelStatus::Ready,
+        ),
+    ]
+}
+
+#[test]
+fn harness_model_stage_labels_local_free_and_paid_models() {
+    // Arrange
+    let slash_state = harness_model_stage(labeled_harness_models(), 0);
+
+    // Act
+    let suggestion_list =
+        build_prompt_slash_suggestion_list("/model", &slash_state, AgentKind::Harness, true)
+            .expect("harness models should render");
+
+    // Assert
+    assert_eq!(
+        suggestion_list.title,
+        "/model Harness model (j/k move, Enter select)"
+    );
+    let rows = suggestion_list
+        .items
+        .iter()
+        .map(|item| {
+            (
+                item.badge.as_deref().unwrap_or_default(),
+                item.label.trim_end(),
+                item.metadata.as_deref().unwrap_or_default(),
+            )
+        })
+        .collect::<Vec<_>>();
+    assert_eq!(
+        rows,
+        vec![
+            ("local", "qwen3:latest", "free · Ollama · runs 32k ctx"),
+            (
+                "local",
+                "llama3.2:3b",
+                "free · Ollama · runs 4k ctx, needs 16k"
+            ),
+            ("local", "gemma:latest", "free · Ollama · no tool calls"),
+            ("paid", "muse-spark-1.3", "Muse · 256k ctx"),
+            ("paid", "kimi-k3", "Kimi · needs KIMI_API_KEY"),
+            (
+                "local",
+                "tiny",
+                "free · OpenAI-compatible server · up to 512 ctx"
+            ),
+            ("local", "plain", "free · OpenAI-compatible server"),
+        ]
+    );
+    // Metadata starts in one column after each `[badge] label`.
+    let metadata_columns = suggestion_list
+        .items
+        .iter()
+        .map(|item| item.badge.as_deref().unwrap_or_default().len() + item.label.len())
+        .collect::<Vec<_>>();
+    assert!(
+        metadata_columns
+            .iter()
+            .all(|column| *column == "paid".len() + "muse-spark-1.3".len())
+    );
+    assert!(
+        suggestion_list
+            .items
+            .iter()
+            .all(|item| item.detail.is_none())
+    );
+}
+
+#[test]
+fn harness_model_stage_selects_only_models_that_can_run() {
+    // Arrange
+    let harness_models = vec![
+        harness_option(
+            served("qwen3:latest"),
+            ModelBilling::Local,
+            "Ollama",
+            HarnessModelStatus::Ready,
+        ),
+        harness_option(
+            AgentModel::KimiK3,
+            ModelBilling::Paid,
+            "Kimi",
+            HarnessModelStatus::MissingConfiguration("KIMI_API_KEY"),
+        ),
+    ];
+
+    // Act
+    let local = resolve_prompt_slash_selection(
+        "/model",
+        &harness_model_stage(harness_models.clone(), 0),
+        AgentKind::Harness,
+        true,
+    );
+    let missing_key = resolve_prompt_slash_selection(
+        "/model",
+        &harness_model_stage(harness_models, 1),
+        AgentKind::Harness,
+        true,
+    );
+
+    // Assert
+    assert_eq!(
+        local,
+        Some(PromptSuggestionSelection::Model(AgentSelection::new(
+            AgentKind::Harness,
+            served("qwen3:latest"),
+        )))
+    );
+    assert_eq!(missing_key, None);
+}
+
+#[test]
+fn harness_model_stage_explains_how_to_add_local_models() {
+    // Arrange
+    let slash_state = harness_model_stage(
+        vec![harness_option(
+            AgentModel::MuseSpark13,
+            ModelBilling::Paid,
+            "Muse",
+            HarnessModelStatus::Ready,
+        )],
+        0,
+    );
+
+    // Act
+    let suggestion_list =
+        build_prompt_slash_suggestion_list("/model", &slash_state, AgentKind::Harness, true)
+            .expect("harness models should render");
+    let hint_selection =
+        resolve_prompt_slash_selection("/model", &slash_state, AgentKind::Harness, true);
+
+    // Assert
+    assert_eq!(suggestion_list.items[0].label.trim_end(), "no local models");
+    assert_eq!(
+        suggestion_list.items[0].metadata.as_deref(),
+        Some("start Ollama or set OPENAI_COMPATIBLE_BASE_URL")
+    );
+    assert_eq!(suggestion_list.items[1].label.trim_end(), "muse-spark-1.3");
+    assert_eq!(hint_selection, None);
+}
+
+#[test]
+fn harness_model_stage_lists_the_paid_catalog_before_discovery() {
+    // Arrange
+    let slash_state = harness_model_stage(Vec::new(), 1);
+
+    // Act
+    let suggestion_list =
+        build_prompt_slash_suggestion_list("/model", &slash_state, AgentKind::Harness, true)
+            .expect("harness catalog should render");
+    let selection =
+        resolve_prompt_slash_selection("/model", &slash_state, AgentKind::Harness, true);
+
+    // Assert
+    assert_eq!(
+        suggestion_list.items.len(),
+        AgentKind::Harness.models().len()
+    );
+    assert!(
+        suggestion_list
+            .items
+            .iter()
+            .all(|item| item.badge.as_deref() == Some("paid"))
+    );
+    assert_eq!(
+        selection,
+        Some(PromptSuggestionSelection::Model(AgentSelection::new(
+            AgentKind::Harness,
+            AgentModel::KimiK3,
+        )))
     );
 }

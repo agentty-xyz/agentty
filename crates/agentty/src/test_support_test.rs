@@ -23,7 +23,11 @@ use tracing::{Event, Level, Metadata, span};
 use crate::app;
 use crate::app::{App, SessionManager, SessionState};
 use crate::db::Database;
-use crate::domain::agent::{AgentKind, AgentModel, AgentSelection, ReasoningLevel};
+use crate::domain::agent::{
+    AgentKind, AgentModel, AgentSelection, HarnessModelOption, HarnessModelStatus, ModelBilling,
+    ReasoningLevel,
+};
+use crate::domain::harness::HarnessModelCatalog;
 use crate::domain::question::QuestionItem;
 use crate::domain::selection::SelectionState;
 use crate::domain::session::{
@@ -341,14 +345,60 @@ pub(crate) fn test_app_clients_with_mock_app_server() -> app::test_support::AppC
 /// Reports no backend CLI and one configured Harness provider.
 struct HarnessOnlyAvailabilityProbe;
 
+#[async_trait::async_trait]
 impl AgentAvailabilityProbe for HarnessOnlyAvailabilityProbe {
     fn available_agent_kinds(&self) -> Vec<AgentKind> {
         Vec::new()
     }
 
-    fn native_harness_default_model(&self) -> Option<AgentModel> {
-        Some(AgentModel::KimiK3)
+    async fn native_harness_models(&self) -> Vec<HarnessModelOption> {
+        vec![ready_harness_model(AgentModel::KimiK3)]
     }
+}
+
+/// Returns a ready paid harness model option for `model`.
+pub(crate) fn ready_harness_model(model: AgentModel) -> HarnessModelOption {
+    HarnessModelOption {
+        billing: ModelBilling::Paid,
+        context_window: None,
+        loaded_context_window: None,
+        model,
+        provider: "Kimi".to_string(),
+        status: HarnessModelStatus::Ready,
+    }
+}
+
+/// Lists one fixed set of harness models on every refresh.
+struct ListedHarnessModelsProbe {
+    options: Vec<HarnessModelOption>,
+}
+
+#[async_trait::async_trait]
+impl AgentAvailabilityProbe for ListedHarnessModelsProbe {
+    fn available_agent_kinds(&self) -> Vec<AgentKind> {
+        Vec::new()
+    }
+
+    async fn native_harness_models(&self) -> Vec<HarnessModelOption> {
+        self.options.clone()
+    }
+}
+
+/// Offers Harness sessions on `ready_model` when `enabled`, or shows the row
+/// disabled without one; refreshes list the same models.
+pub(crate) fn set_test_harness_models(
+    services: &mut app::AppServices,
+    enabled: bool,
+    ready_model: Option<AgentModel>,
+) {
+    let options = ready_model
+        .map(ready_harness_model)
+        .into_iter()
+        .collect::<Vec<_>>();
+    services.set_harness_models(
+        HarnessModelCatalog::new(enabled, options.clone(), None),
+        Arc::new(ListedHarnessModelsProbe { options }),
+    );
 }
 
 /// Builds one client bundle for an `--experimental-harness` launch whose only

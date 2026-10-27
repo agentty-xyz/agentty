@@ -9,7 +9,8 @@ use std::sync::{Mutex, OnceLock};
 use std::time::{Duration, Instant};
 
 pub use ag_session::{AgentAvailabilityProbe, StaticAgentAvailabilityProbe};
-use ag_session::{AgentKind, AgentModel};
+use ag_session::{AgentKind, HarnessModelOption};
+use async_trait::async_trait;
 use semver::Version;
 
 use crate::model::agent::AgentCliInfo;
@@ -71,6 +72,7 @@ impl AgentCliUpdateCommand {
 /// Production availability probe backed by `PATH` executable discovery.
 pub struct RealAgentAvailabilityProbe;
 
+#[async_trait]
 impl AgentAvailabilityProbe for RealAgentAvailabilityProbe {
     fn available_agent_kinds(&self) -> Vec<AgentKind> {
         available_agent_kinds_from_path(env::var_os("PATH").as_deref())
@@ -80,8 +82,8 @@ impl AgentAvailabilityProbe for RealAgentAvailabilityProbe {
         available_agent_clis_from_path(env::var_os("PATH").as_deref())
     }
 
-    fn native_harness_default_model(&self) -> Option<AgentModel> {
-        super::native::default_model(&super::native::process_environment())
+    async fn native_harness_models(&self) -> Vec<HarnessModelOption> {
+        super::native::harness_models(&super::native::process_environment()).await
     }
 }
 

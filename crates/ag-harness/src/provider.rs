@@ -15,7 +15,10 @@
 //! [`ModelProvider::OpenAiCompatible`] serves any model of a local or
 //! self-hosted OpenAI-compatible server, by default Ollama's
 //! `http://127.0.0.1:11434/v1`, with an optional API key and a context
-//! profile declared through [`ModelProvider::declared_profile`].
+//! profile declared through [`ModelProvider::declared_profile`] or sized to
+//! the window the server runs through [`ModelProvider::running_profile`].
+//! [`ModelProvider::local_server`] lists that server's models through
+//! [`LocalServer`].
 
 mod catalog;
 mod kimi;
@@ -26,6 +29,7 @@ mod qwen;
 #[cfg(test)]
 mod test_support;
 
+pub use ag_router::{LocalInventory, LocalModel, LocalServer, LocalServerError, LocalServerKind};
 pub use catalog::{
     ModelConfiguration, ModelConfigurationError, ModelProvider, ModelProviderParseError,
 };

@@ -162,12 +162,22 @@ async fn respond(server: &MockServer, marker: &str, response: ResponseTemplate, 
 
 /// Returns the bodies of every provider request received so far.
 async fn request_bodies(server: &MockServer) -> Vec<String> {
+    chat_requests(server)
+        .await
+        .iter()
+        .map(|request: &Request| String::from_utf8_lossy(&request.body).into_owned())
+        .collect()
+}
+
+/// Returns the chat requests `server` received, without the model-listing
+/// probes a local server also answers.
+async fn chat_requests(server: &MockServer) -> Vec<Request> {
     server
         .received_requests()
         .await
         .unwrap_or_default()
-        .iter()
-        .map(|request: &Request| String::from_utf8_lossy(&request.body).into_owned())
+        .into_iter()
+        .filter(|request| request.url.path().ends_with("/chat/completions"))
         .collect()
 }
 
@@ -906,12 +916,12 @@ async fn openai_compatible_turn_reads_without_a_key_and_follows_the_served_model
         "From llama"
     );
     let requests = server.received_requests().await.unwrap_or_default();
-    assert_eq!(requests.len(), 3);
     assert!(
         requests
             .iter()
             .all(|request| !request.headers.contains_key("authorization"))
     );
+    assert_eq!(chat_requests(&server).await.len(), 3);
     let bodies = request_bodies(&server).await;
     assert!(bodies[0].contains(r#""model":"qwen3:latest""#));
     assert!(bodies[1].contains("local notes"));

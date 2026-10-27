@@ -13,6 +13,9 @@ pub enum SettingName {
     DefaultFastAgent,
     /// Persists the project or global fast-model selection.
     DefaultFastModel,
+    /// Persists the harness model last chosen through `/model`, which new
+    /// Harness sessions start on.
+    DefaultHarnessModel,
     /// Persists the reasoning level paired with the fast-model default.
     DefaultFastReasoningLevel,
     /// Persists the response speed paired with the fast-model default.
@@ -60,6 +63,7 @@ impl SettingName {
             Self::ActiveTab => "ActiveTab",
             Self::DefaultFastAgent => "DefaultFastAgent",
             Self::DefaultFastModel => "DefaultFastModel",
+            Self::DefaultHarnessModel => "DefaultHarnessModel",
             Self::DefaultFastReasoningLevel => "DefaultFastReasoningLevel",
             Self::DefaultFastSpeedMode => "DefaultFastSpeedMode",
             Self::DefaultReviewAgent => "DefaultReviewAgent",

@@ -1,4 +1,6 @@
-use crate::{AgentKind, AgentModel};
+use async_trait::async_trait;
+
+use crate::{AgentKind, HarnessModelOption};
 
 /// Automatic update and version probe state for one locally runnable agent
 /// CLI.
@@ -64,7 +66,9 @@ impl AgentCliInfo {
     }
 }
 
-/// Detects which provider CLIs are locally runnable on the current machine.
+/// Detects which provider CLIs and harness models are runnable on the
+/// current machine.
+#[async_trait]
 pub trait AgentAvailabilityProbe: Send + Sync {
     /// Returns the agent kinds whose backing CLI executable is available.
     fn available_agent_kinds(&self) -> Vec<AgentKind>;
@@ -74,11 +78,13 @@ pub trait AgentAvailabilityProbe: Send + Sync {
         AgentCliInfo::from_kinds(&self.available_agent_kinds())
     }
 
-    /// Returns the first [`AgentKind::Harness`] model whose provider
-    /// credentials are configured, or `None` when no provider is. Probes
-    /// without credential discovery report none.
-    fn native_harness_default_model(&self) -> Option<AgentModel> {
-        None
+    /// Returns the [`AgentKind::Harness`] models a user can choose: models
+    /// the local OpenAI-compatible server serves, then the hosted catalog
+    /// models with their configuration status. Implementations bound every
+    /// network probe with short timeouts. Probes without harness discovery
+    /// report none.
+    async fn native_harness_models(&self) -> Vec<HarnessModelOption> {
+        Vec::new()
     }
 }
 

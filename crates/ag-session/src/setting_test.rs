@@ -9,6 +9,7 @@ fn test_as_str_returns_persisted_keys() {
         (SettingName::ActiveTab, "ActiveTab"),
         (SettingName::DefaultFastAgent, "DefaultFastAgent"),
         (SettingName::DefaultFastModel, "DefaultFastModel"),
+        (SettingName::DefaultHarnessModel, "DefaultHarnessModel"),
         (
             SettingName::DefaultFastReasoningLevel,
             "DefaultFastReasoningLevel",

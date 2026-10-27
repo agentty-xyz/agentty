@@ -6,7 +6,10 @@ use std::time::Duration;
 
 use serde_json::json;
 use testty::assertion;
+use testty::journey::Journey;
+use testty::proof::report::ProofReport;
 use testty::region::Region;
+use testty::step::Step;
 use wiremock::matchers::{body_string_contains, method, path};
 use wiremock::{Mock, MockServer, ResponseTemplate};
 
@@ -20,6 +23,9 @@ const HARNESS_ANSWER: &str = "Created notes.txt through the harness.";
 const FOLLOW_UP_ANSWER: &str = "The notes say harness.";
 /// Project impact the scripted provider returns for focused review.
 const REVIEW_IMPACT: &str = "Harness reviewed the notes.";
+/// Local server endpoint nothing listens on, so a host's own Ollama never
+/// joins a scenario's harness models.
+const NO_LOCAL_SERVER: &str = "http://127.0.0.1:9/v1";
 
 /// Returns one terminal session answer.
 fn answer(text: &str) -> ResponseTemplate {
@@ -122,6 +128,7 @@ async fn test_harness_session_runs_with_flag_and_provider_key() -> E2eResult {
     FeatureTest::new("harness_session")
         .with_git()
         .args(["--experimental-harness".to_string()])
+        .env("OPENAI_COMPATIBLE_BASE_URL", NO_LOCAL_SERVER)
         .env("MODEL_API_KEY", "test-key")
         .env("MODEL_API_BASE_URL", server.uri())
         .run(
@@ -257,6 +264,7 @@ async fn test_harness_only_launch_defaults_to_harness_session() -> E2eResult {
         .with_stub_only_path()
         .env("PATH", git_directory.path().to_string_lossy())
         .args(["--experimental-harness".to_string()])
+        .env("OPENAI_COMPATIBLE_BASE_URL", NO_LOCAL_SERVER)
         .env("MODEL_API_KEY", "test-key")
         .env("MODEL_API_BASE_URL", server.uri())
         .run(
@@ -464,6 +472,7 @@ async fn test_harness_session_runs_on_openai_with_an_api_key() -> E2eResult {
         .env("DASHSCOPE_API_KEY", "")
         .env("KIMI_API_KEY", "")
         .env("MODEL_API_KEY", "")
+        .env("OPENAI_COMPATIBLE_BASE_URL", NO_LOCAL_SERVER)
         .env("OPENAI_COMPATIBLE_MODEL", "")
         .env("OPENAI_API_KEY", "test-openai-key")
         .env("OPENAI_BASE_URL", format!("{}/v1", server.uri()))
@@ -516,6 +525,174 @@ async fn test_harness_session_runs_on_openai_with_an_api_key() -> E2eResult {
     assert!(body.contains(r#""model":"gpt-6.1-sol""#));
     assert!(body.contains(r#""encrypted_content":"gAAAA-e2e""#));
     assert!(body.contains(r#""store":false"#));
+
+    Ok(())
+}
+
+/// Serves Ollama's native listing beside the scripted chat endpoint:
+/// tool-calling `qwen3:latest`, loaded with a 32,768-token window, and
+/// `gemma:latest`, which cannot call tools.
+async fn local_ollama() -> MockServer {
+    let server = scripted_provider().await;
+    Mock::given(method("GET"))
+        .and(path("/api/tags"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(json!({"models": [
+            {
+                "name": "qwen3:latest",
+                "details": {"context_length": 40960},
+                "capabilities": ["completion", "tools"]
+            },
+            {
+                "name": "gemma:latest",
+                "details": {"context_length": 8192},
+                "capabilities": ["completion"]
+            }
+        ]})))
+        .mount(&server)
+        .await;
+    Mock::given(method("GET"))
+        .and(path("/api/ps"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(json!({
+            "models": [{"name": "qwen3:latest", "context_length": 32768}]
+        })))
+        .mount(&server)
+        .await;
+
+    server
+}
+
+/// Opens the in-chat `/model` picker of a Harness session.
+fn open_model_picker() -> Journey {
+    Journey::new("open_harness_model_picker")
+        .with_description("Type /model and open the harness model list")
+        .step(Step::press_key("/"))
+        .step(Step::write_text("model"))
+        .step(Step::wait_for_text("Slash Command", 3000))
+        .step(Step::press_key("Enter"))
+        .step(Step::wait_for_text("/model Harness model", 3000))
+}
+
+/// Asserts the picker labels local and paid rows, including the `OpenAI`
+/// models listed last, and that `Enter` on a model without tool calls keeps
+/// the picker open.
+fn assert_picker_captures(report: &ProofReport, full: Region) {
+    // Rows pad labels into a column, so compare words.
+    let picker_text = common::frame_from_capture(&report.captures[0])
+        .all_text()
+        .split_whitespace()
+        .collect::<Vec<_>>()
+        .join(" ");
+    for row in [
+        "[local] qwen3:latest free · Ollama · runs 32k ctx",
+        "[local] gemma:latest free · Ollama · no tool calls",
+        "[paid] muse-spark-1.3 Muse",
+        "[paid] kimi-k3 Kimi · needs KIMI_API_KEY",
+        "[paid] gpt-6.1-sol OpenAI · needs OPENAI_API_KEY",
+        "[paid] gpt-5.6-terra OpenAI · needs OPENAI_API_KEY",
+    ] {
+        assert!(picker_text.contains(row), "{row} in {picker_text}");
+    }
+    let gemma = common::frame_from_capture(&report.captures[1]);
+    assertion::assert_text_in_region(&gemma, "/model Harness model", &full);
+}
+
+#[tokio::test]
+async fn test_harness_model_picker_switches_between_local_and_paid_models() -> E2eResult {
+    // Arrange
+    let ollama = local_ollama().await;
+    let paid = MockServer::start().await;
+    let git_directory = git_only_path()?;
+
+    // Act, Assert
+    FeatureTest::new("harness_model_picker")
+        .with_git()
+        .with_stub_only_path()
+        .env("PATH", git_directory.path().to_string_lossy())
+        .args(["--experimental-harness".to_string()])
+        .env("DASHSCOPE_API_KEY", "")
+        .env("KIMI_API_KEY", "")
+        .env("OPENAI_API_KEY", "")
+        .env("MODEL_API_KEY", "test-key")
+        .env("MODEL_API_BASE_URL", paid.uri())
+        .env("OPENAI_COMPATIBLE_BASE_URL", ollama.uri())
+        .env("OPENAI_COMPATIBLE_MODEL", "")
+        .run(
+            |scenario| {
+                scenario
+                    .compose(&common::wait_for_agentty_startup())
+                    .compose(&common::switch_to_tab("Sessions"))
+                    .press_key("a")
+                    .wait_for_text("Install an agent CLI", 5000)
+                    .press_key("Enter")
+                    // A paid key is set, yet new sessions start on the free
+                    // local model.
+                    .wait_for_text("harness/openai-compatible/qwen3:latest", 5000)
+                    .compose(&open_model_picker())
+                    .wait_for_text("needs OPENAI_API_KEY", 3000)
+                    .capture_labeled("harness_model_picker", "Local and paid harness models")
+                    // Rows: qwen3, gemma, muse-spark-1.3, kimi-k3, ...
+                    .press_key("j")
+                    .press_key("Enter")
+                    .wait_for_stable_frame(300, 3000)
+                    .capture_labeled("gemma_not_selectable", "A model without tools stays")
+                    .press_key("j")
+                    .press_key("Enter")
+                    .wait_for_text("harness/muse-spark-1.3", 3000)
+                    .compose(&open_model_picker())
+                    .press_key("Enter")
+                    .wait_for_text("harness/openai-compatible/qwen3:latest", 3000)
+                    .write_text("Create notes")
+                    .wait_for_text("Create notes", 3000)
+                    .press_key("Enter")
+                    .eventually(
+                        Duration::from_secs(30),
+                        Duration::from_millis(100),
+                        |frame| {
+                            let full = Region::full(frame.cols(), frame.rows());
+
+                            assertion::match_text_in_region(frame, HARNESS_ANSWER, &full)
+                        },
+                    )
+            },
+            |frame, report| {
+                Box::pin(async move {
+                    let full = Region::full(frame.cols(), frame.rows());
+                    assertion::assert_text_in_region(
+                        frame,
+                        "harness/openai-compatible/qwen3:latest",
+                        &full,
+                    );
+                    assert_picker_captures(report, full);
+                })
+            },
+        )
+        .await?;
+
+    let chat_requests = ollama
+        .received_requests()
+        .await
+        .unwrap_or_default()
+        .into_iter()
+        .filter(|request| request.url.path() == "/chat/completions")
+        .map(|request| String::from_utf8_lossy(&request.body).into_owned())
+        .collect::<Vec<_>>();
+    assert!(
+        chat_requests
+            .iter()
+            .any(|body| body.contains("Create notes"))
+    );
+    assert!(
+        chat_requests
+            .iter()
+            .all(|body| body.contains(r#""model":"qwen3:latest""#))
+    );
+    assert!(
+        paid.received_requests()
+            .await
+            .unwrap_or_default()
+            .is_empty(),
+        "the paid provider must never be called"
+    );
 
     Ok(())
 }

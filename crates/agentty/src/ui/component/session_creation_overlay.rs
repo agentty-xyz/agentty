@@ -28,8 +28,8 @@ const APPEND_TO_STACK_DISABLED_PREVIEW_DETAIL: &str = "[Preview] Review only";
 const STACKED_SESSION_DETAIL: &str = "Stack on selected";
 /// Detail text for the experimental Harness session path when enabled.
 const HARNESS_SESSION_PREVIEW_DETAIL: &str = "[Preview] Built-in agent";
-/// Detail text for the Harness row when no provider is configured.
-const HARNESS_SESSION_MISSING_KEY_DETAIL: &str = "Set provider key and URL";
+/// Detail text for the Harness row when no model can run.
+const HARNESS_SESSION_MISSING_KEY_DETAIL: &str = "Start Ollama or set a key";
 /// Detail text for CLI-backed rows when no agent CLI is installed.
 const AGENT_CLI_REQUIRED_DETAIL: &str = "Install an agent CLI";
 /// Popup dimensions for the compact session selector.

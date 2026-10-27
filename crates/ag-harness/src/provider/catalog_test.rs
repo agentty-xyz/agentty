@@ -216,6 +216,40 @@ fn declares_profiles_for_openai_models_and_from_the_compatible_environment() {
 }
 
 #[test]
+fn only_openai_compatible_has_a_running_profile_and_local_server() {
+    // Arrange and Act
+    let running = ModelProvider::OpenAiCompatible
+        .running_profile(missing_environment, 16_384)
+        .expect("a running window should be valid");
+    let server = ModelProvider::OpenAiCompatible
+        .local_server(missing_environment)
+        .expect("the default endpoint should be valid");
+    let hosted = ModelProvider::all()
+        .iter()
+        .filter(|provider| **provider != ModelProvider::OpenAiCompatible)
+        .map(|provider| {
+            Ok::<_, ModelConfigurationError>((
+                provider.running_profile(missing_environment, 16_384)?,
+                provider.local_server(missing_environment)?,
+            ))
+        })
+        .collect::<Result<Vec<_>, _>>()
+        .expect("hosted providers read nothing");
+
+    // Assert
+    assert_eq!(
+        running.map(ModelProfile::context_window_tokens),
+        Some(16_384)
+    );
+    assert!(server.is_some());
+    assert!(
+        hosted
+            .iter()
+            .all(|(profile, server)| profile.is_none() && server.is_none())
+    );
+}
+
+#[test]
 fn configuration_uses_default_and_explicit_base_urls() {
     // Arrange
     let default = ModelConfiguration::new(ModelProvider::Muse, muse::MUSE_SPARK_1_3);

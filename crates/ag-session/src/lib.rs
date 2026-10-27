@@ -11,6 +11,7 @@ mod discovery;
 mod env;
 mod error;
 mod execution_graph;
+mod harness_model;
 mod message;
 mod model;
 mod project;
@@ -32,7 +33,7 @@ pub mod test_support;
 
 pub use ag_contracts::{ReasoningLevel, SessionDiffState, SessionStats};
 pub use agent::{
-    AgentKind, AgentModel, AgentSelection, AgentSelectionMetadata,
+    AgentKind, AgentModel, AgentSelection, AgentSelectionMetadata, ServedModel,
     parse_persisted_session_agent_model, resolve_agent_kind_for_model,
     resolve_agent_selection_for_model, resolve_model_for_available_agent_kinds,
     resolve_prompt_model_agent_kind, selectable_models_for_agent_kinds,
@@ -54,6 +55,10 @@ pub use execution_graph::{
     GraphNodeContinuation, GraphNodeProgress, GraphNodeStatus, GraphOutput, GraphPostProcessing,
     GraphQuestionAnswer, GraphResolvedInput, GraphResult, GraphResultRef, GraphResultState,
     GraphWorkspaceAccess, ResumeExecutionGraphRequest,
+};
+pub use harness_model::{
+    HarnessModelOption, HarnessModelStatus, MINIMUM_RUNNING_CONTEXT_WINDOW, ModelBilling,
+    default_harness_model,
 };
 pub use message::{
     AgentAnswerContent, SessionMessage, SessionMessageKind, SessionMessageKindParseError,

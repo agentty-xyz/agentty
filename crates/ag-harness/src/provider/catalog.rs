@@ -1,6 +1,7 @@
 use std::str::FromStr;
 use std::{env, fmt};
 
+use ag_router::LocalServer;
 use thiserror::Error;
 
 use super::{kimi, muse, openai, openai_compatible, qwen};
@@ -132,6 +133,53 @@ impl ModelProvider {
                 openai_compatible::profile_from_environment(environment).map(Some)
             }
             Self::Kimi | Self::Muse | Self::Qwen => Ok(None),
+        }
+    }
+
+    /// Returns the profile of a model the server runs with a
+    /// `running_context_window`-token window, or `None` for providers whose
+    /// catalog models the host profiles itself.
+    ///
+    /// For [`Self::OpenAiCompatible`], a declared
+    /// `OPENAI_COMPATIBLE_CONTEXT_WINDOW` larger than the running window is
+    /// capped to it, so requests never outgrow what the server keeps, and an
+    /// undeclared output reservation is a quarter of the window, at most
+    /// 8,192 tokens.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`ModelConfigurationError`] like [`Self::declared_profile`].
+    pub fn running_profile(
+        self,
+        environment: impl FnMut(&str) -> Result<String, env::VarError>,
+        running_context_window: u64,
+    ) -> Result<Option<ModelProfile>, ModelConfigurationError> {
+        match self {
+            Self::OpenAiCompatible => {
+                openai_compatible::running_profile(environment, running_context_window).map(Some)
+            }
+            Self::Kimi | Self::Muse | Self::OpenAi | Self::Qwen => Ok(None),
+        }
+    }
+
+    /// Returns a client for the local server behind this provider, or `None`
+    /// for hosted providers.
+    ///
+    /// [`Self::OpenAiCompatible`] reads `OPENAI_COMPATIBLE_BASE_URL`,
+    /// defaulting to Ollama's local endpoint, and the optional
+    /// `OPENAI_COMPATIBLE_API_KEY`.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`ModelConfigurationError::Environment`] for a base URL that
+    /// is not valid Unicode.
+    pub fn local_server(
+        self,
+        environment: impl FnMut(&str) -> Result<String, env::VarError>,
+    ) -> Result<Option<LocalServer>, ModelConfigurationError> {
+        match self {
+            Self::OpenAiCompatible => openai_compatible::local_server(environment).map(Some),
+            Self::Kimi | Self::Muse | Self::OpenAi | Self::Qwen => Ok(None),
         }
     }
 

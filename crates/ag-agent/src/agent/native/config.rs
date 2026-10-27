@@ -15,14 +15,17 @@ use ag_harness::model::{
     ModelCapabilities, ModelClient, ModelCompletion, ModelMetadata, ModelProfile, ModelRegistry,
     ModelRequest, ReasoningEffort,
 };
-use ag_harness::provider::{ModelConfiguration, ModelProvider};
+use ag_harness::provider::{LocalServerKind, ModelConfiguration, ModelProvider};
 use ag_harness::recovery::ExecutionIdentity;
 use ag_harness::{
     Harness, Model, ModelError, OutputSchema, Repository, RepositoryError, Tool, ToolPolicy,
     TurnInput, TurnOptions,
 };
 use ag_protocol::{ProtocolRequestProfile, SchemaRequiredPolicy, protocol_output_schema};
-use ag_session::{AgentKind, AgentModel};
+use ag_session::{
+    AgentKind, AgentModel, HarnessModelOption, HarnessModelStatus, MINIMUM_RUNNING_CONTEXT_WINDOW,
+    ModelBilling, ServedModel,
+};
 use ag_telemetry::{Context, TraceContextExt as _};
 use async_trait::async_trait;
 
@@ -151,14 +154,150 @@ pub(crate) fn process_environment() -> BTreeMap<String, String> {
     unicode_environment(env::vars_os())
 }
 
-/// Returns the first harness model whose provider has its required API key
-/// and an endpoint, or `None` when no provider is configured. The
-/// OpenAI-compatible model also needs `OPENAI_COMPATIBLE_MODEL`.
-pub(crate) fn default_model(environment: &BTreeMap<String, String>) -> Option<AgentModel> {
-    AgentKind::Harness.models().iter().copied().find(|model| {
-        ModelSelection::resolve(model.as_str(), environment)
-            .is_ok_and(|selection| provider_configured(selection.provider, environment))
+/// Returns the harness models a user can choose: the models the local
+/// OpenAI-compatible server serves, plus `OPENAI_COMPATIBLE_MODEL` when the
+/// server does not list it, then the paid hosted catalog models with the
+/// variable each still needs.
+///
+/// Listing the local server is bounded by short request timeouts; an
+/// unreachable server contributes no discovered models.
+pub(crate) async fn harness_models(
+    environment: &BTreeMap<String, String>,
+) -> Vec<HarnessModelOption> {
+    let mut options = local_models(environment).await;
+    options.extend(
+        AgentKind::Harness
+            .models()
+            .iter()
+            .filter_map(|model| hosted_model(*model, environment)),
+    );
+
+    options
+}
+
+/// Returns the served local models, with the configured model first when the
+/// server does not list it.
+async fn local_models(environment: &BTreeMap<String, String>) -> Vec<HarnessModelOption> {
+    let inventory = match ModelProvider::OpenAiCompatible.local_server(lookup(environment)) {
+        Ok(Some(server)) => server.inventory().await.ok(),
+        Ok(None) | Err(_) => None,
+    };
+    let provider = inventory
+        .as_ref()
+        .map_or(LocalServerKind::OpenAiCompatible, |inventory| {
+            inventory.kind
+        })
+        .display_name();
+    let local_option = |model: AgentModel, status: HarnessModelStatus| HarnessModelOption {
+        billing: ModelBilling::Local,
+        context_window: None,
+        loaded_context_window: None,
+        model,
+        provider: provider.to_string(),
+        status,
+    };
+    let mut options = inventory
+        .map_or_else(Vec::new, |inventory| inventory.models)
+        .into_iter()
+        .filter_map(|served| {
+            let status = if served.supports_tools == Some(false) {
+                HarnessModelStatus::NoToolSupport
+            } else {
+                HarnessModelStatus::Ready
+            };
+
+            Some(HarnessModelOption {
+                context_window: served.context_window,
+                loaded_context_window: served.loaded_context_window,
+                ..local_option(
+                    AgentModel::OpenAiCompatible(ServedModel::new(&served.id)?),
+                    status,
+                )
+            })
+        })
+        .collect::<Vec<_>>();
+    let configured = nonblank(environment, OPENAI_COMPATIBLE_MODEL_ENV)
+        .and_then(ServedModel::new)
+        .map(AgentModel::OpenAiCompatible);
+    if let Some(configured) = configured
+        && !options.iter().any(|option| option.model == configured)
+    {
+        options.insert(0, local_option(configured, HarnessModelStatus::Ready));
+    }
+
+    options
+}
+
+/// Returns one paid catalog model with the variable its provider still
+/// needs, or `None` for a model no built-in provider serves.
+fn hosted_model(
+    model: AgentModel,
+    environment: &BTreeMap<String, String>,
+) -> Option<HarnessModelOption> {
+    let selection = ModelSelection::resolve_known(model.as_str()).ok()?;
+    let provider = selection.provider;
+    let status = missing_configuration(provider, environment)
+        .map_or(HarnessModelStatus::Ready, |variable| {
+            HarnessModelStatus::MissingConfiguration(variable)
+        });
+
+    Some(HarnessModelOption {
+        billing: ModelBilling::Paid,
+        context_window: selection
+            .profile(environment, None)
+            .ok()
+            .map(|profile| profile.context_window_tokens()),
+        loaded_context_window: None,
+        model,
+        provider: provider_display_name(provider).to_string(),
+        status,
     })
+}
+
+/// Returns the name users know a hosted provider by.
+fn provider_display_name(provider: ModelProvider) -> &'static str {
+    match provider {
+        ModelProvider::Kimi => "Kimi",
+        ModelProvider::Muse => "Muse",
+        ModelProvider::OpenAi => "OpenAI",
+        ModelProvider::OpenAiCompatible => LocalServerKind::OpenAiCompatible.display_name(),
+        ModelProvider::Qwen => "Qwen",
+    }
+}
+
+/// Returns the context window `selection`'s server runs its model with, or
+/// `None` for hosted providers and servers that do not report it.
+///
+/// Ollama loads the model first when needed, as the turn's first request
+/// would. A server that cannot be queried reports nothing, leaving the
+/// declared profile and the turn's own request to surface the failure.
+///
+/// # Errors
+/// Returns an actionable error when the server runs the model with a window
+/// too small for harness turns, which Ollama would otherwise fill by
+/// silently dropping the start of the conversation.
+pub(crate) async fn running_context_window(
+    selection: &ModelSelection,
+    environment: &BTreeMap<String, String>,
+) -> Result<Option<u64>, String> {
+    let Ok(Some(server)) = selection.provider.local_server(lookup(environment)) else {
+        return Ok(None);
+    };
+    let Ok(Some(window)) = server.running_context_window(&selection.model).await else {
+        return Ok(None);
+    };
+    if window < MINIMUM_RUNNING_CONTEXT_WINDOW {
+        return Err(format!(
+            "The local server runs `{}` with a {window}-token context window, below the \
+             {MINIMUM_RUNNING_CONTEXT_WINDOW} tokens harness turns need, so it would drop the \
+             start of the conversation. Restart Ollama with `OLLAMA_CONTEXT_LENGTH=32768` (or \
+             raise the context length in the Ollama app's settings), or pick another model with \
+             `/model`.",
+            selection.model
+        ));
+    }
+
+    Ok(Some(window))
 }
 
 /// Reads `environment` as the lookup the harness provider catalog expects.
@@ -183,12 +322,22 @@ fn unicode_environment(
         .collect()
 }
 
-/// Returns whether one provider has a nonempty key, unless its key is
-/// optional, and a base URL.
-fn provider_configured(provider: ModelProvider, environment: &BTreeMap<String, String>) -> bool {
-    (!provider.requires_api_key() || has_value(environment, provider.api_key_environment()))
-        && (provider.default_base_url().is_some()
-            || has_value(environment, provider.base_url_environment()))
+/// Returns the first variable a provider still needs: its API key unless
+/// optional, then a base URL unless it has a default.
+fn missing_configuration(
+    provider: ModelProvider,
+    environment: &BTreeMap<String, String>,
+) -> Option<&'static str> {
+    if provider.requires_api_key() && !has_value(environment, provider.api_key_environment()) {
+        return Some(provider.api_key_environment());
+    }
+    if provider.default_base_url().is_none()
+        && !has_value(environment, provider.base_url_environment())
+    {
+        return Some(provider.base_url_environment());
+    }
+
+    None
 }
 
 /// Returns the trimmed value of `name`, or `None` when it is unset or blank.
@@ -213,9 +362,9 @@ pub(crate) struct ModelSelection {
 }
 
 impl ModelSelection {
-    /// Resolves an Agentty harness model id to its provider. The
-    /// `openai-compatible` id resolves to the model `OPENAI_COMPATIBLE_MODEL`
-    /// names.
+    /// Resolves an Agentty harness model id to its provider. A served
+    /// `openai-compatible/<model>` id resolves to that model, and the bare
+    /// `openai-compatible` id to the model `OPENAI_COMPATIBLE_MODEL` names.
     ///
     /// # Errors
     /// Returns an error when no built-in provider serves `model`, or when
@@ -224,14 +373,21 @@ impl ModelSelection {
         model: &str,
         environment: &BTreeMap<String, String>,
     ) -> Result<Self, String> {
-        if model != AgentModel::OpenAiCompatible.as_str() {
+        let Some(AgentModel::OpenAiCompatible(served)) = AgentKind::Harness.parse_model(model)
+        else {
             return Self::resolve_known(model);
+        };
+        if let Some(name) = served.name() {
+            return Ok(Self {
+                model: name.to_string(),
+                provider: ModelProvider::OpenAiCompatible,
+            });
         }
         let served = nonblank(environment, OPENAI_COMPATIBLE_MODEL_ENV).ok_or_else(|| {
             format!(
-                "Cannot use harness model `{model}`: {OPENAI_COMPATIBLE_MODEL_ENV} is unset. Set \
-                 it to the model your OpenAI-compatible server serves, such as `qwen3:latest`, \
-                 before starting Agentty."
+                "Cannot use harness model `{model}`: {OPENAI_COMPATIBLE_MODEL_ENV} is unset. Pick \
+                 a local model with `/model`, or set it to the model your OpenAI-compatible \
+                 server serves, such as `qwen3:latest`, before starting Agentty."
             )
         })?;
 
@@ -285,6 +441,7 @@ impl ModelSelection {
         &self,
         environment: &BTreeMap<String, String>,
         provider_call_budget: Option<&ProviderCallBudget>,
+        running_context_window: Option<u64>,
     ) -> Result<ModelRegistry, String> {
         let client = ModelConfiguration::new(self.provider, &self.model)
             .client_from_environment(lookup(environment))
@@ -304,15 +461,16 @@ impl ModelSelection {
                 )
             })?;
 
+        let profile = self.profile(environment, running_context_window)?;
         match provider_call_budget {
             Some(budget) => self.register(
                 BudgetedModel {
                     budget: budget.clone(),
                     inner: client,
                 },
-                environment,
+                profile,
             ),
-            None => self.register(client, environment),
+            None => self.register(client, profile),
         }
     }
 
@@ -325,7 +483,11 @@ impl ModelSelection {
         context: &HarnessContext<'_>,
         observer: impl LifecycleObserver + 'static,
     ) -> Result<Harness, String> {
-        let registry = self.registry(context.environment, context.provider_call_budget)?;
+        let registry = self.registry(
+            context.environment,
+            context.provider_call_budget,
+            context.running_context_window,
+        )?;
 
         self.harness_from(&registry, context, observer)
     }
@@ -347,22 +509,25 @@ impl ModelSelection {
             .map_err(failure("Invalid resume-only harness model"))?
             .metadata()
             .clone();
-        let registry = self.register(ResumeOnlyModel { metadata }, context.environment)?;
+        let registry = self.register(
+            ResumeOnlyModel { metadata },
+            self.profile(context.environment, None)?,
+        )?;
 
         self.harness_from(&registry, context, observer)
     }
 
-    /// Registers `model` under this selection's key and declared capabilities.
+    /// Registers `model` under this selection's key with `profile`.
     fn register(
         &self,
         model: impl Model + 'static,
-        environment: &BTreeMap<String, String>,
+        profile: ModelProfile,
     ) -> Result<ModelRegistry, String> {
         let identity = ExecutionIdentity::new(self.key(), REGISTRATION_REVISION)
             .map_err(failure("Invalid harness model registration"))?;
         let capabilities = ModelCapabilities {
             tool_calls: true,
-            ..ModelCapabilities::new(self.profile(environment)?)
+            ..ModelCapabilities::new(profile)
         };
         let mut registry = ModelRegistry::new();
         registry
@@ -390,7 +555,8 @@ impl ModelSelection {
             .with_lifecycle_observer(traced(observer)))
     }
 
-    /// Returns the context profile the harness provider catalog or the
+    /// Returns the context profile sized to the window a local server runs
+    /// the model with, else the one the harness provider catalog or the
     /// environment declares for this model, else the Agentty catalog model's
     /// declared profile, else the conservative fallback. Codex models served
     /// by the harness take the provider catalog's profile, not the one
@@ -398,11 +564,18 @@ impl ModelSelection {
     ///
     /// # Errors
     /// Returns an error for an invalid environment-declared profile.
-    fn profile(&self, environment: &BTreeMap<String, String>) -> Result<ModelProfile, String> {
-        let declared = self
-            .provider
-            .declared_profile(&self.model, lookup(environment))
-            .map_err(failure("Invalid harness model profile"))?;
+    fn profile(
+        &self,
+        environment: &BTreeMap<String, String>,
+        running_context_window: Option<u64>,
+    ) -> Result<ModelProfile, String> {
+        let declared = match running_context_window {
+            Some(window) => self.provider.running_profile(lookup(environment), window),
+            None => self
+                .provider
+                .declared_profile(&self.model, lookup(environment)),
+        }
+        .map_err(failure("Invalid harness model profile"))?;
 
         Ok(declared
             .or_else(|| {
@@ -424,6 +597,8 @@ pub(crate) struct HarnessContext<'a> {
     pub(crate) reasoning_level: ReasoningLevel,
     /// Validated worktree available to tools.
     pub(crate) repository: &'a Repository,
+    /// Context window the local server runs the model with, when known.
+    pub(crate) running_context_window: Option<u64>,
 }
 
 /// Returns the instructions stored with new harness sessions.

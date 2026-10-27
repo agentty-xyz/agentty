@@ -27,8 +27,8 @@ use tokio::sync::mpsc;
 
 use crate::agent::native::{
     ActivityBridge, HarnessContext, ModelSelection, NativeHarnessConfig, NativePrompt, failure,
-    output_schema, parse_outcome, reject_attachments, repository, settle, system_prompt,
-    token_usage, turn_options,
+    output_schema, parse_outcome, reject_attachments, repository, running_context_window, settle,
+    system_prompt, token_usage, turn_options,
 };
 use crate::agent::{
     InstructionDeliveryMode, apply_response_style_prompt, execution_policy,
@@ -137,6 +137,7 @@ async fn run_session_turn(
     });
     let bootstrap = BootstrapMarker::parse(continuation.provider_conversation_id.as_deref());
     settle_previous_turn(active, &session_id).await?;
+    let running_context_window = running_context_window(&selection, &environment).await?;
     let database = config.session_database(&session_id).await?;
     let opener = SessionOpener {
         database: &database,
@@ -146,6 +147,7 @@ async fn run_session_turn(
         provider_call_budget: req.provider_call_budget.as_ref(),
         reasoning_level: req.reasoning_level,
         repository: &repository,
+        running_context_window,
         session_id: &session_id,
     };
     let (mut session, history) = opener.open(&selection).await?;
@@ -265,6 +267,7 @@ struct SessionOpener<'a> {
     provider_call_budget: Option<&'a ag_contracts::ProviderCallBudget>,
     reasoning_level: ReasoningLevel,
     repository: &'a Repository,
+    running_context_window: Option<u64>,
     session_id: &'a str,
 }
 
@@ -318,7 +321,11 @@ impl SessionOpener<'_> {
         stored_selection: &ModelSelection,
         selection: &ModelSelection,
     ) -> Result<Session, String> {
-        let registry = selection.registry(self.environment, self.provider_call_budget)?;
+        let registry = selection.registry(
+            self.environment,
+            self.provider_call_budget,
+            self.running_context_window,
+        )?;
         let harness = self.build_harness(|context, observer| {
             stored_selection.resume_only_harness(context, observer)
         })?;
@@ -356,6 +363,7 @@ impl SessionOpener<'_> {
             &HarnessContext {
                 environment: self.environment,
                 provider_call_budget: self.provider_call_budget,
+                running_context_window: self.running_context_window,
                 reasoning_level: self.reasoning_level,
                 repository: self.repository,
             },

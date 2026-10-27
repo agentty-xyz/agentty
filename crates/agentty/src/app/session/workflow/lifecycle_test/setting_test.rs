@@ -9,8 +9,61 @@ use super::support::{
     test_services_with_event_receiver, test_session,
 };
 use crate::app::AppEvent;
-use crate::domain::agent::{AgentKind, AgentModel, AgentSelection};
+use crate::domain::agent::{AgentKind, AgentModel, AgentSelection, ServedModel};
+use crate::domain::harness::HarnessAvailability;
 use crate::domain::session::Status;
+use crate::domain::setting::SettingName;
+
+#[tokio::test]
+async fn set_session_model_remembers_an_explicit_local_harness_choice() {
+    // Arrange
+    let mut session = test_session("Prompt", Status::Review, Some("Title"), "");
+    session.agent = AgentSelection::new(AgentKind::Harness, AgentModel::KimiK3);
+    let database = database_with_session(&session).await;
+    let mut session_manager = session_manager_with_one_session(session);
+    let mut services = test_services(
+        &database,
+        Arc::new(git::MockGitClient::new()),
+        Arc::new(forge::MockReviewRequestClient::new()),
+    );
+    crate::test_support::set_test_harness_models(&mut services, true, Some(AgentModel::KimiK3));
+    let local = AgentModel::OpenAiCompatible(ServedModel::new("qwen3:latest").expect("name"));
+
+    // Act
+    session_manager
+        .set_session_model(
+            &services,
+            "session-id",
+            AgentSelection::new(AgentKind::Harness, local),
+        )
+        .await
+        .expect("set session model should succeed");
+    let persisted_model = database
+        .sessions()
+        .load_sessions()
+        .await
+        .expect("load sessions should succeed")
+        .into_iter()
+        .find(|row| row.id == "session-id")
+        .expect("session row should exist")
+        .model;
+    let remembered = database
+        .settings()
+        .get_setting(SettingName::DefaultHarnessModel)
+        .await
+        .expect("setting load should succeed");
+
+    // Assert
+    assert_eq!(persisted_model, "openai-compatible/qwen3:latest");
+    assert_eq!(
+        remembered.as_deref(),
+        Some("openai-compatible/qwen3:latest")
+    );
+    assert_eq!(
+        services.harness_availability(),
+        HarnessAvailability::Available(local)
+    );
+}
 
 #[tokio::test]
 async fn set_session_model_persists_new_model_and_clears_conversation_state() {

@@ -370,10 +370,11 @@ async fn test_handle_confirmation_decision_confirm_opens_continuation_draft_prom
 async fn test_handle_session_creation_key_creates_harness_session_when_available() {
     // Arrange
     let (mut app, _base_dir) = crate::test_support::new_git_test_app_with_mock_tmux_client().await;
-    app.services
-        .set_harness_availability(crate::domain::harness::HarnessAvailability::Available(
-            AgentModel::QwenPlus,
-        ));
+    crate::test_support::set_test_harness_models(
+        &mut app.services,
+        true,
+        Some(AgentModel::QwenPlus),
+    );
     app.mode = AppMode::SessionCreation {
         selected_option_index: 0,
     };
@@ -408,14 +409,12 @@ async fn test_handle_session_creation_key_creates_harness_session_when_available
 
 #[tokio::test]
 async fn test_harness_option_is_disabled_without_availability() {
-    for availability in [
-        crate::domain::harness::HarnessAvailability::Hidden,
-        crate::domain::harness::HarnessAvailability::MissingCredentials,
-    ] {
+    // Hidden without the flag, then disabled without a runnable model.
+    for enabled in [false, true] {
         // Arrange
         let (mut app, _base_dir) =
             crate::test_support::new_git_test_app_with_mock_tmux_client().await;
-        app.services.set_harness_availability(availability);
+        crate::test_support::set_test_harness_models(&mut app.services, enabled, None);
         app.mode = AppMode::SessionCreation {
             selected_option_index: 0,
         };

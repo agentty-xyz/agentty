@@ -4,7 +4,8 @@ use std::path::{Path, PathBuf};
 
 use ag_contracts::{AgentError, ExecutionPolicy, McpPolicy, ToolPolicy};
 use ag_scheduler::SessionAdmission;
-use ag_session::{AgentAvailabilityProbe, AgentCliInfo, AgentKind, AgentModel};
+use ag_session::{AgentAvailabilityProbe, AgentCliInfo, AgentKind, HarnessModelOption};
+use async_trait::async_trait;
 
 /// Provider configuration used by the worker to compose its runtimes.
 #[derive(Clone)]
@@ -101,6 +102,7 @@ impl Default for RuntimeConfig {
 /// Discovery boundary for applications; provider details stay in the runtime.
 pub struct RealAgentAvailabilityProbe;
 
+#[async_trait]
 impl AgentAvailabilityProbe for RealAgentAvailabilityProbe {
     fn available_agent_kinds(&self) -> Vec<AgentKind> {
         ag_runtime::RealAgentAvailabilityProbe.available_agent_kinds()
@@ -110,8 +112,10 @@ impl AgentAvailabilityProbe for RealAgentAvailabilityProbe {
         ag_runtime::RealAgentAvailabilityProbe.available_agent_clis()
     }
 
-    fn native_harness_default_model(&self) -> Option<AgentModel> {
-        ag_runtime::RealAgentAvailabilityProbe.native_harness_default_model()
+    async fn native_harness_models(&self) -> Vec<HarnessModelOption> {
+        ag_runtime::RealAgentAvailabilityProbe
+            .native_harness_models()
+            .await
     }
 }
 

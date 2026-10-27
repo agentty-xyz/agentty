@@ -456,11 +456,16 @@ wording, "return only one JSON object", Qwen3 8B on Ollama never called a tool (
 live prompts), and under the tool-aware wording it called `read` in 4 of 4. No reasoning
 control is sent, because Ollama rejects `reasoning_effort` for models without thinking,
 and returned reasoning is not replayed, which keeps history portable across served
-models. The API key is optional, and an unset key sends no `Authorization` header. The
-host declares the context window and output reserve (`ModelProvider::declared_profile`),
-since a server's runtime window can be far below the model's trained one: Ollama loads
-models with 4,096 tokens by default and silently truncates longer input rather than
-rejecting it, so neither discovery nor overflow recovery can be relied on. Without a
+models. The API key is optional, and an unset key sends no `Authorization` header. A
+server's runtime window can be far below the model's trained one: Ollama loads models
+with 4,096 tokens by default and silently truncates longer input rather than rejecting
+it, so overflow recovery cannot be relied on, and its OpenAI-compatible endpoint ignores
+a requested window. The host therefore asks the server: `ag-router`'s `LocalServer`
+lists models (Ollama's `/api/tags`, with `/api/show` for older servers, else
+`GET /models`) and reports the running window (Ollama's `/api/ps`, after loading an
+unloaded model with the server defaults the next chat request would use, else vLLM's
+`max_model_len`). `ModelProvider::running_profile` fits the profile to that window;
+without one, the host declares it (`ModelProvider::declared_profile`). Without a
 fitted estimator, requests are weighed by the default estimator, counting the schema in
 the prompt, under a 50% under-count margin. llama.cpp's `exceed_context_size_error`
 joins the shared overflow markers.

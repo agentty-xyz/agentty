@@ -33,7 +33,7 @@ use crate::app::sync::{
     SyncMainReviewUpdate,
 };
 use crate::app::{self, SessionRuntimeCommand};
-use crate::domain::agent::{AgentCliInfo, AgentSelection};
+use crate::domain::agent::{AgentCliInfo, AgentSelection, HarnessModelOption};
 use crate::domain::file_entry::{FileEntry, at_mention_lookup_root};
 use crate::domain::input::InputState;
 use crate::domain::question::default_option_index;
@@ -56,7 +56,7 @@ pub(crate) enum AppRuntimeEvent {
     /// One event emitted by a background workflow.
     App(Box<AppEvent>),
     /// One API command accepted by the bounded session actor mailbox.
-    Session(SessionRuntimeCommand),
+    Session(Box<SessionRuntimeCommand>),
 }
 
 /// Internal app events emitted by background workers and workflows.
@@ -123,6 +123,8 @@ pub(crate) enum AppEvent {
     },
     /// Indicates locally available agent CLI versions finished loading.
     AgentCliVersionsUpdated { agent_clis: Vec<AgentCliInfo> },
+    /// Indicates a background listing of harness models finished.
+    HarnessModelsUpdated { options: Vec<HarnessModelOption> },
     /// Indicates progress of the background auto-update.
     UpdateStatusChanged { update_status: UpdateStatus },
     /// Indicates a session agent/model selection has been persisted.
@@ -387,6 +389,7 @@ pub(super) struct ReviewRequestStatusUpdate {
 #[derive(Default)]
 pub(super) struct AppEventBatch {
     pub(super) agent_cli_updates: Option<Vec<AgentCliInfo>>,
+    pub(super) harness_model_updates: Option<Vec<HarnessModelOption>>,
     pub(super) applied_turns: HashMap<SessionId, TurnAppliedState>,
     pub(super) at_mention_entries_updates: HashMap<SessionId, Vec<FileEntry>>,
     pub(super) branch_publish_action_updates: Vec<BranchPublishActionUpdate>,
@@ -481,6 +484,7 @@ impl AppEventBatch {
             || self.should_reload_sessions
             || self.should_reload_projects
             || self.agent_cli_updates.is_some()
+            || self.harness_model_updates.is_some()
             || self.git_status_update.is_some()
             || self.latest_available_version_update.is_some()
             || self.update_status.is_some()
@@ -593,6 +597,9 @@ impl AppEventBatch {
             } => self.collect_version_availability_updated(latest_available_version),
             AppEvent::AgentCliVersionsUpdated { agent_clis } => {
                 self.agent_cli_updates = Some(agent_clis);
+            }
+            AppEvent::HarnessModelsUpdated { options } => {
+                self.harness_model_updates = Some(options);
             }
             AppEvent::UpdateStatusChanged { update_status } => {
                 self.update_status = Some(update_status);
@@ -723,6 +730,7 @@ impl AppEventBatch {
             | AppEvent::GitStatusUpdated { .. }
             | AppEvent::VersionAvailabilityUpdated { .. }
             | AppEvent::AgentCliVersionsUpdated { .. }
+            | AppEvent::HarnessModelsUpdated { .. }
             | AppEvent::UpdateStatusChanged { .. }
             | AppEvent::SessionPermissionModeUpdated { .. }
             | AppEvent::SessionReasoningLevelUpdated { .. }
@@ -1113,7 +1121,7 @@ impl App {
                 Poll::Ready(Some(event)) => Poll::Ready(event),
                 Poll::Ready(None) | Poll::Pending => Poll::Pending,
             }) => AppRuntimeEvent::App(Box::new(event)),
-            command = sessions.next_command() => AppRuntimeEvent::Session(command),
+            command = sessions.next_command() => AppRuntimeEvent::Session(Box::new(command)),
         }
     }
 
@@ -1646,6 +1654,12 @@ impl App {
     fn apply_batch_runtime_updates(&mut self, event_batch: &mut AppEventBatch) {
         if let Some(agent_clis) = event_batch.agent_cli_updates.take() {
             self.services.replace_available_agent_clis(agent_clis);
+        }
+        if let Some(options) = event_batch.harness_model_updates.take() {
+            if let AppMode::Prompt { slash_state, .. } = &mut self.mode {
+                slash_state.harness_models.clone_from(&options);
+            }
+            self.services.replace_harness_model_options(options);
         }
 
         if let Some(git_status_update) = &event_batch.git_status_update

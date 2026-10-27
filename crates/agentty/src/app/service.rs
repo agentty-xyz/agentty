@@ -3,11 +3,12 @@
 use std::collections::HashMap;
 use std::num::NonZeroUsize;
 use std::path::{Path, PathBuf};
-use std::sync::{Arc, Mutex};
+use std::sync::{Arc, Mutex, PoisonError};
 use std::time::Duration;
 
 use ag_forge::ReviewRequestClient;
 use ag_git::GitClient;
+use ag_session::{AgentAvailabilityProbe, StaticAgentAvailabilityProbe};
 use ag_worker::{RunClient, RunWorker, RuntimeConfig, SessionRunClient, SessionWorkerTask};
 use tokio::sync::mpsc;
 use tokio::task::JoinHandle;
@@ -19,8 +20,10 @@ use crate::app::AppEvent;
 use crate::app::prompt_intent::PromptImagePasteUpdate;
 use crate::app::session::SessionManager;
 use crate::db::AppRepositories;
-use crate::domain::agent::{AgentCliInfo, AgentKind, AgentSelection};
-use crate::domain::harness::HarnessAvailability;
+use crate::domain::agent::{
+    AgentCliInfo, AgentKind, AgentModel, AgentSelection, HarnessModelOption,
+};
+use crate::domain::harness::{HarnessAvailability, HarnessModelCatalog};
 use crate::domain::session::SessionId;
 use crate::infra::agent_profile::{AgentCatalogClient, RealAgentCatalogClient};
 use crate::infra::clipboard_image::{ClipboardImageClient, RealClipboardImageClient};
@@ -44,7 +47,8 @@ pub struct AppServices {
     event_tx: mpsc::UnboundedSender<AppEvent>,
     fs_client: Arc<dyn FsClient>,
     git_client: Arc<dyn GitClient>,
-    harness_availability: HarnessAvailability,
+    harness_model_probe: Arc<dyn AgentAvailabilityProbe>,
+    harness_models: Arc<Mutex<HarnessModelCatalog>>,
     agent_profile_catalog_client: Arc<dyn AgentCatalogClient>,
     repositories: AppRepositories,
     review_request_client: Arc<dyn ReviewRequestClient>,
@@ -112,7 +116,10 @@ impl AppServices {
             event_tx,
             fs_client,
             git_client,
-            harness_availability: HarnessAvailability::Hidden,
+            harness_model_probe: Arc::new(StaticAgentAvailabilityProbe {
+                available_agent_kinds: Vec::new(),
+            }),
+            harness_models: Arc::default(),
             run_client,
             run_worker,
             session_run_factory,
@@ -125,14 +132,62 @@ impl AppServices {
         }
     }
 
-    /// Records whether this launch offers Harness sessions.
-    pub(crate) fn set_harness_availability(&mut self, harness_availability: HarnessAvailability) {
-        self.harness_availability = harness_availability;
+    /// Records the harness models this launch offers and the probe that
+    /// refreshes them.
+    pub(crate) fn set_harness_models(
+        &mut self,
+        catalog: HarnessModelCatalog,
+        probe: Arc<dyn AgentAvailabilityProbe>,
+    ) {
+        self.harness_models = Arc::new(Mutex::new(catalog));
+        self.harness_model_probe = probe;
     }
 
-    /// Returns whether this launch offers Harness sessions.
+    /// Returns whether and on which model this launch offers Harness
+    /// sessions.
     pub(crate) fn harness_availability(&self) -> HarnessAvailability {
-        self.harness_availability
+        self.with_harness_models(|catalog| catalog.availability())
+    }
+
+    /// Returns the cached harness models in picker order.
+    pub(crate) fn harness_model_options(&self) -> Vec<HarnessModelOption> {
+        self.with_harness_models(|catalog| catalog.options().to_vec())
+    }
+
+    /// Replaces the cached harness models after a background refresh.
+    pub(crate) fn replace_harness_model_options(&self, options: Vec<HarnessModelOption>) {
+        self.with_harness_models(|catalog| catalog.replace_options(options));
+    }
+
+    /// Records the user's explicit harness model choice for new sessions.
+    pub(crate) fn remember_harness_model(&self, model: AgentModel) {
+        self.with_harness_models(|catalog| catalog.remember(model));
+    }
+
+    /// Lists the harness models again without blocking the caller and emits
+    /// [`AppEvent::HarnessModelsUpdated`] when the listing completes. Launches
+    /// without `--experimental-harness` skip the refresh.
+    pub(crate) fn refresh_harness_models(&self) {
+        if !self.with_harness_models(|catalog| catalog.is_enabled()) {
+            return;
+        }
+        let probe = Arc::clone(&self.harness_model_probe);
+        let event_tx = self.event_tx.clone();
+        tokio::spawn(async move {
+            let options = probe.native_harness_models().await;
+            let _ = event_tx.send(AppEvent::HarnessModelsUpdated { options });
+        });
+    }
+
+    /// Runs `action` on the shared harness catalog, which stays usable
+    /// after a panic.
+    fn with_harness_models<T>(&self, action: impl FnOnce(&mut HarnessModelCatalog) -> T) -> T {
+        action(
+            &mut self
+                .harness_models
+                .lock()
+                .unwrap_or_else(PoisonError::into_inner),
+        )
     }
 
     /// Replaces the optional telemetry sender before session work starts.
@@ -484,6 +539,7 @@ impl AppServices {
             AppEvent::GitStatusUpdated { .. } => "GitStatusUpdated",
             AppEvent::VersionAvailabilityUpdated { .. } => "VersionAvailabilityUpdated",
             AppEvent::AgentCliVersionsUpdated { .. } => "AgentCliVersionsUpdated",
+            AppEvent::HarnessModelsUpdated { .. } => "HarnessModelsUpdated",
             AppEvent::UpdateStatusChanged { .. } => "UpdateStatusChanged",
             AppEvent::SessionModelUpdated { .. } => "SessionModelUpdated",
             AppEvent::SessionPermissionModeUpdated { .. } => "SessionPermissionModeUpdated",

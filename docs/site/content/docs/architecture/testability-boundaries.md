@@ -154,7 +154,10 @@ public adapter into the router, including tool-call translation and telemetry; l
 provider qualification remains separate. `ag-agent` native-harness tests inject the
 environment through `NativeHarnessConfig::with_environment` and drive session turns,
 utilities, cancellation, and `bash` against a scripted Chat Completions server; PTY
-scenarios run Harness sessions against the same kind of server.
+scenarios run Harness sessions against the same kind of server. Local model listing and
+running-window checks reach the server only through `AgentAvailabilityProbe` in the
+application and `LocalServer` in `ag-router`, so app tests inject listed models and
+router, agent, and PTY tests script Ollama's `/api` endpoints on the same local server.
 
 Tool-trace tests feed deterministic provider events to verify metadata, opt-in content,
 credential suppression, and preview limits. Public trace-context tests cover capture

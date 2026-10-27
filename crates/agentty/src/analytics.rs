@@ -12,7 +12,7 @@ use serde_json::{Value, json};
 use uuid::Uuid;
 
 use crate::app::AppError;
-use crate::domain::agent::{AgentSelection, AgentSelectionMetadata};
+use crate::domain::agent::{AgentModel, AgentSelection, AgentSelectionMetadata, ServedModel};
 use crate::domain::setting::SettingName;
 use crate::infra::db::AppRepositories;
 
@@ -273,7 +273,7 @@ impl Analytics {
             &[
                 ("session_type", session_type.as_str()),
                 ("agent", agent.kind().name()),
-                ("model", agent.model().as_str()),
+                ("model", reported_model(agent)),
             ],
         )
         .await;
@@ -285,7 +285,7 @@ impl Analytics {
             "agentty_turn_start",
             &[
                 ("agent", agent.kind().name()),
-                ("model", agent.model().as_str()),
+                ("model", reported_model(agent)),
             ],
         )
         .await;
@@ -297,7 +297,7 @@ impl Analytics {
             outcome.event_name(),
             &[
                 ("agent", agent.kind().name()),
-                ("model", agent.model().as_str()),
+                ("model", reported_model(agent)),
             ],
         )
         .await;
@@ -348,6 +348,16 @@ impl Analytics {
         if let Some(posthog) = &self.posthog {
             posthog.send(name, &properties).await;
         }
+    }
+}
+
+/// Returns the model id reported in events. A local server names its models
+/// freely, so served models report only their bounded `openai-compatible`
+/// family.
+fn reported_model(agent: AgentSelection) -> &'static str {
+    match agent.model() {
+        AgentModel::OpenAiCompatible(_) => ServedModel::CONFIGURED.id(),
+        model => model.as_str(),
     }
 }
 

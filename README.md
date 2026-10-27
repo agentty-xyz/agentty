@@ -188,12 +188,13 @@ proposal in the composer, then approve it in your own words to run the **Impleme
 follow-ups go to the Implementer.
 
 `--experimental-harness` adds a preview **Harness** session type that runs Agentty's
-built-in agent loop against Muse, Kimi, or Qwen using `MODEL_API_KEY`, `KIMI_API_KEY`
-with `KIMI_BASE_URL`, or `DASHSCOPE_API_KEY` with `DASHSCOPE_BASE_URL`, or against a
-local or self-hosted OpenAI-compatible server such as Ollama, llama.cpp, LM Studio, or
-vLLM named by `OPENAI_COMPATIBLE_MODEL`, or against OpenAI's GPT models with a paid
-`OPENAI_API_KEY` (ChatGPT subscriptions work through Codex sessions, not the harness).
-Its edit mode runs unsandboxed shell commands. See
+built-in agent loop against a free local model, such as one a running Ollama serves, or
+against paid Muse, Kimi, or Qwen using `MODEL_API_KEY`, `KIMI_API_KEY` with
+`KIMI_BASE_URL`, or `DASHSCOPE_API_KEY` with `DASHSCOPE_BASE_URL`, or OpenAI's GPT models
+with a paid `OPENAI_API_KEY` (ChatGPT subscriptions work through Codex sessions, not the
+harness). Its `/model` picker lists local models first, marks each model free or paid,
+and remembers your choice for new Harness sessions. Its edit mode runs unsandboxed shell
+commands. See
 [Harness sessions](https://agentty.xyz/docs/agents/backends/#backends-harness).
 
 Session tracing is disabled unless `--otlp-endpoint` supplies a complete OTLP

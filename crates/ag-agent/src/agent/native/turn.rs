@@ -144,6 +144,7 @@ pub(crate) async fn run_one_shot(
     let profile = request.request_kind.protocol_profile();
     let options = config::turn_options(profile, request.permission_mode, &environment)?;
     let repository = config::repository(&request.folder, &environment)?;
+    let running_context_window = config::running_context_window(&selection, &environment).await?;
     let activity_tx = request.activity_tx.clone();
     let harness = selection.harness(
         &HarnessContext {
@@ -151,6 +152,7 @@ pub(crate) async fn run_one_shot(
             provider_call_budget: request.provider_call_budget.as_ref(),
             reasoning_level: request.reasoning_level,
             repository: &repository,
+            running_context_window,
         },
         ActivityBridge::new(move |event| {
             if let (TurnEvent::Activity(activity), Some(activity_tx)) = (event, &activity_tx) {

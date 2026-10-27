@@ -4,16 +4,19 @@ use std::os::unix::ffi::OsStringExt;
 use std::path::PathBuf;
 
 use ag_contracts::{PermissionMode, ProviderCallBudget, ReasoningLevel};
-use ag_harness::model::{ModelRequest, ReasoningEffort};
+use ag_harness::model::{ModelProfile, ModelRequest, ReasoningEffort};
 use ag_harness::provider::{ModelConfiguration, ModelProvider};
 use ag_harness::{Model, TurnInput};
 use ag_protocol::ProtocolRequestProfile;
-use ag_session::AgentModel;
+use ag_session::{AgentModel, HarnessModelStatus, ModelBilling, ServedModel};
+use serde_json::json;
+use wiremock::matchers::{method, path};
+use wiremock::{Mock, MockServer, ResponseTemplate};
 
 use super::{
     BudgetedModel, FALLBACK_MODEL_PROFILE, ModelSelection, NativeHarnessConfig, ResumeOnlyModel,
-    bash_environment, default_model, output_schema, reasoning_effort, repository, turn_options,
-    unicode_environment,
+    bash_environment, harness_models, output_schema, reasoning_effort, repository,
+    running_context_window, turn_options, unicode_environment,
 };
 use crate::agent::model_profile;
 
@@ -25,76 +28,226 @@ fn environment(pairs: &[(&str, &str)]) -> BTreeMap<String, String> {
         .collect()
 }
 
-#[test]
-/// Picks the first catalog model whose provider has a nonempty key and,
-/// without a provider default, a base URL.
-fn default_model_follows_the_first_configured_provider() {
-    // Arrange
-    let cases = [
-        (environment(&[]), None),
-        (environment(&[("MODEL_API_KEY", " ")]), None),
-        (
-            environment(&[("MODEL_API_KEY", "key")]),
-            Some(AgentModel::MuseSpark13),
-        ),
-        (environment(&[("KIMI_API_KEY", "key")]), None),
-        (
-            environment(&[("KIMI_API_KEY", "key"), ("KIMI_BASE_URL", "http://kimi")]),
-            Some(AgentModel::KimiK3),
-        ),
-        (
-            environment(&[
-                ("DASHSCOPE_API_KEY", "key"),
-                ("DASHSCOPE_BASE_URL", "http://qwen"),
-            ]),
-            Some(AgentModel::Qwen38Max),
-        ),
-        (
-            environment(&[
-                ("DASHSCOPE_API_KEY", "key"),
-                ("DASHSCOPE_BASE_URL", "http://qwen"),
-                ("MODEL_API_KEY", "key"),
-            ]),
-            Some(AgentModel::MuseSpark13),
-        ),
-        (environment(&[("OPENAI_API_KEY", " ")]), None),
-        (
-            environment(&[("OPENAI_API_KEY", "sk-key")]),
-            Some(AgentModel::Gpt61Sol),
-        ),
-        (
-            environment(&[
-                ("DASHSCOPE_API_KEY", "key"),
-                ("DASHSCOPE_BASE_URL", "http://qwen"),
-                ("OPENAI_API_KEY", "sk-key"),
-            ]),
-            Some(AgentModel::Qwen38Max),
-        ),
-        (
-            environment(&[
-                ("OPENAI_API_KEY", "sk-key"),
-                ("OPENAI_COMPATIBLE_MODEL", "qwen3:latest"),
-            ]),
-            Some(AgentModel::OpenAiCompatible),
-        ),
-        (environment(&[("OPENAI_COMPATIBLE_MODEL", " ")]), None),
-        (
-            environment(&[("OPENAI_COMPATIBLE_MODEL", "qwen3:latest")]),
-            Some(AgentModel::OpenAiCompatible),
-        ),
-        (
-            environment(&[
-                ("OPENAI_COMPATIBLE_MODEL", "qwen3:latest"),
-                ("MODEL_API_KEY", "key"),
-            ]),
-            Some(AgentModel::MuseSpark13),
-        ),
-    ];
+/// Returns the served model `name`.
+fn served(name: &str) -> AgentModel {
+    AgentModel::OpenAiCompatible(ServedModel::new(name).expect("served name"))
+}
 
-    // Act / Assert
-    for (environment, expected) in cases {
-        assert_eq!(default_model(&environment), expected, "{environment:?}");
-    }
+/// Returns a base URL on a port nothing listens on.
+fn unreachable_base_url() -> String {
+    let listener = std::net::TcpListener::bind("127.0.0.1:0").expect("free port");
+    let address = listener.local_addr().expect("address");
+
+    format!("http://{address}/v1")
+}
+
+/// Mounts Ollama's `/api/ps` reporting `qwen3:latest` loaded with `window`.
+async fn mount_loaded_window(server: &MockServer, window: u64) {
+    Mock::given(method("GET"))
+        .and(path("/api/ps"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(json!({
+            "models": [{"name": "qwen3:latest", "context_length": window}]
+        })))
+        .mount(server)
+        .await;
+}
+
+#[tokio::test]
+/// Lists the configured local model first, then every paid catalog model with
+/// the variable its provider still needs.
+async fn harness_models_list_local_then_paid_models_with_their_status() {
+    // Arrange
+    let environment = environment(&[
+        ("KIMI_API_KEY", "key"),
+        ("MODEL_API_KEY", "key"),
+        ("OPENAI_COMPATIBLE_BASE_URL", &unreachable_base_url()),
+        ("OPENAI_COMPATIBLE_MODEL", " qwen3:latest "),
+    ]);
+
+    // Act
+    let options = harness_models(&environment).await;
+
+    // Assert
+    let summary = options
+        .iter()
+        .map(|option| (option.model, option.billing, option.status))
+        .collect::<Vec<_>>();
+    assert_eq!(
+        summary,
+        vec![
+            (
+                served("qwen3:latest"),
+                ModelBilling::Local,
+                HarnessModelStatus::Ready
+            ),
+            (
+                AgentModel::MuseSpark13,
+                ModelBilling::Paid,
+                HarnessModelStatus::Ready
+            ),
+            (
+                AgentModel::KimiK3,
+                ModelBilling::Paid,
+                HarnessModelStatus::MissingConfiguration("KIMI_BASE_URL")
+            ),
+            (
+                AgentModel::KimiK26,
+                ModelBilling::Paid,
+                HarnessModelStatus::MissingConfiguration("KIMI_BASE_URL")
+            ),
+            (
+                AgentModel::Qwen38Max,
+                ModelBilling::Paid,
+                HarnessModelStatus::MissingConfiguration("DASHSCOPE_API_KEY")
+            ),
+            (
+                AgentModel::QwenPlus,
+                ModelBilling::Paid,
+                HarnessModelStatus::MissingConfiguration("DASHSCOPE_API_KEY")
+            ),
+            (
+                AgentModel::Gpt61Sol,
+                ModelBilling::Paid,
+                HarnessModelStatus::MissingConfiguration("OPENAI_API_KEY")
+            ),
+            (
+                AgentModel::Gpt6Astra,
+                ModelBilling::Paid,
+                HarnessModelStatus::MissingConfiguration("OPENAI_API_KEY")
+            ),
+            (
+                AgentModel::Gpt6Luna,
+                ModelBilling::Paid,
+                HarnessModelStatus::MissingConfiguration("OPENAI_API_KEY")
+            ),
+            (
+                AgentModel::Gpt56Terra,
+                ModelBilling::Paid,
+                HarnessModelStatus::MissingConfiguration("OPENAI_API_KEY")
+            ),
+        ]
+    );
+    assert_eq!(options[0].provider, "OpenAI-compatible server");
+    assert_eq!(options[1].provider, "Muse");
+    assert_eq!(options[2].provider, "Kimi");
+    assert_eq!(options[4].provider, "Qwen");
+    assert_eq!(options[6].provider, "OpenAI");
+    assert_eq!(
+        options[1].context_window,
+        model_profile::declared(AgentModel::MuseSpark13).map(ModelProfile::context_window_tokens)
+    );
+    // Shared Codex models show the window the harness runs them with.
+    assert_eq!(
+        options[6].context_window,
+        ModelProvider::OpenAi
+            .declared_profile("gpt-6.1-sol", |_| Err(std::env::VarError::NotPresent))
+            .expect("OpenAI profiles read no environment")
+            .map(ModelProfile::context_window_tokens)
+    );
+}
+
+#[tokio::test]
+/// Lists every model a reachable Ollama serves once, marking models without
+/// tool calls, and keeps its reported windows.
+async fn harness_models_list_discovered_ollama_models() {
+    // Arrange
+    let server = MockServer::start().await;
+    Mock::given(method("GET"))
+        .and(path("/api/tags"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(json!({"models": [
+            {
+                "name": "qwen3:latest",
+                "details": {"context_length": 40960},
+                "capabilities": ["completion", "tools"]
+            },
+            {
+                "name": "gemma:latest",
+                "details": {"context_length": 8192},
+                "capabilities": ["completion"]
+            }
+        ]})))
+        .mount(&server)
+        .await;
+    mount_loaded_window(&server, 4096).await;
+    let environment = environment(&[
+        (
+            "OPENAI_COMPATIBLE_BASE_URL",
+            &format!("{}/v1", server.uri()),
+        ),
+        ("OPENAI_COMPATIBLE_MODEL", "qwen3:latest"),
+    ]);
+
+    // Act
+    let options = harness_models(&environment).await;
+
+    // Assert
+    let local = options
+        .iter()
+        .filter(|option| option.billing == ModelBilling::Local)
+        .collect::<Vec<_>>();
+    assert_eq!(local.len(), 2);
+    assert_eq!(local[0].model, served("qwen3:latest"));
+    assert_eq!(local[0].provider, "Ollama");
+    assert_eq!(local[0].status, HarnessModelStatus::Ready);
+    assert_eq!(local[0].context_window, Some(40_960));
+    assert_eq!(local[0].loaded_context_window, Some(4096));
+    assert_eq!(local[1].model, served("gemma:latest"));
+    assert_eq!(local[1].status, HarnessModelStatus::NoToolSupport);
+}
+
+#[tokio::test]
+/// Sizes a local turn to the window the server runs and refuses a window
+/// that would silently drop conversation history.
+async fn running_context_window_checks_the_local_server() {
+    // Arrange
+    let roomy = MockServer::start().await;
+    mount_loaded_window(&roomy, 32_768).await;
+    let cramped = MockServer::start().await;
+    mount_loaded_window(&cramped, 4096).await;
+    let base_url = |server: &MockServer| {
+        environment(&[(
+            "OPENAI_COMPATIBLE_BASE_URL",
+            &format!("{}/v1", server.uri()),
+        )])
+    };
+    let local = ModelSelection::resolve("openai-compatible/qwen3:latest", &environment(&[]))
+        .expect("served model");
+    let hosted = ModelSelection::resolve("kimi-k3", &environment(&[])).expect("kimi-k3");
+    let unreachable = environment(&[("OPENAI_COMPATIBLE_BASE_URL", &unreachable_base_url())]);
+
+    // Act
+    let roomy_window = running_context_window(&local, &base_url(&roomy)).await;
+    let cramped_window = running_context_window(&local, &base_url(&cramped)).await;
+    let hosted_window = running_context_window(&hosted, &environment(&[])).await;
+    let unreachable_window = running_context_window(&local, &unreachable).await;
+
+    // Assert
+    assert_eq!(roomy_window, Ok(Some(32_768)));
+    let error = cramped_window.expect_err("a 4,096-token window is too small");
+    assert!(error.contains("4096-token context window"), "{error}");
+    assert!(error.contains("OLLAMA_CONTEXT_LENGTH=32768"), "{error}");
+    assert_eq!(hosted_window, Ok(None));
+    assert_eq!(unreachable_window, Ok(None));
+}
+
+#[test]
+/// Registers a served model with the window its server runs.
+fn openai_compatible_registration_uses_the_running_window() {
+    // Arrange
+    let selection = ModelSelection::resolve("openai-compatible/qwen3:latest", &environment(&[]))
+        .expect("served model");
+
+    // Act
+    let registry = selection
+        .registry(&environment(&[]), None, Some(20_000))
+        .expect("registry");
+
+    // Assert
+    let registration = registry.resolve(&selection.key()).expect("registration");
+    assert_eq!(
+        registration.capabilities().profile.context_window_tokens(),
+        20_000
+    );
 }
 
 #[test]
@@ -107,11 +260,14 @@ fn openai_compatible_selection_names_the_served_model() {
     // Act
     let selection = ModelSelection::resolve("openai-compatible", &configured)
         .expect("a named served model should resolve");
+    let chosen = ModelSelection::resolve("openai-compatible/llama3:8b", &configured)
+        .expect("a chosen served model should resolve");
     let missing = ModelSelection::resolve("openai-compatible", &environment(&[]))
         .expect_err("an unnamed served model should fail");
 
     // Assert
     assert_eq!(selection.key(), "openai-compatible/qwen3:latest");
+    assert_eq!(chosen.key(), "openai-compatible/llama3:8b");
     assert_eq!(
         ModelSelection::from_key("openai-compatible/llama3.3:70b").map(|other| other.key()),
         Some("openai-compatible/llama3.3:70b".to_string())
@@ -138,9 +294,11 @@ fn openai_compatible_registration_uses_the_declared_profile() {
         ModelSelection::resolve("openai-compatible", &configured).expect("served model");
 
     // Act
-    let registry = selection.registry(&configured, None).expect("registry");
+    let registry = selection
+        .registry(&configured, None, None)
+        .expect("registry");
     let invalid = selection
-        .registry(&invalid_window, None)
+        .registry(&invalid_window, None, None)
         .err()
         .expect("an invalid window should fail");
 
@@ -172,7 +330,7 @@ fn openai_compatible_configuration_failures_name_the_model_and_endpoint() {
 
     // Act
     let error = blank
-        .registry(&environment(&[]), None)
+        .registry(&environment(&[]), None, None)
         .err()
         .expect("a blank served model should fail");
 
@@ -273,7 +431,9 @@ fn registrations_declare_revision_and_per_model_context_profiles() {
     // Act / Assert
     for (provider, model) in models {
         let selection = ModelSelection::resolve(model, &environment).expect("served model");
-        let registry = selection.registry(&environment, None).expect("registry");
+        let registry = selection
+            .registry(&environment, None, None)
+            .expect("registry");
         let registration = registry.resolve(&selection.key()).expect("registration");
         let expected = if provider == ModelProvider::OpenAi {
             provider
@@ -289,7 +449,7 @@ fn registrations_declare_revision_and_per_model_context_profiles() {
         assert_eq!(registration.capabilities().profile, expected, "{model}");
     }
     let sol = ModelSelection::resolve("gpt-6.1-sol", &environment).expect("served model");
-    let sol_registry = sol.registry(&environment, None).expect("registry");
+    let sol_registry = sol.registry(&environment, None, None).expect("registry");
     let sol_profile = sol_registry
         .resolve("openai/gpt-6.1-sol")
         .expect("registration")
