@@ -22,6 +22,7 @@ use super::support::{
     mock_git_client_detecting_main_repo, seed_recovery_test_operation, transcript_text,
 };
 use crate::app::AppEvent;
+use crate::app::service::HarnessModels;
 use crate::app::session::SessionError;
 use crate::domain::agent::{AgentKind, AgentModel, AgentSelection};
 use crate::domain::session::Status;
@@ -186,6 +187,7 @@ async fn test_run_channel_turn_warns_when_main_checkout_status_changes() {
     let context = SessionWorkerContext {
         app_event_tx: mpsc::unbounded_channel().0,
         available_agent_kinds: Arc::from(AgentKind::ALL),
+        harness_models: HarnessModels::default(),
         branch_operation_lock: Arc::new(tokio::sync::Mutex::new(())),
         cancel_token: Arc::new(Mutex::new(CancellationToken::new())),
         session_run: SessionRunClient::from_channel("sess1".to_string(), Arc::new(mock_channel)),

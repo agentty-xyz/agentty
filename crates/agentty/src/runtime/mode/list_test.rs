@@ -80,6 +80,7 @@ impl SettingsFixture {
             default_smart_reasoning_level: ReasoningLevel::High,
             default_smart_selection: selection,
             default_smart_speed_mode: SpeedMode::Normal,
+            fast_harness_models: Vec::new(),
             include_coauthored_by_agentty: false,
             launch_configuration: launch_configuration.unwrap_or_default().to_string(),
             theme: ColorTheme::Current,

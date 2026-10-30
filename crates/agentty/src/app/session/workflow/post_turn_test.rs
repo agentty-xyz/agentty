@@ -17,6 +17,7 @@ use super::{
     prepare_review_comment_resolutions, run_auto_commit, start_published_branch_auto_push,
     truncate_turn_error_notice, validate_review_comment_outcomes,
 };
+use crate::app::service::HarnessModels;
 use crate::app::session::SessionError;
 use crate::domain::agent::{AgentKind, AgentModel, AgentSelection};
 use crate::domain::session::QueuedMessage;
@@ -130,6 +131,7 @@ fn review_operation_test_context(
     PostTurnContext {
         app_event_tx: mpsc::unbounded_channel().0,
         available_agent_kinds: Arc::from(AgentKind::ALL),
+        harness_models: HarnessModels::default(),
         branch_operation_lock: Arc::new(tokio::sync::Mutex::new(())),
         cancel_token: CancellationToken::new(),
         child_pid: Arc::new(Mutex::new(None)),
@@ -438,6 +440,7 @@ async fn test_unfinished_rebase_check_fails_closed_when_operation_query_fails() 
     let context = PostTurnContext {
         app_event_tx: mpsc::unbounded_channel().0,
         available_agent_kinds: Arc::from(AgentKind::ALL),
+        harness_models: HarnessModels::default(),
         branch_operation_lock: Arc::new(tokio::sync::Mutex::new(())),
         cancel_token: CancellationToken::new(),
         child_pid: Arc::new(Mutex::new(None)),
@@ -492,6 +495,7 @@ async fn test_auto_push_rechecks_queued_rebase_after_waiting_for_branch_lock() {
     let context = Arc::new(PostTurnContext {
         app_event_tx,
         available_agent_kinds: Arc::from(AgentKind::ALL),
+        harness_models: HarnessModels::default(),
         branch_operation_lock,
         cancel_token: CancellationToken::new(),
         child_pid: Arc::new(Mutex::new(None)),

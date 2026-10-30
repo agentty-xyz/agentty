@@ -7,8 +7,7 @@ pub use ag_protocol::render_prompt_text_for_agent;
 
 use crate::domain::agent::{
     AgentKind, AgentModel, AgentSelection, AgentSelectionMetadata, HarnessModelOption,
-    HarnessModelStatus, MINIMUM_RUNNING_CONTEXT_WINDOW, ModelBilling, ReasoningLevel,
-    ResponseStyle,
+    HarnessModelStatus, MINIMUM_RUNNING_CONTEXT_WINDOW, ModelCost, ReasoningLevel, ResponseStyle,
 };
 use crate::domain::input::InputState;
 use crate::domain::permission::PermissionMode;
@@ -1126,8 +1125,10 @@ fn resolve_model_stage_agent(
 /// selects, or `None` for a row that cannot run a turn now.
 ///
 /// Harness rows come from `harness_models`, local models first, badged
-/// `local` (free) or `paid`, with the server or provider, the context window,
-/// and what a row still needs. Without local models a hint row says how to
+/// `local` or `paid`, with the price class (`free`, `cheap`, `standard`, or
+/// `premium`), the server or provider, whether the provider trains on
+/// prompts, the context window, and what a row still needs. Without local
+/// models a hint row says how to
 /// add them. Other agents, and Harness before its models are listed, show
 /// the fixed catalog.
 fn model_rows(
@@ -1154,7 +1155,7 @@ fn model_rows(
         .iter()
         .map(|option| {
             let item = PromptSuggestionItem {
-                badge: Some(billing_badge(option.billing).to_string()),
+                badge: Some(billing_badge(option.cost).to_string()),
                 detail: None,
                 label: option.model.name().to_string(),
                 metadata: Some(harness_model_metadata(option)),
@@ -1163,12 +1164,9 @@ fn model_rows(
             (item, option.is_ready().then_some(option.model))
         })
         .collect::<Vec<_>>();
-    if !harness_models
-        .iter()
-        .any(|option| option.billing == ModelBilling::Local)
-    {
+    if harness_models.iter().all(|option| option.cost.is_paid()) {
         let hint = PromptSuggestionItem {
-            badge: Some(billing_badge(ModelBilling::Local).to_string()),
+            badge: Some(billing_badge(ModelCost::Local).to_string()),
             detail: None,
             label: "no local models".to_string(),
             metadata: Some("start Ollama or set OPENAI_COMPATIBLE_BASE_URL".to_string()),
@@ -1196,21 +1194,18 @@ fn align_row_metadata(rows: &mut [(PromptSuggestionItem, Option<AgentModel>)]) {
 }
 
 /// Returns the badge naming who pays for a model's tokens.
-fn billing_badge(billing: ModelBilling) -> &'static str {
-    match billing {
-        ModelBilling::Local => "local",
-        ModelBilling::Paid => "paid",
-    }
+fn billing_badge(cost: ModelCost) -> &'static str {
+    if cost.is_paid() { "paid" } else { "local" }
 }
 
-/// Describes one harness model row: whether it is free, its server or
-/// provider, its context window, and what it still needs.
+/// Describes one harness model row: its price class, its server or
+/// provider, whether the provider trains on its prompts, its context window,
+/// and what it still needs.
 fn harness_model_metadata(option: &HarnessModelOption) -> String {
-    let mut parts = Vec::new();
-    if option.billing == ModelBilling::Local {
-        parts.push("free".to_string());
+    let mut parts = vec![option.cost.label().to_string(), option.provider.clone()];
+    if option.trains_on_prompts {
+        parts.push("trains on prompts".to_string());
     }
-    parts.push(option.provider.clone());
     match option.status {
         HarnessModelStatus::MissingConfiguration(variable) => {
             parts.push(format!("needs {variable}"));
@@ -1240,10 +1235,7 @@ fn context_window_label(option: &HarnessModelOption) -> Option<String> {
         return Some(label);
     }
 
-    let qualifier = match option.billing {
-        ModelBilling::Local => "up to ",
-        ModelBilling::Paid => "",
-    };
+    let qualifier = if option.cost.is_paid() { "" } else { "up to " };
 
     option
         .context_window

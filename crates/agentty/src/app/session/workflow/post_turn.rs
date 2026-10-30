@@ -21,7 +21,7 @@ use super::worker::{SessionWorkerContext, TurnMetadata, has_unfinished_branch_op
 use super::{SessionTaskService, StatusTransition, published_branch};
 use crate::app::AppEvent;
 use crate::app::assist::AssistContext;
-use crate::app::service::SessionUpdateVersionMap;
+use crate::app::service::{HarnessModels, SessionUpdateVersionMap};
 use crate::app::session::{Clock, SessionError, TurnAppliedState};
 use crate::domain::agent::{AgentKind, AgentSelection};
 use crate::domain::session::{QueuedMessage, SessionFollowUpTask, SessionId, SessionStats, Status};
@@ -62,6 +62,9 @@ pub(super) struct PostTurnContext {
     pub(super) folder: PathBuf,
     /// Git boundary used by auto-commit and published-branch auto-push.
     pub(super) git_client: Arc<dyn GitClient>,
+    /// Harness models a Fast default naming one needs ready before
+    /// auto-commit prompts use it.
+    pub(super) harness_models: HarnessModels,
     /// Provider-neutral boundary used by post-turn auto-commit prompts.
     pub(super) run_client: Arc<dyn RunClient>,
     /// In-memory queue checked before starting detached auto-push effects.
@@ -93,6 +96,7 @@ impl PostTurnContext {
             db: context.db.clone(),
             folder: context.folder.clone(),
             git_client: Arc::clone(&context.git_client),
+            harness_models: context.harness_models.clone(),
             run_client,
             queued_messages: Arc::clone(&context.queued_messages),
             review_request_client: Arc::clone(&context.review_request_client),
@@ -643,6 +647,7 @@ async fn run_auto_commit(
         db: context.db.clone(),
         folder: context.folder.clone(),
         git_client: Arc::clone(&context.git_client),
+        harness_models: context.harness_models.clone(),
         id: context.session_id.to_string(),
         run_client: Arc::clone(&context.run_client),
         session_agent,

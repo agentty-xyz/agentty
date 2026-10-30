@@ -102,6 +102,7 @@ async fn test_load_auto_commit_agent_setting_falls_back_through_defaults() {
         "session-id",
         model_fixture::codex_selection(),
         AgentKind::ALL,
+        &[],
     )
     .await;
 
@@ -124,6 +125,7 @@ async fn test_load_auto_commit_agent_setting_falls_back_through_defaults() {
         "session-id",
         model_fixture::codex_selection(),
         AgentKind::ALL,
+        &[],
     )
     .await;
 
@@ -146,6 +148,7 @@ async fn test_load_auto_commit_agent_setting_keeps_harness_session_model() {
         "session-id",
         harness_selection,
         &[],
+        &[AgentModel::KimiK3],
     )
     .await;
 
@@ -191,6 +194,7 @@ async fn test_load_auto_commit_agent_setting_ignores_uninstalled_cli_defaults() 
         "session-id",
         harness_selection,
         &[],
+        &[],
     )
     .await;
     let codex_installed_agent = SessionTaskService::load_auto_commit_agent_setting(
@@ -198,12 +202,118 @@ async fn test_load_auto_commit_agent_setting_ignores_uninstalled_cli_defaults() 
         "session-id",
         harness_selection,
         &[AgentKind::Codex],
+        &[],
     )
     .await;
 
     // Assert
     assert_eq!(harness_only_agent, harness_selection);
     assert_eq!(codex_installed_agent, model_fixture::codex_selection());
+}
+
+#[tokio::test]
+/// Verifies a Fast default naming a Harness model commits through it while
+/// that model is ready, and counts as missing while only other harness
+/// models are.
+async fn test_load_auto_commit_agent_setting_uses_a_harness_fast_default_while_ready() {
+    // Arrange
+    let database = AppRepositories::in_memory().await.expect("db should open");
+    insert_review_session(&database, model_fixture::CODEX_MODEL.as_str()).await;
+    let project_id = database
+        .sessions()
+        .load_session_project_id("session-id")
+        .await
+        .expect("failed to load session project id")
+        .expect("session should have project id");
+    database
+        .settings()
+        .upsert_project_settings(
+            project_id,
+            vec![
+                (
+                    SettingName::DefaultFastAgent,
+                    AgentKind::Harness.name().to_string(),
+                ),
+                (
+                    SettingName::DefaultFastModel,
+                    AgentModel::Qwen38Flash.as_str().to_string(),
+                ),
+            ],
+        )
+        .await
+        .expect("failed to persist default fast selection");
+    let codex_session = model_fixture::codex_selection();
+
+    // Act
+    let harness_agent = SessionTaskService::load_auto_commit_agent_setting(
+        &database,
+        "session-id",
+        codex_session,
+        &[AgentKind::Codex],
+        &[AgentModel::MuseSpark13, AgentModel::Qwen38Flash],
+    )
+    .await;
+    let unready_model_agent = SessionTaskService::load_auto_commit_agent_setting(
+        &database,
+        "session-id",
+        codex_session,
+        &[AgentKind::Codex],
+        &[AgentModel::MuseSpark13],
+    )
+    .await;
+
+    // Assert
+    assert_eq!(
+        harness_agent,
+        AgentSelection::new(AgentKind::Harness, AgentModel::Qwen38Flash)
+    );
+    assert_eq!(unready_model_agent, codex_session);
+}
+
+#[tokio::test]
+/// Verifies ready harness models never take over utility work the user did
+/// not route to them, even when a CLI default is no longer installed.
+async fn test_load_auto_commit_agent_setting_never_falls_back_to_harness() {
+    // Arrange
+    let database = AppRepositories::in_memory().await.expect("db should open");
+    insert_review_session(&database, AgentModel::ClaudeSonnet55.as_str()).await;
+    let project_id = database
+        .sessions()
+        .load_session_project_id("session-id")
+        .await
+        .expect("failed to load session project id")
+        .expect("session should have project id");
+    database
+        .settings()
+        .upsert_project_settings(
+            project_id,
+            vec![
+                (
+                    SettingName::DefaultSmartAgent,
+                    AgentKind::Codex.name().to_string(),
+                ),
+                (
+                    SettingName::DefaultSmartModel,
+                    AgentModel::Gpt61Sol.as_str().to_string(),
+                ),
+            ],
+        )
+        .await
+        .expect("failed to persist default smart selection");
+    let claude_session = AgentSelection::new(AgentKind::Claude, AgentModel::ClaudeSonnet55);
+
+    // Act
+    let auto_commit_agent = SessionTaskService::load_auto_commit_agent_setting(
+        &database,
+        "session-id",
+        claude_session,
+        &[],
+        &[AgentModel::Gpt61Sol],
+    )
+    .await;
+
+    // Assert
+    assert_eq!(auto_commit_agent, claude_session);
 }
 
 #[tokio::test]

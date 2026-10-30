@@ -57,7 +57,7 @@ pub use execution_graph::{
     GraphWorkspaceAccess, ResumeExecutionGraphRequest,
 };
 pub use harness_model::{
-    HarnessModelOption, HarnessModelStatus, MINIMUM_RUNNING_CONTEXT_WINDOW, ModelBilling,
+    HarnessModelOption, HarnessModelStatus, MINIMUM_RUNNING_CONTEXT_WINDOW, ModelCost,
     default_harness_model,
 };
 pub use message::{

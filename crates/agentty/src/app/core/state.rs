@@ -498,6 +498,7 @@ impl App {
         self.settings = SettingsManager::from_repositories(
             self.services.db().clone(),
             self.services.available_agent_kinds(),
+            self.services.harness_model_options(),
             project.id,
         )
         .await;

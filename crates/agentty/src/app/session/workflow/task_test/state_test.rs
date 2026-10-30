@@ -14,7 +14,7 @@ use super::super::{
 use super::support::{StaticClock, insert_review_session, one_shot_submission};
 use crate::app::AppEvent;
 use crate::app::assist::AssistContext;
-use crate::app::service::{AppServiceDeps, AppServices};
+use crate::app::service::{AppServiceDeps, AppServices, HarnessModels};
 use crate::db::AppRepositories;
 use crate::domain::agent::{AgentCliInfo, AgentKind, AgentModel, AgentSelection};
 use crate::domain::session::{SessionHandles, Status};
@@ -125,6 +125,7 @@ async fn test_handle_auto_commit_updates_session_title() {
     let context = AssistContext {
         app_event_tx,
         available_agent_kinds: Arc::from(AgentKind::ALL),
+        harness_models: HarnessModels::default(),
         child_pid: Arc::new(Mutex::new(None)),
         db: database.clone(),
         folder: PathBuf::from("/tmp/project"),

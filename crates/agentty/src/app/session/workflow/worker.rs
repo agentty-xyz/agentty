@@ -30,7 +30,7 @@ use crate::app::branch_publish::{
     BranchPublishTaskContext, BranchPublishTaskSession, review_request_from_publish_result,
     run_branch_publish_action,
 };
-use crate::app::service::SessionUpdateVersionMap;
+use crate::app::service::{HarnessModels, SessionUpdateVersionMap};
 use crate::app::session::{Clock, SessionError, unix_timestamp_from_system_time};
 use crate::app::{AppEvent, AppServices, SessionManager};
 use crate::domain::agent::{AgentKind, AgentSelection};
@@ -525,6 +525,9 @@ pub(super) struct SessionWorkerContext {
     pub(super) folder: PathBuf,
     pub(super) fs_client: Arc<dyn FsClient>,
     pub(super) git_client: Arc<dyn GitClient>,
+    /// Harness models a Fast default naming one needs ready before title
+    /// and auto-commit utility prompts use it.
+    pub(super) harness_models: HarnessModels,
     /// In-memory queue of prompts staged while the session is `InProgress`.
     ///
     /// Shared with [`SessionHandles::queued_messages`]. The worker drains
@@ -1261,6 +1264,7 @@ impl SessionWorkerService {
             folder: runtime.folder.clone(),
             fs_client: services.fs_client(),
             git_client: services.git_client(),
+            harness_models: services.harness_models(),
             queued_messages: Arc::clone(&runtime.queued_messages),
             review_request_client: Arc::clone(&runtime.review_request_client),
             session_update_versions: Arc::clone(&runtime.session_update_versions),
@@ -1903,6 +1907,7 @@ impl SessionWorkerService {
             folder: context.folder.clone(),
             fs_client: Arc::clone(&context.fs_client),
             git_client: Arc::clone(&context.git_client),
+            harness_models: context.harness_models.clone(),
             id: context.session_id.clone(),
             run_client,
             review_request_client: Arc::clone(&context.review_request_client),

@@ -7,6 +7,7 @@ use tempfile::tempdir;
 use tokio::sync::mpsc;
 
 use super::{AssistContext, FailureTracker, format_detail_lines, run_agent_assist};
+use crate::app::service::HarnessModels;
 use crate::domain::agent::{AgentKind, AgentModel, AgentSelection};
 use crate::domain::session_message::SessionTranscript;
 use crate::infra::db::AppRepositories;
@@ -35,6 +36,7 @@ async fn test_run_agent_assist_uses_injected_run_client() {
     let context = AssistContext {
         app_event_tx,
         available_agent_kinds: Arc::from(AgentKind::ALL),
+        harness_models: HarnessModels::default(),
         child_pid: Arc::new(Mutex::new(None)),
         db: AppRepositories::in_memory().await.expect("db should open"),
         folder: temp_directory.path().to_path_buf(),

@@ -441,7 +441,15 @@ after five minutes of silence, Codex CLI's idle bound, and the whole request aft
 thirty. The prompt cache key is sent, `max` effort maps to `xhigh` for models before
 GPT-5.6, and OpenAI models declare their documented windows in the provider catalog
 (`ModelProvider::declared_profile`) under the default estimator with a 50% margin until
-a live calibration fits one.
+a live calibration fits one; the Qwen flash models are declared the same way.
+
+The provider catalog also declares each hosted model's price class
+(`ModelProvider::cost_tier`): cheap at most $2.50 per million output tokens, premium at
+least $15, standard between, and local for every OpenAI-compatible model. These are
+per-model facts from the providers' published prices, kept in one table beside the model
+identifiers; which model suits which task stays the host's choice. Agentty, for one,
+labels its model pickers with the class and lets a project's Fast model, which writes
+commit messages and titles, be a cheap harness model, but never selects one on its own.
 
 The `openai-compatible` provider serves local and self-hosted models (Ollama, llama.cpp,
 LM Studio, vLLM) under one conservative policy instead of one adapter per server,

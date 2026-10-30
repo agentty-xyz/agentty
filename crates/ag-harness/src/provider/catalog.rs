@@ -62,8 +62,34 @@ impl ModelProvider {
                 openai::GPT_5_3_CODEX,
             ],
             Self::OpenAiCompatible => &[],
-            Self::Qwen => &[qwen::QWEN3_8_MAX, qwen::QWEN_PLUS],
+            Self::Qwen => &[
+                qwen::QWEN3_8_MAX,
+                qwen::QWEN_PLUS,
+                qwen::QWEN3_8_FLASH,
+                qwen::QWEN3_7_FLASH,
+            ],
         }
+    }
+
+    /// Returns the price class of `model`, or `None` for a model this
+    /// catalog does not list. Every [`Self::OpenAiCompatible`] model is
+    /// [`CostTier::Local`].
+    pub fn cost_tier(self, model: &str) -> Option<CostTier> {
+        if self == Self::OpenAiCompatible {
+            return Some(CostTier::Local);
+        }
+
+        MODEL_COST_TIERS
+            .iter()
+            .find(|(provider, cataloged, _)| *provider == self && *cataloged == model)
+            .map(|(_, _, tier)| *tier)
+    }
+
+    /// Returns whether the provider may use `model`'s prompts and
+    /// completions to train its models, which Meta's discounted
+    /// contributor tier requires.
+    pub fn trains_on_prompts(self, model: &str) -> bool {
+        self == Self::Muse && model == muse::MUSE_SPARK_1_3_CONTRIBUTOR
     }
 
     /// Returns the environment variable containing the provider API key.
@@ -110,8 +136,9 @@ impl ModelProvider {
     /// `None` when the host profiles the provider's models itself.
     ///
     /// [`Self::OpenAi`] declares the documented window and output limit of
-    /// each cataloged model, weighed by the default estimator under a 50%
-    /// margin, and `None` for other models. [`Self::OpenAiCompatible`] serves
+    /// each cataloged model, and [`Self::Qwen`] of its flash models, weighed
+    /// by the default estimator under a 50% margin, and `None` for other
+    /// models. [`Self::OpenAiCompatible`] serves
     /// models the harness cannot know, so its profile comes from
     /// `OPENAI_COMPATIBLE_CONTEXT_WINDOW` (default 32,768 tokens) and
     /// `OPENAI_COMPATIBLE_MAX_OUTPUT_TOKENS` (default 8,192), weighed the
@@ -132,7 +159,8 @@ impl ModelProvider {
             Self::OpenAiCompatible => {
                 openai_compatible::profile_from_environment(environment).map(Some)
             }
-            Self::Kimi | Self::Muse | Self::Qwen => Ok(None),
+            Self::Qwen => Ok(qwen::profile(model)),
+            Self::Kimi | Self::Muse => Ok(None),
         }
     }
 
@@ -238,6 +266,39 @@ impl FromStr for ModelProvider {
             .ok_or_else(|| ModelProviderParseError {
                 value: value.to_string(),
             })
+    }
+}
+
+/// Declared price class of a cataloged model, from its provider's list price
+/// per million output tokens.
+#[derive(Clone, Copy, Debug, Eq, Ord, PartialEq, PartialOrd)]
+pub enum CostTier {
+    /// Served by a local or self-hosted server with no per-token charge.
+    Local,
+    /// At most $2.50 per million output tokens; suited to simple,
+    /// high-volume tasks such as titles and commit messages.
+    Cheap,
+    /// Between the cheap and premium bounds.
+    Standard,
+    /// At least $15 per million output tokens.
+    Premium,
+}
+
+impl CostTier {
+    /// Returns the lowercase label for this class, such as `cheap`.
+    pub const fn as_str(self) -> &'static str {
+        match self {
+            Self::Local => "local",
+            Self::Cheap => "cheap",
+            Self::Standard => "standard",
+            Self::Premium => "premium",
+        }
+    }
+}
+
+impl fmt::Display for CostTier {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter.write_str(self.as_str())
     }
 }
 
@@ -371,6 +432,64 @@ pub enum ModelConfigurationError {
         max_output_tokens: u64,
     },
 }
+
+/// Price class of every cataloged hosted model, with its list price in USD per
+/// million input and output tokens at the lowest input tier, as published on
+/// 2026-10-29 by Meta's Model API pricing, Alibaba Cloud Model Studio's
+/// international (Singapore) pricing, Moonshot AI's Kimi pricing, and
+/// `OpenAI`'s API pricing.
+const MODEL_COST_TIERS: &[(ModelProvider, &str, CostTier)] = &[
+    // $1.25 in, $4.25 out.
+    (
+        ModelProvider::Muse,
+        muse::MUSE_SPARK_1_3,
+        CostTier::Standard,
+    ),
+    // $0.10 in, $0.20 out; Meta trains on prompts and completions.
+    (
+        ModelProvider::Muse,
+        muse::MUSE_SPARK_1_3_CONTRIBUTOR,
+        CostTier::Cheap,
+    ),
+    // $3 in, $15 out.
+    (ModelProvider::Kimi, kimi::KIMI_K3, CostTier::Premium),
+    // $0.95 in, $4 out; Moonshot AI retires the K2 models by the end of 2026.
+    (ModelProvider::Kimi, kimi::KIMI_K2_6, CostTier::Standard),
+    // $2 in, $6 out.
+    (ModelProvider::Qwen, qwen::QWEN3_8_MAX, CostTier::Standard),
+    // $0.40 in, $1.20 out under 256,000 input tokens.
+    (ModelProvider::Qwen, qwen::QWEN_PLUS, CostTier::Cheap),
+    // $0.15 in, $0.47 out.
+    (ModelProvider::Qwen, qwen::QWEN3_8_FLASH, CostTier::Cheap),
+    // $0.03 in, $0.13 out under 32,000 input tokens.
+    (ModelProvider::Qwen, qwen::QWEN3_7_FLASH, CostTier::Cheap),
+    // $2 in, $10 out.
+    (
+        ModelProvider::OpenAi,
+        openai::GPT_6_1_SOL,
+        CostTier::Standard,
+    ),
+    // $10 in, $50 out.
+    (
+        ModelProvider::OpenAi,
+        openai::GPT_6_ASTRA,
+        CostTier::Premium,
+    ),
+    // $0.10 in, $0.50 out.
+    (ModelProvider::OpenAi, openai::GPT_6_LUNA, CostTier::Cheap),
+    // $2 in, $12 out.
+    (
+        ModelProvider::OpenAi,
+        openai::GPT_5_6_TERRA,
+        CostTier::Standard,
+    ),
+    // $1.75 in, $14 out.
+    (
+        ModelProvider::OpenAi,
+        openai::GPT_5_3_CODEX,
+        CostTier::Standard,
+    ),
+];
 
 #[cfg(test)]
 #[path = "catalog_test.rs"]

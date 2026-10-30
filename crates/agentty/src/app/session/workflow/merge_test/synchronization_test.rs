@@ -28,6 +28,7 @@ use super::support::{
     session_operation_row, successful_sync_conflict_git_client, successful_sync_conflict_outcome,
     test_fs_client, test_run_client, test_session_agent,
 };
+use crate::app::service::HarnessModels;
 use crate::app::session::workflow::merge::SyncAssistClient;
 use crate::app::session::{Clock, SessionError};
 use crate::app::sync::SyncMainEventContext;
@@ -286,6 +287,7 @@ async fn test_rebase_assist_input_clone() {
         app_event_tx: tx,
         assist_mode: RebaseAssistMode::OneShot,
         available_agent_kinds: Arc::from(AgentKind::ALL),
+        harness_models: HarnessModels::default(),
         child_pid: Arc::new(Mutex::new(None)),
         db,
         folder: temp_dir.path().to_path_buf(),

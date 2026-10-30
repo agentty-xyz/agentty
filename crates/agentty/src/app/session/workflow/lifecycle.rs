@@ -2807,6 +2807,7 @@ impl SessionManager {
                 available_agent_kinds: services.available_agent_kinds().into(),
                 db: services.db().clone(),
                 folder,
+                harness_models: services.harness_models(),
                 prompt: prompt.to_string(),
                 run_client: services.session_run_client(session_id),
                 session_agent,

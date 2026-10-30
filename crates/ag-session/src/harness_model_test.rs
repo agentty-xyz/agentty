@@ -1,29 +1,31 @@
 use crate::agent::{AgentModel, ServedModel};
 use crate::harness_model::{
-    HarnessModelOption, HarnessModelStatus, ModelBilling, default_harness_model,
+    HarnessModelOption, HarnessModelStatus, ModelCost, default_harness_model,
 };
 
 /// Returns one served local model option.
 fn local(name: &str, status: HarnessModelStatus) -> HarnessModelOption {
     HarnessModelOption {
-        billing: ModelBilling::Local,
         context_window: Some(40_960),
+        cost: ModelCost::Local,
         loaded_context_window: None,
         model: served(name),
         provider: "Ollama".to_string(),
         status,
+        trains_on_prompts: false,
     }
 }
 
 /// Returns one hosted paid model option.
 fn paid(model: AgentModel, status: HarnessModelStatus) -> HarnessModelOption {
     HarnessModelOption {
-        billing: ModelBilling::Paid,
         context_window: None,
+        cost: ModelCost::Standard,
         loaded_context_window: None,
         model,
         provider: "Kimi".to_string(),
         status,
+        trains_on_prompts: false,
     }
 }
 
@@ -124,4 +126,48 @@ fn default_is_none_when_no_model_is_ready() {
 
     // Assert
     assert_eq!(model, None);
+}
+
+#[test]
+fn default_keeps_catalog_order_over_a_cheaper_ready_paid_model() {
+    // Arrange
+    let cheap = HarnessModelOption {
+        cost: ModelCost::Cheap,
+        ..paid(AgentModel::Qwen38Flash, HarnessModelStatus::Ready)
+    };
+    let options = [
+        paid(AgentModel::MuseSpark13, HarnessModelStatus::Ready),
+        cheap,
+    ];
+
+    // Act
+    let model = default_harness_model(&options, None);
+
+    // Assert
+    assert_eq!(model, Some(AgentModel::MuseSpark13));
+}
+
+#[test]
+fn model_cost_labels_free_local_models_and_paid_price_classes() {
+    // Arrange
+    let costs = [
+        ModelCost::Local,
+        ModelCost::Cheap,
+        ModelCost::Standard,
+        ModelCost::Premium,
+    ];
+
+    // Act
+    let labels = costs.map(|cost| (cost.label(), cost.is_paid()));
+
+    // Assert
+    assert_eq!(
+        labels,
+        [
+            ("free", false),
+            ("cheap", true),
+            ("standard", true),
+            ("premium", true)
+        ]
+    );
 }

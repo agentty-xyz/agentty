@@ -33,6 +33,7 @@ use super::support::{
 };
 use crate::app::AppEvent;
 use crate::app::branch_publish::BranchPublishTaskSession;
+use crate::app::service::HarnessModels;
 use crate::app::session::SessionError;
 use crate::domain::agent::{AgentKind, AgentModel, AgentSelection, ReasoningLevel};
 use crate::domain::question::QuestionItem;
@@ -75,6 +76,7 @@ async fn test_should_skip_worker_command_without_cancel_request() {
     let context = SessionWorkerContext {
         app_event_tx: mpsc::unbounded_channel().0,
         available_agent_kinds: Arc::from(AgentKind::ALL),
+        harness_models: HarnessModels::default(),
         branch_operation_lock: Arc::new(tokio::sync::Mutex::new(())),
         cancel_token: Arc::new(Mutex::new(CancellationToken::new())),
         session_run: SessionRunClient::from_channel("sess1".to_string(), Arc::new(mock_channel)),
@@ -149,6 +151,7 @@ async fn test_should_skip_worker_command_when_cancel_is_requested() {
     let context = SessionWorkerContext {
         app_event_tx: mpsc::unbounded_channel().0,
         available_agent_kinds: Arc::from(AgentKind::ALL),
+        harness_models: HarnessModels::default(),
         branch_operation_lock: Arc::new(tokio::sync::Mutex::new(())),
         cancel_token: Arc::new(Mutex::new(CancellationToken::new())),
         session_run: SessionRunClient::from_channel("sess1".to_string(), Arc::new(mock_channel)),
@@ -237,6 +240,7 @@ async fn test_should_skip_worker_command_allows_new_operation_after_cancel() {
     let context = SessionWorkerContext {
         app_event_tx: mpsc::unbounded_channel().0,
         available_agent_kinds: Arc::from(AgentKind::ALL),
+        harness_models: HarnessModels::default(),
         branch_operation_lock: Arc::new(tokio::sync::Mutex::new(())),
         cancel_token: Arc::new(Mutex::new(CancellationToken::new())),
         session_run: SessionRunClient::from_channel("sess1".to_string(), Arc::new(mock_channel)),
@@ -342,6 +346,7 @@ async fn test_apply_turn_result_reports_background_push_failures() {
     let context = SessionWorkerContext {
         app_event_tx,
         available_agent_kinds: Arc::from(AgentKind::ALL),
+        harness_models: HarnessModels::default(),
         branch_operation_lock: Arc::new(tokio::sync::Mutex::new(())),
         cancel_token: Arc::new(Mutex::new(CancellationToken::new())),
         session_run: SessionRunClient::from_channel(
@@ -498,6 +503,7 @@ async fn test_run_channel_turn_finalizes_invalid_permission_setup_failure() {
     let context = SessionWorkerContext {
         app_event_tx: mpsc::unbounded_channel().0,
         available_agent_kinds: Arc::from(AgentKind::ALL),
+        harness_models: HarnessModels::default(),
         branch_operation_lock: Arc::new(tokio::sync::Mutex::new(())),
         cancel_token: Arc::new(Mutex::new(CancellationToken::new())),
         session_run: SessionRunClient::from_channel("sess1".to_string(), Arc::new(mock_channel)),
@@ -596,6 +602,7 @@ async fn test_run_channel_turn_returns_stopped_when_cancel_token_fires() {
     let context = SessionWorkerContext {
         app_event_tx: mpsc::unbounded_channel().0,
         available_agent_kinds: Arc::from(AgentKind::ALL),
+        harness_models: HarnessModels::default(),
         branch_operation_lock: Arc::new(tokio::sync::Mutex::new(())),
         cancel_token: Arc::clone(&cancel_token),
         session_run: SessionRunClient::from_channel("sess1".to_string(), Arc::new(mock_channel)),
@@ -739,6 +746,7 @@ async fn test_run_channel_turn_proceeds_read_only_after_previous_cancellation() 
     let context = SessionWorkerContext {
         app_event_tx: mpsc::unbounded_channel().0,
         available_agent_kinds: Arc::from(AgentKind::ALL),
+        harness_models: HarnessModels::default(),
         branch_operation_lock: Arc::new(tokio::sync::Mutex::new(())),
         cancel_token: Arc::new(Mutex::new(stale_token)),
         session_run: SessionRunClient::from_channel("sess1".to_string(), Arc::new(mock_channel)),
@@ -839,6 +847,7 @@ async fn test_run_channel_turn_skips_warning_when_main_checkout_is_clean_after_t
     let context = SessionWorkerContext {
         app_event_tx: mpsc::unbounded_channel().0,
         available_agent_kinds: Arc::from(AgentKind::ALL),
+        harness_models: HarnessModels::default(),
         branch_operation_lock: Arc::new(tokio::sync::Mutex::new(())),
         cancel_token: Arc::new(Mutex::new(CancellationToken::new())),
         session_run: SessionRunClient::from_channel("sess1".to_string(), Arc::new(mock_channel)),
@@ -928,6 +937,7 @@ async fn test_run_channel_turn_skips_warning_when_main_checkout_stays_dirty() {
     let context = SessionWorkerContext {
         app_event_tx: mpsc::unbounded_channel().0,
         available_agent_kinds: Arc::from(AgentKind::ALL),
+        harness_models: HarnessModels::default(),
         branch_operation_lock: Arc::new(tokio::sync::Mutex::new(())),
         cancel_token: Arc::new(Mutex::new(CancellationToken::new())),
         session_run: SessionRunClient::from_channel("sess1".to_string(), Arc::new(mock_channel)),
@@ -1023,6 +1033,7 @@ async fn test_run_channel_turn_skips_main_checkout_snapshot_for_bare_repo() {
     let context = SessionWorkerContext {
         app_event_tx: mpsc::unbounded_channel().0,
         available_agent_kinds: Arc::from(AgentKind::ALL),
+        harness_models: HarnessModels::default(),
         branch_operation_lock: Arc::new(tokio::sync::Mutex::new(())),
         cancel_token: Arc::new(Mutex::new(CancellationToken::new())),
         session_run: SessionRunClient::from_channel("sess1".to_string(), Arc::new(mock_channel)),
@@ -1095,6 +1106,7 @@ async fn test_run_turn_with_cancellation_honours_pre_turn_cancel() {
     let context = SessionWorkerContext {
         app_event_tx: mpsc::unbounded_channel().0,
         available_agent_kinds: Arc::from(AgentKind::ALL),
+        harness_models: HarnessModels::default(),
         branch_operation_lock: Arc::new(tokio::sync::Mutex::new(())),
         cancel_token: Arc::new(Mutex::new(CancellationToken::new())),
         session_run: SessionRunClient::from_channel(
@@ -1210,6 +1222,7 @@ async fn test_run_turn_with_cancellation_returns_stopped_after_drain_timeout() {
         let context = SessionWorkerContext {
             app_event_tx: mpsc::unbounded_channel().0,
             available_agent_kinds: Arc::from(AgentKind::ALL),
+            harness_models: HarnessModels::default(),
             branch_operation_lock: Arc::new(tokio::sync::Mutex::new(())),
             cancel_token: Arc::new(Mutex::new(CancellationToken::new())),
             session_run: SessionRunClient::from_channel(

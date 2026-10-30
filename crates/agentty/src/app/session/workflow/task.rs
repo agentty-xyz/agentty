@@ -22,7 +22,7 @@ use crate::app::assist::{
 use crate::app::service::{AppServices, SessionUpdateVersionMap};
 use crate::app::session::{Clock, SessionError, unix_timestamp_from_system_time};
 use crate::app::{AppEvent, SessionManager, setting};
-use crate::domain::agent::{AgentKind, AgentSelection, ReasoningLevel};
+use crate::domain::agent::{AgentKind, AgentModel, AgentSelection, ReasoningLevel};
 use crate::domain::session::{
     COMMITTING_PROGRESS_LABEL, SessionDiffStats, SessionHandles, SessionId, Status,
 };
@@ -542,12 +542,14 @@ impl SessionTaskService {
     /// returns `fallback_selection` when no persisted setting can be parsed.
     /// Persisted defaults apply only when they resolve to one of
     /// `available_agent_kinds`, so Harness-only setups never fall back to a
-    /// missing CLI.
+    /// missing CLI, or, for a Fast default naming a Harness model, while
+    /// `ready_harness_models` lists it.
     pub(crate) async fn load_auto_commit_agent_setting(
         db: &AppRepositories,
         session_id: &str,
         fallback_selection: AgentSelection,
         available_agent_kinds: &[AgentKind],
+        ready_harness_models: &[AgentModel],
     ) -> AgentSelection {
         let project_id = match db.sessions().load_session_project_id(session_id).await {
             Ok(project_id) => project_id,
@@ -567,6 +569,7 @@ impl SessionTaskService {
             project_id,
             fallback_selection,
             available_agent_kinds,
+            ready_harness_models,
         )
         .await
     }
@@ -753,6 +756,7 @@ impl SessionTaskService {
             &context.id,
             context.session_agent,
             &context.available_agent_kinds,
+            &context.harness_models.ready_models(),
         )
         .await;
         let auto_commit_reasoning_level =

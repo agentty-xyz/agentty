@@ -21,7 +21,7 @@ use crate::app::assist::{
     AssistContext, AssistPolicy, FailureTracker, append_assist_header, format_detail_lines,
     run_agent_assist,
 };
-use crate::app::service::SessionUpdateVersionMap;
+use crate::app::service::{HarnessModels, SessionUpdateVersionMap};
 use crate::app::session::{Clock, SessionError};
 use crate::app::sync::SyncMainEventContext;
 use crate::app::{AppEvent, AppServices, ProjectManager, SessionManager};
@@ -164,6 +164,7 @@ struct MergeTaskInput {
     folder: PathBuf,
     fs_client: Arc<dyn FsClient>,
     git_client: Arc<dyn GitClient>,
+    harness_models: HarnessModels,
     id: SessionId,
     run_client: Arc<dyn RunClient>,
     repo_root: PathBuf,
@@ -204,6 +205,7 @@ struct RebaseAssistInput {
     folder: PathBuf,
     fs_client: Arc<dyn FsClient>,
     git_client: Arc<dyn GitClient>,
+    harness_models: HarnessModels,
     id: SessionId,
     run_client: Arc<dyn RunClient>,
     rebase_plan: RebasePlan,
@@ -238,6 +240,9 @@ pub(super) struct RebaseCommandInput {
     pub(super) fs_client: Arc<dyn FsClient>,
     /// Git boundary used for rebase commands.
     pub(super) git_client: Arc<dyn GitClient>,
+    /// Harness models a Fast default naming one needs ready before
+    /// pre-rebase auto-commit prompts use it.
+    pub(super) harness_models: HarnessModels,
     /// Session identifier receiving transcript/status updates.
     pub(super) id: SessionId,
     /// Provider-neutral boundary used by pre-rebase auto-commit prompts.
@@ -795,6 +800,7 @@ impl SessionMergeService {
             folder,
             fs_client,
             git_client,
+            harness_models: services.harness_models(),
             id: id.clone(),
             run_client: services.session_run_client(&id),
             repo_root,
@@ -1484,6 +1490,7 @@ impl SessionManager {
             folder: input.folder.clone(),
             fs_client: Arc::clone(&input.fs_client),
             git_client: Arc::clone(&input.git_client),
+            harness_models: input.harness_models.clone(),
             id: input.id.clone(),
             run_client: Arc::clone(&input.run_client),
             rebase_plan: RebasePlan::target(input.base_branch.clone()),
@@ -1906,6 +1913,7 @@ impl SessionManager {
             folder,
             fs_client,
             git_client,
+            harness_models,
             id,
             run_client,
             review_request_client,
@@ -1949,6 +1957,7 @@ impl SessionManager {
                 folder: folder.clone(),
                 fs_client: Arc::clone(&fs_client),
                 git_client: Arc::clone(&git_client),
+                harness_models,
                 id: id.clone(),
                 run_client: Arc::clone(&run_client),
                 rebase_plan,
@@ -2086,6 +2095,7 @@ impl SessionManager {
             &input.id,
             input.session_agent,
             &input.available_agent_kinds,
+            &input.harness_models.ready_models(),
         )
         .await;
         let auto_commit_reasoning_level =
@@ -3012,6 +3022,7 @@ impl SessionManager {
             db: input.db.clone(),
             folder: input.folder.clone(),
             git_client: Arc::clone(&input.git_client),
+            harness_models: input.harness_models.clone(),
             id: input.id.to_string(),
             run_client: Arc::clone(&input.run_client),
             session_agent: input.session_agent,

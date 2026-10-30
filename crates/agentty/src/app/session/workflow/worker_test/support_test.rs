@@ -23,6 +23,7 @@ use super::super::super::published_branch;
 use super::super::{ScheduledSessionCommand, SessionCommand, SessionWorkerContext, TurnMetadata};
 use crate::app::AppEvent;
 use crate::app::branch_publish::BranchPublishTaskSession;
+use crate::app::service::HarnessModels;
 use crate::app::session::SessionError;
 use crate::app::test_support::TestSessionRunFactory;
 use crate::domain::agent::{AgentKind, AgentModel, AgentSelection, ReasoningLevel, SpeedMode};
@@ -313,6 +314,7 @@ pub(super) fn preparation_test_worker_context(
     SessionWorkerContext {
         app_event_tx: app.services.event_sender(),
         available_agent_kinds: Arc::from(AgentKind::ALL),
+        harness_models: HarnessModels::default(),
         branch_operation_lock: runtime.branch_operation_lock,
         cancel_token: runtime.cancel_token,
         session_run: SessionRunClient::from_channel(
@@ -1494,6 +1496,7 @@ pub(super) fn rebase_assist_worker_harness(
     let context = SessionWorkerContext {
         app_event_tx: mpsc::unbounded_channel().0,
         available_agent_kinds: Arc::from(AgentKind::ALL),
+        harness_models: HarnessModels::default(),
         branch_operation_lock: Arc::new(tokio::sync::Mutex::new(())),
         cancel_token: Arc::new(Mutex::new(CancellationToken::new())),
         session_run: SessionRunClient::from_channel(
@@ -1600,6 +1603,7 @@ pub(super) async fn queue_test_context(
     let context = SessionWorkerContext {
         app_event_tx: mpsc::unbounded_channel().0,
         available_agent_kinds: Arc::from(AgentKind::ALL),
+        harness_models: HarnessModels::default(),
         branch_operation_lock: Arc::new(tokio::sync::Mutex::new(())),
         cancel_token: Arc::new(Mutex::new(CancellationToken::new())),
         session_run: SessionRunClient::from_channel("sess1".to_string(), Arc::new(channel)),
@@ -1633,6 +1637,7 @@ pub(super) async fn queue_helper_context(
     SessionWorkerContext {
         app_event_tx: mpsc::unbounded_channel().0,
         available_agent_kinds: Arc::from(AgentKind::ALL),
+        harness_models: HarnessModels::default(),
         branch_operation_lock: Arc::new(tokio::sync::Mutex::new(())),
         cancel_token: Arc::new(Mutex::new(CancellationToken::new())),
         session_run: SessionRunClient::from_channel(

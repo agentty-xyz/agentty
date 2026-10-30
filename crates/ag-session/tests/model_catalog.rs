@@ -53,10 +53,13 @@ fn provider_catalog_preserves_wire_ids_order_and_defaults() {
             AgentKind::Harness,
             vec![
                 "muse-spark-1.3",
+                "muse-spark-1.3-contributor",
                 "kimi-k3",
                 "kimi-k2.6",
                 "qwen3.8-max",
                 "qwen-plus",
+                "qwen3.8-flash",
+                "qwen3.7-flash",
                 "gpt-6.1-sol",
                 "gpt-6-astra",
                 "gpt-6-luna",

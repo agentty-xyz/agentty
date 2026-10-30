@@ -1150,7 +1150,7 @@ impl App {
             self.clear_review_output(&session_id);
         }
         self.complete_loaded_dialogs(&mut event_batch);
-        self.apply_batch_runtime_updates(&mut event_batch);
+        self.apply_batch_runtime_updates(&mut event_batch).await;
 
         self.apply_batch_session_snapshot_updates(&mut event_batch);
         self.apply_app_event_effects(after_snapshot_effects).await;
@@ -1651,7 +1651,7 @@ impl App {
     }
 
     /// Applies reducer-batch payloads that mutate global app runtime state.
-    fn apply_batch_runtime_updates(&mut self, event_batch: &mut AppEventBatch) {
+    async fn apply_batch_runtime_updates(&mut self, event_batch: &mut AppEventBatch) {
         if let Some(agent_clis) = event_batch.agent_cli_updates.take() {
             self.services.replace_available_agent_clis(agent_clis);
         }
@@ -1659,6 +1659,7 @@ impl App {
             if let AppMode::Prompt { slash_state, .. } = &mut self.mode {
                 slash_state.harness_models.clone_from(&options);
             }
+            self.settings.replace_harness_models(options.clone()).await;
             self.services.replace_harness_model_options(options);
         }
 

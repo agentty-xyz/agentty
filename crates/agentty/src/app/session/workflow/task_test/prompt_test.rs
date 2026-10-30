@@ -14,6 +14,7 @@ use super::super::{
 use super::support::insert_review_session;
 use crate::app::AppEvent;
 use crate::app::assist::AssistContext;
+use crate::app::service::HarnessModels;
 use crate::app::session::SessionError;
 use crate::db::AppRepositories;
 use crate::domain::agent::AgentKind;
@@ -62,6 +63,7 @@ async fn test_handle_auto_commit_stops_on_input_size() {
     let context = AssistContext {
         app_event_tx,
         available_agent_kinds: Arc::from(AgentKind::ALL),
+        harness_models: HarnessModels::default(),
         child_pid: Arc::new(Mutex::new(None)),
         db: database.clone(),
         folder: PathBuf::from("project"),

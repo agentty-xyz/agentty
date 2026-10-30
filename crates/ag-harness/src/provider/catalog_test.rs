@@ -1,8 +1,8 @@
 use std::env;
 
 use super::{
-    ModelConfiguration, ModelConfigurationError, ModelProvider, ModelProviderParseError, kimi,
-    muse, openai_compatible,
+    CostTier, ModelConfiguration, ModelConfigurationError, ModelProvider, ModelProviderParseError,
+    kimi, muse, openai_compatible, qwen,
 };
 use crate::model::{ModelMetadataError, ModelProfile};
 
@@ -59,7 +59,7 @@ fn catalog_exposes_every_provider_and_known_model() {
     );
     assert_eq!(
         ModelProvider::Qwen.known_models(),
-        &["qwen3.8-max", "qwen-plus"]
+        &["qwen3.8-max", "qwen-plus", "qwen3.8-flash", "qwen3.7-flash"]
     );
     assert_eq!(
         ModelProvider::Muse.default_base_url(),
@@ -195,6 +195,14 @@ fn declares_profiles_for_openai_models_and_from_the_compatible_environment() {
     let unlisted = ModelProvider::OpenAi
         .declared_profile("gpt-unlisted", missing_environment)
         .expect("unlisted models read no environment");
+    let qwen_flash = [qwen::QWEN3_8_FLASH, qwen::QWEN3_7_FLASH]
+        .iter()
+        .map(|model| {
+            ModelProvider::Qwen
+                .declared_profile(model, missing_environment)
+                .expect("cataloged models read no environment")
+        })
+        .collect::<Vec<_>>();
     let host_profiled = [
         ModelProvider::Muse,
         ModelProvider::Kimi,
@@ -213,6 +221,108 @@ fn declares_profiles_for_openai_models_and_from_the_compatible_environment() {
     assert!(openai.iter().all(Option::is_some));
     assert_eq!(unlisted, None);
     assert!(host_profiled.iter().all(Option::is_none));
+    for profile in qwen_flash {
+        let profile = profile.expect("Qwen flash models declare a profile");
+        assert_eq!(profile.context_window_tokens(), 1_000_000);
+        assert_eq!(profile.input_token_budget(), 609_774);
+        assert!(profile.input_token_budget() < 991_808);
+    }
+}
+
+#[test]
+fn declares_a_cost_tier_for_every_cataloged_model() {
+    // Arrange
+    let cataloged = ModelProvider::all()
+        .iter()
+        .flat_map(|provider| {
+            provider
+                .known_models()
+                .iter()
+                .map(move |model| (*provider, *model))
+        })
+        .collect::<Vec<_>>();
+
+    // Act
+    let cheap = cataloged
+        .iter()
+        .filter(|(provider, model)| provider.cost_tier(model) == Some(CostTier::Cheap))
+        .map(|(_, model)| *model)
+        .collect::<Vec<_>>();
+    let premium = cataloged
+        .iter()
+        .filter(|(provider, model)| provider.cost_tier(model) == Some(CostTier::Premium))
+        .map(|(_, model)| *model)
+        .collect::<Vec<_>>();
+
+    // Assert
+    assert!(
+        cataloged
+            .iter()
+            .all(|(provider, model)| provider.cost_tier(model).is_some())
+    );
+    assert_eq!(
+        cheap,
+        [
+            "muse-spark-1.3-contributor",
+            "qwen-plus",
+            "qwen3.8-flash",
+            "qwen3.7-flash",
+            "gpt-6-luna"
+        ]
+    );
+    assert_eq!(premium, ["kimi-k3", "gpt-6-astra"]);
+    assert_eq!(
+        ModelProvider::Muse.cost_tier(muse::MUSE_SPARK_1_3),
+        Some(CostTier::Standard)
+    );
+    assert_eq!(
+        ModelProvider::OpenAiCompatible.cost_tier("qwen3:latest"),
+        Some(CostTier::Local)
+    );
+    assert_eq!(ModelProvider::Qwen.cost_tier("qwen-unlisted"), None);
+    assert_eq!(ModelProvider::Kimi.cost_tier(muse::MUSE_SPARK_1_3), None);
+}
+
+#[test]
+fn cost_tiers_order_and_display_from_local_to_premium() {
+    // Arrange
+    let tiers = [
+        CostTier::Premium,
+        CostTier::Local,
+        CostTier::Standard,
+        CostTier::Cheap,
+    ];
+
+    // Act
+    let mut sorted = tiers;
+    sorted.sort();
+    let labels = sorted.map(|tier| tier.to_string());
+
+    // Assert
+    assert_eq!(labels, ["local", "cheap", "standard", "premium"]);
+}
+
+#[test]
+fn only_the_muse_contributor_tier_trains_on_prompts() {
+    // Arrange
+    let cataloged = ModelProvider::all().iter().flat_map(|provider| {
+        provider
+            .known_models()
+            .iter()
+            .map(move |model| (*provider, *model))
+    });
+
+    // Act
+    let training = cataloged
+        .filter(|(provider, model)| provider.trains_on_prompts(model))
+        .collect::<Vec<_>>();
+
+    // Assert
+    assert_eq!(
+        training,
+        [(ModelProvider::Muse, muse::MUSE_SPARK_1_3_CONTRIBUTOR)]
+    );
+    assert!(!ModelProvider::Kimi.trains_on_prompts(muse::MUSE_SPARK_1_3_CONTRIBUTOR));
 }
 
 #[test]

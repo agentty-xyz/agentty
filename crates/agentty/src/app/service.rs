@@ -48,7 +48,7 @@ pub struct AppServices {
     fs_client: Arc<dyn FsClient>,
     git_client: Arc<dyn GitClient>,
     harness_model_probe: Arc<dyn AgentAvailabilityProbe>,
-    harness_models: Arc<Mutex<HarnessModelCatalog>>,
+    harness_models: HarnessModels,
     agent_profile_catalog_client: Arc<dyn AgentCatalogClient>,
     repositories: AppRepositories,
     review_request_client: Arc<dyn ReviewRequestClient>,
@@ -119,7 +119,7 @@ impl AppServices {
             harness_model_probe: Arc::new(StaticAgentAvailabilityProbe {
                 available_agent_kinds: Vec::new(),
             }),
-            harness_models: Arc::default(),
+            harness_models: HarnessModels::default(),
             run_client,
             run_worker,
             session_run_factory,
@@ -139,8 +139,14 @@ impl AppServices {
         catalog: HarnessModelCatalog,
         probe: Arc<dyn AgentAvailabilityProbe>,
     ) {
-        self.harness_models = Arc::new(Mutex::new(catalog));
+        self.with_harness_models(|current| *current = catalog);
         self.harness_model_probe = probe;
+    }
+
+    /// Returns the shared harness model list, which background workflows read
+    /// when they start utility work.
+    pub(crate) fn harness_models(&self) -> HarnessModels {
+        self.harness_models.clone()
     }
 
     /// Returns whether and on which model this launch offers Harness
@@ -179,15 +185,9 @@ impl AppServices {
         });
     }
 
-    /// Runs `action` on the shared harness catalog, which stays usable
-    /// after a panic.
+    /// Runs `action` on the shared harness catalog.
     fn with_harness_models<T>(&self, action: impl FnOnce(&mut HarnessModelCatalog) -> T) -> T {
-        action(
-            &mut self
-                .harness_models
-                .lock()
-                .unwrap_or_else(PoisonError::into_inner),
-        )
+        self.harness_models.with_catalog(action)
     }
 
     /// Replaces the optional telemetry sender before session work starts.
@@ -638,6 +638,30 @@ impl AppServices {
 
 /// Shared per-app session redraw version counters keyed by session id.
 pub(crate) type SessionUpdateVersionMap = Arc<Mutex<HashMap<SessionId, u64>>>;
+
+/// Shared handle to the harness models this launch lists, refreshed in place,
+/// so background workflows check a model's readiness when they use it.
+#[derive(Clone, Default)]
+pub(crate) struct HarnessModels(Arc<Mutex<HarnessModelCatalog>>);
+
+impl HarnessModels {
+    /// Returns the listed harness models that can run a turn now.
+    pub(crate) fn ready_models(&self) -> Vec<AgentModel> {
+        self.with_catalog(|catalog| {
+            catalog
+                .options()
+                .iter()
+                .filter(|option| option.is_ready())
+                .map(|option| option.model)
+                .collect()
+        })
+    }
+
+    /// Runs `action` on the shared catalog, which stays usable after a panic.
+    fn with_catalog<T>(&self, action: impl FnOnce(&mut HarnessModelCatalog) -> T) -> T {
+        action(&mut self.0.lock().unwrap_or_else(PoisonError::into_inner))
+    }
+}
 
 /// External clients and cached machine-scoped availability injected into
 /// [`AppServices`].

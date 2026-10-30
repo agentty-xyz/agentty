@@ -1,24 +1,25 @@
 use crate::domain::agent::{
-    AgentModel, HarnessModelOption, HarnessModelStatus, ModelBilling, ServedModel,
+    AgentModel, HarnessModelOption, HarnessModelStatus, ModelCost, ServedModel,
 };
 use crate::domain::harness::{HarnessAvailability, HarnessModelCatalog};
 
 /// Returns one hosted option with `status`.
 fn kimi(status: HarnessModelStatus) -> HarnessModelOption {
     HarnessModelOption {
-        billing: ModelBilling::Paid,
         context_window: None,
+        cost: ModelCost::Premium,
         loaded_context_window: None,
         model: AgentModel::KimiK3,
         provider: "Kimi".to_string(),
         status,
+        trains_on_prompts: false,
     }
 }
 
 /// Returns one ready local option.
 fn local_qwen() -> HarnessModelOption {
     HarnessModelOption {
-        billing: ModelBilling::Local,
+        cost: ModelCost::Local,
         model: AgentModel::OpenAiCompatible(ServedModel::new("qwen3:latest").expect("name")),
         provider: "Ollama".to_string(),
         ..kimi(HarnessModelStatus::Ready)

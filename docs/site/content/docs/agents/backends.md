@@ -82,15 +82,24 @@ provider:
 
 <a id="backends-harness-model"></a> Type `/model` in a Harness session to open its model
 list. Local models come first, marked `[local]` and free; hosted models follow, marked
-`[paid]`, with the OpenAI models last:
+`[paid]` with their price class, with the OpenAI models last:
 
 ```text
-[local] qwen3:latest   free · Ollama · runs 32k ctx
-[local] gemma:latest   free · Ollama · no tool calls
-[paid] muse-spark-1.3  Muse · 1024k ctx
-[paid] kimi-k3         Kimi · needs KIMI_API_KEY
-[paid] gpt-6.1-sol     OpenAI · needs OPENAI_API_KEY
+[local] qwen3:latest              free · Ollama · runs 32k ctx
+[local] gemma:latest              free · Ollama · no tool calls
+[paid] muse-spark-1.3             standard · Muse · 1024k ctx
+[paid] muse-spark-1.3-contributor cheap · Muse · trains on prompts · 1024k ctx
+[paid] kimi-k3                    premium · Kimi · needs KIMI_API_KEY
+[paid] qwen3.8-flash              cheap · Qwen · 976k ctx
+[paid] gpt-6.1-sol                standard · OpenAI · needs OPENAI_API_KEY
 ```
+
+The price class comes from each provider's published list price per million output
+tokens: `cheap` costs at most $2.50, `premium` at least $15, and `standard` lies
+between. The cheap models are `muse-spark-1.3-contributor`, `qwen-plus`,
+`qwen3.8-flash`, `qwen3.7-flash`, and `gpt-6-luna`; they suit simple work such as titles
+and commit messages. Meta may train on the prompts and completions of
+`muse-spark-1.3-contributor`, its discounted tier, so the row says `trains on prompts`.
 
 Rows that cannot run a turn, such as a model without tool calls or a provider without
 its key, say what is missing and stay unselected when you press `Enter`. The list is
@@ -183,6 +192,12 @@ never list them.
   set and its agent CLI is installed, otherwise the session's harness model. Focused
   review likewise falls back to the session's harness model when the review model's CLI
   is not installed.
+- <a id="backends-harness-fast-model"></a> With the flag, **Settings → Default Fast
+  Model** also lists every ready harness model with its price class, such as
+  `harness/qwen3.8-flash · cheap`. Choosing one runs commit messages and titles on it
+  for every session type of the project. Agentty never picks a harness model for this on
+  its own; while the chosen model is not ready, or without the flag, the Fast default
+  falls back as if unset.
 - History is stored per session under `~/.agentty/harness/` and removed with the
   session. Image attachments are not supported yet; a prompt with pasted images fails
   before reaching the model.
@@ -190,9 +205,9 @@ never list them.
   context fitting, corrections, and tool activity, is kept in the `harness_turn_report`
   table of Agentty's database for later analysis, including after the session is
   deleted.
-- Switching away from `kimi-k3`, `kimi-k2.6`, or `qwen3.8-max` is rejected once the
-  session has their reasoning history. Switching to another provider needs only that
-  provider's key.
+- Switching away from `kimi-k3`, `kimi-k2.6`, `qwen3.8-max`, or `qwen3.8-flash` is
+  rejected once the session has their reasoning history. Switching to another provider
+  needs only that provider's key.
 
 ## Subagent Limits
 

@@ -15,7 +15,7 @@ use ag_harness::model::{
     ModelCapabilities, ModelClient, ModelCompletion, ModelMetadata, ModelProfile, ModelRegistry,
     ModelRequest, ReasoningEffort,
 };
-use ag_harness::provider::{LocalServerKind, ModelConfiguration, ModelProvider};
+use ag_harness::provider::{CostTier, LocalServerKind, ModelConfiguration, ModelProvider};
 use ag_harness::recovery::ExecutionIdentity;
 use ag_harness::{
     Harness, Model, ModelError, OutputSchema, Repository, RepositoryError, Tool, ToolPolicy,
@@ -24,7 +24,7 @@ use ag_harness::{
 use ag_protocol::{ProtocolRequestProfile, SchemaRequiredPolicy, protocol_output_schema};
 use ag_session::{
     AgentKind, AgentModel, HarnessModelOption, HarnessModelStatus, MINIMUM_RUNNING_CONTEXT_WINDOW,
-    ModelBilling, ServedModel,
+    ModelCost, ServedModel,
 };
 use ag_telemetry::{Context, TraceContextExt as _};
 use async_trait::async_trait;
@@ -190,12 +190,13 @@ async fn local_models(environment: &BTreeMap<String, String>) -> Vec<HarnessMode
         })
         .display_name();
     let local_option = |model: AgentModel, status: HarnessModelStatus| HarnessModelOption {
-        billing: ModelBilling::Local,
         context_window: None,
+        cost: ModelCost::Local,
         loaded_context_window: None,
         model,
         provider: provider.to_string(),
         status,
+        trains_on_prompts: false,
     };
     let mut options = inventory
         .map_or_else(Vec::new, |inventory| inventory.models)
@@ -237,22 +238,35 @@ fn hosted_model(
 ) -> Option<HarnessModelOption> {
     let selection = ModelSelection::resolve_known(model.as_str()).ok()?;
     let provider = selection.provider;
+    let cost = model_cost(provider.cost_tier(&selection.model)?);
     let status = missing_configuration(provider, environment)
         .map_or(HarnessModelStatus::Ready, |variable| {
             HarnessModelStatus::MissingConfiguration(variable)
         });
 
     Some(HarnessModelOption {
-        billing: ModelBilling::Paid,
         context_window: selection
             .profile(environment, None)
             .ok()
             .map(ModelProfile::context_window_tokens),
+        cost,
         loaded_context_window: None,
         model,
         provider: provider_display_name(provider).to_string(),
         status,
+        trains_on_prompts: provider.trains_on_prompts(&selection.model),
     })
+}
+
+/// Returns the cost Agentty shows for a model of the harness catalog's
+/// price class `tier`.
+fn model_cost(tier: CostTier) -> ModelCost {
+    match tier {
+        CostTier::Local => ModelCost::Local,
+        CostTier::Cheap => ModelCost::Cheap,
+        CostTier::Standard => ModelCost::Standard,
+        CostTier::Premium => ModelCost::Premium,
+    }
 }
 
 /// Returns the name users know a hosted provider by.

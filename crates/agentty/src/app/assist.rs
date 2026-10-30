@@ -8,7 +8,7 @@ use ag_worker::RunClient;
 use tokio::sync::mpsc;
 
 use crate::app::AppEvent;
-use crate::app::service::SessionUpdateVersionMap;
+use crate::app::service::{HarnessModels, SessionUpdateVersionMap};
 use crate::app::session::{RunAgentAssistTaskInput, SessionError, SessionTaskService};
 use crate::domain::agent::{AgentKind, AgentSelection};
 use crate::domain::session_message::SessionTranscript;
@@ -38,6 +38,9 @@ pub(super) struct AssistContext {
     pub(super) folder: PathBuf,
     /// Git boundary used for commit/rebase operations.
     pub(super) git_client: Arc<dyn GitClient>,
+    /// Harness models a Fast default naming one needs ready before utility
+    /// prompts use it.
+    pub(super) harness_models: HarnessModels,
     /// Session identifier receiving assist output updates.
     pub(super) id: String,
     /// Provider-neutral boundary for isolated structured assist prompts.
