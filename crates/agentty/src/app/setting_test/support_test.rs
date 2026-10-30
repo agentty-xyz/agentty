@@ -98,6 +98,7 @@ impl SettingsTestHarness {
                 default_smart_reasoning_level: ReasoningLevel::High,
                 default_smart_selection: default_selection,
                 default_smart_speed_mode: SpeedMode::Normal,
+                fast_harness_models: Vec::new(),
                 include_coauthored_by_agentty: false,
                 launch_configuration: String::new(),
                 theme: ColorTheme::Current,
@@ -276,6 +277,7 @@ pub(super) async fn settings_manager(
     let manager = SettingsManager::from_repositories(
         services.db().clone(),
         services.available_agent_kinds(),
+        services.harness_model_options(),
         project_id,
     )
     .await;

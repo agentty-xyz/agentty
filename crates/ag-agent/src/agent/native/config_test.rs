@@ -5,18 +5,18 @@ use std::path::PathBuf;
 
 use ag_contracts::{PermissionMode, ProviderCallBudget, ReasoningLevel};
 use ag_harness::model::{ModelProfile, ModelRequest, ReasoningEffort};
-use ag_harness::provider::{ModelConfiguration, ModelProvider};
+use ag_harness::provider::{CostTier, ModelConfiguration, ModelProvider};
 use ag_harness::{Model, TurnInput};
 use ag_protocol::ProtocolRequestProfile;
-use ag_session::{AgentModel, HarnessModelStatus, ModelBilling, ServedModel};
+use ag_session::{AgentModel, HarnessModelStatus, ModelCost, ServedModel};
 use serde_json::json;
 use wiremock::matchers::{method, path};
 use wiremock::{Mock, MockServer, ResponseTemplate};
 
 use super::{
     BudgetedModel, FALLBACK_MODEL_PROFILE, ModelSelection, NativeHarnessConfig, ResumeOnlyModel,
-    bash_environment, harness_models, output_schema, provider_display_name, reasoning_effort,
-    repository, running_context_window, turn_options, unicode_environment,
+    bash_environment, harness_models, model_cost, output_schema, provider_display_name,
+    reasoning_effort, repository, running_context_window, turn_options, unicode_environment,
 };
 use crate::agent::model_profile;
 
@@ -70,75 +70,53 @@ async fn harness_models_list_local_then_paid_models_with_their_status() {
     // Assert
     let summary = options
         .iter()
-        .map(|option| (option.model, option.billing, option.status))
+        .map(|option| (option.model, option.cost, option.status))
         .collect::<Vec<_>>();
+    let dashscope = HarnessModelStatus::MissingConfiguration("DASHSCOPE_API_KEY");
+    let kimi = HarnessModelStatus::MissingConfiguration("KIMI_BASE_URL");
+    let openai = HarnessModelStatus::MissingConfiguration("OPENAI_API_KEY");
+    let ready = HarnessModelStatus::Ready;
     assert_eq!(
         summary,
         vec![
-            (
-                served("qwen3:latest"),
-                ModelBilling::Local,
-                HarnessModelStatus::Ready
-            ),
-            (
-                AgentModel::MuseSpark13,
-                ModelBilling::Paid,
-                HarnessModelStatus::Ready
-            ),
-            (
-                AgentModel::KimiK3,
-                ModelBilling::Paid,
-                HarnessModelStatus::MissingConfiguration("KIMI_BASE_URL")
-            ),
-            (
-                AgentModel::KimiK26,
-                ModelBilling::Paid,
-                HarnessModelStatus::MissingConfiguration("KIMI_BASE_URL")
-            ),
-            (
-                AgentModel::Qwen38Max,
-                ModelBilling::Paid,
-                HarnessModelStatus::MissingConfiguration("DASHSCOPE_API_KEY")
-            ),
-            (
-                AgentModel::QwenPlus,
-                ModelBilling::Paid,
-                HarnessModelStatus::MissingConfiguration("DASHSCOPE_API_KEY")
-            ),
-            (
-                AgentModel::Gpt61Sol,
-                ModelBilling::Paid,
-                HarnessModelStatus::MissingConfiguration("OPENAI_API_KEY")
-            ),
-            (
-                AgentModel::Gpt6Astra,
-                ModelBilling::Paid,
-                HarnessModelStatus::MissingConfiguration("OPENAI_API_KEY")
-            ),
-            (
-                AgentModel::Gpt6Luna,
-                ModelBilling::Paid,
-                HarnessModelStatus::MissingConfiguration("OPENAI_API_KEY")
-            ),
-            (
-                AgentModel::Gpt56Terra,
-                ModelBilling::Paid,
-                HarnessModelStatus::MissingConfiguration("OPENAI_API_KEY")
-            ),
+            (served("qwen3:latest"), ModelCost::Local, ready),
+            (AgentModel::MuseSpark13, ModelCost::Standard, ready),
+            (AgentModel::MuseSpark13Contributor, ModelCost::Cheap, ready),
+            (AgentModel::KimiK3, ModelCost::Premium, kimi),
+            (AgentModel::KimiK26, ModelCost::Standard, kimi),
+            (AgentModel::Qwen38Max, ModelCost::Standard, dashscope),
+            (AgentModel::QwenPlus, ModelCost::Cheap, dashscope),
+            (AgentModel::Qwen38Flash, ModelCost::Cheap, dashscope),
+            (AgentModel::Qwen37Flash, ModelCost::Cheap, dashscope),
+            (AgentModel::Gpt61Sol, ModelCost::Standard, openai),
+            (AgentModel::Gpt6Astra, ModelCost::Premium, openai),
+            (AgentModel::Gpt6Luna, ModelCost::Cheap, openai),
+            (AgentModel::Gpt56Terra, ModelCost::Standard, openai),
         ]
     );
     assert_eq!(options[0].provider, "OpenAI-compatible server");
     assert_eq!(options[1].provider, "Muse");
-    assert_eq!(options[2].provider, "Kimi");
-    assert_eq!(options[4].provider, "Qwen");
-    assert_eq!(options[6].provider, "OpenAI");
+    assert_eq!(options[3].provider, "Kimi");
+    assert_eq!(options[5].provider, "Qwen");
+    assert_eq!(options[9].provider, "OpenAI");
+    // Only Muse's contributor tier lets the provider train on prompts.
+    assert_eq!(
+        options
+            .iter()
+            .filter(|option| option.trains_on_prompts)
+            .map(|option| option.model)
+            .collect::<Vec<_>>(),
+        [AgentModel::MuseSpark13Contributor]
+    );
+    // The harness catalog declares the Qwen flash window.
+    assert_eq!(options[7].context_window, Some(1_000_000));
     assert_eq!(
         options[1].context_window,
         model_profile::declared(AgentModel::MuseSpark13).map(ModelProfile::context_window_tokens)
     );
     // Shared Codex models show the window the harness runs them with.
     assert_eq!(
-        options[6].context_window,
+        options[9].context_window,
         ModelProvider::OpenAi
             .declared_profile("gpt-6.1-sol", |_| Err(std::env::VarError::NotPresent))
             .expect("OpenAI profiles read no environment")
@@ -156,6 +134,32 @@ fn providers_have_display_names() {
             .map(|provider| provider_display_name(*provider))
             .collect::<Vec<_>>(),
         ["Muse", "Kimi", "Qwen", "OpenAI", "OpenAI-compatible server"]
+    );
+}
+
+#[test]
+/// Shows every catalog price class as the matching model cost.
+fn catalog_cost_tiers_map_to_model_costs() {
+    // Arrange
+    let tiers = [
+        CostTier::Local,
+        CostTier::Cheap,
+        CostTier::Standard,
+        CostTier::Premium,
+    ];
+
+    // Act
+    let costs = tiers.map(model_cost);
+
+    // Assert
+    assert_eq!(
+        costs,
+        [
+            ModelCost::Local,
+            ModelCost::Cheap,
+            ModelCost::Standard,
+            ModelCost::Premium
+        ]
     );
 }
 
@@ -196,7 +200,7 @@ async fn harness_models_list_discovered_ollama_models() {
     // Assert
     let local = options
         .iter()
-        .filter(|option| option.billing == ModelBilling::Local)
+        .filter(|option| !option.cost.is_paid())
         .collect::<Vec<_>>();
     assert_eq!(local.len(), 2);
     assert_eq!(local[0].model, served("qwen3:latest"));
@@ -448,16 +452,16 @@ fn registrations_declare_revision_and_per_model_context_profiles() {
             .registry(&environment, None, None)
             .expect("registry");
         let registration = registry.resolve(&selection.key()).expect("registration");
-        let expected = if provider == ModelProvider::OpenAi {
-            provider
-                .declared_profile(model, |_| Err(std::env::VarError::NotPresent))
-                .expect("OpenAI profiles read no environment")
-        } else {
-            AgentModel::parse_persisted(model)
-                .ok()
-                .and_then(model_profile::declared)
-        }
-        .unwrap_or(FALLBACK_MODEL_PROFILE);
+        // The harness catalog's own profile wins over Agentty's fitted one.
+        let expected = provider
+            .declared_profile(model, |_| Err(std::env::VarError::NotPresent))
+            .expect("hosted catalog profiles read no environment")
+            .or_else(|| {
+                AgentModel::parse_persisted(model)
+                    .ok()
+                    .and_then(model_profile::declared)
+            })
+            .unwrap_or(FALLBACK_MODEL_PROFILE);
         assert_eq!(registration.identity().revision(), "agentty-native-2");
         assert_eq!(registration.capabilities().profile, expected, "{model}");
     }

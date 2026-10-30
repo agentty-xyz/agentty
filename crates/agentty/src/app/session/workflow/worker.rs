@@ -505,8 +505,9 @@ impl ag_worker::WorkerHost for SessionWorkerHost {
 /// Shared state threaded through all worker turn executions.
 pub(super) struct SessionWorkerContext {
     pub(super) app_event_tx: mpsc::UnboundedSender<AppEvent>,
-    /// Locally installed agent CLIs that title and auto-commit utility
-    /// prompts may target.
+    /// Agent kinds that title and auto-commit utility prompts may target:
+    /// installed CLIs, plus Harness when this launch has a ready harness
+    /// model.
     pub(super) available_agent_kinds: Arc<[AgentKind]>,
     /// Serializes post-turn publish ownership with queued branch operations.
     pub(super) branch_operation_lock: Arc<tokio::sync::Mutex<()>>,
@@ -1251,7 +1252,7 @@ impl SessionWorkerService {
 
         let context = SessionWorkerContext {
             app_event_tx: services.event_sender(),
-            available_agent_kinds: services.available_agent_kinds().into(),
+            available_agent_kinds: services.utility_agent_kinds().into(),
             branch_operation_lock: Arc::clone(&runtime.branch_operation_lock),
             cancel_token: Arc::clone(&runtime.cancel_token),
             session_run,

@@ -11,6 +11,10 @@ fn declared_profiles_preserve_proactive_compaction_budgets() {
     let codex_models = AgentKind::Codex.models();
     let harness_models = [
         (AgentModel::MuseSpark13, (1_048_576, 230_107, 818_469)),
+        (
+            AgentModel::MuseSpark13Contributor,
+            (1_048_576, 230_107, 818_469),
+        ),
         (AgentModel::KimiK3, (1_048_576, 223_112, 825_464)),
         (AgentModel::KimiK26, (262_144, 55_778, 206_366)),
         (AgentModel::Qwen38Max, (1_000_000, 204_643, 795_357)),
@@ -35,9 +39,16 @@ fn declared_profiles_preserve_proactive_compaction_budgets() {
         assert_eq!(profile.reserved_tokens(), expected.1, "{model:?}");
         assert_eq!(profile.input_token_budget(), expected.2, "{model:?}");
     }
+    // The harness catalog declares the Qwen flash profiles itself.
+    let catalog_profiled = [AgentModel::Qwen38Flash, AgentModel::Qwen37Flash];
     assert_eq!(
         AgentKind::Harness.models().len(),
-        harness_models.len() + codex_models.len() - 1
+        harness_models.len() + catalog_profiled.len() + codex_models.len() - 1
+    );
+    assert!(
+        catalog_profiled
+            .iter()
+            .all(|model| declared(*model).is_none())
     );
     assert_eq!(
         declared(AgentModel::OpenAiCompatible(ServedModel::CONFIGURED)),
@@ -56,12 +67,14 @@ fn declared_profiles_preserve_proactive_compaction_budgets() {
 #[test]
 fn harness_models_weigh_requests_with_measured_estimators() {
     // Arrange
-    // The harness profiles the shared Codex models from its provider catalog
-    // and served OpenAI-compatible models from the server or environment.
+    // The harness profiles the shared Codex models and the Qwen flash models
+    // from its provider catalog, and served OpenAI-compatible models from the
+    // server or environment.
     let harness_models = AgentKind::Harness
         .models()
         .iter()
         .filter(|model| !AgentKind::Codex.supports_model(**model))
+        .filter(|model| !matches!(model, AgentModel::Qwen38Flash | AgentModel::Qwen37Flash))
         .collect::<Vec<_>>();
 
     // Act

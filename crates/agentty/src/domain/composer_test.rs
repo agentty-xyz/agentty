@@ -11,7 +11,7 @@ use super::{
     insert_prompt_local_image_at, prompt_slash_option_count, resolve_prompt_slash_selection,
 };
 use crate::domain::agent::{
-    AgentKind, AgentModel, AgentSelection, HarnessModelOption, HarnessModelStatus, ModelBilling,
+    AgentKind, AgentModel, AgentSelection, HarnessModelOption, HarnessModelStatus, ModelCost,
     ReasoningLevel, ResponseStyle, ServedModel,
 };
 use crate::domain::input::{INPUT_HISTORY_LIMIT, InputState};
@@ -979,17 +979,18 @@ fn test_style_stage_lists_descriptions_and_returns_selected_style() {
 /// Returns one harness model option.
 fn harness_option(
     model: AgentModel,
-    billing: ModelBilling,
+    cost: ModelCost,
     provider: &str,
     status: HarnessModelStatus,
 ) -> HarnessModelOption {
     HarnessModelOption {
-        billing,
         context_window: None,
+        cost,
         loaded_context_window: None,
         model,
         provider: provider.to_string(),
         status,
+        trains_on_prompts: false,
     }
 }
 
@@ -1020,7 +1021,7 @@ fn labeled_harness_models() -> Vec<HarnessModelOption> {
             loaded_context_window: Some(32_768),
             ..harness_option(
                 served("qwen3:latest"),
-                ModelBilling::Local,
+                ModelCost::Local,
                 "Ollama",
                 HarnessModelStatus::Ready,
             )
@@ -1029,14 +1030,14 @@ fn labeled_harness_models() -> Vec<HarnessModelOption> {
             loaded_context_window: Some(4096),
             ..harness_option(
                 served("llama3.2:3b"),
-                ModelBilling::Local,
+                ModelCost::Local,
                 "Ollama",
                 HarnessModelStatus::Ready,
             )
         },
         harness_option(
             served("gemma:latest"),
-            ModelBilling::Local,
+            ModelCost::Local,
             "Ollama",
             HarnessModelStatus::NoToolSupport,
         ),
@@ -1044,14 +1045,23 @@ fn labeled_harness_models() -> Vec<HarnessModelOption> {
             context_window: Some(262_144),
             ..harness_option(
                 AgentModel::MuseSpark13,
-                ModelBilling::Paid,
+                ModelCost::Standard,
+                "Muse",
+                HarnessModelStatus::Ready,
+            )
+        },
+        HarnessModelOption {
+            trains_on_prompts: true,
+            ..harness_option(
+                AgentModel::MuseSpark13Contributor,
+                ModelCost::Cheap,
                 "Muse",
                 HarnessModelStatus::Ready,
             )
         },
         harness_option(
             AgentModel::KimiK3,
-            ModelBilling::Paid,
+            ModelCost::Premium,
             "Kimi",
             HarnessModelStatus::MissingConfiguration("KIMI_API_KEY"),
         ),
@@ -1059,14 +1069,14 @@ fn labeled_harness_models() -> Vec<HarnessModelOption> {
             context_window: Some(512),
             ..harness_option(
                 served("tiny"),
-                ModelBilling::Local,
+                ModelCost::Local,
                 "OpenAI-compatible server",
                 HarnessModelStatus::Ready,
             )
         },
         harness_option(
             served("plain"),
-            ModelBilling::Local,
+            ModelCost::Local,
             "OpenAI-compatible server",
             HarnessModelStatus::Ready,
         ),
@@ -1074,7 +1084,7 @@ fn labeled_harness_models() -> Vec<HarnessModelOption> {
 }
 
 #[test]
-fn harness_model_stage_labels_local_free_and_paid_models() {
+fn harness_model_stage_labels_free_local_models_and_paid_price_classes() {
     // Arrange
     let slash_state = harness_model_stage(labeled_harness_models(), 0);
 
@@ -1109,8 +1119,13 @@ fn harness_model_stage_labels_local_free_and_paid_models() {
                 "free · Ollama · runs 4k ctx, needs 16k"
             ),
             ("local", "gemma:latest", "free · Ollama · no tool calls"),
-            ("paid", "muse-spark-1.3", "Muse · 256k ctx"),
-            ("paid", "kimi-k3", "Kimi · needs KIMI_API_KEY"),
+            ("paid", "muse-spark-1.3", "standard · Muse · 256k ctx"),
+            (
+                "paid",
+                "muse-spark-1.3-contributor",
+                "cheap · Muse · trains on prompts"
+            ),
+            ("paid", "kimi-k3", "premium · Kimi · needs KIMI_API_KEY"),
             (
                 "local",
                 "tiny",
@@ -1128,7 +1143,7 @@ fn harness_model_stage_labels_local_free_and_paid_models() {
     assert!(
         metadata_columns
             .iter()
-            .all(|column| *column == "paid".len() + "muse-spark-1.3".len())
+            .all(|column| *column == "paid".len() + "muse-spark-1.3-contributor".len())
     );
     assert!(
         suggestion_list
@@ -1144,13 +1159,13 @@ fn harness_model_stage_selects_only_models_that_can_run() {
     let harness_models = vec![
         harness_option(
             served("qwen3:latest"),
-            ModelBilling::Local,
+            ModelCost::Local,
             "Ollama",
             HarnessModelStatus::Ready,
         ),
         harness_option(
             AgentModel::KimiK3,
-            ModelBilling::Paid,
+            ModelCost::Premium,
             "Kimi",
             HarnessModelStatus::MissingConfiguration("KIMI_API_KEY"),
         ),
@@ -1187,7 +1202,7 @@ fn harness_model_stage_explains_how_to_add_local_models() {
     let slash_state = harness_model_stage(
         vec![harness_option(
             AgentModel::MuseSpark13,
-            ModelBilling::Paid,
+            ModelCost::Standard,
             "Muse",
             HarnessModelStatus::Ready,
         )],
@@ -1238,7 +1253,7 @@ fn harness_model_stage_lists_the_paid_catalog_before_discovery() {
         selection,
         Some(PromptSuggestionSelection::Model(AgentSelection::new(
             AgentKind::Harness,
-            AgentModel::KimiK3,
+            AgentModel::MuseSpark13Contributor,
         )))
     );
 }

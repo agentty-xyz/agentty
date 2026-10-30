@@ -218,8 +218,8 @@ pub(super) struct RebaseCommandInput {
     pub(super) app_event_tx: mpsc::UnboundedSender<AppEvent>,
     /// Agent submission mode used when rebase conflicts need edits.
     pub(super) assist_mode: RebaseAssistMode,
-    /// Locally installed agent CLIs that pre-rebase auto-commit prompts may
-    /// target.
+    /// Agent kinds that pre-rebase auto-commit prompts may target: installed
+    /// CLIs, plus Harness when this launch has a ready harness model.
     pub(super) available_agent_kinds: Arc<[AgentKind]>,
     /// Stored base branch for the session worktree.
     pub(super) base_branch: String,
@@ -787,7 +787,7 @@ impl SessionMergeService {
 
         let merge_task_input = MergeTaskInput {
             app_event_tx,
-            available_agent_kinds: services.available_agent_kinds().into(),
+            available_agent_kinds: services.utility_agent_kinds().into(),
             base_branch,
             child_pid,
             clock,

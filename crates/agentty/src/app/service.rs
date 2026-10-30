@@ -232,6 +232,23 @@ impl AppServices {
         self.available_agent_kinds.as_ref().to_vec()
     }
 
+    /// Returns the agent kinds utility work may target: the installed CLIs,
+    /// plus [`AgentKind::Harness`] when this launch lists a ready harness
+    /// model. Utility work runs on Harness only when the Fast default names a
+    /// Harness model.
+    pub(crate) fn utility_agent_kinds(&self) -> Vec<AgentKind> {
+        let mut agent_kinds = self.available_agent_kinds();
+        if self
+            .harness_model_options()
+            .iter()
+            .any(HarnessModelOption::is_ready)
+        {
+            agent_kinds.push(AgentKind::Harness);
+        }
+
+        agent_kinds
+    }
+
     /// Returns whether any agent CLI can run new sessions.
     ///
     /// Reads the startup-validated agent kinds that session defaults and

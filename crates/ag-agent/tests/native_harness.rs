@@ -29,9 +29,11 @@ use wiremock::{Mock, MockServer, Request, ResponseTemplate};
 
 const MUSE_MODEL: &str = "muse-spark-1.3";
 const QWEN_MODEL: &str = "qwen-plus";
-/// Served Muse model without catalog limits, so the small fallback context
-/// budget applies.
-const FALLBACK_BUDGET_MODEL: &str = "muse-spark-1.3-contributor";
+/// Locally served model whose declared 128,000-token window is far smaller
+/// than the cataloged models' windows.
+const FALLBACK_BUDGET_MODEL: &str = "openai-compatible/budget-model";
+/// Name the local server serves [`FALLBACK_BUDGET_MODEL`] under.
+const FALLBACK_BUDGET_SERVED_NAME: &str = "budget-model";
 /// Heading present only in a full instruction bootstrap.
 const FULL_CONTRACT: &str = "Structured response protocol:";
 /// Heading present only in a compact refresh reminder.
@@ -45,6 +47,11 @@ fn environment(server: &MockServer) -> BTreeMap<String, String> {
         ("HOME".to_string(), "/tmp".to_string()),
         ("MODEL_API_BASE_URL".to_string(), server.uri()),
         ("MODEL_API_KEY".to_string(), "muse-key".to_string()),
+        ("OPENAI_COMPATIBLE_BASE_URL".to_string(), server.uri()),
+        (
+            "OPENAI_COMPATIBLE_CONTEXT_WINDOW".to_string(),
+            "128000".to_string(),
+        ),
         (
             "PATH".to_string(),
             std::env::var("PATH").unwrap_or_default(),
@@ -507,7 +514,7 @@ async fn switching_to_a_smaller_window_fits_history_to_the_new_budget() {
     let bodies = request_bodies(&server).await;
     assert_eq!(bodies.len(), 3);
     assert!(bodies[1].contains("First answer"));
-    assert!(bodies[2].contains(FALLBACK_BUDGET_MODEL));
+    assert!(bodies[2].contains(&format!(r#""model":"{FALLBACK_BUDGET_SERVED_NAME}""#)));
     assert!(!bodies[2].contains("First answer"));
     assert!(bodies[2].contains("Second answer"));
 }

@@ -572,9 +572,9 @@ fn open_model_picker() -> Journey {
         .step(Step::wait_for_text("/model Harness model", 3000))
 }
 
-/// Asserts the picker labels local and paid rows, including the `OpenAI`
-/// models listed last, and that `Enter` on a model without tool calls keeps
-/// the picker open.
+/// Asserts the picker labels local rows free and paid rows with their price
+/// class, including the `OpenAI` models listed last, and that `Enter` on a
+/// model without tool calls keeps the picker open.
 fn assert_picker_captures(report: &ProofReport, full: Region) {
     // Rows pad labels into a column, so compare words.
     let picker_text = common::frame_from_capture(&report.captures[0])
@@ -585,10 +585,12 @@ fn assert_picker_captures(report: &ProofReport, full: Region) {
     for row in [
         "[local] qwen3:latest free · Ollama · runs 32k ctx",
         "[local] gemma:latest free · Ollama · no tool calls",
-        "[paid] muse-spark-1.3 Muse",
-        "[paid] kimi-k3 Kimi · needs KIMI_API_KEY",
-        "[paid] gpt-6.1-sol OpenAI · needs OPENAI_API_KEY",
-        "[paid] gpt-5.6-terra OpenAI · needs OPENAI_API_KEY",
+        "[paid] muse-spark-1.3 standard · Muse",
+        "[paid] muse-spark-1.3-contributor cheap · Muse · trains on prompts",
+        "[paid] kimi-k3 premium · Kimi · needs KIMI_API_KEY",
+        "[paid] qwen3.8-flash cheap · Qwen · needs DASHSCOPE_API_KEY",
+        "[paid] gpt-6-luna cheap · OpenAI · needs OPENAI_API_KEY",
+        "[paid] gpt-5.6-terra standard · OpenAI · needs OPENAI_API_KEY",
     ] {
         assert!(picker_text.contains(row), "{row} in {picker_text}");
     }
@@ -693,6 +695,148 @@ async fn test_harness_model_picker_switches_between_local_and_paid_models() -> E
             .is_empty(),
         "the paid provider must never be called"
     );
+
+    Ok(())
+}
+
+/// Commit message the cheap Qwen model writes.
+const CHEAP_COMMIT_TITLE: &str = "Add notes with a cheap model";
+
+/// Scripts a Qwen endpoint answering utility prompts: the commit message,
+/// and any other utility, such as the session title, with a short answer.
+async fn cheap_qwen_provider() -> MockServer {
+    let server = MockServer::start().await;
+    Mock::given(method("POST"))
+        .and(path("/chat/completions"))
+        .and(body_string_contains(
+            "Generate the canonical session commit message",
+        ))
+        .respond_with(ResponseTemplate::new(200).set_body_json(json!({
+            "choices": [{
+                "finish_reason": "stop",
+                "message": {"content": json!({"answer": CHEAP_COMMIT_TITLE}).to_string()}
+            }]
+        })))
+        .with_priority(1)
+        .mount(&server)
+        .await;
+    Mock::given(method("POST"))
+        .and(path("/chat/completions"))
+        .respond_with(answer("Harness notes"))
+        .with_priority(2)
+        .mount(&server)
+        .await;
+
+    server
+}
+
+/// Opens the Default Fast Model selector on the Settings tab.
+fn open_fast_model_selector() -> Journey {
+    Journey::new("open_fast_model_selector")
+        .with_description("Open the Default Fast Model selector in Settings")
+        .step(Step::press_key("j"))
+        .step(Step::press_key("j"))
+        .step(Step::wait_for_stable_frame(200, 3000))
+        .step(Step::press_key("Enter"))
+        .step(Step::wait_for_text("Select model", 3000))
+}
+
+#[tokio::test]
+async fn test_harness_fast_model_writes_commit_messages_on_a_cheap_model() -> E2eResult {
+    // Arrange
+    let muse = scripted_provider().await;
+    let qwen = cheap_qwen_provider().await;
+    let git_directory = git_only_path()?;
+
+    // Act, Assert
+    FeatureTest::new("harness_cheap_fast_model")
+        .with_git()
+        .with_stub_only_path()
+        .env("PATH", git_directory.path().to_string_lossy())
+        .args(["--experimental-harness".to_string()])
+        .env("DASHSCOPE_API_KEY", "test-key")
+        .env("DASHSCOPE_BASE_URL", qwen.uri())
+        .env("KIMI_API_KEY", "")
+        .env("OPENAI_API_KEY", "")
+        .env("MODEL_API_KEY", "test-key")
+        .env("MODEL_API_BASE_URL", muse.uri())
+        .env("OPENAI_COMPATIBLE_BASE_URL", NO_LOCAL_SERVER)
+        .run(
+            |scenario| {
+                scenario
+                    .compose(&common::wait_for_agentty_startup())
+                    .compose(&common::switch_to_tab("Sessions"))
+                    .compose(&common::switch_to_tab("Settings"))
+                    .compose(&open_fast_model_selector())
+                    .wait_for_text("harness/qwen3.8-flash · cheap", 3000)
+                    .capture_labeled("fast_model_choices", "Ready harness models by price")
+                    // Choices: muse-spark-1.3, its contributor tier,
+                    // qwen3.8-max, qwen-plus, then qwen3.8-flash.
+                    .press_key("j")
+                    .press_key("j")
+                    .press_key("j")
+                    .press_key("j")
+                    .press_key("Enter")
+                    .wait_for_text("Select reasoning level", 3000)
+                    .press_key("Enter")
+                    .wait_for_text("harness/qwen3.8-flash [", 3000)
+                    .compose(&common::switch_to_tab_reverse("Sessions"))
+                    .press_key("a")
+                    .wait_for_text("Install an agent CLI", 5000)
+                    .press_key("Enter")
+                    .wait_for_text("harness/muse-spark-1.3", 5000)
+                    .write_text("Create notes")
+                    .wait_for_text("Create notes", 3000)
+                    .press_key("Enter")
+                    // The cheap model's commit message titles the session.
+                    .eventually(
+                        Duration::from_secs(30),
+                        Duration::from_millis(100),
+                        |frame| {
+                            let full = Region::full(frame.cols(), frame.rows());
+
+                            assertion::match_text_in_region(frame, CHEAP_COMMIT_TITLE, &full)
+                        },
+                    )
+            },
+            |frame, report| {
+                Box::pin(async move {
+                    let full = Region::full(frame.cols(), frame.rows());
+                    assertion::assert_text_in_region(frame, "harness/muse-spark-1.3", &full);
+                    let choices = common::frame_from_capture(&report.captures[0]).all_text();
+                    for label in [
+                        "harness/muse-spark-1.3 · standard",
+                        // The dropdown truncates this longer label.
+                        "harness/muse-spark-1.3-contributor",
+                        "harness/qwen-plus · cheap",
+                        "harness/qwen3.8-flash · cheap",
+                        "harness/qwen3.7-flash · cheap",
+                    ] {
+                        assert!(choices.contains(label), "{label} in {choices}");
+                    }
+                })
+            },
+        )
+        .await?;
+
+    let bodies = |requests: Vec<wiremock::Request>| {
+        requests
+            .into_iter()
+            .map(|request| String::from_utf8_lossy(&request.body).into_owned())
+            .collect::<Vec<_>>()
+    };
+    let qwen_bodies = bodies(qwen.received_requests().await.unwrap_or_default());
+    let muse_bodies = bodies(muse.received_requests().await.unwrap_or_default());
+    let commit_prompt = "Generate the canonical session commit message";
+    // The session turn ran on Muse, and its commit message on the cheap
+    // Qwen model.
+    assert!(muse_bodies.iter().any(|body| body.contains("Create notes")));
+    assert!(!muse_bodies.iter().any(|body| body.contains(commit_prompt)));
+    let commit_request = qwen_bodies
+        .iter()
+        .find(|body| body.contains(commit_prompt))
+        .ok_or("the commit message should run on the cheap model")?;
+    assert!(commit_request.contains(r#""model":"qwen3.8-flash""#));
 
     Ok(())
 }

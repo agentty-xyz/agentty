@@ -176,6 +176,13 @@ define_model_catalog! {
             description: "Muse Spark model served through the native harness.",
             fast: false,
         },
+        /// Discounted Muse model backed by `muse-spark-1.3-contributor`,
+        /// whose prompts and completions Meta may use for training.
+        MuseSpark13Contributor = 19 => {
+            id: "muse-spark-1.3-contributor",
+            description: "Cheap Muse Spark tier; Meta may train on its prompts and completions.",
+            fast: false,
+        },
         /// Kimi model backed by `kimi-k3`.
         KimiK3 = 13 => {
             id: "kimi-k3",
@@ -200,6 +207,18 @@ define_model_catalog! {
             description: "Balanced Qwen model served through the native harness.",
             fast: false,
         },
+        /// Cheap Qwen model backed by `qwen3.8-flash`.
+        Qwen38Flash = 20 => {
+            id: "qwen3.8-flash",
+            description: "Cheap Qwen model for simple tasks such as titles and commit messages.",
+            fast: false,
+        },
+        /// Cheapest Qwen model backed by `qwen3.7-flash`.
+        Qwen37Flash = 21 => {
+            id: "qwen3.7-flash",
+            description: "Cheapest Qwen model for short, simple tasks.",
+            fast: false,
+        },
     }
 }
 
@@ -214,13 +233,18 @@ define_model_catalog! {
 /// other tools, so its mere presence must not move sessions from a
 /// deliberately configured harness provider to paid `OpenAI` usage. The
 /// harness library also catalogs the deprecated `gpt-5.3-codex`, which
-/// Agentty retires to [`AgentModel::Gpt61Sol`] instead of offering it.
+/// Agentty retires to [`AgentModel::Gpt61Sol`] instead of offering it. Cheap
+/// tiers follow their provider's other models, so adding one never changes
+/// which configured model a new session starts on.
 const HARNESS_MODELS: &[AgentModel] = &[
     AgentModel::MuseSpark13,
+    AgentModel::MuseSpark13Contributor,
     AgentModel::KimiK3,
     AgentModel::KimiK26,
     AgentModel::Qwen38Max,
     AgentModel::QwenPlus,
+    AgentModel::Qwen38Flash,
+    AgentModel::Qwen37Flash,
     AgentModel::Gpt61Sol,
     AgentModel::Gpt6Astra,
     AgentModel::Gpt6Luna,

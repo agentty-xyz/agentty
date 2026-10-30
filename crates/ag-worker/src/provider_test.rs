@@ -7,9 +7,7 @@ use ag_contracts::{
     PermissionMode, ReasoningLevel, ResponseStyle, SpeedMode, ToolPolicy, TurnContinuation,
     TurnRequest,
 };
-use ag_session::{
-    AgentAvailabilityProbe, AgentCliInfo, AgentKind, AgentModel, HarnessModelStatus, ModelBilling,
-};
+use ag_session::{AgentAvailabilityProbe, AgentCliInfo, AgentKind, AgentModel, HarnessModelStatus};
 
 use crate::{
     RealAgentAvailabilityProbe, RuntimeConfig, cleanup_session_worktree_artifacts, setup_backend,
@@ -90,11 +88,7 @@ async fn provider_discovery_uses_the_runtime_with_an_isolated_empty_search_path(
             .find(|option| option.model == AgentModel::MuseSpark13)
             .expect("Muse is listed");
         assert_eq!(muse.status, HarnessModelStatus::Ready);
-        assert!(
-            harness_models
-                .iter()
-                .all(|option| option.billing == ModelBilling::Paid)
-        );
+        assert!(harness_models.iter().all(|option| option.cost.is_paid()));
         return;
     }
     // Act

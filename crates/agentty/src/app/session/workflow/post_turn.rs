@@ -46,7 +46,8 @@ pub(super) enum TurnEffectPolicy {
 pub(super) struct PostTurnContext {
     /// Reducer event sender used for output and post-turn projections.
     pub(super) app_event_tx: mpsc::UnboundedSender<AppEvent>,
-    /// Locally installed agent CLIs that auto-commit prompts may target.
+    /// Agent kinds that auto-commit prompts may target: installed CLIs, plus
+    /// Harness when this launch has a ready harness model.
     pub(super) available_agent_kinds: Arc<[AgentKind]>,
     /// Serializes post-turn publish ownership with queued branch operations.
     pub(super) branch_operation_lock: Arc<tokio::sync::Mutex<()>>,

@@ -10,7 +10,7 @@ use super::{
     settings_operation_for_primary_selector, speed_selector_option_labels,
 };
 use crate::domain::agent::{
-    AgentKind, AgentModel, AgentSelection, ReasoningLevel, ResponseStyle, SpeedMode,
+    AgentKind, AgentModel, AgentSelection, ModelCost, ReasoningLevel, ResponseStyle, SpeedMode,
 };
 use crate::domain::input::{InputCommand, InputState};
 use crate::domain::theme::ColorTheme;
@@ -37,6 +37,7 @@ fn test_settings_view(launch_configuration: &str) -> SettingsView {
         default_smart_reasoning_level: ReasoningLevel::High,
         default_smart_selection: smart_selection,
         default_smart_speed_mode: SpeedMode::Normal,
+        fast_harness_models: Vec::new(),
         include_coauthored_by_agentty: false,
         launch_configuration: launch_configuration.to_string(),
         theme: ColorTheme::Current,
@@ -465,6 +466,33 @@ fn previous_launch_selection_wraps_and_all_row_options_are_available() {
         launch_options,
         [] as [crate::presentation::setting::SettingSelectorOption; 0]
     );
+}
+
+#[test]
+fn fast_model_options_add_ready_harness_models_with_their_price_class() {
+    // Arrange
+    let qwen_flash = AgentSelection::new(AgentKind::Harness, AgentModel::Qwen38Flash);
+    let view = SettingsView {
+        fast_harness_models: vec![(qwen_flash, ModelCost::Cheap)],
+        ..test_settings_view("")
+    };
+
+    // Act
+    let fast_options = selector_options_for_row(&view, SettingRow::DefaultFastModel);
+    let review_options = selector_options_for_row(&view, SettingRow::DefaultReviewModel);
+    let harness_option = fast_options.last().expect("harness option is listed");
+
+    // Assert
+    assert_eq!(
+        fast_options.len(),
+        view.available_model_selections.len() + 1
+    );
+    assert_eq!(harness_option.label, "harness/qwen3.8-flash · cheap");
+    assert_eq!(
+        harness_option.value,
+        SettingSelectorValue::ModelSelection(qwen_flash)
+    );
+    assert_eq!(review_options.len(), view.available_model_selections.len());
 }
 
 #[test]

@@ -1659,6 +1659,7 @@ impl App {
             if let AppMode::Prompt { slash_state, .. } = &mut self.mode {
                 slash_state.harness_models.clone_from(&options);
             }
+            self.settings.replace_harness_models(options.clone());
             self.services.replace_harness_model_options(options);
         }
 

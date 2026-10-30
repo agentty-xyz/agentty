@@ -334,6 +334,16 @@ async fn apply_app_events_harness_models_updates_app_services_outside_prompts() 
         app.services.harness_availability(),
         HarnessAvailability::Available(AgentModel::KimiK3)
     );
+    // The settings screen offers the listed model for the Fast default.
+    assert_eq!(
+        app.settings
+            .view()
+            .fast_harness_models
+            .iter()
+            .map(|(selection, _)| selection.model())
+            .collect::<Vec<_>>(),
+        [AgentModel::KimiK3]
+    );
 }
 
 #[tokio::test]

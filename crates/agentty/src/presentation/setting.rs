@@ -1,6 +1,6 @@
 //! Presentation-owned settings screen state and input translation.
 
-use crate::domain::agent::{AgentSelection, ReasoningLevel, ResponseStyle, SpeedMode};
+use crate::domain::agent::{AgentSelection, ModelCost, ReasoningLevel, ResponseStyle, SpeedMode};
 use crate::domain::input::{InputCommand, InputState};
 use crate::domain::selection::SelectionState;
 use crate::domain::theme::ColorTheme;
@@ -20,6 +20,8 @@ pub(crate) struct SettingsView {
     pub(crate) default_smart_reasoning_level: ReasoningLevel,
     pub(crate) default_smart_selection: AgentSelection,
     pub(crate) default_smart_speed_mode: SpeedMode,
+    /// Ready harness models the Fast model may use, with their price class.
+    pub(crate) fast_harness_models: Vec<(AgentSelection, ModelCost)>,
     pub(crate) include_coauthored_by_agentty: bool,
     pub(crate) launch_configuration: String,
     pub(crate) theme: ColorTheme,
@@ -1062,9 +1064,22 @@ fn selector_options_for_row(view: &SettingsView, row: SettingRow) -> Vec<Setting
 
             options
         }
-        SettingRow::DefaultFastModel | SettingRow::DefaultReviewModel => {
-            model_selector_options(view)
+        SettingRow::DefaultFastModel => {
+            let mut options = model_selector_options(view);
+            options.extend(view.fast_harness_models.iter().map(|(selection, cost)| {
+                SettingSelectorOption {
+                    label: format!(
+                        "{} · {}",
+                        display_model_selector_value(*selection),
+                        cost.label()
+                    ),
+                    value: SettingSelectorValue::ModelSelection(*selection),
+                }
+            }));
+
+            options
         }
+        SettingRow::DefaultReviewModel => model_selector_options(view),
         SettingRow::DefaultResponseStyle => ResponseStyle::ALL
             .iter()
             .copied()

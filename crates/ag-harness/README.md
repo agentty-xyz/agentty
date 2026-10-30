@@ -309,7 +309,8 @@ Responses API with `OPENAI_API_KEY` and an optional `OPENAI_BASE_URL` (default
 resends its history, encrypted reasoning from earlier responses is replayed verbatim,
 and output is constrained by a native JSON Schema format. `declared_profile` returns
 each cataloged model's documented window under the default estimator with a 50% margin,
-and `None` for other models, Muse, Kimi, and Qwen, whose hosts declare their own:
+as it does for the Qwen flash models, and `None` for other models and the remaining
+Muse, Kimi, and Qwen models, whose hosts declare their own:
 
 ```rust
 use ag_harness::provider::GPT_6_1_SOL;
@@ -319,6 +320,21 @@ let openai = ModelConfiguration::new(ModelProvider::OpenAi, GPT_6_1_SOL)
 let profile = ModelProvider::OpenAi
     .declared_profile(GPT_6_1_SOL, |name| std::env::var(name))?
     .expect("cataloged OpenAI models declare their profile");
+```
+
+`ModelProvider::cost_tier` declares each cataloged model's `CostTier` (`Cheap`,
+`Standard`, or `Premium` from the provider's list price per million output tokens, and
+`Local` for every OpenAI-compatible model), so a host can route simple tasks to a cheap
+model. `ModelProvider::trains_on_prompts` flags tiers, such as
+`muse-spark-1.3-contributor`, that let the provider train on requests:
+
+```rust
+use ag_harness::provider::{CostTier, QWEN3_8_FLASH};
+
+assert_eq!(
+    ModelProvider::Qwen.cost_tier(QWEN3_8_FLASH),
+    Some(CostTier::Cheap)
+);
 ```
 
 Built-in clients call `ag-router` for provider transport and schema validation. Hosts

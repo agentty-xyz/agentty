@@ -24,7 +24,7 @@ use crate::app;
 use crate::app::{App, SessionManager, SessionState};
 use crate::db::Database;
 use crate::domain::agent::{
-    AgentKind, AgentModel, AgentSelection, HarnessModelOption, HarnessModelStatus, ModelBilling,
+    AgentKind, AgentModel, AgentSelection, HarnessModelOption, HarnessModelStatus, ModelCost,
     ReasoningLevel,
 };
 use crate::domain::harness::HarnessModelCatalog;
@@ -359,12 +359,13 @@ impl AgentAvailabilityProbe for HarnessOnlyAvailabilityProbe {
 /// Returns a ready paid harness model option for `model`.
 pub(crate) fn ready_harness_model(model: AgentModel) -> HarnessModelOption {
     HarnessModelOption {
-        billing: ModelBilling::Paid,
         context_window: None,
+        cost: ModelCost::Standard,
         loaded_context_window: None,
         model,
         provider: "Kimi".to_string(),
         status: HarnessModelStatus::Ready,
+        trains_on_prompts: false,
     }
 }
 

@@ -9,13 +9,39 @@ use crate::AgentModel;
 /// the conversation.
 pub const MINIMUM_RUNNING_CONTEXT_WINDOW: u64 = 16_384;
 
-/// Who pays for a harness model's tokens.
+/// Who pays for a harness model's tokens and, for a hosted model, its price
+/// class as the `ag-harness` provider catalog declares it.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub enum ModelBilling {
+pub enum ModelCost {
     /// A local or self-hosted server runs the model at no per-token cost.
     Local,
-    /// A hosted provider bills every request to the configured API key.
-    Paid,
+    /// A hosted provider bills at most $2.50 per million output tokens,
+    /// suited to simple tasks such as titles and commit messages.
+    Cheap,
+    /// A hosted provider bills between the cheap and premium bounds.
+    Standard,
+    /// A hosted provider bills at least $15 per million output tokens.
+    Premium,
+}
+
+impl ModelCost {
+    /// Returns whether a hosted provider bills the model's tokens.
+    #[must_use]
+    pub fn is_paid(self) -> bool {
+        self != Self::Local
+    }
+
+    /// Returns the price-class label of a paid model, such as `cheap`, or
+    /// `free` for a local one.
+    #[must_use]
+    pub fn label(self) -> &'static str {
+        match self {
+            Self::Local => "free",
+            Self::Cheap => "cheap",
+            Self::Standard => "standard",
+            Self::Premium => "premium",
+        }
+    }
 }
 
 /// Whether a harness model can run a turn now.
@@ -35,8 +61,8 @@ pub enum HarnessModelStatus {
 /// context window.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct HarnessModelOption {
-    /// Who pays for the model's tokens.
-    pub billing: ModelBilling,
+    /// Who pays for the model's tokens, and how much.
+    pub cost: ModelCost,
     /// Context window in tokens the model supports, when the server reports
     /// it.
     pub context_window: Option<u64>,
@@ -50,6 +76,9 @@ pub struct HarnessModelOption {
     pub provider: String,
     /// Whether the model can run a turn now.
     pub status: HarnessModelStatus,
+    /// Whether the provider may train its models on the prompts and
+    /// completions, which its discounted contributor tier requires.
+    pub trains_on_prompts: bool,
 }
 
 impl HarnessModelOption {
@@ -79,13 +108,14 @@ pub fn default_harness_model(
         _ => {}
     }
 
-    [ModelBilling::Local, ModelBilling::Paid]
-        .into_iter()
-        .find_map(|billing| {
-            options
-                .iter()
-                .find(|option| option.billing == billing && option.is_ready())
-        })
+    let first_ready = |is_paid: bool| {
+        options
+            .iter()
+            .find(|option| option.cost.is_paid() == is_paid && option.is_ready())
+    };
+
+    first_ready(false)
+        .or_else(|| first_ready(true))
         .map(|option| option.model)
 }
 

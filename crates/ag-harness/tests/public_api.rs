@@ -65,7 +65,7 @@ use ag_harness::model::{
     CompletionMetadata, CompletionUsage, ContextBudget, ContextSummaryPolicy, ModelCapabilities,
     ModelCompletion, ModelMessage, ModelMetadata, ModelRegistry, ModelRequest, ModelResponse,
 };
-use ag_harness::provider::{ModelConfiguration, ModelProvider};
+use ag_harness::provider::{CostTier, ModelConfiguration, ModelProvider, QWEN_PLUS, QWEN3_8_FLASH};
 use ag_harness::recovery::ExecutionIdentity;
 use ag_harness::store::{MemoryStore, SessionInfo, SessionStore, WriteStatus};
 use ag_harness::tool::{FileSystem, LocalFileSystem, ToolCall};
@@ -513,6 +513,30 @@ fn external_consumer_configures_a_local_server_from_the_environment() {
         ModelProvider::OpenAiCompatible.default_base_url(),
         Some("http://127.0.0.1:11434/v1")
     );
+}
+
+#[test]
+fn external_consumer_picks_a_cheap_cataloged_model() {
+    // Arrange
+    let cataloged = ModelProvider::all().iter().flat_map(|provider| {
+        provider
+            .known_models()
+            .iter()
+            .map(move |model| (*provider, *model))
+    });
+
+    // Act
+    let cheap = cataloged
+        .filter(|(provider, model)| provider.cost_tier(model) == Some(CostTier::Cheap))
+        .find(|(provider, model)| !provider.trains_on_prompts(model));
+
+    // Assert
+    assert_eq!(cheap, Some((ModelProvider::Qwen, QWEN_PLUS)));
+    assert_eq!(
+        ModelProvider::Qwen.cost_tier(QWEN3_8_FLASH),
+        Some(CostTier::Cheap)
+    );
+    assert_eq!(CostTier::Cheap.as_str(), "cheap");
 }
 
 #[test]

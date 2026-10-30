@@ -193,8 +193,10 @@ against paid Muse, Kimi, or Qwen using `MODEL_API_KEY`, `KIMI_API_KEY` with
 `KIMI_BASE_URL`, or `DASHSCOPE_API_KEY` with `DASHSCOPE_BASE_URL`, or OpenAI's GPT
 models with a paid `OPENAI_API_KEY` (ChatGPT subscriptions work through Codex sessions,
 not the harness). Its `/model` picker lists local models first, marks each model free or
-paid, and remembers your choice for new Harness sessions. Its edit mode runs unsandboxed
-shell commands. See
+paid with a cheap, standard, or premium price class, and remembers your choice for new
+Harness sessions. A project's Default Fast Model can be a cheap harness model, such as
+`qwen3.8-flash`, for commit messages and titles. Its edit mode runs unsandboxed shell
+commands. See
 [Harness sessions](https://agentty.xyz/docs/agents/backends/#backends-harness).
 
 Session tracing is disabled unless `--otlp-endpoint` supplies a complete OTLP
