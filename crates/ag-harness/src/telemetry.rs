@@ -67,6 +67,7 @@ pub(crate) const OUTPUT_JSON: &str = "json";
 pub(crate) const PROVIDER_ALIBABA_CLOUD: &str = "alibaba_cloud";
 pub(crate) const PROVIDER_META: &str = "meta";
 pub(crate) const PROVIDER_MOONSHOT_AI: &str = "moonshot_ai";
+pub(crate) const PROVIDER_OPENAI: &str = "openai";
 /// Provider name for any OpenAI-compatible server, which `gen_ai` semantic
 /// conventions do not enumerate.
 pub(crate) const PROVIDER_OPENAI_COMPATIBLE: &str = "openai_compatible";

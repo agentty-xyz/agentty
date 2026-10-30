@@ -22,6 +22,7 @@ fn catalog_exposes_every_provider_and_known_model() {
             ModelProvider::Muse,
             ModelProvider::Kimi,
             ModelProvider::Qwen,
+            ModelProvider::OpenAi,
             ModelProvider::OpenAiCompatible
         ]
     );
@@ -29,6 +30,29 @@ fn catalog_exposes_every_provider_and_known_model() {
         ModelProvider::Muse.known_models(),
         &["muse-spark-1.3", "muse-spark-1.3-contributor"]
     );
+    assert_eq!(
+        ModelProvider::OpenAi.known_models(),
+        &[
+            "gpt-6.1-sol",
+            "gpt-6-astra",
+            "gpt-6-luna",
+            "gpt-5.6-terra",
+            "gpt-5.3-codex"
+        ]
+    );
+    assert_eq!(
+        ModelProvider::OpenAi.api_key_environment(),
+        "OPENAI_API_KEY"
+    );
+    assert_eq!(
+        ModelProvider::OpenAi.base_url_environment(),
+        "OPENAI_BASE_URL"
+    );
+    assert_eq!(
+        ModelProvider::OpenAi.default_base_url(),
+        Some("https://api.openai.com/v1")
+    );
+    assert!(ModelProvider::OpenAi.requires_api_key());
     assert_eq!(
         ModelProvider::Kimi.known_models(),
         &["kimi-k3", "kimi-k2.6"]
@@ -60,7 +84,10 @@ fn provider_identifiers_round_trip_and_display() {
 
     // Assert
     assert_eq!(parsed, ModelProvider::all());
-    assert_eq!(displayed, ["muse", "kimi", "qwen", "openai-compatible"]);
+    assert_eq!(
+        displayed,
+        ["muse", "kimi", "qwen", "openai", "openai-compatible"]
+    );
     assert_eq!(
         "unknown".parse::<ModelProvider>(),
         Err(ModelProviderParseError {
@@ -145,10 +172,10 @@ fn openai_compatible_defaults_to_unauthenticated_ollama() {
 }
 
 #[test]
-fn only_openai_compatible_declares_its_profile_in_the_environment() {
+fn declares_profiles_for_openai_models_and_from_the_compatible_environment() {
     // Arrange and Act
     let declared = ModelProvider::OpenAiCompatible
-        .environment_profile(|name| {
+        .declared_profile("qwen3:latest", |name| {
             if name == openai_compatible::OPENAI_COMPATIBLE_CONTEXT_WINDOW_ENV {
                 Ok("40960".to_string())
             } else {
@@ -156,19 +183,36 @@ fn only_openai_compatible_declares_its_profile_in_the_environment() {
             }
         })
         .expect("declared window should be valid");
-    let hosted = ModelProvider::all()
+    let openai = ModelProvider::OpenAi
+        .known_models()
         .iter()
-        .filter(|provider| **provider != ModelProvider::OpenAiCompatible)
-        .map(|provider| provider.environment_profile(missing_environment))
-        .collect::<Result<Vec<_>, _>>()
-        .expect("hosted providers read no profile");
+        .map(|model| {
+            ModelProvider::OpenAi
+                .declared_profile(model, missing_environment)
+                .expect("cataloged models read no environment")
+        })
+        .collect::<Vec<_>>();
+    let unlisted = ModelProvider::OpenAi
+        .declared_profile("gpt-unlisted", missing_environment)
+        .expect("unlisted models read no environment");
+    let host_profiled = [
+        ModelProvider::Muse,
+        ModelProvider::Kimi,
+        ModelProvider::Qwen,
+    ]
+    .iter()
+    .map(|provider| provider.declared_profile(provider.known_models()[0], missing_environment))
+    .collect::<Result<Vec<_>, _>>()
+    .expect("host-profiled providers read no profile");
 
     // Assert
     assert_eq!(
         declared.map(ModelProfile::context_window_tokens),
         Some(40_960)
     );
-    assert!(hosted.iter().all(Option::is_none));
+    assert!(openai.iter().all(Option::is_some));
+    assert_eq!(unlisted, None);
+    assert!(host_profiled.iter().all(Option::is_none));
 }
 
 #[test]

@@ -26,7 +26,7 @@ pub use crate::model_profile::ModelProfile;
 pub use crate::model_registry::{
     ModelCapabilities, ModelRegistration, ModelRegistry, ModelRegistryError,
 };
-use crate::provider::{KimiConfig, MuseConfig, OpenAiCompatibleConfig, QwenConfig};
+use crate::provider::{KimiConfig, MuseConfig, OpenAiCompatibleConfig, OpenAiConfig, QwenConfig};
 use crate::schema_contract::{OutputSchema, OutputValidationError, bounded_diagnostic};
 use crate::{telemetry, tool};
 
@@ -128,6 +128,24 @@ impl ModelClient {
     pub fn muse(config: MuseConfig) -> Result<Self, ModelMetadataError> {
         Self::routed(
             ag_router::Provider::Muse,
+            Some(config.api_key),
+            config.base_url,
+            &config.model,
+        )
+    }
+
+    /// Creates a client backed by `OpenAI`'s Responses API. Requests are
+    /// streamed and stateless (`store: false`): each carries its whole
+    /// history, with the encrypted reasoning of earlier responses replayed
+    /// verbatim, and output is constrained by a native JSON Schema format.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`ModelMetadataError`] when the configured model identifier is
+    /// empty or contains only whitespace.
+    pub fn openai(config: OpenAiConfig) -> Result<Self, ModelMetadataError> {
+        Self::routed(
+            ag_router::Provider::OpenAi,
             Some(config.api_key),
             config.base_url,
             &config.model,
@@ -474,6 +492,7 @@ fn provider_telemetry_name(provider: ag_router::Provider) -> &'static str {
     match provider {
         ag_router::Provider::Kimi => telemetry::PROVIDER_MOONSHOT_AI,
         ag_router::Provider::Muse => telemetry::PROVIDER_META,
+        ag_router::Provider::OpenAi => telemetry::PROVIDER_OPENAI,
         ag_router::Provider::OpenAiCompatible => telemetry::PROVIDER_OPENAI_COMPATIBLE,
         ag_router::Provider::Qwen => telemetry::PROVIDER_ALIBABA_CLOUD,
     }

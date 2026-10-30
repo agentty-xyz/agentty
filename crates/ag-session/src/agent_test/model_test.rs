@@ -325,3 +325,21 @@ fn test_harness_kind_metadata() {
     assert!(!harness_kind.supports_speed_mode());
     assert!(!AgentKind::ALL.contains(&harness_kind));
 }
+
+#[test]
+/// Ensures the harness lists every model of its own catalog block and shares
+/// the Codex models the Responses API serves, without Codex Spark.
+fn test_harness_models_include_its_own_and_shared_codex_models() {
+    // Arrange
+    let harness_models = AgentKind::Harness.models();
+
+    // Act
+    let declared = AgentKind::Harness.declared_models();
+
+    // Assert
+    assert!(declared.iter().all(|model| harness_models.contains(model)));
+    assert!(AgentKind::Harness.supports_model(AgentModel::Gpt61Sol));
+    assert!(AgentKind::Codex.supports_model(AgentModel::Gpt61Sol));
+    assert!(!AgentKind::Harness.supports_model(AgentModel::Gpt53CodexSpark));
+    assert_eq!(AgentKind::Antigravity.declared_models(), &[]);
+}

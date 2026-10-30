@@ -1,34 +1,18 @@
-use std::error::Error;
-use std::fmt::Write as _;
 use std::sync::Arc;
 use std::time::Duration;
 
 use async_trait::async_trait;
-use serde::de::DeserializeOwned;
-use serde::{Deserialize, Deserializer, Serialize};
+use serde::{Deserialize, Serialize};
 use serde_json::Value;
-use thiserror::Error;
 
+use crate::http::{HttpTransport, ProviderRequest, TransportError, deserialize_optional};
+use crate::model::GeneratedResponse;
 use crate::{input, model, schema as schema_contract, tool};
 
-pub(crate) const ERROR_BODY_LIMIT_BYTES: usize = 4 * 1024;
-const JSON_STRING_MAX_EXPANSION: usize = 6;
-const MAX_RATE_LIMIT_RETRIES: usize = 5;
-/// Ceiling for the exponential backoff between rate-limit retries.
-const MAX_RETRY_DELAY: Duration = Duration::from_secs(5);
-/// Ceiling for a provider-declared `Retry-After`, so a per-minute quota can
-/// be waited out without honoring an unbounded instruction.
-const MAX_PROVIDER_RETRY_DELAY: Duration = Duration::from_secs(60);
-const MAX_TRANSPORT_RETRIES: usize = 1;
-pub(crate) const RESPONSE_ENVELOPE_LIMIT_BYTES: usize = 64 * 1024;
-/// Bound for one provider request. Reasoning models can spend more than a
-/// minute on a single completion, so a timed-out request is reported without
-/// a retry instead of doubling the wait.
+/// Bound for one Chat Completions request. Reasoning models can spend more
+/// than a minute on a single completion, so a timed-out request is reported
+/// without a retry instead of doubling the wait.
 const REQUEST_TIMEOUT: Duration = Duration::from_mins(3);
-const RETRY_DELAY: Duration = Duration::from_secs(1);
-pub(crate) const SUCCESS_BODY_LIMIT_BYTES: usize = schema_contract::RESPONSE_CONTENT_LIMIT_BYTES
-    * JSON_STRING_MAX_EXPANSION
-    + RESPONSE_ENVELOPE_LIMIT_BYTES;
 pub(crate) const STRUCTURED_OUTPUT_INSTRUCTION: &str = concat!(
     "Return only one JSON object. The object must validate against this JSON Schema. ",
     "Do not include Markdown fences or any other text.\n\nJSON Schema:\n",
@@ -80,17 +64,11 @@ impl StructuredOutputMode {
     }
 }
 
-/// Lowercase markers that, in an unsuccessful response body from any
-/// OpenAI-compatible provider, mean the request input exceeded the model's
-/// context window: the `context_length_exceeded` code and "maximum
-/// context length" message of the `OpenAI` API.
-const CONTEXT_OVERFLOW_MARKERS: [&str; 2] = ["context_length_exceeded", "maximum context length"];
-
 /// Provider policy applied by the shared Chat Completions backend.
 #[derive(Clone, Copy)]
 pub(crate) struct ChatCompletionProviderPolicy {
     /// Lowercase provider-specific body markers of a context-window
-    /// overflow, checked beside [`CONTEXT_OVERFLOW_MARKERS`].
+    /// overflow, checked beside the markers every provider shares.
     pub(crate) context_overflow_markers: &'static [&'static str],
     pub(crate) display_name: &'static str,
     pub(crate) image_input: bool,
@@ -103,29 +81,6 @@ pub(crate) struct ChatCompletionProviderPolicy {
     pub(crate) unsupported_schema_reason: &'static str,
 }
 
-impl ChatCompletionProviderPolicy {
-    /// Returns whether an unsuccessful response rejected the request because
-    /// its input exceeds the model's context window: any `413`, or a `400`
-    /// or `422` whose body carries a shared or provider-specific marker.
-    fn is_context_overflow(&self, status: reqwest::StatusCode, body: &str) -> bool {
-        if status == reqwest::StatusCode::PAYLOAD_TOO_LARGE {
-            return true;
-        }
-        if !matches!(
-            status,
-            reqwest::StatusCode::BAD_REQUEST | reqwest::StatusCode::UNPROCESSABLE_ENTITY
-        ) {
-            return false;
-        }
-        let body = body.to_lowercase();
-
-        CONTEXT_OVERFLOW_MARKERS
-            .iter()
-            .chain(self.context_overflow_markers)
-            .any(|marker| body.contains(marker))
-    }
-}
-
 /// Provider wire representation for a requested reasoning depth.
 #[derive(Clone, Copy)]
 pub(crate) enum ReasoningFormat {
@@ -136,33 +91,6 @@ pub(crate) enum ReasoningFormat {
         disable_supported: bool,
         preserve_reasoning: bool,
     },
-}
-
-/// Provider-neutral result of decoding one Chat Completions choice.
-pub(crate) enum GeneratedResponse {
-    Failed {
-        error: model::ModelError,
-        metadata: model::CompletionMetadata,
-    },
-    Output {
-        metadata: model::CompletionMetadata,
-        output: String,
-        reasoning_content: Option<String>,
-    },
-    ToolCall {
-        call: tool::ToolCall,
-        metadata: model::CompletionMetadata,
-    },
-    ToolCalls {
-        calls: Vec<tool::ToolCall>,
-        metadata: model::CompletionMetadata,
-    },
-}
-
-impl GeneratedResponse {
-    fn failed(error: model::ModelError, metadata: model::CompletionMetadata) -> Self {
-        Self::Failed { error, metadata }
-    }
 }
 
 /// Shared structured-output backend for OpenAI-compatible Chat Completions
@@ -241,7 +169,7 @@ impl ChatCompletionBackend {
         let payload = serde_json::to_value(payload).map_err(model::ModelError::request)?;
         let completion = self
             .client
-            .complete(ChatCompletionRequest::new(
+            .complete(ProviderRequest::new(
                 self.api_key.as_deref(),
                 endpoint(&self.base_url),
                 payload,
@@ -519,37 +447,11 @@ impl ChatCompletionBackend {
         }
     }
 
-    fn map_completion_error(&self, error: ChatCompletionError) -> model::ModelError {
-        match error {
-            ChatCompletionError::Http {
-                body,
-                source,
-                status,
-            } => {
-                let context_overflow = self.policy.is_context_overflow(status, &body);
-
-                model::ModelError::provider_request(
-                    self.policy.display_name,
-                    body,
-                    source,
-                    status,
-                    context_overflow,
-                )
-            }
-            error @ ChatCompletionError::InvalidResponse(_) => {
-                model::ModelError::classified_request(
-                    model::ModelErrorType::InvalidProviderResponse,
-                    None,
-                    error.into(),
-                )
-            }
-            ChatCompletionError::ResponseBodyTooLarge => model::ModelError::ResponseBodyTooLarge,
-            error @ ChatCompletionError::Transport(_) => model::ModelError::classified_request(
-                model::ModelErrorType::Transport,
-                None,
-                error.into(),
-            ),
-        }
+    fn map_completion_error(&self, error: TransportError) -> model::ModelError {
+        error.into_model_error(
+            self.policy.display_name,
+            self.policy.context_overflow_markers,
+        )
     }
 
     fn decode_tool_call(
@@ -560,11 +462,7 @@ impl ChatCompletionBackend {
         metadata: model::CompletionMetadata,
     ) -> GeneratedResponse {
         match Self::decode_tool_call_parts(request, content, reasoning_content, calls) {
-            Ok(mut calls) if calls.len() == 1 => GeneratedResponse::ToolCall {
-                call: calls.remove(0),
-                metadata,
-            },
-            Ok(calls) => GeneratedResponse::ToolCalls { calls, metadata },
+            Ok(calls) => GeneratedResponse::tool_calls(calls, metadata),
             Err(error) => GeneratedResponse::failed(error, metadata),
         }
     }
@@ -630,40 +528,6 @@ fn reasoning_enabled(reasoning_effort: model::ReasoningEffort) -> bool {
     reasoning_effort != model::ReasoningEffort::Low
 }
 
-/// One provider-authenticated request using the Chat Completions wire API.
-pub(crate) struct ChatCompletionRequest<'a> {
-    api_key: Option<&'a str>,
-    endpoint: String,
-    payload: Value,
-}
-
-impl<'a> ChatCompletionRequest<'a> {
-    /// Creates a request from provider-owned authentication and payload data.
-    pub(crate) fn new(api_key: Option<&'a str>, endpoint: String, payload: Value) -> Self {
-        Self {
-            api_key,
-            endpoint,
-            payload,
-        }
-    }
-
-    /// Returns the provider bearer token, or `None` for an unauthenticated
-    /// request.
-    pub(crate) fn api_key(&self) -> Option<&str> {
-        self.api_key
-    }
-
-    /// Returns the provider request endpoint.
-    pub(crate) fn endpoint(&self) -> &str {
-        &self.endpoint
-    }
-
-    /// Returns the serialized provider request body.
-    pub(crate) fn payload(&self) -> &Value {
-        &self.payload
-    }
-}
-
 /// Provider-independent fields extracted from the first completion choice.
 pub(crate) struct ChatCompletion {
     content: Option<String>,
@@ -707,8 +571,8 @@ impl ChatCompletion {
 pub(crate) trait ChatCompletionClient: Send + Sync {
     async fn complete(
         &self,
-        request: ChatCompletionRequest<'_>,
-    ) -> Result<Option<ChatCompletion>, ChatCompletionError>;
+        request: ProviderRequest<'_>,
+    ) -> Result<Option<ChatCompletion>, TransportError>;
 }
 
 /// Builds the Chat Completions endpoint for a provider base URL.
@@ -718,84 +582,25 @@ pub(crate) fn endpoint(base_url: &str) -> String {
 
 /// Creates the production Chat Completions client implementation.
 pub(crate) fn default_client() -> Arc<dyn ChatCompletionClient> {
-    let _ = rustls::crypto::ring::default_provider().install_default();
-
     Arc::new(ReqwestChatCompletionClient {
-        client: reqwest::Client::new(),
-        max_retry_delay: MAX_RETRY_DELAY,
-        request_timeout: REQUEST_TIMEOUT,
-        retry_delay: RETRY_DELAY,
+        http: HttpTransport::new(REQUEST_TIMEOUT),
     })
 }
 
 struct ReqwestChatCompletionClient {
-    client: reqwest::Client,
-    max_retry_delay: Duration,
-    request_timeout: Duration,
-    retry_delay: Duration,
+    http: HttpTransport,
 }
 
 #[async_trait]
 impl ChatCompletionClient for ReqwestChatCompletionClient {
     async fn complete(
         &self,
-        request: ChatCompletionRequest<'_>,
-    ) -> Result<Option<ChatCompletion>, ChatCompletionError> {
-        let mut rate_limit_retries = 0_usize;
-        let mut transport_retries = 0_usize;
-        let mut response = loop {
-            let mut builder = self.client.post(request.endpoint());
-            if let Some(api_key) = request.api_key() {
-                builder = builder.bearer_auth(api_key);
-            }
-            let response = builder
-                .timeout(self.request_timeout)
-                .json(request.payload())
-                .send()
-                .await;
-            let mut response = match response {
-                Ok(response) => response,
-                Err(error) if !error.is_timeout() && transport_retries < MAX_TRANSPORT_RETRIES => {
-                    transport_retries += 1;
-                    tokio::time::sleep(self.retry_delay).await;
-
-                    continue;
-                }
-                Err(error) => return Err(ChatCompletionError::transport(error)),
-            };
-
-            if response.status() == reqwest::StatusCode::TOO_MANY_REQUESTS
-                && rate_limit_retries < MAX_RATE_LIMIT_RETRIES
-            {
-                let delay = rate_limit_retry_delay(
-                    response.headers(),
-                    rate_limit_retries,
-                    self.retry_delay,
-                    self.max_retry_delay,
-                );
-                rate_limit_retries += 1;
-                drop(response);
-                tokio::time::sleep(delay).await;
-
-                continue;
-            }
-            if let Err(source) = response.error_for_status_ref() {
-                let status = response.status();
-                let body = error_body_summary(&mut response).await;
-
-                return Err(ChatCompletionError::Http {
-                    body,
-                    source,
-                    status,
-                });
-            }
-
-            break response;
-        };
-
-        let body = success_body(&mut response).await?;
-        let response = serde_json::from_slice::<ChatCompletionResponse>(&body)
-            .map_err(ChatCompletionError::InvalidResponse)?;
+        request: ProviderRequest<'_>,
+    ) -> Result<Option<ChatCompletion>, TransportError> {
+        let response = self
+            .http
+            .post_json::<ChatCompletionResponse>(&request)
+            .await?;
 
         Ok(response.into_completion().map(|(choice, metadata)| {
             let mut completion = ChatCompletion::new(choice.finish_reason, choice.message.content);
@@ -805,119 +610,6 @@ impl ChatCompletionClient for ReqwestChatCompletionClient {
 
             completion
         }))
-    }
-}
-
-fn rate_limit_retry_delay(
-    headers: &reqwest::header::HeaderMap,
-    retry: usize,
-    retry_delay: Duration,
-    max_retry_delay: Duration,
-) -> Duration {
-    let provider_delay = headers
-        .get(reqwest::header::RETRY_AFTER)
-        .and_then(|value| value.to_str().ok())
-        .and_then(|value| value.parse::<u64>().ok())
-        .map_or_default(Duration::from_secs);
-    let backoff = retry_delay
-        .saturating_mul(1_u32 << retry.min(31))
-        .min(max_retry_delay);
-
-    provider_delay.min(MAX_PROVIDER_RETRY_DELAY).max(backoff)
-}
-
-async fn error_body_summary(response: &mut reqwest::Response) -> String {
-    let mut body = Vec::new();
-    let mut is_truncated = false;
-    let read_error = loop {
-        let chunk = match response.chunk().await {
-            Ok(Some(chunk)) => chunk,
-            Ok(None) => break None,
-            Err(error) => break Some(error),
-        };
-
-        let remaining = ERROR_BODY_LIMIT_BYTES.saturating_sub(body.len());
-
-        if chunk.len() > remaining {
-            body.extend_from_slice(&chunk[..remaining]);
-            is_truncated = true;
-
-            break None;
-        }
-
-        body.extend_from_slice(&chunk);
-    };
-
-    let mut summary = String::from_utf8_lossy(&body)
-        .split_whitespace()
-        .collect::<Vec<_>>()
-        .join(" ");
-    if is_truncated {
-        summary.push_str(" ...");
-    }
-    if let Some(error) = read_error {
-        if !summary.is_empty() {
-            summary.push(' ');
-        }
-        let _ = write!(&mut summary, "[error body read failed: {error}]");
-    }
-
-    summary
-}
-
-async fn success_body(response: &mut reqwest::Response) -> Result<Vec<u8>, ChatCompletionError> {
-    let limit = u64::try_from(SUCCESS_BODY_LIMIT_BYTES).unwrap_or(u64::MAX);
-    if response
-        .content_length()
-        .is_some_and(|content_length| content_length > limit)
-    {
-        return Err(ChatCompletionError::ResponseBodyTooLarge);
-    }
-
-    let mut body = Vec::new();
-    while let Some(chunk) = response
-        .chunk()
-        .await
-        .map_err(ChatCompletionError::transport)?
-    {
-        append_success_chunk(&mut body, &chunk)?;
-    }
-
-    Ok(body)
-}
-
-fn append_success_chunk(body: &mut Vec<u8>, chunk: &[u8]) -> Result<(), ChatCompletionError> {
-    let remaining = SUCCESS_BODY_LIMIT_BYTES.saturating_sub(body.len());
-    if chunk.len() > remaining {
-        return Err(ChatCompletionError::ResponseBodyTooLarge);
-    }
-
-    body.extend_from_slice(chunk);
-
-    Ok(())
-}
-
-/// Failure produced by a Chat Completions client implementation.
-#[derive(Debug, Error)]
-pub(crate) enum ChatCompletionError {
-    #[error("Chat Completions returned HTTP {status}: {body}")]
-    Http {
-        body: String,
-        #[source]
-        source: reqwest::Error,
-        status: reqwest::StatusCode,
-    },
-    #[error("Chat Completions returned an invalid response: {0}")]
-    InvalidResponse(#[source] serde_json::Error),
-    #[error("Chat Completions response body exceeds the size limit")]
-    ResponseBodyTooLarge,
-    #[error("Chat Completions transport failed: {0}")]
-    Transport(#[source] Box<dyn Error + Send + Sync>),
-}
-
-impl ChatCompletionError {
-    fn transport(error: impl Error + Send + Sync + 'static) -> Self {
-        Self::Transport(Box::new(error))
     }
 }
 
@@ -1152,18 +844,6 @@ struct CompletionTokenDetails {
 struct PromptTokenDetails {
     #[serde(default, deserialize_with = "deserialize_optional")]
     cached_tokens: Option<u64>,
-}
-
-fn deserialize_optional<'de, DeserializerType, ValueType>(
-    deserializer: DeserializerType,
-) -> Result<Option<ValueType>, DeserializerType::Error>
-where
-    DeserializerType: Deserializer<'de>,
-    ValueType: DeserializeOwned,
-{
-    let value = Value::deserialize(deserializer)?;
-
-    Ok(serde_json::from_value(value).ok())
 }
 
 #[derive(Deserialize)]

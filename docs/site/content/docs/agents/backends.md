@@ -75,6 +75,29 @@ external CLI. It talks directly to a model provider configured in the environmen
 | Kimi              | `KIMI_API_KEY`                       | Required `KIMI_BASE_URL`              |
 | Qwen              | `DASHSCOPE_API_KEY`                  | Required `DASHSCOPE_BASE_URL`         |
 | OpenAI-compatible | Optional `OPENAI_COMPATIBLE_API_KEY` | Optional `OPENAI_COMPATIBLE_BASE_URL` |
+| OpenAI            | `OPENAI_API_KEY`                     | Optional `OPENAI_BASE_URL`            |
+
+### OpenAI Models
+
+<a id="backends-harness-openai"></a> The harness runs `gpt-6.1-sol`, `gpt-6-astra`,
+`gpt-6-luna`, and `gpt-5.6-terra`, the GPT models Codex uses, through OpenAI's Responses
+API with a paid OpenAI Platform API key:
+
+```sh
+export OPENAI_API_KEY=sk-...
+agentty --experimental-harness   # then choose a gpt-* model in the Harness /model list
+```
+
+- Usage is billed to the API key's organization, not to a ChatGPT plan. To use a ChatGPT
+  subscription, run a **Codex** session instead; the Codex CLI signs in with ChatGPT.
+- `OPENAI_BASE_URL` (default `https://api.openai.com/v1`) points the harness at another
+  Responses API endpoint.
+- OpenAI stores no responses for the harness; each request resends the session history,
+  which OpenAI's prompt cache bills at the cached-input rate. OpenAI charges prompts
+  over 272,000 input tokens at twice the input rate, which long sessions can reach.
+- New Harness sessions start on an OpenAI model only when no other harness provider is
+  configured, so an `OPENAI_API_KEY` set for other tools never moves sessions to paid
+  OpenAI usage on its own.
 
 ### Local and Self-Hosted Models
 
@@ -284,6 +307,8 @@ whose provider is configured:
 - `qwen-plus`: Balanced Qwen model.
 - `openai-compatible`: The model `OPENAI_COMPATIBLE_MODEL` names on a local or
   self-hosted server; see [Local and Self-Hosted Models](#backends-harness-local).
+- `gpt-6.1-sol`, `gpt-6-astra`, `gpt-6-luna`, `gpt-5.6-terra`: OpenAI models with an
+  `OPENAI_API_KEY`; see [OpenAI Models](#backends-harness-openai).
 
 Each request stays within an input budget below the model's context window. Because
 Agentty estimates tokens from text size, it holds back the model's output reserve plus a
@@ -298,6 +323,7 @@ next turn fits history to that model's budget.
 | `kimi-k2.6`      | 262,144        | 206,366      |
 | `qwen3.8-max`    | 1,000,000      | 795,357      |
 | `qwen-plus`      | 1,000,000      | 877,705      |
+| `gpt-*` models   | 1,050,000      | 647,017      |
 
 `openai-compatible` takes its window and output reserve from the environment.
 

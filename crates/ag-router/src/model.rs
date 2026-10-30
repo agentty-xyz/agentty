@@ -487,7 +487,9 @@ impl ModelError {
         source: Box<dyn Error + Send + Sync>,
     ) -> Self {
         let class = match error_type {
+            ModelErrorType::ContextOverflow => ErrorClass::ContextOverflow,
             ModelErrorType::InvalidProviderResponse => ErrorClass::InvalidProviderResponse,
+            ModelErrorType::Provider => ErrorClass::Provider,
             ModelErrorType::Transport => ErrorClass::Transport,
         };
         Self::Request(Box::new(ClassifiedRequestError {
@@ -529,8 +531,51 @@ pub enum ErrorClass {
 /// Stable failure class used by transport adapters.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(crate) enum ModelErrorType {
+    /// A streamed response failed because its input exceeds the window.
+    ContextOverflow,
     InvalidProviderResponse,
+    /// A streamed response reported a provider failure after its `200`.
+    Provider,
     Transport,
+}
+
+/// Provider-neutral result of decoding one provider response.
+pub(crate) enum GeneratedResponse {
+    Failed {
+        error: ModelError,
+        metadata: CompletionMetadata,
+    },
+    Output {
+        metadata: CompletionMetadata,
+        output: String,
+        reasoning_content: Option<String>,
+    },
+    ToolCall {
+        call: ToolCall,
+        metadata: CompletionMetadata,
+    },
+    ToolCalls {
+        calls: Vec<ToolCall>,
+        metadata: CompletionMetadata,
+    },
+}
+
+impl GeneratedResponse {
+    pub(crate) fn failed(error: ModelError, metadata: CompletionMetadata) -> Self {
+        Self::Failed { error, metadata }
+    }
+
+    /// Wraps decoded calls, keeping a single call as [`Self::ToolCall`].
+    pub(crate) fn tool_calls(mut calls: Vec<ToolCall>, metadata: CompletionMetadata) -> Self {
+        if calls.len() == 1 {
+            Self::ToolCall {
+                call: calls.remove(0),
+                metadata,
+            }
+        } else {
+            Self::ToolCalls { calls, metadata }
+        }
+    }
 }
 
 #[derive(Debug, Error)]

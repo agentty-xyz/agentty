@@ -53,9 +53,8 @@ const BASH_CAPTURE_BYTES: usize = 8192;
 /// for [`AgentModel::OpenAiCompatible`], such as Ollama's `qwen3:latest`.
 const OPENAI_COMPATIBLE_MODEL_ENV: &str = "OPENAI_COMPATIBLE_MODEL";
 /// Environment prefixes that carry provider keys and endpoints, withheld from
-/// `bash`.
-const PROVIDER_ENVIRONMENT_PREFIXES: [&str; 4] =
-    ["DASHSCOPE_", "KIMI_", "MODEL_", "OPENAI_COMPATIBLE_"];
+/// `bash`. `OPENAI_` covers both `OpenAI` and OpenAI-compatible variables.
+const PROVIDER_ENVIRONMENT_PREFIXES: [&str; 4] = ["DASHSCOPE_", "KIMI_", "MODEL_", "OPENAI_"];
 /// Variables granted to `bash` first, so the harness environment limit never
 /// drops them.
 const PRIORITY_ENVIRONMENT: [&str; 17] = [
@@ -391,16 +390,18 @@ impl ModelSelection {
             .with_lifecycle_observer(traced(observer)))
     }
 
-    /// Returns the context profile the environment declares for this
-    /// provider's models, else the catalog model's declared profile, else
-    /// the conservative fallback.
+    /// Returns the context profile the harness provider catalog or the
+    /// environment declares for this model, else the Agentty catalog model's
+    /// declared profile, else the conservative fallback. Codex models served
+    /// by the harness take the provider catalog's profile, not the one
+    /// Agentty declares for Codex app-server compaction.
     ///
     /// # Errors
     /// Returns an error for an invalid environment-declared profile.
     fn profile(&self, environment: &BTreeMap<String, String>) -> Result<ModelProfile, String> {
         let declared = self
             .provider
-            .environment_profile(lookup(environment))
+            .declared_profile(&self.model, lookup(environment))
             .map_err(failure("Invalid harness model profile"))?;
 
         Ok(declared

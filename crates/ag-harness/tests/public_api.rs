@@ -502,7 +502,7 @@ fn external_consumer_configures_a_local_server_from_the_environment() {
         .client_from_environment(environment)
         .expect("Ollama defaults need no key or endpoint");
     let profile = ModelProvider::OpenAiCompatible
-        .environment_profile(environment)
+        .declared_profile("qwen3:latest", environment)
         .expect("declared window should be valid")
         .expect("OpenAI-compatible models declare their profile");
 

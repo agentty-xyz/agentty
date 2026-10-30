@@ -31,6 +31,12 @@ fn test_agent_selection_speed_compatibility() {
             false,
         ),
         (
+            AgentSelection::new(AgentKind::Harness, AgentModel::Gpt61Sol),
+            SpeedMode::Fast,
+            AgentSelection::new(AgentKind::Harness, AgentModel::Gpt61Sol),
+            false,
+        ),
+        (
             AgentSelection::new(AgentKind::Claude, AgentModel::ClaudeOpus55),
             SpeedMode::Fast,
             AgentSelection::new(AgentKind::Claude, AgentModel::ClaudeOpus55),

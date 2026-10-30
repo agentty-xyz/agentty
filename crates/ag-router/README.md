@@ -1,11 +1,12 @@
 # `ag-router`
 
-One Rust API for structured chat requests to Muse, Kimi, Qwen, and any OpenAI-compatible
-Chat Completions server (`openai-compatible`), such as Ollama, llama.cpp, LM Studio, or
-vLLM. The host supplies provider credentials and chooses the model explicitly as
-`provider/model`. The model component may itself contain `/`. Every request requires a
-named JSON Schema response format. The router returns locally validated JSON or generic
-function calls for the caller to execute.
+One Rust API for structured chat requests to Muse, Kimi, Qwen, `OpenAI` (`openai`,
+through the Responses API), and any OpenAI-compatible Chat Completions server
+(`openai-compatible`), such as Ollama, llama.cpp, LM Studio, or vLLM. The host supplies
+provider credentials and chooses the model explicitly as `provider/model`. The model
+component may itself contain `/`. Every request requires a named JSON Schema response
+format. The router returns locally validated JSON or generic function calls for the
+caller to execute.
 
 ```rust
 use ag_router::{
@@ -68,5 +69,19 @@ JSON answer because small local models read an unconditional "return only JSON" 
 forbidding them; requests without tools also send the `json_schema` response format,
 which Ollama, llama.cpp, LM Studio, and vLLM all accept. Reasoning a server returns is
 not replayed, so the history stays portable. Context overflow is recognized from the
-shared `OpenAI` markers and llama.cpp's `exceed_context_size_error`. The current `Task`
-surface supports chat only. Streaming and other model modes are not yet implemented.
+shared `OpenAI` markers and llama.cpp's `exceed_context_size_error`.
+
+`openai` sends requests to `{base_url}/responses`, the only `OpenAI` API that offers
+function tools to the current GPT models. Requests are stateless (`store: false`) and
+streamed; the router reads the server-sent events and returns one completion, so callers
+see the same contract as every other provider. System messages travel as `developer`
+messages, the schema is a native but non-strict `json_schema` text format beside
+non-strict function tools, `parallel_tool_calls` is on, and `prompt_cache_key` is sent.
+The reasoning items of a response are returned as one JSON array in the reasoning
+content of its first call or output, and replayed verbatim before that assistant turn;
+reasoning content that is not such an array is omitted. Usage reports cached input
+tokens. An overflow is recognized from an HTTP rejection or from a streamed
+`response.failed`, a response cut short reports its `incomplete_details` reason, and a
+stream that closes before its terminal event is a transport failure. The current `Task`
+surface supports chat only. Streaming to callers and other model modes are not yet
+implemented.

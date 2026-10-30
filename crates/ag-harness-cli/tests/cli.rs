@@ -429,7 +429,9 @@ async fn provider_flags_select_alternate_wire_formats() {
                 expected_request["messages"][0]["content"] =
                     json!(tool_aware_structured_output_instruction());
             }
-            ModelProvider::Muse => unreachable!("the test covers alternate providers"),
+            ModelProvider::Muse | ModelProvider::OpenAi => {
+                unreachable!("the test covers alternate Chat Completions providers")
+            }
         }
         Mock::given(method("POST"))
             .and(path("/chat/completions"))
@@ -471,6 +473,88 @@ async fn provider_flags_select_alternate_wire_formats() {
         );
         assert_eq!(body, expected_request);
     }
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn openai_provider_streams_a_responses_request_and_resumes() {
+    // Arrange
+    let server = MockServer::start().await;
+    let completed = json!({
+        "type": "response.completed",
+        "response": {
+            "id": "resp_cli",
+            "status": "completed",
+            "output": [{
+                "type": "message",
+                "role": "assistant",
+                "content": [{
+                    "type": "output_text",
+                    "text": json!({"message": "openai response"}).to_string()
+                }]
+            }],
+            "usage": {"input_tokens": 4, "output_tokens": 2, "total_tokens": 6}
+        }
+    });
+    Mock::given(method("POST"))
+        .and(path("/v1/responses"))
+        .and(bearer_token("sk-test"))
+        .respond_with(
+            ResponseTemplate::new(200)
+                .set_body_raw(format!("data: {completed}\n\n"), "text/event-stream"),
+        )
+        .expect(2)
+        .mount(&server)
+        .await;
+    let (storage, mut command) = harness_command().expect("temporary storage should exist");
+    let base_url = format!("{}/v1", server.uri());
+
+    // Act
+    let run = command
+        .args([
+            "run",
+            "gpt-6.1-sol",
+            "Hello",
+            "--provider",
+            "openai",
+            "--session",
+            "openai-session",
+        ])
+        .env("OPENAI_API_KEY", "sk-test")
+        .env("OPENAI_BASE_URL", &base_url)
+        .output()
+        .expect("OpenAI run should execute");
+    let mut resume = Command::new(cargo_bin!("ag-harness"));
+    let resume = resume
+        .env("AG_HARNESS_ROOT", storage.path())
+        .env("OPENAI_API_KEY", "sk-test")
+        .env("OPENAI_BASE_URL", &base_url)
+        .args(["resume", "openai-session", "Again"])
+        .output()
+        .expect("OpenAI resume should execute");
+
+    // Assert
+    assert!(
+        run.status.success(),
+        "OpenAI run failed: {}",
+        String::from_utf8_lossy(&run.stderr)
+    );
+    assert!(String::from_utf8_lossy(&run.stdout).contains("assistant> openai response"));
+    assert!(
+        resume.status.success(),
+        "OpenAI resume failed: {}",
+        String::from_utf8_lossy(&resume.stderr)
+    );
+    let requests = server
+        .received_requests()
+        .await
+        .expect("provider requests should be recorded");
+    let body = requests[0]
+        .body_json::<serde_json::Value>()
+        .expect("provider request should contain JSON");
+    assert_eq!(body["model"], "gpt-6.1-sol");
+    assert_eq!(body["stream"], true);
+    assert_eq!(body["store"], false);
+    assert_eq!(body["input"][0]["role"], "developer");
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]

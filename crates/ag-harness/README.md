@@ -273,16 +273,16 @@ let kimi = ModelConfiguration::new(ModelProvider::Kimi, KIMI_K3)
 OpenAI-compatible server (Ollama, llama.cpp, LM Studio, vLLM). Its API key
 (`OPENAI_COMPATIBLE_API_KEY`) is optional and its base URL
 (`OPENAI_COMPATIBLE_BASE_URL`) defaults to Ollama's `http://127.0.0.1:11434/v1`. The
-harness cannot know such a model, so `ModelProvider::environment_profile` returns the
+harness cannot know such a model, so `ModelProvider::declared_profile` returns the
 profile the environment declares (`OPENAI_COMPATIBLE_CONTEXT_WINDOW`, default 32,768;
 `OPENAI_COMPATIBLE_MAX_OUTPUT_TOKENS`, default 8,192) under the default estimator with a
-50% margin, and `None` for hosted providers:
+50% margin:
 
 ```rust
 let local = ModelConfiguration::new(ModelProvider::OpenAiCompatible, "qwen3:latest")
     .client_from_environment(|name| std::env::var(name))?;
 let profile = ModelProvider::OpenAiCompatible
-    .environment_profile(|name| std::env::var(name))?
+    .declared_profile("qwen3:latest", |name| std::env::var(name))?
     .expect("OpenAI-compatible models declare their profile");
 ```
 
@@ -290,6 +290,24 @@ Its requests carry only portable fields: the schema is stated in the prompt (wit
 `json_schema` response format when no tools are offered), reasoning is neither requested
 nor replayed, and no prompt cache key or image input is sent. The server must support
 tool calls.
+
+`ModelProvider::OpenAi` serves `OpenAI` models such as `GPT_6_1_SOL` through the
+Responses API with `OPENAI_API_KEY` and an optional `OPENAI_BASE_URL` (default
+`https://api.openai.com/v1`). Requests are streamed and stateless (`store: false`): each
+resends its history, encrypted reasoning from earlier responses is replayed verbatim,
+and output is constrained by a native JSON Schema format. `declared_profile` returns
+each cataloged model's documented window under the default estimator with a 50% margin,
+and `None` for other models, Muse, Kimi, and Qwen, whose hosts declare their own:
+
+```rust
+use ag_harness::provider::GPT_6_1_SOL;
+
+let openai = ModelConfiguration::new(ModelProvider::OpenAi, GPT_6_1_SOL)
+    .client_from_environment(|name| std::env::var(name))?;
+let profile = ModelProvider::OpenAi
+    .declared_profile(GPT_6_1_SOL, |name| std::env::var(name))?
+    .expect("cataloged OpenAI models declare their profile");
+```
 
 Built-in clients call `ag-router` for provider transport and schema validation. Hosts
 can also use `ag-router` directly for structured chat calls without a harness. Implement
@@ -365,7 +383,7 @@ The crate root holds what a typical host needs: `Harness`, `Session`, `TurnOptio
 
 | Module      | Contents                                                 |
 | ----------- | -------------------------------------------------------- |
-| `provider`  | Muse, Kimi, Qwen, and OpenAI-compatible clients          |
+| `provider`  | Muse, Kimi, Qwen, OpenAI, and OpenAI-compatible clients  |
 | `model`     | The `Model` trait, requests, registry, context budgets   |
 | `tool`      | Tool arguments, results, and the `FileSystem` seam       |
 | `bash`      | Sandboxed Bash configuration, executors, command records |

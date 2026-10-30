@@ -37,10 +37,11 @@ const CHAT_COMMAND_HELP: &str = concat!(
     "  /model <MODEL>    switch later turns to a list number, provider/model, or model ID\n",
     "  /help             show commands\n"
 );
-/// Context profile assumed for every hosted chat model. The built-in catalog
-/// declares no context windows for them, so this assumes a conservative
-/// 128k-token window and keeps 16,384 tokens free for the model's response.
-/// OpenAI-compatible models declare theirs in the environment.
+/// Context profile assumed for hosted chat models whose window the built-in
+/// catalog does not declare: a conservative 128k-token window keeping 16,384
+/// tokens free for the model's response. Cataloged `OpenAI` models declare
+/// their documented windows, and OpenAI-compatible models declare theirs in
+/// the environment.
 const MODEL_PROFILE: ModelProfile = ModelProfile::new(128_000).with_reserved_tokens(16_384);
 /// Revision of the CLI's built-in model registrations. Sessions record it and
 /// require the same value on resume.
@@ -674,8 +675,8 @@ fn repository_from_path(root: &Path, path: Option<&OsStr>) -> Result<Repository,
 
 /// Builds clients and context profiles for the starting model and later
 /// `/model` switches. An explicit base URL applies only to the provider it
-/// was given for. A provider that declares its profile in the environment
-/// uses it; the others assume [`MODEL_PROFILE`].
+/// was given for. A model whose profile the provider catalog or environment
+/// declares uses it; the others assume [`MODEL_PROFILE`].
 fn model_connector(
     provider: ModelProvider,
     base_url: Option<String>,
@@ -689,7 +690,7 @@ fn model_connector(
         let client = model_client(selection.provider, &selection.model, base_url, environment)?;
         let profile = selection
             .provider
-            .environment_profile(&mut *environment)
+            .declared_profile(&selection.model, &mut *environment)
             .map_err(CliError::from)?
             .unwrap_or(MODEL_PROFILE);
 
@@ -770,6 +771,7 @@ fn stored_model_identity_parts(
         Some("meta") => ModelProvider::Muse,
         Some("moonshot_ai") => ModelProvider::Kimi,
         Some("alibaba_cloud") => ModelProvider::Qwen,
+        Some("openai") => ModelProvider::OpenAi,
         Some("openai_compatible") => ModelProvider::OpenAiCompatible,
         _ => return Err(CliError::MissingModelIdentity),
     };

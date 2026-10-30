@@ -4,19 +4,24 @@ use std::collections::HashMap;
 use std::sync::Arc;
 
 use crate::chat_completion::{
-    self, ChatCompletionBackend, ChatCompletionProviderPolicy, GeneratedResponse, ReasoningFormat,
+    self, ChatCompletionBackend, ChatCompletionProviderPolicy, ReasoningFormat,
     StructuredOutputMode,
 };
-use crate::model::{Completion, ModelError, ModelRequest, ReasoningEffort};
+use crate::http::HttpTransport;
+use crate::model::{Completion, GeneratedResponse, ModelError, ModelRequest, ReasoningEffort};
+use crate::responses::{self, ResponsesBackend, ResponsesProviderPolicy};
 use crate::{OutputSchema, TurnInput};
 
-/// Built-in Chat Completions provider.
+/// Built-in model provider.
 #[derive(Clone, Copy, Debug, Eq, Hash, PartialEq)]
 pub enum Provider {
     /// Moonshot AI Kimi.
     Kimi,
     /// Meta Model API Muse.
     Muse,
+    /// `OpenAI` models, such as the GPT models Codex runs, through the
+    /// Responses API.
+    OpenAi,
     /// Any server implementing the `OpenAI` Chat Completions API, such as
     /// Ollama, llama.cpp, LM Studio, or vLLM, under a conservative policy.
     OpenAiCompatible,
@@ -25,13 +30,20 @@ pub enum Provider {
 }
 
 impl Provider {
-    const ALL: [Self; 4] = [Self::Kimi, Self::Muse, Self::OpenAiCompatible, Self::Qwen];
+    const ALL: [Self; 5] = [
+        Self::Kimi,
+        Self::Muse,
+        Self::OpenAi,
+        Self::OpenAiCompatible,
+        Self::Qwen,
+    ];
 
     /// Prefix used in a `provider/model` request identifier.
     pub const fn as_str(self) -> &'static str {
         match self {
             Self::Kimi => "kimi",
             Self::Muse => "muse",
+            Self::OpenAi => "openai",
             Self::OpenAiCompatible => "openai-compatible",
             Self::Qwen => "qwen",
         }
@@ -60,6 +72,7 @@ pub struct ProviderConfig {
 pub struct Router {
     providers: HashMap<Provider, ProviderConfig>,
     client: Arc<dyn chat_completion::ChatCompletionClient>,
+    responses: Arc<HttpTransport>,
 }
 
 impl Router {
@@ -68,6 +81,7 @@ impl Router {
         Self {
             providers: HashMap::from([(config.provider, config)]),
             client: chat_completion::default_client(),
+            responses: responses::default_transport(),
         }
     }
 
@@ -85,6 +99,7 @@ impl Router {
         Ok(Self {
             providers,
             client: chat_completion::default_client(),
+            responses: responses::default_transport(),
         })
     }
 
@@ -148,7 +163,7 @@ impl Router {
         }
     }
 
-    fn backend(&self, id: &str) -> Result<ChatCompletionBackend, ModelError> {
+    fn backend(&self, id: &str) -> Result<Backend, ModelError> {
         let (prefix, model) = id.split_once('/').ok_or(ModelError::InvalidModelId)?;
         if model.trim().is_empty() || prefix.trim().is_empty() {
             return Err(ModelError::InvalidModelId);
@@ -168,14 +183,71 @@ impl Router {
         if !api_key_valid || config.base_url.trim().is_empty() {
             return Err(ModelError::InvalidProviderConfig);
         }
-        Ok(ChatCompletionBackend::with_client(
-            config.api_key.clone(),
-            config.base_url.clone(),
-            model.to_string(),
-            policy(provider, model),
-            Arc::clone(&self.client),
-        ))
+
+        Ok(match policy(provider, model) {
+            ProviderPolicy::ChatCompletion(policy) => {
+                Backend::ChatCompletion(ChatCompletionBackend::with_client(
+                    config.api_key.clone(),
+                    config.base_url.clone(),
+                    model.to_string(),
+                    policy,
+                    Arc::clone(&self.client),
+                ))
+            }
+            ProviderPolicy::Responses(policy) => Backend::Responses(ResponsesBackend::new(
+                config.api_key.clone(),
+                config.base_url.clone(),
+                model.to_string(),
+                policy,
+                Arc::clone(&self.responses),
+            )),
+        })
     }
+}
+
+/// Wire backend serving one routed model.
+enum Backend {
+    ChatCompletion(ChatCompletionBackend),
+    Responses(ResponsesBackend),
+}
+
+impl Backend {
+    fn validate_schema(&self, schema: &OutputSchema) -> Result<(), ModelError> {
+        match self {
+            Self::ChatCompletion(backend) => backend.validate_schema(schema),
+            Self::Responses(backend) => backend.validate_schema(schema),
+        }
+    }
+
+    /// Validates input content; every current `OpenAI` model reads images.
+    fn validate_input(&self, input: &TurnInput) -> Result<(), ModelError> {
+        match self {
+            Self::ChatCompletion(backend) => backend.validate_input(input),
+            Self::Responses(_) => Ok(()),
+        }
+    }
+
+    /// Returns whether the schema is stated in a leading prompt message; the
+    /// Responses API constrains output natively.
+    fn keeps_prefix_across_schemas(&self) -> bool {
+        match self {
+            Self::ChatCompletion(backend) => backend.keeps_prefix_across_schemas(),
+            Self::Responses(_) => false,
+        }
+    }
+
+    async fn generate(&self, request: &ModelRequest) -> Result<GeneratedResponse, ModelError> {
+        match self {
+            Self::ChatCompletion(backend) => backend.generate(request).await,
+            Self::Responses(backend) => backend.generate(request).await,
+        }
+    }
+}
+
+/// Wire policy of one provider model.
+enum ProviderPolicy {
+    ChatCompletion(ChatCompletionProviderPolicy),
+    Responses(ResponsesProviderPolicy),
 }
 
 /// Kimi's `400` message for input over the window, as in "Your request
@@ -198,9 +270,19 @@ const LLAMA_CPP_CONTEXT_OVERFLOW: &str = "exceed_context_size_error";
 /// input length should be [1, 983616]".
 const QWEN_CONTEXT_OVERFLOW: &str = "range of input length";
 
-fn policy(provider: Provider, model: &str) -> ChatCompletionProviderPolicy {
+/// The `OpenAI` Responses API's message for input over the window, as in
+/// "Your input exceeds the context window of this model", which a streamed
+/// `response.failed` may carry beside the shared `context_length_exceeded`
+/// code.
+const OPENAI_CONTEXT_OVERFLOW: &str = "exceeds the context window";
+
+/// Prefixes of the `OpenAI` model families that accept the `max` reasoning
+/// effort; earlier models, such as `gpt-5.3-codex`, top out at `xhigh`.
+const OPENAI_MAX_EFFORT_PREFIXES: [&str; 2] = ["gpt-5.6-", "gpt-6"];
+
+fn policy(provider: Provider, model: &str) -> ProviderPolicy {
     match provider {
-        Provider::Kimi => ChatCompletionProviderPolicy {
+        Provider::Kimi => ProviderPolicy::ChatCompletion(ChatCompletionProviderPolicy {
             context_overflow_markers: &[KIMI_CONTEXT_OVERFLOW],
             display_name: "Kimi",
             image_input: matches!(
@@ -230,8 +312,8 @@ fn policy(provider: Provider, model: &str) -> ChatCompletionProviderPolicy {
             },
             unsupported_schema_reason: "Kimi JSON Object mode requires an explicit object root \
                                         schema",
-        },
-        Provider::Muse => ChatCompletionProviderPolicy {
+        }),
+        Provider::Muse => ProviderPolicy::ChatCompletion(ChatCompletionProviderPolicy {
             context_overflow_markers: &[MUSE_CONTEXT_OVERFLOW],
             display_name: "Meta Model API",
             image_input: matches!(model, "muse-spark-1.3" | "muse-spark-1.3-contributor"),
@@ -241,21 +323,37 @@ fn policy(provider: Provider, model: &str) -> ChatCompletionProviderPolicy {
             structured_output: StructuredOutputMode::JsonSchema,
             unsupported_schema_reason: "Muse structured output requires an explicit object root \
                                         schema",
-        },
-        Provider::OpenAiCompatible => ChatCompletionProviderPolicy {
-            context_overflow_markers: &[LLAMA_CPP_CONTEXT_OVERFLOW],
-            display_name: "OpenAI-compatible server",
-            image_input: false,
-            prompt_cache_key: false,
-            reasoning_format: ReasoningFormat::None,
-            response_format_with_tools: false,
-            structured_output: StructuredOutputMode::SchemaPrompt,
-            unsupported_schema_reason: "OpenAI-compatible structured output requires an explicit \
-                                        object root schema",
-        },
+        }),
+        Provider::OpenAi => ProviderPolicy::Responses(ResponsesProviderPolicy {
+            context_overflow_markers: &[OPENAI_CONTEXT_OVERFLOW],
+            display_name: "OpenAI",
+            reasoning_effort: if OPENAI_MAX_EFFORT_PREFIXES
+                .iter()
+                .any(|prefix| model.starts_with(prefix))
+            {
+                ReasoningEffort::as_str
+            } else {
+                openai_xhigh_effort
+            },
+            unsupported_schema_reason: "OpenAI structured output requires an explicit object root \
+                                        schema",
+        }),
+        Provider::OpenAiCompatible => {
+            ProviderPolicy::ChatCompletion(ChatCompletionProviderPolicy {
+                context_overflow_markers: &[LLAMA_CPP_CONTEXT_OVERFLOW],
+                display_name: "OpenAI-compatible server",
+                image_input: false,
+                prompt_cache_key: false,
+                reasoning_format: ReasoningFormat::None,
+                response_format_with_tools: false,
+                structured_output: StructuredOutputMode::SchemaPrompt,
+                unsupported_schema_reason: "OpenAI-compatible structured output requires an \
+                                            explicit object root schema",
+            })
+        }
         Provider::Qwen => {
             let preserves_reasoning = model.starts_with("qwen3.8-");
-            ChatCompletionProviderPolicy {
+            ProviderPolicy::ChatCompletion(ChatCompletionProviderPolicy {
                 context_overflow_markers: &[QWEN_CONTEXT_OVERFLOW],
                 display_name: "Qwen",
                 image_input: model.starts_with("qwen-vl-")
@@ -279,8 +377,18 @@ fn policy(provider: Provider, model: &str) -> ChatCompletionProviderPolicy {
                 },
                 unsupported_schema_reason: "Qwen JSON Object mode requires an explicit object \
                                             root schema",
-            }
+            })
         }
+    }
+}
+
+/// Maps `max` to `xhigh`, the deepest effort of `OpenAI` models before
+/// GPT-5.6, such as `gpt-5.3-codex`.
+fn openai_xhigh_effort(effort: ReasoningEffort) -> &'static str {
+    if effort == ReasoningEffort::Max {
+        "xhigh"
+    } else {
+        effort.as_str()
     }
 }
 

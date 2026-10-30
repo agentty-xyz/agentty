@@ -56,10 +56,11 @@ macro_rules! define_model_catalog {
         }
 
         impl AgentKind {
-            /// Returns this provider's models in their catalog display order.
-            pub fn models(self) -> &'static [AgentModel] {
+            /// Returns the models declared under this provider's catalog
+            /// block, without the models it shares with another provider.
+            const fn declared_models(self) -> &'static [AgentModel] {
                 match self {
-                    Self::Antigravity => Self::Gemini.models(),
+                    Self::Antigravity => &[],
                     $(Self::$provider => &[$(AgentModel::$model,)*],)*
                 }
             }
@@ -193,6 +194,30 @@ define_model_catalog! {
     }
 }
 
+/// Models the native harness serves, in display order: its own catalog
+/// models, then the Codex models `OpenAI`'s Responses API also serves, which
+/// the harness shares with [`AgentKind::Codex`] like Antigravity shares the
+/// Gemini models.
+///
+/// A new harness session starts on the first model whose provider is
+/// configured. The `OpenAI` models come last because `OPENAI_API_KEY` is
+/// often set for other tools, so its mere presence must not move sessions
+/// from a deliberately configured harness provider to paid `OpenAI` usage.
+/// The harness library also catalogs the deprecated `gpt-5.3-codex`, which
+/// Agentty retires to [`AgentModel::Gpt61Sol`] instead of offering it.
+const HARNESS_MODELS: &[AgentModel] = &[
+    AgentModel::MuseSpark13,
+    AgentModel::KimiK3,
+    AgentModel::KimiK26,
+    AgentModel::Qwen38Max,
+    AgentModel::QwenPlus,
+    AgentModel::OpenAiCompatible,
+    AgentModel::Gpt61Sol,
+    AgentModel::Gpt6Astra,
+    AgentModel::Gpt6Luna,
+    AgentModel::Gpt56Terra,
+];
+
 struct ModelDescriptor {
     description: &'static str,
     id: &'static str,
@@ -234,10 +259,12 @@ impl AgentSelection {
         self.model
     }
 
-    /// Returns whether this exact provider/model pair supports Fast mode.
+    /// Returns whether this exact provider/model pair supports Fast mode,
+    /// which needs a provider with a speed control; the harness serves Codex
+    /// models without one.
     #[must_use]
     pub fn supports_fast_mode(self) -> bool {
-        self.model.descriptor().supports_fast_mode
+        self.kind.supports_speed_mode() && self.model.descriptor().supports_fast_mode
     }
 
     /// Returns the compatible provider/model pair for one speed preference.
@@ -565,6 +592,19 @@ impl AgentKind {
             Self::Claude => Some("claude"),
             Self::Codex => Some("codex"),
             Self::Harness => None,
+        }
+    }
+
+    /// Returns this provider's models in their catalog display order.
+    ///
+    /// Antigravity serves the Gemini models, and the harness serves the
+    /// Codex models available through `OpenAI`'s Responses API beside its
+    /// own.
+    pub fn models(self) -> &'static [AgentModel] {
+        match self {
+            Self::Antigravity => Self::Gemini.declared_models(),
+            Self::Harness => HARNESS_MODELS,
+            Self::Claude | Self::Codex | Self::Gemini => self.declared_models(),
         }
     }
 
