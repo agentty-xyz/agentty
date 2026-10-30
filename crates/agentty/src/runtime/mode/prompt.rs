@@ -945,10 +945,10 @@ async fn handle_prompt_slash_submit(app: &mut App, prompt_context: &PromptContex
             open_prompt_response_style_stage(app, prompt_context.session_index);
         }
         Some(PromptSuggestionSelection::Command(_)) => {
-            if let AppMode::Prompt { slash_state, .. } = &mut app.mode {
-                slash_state.stage = PromptSlashStage::Agent;
-                slash_state.selected_agent = None;
-                slash_state.selected_index = 0;
+            if let AppMode::Prompt { slash_state, .. } = &mut app.mode
+                && slash_state.open_model_stage()
+            {
+                app.refresh_harness_models();
             }
         }
         Some(PromptSuggestionSelection::Agent(selected_agent)) => {

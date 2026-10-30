@@ -427,6 +427,13 @@ impl App {
         review::has_actionable_review_suggestions(Some(text))
     }
 
+    /// Lists the harness models again in the background, so a server started
+    /// or a model pulled after launch appears in the session picker and
+    /// `/model`.
+    pub(crate) fn refresh_harness_models(&self) {
+        self.services.refresh_harness_models();
+    }
+
     /// Persists one slash-selected model change and logs any failure with
     /// session context.
     pub(crate) async fn update_prompt_session_model(

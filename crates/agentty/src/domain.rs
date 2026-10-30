@@ -4,7 +4,7 @@
 pub mod agent_profile;
 pub mod composer;
 pub mod file_entry;
-/// Launch-time availability of in-process harness sessions.
+/// Harness models this launch offers and availability of Harness sessions.
 pub mod harness;
 /// Editable text-input state and cursor operations.
 pub mod input;
@@ -30,7 +30,9 @@ pub mod agent {
     pub use ag_contracts::{ReasoningLevel, ResponseStyle, SpeedMode};
     pub use ag_session::{
         AgentCliInfo, AgentCliVersion, AgentKind, AgentModel, AgentSelection,
-        AgentSelectionMetadata, parse_persisted_session_agent_model, resolve_agent_kind_for_model,
+        AgentSelectionMetadata, HarnessModelOption, HarnessModelStatus,
+        MINIMUM_RUNNING_CONTEXT_WINDOW, ModelBilling, ServedModel,
+        parse_persisted_session_agent_model, resolve_agent_kind_for_model,
         resolve_agent_selection_for_model, resolve_model_for_available_agent_kinds,
         resolve_prompt_model_agent_kind, selectable_models_for_agent_kinds,
     };

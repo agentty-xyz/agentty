@@ -13,6 +13,7 @@ use crate::app;
 use crate::app::core::event::{AppEvent, AppEventBatch};
 use crate::app::session_state::SessionGitStatus;
 use crate::domain::agent::{AgentCliInfo, AgentKind, AgentModel, AgentSelection};
+use crate::domain::harness::HarnessAvailability;
 use crate::domain::question::QuestionItem;
 use crate::domain::session::{
     SESSION_DATA_DIR, SessionDiffState, SessionHandles, SessionId, SessionSize, SessionStats,
@@ -306,6 +307,33 @@ async fn apply_app_events_update_status_changed_updates_app_state() {
         })
     );
     assert!(app.needs_redraw());
+}
+
+#[tokio::test]
+/// Verifies that a harness model listing outside the composer replaces the
+/// cached models new prompts and the session picker read.
+async fn apply_app_events_harness_models_updates_app_services_outside_prompts() {
+    // Arrange
+    let mut app = crate::test_support::new_test_app_with_tmux_client_without_retained_base_dir(
+        Arc::new(MockTmuxClient::new()),
+    )
+    .await;
+    crate::test_support::set_test_harness_models(&mut app.services, true, None);
+    let listed = crate::test_support::ready_harness_model(AgentModel::KimiK3);
+
+    // Act
+    app.apply_app_events(AppEvent::HarnessModelsUpdated {
+        options: vec![listed.clone()],
+    })
+    .await;
+
+    // Assert
+    assert!(matches!(app.mode, AppMode::List));
+    assert_eq!(app.services.harness_model_options(), vec![listed]);
+    assert_eq!(
+        app.services.harness_availability(),
+        HarnessAvailability::Available(AgentModel::KimiK3)
+    );
 }
 
 #[tokio::test]

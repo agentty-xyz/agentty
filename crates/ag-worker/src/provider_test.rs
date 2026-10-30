@@ -7,7 +7,9 @@ use ag_contracts::{
     PermissionMode, ReasoningLevel, ResponseStyle, SpeedMode, ToolPolicy, TurnContinuation,
     TurnRequest,
 };
-use ag_session::{AgentAvailabilityProbe, AgentCliInfo, AgentKind, AgentModel};
+use ag_session::{
+    AgentAvailabilityProbe, AgentCliInfo, AgentKind, AgentModel, HarnessModelStatus, ModelBilling,
+};
 
 use crate::{
     RealAgentAvailabilityProbe, RuntimeConfig, cleanup_session_worktree_artifacts, setup_backend,
@@ -63,8 +65,8 @@ fn worker_defaults_preserve_provider_policy_and_overrides_are_isolated() {
     );
 }
 
-#[test]
-fn provider_discovery_uses_the_runtime_with_an_isolated_empty_search_path() {
+#[tokio::test]
+async fn provider_discovery_uses_the_runtime_with_an_isolated_empty_search_path() {
     // Arrange: isolate PATH in a child so discovery never updates installed
     // CLIs.
     const MARKER: &str = "AG_WORKER_EMPTY_PROVIDER_PATH";
@@ -82,16 +84,25 @@ fn provider_discovery_uses_the_runtime_with_an_isolated_empty_search_path() {
             setup_backend(AgentKind::Antigravity, std::path::Path::new(".")),
             Err(ag_contracts::AgentError::Backend(_))
         ));
-        assert_eq!(
-            RealAgentAvailabilityProbe.native_harness_default_model(),
-            Some(AgentModel::MuseSpark13)
+        let harness_models = RealAgentAvailabilityProbe.native_harness_models().await;
+        let muse = harness_models
+            .iter()
+            .find(|option| option.model == AgentModel::MuseSpark13)
+            .expect("Muse is listed");
+        assert_eq!(muse.status, HarnessModelStatus::Ready);
+        assert!(
+            harness_models
+                .iter()
+                .all(|option| option.billing == ModelBilling::Paid)
         );
         return;
     }
     // Act
     let output = Command::new(env::current_exe().expect("test executable"))
         .args(["--exact", "provider::tests::provider_discovery_uses_the_runtime_with_an_isolated_empty_search_path"])
-        .env(MARKER, "1").env("PATH", "").env("MODEL_API_KEY", "test-key").output().expect("isolated discovery");
+        .env(MARKER, "1").env("PATH", "").env("MODEL_API_KEY", "test-key")
+        .env("OPENAI_COMPATIBLE_BASE_URL", "http://127.0.0.1:9/v1").env_remove("OPENAI_COMPATIBLE_MODEL")
+        .output().expect("isolated discovery");
     // Assert
     assert!(
         output.status.success(),

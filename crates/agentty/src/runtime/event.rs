@@ -247,7 +247,7 @@ where
                     app.apply_app_events(*event).await;
                 }
                 AppRuntimeEvent::Session(command) => {
-                    app.apply_session_runtime_command(command).await;
+                    app.apply_session_runtime_command(*command).await;
                 }
             }
 

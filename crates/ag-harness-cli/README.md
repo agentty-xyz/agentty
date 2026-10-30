@@ -69,8 +69,9 @@ Sessions whose history contains provider reasoning cannot switch models. A model
 - Muse, Kimi, and Qwen models are assumed to have a 128k-token context window; cataloged
   OpenAI models use their documented windows; OpenAI-compatible models use
   `OPENAI_COMPATIBLE_CONTEXT_WINDOW` (default 32,768) and
-  `OPENAI_COMPATIBLE_MAX_OUTPUT_TOKENS` (default 8,192). Each request replays the most
-  recent turns that fit, and a turn fails once its own tool traffic no longer fits.
+  `OPENAI_COMPATIBLE_MAX_OUTPUT_TOKENS` (default a quarter of the window, at most
+  8,192). Each request replays the most recent turns that fit, and a turn fails once its
+  own tool traffic no longer fits.
 
 ## Tracing
 

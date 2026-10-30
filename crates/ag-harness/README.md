@@ -275,15 +275,27 @@ OpenAI-compatible server (Ollama, llama.cpp, LM Studio, vLLM). Its API key
 (`OPENAI_COMPATIBLE_BASE_URL`) defaults to Ollama's `http://127.0.0.1:11434/v1`. The
 harness cannot know such a model, so `ModelProvider::declared_profile` returns the
 profile the environment declares (`OPENAI_COMPATIBLE_CONTEXT_WINDOW`, default 32,768;
-`OPENAI_COMPATIBLE_MAX_OUTPUT_TOKENS`, default 8,192) under the default estimator with a
-50% margin:
+`OPENAI_COMPATIBLE_MAX_OUTPUT_TOKENS`, default a quarter of the window, at most 8,192)
+under the default estimator with a 50% margin. `ModelProvider::local_server` returns a
+`LocalServer` for that endpoint, which lists the served models
+(`LocalServer::inventory`) and reports the window the server runs a model with
+(`LocalServer::running_context_window`, loading an unloaded Ollama model first);
+`ModelProvider::running_profile` sizes the profile to that window, capping a larger
+declared one:
 
 ```rust
 let local = ModelConfiguration::new(ModelProvider::OpenAiCompatible, "qwen3:latest")
     .client_from_environment(|name| std::env::var(name))?;
-let profile = ModelProvider::OpenAiCompatible
-    .declared_profile("qwen3:latest", |name| std::env::var(name))?
-    .expect("OpenAI-compatible models declare their profile");
+let server = ModelProvider::OpenAiCompatible
+    .local_server(|name| std::env::var(name))?
+    .expect("OpenAI-compatible models have a local server");
+let profile = match server.running_context_window("qwen3:latest").await? {
+    Some(window) => ModelProvider::OpenAiCompatible
+        .running_profile(|name| std::env::var(name), window)?,
+    None => ModelProvider::OpenAiCompatible
+        .declared_profile("qwen3:latest", |name| std::env::var(name))?,
+}
+.expect("OpenAI-compatible models declare their profile");
 ```
 
 Its requests carry only portable fields: the schema is stated in the prompt (with the

@@ -8,6 +8,7 @@
 mod chat_completion;
 mod http;
 mod input;
+mod local_server;
 mod model;
 mod provider;
 mod response_error;
@@ -16,6 +17,9 @@ mod schema;
 mod tool;
 
 pub use input::{ImageContent, ImageMediaType, InputBlock, InputError, TurnInput};
+pub use local_server::{
+    LocalInventory, LocalModel, LocalServer, LocalServerError, LocalServerKind,
+};
 pub use model::{
     ChatRequest, Completion, CompletionMetadata, CompletionUsage, ErrorClass, GenerationOptions,
     JsonSchemaFormat, ModelError, ModelMessage, ModelRequest, ReasoningEffort, Task,

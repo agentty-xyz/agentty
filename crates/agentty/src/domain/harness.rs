@@ -1,6 +1,6 @@
-//! Launch-time availability of in-process harness sessions.
+//! Harness models this launch offers and availability of Harness sessions.
 
-use crate::domain::agent::AgentModel;
+use crate::domain::agent::{AgentModel, HarnessModelOption};
 
 /// Whether the session-type picker offers Harness sessions.
 #[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
@@ -8,26 +8,14 @@ pub enum HarnessAvailability {
     /// Agentty started without `--experimental-harness`; the row is hidden.
     #[default]
     Hidden,
-    /// The flag is set but no provider has a key and endpoint; the row is
-    /// shown disabled.
+    /// The flag is set but no harness model can run; the row is shown
+    /// disabled.
     MissingCredentials,
-    /// Harness sessions can be created and start on the contained model,
-    /// whose provider is configured.
+    /// Harness sessions can be created and start on the contained model.
     Available(AgentModel),
 }
 
 impl HarnessAvailability {
-    /// Resolves availability from the launch flag and the first Harness model
-    /// whose provider credentials are configured.
-    #[must_use]
-    pub fn resolve(experimental_harness: bool, default_model: Option<AgentModel>) -> Self {
-        match (experimental_harness, default_model) {
-            (false, _) => Self::Hidden,
-            (true, None) => Self::MissingCredentials,
-            (true, Some(model)) => Self::Available(model),
-        }
-    }
-
     /// Returns whether the picker shows the Harness row.
     #[must_use]
     pub fn is_visible(self) -> bool {
@@ -47,6 +35,68 @@ impl HarnessAvailability {
             Self::Available(model) => Some(model),
             Self::Hidden | Self::MissingCredentials => None,
         }
+    }
+}
+
+/// Harness models discovered for this launch and the user's last explicit
+/// harness model choice.
+#[derive(Clone, Debug, Default, Eq, PartialEq)]
+pub struct HarnessModelCatalog {
+    enabled: bool,
+    options: Vec<HarnessModelOption>,
+    remembered: Option<AgentModel>,
+}
+
+impl HarnessModelCatalog {
+    /// Creates the catalog of a launch with `--experimental-harness`
+    /// `enabled`, its discovered `options`, and the `remembered` choice.
+    #[must_use]
+    pub fn new(
+        enabled: bool,
+        options: Vec<HarnessModelOption>,
+        remembered: Option<AgentModel>,
+    ) -> Self {
+        Self {
+            enabled,
+            options,
+            remembered,
+        }
+    }
+
+    /// Returns whether and on which model new Harness sessions start, per
+    /// [`ag_session::default_harness_model`].
+    #[must_use]
+    pub fn availability(&self) -> HarnessAvailability {
+        if !self.enabled {
+            return HarnessAvailability::Hidden;
+        }
+
+        ag_session::default_harness_model(&self.options, self.remembered)
+            .map_or(HarnessAvailability::MissingCredentials, |model| {
+                HarnessAvailability::Available(model)
+            })
+    }
+
+    /// Returns whether this launch offers Harness sessions at all.
+    #[must_use]
+    pub fn is_enabled(&self) -> bool {
+        self.enabled
+    }
+
+    /// Returns the discovered models in picker order.
+    #[must_use]
+    pub fn options(&self) -> &[HarnessModelOption] {
+        &self.options
+    }
+
+    /// Replaces the discovered models after a refresh.
+    pub fn replace_options(&mut self, options: Vec<HarnessModelOption>) {
+        self.options = options;
+    }
+
+    /// Records the user's explicit harness model choice.
+    pub fn remember(&mut self, model: AgentModel) {
+        self.remembered = Some(model);
     }
 }
 

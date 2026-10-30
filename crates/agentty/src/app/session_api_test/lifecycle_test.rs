@@ -141,10 +141,7 @@ async fn runtime_backend_creates_harness_sessions_only_when_available() {
     let unavailable_error = request_session_creation(&mut app, request.clone())
         .await
         .expect_err("hidden harness should reject creation");
-    app.services
-        .set_harness_availability(crate::domain::harness::HarnessAvailability::Available(
-            AgentModel::KimiK3,
-        ));
+    crate::test_support::set_test_harness_models(&mut app.services, true, Some(AgentModel::KimiK3));
     let session_id = request_session_creation(&mut app, request)
         .await
         .expect("available harness should create a session");

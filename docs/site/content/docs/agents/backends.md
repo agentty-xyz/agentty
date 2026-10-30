@@ -67,15 +67,44 @@ choosing an authentication method permitted for your account, plan, and usage pa
 
 <a id="backends-harness"></a> Start Agentty with `agentty --experimental-harness` to add
 a **Harness** session type that runs Agentty's built-in agent loop instead of an
-external CLI. It talks directly to a model provider configured in the environment:
+external CLI. It talks directly to a free local model server or to a paid hosted
+provider:
 
-| Provider          | Key                                  | Endpoint                              |
-| ----------------- | ------------------------------------ | ------------------------------------- |
-| Muse              | `MODEL_API_KEY`                      | Optional `MODEL_API_BASE_URL`         |
-| Kimi              | `KIMI_API_KEY`                       | Required `KIMI_BASE_URL`              |
-| Qwen              | `DASHSCOPE_API_KEY`                  | Required `DASHSCOPE_BASE_URL`         |
-| OpenAI-compatible | Optional `OPENAI_COMPATIBLE_API_KEY` | Optional `OPENAI_COMPATIBLE_BASE_URL` |
-| OpenAI            | `OPENAI_API_KEY`                     | Optional `OPENAI_BASE_URL`            |
+| Provider     | Cost | Key                                  | Endpoint                              |
+| ------------ | ---- | ------------------------------------ | ------------------------------------- |
+| Local server | Free | Optional `OPENAI_COMPATIBLE_API_KEY` | Optional `OPENAI_COMPATIBLE_BASE_URL` |
+| Muse         | Paid | `MODEL_API_KEY`                      | Optional `MODEL_API_BASE_URL`         |
+| Kimi         | Paid | `KIMI_API_KEY`                       | Required `KIMI_BASE_URL`              |
+| Qwen         | Paid | `DASHSCOPE_API_KEY`                  | Required `DASHSCOPE_BASE_URL`         |
+| OpenAI       | Paid | `OPENAI_API_KEY`                     | Optional `OPENAI_BASE_URL`            |
+
+### Choosing a Model
+
+<a id="backends-harness-model"></a> Type `/model` in a Harness session to open its model
+list. Local models come first, marked `[local]` and free; hosted models follow, marked
+`[paid]`, with the OpenAI models last:
+
+```text
+[local] qwen3:latest   free · Ollama · runs 32k ctx
+[local] gemma:latest   free · Ollama · no tool calls
+[paid] muse-spark-1.3  Muse · 1024k ctx
+[paid] kimi-k3         Kimi · needs KIMI_API_KEY
+[paid] gpt-6.1-sol     OpenAI · needs OPENAI_API_KEY
+```
+
+Rows that cannot run a turn, such as a model without tool calls or a provider without
+its key, say what is missing and stay unselected when you press `Enter`. The list is
+refreshed each time you open it or the session-type picker, so models you pull or a
+server you start later appear without restarting Agentty.
+
+The model you pick is saved with the session and becomes the model new Harness sessions
+start on. Until you pick one, new sessions prefer a ready local model over a paid one,
+and among paid models take the first ready one in list order, so an exported API key
+never makes a paid provider the default over a local model, and an `OPENAI_API_KEY` set
+for other tools never wins over another configured provider. A remembered local model
+stays the default even while its server is stopped; a remembered paid model whose key is
+gone gives way to the next ready model. Choosing a harness model never changes the
+project's default model for other session types.
 
 ### OpenAI Models
 
@@ -95,50 +124,55 @@ agentty --experimental-harness   # then choose a gpt-* model in the Harness /mod
 - OpenAI stores no responses for the harness; each request resends the session history,
   which OpenAI's prompt cache bills at the cached-input rate. OpenAI charges prompts
   over 272,000 input tokens at twice the input rate, which long sessions can reach.
-- New Harness sessions start on an OpenAI model only when no other harness provider is
-  configured, so an `OPENAI_API_KEY` set for other tools never moves sessions to paid
-  OpenAI usage on its own.
+- New Harness sessions start on an OpenAI model only when you pick one or no local or
+  other hosted model is ready, so an `OPENAI_API_KEY` set for other tools never moves
+  sessions to paid OpenAI usage on its own.
 
 ### Local and Self-Hosted Models
 
-<a id="backends-harness-local"></a> The `openai-compatible` harness model runs any model
-served by an OpenAI-compatible Chat Completions endpoint, such as Ollama, llama.cpp
-`llama-server`, LM Studio, or vLLM. Name the served model and declare its window:
+<a id="backends-harness-local"></a> Agentty lists the models served by an
+OpenAI-compatible Chat Completions endpoint, by default Ollama at
+`http://127.0.0.1:11434/v1`, so a running Ollama needs no configuration. For Ollama it
+reads each model's context window, tool support, and the window a loaded model runs
+with; other servers, such as llama.cpp `llama-server`, LM Studio, or vLLM, are listed
+through their models endpoint.
 
 ```sh
-OLLAMA_CONTEXT_LENGTH=40960 ollama serve   # or raise the Ollama app's context length
-export OPENAI_COMPATIBLE_MODEL=qwen3:latest
-export OPENAI_COMPATIBLE_CONTEXT_WINDOW=40960
+OLLAMA_CONTEXT_LENGTH=32768 ollama serve   # or raise the Ollama app's context length
 agentty --experimental-harness
 ```
 
 | Variable                              | Default                     | Meaning                                    |
 | ------------------------------------- | --------------------------- | ------------------------------------------ |
-| `OPENAI_COMPATIBLE_MODEL`             | Required                    | Model id the server serves                 |
 | `OPENAI_COMPATIBLE_BASE_URL`          | `http://127.0.0.1:11434/v1` | Endpoint including `/v1`; Ollama's default |
 | `OPENAI_COMPATIBLE_API_KEY`           | None                        | Bearer token, such as vLLM's `--api-key`   |
+| `OPENAI_COMPATIBLE_MODEL`             | None                        | Model to list when the server lists none   |
 | `OPENAI_COMPATIBLE_CONTEXT_WINDOW`    | `32768`                     | Tokens the server runs the model with      |
-| `OPENAI_COMPATIBLE_MAX_OUTPUT_TOKENS` | `8192`                      | Tokens reserved for each response          |
+| `OPENAI_COMPATIBLE_MAX_OUTPUT_TOKENS` | A quarter of the window     | Tokens reserved for each response, ≤ 8192  |
 
 - The model must support tool calls. Use base URLs such as `http://127.0.0.1:8080/v1`
   for `llama-server`, `http://127.0.0.1:1234/v1` for LM Studio, and
   `http://127.0.0.1:8000/v1` for vLLM.
-- Declare the window the server actually runs, not the model's maximum. Ollama loads
+- A model's maximum window is not the window the server runs it with. Ollama loads
   models with a 4,096-token window unless `OLLAMA_CONTEXT_LENGTH` or the app setting
-  raises it, and silently truncates longer requests; Agentty's protocol alone needs
-  several thousand tokens, so give it at least 16,384.
+  raises it, and silently drops the start of longer requests. Before each turn on
+  Ollama, Agentty loads the model if needed, reads the window it runs with, and fits
+  requests to it. Below 16,384 tokens it stops the turn and asks you to raise the window
+  rather than let Ollama truncate the conversation. The picker shows the running window
+  of a loaded model, as in `runs 4k ctx, needs 16k`, and otherwise the model's maximum,
+  as in `up to 40k ctx`.
+- Where the server reports no running window, Agentty uses
+  `OPENAI_COMPATIBLE_CONTEXT_WINDOW`, so declare the window the server actually runs.
 - Agentty has no measured token estimate for unknown models, so it budgets input with a
   50% margin: a 32,768-token window with the default reserve leaves a 17,246-token input
   budget. The reasoning level is not sent, since servers reject it for models without
   thinking; the model uses its server default.
-- Changing `OPENAI_COMPATIBLE_MODEL` switches existing sessions to the new model on
-  their next turn.
 
-Without the flag the session type is hidden; with the flag but no configured provider it
-is shown disabled. With a configured provider, Agentty starts even when no backend CLI
-is installed; the other session types are then disabled and the selector opens on
+Without the flag the session type is hidden; with the flag but no runnable model it is
+shown disabled. With a runnable model, Agentty starts even when no backend CLI is
+installed; the other session types are then disabled and the selector opens on
 **Harness**. A Harness session's `/model` lists only harness models, and other sessions
-never list them. Choosing a harness model never changes the project's default model.
+never list them.
 
 - `Read Only` turns can read the worktree. `Auto Edit` turns can also write files and
   run unsandboxed `bash`, which can reach the network and paths outside the worktree,
@@ -297,16 +331,15 @@ Both providers share the same Gemini model ids:
 
 ### Harness Models
 
-Available only in Harness sessions. New Harness sessions start on the first listed model
-whose provider is configured:
+Available only in Harness sessions; see [Choosing a Model](#backends-harness-model) for
+which one new sessions start on. Besides the local models a server serves, stored as
+`openai-compatible/<model>`, the paid catalog lists:
 
 - `muse-spark-1.3`: Muse Spark model.
 - `kimi-k3`: Latest Kimi model.
 - `kimi-k2.6`: Previous Kimi model.
 - `qwen3.8-max`: Most capable Qwen model.
 - `qwen-plus`: Balanced Qwen model.
-- `openai-compatible`: The model `OPENAI_COMPATIBLE_MODEL` names on a local or
-  self-hosted server; see [Local and Self-Hosted Models](#backends-harness-local).
 - `gpt-6.1-sol`, `gpt-6-astra`, `gpt-6-luna`, `gpt-5.6-terra`: OpenAI models with an
   `OPENAI_API_KEY`; see [OpenAI Models](#backends-harness-openai).
 
@@ -325,7 +358,8 @@ next turn fits history to that model's budget.
 | `qwen-plus`      | 1,000,000      | 877,705      |
 | `gpt-*` models   | 1,050,000      | 647,017      |
 
-`openai-compatible` takes its window and output reserve from the environment.
+Local models take their window from the server or the environment; see
+[Local and Self-Hosted Models](#backends-harness-local).
 
 ### Stored Model Upgrades
 

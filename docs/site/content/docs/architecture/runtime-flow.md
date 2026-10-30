@@ -412,6 +412,7 @@ it does not submit an empty generated reply.
 | Project status and forge refresh    | Startup, project switch, periodic refresh |
 | Agentty update                      | Startup and hourly                        |
 | Agent CLI discovery and update      | Startup                                   |
+| Harness model listing               | Session picker or Harness `/model`        |
 | Worktree preparation and cleanup    | Session lifecycle                         |
 | File indexing and image capture     | Composer interaction                      |
 | Full diff and Markdown preview      | Inspection request                        |

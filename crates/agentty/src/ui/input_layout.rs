@@ -14,7 +14,8 @@ pub const CHAT_INPUT_MAX_VISIBLE_LINES: u16 = 10;
 const CHAT_INPUT_BORDER_HEIGHT: u16 = 2;
 const CHAT_INPUT_INNER_OFFSET: u16 = 1;
 const CHAT_INPUT_PROMPT_PREFIX_WIDTH: u16 = 3;
-const SLASH_MENU_BORDER_HEIGHT: u16 = 2;
+/// Rows the top and bottom borders of a suggestion dropdown take.
+pub(crate) const SLASH_MENU_BORDER_HEIGHT: u16 = 2;
 
 /// Calculate the chat input widget height with a capped visible viewport.
 ///

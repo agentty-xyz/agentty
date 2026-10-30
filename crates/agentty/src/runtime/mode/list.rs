@@ -149,6 +149,7 @@ fn cancel_confirmation_mode(session: &Session) -> Option<AppMode> {
 /// Opens the session selector, preceded by an advisory when configured
 /// pre-commit validation has no executable Git hook.
 async fn open_session_creation_flow(app: &mut App) {
+    app.refresh_harness_models();
     if let Some(warning) = app.pre_commit_hook_warning().await {
         app.mode = AppMode::PreCommitHookWarning {
             message: format!(

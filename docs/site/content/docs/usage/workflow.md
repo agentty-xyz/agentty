@@ -529,14 +529,14 @@ and older saved responses have no footer. Detailed previews are not saved in foo
 <a id="usage-slash-commands"></a> Type `/` in the composer. From session view, `/` opens
 a fresh composer, replacing any saved draft. The picker supports fuzzy matching.
 
-| Command      | Action                                               |
-| ------------ | ---------------------------------------------------- |
-| `/apply`     | Verify and apply valid focused-review suggestions.   |
-| `/mode`      | Choose permissions and review automation.            |
-| `/model`     | Choose a locally available backend and model.        |
-| `/reasoning` | Set reasoning effort for this session.               |
-| `/style`     | Choose concise, balanced, or detailed answers.       |
-| `/fast`      | Toggle normal or fast responses for Claude or Codex. |
+| Command      | Action                                                |
+| ------------ | ----------------------------------------------------- |
+| `/apply`     | Verify and apply valid focused-review suggestions.    |
+| `/mode`      | Choose permissions and review automation.             |
+| `/model`     | Choose a backend and model; local or paid in Harness. |
+| `/reasoning` | Set reasoning effort for this session.                |
+| `/style`     | Choose concise, balanced, or detailed answers.        |
+| `/fast`      | Toggle normal or fast responses for Claude or Codex.  |
 
 `/apply` requires a completed focused review. `/mode` selects:
 
@@ -639,8 +639,9 @@ Every event includes `app_source` (`cli`), `app_version`, and `install_method` (
 | `agentty_turn_interrupt` | When an executing turn is stopped by the user                       | `agent`, `model`                                 |
 
 Session types are `regular`, `draft`, `stacked`, and `fork`. `agent` identifies the
-selected provider; `model` is its supported model identifier. Turn events use the
-selection captured when the turn was queued.
+selected provider; `model` is its supported model identifier, or `openai-compatible` for
+any local model, whose name is never sent. Turn events use the selection captured when
+the turn was queued.
 
 Each event carries a random installation ID that Agentty creates on the first launch
 with telemetry enabled and stores in its database, so events from one Agentty root share

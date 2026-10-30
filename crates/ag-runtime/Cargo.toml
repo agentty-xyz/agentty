@@ -14,6 +14,7 @@ workspace = true
 ag-agent.workspace = true
 ag-contracts.workspace = true
 ag-session.workspace = true
+async-trait.workspace = true
 tokio.workspace = true
 tokio-util.workspace = true
 

@@ -781,6 +781,57 @@ fn test_handle_paste_inserts_multiline_content_with_normalized_newlines() {
 }
 
 #[tokio::test]
+async fn test_model_command_in_harness_session_opens_refreshed_harness_models() {
+    // Arrange
+    let (mut app, _base_dir) = new_test_prompt_app("/model", None).await;
+    crate::test_support::set_test_harness_models(&mut app.services, true, Some(AgentModel::KimiK3));
+    if let AppMode::Prompt { slash_state, .. } = &mut app.mode {
+        *slash_state = PromptSlashState::with_available_agent_kinds(vec![AgentKind::Harness]);
+    }
+    let prompt_context = prompt_context(&mut app).expect("expected prompt context");
+
+    // Act
+    handle_prompt_slash_submit(&mut app, &prompt_context).await;
+    let event = tokio::time::timeout(std::time::Duration::from_secs(5), app.next_app_event())
+        .await
+        .expect("harness model refresh should finish")
+        .expect("refresh event");
+    app.apply_app_events(event).await;
+
+    // Assert
+    let AppMode::Prompt { slash_state, .. } = &app.mode else {
+        unreachable!("expected AppMode::Prompt");
+    };
+    assert_eq!(slash_state.stage, PromptSlashStage::Model);
+    assert_eq!(slash_state.selected_agent, Some(AgentKind::Harness));
+    assert_eq!(
+        slash_state
+            .harness_models
+            .iter()
+            .map(|option| option.model)
+            .collect::<Vec<_>>(),
+        vec![AgentModel::KimiK3]
+    );
+}
+
+#[tokio::test]
+async fn test_model_command_in_cli_session_opens_the_agent_list() {
+    // Arrange
+    let (mut app, _base_dir) = new_test_prompt_app("/model", None).await;
+    let prompt_context = prompt_context(&mut app).expect("expected prompt context");
+
+    // Act
+    handle_prompt_slash_submit(&mut app, &prompt_context).await;
+
+    // Assert
+    let AppMode::Prompt { slash_state, .. } = &app.mode else {
+        unreachable!("expected AppMode::Prompt");
+    };
+    assert_eq!(slash_state.stage, PromptSlashStage::Agent);
+    assert_eq!(slash_state.selected_agent, None);
+}
+
+#[tokio::test]
 async fn test_reasoning_slash_submit_sets_level_and_resets_input() {
     // Arrange
     let (mut app, _base_dir) = new_test_prompt_app("/reasoning", None).await;

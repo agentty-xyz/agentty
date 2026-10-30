@@ -235,6 +235,8 @@ async fn test_new_uses_production_client_bundle() {
         .env(PUBLIC_CONSTRUCTOR_COVERAGE_ENV, "1")
         .env("HOME", base_dir.path())
         .env("MODEL_API_KEY", "test-key")
+        .env("OPENAI_COMPATIBLE_BASE_URL", "http://127.0.0.1:9/v1")
+        .env_remove("OPENAI_COMPATIBLE_MODEL")
         .env("PATH", child_path);
     if let Some(profile) = child_coverage_profile {
         child.env("LLVM_PROFILE_FILE", profile);

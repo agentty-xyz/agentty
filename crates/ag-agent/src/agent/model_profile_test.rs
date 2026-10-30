@@ -1,6 +1,6 @@
 use ag_harness::OutputSchema;
 use ag_harness::model::{ContextEstimator, HeuristicContextEstimator};
-use ag_session::{AgentKind, AgentModel};
+use ag_session::{AgentKind, AgentModel, ServedModel};
 use serde_json::json;
 
 use crate::agent::model_profile::declared;
@@ -37,9 +37,12 @@ fn declared_profiles_preserve_proactive_compaction_budgets() {
     }
     assert_eq!(
         AgentKind::Harness.models().len(),
-        harness_models.len() + codex_models.len()
+        harness_models.len() + codex_models.len() - 1
     );
-    assert_eq!(declared(AgentModel::OpenAiCompatible), None);
+    assert_eq!(
+        declared(AgentModel::OpenAiCompatible(ServedModel::CONFIGURED)),
+        None
+    );
     for provider in [AgentKind::Gemini, AgentKind::Antigravity, AgentKind::Claude] {
         assert!(
             provider
@@ -54,13 +57,11 @@ fn declared_profiles_preserve_proactive_compaction_budgets() {
 fn harness_models_weigh_requests_with_measured_estimators() {
     // Arrange
     // The harness profiles the shared Codex models from its provider catalog
-    // and OpenAI-compatible models from the environment.
+    // and served OpenAI-compatible models from the server or environment.
     let harness_models = AgentKind::Harness
         .models()
         .iter()
-        .filter(|model| {
-            **model != AgentModel::OpenAiCompatible && !AgentKind::Codex.supports_model(**model)
-        })
+        .filter(|model| !AgentKind::Codex.supports_model(**model))
         .collect::<Vec<_>>();
 
     // Act

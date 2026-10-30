@@ -57,7 +57,6 @@ fn provider_catalog_preserves_wire_ids_order_and_defaults() {
                 "kimi-k2.6",
                 "qwen3.8-max",
                 "qwen-plus",
-                "openai-compatible",
                 "gpt-6.1-sol",
                 "gpt-6-astra",
                 "gpt-6-luna",

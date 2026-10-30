@@ -5,8 +5,9 @@ use wiremock::matchers::{method, path};
 use wiremock::{Mock, MockServer, ResponseTemplate};
 
 use super::{
-    DEFAULT_CONTEXT_WINDOW_TOKENS, DEFAULT_MAX_OUTPUT_TOKENS, OPENAI_COMPATIBLE_CONTEXT_WINDOW_ENV,
-    OPENAI_COMPATIBLE_MAX_OUTPUT_TOKENS_ENV, OpenAiCompatibleConfig, profile_from_environment,
+    DEFAULT_CONTEXT_WINDOW_TOKENS, DEFAULT_MAX_OUTPUT_TOKENS, OPENAI_COMPATIBLE_BASE_URL_ENV,
+    OPENAI_COMPATIBLE_CONTEXT_WINDOW_ENV, OPENAI_COMPATIBLE_MAX_OUTPUT_TOKENS_ENV,
+    OpenAiCompatibleConfig, local_server, profile_from_environment, running_profile,
 };
 use crate::model::{HeuristicContextEstimator, Model, ModelClient, ModelProfile, ModelRequest};
 use crate::provider::catalog::ModelConfigurationError;
@@ -77,6 +78,47 @@ fn profile_uses_the_declared_window_and_output_reservation() {
             .with_estimate_margin(4_096, 50)
             .with_estimator(HeuristicContextEstimator::DEFAULT.with_output_schema_in_prompt())
     );
+}
+
+#[test]
+fn running_profile_fits_the_window_the_server_runs() {
+    // Arrange and Act
+    let undeclared = running_profile(environment(None, None), 4096)
+        .expect("a running window should form a valid profile");
+    let larger_declared = running_profile(environment(Some("32768"), None), 16_384)
+        .expect("a capped declared window should form a valid profile");
+    let smaller_declared = running_profile(environment(Some("8192"), Some("2048")), 40_960)
+        .expect("a smaller declared window should form a valid profile");
+
+    // Assert
+    assert_eq!(
+        undeclared,
+        ModelProfile::new(4096)
+            .with_estimate_margin(1024, 50)
+            .with_estimator(HeuristicContextEstimator::DEFAULT.with_output_schema_in_prompt())
+    );
+    assert_eq!(larger_declared.context_window_tokens(), 16_384);
+    assert_eq!(smaller_declared.context_window_tokens(), 8192);
+}
+
+#[test]
+fn local_server_reads_the_endpoint_and_rejects_a_non_unicode_base_url() {
+    // Arrange and Act
+    let configured = local_server(|name| match name {
+        OPENAI_COMPATIBLE_BASE_URL_ENV => Ok(" http://127.0.0.1:1234/v1 ".to_string()),
+        _ => Err(env::VarError::NotPresent),
+    });
+    let invalid = local_server(|_| Err(env::VarError::NotUnicode("invalid".into())));
+
+    // Assert
+    assert!(configured.is_ok());
+    assert!(matches!(
+        invalid,
+        Err(ModelConfigurationError::Environment {
+            name: OPENAI_COMPATIBLE_BASE_URL_ENV,
+            ..
+        })
+    ));
 }
 
 #[test]

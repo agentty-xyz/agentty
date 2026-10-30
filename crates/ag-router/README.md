@@ -69,7 +69,12 @@ JSON answer because small local models read an unconditional "return only JSON" 
 forbidding them; requests without tools also send the `json_schema` response format,
 which Ollama, llama.cpp, LM Studio, and vLLM all accept. Reasoning a server returns is
 not replayed, so the history stays portable. Context overflow is recognized from the
-shared `OpenAI` markers and llama.cpp's `exceed_context_size_error`.
+shared `OpenAI` markers and llama.cpp's `exceed_context_size_error`. `LocalServer` reads
+such a server's model inventory (`LocalServer::inventory`: Ollama's `/api/tags` and
+`/api/show` with context windows, tool support, and loaded windows from `/api/ps`, else
+`GET {base}/models`) under two-second request timeouts, and the window the server runs a
+model with (`LocalServer::running_context_window`), loading an unloaded Ollama model
+first because Ollama reports the window only for loaded models.
 
 `openai` sends requests to `{base_url}/responses`, the only `OpenAI` API that offers
 function tools to the current GPT models. Requests are stateless (`store: false`) and

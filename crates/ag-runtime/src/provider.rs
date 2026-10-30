@@ -1,11 +1,13 @@
 use std::path::Path;
 
 use ag_contracts::AgentError;
-use ag_session::{AgentAvailabilityProbe, AgentCliInfo, AgentKind, AgentModel};
+use ag_session::{AgentAvailabilityProbe, AgentCliInfo, AgentKind, HarnessModelOption};
+use async_trait::async_trait;
 
 /// Machine-scoped provider discovery through the concrete adapter registry.
 pub struct RealAgentAvailabilityProbe;
 
+#[async_trait]
 impl AgentAvailabilityProbe for RealAgentAvailabilityProbe {
     fn available_agent_kinds(&self) -> Vec<AgentKind> {
         ag_agent::RealAgentAvailabilityProbe.available_agent_kinds()
@@ -15,8 +17,10 @@ impl AgentAvailabilityProbe for RealAgentAvailabilityProbe {
         ag_agent::RealAgentAvailabilityProbe.available_agent_clis()
     }
 
-    fn native_harness_default_model(&self) -> Option<AgentModel> {
-        ag_agent::RealAgentAvailabilityProbe.native_harness_default_model()
+    async fn native_harness_models(&self) -> Vec<HarnessModelOption> {
+        ag_agent::RealAgentAvailabilityProbe
+            .native_harness_models()
+            .await
     }
 }
 

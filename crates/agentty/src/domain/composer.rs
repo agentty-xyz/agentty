@@ -6,7 +6,9 @@ use std::path::PathBuf;
 pub use ag_protocol::render_prompt_text_for_agent;
 
 use crate::domain::agent::{
-    AgentKind, AgentSelection, AgentSelectionMetadata, ReasoningLevel, ResponseStyle,
+    AgentKind, AgentModel, AgentSelection, AgentSelectionMetadata, HarnessModelOption,
+    HarnessModelStatus, MINIMUM_RUNNING_CONTEXT_WINDOW, ModelBilling, ReasoningLevel,
+    ResponseStyle,
 };
 use crate::domain::input::InputState;
 use crate::domain::permission::PermissionMode;
@@ -441,6 +443,9 @@ pub struct PromptSlashState {
     pub allow_plan_command: bool,
     /// Agent kinds currently runnable on this machine for `/model`.
     pub available_agent_kinds: Vec<AgentKind>,
+    /// Harness models `/model` lists for [`AgentKind::Harness`], local models
+    /// first; empty lists the fixed catalog.
+    pub harness_models: Vec<HarnessModelOption>,
     /// Whether `/plan` armed the composer, so the next submit starts the
     /// Planner with the typed task. Menu resets keep it; `Esc` disarms it.
     pub is_plan_armed: bool,
@@ -460,6 +465,7 @@ impl PromptSlashState {
         Self {
             allow_plan_command: false,
             available_agent_kinds,
+            harness_models: Vec::new(),
             is_plan_armed: false,
             selected_agent: None,
             selected_index: 0,
@@ -483,6 +489,24 @@ impl PromptSlashState {
                 self.stage = PromptSlashStage::Agent;
             }
         }
+    }
+
+    /// Opens `/model` on its agent list, or, in a Harness session, which
+    /// offers only Harness models, straight on the harness model list.
+    ///
+    /// Returns whether the harness model list opened, so the caller can
+    /// refresh it.
+    pub fn open_model_stage(&mut self) -> bool {
+        let is_harness_session = self.available_agent_kinds == [AgentKind::Harness];
+        self.selected_agent = is_harness_session.then_some(AgentKind::Harness);
+        self.selected_index = 0;
+        self.stage = if is_harness_session {
+            PromptSlashStage::Model
+        } else {
+            PromptSlashStage::Agent
+        };
+
+        is_harness_session
     }
 
     /// Resets slash state back to command selection.
@@ -957,18 +981,17 @@ fn build_slash_suggestion_list(
                 &slash_state.available_agent_kinds,
                 slash_state.selected_agent,
             )?;
-            let models = selected_agent_kind
-                .models()
-                .iter()
-                .map(|model| PromptSuggestionItem {
-                    badge: None,
-                    detail: Some(model.description().to_string()),
-                    label: model.name().to_string(),
-                    metadata: None,
-                })
+            let models = model_rows(selected_agent_kind, &slash_state.harness_models)
+                .into_iter()
+                .map(|(item, _)| item)
                 .collect::<Vec<_>>();
+            let title = if selected_agent_kind == AgentKind::Harness {
+                "/model Harness model (j/k move, Enter select)"
+            } else {
+                "/model Model (j/k move, Enter select)"
+            };
 
-            ("/model Model (j/k move, Enter select)", models)
+            (title, models)
         }
         PromptSlashStage::Mode => (
             "/mode (j/k move, Enter select)",
@@ -1035,17 +1058,15 @@ fn selected_slash_action(
                 &slash_state.available_agent_kinds,
                 slash_state.selected_agent,
             )?;
-            let models = selected_agent_kind.models();
-            let selected_model = models
-                .get(clamp_selected_index(
-                    slash_state.selected_index,
-                    models.len(),
-                ))
-                .copied()?;
+            let models = model_rows(selected_agent_kind, &slash_state.harness_models);
+            let (_, selected_model) = models.get(clamp_selected_index(
+                slash_state.selected_index,
+                models.len(),
+            ))?;
 
             Some(PromptSuggestionSelection::Model(AgentSelection::new(
                 selected_agent_kind,
-                selected_model,
+                (*selected_model)?,
             )))
         }
         PromptSlashStage::Mode => {
@@ -1099,6 +1120,143 @@ fn resolve_model_stage_agent(
     selected_agent.or_else(|| {
         ag_session::resolve_prompt_model_agent_kind(session_agent_kind, available_agent_kinds)
     })
+}
+
+/// Returns the `/model` rows for `agent_kind`, each with the model it
+/// selects, or `None` for a row that cannot run a turn now.
+///
+/// Harness rows come from `harness_models`, local models first, badged
+/// `local` (free) or `paid`, with the server or provider, the context window,
+/// and what a row still needs. Without local models a hint row says how to
+/// add them. Other agents, and Harness before its models are listed, show
+/// the fixed catalog.
+fn model_rows(
+    agent_kind: AgentKind,
+    harness_models: &[HarnessModelOption],
+) -> Vec<(PromptSuggestionItem, Option<AgentModel>)> {
+    if agent_kind != AgentKind::Harness || harness_models.is_empty() {
+        return agent_kind
+            .models()
+            .iter()
+            .map(|model| {
+                let item = PromptSuggestionItem {
+                    badge: (agent_kind == AgentKind::Harness).then(|| "paid".to_string()),
+                    detail: Some(model.description().to_string()),
+                    label: model.name().to_string(),
+                    metadata: None,
+                };
+
+                (item, Some(*model))
+            })
+            .collect();
+    }
+    let mut rows = harness_models
+        .iter()
+        .map(|option| {
+            let item = PromptSuggestionItem {
+                badge: Some(billing_badge(option.billing).to_string()),
+                detail: None,
+                label: option.model.name().to_string(),
+                metadata: Some(harness_model_metadata(option)),
+            };
+
+            (item, option.is_ready().then_some(option.model))
+        })
+        .collect::<Vec<_>>();
+    if !harness_models
+        .iter()
+        .any(|option| option.billing == ModelBilling::Local)
+    {
+        let hint = PromptSuggestionItem {
+            badge: Some(billing_badge(ModelBilling::Local).to_string()),
+            detail: None,
+            label: "no local models".to_string(),
+            metadata: Some("start Ollama or set OPENAI_COMPATIBLE_BASE_URL".to_string()),
+        };
+        rows.insert(0, (hint, None));
+    }
+    align_row_metadata(&mut rows);
+
+    rows
+}
+
+/// Pads labels so every row's metadata starts in one column after its badge
+/// and label.
+fn align_row_metadata(rows: &mut [(PromptSuggestionItem, Option<AgentModel>)]) {
+    let badge_width = |item: &PromptSuggestionItem| item.badge.as_deref().map_or(0, str::len);
+    let column = rows
+        .iter()
+        .map(|(item, _)| badge_width(item) + item.label.chars().count())
+        .max()
+        .unwrap_or_default();
+    for (item, _) in rows {
+        let width = column - badge_width(item);
+        item.label = format!("{:<width$}", item.label);
+    }
+}
+
+/// Returns the badge naming who pays for a model's tokens.
+fn billing_badge(billing: ModelBilling) -> &'static str {
+    match billing {
+        ModelBilling::Local => "local",
+        ModelBilling::Paid => "paid",
+    }
+}
+
+/// Describes one harness model row: whether it is free, its server or
+/// provider, its context window, and what it still needs.
+fn harness_model_metadata(option: &HarnessModelOption) -> String {
+    let mut parts = Vec::new();
+    if option.billing == ModelBilling::Local {
+        parts.push("free".to_string());
+    }
+    parts.push(option.provider.clone());
+    match option.status {
+        HarnessModelStatus::MissingConfiguration(variable) => {
+            parts.push(format!("needs {variable}"));
+        }
+        HarnessModelStatus::NoToolSupport => parts.push("no tool calls".to_string()),
+        HarnessModelStatus::Ready => {
+            parts.extend(context_window_label(option));
+        }
+    }
+
+    parts.join(" · ")
+}
+
+/// Labels the window the server runs a model with, flagging one too small
+/// for harness turns, else the model's own window, which a local server may
+/// run below.
+fn context_window_label(option: &HarnessModelOption) -> Option<String> {
+    if let Some(loaded) = option.loaded_context_window {
+        let label = format!("runs {} ctx", token_count_label(loaded));
+        if loaded < MINIMUM_RUNNING_CONTEXT_WINDOW {
+            return Some(format!(
+                "{label}, needs {}",
+                token_count_label(MINIMUM_RUNNING_CONTEXT_WINDOW)
+            ));
+        }
+
+        return Some(label);
+    }
+
+    let qualifier = match option.billing {
+        ModelBilling::Local => "up to ",
+        ModelBilling::Paid => "",
+    };
+
+    option
+        .context_window
+        .map(|window| format!("{qualifier}{} ctx", token_count_label(window)))
+}
+
+/// Formats a token count in binary thousands, as in `32k`.
+fn token_count_label(tokens: u64) -> String {
+    if tokens < 1024 {
+        return tokens.to_string();
+    }
+
+    format!("{}k", tokens / 1024)
 }
 
 /// Returns the fixed description text for one slash command label.

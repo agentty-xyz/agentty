@@ -124,7 +124,7 @@ pub(crate) const fn declared(model: AgentModel) -> Option<ModelProfile> {
         AgentModel::KimiK26 => Some(KIMI_K2_6),
         AgentModel::Qwen38Max => Some(QWEN3_8_MAX),
         AgentModel::QwenPlus => Some(QWEN_PLUS),
-        AgentModel::OpenAiCompatible
+        AgentModel::OpenAiCompatible(_)
         | AgentModel::Gemini4Argon
         | AgentModel::Gemini31Pro
         | AgentModel::Gemini38Flash
