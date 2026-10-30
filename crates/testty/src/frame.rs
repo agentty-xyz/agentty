@@ -5,6 +5,8 @@
 //! colors, and style flags so assertions can inspect terminal state without
 //! screenshot OCR.
 
+use std::num::NonZeroU16;
+
 use unicode_width::UnicodeWidthStr;
 
 use crate::locator::MatchedSpan;
@@ -132,7 +134,12 @@ pub struct TerminalFrame {
 impl TerminalFrame {
     /// Create a new frame by processing raw ANSI bytes through a terminal
     /// parser configured with the given dimensions.
+    ///
+    /// A zero `cols` or `rows` is clamped to `1`, because a terminal grid
+    /// needs at least one cell in each dimension.
     pub fn new(cols: u16, rows: u16, data: &[u8]) -> Self {
+        let cols = NonZeroU16::new(cols).unwrap_or(NonZeroU16::MIN);
+        let rows = NonZeroU16::new(rows).unwrap_or(NonZeroU16::MIN);
         let mut parser = vt100::Parser::new(rows, cols, 0);
         parser.process(data);
 
@@ -141,12 +148,12 @@ impl TerminalFrame {
 
     /// Return the number of columns in the terminal grid.
     pub fn cols(&self) -> u16 {
-        self.parser.screen().size().1
+        self.parser.screen().size().1.get()
     }
 
     /// Return the number of rows in the terminal grid.
     pub fn rows(&self) -> u16 {
-        self.parser.screen().size().0
+        self.parser.screen().size().0.get()
     }
 
     /// Extract the visible text from a single row, trimming trailing spaces.
@@ -210,7 +217,7 @@ impl TerminalFrame {
     /// so passing them to [`TerminalFrame::new()`] with the same dimensions
     /// produces a frame with identical cell metadata.
     pub fn contents_formatted(&self) -> Vec<u8> {
-        self.parser.screen().contents_formatted()
+        self.parser.screen().contents_formatted().into_bytes()
     }
 
     /// Return the text content of a single cell without region overhead.
