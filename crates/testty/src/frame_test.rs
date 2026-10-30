@@ -17,6 +17,19 @@ fn new_frame_captures_plain_text() {
 }
 
 #[test]
+fn new_frame_clamps_zero_dimensions_to_one_cell() {
+    // Arrange
+    let data = b"AB";
+
+    // Act
+    let frame = TerminalFrame::new(0, 0, data);
+
+    // Assert
+    assert_eq!(frame.cols(), 1);
+    assert_eq!(frame.rows(), 1);
+}
+
+#[test]
 fn row_text_trims_trailing_spaces() {
     // Arrange
     let data = b"abc";
