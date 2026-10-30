@@ -8,7 +8,7 @@ use ag_worker::RunClient;
 use tokio::sync::mpsc;
 
 use crate::app::AppEvent;
-use crate::app::service::SessionUpdateVersionMap;
+use crate::app::service::{HarnessModels, SessionUpdateVersionMap};
 use crate::app::session::{RunAgentAssistTaskInput, SessionError, SessionTaskService};
 use crate::domain::agent::{AgentKind, AgentSelection};
 use crate::domain::session_message::SessionTranscript;
@@ -28,8 +28,7 @@ pub(super) struct AssistPolicy {
 pub(super) struct AssistContext {
     /// App event sender used to update UI progress/output state.
     pub(super) app_event_tx: mpsc::UnboundedSender<AppEvent>,
-    /// Agent kinds that utility prompts may target: installed CLIs, plus
-    /// Harness when this launch has a ready harness model.
+    /// Locally installed agent CLIs that utility prompts may target.
     pub(super) available_agent_kinds: Arc<[AgentKind]>,
     /// Session PID slot for CLI cancellation or retained app-server accounting.
     pub(super) child_pid: Arc<Mutex<Option<u32>>>,
@@ -39,6 +38,9 @@ pub(super) struct AssistContext {
     pub(super) folder: PathBuf,
     /// Git boundary used for commit/rebase operations.
     pub(super) git_client: Arc<dyn GitClient>,
+    /// Harness models a Fast default naming one needs ready before utility
+    /// prompts use it.
+    pub(super) harness_models: HarnessModels,
     /// Session identifier receiving assist output updates.
     pub(super) id: String,
     /// Provider-neutral boundary for isolated structured assist prompts.

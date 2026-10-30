@@ -340,7 +340,7 @@ async fn apply_app_events_harness_models_updates_app_services_outside_prompts() 
             .view()
             .fast_harness_models
             .iter()
-            .map(|(selection, _)| selection.model())
+            .map(|option| option.model)
             .collect::<Vec<_>>(),
         [AgentModel::KimiK3]
     );

@@ -63,7 +63,10 @@ pub(crate) async fn load_default_fast_agent_setting(
     fallback_selection: AgentSelection,
 ) -> AgentSelection {
     if let Some(selection) = load_harness_fast_selection(services.db(), project_id).await
-        && is_ready_harness_model(&services.harness_model_options(), selection.model())
+        && services
+            .harness_models()
+            .ready_models()
+            .contains(&selection.model())
     {
         return selection;
     }
@@ -167,32 +170,26 @@ pub(crate) async fn load_default_fast_agent_selection_from_repositories(
 /// Loads the Fast-role selection used by one session's utility work, such as
 /// title generation and auto-commit messages.
 ///
-/// `utility_agent_kinds` lists the installed agent CLIs, plus
-/// [`AgentKind::Harness`] when this launch has a ready harness model. A Fast
-/// default naming a Harness model, which only the settings screen saves from
-/// a ready model, applies whenever Harness is listed, so simple utility work
-/// can run on a cheap harness model. Other persisted Fast and Smart defaults
-/// apply only when they resolve to an installed agent CLI. Otherwise the
-/// session keeps its own selection, so a Harness session in a launch without
-/// CLIs never routes utility work to a missing CLI, and no fallback ever
-/// moves utility work onto a Harness provider the user did not pick.
+/// A Fast default naming a Harness model, which only the settings screen
+/// saves, applies while `ready_harness_models` lists that model, so simple
+/// utility work can run on a cheap harness model. Other persisted Fast and
+/// Smart defaults apply only when they resolve to an installed agent CLI in
+/// `available_agent_kinds`. Otherwise the session keeps its own selection, so
+/// a Harness session in a launch without CLIs never routes utility work to a
+/// missing CLI, and no fallback ever moves utility work onto a harness model
+/// the user did not pick.
 pub(crate) async fn load_session_utility_agent_selection_from_repositories(
     repositories: &AppRepositories,
     project_id: Option<i64>,
     session_agent: AgentSelection,
-    utility_agent_kinds: &[AgentKind],
+    available_agent_kinds: &[AgentKind],
+    ready_harness_models: &[AgentModel],
 ) -> AgentSelection {
-    if utility_agent_kinds.contains(&AgentKind::Harness)
-        && let Some(selection) = load_harness_fast_selection(repositories, project_id).await
+    if let Some(selection) = load_harness_fast_selection(repositories, project_id).await
+        && ready_harness_models.contains(&selection.model())
     {
         return selection;
     }
-    let available_agent_kinds = utility_agent_kinds
-        .iter()
-        .copied()
-        .filter(|agent_kind| *agent_kind != AgentKind::Harness)
-        .collect::<Vec<_>>();
-    let available_agent_kinds = available_agent_kinds.as_slice();
     let allowed_agent_kinds = [available_agent_kinds, &[session_agent.kind()]].concat();
     let selection = load_default_fast_agent_selection_from_repositories(
         repositories,
@@ -456,9 +453,21 @@ impl SettingsManager {
     }
 
     /// Replaces the listed harness models after a background refresh, which
-    /// changes the Fast-model choices.
-    pub(crate) fn replace_harness_models(&mut self, harness_models: Vec<HarnessModelOption>) {
+    /// changes the Fast-model choices, and reloads the Fast default, so a
+    /// saved Harness model shows once it becomes ready and stops showing once
+    /// it is not.
+    pub(crate) async fn replace_harness_models(&mut self, harness_models: Vec<HarnessModelOption>) {
         self.harness_models = harness_models;
+        let selection = Self::load_default_fast_selection(
+            &self.repositories,
+            self.project_id,
+            self.default_smart_selection,
+            &self.available_agent_kinds,
+            &self.harness_models,
+        )
+        .await;
+        (self.default_fast_selection, self.default_fast_speed_mode) =
+            normalized_speed_default(selection, self.default_fast_speed_mode);
     }
 
     /// Returns an immutable projection for the settings screen.
@@ -472,12 +481,7 @@ impl SettingsManager {
                 .harness_models
                 .iter()
                 .filter(|option| option.is_ready())
-                .map(|option| {
-                    (
-                        AgentSelection::new(AgentKind::Harness, option.model),
-                        option.cost,
-                    )
-                })
+                .cloned()
                 .collect(),
             default_fast_reasoning_level: self.default_fast_reasoning_level,
             default_fast_selection: self.default_fast_selection,

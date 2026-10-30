@@ -21,6 +21,7 @@ use super::support::{
     resume_command, transcript_text,
 };
 use crate::app::AppEvent;
+use crate::app::service::HarnessModels;
 use crate::app::session::SessionError;
 use crate::domain::agent::{AgentKind, AgentModel, AgentSelection};
 use crate::domain::session::{SessionId, Status};
@@ -57,6 +58,7 @@ async fn test_apply_turn_result_refreshes_when_turn_metadata_persistence_fails()
     let context = SessionWorkerContext {
         app_event_tx,
         available_agent_kinds: Arc::from(AgentKind::ALL),
+        harness_models: HarnessModels::default(),
         branch_operation_lock: Arc::new(tokio::sync::Mutex::new(())),
         cancel_token: Arc::new(Mutex::new(CancellationToken::new())),
         session_run: SessionRunClient::from_channel(
@@ -163,6 +165,7 @@ async fn test_apply_turn_result_persists_only_assistant_answer() {
     let context = SessionWorkerContext {
         app_event_tx: mpsc::unbounded_channel().0,
         available_agent_kinds: Arc::from(AgentKind::ALL),
+        harness_models: HarnessModels::default(),
         branch_operation_lock: Arc::new(tokio::sync::Mutex::new(())),
         cancel_token: Arc::new(Mutex::new(CancellationToken::new())),
         session_run: SessionRunClient::from_channel(
@@ -241,6 +244,7 @@ async fn test_apply_turn_result_persists_harness_turn_report() {
     let context = SessionWorkerContext {
         app_event_tx: mpsc::unbounded_channel().0,
         available_agent_kinds: Arc::from(AgentKind::ALL),
+        harness_models: HarnessModels::default(),
         branch_operation_lock: Arc::new(tokio::sync::Mutex::new(())),
         cancel_token: Arc::new(Mutex::new(CancellationToken::new())),
         session_run: SessionRunClient::from_channel(
@@ -330,6 +334,7 @@ async fn test_apply_turn_result_persists_instruction_conversation_id_for_app_ser
     let context = SessionWorkerContext {
         app_event_tx: mpsc::unbounded_channel().0,
         available_agent_kinds: Arc::from(AgentKind::ALL),
+        harness_models: HarnessModels::default(),
         branch_operation_lock: Arc::new(tokio::sync::Mutex::new(())),
         cancel_token: Arc::new(Mutex::new(CancellationToken::new())),
         session_run: SessionRunClient::from_channel(

@@ -18,6 +18,7 @@ use super::lifecycle::SessionTitleGenerationTaskInput;
 use super::post_turn::PostTurnContext;
 use super::worker::{SessionWorkerContext, SessionWorkerService, TurnMetadata};
 use super::{SessionTaskService, StatusTransition, isolation, post_turn};
+use crate::app::service::HarnessModels;
 use crate::app::session::SessionError;
 use crate::app::{AppEvent, SessionManager, setting};
 use crate::domain::agent::{AgentKind, AgentSelection, ReasoningLevel, ResponseStyle, SpeedMode};
@@ -44,6 +45,7 @@ pub(super) struct RequestTitleInput {
     pub(super) available_agent_kinds: Arc<[AgentKind]>,
     pub(super) db: AppRepositories,
     pub(super) folder: PathBuf,
+    pub(super) harness_models: HarnessModels,
     pub(super) prompt: String,
     pub(super) run_client: Arc<dyn RunClient>,
     pub(super) session_agent: AgentSelection,
@@ -63,6 +65,7 @@ impl RequestTitleInput {
             available_agent_kinds: Arc::clone(&context.available_agent_kinds),
             db: context.db.clone(),
             folder: context.folder.clone(),
+            harness_models: context.harness_models.clone(),
             prompt: prompt.to_string(),
             run_client,
             session_agent,
@@ -812,6 +815,7 @@ pub(super) async fn spawn_request_title_generation(
         available_agent_kinds,
         db,
         folder,
+        harness_models,
         prompt,
         run_client,
         session_agent,
@@ -822,6 +826,7 @@ pub(super) async fn spawn_request_title_generation(
         session_project_id,
         session_agent,
         &available_agent_kinds,
+        &harness_models.ready_models(),
     )
     .await;
     let title_reasoning_level = load_title_reasoning_level(&db, session_project_id).await;

@@ -26,6 +26,7 @@ use super::support::{
 };
 use crate::analytics::TurnOutcome;
 use crate::app::AppEvent;
+use crate::app::service::HarnessModels;
 use crate::app::session::SessionError;
 use crate::domain::agent::{AgentKind, AgentModel, AgentSelection};
 use crate::domain::session::Status;
@@ -160,6 +161,7 @@ async fn test_apply_turn_result_skips_background_push_while_messages_are_queued(
     let context = SessionWorkerContext {
         app_event_tx,
         available_agent_kinds: Arc::from(AgentKind::ALL),
+        harness_models: HarnessModels::default(),
         branch_operation_lock: Arc::new(tokio::sync::Mutex::new(())),
         cancel_token: Arc::new(Mutex::new(CancellationToken::new())),
         session_run: SessionRunClient::from_channel(

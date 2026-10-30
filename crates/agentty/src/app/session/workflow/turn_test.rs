@@ -12,6 +12,7 @@ use super::{
     READ_ONLY_CHAT_PROMPT, load_session_permission_mode, load_session_response_style,
     load_title_reasoning_level, prepare_turn_request,
 };
+use crate::app::service::HarnessModels;
 use crate::app::session::SessionError;
 use crate::domain::agent::{
     AgentKind, AgentModel, AgentSelection, ReasoningLevel, ResponseStyle, SpeedMode,
@@ -490,6 +491,7 @@ fn turn_test_context(db: AppRepositories) -> SessionWorkerContext {
     SessionWorkerContext {
         app_event_tx: mpsc::unbounded_channel().0,
         available_agent_kinds: Arc::from(AgentKind::ALL),
+        harness_models: HarnessModels::default(),
         branch_operation_lock: Arc::new(tokio::sync::Mutex::new(())),
         cancel_token: Arc::new(Mutex::new(CancellationToken::new())),
         child_pid: Arc::new(Mutex::new(None)),

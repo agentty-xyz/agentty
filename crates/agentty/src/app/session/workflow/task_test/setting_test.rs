@@ -102,6 +102,7 @@ async fn test_load_auto_commit_agent_setting_falls_back_through_defaults() {
         "session-id",
         model_fixture::codex_selection(),
         AgentKind::ALL,
+        &[],
     )
     .await;
 
@@ -124,6 +125,7 @@ async fn test_load_auto_commit_agent_setting_falls_back_through_defaults() {
         "session-id",
         model_fixture::codex_selection(),
         AgentKind::ALL,
+        &[],
     )
     .await;
 
@@ -146,6 +148,7 @@ async fn test_load_auto_commit_agent_setting_keeps_harness_session_model() {
         "session-id",
         harness_selection,
         &[],
+        &[AgentModel::KimiK3],
     )
     .await;
 
@@ -191,6 +194,7 @@ async fn test_load_auto_commit_agent_setting_ignores_uninstalled_cli_defaults() 
         "session-id",
         harness_selection,
         &[],
+        &[],
     )
     .await;
     let codex_installed_agent = SessionTaskService::load_auto_commit_agent_setting(
@@ -198,6 +202,7 @@ async fn test_load_auto_commit_agent_setting_ignores_uninstalled_cli_defaults() 
         "session-id",
         harness_selection,
         &[AgentKind::Codex],
+        &[],
     )
     .await;
 
@@ -208,8 +213,9 @@ async fn test_load_auto_commit_agent_setting_ignores_uninstalled_cli_defaults() 
 
 #[tokio::test]
 /// Verifies a Fast default naming a Harness model commits through it while
-/// this launch lists Harness, and counts as missing otherwise.
-async fn test_load_auto_commit_agent_setting_uses_a_harness_fast_default_while_harness_runs() {
+/// that model is ready, and counts as missing while only other harness
+/// models are.
+async fn test_load_auto_commit_agent_setting_uses_a_harness_fast_default_while_ready() {
     // Arrange
     let database = AppRepositories::in_memory().await.expect("db should open");
     insert_review_session(&database, model_fixture::CODEX_MODEL.as_str()).await;
@@ -243,14 +249,16 @@ async fn test_load_auto_commit_agent_setting_uses_a_harness_fast_default_while_h
         &database,
         "session-id",
         codex_session,
-        &[AgentKind::Codex, AgentKind::Harness],
+        &[AgentKind::Codex],
+        &[AgentModel::MuseSpark13, AgentModel::Qwen38Flash],
     )
     .await;
-    let without_harness_agent = SessionTaskService::load_auto_commit_agent_setting(
+    let unready_model_agent = SessionTaskService::load_auto_commit_agent_setting(
         &database,
         "session-id",
         codex_session,
         &[AgentKind::Codex],
+        &[AgentModel::MuseSpark13],
     )
     .await;
 
@@ -259,12 +267,12 @@ async fn test_load_auto_commit_agent_setting_uses_a_harness_fast_default_while_h
         harness_agent,
         AgentSelection::new(AgentKind::Harness, AgentModel::Qwen38Flash)
     );
-    assert_eq!(without_harness_agent, codex_session);
+    assert_eq!(unready_model_agent, codex_session);
 }
 
 #[tokio::test]
-/// Verifies listing Harness never moves utility work onto a harness model
-/// the user did not pick, even when a CLI default is no longer installed.
+/// Verifies ready harness models never take over utility work the user did
+/// not route to them, even when a CLI default is no longer installed.
 async fn test_load_auto_commit_agent_setting_never_falls_back_to_harness() {
     // Arrange
     let database = AppRepositories::in_memory().await.expect("db should open");
@@ -299,7 +307,8 @@ async fn test_load_auto_commit_agent_setting_never_falls_back_to_harness() {
         &database,
         "session-id",
         claude_session,
-        &[AgentKind::Harness],
+        &[],
+        &[AgentModel::Gpt61Sol],
     )
     .await;
 

@@ -15,6 +15,7 @@ use super::super::{
 use super::support::{commit_fallback_transcript, insert_review_session, one_shot_submission};
 use crate::app::AppEvent;
 use crate::app::assist::AssistContext;
+use crate::app::service::HarnessModels;
 use crate::app::test_support::purpose_recording_run_worker;
 use crate::db::AppRepositories;
 use crate::domain::agent::{AgentKind, AgentModel, AgentSelection, ReasoningLevel, SpeedMode};
@@ -43,6 +44,7 @@ async fn test_handle_auto_commit_appends_commit_error_from_mock_git_client() {
     let context = AssistContext {
         app_event_tx,
         available_agent_kinds: Arc::from(AgentKind::ALL),
+        harness_models: HarnessModels::default(),
         child_pid: Arc::new(Mutex::new(None)),
         db: database.clone(),
         folder: PathBuf::from("/tmp/project"),
@@ -115,6 +117,7 @@ async fn test_handle_auto_commit_stops_on_index_lock() {
     let context = AssistContext {
         app_event_tx,
         available_agent_kinds: Arc::from(AgentKind::ALL),
+        harness_models: HarnessModels::default(),
         child_pid: Arc::new(Mutex::new(None)),
         db: database.clone(),
         folder: PathBuf::from("project"),
@@ -201,6 +204,7 @@ async fn test_handle_auto_commit_warns_when_pre_commit_hook_is_missing() {
     let context = AssistContext {
         app_event_tx,
         available_agent_kinds: Arc::from(AgentKind::ALL),
+        harness_models: HarnessModels::default(),
         child_pid: Arc::new(Mutex::new(None)),
         db: database.clone(),
         folder: PathBuf::from("/tmp/project"),
@@ -246,6 +250,7 @@ async fn test_handle_auto_commit_reports_when_no_changes_exist() {
     let context = AssistContext {
         app_event_tx,
         available_agent_kinds: Arc::from(AgentKind::ALL),
+        harness_models: HarnessModels::default(),
         child_pid: Arc::new(Mutex::new(None)),
         db: database.clone(),
         folder: PathBuf::from("/tmp/project"),
@@ -362,6 +367,7 @@ async fn test_commit_assist_preserves_retained_runtime_accounting() {
         let context = AssistContext {
             app_event_tx,
             available_agent_kinds: Arc::from(AgentKind::ALL),
+            harness_models: HarnessModels::default(),
             child_pid: Arc::clone(&child_pid),
             db: database,
             folder: PathBuf::from("project"),
@@ -656,6 +662,7 @@ async fn test_append_pre_commit_hook_warning_ignores_duplicate_advisory() {
     let context = AssistContext {
         app_event_tx,
         available_agent_kinds: Arc::from(AgentKind::ALL),
+        harness_models: HarnessModels::default(),
         child_pid: Arc::new(Mutex::new(None)),
         db: database.clone(),
         folder: PathBuf::from("/tmp/project"),

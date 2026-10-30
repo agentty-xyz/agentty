@@ -2804,9 +2804,10 @@ impl SessionManager {
         super::turn::spawn_request_title_generation(
             super::turn::RequestTitleInput {
                 app_event_tx: services.event_sender(),
-                available_agent_kinds: services.utility_agent_kinds().into(),
+                available_agent_kinds: services.available_agent_kinds().into(),
                 db: services.db().clone(),
                 folder,
+                harness_models: services.harness_models(),
                 prompt: prompt.to_string(),
                 run_client: services.session_run_client(session_id),
                 session_agent,

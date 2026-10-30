@@ -12,7 +12,7 @@ use super::support::{
 use crate::app::AppServices;
 use crate::db::AppRepositories;
 use crate::domain::agent::{
-    AgentKind, AgentModel, AgentSelection, HarnessModelStatus, ModelCost, ReasoningLevel, SpeedMode,
+    AgentKind, AgentModel, AgentSelection, HarnessModelStatus, ReasoningLevel, SpeedMode,
 };
 use crate::domain::setting::SettingName;
 use crate::domain::theme::ColorTheme;
@@ -943,35 +943,57 @@ async fn load_default_fast_agent_setting_uses_a_ready_harness_fast_default() {
     persist_harness_fast_default(&services, project_id, "kimi-k9").await;
     let unknown_model =
         load_default_fast_agent_setting(&services, Some(project_id), fallback).await;
+    let agent_only_project_id = services
+        .db()
+        .projects()
+        .upsert_project("/tmp/agent-only", None)
+        .await
+        .expect("failed to create project");
+    services
+        .db()
+        .settings()
+        .upsert_project_setting(
+            agent_only_project_id,
+            SettingName::DefaultFastAgent,
+            AgentKind::Harness.name(),
+        )
+        .await
+        .expect("failed to persist harness fast agent");
+    let missing_model =
+        load_default_fast_agent_setting(&services, Some(agent_only_project_id), fallback).await;
 
     // Assert
     assert_eq!(without_harness, fallback);
     assert_eq!(ready, qwen_flash);
     assert_eq!(without_project, fallback);
     assert_eq!(unknown_model, fallback);
+    assert_eq!(missing_model, fallback);
 }
 
 #[tokio::test]
-async fn utility_agent_kinds_list_harness_only_with_a_ready_model() {
+async fn shared_harness_models_report_ready_models_as_the_list_changes() {
     // Arrange
     let (mut services, _project_id) =
         test_services_with_available_agent_kinds(vec![AgentKind::Codex]).await;
+    let harness_models = services.harness_models();
+    let mut unready = crate::test_support::ready_harness_model(AgentModel::KimiK3);
+    unready.status = HarnessModelStatus::MissingConfiguration("KIMI_API_KEY");
 
     // Act
-    let without_models = services.utility_agent_kinds();
-    crate::test_support::set_test_harness_models(&mut services, true, None);
-    let without_ready_model = services.utility_agent_kinds();
+    let without_models = harness_models.ready_models();
     crate::test_support::set_test_harness_models(
         &mut services,
         true,
         Some(AgentModel::Qwen38Flash),
     );
-    let with_ready_model = services.utility_agent_kinds();
+    let after_listing = harness_models.ready_models();
+    services.replace_harness_model_options(vec![unready]);
+    let after_refresh = harness_models.ready_models();
 
     // Assert
-    assert_eq!(without_models, [AgentKind::Codex]);
-    assert_eq!(without_ready_model, [AgentKind::Codex]);
-    assert_eq!(with_ready_model, [AgentKind::Codex, AgentKind::Harness]);
+    assert_eq!(without_models, []);
+    assert_eq!(after_listing, [AgentModel::Qwen38Flash]);
+    assert_eq!(after_refresh, []);
 }
 
 #[tokio::test]
@@ -998,25 +1020,22 @@ async fn settings_offer_ready_harness_models_for_the_fast_default() {
     )
     .await;
     let loaded_view = manager.view();
-    manager.replace_harness_models(vec![unready]);
-    let refreshed_view = manager.view();
-    let unlisted_manager = SettingsManager::from_repositories(
-        services.db().clone(),
-        services.available_agent_kinds(),
-        Vec::new(),
-        project_id,
-    )
-    .await;
+    manager.replace_harness_models(vec![unready]).await;
+    let unready_view = manager.view();
+    manager
+        .replace_harness_models(services.harness_model_options())
+        .await;
+    let ready_again_view = manager.view();
 
     // Assert
     assert_eq!(loaded_view.default_fast_selection, qwen_flash);
     assert_eq!(
         loaded_view.fast_harness_models,
-        [(qwen_flash, ModelCost::Standard)]
+        services.harness_model_options()
     );
-    assert_eq!(refreshed_view.fast_harness_models, []);
-    assert_eq!(
-        unlisted_manager.default_fast_selection.kind(),
-        AgentKind::Codex
-    );
+    // While the saved model is not ready, settings show the model utility
+    // work falls back to, and show the saved one again once it is.
+    assert_eq!(unready_view.fast_harness_models, []);
+    assert_eq!(unready_view.default_fast_selection.kind(), AgentKind::Codex);
+    assert_eq!(ready_again_view.default_fast_selection, qwen_flash);
 }

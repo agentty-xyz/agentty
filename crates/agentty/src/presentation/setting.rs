@@ -1,6 +1,8 @@
 //! Presentation-owned settings screen state and input translation.
 
-use crate::domain::agent::{AgentSelection, ModelCost, ReasoningLevel, ResponseStyle, SpeedMode};
+use crate::domain::agent::{
+    AgentKind, AgentSelection, HarnessModelOption, ReasoningLevel, ResponseStyle, SpeedMode,
+};
 use crate::domain::input::{InputCommand, InputState};
 use crate::domain::selection::SelectionState;
 use crate::domain::theme::ColorTheme;
@@ -20,8 +22,8 @@ pub(crate) struct SettingsView {
     pub(crate) default_smart_reasoning_level: ReasoningLevel,
     pub(crate) default_smart_selection: AgentSelection,
     pub(crate) default_smart_speed_mode: SpeedMode,
-    /// Ready harness models the Fast model may use, with their price class.
-    pub(crate) fast_harness_models: Vec<(AgentSelection, ModelCost)>,
+    /// Ready harness models the Fast model may use.
+    pub(crate) fast_harness_models: Vec<HarnessModelOption>,
     pub(crate) include_coauthored_by_agentty: bool,
     pub(crate) launch_configuration: String,
     pub(crate) theme: ColorTheme,
@@ -1066,14 +1068,20 @@ fn selector_options_for_row(view: &SettingsView, row: SettingRow) -> Vec<Setting
         }
         SettingRow::DefaultFastModel => {
             let mut options = model_selector_options(view);
-            options.extend(view.fast_harness_models.iter().map(|(selection, cost)| {
+            options.extend(view.fast_harness_models.iter().map(|option| {
+                let selection = AgentSelection::new(AgentKind::Harness, option.model);
+                let mut label = format!(
+                    "{} · {}",
+                    display_model_selector_value(selection),
+                    option.cost.label()
+                );
+                if option.trains_on_prompts {
+                    label.push_str(" · trains on prompts");
+                }
+
                 SettingSelectorOption {
-                    label: format!(
-                        "{} · {}",
-                        display_model_selector_value(*selection),
-                        cost.label()
-                    ),
-                    value: SettingSelectorValue::ModelSelection(*selection),
+                    label,
+                    value: SettingSelectorValue::ModelSelection(selection),
                 }
             }));
 
