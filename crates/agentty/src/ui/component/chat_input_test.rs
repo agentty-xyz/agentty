@@ -335,6 +335,38 @@ fn test_render_uses_matching_rounded_dropdown_frame() {
 }
 
 #[test]
+fn test_render_suggestion_dropdown_scrolls_to_a_highlighted_row_below_the_fold() {
+    // Arrange
+    let width = 30;
+    let backend = ratatui::backend::TestBackend::new(width, 5);
+    let mut terminal = ratatui::Terminal::new(backend).expect("failed to create terminal");
+    let suggestion_list = SuggestionList {
+        items: (0..6)
+            .map(|index| SuggestionItem {
+                badge: None,
+                detail: None,
+                label: format!("model-{index}"),
+                metadata: None,
+            })
+            .collect(),
+        selected_index: 4,
+        title: "Models".to_string(),
+    };
+
+    // Act
+    terminal
+        .draw(|frame| {
+            ChatInput::render_suggestion_dropdown(frame, frame.area(), &suggestion_list);
+        })
+        .expect("failed to draw dropdown");
+
+    // Assert
+    let buffer = terminal.backend().buffer();
+    assert!(buffer_row_text(buffer, 1, width).contains("model-2"));
+    assert!(buffer_row_text(buffer, 3, width).contains("model-4"));
+}
+
+#[test]
 fn test_render_keeps_raw_at_lookup_text_visible_in_input() {
     // Arrange
     let width = 48;

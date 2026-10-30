@@ -247,7 +247,7 @@ fn hosted_model(
         context_window: selection
             .profile(environment, None)
             .ok()
-            .map(|profile| profile.context_window_tokens()),
+            .map(ModelProfile::context_window_tokens),
         loaded_context_window: None,
         model,
         provider: provider_display_name(provider).to_string(),

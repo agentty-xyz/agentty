@@ -465,10 +465,10 @@ lists models (Ollama's `/api/tags`, with `/api/show` for older servers, else
 `GET /models`) and reports the running window (Ollama's `/api/ps`, after loading an
 unloaded model with the server defaults the next chat request would use, else vLLM's
 `max_model_len`). `ModelProvider::running_profile` fits the profile to that window;
-without one, the host declares it (`ModelProvider::declared_profile`). Without a
-fitted estimator, requests are weighed by the default estimator, counting the schema in
-the prompt, under a 50% under-count margin. llama.cpp's `exceed_context_size_error`
-joins the shared overflow markers.
+without one, the host declares it (`ModelProvider::declared_profile`). Without a fitted
+estimator, requests are weighed by the default estimator, counting the schema in the
+prompt, under a 50% under-count margin. llama.cpp's `exceed_context_size_error` joins
+the shared overflow markers.
 
 Providers cache prompt prefixes per backend, so cache hits depend on routing related
 requests together. The harness gives every turn request of a durable session one key,

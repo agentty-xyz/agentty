@@ -155,7 +155,7 @@ fn providers_have_display_names() {
             .iter()
             .map(|provider| provider_display_name(*provider))
             .collect::<Vec<_>>(),
-        ["Muse", "Kimi", "Qwen", "OpenAI-compatible server"]
+        ["Muse", "Kimi", "Qwen", "OpenAI", "OpenAI-compatible server"]
     );
 }
 

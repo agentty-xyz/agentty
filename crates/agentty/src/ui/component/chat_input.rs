@@ -7,8 +7,9 @@ use ratatui::widgets::{Block, BorderType, Borders, Clear, Paragraph};
 use unicode_width::UnicodeWidthStr;
 
 use crate::ui::input_layout::{
-    CHAT_INPUT_MAX_VISIBLE_LINES, calculate_input_viewport, compute_input_layout,
-    input_cursor_position, placeholder_cursor_position, suggestion_dropdown_height,
+    CHAT_INPUT_MAX_VISIBLE_LINES, SLASH_MENU_BORDER_HEIGHT, calculate_input_viewport,
+    compute_input_layout, input_cursor_position, placeholder_cursor_position,
+    suggestion_dropdown_height,
 };
 use crate::ui::{Component, style};
 
@@ -287,9 +288,16 @@ impl<'a> ChatInput<'a> {
             })
             .collect::<Vec<_>>();
 
+        // A list taller than the space above the composer scrolls to keep
+        // the highlighted row visible.
+        let visible_rows = usize::from(area.height.saturating_sub(SLASH_MENU_BORDER_HEIGHT));
+        let first_visible_row = suggestion_list
+            .selected_index
+            .saturating_sub(visible_rows.saturating_sub(1));
         let dropdown = Paragraph::new(rows)
             .style(Self::input_text_style())
-            .block(Self::dropdown_block(&suggestion_list.title));
+            .block(Self::dropdown_block(&suggestion_list.title))
+            .scroll((u16::try_from(first_visible_row).unwrap_or(u16::MAX), 0));
 
         Self::clear_area(f, area, None);
         f.render_widget(dropdown, area);
