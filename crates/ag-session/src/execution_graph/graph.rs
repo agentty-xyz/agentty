@@ -1,6 +1,8 @@
-use std::collections::{HashMap, HashSet, VecDeque};
+use std::collections::{HashMap, HashSet};
 use std::num::NonZeroU64;
 
+use petgraph::algo;
+use petgraph::graph::DiGraph;
 use serde::{Deserialize, Serialize};
 
 use super::{
@@ -230,43 +232,29 @@ impl ExecutionGraph {
         Ok(())
     }
 
-    /// Kahn traversal avoids recursion for caller-supplied graph depth.
+    /// Checks validated dependency references with an iterative traversal,
+    /// preserving caller order and avoiding recursion for caller-supplied
+    /// depth.
     fn validate_acyclic(&self) -> Result<(), GraphContractError> {
-        let mut remaining: Vec<usize> = self
+        let mut topology = DiGraph::<(), ()>::new();
+        let indices: HashMap<_, _> = self
             .nodes
             .iter()
-            .map(|node| node.dependencies.len())
+            .map(|node| (node.id.as_str(), topology.add_node(())))
             .collect();
-        let mut consumers: HashMap<&str, Vec<usize>> = HashMap::new();
-        for (index, node) in self.nodes.iter().enumerate() {
+        for node in &self.nodes {
             for dependency in &node.dependencies {
-                consumers
-                    .entry(&dependency.node_id)
-                    .or_default()
-                    .push(index);
+                topology.add_edge(
+                    indices[dependency.node_id.as_str()],
+                    indices[node.id.as_str()],
+                    (),
+                );
             }
-        }
-        let mut ready: VecDeque<&str> = self
-            .nodes
-            .iter()
-            .filter(|node| node.dependencies.is_empty())
-            .map(|node| node.id.as_str())
-            .collect();
-        let mut visited = 0;
-        while let Some(node_id) = ready.pop_front() {
-            visited += 1;
-            for &consumer in consumers.get(node_id).into_iter().flatten() {
-                remaining[consumer] -= 1;
-                if remaining[consumer] == 0 {
-                    ready.push_back(&self.nodes[consumer].id);
-                }
-            }
-        }
-        if visited != self.nodes.len() {
-            return Err(GraphContractError::Cycle);
         }
 
-        Ok(())
+        algo::toposort(&topology, None)
+            .map(|_| ())
+            .map_err(|_| GraphContractError::Cycle)
     }
 
     /// Constructs a scoped uniqueness error without losing the conflicting ID.

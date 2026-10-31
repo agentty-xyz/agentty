@@ -255,6 +255,31 @@ fn graphs_allow_multiple_gates_and_join_producers_in_any_declaration_order() {
 }
 
 #[test]
+fn graphs_validate_deep_dependency_chains_without_recursion() {
+    // Arrange
+    let mut graph = graph();
+    graph.nodes = (0..4096)
+        .map(|index| {
+            let mut node = reader(&format!("node-{index}"));
+            if index > 0 {
+                node.dependencies.push(GraphDependency {
+                    gate: GraphCompletionGate::ExecutionSucceeded,
+                    node_id: format!("node-{}", index - 1),
+                });
+            }
+
+            node
+        })
+        .collect();
+
+    // Act
+    let validation = graph.validate();
+
+    // Assert
+    assert_eq!(validation, Ok(()));
+}
+
+#[test]
 fn input_gates_require_the_state_of_the_exact_version() {
     // Arrange
     for acceptance_required in [false, true] {

@@ -53,6 +53,7 @@ opentelemetry-otlp = { version = "0.33", default-features = false, features = ["
 opentelemetry-proto = { version = "0.33", default-features = false, features = ["gen-tonic-messages", "metrics", "trace"] }
 opentelemetry_sdk = { version = "0.33.0", default-features = false, features = ["internal-logs", "metrics", "trace"] }
 percent-encoding = "2"
+petgraph = { version = "0.8.3", default-features = false, features = ["std"] }
 portable-pty = "0.9"
 prost = "0.14"
 pulldown-cmark = { version = "0.13", default-features = false }
