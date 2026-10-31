@@ -333,6 +333,8 @@ impl ActivityObserver {
                                 .and_then(Value::as_str)
                                 .unwrap_or("Skill"),
                         )
+                    } else if name == "Bash" {
+                        (ActivityKind::Command, name)
                     } else {
                         (ActivityKind::Tool, name)
                     };

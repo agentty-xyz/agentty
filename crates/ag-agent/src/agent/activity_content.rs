@@ -22,10 +22,19 @@ impl ActivityDetails {
         Self {
             exit_code,
             input: input.filter(|value| !value.is_null()).map(|value| {
-                let value = value
-                    .get("command")
-                    .or_else(|| value.get("CommandLine"))
-                    .unwrap_or(value);
+                // Select useful fields before bounding large edit/write
+                // payloads.
+                let value = [
+                    "command",
+                    "CommandLine",
+                    "file_path",
+                    "path",
+                    "TargetFile",
+                    "target_file",
+                ]
+                .iter()
+                .find_map(|key| value.get(*key))
+                .unwrap_or(value);
                 match value.as_str() {
                     Some(text) => bounded(text),
                     None => bounded(&value.to_string()),

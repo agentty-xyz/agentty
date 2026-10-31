@@ -1040,7 +1040,7 @@ pub(crate) fn live_activity_lines(activity: &str, width: usize) -> Vec<Line<'sta
         .map(|line| {
             Line::styled(
                 text_util::truncate_with_ellipsis(line, width),
-                ratatui::style::Style::default().fg(style::palette::text_muted()),
+                activity_line_style(line),
             )
         })
         .collect()
@@ -1054,7 +1054,7 @@ pub(crate) fn activity_summary_lines(summary: &str, width: usize) -> Vec<Line<'s
             ag_tui_text::text_util::wrap_styled_line(
                 vec![ratatui::text::Span::styled(
                     line.to_string(),
-                    ratatui::style::Style::default().fg(style::palette::text_muted()),
+                    activity_line_style(line),
                 )],
                 width,
             )
@@ -1066,6 +1066,23 @@ pub(crate) fn activity_summary_lines(summary: &str, width: usize) -> Vec<Line<'s
             })
         })
         .collect()
+}
+
+/// Gives call outcomes the same semantic colors in live and saved activity.
+fn activity_line_style(line: &str) -> ratatui::style::Style {
+    let color = if line.starts_with('✗') {
+        style::palette::danger()
+    } else if line.starts_with('!') {
+        style::palette::warning()
+    } else if line.starts_with('…') {
+        style::palette::info()
+    } else if line.starts_with('✓') {
+        style::palette::success()
+    } else {
+        style::palette::text_muted()
+    };
+
+    ratatui::style::Style::default().fg(color)
 }
 
 #[cfg(test)]

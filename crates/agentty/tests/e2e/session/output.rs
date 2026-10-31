@@ -7,10 +7,11 @@ use ag_session::test_support as model_fixture;
 use agentty::domain::session_message::SessionMessageKind;
 use testty::assertion;
 use testty::frame::TerminalFrame;
+use testty::proof::report::ProofReport;
 use testty::region::Region;
 
 use super::fixture::{E2eResult, seed_project_settings};
-use crate::common::{BuilderEnv, FeatureTest, SessionSeed};
+use crate::common::{BuilderEnv, FeatureTest, ReleaseGate, SessionSeed};
 use crate::{common, test_support};
 
 const LOADER_SESSION_ID: &str = "loader-session-0001";
@@ -1166,10 +1167,16 @@ async fn test_session_activity_footers() -> E2eResult {
 #[tokio::test]
 async fn test_session_live_activity() -> E2eResult {
     // Arrange, Act, Assert
+    let running = ReleaseGate::new()?;
+    let settled = ReleaseGate::new()?;
+    let thinking = ReleaseGate::new()?;
+    let hold_running = running.shell_wait();
+    let hold_settled = settled.shell_wait();
+    let hold_thinking = thinking.shell_wait();
     FeatureTest::new("session_live_activity")
         .with_git()
         .with_terminal_size(100, 40)
-        .setup(|env| Box::pin(async move {
+        .setup(move |env| Box::pin(async move {
             let script = r#"#!/bin/sh
 if [ "$1" = "update" ]; then exit 0; fi
 if [ "$1" = "--version" ]; then printf 'claude 0.0.0-test\n'; exit 0; fi
@@ -1177,23 +1184,33 @@ input=$(cat)
 case "$input" in
   *"Generate a concise, commit-style title"*) answer='Activity demo' ;;
   *"Stream activity demo"*)
+    printf '%s\n' '{"type":"assistant","message":{"content":[{"type":"tool_use","id":"old","name":"Bash","input":{"command":"obsolete-command"}}]}}'
+    printf '%s\n' '{"type":"user","message":{"content":[{"type":"tool_result","tool_use_id":"old","content":"done"}]}}'
     printf '%s\n' '{"type":"assistant","message":{"content":[{"type":"tool_use","id":"read","name":"Bash","input":{"command":"printf activity-details-with-a-long-literal-xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx-hidden-command-tail"}},{"type":"tool_use","id":"skill","name":"Skill","input":{"skill":"review"}}]}}'
-    sleep 3
+    printf '%s\n' '{"type":"assistant","message":{"content":[{"type":"tool_use","id":"group","name":"Bash","input":{"command":"{ cargo fmt; cargo test; }"}}]}}'
+    __RUNNING_GATE__
     printf '%s\n' '{"type":"user","message":{"content":[{"type":"tool_result","tool_use_id":"read","content":"activity-details\nsecond output line"},{"type":"tool_result","tool_use_id":"skill","is_error":true,"content":"first error line\nsecond error line\nhidden third error line"}]}}'
-    sleep 3
+    printf '%s\n' '{"type":"user","message":{"content":[{"type":"tool_result","tool_use_id":"group","is_error":true,"content":"group failed"}]}}'
+    printf '%s\n' '{"type":"assistant","message":{"content":[{"type":"tool_use","id":"edit","name":"Edit","input":{"replace_all":false,"file_path":"src/example.rs","old_string":"hidden-old-content","new_string":"hidden-new-content"}}]}}'
+    __SETTLED_GATE__
+    printf '%s\n' '{"type":"user","message":{"content":[{"type":"tool_result","tool_use_id":"edit","content":"edited"}]}}'
+    __THINKING_GATE__
     answer='Activity demo finished' ;;
   *) answer='Ready' ;;
 esac
 result='{\"answer\":\"'"$answer"'\"}'
 printf '{"type":"result","subtype":"success","result":"%s","usage":{"input_tokens":5,"output_tokens":9}}\n' "$result"
-"#;
+"#
+                .replace("__RUNNING_GATE__", &hold_running)
+                .replace("__SETTLED_GATE__", &hold_settled)
+                .replace("__THINKING_GATE__", &hold_thinking);
             let path = env.stub_bin.join("claude");
             std::fs::write(&path, script)?;
             #[cfg(unix)]
             std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o750))?;
             seed_project_settings(env, &[("DefaultSmartModel", "claude-haiku-4-5-20251001")]).await
         }))
-        .run(|scenario| {
+        .run(move |scenario| {
             scenario
                 .compose(&common::wait_for_agentty_startup())
                 .compose(&common::switch_to_tab("Sessions"))
@@ -1204,48 +1221,101 @@ printf '{"type":"result","subtype":"success","result":"%s","usage":{"input_token
                 .press_key("Enter")
                 .wait_for_text("printf activity-details", 15000)
                 .wait_for_text("… skill review", 15000)
+                .wait_for_text("… Bash · { cargo fmt; cargo test; }", 15000)
                 .capture_labeled("running", "Invocations before the answer")
+                .compose(&running.release())
                 .wait_for_text("second error line", 10000)
                 .wait_for_text("✗ skill review", 10000)
+                .wait_for_text("… Edit · src/example.rs", 10000)
                 .capture_labeled("settled", "Statuses update in place")
-                .wait_for_text("Tools: Bash ×1", 15000)
+                .compose(&settled.release())
+                .wait_for_text("✓ Edit · src/example.rs", 10000)
+                .capture_labeled("thinking", "Recent activity remains between calls")
+                .compose(&thinking.release())
                 // The summary is published before live-row cleanup completes.
                 // Wait for turn finalization before asserting the final frame.
                 .wait_for_text("Enter: reply", 15000)
         }, |frame, report| Box::pin(async move {
-            for (index, labels) in [
-                ["… Bash · printf activity-details", "… skill review"],
-                ["✓ Bash · printf activity-details", "✗ skill review"],
-            ].iter().enumerate() {
-                let capture = common::frame_from_capture(&report.captures[index]);
-                let full = Region::full(capture.cols(), capture.rows());
-                for label in labels {
-                    assertion::assert_text_in_region(&capture, label, &full);
-                    assertion::assert_match_count(&capture, label, 1);
-                }
-                assertion::assert_text_in_region(&capture, "printf activity-details", &full);
-                let text = capture.all_text();
-                let call_row = text.lines().find(|line| line.contains("Bash ·")).expect("call row");
-                assert!(call_row.contains("..."));
-                assert!(!text.contains("hidden-command-tail"));
-                if index == 1 {
-                    assertion::assert_text_in_region(&capture, "first error line", &full);
-                    assertion::assert_text_in_region(&capture, "second error line", &full);
-                    assert!(!capture.all_text().contains("hidden third error line"));
-                }
-                assert!(!capture.all_text().contains("second output line"));
-                assert!(!capture.all_text().contains("Input:"));
-                assert!(!capture.all_text().contains("Output:"));
-                assert!(!capture.all_text().contains("Activity demo finished"));
-            }
-            let full = Region::full(frame.cols(), frame.rows());
-            assertion::assert_text_in_region(frame, "Activity demo finished", &full);
-            assertion::assert_text_in_region(frame, "Skills: review ×1 (1 failed)", &full);
-            assert!(!frame.all_text().contains("… Bash"));
-            assert!(!frame.all_text().contains("✓ Bash"));
-            assert!(!frame.all_text().contains("first error line"));
+            assert_live_activity_report(frame, report);
         }))
         .await?;
 
     Ok(())
+}
+
+/// Checks live replacement, readable previews, and the saved failure footer.
+fn assert_live_activity_report(frame: &TerminalFrame, report: &ProofReport) {
+    for (index, labels) in [
+        [
+            "… Bash · printf activity-details",
+            "… skill review",
+            "… Bash · { cargo fmt; cargo test; }",
+        ],
+        [
+            "✓ Bash · printf activity-details",
+            "✗ skill review",
+            "✗ Bash · { cargo fmt; cargo test; }",
+        ],
+    ]
+    .iter()
+    .enumerate()
+    {
+        let capture = common::frame_from_capture(&report.captures[index]);
+        let full = Region::full(capture.cols(), capture.rows());
+        for label in labels {
+            assertion::assert_text_in_region(&capture, label, &full);
+            assertion::assert_match_count(&capture, label, 1);
+        }
+        assertion::assert_text_in_region(&capture, "printf activity-details", &full);
+        assertion::assert_text_in_region(&capture, "Tools: Bash ×3", &full);
+        assertion::assert_text_in_region(&capture, "Skills: review ×1", &full);
+        assertion::assert_text_in_region(
+            &capture,
+            if index == 0 {
+                "Status: 1 succeeded · 0 failed · 3 running"
+            } else {
+                "Status: 2 succeeded · 2 failed · 1 running"
+            },
+            &full,
+        );
+        let text = capture.all_text();
+        assert!(
+            text.lines()
+                .any(|line| line.contains("Bash · printf") && line.contains("..."))
+        );
+        assert!(!text.contains("hidden-command-tail"));
+        if index == 1 {
+            assert!(!text.contains("obsolete-command"));
+            assertion::assert_text_in_region(&capture, "… Edit · src/example.rs", &full);
+            assertion::assert_text_in_region(&capture, "first error line", &full);
+            assertion::assert_text_in_region(&capture, "second error line", &full);
+            assert!(!capture.all_text().contains("hidden third error line"));
+        }
+        assert!(!capture.all_text().contains("second output line"));
+        assert!(!capture.all_text().contains("Input:"));
+        assert!(!capture.all_text().contains("Output:"));
+        assert!(!capture.all_text().contains("Activity demo finished"));
+        assert!(!text.contains("hidden-new-content"));
+        assert!(!text.contains("replace_all"));
+    }
+    let thinking = common::frame_from_capture(&report.captures[2]);
+    let thinking_full = Region::full(thinking.cols(), thinking.rows());
+    assertion::assert_text_in_region(
+        &thinking,
+        "Status: 3 succeeded · 2 failed · 0 running",
+        &thinking_full,
+    );
+    assertion::assert_text_in_region(&thinking, "✓ Edit · src/example.rs", &thinking_full);
+    assertion::assert_text_in_region(&thinking, "first error line", &thinking_full);
+    assert!(!thinking.all_text().contains("printf activity-details"));
+    let full = Region::full(frame.cols(), frame.rows());
+    assertion::assert_text_in_region(frame, "Activity demo finished", &full);
+    assertion::assert_text_in_region(frame, "Skills: review ×1 (1 failed)", &full);
+    assert!(!frame.all_text().contains("… Bash"));
+    assert!(!frame.all_text().contains("✓ Bash"));
+    assertion::assert_text_in_region(frame, "first error line", &full);
+    assertion::assert_text_in_region(frame, "second error line", &full);
+    assertion::assert_text_in_region(frame, "✗ Bash · { cargo fmt; cargo test; }", &full);
+    assert!(!frame.all_text().contains("✓ Edit"));
+    assert!(!frame.all_text().contains("Status:"));
 }

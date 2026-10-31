@@ -78,6 +78,58 @@ fn claude_preserves_skill_parent_and_content() {
 }
 
 #[test]
+fn claude_bash_is_classified_as_command_and_keeps_literal_input() {
+    // Arrange
+    let mut observer = ActivityObserver::new(|_| {});
+    let command = "{ cargo fmt; cargo test; }";
+
+    // Act
+    observer.observe(AgentKind::Claude, &json!({"type":"assistant", "message":{"content":[{"type":"tool_use", "id":"group", "name":"Bash", "input":{"command":command}}]}}));
+    let running = observer.calls["group"].clone();
+    observer.observe(AgentKind::Claude, &json!({"type":"user", "message":{"content":[{"type":"tool_result", "tool_use_id":"group", "is_error":true}]}}));
+    let failed = &observer.calls["group"];
+
+    // Assert
+    assert_eq!(running.status, ActivityStatus::Running);
+    assert_eq!(failed.status, ActivityStatus::Failed);
+    for event in [&running, failed] {
+        assert_eq!(event.kind, ActivityKind::Command);
+        assert_eq!(event.name, "Bash");
+        assert_eq!(event.input.as_deref(), Some(command));
+    }
+}
+
+#[test]
+fn claude_oversized_edits_and_writes_preserve_paths_through_failure_updates() {
+    // Arrange, Act, Assert
+    for name in ["Edit", "Write"] {
+        let events = Arc::new(Mutex::new(Vec::new()));
+        let sink = Arc::clone(&events);
+        let mut observer = ActivityObserver::new(move |event| {
+            sink.lock().expect("events lock").push(event);
+        });
+        let input = if name == "Edit" {
+            json!({"file_path":"src/example.rs", "old_string":"old", "new_string":"x".repeat(8192)})
+        } else {
+            json!({"file_path":"src/example.rs", "content":"x".repeat(8192)})
+        };
+        observer.observe_line(AgentKind::Claude, &json!({"type":"assistant", "message":{"content":[{"type":"tool_use", "id":"edit", "name":name, "input":input}]}}).to_string());
+        observer.observe_line(AgentKind::Claude, &json!({"type":"user", "message":{"content":[{"type":"tool_result", "tool_use_id":"edit", "is_error":true, "content":"edit failed"}]}}).to_string());
+        drop(observer);
+
+        let events = events.lock().expect("events lock");
+        assert_eq!(events.len(), 2);
+        assert_eq!(events[0].status, ActivityStatus::Running);
+        assert_eq!(events[1].status, ActivityStatus::Failed);
+        for event in events.iter() {
+            assert_eq!(event.name, name);
+            assert_eq!(event.input.as_deref(), Some("src/example.rs"));
+        }
+        assert_eq!(events[1].output.as_deref(), Some("edit failed"));
+    }
+}
+
+#[test]
 fn claude_excludes_structured_output_results_but_preserves_orphan_results() {
     // Arrange
     let events = Arc::new(Mutex::new(Vec::new()));

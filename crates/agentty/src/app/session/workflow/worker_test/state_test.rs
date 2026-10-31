@@ -375,7 +375,10 @@ async fn test_activity_is_published_before_the_turn_stream_closes() {
         unreachable!("expected live activity");
     };
     assert_eq!(session_id.as_str(), "session");
-    assert_eq!(snapshot.snapshot(), "… Read\n");
+    assert_eq!(
+        snapshot.snapshot(),
+        "Tools: Read ×1\nStatus: 0 succeeded · 0 failed · 1 running\n\n… Read\n"
+    );
     assert!(!consumer.is_finished());
 
     // Act
@@ -392,7 +395,7 @@ async fn test_activity_is_published_before_the_turn_stream_closes() {
     // Assert
     assert!(remaining.iter().any(|event| matches!(event,
         AppEvent::SessionActivityReady { activity, session_id }
-            if session_id.as_str() == "session" && activity.snapshot() == "✓ Read\n"
+            if session_id.as_str() == "session" && activity.snapshot() == "Tools: Read ×1\nStatus: 1 succeeded · 0 failed · 0 running\n\n✓ Read\n"
     )));
     assert_eq!(activity.summary(), "Tools: Read ×1\n");
 }
