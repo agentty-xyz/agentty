@@ -1,4 +1,5 @@
 use std::path::PathBuf;
+use std::sync::Arc;
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::time::Duration;
 
@@ -50,10 +51,10 @@ fn request() -> OneShotRequest {
 #[tokio::test]
 async fn one_deadline_cancels_a_hung_call_and_prevents_later_submissions() {
     // Arrange
-    let fixture = DeadlineFixture {
+    let fixture = Arc::new(DeadlineFixture {
         calls: AtomicUsize::new(0),
-    };
-    let client = ReviewDeadlineClient::new(&fixture, Duration::from_millis(50));
+    });
+    let client = ReviewDeadlineClient::new(fixture.clone(), Duration::from_millis(50));
 
     // Act
     let first = client.submit(request()).await.expect("initial result");

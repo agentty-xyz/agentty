@@ -445,7 +445,9 @@ checkpoints. Completion atomically archives these call records with the review b
 clearing retry state. The latest completed audit survives invalidation, partial retries,
 and cached review restoration until an active review generation completes or its session
 is deleted; generation checks reject stale evidence. Failed coverage remains explicit
-rather than being presented as a completed review.
+rather than being presented as a completed review. Each generation runs as a static
+execution graph of parallel fragment readers joined by cross-file and consolidation
+nodes; see [details](@/docs/architecture/execution-graphs.md#focused-review-graph).
 
 Commit-message generation summarizes large diffs and has a bounded fallback using
 changed filenames, conversation, and the existing commit message. It never discards
@@ -515,8 +517,8 @@ those using retained handle clones.
 The static `GraphExecutor` separately drains dependency-ready branches through injected
 worker adapters. Storage admits each node once with pinned inputs and its existing
 execution authority. Shared Env leases and provider budgets constrain parallel branches;
-all prerequisite gates must hold before a join runs. The existing `/plan` and focused
-review coordinators have not migrated. See
+all prerequisite gates must hold before a join runs. Focused review launches its own
+graph from its background task; the `/plan` coordinator has not migrated. See
 [Execution Graphs](@/docs/architecture/execution-graphs.md).
 
 Explicit graph launches use the same foreground admission gateway. Graph task handoffs
@@ -525,20 +527,19 @@ operation settlement. The selected graph command publishes active ownership befo
 waiting for Env access, so sync queues behind it. Gate waits observe cancellation;
 completion retains acquired leases through settlement. Queued nodes cannot hold a lease
 ahead of earlier commands. Utilities retain their concurrent worker path. Graph writers
-also exclude detached focused-review readers, while legacy reviews retain their overlap
-with ordinary session work and conflict-free sync. Acceptance and Env release wake
-active graph drivers without polling or startup replay. Each settled graph node also
-wakes drivers after releasing shared capacity and its Env lease, independently of the
-rest of its dispatch wave. Returning capacity or an Env lease from an unclaimed check
-wakes only drivers waiting for that resource, avoiding unconditional broadcasts. Drivers
-retain their launch and remaining budgets while waiting for explicit retry or
-clarification intent. Progress queries do not dispatch work. Cancellation closes durable
-admission before signaling workers, and startup never recreates drivers. Explicit resume
-uses the saved revision; retry and clarification actions append new executions against
-the exact source receipt. Completion requires every node's question-free settlement.
-Detached utilities retain their Env leases in worker-owned scopes through cancellation
-cleanup. Ordinary worker leases release and notify on early returns as well as normal
-completion.
+also exclude focused-review readers, which overlap ordinary session work and
+conflict-free sync as background readers. Acceptance and Env release wake active graph
+drivers without polling or startup replay. Each settled graph node also wakes drivers
+after releasing shared capacity and its Env lease, independently of the rest of its
+dispatch wave. Returning capacity or an Env lease from an unclaimed check wakes only
+drivers waiting for that resource, avoiding unconditional broadcasts. Drivers retain
+their launch and remaining budgets while waiting for explicit retry or clarification
+intent. Progress queries do not dispatch work. Cancellation closes durable admission
+before signaling workers, and startup never recreates drivers. Explicit resume uses the
+saved revision; retry and clarification actions append new executions against the exact
+source receipt. Completion requires every node's question-free settlement. Detached
+utilities retain their Env leases in worker-owned scopes through cancellation cleanup.
+Ordinary worker leases release and notify on early returns as well as normal completion.
 
 Channel owners clean up provider processes after cancellation. Operation completion
 includes post-processing, not just model completion. Heartbeat failures are reported

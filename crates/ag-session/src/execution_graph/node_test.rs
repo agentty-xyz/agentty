@@ -54,6 +54,18 @@ fn profiles_reject_incompatible_paths_effects_and_blank_identities() {
             ),
         ),
         (
+            |profile| {
+                profile.context = GraphContext::TaskConversation {
+                    task_id: "task".into(),
+                };
+                profile.response_profile = ProtocolRequestProfile::SessionTurn;
+                profile.workspace_access = GraphWorkspaceAccess::BackgroundRead;
+            },
+            GraphContractError::InvalidProfile(
+                "background readers require a fresh utility context",
+            ),
+        ),
+        (
             |profile| profile.shared_budget_id = Some("\t".into()),
             GraphContractError::EmptyField("shared_budget_id"),
         ),
@@ -76,6 +88,7 @@ fn profiles_preserve_permission_ceilings_for_every_session_mode() {
     // Arrange
     for access in [
         GraphWorkspaceAccess::SharedRead,
+        GraphWorkspaceAccess::BackgroundRead,
         GraphWorkspaceAccess::ExclusiveWrite,
     ] {
         for read_only in [false, true] {
@@ -83,7 +96,7 @@ fn profiles_preserve_permission_ceilings_for_every_session_mode() {
                 let mut node = reader("node");
                 node.execution.workspace_access = access;
                 node.definition.read_only = read_only;
-                let expected = if read_only || access == GraphWorkspaceAccess::SharedRead {
+                let expected = if read_only || access != GraphWorkspaceAccess::ExclusiveWrite {
                     PermissionMode::ReadOnly
                 } else {
                     session_mode

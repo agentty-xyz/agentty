@@ -1,8 +1,8 @@
-//! Bounded reviews of original diff fragments, retaining completed findings.
+//! Bounded review phases over original diff fragments, retaining completed
+//! findings. `review_graph` dispatches these phases as graph nodes.
 
 use std::collections::{BTreeMap, BTreeSet, VecDeque};
 use std::fmt::Write as _;
-use std::sync::atomic::{AtomicUsize, Ordering};
 
 use ag_contracts::{
     AgentRequestKind, OneShotError, OneShotRequest, PermissionMode, ProviderCallBudget,
@@ -19,8 +19,11 @@ use super::review_diff;
 /// Allows both original-source passes while bounding their shared retries.
 pub(super) const MAX_REVIEW_PROVIDER_CALLS: usize = MAX_PROVIDER_CALLS * 2;
 
-/// Bounds simultaneous provider work within one focused review.
-const REVIEW_CONCURRENCY: usize = 3;
+/// Bounds simultaneous provider work within one focused-review phase.
+pub(super) const REVIEW_CONCURRENCY: usize = 3;
+
+/// Hierarchical source position and the original fragment text.
+pub(super) type Fragment = (Vec<usize>, String);
 
 /// One original fragment's result and any provider-required history reduction.
 struct FragmentReview {
@@ -31,127 +34,200 @@ struct FragmentReview {
 }
 
 /// Original-diff results and the file coverage left by failed fragments.
-struct ReviewedBatches {
-    completed: usize,
-    coverage: String,
-    review: FocusedReview,
-    shared_context_summarized: bool,
-    unreviewed: BTreeSet<String>,
+#[derive(Clone, Debug)]
+pub(super) struct ReviewedBatches {
+    pub(super) completed: usize,
+    pub(super) coverage: String,
+    pub(super) review: FocusedReview,
+    pub(super) shared_context_summarized: bool,
+    pub(super) unreviewed: BTreeSet<String>,
 }
 
-/// Reviews original diff text in bounded fragments. History and shared
-/// cross-file context may be summarized. All fragments, history repairs, the
-/// cross-file pass, and final reduction share one provider budget. Concurrent
-/// batches merge in input order; failures drain their running peers before
-/// reporting incomplete coverage and stop new work. The renderer receives
-/// content, history, and the captured diff defining the criteria scope.
-/// Discovery uses original source; consolidation retains the full criteria
-/// scope for candidate input.
-pub(super) async fn submit(
-    client: &dyn RunClient,
-    mut request: OneShotRequest,
-    diff: &str,
-    context: &str,
-    render: impl Fn(&str, &str, &str) -> Result<String, OneShotError> + Sync,
-    progress: impl Fn(ReviewProgress) + Sync,
-) -> Result<String, OneShotError> {
-    let budget = ProviderCallBudget::new(MAX_REVIEW_PROVIDER_CALLS);
-    request.provider_call_budget = Some(budget.clone());
-    request.permission_mode = PermissionMode::ReadOnly;
-    request.request_kind = AgentRequestKind::FocusedReview;
-    let mut context = context.to_string();
-    if render(diff, &context, diff)?.len() > PROMPT_BUDGET {
-        if context.len() > 7_500 {
-            progress(ReviewProgress::SummarizingHistory);
-        }
-        context =
-            diff_prompt::summarize_context(client, &request, &context, 7_500, &budget).await?;
+/// Fragment reviews keyed by source position, with any unfinished work.
+pub(super) struct BatchOutcome {
+    pub(super) completed: BTreeMap<Vec<usize>, FocusedReview>,
+    pub(super) failure: Option<OneShotError>,
+    pub(super) pending: VecDeque<Fragment>,
+}
+
+impl BatchOutcome {
+    /// Merges completed reviews in source order and reports unfinished
+    /// fragments. A failure before any completed review propagates.
+    pub(super) fn into_reviewed(self, diff: &str) -> Result<ReviewedBatches, OneShotError> {
+        let completed = self.completed.len();
+        let coverage = match self.failure {
+            Some(error) if completed == 0 => return Err(error),
+            Some(error) => partial_coverage(&self.pending, completed, &error),
+            None => String::new(),
+        };
+
+        Ok(ReviewedBatches {
+            completed,
+            coverage,
+            review: merged(self.completed.into_values()),
+            shared_context_summarized: false,
+            unreviewed: unreviewed_files(diff, &self.pending),
+        })
     }
-    let ReviewedBatches {
-        completed,
-        mut coverage,
-        mut review,
-        mut shared_context_summarized,
-        mut unreviewed,
-    } = review_batches(
-        client,
-        &request,
-        diff,
-        &mut context,
-        &render,
-        &progress,
-        &budget,
-    )
-    .await?;
-    if completed > 0 && coverage.is_empty() {
-        progress(ReviewProgress::CrossFile);
-        let boundary = cross_file_review(
-            client,
-            &request,
-            diff,
-            &mut context,
-            (completed > 1).then_some(&review),
-            &render,
-            &budget,
-        )
-        .await;
-        match boundary {
-            Ok(result) => {
-                merge(&mut review, result.review);
-                shared_context_summarized = result.shared_context_summarized;
-                unreviewed.extend(result.unreviewed);
-                if !result.coverage.is_empty() {
-                    coverage = result.coverage.replacen(
-                        "Partial review:",
-                        "Partial review: independent boundary pass;",
-                        1,
+}
+
+/// Settled results of every review phase. Discovery positions are absolute,
+/// so completed findings merge in source order across graph nodes.
+pub(super) struct ReviewOutcome {
+    /// Every original-diff fragment, including unfinished ones.
+    pub(super) batches: BatchOutcome,
+    /// Smallest accepted history, used for coverage notices.
+    pub(super) context: String,
+    /// Final reconciliation result, absent when it never ran.
+    pub(super) consolidation: Option<Result<FocusedReview, OneShotError>>,
+    /// Independent cross-file pass, absent when it never ran.
+    pub(super) cross_file: Option<Result<ReviewedBatches, OneShotError>>,
+    /// Reported for a phase that never ran, such as after budget exhaustion.
+    pub(super) stopped: OneShotError,
+}
+
+impl ReviewOutcome {
+    /// Renders complete or partial review text. Discovery must complete
+    /// before cross-file results count, and both before consolidation does.
+    ///
+    /// # Errors
+    /// Returns the discovery failure when no fragment review completed.
+    pub(super) fn render(self, diff: &str) -> Result<String, OneShotError> {
+        let ReviewedBatches {
+            completed,
+            mut coverage,
+            mut review,
+            mut shared_context_summarized,
+            mut unreviewed,
+        } = self.batches.into_reviewed(diff)?;
+        if coverage.is_empty() {
+            match self.cross_file.unwrap_or_else(|| Err(self.stopped.clone())) {
+                Ok(result) => {
+                    review = merged([review, result.review]);
+                    shared_context_summarized = result.shared_context_summarized;
+                    unreviewed.extend(result.unreviewed);
+                    if !result.coverage.is_empty() {
+                        coverage = result.coverage.replacen(
+                            "Partial review:",
+                            "Partial review: independent boundary pass;",
+                            1,
+                        );
+                    }
+                }
+                Err(error) => {
+                    coverage = format!(
+                        "Partial review: all {completed} batches completed, but the cross-file \
+                         pass failed: {error}. Press `f` to retry the review."
                     );
                 }
             }
-            Err(error) => {
-                coverage = format!(
-                    "Partial review: all {completed} batches completed, but the cross-file pass \
-                     failed: {error}. Press `f` to retry the review."
-                );
+        }
+        if coverage.is_empty() {
+            match self.consolidation.unwrap_or(Err(self.stopped)) {
+                Ok(result) => review = result,
+                Err(error) => {
+                    coverage = format!(
+                        "Partial review: all {completed} batches completed, but final \
+                         consolidation failed: {error}. Retained findings have not been \
+                         reconciled. Press `f` to retry the review."
+                    );
+                }
             }
         }
-    }
-    if completed > 0 && coverage.is_empty() {
-        progress(ReviewProgress::Reducing);
-        match reduce_review(
-            client,
-            &request,
-            &review,
+
+        Ok(render_review(
+            review,
+            &self.context,
             diff,
-            &mut context,
-            &render,
-            &budget,
-        )
-        .await
+            coverage,
+            &unreviewed,
+            shared_context_summarized,
+        ))
+    }
+}
+
+/// Batch progress within one phase; provider size rejection can add work.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(super) enum BatchProgress {
+    /// One fragment review finished successfully.
+    Completed,
+    /// Subdivision added this many fragments beyond the one it replaced.
+    Added(usize),
+}
+
+/// Summarizes history before the diff when the complete review cannot fit
+/// the prompt budget. Render failures for the complete diff propagate.
+pub(super) async fn prepare_context(
+    client: &dyn RunClient,
+    request: &OneShotRequest,
+    diff: &str,
+    context: &str,
+    render: &(impl Fn(&str, &str, &str) -> Result<String, OneShotError> + ?Sized),
+    budget: &ProviderCallBudget,
+    progress: &(impl Fn(ReviewProgress) + ?Sized),
+) -> Result<String, OneShotError> {
+    if render(diff, context, diff)?.len() <= PROMPT_BUDGET {
+        return Ok(context.to_string());
+    }
+    if context.len() > 7_500 {
+        progress(ReviewProgress::SummarizingHistory);
+    }
+
+    diff_prompt::summarize_context(client, request, context, 7_500, budget).await
+}
+
+/// Splits the diff exactly as the local prompt-budget check would reject it,
+/// without spending provider calls. Fragments that fail to render remain
+/// whole so their review reports the failure. Provider limits can still
+/// subdivide fragments during review.
+pub(super) fn partition(
+    diff: &str,
+    context: &str,
+    render: &(impl Fn(&str, &str, &str) -> Result<String, OneShotError> + ?Sized),
+) -> Vec<Fragment> {
+    let mut pending = VecDeque::from([(Vec::new(), diff.to_string())]);
+    let mut leaves = Vec::new();
+    while let Some((position, fragment)) = pending.pop_front() {
+        if fragment.len() > MIN_CHUNK_BYTES
+            && render(&fragment, context, &fragment)
+                .is_ok_and(|prompt| prompt.len() > PROMPT_BUDGET)
         {
-            Ok(result) => {
-                review.candidate_decisions.clear();
-                review.project_impact.clear();
-                review.suggestions.clear();
-                merge(&mut review, result);
+            for child in split_fragment(&fragment, &position).into_iter().rev() {
+                pending.push_front(child);
             }
-            Err(error) => {
-                coverage = format!(
-                    "Partial review: all {completed} batches completed, but final consolidation \
-                     failed: {error}. Retained findings have not been reconciled. Press `f` to \
-                     retry the review."
-                );
-            }
+        } else {
+            leaves.push((position, fragment));
         }
     }
-    Ok(render_review(
-        review,
-        &context,
-        diff,
-        coverage,
-        &unreviewed,
-        shared_context_summarized,
-    ))
+
+    leaves
+}
+
+/// Prepares the shared request template: read-only, focused-review schema,
+/// and one provider budget for every phase.
+pub(super) fn review_request(
+    mut request: OneShotRequest,
+    budget: &ProviderCallBudget,
+) -> OneShotRequest {
+    request.provider_call_budget = Some(budget.clone());
+    request.permission_mode = PermissionMode::ReadOnly;
+    request.request_kind = AgentRequestKind::FocusedReview;
+
+    request
+}
+
+/// Combines reviews in order with exact deduplication and severity ordering.
+pub(super) fn merged(reviews: impl IntoIterator<Item = FocusedReview>) -> FocusedReview {
+    let mut review = FocusedReview {
+        candidate_decisions: Vec::new(),
+        project_impact: Vec::new(),
+        suggestions: Vec::new(),
+    };
+    for additional in reviews {
+        merge(&mut review, additional);
+    }
+
+    review
 }
 
 /// Parses the transport-normalized focused-review response.
@@ -202,36 +278,20 @@ fn file_accounting(diff: &str, unreviewed: &BTreeSet<String>) -> String {
     accounting
 }
 
-/// Completes the original-diff phase, retaining source order and partial
-/// coverage independently of the later cross-file and reduction passes.
-async fn review_batches(
+/// Reviews fragments in bounded waves, retaining source order and partial
+/// results. Provider size rejections subdivide a fragment; any other failure
+/// drains the running wave and stops new work.
+pub(super) async fn review_batches(
     client: &dyn RunClient,
     request: &OneShotRequest,
-    diff: &str,
+    mut pending: VecDeque<Fragment>,
     context: &mut String,
-    render: &(impl Fn(&str, &str, &str) -> Result<String, OneShotError> + Sync),
-    progress: &(impl Fn(ReviewProgress) + Sync),
+    render: &(impl Fn(&str, &str, &str) -> Result<String, OneShotError> + Sync + ?Sized),
     budget: &ProviderCallBudget,
-) -> Result<ReviewedBatches, OneShotError> {
-    let mut pending = VecDeque::from([(Vec::new(), diff.to_string())]);
-    let mut completed_reviews = BTreeMap::new();
-    let mut review = FocusedReview {
-        candidate_decisions: Vec::new(),
-        project_impact: Vec::new(),
-        suggestions: Vec::new(),
-    };
-    let mut completed = 0;
-    let mut coverage = String::new();
+    progress: &(impl Fn(BatchProgress) + Sync + ?Sized),
+) -> BatchOutcome {
+    let mut completed = BTreeMap::new();
     while !pending.is_empty() {
-        let finished = AtomicUsize::new(completed);
-        let total = completed + pending.len();
-        progress(ReviewProgress::Batches { completed, total });
-        let batch_completed = || {
-            progress(ReviewProgress::Batches {
-                completed: finished.fetch_add(1, Ordering::Relaxed) + 1,
-                total,
-            });
-        };
         let results = review_batch(
             client,
             request,
@@ -239,7 +299,9 @@ async fn review_batches(
             context,
             render,
             budget,
-            &batch_completed,
+            &|| {
+                progress(BatchProgress::Completed);
+            },
         )
         .await;
         let mut retry = VecDeque::new();
@@ -258,15 +320,16 @@ async fn review_batches(
             }
             match result {
                 Ok(result) => {
-                    completed_reviews.insert(position, result);
-                    completed += 1;
+                    completed.insert(position, result);
                 }
                 Err(error)
                     if is_input_size_error(&error.to_string())
                         && fragment.len() > MIN_CHUNK_BYTES
                         && budget.ensure_available().is_ok() =>
                 {
-                    retry.extend(split_fragment(&fragment, &position));
+                    let children = split_fragment(&fragment, &position);
+                    progress(BatchProgress::Added(children.len().saturating_sub(1)));
+                    retry.extend(children);
                 }
                 Err(error) => {
                     failure.get_or_insert(error);
@@ -276,22 +339,28 @@ async fn review_batches(
         }
         retry.append(&mut pending);
         pending = retry;
-        if let Some(error) = failure {
-            if completed == 0 {
-                return Err(error);
-            }
-            coverage = partial_coverage(&pending, completed, &error);
-            break;
+        if failure.is_some() {
+            return BatchOutcome {
+                completed,
+                failure,
+                pending,
+            };
         }
     }
-    // Hierarchical positions keep retry subdivisions ahead of later source
-    // fragments, including when only part of the review completes.
-    for result in completed_reviews.into_values() {
-        merge(&mut review, result);
+
+    BatchOutcome {
+        completed,
+        failure: None,
+        pending,
     }
+}
+
+/// Names files left unfinished; continuation fragments without a header
+/// leave every captured file unfinished.
+fn unreviewed_files(diff: &str, pending: &VecDeque<Fragment>) -> BTreeSet<String> {
     let mut unreviewed = BTreeSet::new();
     for (_, fragment) in pending {
-        let paths = review_diff::paths(&fragment);
+        let paths = review_diff::paths(fragment);
         if paths.is_empty() {
             unreviewed.extend(review_diff::paths(diff));
         } else {
@@ -299,13 +368,7 @@ async fn review_batches(
         }
     }
 
-    Ok(ReviewedBatches {
-        completed,
-        coverage,
-        review,
-        shared_context_summarized: false,
-        unreviewed,
-    })
+    unreviewed
 }
 
 /// Runs one bounded wave and retains every outcome, even when a peer fails.
@@ -315,7 +378,7 @@ async fn review_batch(
     request: &OneShotRequest,
     pending: &mut VecDeque<(Vec<usize>, String)>,
     context: &str,
-    render: &(impl Fn(&str, &str, &str) -> Result<String, OneShotError> + Sync),
+    render: &(impl Fn(&str, &str, &str) -> Result<String, OneShotError> + Sync + ?Sized),
     budget: &ProviderCallBudget,
     completed: &(impl Fn() + Sync),
 ) -> [Option<FragmentReview>; REVIEW_CONCURRENCY] {
@@ -365,7 +428,7 @@ async fn review_fragment(
     request: &OneShotRequest,
     fragment: &str,
     context: &mut String,
-    render: &impl Fn(&str, &str, &str) -> Result<String, OneShotError>,
+    render: &(impl Fn(&str, &str, &str) -> Result<String, OneShotError> + ?Sized),
     budget: &ProviderCallBudget,
 ) -> Result<FocusedReview, OneShotError> {
     let mut request = request.clone();
@@ -441,13 +504,13 @@ fn merge(review: &mut FocusedReview, additional: FocusedReview) {
 /// Fragmented reviews share a bounded view of all changes and initial findings,
 /// alongside each original fragment. Context may be condensed for provider
 /// limits; it never substitutes for the fragment's source.
-async fn cross_file_review(
+pub(super) async fn cross_file_review(
     client: &dyn RunClient,
     request: &OneShotRequest,
     diff: &str,
     context: &mut String,
     discovery: Option<&FocusedReview>,
-    render: &(impl Fn(&str, &str, &str) -> Result<String, OneShotError> + Sync),
+    render: &(impl Fn(&str, &str, &str) -> Result<String, OneShotError> + Sync + ?Sized),
     budget: &ProviderCallBudget,
 ) -> Result<ReviewedBatches, OneShotError> {
     let mut boundary_context = context.clone();
@@ -465,12 +528,12 @@ async fn cross_file_review(
              interactions):\n{overview}"
         );
     }
-    let result = review_batches(
+    let outcome = review_batches(
         client,
         request,
-        diff,
+        VecDeque::from([(Vec::new(), diff.to_string())]),
         &mut boundary_context,
-        &|fragment, history, _| {
+        &|fragment: &str, history: &str, _: &str| {
             Ok(format!(
                 "Cross-file review: independently inspect the original changes for missed risks, \
                  even when there was only one batch. Trace callers and dependent state through \
@@ -483,15 +546,15 @@ async fn cross_file_review(
                 render(fragment, history, diff)?
             ))
         },
-        &|_| {},
         budget,
+        &|_| {},
     )
     .await;
     if discovery.is_none() {
         *context = boundary_context;
     }
 
-    result.map(|mut result| {
+    outcome.into_reviewed(diff).map(|mut result| {
         result.shared_context_summarized = shared_context_summarized;
 
         result
@@ -501,13 +564,13 @@ async fn cross_file_review(
 /// Reconciles every candidate into the final review. Never summarize or
 /// truncate candidates: an oversized prompt fails safely to the unreconciled
 /// findings.
-async fn reduce_review(
+pub(super) async fn reduce_review(
     client: &dyn RunClient,
     request: &OneShotRequest,
     review: &FocusedReview,
     diff: &str,
     context: &mut String,
-    render: &impl Fn(&str, &str, &str) -> Result<String, OneShotError>,
+    render: &(impl Fn(&str, &str, &str) -> Result<String, OneShotError> + Sync + ?Sized),
     budget: &ProviderCallBudget,
 ) -> Result<FocusedReview, OneShotError> {
     let mut headers =

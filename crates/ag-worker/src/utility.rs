@@ -59,6 +59,74 @@ impl RunWorker {
         self.submit_inner(request, Some(run)).await
     }
 
+    /// Runs host coordination under an exact preadmitted utility identity.
+    ///
+    /// The record represents work that awaits several child utilities, such
+    /// as one phase of a graph node. It holds no utility execution slot, so
+    /// children submitted by `work` never queue behind their waiting parent;
+    /// they inherit this run as their parent and its ownership. The record is
+    /// claimed before `work` starts, receives heartbeats while it runs, and
+    /// settles after it returns. Session cancellation, worker shutdown, or the
+    /// caller dropping this future cancels `work`, which cancels its children.
+    /// Settlement and the result always wait for every child's cleanup and
+    /// terminal bookkeeping, so resources the caller holds for this run, such
+    /// as Env leases, outlive the children it started.
+    ///
+    /// # Errors
+    /// Rejects closed admission and unclaimable records, and returns `work`'s
+    /// failure, cancellation, panic, or terminal persistence errors.
+    pub async fn coordinate_recorded<T: Send + 'static>(
+        &self,
+        run: RunInfo,
+        work: impl Future<Output = Result<T, OneShotError>> + Send + 'static,
+    ) -> Result<T, OneShotError> {
+        let (sender, receiver) = oneshot::channel();
+        {
+            let admission = self
+                .admission
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner);
+            if !*admission {
+                return Err(OneShotError::new("Run worker has shut down"));
+            }
+            let execution = Arc::clone(&self.execution);
+            let mut context = RunContext::current();
+            context.scope.parent_id = Some(run.id.clone());
+            context.scope.project_id = run.project_id;
+            context.scope.purpose = Some(run.purpose.clone());
+            context.scope.session_id.clone_from(&run.session_id);
+            let trace = context.trace.clone();
+            let session = run
+                .session_id
+                .as_deref()
+                .map(|id| execution.admit_session(id));
+            let session_cancellation = session
+                .as_ref()
+                .map_or_else(CancellationToken::new, |(session, _)| {
+                    session.cancellation.clone()
+                });
+            self.tasks.spawn(
+                async move {
+                    let session_id = run.session_id.clone();
+                    tokio::select! {
+                        biased;
+                        () = execution.force_shutdown.cancelled() => {},
+                        () = execution.coordinate(run, work, context, session_cancellation, sender) => {},
+                    }
+                    if let (Some(session_id), Some((session, task))) = (session_id, session) {
+                        drop(task);
+                        execution.release_session(&session_id, &session);
+                    }
+                }
+                .with_context(trace),
+            );
+        }
+
+        receiver
+            .await
+            .map_err(|_| OneShotError::new("Run worker task failed"))?
+    }
+
     /// Creates provider runtimes inside the worker, retaining host storage and
     /// clock injection.
     pub fn new(
@@ -386,6 +454,102 @@ impl Execution {
         let _ = sender.send(result);
     }
 
+    /// Mirrors `execute` for host coordination: the claim precedes `work`,
+    /// cancellation drops it, children drain their cleanup, and terminal state
+    /// persists before the caller receives the result.
+    async fn coordinate<T>(
+        &self,
+        run: RunInfo,
+        work: impl Future<Output = Result<T, OneShotError>>,
+        context: RunContext,
+        session_cancellation: CancellationToken,
+        mut sender: oneshot::Sender<Result<T, OneShotError>>,
+    ) {
+        let span = Span::child("utility.coordinate");
+        span.attribute("agentty.run.id", run.id.clone());
+        span.attribute("agentty.purpose", run.purpose.clone());
+        let claimed = self
+            .repository
+            .claim_queued(&run)
+            .await
+            .and_then(|claimed| {
+                if claimed {
+                    Ok(())
+                } else {
+                    Err(OneShotError::new(
+                        "Recorded run is not queued or does not match",
+                    ))
+                }
+            });
+        if let Err(error) = claimed {
+            span.finish(Outcome::Failed);
+            let _ = sender.send(Err(error));
+            return;
+        }
+        // Every child retains a token until its own cancellation cleanup and
+        // terminal bookkeeping finish, including children whose submission
+        // was dropped by cancellation or a caller-side timeout.
+        let children = TaskTracker::new();
+        let mut child_context = context.clone();
+        child_context.trace = span.context();
+        child_context.retain(Arc::new(children.token()));
+        let (state, result) = {
+            let work = crate::scope::in_context(child_context, work);
+            tokio::pin!(work);
+            let work = poll_fn(|poll_context| {
+                catch_unwind(AssertUnwindSafe(|| work.as_mut().poll(poll_context))).unwrap_or_else(
+                    |_| Poll::Ready(Err(OneShotError::new("Run worker task failed"))),
+                )
+            });
+            tokio::pin!(work);
+            let canceled = || {
+                (
+                    RunState::Canceled,
+                    Err(OneShotError::new("[Stopped] Agent run canceled")),
+                )
+            };
+            loop {
+                tokio::select! {
+                    biased;
+                    () = self.shutdown.cancelled() => break canceled(),
+                    () = context.cancelled() => break canceled(),
+                    () = session_cancellation.cancelled() => break canceled(),
+                    () = sender.closed() => break canceled(),
+                    result = &mut work => {
+                        break (if result.is_ok() { RunState::Completed } else { RunState::Failed }, result);
+                    }
+                    () = self.clock.wait() => {
+                        if let Err(error) = self.repository.heartbeat(&run.id).await {
+                            warn!(run_id = %run.id, %error, "Agent run heartbeat failed");
+                        }
+                    }
+                }
+            }
+        };
+        // Dropping the work above cancels its children; settle only after they
+        // release resources the caller holds for this run, such as Env leases.
+        children.close();
+        children.wait().await;
+        let error = result.as_ref().err().map(ToString::to_string);
+        let result = match self
+            .repository
+            .transition(&run.id, state, error.as_deref())
+            .await
+        {
+            Ok(()) => result,
+            Err(error) => {
+                warn!(run_id = %run.id, %error, "Failed to record terminal agent run state");
+                Err(error)
+            }
+        };
+        span.finish(match state {
+            RunState::Canceled => Outcome::Canceled,
+            _ if result.is_ok() => Outcome::Completed,
+            _ => Outcome::Failed,
+        });
+        let _ = sender.send(result);
+    }
+
     async fn run(
         &self,
         id: &str,
@@ -433,6 +597,10 @@ impl Execution {
 #[cfg(test)]
 #[path = "utility_test.rs"]
 mod tests;
+
+#[cfg(test)]
+#[path = "utility_coordinate_test.rs"]
+mod coordinate_tests;
 
 #[cfg(any(test, feature = "test-utils"))]
 #[path = "utility_support_test.rs"]

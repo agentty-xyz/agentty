@@ -19,78 +19,10 @@ use sqlx::SqlitePool;
 use tokio::sync::oneshot;
 use tokio_util::sync::CancellationToken;
 
-use super::{background_request, graph, run_request, seed_session, wait_result};
+use super::{graph, run_request, seed_session, wait_result};
 use crate::app::App;
 use crate::infra::db::Database;
 use crate::test_support::{new_test_app, new_test_app_with_clients, test_app_clients};
-
-#[tokio::test]
-async fn dropped_background_submissions_retain_env_leases_until_worker_cleanup_finishes() {
-    for permission in [PermissionMode::ReadOnly, PermissionMode::AutoEdit] {
-        // Arrange
-        let started = CancellationToken::new();
-        let stopped = CancellationToken::new();
-        let finish = CancellationToken::new();
-        let mut provider = MockAppServerClient::new();
-        let (active, stopping, release) = (started.clone(), stopped.clone(), finish.clone());
-        provider
-            .expect_run_isolated_turn()
-            .once()
-            .returning(move |_, _| {
-                let (active, stopping, release) =
-                    (active.clone(), stopping.clone(), release.clone());
-                Box::pin(async move {
-                    active.cancel();
-                    stopping.cancelled().await;
-                    release.cancelled().await;
-                    Ok(AppServerTurnResponse {
-                        assistant_message: r#"{"answer":"stopped"}"#.into(),
-                        context_reset: false,
-                        input_tokens: 0,
-                        output_tokens: 0,
-                        pid: None,
-                        provider_conversation_id: None,
-                    })
-                })
-            });
-        let (stopping, release) = (stopped.clone(), finish.clone());
-        provider.expect_shutdown_session().returning(move |_| {
-            let (stopping, release) = (stopping.clone(), release.clone());
-            Box::pin(async move {
-                stopping.cancel();
-                release.cancelled().await;
-            })
-        });
-        let clients = test_app_clients().with_app_server_client_override(Arc::new(provider));
-        let (app, _directory) = new_test_app_with_clients(clients).await;
-        let client = app
-            .services
-            .background_run_client("sess", app.services.run_client());
-        let wake = app.services.graph_wake.subscribe();
-        let caller =
-            tokio::spawn(async move { client.submit(background_request(permission)).await });
-        started.cancelled().await;
-
-        // Act: deadline expiration also drops this same submission future.
-        caller.abort();
-        assert!(caller.await.is_err());
-        stopped.cancelled().await;
-
-        // Assert: cleanup still owns the conflicting Env lease.
-        let env_id = ag_session::EnvId::SessionWorktree("sess".into());
-        let gate = if permission.is_read_only() {
-            app.services.graph_resources.background_readers(&env_id)
-        } else {
-            app.services.graph_resources.environment(&env_id)
-        };
-        assert!(gate.try_write().is_err());
-        assert!(!wake.has_changed().expect("no release before cleanup"));
-        finish.cancel();
-        app.services.wait_for_cleanup_tasks(None).await;
-        assert!(gate.try_write().is_ok());
-        assert!(wake.has_changed().expect("cleanup releases and notifies"));
-    }
-}
 
 #[tokio::test]
 async fn graph_launch_propagates_storage_and_permission_failures_without_dispatch() {
