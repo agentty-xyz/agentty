@@ -73,7 +73,6 @@ impl App {
                 agents: Box::new(agents),
                 attachments: prompt.attachments,
                 chain_id: Uuid::new_v4().to_string(),
-                planner_attempt_id: Uuid::new_v4().to_string(),
                 user_request: prompt.text,
             };
             let service = self.session_view_service();
@@ -184,7 +183,7 @@ impl App {
         let chain = match self
             .services
             .db()
-            .tasks()
+            .graphs()
             .list_task_chains(session_id)
             .await
         {
@@ -251,7 +250,7 @@ impl App {
     async fn session_owns_task_chain(&self, session_id: &SessionId) -> Result<bool, SessionError> {
         self.services
             .db()
-            .tasks()
+            .graphs()
             .list_task_chains(session_id)
             .await
             .map(|chains| !chains.is_empty())

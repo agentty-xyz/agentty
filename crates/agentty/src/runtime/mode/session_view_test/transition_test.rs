@@ -1,9 +1,11 @@
+use std::num::NonZeroU64;
 use std::sync::Arc;
 
 use ag_session::{
-    AgentKind, AgentModel, AgentSelection, StartPlanThenImplementRequest, TaskChain, TaskChainPhase,
+    AgentKind, AgentModel, AgentSelection, GraphExecutionRef, StartPlanThenImplementRequest,
+    TaskAgentRole, TaskChain, TaskChainPhase,
 };
-use ag_store::MockTaskRepository;
+use ag_store::MockGraphRepository;
 use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
 use mockall::predicate::eq;
 use tokio_util::sync::CancellationToken;
@@ -769,10 +771,14 @@ async fn ending_a_running_chain_turn_cancels_the_chain_through_the_orchestrator(
             chain.phase = TaskChainPhase::AwaitingPlanAcceptance;
             app.sessions
                 .deciding_task_chain_ids
-                .insert(chain.id.clone(), CancellationToken::new());
+                .insert(chain.id.clone(), Arc::new(CancellationToken::new()));
         }
-        let mut tasks = MockTaskRepository::new();
+        let mut tasks = MockGraphRepository::new();
         let listed = chain.clone();
+        let execution = chain
+            .current_execution
+            .clone()
+            .filter(|_| status == Status::InProgress);
         tasks
             .expect_list_task_chains()
             .returning(move |_| Ok(vec![listed.clone()]));
@@ -780,11 +786,10 @@ async fn ending_a_running_chain_turn_cancels_the_chain_through_the_orchestrator(
             .expect_load_task_chain()
             .returning(move |_| Ok(Some(chain.clone())));
         tasks
-            .expect_cancel_task_chain()
-            .with(eq("chain"))
+            .expect_cancel_task_chain_stage()
             .times(1)
-            .returning(|_| Ok(()));
-        app.services.set_task_repository(Arc::new(tasks));
+            .returning(move |_| Ok(execution.clone()));
+        app.services.set_graph_repository(Arc::new(tasks));
         let mut terminal =
             ratatui::Terminal::new(ratatui::backend::TestBackend::new(80, 24)).expect("terminal");
 
@@ -810,20 +815,24 @@ fn running_planner_chain(session_id: &str) -> TaskChain {
         attachments: Vec::new(),
         agent: AgentSelection::new(AgentKind::Codex, AgentModel::Gpt61Sol),
         chain_id: "chain".to_string(),
-        planner_attempt_id: "attempt".to_string(),
         user_request: "Add search".to_string(),
     };
-    let planner_request = launch.planner_request();
 
     TaskChain {
         agents: ag_session::PlanThenImplementAgents::bundled().expect("bundled agents"),
         accepted_plan: None,
         agent: launch.agent,
         id: launch.chain_id.clone(),
-        implementer_task_id: launch.implementer_task_id(),
+        implementer_task_id: TaskChain::task_id(&launch.chain_id, TaskAgentRole::Implementer),
         phase: TaskChainPhase::Planning,
-        planner_task_id: planner_request.task_id.clone(),
-        current_request: planner_request,
+        planner_task_id: TaskChain::task_id(&launch.chain_id, TaskAgentRole::Planner),
+        current_role: TaskAgentRole::Planner,
+        current_execution: Some(GraphExecutionRef::TaskAttempt {
+            attempt_id: "attempt".into(),
+            operation_id: "task-attempt:attempt".into(),
+            task_id: TaskChain::task_id(&launch.chain_id, TaskAgentRole::Planner),
+        }),
+        revision: NonZeroU64::MIN,
         session_id: SessionId::from(session_id),
         user_request: launch.user_request,
     }

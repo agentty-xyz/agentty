@@ -1,116 +1,93 @@
-use std::sync::Arc;
-use std::time::Duration;
+use ag_session::{ContinueTaskChainRequest, TaskChainPhase};
+use uuid::Uuid;
 
-use ag_contracts::MockAgentChannel;
-use ag_session::{
-    AgentKind, AgentModel, AgentSelection, ContinueTaskChainRequest, SessionId, SessionStatus,
-    StartPlanThenImplementRequest, TaskChainPhase,
-};
-use tokio_util::sync::CancellationToken;
-
-use super::support::successful_turn_result;
-use crate::app::test_support::TestSessionRunFactory;
-use crate::test_support::{new_git_test_app, set_session_status_for_test};
+use crate::app::task_chain::test_support::{ChainFixture, launch_request};
 
 #[tokio::test]
 async fn queued_cancellation_followed_by_retry_never_replays_the_old_attempt() {
     // Arrange
-    let (mut app, _directory) = new_git_test_app().await;
-    let session_id = SessionId::from(app.create_session().await.expect("session"));
-    set_session_status_for_test(&mut app, &session_id, SessionStatus::Review);
-    let factory = TestSessionRunFactory::install(&mut app.services);
-    let service = app.session_service();
-    let launch = StartPlanThenImplementRequest {
-        agents: Box::new(ag_session::PlanThenImplementAgents::bundled().expect("bundled agents")),
-        attachments: Vec::new(),
-        agent: AgentSelection::new(AgentKind::Codex, AgentModel::Gpt61Sol),
-        chain_id: "workflow".into(),
-        planner_attempt_id: "initial".into(),
-        user_request: "Plan a scoped change".into(),
-    };
-    let planner_id = launch.planner_request().task_id;
-    let initial = register_response(&factory, &planner_id);
-    app.drive_session_request(service.start_plan_then_implement(&session_id, launch))
+    let mut fixture = ChainFixture::new().await;
+    let initial = fixture.register_turn("Initial plan", false);
+    fixture
+        .app
+        .drive_session_request(
+            fixture
+                .service
+                .start_plan_then_implement(&fixture.session_id, launch_request()),
+        )
         .await
         .expect("launch");
-    tokio::time::timeout(Duration::from_secs(10), initial.cancelled())
+    fixture.settle(&initial).await;
+    let source = fixture
+        .snapshot()
         .await
-        .expect("initial start");
-    let hold = app
+        .current_attempt_id()
+        .expect("initial")
+        .to_string();
+    let hold = fixture
+        .app
         .sessions
-        .pause_session_worker(&session_id)
+        .pause_session_worker(&fixture.session_id)
         .await
         .expect("worker hold");
-    app.sessions.sync_session_from_handle(&session_id);
+    let canceled_id = Uuid::new_v4().to_string();
+    let retry_id = Uuid::new_v4().to_string();
     // Only the new request may consume this scripted provider.
-    let retry = register_response(&factory, &planner_id);
+    let retry = fixture.register_turn("Retried plan", false);
 
     // Act
-    app.drive_session_request(service.continue_task_chain(
-        "workflow",
-        ContinueTaskChainRequest {
-            attachments: Vec::new(),
-            attempt_id: "queued-old".into(),
-            clarification: Some("old guidance".into()),
-            expected_attempt_id: "initial".into(),
-        },
-    ))
-    .await
-    .expect("queued revision");
-    app.drive_session_request(service.cancel_task_chain("workflow"))
+    fixture
+        .app
+        .drive_session_request(fixture.service.continue_task_chain(
+            "workflow",
+            ContinueTaskChainRequest {
+                attachments: Vec::new(),
+                attempt_id: canceled_id.clone(),
+                clarification: Some("old guidance".into()),
+                expected_attempt_id: source,
+            },
+        ))
+        .await
+        .expect("queued revision");
+    let awaited_id = canceled_id.clone();
+    fixture
+        .wait_for(move |chain| chain.current_attempt_id() == Some(awaited_id.as_str()))
+        .await;
+    fixture
+        .app
+        .drive_session_request(fixture.service.cancel_task_chain("workflow"))
         .await
         .expect("cancel queued");
-    app.drive_session_request(service.continue_task_chain(
-        "workflow",
-        ContinueTaskChainRequest {
-            attachments: Vec::new(),
-            attempt_id: "queued-new".into(),
-            clarification: None,
-            expected_attempt_id: "queued-old".into(),
-        },
-    ))
-    .await
-    .expect("explicit new retry");
+    fixture
+        .app
+        .drive_session_request(fixture.service.continue_task_chain(
+            "workflow",
+            ContinueTaskChainRequest {
+                attachments: Vec::new(),
+                attempt_id: retry_id.clone(),
+                clarification: None,
+                expected_attempt_id: canceled_id,
+            },
+        ))
+        .await
+        .expect("explicit new retry");
     drop(hold);
-    tokio::time::timeout(Duration::from_secs(10), retry.cancelled())
+    fixture.settle(&retry).await;
+    let chain = fixture.snapshot().await;
+    let progress = fixture
+        .app
+        .services
+        .db()
+        .graphs()
+        .progress("workflow")
         .await
-        .expect("retry start");
-    let settled = app
-        .sessions
-        .pause_session_worker(&session_id)
-        .await
-        .expect("settled worker");
-    let history = app
-        .drive_session_request(service.get_agent_task_history(&planner_id))
-        .await
-        .expect("history")
-        .expect("context");
-    let chain = app
-        .drive_session_request(service.get_task_chain("workflow"))
-        .await
-        .expect("snapshot")
-        .expect("workflow");
+        .expect("progress")
+        .expect("graph");
 
     // Assert
-    assert_eq!(history.turns.len(), 2);
-    assert_eq!(chain.current_request.attempt_id, "queued-new");
+    assert_eq!(progress.nodes[0].executions.len(), 3);
+    assert_eq!(chain.current_attempt_id(), Some(retry_id.as_str()));
     assert_eq!(chain.phase, TaskChainPhase::AwaitingPlanAcceptance);
-    drop(settled);
-}
-
-fn register_response(factory: &TestSessionRunFactory, task_id: &str) -> CancellationToken {
-    let started = CancellationToken::new();
-    let signal = started.clone();
-    let mut channel = MockAgentChannel::new();
-    channel.expect_run_turn().once().returning(move |_, _, _| {
-        signal.cancel();
-        Box::pin(async { Ok(successful_turn_result("A concrete plan")) })
-    });
-    channel
-        .expect_shutdown_session()
-        .once()
-        .returning(|_| Box::pin(async { Ok(()) }));
-    factory.register(task_id, Arc::new(channel));
-
-    started
+    assert!(retry.prompt().contains("Initial plan"));
+    assert!(retry.prompt().contains("Explicitly retry"));
 }

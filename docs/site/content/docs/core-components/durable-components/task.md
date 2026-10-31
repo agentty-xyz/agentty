@@ -97,10 +97,23 @@ record. Repeated acceptance of the same eligible version is idempotent.
 
 ## Static Plan Then Implement Workflow
 
-A static workflow captures one original request and provider/model selection for two
-isolated tasks sharing the session's workspace. Planning finishes before explicit plan
-acceptance admits implementation. Revision and clarification use new attempts in the
-current role's context; implementation retains the accepted plan exactly.
+A static workflow is a two-node
+[execution graph](@/docs/architecture/execution-graphs.md#plan-then-implement-graph)
+that captures one original request and provider/model selection for two isolated tasks
+sharing the session's workspace. Planning finishes before explicit plan acceptance
+releases implementation. Revision and clarification use new attempts in the current
+role's context; implementation retains the accepted plan exactly.
+
+A response with neither a nonblank answer nor clarification questions fails the stage.
+
+Launch reserves both role-task identities in the saved graph. Ordinary task creation and
+submission cannot use them, including before implementation starts. Canceling a pending
+approval prevents its queued decision from accepting the plan.
+
+Upgrading removes experimental legacy workflow records and their transcript graph
+markers without converting or replaying them. Existing sessions, conversation messages,
+and individual task histories remain. Start a new `/plan` workflow to use graph
+execution.
 
 Workflow phase is projected from its current attempt and saved response. A saved plan
 does not become acceptable until the entire attempt, including post-processing, has
@@ -118,15 +131,16 @@ marker.
 
 `SessionService` exposes this optional workflow capability through
 `start_plan_then_implement`, `get_task_chain`, `list_task_chains`,
-`accept_task_chain_plan`, `continue_task_chain`, and `cancel_task_chain`. The SQLite
-adapter admits each action atomically; hosts dispatch newly admitted requests through
-the session's serialized worker.
+`accept_task_chain_plan`, `continue_task_chain`, and `cancel_task_chain`. Acceptance
+names the latest validated Planner attempt. Continuations use a new UUID and retain
+their exact source attempt. The graph executor owns admission and pinned inputs; task
+turns run through the session's serialized worker.
 
 Continuations include `expected_attempt_id`, captured from the workflow snapshot when
 guidance is authored. Admission rejects stale guidance if another action has advanced
 the workflow. The continuation receipt retains that source identity, so exact repeats
-remain safe after later progress; changing the source under an existing delivery ID or
-reusing a launch or acceptance ID as a continuation is rejected.
+remain safe after later progress. Changing the source or guidance under an existing
+continuation ID is rejected.
 
 ### Natural-Language Replies
 
@@ -147,12 +161,12 @@ routes it by the phase observed at that moment:
   rejected with `SessionError::TaskChainBusy`. A session without a workflow returns
   `SessionError::TaskChainNotFound`.
 
-The result is `PlanAccepted`, `PlanRevised`, or `Continued`. Each action uses an attempt
-ID derived from the caller's globally unique `reply_id`. Redelivering a reply returns
-its original outcome without recording, deciding, or admitting work again, even after
-another workflow starts in the session. Reusing that identity with different text is
-rejected. Canceling the workflow interrupts its pending decision; a late decision cannot
-restart canceled work.
+The result is `PlanAccepted`, `PlanRevised`, or `Continued`. The first decision and any
+continuation UUID are stored against the caller's globally unique `reply_id` and exact
+source execution. Redelivery reapplies that idempotent action without deciding again or
+duplicating work, even after another workflow starts in the session. Reusing that
+identity with different text is rejected. Canceling the workflow interrupts its pending
+decision; a late decision cannot restart canceled work.
 
 ## Submission and Completion
 

@@ -1,8 +1,9 @@
+use std::num::NonZeroU64;
 use std::time::Instant;
 
 use ag_session::{
-    AcceptedTaskPlan, AgentKind, AgentModel, AgentSelection, StartPlanThenImplementRequest,
-    TaskAgentRole, TaskChain, TaskChainPhase,
+    AcceptedTaskPlan, AgentKind, AgentModel, AgentSelection, GraphExecutionRef,
+    StartPlanThenImplementRequest, TaskAgentRole, TaskChain, TaskChainPhase,
 };
 
 use crate::domain::session::SessionId;
@@ -206,14 +207,11 @@ fn chain(phase: TaskChainPhase, current_role: TaskAgentRole) -> TaskChain {
         attachments: Vec::new(),
         agent: AgentSelection::new(AgentKind::Codex, AgentModel::Gpt61Sol),
         chain_id: "chain".into(),
-        planner_attempt_id: "plan".into(),
         user_request: "Add search".into(),
     };
-    let mut current_request = start.planner_request();
-    current_request.assignment.role = current_role;
     let accepted_plan = (current_role == TaskAgentRole::Implementer).then(|| AcceptedTaskPlan {
         attempt_id: "plan".into(),
-        task_id: current_request.task_id.clone(),
+        task_id: TaskChain::task_id(&start.chain_id, TaskAgentRole::Planner),
         text: "Plan".into(),
     });
 
@@ -221,11 +219,17 @@ fn chain(phase: TaskChainPhase, current_role: TaskAgentRole) -> TaskChain {
         agents: ag_session::PlanThenImplementAgents::bundled().expect("bundled agents"),
         accepted_plan,
         agent: start.agent,
-        current_request: current_request.clone(),
+        current_execution: Some(GraphExecutionRef::TaskAttempt {
+            attempt_id: "attempt".into(),
+            operation_id: "task-attempt:attempt".into(),
+            task_id: TaskChain::task_id(&start.chain_id, current_role),
+        }),
+        current_role,
         id: start.chain_id.clone(),
-        implementer_task_id: start.implementer_task_id(),
+        implementer_task_id: TaskChain::task_id(&start.chain_id, TaskAgentRole::Implementer),
         phase,
-        planner_task_id: current_request.task_id,
+        planner_task_id: TaskChain::task_id(&start.chain_id, TaskAgentRole::Planner),
+        revision: NonZeroU64::MIN,
         session_id: "session".into(),
         user_request: start.user_request,
     }

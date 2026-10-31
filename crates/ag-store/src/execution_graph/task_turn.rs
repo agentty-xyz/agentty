@@ -1,8 +1,11 @@
 use ag_protocol::{ProtocolRequestProfile, parse_protocol_response_strict};
-use ag_session::GraphExecutionRef;
+use ag_session::{
+    AgentAnswerContent, GraphExecutionRef, SessionMessageKind, TaskChain, stored_message_content,
+};
 use ag_worker::GraphDispatch;
 
 use super::SqliteGraphRepository;
+use crate::session_message::SessionMessageStore;
 use crate::{DbError, TaskAgentTurnMetadata, session};
 
 impl SqliteGraphRepository {
@@ -26,7 +29,7 @@ impl SqliteGraphRepository {
         let GraphExecutionRef::TaskAttempt { operation_id, .. } = &record.execution else {
             return Err(Self::invalid("Task response requires a task attempt"));
         };
-        parse_protocol_response_strict(
+        let response = parse_protocol_response_strict(
             &metadata.assistant_message,
             ProtocolRequestProfile::SessionTurn,
         )
@@ -71,16 +74,34 @@ impl SqliteGraphRepository {
         .bind(encoded)
         .execute(&mut *transaction)
         .await?;
+        let now = self.timestamp_source.now_timestamp_seconds();
         session::persist_turn_usage(
             &mut transaction,
             graph.session_id.as_str(),
             dispatch.node.agent.model().as_str(),
-            self.timestamp_source.now_timestamp_seconds(),
+            now,
             metadata.input_tokens,
             metadata.output_tokens,
             metadata.harness_turn_report.as_deref(),
         )
         .await?;
+        // Task-chain role answers join the visible session transcript with
+        // their response receipt; other graph conversations stay task-only.
+        let text = response.to_display_text();
+        if let Some(agent) = TaskChain::role(&graph.id, &dispatch.node)
+            && !text.trim().is_empty()
+        {
+            let answer = AgentAnswerContent { agent, text }.encode();
+            let content = stored_message_content(SessionMessageKind::AgentAnswer, &answer);
+            SessionMessageStore::append_normalized_in_transaction(
+                &mut transaction,
+                graph.session_id.as_str(),
+                SessionMessageKind::AgentAnswer,
+                &content,
+                now,
+            )
+            .await?;
+        }
         transaction.commit().await?;
 
         Ok(true)

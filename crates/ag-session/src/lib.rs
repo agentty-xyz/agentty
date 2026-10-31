@@ -86,8 +86,8 @@ pub use setting::SettingName;
 pub use task::{CreateTaskRequest, SubmitTaskRequest, Task, TaskAttempt, TaskAttemptStatus};
 pub use task_chain::{
     AcceptTaskChainPlanRequest, ContinueTaskChainRequest, PlanThenImplementAgents,
-    ReplyToTaskChainRequest, StartPlanThenImplementRequest, TaskChain, TaskChainPhase,
-    TaskChainReplyOutcome,
+    ReplyToTaskChainRequest, StartPlanThenImplementRequest, TASK_CHAIN_PLAN_OUTPUT, TaskChain,
+    TaskChainPhase, TaskChainReplyOutcome,
 };
 pub use task_execution::{
     AcceptedTaskPlan, SubmitAgentTaskRequest, TaskAgentAssignment, TaskAgentContext,

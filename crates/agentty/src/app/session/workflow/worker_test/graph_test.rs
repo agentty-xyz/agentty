@@ -4,7 +4,11 @@ use std::sync::{Arc, Mutex};
 use ag_contracts::{AgentError, MockAgentChannel, PermissionMode, ProviderCallBudget};
 use ag_git::{GitError, MockGitClient};
 use ag_protocol::QuestionItem;
-use ag_session::{GraphPostProcessing, GraphWorkspaceAccess, TaskAttemptStatus};
+use ag_session::{
+    ExecutionGraph, GraphContext, GraphPostProcessing, GraphWorkspaceAccess, TaskAgentRole,
+    TaskAttemptStatus, TaskChain,
+};
+use ag_store::SessionMessageRow;
 use ag_worker::{GraphRunRequest, MockRunClient, ScheduledWork, SessionRunClient, WorkerHost};
 use tokio::sync::oneshot;
 use tokio_util::sync::CancellationToken;
@@ -17,10 +21,12 @@ use super::support::{
     mock_fs_client_with_existing_directories, queue_helper_context, successful_turn_result,
     test_graph_resources,
 };
+use crate::app::AppEvent;
 use crate::app::execution_graph::tests::{claimed_dispatch, graph, run_request, task_operation_id};
 use crate::app::service::MockSessionRunFactory;
 use crate::app::session::workflow::graph_turn::{GraphTaskCommand, GraphTaskCompletion};
 use crate::domain::session::Status;
+use crate::domain::session_message::SessionMessage;
 
 #[tokio::test]
 async fn selected_graph_writers_wait_for_background_reviews_before_running() {
@@ -234,6 +240,123 @@ async fn graph_task_failures_questions_and_cancellation_settle_without_chat_leak
     }
 }
 
+#[tokio::test]
+async fn workflow_roles_reject_blank_answers_without_effects_or_success_events() {
+    for role in [
+        Some(TaskAgentRole::Planner),
+        Some(TaskAgentRole::Implementer),
+        None,
+    ] {
+        for scenario in [
+            "empty-answer",
+            "whitespace-answer",
+            "question-only",
+            "blank-question",
+        ] {
+            // Arrange
+            let mut context = graph_context(scenario).await;
+            let (events_tx, mut events_rx) = tokio::sync::mpsc::unbounded_channel();
+            context.app_event_tx = events_tx;
+            let (graph, task_id) = graph_for_role(role);
+            let (task, receiver) = graph_task_command(&context, scenario, graph).await;
+            let execution = task.request.dispatch.record.execution.clone();
+
+            // Act
+            let result = SessionWorkerService::process_session_command(
+                &context,
+                &(Arc::new(MockRunClient::new()) as Arc<dyn ag_worker::RunClient>),
+                SessionCommand::RunGraphTask(Box::new(task)),
+            )
+            .await
+            .expect("selected");
+            let response = receiver.await.expect("worker completion");
+            let task = context
+                .db
+                .tasks()
+                .load_task(&task_id)
+                .await
+                .expect("task")
+                .expect("present");
+
+            // Assert
+            let succeeds =
+                role.is_none() || ["question-only", "blank-question"].contains(&scenario);
+            assert_eq!(result.is_ok(), succeeds, "{role:?}: {scenario}: {result:?}");
+            assert_eq!(response.is_ok(), succeeds);
+            assert_eq!(
+                task.attempts[0].status,
+                if succeeds {
+                    TaskAttemptStatus::Succeeded
+                } else {
+                    TaskAttemptStatus::Failed
+                }
+            );
+            if !succeeds {
+                assert!(
+                    response
+                        .expect_err("blank role response")
+                        .to_string()
+                        .contains("Workflow role returned an empty answer")
+                );
+            }
+            assert!(
+                context
+                    .db
+                    .graphs()
+                    .load_task_turn(&execution)
+                    .await
+                    .expect("history")
+                    .is_some(),
+                "observed response remains available for retries"
+            );
+            while let Ok(event) = events_rx.try_recv() {
+                assert!(!matches!(
+                    event,
+                    AppEvent::ImplementerAttemptSucceeded { .. }
+                ));
+            }
+            if scenario == "blank-question" {
+                assert_eq!(
+                    context.transcript.lock().expect("transcript").messages(),
+                    &[] as &[SessionMessage]
+                );
+                assert_eq!(
+                    context
+                        .db
+                        .sessions()
+                        .load_session_messages("sess")
+                        .await
+                        .expect("chat"),
+                    Vec::<SessionMessageRow>::new()
+                );
+            }
+        }
+    }
+}
+
+fn graph_for_role(role: Option<TaskAgentRole>) -> (ExecutionGraph, String) {
+    let mut graph = graph();
+    graph.nodes.truncate(1);
+    let task_id = role.map_or_else(
+        || "task-first".to_string(),
+        |role| TaskChain::task_id(&graph.id, role),
+    );
+    if let Some(role) = role {
+        let node = &mut graph.nodes[0];
+        node.id = role.id().into();
+        node.execution.context = GraphContext::TaskConversation {
+            task_id: task_id.clone(),
+        };
+        if role == TaskAgentRole::Implementer {
+            node.definition.read_only = false;
+            node.execution.workspace_access = GraphWorkspaceAccess::ExclusiveWrite;
+            node.execution.post_processing = GraphPostProcessing::SessionWorkflow;
+        }
+    }
+
+    (graph, task_id)
+}
+
 async fn graph_context(scenario: &'static str) -> SessionWorkerContext {
     let mut context = queue_helper_context(Arc::new(Mutex::new(VecDeque::new()))).await;
     let project = context
@@ -267,14 +390,25 @@ async fn graph_context(scenario: &'static str) -> SessionWorkerContext {
         .returning(|_| Box::pin(async { Ok(None) }));
     git.expect_diff()
         .returning(|_, _| Box::pin(async { Ok(String::new()) }));
-    git.expect_is_worktree_clean().returning(|_| {
-        Box::pin(async {
-            Err(GitError::CommandFailed {
-                command: "status".into(),
-                stderr: "index locked".into(),
+    if [
+        "empty-answer",
+        "whitespace-answer",
+        "question-only",
+        "blank-question",
+    ]
+    .contains(&scenario)
+    {
+        git.expect_is_worktree_clean().times(0);
+    } else {
+        git.expect_is_worktree_clean().returning(|_| {
+            Box::pin(async {
+                Err(GitError::CommandFailed {
+                    command: "status".into(),
+                    stderr: "index locked".into(),
+                })
             })
-        })
-    });
+        });
+    }
     context.git_client = Arc::new(git);
     *context.status.lock().expect("status") = Status::Review;
 
@@ -288,8 +422,7 @@ async fn graph_task_fixture(
     GraphTaskCommand,
     oneshot::Receiver<Result<String, ag_contracts::OneShotError>>,
 ) {
-    let mut graph = graph();
-    graph.nodes.truncate(1);
+    let (mut graph, _) = graph_for_role(None);
     if ["effects", "readonly", "unbudgeted-effects", "wait-canceled"].contains(&scenario) {
         graph.nodes[0].definition.read_only = false;
         graph.nodes[0].execution.workspace_access = GraphWorkspaceAccess::ExclusiveWrite;
@@ -301,6 +434,18 @@ async fn graph_task_fixture(
             ag_session::AgentModel::ClaudeSonnet55,
         );
     }
+
+    graph_task_command(context, scenario, graph).await
+}
+
+async fn graph_task_command(
+    context: &SessionWorkerContext,
+    scenario: &'static str,
+    graph: ExecutionGraph,
+) -> (
+    GraphTaskCommand,
+    oneshot::Receiver<Result<String, ag_contracts::OneShotError>>,
+) {
     context
         .db
         .graphs()
@@ -312,9 +457,9 @@ async fn graph_task_fixture(
             .db
             .graph_dispatch()
             .claim(
-                "graph",
+                &graph.id,
                 graph.revision,
-                "first",
+                &graph.nodes[0].id,
                 "aaaaaaaa-0000-0000-0000-000000000001",
                 &context.folder,
             )
@@ -385,12 +530,20 @@ fn graph_factory(
                     if scenario == "provider" {
                         return Err(AgentError::Backend("provider failed".into()));
                     }
-                    let mut result = successful_turn_result("task response");
-                    if scenario == "questions" {
-                        result
-                            .assistant_message
-                            .questions
-                            .push(QuestionItem::new("Task question?"));
+                    let answer = match scenario {
+                        "empty-answer" | "question-only" | "blank-question" => "",
+                        "whitespace-answer" => " \t\n",
+                        _ => "task response",
+                    };
+                    let mut result = successful_turn_result(answer);
+                    if ["questions", "question-only", "blank-question"].contains(&scenario) {
+                        result.assistant_message.questions.push(QuestionItem::new(
+                            if scenario == "blank-question" {
+                                " \t\n"
+                            } else {
+                                "Task question?"
+                            },
+                        ));
                     }
                     result.provider_conversation_id = Some("task-provider".into());
                     Ok(result)

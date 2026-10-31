@@ -2809,7 +2809,8 @@ impl SessionManager {
                 folder,
                 harness_models: services.harness_models(),
                 prompt: prompt.to_string(),
-                run_client: services.session_run_client(session_id),
+                run_client: services
+                    .graph_waking_run_client(services.session_run_client(session_id)),
                 session_agent,
                 session_id: session_id.clone(),
             },

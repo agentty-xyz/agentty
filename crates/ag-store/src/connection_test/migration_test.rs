@@ -1,7 +1,7 @@
 use ag_session::{
-    AgentKind, AgentModel, AgentSelection, DurableMessageVisibility, SessionMessageKind,
-    SettingName, SubmitAgentTaskRequest, SubmitTaskRequest, TaskAgentAssignment, TaskAgentInput,
-    TaskAgentRole,
+    AgentKind, AgentModel, AgentSelection, DurableMessageVisibility, PlanThenImplementAgents,
+    SessionMessageKind, SettingName, StartPlanThenImplementRequest, SubmitAgentTaskRequest,
+    SubmitTaskRequest, TaskAgentAssignment, TaskAgentInput, TaskAgentRole, TaskChainPhase,
 };
 use sqlx::SqlitePool;
 use sqlx::migrate::Migrator;
@@ -9,7 +9,195 @@ use sqlx::sqlite::SqlitePoolOptions;
 
 use super::support::insert_session_fixture;
 use crate::LEGACY_SESSION_AGENT_CLEAR_MARKER;
-use crate::connection::Database;
+use crate::connection::{Database, MIGRATOR};
+use crate::timestamp::system_timestamp_source;
+
+#[tokio::test]
+async fn graph_upgrade_discards_legacy_workflows_and_preserves_session_work() {
+    // Arrange
+    let database = legacy_plan_database().await;
+    let tasks = database
+        .tasks()
+        .list_tasks("session")
+        .await
+        .expect("legacy tasks");
+
+    // Act
+    MIGRATOR.run(database.pool()).await.expect("graph upgrade");
+    MIGRATOR
+        .run(database.pool())
+        .await
+        .expect("idempotent reopening");
+    let legacy = database
+        .graphs()
+        .load_task_chain("workflow")
+        .await
+        .expect("legacy lookup");
+    let graphs = database
+        .graphs()
+        .list_graphs("session")
+        .await
+        .expect("saved graphs");
+    let tables: Vec<String> = sqlx::query_scalar(
+        "SELECT name FROM sqlite_master WHERE type = 'table' AND name IN ('task_chain', \
+         'task_chain_reply', 'task_chain_continuation')",
+    )
+    .fetch_all(database.pool())
+    .await
+    .expect("legacy tables");
+    let messages = database
+        .sessions()
+        .load_session_messages("session")
+        .await
+        .expect("transcript");
+    let session = database
+        .sessions()
+        .load_session("session")
+        .await
+        .expect("session")
+        .expect("retained");
+    let other_messages = database
+        .sessions()
+        .load_session_messages("other")
+        .await
+        .expect("other transcript");
+
+    // Assert
+    assert_eq!(legacy, None);
+    assert_eq!(graphs, []);
+    assert_eq!(tables, [] as [String; 0]);
+    assert_eq!(
+        database
+            .tasks()
+            .list_tasks("session")
+            .await
+            .expect("retained tasks"),
+        tasks
+    );
+    assert_eq!(session.status, "Review");
+    assert_eq!(messages.len(), 2);
+    assert_eq!(messages[0].content, "Keep this conversation");
+    assert_eq!(messages[1].kind, SessionMessageKind::UserPrompt.as_str());
+    assert_eq!(messages[1].content, "workflow");
+    assert_eq!(
+        other_messages
+            .iter()
+            .map(|message| (message.kind.as_str(), message.content.as_str()))
+            .collect::<Vec<_>>(),
+        [
+            (SessionMessageKind::AgentGraph.as_str(), "workflow"),
+            (SessionMessageKind::AgentGraph.as_str(), "retained-graph"),
+        ]
+    );
+
+    // Act: a fresh graph workflow can be admitted after the legacy upgrade.
+    let graph = StartPlanThenImplementRequest {
+        agent: AgentSelection::new(AgentKind::Codex, AgentModel::Gpt61Sol),
+        agents: Box::new(PlanThenImplementAgents::bundled().expect("bundled agents")),
+        attachments: Vec::new(),
+        chain_id: "new-workflow".into(),
+        user_request: "Add search".into(),
+    }
+    .graph(&"session".into(), None);
+    database
+        .graphs()
+        .start_task_chain(&graph, "Add search")
+        .await
+        .expect("new workflow");
+    let chain = database
+        .graphs()
+        .load_task_chain("new-workflow")
+        .await
+        .expect("query graph")
+        .expect("saved workflow");
+
+    // Assert
+    assert_eq!(chain.phase, TaskChainPhase::Planning);
+    assert_eq!(chain.current_execution, None);
+}
+
+/// A populated database at the last schema before graph-backed workflows.
+async fn legacy_plan_database() -> Database {
+    let pool = SqlitePoolOptions::new()
+        .max_connections(1)
+        .connect("sqlite::memory:")
+        .await
+        .expect("legacy pool");
+    sqlx::query("PRAGMA foreign_keys = ON")
+        .execute(&pool)
+        .await
+        .expect("foreign keys");
+    let migrations = MIGRATOR
+        .iter()
+        .filter(|migration| migration.version < 106)
+        .cloned()
+        .collect::<Vec<_>>();
+    Migrator::with_migrations(migrations)
+        .run(&pool)
+        .await
+        .expect("legacy schema");
+    sqlx::raw_sql(
+        "INSERT INTO project (id, path) VALUES (1, 'project');
+        INSERT INTO session (id, model, base_branch, status, project_id)
+        VALUES ('session', 'gpt-6.1-sol', 'main', 'Review', 1),
+        ('other', 'gpt-6.1-sol', 'main', 'Review', 1);
+        INSERT INTO task (id, session_id, objective, created_at) VALUES
+        ('planner', 'session', 'Add search', 1), ('implementer', 'session', 'Add search', 1),
+        ('ordinary', 'session', 'Keep this task', 1);
+        INSERT INTO session_operation (id, session_id, kind, status, queued_at)
+        VALUES ('operation', 'session', 'agent_task', 'done', 1),
+        ('revision-operation', 'session', 'agent_task', 'canceled', 2),
+        ('ordinary-operation', 'session', 'reply', 'done', 1);
+        INSERT INTO task_attempt (id, task_id, session_operation_id, message, is_visible)
+        VALUES ('attempt', 'planner', 'operation', 'Add search', 0),
+        ('revision', 'planner', 'revision-operation', 'Revise the plan', 0),
+        ('ordinary-attempt', 'ordinary', 'ordinary-operation', 'Keep this input', 1);",
+    )
+    .execute(&pool)
+    .await
+    .expect("legacy tasks");
+    sqlx::query(
+        "INSERT INTO task_chain (id, session_id, agent, model, user_request, planner_task_id, \
+         implementer_task_id, planner_task_attempt_id, created_at) VALUES ('workflow', 'session', \
+         'codex', 'gpt-6.1-sol', 'Add search', 'planner', 'implementer', 'attempt', 1)",
+    )
+    .execute(&pool)
+    .await
+    .expect("legacy workflow");
+    sqlx::raw_sql(
+        "INSERT INTO task_chain_continuation (task_attempt_id, expected_task_attempt_id)
+        VALUES ('revision', 'attempt');
+        INSERT INTO task_chain_reply (id, task_chain_id, message, created_at)
+        VALUES ('legacy-reply', 'workflow', 'Go ahead', 1);",
+    )
+    .execute(&pool)
+    .await
+    .expect("legacy continuation and reply");
+    let database = Database::from_pool(pool, system_timestamp_source());
+    database
+        .sessions()
+        .append_session_message(
+            "session",
+            SessionMessageKind::UserPrompt,
+            "Keep this conversation",
+        )
+        .await
+        .expect("ordinary conversation");
+    for (session_id, kind, content) in [
+        ("session", SessionMessageKind::AgentGraph, "workflow"),
+        ("session", SessionMessageKind::UserPrompt, "workflow"),
+        ("other", SessionMessageKind::AgentGraph, "workflow"),
+        ("other", SessionMessageKind::AgentGraph, "retained-graph"),
+    ] {
+        database
+            .sessions()
+            .append_session_message(session_id, kind, content)
+            .await
+            .expect("legacy graph marker and conversation");
+    }
+
+    database
+}
 
 #[tokio::test]
 async fn removal_of_session_selection_preserves_conversation_and_task_snapshots() {
@@ -266,13 +454,10 @@ async fn task_context_migration_preserves_unassigned_task_history() {
 async fn task_migration_preserves_existing_sessions_and_operation_retry_semantics() {
     // Arrange
     let database = Database::open_in_memory().await.expect("database");
-    sqlx::raw_sql(
-        "DROP TABLE task_chain; DROP TRIGGER task_attempt_no_reopen; DROP TABLE task_attempt; \
-         DROP TABLE task;",
-    )
-    .execute(database.pool())
-    .await
-    .expect("prior schema");
+    sqlx::raw_sql("DROP TRIGGER task_attempt_no_reopen; DROP TABLE task_attempt; DROP TABLE task;")
+        .execute(database.pool())
+        .await
+        .expect("prior schema");
     let project = database
         .projects()
         .upsert_project("project", None)

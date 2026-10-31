@@ -476,30 +476,38 @@ pub(crate) async fn new_test_app_without_retained_base_dir() -> App {
 /// repository is built once into a shared temporary directory and copied,
 /// avoiding six git subprocesses per fixture.
 pub(crate) fn setup_test_git_repo(path: &Path) {
-    copy_directory(&shared_git_repo_template(), path);
+    let (template, _staging) = shared_git_repo_template();
+    copy_directory(&template, path);
 }
 
 /// Returns the shared committed repository, publishing it atomically so
 /// concurrent test processes see either no template or a complete one.
-fn shared_git_repo_template() -> PathBuf {
+fn shared_git_repo_template() -> (PathBuf, Option<tempfile::TempDir>) {
     let template = std::env::temp_dir().join(format!(
         "agentty-test-git-template-v{GIT_REPO_TEMPLATE_REVISION}"
     ));
+    git_repo_template_at(template)
+}
+
+/// Retains an owned fallback when an incomplete cache prevents publication.
+fn git_repo_template_at(template: PathBuf) -> (PathBuf, Option<tempfile::TempDir>) {
     if template.join(".git").join("HEAD").is_file() {
-        return template;
+        return (template, None);
     }
     let staging = tempfile::Builder::new()
         .prefix("agentty-test-git-template-")
         .tempdir_in(std::env::temp_dir())
         .expect("failed to create git template staging dir");
     build_git_repo(staging.path());
-    let staging = staging.keep();
-    if std::fs::rename(&staging, &template).is_err() {
-        // Another test process published the template first.
-        std::fs::remove_dir_all(&staging).expect("failed to remove git template staging dir");
+    if std::fs::rename(staging.path(), &template).is_ok()
+        || template.join(".git").join("HEAD").is_file()
+    {
+        return (template, None);
     }
 
-    template
+    // An occupied, incomplete cache must not replace the valid staging
+    // repository. Its TempDir stays alive through the copy and then cleans up.
+    (staging.path().to_path_buf(), Some(staging))
 }
 
 /// Revision of the shared repository layout; bump it when

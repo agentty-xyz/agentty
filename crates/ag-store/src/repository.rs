@@ -16,7 +16,7 @@ pub struct AppRepositories {
 impl AppRepositories {
     /// Returns atomic static-graph admission and result settlement.
     pub fn graph_dispatch(&self) -> Arc<dyn ag_worker::GraphDispatchRepository> {
-        self.repositories.graph.clone()
+        self.repositories.graph_dispatch.clone()
     }
 
     /// Returns immutable graph revisions, execution links, and exact results.
@@ -74,13 +74,16 @@ impl AppRepositories {
         pool: SqlitePool,
         timestamp_source: Arc<dyn TimestampSource>,
     ) -> Self {
+        let graph = Arc::new(crate::execution_graph::SqliteGraphRepository::new(
+            pool.clone(),
+            Arc::clone(&timestamp_source),
+        ));
+
         Self {
             repositories: Arc::new(RepositorySet {
                 activity: Arc::new(activity::SqliteActivityRepository::new(pool.clone())),
-                graph: Arc::new(crate::execution_graph::SqliteGraphRepository::new(
-                    pool.clone(),
-                    Arc::clone(&timestamp_source),
-                )),
+                graph: graph.clone(),
+                graph_dispatch: graph,
                 operation: Arc::new(operation::SqliteOperationRepository::new(
                     pool.clone(),
                     Arc::clone(&timestamp_source),
@@ -113,7 +116,8 @@ impl AppRepositories {
 /// number of repositories carried through asynchronous workflows.
 struct RepositorySet {
     activity: Arc<dyn activity::ActivityRepository>,
-    graph: Arc<crate::execution_graph::SqliteGraphRepository>,
+    graph: Arc<dyn crate::GraphRepository>,
+    graph_dispatch: Arc<dyn ag_worker::GraphDispatchRepository>,
     operation: Arc<dyn operation::OperationRepository<crate::DbError>>,
     project: Arc<dyn project::ProjectRepository>,
     review: Arc<dyn review::ReviewRepository>,

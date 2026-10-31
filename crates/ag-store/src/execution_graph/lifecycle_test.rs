@@ -278,7 +278,8 @@ async fn graph_lifecycle_clarification_is_exact_and_new_attempts_retain_history(
         .execution_history(&second.record.execution)
         .await
         .expect("history")
-        .expect("isolated replay");
+        .expect("isolated replay")
+        .text;
     assert!(history.contains("Need input"));
     assert!(history.contains("Local"));
     assert_ne!(second.record.execution, first.record.execution);
@@ -791,7 +792,8 @@ async fn graph_lifecycle_retry_retains_observed_task_turns_when_ordered_effects_
         .execution_history(&retry.record.execution)
         .await
         .expect("history")
-        .expect("retained failed observation");
+        .expect("retained failed observation")
+        .text;
 
     // Assert
     assert!(history.contains("Observed changes before effects failed"));
@@ -907,7 +909,8 @@ async fn graph_lifecycle_retry_history_omits_unobserved_failed_turns() {
         .execution_history(&retry.record.execution)
         .await
         .expect("history")
-        .expect("explicit retry");
+        .expect("explicit retry")
+        .text;
 
     // Assert
     assert!(history.contains("Explicitly retry"));
@@ -1038,4 +1041,36 @@ async fn graph_lifecycle_retry_rolls_back_when_its_inserted_receipt_disappears()
     .await
     .expect("retained intent");
     assert_eq!(state, (false, None));
+}
+
+#[tokio::test]
+async fn graph_history_rejects_a_corrupt_continuation_request() {
+    // Arrange
+    let (database, _, request) = clarification_fixture().await;
+    database
+        .graphs()
+        .continue_node(&request)
+        .await
+        .expect("answer");
+    let resumed = claim(&database, "first").await;
+    sqlx::query("UPDATE execution_graph_continuation SET request = ? WHERE id = ?")
+        .bind("{")
+        .bind(&request.action_id)
+        .execute(database.pool())
+        .await
+        .expect("inject corrupt request");
+
+    // Act
+    let history = database
+        .graphs()
+        .execution_history(&resumed.record.execution)
+        .await;
+
+    // Assert
+    assert!(
+        history
+            .expect_err("invalid persisted request")
+            .to_string()
+            .contains("EOF")
+    );
 }

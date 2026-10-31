@@ -1,10 +1,13 @@
 //! Typed mutation requests and transport-independent admission metadata.
 
+use std::sync::Arc;
+
 use ag_session::{
     AnswerQuestionsRequest, CreateSessionRequest, DurableMessageRequest, ReplyToTaskChainRequest,
     ReviewRequest, SessionError, SessionId, TaskChainReplyOutcome,
 };
 use tokio::sync::oneshot;
+use tokio_util::sync::CancellationToken;
 use uuid::Uuid;
 
 use super::ReviewRequestCommand;
@@ -47,11 +50,11 @@ impl SessionCommand {
             CommandDelivery::Admission {
                 request: SessionMutation::StartTaskChain { request, .. },
                 ..
-            } => Some(format!("task-attempt:{}", request.planner_attempt_id)),
+            } => Some(format!("execution-graph:{}", request.chain_id)),
             CommandDelivery::Admission {
                 request: SessionMutation::AcceptTaskChainPlan { request, .. },
                 ..
-            } => Some(format!("task-attempt:{}", request.attempt_id)),
+            } => Some(format!("task-attempt:{}", request.plan_attempt_id)),
             CommandDelivery::Admission {
                 request: SessionMutation::ContinueTaskChain { request, .. },
                 ..
@@ -112,7 +115,7 @@ impl CommandDelivery {
                 ..
             } => ("reply_to_task_chain", Some(session_id)),
             Self::TaskChainReply {
-                request: TaskChainReplyCommand::Apply(action),
+                request: TaskChainReplyCommand::Apply { action, .. },
                 ..
             } => ("apply_task_chain_reply", Some(&action.session_id)),
         }
@@ -127,7 +130,11 @@ pub(crate) enum TaskChainReplyCommand {
         session_id: SessionId,
     },
     /// Admits an action decided for an already recorded reply.
-    Apply(TaskChainReplyAction),
+    Apply {
+        action: TaskChainReplyAction,
+        /// Identity and cancellation fence for this background decision.
+        cancellation: Arc<CancellationToken>,
+    },
 }
 
 impl TaskChainReplyCommand {
@@ -135,7 +142,7 @@ impl TaskChainReplyCommand {
     pub(super) fn reply_id(&self) -> &str {
         match self {
             Self::Reply { request, .. } => &request.reply_id,
-            Self::Apply(action) => &action.reply_id,
+            Self::Apply { action, .. } => &action.reply_id,
         }
     }
 }

@@ -5,10 +5,8 @@ use ag_session::{
     TaskAgentAssignment, TaskAgentContext, TaskAgentInput, TaskAgentRole,
 };
 
-use super::{TaskReplay, effect_transcript, launch_conversation, replay, task_prompt};
-use crate::infra::db::{
-    SessionMessageRow, TaskAgentContextRow, TaskAgentHistoryRow, TaskAgentTurnRow,
-};
+use super::{TaskReplay, effect_transcript, replay, task_prompt};
+use crate::infra::db::{TaskAgentContextRow, TaskAgentHistoryRow, TaskAgentTurnRow};
 
 #[test]
 fn task_replay_is_json_encoded() {
@@ -94,7 +92,7 @@ fn task_images_preserve_json_and_disambiguate_reused_composer_markers() {
         .collect();
 
     // Act
-    let prompt = task_prompt(&request, None);
+    let prompt = task_prompt(&request);
     let image_paths = prompt
         .content_parts()
         .into_iter()
@@ -123,62 +121,4 @@ fn task_images_preserve_json_and_disambiguate_reused_composer_markers() {
     );
     assert_eq!(prompt.attachments[0].placeholder, "[#Task image #1]");
     assert_eq!(prompt.attachments[1].placeholder, "[Task image #2]");
-}
-
-#[test]
-fn planner_launch_snapshot_preserves_conversation_and_excludes_later_messages() {
-    // Arrange
-    let messages = [
-        ("user_prompt", "Recommend the next step"),
-        (
-            "assistant_answer",
-            "Build a graph with \"joins\".\nThen migrate /plan.",
-        ),
-        ("workflow_notice", "Internal notice"),
-        ("unknown", "Unknown message"),
-        ("agent_graph", "older-workflow"),
-        ("user_prompt", "Work on that recommendation"),
-        ("agent_graph", "workflow"),
-        ("user_prompt", "Later guidance"),
-        ("assistant_answer", "Later answer"),
-    ]
-    .into_iter()
-    .enumerate()
-    .map(|(position, (kind, content))| SessionMessageRow {
-        position: i64::try_from(position).expect("position"),
-        kind: kind.into(),
-        content: content.into(),
-    })
-    .collect::<Vec<_>>();
-
-    // Act
-    let snapshot = launch_conversation(messages.clone(), "workflow")
-        .expect("snapshot")
-        .expect("conversation");
-    let prompt = task_prompt(&request(), Some(&snapshot));
-
-    // Assert
-    assert_eq!(
-        snapshot,
-        " › Recommend the next step\n\nBuild a graph with \"joins\".\nThen migrate /plan.\n\n\n › \
-         Work on that recommendation\n\n"
-    );
-    assert!(
-        prompt
-            .text
-            .ends_with(&serde_json::json!(snapshot).to_string())
-    );
-    assert!(launch_conversation(messages, "missing").is_err());
-    assert_eq!(
-        launch_conversation(
-            vec![SessionMessageRow {
-                position: 0,
-                kind: "agent_graph".into(),
-                content: "empty".into(),
-            }],
-            "empty"
-        )
-        .expect("empty snapshot"),
-        None
-    );
 }

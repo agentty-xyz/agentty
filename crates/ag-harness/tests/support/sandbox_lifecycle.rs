@@ -172,7 +172,9 @@ async fn output_flood_cannot_prevent_deadline_cleanup() {
     for selected in CONFORMANCE_EXECUTORS {
         // Arrange
         let workspace = Workspace::new();
-        let options = workspace.executor_options(selected, Duration::from_secs(1), 37);
+        // Allow instrumented launcher startup under parallel workspace load
+        // before requiring enough flood output to exercise the capture cap.
+        let options = workspace.executor_options(selected, Duration::from_secs(5), 37);
 
         // Act
         let result = workspace

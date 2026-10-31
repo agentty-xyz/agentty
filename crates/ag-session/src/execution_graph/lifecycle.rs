@@ -1,6 +1,7 @@
 use std::collections::BTreeMap;
 use std::num::NonZeroU64;
 
+use ag_protocol::TurnPromptAttachment;
 use serde::{Deserialize, Serialize};
 
 use super::{GraphCompletionGate, GraphExecutionRef};
@@ -50,6 +51,17 @@ pub enum GraphNodeContinuation {
     Answer {
         /// Ordered answers paired with their exact question text.
         answers: Vec<GraphQuestionAnswer>,
+    },
+    /// Free-form user guidance for the same task conversation. It may retry
+    /// failed or canceled work, answer clarification questions in prose,
+    /// revise a validated output that has not been accepted, or follow up on
+    /// settled work. Accepted outputs and nodes whose dependents have started
+    /// are final.
+    Reply {
+        /// Images accompanying the guidance, delivered with later attempts.
+        attachments: Vec<TurnPromptAttachment>,
+        /// User-authored guidance.
+        message: String,
     },
 }
 

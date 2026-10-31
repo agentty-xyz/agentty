@@ -195,7 +195,7 @@ pub trait SessionBackend: Send + Sync {
         ))
     }
 
-    /// Launches a static workflow with one isolated Planner attempt.
+    /// Saves and starts the static Planner → Implementer execution graph.
     async fn start_plan_then_implement(
         &self,
         _session_id: &SessionId,
@@ -223,7 +223,7 @@ pub trait SessionBackend: Send + Sync {
         ))
     }
 
-    /// Explicitly accepts an exact Planner version and admits implementation.
+    /// Explicitly accepts an exact Planner version, releasing implementation.
     async fn accept_task_chain_plan(
         &self,
         _chain_id: &str,
@@ -234,7 +234,7 @@ pub trait SessionBackend: Send + Sync {
         ))
     }
 
-    /// Explicitly continues the current stage; uses a new attempt identity.
+    /// Explicitly continues the current stage with a new execution UUID.
     async fn continue_task_chain(
         &self,
         _chain_id: &str,
@@ -245,7 +245,7 @@ pub trait SessionBackend: Send + Sync {
         ))
     }
 
-    /// Requests cancellation of only this workflow's current attempt.
+    /// Cancels only the current stage's execution; the graph stays open.
     async fn cancel_task_chain(&self, _chain_id: &str) -> Result<(), SessionError> {
         Err(SessionError::Operation(
             "Host does not support task chains".to_string(),
@@ -449,7 +449,9 @@ impl SessionService {
         self.backend.accept_agent_plan(session_id, request).await
     }
 
-    /// Starts one Planner attempt with a captured provider/model selection.
+    /// Saves the Planner → accepted plan → Implementer execution graph with a
+    /// captured provider/model selection and starts its driver. Matching
+    /// launch redelivery is a receipt.
     ///
     /// # Errors
     /// Returns an error for identity conflicts, ineligible sessions, or failed
@@ -483,8 +485,8 @@ impl SessionService {
         self.backend.list_task_chains(session_id).await
     }
 
-    /// Accepts an exact latest plan and admits its isolated Implementer
-    /// attempt.
+    /// Accepts the exact latest validated plan. The graph executor then
+    /// admits the isolated Implementer with that version pinned as input.
     ///
     /// # Errors
     /// Returns an error for stale/ineligible plans, conflicts, or failed
@@ -497,11 +499,12 @@ impl SessionService {
         self.backend.accept_task_chain_plan(chain_id, request).await
     }
 
-    /// Explicitly revises, clarifies, or retries the current stage.
+    /// Explicitly revises, clarifies, or retries the current stage through a
+    /// graph continuation. `attempt_id` must be a new UUID.
     ///
     /// # Errors
-    /// Returns an error for unfinished attempts, conflicts, or failed
-    /// admission.
+    /// Returns an error for unfinished or stale attempts, accepted plans,
+    /// conflicts, or failed admission.
     pub async fn continue_task_chain(
         &self,
         chain_id: &str,
@@ -510,7 +513,8 @@ impl SessionService {
         self.backend.continue_task_chain(chain_id, request).await
     }
 
-    /// Requests cancellation of this workflow's current attempt.
+    /// Requests cancellation of this workflow's current execution. The graph
+    /// stays open, so a later continuation may retry the canceled stage.
     ///
     /// # Errors
     /// Returns an error when the workflow is missing or cancellation cannot

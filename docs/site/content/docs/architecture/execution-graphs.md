@@ -8,7 +8,9 @@ weight = 8
 persists their revisions, execution links, and exact result versions. `ag-worker`
 provides a deterministic static executor with atomic storage admission. Agentty adapts
 task conversations to its serial session workers and fresh utilities to the concurrent
-utility worker. Focused review runs on this executor; `/plan` still uses `TaskChain`.
+utility worker. Focused review and `/plan` both run on this executor. `TaskChain` builds
+and projects the fixed Planner-to-Implementer graph; it has no separate execution
+ledger.
 
 ## Graph and Node Identity
 
@@ -202,14 +204,17 @@ Already completed graphs retain their completion state. Workers retain their res
 through cleanup; unrelated session work is unaffected. Late responses and acceptance
 actions cannot advance a canceled graph.
 
-`continue_execution_graph_node` records either a retry or the complete ordered answers
-to a settled task turn. The request names the current revision, exact source execution,
-and a new execution UUID. A retry requires failed, canceled, or incompletely settled
-work. Clarification continues the same isolated task with a new attempt and its own
-runtime context, replaying only that node's retained responses and explicit replies.
-Neither action rewrites previous attempts or changes their pinned inputs. Identical
-delivery never executes twice; conflicting identities and stale sources are rejected.
-Failed predecessors keep dependent nodes blocked while independent branches may proceed.
+`continue_execution_graph_node` records a retry, complete ordered clarification answers,
+or a free-form reply to a settled task turn. A reply may revise an unaccepted output or
+follow up on a terminal node; accepted outputs and nodes with started dependents are
+final. Reply images remain attached to later attempts. The request names the current
+revision, exact source execution, and a new execution UUID. A retry requires failed,
+canceled, or incompletely settled work. Clarification continues the same isolated task
+with a new attempt and its own runtime context, replaying only that node's retained
+responses and explicit replies. Neither action rewrites previous attempts or changes
+their pinned inputs. Identical delivery never executes twice; conflicting identities and
+stale sources are rejected. Failed predecessors keep dependent nodes blocked while
+independent branches may proceed.
 
 Startup restores records without dispatching them. `resume_execution_graph` explicitly
 starts dispatch for the saved revision; admitted nodes require a separate continuation
@@ -217,4 +222,20 @@ action before another execution. Live launches retain their original shared limi
 remaining credits across resume calls. After process restart, explicit resume supplies
 new limits for that live execution period; budget counters are not durable usage
 ledgers. Recording continuation intent alone never recreates a driver or replenishes
-credits. `/plan` migration, graph proposals, and runtime expansion remain separate work.
+credits. Graph proposals and runtime expansion remain separate work.
+
+## Plan Then Implement Graph
+
+`/plan` saves two task-conversation nodes with captured definitions, model, attachments,
+and the Planner's launch-time session snapshot. The Planner is a shared reader. Its
+validated `plan` output requires explicit acceptance before the exclusive-writer
+Implementer can start with that exact result pinned as input. Planner revision and
+clarification create new attempts in the same isolated history. The Implementer retains
+the original images and the accepted Planner attempt's reply images, and settles ordered
+session effects before its execution succeeds.
+
+Workflow phase and the visible graph card project the graph's operation-backed state.
+Natural-language replies retain their exact source execution and first decision before
+applying an idempotent graph action. Canceling a stage leaves the graph open for an
+explicit retry; whole-graph cancellation remains terminal. Reading saved workflows never
+dispatches work.

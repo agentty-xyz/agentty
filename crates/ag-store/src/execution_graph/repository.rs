@@ -1,11 +1,16 @@
 use std::num::NonZeroU64;
 use std::sync::Arc;
 
-use ag_session::{ExecutionGraph, GraphExecutionRef, GraphResultRef};
+use ag_protocol::TurnPrompt;
+use ag_session::{
+    ExecutionGraph, GraphExecutionRef, GraphResultRef, TaskChain, TaskChainReplyOutcome,
+};
 use async_trait::async_trait;
 use sqlx::{SqliteConnection, SqlitePool};
 
-use super::{GraphEvidence, GraphExecutionRecord, StoredGraphResult};
+use super::{
+    GraphEvidence, GraphExecutionRecord, GraphNodeHistory, StoredGraphResult, TaskChainReplyRecord,
+};
 use crate::{DbError, TimestampSource};
 
 /// Persistence only: no dispatch, capacity allocation, or automatic replay.
@@ -30,11 +35,67 @@ pub trait GraphRepository: Send + Sync {
         request: &ag_session::ContinueGraphNodeRequest,
     ) -> Result<bool, DbError>;
 
-    /// Replays only this node's immutable attempts and explicit replies.
+    /// Replays only this node's immutable attempts and explicit replies,
+    /// including images attached to free-form replies.
     async fn execution_history(
         &self,
         execution: &GraphExecutionRef,
-    ) -> Result<Option<String>, DbError>;
+    ) -> Result<Option<GraphNodeHistory>, DbError>;
+
+    /// Requests cancellation of one queued or running task execution without
+    /// closing graph admission. Queued work settles as canceled immediately;
+    /// a running worker observes the flag. Returns whether it was active.
+    async fn cancel_execution(&self, execution: &GraphExecutionRef) -> Result<bool, DbError>;
+
+    /// Cancels the current workflow stage, including an unclaimed first turn
+    /// or pending continuation. Unclaimed work receives a canceled receipt
+    /// without taking resources or dispatching a worker.
+    async fn cancel_task_chain_stage(
+        &self,
+        chain_id: &str,
+    ) -> Result<Option<GraphExecutionRef>, DbError>;
+
+    /// Saves a new task-chain graph together with its visible launch prompt
+    /// and graph marker. Returns false for identical redelivery without
+    /// appending again. Rejects other graph shapes and occupied task IDs.
+    async fn start_task_chain(
+        &self,
+        graph: &ExecutionGraph,
+        user_prompt: &str,
+    ) -> Result<bool, DbError>;
+
+    /// Projects one task-chain graph from a single snapshot; never dispatches.
+    async fn load_task_chain(&self, chain_id: &str) -> Result<Option<TaskChain>, DbError>;
+
+    /// Lists a session's task chains in creation order.
+    async fn list_task_chains(&self, session_id: &str) -> Result<Vec<TaskChain>, DbError>;
+
+    /// Records one natural-language reply bound to the exact execution it
+    /// answers and appends it as a visible user prompt atomically. Returns
+    /// false for identical redelivery; conflicting reuse is rejected.
+    async fn record_task_chain_reply(
+        &self,
+        chain_id: &str,
+        reply_id: &str,
+        prompt: &TurnPrompt,
+        source: &GraphExecutionRef,
+    ) -> Result<bool, DbError>;
+
+    /// Loads a reply owned by this session, or `None` for a new reply.
+    async fn load_task_chain_reply(
+        &self,
+        session_id: &str,
+        reply_id: &str,
+    ) -> Result<Option<TaskChainReplyRecord>, DbError>;
+
+    /// Records the first decision for a reply and returns the stored one;
+    /// later decisions never replace it.
+    async fn decide_task_chain_reply(
+        &self,
+        reply_id: &str,
+        outcome: TaskChainReplyOutcome,
+        action_id: Option<String>,
+    ) -> Result<TaskChainReplyRecord, DbError>;
 
     /// Returns static task dispatch context UUIDs before session deletion
     /// cascades their receipts. Legacy links never allocate runtime resources.
@@ -238,7 +299,7 @@ impl GraphRepository for SqliteGraphRepository {
     async fn execution_history(
         &self,
         execution: &GraphExecutionRef,
-    ) -> Result<Option<String>, DbError> {
+    ) -> Result<Option<GraphNodeHistory>, DbError> {
         self.node_history(execution).await
     }
 
@@ -306,80 +367,17 @@ impl GraphRepository for SqliteGraphRepository {
         graph: &ExecutionGraph,
         expected_revision: Option<NonZeroU64>,
     ) -> Result<bool, DbError> {
-        graph
-            .validate()
-            .map_err(|error| Self::invalid(error.to_string()))?;
-        let revision = Self::integer(graph.revision)?;
         let mut transaction = self.pool.begin().await?;
-        Self::lock(&mut transaction, &graph.id).await?;
-        if let Some(existing) =
-            Self::graph(&mut transaction, &graph.id, Some(graph.revision)).await?
-        {
-            if existing != *graph {
-                return Err(Self::invalid(
-                    "Revision identity already has different contents",
-                ));
-            }
-
-            return Ok(false);
-        }
-        let current = Self::graph(&mut transaction, &graph.id, None).await?;
-        if let Some(current) = current {
-            if current.session_id != graph.session_id
-                || expected_revision != Some(current.revision)
-                || current.revision.get().checked_add(1) != Some(graph.revision.get())
-            {
-                return Err(Self::invalid(
-                    "Revision must follow the expected revision and retain ownership",
-                ));
-            }
-            let linked = sqlx::query!(
-                "SELECT id FROM execution_graph_execution WHERE execution_graph_id = ? LIMIT 1",
-                graph.id
-            )
-            .fetch_optional(&mut *transaction)
-            .await?;
-            if linked.is_some() {
-                return Err(Self::invalid("Cannot revise a graph with execution links"));
-            }
-            sqlx::query!(
-                "UPDATE execution_graph SET revision = ? WHERE id = ?",
-                revision,
-                graph.id
-            )
-            .execute(&mut *transaction)
-            .await?;
-        } else {
-            if expected_revision.is_some() || revision != 1 {
-                return Err(Self::invalid(
-                    "New graphs require revision one and no expected revision",
-                ));
-            }
-            let session_id = graph.session_id.as_str();
-            sqlx::query!(
-                "INSERT INTO execution_graph (id, session_id, revision) VALUES (?, ?, ?)",
-                graph.id,
-                session_id,
-                revision
-            )
-            .execute(&mut *transaction)
-            .await?;
-        }
-        let snapshot = serde_json::json!(graph).to_string();
-        let now = self.timestamp_source.now_timestamp_seconds();
-        sqlx::query!(
-            "INSERT INTO execution_graph_revision (execution_graph_id, revision, snapshot, \
-             created_at) VALUES (?, ?, ?, ?)",
-            graph.id,
-            revision,
-            snapshot,
-            now
+        let saved = Self::save_in(
+            &mut transaction,
+            graph,
+            expected_revision,
+            self.timestamp_source.now_timestamp_seconds(),
         )
-        .execute(&mut *transaction)
         .await?;
         transaction.commit().await?;
 
-        Ok(true)
+        Ok(saved)
     }
 
     async fn load_graph(
@@ -393,25 +391,9 @@ impl GraphRepository for SqliteGraphRepository {
     }
 
     async fn list_graphs(&self, session_id: &str) -> Result<Vec<ExecutionGraph>, DbError> {
-        let rows = sqlx::query!(
-            "SELECT r.snapshot FROM execution_graph g JOIN execution_graph_revision r ON \
-             r.execution_graph_id = g.id AND r.revision = g.revision WHERE g.session_id = ? ORDER \
-             BY g.rowid",
-            session_id
-        )
-        .fetch_all(&self.pool)
-        .await?;
-        rows.into_iter()
-            .map(|row| {
-                let graph: ExecutionGraph = serde_json::from_str(&row.snapshot)
-                    .map_err(|error| Self::invalid(error.to_string()))?;
-                graph
-                    .validate()
-                    .map_err(|error| Self::invalid(error.to_string()))?;
+        let mut connection = self.pool.acquire().await?;
 
-                Ok(graph)
-            })
-            .collect()
+        Self::session_graphs(&mut connection, session_id).await
     }
 
     async fn link_execution(&self, record: &GraphExecutionRecord) -> Result<bool, DbError> {
@@ -536,5 +518,179 @@ impl GraphRepository for SqliteGraphRepository {
         evidence: &GraphEvidence,
     ) -> Result<bool, DbError> {
         self.attest(reference, evidence, "acceptance").await
+    }
+
+    async fn start_task_chain(
+        &self,
+        graph: &ExecutionGraph,
+        user_prompt: &str,
+    ) -> Result<bool, DbError> {
+        self.save_task_chain(graph, user_prompt).await
+    }
+
+    async fn load_task_chain(&self, chain_id: &str) -> Result<Option<TaskChain>, DbError> {
+        let mut transaction = self.pool.begin().await?;
+        let chain = Self::task_chain(&mut transaction, chain_id).await?;
+        transaction.commit().await?;
+
+        Ok(chain)
+    }
+
+    async fn list_task_chains(&self, session_id: &str) -> Result<Vec<TaskChain>, DbError> {
+        let mut transaction = self.pool.begin().await?;
+        let chains = Self::session_task_chains(&mut transaction, session_id).await?;
+        transaction.commit().await?;
+
+        Ok(chains)
+    }
+
+    async fn record_task_chain_reply(
+        &self,
+        chain_id: &str,
+        reply_id: &str,
+        prompt: &TurnPrompt,
+        source: &GraphExecutionRef,
+    ) -> Result<bool, DbError> {
+        self.save_task_chain_reply(chain_id, reply_id, prompt, source)
+            .await
+    }
+
+    async fn load_task_chain_reply(
+        &self,
+        session_id: &str,
+        reply_id: &str,
+    ) -> Result<Option<TaskChainReplyRecord>, DbError> {
+        let mut connection = self.pool.acquire().await?;
+
+        Self::task_chain_reply(&mut connection, session_id, reply_id).await
+    }
+
+    async fn decide_task_chain_reply(
+        &self,
+        reply_id: &str,
+        outcome: TaskChainReplyOutcome,
+        action_id: Option<String>,
+    ) -> Result<TaskChainReplyRecord, DbError> {
+        self.save_task_chain_reply_decision(reply_id, outcome, action_id)
+            .await
+    }
+
+    async fn cancel_execution(&self, execution: &GraphExecutionRef) -> Result<bool, DbError> {
+        self.cancel_one_execution(execution).await
+    }
+
+    async fn cancel_task_chain_stage(
+        &self,
+        chain_id: &str,
+    ) -> Result<Option<GraphExecutionRef>, DbError> {
+        self.cancel_chain_stage(chain_id).await
+    }
+}
+
+impl SqliteGraphRepository {
+    /// Saves one validated snapshot inside the caller's writer transaction.
+    pub(super) async fn save_in(
+        transaction: &mut SqliteConnection,
+        graph: &ExecutionGraph,
+        expected_revision: Option<NonZeroU64>,
+        now: i64,
+    ) -> Result<bool, DbError> {
+        graph
+            .validate()
+            .map_err(|error| Self::invalid(error.to_string()))?;
+        let revision = Self::integer(graph.revision)?;
+        Self::lock(&mut *transaction, &graph.id).await?;
+        if let Some(existing) =
+            Self::graph(&mut *transaction, &graph.id, Some(graph.revision)).await?
+        {
+            if existing != *graph {
+                return Err(Self::invalid(
+                    "Revision identity already has different contents",
+                ));
+            }
+
+            return Ok(false);
+        }
+        let current = Self::graph(&mut *transaction, &graph.id, None).await?;
+        if let Some(current) = current {
+            if current.session_id != graph.session_id
+                || expected_revision != Some(current.revision)
+                || current.revision.get().checked_add(1) != Some(graph.revision.get())
+            {
+                return Err(Self::invalid(
+                    "Revision must follow the expected revision and retain ownership",
+                ));
+            }
+            let linked = sqlx::query!(
+                "SELECT id FROM execution_graph_execution WHERE execution_graph_id = ? LIMIT 1",
+                graph.id
+            )
+            .fetch_optional(&mut *transaction)
+            .await?;
+            if linked.is_some() {
+                return Err(Self::invalid("Cannot revise a graph with execution links"));
+            }
+            sqlx::query!(
+                "UPDATE execution_graph SET revision = ? WHERE id = ?",
+                revision,
+                graph.id
+            )
+            .execute(&mut *transaction)
+            .await?;
+        } else {
+            if expected_revision.is_some() || revision != 1 {
+                return Err(Self::invalid(
+                    "New graphs require revision one and no expected revision",
+                ));
+            }
+            let session_id = graph.session_id.as_str();
+            sqlx::query!(
+                "INSERT INTO execution_graph (id, session_id, revision) VALUES (?, ?, ?)",
+                graph.id,
+                session_id,
+                revision
+            )
+            .execute(&mut *transaction)
+            .await?;
+        }
+        let snapshot = serde_json::json!(graph).to_string();
+        sqlx::query!(
+            "INSERT INTO execution_graph_revision (execution_graph_id, revision, snapshot, \
+             created_at) VALUES (?, ?, ?, ?)",
+            graph.id,
+            revision,
+            snapshot,
+            now
+        )
+        .execute(&mut *transaction)
+        .await?;
+
+        Ok(true)
+    }
+
+    /// Lists current snapshots for one session in graph creation order.
+    pub(super) async fn session_graphs(
+        connection: &mut SqliteConnection,
+        session_id: &str,
+    ) -> Result<Vec<ExecutionGraph>, DbError> {
+        let rows = sqlx::query!(
+            "SELECT r.snapshot FROM execution_graph g JOIN execution_graph_revision r ON \
+             r.execution_graph_id = g.id AND r.revision = g.revision WHERE g.session_id = ? ORDER \
+             BY g.rowid",
+            session_id
+        )
+        .fetch_all(connection)
+        .await?;
+        rows.into_iter()
+            .map(|row| {
+                let graph: ExecutionGraph = serde_json::from_str(&row.snapshot)
+                    .map_err(|error| Self::invalid(error.to_string()))?;
+                graph
+                    .validate()
+                    .map_err(|error| Self::invalid(error.to_string()))?;
+
+                Ok(graph)
+            })
+            .collect()
     }
 }

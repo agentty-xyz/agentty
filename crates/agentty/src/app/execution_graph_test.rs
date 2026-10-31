@@ -540,7 +540,20 @@ async fn assert_reader_result(
     assert_eq!(first.agent_profile.current(), Some("Captured instructions"));
     assert_eq!(first.continuation.provider_conversation_id(), None);
     assert_eq!(first.continuation.replay_transcript(), None);
-    assert_eq!(first.prompt.attachments, graph.nodes[0].request.attachments);
+    assert_eq!(
+        first
+            .prompt
+            .attachments
+            .iter()
+            .map(|image| &image.local_image_path)
+            .collect::<Vec<_>>(),
+        graph.nodes[0]
+            .request
+            .attachments
+            .iter()
+            .map(|image| &image.local_image_path)
+            .collect::<Vec<_>>()
+    );
     assert!(first.prompt.text.contains("\"src/main.rs\""));
     assert_eq!(pending.len(), 1);
     assert_eq!(result.result.state, GraphResultState::Validated);
