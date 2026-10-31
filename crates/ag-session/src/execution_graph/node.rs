@@ -62,7 +62,7 @@ impl GraphExecutionProfile {
         definition: &AgentDefinition,
         session_mode: PermissionMode,
     ) -> PermissionMode {
-        if self.workspace_access == GraphWorkspaceAccess::SharedRead {
+        if self.workspace_access.is_read() {
             return PermissionMode::ReadOnly;
         }
 
@@ -73,7 +73,8 @@ impl GraphExecutionProfile {
     ///
     /// # Errors
     /// Rejects blank identities, session schemas on utility contexts, utility
-    /// schemas on task contexts, and effects on fresh or read-only execution.
+    /// schemas on task contexts, effects on fresh or read-only execution, and
+    /// background readers outside fresh utility contexts.
     pub fn validate(&self) -> Result<(), GraphContractError> {
         match &self.context {
             GraphContext::Fresh => {
@@ -95,11 +96,16 @@ impl GraphExecutionProfile {
             }
         }
 
-        if self.workspace_access == GraphWorkspaceAccess::SharedRead
-            && self.post_processing != GraphPostProcessing::None
-        {
+        if self.workspace_access.is_read() && self.post_processing != GraphPostProcessing::None {
             return Err(GraphContractError::InvalidProfile(
                 "shared readers cannot perform host mutation effects",
+            ));
+        }
+        if self.workspace_access == GraphWorkspaceAccess::BackgroundRead
+            && self.context != GraphContext::Fresh
+        {
+            return Err(GraphContractError::InvalidProfile(
+                "background readers require a fresh utility context",
             ));
         }
         if let Some(budget_id) = &self.shared_budget_id {
@@ -136,9 +142,21 @@ pub enum GraphPostProcessing {
 pub enum GraphWorkspaceAccess {
     /// Read-only execution may share the Env with other readers.
     SharedRead,
+    /// Read-only fresh utility that may overlap ordinary host work in the
+    /// Env, such as session turns and sync, but never graph writers. Use only
+    /// when observing a changing workspace is acceptable.
+    BackgroundRead,
     /// Serialize against all other work in the Env, including readers.
     /// Session/worker/definition restrictions can still deny writes.
     ExclusiveWrite,
+}
+
+impl GraphWorkspaceAccess {
+    /// Whether this access forces read-only execution.
+    #[must_use]
+    pub fn is_read(self) -> bool {
+        matches!(self, Self::SharedRead | Self::BackgroundRead)
+    }
 }
 
 /// One prerequisite; multiple gates on one producer are permitted.

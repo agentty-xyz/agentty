@@ -140,7 +140,9 @@ impl GraphTaskEnvironment {
         let environment = task.resources.environment(&node.env_id);
 
         match node.execution.workspace_access {
-            GraphWorkspaceAccess::SharedRead => Self {
+            // Validation limits background readers to fresh utilities; a task
+            // conversation always takes the stricter shared-reader lease.
+            GraphWorkspaceAccess::SharedRead | GraphWorkspaceAccess::BackgroundRead => Self {
                 _background_writer: None,
                 _reader: Some(environment.read_owned().await),
                 _writer: None,

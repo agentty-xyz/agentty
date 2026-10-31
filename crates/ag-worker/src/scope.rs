@@ -85,6 +85,12 @@ impl RunContext {
         self
     }
 
+    /// Retains a resource in every child submitted from this context until
+    /// that child finishes cleanup and terminal bookkeeping.
+    pub(crate) fn retain(&mut self, resource: Arc<dyn Send + Sync>) {
+        self.resources.push(resource);
+    }
+
     /// Waits for any enclosing token without spawning propagation tasks.
     pub(crate) async fn cancelled(&self) {
         let mut cancellations: Vec<_> = self
