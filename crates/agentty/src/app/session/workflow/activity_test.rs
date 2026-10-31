@@ -44,7 +44,7 @@ fn summary_counts_invocations_not_updates_and_separates_attempts_and_skills() {
     // Assert
     assert_eq!(
         activity.summary(),
-        "Tools: Read ×2 (1 failed)\nSkills: review ×1 (1 interrupted)\n"
+        "Tools: Read ×2 (1 failed)\nSkills: review ×1 (1 interrupted)\n✗ Read\n"
     );
     assert_eq!(TurnActivity::default().summary(), "");
 }
@@ -82,7 +82,10 @@ fn summary_retains_failed_command_count_after_live_rows_clear() {
             session_id,
         })
     );
-    assert_eq!(activity.summary(), "Tools: run_command ×1 (1 failed)\n");
+    assert_eq!(
+        activity.summary(),
+        "Tools: run_command ×1 (1 failed)\n✗ run_command (exit 1)\n"
+    );
 }
 
 #[test]
@@ -184,7 +187,8 @@ fn live_rows_keep_invocation_order_update_status_and_clear() {
     assert_eq!(actual_id, &session_id);
     assert_eq!(
         snapshot.snapshot(),
-        "✓ Read\n! skill review (interrupted)\n✗ Read\n"
+        "Tools: Read ×2\nSkills: review ×1\nStatus: 1 succeeded · 1 failed · 0 running · 1 \
+         interrupted\n\n✗ Read\n! skill review (interrupted)\n✓ Read\n"
     );
     assert_eq!(
         events[1],
@@ -224,10 +228,17 @@ fn compact_failures_show_exit_codes_literal_input_and_two_output_lines() {
     // Assert
     assert_eq!(
         text,
-        "✗ shell (exit 1) · rg '**example**' README.md\n  line 1\n  line 2 …\n"
+        "Tools: shell ×1\nStatus: 0 succeeded · 1 failed · 0 running\n\n✗ shell (exit 1) · rg \
+         '**example**' README.md\n  line 1\n  line 2 …\n"
     );
-    assert_eq!(activity.live.snapshot(), "✗ shell (exit 1)\n");
-    assert_eq!(activity.summary(), "Tools: shell ×1 (1 failed)\n");
+    assert_eq!(
+        activity.live.snapshot(),
+        "Tools: shell ×1\nStatus: 0 succeeded · 1 failed · 0 running\n\n✗ shell (exit 1)\n"
+    );
+    assert_eq!(
+        activity.summary(),
+        "Tools: shell ×1 (1 failed)\n✗ shell (exit 1)\n"
+    );
 }
 
 #[test]
@@ -271,9 +282,13 @@ fn live_activity_bursts_bound_pending_snapshots_and_rearm_after_consumption() {
     assert_eq!(snapshot, activity.live);
     assert_ne!(snapshot, TurnActivity::default().live);
     let text = snapshot.snapshot();
-    assert_eq!(text.matches("Read").count(), 100);
-    assert_eq!(text.matches("(interrupted)").count(), 99);
-    assert!(text.ends_with("✗ Read\n  final result\n"));
+    assert!(text.starts_with(
+        "Tools: Read ×100\nStatus: 0 succeeded · 1 failed · 0 running · 99 interrupted\n"
+    ));
+    assert_eq!(text.matches("! Read (interrupted)").count(), 3);
+    assert!(!text.contains("final result"));
+    assert!(activity.summary().ends_with("✗ Read\n  final result\n"));
+    assert!(text.ends_with("+97 earlier failed or interrupted calls\n"));
 
     // Act: reading rearms the mailbox; the next turn follows the clear.
     activity.observe_live(event.clone(), &sender, &session_id);
@@ -325,23 +340,24 @@ fn compact_rows_hide_successful_output_and_flatten_multiline_commands() {
         (
             ActivityStatus::Running,
             None,
-            "… shell · cargo test --workspace\n",
+            "Status: 0 succeeded · 0 failed · 1 running\n\n… shell · cargo test --workspace\n",
         ),
         (
             ActivityStatus::Completed,
             Some(0),
-            "✓ shell · cargo test --workspace\n",
+            "Status: 1 succeeded · 0 failed · 0 running\n\n✓ shell · cargo test --workspace\n",
         ),
         (
             ActivityStatus::Interrupted,
             None,
-            "! shell (interrupted) · cargo test --workspace\n",
+            "Status: 0 succeeded · 0 failed · 0 running · 1 interrupted\n\n! shell (interrupted) \
+             · cargo test --workspace\n",
         ),
         (
             ActivityStatus::Completed,
             Some(2),
-            "✗ shell (exit 2) · cargo test --workspace\n  verbose successful output\n  more \
-             output\n",
+            "Status: 0 succeeded · 1 failed · 0 running\n\n✗ shell (exit 2) · cargo test \
+             --workspace\n  verbose successful output\n  more output\n",
         ),
     ] {
         activity.observe(ActivityEvent {
@@ -349,7 +365,10 @@ fn compact_rows_hide_successful_output_and_flatten_multiline_commands() {
             exit_code,
             ..event.clone()
         });
-        assert_eq!(activity.live.snapshot(), expected);
+        assert_eq!(
+            activity.live.snapshot(),
+            format!("Tools: shell ×1\n{expected}")
+        );
     }
     activity.observe(ActivityEvent {
         kind: ActivityKind::Skill,
@@ -358,7 +377,10 @@ fn compact_rows_hide_successful_output_and_flatten_multiline_commands() {
         status: ActivityStatus::Completed,
         ..event
     });
-    assert_eq!(activity.live.snapshot(), "✓ skill review\n");
+    assert_eq!(
+        activity.live.snapshot(),
+        "Skills: review ×1\nStatus: 1 succeeded · 0 failed · 0 running\n\n✓ skill review\n"
+    );
 }
 
 #[test]
@@ -374,5 +396,203 @@ fn compact_failures_skip_empty_lines_and_mark_only_omitted_output() {
         let mut text = String::new();
         ActivityState::append_failure_preview(&mut text, output);
         assert_eq!(text, expected);
+    }
+}
+
+#[test]
+fn rolling_activity_tracks_completion_order_and_bounds_parallel_rows() {
+    // Arrange
+    let mut activity = TurnActivity::default();
+    let event = activity_event();
+    assert_eq!(activity.live.snapshot(), "");
+
+    // Act
+    for index in 0..6 {
+        activity.observe(ActivityEvent {
+            id: index.to_string(),
+            input: Some(format!("command-{index}")),
+            ..event.clone()
+        });
+    }
+    let parallel = activity.live.snapshot();
+    for index in [3, 1, 5, 0] {
+        activity.observe(ActivityEvent {
+            id: index.to_string(),
+            input: Some(format!("command-{index}")),
+            status: ActivityStatus::Completed,
+            ..event.clone()
+        });
+    }
+    // A repeated terminal snapshot must not replace the last completed call.
+    activity.observe(ActivityEvent {
+        id: "5".into(),
+        status: ActivityStatus::Completed,
+        ..event.clone()
+    });
+    let rolling = activity.live.snapshot();
+    activity.observe(ActivityEvent {
+        id: "2".into(),
+        status: ActivityStatus::Failed,
+        output: Some("a retained failure".into()),
+        ..event.clone()
+    });
+    activity.observe(ActivityEvent {
+        id: "4".into(),
+        status: ActivityStatus::Completed,
+        ..event
+    });
+
+    // Assert
+    assert_eq!(parallel.matches("… shell").count(), 3);
+    assert!(parallel.ends_with("+3 more running\n"));
+    assert!(rolling.contains("Status: 4 succeeded · 0 failed · 2 running"));
+    assert!(rolling.contains("✓ shell · command-0\n… shell · command-2\n… shell · command-4"));
+    assert_eq!(rolling.matches("✓ shell").count(), 1);
+    let settled = activity.live.snapshot();
+    assert!(settled.contains("Status: 5 succeeded · 1 failed · 0 running"));
+    assert!(settled.contains("✗ shell\n  a retained failure\n✓ shell\n"));
+    assert!(
+        activity
+            .summary()
+            .ends_with("✗ shell\n  a retained failure\n")
+    );
+}
+
+#[test]
+fn rolling_activity_bounds_issues_by_transition_order_and_saves_failures() {
+    for final_status in [ActivityStatus::Failed, ActivityStatus::Interrupted] {
+        // Arrange
+        let mut activity = TurnActivity::default();
+        let event = activity_event();
+        for index in 0..4 {
+            activity.observe(ActivityEvent {
+                id: index.to_string(),
+                ..event.clone()
+            });
+        }
+
+        // Act: B, C, D settle first, then the earlier invocation A.
+        for index in [1, 2, 3, 0] {
+            activity.observe(ActivityEvent {
+                id: index.to_string(),
+                input: Some(format!("command-{index}")),
+                status: if index == 0 {
+                    final_status
+                } else {
+                    ActivityStatus::Failed
+                },
+                output: Some(format!("error-{index}")),
+                ..event.clone()
+            });
+        }
+        // A result preview update must not promote the older failure B.
+        activity.observe(ActivityEvent {
+            id: "1".into(),
+            input: Some("command-1".into()),
+            status: ActivityStatus::Failed,
+            output: Some("updated error-1".into()),
+            ..event
+        });
+        let live = activity.live.snapshot();
+        let summary = activity.summary();
+
+        // Assert
+        assert!(!live.contains("command-1"));
+        assert!(!live.contains("error-1"));
+        assert!(live.find("command-2") < live.find("command-3"));
+        assert!(live.find("command-3") < live.find("command-0"));
+        assert!(live.ends_with("+1 earlier failed or interrupted calls\n"));
+        assert!(summary.contains("updated error-1"));
+        if final_status == ActivityStatus::Failed {
+            assert_eq!(live.matches("✗ shell").count(), 3);
+            assert!(live.contains("error-0"));
+            assert_eq!(summary.matches("✗ shell").count(), 4);
+        } else {
+            assert!(live.contains("! shell (interrupted) · command-0"));
+            assert_eq!(summary.matches("✗ shell").count(), 3);
+        }
+    }
+}
+
+#[test]
+fn readable_inputs_extract_useful_fields_and_hide_payloads() {
+    // Arrange, Act, Assert
+    for (input, expected) in [
+        ("cargo\n test", Some("cargo test")),
+        ("true", Some("true")),
+        ("42", Some("42")),
+        (r#"{"file_path":"src/\u001bmain.rs"}"#, Some("src/main.rs")),
+        (
+            r#"{"command":"cargo test","description":"hidden"}"#,
+            Some("cargo test"),
+        ),
+        (r#"{"CommandLine":"pwd"}"#, Some("pwd")),
+        (
+            r#"{"file_path":"src/main.rs","content":"hidden"}"#,
+            Some("src/main.rs"),
+        ),
+        (r#"{"path":"README.md"}"#, Some("README.md")),
+        (r#"{"TargetFile":"src/main.rs"}"#, Some("src/main.rs")),
+        (r#"{"target_file":"src/main.rs"}"#, Some("src/main.rs")),
+        (r#"{"query":"search term"}"#, Some("search term")),
+        (r#"{"pattern":"fn main"}"#, Some("fn main")),
+        (r#""quoted input""#, Some("quoted input")),
+        (r#"{"content":"hidden"}"#, None),
+        (r#"{"file_path":"truncated"#, None),
+        (r#"[{"content":"hidden"}]"#, None),
+    ] {
+        assert_eq!(
+            ActivityState::input_preview(input, ActivityKind::Tool).as_deref(),
+            expected,
+            "{input}"
+        );
+    }
+}
+
+#[test]
+fn command_previews_preserve_shell_syntax_in_live_and_saved_rows() {
+    for (input, expected) in [
+        ("{ cargo fmt; cargo test; }", "{ cargo fmt; cargo test; }"),
+        (
+            "{\n cargo fmt;\n cargo test;\n}",
+            "{ cargo fmt; cargo test; }",
+        ),
+        (r#""cargo""#, r#""cargo""#),
+    ] {
+        // Arrange
+        let mut activity = TurnActivity::default();
+        let event = ActivityEvent {
+            input: Some(input.into()),
+            ..activity_event()
+        };
+
+        // Act
+        activity.observe(event.clone());
+        let running = activity.live.snapshot();
+        activity.observe(ActivityEvent {
+            status: ActivityStatus::Failed,
+            ..event
+        });
+
+        // Assert
+        assert!(running.contains(&format!("… shell · {expected}\n")));
+        let failure = format!("✗ shell · {expected}\n");
+        assert!(activity.live.snapshot().contains(&failure));
+        assert!(activity.summary().ends_with(&failure));
+    }
+}
+
+fn activity_event() -> ActivityEvent {
+    ActivityEvent {
+        attempt_id: "attempt".into(),
+        exit_code: None,
+        id: "call".into(),
+        input: None,
+        kind: ActivityKind::Command,
+        name: "shell".into(),
+        observed_at: SystemTime::UNIX_EPOCH,
+        output: None,
+        parent_id: None,
+        status: ActivityStatus::Running,
     }
 }

@@ -59,7 +59,7 @@ async fn assist_activity_follows_answer_or_failure_and_is_excluded_from_replay()
             result.expect("assistance should succeed");
             ("assistant_answer", "Recovered the session.")
         };
-        let summary = "Tools: Read ×2 (1 failed)\nSkills: recovery ×1";
+        let summary = "Tools: Read ×2 (1 failed)\nSkills: recovery ×1\n✗ Read";
         assert_eq!(messages.len(), 2);
         assert_eq!(messages[0].kind, kind);
         assert_eq!(messages[0].content, content);

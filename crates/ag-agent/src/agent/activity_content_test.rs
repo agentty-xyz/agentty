@@ -8,7 +8,10 @@ fn previews_extract_commands_text_blocks_and_structured_results() {
     for (value, expected) in [
         (json!({"command": "cargo test"}), "cargo test"),
         (json!({"CommandLine": "pwd"}), "pwd"),
-        (json!({"path": "README.md"}), r#"{"path":"README.md"}"#),
+        (json!({"file_path": "README.md"}), "README.md"),
+        (json!({"path": "README.md"}), "README.md"),
+        (json!({"TargetFile": "README.md"}), "README.md"),
+        (json!({"target_file": "README.md"}), "README.md"),
     ] {
         let details = ActivityDetails::new(Some(&value), Some(&json!("done")), Some(0));
         assert_eq!(details.input.as_deref(), Some(expected));
@@ -44,6 +47,11 @@ fn previews_bound_unicode_strip_controls_and_stop_growing() {
     assert_eq!(append_output(Some(&capped), "ignored"), capped);
     assert_eq!(append_output(None, &oversized), capped);
     assert_eq!(bounded(&"x".repeat(PREVIEW_LIMIT)).len(), PREVIEW_LIMIT);
+    let arguments = json!({"file_path": oversized, "content": "hidden"});
+    assert_eq!(
+        ActivityDetails::new(Some(&arguments), None, None).input,
+        Some(capped)
+    );
 }
 
 #[test]

@@ -499,20 +499,22 @@ completion and multiline editing.
 
 Provider failures show a short error and captured output where available.
 
-During a session turn, reported tool and skill invocations appear immediately in the
-output, in first-seen order. Each row updates as the call completes, fails, or is
-interrupted. Each compact row shows its status and an inline command or argument
-preview, shortened to fit the pane. Successful output stays hidden; failed calls show
-reported nonzero exit codes and up to two output lines. Codex, Claude, Gemini, and
-Antigravity supply these details where available. Live rows disappear when the turn
-ends. Skill names require explicit provider reporting.
+During a session turn, the output shows rolling tool and skill counts and totals for
+succeeded, failed, running, and interrupted calls. A compact block retains the latest
+successful call, up to three recent failed or interrupted calls, and up to three running
+calls, with counts for additional calls. Command previews and file paths replace raw
+argument JSON and shorten to fit the pane. Successful output stays hidden; failed calls
+show reported nonzero exit codes and up to two output lines. Codex, Claude, Gemini, and
+Antigravity supply these details where available. Skill names require explicit provider
+reporting.
 
 Responses from these providers, including commit and rebase recovery assistance, include
 a usage footer when tool activity was observed. `Tools` lists invocation counts and
 failed or interrupted calls; `Skills` lists explicit Claude skill invocations. Footers
 remain attached to their responses in saved history, including failed recovery attempts.
-Reading a skill file does not establish invocation. Providers without activity reporting
-and older saved responses have no footer. Detailed previews are not saved in footers.
+At turn completion, successful live rows collapse into the footer; failed call previews
+remain in saved history. Reading a skill file does not establish invocation. Providers
+without activity reporting and older saved responses have no footer.
 
 ## Session Sizes
 

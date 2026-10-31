@@ -4,7 +4,7 @@ use ratatui::layout::Rect;
 
 use super::super::{
     SessionOutput, SessionOutputLayout, SessionOutputLayoutCache, SessionOutputLineContext,
-    live_activity_lines,
+    activity_summary_lines, live_activity_lines,
 };
 use super::support::{line_context, output_lines, session_fixture, set_conversation_transcript};
 use crate::domain::session::Status;
@@ -13,7 +13,7 @@ use crate::domain::transient_message::{
     TransientMessage, TransientMessageAnchor, TransientMessageBody, TransientMessageLifecycle,
     TransientMessageSlot,
 };
-use crate::ui::{markdown, session_output_assembly};
+use crate::ui::{markdown, session_output_assembly, style};
 
 fn layout_text(layout: &SessionOutputLayout) -> String {
     layout
@@ -270,4 +270,22 @@ fn compact_activity_clips_to_terminal_width_without_wrapping_or_markdown() {
         live_activity_lines("", 80),
         Vec::<ratatui::text::Line<'_>>::new()
     );
+}
+
+#[test]
+fn activity_outcomes_use_semantic_colors_in_live_and_saved_rows() {
+    // Arrange, Act, Assert
+    for (text, color) in [
+        ("✗ shell", style::palette::danger()),
+        ("! shell (interrupted)", style::palette::warning()),
+        ("… shell", style::palette::info()),
+        ("✓ shell", style::palette::success()),
+        ("Tools: shell ×1", style::palette::text_muted()),
+    ] {
+        assert_eq!(live_activity_lines(text, 80)[0].style.fg, Some(color));
+        assert_eq!(
+            activity_summary_lines(text, 80)[0].spans[0].style.fg,
+            Some(color)
+        );
+    }
 }
