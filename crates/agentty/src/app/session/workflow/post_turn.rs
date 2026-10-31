@@ -854,7 +854,7 @@ async fn start_published_branch_auto_push(
     };
     let finishes_review_comments = !turn_metadata.review_comment_thread_ids.is_empty();
     let task_owned = policy == TurnEffectPolicy::Task;
-    if context.has_queued_messages() && !finishes_review_comments && !task_owned {
+    if context.has_queued_messages() && !task_owned {
         return Ok(());
     }
     let branch_operation_guard = tokio::select! {
@@ -870,6 +870,11 @@ async fn start_published_branch_auto_push(
                 "Task publication is blocked by another branch operation".to_string(),
             ));
         }
+        return Ok(());
+    }
+    // Messages can arrive while waiting for branch ownership or operation
+    // state.
+    if context.has_queued_messages() && !task_owned {
         return Ok(());
     }
 

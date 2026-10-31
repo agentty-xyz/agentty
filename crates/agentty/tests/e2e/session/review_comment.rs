@@ -2,12 +2,16 @@
 
 #[cfg(unix)]
 use std::os::unix::fs::PermissionsExt;
+use std::path::Path;
 use std::sync::{Arc, OnceLock};
+use std::time::Duration;
 
 use agentty::domain::session_message::SessionMessageKind;
 use testty::assertion;
 use testty::frame::TerminalFrame;
+use testty::proof::report::ProofReport;
 use testty::region::Region;
+use testty::scenario::Scenario;
 
 use super::fixture::{
     E2eResult, run_git, seed_review_ready_session_with_review_request, seed_sessions_startup_tab,
@@ -581,29 +585,36 @@ async fn test_review_comment_incomplete_outcomes() -> E2eResult {
     Ok(())
 }
 
-/// Queued review work keeps its selected thread and follows earlier chat.
-#[tokio::test]
-async fn review_comments_queue_behind_running_turn_and_chat() -> E2eResult {
-    // Arrange, Act, Assert
-    let slow_turn = ReleaseGate::new()?;
-    let review_turn = ReleaseGate::new()?;
-    let (setup_slow_turn, setup_review_turn) = (slow_turn.clone(), review_turn.clone());
-    FeatureTest::new("review_comments_queue")
-        .with_git()
-        .with_terminal_size(160, 60)
-        .setup(move |env| Box::pin(async move {
-            seed_review_comment_agent_resolution(env).await?;
-            let claude_path = env.stub_bin.join("claude");
-            let script = r#"#!/bin/sh
+/// Installs gated turns around one selected review-comment batch.
+async fn seed_queued_review_comment_turns(
+    env: &BuilderEnv,
+    slow_turn: &ReleaseGate,
+    review_turn: &ReleaseGate,
+    later_turn: &ReleaseGate,
+) -> E2eResult {
+    seed_review_comment_agent_resolution(env).await?;
+    seed_review_publication_spies(env).await?;
+    let claude_path = env.stub_bin.join("claude");
+    let script = r#"#!/bin/sh
 if [ "$1" = "update" ]; then exit 0; fi
 if [ "$1" = "--version" ]; then printf 'claude 0.0.0-test\n'; exit 0; fi
 prompt=$(cat)
+printf '%s\n' '{"type":"system","subtype":"init"}'
 case "$prompt" in
   *"For this utility request"*)
     answer='Helper response'
     response='{ \"answer\": \"Helper response\" }'
     ;;
+  *"Later queued edit"*)
+    printf '%s\n' 'later-edit-started' >> "$AGENTTY_TEST_REVIEW_EVENTS"
+    HOLD_LATER_TURN
+    printf 'fn main() { println!("queued edit"); }\n' > src/main.rs
+    answer='Later queued edit completed'
+    response='{ \"answer\": \"Later queued edit completed\", \"review_comment_outcomes\": [{ \"reply\": \"Explained the output after the queued edit\", \"resolution\": \"fixed\", \"thread_id\": \"thread-inline\" }] }'
+    printf '%s\n' 'later-edit-completed' >> "$AGENTTY_TEST_REVIEW_EVENTS"
+    ;;
   *"Evaluate the following selected forge review comments"*)
+    printf '%s\n' 'review-started' >> "$AGENTTY_TEST_REVIEW_EVENTS"
     HOLD_REVIEW_TURN
     answer='Queued review comment completed'
     response='{ \"answer\": \"Queued review comment completed\", \"review_comment_outcomes\": [{ \"reply\": \"Explained the output\", \"resolution\": \"fixed\", \"thread_id\": \"thread-inline\" }] }'
@@ -619,65 +630,246 @@ case "$prompt" in
     ;;
   *) answer='Helper response'; response='{ \"answer\": \"Helper response\" }' ;;
 esac
-printf '%s\n' '{"type":"system","subtype":"init"}'
 printf '{"type":"assistant","message":{"role":"assistant","content":[{"type":"text","text":"%s"}]}}\n' "$answer"
 printf '{"type":"result","subtype":"success","result":"%s","usage":{"input_tokens":5,"output_tokens":9}}\n' "$response"
 "#
-            .replace("HOLD_SLOW_TURN", &setup_slow_turn.shell_wait())
-            .replace("HOLD_REVIEW_TURN", &setup_review_turn.shell_wait());
-            std::fs::write(&claude_path, script)?;
-            #[cfg(unix)]
-            std::fs::set_permissions(&claude_path, std::fs::Permissions::from_mode(0o750))?;
-            Ok(())
-        }))
-        .run(move |scenario| scenario
-            .compose(&common::wait_for_agentty_startup())
-            .compose(&common::switch_to_tab("Sessions"))
-            .compose(&common::open_selected_session_view())
-            .press_key("Enter")
-            .wait_for_text("Type your message", 5000)
-            .write_text("Start slow review work")
-            .wait_for_text("Start slow review work", 3000)
-            .press_key("Enter")
-            .wait_for_text("Ctrl+c: stop", 5000)
-            .press_key("Enter")
-            .wait_for_text("Type your message", 5000)
-            .write_text("Earlier queued chat")
-            .wait_for_text("Earlier queued chat", 3000)
-            .press_key("Enter")
-            .wait_for_text("≡ queued › Earlier queued chat", 5000)
-            .press_key("c")
-            .wait_for_text("Space: select", 5000)
-            .press_key("Space")
-            .wait_for_text("Selected 1", 5000)
-            .press_key("Enter")
-            .wait_for_text("≡ resolve 1 review comment", 5000)
-            .capture_labeled("waiting_review_comments", "Review comments join the visible queue")
-            .compose(&slow_turn.release())
-            .wait_for_text("Earlier queued chat completed", 10000)
-            .wait_for_text("Resolving 1 review comment...", 5000)
-            .capture_labeled("running_review_comments", "Review comments start after earlier chat")
-            .compose(&review_turn.release())
-            .wait_for_text("Queued review comment completed", 10000)
-            .wait_for_text("Enter: reply", 10000),
-            |frame, report| Box::pin(async move {
-                let waiting = common::frame_from_capture(&report.captures[0]);
-                let full = Region::full(waiting.cols(), waiting.rows());
-                let waiting_text = waiting.text_in_region(&full);
-                assertion::assert_text_in_region(&waiting, "≡ queued › Earlier queued chat", &full);
-                assertion::assert_text_in_region(&waiting, "≡ resolve 1 review comment", &full);
-                assert!(waiting_text.find("≡ queued › Earlier queued chat") < waiting_text.find("≡ resolve 1 review comment"));
-                assertion::assert_not_visible(&waiting, "Resolving 1 review comment...");
-                let running = common::frame_from_capture(&report.captures[1]);
-                assertion::assert_not_visible(&running, "≡ resolve 1 review comment");
-                let full = Region::full(frame.cols(), frame.rows());
-                assertion::assert_text_in_region(frame, "Queued review comment completed", &full);
-                assertion::assert_not_visible(frame, "Resolving 1 review comment...");
-                assertion::assert_not_visible(frame, "≡ resolve 1 review comment");
-            }))
+        .replace("HOLD_SLOW_TURN", &slow_turn.shell_wait())
+        .replace("HOLD_REVIEW_TURN", &review_turn.shell_wait())
+        .replace("HOLD_LATER_TURN", &later_turn.shell_wait());
+    std::fs::write(&claude_path, script)?;
+    #[cfg(unix)]
+    std::fs::set_permissions(&claude_path, std::fs::Permissions::from_mode(0o750))?;
+
+    Ok(())
+}
+
+/// Enables publishing and records branch pushes plus thread mutations without
+/// contacting a live forge.
+async fn seed_review_publication_spies(env: &BuilderEnv) -> E2eResult {
+    common::open_database(env)
+        .await?
+        .sessions()
+        .update_session_published_upstream_ref(
+            "review-shortcut-0001",
+            Some("origin/wt/review-s".to_string()),
+        )
+        .await?;
+    let real_git = std::env::split_paths(&std::env::var_os("PATH").unwrap_or_default())
+        .map(|path| path.join("git"))
+        .find(|path| path.is_file())
+        .ok_or("git not found")?;
+    let git_script = r#"#!/bin/sh
+if [ "$1" = "push" ]; then
+  printf '%s\n' push >> "$AGENTTY_TEST_REVIEW_EVENTS"
+  printf '*\tHEAD:refs/heads/wt/review-s\t[new branch]\n'
+  REAL_GIT update-ref refs/remotes/origin/wt/review-s HEAD
+  exit 0
+fi
+if [ "$1" = "ls-remote" ]; then
+  published_hash=$(REAL_GIT rev-parse HEAD)
+  printf '%s\trefs/heads/main\n%s\trefs/heads/wt/review-s\n' "$published_hash" "$published_hash"
+  exit 0
+fi
+if [ "$1" = "fetch" ]; then exit 0; fi
+exec REAL_GIT "$@"
+"#
+    .replace(
+        "REAL_GIT",
+        &format!("'{}'", real_git.to_string_lossy().replace('\'', "'\"'\"'")),
+    );
+    let git_path = env.stub_bin.join("git");
+    std::fs::write(&git_path, git_script)?;
+    let gh_path = env.stub_bin.join("gh");
+    std::fs::rename(&gh_path, env.stub_bin.join("gh.fixture"))?;
+    std::fs::write(
+        &gh_path,
+        r#"#!/bin/sh
+case "$*" in
+  *"addPullRequestReviewThreadReply"*)
+    printf '%s\n' reply >> "$AGENTTY_TEST_REVIEW_EVENTS"
+    printf '%s\n' "$*" >> "${AGENTTY_TEST_REVIEW_EVENTS}.replies"
+    ;;
+  *"resolveReviewThread"*) printf '%s\n' resolve >> "$AGENTTY_TEST_REVIEW_EVENTS" ;;
+esac
+exec "${0}.fixture" "$@"
+"#,
+    )?;
+    #[cfg(unix)]
+    for path in [git_path, gh_path] {
+        std::fs::set_permissions(path, std::fs::Permissions::from_mode(0o750))?;
+    }
+
+    Ok(())
+}
+
+/// Queued review work keeps its selected thread across earlier and later chat.
+#[tokio::test]
+async fn review_comments_queue_behind_running_turn_and_chat() -> E2eResult {
+    // Arrange, Act, Assert
+    let slow_turn = ReleaseGate::new()?;
+    let review_turn = ReleaseGate::new()?;
+    let later_turn = ReleaseGate::new()?;
+    let events_directory = tempfile::tempdir()?;
+    let events_path = events_directory.path().join("events");
+    let waiting_events = events_path.clone();
+    let (setup_slow_turn, setup_review_turn) = (slow_turn.clone(), review_turn.clone());
+    let setup_later_turn = later_turn.clone();
+    FeatureTest::new("review_comments_queue")
+        .with_git()
+        .with_terminal_size(160, 60)
+        .env("AGENTTY_TEST_REVIEW_EVENTS", events_path.to_string_lossy())
+        .setup(move |env| {
+            Box::pin(async move {
+                seed_queued_review_comment_turns(
+                    env,
+                    &setup_slow_turn,
+                    &setup_review_turn,
+                    &setup_later_turn,
+                )
+                .await
+            })
+        })
+        .run(
+            move |scenario| {
+                start_queued_review_batch(scenario, &slow_turn)
+                    .press_key("Enter")
+                    .wait_for_text("Type your message", 5000)
+                    .write_text("Later queued edit")
+                    .wait_for_text("Later queued edit", 3000)
+                    .press_key("Enter")
+                    .wait_for_text("≡ queued › Later queued edit", 5000)
+                    .compose(&review_turn.release())
+                    .wait_for_text("Queued review comment completed", 10000)
+                    .eventually(
+                        Duration::from_secs(10),
+                        Duration::from_millis(20),
+                        move |frame| {
+                            let events = review_publication_events(&waiting_events)
+                                .expect("review event log");
+                            assert!(
+                                events.iter().all(|event| matches!(
+                                    event.as_str(),
+                                    "review-started" | "later-edit-started"
+                                )),
+                                "Publishing started before the queued edit finished: {events:?}"
+                            );
+                            if events
+                                .last()
+                                .is_some_and(|event| event == "later-edit-started")
+                            {
+                                return Ok(());
+                            }
+
+                            assertion::match_text_in_region(
+                                frame,
+                                "Later queued edit started",
+                                &Region::full(frame.cols(), frame.rows()),
+                            )
+                        },
+                    )
+                    .compose(&later_turn.release())
+                    .wait_for_text("Later queued edit completed", 10000)
+                    .wait_for_text(
+                        "Replied to 1 review thread(s) and resolved 1 fixed thread(s).",
+                        10000,
+                    )
+                    .wait_for_text("Enter: reply", 10000)
+            },
+            move |frame, report| {
+                Box::pin(async move {
+                    assert_queued_review_frames(frame, report);
+                    assert_eq!(
+                        review_publication_events(&events_path).expect("review event log"),
+                        [
+                            "review-started",
+                            "later-edit-started",
+                            "later-edit-completed",
+                            "push",
+                            "reply",
+                            "resolve"
+                        ]
+                    );
+                    let replies = std::fs::read_to_string(events_path.with_extension("replies"))
+                        .expect("recorded review replies");
+                    assert!(replies.contains("Explained the output after the queued edit"));
+                })
+            },
+        )
         .await?;
 
     Ok(())
+}
+
+/// Starts selected review work after an active turn and an earlier queued chat.
+fn start_queued_review_batch(scenario: Scenario, slow_turn: &ReleaseGate) -> Scenario {
+    scenario
+        .compose(&common::wait_for_agentty_startup())
+        .compose(&common::switch_to_tab("Sessions"))
+        .compose(&common::open_selected_session_view())
+        .press_key("Enter")
+        .wait_for_text("Type your message", 5000)
+        .write_text("Start slow review work")
+        .wait_for_text("Start slow review work", 3000)
+        .press_key("Enter")
+        .wait_for_text("Ctrl+c: stop", 5000)
+        .press_key("Enter")
+        .wait_for_text("Type your message", 5000)
+        .write_text("Earlier queued chat")
+        .wait_for_text("Earlier queued chat", 3000)
+        .press_key("Enter")
+        .wait_for_text("≡ queued › Earlier queued chat", 5000)
+        .press_key("c")
+        .wait_for_text("Space: select", 5000)
+        .press_key("Space")
+        .wait_for_text("Selected 1", 5000)
+        .press_key("Enter")
+        .wait_for_text("≡ resolve 1 review comment", 5000)
+        .capture_labeled(
+            "waiting_review_comments",
+            "Review comments join the visible queue",
+        )
+        .compose(&slow_turn.release())
+        .wait_for_text("Earlier queued chat completed", 10000)
+        .wait_for_text("Resolving 1 review comment...", 5000)
+        .capture_labeled(
+            "running_review_comments",
+            "Review comments start after earlier chat",
+        )
+}
+
+/// Returns calls made since the selected review turn began; earlier chat may
+/// independently publish before the batch starts.
+fn review_publication_events(path: &Path) -> std::io::Result<Vec<String>> {
+    let events = std::fs::read_to_string(path)?;
+
+    Ok(events
+        .lines()
+        .skip_while(|event| *event != "review-started")
+        .map(str::to_string)
+        .collect())
+}
+
+/// Checks the visible queue and completed answers independently of the call
+/// log.
+fn assert_queued_review_frames(frame: &TerminalFrame, report: &ProofReport) {
+    let waiting = common::frame_from_capture(&report.captures[0]);
+    let full = Region::full(waiting.cols(), waiting.rows());
+    let waiting_text = waiting.text_in_region(&full);
+    assertion::assert_text_in_region(&waiting, "≡ queued › Earlier queued chat", &full);
+    assertion::assert_text_in_region(&waiting, "≡ resolve 1 review comment", &full);
+    assert!(
+        waiting_text.find("≡ queued › Earlier queued chat")
+            < waiting_text.find("≡ resolve 1 review comment")
+    );
+    assertion::assert_not_visible(&waiting, "Resolving 1 review comment...");
+    let running = common::frame_from_capture(&report.captures[1]);
+    assertion::assert_not_visible(&running, "≡ resolve 1 review comment");
+    let full = Region::full(frame.cols(), frame.rows());
+    assertion::assert_text_in_region(frame, "Queued review comment completed", &full);
+    assertion::assert_text_in_region(frame, "Later queued edit completed", &full);
+    assertion::assert_not_visible(frame, "≡ queued › Later queued edit");
+    assertion::assert_not_visible(frame, "Resolving 1 review comment...");
+    assertion::assert_not_visible(frame, "≡ resolve 1 review comment");
 }
 
 /// A review submitted to an idle question session waits for its explicit

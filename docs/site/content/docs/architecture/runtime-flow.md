@@ -480,8 +480,9 @@ worktree changes to fit a prompt.
 Review-comment targets persist before execution and are scoped to the linked open review
 request. Clarification answers and subsequent turns restore unfinished targets and
 re-evaluate prior outcomes. Complete outcome batches persist with the answer and bind to
-the successful fix commit. Review turns await post-push thread updates before the worker
-runs queued edits. Automatic and manual pushes share the same handler; a changed tip
+the successful fix commit. Queued chat defers automatic publishing, including after
+review turns; follow-ups re-evaluate pending targets before the final turn pushes and
+awaits thread updates. Automatic and manual pushes share the same handler; a changed tip
 retains the batch for re-evaluation. Durable posting markers permit retries without
 duplicate replies. Only `fixed` threads resolve, while `no_change_needed` receives a
 reply and remains open.
