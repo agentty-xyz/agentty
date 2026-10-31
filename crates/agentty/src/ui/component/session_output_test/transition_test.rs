@@ -58,7 +58,7 @@ fn test_indicator_area_skips_line_outside_viewport() {
 }
 
 #[test]
-fn test_visible_paint_lines_skip_rows_outside_viewport() {
+fn test_visible_lines_skip_rows_outside_viewport() {
     // Arrange
     let cached_lines = SessionOutputLayoutLines {
         body: Arc::from([
@@ -74,7 +74,7 @@ fn test_visible_paint_lines_skip_rows_outside_viewport() {
     };
 
     // Act
-    let paint_lines = SessionOutput::visible_paint_lines(Rect::new(0, 0, 30, 4), &cached_lines, 1);
+    let paint_lines = cached_lines.visible_lines(1, 3).collect::<Vec<_>>();
     let rendered_text = paint_lines
         .iter()
         .map(ToString::to_string)
@@ -89,6 +89,10 @@ fn test_visible_paint_lines_skip_rows_outside_viewport() {
             "visible bottom row"
         ]
     );
+    assert!(std::ptr::eq(
+        paint_lines[0],
+        &raw const cached_lines.body[1]
+    ));
 }
 
 #[test]
@@ -102,12 +106,12 @@ fn test_visible_rows_cross_shared_body_and_tail_without_copying_hidden_rows() {
     };
 
     // Act
-    let crossing = lines.paint_lines(1, 2);
-    let tail_only = lines.paint_lines(2, 8);
-    let past_end = lines.paint_lines(10, 2);
-    let zero_height = lines.paint_lines(0, 0);
-    let queue_crossing = lines.paint_lines(3, 2);
-    let queue_only = lines.paint_lines(4, 1);
+    let crossing = lines.visible_lines(1, 2).collect::<Vec<_>>();
+    let tail_only = lines.visible_lines(2, 8).collect::<Vec<_>>();
+    let past_end = lines.visible_lines(10, 2).collect::<Vec<_>>();
+    let zero_height = lines.visible_lines(0, 0).collect::<Vec<_>>();
+    let queue_crossing = lines.visible_lines(3, 2).collect::<Vec<_>>();
+    let queue_only = lines.visible_lines(4, 1).collect::<Vec<_>>();
 
     // Assert
     assert_eq!(
@@ -129,6 +133,8 @@ fn test_visible_rows_cross_shared_body_and_tail_without_copying_hidden_rows() {
         ["done", "queued first"]
     );
     assert_eq!(queue_only[0].to_string(), "queued first");
-    assert_eq!(past_end, Vec::<Line<'_>>::new());
-    assert_eq!(zero_height, Vec::<Line<'_>>::new());
+    assert_eq!(past_end, Vec::<&Line<'_>>::new());
+    assert_eq!(zero_height, Vec::<&Line<'_>>::new());
+    assert!(std::ptr::eq(crossing[1], &raw const lines.tail[0]));
+    assert!(std::ptr::eq(queue_only[0], &raw const lines.queued[0]));
 }

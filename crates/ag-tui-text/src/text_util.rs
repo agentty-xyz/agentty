@@ -1,8 +1,10 @@
 use std::borrow::Cow;
 use std::fmt::Write as _;
 
+use ratatui::buffer::{Buffer, CellWidth};
+use ratatui::layout::{Alignment, Rect};
 use ratatui::style::Style;
-use ratatui::text::{Line, Span};
+use ratatui::text::{Line, Span, StyledGrapheme};
 use unicode_width::UnicodeWidthChar;
 
 struct StyledWord {
@@ -293,6 +295,59 @@ fn push_styled_character(spans: &mut Vec<Span<'static>>, style: Style, character
 /// `Line<'static>` entries.
 pub fn borrowed_paint_lines<'line>(lines: &'line [Line<'static>]) -> Vec<Line<'line>> {
     lines.iter().map(borrowed_paint_line).collect()
+}
+
+/// Paints one already-wrapped row directly from its cached spans.
+///
+/// Matches an unwrapped, unscrolled `Paragraph` row, including its clipping,
+/// alignment and style inheritance, without allocating temporary lines, spans
+/// or grapheme vectors. Only the first row of `area` is painted.
+pub fn paint_line(line: &Line<'_>, area: Rect, buffer: &mut Buffer) {
+    let area = area.intersection(buffer.area);
+    if area.is_empty() {
+        return;
+    }
+
+    let alignment = line.alignment.unwrap_or(Alignment::Left);
+    let offset = match alignment {
+        Alignment::Left => 0,
+        Alignment::Center | Alignment::Right => {
+            let width: u16 = clipped_graphemes(line, area.width)
+                .map(|(_, width)| width)
+                .sum();
+
+            match alignment {
+                Alignment::Center => (area.width / 2).saturating_sub(width / 2),
+                _ => area.width.saturating_sub(width),
+            }
+        }
+    };
+    let mut column = area.x + offset;
+    for (grapheme, width) in clipped_graphemes(line, area.width) {
+        buffer[(column, area.y)]
+            .set_symbol(grapheme.symbol)
+            .set_style(grapheme.style);
+        column += width;
+    }
+}
+
+/// Streams the same visible graphemes as an unwrapped paragraph row.
+fn clipped_graphemes<'line>(
+    line: &'line Line<'_>,
+    max_width: u16,
+) -> impl Iterator<Item = (StyledGrapheme<'line>, u16)> {
+    line.styled_graphemes(Style::default())
+        .map(|grapheme| {
+            let width = grapheme.symbol.cell_width();
+
+            (grapheme, width)
+        })
+        .filter(move |(_, width)| *width > 0 && *width <= max_width)
+        .scan(max_width, |remaining, (grapheme, width)| {
+            *remaining = remaining.checked_sub(width)?;
+
+            Some((grapheme, width))
+        })
 }
 
 /// Builds one short-lived paint line that borrows span text from a cached

@@ -833,6 +833,75 @@ async fn session_active_loader_uses_tachyonfx_glyph() -> E2eResult {
     Ok(())
 }
 
+/// Verify navigation across hundreds of styled messages in a single session.
+#[tokio::test]
+async fn session_long_transcript_scrolls() -> E2eResult {
+    // Arrange, Act, Assert
+    FeatureTest::new("session_long_transcript_scrolls")
+        .with_terminal_size(80, 20)
+        .setup(|env| {
+            Box::pin(async move {
+                seed_session_with_scrollable_output(env).await?;
+                let database = common::open_database(env).await?;
+                for index in 0..256 {
+                    database
+                        .sessions()
+                        .append_session_message(
+                            "scroll-output-0001",
+                            SessionMessageKind::AssistantAnswer,
+                            &format!(
+                                "## Message {index:04}\n\n**Styled** output with `code` and \
+                                 界.\n\nMore transcript content."
+                            ),
+                        )
+                        .await?;
+                }
+
+                Ok(())
+            })
+        })
+        .run(
+            |scenario| {
+                scenario
+                    .compose(&common::wait_for_agentty_startup())
+                    .compose(&common::switch_to_tab("Sessions"))
+                    .press_key("Enter")
+                    .wait_for_text("Message 0255", 5000)
+                    .press_key("g")
+                    .wait_for_text("Transcript line 00", 5000)
+                    .capture_labeled("oldest", "Oldest rows of a long transcript")
+                    .press_key("Ctrl+d")
+                    .wait_for_stable_frame(300, 5000)
+                    .capture_labeled("page_down", "Half-page scroll through cached rows")
+                    .write_text("G")
+                    .wait_for_text("Message 0255", 5000)
+                    .capture_labeled("newest", "Return to the newest styled rows")
+            },
+            |frame, report| {
+                Box::pin(async move {
+                    let oldest = common::frame_from_capture(&report.captures[0]);
+                    let page_down = common::frame_from_capture(&report.captures[1]);
+                    let oldest_region = Region::full(oldest.cols(), oldest.rows());
+                    assertion::assert_text_in_region(&oldest, "Transcript line 00", &oldest_region);
+                    assertion::assert_not_visible(&page_down, "Transcript line 00");
+                    assertion::assert_text_in_region(
+                        frame,
+                        "Message 0255",
+                        &Region::full(frame.cols(), frame.rows()),
+                    );
+                    assertion::assert_text_in_region(
+                        frame,
+                        "Styled output with code and 界.",
+                        &Region::full(frame.cols(), frame.rows()),
+                    );
+                })
+            },
+        )
+        .await?;
+
+    Ok(())
+}
+
 /// Verify that overflowing session output shows a scrollbar in the panel's
 /// rightmost column and returning to the list clears the chat page.
 #[tokio::test]
