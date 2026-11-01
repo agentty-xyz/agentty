@@ -13,6 +13,9 @@ use ag_worker::{GraphAdmission, GraphDispatch};
 use crate::execution_graph::SqliteGraphRepository;
 use crate::{Database, GraphEvidence, TaskAgentTurnMetadata};
 
+#[path = "task_chain_concurrency_test.rs"]
+mod concurrency;
+
 fn chain_graph(chain_id: &str) -> ExecutionGraph {
     StartPlanThenImplementRequest {
         agent: AgentSelection::new(AgentKind::Codex, AgentModel::Gpt61Sol),

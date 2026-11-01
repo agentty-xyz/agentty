@@ -1,19 +1,25 @@
+use std::collections::BTreeMap;
 use std::num::NonZeroUsize;
+use std::path::Path;
 use std::sync::Arc;
 use std::time::Duration;
 
 use ag_contracts::{OneShotError, OneShotRequest, OneShotSubmission, SessionStats};
 use ag_protocol::{AgentResponse, TurnPrompt};
 use ag_session::{
-    GraphExecutionRef, ReplyToTaskChainRequest, SessionError, SessionId, SessionMessageKind,
-    SessionService, StartPlanThenImplementRequest, TaskAgentRole, TaskChain, TaskChainPhase,
-    TaskChainReplyOutcome,
+    AcceptTaskChainPlanRequest, ExecutionGraph, GraphControlRequest, GraphExecutionRef,
+    ReplyToTaskChainRequest, ResumeExecutionGraphRequest, SessionError, SessionId,
+    SessionMessageKind, SessionService, StartPlanThenImplementRequest, TaskAgentRole, TaskChain,
+    TaskChainPhase, TaskChainReplyOutcome,
 };
-use ag_store::{MockGraphRepository, TaskChainReplyRecord};
+use ag_store::{GraphEvidence, MockGraphRepository, TaskAgentTurnMetadata, TaskChainReplyRecord};
 use ag_worker::test_support::{AppServerError, AppServerTurnResponse, MockAppServerClient};
-use ag_worker::{HeartbeatClock, MockRunClient, RunClient, RunWorker, RuntimeConfig};
+use ag_worker::{
+    GraphAdmission, HeartbeatClock, MockRunClient, RunClient, RunWorker, RuntimeConfig,
+};
 use async_trait::async_trait;
 use tokio_util::sync::CancellationToken;
+use uuid::Uuid;
 
 use crate::app::App;
 use crate::app::command_gateway::{TaskChainReplyAction, TaskChainReplyCommand};
@@ -29,6 +35,81 @@ const REJECT_REPLY: &str = "CREATE TRIGGER reject_insert BEFORE INSERT ON execut
 const REJECT_CONTINUATION: &str = "CREATE TRIGGER reject_insert BEFORE INSERT ON \
                                    execution_graph_continuation BEGIN SELECT RAISE(ABORT, \
                                    'continuation unavailable'); END";
+
+#[tokio::test]
+async fn restored_approval_receipts_leave_unclaimed_implementation_for_explicit_resume() {
+    for recorded_reply in [false, true] {
+        // Arrange: restore accepted state without a live driver or Implementer
+        // claim, as after a restart between acceptance and admission.
+        let mut fixture = ChainFixture::new().await;
+        let db = fixture.app.services.db().clone();
+        let (graph, attempt_id) = accepted_without_dispatch(&fixture).await;
+        let before = fixture.persisted_transcript().await;
+
+        // Act: both kinds of approval redelivery are receipts.
+        if recorded_reply {
+            assert_eq!(
+                reply(&mut fixture, "approval", "Go ahead").await,
+                Ok(TaskChainReplyOutcome::PlanAccepted)
+            );
+        } else {
+            assert!(
+                !fixture
+                    .app
+                    .accept_api_task_chain_plan(
+                        &graph.id,
+                        AcceptTaskChainPlanRequest {
+                            plan_attempt_id: attempt_id
+                        }
+                    )
+                    .await
+                    .expect("acceptance receipt")
+            );
+        }
+
+        // Assert: no dispatch or transcript mutation occurs on redelivery.
+        assert!(
+            fixture
+                .app
+                .services
+                .graph_drivers
+                .lock()
+                .expect("drivers")
+                .is_empty()
+        );
+        assert_eq!(fixture.persisted_transcript().await, before);
+        assert_eq!(
+            db.graphs()
+                .list_executions(&graph.id, graph.revision)
+                .await
+                .expect("executions")
+                .len(),
+            1
+        );
+        assert!(fixture.snapshot().await.current_execution.is_none());
+
+        // Act: explicit resume dispatches the previously unclaimed Implementer.
+        let implementation = fixture.register_turn("Implemented", false);
+        fixture
+            .app
+            .drive_session_request(fixture.service.resume_execution_graph(
+                ResumeExecutionGraphRequest {
+                    graph: GraphControlRequest {
+                        graph_id: graph.id,
+                        revision: graph.revision,
+                    },
+                    provider_call_limits: BTreeMap::new(),
+                },
+            ))
+            .await
+            .expect("explicit resume");
+        fixture.settle(&implementation).await;
+
+        // Assert
+        assert!(implementation.prompt().contains("Exact plan"));
+        assert_eq!(fixture.snapshot().await.phase, TaskChainPhase::Succeeded);
+    }
+}
 
 #[tokio::test]
 async fn clear_approval_accepts_the_plan_once_and_later_replies_reach_the_implementer() {
@@ -937,6 +1018,102 @@ impl RunClient for GatedDecision {
             stats: SessionStats::default(),
         })
     }
+}
+
+/// Seeds the state restored after acceptance but before Implementer admission.
+async fn accepted_without_dispatch(fixture: &ChainFixture) -> (ExecutionGraph, String) {
+    let db = fixture.app.services.db();
+    let graph = launch_request().graph(&fixture.session_id, None);
+    db.graphs()
+        .start_task_chain(&graph, "Implement a scoped change")
+        .await
+        .expect("saved workflow");
+    let admission = db
+        .graph_dispatch()
+        .claim(
+            &graph.id,
+            graph.revision,
+            "planner",
+            &Uuid::new_v4().to_string(),
+            Path::new("workspace"),
+        )
+        .await
+        .expect("planner claim");
+    let planner = match admission {
+        GraphAdmission::Claimed(planner) => Some(planner),
+        _ => None,
+    }
+    .expect("expected planner claim");
+    let (operation_id, attempt_id) = match &planner.record.execution {
+        GraphExecutionRef::TaskAttempt {
+            operation_id,
+            attempt_id,
+            ..
+        } => Some((operation_id, attempt_id)),
+        GraphExecutionRef::UtilityRun { .. } => None,
+    }
+    .expect("expected task attempt");
+    let body = r#"{"answer":"Exact plan"}"#;
+    db.operations()
+        .mark_session_operation_running(operation_id)
+        .await
+        .expect("running planner");
+    db.graphs()
+        .record_task_turn(
+            &planner,
+            &TaskAgentTurnMetadata {
+                assistant_message: body.into(),
+                harness_turn_report: None,
+                instruction_conversation_id: None,
+                input_tokens: 1,
+                output_tokens: 1,
+                provider_conversation_id: None,
+            },
+        )
+        .await
+        .expect("planner response");
+    db.operations()
+        .mark_session_operation_done(operation_id)
+        .await
+        .expect("planner done");
+    db.graph_dispatch()
+        .finish(&planner, body)
+        .await
+        .expect("plan result");
+    db.graphs()
+        .record_task_chain_reply(
+            &graph.id,
+            "approval",
+            &TurnPrompt::from_text("Go ahead".into()),
+            &planner.record.execution,
+        )
+        .await
+        .expect("record approval");
+    db.graphs()
+        .decide_task_chain_reply("approval", TaskChainReplyOutcome::PlanAccepted, None)
+        .await
+        .expect("approval decision");
+    let result = db
+        .graphs()
+        .list_results(&graph.id, "planner", "plan")
+        .await
+        .expect("results")
+        .pop()
+        .expect("plan")
+        .result
+        .reference;
+    db.graphs()
+        .accept_result(
+            &result,
+            &GraphEvidence {
+                actor: "user".into(),
+                reason: "Go ahead".into(),
+            },
+        )
+        .await
+        .expect("persisted acceptance");
+
+    (graph, attempt_id.clone())
 }
 
 /// Starts the fixture workflow and settles its Planner on `Exact plan`.

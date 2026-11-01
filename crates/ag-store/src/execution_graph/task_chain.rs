@@ -51,7 +51,7 @@ impl SqliteGraphRepository {
             return Err(Self::invalid("Graph is not a task chain"));
         }
         let now = self.timestamp_source.now_timestamp_seconds();
-        let mut transaction = self.pool.begin().await?;
+        let mut transaction = self.pool.begin_with("BEGIN IMMEDIATE").await?;
         if Self::graph(&mut transaction, &graph.id, None)
             .await?
             .is_none()
@@ -241,7 +241,7 @@ impl SqliteGraphRepository {
             ));
         };
         let now = self.timestamp_source.now_timestamp_seconds();
-        let mut transaction = self.pool.begin().await?;
+        let mut transaction = self.pool.begin_with("BEGIN IMMEDIATE").await?;
         if Self::execution(&mut transaction, execution)
             .await?
             .is_none()
