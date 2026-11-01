@@ -467,84 +467,98 @@ async fn test_unfinished_rebase_check_fails_closed_when_operation_query_fails() 
 }
 
 #[tokio::test]
-async fn test_auto_push_rechecks_queued_rebase_after_waiting_for_branch_lock() {
-    // Arrange
-    let db = AppRepositories::in_memory().await.expect("db should open");
-    let project_id = db
-        .projects()
-        .upsert_project("/tmp/project", Some("main".to_string()))
-        .await
-        .expect("failed to upsert project");
-    db.sessions()
-        .insert_session(
-            "session-id",
-            "gemini-3.8-flash",
-            "main",
-            "InProgress",
-            project_id,
-        )
-        .await
-        .expect("failed to insert session");
-    let branch_operation_lock = Arc::new(tokio::sync::Mutex::new(()));
-    let enqueue_guard = Arc::clone(&branch_operation_lock).lock_owned().await;
-    let (app_event_tx, mut app_event_rx) = mpsc::unbounded_channel();
-    let mut mock_git_client = MockGitClient::new();
-    mock_git_client
-        .expect_push_current_branch_to_remote_branch_with_outcome()
-        .never();
-    let context = Arc::new(PostTurnContext {
-        app_event_tx,
-        available_agent_kinds: Arc::from(AgentKind::ALL),
-        harness_models: HarnessModels::default(),
-        branch_operation_lock,
-        cancel_token: CancellationToken::new(),
-        child_pid: Arc::new(Mutex::new(None)),
-        clock: Arc::new(crate::infra::clock::RealClock),
-        db: db.clone(),
-        folder: PathBuf::new(),
-        git_client: Arc::new(mock_git_client),
-        run_client: Arc::new(MockRunClient::new()),
-        queued_messages: Arc::new(Mutex::new(VecDeque::new())),
-        review_request_client: Arc::new(forge::MockReviewRequestClient::new()),
-        session_update_versions: Arc::default(),
-        session_id: "session-id".into(),
-        transcript: Arc::new(Mutex::new(SessionTranscript::default())),
-    });
-    let auto_push_task = {
-        let context = Arc::clone(&context);
-
-        tokio::spawn(async move {
-            start_published_branch_auto_push(
-                &context,
-                TurnMetadata {
-                    published_upstream_ref: Some("origin/wt/session-id".to_string()),
-                    review_comment_thread_ids: Vec::new(),
-                    session_agent: AgentSelection::new(
-                        AgentKind::Antigravity,
-                        AgentModel::Gemini38Flash,
-                    ),
-                },
-                None,
-                TurnEffectPolicy::Ordinary,
+async fn test_auto_push_rechecks_queued_work_after_waiting_for_branch_lock() {
+    for queued_chat in [false, true] {
+        // Arrange
+        let db = AppRepositories::in_memory().await.expect("db should open");
+        let project_id = db
+            .projects()
+            .upsert_project("/tmp/project", Some("main".to_string()))
+            .await
+            .expect("failed to upsert project");
+        db.sessions()
+            .insert_session(
+                "session-id",
+                "gemini-3.8-flash",
+                "main",
+                "InProgress",
+                project_id,
             )
             .await
-            .expect("queued sync should suppress auto-push");
-        })
-    };
-    db.operations()
-        .insert_session_operation("queued-sync", "session-id", "rebase")
-        .await
-        .expect("failed to insert queued sync");
+            .expect("failed to insert session");
+        let branch_operation_lock = Arc::new(tokio::sync::Mutex::new(()));
+        let enqueue_guard = Arc::clone(&branch_operation_lock).lock_owned().await;
+        let (app_event_tx, mut app_event_rx) = mpsc::unbounded_channel();
+        let mut mock_git_client = MockGitClient::new();
+        mock_git_client
+            .expect_push_current_branch_to_remote_branch_with_outcome()
+            .never();
+        let context = Arc::new(PostTurnContext {
+            app_event_tx,
+            available_agent_kinds: Arc::from(AgentKind::ALL),
+            harness_models: HarnessModels::default(),
+            branch_operation_lock,
+            cancel_token: CancellationToken::new(),
+            child_pid: Arc::new(Mutex::new(None)),
+            clock: Arc::new(crate::infra::clock::RealClock),
+            db: db.clone(),
+            folder: PathBuf::new(),
+            git_client: Arc::new(mock_git_client),
+            run_client: Arc::new(MockRunClient::new()),
+            queued_messages: Arc::new(Mutex::new(VecDeque::new())),
+            review_request_client: Arc::new(forge::MockReviewRequestClient::new()),
+            session_update_versions: Arc::default(),
+            session_id: "session-id".into(),
+            transcript: Arc::new(Mutex::new(SessionTranscript::default())),
+        });
+        let auto_push = start_published_branch_auto_push(
+            &context,
+            TurnMetadata {
+                published_upstream_ref: Some("origin/wt/session-id".to_string()),
+                review_comment_thread_ids: vec!["thread-42".to_string()],
+                session_agent: AgentSelection::new(
+                    AgentKind::Antigravity,
+                    AgentModel::Gemini38Flash,
+                ),
+            },
+            None,
+            TurnEffectPolicy::Ordinary,
+        );
+        tokio::pin!(auto_push);
+        let waiting = tokio::select! {
+            biased;
+            _ = &mut auto_push => false,
+            () = std::future::ready(()) => true,
+        };
+        assert!(waiting, "publishing must wait for the branch lock");
+        if queued_chat {
+            context
+                .queued_messages
+                .lock()
+                .expect("queue")
+                .push_back(QueuedMessage::new(
+                    1,
+                    TurnPrompt::from_text("Finish this before pushing".to_string()),
+                ));
+        } else {
+            db.operations()
+                .insert_session_operation("queued-sync", "session-id", "rebase")
+                .await
+                .expect("failed to insert queued sync");
+        }
 
-    // Act
-    drop(enqueue_guard);
-    auto_push_task.await.expect("auto-push task should join");
+        // Act
+        drop(enqueue_guard);
+        auto_push
+            .await
+            .expect("queued work should suppress publishing");
 
-    // Assert
-    assert!(
-        app_event_rx.try_recv().is_err(),
-        "the queued sync should retain publish ownership"
-    );
+        // Assert
+        assert!(
+            app_event_rx.try_recv().is_err(),
+            "queued work should retain publish ownership"
+        );
+    }
 }
 
 #[tokio::test]

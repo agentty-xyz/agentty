@@ -432,14 +432,15 @@ Threads needing no change receive an explanation and stay open. An `addressed` t
 becomes actionable again when a reviewer follows up.
 
 `[Review Comments Warning]` reports failures. Failed or incomplete batches remain
-pending for the next session turn. Review turns finish their push and thread updates
-before queued edits begin. Automatic and manual pushes retry saved replies when the fix
-commit still matches the branch tip. If the branch has changed, continue the session to
-re-evaluate the pending comments before resolving them. Interrupted replies can resume
-without duplicating a reply already posted, including when a later automatic commit
-fails. Stopping a review turn also stops its pending push and thread updates; unfinished
-updates remain available for retry. A follow-up waiting for an earlier push can be
-stopped without waiting for that push to finish.
+pending for the next session turn. Queued messages finish before the automatic push and
+thread updates; each follow-up re-evaluates pending review targets against its changes.
+Automatic and manual pushes retry saved replies when the fix commit still matches the
+branch tip. If the branch has changed, continue the session to re-evaluate the pending
+comments before resolving them. Interrupted replies can resume without duplicating a
+reply already posted, including when a later automatic commit fails. Stopping a review
+turn also stops its pending push and thread updates; unfinished updates remain available
+for retry. A follow-up waiting for an earlier push can be stopped without waiting for
+that push to finish.
 
 <a id="usage-review-request-prerequisites"></a> Publishing requires both Git credentials
 and an authenticated forge CLI: `gh` for GitHub or `glab` for GitLab. See
