@@ -112,7 +112,7 @@ impl App {
 
     /// Accepts the exact latest validated plan and releases the Implementer
     /// gate. Returns whether this call recorded the acceptance; repeating the
-    /// same acceptance is a receipt.
+    /// same acceptance is a receipt and never resumes dispatch.
     pub(super) async fn accept_api_task_chain_plan(
         &mut self,
         chain_id: &str,
@@ -125,7 +125,6 @@ impl App {
                     "Workflow already accepted a different plan version".into(),
                 ));
             }
-            self.ensure_task_chain_driver(chain_id).await?;
 
             return Ok(false);
         }
