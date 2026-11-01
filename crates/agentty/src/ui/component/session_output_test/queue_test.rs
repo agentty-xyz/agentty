@@ -162,6 +162,7 @@ fn test_render_animates_transient_loader_and_queued_indicator() {
     // Arrange
     let mut session = session_fixture();
     session.status = Status::Review;
+    set_assistant_transcript(&mut session, &"Earlier transcript output\n".repeat(20));
     session.transient_messages.upsert(TransientMessage {
         anchor: TransientMessageAnchor::Tail,
         body: TransientMessageBody::Loading("Publishing review request...".to_string()),
@@ -208,6 +209,36 @@ fn test_render_animates_transient_loader_and_queued_indicator() {
     assert!(buffer.content().iter().any(|cell| {
         cell.symbol() == tachyon_cell_symbol && cell.fg == style::palette::warning()
     }));
+
+    // Act: scroll both indicators below the viewport, then advance animation.
+    terminal
+        .draw(|frame| {
+            SessionOutput::new(&session)
+                .scroll_offset(0)
+                .spinner_frame(0)
+                .render(frame, frame.area());
+        })
+        .expect("failed to draw earlier output");
+    let earlier_buffer = terminal.backend().buffer().clone();
+    terminal
+        .draw(|frame| {
+            SessionOutput::new(&session)
+                .scroll_offset(0)
+                .spinner_frame(5)
+                .render(frame, frame.area());
+        })
+        .expect("failed to advance offscreen indicators");
+
+    // Assert: hidden indicators do not animate visible transcript cells.
+    let earlier_text = earlier_buffer
+        .content()
+        .iter()
+        .map(ratatui::buffer::Cell::symbol)
+        .collect::<String>();
+    assert!(earlier_text.contains("Earlier transcript output"));
+    assert!(!earlier_text.contains(Icon::QueuedAction.as_str()));
+    assert!(!earlier_text.contains(&tachyon_cell_symbol));
+    assert_eq!(terminal.backend().buffer(), &earlier_buffer);
 }
 
 /// Verifies queued follow-up messages render after the active turn.

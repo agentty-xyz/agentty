@@ -1,10 +1,60 @@
+use ratatui::buffer::Buffer;
+use ratatui::layout::{Alignment, Rect};
 use ratatui::style::{Color, Modifier, Style};
-use ratatui::text::Span;
+use ratatui::text::{Line, Span};
+use ratatui::widgets::{Paragraph, Widget};
 
 use crate::text_util::{
-    format_duration_compact, format_token_count, inline_text, span_display_width,
+    format_duration_compact, format_token_count, inline_text, paint_line, span_display_width,
     truncate_spans_with_ellipsis, truncate_with_ellipsis, wrap_lines, wrap_styled_line,
 };
+
+#[test]
+fn test_paint_line_matches_paragraph_cells() {
+    // Arrange
+    let lines = [
+        Line::default(),
+        Line::raw("plain text"),
+        Line::raw("界a界bc"),
+        Line::raw("a界bc"),
+        Line::raw("\u{200b}e\u{301} 👩‍💻 ﾞx\t\n"),
+        Line::from(vec![
+            Span::styled("colored ", Style::default().fg(Color::Red)),
+            Span::styled("界界", Style::default().bg(Color::Blue)),
+            Span::raw(" tail"),
+        ])
+        .style(
+            Style::default()
+                .fg(Color::Green)
+                .add_modifier(Modifier::BOLD),
+        ),
+    ];
+
+    // Act, Assert
+    for line in lines {
+        for alignment in [
+            None,
+            Some(Alignment::Left),
+            Some(Alignment::Center),
+            Some(Alignment::Right),
+        ] {
+            let line = Line {
+                alignment,
+                ..line.clone()
+            };
+            for width in 0..25 {
+                for height in 0..=2 {
+                    let area = Rect::new(2, 1, width, height);
+                    let mut expected = Buffer::empty(Rect::new(0, 0, 30, 4));
+                    let mut actual = expected.clone();
+                    Paragraph::new(line.clone()).render(area, &mut expected);
+                    paint_line(&line, area, &mut actual);
+                    assert_eq!(actual, expected, "{line:?}, {area:?}");
+                }
+            }
+        }
+    }
+}
 
 #[test]
 fn test_wrap_lines_basic() {

@@ -8,7 +8,7 @@ use ratatui::Frame;
 use ratatui::buffer::Buffer;
 use ratatui::layout::Rect;
 use ratatui::text::Line;
-use ratatui::widgets::{Block, Paragraph};
+use ratatui::widgets::Block;
 use rustc_hash::FxHasher;
 
 use crate::domain::session::{QueuedMessage, Session, SessionId, Status};
@@ -209,25 +209,25 @@ impl SessionOutputLayoutLines {
         self.body_line_count + self.tail.len() + self.queued.len()
     }
 
-    /// Borrows only visible rows across the transcript, status and queue.
-    fn paint_lines(&self, first: usize, height: usize) -> Vec<Line<'_>> {
-        let mut lines = Vec::new();
+    /// Visits only visible rows, borrowing cached lines and their spans.
+    fn visible_lines(&self, first: usize, height: usize) -> impl Iterator<Item = &Line<'static>> {
         let mut segment_offset = 0;
-        for segment in [
+        [
             &self.body[..self.body_line_count],
             self.tail.as_slice(),
             self.queued.as_ref(),
-        ] {
+        ]
+        .into_iter()
+        .flat_map(move |segment| {
             let start = first.saturating_sub(segment_offset).min(segment.len());
             let end = first
                 .saturating_add(height)
                 .saturating_sub(segment_offset)
                 .min(segment.len());
-            lines.extend(text_util::borrowed_paint_lines(&segment[start..end]));
             segment_offset += segment.len();
-        }
 
-        lines
+            segment[start..end].iter()
+        })
     }
 }
 
@@ -901,22 +901,6 @@ impl<'a> SessionOutput<'a> {
             .inner(output_area)
     }
 
-    /// Builds borrowed paint lines only for transcript rows in the viewport.
-    ///
-    /// The cached lines are already wrapped to the output width, so handing
-    /// the full transcript back to `Paragraph` would rebuild borrowed line and
-    /// span vectors for every off-screen row on each scroll frame. Slicing
-    /// before borrowing keeps paint preparation proportional to terminal
-    /// height while retaining `Paragraph`'s established cell semantics.
-    fn visible_paint_lines(
-        output_area: Rect,
-        lines: &SessionOutputLayoutLines,
-        final_scroll: u16,
-    ) -> Vec<Line<'_>> {
-        let inner_area = Self::session_output_inner_area(output_area);
-        lines.paint_lines(usize::from(final_scroll), usize::from(inner_area.height))
-    }
-
     /// Returns the width used to wrap output while leaving padding before the
     /// scrollbar in the final panel column.
     fn scrollbar_layout_area(output_area: Rect) -> Rect {
@@ -991,22 +975,18 @@ impl Component for SessionOutput<'_> {
         let transient_loader_area = layout.transient_loader_line_index.and_then(|line_index| {
             Self::indicator_area(output_area, line_index, final_scroll, TACHYON_LOADER_WIDTH)
         });
-        let queued_indicator_areas = layout
-            .queued_line_indices
-            .iter()
-            .filter_map(|line_index| {
-                Self::indicator_area(output_area, *line_index, final_scroll, QUEUED_ACTION_WIDTH)
-            })
-            .collect::<Vec<_>>();
-
-        let paint_lines = Self::visible_paint_lines(output_area, &layout.lines, final_scroll);
-        let paragraph = Paragraph::new(paint_lines).block(
-            Block::default()
-                .borders(session_format::session_output_panel_borders())
-                .border_style(session_format::session_output_panel_border_style(status)),
-        );
-
-        f.render_widget(paragraph, output_area);
+        let block = Block::default()
+            .borders(session_format::session_output_panel_borders())
+            .border_style(session_format::session_output_panel_border_style(status));
+        let inner_area = block.inner(output_area);
+        f.render_widget(block, output_area);
+        for (line, row) in layout
+            .lines
+            .visible_lines(usize::from(final_scroll), usize::from(inner_area.height))
+            .zip(inner_area.rows())
+        {
+            text_util::paint_line(line, row, f.buffer_mut());
+        }
 
         if resolved_layout.show_scrollbar {
             let scrollbar_area = Rect::new(
@@ -1027,8 +1007,12 @@ impl Component for SessionOutput<'_> {
         if let Some(loader_area) = transient_loader_area {
             TachyonLoaderEffect::apply_stateless(f.buffer_mut(), loader_area, spinner_frame);
         }
-        for queued_indicator_area in queued_indicator_areas {
-            QueuePulseEffect::apply_stateless(f.buffer_mut(), queued_indicator_area, spinner_frame);
+        for line_index in layout.queued_line_indices.iter() {
+            if let Some(area) =
+                Self::indicator_area(output_area, *line_index, final_scroll, QUEUED_ACTION_WIDTH)
+            {
+                QueuePulseEffect::apply_stateless(f.buffer_mut(), area, spinner_frame);
+            }
         }
     }
 }
