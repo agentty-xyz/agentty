@@ -12,7 +12,7 @@ use crate::app::AppEvent;
 use crate::domain::session::SessionId;
 
 const LIVE_RUNNING_LIMIT: usize = 3;
-const LIVE_ISSUE_LIMIT: usize = 3;
+const LIVE_INTERRUPTED_LIMIT: usize = 3;
 
 /// Reduces snapshots without counting lifecycle updates as additional calls.
 #[derive(Default)]
@@ -66,11 +66,13 @@ impl TurnActivity {
             .lock()
             .unwrap_or_else(std::sync::PoisonError::into_inner);
         let mut changed = false;
-        let ActivityState { calls, issues, .. } = &mut *state;
+        let ActivityState {
+            calls, interrupted, ..
+        } = &mut *state;
         for (index, event) in calls.iter_mut().enumerate() {
             if event.status == ActivityStatus::Running {
                 event.status = ActivityStatus::Interrupted;
-                issues.push(index);
+                interrupted.push(index);
                 changed = true;
             }
         }
@@ -168,9 +170,9 @@ impl Eq for LiveActivity {}
 struct ActivityState {
     calls: Vec<ActivityEvent>,
     indices: BTreeMap<(String, String), usize>,
-    /// Unique issue indices in observed terminal-transition order, bounded by
-    /// calls.
-    issues: Vec<usize>,
+    /// Unique interrupted indices in observed terminal-transition order,
+    /// bounded by calls.
+    interrupted: Vec<usize>,
     /// Last successful completion, independent of invocation order.
     last_completed: Option<usize>,
     pending: bool,
@@ -198,12 +200,12 @@ impl ActivityState {
         if previous_status == Some(status) {
             return;
         }
-        self.issues
+        self.interrupted
             .retain(|previous_index| *previous_index != index);
         match status {
             ActivityStatus::Completed => self.last_completed = Some(index),
-            ActivityStatus::Failed | ActivityStatus::Interrupted => self.issues.push(index),
-            ActivityStatus::Running => {}
+            ActivityStatus::Interrupted => self.interrupted.push(index),
+            ActivityStatus::Failed | ActivityStatus::Running => {}
         }
     }
 
@@ -245,8 +247,9 @@ impl ActivityState {
         summary
     }
 
-    /// Shows rolling totals, recent issues, the last successful call, and a
-    /// bounded set of running calls. The UI clips previews to the pane width.
+    /// Shows rolling totals, recent interruptions, the last successful call,
+    /// and a bounded set of running calls. Failed previews remain in durable
+    /// summaries. The UI clips previews to the pane width.
     fn live_text(&self) -> String {
         if self.calls.is_empty() {
             return String::new();
@@ -272,8 +275,11 @@ impl ActivityState {
         }
         text.push_str("\n\n");
 
-        let first_issue = self.issues.len().saturating_sub(LIVE_ISSUE_LIMIT);
-        for &index in &self.issues[first_issue..] {
+        let first_interrupted = self
+            .interrupted
+            .len()
+            .saturating_sub(LIVE_INTERRUPTED_LIMIT);
+        for &index in &self.interrupted[first_interrupted..] {
             Self::append_call(&mut text, &self.calls[index]);
         }
         if let Some(index) = self.last_completed
@@ -281,9 +287,9 @@ impl ActivityState {
         {
             Self::append_call(&mut text, &self.calls[index]);
         }
-        let hidden_issues = (failed + interrupted).saturating_sub(LIVE_ISSUE_LIMIT);
-        if hidden_issues > 0 {
-            let _ = writeln!(text, "+{hidden_issues} earlier failed or interrupted calls");
+        let hidden_interrupted = interrupted.saturating_sub(LIVE_INTERRUPTED_LIMIT);
+        if hidden_interrupted > 0 {
+            let _ = writeln!(text, "+{hidden_interrupted} earlier interrupted calls");
         }
         for event in self
             .calls

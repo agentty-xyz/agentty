@@ -71,15 +71,16 @@ host reduces them by attempt and operation identity in first-seen order and publ
 one replaceable snapshot with at most one unread `AppEvent` notification per turn. The
 foreground formats the latest snapshot when consuming that notification and replaces a
 transient plain-text block with compact status and command/argument rows, preserving all
-invocations when events are batched. Only failed calls show output, capped at two lines;
-the renderer clips live rows to the pane width. Provider output deltas update the
-matching call. After the final answer or failure notice, a durable usage message
-replaces the live rows. These messages participate in render-cache invalidation and
-saved history, but are excluded from provider replay. Commit and rebase assistance
-collect utility activity concurrently and save the same usage footer immediately after
-their displayed answer or attempt failure notice, before propagating failures to the
-overall workflow. Existing session rebase-assistance turns clear their live rows before
-returning success, failure, or cancellation.
+invocation counts when events are batched. Failed calls contribute to live totals
+without retaining rows; the renderer clips live rows to the pane width. Provider output
+deltas update the matching call. After the final answer or failure notice, a durable
+usage message replaces the live rows and includes failed-call previews capped at two
+output lines. These messages participate in render-cache invalidation and saved history,
+but are excluded from provider replay. Commit and rebase assistance collect utility
+activity concurrently and save the same usage footer immediately after their displayed
+answer or attempt failure notice, before propagating failures to the overall workflow.
+Existing session rebase-assistance turns clear their live rows before returning success,
+failure, or cancellation.
 
 ## Project Access
 
