@@ -502,20 +502,20 @@ Provider failures show a short error and captured output where available.
 
 During a session turn, the output shows rolling tool and skill counts and totals for
 succeeded, failed, running, and interrupted calls. A compact block retains the latest
-successful call, up to three recent failed or interrupted calls, and up to three running
-calls, with counts for additional calls. Command previews and file paths replace raw
-argument JSON and shorten to fit the pane. Successful output stays hidden; failed calls
-show reported nonzero exit codes and up to two output lines. Codex, Claude, Gemini, and
-Antigravity supply these details where available. Skill names require explicit provider
-reporting.
+successful call, up to three recent interrupted calls, and up to three running calls,
+with counts for additional calls. Failed calls contribute to totals without staying in
+the live block. Command previews and file paths replace raw argument JSON and shorten to
+fit the pane. Successful output stays hidden. Codex, Claude, Gemini, and Antigravity
+supply these details where available. Skill names require explicit provider reporting.
 
 Responses from these providers, including commit and rebase recovery assistance, include
 a usage footer when tool activity was observed. `Tools` lists invocation counts and
 failed or interrupted calls; `Skills` lists explicit Claude skill invocations. Footers
 remain attached to their responses in saved history, including failed recovery attempts.
 At turn completion, successful live rows collapse into the footer; failed call previews
-remain in saved history. Reading a skill file does not establish invocation. Providers
-without activity reporting and older saved responses have no footer.
+remain in saved history with reported nonzero exit codes and up to two output lines.
+Reading a skill file does not establish invocation. Providers without activity reporting
+and older saved responses have no footer.
 
 ## Session Sizes
 

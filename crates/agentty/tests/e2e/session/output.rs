@@ -1293,8 +1293,7 @@ printf '{"type":"result","subtype":"success","result":"%s","usage":{"input_token
                 .wait_for_text("… Bash · { cargo fmt; cargo test; }", 15000)
                 .capture_labeled("running", "Invocations before the answer")
                 .compose(&running.release())
-                .wait_for_text("second error line", 10000)
-                .wait_for_text("✗ skill review", 10000)
+                .wait_for_text("Status: 2 succeeded · 2 failed · 1 running", 10000)
                 .wait_for_text("… Edit · src/example.rs", 10000)
                 .capture_labeled("settled", "Statuses update in place")
                 .compose(&settled.release())
@@ -1314,24 +1313,18 @@ printf '{"type":"result","subtype":"success","result":"%s","usage":{"input_token
 
 /// Checks live replacement, readable previews, and the saved failure footer.
 fn assert_live_activity_report(frame: &TerminalFrame, report: &ProofReport) {
-    for (index, labels) in [
-        [
+    let expected_labels: [&[&str]; 2] = [
+        &[
             "… Bash · printf activity-details",
             "… skill review",
             "… Bash · { cargo fmt; cargo test; }",
         ],
-        [
-            "✓ Bash · printf activity-details",
-            "✗ skill review",
-            "✗ Bash · { cargo fmt; cargo test; }",
-        ],
-    ]
-    .iter()
-    .enumerate()
-    {
+        &["✓ Bash · printf activity-details"],
+    ];
+    for (index, labels) in expected_labels.iter().enumerate() {
         let capture = common::frame_from_capture(&report.captures[index]);
         let full = Region::full(capture.cols(), capture.rows());
-        for label in labels {
+        for label in *labels {
             assertion::assert_text_in_region(&capture, label, &full);
             assertion::assert_match_count(&capture, label, 1);
         }
@@ -1356,10 +1349,11 @@ fn assert_live_activity_report(frame: &TerminalFrame, report: &ProofReport) {
         if index == 1 {
             assert!(!text.contains("obsolete-command"));
             assertion::assert_text_in_region(&capture, "… Edit · src/example.rs", &full);
-            assertion::assert_text_in_region(&capture, "first error line", &full);
-            assertion::assert_text_in_region(&capture, "second error line", &full);
-            assert!(!capture.all_text().contains("hidden third error line"));
         }
+        assert!(!text.contains("✗ skill review"));
+        assert!(!text.contains("✗ Bash"));
+        assert!(!text.contains("error line"));
+        assert!(!text.contains("group failed"));
         assert!(!capture.all_text().contains("second output line"));
         assert!(!capture.all_text().contains("Input:"));
         assert!(!capture.all_text().contains("Output:"));
@@ -1375,7 +1369,9 @@ fn assert_live_activity_report(frame: &TerminalFrame, report: &ProofReport) {
         &thinking_full,
     );
     assertion::assert_text_in_region(&thinking, "✓ Edit · src/example.rs", &thinking_full);
-    assertion::assert_text_in_region(&thinking, "first error line", &thinking_full);
+    assert!(!thinking.all_text().contains("✗"));
+    assert!(!thinking.all_text().contains("error line"));
+    assert!(!thinking.all_text().contains("group failed"));
     assert!(!thinking.all_text().contains("printf activity-details"));
     let full = Region::full(frame.cols(), frame.rows());
     assertion::assert_text_in_region(frame, "Activity demo finished", &full);
