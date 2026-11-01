@@ -2,7 +2,7 @@ use std::path::PathBuf;
 use std::sync::Arc;
 
 use ag_session::test_support as model_fixture;
-use ag_store::{DbError, MockTaskRepository};
+use ag_store::{DbError, MockGraphRepository};
 use crossterm::event;
 use crossterm::event::{KeyCode, KeyEvent};
 
@@ -792,11 +792,16 @@ async fn test_model_command_in_harness_session_opens_refreshed_harness_models() 
 
     // Act
     handle_prompt_slash_submit(&mut app, &prompt_context).await;
-    let event = tokio::time::timeout(std::time::Duration::from_secs(5), app.next_app_event())
-        .await
-        .expect("harness model refresh should finish")
-        .expect("refresh event");
-    app.apply_app_events(event).await;
+    tokio::time::timeout(std::time::Duration::from_secs(5), async {
+        loop {
+            let event = app.next_app_event().await.expect("refresh event");
+            app.apply_app_events(event).await;
+            if matches!(&app.mode, AppMode::Prompt { slash_state, .. }
+                if slash_state.harness_models.iter().any(|option| option.model == AgentModel::KimiK3)) {
+                break;
+            }
+        }
+    }).await.expect("harness model refresh should finish");
 
     // Assert
     let AppMode::Prompt { slash_state, .. } = &app.mode else {
@@ -2291,14 +2296,14 @@ async fn plan_tasks_keep_leading_slashes_as_literal_text() {
             .build(),
     );
     app.experimental_multi_agent = true;
-    let mut tasks = MockTaskRepository::new();
+    let mut tasks = MockGraphRepository::new();
     tasks.expect_list_task_chains().times(5).returning(|_| {
         Err(DbError::InvalidData {
             entity: "task chain",
             reason: "unavailable".to_string(),
         })
     });
-    app.services.set_task_repository(Arc::new(tasks));
+    app.services.set_graph_repository(Arc::new(tasks));
 
     for (command, task, armed) in [
         ("/plan   Add search  ", "Add search", false),

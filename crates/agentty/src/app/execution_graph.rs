@@ -17,6 +17,7 @@ use async_trait::async_trait;
 use tokio_util::sync::CancellationToken;
 
 use crate::app::review_graph::ReviewGraphHost;
+use crate::app::session::SessionTaskService;
 use crate::app::{App, AppServices, SessionRuntimeHandle};
 use crate::domain::session::Status;
 use crate::infra::db::GraphEvidence;
@@ -327,8 +328,17 @@ impl App {
     ) {
         if let ag_session::GraphExecutionRef::TaskAttempt { attempt_id, .. } =
             &request.dispatch.record.execution
+            && ag_session::TaskChain::role(
+                &request.dispatch.record.graph_id,
+                &request.dispatch.node,
+            )
+            .is_some()
         {
             let ag_session::EnvId::SessionWorktree(session_id) = &request.dispatch.node.env_id;
+            // Chat admission already resets user-initiated cycles. A graph
+            // handoff may arrive later, after generated remediation restored
+            // its existing cycle, so retain that counter across suppression.
+            let iterations = self.auto_address_review_iterations.get(session_id).copied();
             if let Err(error) = self
                 .suppress_agent_task_automation(session_id, attempt_id)
                 .await
@@ -336,6 +346,10 @@ impl App {
                 let _ = response_tx.send(Err(OneShotError::new(error.to_string())));
                 let _ = admitted_tx.send(());
                 return;
+            }
+            if let Some(iterations) = iterations {
+                self.auto_address_review_iterations
+                    .insert(session_id.clone(), iterations);
             }
         }
         self.sessions
@@ -380,6 +394,17 @@ impl App {
 }
 
 impl AppServices {
+    /// Wakes resource-blocked graphs after a detached utility settles.
+    pub(super) fn graph_waking_run_client(
+        &self,
+        client: Arc<dyn ag_worker::RunClient>,
+    ) -> Arc<dyn ag_worker::RunClient> {
+        Arc::new(GraphWakeClient {
+            client,
+            wake: self.graph_wake.clone(),
+        })
+    }
+
     async fn validate_graph_session_permissions(
         &self,
         session_id: &str,
@@ -491,7 +516,16 @@ impl AppServices {
             )
             .await;
             match result {
-                Ok(receipts) if !receipts.is_empty() => self.wake_graphs(),
+                Ok(receipts) if !receipts.is_empty() => {
+                    // Settlement stores results after the worker's own status
+                    // updates; refresh session views that project them.
+                    SessionTaskService::emit_session_updated(
+                        &self.event_sender(),
+                        &self.session_update_versions(),
+                        &graph.session_id,
+                    );
+                    self.wake_graphs();
+                }
                 Ok(_) => {}
                 Err(error) => {
                     tracing::warn!(graph_id = graph.id, %error, "Graph dispatch failed");
@@ -608,6 +642,25 @@ impl AppServices {
 
                 !stop
             });
+    }
+}
+
+struct GraphWakeClient {
+    client: Arc<dyn ag_worker::RunClient>,
+    wake: tokio::sync::watch::Sender<u64>,
+}
+
+#[async_trait]
+impl ag_worker::RunClient for GraphWakeClient {
+    async fn submit(
+        &self,
+        request: ag_contracts::OneShotRequest,
+    ) -> Result<ag_contracts::OneShotSubmission, OneShotError> {
+        let result = self.client.submit(request).await;
+        self.wake
+            .send_modify(|version| *version = version.wrapping_add(1));
+
+        result
     }
 }
 

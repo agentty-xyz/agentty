@@ -316,7 +316,7 @@ impl App {
                 let result = self
                     .services
                     .db()
-                    .tasks()
+                    .graphs()
                     .load_task_chain(&chain_id)
                     .await
                     .map_err(|error| ApiSessionError::Operation(error.to_string()));
@@ -329,7 +329,7 @@ impl App {
                 let result = self
                     .services
                     .db()
-                    .tasks()
+                    .graphs()
                     .list_task_chains(&session_id)
                     .await
                     .map_err(|error| ApiSessionError::Operation(error.to_string()));

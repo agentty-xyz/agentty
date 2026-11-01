@@ -36,7 +36,7 @@ impl GraphDispatchRepository for SqliteGraphRepository {
         execution_id: &str,
         folder: &Path,
     ) -> Result<GraphAdmission, OneShotError> {
-        self.claim_node(graph_id, revision, node_id, execution_id, folder)
+        self.claim_node(graph_id, revision, node_id, (execution_id, folder), false)
             .await
             .map_err(Self::dispatch_error)
     }
@@ -59,14 +59,15 @@ impl SqliteGraphRepository {
         OneShotError::new(format!("Graph dispatch failed: {error}"))
     }
 
-    async fn claim_node(
+    pub(super) async fn claim_node(
         &self,
         graph_id: &str,
         revision: NonZeroU64,
         node_id: &str,
-        execution_id: &str,
-        folder: &Path,
+        delivery: (&str, &Path),
+        cancel_before_dispatch: bool,
     ) -> Result<GraphAdmission, DbError> {
+        let (execution_id, folder) = delivery;
         if execution_id.trim().is_empty() || folder.as_os_str().is_empty() {
             return Err(Self::invalid(
                 "Dispatch requires an execution identity and Env folder",
@@ -116,7 +117,7 @@ impl SqliteGraphRepository {
 
             inputs
         };
-        if Self::env_busy(&mut transaction, &graph, node).await? {
+        if !cancel_before_dispatch && Self::env_busy(&mut transaction, &graph, node).await? {
             return Ok(GraphAdmission::Blocked);
         }
         let execution_id = continuation.as_deref().unwrap_or(execution_id);

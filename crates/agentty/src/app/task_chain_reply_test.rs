@@ -3,27 +3,32 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use ag_contracts::{OneShotError, OneShotRequest, OneShotSubmission, SessionStats};
-use ag_protocol::AgentResponse;
+use ag_protocol::{AgentResponse, TurnPrompt};
 use ag_session::{
-    ReplyToTaskChainRequest, SessionError, SessionId, SessionMessageKind, SessionService,
-    StartPlanThenImplementRequest, TaskAgentRole, TaskChainPhase, TaskChainReplyOutcome,
+    GraphExecutionRef, ReplyToTaskChainRequest, SessionError, SessionId, SessionMessageKind,
+    SessionService, StartPlanThenImplementRequest, TaskAgentRole, TaskChain, TaskChainPhase,
+    TaskChainReplyOutcome,
 };
+use ag_store::{MockGraphRepository, TaskChainReplyRecord};
 use ag_worker::test_support::{AppServerError, AppServerTurnResponse, MockAppServerClient};
 use ag_worker::{HeartbeatClock, MockRunClient, RunClient, RunWorker, RuntimeConfig};
 use async_trait::async_trait;
 use tokio_util::sync::CancellationToken;
 
-use crate::app::command_gateway::TaskChainReplyAction;
-use crate::app::task_chain::test_support::{ChainFixture, agent_answer, launch_request};
+use crate::app::App;
+use crate::app::command_gateway::{TaskChainReplyAction, TaskChainReplyCommand};
+use crate::app::task_chain::test_support::{
+    ChainFixture, agent_answer, graph_unavailable, launch_request,
+};
 
 /// Fails reply recording before its transcript prompt is written.
-const REJECT_REPLY: &str = "CREATE TRIGGER reject_insert BEFORE INSERT ON task_chain_reply BEGIN \
-                            SELECT RAISE(ABORT, 'task_chain_reply unavailable'); END";
+const REJECT_REPLY: &str = "CREATE TRIGGER reject_insert BEFORE INSERT ON execution_graph_reply \
+                            BEGIN SELECT RAISE(ABORT, 'reply unavailable'); END";
 
-/// Fails continuation admission after the reply was recorded.
+/// Fails continuation admission after the reply was recorded and decided.
 const REJECT_CONTINUATION: &str = "CREATE TRIGGER reject_insert BEFORE INSERT ON \
-                                   task_chain_continuation BEGIN SELECT RAISE(ABORT, \
-                                   'task_chain_continuation unavailable'); END";
+                                   execution_graph_continuation BEGIN SELECT RAISE(ABORT, \
+                                   'continuation unavailable'); END";
 
 #[tokio::test]
 async fn clear_approval_accepts_the_plan_once_and_later_replies_reach_the_implementer() {
@@ -31,12 +36,14 @@ async fn clear_approval_accepts_the_plan_once_and_later_replies_reach_the_implem
     let mut fixture = ChainFixture::new().await;
     install_decision(&mut fixture, "implement");
     let launch = awaiting_plan(&mut fixture).await;
-    let implementation =
-        fixture.register_result(&launch.implementer_task_id(), "Implemented", true);
+    let implementation = fixture.register_turn("Implemented", true);
 
     // Act
     let accepted = reply(&mut fixture, "reply-1", "Looks good, go ahead").await;
-    implementation.started().await;
+    fixture
+        .app
+        .drive_session_request(implementation.started())
+        .await;
     let redelivered = reply(&mut fixture, "reply-1", "Looks good, go ahead").await;
     let conflicting = reply(&mut fixture, "reply-1", "Actually, revise the plan").await;
     let racing_decision = fixture
@@ -44,7 +51,7 @@ async fn clear_approval_accepts_the_plan_once_and_later_replies_reach_the_implem
         .apply_task_chain_reply(TaskChainReplyAction {
             attachments: Vec::new(),
             chain_id: launch.chain_id.clone(),
-            expected_attempt_id: launch.planner_attempt_id.clone(),
+            expected_attempt_id: String::new(),
             message: "Looks good, go ahead".to_string(),
             outcome: TaskChainReplyOutcome::PlanRevised,
             reply_id: "reply-1".to_string(),
@@ -53,10 +60,7 @@ async fn clear_approval_accepts_the_plan_once_and_later_replies_reach_the_implem
         .await;
     let busy = reply(&mut fixture, "reply-2", "Also update the docs").await;
     let implementing = fixture.snapshot().await;
-    fixture
-        .app
-        .sessions
-        .sync_session_from_handle(&fixture.session_id);
+    fixture.drain_app_events().await;
 
     // Assert
     assert_eq!(accepted, Ok(TaskChainReplyOutcome::PlanAccepted));
@@ -64,7 +68,7 @@ async fn clear_approval_accepts_the_plan_once_and_later_replies_reach_the_implem
     assert_eq!(
         conflicting,
         Err(SessionError::Operation(
-            "Invalid task chain: Reply identity was already used with different inputs".to_string()
+            "Reply identity was already used with different inputs".to_string()
         ))
     );
     assert_eq!(racing_decision, Ok(TaskChainReplyOutcome::PlanAccepted));
@@ -74,13 +78,10 @@ async fn clear_approval_accepts_the_plan_once_and_later_replies_reach_the_implem
     );
     assert_eq!(implementing.phase, TaskChainPhase::Implementing);
     assert_eq!(
-        implementing.current_request.attempt_id,
-        "reply:reply-1:implement"
-    );
-    assert_eq!(
         implementing.accepted_plan.expect("accepted plan").text,
         "Exact plan"
     );
+    assert!(implementation.prompt().contains("Exact plan"));
     let expected_transcript = [
         launch_transcript(),
         vec![
@@ -102,7 +103,7 @@ async fn clear_approval_accepts_the_plan_once_and_later_replies_reach_the_implem
     implementation.release.cancel();
     fixture.settle(&implementation).await;
     assert_eq!(fixture.snapshot().await.phase, TaskChainPhase::Succeeded);
-    let follow_up = fixture.register_result(&launch.implementer_task_id(), "Updated", false);
+    let follow_up = fixture.register_turn("Updated", false);
 
     // Act
     let continued = reply(&mut fixture, "reply-3", "Also update the docs").await;
@@ -112,18 +113,9 @@ async fn clear_approval_accepts_the_plan_once_and_later_replies_reach_the_implem
     // Assert
     assert_eq!(continued, Ok(TaskChainReplyOutcome::Continued));
     assert_eq!(finished.phase, TaskChainPhase::Succeeded);
-    assert_eq!(
-        finished.current_request.assignment.role,
-        TaskAgentRole::Implementer
-    );
-    assert_eq!(
-        finished.current_request.attempt_id,
-        "reply:reply-3:continue"
-    );
-    assert_eq!(
-        finished.current_request.input.clarification.as_deref(),
-        Some("Also update the docs")
-    );
+    assert_eq!(finished.current_role, TaskAgentRole::Implementer);
+    assert!(follow_up.prompt().contains("Also update the docs"));
+    assert!(follow_up.prompt().contains("Implemented"));
 }
 
 #[tokio::test]
@@ -131,18 +123,16 @@ async fn admitted_reply_keeps_its_original_workflow_after_a_new_chain_starts() {
     // Arrange
     let mut fixture = ChainFixture::new().await;
     install_decision(&mut fixture, "implement");
-    let original = awaiting_plan(&mut fixture).await;
-    let implementation =
-        fixture.register_result(&original.implementer_task_id(), "Implemented", false);
+    awaiting_plan(&mut fixture).await;
+    let implementation = fixture.register_turn("Implemented", false);
     let accepted = reply(&mut fixture, "reply-1", "Go ahead").await;
     fixture.settle(&implementation).await;
     let newer = StartPlanThenImplementRequest {
         agents: Box::new(ag_session::PlanThenImplementAgents::bundled().expect("bundled agents")),
         chain_id: "workflow-new".to_string(),
-        planner_attempt_id: "new-plan".to_string(),
         ..launch_request()
     };
-    let plan = fixture.register_result(&newer.planner_request().task_id, "New plan", false);
+    let plan = fixture.register_turn("New plan", false);
     fixture
         .app
         .drive_session_request(
@@ -164,10 +154,7 @@ async fn admitted_reply_keeps_its_original_workflow_after_a_new_chain_starts() {
         .await
         .expect("new workflow read")
         .expect("new workflow exists");
-    fixture
-        .app
-        .sessions
-        .sync_session_from_handle(&fixture.session_id);
+    fixture.drain_app_events().await;
 
     // Assert
     assert_eq!(accepted, Ok(TaskChainReplyOutcome::PlanAccepted));
@@ -175,11 +162,11 @@ async fn admitted_reply_keeps_its_original_workflow_after_a_new_chain_starts() {
     assert_eq!(
         conflicting,
         Err(SessionError::Operation(
-            "Invalid task chain: Reply identity was already used with different inputs".to_string()
+            "Reply identity was already used with different inputs".to_string()
         ))
     );
     assert_eq!(latest.phase, TaskChainPhase::AwaitingPlanAcceptance);
-    assert_eq!(latest.current_request.attempt_id, newer.planner_attempt_id);
+    assert_eq!(latest.accepted_plan, None);
     assert_eq!(fixture.persisted_transcript().await, before);
     assert_eq!(fixture.live_transcript(), before);
 }
@@ -193,8 +180,8 @@ async fn approval_with_requested_changes_revises_the_plan_and_blocks_replies_whi
         .app
         .services
         .set_run_client(Arc::clone(&decision) as Arc<dyn RunClient>);
-    let launch = awaiting_plan(&mut fixture).await;
-    let revision = fixture.register_result(&launch.planner_request().task_id, "New plan", false);
+    awaiting_plan(&mut fixture).await;
+    let revision = fixture.register_turn("New plan", false);
     let service = fixture.service.clone();
     let session_id = fixture.session_id.clone();
 
@@ -233,11 +220,7 @@ async fn approval_with_requested_changes_revises_the_plan_and_blocks_replies_whi
     );
     assert_eq!(awaiting.phase, TaskChainPhase::AwaitingPlanAcceptance);
     assert_eq!(awaiting.accepted_plan, None);
-    assert_eq!(awaiting.current_request.attempt_id, "reply:reply-1:revise");
-    assert_eq!(
-        awaiting.current_request.input.clarification.as_deref(),
-        Some("Looks good, but add tests")
-    );
+    assert!(revision.prompt().contains("Looks good, but add tests"));
     assert_eq!(
         fixture.persisted_transcript().await,
         [
@@ -252,27 +235,10 @@ async fn approval_with_requested_changes_revises_the_plan_and_blocks_replies_whi
         ]
         .concat()
     );
-
-    // Arrange: an older Planner turn can no longer be decoded.
-    sqlx::query("UPDATE task_attempt SET message = 'not json' WHERE id = 'initial'")
-        .execute(&fixture.pool)
-        .await
-        .expect("corrupt planner history");
-
-    // Act
-    let unreadable = reply(&mut fixture, "reply-3", "Go ahead").await;
-
-    // Assert
-    assert!(
-        unreadable
-            .expect_err("history read fails")
-            .to_string()
-            .contains("Invalid task attempt input")
-    );
 }
 
 #[tokio::test]
-async fn canceling_a_reply_decision_preserves_cancellation_and_later_utility_admission() {
+async fn canceling_a_reply_decision_keeps_the_plan_and_later_utility_admission() {
     // Arrange
     let mut fixture = ChainFixture::new().await;
     let decision = CancelableDecisionWorker::install(&mut fixture);
@@ -298,7 +264,7 @@ async fn canceling_a_reply_decision_preserves_cancellation_and_later_utility_adm
             pending.await
         })
         .await;
-    let canceled = fixture.snapshot().await;
+    let awaiting = fixture.snapshot().await;
 
     // Assert
     assert_eq!(
@@ -307,14 +273,10 @@ async fn canceling_a_reply_decision_preserves_cancellation_and_later_utility_adm
             "Workflow changed before reply decision completed".to_string()
         ))
     );
-    assert_eq!(canceled.phase, TaskChainPhase::Canceled);
+    assert_eq!(awaiting.phase, TaskChainPhase::AwaitingPlanAcceptance);
     assert!(
         decision.interrupted.is_cancelled(),
         "the worker stopped its provider turn"
-    );
-    assert_eq!(
-        canceled.current_request.attempt_id,
-        launch.planner_attempt_id
     );
     assert!(
         !fixture
@@ -335,24 +297,128 @@ async fn canceling_a_reply_decision_preserves_cancellation_and_later_utility_adm
         .concat()
     );
 
-    // Arrange: retry the canceled role, then decide a fresh approval through
-    // the same session-owned worker to prove utility admission stayed open.
-    let retried_plan =
-        fixture.register_result(&launch.planner_request().task_id, "Exact plan", false);
+    // Arrange: decide a fresh approval through the same session-owned worker
+    // to prove utility admission stayed open.
+    let implementation = fixture.register_turn("Implemented", false);
 
     // Act
-    let retried = reply(&mut fixture, "reply-2", "Try again").await;
-    fixture.settle(&retried_plan).await;
-    let implementation =
-        fixture.register_result(&launch.implementer_task_id(), "Implemented", false);
-    let accepted = reply(&mut fixture, "reply-3", "Go ahead").await;
+    let accepted = reply(&mut fixture, "reply-2", "Go ahead").await;
     fixture.settle(&implementation).await;
     decision.worker.shutdown().await;
 
     // Assert
-    assert_eq!(retried, Ok(TaskChainReplyOutcome::Continued));
     assert_eq!(accepted, Ok(TaskChainReplyOutcome::PlanAccepted));
     assert_eq!(fixture.snapshot().await.phase, TaskChainPhase::Succeeded);
+}
+
+#[tokio::test]
+async fn queued_approval_cannot_survive_cancellation_or_clear_a_new_decision() {
+    // Arrange
+    let mut fixture = ChainFixture::new().await;
+    let decision = Arc::new(GatedDecision {
+        approval: true,
+        ..GatedDecision::default()
+    });
+    fixture
+        .app
+        .services
+        .set_run_client(Arc::clone(&decision) as Arc<dyn RunClient>);
+    let launch = awaiting_plan(&mut fixture).await;
+    let service = fixture.service.clone();
+    let session_id = fixture.session_id.clone();
+    let _consumer = fixture.app.sessions.foreground_consumer();
+    let pending = send_reply(&service, &session_id, "reply-1", "Go ahead");
+    tokio::pin!(pending);
+    let reply_command = tokio::select! {
+        _ = &mut pending => None,
+        command = fixture.app.sessions.next_command() => Some(command),
+    }
+    .expect("reply must await admission");
+    fixture
+        .app
+        .apply_session_runtime_command(reply_command)
+        .await;
+    decision.entered.cancelled().await;
+    let cancellation = service.cancel_task_chain(&launch.chain_id);
+    tokio::pin!(cancellation);
+    let cancel_command = tokio::select! {
+        _ = &mut cancellation => None,
+        command = fixture.app.sessions.next_command() => Some(command),
+    }
+    .expect("cancellation must await admission");
+    decision.release.cancel();
+    let apply_command = fixture.app.sessions.next_command().await;
+
+    // Act: cancellation is ahead of the already queued classifier result.
+    fixture
+        .app
+        .apply_session_runtime_command(cancel_command)
+        .await;
+    cancellation.await.expect("cancel decision");
+    let newer = Arc::new(CancellationToken::new());
+    fixture
+        .app
+        .sessions
+        .deciding_task_chain_ids
+        .insert(launch.chain_id.clone(), Arc::clone(&newer));
+    fixture
+        .app
+        .apply_session_runtime_command(apply_command)
+        .await;
+    let canceled = pending.await;
+    let chain = fixture.snapshot().await;
+    let recorded = fixture
+        .app
+        .services
+        .db()
+        .graphs()
+        .load_task_chain_reply(&session_id, "reply-1")
+        .await
+        .expect("reply")
+        .expect("recorded");
+
+    // Assert
+    assert_eq!(canceled, Err(App::changed_before_decision()));
+    assert_eq!(chain.phase, TaskChainPhase::AwaitingPlanAcceptance);
+    assert_eq!(chain.accepted_plan, None);
+    assert_eq!(recorded.outcome, None);
+
+    // Act: an uncanceled result from another generation is stale as well.
+    let (response_tx, response_rx) = tokio::sync::oneshot::channel();
+    fixture
+        .app
+        .execute_task_chain_reply(
+            TaskChainReplyCommand::Apply {
+                action: TaskChainReplyAction {
+                    attachments: Vec::new(),
+                    chain_id: launch.chain_id.clone(),
+                    expected_attempt_id: chain.current_attempt_id().expect("planner").into(),
+                    message: "Go ahead".into(),
+                    outcome: TaskChainReplyOutcome::PlanAccepted,
+                    reply_id: "reply-1".into(),
+                    session_id: session_id.clone(),
+                },
+                cancellation: Arc::new(CancellationToken::new()),
+            },
+            response_tx,
+        )
+        .await;
+
+    // Assert
+    assert_eq!(
+        response_rx.await.expect("response"),
+        Err(App::changed_before_decision())
+    );
+    assert!(Arc::ptr_eq(
+        fixture
+            .app
+            .sessions
+            .deciding_task_chain_ids
+            .get(&launch.chain_id)
+            .expect("new decision"),
+        &newer,
+    ));
+    assert!(!newer.is_cancelled());
 }
 
 #[tokio::test]
@@ -360,23 +426,48 @@ async fn acceptance_without_live_session_handles_leaves_the_plan_unaccepted() {
     // Arrange
     let mut fixture = ChainFixture::new().await;
     let launch = awaiting_plan(&mut fixture).await;
+    let chain = fixture.snapshot().await;
+    fixture
+        .app
+        .services
+        .db()
+        .graphs()
+        .record_task_chain_reply(
+            &launch.chain_id,
+            "reply-1",
+            &TurnPrompt::from_text("Go ahead".into()),
+            chain.current_execution.as_ref().expect("plan execution"),
+        )
+        .await
+        .expect("recorded reply");
     fixture
         .app
         .sessions
         .session_handles_mut()
         .remove(&fixture.session_id);
-    let before = fixture.persisted_transcript().await;
 
     // Act
     let result = fixture
         .app
         .apply_task_chain_reply(TaskChainReplyAction {
             attachments: Vec::new(),
-            chain_id: launch.chain_id,
-            expected_attempt_id: launch.planner_attempt_id,
+            chain_id: launch.chain_id.clone(),
+            expected_attempt_id: String::new(),
             message: "Go ahead".to_string(),
             outcome: TaskChainReplyOutcome::PlanAccepted,
             reply_id: "reply-1".to_string(),
+            session_id: fixture.session_id.clone(),
+        })
+        .await;
+    let missing = fixture
+        .app
+        .apply_task_chain_reply(TaskChainReplyAction {
+            attachments: Vec::new(),
+            chain_id: launch.chain_id,
+            expected_attempt_id: String::new(),
+            message: "Go ahead".to_string(),
+            outcome: TaskChainReplyOutcome::PlanAccepted,
+            reply_id: "missing".to_string(),
             session_id: fixture.session_id.clone(),
         })
         .await;
@@ -389,19 +480,24 @@ async fn acceptance_without_live_session_handles_leaves_the_plan_unaccepted() {
             "Session handles not found".to_string()
         ))
     );
+    assert_eq!(
+        missing,
+        Err(SessionError::Operation(
+            "Task chain reply is missing".to_string()
+        ))
+    );
     assert_eq!(chain.phase, TaskChainPhase::AwaitingPlanAcceptance);
     assert_eq!(chain.accepted_plan, None);
-    assert_eq!(fixture.persisted_transcript().await, before);
 }
 
 #[tokio::test]
 async fn new_replies_report_workflow_lookup_failures_without_recording_a_prompt() {
     // Arrange
     let mut fixture = ChainFixture::new().await;
-    sqlx::query("DROP TABLE task_chain")
+    sqlx::query("DROP TABLE execution_graph_reply")
         .execute(&fixture.pool)
         .await
-        .expect("make workflow listing unavailable");
+        .expect("make reply lookup unavailable");
 
     // Act
     let result = reply(&mut fixture, "reply-1", "Go ahead").await;
@@ -409,11 +505,257 @@ async fn new_replies_report_workflow_lookup_failures_without_recording_a_prompt(
     // Assert
     assert!(
         result
-            .expect_err("workflow lookup must fail")
+            .expect_err("reply lookup must fail")
             .to_string()
-            .contains("no such table: task_chain")
+            .contains("no such table: execution_graph_reply")
     );
     assert_eq!(fixture.persisted_transcript().await, vec![]);
+}
+
+#[tokio::test]
+async fn reply_routing_rejects_missing_sources_and_unavailable_workflows() {
+    // Arrange
+    let mut fixture = ChainFixture::new().await;
+    awaiting_plan(&mut fixture).await;
+    let original = fixture.snapshot().await;
+    let before = fixture.live_transcript();
+
+    for fault in ["list-error", "missing-source", "unavailable-driver"] {
+        let mut repository = MockGraphRepository::new();
+        repository
+            .expect_load_task_chain_reply()
+            .returning(|_, _| Ok(None));
+        if fault == "list-error" {
+            repository
+                .expect_list_task_chains()
+                .returning(|_| Err(graph_unavailable()));
+        } else {
+            let mut chain = original.clone();
+            chain.current_execution = None;
+            chain.phase = if fault == "missing-source" {
+                TaskChainPhase::Canceled
+            } else {
+                TaskChainPhase::Planning
+            };
+            repository
+                .expect_list_task_chains()
+                .returning(move |_| Ok(vec![chain.clone()]));
+            if fault == "unavailable-driver" {
+                repository
+                    .expect_load_graph()
+                    .returning(|_, _| Err(graph_unavailable()));
+            }
+        }
+        fixture
+            .app
+            .services
+            .set_graph_repository(Arc::new(repository));
+
+        // Act
+        let result = reply(&mut fixture, "reply", "Guidance").await;
+
+        // Assert
+        let error = result.expect_err("workflow is unavailable").to_string();
+        let expected = match fault {
+            "list-error" => "injected graph outage",
+            "missing-source" => "no execution to reply to",
+            _ => "still working",
+        };
+        assert!(error.contains(expected), "{fault}: {error}");
+        assert_eq!(fixture.live_transcript(), before);
+    }
+}
+
+#[tokio::test]
+async fn plan_lookup_rejects_missing_versions_and_repository_failures() {
+    // Arrange
+    let mut fixture = ChainFixture::new().await;
+    awaiting_plan(&mut fixture).await;
+    let chain = fixture.snapshot().await;
+    for missing in [false, true] {
+        let mut repository = MockGraphRepository::new();
+        repository.expect_list_results().returning(move |_, _, _| {
+            if missing {
+                Ok(Vec::new())
+            } else {
+                Err(graph_unavailable())
+            }
+        });
+        fixture
+            .app
+            .services
+            .set_graph_repository(Arc::new(repository));
+
+        // Act
+        let result = fixture.app.task_chain_plan(&chain).await;
+
+        // Assert
+        assert!(
+            result
+                .expect_err("plan unavailable")
+                .to_string()
+                .contains(if missing {
+                    "Plan version is missing"
+                } else {
+                    "injected graph outage"
+                })
+        );
+    }
+}
+
+#[tokio::test]
+async fn applying_replies_fails_closed_on_stale_or_inconsistent_decision_records() {
+    // Arrange
+    let mut fixture = ChainFixture::new().await;
+    awaiting_plan(&mut fixture).await;
+    let chain = fixture.snapshot().await;
+    let action = TaskChainReplyAction {
+        attachments: Vec::new(),
+        chain_id: chain.id.clone(),
+        expected_attempt_id: chain.current_attempt_id().expect("planner").into(),
+        message: "Guidance".into(),
+        outcome: TaskChainReplyOutcome::PlanAccepted,
+        reply_id: "reply".into(),
+        session_id: fixture.session_id.clone(),
+    };
+    for fault in [
+        "load-error",
+        "stale",
+        "decision-error",
+        "undecided",
+        "utility-source",
+        "missing-action",
+    ] {
+        let (repository, expected) = failed_reply_repository(&chain, fault);
+        fixture
+            .app
+            .services
+            .set_graph_repository(Arc::new(repository));
+
+        // Act
+        let result = fixture.app.apply_task_chain_reply(action.clone()).await;
+
+        // Assert
+        let error = result.expect_err("invalid reply state").to_string();
+        assert!(error.contains(expected), "{fault}: {error}");
+    }
+}
+
+/// Injects a failure at one boundary of foreground reply application.
+fn failed_reply_repository(
+    chain: &TaskChain,
+    fault: &'static str,
+) -> (MockGraphRepository, &'static str) {
+    let mut repository = MockGraphRepository::new();
+    let mut record = TaskChainReplyRecord {
+        action_id: None,
+        chain_id: chain.id.clone(),
+        outcome: None,
+        prompt: TurnPrompt::from_text("Guidance".into()),
+        source: chain.current_execution.clone().expect("planner"),
+    };
+    if fault == "load-error" {
+        repository
+            .expect_load_task_chain_reply()
+            .returning(|_, _| Err(graph_unavailable()));
+        return (repository, "injected graph outage");
+    }
+    if fault == "utility-source" {
+        record.source = GraphExecutionRef::UtilityRun {
+            run_id: "utility".into(),
+        };
+        record.outcome = Some(TaskChainReplyOutcome::PlanAccepted);
+    } else if fault == "missing-action" {
+        record.outcome = Some(TaskChainReplyOutcome::Continued);
+    }
+    let stored = record.clone();
+    repository
+        .expect_load_task_chain_reply()
+        .returning(move |_, _| Ok(Some(stored.clone())));
+    if record.outcome.is_none() {
+        let mut chain = chain.clone();
+        if fault == "stale" {
+            chain.phase = TaskChainPhase::Planning;
+        }
+        repository
+            .expect_load_task_chain()
+            .returning(move |_| Ok(Some(chain.clone())));
+    }
+    if fault != "stale" {
+        repository
+            .expect_decide_task_chain_reply()
+            .returning(move |_, _, _| {
+                if fault == "decision-error" {
+                    Err(graph_unavailable())
+                } else {
+                    Ok(record.clone())
+                }
+            });
+    }
+    let expected = match fault {
+        "stale" => "Workflow changed before reply decision",
+        "decision-error" => "injected graph outage",
+        "undecided" => "Reply decision was not recorded",
+        "utility-source" => "Reply source is not a task",
+        _ => "Reply continuation identity is missing",
+    };
+
+    (repository, expected)
+}
+
+#[tokio::test]
+async fn interrupted_decisions_resume_only_against_their_bound_source() {
+    // Arrange
+    let mut fixture = ChainFixture::new().await;
+    install_decision(&mut fixture, "revise");
+    let launch = awaiting_plan(&mut fixture).await;
+    let chain = fixture.snapshot().await;
+    let source = chain.current_execution.clone().expect("plan execution");
+    fixture
+        .app
+        .services
+        .db()
+        .graphs()
+        .record_task_chain_reply(
+            &launch.chain_id,
+            "interrupted",
+            &TurnPrompt::from_text("Add tests".into()),
+            &source,
+        )
+        .await
+        .expect("recorded before a crash");
+    let revision = fixture.register_turn("Plan with tests", false);
+
+    // Act: redelivery decides the recorded reply against its own source.
+    let revised = reply(&mut fixture, "interrupted", "Add tests").await;
+    fixture.settle(&revision).await;
+    fixture
+        .app
+        .services
+        .db()
+        .graphs()
+        .record_task_chain_reply(
+            &launch.chain_id,
+            "stale",
+            &TurnPrompt::from_text("Ship it".into()),
+            &source,
+        )
+        .await
+        .expect("recorded against the old plan");
+    let stale = reply(&mut fixture, "stale", "Ship it").await;
+
+    // Assert
+    assert_eq!(revised, Ok(TaskChainReplyOutcome::PlanRevised));
+    assert_eq!(
+        stale,
+        Err(SessionError::Operation(
+            "Workflow changed before reply decision completed".to_string()
+        ))
+    );
+    assert_eq!(
+        fixture.snapshot().await.phase,
+        TaskChainPhase::AwaitingPlanAcceptance
+    );
 }
 
 #[tokio::test]
@@ -423,31 +765,32 @@ async fn replies_without_a_plan_to_accept_skip_the_decision_and_reject_invalid_s
     let mut run_client = MockRunClient::new();
     run_client.expect_submit().never();
     fixture.app.services.set_run_client(Arc::new(run_client));
-    let launch = launch_request();
-    let planner_id = launch.planner_request().task_id;
 
     // Act
     let missing = reply(&mut fixture, "reply-1", "Start").await;
     let blank = reply(&mut fixture, "reply-1", "  ").await;
-    let first = fixture.register_result(&planner_id, "A plan", true);
+    let first = fixture.register_turn("A plan", true);
     fixture
         .app
         .drive_session_request(
             fixture
                 .service
-                .start_plan_then_implement(&fixture.session_id, launch),
+                .start_plan_then_implement(&fixture.session_id, launch_request()),
         )
         .await
         .expect("launch");
-    first.started().await;
+    fixture.app.drive_session_request(first.started()).await;
     let busy = reply(&mut fixture, "reply-2", "Hurry up").await;
     fixture
         .app
         .drive_session_request(fixture.service.cancel_task_chain("workflow"))
         .await
         .expect("cancel workflow");
-    fixture.settle(&first).await;
-    let retry = fixture.register_result(&planner_id, "Retried plan", false);
+    fixture
+        .wait_for(|chain| chain.phase == TaskChainPhase::Canceled)
+        .await;
+    first.release.cancel();
+    let retry = fixture.register_turn("Retried plan", false);
     let unrecorded =
         reply_while_rejecting(&mut fixture, REJECT_REPLY, "Try again, smaller scope").await;
     let unadmitted = reply_while_rejecting(
@@ -472,21 +815,17 @@ async fn replies_without_a_plan_to_accept_skip_the_decision_and_reject_invalid_s
         unrecorded
             .expect_err("reply persistence fails")
             .to_string()
-            .contains("task_chain_reply unavailable")
+            .contains("reply unavailable")
     );
     assert!(
         unadmitted
             .expect_err("continuation admission fails")
             .to_string()
-            .contains("task_chain_continuation unavailable")
+            .contains("continuation unavailable")
     );
     assert_eq!(continued, Ok(TaskChainReplyOutcome::Continued));
     assert_eq!(retried.phase, TaskChainPhase::AwaitingPlanAcceptance);
-    assert_eq!(retried.current_request.attempt_id, "reply:reply-3:continue");
-    assert_eq!(
-        retried.current_request.input.clarification.as_deref(),
-        Some("Try again, smaller scope")
-    );
+    assert!(retry.prompt().contains("Try again, smaller scope"));
     assert_eq!(
         transcript[transcript.len() - 2..],
         [
@@ -580,6 +919,7 @@ impl CancelableDecisionWorker {
 /// Decision client that waits for the test before revising the plan.
 #[derive(Default)]
 struct GatedDecision {
+    approval: bool,
     entered: CancellationToken,
     release: CancellationToken,
 }
@@ -593,7 +933,7 @@ impl RunClient for GatedDecision {
             .expect("decision release guard");
 
         Ok(OneShotSubmission {
-            response: AgentResponse::plain("revise"),
+            response: AgentResponse::plain(if self.approval { "implement" } else { "revise" }),
             stats: SessionStats::default(),
         })
     }
@@ -602,7 +942,7 @@ impl RunClient for GatedDecision {
 /// Starts the fixture workflow and settles its Planner on `Exact plan`.
 async fn awaiting_plan(fixture: &mut ChainFixture) -> StartPlanThenImplementRequest {
     let launch = launch_request();
-    let plan = fixture.register_result(&launch.planner_request().task_id, "Exact plan", false);
+    let plan = fixture.register_turn("Exact plan", false);
     fixture
         .app
         .drive_session_request(

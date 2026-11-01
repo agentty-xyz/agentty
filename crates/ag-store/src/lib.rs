@@ -18,7 +18,6 @@ mod status;
 mod task;
 mod task_agent;
 mod task_agent_turn;
-mod task_chain;
 mod task_plan;
 mod timestamp;
 mod usage;
@@ -30,7 +29,8 @@ pub(crate) use error::DbResultExt;
 #[cfg(any(test, feature = "test-utils"))]
 pub use execution_graph::MockGraphRepository;
 pub use execution_graph::{
-    GraphEvidence, GraphExecutionRecord, GraphRepository, StoredGraphEvidence, StoredGraphResult,
+    GraphEvidence, GraphExecutionRecord, GraphNodeHistory, GraphRepository, StoredGraphEvidence,
+    StoredGraphResult, TaskChainReplyRecord,
 };
 pub use operation::{OperationRepository, SessionOperationRow};
 pub use project::{ProjectListRow, ProjectRepository, ProjectRow};

@@ -39,8 +39,8 @@ and preserve task snapshots when changing admission or continuation.
 
 Keep pure graph shapes, node requirements, and exact result bindings in `ag-session`.
 Follow the [execution graph contracts](@/docs/architecture/execution-graphs.md), and
-test structural rules without storage or workers. Existing `/plan` and review
-coordinators remain authoritative until graph dispatch is integrated. Use
+test structural rules without storage or workers. `/plan` and focused review build their
+own graphs and retain workflow-specific policy around the shared executor. Use
 `GraphRepository` in `ag-store` for revision snapshots, exact results, and execution
 links; keep operation and utility-run lifecycle authority with their existing owners.
 Use `GraphDispatchRepository` for atomic admission and `GraphExecutor` to drain ready

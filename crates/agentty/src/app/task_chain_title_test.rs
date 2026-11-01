@@ -40,7 +40,7 @@ async fn new_chain_titles_the_original_request_once() {
         })
     });
     fixture.app.services.set_run_client(Arc::new(client));
-    let planner = fixture.register_result(&launch.planner_request().task_id, "A plan", true);
+    let planner = fixture.register_turn("A plan", true);
 
     // Act
     fixture
@@ -150,7 +150,7 @@ async fn new_chain_preserves_authoritative_metadata() {
         client.expect_submit().never();
         fixture.app.services.set_run_client(Arc::new(client));
         let launch = launch_request();
-        let planner = fixture.register_result(&launch.planner_request().task_id, "A plan", false);
+        let planner = fixture.register_turn("A plan", false);
         let expected_prompt = if original.is_empty() {
             launch.user_request.clone()
         } else {

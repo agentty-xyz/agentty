@@ -102,7 +102,7 @@ sessions without changing their mailbox order.
 Role-aware task commands share that mailbox and the session's Env while using separate
 runtime identities, captured models, and durable response histories. Task continuation
 and clarification retain that task's input and responses. A chain's Planner also
-receives the saved session conversation through its launch marker as historical data on
+receives the session conversation captured in its graph request as historical data on
 every attempt, including after restart; later workflow messages stay outside that
 snapshot. Ordinary session questions and provider continuation remain unchanged.
 Admission resolves definitions through the injected catalog and persists their complete
@@ -257,9 +257,10 @@ recovery supply attempt status. The task remains open until a caller explicitly 
 its outcome, independently of session lifecycle.
 
 The static Planner-to-Implementer workflow uses the same command gateway and serial
-worker. Accepting a specific plan version and admitting implementation commit together
-before dispatch. Duplicate requests acknowledge their saved attempt; queries and
-reopening never start work. Cancellation targets the current attempt, and retries
+worker through a fixed execution graph. Accepting a specific plan version records
+evidence and wakes dispatch; the executor atomically pins that accepted version when
+admitting implementation. Duplicate requests acknowledge their saved receipt; queries
+and reopening never start work. Cancellation targets the current attempt, and retries
 require an explicit new delivery. Failed delivery remains visible in operation state.
 Image attachments are durable task inputs: continuations retain earlier images, add new
 ones, and carry them through acceptance to the Implementer. The worker submits the
@@ -267,13 +268,15 @@ images as structured turn attachments alongside the explicit task input.
 
 Natural-language workflow replies also enter through the gateway. Foreground admission
 returns earlier receipts, rejects busy workflows, and stores the reply with its
-transcript prompt atomically. While a plan awaits acceptance, the gateway transfers the
-caller's response channel to a background task and treats the chain as busy until the
-decided action returns. That task runs the orchestrator decision through the
-session-scoped `RunClient`, then submits the decided acceptance or revision through the
-runtime mailbox for ordinary admission. Every other settled phase continues the current
-role immediately in the foreground. An image reply awaiting plan acceptance revises the
-Planner directly, keeping visual guidance out of the text-only approval decision.
+transcript prompt and exact source execution atomically. Its first decision is durable,
+so redelivery cannot approve a newer plan. While a plan awaits acceptance, the gateway
+transfers the caller's response channel to a background task and treats the chain as
+busy until the decided action returns. That task runs the orchestrator decision through
+the session-scoped `RunClient`, then submits the decided acceptance or revision through
+the runtime mailbox for ordinary admission. Every other settled phase continues the
+current role immediately in the foreground. An image reply awaiting plan acceptance
+revises the Planner directly, keeping visual guidance out of the text-only approval
+decision.
 
 The host's opt-in tool-content capture policy travels with the execution trace context,
 including independent roots, queued work, and linked operations. Scoped utility clients
@@ -518,8 +521,8 @@ The static `GraphExecutor` separately drains dependency-ready branches through i
 worker adapters. Storage admits each node once with pinned inputs and its existing
 execution authority. Shared Env leases and provider budgets constrain parallel branches;
 all prerequisite gates must hold before a join runs. Focused review launches its own
-graph from its background task; the `/plan` coordinator has not migrated. See
-[Execution Graphs](@/docs/architecture/execution-graphs.md).
+graph from its background task; `/plan` launches its two task-conversation nodes through
+the same executor. See [Execution Graphs](@/docs/architecture/execution-graphs.md).
 
 Explicit graph launches use the same foreground admission gateway. Graph task handoffs
 enter the owning session's ordered mailbox with a completion reply retained through

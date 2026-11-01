@@ -6,21 +6,26 @@ use std::sync::{Arc, Mutex};
 use ag_contracts::{
     AgentDefinitionPrompt, AgentRequestKind, OneShotError, TurnContinuation, TurnRequest,
 };
-use ag_session::{GraphExecutionRef, GraphPostProcessing, GraphWorkspaceAccess};
-use ag_worker::{GraphRunRequest, RunClient};
+use ag_session::{
+    AgentAnswerContent, GraphExecutionRef, GraphPostProcessing, GraphWorkspaceAccess,
+    TaskAgentRole, TaskChain,
+};
+use ag_worker::{GraphDispatch, GraphRunRequest, RunClient};
 use async_trait::async_trait;
 use tokio::sync::{mpsc, oneshot};
 use tokio_util::sync::CancellationToken;
 
 use super::post_turn::{PostTurnContext, TurnFinalizerContext};
+use super::task::SessionTaskService;
 use super::worker::{SessionWorkerContext, TurnMetadata};
 use super::{StatusTransition, isolation, post_turn, turn};
+use crate::app::AppEvent;
 use crate::app::service::SessionRunFactory;
 use crate::app::session::SessionError;
 use crate::domain::permission::PermissionMode;
 use crate::domain::session::Status;
 use crate::domain::session_message::{SessionMessage, SessionMessageKind, SessionTranscript};
-use crate::domain::turn_prompt::TurnPrompt;
+use crate::domain::turn_prompt::{TurnPrompt, TurnPromptAttachment};
 use crate::infra::db::TaskAgentTurnMetadata;
 
 /// Captured graph input and completion owned by one serial mailbox command.
@@ -208,7 +213,7 @@ async fn execute(
         } else {
             None
         };
-    context
+    let recorded = context
         .db
         .graphs()
         .record_task_turn(
@@ -223,8 +228,19 @@ async fn execute(
             },
         )
         .await?;
+    let role = validate_workflow_response(dispatch, &result.assistant_message)?;
+    if role == Some(TaskAgentRole::Implementer) {
+        // The answer can be visible while commit hooks and publishing still
+        // run. Project its changes before exposing that answer, then refresh
+        // again during finalization to include any post-turn edits.
+        post_turn::refresh_channel_diff_stats(&TurnFinalizerContext::from_worker(context)).await;
+    }
+    if recorded && let Some(role) = role {
+        mirror_chain_answer(context, role, &result.assistant_message);
+    }
+    let effects_succeeded = result.assistant_message.questions.is_empty();
     if dispatch.node.execution.post_processing == GraphPostProcessing::SessionWorkflow
-        && result.assistant_message.questions.is_empty()
+        && effects_succeeded
         && permission_mode != PermissionMode::ReadOnly
     {
         apply_effects(
@@ -237,6 +253,17 @@ async fn execute(
         .await?;
     }
     check_cancellation(&task.cancellation)?;
+    if role == Some(TaskAgentRole::Implementer) && effects_succeeded {
+        // Sent after implementation effects and before the review-ready
+        // status, matching ordinary completion ordering. Fire-and-forget:
+        // the receiver may be dropped during shutdown.
+        let _ = context
+            .app_event_tx
+            .send(AppEvent::ImplementerAttemptSucceeded {
+                attempt_id: attempt_id.clone(),
+                session_id: context.session_id.clone(),
+            });
+    }
     *task
         .completion
         .body
@@ -244,6 +271,45 @@ async fn execute(
         .unwrap_or_else(std::sync::PoisonError::into_inner) = Some(body);
 
     Ok(())
+}
+
+/// Workflow roles must answer or ask for clarification before effects and
+/// successful settlement. Generic graph nodes retain their response contract.
+fn validate_workflow_response(
+    dispatch: &GraphDispatch,
+    response: &ag_protocol::AgentResponse,
+) -> Result<Option<TaskAgentRole>, SessionError> {
+    let role = TaskChain::role(&dispatch.record.graph_id, &dispatch.node);
+    if role.is_some() && response.questions.is_empty() && response.answer.trim().is_empty() {
+        return Err(SessionError::Workflow(
+            "Workflow role returned an empty answer".into(),
+        ));
+    }
+
+    Ok(role)
+}
+
+/// Mirrors a durably recorded task-chain role answer into live chat.
+///
+/// Storage appends the same answer with its response receipt, so only the
+/// first recording mirrors and redelivery never appends twice.
+fn mirror_chain_answer(
+    context: &SessionWorkerContext,
+    agent: TaskAgentRole,
+    response: &ag_protocol::AgentResponse,
+) {
+    let text = response.to_display_text();
+    if text.trim().is_empty() {
+        return;
+    }
+    SessionTaskService::mirror_session_transcript_message(
+        &context.transcript,
+        &context.app_event_tx,
+        &context.session_update_versions,
+        &context.session_id,
+        SessionMessageKind::AgentAnswer,
+        &AgentAnswerContent { agent, text }.encode(),
+    );
 }
 
 /// Runs host effects with only the graph node's explicit input and response.
@@ -314,16 +380,35 @@ async fn prepare(
         .graphs()
         .execution_history(&request.dispatch.record.execution)
         .await?;
-    let mut prompt = graph_prompt(request);
+    let mut reply_attachments = Vec::new();
+    if TaskChain::role(&request.dispatch.record.graph_id, node) == Some(TaskAgentRole::Implementer)
+    {
+        for input in &request.dispatch.inputs {
+            if let Some(planner_history) = context
+                .db
+                .graphs()
+                .execution_history(&input.reference.result.execution)
+                .await?
+            {
+                reply_attachments.extend(planner_history.attachments);
+            }
+        }
+    }
+    if let Some(history) = &history {
+        reply_attachments.extend_from_slice(&history.attachments);
+    }
+    let mut prompt = graph_prompt(request, &reply_attachments);
     if history.is_some() {
         prompt.text.push_str(
-            "\n\nContinue this node using the explicit retry or clarification reply in its \
+            "\n\nContinue this node using the explicit retry, clarification, or reply in its \
              isolated history.",
         );
     }
     Ok(TurnRequest {
         agent_profile: AgentDefinitionPrompt::active(node.definition.prompt.clone(), true),
-        continuation: history.map_or_else(TurnContinuation::fresh, TurnContinuation::replaying),
+        continuation: history.map_or_else(TurnContinuation::fresh, |history| {
+            TurnContinuation::replaying(history.text)
+        }),
         execution_policy: ag_contracts::ExecutionPolicy::default(),
         folder: env.folder,
         main_checkout_root: env.main_checkout,
@@ -350,11 +435,15 @@ fn intersect_permissions(captured: PermissionMode, current: PermissionMode) -> P
     }
 }
 
-fn graph_prompt(request: &GraphRunRequest) -> TurnPrompt {
+/// Places every image after the JSON data with unique transport placeholders.
+/// Composer numbering restarts on each reply, so cumulative attachments must
+/// not reuse those markers or replace strings inside the JSON data.
+fn graph_prompt(
+    request: &GraphRunRequest,
+    reply_attachments: &[TurnPromptAttachment],
+) -> TurnPrompt {
     let node = &request.dispatch.node;
     let mut prompt = TurnPrompt::from_agent_data(node.request.agent_text());
-    prompt.attachments.clone_from(&node.request.attachments);
-    // Keep the original attachment placeholders and user/evidence boundary.
     let input = serde_json::json!({
         "objective": node.objective,
         "bound_results": request.dispatch.inputs.iter().map(|input| serde_json::json!({
@@ -366,6 +455,27 @@ fn graph_prompt(request: &GraphRunRequest) -> TurnPrompt {
         prompt.text,
         "\n\nGraph objective and exact bound results (JSON data):\n{input}"
     );
+    for (index, attachment) in node
+        .request
+        .attachments
+        .iter()
+        .chain(reply_attachments)
+        .enumerate()
+    {
+        let mut placeholder = format!("[Task image #{}]", index + 1);
+        while prompt.text.contains(&placeholder) {
+            placeholder.insert(1, '#');
+        }
+        let _ = write!(
+            prompt.text,
+            "\n\nTask input attachment {}: {placeholder}",
+            index + 1
+        );
+        prompt.attachments.push(TurnPromptAttachment {
+            local_image_path: attachment.local_image_path.clone(),
+            placeholder,
+        });
+    }
 
     prompt
 }

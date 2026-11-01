@@ -1,46 +1,154 @@
 use std::sync::Arc;
 
+use ag_protocol::TurnPromptAttachment;
 use ag_session::{
-    AcceptTaskChainPlanRequest, AcceptTaskPlanRequest, ContinueTaskChainRequest,
-    FocusedReviewStatus, ReplyToTaskChainRequest, SessionError, SessionId, SessionMessageKind,
-    SessionStatus, StartPlanThenImplementRequest, TaskAgentRole, TaskAgentTurn, TaskChainPhase,
+    AcceptTaskChainPlanRequest, AcceptTaskPlanRequest, AgentDefinition, AgentSelection,
+    ContinueTaskChainRequest, FocusedReviewStatus, ReplyToTaskChainRequest, SessionError,
+    SessionId, SessionMessageKind, SessionStatus, StartPlanThenImplementRequest, TaskAgentRole,
+    TaskChainPhase,
 };
+use ag_store::MockGraphRepository;
 use ag_worker::MockRunClient;
 use mockall::predicate::eq;
 use tempfile::TempDir;
+use uuid::Uuid;
 
-use super::test_support::{ChainFixture, agent_answer, launch_request};
+use super::test_support::{ChainFixture, Script, agent_answer, graph_unavailable, launch_request};
 use crate::app::App;
 use crate::app::review::ReviewCacheEntry;
 use crate::infra::agent_profile::MockAgentCatalogClient;
 use crate::infra::db::Database;
+use crate::infra::fs::MockFsClient;
 use crate::test_support::{SessionFixtureBuilder, new_test_app, set_session_status_for_test};
+
+#[tokio::test]
+async fn graph_turns_preserve_launch_history_captured_settings_and_revision_images() {
+    // Arrange
+    let mut fixture = ChainFixture::new().await;
+    append_conversation(
+        &fixture,
+        &[
+            (SessionMessageKind::UserPrompt, "Recommend the next step"),
+            (
+                SessionMessageKind::AssistantAnswer,
+                "Build a graph with joins",
+            ),
+            (SessionMessageKind::WorkflowNotice, "Internal notice"),
+        ],
+    )
+    .await;
+    let mut launch = launch_request();
+    launch.attachments.push(TurnPromptAttachment {
+        local_image_path: "initial.png".into(),
+        placeholder: "[Image #1]".into(),
+    });
+    let plan = fixture.register_turn("Initial plan", false);
+    fixture
+        .app
+        .drive_session_request(
+            fixture
+                .service
+                .start_plan_then_implement(&fixture.session_id, launch.clone()),
+        )
+        .await
+        .expect("launch");
+    fixture.settle(&plan).await;
+    let source = fixture
+        .snapshot()
+        .await
+        .current_attempt_id()
+        .expect("plan")
+        .to_string();
+    append_conversation(
+        &fixture,
+        &[(
+            SessionMessageKind::AssistantAnswer,
+            "Unrelated later conversation",
+        )],
+    )
+    .await;
+    let revised = fixture.register_turn("Plan with tests", false);
+
+    // Act
+    fixture
+        .app
+        .drive_session_request(fixture.service.continue_task_chain(
+            "workflow",
+            ContinueTaskChainRequest {
+                attachments: vec![TurnPromptAttachment {
+                    local_image_path: "revision.png".into(),
+                    placeholder: "[Image #1]".into(),
+                }],
+                attempt_id: Uuid::new_v4().to_string(),
+                clarification: Some("Use this sketch".into()),
+                expected_attempt_id: source,
+            },
+        ))
+        .await
+        .expect("revise");
+    fixture.settle(&revised).await;
+    let accepted = fixture.snapshot().await;
+    let implementation = fixture.register_turn("Implemented", false);
+    fixture
+        .app
+        .drive_session_request(fixture.service.accept_task_chain_plan(
+            "workflow",
+            AcceptTaskChainPlanRequest {
+                plan_attempt_id: accepted.current_attempt_id().expect("revised plan").into(),
+            },
+        ))
+        .await
+        .expect("accept");
+    fixture.settle(&implementation).await;
+
+    // Assert
+    assert!(plan.prompt().contains("Recommend the next step"));
+    assert!(revised.prompt().contains("Build a graph with joins"));
+    assert!(!revised.prompt().contains("Unrelated later conversation"));
+    assert!(!plan.prompt().contains("Internal notice"));
+    assert!(!implementation.prompt().contains("Build a graph with joins"));
+    assert!(implementation.prompt().contains("Plan with tests"));
+    for (script, definition, paths) in [
+        (&plan, &accepted.agents.planner, vec!["initial.png"]),
+        (
+            &revised,
+            &accepted.agents.planner,
+            vec!["initial.png", "revision.png"],
+        ),
+        (
+            &implementation,
+            &accepted.agents.implementer,
+            vec!["initial.png", "revision.png"],
+        ),
+    ] {
+        assert_role_request(script, launch.agent, definition, &paths);
+    }
+}
 
 #[tokio::test]
 async fn service_coordinates_revision_explicit_acceptance_and_exactly_once_handoff() {
     // Arrange
     let mut fixture = ChainFixture::new().await;
-    let (launch, revision) = revised_plan(&mut fixture).await;
-    let planner_id = launch.planner_request().task_id;
+    let (launch, first_plan, revision) = revised_plan(&mut fixture).await;
+    let awaiting = fixture.snapshot().await;
+    let revised_attempt = awaiting
+        .current_attempt_id()
+        .expect("revised plan attempt")
+        .to_string();
 
-    // Act: standalone acceptance records intent without starting
-    // implementation.
-    fixture
+    // Act: a superseded plan version cannot be accepted.
+    let stale = fixture
         .app
-        .drive_session_request(fixture.service.accept_agent_plan(
-            &fixture.session_id,
-            AcceptTaskPlanRequest {
-                task_id: planner_id,
-                attempt_id: "revision".into(),
+        .drive_session_request(fixture.service.accept_task_chain_plan(
+            "workflow",
+            AcceptTaskChainPlanRequest {
+                plan_attempt_id: first_plan,
             },
         ))
-        .await
-        .expect("standalone acceptance");
-    let implementation =
-        fixture.register_result(&launch.implementer_task_id(), "Implemented", true);
+        .await;
+    let implementation = fixture.register_turn("Implemented", true);
     let acceptance = AcceptTaskChainPlanRequest {
-        attempt_id: "implementation".to_string(),
-        plan_attempt_id: "revision".to_string(),
+        plan_attempt_id: revised_attempt.clone(),
     };
     fixture
         .app
@@ -51,37 +159,25 @@ async fn service_coordinates_revision_explicit_acceptance_and_exactly_once_hando
         )
         .await
         .expect("accepted handoff");
-    implementation.started().await;
+    fixture
+        .app
+        .drive_session_request(implementation.started())
+        .await;
 
-    // Assert: old receipts remain idempotent while execution is busy.
-    fixture
-        .app
-        .drive_session_request(
-            fixture
-                .service
-                .start_plan_then_implement(&fixture.session_id, launch),
-        )
-        .await
-        .expect("launch receipt");
-    fixture
-        .app
-        .drive_session_request(fixture.service.continue_task_chain("workflow", revision))
-        .await
-        .expect("old revision receipt");
-    fixture
-        .app
-        .drive_session_request(
-            fixture
-                .service
-                .accept_task_chain_plan("workflow", acceptance),
-        )
-        .await
-        .expect("handoff receipt");
+    // Assert: receipts remain idempotent while execution is busy.
+    assert!(stale.is_err());
+    assert_historical_receipts(&mut fixture, launch, revision, acceptance).await;
     let running = fixture.snapshot().await;
     assert_eq!(running.phase, TaskChainPhase::Implementing);
-    assert_eq!(
-        running.accepted_plan.expect("accepted version").text,
-        "Exact revised plan"
+    assert_eq!(running.current_role, TaskAgentRole::Implementer);
+    let accepted = running.accepted_plan.expect("accepted version");
+    assert_eq!(accepted.text, "Exact revised plan");
+    assert_eq!(accepted.attempt_id, revised_attempt);
+    assert!(implementation.prompt().contains("Exact revised plan"));
+    assert!(
+        implementation
+            .prompt()
+            .contains("Implement a scoped change")
     );
 
     // Act
@@ -116,33 +212,32 @@ async fn service_coordinates_revision_explicit_acceptance_and_exactly_once_hando
                 "workflow",
                 ContinueTaskChainRequest {
                     attachments: Vec::new(),
-                    attempt_id: "stale-planner-guidance".into(),
+                    attempt_id: Uuid::new_v4().to_string(),
                     clarification: Some("Answering the old Planner".into()),
-                    expected_attempt_id: "revision".into(),
+                    expected_attempt_id: revised_attempt,
                 },
             ))
             .await
             .is_err()
     );
-    assert_repository_errors_surface(&mut fixture).await;
 }
 
 #[tokio::test]
-async fn service_cancels_and_retries_only_the_current_workflow_attempt() {
+async fn service_cancels_and_retries_only_the_current_workflow_stage() {
     // Arrange
     let mut fixture = ChainFixture::new().await;
-    let launch = launch_request();
-    let first = fixture.register_result(&launch.planner_request().task_id, "A plan", true);
+    let first = fixture.register_turn("A plan", true);
     fixture
         .app
         .drive_session_request(
             fixture
                 .service
-                .start_plan_then_implement(&fixture.session_id, launch.clone()),
+                .start_plan_then_implement(&fixture.session_id, launch_request()),
         )
         .await
         .expect("launch");
-    first.started().await;
+    fixture.app.drive_session_request(first.started()).await;
+    let running = fixture.snapshot().await;
 
     // Act
     fixture
@@ -150,25 +245,32 @@ async fn service_cancels_and_retries_only_the_current_workflow_attempt() {
         .drive_session_request(fixture.service.cancel_task_chain("workflow"))
         .await
         .expect("cancel workflow");
-    fixture.settle(&first).await;
-    let canceled = fixture.snapshot().await;
+    let canceled = fixture
+        .wait_for(|chain| chain.phase == TaskChainPhase::Canceled)
+        .await;
+    first.release.cancel();
 
     // Assert
-    assert_eq!(canceled.phase, TaskChainPhase::Canceled);
+    assert_eq!(canceled.current_execution, running.current_execution);
 
     // Act
-    let retry = fixture.register_result(&launch.planner_request().task_id, "Retried plan", false);
+    let retry = fixture.register_turn("Retried plan", false);
     fixture
         .app
-        .drive_session_request(fixture.service.continue_task_chain(
-            "workflow",
-            ContinueTaskChainRequest {
-                attachments: Vec::new(),
-                attempt_id: "retry".to_string(),
-                clarification: None,
-                expected_attempt_id: "initial".into(),
-            },
-        ))
+        .drive_session_request(
+            fixture.service.continue_task_chain(
+                "workflow",
+                ContinueTaskChainRequest {
+                    attachments: Vec::new(),
+                    attempt_id: Uuid::new_v4().to_string(),
+                    clarification: None,
+                    expected_attempt_id: running
+                        .current_attempt_id()
+                        .expect("canceled attempt")
+                        .into(),
+                },
+            ),
+        )
         .await
         .expect("explicit retry");
     fixture.settle(&retry).await;
@@ -178,6 +280,7 @@ async fn service_cancels_and_retries_only_the_current_workflow_attempt() {
         fixture.snapshot().await.phase,
         TaskChainPhase::AwaitingPlanAcceptance
     );
+    assert!(retry.prompt().contains("Explicitly retry"));
     assert_eq!(
         fixture
             .app
@@ -186,6 +289,11 @@ async fn service_cancels_and_retries_only_the_current_workflow_attempt() {
             .expect("missing workflow"),
         None
     );
+    fixture
+        .app
+        .drive_session_request(fixture.service.cancel_task_chain("workflow"))
+        .await
+        .expect("idle cancellation is a no-op");
 }
 
 #[tokio::test]
@@ -219,7 +327,7 @@ async fn service_reports_missing_busy_and_invalid_workflows_without_dispatch() {
             .drive_session_request(
                 fixture
                     .service
-                    .start_plan_then_implement(&fixture.session_id, launch.clone(),)
+                    .start_plan_then_implement(&fixture.session_id, launch.clone())
             )
             .await
             .is_err()
@@ -230,7 +338,6 @@ async fn service_reports_missing_busy_and_invalid_workflows_without_dispatch() {
             .drive_session_request(fixture.service.accept_task_chain_plan(
                 "missing",
                 AcceptTaskChainPlanRequest {
-                    attempt_id: "impl".into(),
                     plan_attempt_id: "plan".into()
                 },
             ))
@@ -244,7 +351,7 @@ async fn service_reports_missing_busy_and_invalid_workflows_without_dispatch() {
                 "missing",
                 ContinueTaskChainRequest {
                     attachments: Vec::new(),
-                    attempt_id: "retry".into(),
+                    attempt_id: Uuid::new_v4().to_string(),
                     clarification: None,
                     expected_attempt_id: "missing".into(),
                 },
@@ -275,118 +382,101 @@ async fn service_reports_missing_busy_and_invalid_workflows_without_dispatch() {
 }
 
 #[tokio::test]
-async fn enqueue_failure_is_durable_and_requires_an_explicit_new_attempt() {
-    // Arrange: a persisted session with no live handles cannot own a worker.
-    let (mut app, _directory) = new_test_app().await;
-    let session_id = SessionId::from("unbound");
-    app.services
-        .db()
-        .sessions()
-        .insert_session(
-            &session_id,
-            "gpt-6.1-sol",
-            "main",
-            "Review",
-            app.active_project_id(),
+async fn invalid_actions_and_conflicting_launches_are_rejected() {
+    // Arrange
+    let mut fixture = ChainFixture::new().await;
+    let launch = launch_request();
+    let planner = fixture.register_turn("A plan", false);
+    fixture
+        .app
+        .drive_session_request(
+            fixture
+                .service
+                .start_plan_then_implement(&fixture.session_id, launch.clone()),
         )
         .await
-        .expect("persisted owner");
-    app.sessions.push_session(
-        SessionFixtureBuilder::new()
-            .id(session_id.clone())
-            .status(SessionStatus::Review)
-            .build(),
-    );
-    let service = app.session_service();
-    let launch = launch_request();
+        .expect("launch");
+    fixture.settle(&planner).await;
+    let awaiting = fixture.snapshot().await;
+    let plan_attempt = awaiting.current_attempt_id().expect("plan").to_string();
 
     // Act
-    let failure = app
-        .drive_session_request(service.start_plan_then_implement(&session_id, launch.clone()))
-        .await;
-    let failed = app
-        .drive_session_request(service.get_task_chain("workflow"))
-        .await
-        .expect("read failure")
-        .expect("durable workflow");
-    let receipt = app
-        .drive_session_request(service.start_plan_then_implement(&session_id, launch.clone()))
-        .await;
-    let conflict = app
-        .drive_session_request(service.start_plan_then_implement(
-            &session_id,
-            StartPlanThenImplementRequest {
-                agents: Box::new(
-                    ag_session::PlanThenImplementAgents::bundled().expect("bundled agents"),
-                ),
-                user_request: "Conflicting launch".into(),
-                ..launch.clone()
-            },
-        ))
-        .await;
-
-    // Assert
-    assert!(failure.is_err());
-    assert!(receipt.is_ok());
-    assert!(conflict.is_err());
-    assert_eq!(failed.phase, TaskChainPhase::Failed);
-
-    // Act / Assert: changing either stage's definition ID is a conflict,
-    // rather than a request to replace captured definitions.
-    for role in [TaskAgentRole::Planner, TaskAgentRole::Implementer] {
-        let mut changed = launch.clone();
-        match role {
-            TaskAgentRole::Planner => changed.agents.planner.id = "other-planner".into(),
-            TaskAgentRole::Implementer => {
-                changed.agents.implementer.id = "other-implementer".into();
-            }
-        }
-        assert!(matches!(
-            app.drive_session_request(service.start_plan_then_implement(&session_id, changed))
-                .await,
-            Err(SessionError::Operation(_))
-        ));
-        assert_eq!(
-            app.drive_session_request(service.get_task_chain("workflow"))
-                .await
-                .expect("workflow query"),
-            Some(failed.clone())
-        );
-    }
-    assert!(
-        app.dispatch_task_chain("workflow", "different-delivery")
-            .await
-            .expect_err("cannot dispatch a different attempt")
-            .to_string()
-            .contains("changed before delivery")
-    );
-
-    // Act / Assert: neither version acceptance nor retry hides admission
-    // errors.
-    assert!(
-        app.drive_session_request(service.accept_task_chain_plan(
-            "workflow",
-            AcceptTaskChainPlanRequest {
-                attempt_id: "impl".into(),
-                plan_attempt_id: "initial".into(),
-            }
-        ))
-        .await
-        .is_err()
-    );
-    assert!(
-        app.drive_session_request(service.continue_task_chain(
+    let unknown_source = fixture
+        .app
+        .drive_session_request(fixture.service.continue_task_chain(
             "workflow",
             ContinueTaskChainRequest {
                 attachments: Vec::new(),
-                attempt_id: "explicit-retry".into(),
-                clarification: None,
-                expected_attempt_id: "initial".into(),
-            }
+                attempt_id: Uuid::new_v4().to_string(),
+                clarification: Some("Guidance".into()),
+                expected_attempt_id: "unknown".into(),
+            },
         ))
-        .await
-        .is_err()
-    );
+        .await;
+    let silent_images = fixture
+        .app
+        .drive_session_request(fixture.service.continue_task_chain(
+            "workflow",
+            ContinueTaskChainRequest {
+                attachments: vec![TurnPromptAttachment {
+                    local_image_path: "sketch.png".into(),
+                    placeholder: "[Image #1]".into(),
+                }],
+                attempt_id: Uuid::new_v4().to_string(),
+                clarification: None,
+                expected_attempt_id: plan_attempt.clone(),
+            },
+        ))
+        .await;
+    let retry_success = fixture
+        .app
+        .drive_session_request(fixture.service.continue_task_chain(
+            "workflow",
+            ContinueTaskChainRequest {
+                attachments: Vec::new(),
+                attempt_id: Uuid::new_v4().to_string(),
+                clarification: None,
+                expected_attempt_id: plan_attempt,
+            },
+        ))
+        .await;
+    let mut conflicts = Vec::new();
+    for changed in [
+        StartPlanThenImplementRequest {
+            user_request: "Conflicting launch".into(),
+            ..launch.clone()
+        },
+        {
+            let mut changed = launch.clone();
+            changed.agents.planner.id = "other-planner".into();
+            changed
+        },
+        {
+            let mut changed = launch.clone();
+            changed.agents.implementer.id = "other-implementer".into();
+            changed
+        },
+    ] {
+        conflicts.push(
+            fixture
+                .app
+                .drive_session_request(
+                    fixture
+                        .service
+                        .start_plan_then_implement(&fixture.session_id, changed),
+                )
+                .await,
+        );
+    }
+
+    // Assert
+    assert!(unknown_source.is_err());
+    assert!(silent_images.is_err());
+    assert!(retry_success.is_err());
+    for conflict in conflicts {
+        assert!(matches!(conflict, Err(SessionError::Operation(_))));
+    }
+    assert_eq!(fixture.snapshot().await, awaiting);
 }
 
 #[tokio::test]
@@ -408,11 +498,6 @@ async fn workflow_queries_and_admission_surface_database_failures() {
 
     // Act / Assert
     assert!(
-        app.dispatch_task_chain("workflow", "initial")
-            .await
-            .is_err()
-    );
-    assert!(
         app.drive_session_request(service.get_task_chain("workflow"))
             .await
             .is_err()
@@ -429,6 +514,7 @@ async fn workflow_queries_and_admission_surface_database_failures() {
         .await
         .is_err()
     );
+    assert!(app.ensure_task_chain_driver("workflow").await.is_err());
     assert!(matches!(
         app.drive_session_request(service.reply_to_task_chain(
             &SessionId::from("missing"),
@@ -441,6 +527,182 @@ async fn workflow_queries_and_admission_surface_database_failures() {
         .await,
         Err(SessionError::Operation(_))
     ));
+}
+
+#[tokio::test]
+async fn workflow_launch_failures_and_competing_redelivery_leave_chat_unchanged() {
+    for fault in ["workspace", "history", "admission", "redelivery"] {
+        // Arrange
+        let mut fixture = ChainFixture::new().await;
+        let mut repository = MockGraphRepository::new();
+        repository.expect_load_graph().returning(|_, _| Ok(None));
+        match fault {
+            "workspace" => {
+                fixture.app.sessions.sessions_mut()[0].is_draft = true;
+                let mut filesystem = MockFsClient::new();
+                filesystem.expect_is_dir().return_const(false);
+                fixture.app.services.set_fs_client(Arc::new(filesystem));
+            }
+            "history" => {
+                sqlx::query("DROP TABLE session_message")
+                    .execute(&fixture.pool)
+                    .await
+                    .expect("unavailable history");
+            }
+            "admission" => {
+                repository
+                    .expect_start_task_chain()
+                    .returning(|_, _| Err(graph_unavailable()));
+            }
+            "redelivery" => {
+                repository
+                    .expect_start_task_chain()
+                    .returning(|_, _| Ok(false));
+            }
+            _ => {}
+        }
+        fixture
+            .app
+            .services
+            .set_graph_repository(Arc::new(repository));
+        // Act
+        let result = fixture
+            .app
+            .drive_session_request(
+                fixture
+                    .service
+                    .start_plan_then_implement(&fixture.session_id, launch_request()),
+            )
+            .await;
+        fixture.app.mirror_task_chain_transcript_message(
+            &SessionId::from("missing"),
+            SessionMessageKind::UserPrompt,
+            "Do not append",
+        );
+
+        // Assert
+        assert!(
+            fixture
+                .app
+                .sessions
+                .session_handles()
+                .get(&fixture.session_id)
+                .is_none_or(|handles| {
+                    handles
+                        .transcript
+                        .lock()
+                        .expect("live transcript")
+                        .messages()
+                        .is_empty()
+                })
+        );
+        if fault == "redelivery" {
+            assert_eq!(result, Ok(()));
+        } else {
+            let error = result.expect_err("launch failure").to_string();
+            let expected = match fault {
+                "workspace" => "prepared workspace",
+                "history" => "session_message",
+                _ => "injected graph outage",
+            };
+            assert!(error.contains(expected), "{fault}: {error}");
+        }
+    }
+}
+
+#[tokio::test]
+async fn workflow_actions_report_failed_or_missing_repository_snapshots() {
+    // Arrange
+    let mut fixture = ChainFixture::new().await;
+    let plan = fixture.register_turn("Plan", false);
+    fixture
+        .app
+        .drive_session_request(
+            fixture
+                .service
+                .start_plan_then_implement(&fixture.session_id, launch_request()),
+        )
+        .await
+        .expect("launch");
+    fixture.settle(&plan).await;
+    let chain = fixture.snapshot().await;
+    let attempt_id = chain.current_attempt_id().expect("plan").to_string();
+
+    for fault in ["lookup", "results", "missing-result", "progress"] {
+        let mut repository = MockGraphRepository::new();
+        if fault == "lookup" {
+            repository
+                .expect_load_task_chain()
+                .returning(|_| Err(graph_unavailable()));
+        } else {
+            let chain = chain.clone();
+            repository
+                .expect_load_task_chain()
+                .returning(move |_| Ok(Some(chain.clone())));
+        }
+        match fault {
+            "results" => {
+                repository
+                    .expect_list_results()
+                    .returning(|_, _, _| Err(graph_unavailable()));
+            }
+            "missing-result" => {
+                repository
+                    .expect_list_results()
+                    .returning(|_, _, _| Ok(Vec::new()));
+            }
+            "progress" => {
+                repository
+                    .expect_progress()
+                    .returning(|_| Err(graph_unavailable()));
+            }
+            _ => {}
+        }
+        fixture
+            .app
+            .services
+            .set_graph_repository(Arc::new(repository));
+
+        // Act
+        let result = match fault {
+            "lookup" => fixture.app.require_task_chain("workflow").await.map(|_| ()),
+            "progress" => {
+                fixture
+                    .app
+                    .continue_api_task_chain(
+                        "workflow",
+                        ContinueTaskChainRequest {
+                            attachments: Vec::new(),
+                            attempt_id: Uuid::new_v4().to_string(),
+                            clarification: None,
+                            expected_attempt_id: attempt_id.clone(),
+                        },
+                    )
+                    .await
+            }
+            _ => fixture
+                .app
+                .accept_api_task_chain_plan(
+                    "workflow",
+                    AcceptTaskChainPlanRequest {
+                        plan_attempt_id: attempt_id.clone(),
+                    },
+                )
+                .await
+                .map(|_| ()),
+        };
+
+        // Assert
+        let error = result.expect_err("repository failure").to_string();
+        assert!(
+            error.contains(if fault == "missing-result" {
+                "Plan version is missing"
+            } else {
+                "injected graph outage"
+            }),
+            "{fault}: {error}"
+        );
+    }
 }
 
 #[tokio::test]
@@ -482,11 +744,16 @@ async fn task_agent_resolution_rejects_missing_sessions_and_unavailable_definiti
     );
 }
 
+/// Launches the fixture workflow, then revises its first plan. Returns the
+/// launch, the superseded plan attempt, and the revision request.
 async fn revised_plan(
     fixture: &mut ChainFixture,
-) -> (StartPlanThenImplementRequest, ContinueTaskChainRequest) {
+) -> (
+    StartPlanThenImplementRequest,
+    String,
+    ContinueTaskChainRequest,
+) {
     let launch = launch_request();
-    let planner_id = launch.planner_request().task_id;
     fixture
         .app
         .services
@@ -504,7 +771,7 @@ async fn revised_plan(
         .app
         .deferred_auto_review_session_ids
         .insert(fixture.session_id.clone());
-    let first = fixture.register_result(&planner_id, "First plan", false);
+    let first = fixture.register_turn("First plan", false);
     fixture
         .app
         .drive_session_request(
@@ -514,6 +781,7 @@ async fn revised_plan(
         )
         .await
         .expect("launch");
+    fixture.settle(&first).await;
     assert!(matches!(
         fixture.app.review_cache.get(&fixture.session_id),
         Some(ReviewCacheEntry::Suppressed)
@@ -535,14 +803,19 @@ async fn revised_plan(
             .expect("startup review triggers"),
         Vec::<String>::new()
     );
-    fixture.settle(&first).await;
+    let first_attempt = fixture
+        .snapshot()
+        .await
+        .current_attempt_id()
+        .expect("first plan attempt")
+        .to_string();
     let revision = ContinueTaskChainRequest {
         attachments: Vec::new(),
-        attempt_id: "revision".to_string(),
+        attempt_id: Uuid::new_v4().to_string(),
         clarification: Some("Revise the scope".to_string()),
-        expected_attempt_id: "initial".into(),
+        expected_attempt_id: first_attempt.clone(),
     };
-    let second = fixture.register_result(&planner_id, "Exact revised plan", false);
+    let second = fixture.register_turn("Exact revised plan", false);
     fixture
         .app
         .drive_session_request(
@@ -556,102 +829,105 @@ async fn revised_plan(
     let awaiting = fixture.snapshot().await;
     assert_eq!(awaiting.phase, TaskChainPhase::AwaitingPlanAcceptance);
     assert_eq!(awaiting.accepted_plan, None);
+    assert!(second.prompt().contains("Revise the scope"));
+    assert!(second.prompt().contains("First plan"));
 
-    (launch, revision)
+    (launch, first_attempt, revision)
 }
 
-async fn assert_repository_errors_surface(fixture: &mut ChainFixture) {
-    // Arrange: snapshot reads succeed, but cancellation persistence fails.
-    sqlx::query(
-        "CREATE TRIGGER reject_workflow_cancel BEFORE UPDATE OF canceled_at ON task_chain BEGIN \
-         SELECT RAISE(ABORT, 'cancellation unavailable'); END",
-    )
-    .execute(&fixture.pool)
-    .await
-    .expect("reject cancellation persistence");
+async fn append_conversation(fixture: &ChainFixture, messages: &[(SessionMessageKind, &str)]) {
+    for (kind, text) in messages {
+        fixture
+            .app
+            .services
+            .db()
+            .sessions()
+            .append_session_message(&fixture.session_id, *kind, text)
+            .await
+            .expect("history");
+    }
+}
 
-    // Act / Assert
-    let error = fixture
+fn assert_role_request(
+    script: &Script,
+    agent: AgentSelection,
+    definition: &AgentDefinition,
+    paths: &[&str],
+) {
+    let request = script.request();
+    assert_eq!(request.model, agent.model().provider_model_str());
+    assert_eq!(
+        request.agent_profile.current(),
+        Some(definition.prompt.as_str())
+    );
+    assert_eq!(
+        request
+            .prompt
+            .attachments
+            .iter()
+            .map(|image| image.local_image_path.to_str().expect("path"))
+            .collect::<Vec<_>>(),
+        paths
+    );
+}
+
+async fn assert_historical_receipts(
+    fixture: &mut ChainFixture,
+    launch: StartPlanThenImplementRequest,
+    revision: ContinueTaskChainRequest,
+    acceptance: AcceptTaskChainPlanRequest,
+) {
+    fixture
         .app
-        .drive_session_request(fixture.service.cancel_task_chain("workflow"))
+        .drive_session_request(
+            fixture
+                .service
+                .start_plan_then_implement(&fixture.session_id, launch),
+        )
         .await
-        .expect_err("surface failed cancellation");
-    assert!(error.to_string().contains("cancellation unavailable"));
-    sqlx::query("DROP TRIGGER reject_workflow_cancel")
-        .execute(&fixture.pool)
+        .expect("launch receipt");
+    fixture
+        .app
+        .drive_session_request(
+            fixture
+                .service
+                .continue_task_chain("workflow", revision.clone()),
+        )
         .await
-        .expect("restore cancellation persistence");
-
-    // Arrange: the current Implementer snapshot remains readable while a
-    // historical Planner receipt cannot be decoded.
-    sqlx::query(
-        "UPDATE session_operation SET status = 'invalid' WHERE id = 'task-attempt:initial'",
-    )
-    .execute(&fixture.pool)
-    .await
-    .expect("corrupt historical receipt");
-
-    // Act / Assert
-    let error = fixture
+        .expect("old revision receipt");
+    let conflicting = fixture
         .app
         .drive_session_request(fixture.service.continue_task_chain(
             "workflow",
             ContinueTaskChainRequest {
-                attachments: Vec::new(),
-                attempt_id: "unreadable-receipt".into(),
-                clarification: None,
-                expected_attempt_id: "implementation".into(),
+                clarification: Some("Conflicting revision".into()),
+                ..revision
             },
         ))
-        .await
-        .expect_err("surface failed receipt read");
-    assert!(error.to_string().contains("invalid"));
-
-    // Arrange: a newly admitted workflow cannot clear the durable ordinary
-    // review trigger. Its attempt must fail before worker dispatch.
-    sqlx::query(
-        "CREATE TRIGGER reject_review_suppression BEFORE UPDATE OF focused_review_status ON \
-         session BEGIN SELECT RAISE(ABORT, 'review suppression unavailable'); END",
-    )
-    .execute(&fixture.pool)
-    .await
-    .expect("reject review suppression");
-    let launch = StartPlanThenImplementRequest {
-        agents: Box::new(ag_session::PlanThenImplementAgents::bundled().expect("bundled agents")),
-        chain_id: "rejected-review".into(),
-        planner_attempt_id: "review-unavailable".into(),
-        ..launch_request()
-    };
-
-    // Act
-    let error = fixture
+        .await;
+    assert!(conflicting.is_err());
+    let wrong_plan = fixture
+        .app
+        .accept_api_task_chain_plan(
+            "workflow",
+            AcceptTaskChainPlanRequest {
+                plan_attempt_id: "another-version".into(),
+            },
+        )
+        .await;
+    assert!(
+        wrong_plan
+            .expect_err("accepted plan is immutable")
+            .to_string()
+            .contains("already accepted a different plan")
+    );
+    fixture
         .app
         .drive_session_request(
             fixture
                 .service
-                .start_plan_then_implement(&fixture.session_id, launch.clone()),
+                .accept_task_chain_plan("workflow", acceptance),
         )
         .await
-        .expect_err("surface suppression failure");
-    let failed = fixture
-        .app
-        .drive_session_request(fixture.service.get_task_chain(&launch.chain_id))
-        .await
-        .expect("failed workflow read")
-        .expect("durable workflow");
-    let history = fixture
-        .app
-        .drive_session_request(
-            fixture
-                .service
-                .get_agent_task_history(&launch.planner_request().task_id),
-        )
-        .await
-        .expect("undispatched history")
-        .expect("task context");
-
-    // Assert
-    assert!(error.to_string().contains("review suppression unavailable"));
-    assert_eq!(failed.phase, TaskChainPhase::Failed);
-    assert_eq!(history.turns, Vec::<TaskAgentTurn>::new());
+        .expect("handoff receipt");
 }

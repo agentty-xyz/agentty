@@ -192,9 +192,10 @@ impl App {
                 request,
                 session_id,
             } => self.start_api_task_chain(&session_id, request).await,
-            SessionMutation::AcceptTaskChainPlan { chain_id, request } => {
-                self.accept_api_task_chain_plan(&chain_id, request).await
-            }
+            SessionMutation::AcceptTaskChainPlan { chain_id, request } => self
+                .accept_api_task_chain_plan(&chain_id, request)
+                .await
+                .map(|_| ()),
             SessionMutation::ContinueTaskChain { chain_id, request } => {
                 self.continue_api_task_chain(&chain_id, request).await
             }

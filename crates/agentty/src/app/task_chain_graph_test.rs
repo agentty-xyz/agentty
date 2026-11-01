@@ -21,8 +21,8 @@ async fn visible_chain_session_loads_its_latest_graph_for_the_update_version() {
     let session_id = visible_session(&mut app, Some("workflow")).await;
     app.services
         .db()
-        .tasks()
-        .start_task_chain(&session_id, &launch_request(), "agent_task")
+        .graphs()
+        .start_task_chain(&launch_request().graph(&session_id, None), "Add search")
         .await
         .expect("durable chain");
 
@@ -186,7 +186,6 @@ fn launch_request() -> StartPlanThenImplementRequest {
         attachments: Vec::new(),
         agent: AgentSelection::new(AgentKind::Codex, AgentModel::Gpt61Sol),
         chain_id: "workflow".into(),
-        planner_attempt_id: "initial".into(),
         user_request: "Add search".into(),
     }
 }

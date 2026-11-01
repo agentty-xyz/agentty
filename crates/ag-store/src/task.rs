@@ -3,18 +3,15 @@
 use std::sync::Arc;
 
 use ag_session::{
-    AcceptTaskChainPlanRequest, AcceptTaskPlanRequest, AcceptedTaskPlan, ContinueTaskChainRequest,
-    CreateTaskRequest, DurableMessageVisibility, SessionId, SessionMessageKind,
-    StartPlanThenImplementRequest, SubmitAgentTaskRequest, SubmitTaskRequest, Task, TaskAttempt,
-    TaskAttemptStatus, TaskChain, stored_message_content,
+    AcceptTaskPlanRequest, AcceptedTaskPlan, CreateTaskRequest, DurableMessageVisibility,
+    SessionId, SubmitAgentTaskRequest, SubmitTaskRequest, Task, TaskAttempt, TaskAttemptStatus,
 };
 use async_trait::async_trait;
 use sqlx::{SqliteConnection, SqlitePool};
 
-use crate::session_message::SessionMessageStore;
+use crate::execution_graph::SqliteGraphRepository;
 use crate::task_agent::{TaskAgentContextRow, TaskAgentStore};
 use crate::task_agent_turn::{TaskAgentHistoryRow, TaskAgentTurnMetadata, TaskAgentTurnStore};
-use crate::task_chain::TaskChainStore;
 use crate::task_plan::TaskPlanStore;
 use crate::{DbError, TimestampSource};
 
@@ -25,87 +22,6 @@ use crate::{DbError, TimestampSource};
 #[cfg_attr(any(test, feature = "test-utils"), mockall::automock)]
 #[async_trait]
 pub trait TaskRepository: Send + Sync {
-    /// Atomically reserves both role tasks and admits the first Planner.
-    /// The launch prompt and graph marker commit with the workflow receipt.
-    /// Returns false for identical launch redelivery, without replaying work.
-    async fn start_task_chain(
-        &self,
-        session_id: &str,
-        request: &StartPlanThenImplementRequest,
-        operation_kind: &str,
-    ) -> Result<bool, DbError> {
-        let _ = (session_id, request, operation_kind);
-        Err(TaskChainStore::unsupported())
-    }
-
-    /// Reads a consistent stage projection; never dispatches pending work.
-    async fn load_task_chain(&self, chain_id: &str) -> Result<Option<TaskChain>, DbError> {
-        let _ = chain_id;
-        Err(TaskChainStore::unsupported())
-    }
-
-    /// Lists session workflow snapshots in creation order.
-    async fn list_task_chains(&self, session_id: &str) -> Result<Vec<TaskChain>, DbError> {
-        let _ = session_id;
-        Err(TaskChainStore::unsupported())
-    }
-
-    /// Reads the workflow already bound to a reply in its owning session.
-    /// Returns `None` for a new reply or a reply owned by another session.
-    async fn load_task_chain_for_reply(
-        &self,
-        session_id: &str,
-        reply_id: &str,
-    ) -> Result<Option<TaskChain>, DbError> {
-        let _ = (session_id, reply_id);
-        Err(TaskChainStore::unsupported())
-    }
-
-    /// Atomically accepts a Planner version and admits its Implementer.
-    /// Returns false for identical handoff redelivery.
-    async fn accept_task_chain_plan(
-        &self,
-        chain_id: &str,
-        request: &AcceptTaskChainPlanRequest,
-        operation_kind: &str,
-    ) -> Result<bool, DbError> {
-        let _ = (chain_id, request, operation_kind);
-        Err(TaskChainStore::unsupported())
-    }
-
-    /// Admits an explicit new attempt for the current role. Identical old
-    /// delivery never clears cancellation or restarts work.
-    async fn continue_task_chain(
-        &self,
-        chain_id: &str,
-        request: &ContinueTaskChainRequest,
-        operation_kind: &str,
-    ) -> Result<bool, DbError> {
-        let _ = (chain_id, request, operation_kind);
-        Err(TaskChainStore::unsupported())
-    }
-
-    /// Cancels only operations belonging to this workflow; queued attempts
-    /// settle immediately and active workers observe their cancellation flag.
-    async fn cancel_task_chain(&self, chain_id: &str) -> Result<(), DbError> {
-        let _ = chain_id;
-        Err(TaskChainStore::unsupported())
-    }
-
-    /// Atomically records a natural-language reply and appends it as a
-    /// visible user prompt in the owning session transcript. Returns false
-    /// for identical redelivery; reusing a reply identity with different
-    /// inputs is rejected. Recording never admits work.
-    async fn record_task_chain_reply(
-        &self,
-        chain_id: &str,
-        reply_id: &str,
-        prompt: &ag_protocol::TurnPrompt,
-    ) -> Result<bool, DbError> {
-        let _ = (chain_id, reply_id, prompt);
-        Err(TaskChainStore::unsupported())
-    }
-
     /// Accepts the latest successful Planner response by immutable version.
     /// Reads the exact plan from storage; task completion is independent.
     async fn accept_agent_plan(
@@ -202,6 +118,7 @@ pub trait TaskRepository: Send + Sync {
 
     /// Creates an outcome with zero attempts in any persisted session.
     /// Identical requests are idempotent; session and objective are immutable.
+    /// Workflow-reserved role identities require graph admission instead.
     async fn create_task(
         &self,
         session_id: &str,
@@ -216,6 +133,7 @@ pub trait TaskRepository: Send + Sync {
     /// Atomically creates the task, attempt, and queued operation. Returns
     /// `false` for an identical delivery, including a terminal attempt.
     /// Rejects conflicting payloads, completed tasks, and concurrent attempts.
+    /// Workflow-reserved role identities require graph admission instead.
     async fn claim_attempt(
         &self,
         session_id: &str,
@@ -360,7 +278,7 @@ impl SqliteTaskRepository {
     ) -> Result<bool, DbError> {
         let now = self.timestamp_source.now_timestamp_seconds();
         let mut transaction = self.pool.begin().await?;
-        TaskChainStore::require_unowned(&mut transaction, &request.task_id).await?;
+        SqliteGraphRepository::require_unreserved_task(&mut transaction, &request.task_id).await?;
         let claimed = Self::claim_attempt_in_transaction(
             &mut transaction,
             session_id,
@@ -373,26 +291,6 @@ impl SqliteTaskRepository {
         transaction.commit().await?;
 
         Ok(claimed)
-    }
-
-    pub(crate) async fn claim_agent_in_transaction(
-        connection: &mut SqliteConnection,
-        session_id: &str,
-        request: &SubmitAgentTaskRequest,
-        operation_kind: &str,
-        now: i64,
-    ) -> Result<bool, DbError> {
-        let attempt = TaskAgentStore::attempt(request)?;
-
-        Self::claim_attempt_in_transaction(
-            connection,
-            session_id,
-            &attempt,
-            operation_kind,
-            Some(request),
-            now,
-        )
-        .await
     }
 
     pub(crate) async fn claim_attempt_in_transaction(
@@ -490,137 +388,6 @@ impl SqliteTaskRepository {
 
 #[async_trait]
 impl TaskRepository for SqliteTaskRepository {
-    async fn start_task_chain(
-        &self,
-        session_id: &str,
-        request: &StartPlanThenImplementRequest,
-        operation_kind: &str,
-    ) -> Result<bool, DbError> {
-        let now = self.timestamp_source.now_timestamp_seconds();
-        let mut transaction = self.pool.begin().await?;
-        let claimed =
-            TaskChainStore::start(&mut transaction, session_id, request, operation_kind, now)
-                .await?;
-        if claimed {
-            for (kind, raw_content) in [
-                (
-                    SessionMessageKind::UserPrompt,
-                    request.user_request.as_str(),
-                ),
-                (SessionMessageKind::AgentGraph, request.chain_id.as_str()),
-            ] {
-                let content = stored_message_content(kind, raw_content);
-                SessionMessageStore::append_normalized_in_transaction(
-                    &mut transaction,
-                    session_id,
-                    kind,
-                    &content,
-                    now,
-                )
-                .await?;
-            }
-        }
-        transaction.commit().await?;
-
-        Ok(claimed)
-    }
-
-    async fn load_task_chain(&self, chain_id: &str) -> Result<Option<TaskChain>, DbError> {
-        let mut transaction = self.pool.begin().await?;
-        let chain = TaskChainStore::load(&mut transaction, chain_id).await?;
-        transaction.commit().await?;
-
-        Ok(chain)
-    }
-
-    async fn list_task_chains(&self, session_id: &str) -> Result<Vec<TaskChain>, DbError> {
-        let mut transaction = self.pool.begin().await?;
-        let chains = TaskChainStore::list(&mut transaction, session_id).await?;
-        transaction.commit().await?;
-
-        Ok(chains)
-    }
-
-    async fn load_task_chain_for_reply(
-        &self,
-        session_id: &str,
-        reply_id: &str,
-    ) -> Result<Option<TaskChain>, DbError> {
-        let mut transaction = self.pool.begin().await?;
-        let chain = TaskChainStore::load_for_reply(&mut transaction, session_id, reply_id).await?;
-        transaction.commit().await?;
-
-        Ok(chain)
-    }
-
-    async fn accept_task_chain_plan(
-        &self,
-        chain_id: &str,
-        request: &AcceptTaskChainPlanRequest,
-        operation_kind: &str,
-    ) -> Result<bool, DbError> {
-        let now = self.timestamp_source.now_timestamp_seconds();
-        let mut transaction = self.pool.begin().await?;
-        let claimed =
-            TaskChainStore::accept(&mut transaction, chain_id, request, operation_kind, now)
-                .await?;
-        transaction.commit().await?;
-
-        Ok(claimed)
-    }
-
-    async fn continue_task_chain(
-        &self,
-        chain_id: &str,
-        request: &ContinueTaskChainRequest,
-        operation_kind: &str,
-    ) -> Result<bool, DbError> {
-        let now = self.timestamp_source.now_timestamp_seconds();
-        let mut transaction = self.pool.begin().await?;
-        let claimed =
-            TaskChainStore::resume(&mut transaction, chain_id, request, operation_kind, now)
-                .await?;
-        transaction.commit().await?;
-
-        Ok(claimed)
-    }
-
-    async fn cancel_task_chain(&self, chain_id: &str) -> Result<(), DbError> {
-        let now = self.timestamp_source.now_timestamp_seconds();
-        let mut transaction = self.pool.begin().await?;
-        TaskChainStore::cancel(&mut transaction, chain_id, now).await?;
-        transaction.commit().await?;
-
-        Ok(())
-    }
-
-    async fn record_task_chain_reply(
-        &self,
-        chain_id: &str,
-        reply_id: &str,
-        prompt: &ag_protocol::TurnPrompt,
-    ) -> Result<bool, DbError> {
-        let now = self.timestamp_source.now_timestamp_seconds();
-        let mut transaction = self.pool.begin().await?;
-        let session_id =
-            TaskChainStore::record_reply(&mut transaction, chain_id, reply_id, prompt, now).await?;
-        if let Some(session_id) = &session_id {
-            let content =
-                stored_message_content(SessionMessageKind::UserPrompt, &prompt.transcript_text());
-            SessionMessageStore::append_normalized_in_transaction(
-                &mut transaction,
-                session_id,
-                SessionMessageKind::UserPrompt,
-                &content,
-                now,
-            )
-            .await?;
-        }
-        transaction.commit().await?;
-
-        Ok(session_id.is_some())
-    }
-
     async fn accept_agent_plan(
         &self,
         session_id: &str,
@@ -721,6 +488,7 @@ impl TaskRepository for SqliteTaskRepository {
         }
         let now = self.timestamp_source.now_timestamp_seconds();
         let mut transaction = self.pool.begin().await?;
+        SqliteGraphRepository::require_unreserved_task(&mut transaction, &request.task_id).await?;
         sqlx::query!(
             "INSERT INTO task (id, session_id, objective, created_at) VALUES (?, ?, ?, ?) ON \
              CONFLICT(id) DO NOTHING",

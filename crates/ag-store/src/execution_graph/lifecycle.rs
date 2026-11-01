@@ -7,10 +7,16 @@ use ag_session::{
 };
 use sqlx::SqliteConnection;
 
-use super::{GraphExecutionRecord, SqliteGraphRepository};
+use super::{GraphExecutionRecord, GraphNodeHistory, SqliteGraphRepository};
 use crate::DbError;
 
-type HistoryRow = (i64, Option<String>, Option<String>, Option<String>);
+type HistoryRow = (
+    i64,
+    Option<String>,
+    Option<String>,
+    Option<String>,
+    Option<String>,
+);
 
 impl SqliteGraphRepository {
     pub(super) async fn cancelled(
@@ -250,8 +256,71 @@ impl SqliteGraphRepository {
                     serde_json::json!(answers)
                 )
             }
+            GraphNodeContinuation::Reply { message, .. } => {
+                if message.trim().is_empty()
+                    || !matches!(
+                        node.execution.context,
+                        GraphContext::TaskConversation { .. }
+                    )
+                {
+                    return Err(Self::invalid(
+                        "Reply requires guidance for a task conversation",
+                    ));
+                }
+                if !matches!(
+                    status.as_str(),
+                    "failed" | "canceled" | "done" | "completed"
+                ) {
+                    return Err(Self::invalid("Reply requires settled execution"));
+                }
+                if Self::node_output_final(connection, graph, &node.id).await? {
+                    return Err(Self::invalid(
+                        "Accepted or consumed output is final; continue its dependents instead",
+                    ));
+                }
+
+                format!(
+                    "Explicit user reply (JSON data):\n{}",
+                    serde_json::json!({ "message": message })
+                )
+            }
         };
         Ok(prompt)
+    }
+
+    /// Whether an output of this node was accepted or a dependent started.
+    async fn node_output_final(
+        connection: &mut SqliteConnection,
+        graph: &ExecutionGraph,
+        node_id: &str,
+    ) -> Result<bool, DbError> {
+        let accepted: bool = sqlx::query_scalar(
+            "SELECT EXISTS(SELECT 1 FROM execution_graph_result r JOIN execution_graph_evidence v \
+             ON v.execution_graph_result_id = r.id AND v.kind = 'acceptance' WHERE \
+             r.execution_graph_id = ? AND r.node_id = ?)",
+        )
+        .bind(&graph.id)
+        .bind(node_id)
+        .fetch_one(&mut *connection)
+        .await?;
+        if accepted {
+            return Ok(true);
+        }
+        for dependent in graph.nodes.iter().filter(|candidate| {
+            candidate
+                .dependencies
+                .iter()
+                .any(|dependency| dependency.node_id == node_id)
+        }) {
+            if Self::node_execution(&mut *connection, graph, &dependent.id)
+                .await?
+                .is_some()
+            {
+                return Ok(true);
+            }
+        }
+
+        Ok(false)
     }
 
     pub(super) async fn response_body(
@@ -287,16 +356,16 @@ impl SqliteGraphRepository {
     pub(super) async fn node_history(
         &self,
         execution: &GraphExecutionRef,
-    ) -> Result<Option<String>, DbError> {
+    ) -> Result<Option<GraphNodeHistory>, DbError> {
         let mut transaction = self.pool.begin().await?;
         let Some((current_id, record)) = Self::execution(&mut transaction, execution).await? else {
             return Ok(None);
         };
         let rows: Vec<HistoryRow> = sqlx::query_as(
-            "SELECT e.id, c.prompt, r.body, t.metadata FROM execution_graph_execution e LEFT JOIN \
-             execution_graph_continuation c ON c.execution_graph_execution_id = e.id LEFT JOIN \
-             execution_graph_response r ON r.execution_graph_execution_id = e.id LEFT JOIN \
-             execution_graph_task_turn t ON t.execution_graph_execution_id = e.id WHERE \
+            "SELECT e.id, c.prompt, c.request, r.body, t.metadata FROM execution_graph_execution \
+             e LEFT JOIN execution_graph_continuation c ON c.execution_graph_execution_id = e.id \
+             LEFT JOIN execution_graph_response r ON r.execution_graph_execution_id = e.id LEFT \
+             JOIN execution_graph_task_turn t ON t.execution_graph_execution_id = e.id WHERE \
              e.execution_graph_id = ? AND e.revision = ? AND e.node_id = ? AND e.id <= ? ORDER BY \
              e.id",
         )
@@ -307,9 +376,21 @@ impl SqliteGraphRepository {
         .fetch_all(&mut *transaction)
         .await?;
         let mut history = String::new();
-        for (id, prompt, body, metadata) in rows {
+        let mut attachments = Vec::new();
+        for (id, prompt, request, body, metadata) in rows {
             if let Some(prompt) = prompt {
                 let _ = writeln!(history, "User: {prompt}");
+            }
+            if let Some(request) = request {
+                let request: ContinueGraphNodeRequest = serde_json::from_str(&request)
+                    .map_err(|error| Self::invalid(error.to_string()))?;
+                if let GraphNodeContinuation::Reply {
+                    attachments: reply_attachments,
+                    ..
+                } = request.kind
+                {
+                    attachments.extend(reply_attachments);
+                }
             }
             if id == current_id {
                 break;
@@ -328,6 +409,9 @@ impl SqliteGraphRepository {
         }
         transaction.commit().await?;
 
-        Ok((!history.is_empty()).then_some(history))
+        Ok((!history.is_empty()).then_some(GraphNodeHistory {
+            attachments,
+            text: history,
+        }))
     }
 }

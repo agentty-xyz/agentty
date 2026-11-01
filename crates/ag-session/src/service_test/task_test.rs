@@ -146,7 +146,6 @@ async fn existing_hosts_report_unsupported_workflow_capability() {
         attachments: Vec::new(),
         agent: crate::test_support::codex_selection(),
         chain_id: "chain".into(),
-        planner_attempt_id: "plan".into(),
         user_request: "Objective".into(),
     };
 
@@ -158,7 +157,6 @@ async fn existing_hosts_report_unsupported_workflow_capability() {
         .accept_task_chain_plan(
             "chain",
             AcceptTaskChainPlanRequest {
-                attempt_id: "implement".into(),
                 plan_attempt_id: "plan".into(),
             },
         )

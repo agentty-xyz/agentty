@@ -4,9 +4,47 @@ use ag_contracts::{
     AgentRequestKind, ExecutionPolicy, OneShotRequest, OneShotSubmission, PermissionMode,
     ProviderCallBudget, ReasoningLevel, SpeedMode,
 };
+use ag_protocol::{TurnPrompt, TurnPromptAttachment, TurnPromptContentPart};
 use ag_worker::{MockRunClient, RunClient};
 
-use super::{GraphEffectClient, intersect_permissions};
+use super::{GraphEffectClient, graph_prompt, intersect_permissions};
+use crate::app::execution_graph::tests::run_request;
+
+#[test]
+fn graph_images_disambiguate_reused_reply_markers_without_rewriting_json_data() {
+    // Arrange
+    let mut request = run_request();
+    let input =
+        serde_json::json!({"literal": "[Task image #1]", "request": "Use [Image #1]"}).to_string();
+    request.dispatch.node.request = TurnPrompt::from_agent_data(input.clone());
+    request.dispatch.node.request.attachments = vec![TurnPromptAttachment {
+        local_image_path: "initial.png".into(),
+        placeholder: "[Image #1]".into(),
+    }];
+    let replies = vec![TurnPromptAttachment {
+        local_image_path: "revision.png".into(),
+        placeholder: "[Image #1]".into(),
+    }];
+
+    // Act
+    let prompt = graph_prompt(&request, &replies);
+    let paths = prompt
+        .content_parts()
+        .into_iter()
+        .filter_map(|part| match part {
+            TurnPromptContentPart::Attachment(image) => {
+                Some(image.local_image_path.to_str().expect("path"))
+            }
+            TurnPromptContentPart::Text(_) | TurnPromptContentPart::OrphanAttachment(_) => None,
+        })
+        .collect::<Vec<_>>();
+
+    // Assert
+    assert!(prompt.text.contains(&input));
+    assert_eq!(paths, ["initial.png", "revision.png"]);
+    assert_eq!(prompt.attachments[0].placeholder, "[#Task image #1]");
+    assert_eq!(prompt.attachments[1].placeholder, "[Task image #2]");
+}
 
 #[test]
 fn graph_permissions_never_exceed_captured_or_current_permissions() {

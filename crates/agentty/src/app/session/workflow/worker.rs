@@ -1118,12 +1118,7 @@ impl SessionWorkerService {
         let operation_id = command.operation_id().to_string();
 
         if let SessionCommand::RunAgentTask { cancellation, .. } = &command {
-            self.task_cancellations
-                .retain(|_, (_, token)| token.strong_count() > 0);
-            self.task_cancellations.insert(
-                operation_id.clone(),
-                (session_id.clone(), Arc::downgrade(cancellation)),
-            );
+            self.register_task_cancellation(&session_id, &operation_id, cancellation);
         }
 
         let worker = self.ensure_session_worker(services, &runtime);
@@ -1340,6 +1335,21 @@ impl SessionWorkerService {
         }
 
         Ok(())
+    }
+
+    /// Shares per-execution cancellation for role and graph task commands.
+    fn register_task_cancellation(
+        &mut self,
+        session_id: &SessionId,
+        operation_id: &str,
+        cancellation: &Arc<CancellationToken>,
+    ) {
+        self.task_cancellations
+            .retain(|_, (_, token)| token.strong_count() > 0);
+        self.task_cancellations.insert(
+            operation_id.to_string(),
+            (session_id.clone(), Arc::downgrade(cancellation)),
+        );
     }
 
     /// Clears pending chat messages when the work just stopped by user action.
@@ -2024,46 +2034,21 @@ impl SessionManager {
                     "Graph writer requires an idle session stack".into(),
                 ));
             }
-            let graph = services
-                .db()
-                .graphs()
-                .load_graph(&record.graph_id, Some(record.graph_revision))
-                .await?
-                .ok_or_else(|| SessionError::Workflow("Graph snapshot is missing".into()))?;
-            if graph.session_id != *session_id
-                || !graph.nodes.contains(node)
-                || services
-                    .db()
-                    .graphs()
-                    .load_execution(&record.execution)
-                    .await?
-                    .as_ref()
-                    != Some(record)
-            {
-                return Err(SessionError::Workflow(
-                    "Graph task differs from its durable claim".into(),
-                ));
-            }
-            let queued = services
-                .db()
-                .tasks()
-                .load_task(task_id)
-                .await?
-                .is_some_and(|task| {
-                    task.attempts.iter().any(|attempt| {
-                        attempt.id == *attempt_id
-                            && attempt.status == ag_session::TaskAttemptStatus::Queued
-                    })
-                });
-            if !queued {
-                return Err(SessionError::Workflow("Graph task is not queued".into()));
-            }
+            Self::validate_graph_task_claim(services, &request, task_id, attempt_id).await?;
             self.validate_agent_task_workspace(services, session_id)?;
             let runtime = self.session_worker_runtime_or_err(services, session_id)?;
             let owner = session_id.clone();
             let operation_id = operation_id.clone();
+            let cancellation = Arc::new(cancellation);
+            // Stage cancellation interrupts exactly this execution while the
+            // graph and its other nodes stay open.
+            self.worker_service_mut().register_task_cancellation(
+                &owner,
+                &operation_id,
+                &cancellation,
+            );
             let command = SessionCommand::RunGraphTask(Box::new(graph_turn::GraphTaskCommand {
-                cancellation: Arc::new(cancellation),
+                cancellation,
                 completion: completion.clone(),
                 factory: services.task_run_factory(),
                 operation_id,
@@ -2085,6 +2070,53 @@ impl SessionManager {
         if let Err(error) = result {
             completion.finish(Err(error.to_string()));
         }
+    }
+
+    /// Verifies the captured graph request and queued operation before handoff.
+    async fn validate_graph_task_claim(
+        services: &AppServices,
+        request: &ag_worker::GraphRunRequest,
+        task_id: &str,
+        attempt_id: &str,
+    ) -> Result<(), SessionError> {
+        let record = &request.dispatch.record;
+        let graph = services
+            .db()
+            .graphs()
+            .load_graph(&record.graph_id, Some(record.graph_revision))
+            .await?
+            .ok_or_else(|| SessionError::Workflow("Graph snapshot is missing".into()))?;
+        let ag_session::EnvId::SessionWorktree(session_id) = &request.dispatch.node.env_id;
+        if graph.session_id != *session_id
+            || !graph.nodes.contains(&request.dispatch.node)
+            || services
+                .db()
+                .graphs()
+                .load_execution(&record.execution)
+                .await?
+                .as_ref()
+                != Some(record)
+        {
+            return Err(SessionError::Workflow(
+                "Graph task differs from its durable claim".into(),
+            ));
+        }
+        let queued = services
+            .db()
+            .tasks()
+            .load_task(task_id)
+            .await?
+            .is_some_and(|task| {
+                task.attempts.iter().any(|attempt| {
+                    attempt.id == attempt_id
+                        && attempt.status == ag_session::TaskAttemptStatus::Queued
+                })
+            });
+        if !queued {
+            return Err(SessionError::Workflow("Graph task is not queued".into()));
+        }
+
+        Ok(())
     }
 
     /// Checks live readiness and stack ownership before isolated admission.
@@ -2184,6 +2216,20 @@ impl SessionManager {
         }
 
         result
+    }
+
+    /// Materializes a deferred draft workspace before a graph launch, so the
+    /// graph's Env is prepared before any node is admitted.
+    pub(in crate::app) async fn prepare_graph_workspace(
+        &mut self,
+        services: &AppServices,
+        session_id: &str,
+    ) -> Result<(), SessionError> {
+        self.validate_agent_task_workspace(services, session_id)?;
+        self.ensure_session_worktree_ready(services, session_id)
+            .await?;
+
+        self.clear_session_draft_flag(services, session_id).await
     }
 
     pub(in crate::app) fn validate_agent_task_workspace(

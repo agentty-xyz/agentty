@@ -110,12 +110,12 @@ Plan acceptance uses a versioned ledger independent of task completion. Reposito
 prove exact plan handoff, latest-version checks, ownership and captured-selection
 validation, and transactional rejection before Implementer admission.
 
-Static workflow storage atomically reserves role tasks, accepts exact plan versions, and
-admits attempts. Its phase is projected from operation-backed attempts rather than
-stored as a second lifecycle. Pure tests cover phase projection; SQLite boundary tests
-cover historical delivery receipts, cancellation scope, and rollback of failed handoffs.
-A public reopening contract proves interrupted implementation remains failed until an
-explicit retry.
+Static workflows use graph storage, acceptance evidence, and atomic node admission.
+Their phases project operation-backed graph progress. Pure tests cover graph
+construction and phase projection; SQLite tests cover exact handoff, historical
+receipts, reply attachments, and stage cancellation. Public graph contracts cover
+reopening without replay, and scripted session workers cover revision, clarification,
+and ordered effects.
 
 Continuation receipts bind each delivery to its observed source attempt. Transactional
 tests cover stale guidance after a role change, changed anchors on repeated deliveries,

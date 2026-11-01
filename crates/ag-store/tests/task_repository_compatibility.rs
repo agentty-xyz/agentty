@@ -1,10 +1,9 @@
 //! Existing task adapters can omit the optional role-aware capability.
 
 use ag_session::{
-    AcceptTaskChainPlanRequest, AcceptTaskPlanRequest, AgentKind, AgentModel, AgentSelection,
-    ContinueTaskChainRequest, CreateTaskRequest, DurableMessageVisibility,
-    StartPlanThenImplementRequest, SubmitAgentTaskRequest, SubmitTaskRequest, Task,
-    TaskAgentAssignment, TaskAgentInput, TaskAgentRole,
+    AcceptTaskPlanRequest, AgentKind, AgentModel, AgentSelection, CreateTaskRequest,
+    DurableMessageVisibility, SubmitAgentTaskRequest, SubmitTaskRequest, Task, TaskAgentAssignment,
+    TaskAgentInput, TaskAgentRole,
 };
 use ag_store::{DbError, TaskAgentTurnMetadata, TaskRepository};
 use async_trait::async_trait;
@@ -48,87 +47,6 @@ impl TaskRepository for OrdinaryTaskAdapter {
 
     async fn complete_task(&self, _task_id: &str) -> Result<(), DbError> {
         Ok(())
-    }
-}
-
-#[tokio::test]
-async fn ordinary_adapter_explicitly_rejects_optional_static_workflows() {
-    // Arrange
-    let adapter = OrdinaryTaskAdapter;
-    let start = StartPlanThenImplementRequest {
-        agents: Box::new(ag_session::PlanThenImplementAgents::bundled().expect("bundled agents")),
-        attachments: Vec::new(),
-        agent: AgentSelection::new(AgentKind::Codex, AgentModel::Gpt61Sol),
-        chain_id: "chain".into(),
-        planner_attempt_id: "plan".into(),
-        user_request: "request".into(),
-    };
-
-    // Act
-    let start_error = adapter
-        .start_task_chain("session", &start, "reply")
-        .await
-        .expect_err("unsupported");
-    let load = adapter
-        .load_task_chain("chain")
-        .await
-        .expect_err("unsupported");
-    let list = adapter
-        .list_task_chains("session")
-        .await
-        .expect_err("unsupported");
-    let reply_owner = adapter
-        .load_task_chain_for_reply("session", "reply")
-        .await
-        .expect_err("unsupported");
-    let accept = adapter
-        .accept_task_chain_plan(
-            "chain",
-            &AcceptTaskChainPlanRequest {
-                attempt_id: "implement".into(),
-                plan_attempt_id: "plan".into(),
-            },
-            "reply",
-        )
-        .await
-        .expect_err("unsupported");
-    let continued = adapter
-        .continue_task_chain(
-            "chain",
-            &ContinueTaskChainRequest {
-                attachments: Vec::new(),
-                attempt_id: "retry".into(),
-                clarification: None,
-                expected_attempt_id: "plan".into(),
-            },
-            "reply",
-        )
-        .await
-        .expect_err("unsupported");
-    let cancel = adapter
-        .cancel_task_chain("chain")
-        .await
-        .expect_err("unsupported");
-    let reply = adapter
-        .record_task_chain_reply("chain", "reply", &"Go ahead".into())
-        .await
-        .expect_err("unsupported");
-
-    // Assert
-    for error in [
-        start_error,
-        load,
-        list,
-        reply_owner,
-        accept,
-        continued,
-        cancel,
-        reply,
-    ] {
-        assert_eq!(
-            error.to_string(),
-            "Invalid task chain: Host does not support task chains"
-        );
     }
 }
 

@@ -152,7 +152,7 @@ impl TaskChainGraph {
         chain: &TaskChain,
         status: TaskChainNodeStatus,
     ) -> (TaskChainNodeStatus, TaskChainNodeStatus) {
-        match chain.current_request.assignment.role {
+        match chain.current_role {
             TaskAgentRole::Planner => (status, TaskChainNodeStatus::Waiting),
             TaskAgentRole::Implementer => (TaskChainNodeStatus::Done, status),
         }

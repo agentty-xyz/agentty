@@ -17,10 +17,21 @@ impl SqliteGraphRepository {
         let Some(graph) = Self::graph(&mut transaction, graph_id, None).await? else {
             return Ok(None);
         };
-        let cancelled = Self::cancelled(&mut transaction, graph_id).await?;
+        let progress = Self::progress_in(&mut transaction, &graph).await?;
+        transaction.commit().await?;
+
+        Ok(Some(progress))
+    }
+
+    /// Projects one loaded graph inside the caller's snapshot.
+    pub(super) async fn progress_in(
+        connection: &mut SqliteConnection,
+        graph: &ExecutionGraph,
+    ) -> Result<ExecutionGraphProgress, DbError> {
+        let cancelled = Self::cancelled(connection, &graph.id).await?;
         let mut nodes = Vec::new();
         for node in &graph.nodes {
-            let mut progress = Self::node_progress(&mut transaction, &graph, node).await?;
+            let mut progress = Self::node_progress(connection, graph, node).await?;
             if cancelled && progress.status == GraphNodeStatus::Pending {
                 progress.status = GraphNodeStatus::Cancelled;
                 progress.blocked.clear();
@@ -52,15 +63,14 @@ impl SqliteGraphRepository {
         } else {
             ExecutionGraphStatus::Blocked
         };
-        transaction.commit().await?;
 
-        Ok(Some(ExecutionGraphProgress {
-            graph_id: graph.id,
+        Ok(ExecutionGraphProgress {
+            graph_id: graph.id.clone(),
             nodes,
             revision: graph.revision,
-            session_id: graph.session_id,
+            session_id: graph.session_id.clone(),
             status,
-        }))
+        })
     }
 
     async fn node_progress(

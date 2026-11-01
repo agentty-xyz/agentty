@@ -1,14 +1,14 @@
-//! Shared task-chain fixture with scripted role turns on a real session.
+//! Shared task-chain fixture with scripted graph role turns on a real session.
 
-use std::sync::Arc;
+use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
-use ag_contracts::{MockAgentChannel, TurnResult};
+use ag_contracts::{MockAgentChannel, TurnRequest, TurnResult};
 use ag_protocol::AgentResponse;
 use ag_session::{
     AgentAnswerContent, AgentKind, AgentModel, AgentSelection, PermissionMode, SessionId,
     SessionMessageKind, SessionService, SessionStatus, StartPlanThenImplementRequest,
-    TaskAgentRole, TaskChain,
+    TaskAgentRole, TaskChain, TaskChainPhase,
 };
 use sqlx::SqlitePool;
 use tempfile::TempDir;
@@ -16,7 +16,16 @@ use tokio_util::sync::CancellationToken;
 
 use crate::app::App;
 use crate::app::test_support::TestSessionRunFactory;
+use crate::infra::db::{AppRepositories, DbError};
 use crate::test_support::{new_git_test_app_with_pool, set_session_status_for_test};
+
+/// Injected repository failure shared by workflow admission tests.
+pub(in crate::app) fn graph_unavailable() -> DbError {
+    DbError::InvalidData {
+        entity: "execution graph",
+        reason: "injected graph outage".into(),
+    }
+}
 
 /// Launch input for the fixture workflow `workflow`.
 pub(in crate::app) fn launch_request() -> StartPlanThenImplementRequest {
@@ -25,7 +34,6 @@ pub(in crate::app) fn launch_request() -> StartPlanThenImplementRequest {
         attachments: Vec::new(),
         agent: AgentSelection::new(AgentKind::Codex, AgentModel::Gpt61Sol),
         chain_id: "workflow".into(),
-        planner_attempt_id: "initial".into(),
         user_request: "Implement a scoped change".into(),
     }
 }
@@ -45,8 +53,7 @@ pub(in crate::app) fn agent_answer(
     )
 }
 
-/// A review-ready session whose role turns are answered by registered
-/// scripts.
+/// A review-ready session whose graph role turns are answered by scripts.
 pub(in crate::app) struct ChainFixture {
     pub(in crate::app) app: App,
     pub(in crate::app) pool: SqlitePool,
@@ -107,84 +114,115 @@ impl ChainFixture {
         }
     }
 
-    /// Registers the next turn of `task_id`; a blocked turn waits for
-    /// `Script::release`.
-    pub(in crate::app) fn register_result(
+    /// Queues the next graph role turn; a blocked turn waits for
+    /// `Script::release`. Role turns run in queue order.
+    pub(in crate::app) fn register_turn(&self, answer: &str, blocked: bool) -> Script {
+        self.register_response(AgentResponse::plain(answer), blocked)
+    }
+
+    /// Queues the next graph role turn with an explicit structured response.
+    pub(in crate::app) fn register_response(
         &self,
-        task_id: &str,
-        answer: &str,
+        response: AgentResponse,
         blocked: bool,
     ) -> Script {
         let script = Script {
             entered: CancellationToken::new(),
+            prompt: Arc::new(Mutex::new(None)),
             release: CancellationToken::new(),
         };
         if !blocked {
             script.release.cancel();
         }
         let entered = script.entered.clone();
+        let prompt = Arc::clone(&script.prompt);
         let release = script.release.clone();
-        let response = AgentResponse::plain(answer);
         let mut channel = MockAgentChannel::new();
-        channel.expect_run_turn().once().returning(move |_, _, _| {
-            let entered = entered.clone();
-            let release = release.clone();
-            let response = response.clone();
+        channel
+            .expect_run_turn()
+            .once()
+            .returning(move |_, request, _| {
+                *prompt.lock().expect("observed prompt") = Some(request);
+                let entered = entered.clone();
+                let release = release.clone();
+                let response = response.clone();
 
-            Box::pin(async move {
-                entered.cancel();
-                release.cancelled().await;
-                Ok(TurnResult {
-                    assistant_message: response,
-                    context_reset: false,
-                    harness_report: None,
-                    input_tokens: 1,
-                    output_tokens: 1,
-                    provider_conversation_id: Some("task-thread".into()),
+                Box::pin(async move {
+                    entered.cancel();
+                    release.cancelled().await;
+                    Ok(TurnResult {
+                        assistant_message: response,
+                        context_reset: false,
+                        harness_report: None,
+                        input_tokens: 1,
+                        output_tokens: 1,
+                        provider_conversation_id: Some("task-thread".into()),
+                    })
                 })
-            })
-        });
+            });
         channel
             .expect_shutdown_session()
             .times(1..)
             .returning(|_| Box::pin(async { Ok(()) }));
-        self.factory.register(task_id, Arc::new(channel));
+        self.factory.register_graph_task(Arc::new(channel));
 
         script
     }
 
-    /// Drives reducer events until the current attempt's operation settles.
+    /// Drives the runtime until the scripted turn starts and the workflow
+    /// leaves its working phase.
     pub(in crate::app) async fn settle(&mut self, script: &Script) {
         self.settle_chain(script, "workflow").await;
     }
 
     /// Settles a named workflow when a session owns several chains.
     pub(in crate::app) async fn settle_chain(&mut self, script: &Script, chain_id: &str) {
-        script.started().await;
-        let request = self
-            .app
-            .drive_session_request(self.service.get_task_chain(chain_id))
+        let db = self.app.services.db().clone();
+        let chain_id = chain_id.to_string();
+        self.app.drive_session_request(script.started()).await;
+        // Run database polling independently: suspending a transaction in
+        // drive_session_request can starve a foreground command on the
+        // fixture's single-connection pool.
+        let waiter = tokio::spawn(async move {
+            wait_for_chain(&db, &chain_id, |chain| {
+                !matches!(
+                    chain.phase,
+                    TaskChainPhase::Planning | TaskChainPhase::Implementing
+                )
+            })
             .await
-            .expect("read workflow")
-            .expect("workflow exists")
-            .current_request;
-        let operation_id = format!("task-attempt:{}", request.attempt_id);
-        tokio::time::timeout(Duration::from_secs(10), async {
-            while self
-                .app
-                .services
-                .db()
-                .operations()
-                .is_session_operation_unfinished(&operation_id)
-                .await
-                .expect("operation state")
-            {
-                let event = self.app.next_app_event().await.expect("worker event");
-                self.app.apply_app_events(event).await;
-            }
-        })
-        .await
-        .expect("settle guard");
+        });
+        self.app
+            .drive_session_request(waiter)
+            .await
+            .expect("workflow waiter");
+        self.drain_app_events().await;
+    }
+
+    /// Drives the runtime until the workflow satisfies `condition`.
+    pub(in crate::app) async fn wait_for(
+        &mut self,
+        condition: impl Fn(&TaskChain) -> bool + Send + Sync + 'static,
+    ) -> TaskChain {
+        let db = self.app.services.db().clone();
+        let waiter = tokio::spawn(async move { wait_for_chain(&db, "workflow", condition).await });
+        let chain = self
+            .app
+            .drive_session_request(waiter)
+            .await
+            .expect("workflow waiter");
+        self.drain_app_events().await;
+
+        chain
+    }
+
+    /// Applies already queued reducer events and syncs the live session.
+    pub(in crate::app) async fn drain_app_events(&mut self) {
+        while let Ok(Some(event)) =
+            tokio::time::timeout(Duration::from_millis(20), self.app.next_app_event()).await
+        {
+            self.app.apply_app_events(event).await;
+        }
         self.app.sessions.sync_session_from_handle(&self.session_id);
     }
 
@@ -225,9 +263,45 @@ impl ChainFixture {
     }
 }
 
+/// Polls durable workflow state; graph settlement completes in the
+/// background driver after the worker's own status updates.
+async fn wait_for_chain(
+    db: &AppRepositories,
+    chain_id: &str,
+    condition: impl Fn(&TaskChain) -> bool,
+) -> TaskChain {
+    let result = tokio::time::timeout(Duration::from_secs(10), async {
+        loop {
+            if let Some(chain) = db
+                .graphs()
+                .load_task_chain(chain_id)
+                .await
+                .expect("workflow state")
+                .filter(|chain| condition(chain))
+            {
+                return chain;
+            }
+            tokio::time::sleep(Duration::from_millis(10)).await;
+        }
+    })
+    .await;
+
+    let diagnostic = if result.is_err() {
+        format!(
+            "workflow settle guard; progress: {:?}",
+            db.graphs().progress(chain_id).await
+        )
+    } else {
+        String::new()
+    };
+
+    result.expect(&diagnostic)
+}
+
 /// Observes and releases one scripted role turn.
 pub(in crate::app) struct Script {
     pub(in crate::app) entered: CancellationToken,
+    pub(in crate::app) prompt: Arc<Mutex<Option<TurnRequest>>>,
     pub(in crate::app) release: CancellationToken,
 }
 
@@ -237,5 +311,25 @@ impl Script {
         tokio::time::timeout(Duration::from_secs(10), self.entered.cancelled())
             .await
             .expect("execution start guard");
+    }
+
+    /// Returns the replayed history and prompt sent to the provider.
+    pub(in crate::app) fn prompt(&self) -> String {
+        let request = self.request();
+
+        format!(
+            "{}\n{}",
+            request.continuation.replay_transcript().unwrap_or_default(),
+            request.prompt.agent_text()
+        )
+    }
+
+    /// Captured provider request, including structured images and settings.
+    pub(in crate::app) fn request(&self) -> TurnRequest {
+        self.prompt
+            .lock()
+            .expect("observed prompt")
+            .clone()
+            .expect("turn ran")
     }
 }

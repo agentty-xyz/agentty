@@ -1,481 +1,230 @@
-//! Public static workflow durability and explicit recovery contract.
+//! Public durability of the graph-backed plan workflow and reply decisions.
 
+use std::error::Error;
+use std::path::Path;
+
+use ag_protocol::TurnPrompt;
 use ag_session::{
-    AcceptTaskChainPlanRequest, AgentAnswerContent, AgentKind, AgentModel, AgentSelection,
-    ContinueTaskChainRequest, SessionMessageKind, StartPlanThenImplementRequest, TaskAgentRole,
-    TaskChainPhase,
+    AgentKind, AgentModel, AgentSelection, CreateTaskRequest, DurableMessageVisibility,
+    ExecutionGraph, GraphExecutionRef, PlanThenImplementAgents, StartPlanThenImplementRequest,
+    SubmitTaskRequest, TaskChainPhase, TaskChainReplyOutcome,
 };
-use ag_store::{Database, DbError, TaskAgentTurnMetadata};
-use tempfile::tempdir;
+use ag_store::{Database, GraphEvidence, TaskAgentTurnMetadata};
+use ag_worker::{GraphAdmission, GraphDispatch};
 
 #[tokio::test]
-async fn launch_transcript_failures_roll_back_workflow_admission_before_retry() {
-    for failed_kind in [
-        SessionMessageKind::UserPrompt,
-        SessionMessageKind::AgentGraph,
-    ] {
-        // Arrange
-        let database = chain_database().await.expect("database");
-        let mut request = chain_request();
-        request.chain_id = " chain \n".into();
-        let before = durable_counts(&database).await.expect("counts");
-        reject_transcript_kind(&database, failed_kind)
-            .await
-            .expect("reject transcript");
-
-        // Act
-        let failed = database
-            .tasks()
-            .start_task_chain("session", &request, "reply")
-            .await;
-
-        // Assert
-        assert!(failed.is_err(), "{failed_kind}");
-        assert_eq!(
-            durable_counts(&database).await.expect("counts"),
-            before,
-            "{failed_kind}"
-        );
-        assert_eq!(
-            database
-                .tasks()
-                .load_task_chain(&request.chain_id)
-                .await
-                .expect("chain"),
-            None
-        );
-
-        // Act: retry the same immutable launch after storage recovers.
-        allow_transcript(&database).await.expect("recover storage");
-        assert!(
-            database
-                .tasks()
-                .start_task_chain("session", &request, "reply")
-                .await
-                .expect("retry")
-        );
-        assert!(
-            !database
-                .tasks()
-                .start_task_chain("session", &request, "reply")
-                .await
-                .expect("redelivery")
-        );
-
-        // Assert
-        let messages = database
-            .sessions()
-            .load_session_messages("session")
-            .await
-            .expect("transcript");
-        assert_eq!(messages.len(), 2);
-        assert_eq!(messages[0].kind, SessionMessageKind::UserPrompt.as_str());
-        assert_eq!(messages[0].content, request.user_request);
-        assert_eq!(messages[1].kind, SessionMessageKind::AgentGraph.as_str());
-        assert_eq!(messages[1].content, request.chain_id);
-    }
-}
-
-#[tokio::test]
-async fn role_transcript_failure_rolls_back_response_usage_and_continuation_before_retry() {
+async fn reopening_retains_the_accepted_graph_handoff_and_original_reply_decision()
+-> Result<(), Box<dyn Error>> {
     // Arrange
-    let database = chain_database().await.expect("database");
-    let request = chain_request();
+    let directory = tempfile::tempdir()?;
+    let path = directory.path().join("workflow.sqlite");
+    let database = Database::open(&path).await?;
+    let (graph, planner) = planned_workflow(&database).await?;
+    for role in ["planner", "implementer"] {
+        reject_ordinary_task_inputs(&database, &format!("chain:workflow:{role}")).await?;
+    }
     database
-        .tasks()
-        .start_task_chain("session", &request, "reply")
-        .await
-        .expect("launch");
+        .graphs()
+        .record_task_chain_reply(
+            &graph.id,
+            "approval",
+            &TurnPrompt::from_text("Go ahead".into()),
+            &planner.record.execution,
+        )
+        .await?;
+    let decision = database
+        .graphs()
+        .decide_task_chain_reply("approval", TaskChainReplyOutcome::PlanAccepted, None)
+        .await?;
+    let plan = database
+        .graphs()
+        .list_results(&graph.id, "planner", "plan")
+        .await?
+        .pop()
+        .expect("plan")
+        .result
+        .reference;
     database
-        .operations()
-        .mark_session_operation_running("task-attempt:plan")
-        .await
-        .expect("running");
-    let task_id = request.planner_request().task_id;
-    let before_history = database
-        .tasks()
-        .load_agent_history(&task_id)
-        .await
-        .expect("history");
-    let before_counts = durable_counts(&database).await.expect("counts");
-    reject_transcript_kind(&database, SessionMessageKind::AgentAnswer)
-        .await
-        .expect("reject transcript");
-    let metadata = TaskAgentTurnMetadata {
-        assistant_message: r#"{"answer":"Durable plan","questions":[]}"#.into(),
-        harness_turn_report: Some("{}".into()),
-        instruction_conversation_id: Some("bootstrap".into()),
-        input_tokens: 5,
-        output_tokens: 2,
-        provider_conversation_id: Some("thread".into()),
-    };
+        .graphs()
+        .accept_result(
+            &plan,
+            &GraphEvidence {
+                actor: "user".into(),
+                reason: "Go ahead".into(),
+            },
+        )
+        .await?;
+    let implementation = match database
+        .graph_dispatch()
+        .claim(
+            &graph.id,
+            graph.revision,
+            "implementer",
+            &uuid::Uuid::new_v4().to_string(),
+            Path::new("workspace"),
+        )
+        .await?
+    {
+        GraphAdmission::Claimed(dispatch) => Some(dispatch),
+        _ => None,
+    }
+    .expect("implementation admission");
+    database
+        .graph_dispatch()
+        .fail(&implementation.record, "Interrupted by restart")
+        .await?;
+    database.pool().close().await;
 
     // Act
-    let failed = database.tasks().persist_agent_turn("plan", &metadata).await;
+    let reopened = Database::open(&path).await?;
+    reject_ordinary_task_inputs(&reopened, "chain:workflow:implementer").await?;
+    let chains = reopened.graphs().list_task_chains("session").await?;
+    let redelivery = reopened
+        .graph_dispatch()
+        .claim(
+            &graph.id,
+            graph.revision,
+            "implementer",
+            &uuid::Uuid::new_v4().to_string(),
+            Path::new("workspace"),
+        )
+        .await?;
+    let reply = reopened
+        .graphs()
+        .decide_task_chain_reply(
+            "approval",
+            TaskChainReplyOutcome::PlanRevised,
+            Some(uuid::Uuid::new_v4().to_string()),
+        )
+        .await?;
 
     // Assert
-    assert!(failed.is_err());
+    assert_eq!(chains.len(), 1);
+    assert_eq!(chains[0].phase, TaskChainPhase::Failed);
     assert_eq!(
-        durable_counts(&database).await.expect("counts"),
-        before_counts
+        chains[0].accepted_plan.as_ref().expect("accepted").text,
+        "Build a title index"
     );
-    assert_eq!(
-        database
-            .tasks()
-            .load_agent_history(&task_id)
-            .await
-            .expect("history"),
-        before_history
-    );
-
-    // Act: no receipt survived the failed projection, so retry writes all
-    // effects once.
-    allow_transcript(&database).await.expect("recover storage");
+    assert_eq!(reply, decision);
+    assert_eq!(implementation.inputs[0].reference.result, plan);
     assert!(
-        database
-            .tasks()
-            .persist_agent_turn("plan", &metadata)
-            .await
-            .expect("retry")
+        matches!(redelivery, GraphAdmission::Existing(record) if record == implementation.record)
     );
-    assert!(
-        !database
-            .tasks()
-            .persist_agent_turn("plan", &metadata)
-            .await
-            .expect("redelivery")
+    assert_eq!(
+        reopened.graphs().load_graph(&graph.id, None).await?,
+        Some(graph)
     );
+    reopened.pool().close().await;
 
-    // Assert
-    let history = database
-        .tasks()
-        .load_agent_history(&task_id)
-        .await
-        .expect("history")
-        .expect("context");
-    assert_eq!(history.turns.len(), 1);
-    assert_eq!(
-        history.provider_conversation_id,
-        metadata.provider_conversation_id
-    );
-    assert_eq!(
-        history.instruction_conversation_id,
-        metadata.instruction_conversation_id
-    );
-    let usage: (i64, i64, i64) = sqlx::query_as(
-        "SELECT input_tokens, output_tokens, invocation_count FROM session_usage WHERE session_id \
-         = 'session'",
-    )
-    .fetch_one(database.pool())
-    .await
-    .expect("usage");
-    assert_eq!(usage, (5, 2, 1));
-    let messages = database
-        .sessions()
-        .load_session_messages("session")
-        .await
-        .expect("transcript");
-    assert_eq!(messages.len(), 3);
-    assert_eq!(messages[2].kind, SessionMessageKind::AgentAnswer.as_str());
-    assert_eq!(
-        AgentAnswerContent::decode(&messages[2].content),
-        Some(AgentAnswerContent {
-            agent: TaskAgentRole::Planner,
-            text: "Durable plan".into()
-        })
-    );
+    Ok(())
 }
 
-async fn chain_database() -> Result<Database, DbError> {
-    let database = Database::open_in_memory().await?;
+/// Public task APIs cannot occupy a role's durable graph reservation.
+async fn reject_ordinary_task_inputs(
+    database: &Database,
+    task_id: &str,
+) -> Result<(), Box<dyn Error>> {
+    let before = database.tasks().list_tasks("session").await?;
+    let created = database
+        .tasks()
+        .create_task(
+            "session",
+            &CreateTaskRequest {
+                objective: "Add search".into(),
+                task_id: task_id.into(),
+            },
+        )
+        .await;
+    let submitted = database
+        .tasks()
+        .claim_attempt(
+            "session",
+            &SubmitTaskRequest {
+                attempt_id: "ordinary-attempt".into(),
+                message: "Occupy the workflow task".into(),
+                objective: "Add search".into(),
+                task_id: task_id.into(),
+                visibility: DurableMessageVisibility::Visible,
+            },
+            "reply",
+        )
+        .await;
+    for result in [created.map(|()| true), submitted] {
+        assert!(matches!(
+            result,
+            Err(ag_store::DbError::InvalidData { reason, .. })
+                if reason == "Workflow task identities require graph admission"
+        ));
+    }
+    assert_eq!(database.tasks().list_tasks("session").await?, before);
+
+    Ok(())
+}
+
+async fn planned_workflow(
+    database: &Database,
+) -> Result<(ExecutionGraph, Box<GraphDispatch>), Box<dyn Error>> {
     let project = database.projects().upsert_project("project", None).await?;
     database
         .sessions()
         .insert_session("session", "gpt-6.1-sol", "main", "Review", project)
         .await?;
-
-    Ok(database)
-}
-
-fn chain_request() -> StartPlanThenImplementRequest {
-    StartPlanThenImplementRequest {
-        agents: ag_session::test_support::workflow_agents(),
-        attachments: Vec::new(),
+    let graph = StartPlanThenImplementRequest {
         agent: AgentSelection::new(AgentKind::Codex, AgentModel::Gpt61Sol),
-        chain_id: "chain".into(),
-        planner_attempt_id: "plan".into(),
-        user_request: "Implement this change".into(),
+        agents: Box::new(PlanThenImplementAgents::bundled().ok_or("bundled agents missing")?),
+        attachments: Vec::new(),
+        chain_id: "workflow".into(),
+        user_request: "Add search".into(),
     }
-}
-
-async fn durable_counts(
-    database: &Database,
-) -> Result<(i64, i64, i64, i64, i64, i64, i64, i64), sqlx::Error> {
-    sqlx::query_as(
-        "SELECT (SELECT COUNT(*) FROM task), (SELECT COUNT(*) FROM task_attempt), (SELECT \
-         COUNT(*) FROM task_agent_context), (SELECT COUNT(*) FROM task_chain), (SELECT COUNT(*) \
-         FROM task_agent_turn), (SELECT COUNT(*) FROM session_usage), (SELECT COUNT(*) FROM \
-         harness_turn_report), (SELECT COUNT(*) FROM session_message)",
-    )
-    .fetch_one(database.pool())
-    .await
-}
-
-async fn reject_transcript_kind(
-    database: &Database,
-    kind: SessionMessageKind,
-) -> Result<(), sqlx::Error> {
-    sqlx::query("CREATE TABLE rejected_transcript_kind (kind TEXT NOT NULL)")
-        .execute(database.pool())
-        .await?;
-    sqlx::query("INSERT INTO rejected_transcript_kind (kind) VALUES (?)")
-        .bind(kind.as_str())
-        .execute(database.pool())
-        .await?;
-    sqlx::query(
-        "CREATE TRIGGER reject_transcript BEFORE INSERT ON session_message WHEN NEW.kind IN \
-         (SELECT kind FROM rejected_transcript_kind) BEGIN SELECT RAISE(ABORT, 'transcript \
-         unavailable'); END",
-    )
-    .execute(database.pool())
-    .await?;
-    Ok(())
-}
-
-async fn allow_transcript(database: &Database) -> Result<(), sqlx::Error> {
-    sqlx::query("DROP TRIGGER reject_transcript")
-        .execute(database.pool())
-        .await?;
-    Ok(())
-}
-
-#[tokio::test]
-async fn reopening_never_replays_an_interrupted_implementation() {
-    // Arrange
-    let directory = tempdir().expect("directory");
-    let path = directory.path().join("chain.sqlite");
-    let database = Database::open(&path).await.expect("database");
-    let project = database
-        .projects()
-        .upsert_project("project", None)
-        .await
-        .expect("project");
+    .graph(&"session".into(), Some("User: use the title index"));
     database
-        .sessions()
-        .insert_session("session", "gpt-6.1-sol", "main", "Review", project)
-        .await
-        .expect("session");
-    let start = StartPlanThenImplementRequest {
-        agents: ag_session::test_support::workflow_agents(),
-        attachments: Vec::new(),
-        agent: AgentSelection::new(AgentKind::Codex, AgentModel::Gpt61Sol),
-        chain_id: "chain".into(),
-        planner_attempt_id: "plan".into(),
-        user_request: "Implement this change".into(),
-    };
-    begin_implementation(&database, &start)
-        .await
-        .expect("initial implementation");
-    database.pool().close().await;
-
-    // Act
-    let reopened = Database::open(&path).await.expect("reopen");
-    reopened
-        .operations()
-        .fail_unfinished_session_operations("Interrupted by restart")
-        .await
-        .expect("recovery");
-    let recovered = reopened
-        .tasks()
-        .load_task_chain("chain")
-        .await
-        .expect("snapshot")
-        .expect("chain");
-    let repeated = reopened
-        .tasks()
-        .start_task_chain("session", &start, "reply")
-        .await
-        .expect("old launch receipt");
-
-    // Assert
-    assert!(!repeated);
-    assert_eq!(recovered.phase, TaskChainPhase::Failed);
-    assert_eq!(recovered.current_request.attempt_id, "implement");
-    assert_eq!(
-        recovered.accepted_plan.expect("accepted").text,
-        "Exact plan"
-    );
-    assert_eq!(
-        reopened
-            .tasks()
-            .load_task("chain:chain:implementer")
-            .await
-            .expect("task")
-            .expect("present")
-            .attempts
-            .len(),
-        1
-    );
-    let admitted = reopened
-        .tasks()
-        .continue_task_chain(
-            "chain",
-            &ContinueTaskChainRequest {
-                attachments: Vec::new(),
-                attempt_id: "explicit-retry".into(),
-                clarification: Some("Retry after inspection".into()),
-                expected_attempt_id: "implement".into(),
-            },
-            "reply",
+        .graphs()
+        .start_task_chain(&graph, "Add search")
+        .await?;
+    let planner = match database
+        .graph_dispatch()
+        .claim(
+            &graph.id,
+            graph.revision,
+            "planner",
+            &uuid::Uuid::new_v4().to_string(),
+            Path::new("workspace"),
         )
-        .await
-        .expect("explicit retry");
-    assert!(admitted);
-    assert_eq!(
-        reopened
-            .tasks()
-            .load_task_chain("chain")
-            .await
-            .expect("snapshot")
-            .expect("chain")
-            .phase,
-        TaskChainPhase::Implementing
-    );
-    reopened
-        .sessions()
-        .delete_session("session")
-        .await
-        .expect("delete owner");
-    assert_eq!(
-        reopened
-            .tasks()
-            .load_task_chain("chain")
-            .await
-            .expect("deleted chain"),
-        None
-    );
-}
-
-#[tokio::test]
-async fn reopening_keeps_reply_receipts_without_duplicate_prompts() {
-    // Arrange
-    let directory = tempdir().expect("directory");
-    let path = directory.path().join("reply.sqlite");
-    let database = Database::open(&path).await.expect("database");
-    let project = database
-        .projects()
-        .upsert_project("project", None)
-        .await
-        .expect("project");
-    database
-        .sessions()
-        .insert_session("session", "gpt-6.1-sol", "main", "Review", project)
-        .await
-        .expect("session");
-    database
-        .tasks()
-        .start_task_chain(
-            "session",
-            &StartPlanThenImplementRequest {
-                agents: ag_session::test_support::workflow_agents(),
-                attachments: Vec::new(),
-                agent: AgentSelection::new(AgentKind::Codex, AgentModel::Gpt61Sol),
-                chain_id: "chain".into(),
-                planner_attempt_id: "plan".into(),
-                user_request: "Implement this change".into(),
-            },
-            "reply",
-        )
-        .await
-        .expect("start");
-    let recorded = database
-        .tasks()
-        .record_task_chain_reply("chain", "reply-1", &"Go ahead".into())
-        .await
-        .expect("record reply");
-    database.pool().close().await;
-
-    // Act
-    let reopened = Database::open(&path).await.expect("reopen");
-    let redelivered = reopened
-        .tasks()
-        .record_task_chain_reply("chain", "reply-1", &"Go ahead".into())
-        .await
-        .expect("reply receipt");
-    let owner = reopened
-        .tasks()
-        .load_task_chain_for_reply("session", "reply-1")
-        .await
-        .expect("reply owner")
-        .expect("recorded reply");
-    let messages = reopened
-        .sessions()
-        .load_session_messages("session")
-        .await
-        .expect("transcript");
-
-    // Assert
-    assert!(recorded);
-    assert!(!redelivered);
-    assert_eq!(owner.id, "chain");
-    assert_eq!(
-        messages
-            .iter()
-            .map(|message| (message.kind.as_str(), message.content.as_str()))
-            .collect::<Vec<_>>(),
-        [
-            ("user_prompt", "Implement this change"),
-            ("agent_graph", "chain"),
-            ("user_prompt", "Go ahead")
-        ]
-    );
-}
-
-async fn begin_implementation(
-    database: &Database,
-    start: &StartPlanThenImplementRequest,
-) -> Result<(), DbError> {
-    database
-        .tasks()
-        .start_task_chain("session", start, "reply")
-        .await?;
+        .await?
+    {
+        GraphAdmission::Claimed(dispatch) => Some(dispatch),
+        _ => None,
+    }
+    .ok_or("planner admission missing")?;
+    let operation_id = match &planner.record.execution {
+        GraphExecutionRef::TaskAttempt { operation_id, .. } => Some(operation_id),
+        GraphExecutionRef::UtilityRun { .. } => None,
+    }
+    .ok_or("task attempt missing")?;
+    let body = r#"{"answer":"Build a title index"}"#;
     database
         .operations()
-        .mark_session_operation_running("task-attempt:plan")
+        .mark_session_operation_running(operation_id)
         .await?;
     database
-        .tasks()
-        .persist_agent_turn(
-            "plan",
+        .graphs()
+        .record_task_turn(
+            &planner,
             &TaskAgentTurnMetadata {
-                assistant_message: r#"{"answer":"Exact plan","questions":[]}"#.into(),
+                assistant_message: body.into(),
                 harness_turn_report: None,
                 instruction_conversation_id: None,
-                input_tokens: 0,
-                output_tokens: 0,
+                input_tokens: 1,
+                output_tokens: 1,
                 provider_conversation_id: None,
             },
         )
         .await?;
     database
         .operations()
-        .mark_session_operation_done("task-attempt:plan")
+        .mark_session_operation_done(operation_id)
         .await?;
-    database
-        .tasks()
-        .accept_task_chain_plan(
-            "chain",
-            &AcceptTaskChainPlanRequest {
-                attempt_id: "implement".into(),
-                plan_attempt_id: "plan".into(),
-            },
-            "reply",
-        )
-        .await?;
-    database
-        .operations()
-        .mark_session_operation_running("task-attempt:implement")
-        .await?;
+    database.graph_dispatch().finish(&planner, body).await?;
 
-    Ok(())
+    Ok((graph, planner))
 }

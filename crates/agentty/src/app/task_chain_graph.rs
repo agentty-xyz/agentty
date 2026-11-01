@@ -48,7 +48,7 @@ impl App {
         tokio::spawn(async move {
             let result = services
                 .db()
-                .tasks()
+                .graphs()
                 .list_task_chains(&session_id)
                 .await
                 .map(|chains| chains.last().map(TaskChainGraph::from_chain))

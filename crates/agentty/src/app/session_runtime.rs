@@ -305,9 +305,13 @@ impl SessionRuntimeHandle {
     pub(crate) async fn apply_task_chain_reply(
         &self,
         action: TaskChainReplyAction,
+        cancellation: Arc<CancellationToken>,
     ) -> Result<ag_session::TaskChainReplyOutcome, SessionError> {
         self.request_mutation(|response_tx| CommandDelivery::TaskChainReply {
-            request: TaskChainReplyCommand::Apply(action),
+            request: TaskChainReplyCommand::Apply {
+                action,
+                cancellation,
+            },
             response_tx,
         })
         .await
@@ -602,7 +606,7 @@ pub(crate) struct SessionRuntime {
     /// Task chains whose reply decision has deferred its admission to a
     /// background task, with its independently cancelable run scope. Further
     /// replies are busy until that action arrives.
-    pub(crate) deciding_task_chain_ids: HashMap<String, CancellationToken>,
+    pub(crate) deciding_task_chain_ids: HashMap<String, Arc<CancellationToken>>,
     command_rx: mpsc::Receiver<SessionRuntimeCommand>,
     command_tx: mpsc::Sender<SessionRuntimeCommand>,
     consumer_state: Arc<SessionRuntimeConsumerState>,

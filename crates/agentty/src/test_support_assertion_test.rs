@@ -5,8 +5,38 @@ use ratatui::buffer::Buffer;
 use ratatui::style::{Color, Style};
 
 use super::{
-    TestSubscriber, rendered_text_start_cell, rendered_text_start_cells, setup_test_git_repo,
+    TestSubscriber, git_repo_template_at, rendered_text_start_cell, rendered_text_start_cells,
+    setup_test_git_repo,
 };
+
+#[test]
+fn git_template_publication_keeps_a_valid_fallback_for_an_incomplete_cache() {
+    for incomplete in [false, true] {
+        // Arrange
+        let directory = tempfile::tempdir().expect("cache directory");
+        let cache = directory.path().join("template");
+        if incomplete {
+            std::fs::create_dir_all(cache.join(".git/objects")).expect("incomplete cache");
+        }
+
+        // Act
+        let (template, staging) = git_repo_template_at(cache.clone());
+
+        // Assert
+        assert!(template.join(".git/HEAD").is_file());
+        assert_eq!(staging.is_some(), incomplete);
+        if incomplete {
+            assert_ne!(template, cache);
+            drop(staging);
+            assert!(!template.exists());
+        } else {
+            assert_eq!(template, cache);
+            let (reused, staging) = git_repo_template_at(cache);
+            assert_eq!(reused, template);
+            assert!(staging.is_none());
+        }
+    }
+}
 
 #[test]
 fn git_repo_fixtures_are_independent_committed_main_checkouts() {

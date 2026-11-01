@@ -8,7 +8,7 @@ use ag_session::{
     AcceptTaskChainPlanRequest, SessionError, SessionId, SessionMessageKind, SessionStatus,
     StartPlanThenImplementRequest, TaskAgentRole, TaskChain, TaskChainPhase, TaskChainReplyOutcome,
 };
-use ag_store::{DbError, MockTaskRepository};
+use ag_store::{DbError, MockGraphRepository};
 use ag_worker::MockRunClient;
 
 use super::{deferred_reply_error, task_chain_reply_failure};
@@ -27,6 +27,7 @@ async fn plan_request_starts_one_planner_chain_with_the_session_agent() {
         .session_for_id(&fixture.session_id)
         .expect("session")
         .agent;
+    let planner = fixture.register_turn("A plan", true);
 
     // Act
     let blank = fixture
@@ -59,7 +60,18 @@ async fn plan_request_starts_one_planner_chain_with_the_session_agent() {
     assert_eq!(chains[0].agent, session_agent);
     assert_eq!(chains[0].user_request, "Add search [Image #1]");
     assert_eq!(
-        chains[0].current_request.input.attachments,
+        fixture
+            .app
+            .services
+            .db()
+            .graphs()
+            .load_graph(&chains[0].id, None)
+            .await
+            .expect("graph")
+            .expect("stored")
+            .nodes[0]
+            .request
+            .attachments,
         image_prompt("").attachments
     );
     let transcript = fixture.persisted_transcript().await;
@@ -69,6 +81,7 @@ async fn plan_request_starts_one_planner_chain_with_the_session_agent() {
         "Add search [Image #1]".to_string()
     )));
     assert!(transcript.contains(&(SessionMessageKind::AgentGraph, chains[0].id.clone())));
+    planner.release.cancel();
 }
 
 #[tokio::test]
@@ -111,10 +124,9 @@ async fn composer_messages_reach_the_orchestrator_and_never_the_planner_after_ac
         .app
         .submit_task_chain_prompt(&fixture.session_id, &TurnPrompt::from_text("Hi".into()))
         .await;
-    let launch = awaiting_plan(&mut fixture).await;
+    awaiting_plan(&mut fixture).await;
     install_decision(&mut fixture, "implement");
-    let implementation =
-        fixture.register_result(&launch.implementer_task_id(), "Implemented", true);
+    let implementation = fixture.register_turn("Implemented", true);
 
     // Act
     let approval = fixture
@@ -134,7 +146,7 @@ async fn composer_messages_reach_the_orchestrator_and_never_the_planner_after_ac
         .await;
     implementation.release.cancel();
     fixture.settle(&implementation).await;
-    let follow_up = fixture.register_result(&launch.implementer_task_id(), "Docs added", false);
+    let follow_up = fixture.register_turn("Docs added", false);
     let after_success = fixture
         .app
         .submit_task_chain_prompt(
@@ -154,18 +166,9 @@ async fn composer_messages_reach_the_orchestrator_and_never_the_planner_after_ac
     assert_eq!(while_busy, Some(PromptWorkflowOutcome::KeepPrompt));
     assert_eq!(after_success, show_session);
     assert_eq!(finished.phase, TaskChainPhase::Succeeded);
-    assert_eq!(
-        finished.current_request.assignment.role,
-        TaskAgentRole::Implementer
-    );
-    assert_eq!(
-        finished.current_request.input.clarification.as_deref(),
-        Some("Also add docs [Image #1]")
-    );
-    assert_eq!(
-        finished.current_request.input.attachments,
-        image_prompt("").attachments
-    );
+    assert_eq!(finished.current_role, TaskAgentRole::Implementer);
+    assert!(follow_up.prompt().contains("Also add docs [Image #1]"));
+    assert!(follow_up.prompt().contains("Task input attachment 1"));
     let transcript = fixture.persisted_transcript().await;
     assert!(has_notice(&transcript, "The Implementer is still working"));
 }
@@ -175,8 +178,8 @@ async fn image_reply_revises_the_plan_before_text_only_approval() {
     // Arrange
     let mut fixture = ChainFixture::new().await;
     let _terminal_consumer = fixture.app.sessions.foreground_consumer();
-    let launch = awaiting_plan(&mut fixture).await;
-    let revised = fixture.register_result(&launch.planner_request().task_id, "Updated plan", false);
+    awaiting_plan(&mut fixture).await;
+    let revised = fixture.register_turn("Updated plan", false);
     let prompt = image_prompt("Use this layout [Image #1]");
 
     // Act
@@ -195,12 +198,9 @@ async fn image_reply_revises_the_plan_before_text_only_approval() {
         })
     );
     assert_eq!(chain.phase, TaskChainPhase::AwaitingPlanAcceptance);
-    assert_eq!(chain.current_request.input.attachments, prompt.attachments);
-    assert_eq!(
-        chain.current_request.input.clarification.as_deref(),
-        Some(prompt.text.as_str())
-    );
-    assert!(chain.current_request.attempt_id.ends_with(":revise"));
+    assert!(revised.prompt().contains(&prompt.text));
+    assert!(revised.prompt().contains("Task input attachment 1"));
+    assert!(uuid::Uuid::parse_str(chain.current_attempt_id().expect("revision")).is_ok());
     assert!(
         fixture
             .persisted_transcript()
@@ -301,23 +301,24 @@ async fn generated_instructions_follow_the_session_routing() {
         let mut fixture = ChainFixture::new().await;
         let _terminal_consumer = fixture.app.sessions.foreground_consumer();
         let launch = awaiting_plan(&mut fixture).await;
-        let implementation =
-            fixture.register_result(&launch.implementer_task_id(), "Implemented", false);
+        let implementation = fixture.register_turn("Implemented", false);
+        let plan_attempt_id = fixture
+            .snapshot()
+            .await
+            .current_attempt_id()
+            .expect("plan")
+            .to_string();
         let service = fixture.service.clone();
         fixture
             .app
             .drive_session_request(service.accept_task_chain_plan(
                 &launch.chain_id,
-                AcceptTaskChainPlanRequest {
-                    attempt_id: "implementation".to_string(),
-                    plan_attempt_id: launch.planner_attempt_id.clone(),
-                },
+                AcceptTaskChainPlanRequest { plan_attempt_id },
             ))
             .await
             .expect("accepted plan");
         fixture.settle(&implementation).await;
-        let applied =
-            fixture.register_result(&launch.implementer_task_id(), "Review applied", true);
+        let applied = fixture.register_turn("Review applied", true);
         if let Some(previous_count) = previous_count {
             fixture
                 .app
@@ -341,10 +342,7 @@ async fn generated_instructions_follow_the_session_routing() {
         assert!(routed);
         let revised = fixture.snapshot().await;
         assert_eq!(revised.phase, TaskChainPhase::Succeeded);
-        assert_eq!(
-            revised.current_request.assignment.role,
-            TaskAgentRole::Implementer
-        );
+        assert_eq!(revised.current_role, TaskAgentRole::Implementer);
         assert_eq!(
             fixture
                 .app
@@ -353,10 +351,7 @@ async fn generated_instructions_follow_the_session_routing() {
                 .copied(),
             previous_count
         );
-        assert_eq!(
-            revised.current_request.input.clarification.as_deref(),
-            Some("Apply the review suggestions")
-        );
+        assert!(applied.prompt().contains("Apply the review suggestions"));
     }
 }
 
@@ -369,16 +364,18 @@ async fn cancel_stops_only_a_running_chain_role() {
         .cancel_running_task_chain(&fixture.session_id)
         .await;
     let launch = launch_request();
-    let planner = fixture.register_result(&launch.planner_request().task_id, "Plan", true);
+    let planner = fixture.register_turn("Plan", true);
     start_chain(&mut fixture, launch).await;
-    planner.started().await;
+    fixture.app.drive_session_request(planner.started()).await;
 
     // Act
     let canceled = fixture
         .app
         .cancel_running_task_chain(&fixture.session_id)
         .await;
-    let snapshot = fixture.snapshot().await;
+    let snapshot = fixture
+        .wait_for(|chain| chain.phase == TaskChainPhase::Canceled)
+        .await;
     let repeated = fixture
         .app
         .cancel_running_task_chain(&fixture.session_id)
@@ -397,16 +394,16 @@ async fn unreadable_or_failed_chain_storage_keeps_chain_routing_closed() {
     // Arrange
     let mut fixture = ChainFixture::new().await;
     let launch = launch_request();
-    let planner = fixture.register_result(&launch.planner_request().task_id, "Plan", true);
+    let planner = fixture.register_turn("Plan", true);
     start_chain(&mut fixture, launch).await;
-    planner.started().await;
+    fixture.app.drive_session_request(planner.started()).await;
     let running = fixture.snapshot().await;
-    let mut failing = MockTaskRepository::new();
+    let mut failing = MockGraphRepository::new();
     failing
         .expect_list_task_chains()
         .times(4)
         .returning(|_| Err(invalid_store()));
-    fixture.app.services.set_task_repository(Arc::new(failing));
+    fixture.app.services.set_graph_repository(Arc::new(failing));
 
     // Act
     let unreadable_cancel = fixture
@@ -431,7 +428,7 @@ async fn unreadable_or_failed_chain_storage_keeps_chain_routing_closed() {
     fixture
         .app
         .services
-        .set_task_repository(Arc::new(cancel_failing_store(running)));
+        .set_graph_repository(Arc::new(cancel_failing_store(running)));
     let failed_cancel = fixture
         .app
         .cancel_running_task_chain(&fixture.session_id)
@@ -538,7 +535,7 @@ async fn list_chains(fixture: &ChainFixture) -> Vec<TaskChain> {
         .app
         .services
         .db()
-        .tasks()
+        .graphs()
         .list_task_chains(&fixture.session_id)
         .await
         .expect("chains")
@@ -560,7 +557,7 @@ async fn start_chain(fixture: &mut ChainFixture, launch: StartPlanThenImplementR
 /// Starts the fixture workflow and settles its Planner on `Exact plan`.
 async fn awaiting_plan(fixture: &mut ChainFixture) -> StartPlanThenImplementRequest {
     let launch = launch_request();
-    let plan = fixture.register_result(&launch.planner_request().task_id, "Exact plan", false);
+    let plan = fixture.register_turn("Exact plan", false);
     start_chain(fixture, launch.clone()).await;
     fixture.settle(&plan).await;
 
@@ -586,8 +583,8 @@ async fn drive_until_started(fixture: &mut ChainFixture, script: &Script) {
 }
 
 /// Store that reports `running` and rejects its cancellation.
-fn cancel_failing_store(running: TaskChain) -> MockTaskRepository {
-    let mut store = MockTaskRepository::new();
+fn cancel_failing_store(running: TaskChain) -> MockGraphRepository {
+    let mut store = MockGraphRepository::new();
     let listed = running.clone();
     store
         .expect_list_task_chains()
@@ -596,7 +593,7 @@ fn cancel_failing_store(running: TaskChain) -> MockTaskRepository {
         .expect_load_task_chain()
         .returning(move |_| Ok(Some(running.clone())));
     store
-        .expect_cancel_task_chain()
+        .expect_cancel_task_chain_stage()
         .returning(|_| Err(invalid_store()));
 
     store

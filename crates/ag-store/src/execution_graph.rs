@@ -8,9 +8,13 @@ mod model;
 mod progress;
 mod repository;
 mod result;
+mod task_chain;
 mod task_turn;
 
-pub use model::{GraphEvidence, GraphExecutionRecord, StoredGraphEvidence, StoredGraphResult};
+pub use model::{
+    GraphEvidence, GraphExecutionRecord, GraphNodeHistory, StoredGraphEvidence, StoredGraphResult,
+    TaskChainReplyRecord,
+};
 pub use repository::GraphRepository;
 #[cfg(any(test, feature = "test-utils"))]
 pub use repository::MockGraphRepository;
