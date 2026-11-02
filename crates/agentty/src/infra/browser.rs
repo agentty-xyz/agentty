@@ -1,6 +1,12 @@
 use std::ffi::OsString;
 use std::process::Stdio;
 
+/// Platform command that opens a URL in the default browser.
+#[cfg(target_os = "macos")]
+const URL_OPENER: &str = "open";
+#[cfg(not(target_os = "macos"))]
+const URL_OPENER: &str = "xdg-open";
+
 /// Opens URLs for the user, such as a sign-in page in the default browser.
 #[cfg_attr(test, mockall::automock)]
 pub trait BrowserClient: Send + Sync {
@@ -18,14 +24,8 @@ pub struct RealBrowserClient {
 impl RealBrowserClient {
     /// Creates a browser client using the platform URL handler.
     pub fn new() -> Self {
-        let program = if cfg!(target_os = "macos") {
-            "open"
-        } else {
-            "xdg-open"
-        };
-
         Self {
-            program: OsString::from(program),
+            program: OsString::from(URL_OPENER),
         }
     }
 

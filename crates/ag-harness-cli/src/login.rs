@@ -12,17 +12,20 @@ pub(crate) trait Browser {
     fn open(&self, url: &str);
 }
 
+/// Preferred loopback port for the sign-in callback.
+pub(crate) const DEFAULT_PORT: u16 = 1455;
+/// Platform command that opens a URL in the default browser.
+#[cfg(target_os = "macos")]
+const URL_OPENER: &str = "open";
+#[cfg(not(target_os = "macos"))]
+const URL_OPENER: &str = "xdg-open";
+
 /// Opens URLs with the platform's default handler.
 pub(crate) struct SystemBrowser;
 
 impl Browser for SystemBrowser {
     fn open(&self, url: &str) {
-        let program = if cfg!(target_os = "macos") {
-            "open"
-        } else {
-            "xdg-open"
-        };
-        let _ = std::process::Command::new(program)
+        let _ = std::process::Command::new(URL_OPENER)
             .arg(url)
             .stdin(std::process::Stdio::null())
             .stdout(std::process::Stdio::null())
@@ -61,11 +64,6 @@ pub(crate) async fn login(
     );
 
     Ok(())
-}
-
-/// Default preferred callback port.
-pub(crate) const fn default_port() -> u16 {
-    1455
 }
 
 #[cfg(test)]

@@ -465,17 +465,6 @@ where
     Input: AsyncBufRead + Unpin,
     Output: AsyncWrite + Unpin,
 {
-    if let Command::Login(_) = cli.command {
-        return login::login(
-            environment,
-            &login::SystemBrowser,
-            &mut io::stdout().lock(),
-            login::default_port(),
-        )
-        .await
-        .map_err(CliError::from);
-    }
-
     execute_with_telemetry(cli, environment, input, output, mode, io::stderr()).await
 }
 
@@ -631,8 +620,14 @@ where
             )
             .await
         }
-        // `execute` signs in before any chat or telemetry setup.
-        Command::Login(_) => Ok(()),
+        Command::Login(_) => login::login(
+            environment,
+            &login::SystemBrowser,
+            &mut io::stdout().lock(),
+            login::DEFAULT_PORT,
+        )
+        .await
+        .map_err(CliError::from),
     }
 }
 

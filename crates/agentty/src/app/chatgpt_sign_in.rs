@@ -164,36 +164,38 @@ impl App {
                 self.chatgpt_sign_in.task = None;
                 let selection = dialog.selection;
                 let session_id = dialog.session_id().clone();
-                match result {
+                let message = match result {
                     Ok(outcome) => {
                         let account = outcome
                             .email
                             .unwrap_or_else(|| "your ChatGPT account".to_string());
                         let model = selection.model().as_str();
                         self.mark_chatgpt_models_signed_in();
-                        let message = if self
+                        let switched = self
                             .update_prompt_session_model(&session_id, selection)
-                            .await
-                        {
+                            .await;
+                        self.refresh_harness_models();
+                        if switched {
                             format!("Signed in as {account}. `{model}` now uses your ChatGPT plan.")
                         } else {
                             format!(
                                 "Signed in as {account}, but switching this session to `{model}` \
                                  failed. Pick it again with /model."
                             )
-                        };
-                        self.refresh_harness_models();
-                        if let AppMode::ChatGptSignIn { dialog } = &mut self.mode {
-                            dialog.phase = ChatGptSignInPhase::Finished { message };
                         }
                     }
-                    Err(error) => {
-                        dialog.phase = ChatGptSignInPhase::Finished {
-                            message: format!("Sign-in failed: {error}"),
-                        };
-                    }
-                }
+                    Err(error) => format!("Sign-in failed: {error}"),
+                };
+                self.finish_chatgpt_sign_in(message);
             }
+        }
+    }
+
+    /// Shows `message` as the sign-in result while the popup is still open;
+    /// the popup may have closed while the session model was switching.
+    fn finish_chatgpt_sign_in(&mut self, message: String) {
+        if let AppMode::ChatGptSignIn { dialog } = &mut self.mode {
+            dialog.phase = ChatGptSignInPhase::Finished { message };
         }
     }
 

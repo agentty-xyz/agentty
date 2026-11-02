@@ -1,5 +1,6 @@
 //! Process-level coverage for the `ag-harness` command-line interface.
 
+use std::os::unix::fs::PermissionsExt as _;
 use std::path::Path;
 use std::process::{Command, Stdio};
 use std::time::Duration;
@@ -1673,4 +1674,75 @@ async fn failed_trace_export_warns_without_failing_the_chat() {
     let stderr = String::from_utf8_lossy(&output.stderr);
     assert!(stderr.contains("OTLP export reported"));
     assert!(stderr.contains("some traces may be missing."));
+}
+
+/// Installs `open` and `xdg-open` stand-ins into `directory` that approve
+/// the sign-in like a user: they request the loopback callback with the
+/// URL's `state`, using only Bash built-ins.
+fn install_approving_browser(directory: &Path) -> io::Result<()> {
+    let script = concat!(
+        "#!/bin/bash\n",
+        "url=\"$1\"\n",
+        "state=\"${url#*&state=}\"; state=\"${state%%&*}\"\n",
+        "port=\"${url#*127.0.0.1%3A}\"; port=\"${port%%%2F*}\"\n",
+        "exec 3<>\"/dev/tcp/127.0.0.1/$port\" || exit 1\n",
+        "printf 'GET /auth/callback?state=%s&code=c&client_id=oaiapp_cli HTTP/1.1\\r\\n",
+        "host: 127.0.0.1\\r\\n\\r\\n' \"$state\" >&3\n",
+        "while read -r -u 3 line; do :; done\n",
+    );
+    for name in ["open", "xdg-open"] {
+        let browser = directory.join(name);
+        fs::write(&browser, script)?;
+        fs::set_permissions(&browser, fs::Permissions::from_mode(0o750))?;
+    }
+
+    Ok(())
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn login_chatgpt_signs_in_through_the_system_browser() {
+    // Arrange
+    let server = MockServer::start().await;
+    Mock::given(method("POST"))
+        .and(path("/api/accounts/oauth/token"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(json!({
+            "access_token": "plan-access",
+            "expires_in": 3600,
+            "id_token": "header.eyJlbWFpbCI6InVzZXJAZXhhbXBsZS5jb20ifQ.signature",
+            "refresh_token": "plan-refresh",
+            "scope": "openid chatgpt.tokens.use.direct"
+        })))
+        .mount(&server)
+        .await;
+    let browser_directory = tempfile::tempdir().expect("browser directory");
+    install_approving_browser(browser_directory.path()).expect("approving browser");
+    let auth_directory = tempfile::tempdir().expect("auth directory");
+    let auth_file = auth_directory.path().join("chatgpt.json");
+    let (_storage, mut command) = harness_command().expect("temporary storage should exist");
+    command
+        .args(["login", "chatgpt"])
+        .env("PATH", browser_directory.path())
+        .env("CHATGPT_AUTH_FILE", &auth_file)
+        .env("CHATGPT_AUTH_URL", server.uri())
+        .stdin(Stdio::null());
+
+    // Act
+    let output = tokio::time::timeout(
+        Duration::from_secs(30),
+        tokio::task::spawn_blocking(move || command.output()),
+    )
+    .await
+    .expect("login finishes")
+    .expect("login task")
+    .expect("login runs");
+
+    // Assert
+    let stdout = String::from_utf8(output.stdout).expect("stdout should be UTF-8");
+    assert!(output.status.success(), "{stdout}");
+    assert!(stdout.contains("Signed in as user@example.com"));
+    let stored: serde_json::Value =
+        serde_json::from_str(&fs::read_to_string(&auth_file).expect("stored sign-in"))
+            .expect("stored sign-in is JSON");
+    assert_eq!(stored["client_id"], "oaiapp_cli");
+    assert_eq!(stored["access_token"], "plan-access");
 }

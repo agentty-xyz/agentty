@@ -81,7 +81,7 @@ impl ChatGptCredentials {
         let parent = path
             .parent()
             .filter(|parent| !parent.as_os_str().is_empty())
-            .unwrap_or_else(|| Path::new("."));
+            .unwrap_or(Path::new("."));
         create_private_dir(parent).map_err(io_error)?;
         // `tempfile` creates the file readable only by its owner.
         let mut file = tempfile::NamedTempFile::new_in(parent).map_err(io_error)?;

@@ -79,10 +79,7 @@ impl ChatGptAuth {
             self.issuer.clone(),
             self.path.clone(),
         ));
-        let credentials = refresh.await.map_err(|error| ChatGptAuthError::Io {
-            path: self.path.clone(),
-            source: io::Error::other(error),
-        })??;
+        let credentials = refresh.await.map_err(ChatGptAuthError::RefreshTask)??;
         let access_token = credentials.access_token.clone();
         *cached = Some(credentials);
 
@@ -121,28 +118,31 @@ impl ChatGptAuth {
         Ok(refreshed)
     }
 
+    /// Opens and exclusively locks the sibling `.lock` file on a blocking
+    /// thread, creating it and its directory private to the owner.
     async fn lock_file(path: &Path) -> Result<File, ChatGptAuthError> {
         let path = path.with_extension("lock");
-        let io_error = |source| ChatGptAuthError::Io {
-            path: path.clone(),
-            source,
-        };
-        if let Some(parent) = path
-            .parent()
-            .filter(|parent| !parent.as_os_str().is_empty())
-        {
-            credentials::create_private_dir(parent).map_err(io_error)?;
-        }
+        let lock_path = path.clone();
+
+        tokio::task::spawn_blocking(move || Self::open_locked(&lock_path))
+            .await
+            .map_err(io::Error::other)
+            .flatten()
+            .map_err(|source| ChatGptAuthError::Io { path, source })
+    }
+
+    fn open_locked(path: &Path) -> io::Result<File> {
+        // A bare file name has an empty parent, which needs no directory.
+        path.parent()
+            .map_or(Ok(()), credentials::create_private_dir)?;
         let mut options = OpenOptions::new();
         options.create(true).truncate(false).write(true);
         #[cfg(unix)]
         options.mode(0o600);
-        let file = options.open(&path).map_err(io_error)?;
+        let file = options.open(path)?;
+        file.lock()?;
 
-        tokio::task::spawn_blocking(move || file.lock().map(|()| file))
-            .await
-            .map_err(|error| io_error(io::Error::other(error)))?
-            .map_err(io_error)
+        Ok(file)
     }
 
     async fn refresh(

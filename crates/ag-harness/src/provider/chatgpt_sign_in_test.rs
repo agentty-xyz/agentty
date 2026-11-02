@@ -90,6 +90,13 @@ async fn complete_ignores_silent_connections_and_stale_callbacks() {
 
     // Act
     let _silent = TcpStream::connect(&address).await.expect("silent client");
+    let mut garbled = TcpStream::connect(&address).await.expect("garbled client");
+    garbled
+        .write_all(b"\xff\xfe\n")
+        .await
+        .expect("garbled request sent");
+    let mut garbled_response = Vec::new();
+    let _ = garbled.read_to_end(&mut garbled_response).await;
     let stray = get(&address, "/favicon.ico").await;
     let earlier_callback = get(&address, "/auth/callback?state=earlier&code=old").await;
     let callback = get(
@@ -103,6 +110,7 @@ async fn complete_ignores_silent_connections_and_stale_callbacks() {
         .expect("sign-in succeeds");
 
     // Assert
+    assert_eq!(garbled_response, Vec::<u8>::new());
     assert!(stray.starts_with("HTTP/1.1 404"));
     assert!(earlier_callback.starts_with("HTTP/1.1 400"));
     assert!(earlier_callback.contains("no longer active"));
@@ -165,4 +173,32 @@ async fn complete_times_out_when_the_user_never_approves() {
 
     // Assert
     assert!(matches!(result, Err(ChatGptSignInError::TimedOut)));
+}
+
+#[tokio::test]
+async fn start_signs_in_with_openai_unless_the_issuer_is_replaced() {
+    // Arrange
+    let directory = tempfile::tempdir().expect("temporary directory");
+    let auth_file = directory
+        .path()
+        .join("chatgpt.json")
+        .to_string_lossy()
+        .into_owned();
+    let sign_in = ChatGptSignIn::from_environment(move |name| match name {
+        "CHATGPT_AUTH_FILE" => Ok(auth_file.clone()),
+        "CHATGPT_AUTH_URL" => Ok("  ".to_string()),
+        _ => Err(env::VarError::NotPresent),
+    })
+    .expect("auth file located")
+    .with_port(0);
+
+    // Act
+    let pending = sign_in.start().await.expect("sign-in starts");
+
+    // Assert
+    assert!(
+        pending
+            .authorize_url()
+            .starts_with("https://auth.openai.com/api/accounts/authorize?")
+    );
 }

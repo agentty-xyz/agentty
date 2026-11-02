@@ -61,6 +61,9 @@ pub enum ChatGptAuthError {
         /// HTTP status code.
         status: u16,
     },
+    /// The background token refresh stopped before finishing.
+    #[error("the ChatGPT token refresh stopped unexpectedly: {0}")]
+    RefreshTask(#[source] tokio::task::JoinError),
     /// The token endpoint returned a body larger than any grant.
     #[error("the ChatGPT token response is too large")]
     TokenResponseTooLarge,

@@ -78,9 +78,10 @@ async fn sign_in_app(script: ScriptedSignIn, opens: usize) -> (App, tempfile::Te
     app.services.set_harness_models(
         HarnessModelCatalog::new(
             true,
-            vec![test_support::sign_in_required_harness_model(
-                AgentModel::ChatGptGpt6Sol,
-            )],
+            vec![
+                test_support::ready_harness_model(AgentModel::KimiK3),
+                test_support::sign_in_required_harness_model(AgentModel::ChatGptGpt6Sol),
+            ],
             None,
         ),
         Arc::new(ScriptedSignInProbe { script }),
@@ -232,7 +233,7 @@ async fn failed_sign_in_reports_the_error_and_keeps_the_session_model() {
         !app.services
             .harness_model_options()
             .iter()
-            .any(HarnessModelOption::is_ready)
+            .any(|option| option.model == AgentModel::ChatGptGpt6Sol && option.is_ready())
     );
 }
 
@@ -319,6 +320,7 @@ async fn sign_in_actions_outside_the_popup_leave_the_mode_unchanged() {
         url: SIGN_IN_URL.to_string(),
     })
     .await;
+    app.finish_chatgpt_sign_in("Signed in".to_string());
 
     // Assert
     assert!(matches!(app.mode, AppMode::List));

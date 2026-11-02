@@ -186,12 +186,7 @@ impl PendingChatGptSignIn {
             tokio::select! {
                 accepted = self.listener.accept() => {
                     let (stream, _) = accepted.map_err(ChatGptSignInError::Callback)?;
-                    let sender = sender.clone();
-                    tokio::spawn(async move {
-                        if let Some(request) = Self::read_request_target(stream).await {
-                            let _ = sender.send(request);
-                        }
-                    });
+                    tokio::spawn(Self::forward_request(stream, sender.clone()));
                 }
                 Some((mut stream, target)) = requests.recv() => {
                     let Some(query) = target
@@ -219,26 +214,30 @@ impl PendingChatGptSignIn {
         }
     }
 
-    /// Reads one bounded request line and returns the connection with its
-    /// request target, or `None` when the client stays silent or fails.
-    async fn read_request_target(stream: TcpStream) -> Option<(TcpStream, String)> {
+    /// Reads one bounded request line and forwards the connection with its
+    /// request target; a client that stays silent or sends garbage is
+    /// dropped.
+    async fn forward_request(
+        stream: TcpStream,
+        sender: mpsc::UnboundedSender<(TcpStream, String)>,
+    ) {
         let mut reader = BufReader::new(stream);
         let mut request_line = String::new();
         let mut bounded = (&mut reader).take(MAX_REQUEST_LINE_BYTES);
-        tokio::time::timeout(
+        let read = tokio::time::timeout(
             CONNECTION_READ_TIMEOUT,
             bounded.read_line(&mut request_line),
         )
-        .await
-        .ok()?
-        .ok()?;
+        .await;
+        let Ok(Ok(_)) = read else {
+            return;
+        };
         let target = request_line
             .split_whitespace()
             .nth(1)
             .unwrap_or_default()
             .to_string();
-
-        Some((reader.into_inner(), target))
+        let _ = sender.send((reader.into_inner(), target));
     }
 
     /// Exchanges the callback's code and stores the credential.

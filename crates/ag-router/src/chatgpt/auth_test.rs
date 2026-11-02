@@ -230,3 +230,35 @@ async fn reports_missing_credentials_and_an_unusable_lock_file() {
         Err(ChatGptAuthError::Io { ref path, .. }) if *path == locked_dir.with_extension("lock")
     ));
 }
+
+#[tokio::test]
+async fn keeps_the_sign_in_when_a_refresh_fails_temporarily() {
+    // Arrange
+    let server = MockServer::start().await;
+    Mock::given(method("POST"))
+        .and(path(TOKEN_PATH))
+        .respond_with(
+            ResponseTemplate::new(503).set_body_json(serde_json::json!({"error": "unavailable"})),
+        )
+        .mount(&server)
+        .await;
+    let directory = tempfile::tempdir().expect("temporary directory");
+    let path = directory.path().join("chatgpt.json");
+    credentials(0).save(&path).expect("credentials save");
+    let auth = ChatGptAuth::new(&path).with_issuer(server.uri());
+
+    // Act
+    let result = auth.access_token().await;
+
+    // Assert
+    assert!(matches!(
+        result,
+        Err(ChatGptAuthError::TokenRequest { status: 503, .. })
+    ));
+    assert_eq!(
+        ChatGptCredentials::load(&path)
+            .expect("sign-in stays")
+            .refresh_token,
+        "stored-refresh"
+    );
+}

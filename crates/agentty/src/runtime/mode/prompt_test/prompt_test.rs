@@ -13,9 +13,9 @@ use super::super::{
     handle_prompt_cancel_key, handle_prompt_down_key, handle_prompt_image_paste,
     handle_prompt_slash_submit, handle_prompt_submit_key, handle_prompt_up_key, handle_with_cache,
     is_active_at_mention, is_prompt_image_paste_key, move_prompt_slash_selection,
-    navigate_prompt_history_down, navigate_prompt_history_up, paste_image_into_active_prompt,
-    prompt_context, show_prompt_diff, submit_current_text_prompt, take_prompt_attachment_cleanup,
-    take_prompt_snapshot, take_submitted_turn_prompt,
+    navigate_prompt_history_down, navigate_prompt_history_up, open_chatgpt_sign_in,
+    paste_image_into_active_prompt, prompt_context, show_prompt_diff, submit_current_text_prompt,
+    take_prompt_attachment_cleanup, take_prompt_snapshot, take_submitted_turn_prompt,
 };
 use super::support::{
     PromptTestAppExt, PromptTestModeExt, apply_next_prompt_image_paste, apply_next_session_diff,
@@ -2768,4 +2768,20 @@ async fn test_prompt_attachment_helpers_ignore_non_prompt_mode() {
         cleanup_attachments,
         [] as [crate::domain::composer::PromptAttachment; 0]
     );
+}
+
+#[tokio::test]
+async fn test_open_chatgpt_sign_in_outside_the_composer_leaves_the_mode_unchanged() {
+    // Arrange
+    let (mut app, _base_dir) = new_test_prompt_app("draft text", None).await;
+    app.mode = AppMode::List;
+
+    // Act
+    open_chatgpt_sign_in(
+        &mut app,
+        AgentSelection::new(AgentKind::Harness, AgentModel::ChatGptGpt6Sol),
+    );
+
+    // Assert
+    assert!(matches!(app.mode, AppMode::List));
 }
