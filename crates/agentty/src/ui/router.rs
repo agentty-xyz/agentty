@@ -18,6 +18,9 @@ use crate::presentation::app_mode::{
     AppMode, ConfirmationIntent, DiffFocus, DiffLineComments, DiffPreview, DiffRestoreTarget,
     DiffReviewComments, DiffSidebarFocus, HelpContext, allows_diff_line_comment_reply,
 };
+use crate::presentation::chatgpt_sign_in::{
+    CHATGPT_SIGN_IN_LOADING_LABEL, CHATGPT_SIGN_IN_TITLE, ChatGptSignInDialog,
+};
 use crate::presentation::frame_time::FrameTime;
 use crate::presentation::setting::SettingsScreenSnapshot;
 use crate::presentation::task_chain_graph::TaskChainGraphCache;
@@ -327,6 +330,11 @@ fn surface_for_mode(mode: &AppMode) -> Surface<'_> {
             scroll_offset: restore_view.scroll_offset,
             session_id: &restore_view.session_id,
         },
+        AppMode::ChatGptSignIn { dialog } => Surface::Session {
+            mode: SessionSurfaceMode::View,
+            scroll_offset: dialog.restore.scroll_offset,
+            session_id: dialog.session_id(),
+        },
         AppMode::List
         | AppMode::SessionCreation { .. }
         | AppMode::StackAppendParentSelection { .. }
@@ -604,6 +612,9 @@ fn render_mode_overlay(
                 .loading_label(loading_label);
             render_information_overlay(f, area, popup, resources.frame_time);
         }
+        AppMode::ChatGptSignIn { dialog } => {
+            render_chatgpt_sign_in_overlay(f, area, dialog, resources.frame_time);
+        }
         AppMode::Help {
             context: help_context,
             scroll_offset,
@@ -643,6 +654,21 @@ fn render_information_overlay(
             frame_time.unix_millis(),
         ))
         .render(frame, area);
+}
+
+/// Renders the `ChatGPT` sign-in popup for its current step.
+fn render_chatgpt_sign_in_overlay(
+    frame: &mut Frame,
+    area: Rect,
+    dialog: &ChatGptSignInDialog,
+    frame_time: FrameTime,
+) {
+    let message = dialog.message();
+    let popup = InfoOverlay::new(CHATGPT_SIGN_IN_TITLE, &message)
+        .is_loading(dialog.is_loading())
+        .loading_label(CHATGPT_SIGN_IN_LOADING_LABEL)
+        .action_label(dialog.action_label());
+    render_information_overlay(frame, area, popup, frame_time);
 }
 
 /// Renders the eligible parent choices for the session being appended.

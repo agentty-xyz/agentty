@@ -22,17 +22,21 @@ pub enum ModelCost {
     Standard,
     /// A hosted provider bills at least $15 per million output tokens.
     Premium,
+    /// The user's subscription plan, such as `ChatGPT`'s, covers the model's
+    /// usage within its limits instead of per-token API billing.
+    Plan,
 }
 
 impl ModelCost {
-    /// Returns whether a hosted provider bills the model's tokens.
+    /// Returns whether a hosted provider bills the model's tokens, per token
+    /// or through the user's plan.
     #[must_use]
     pub fn is_paid(self) -> bool {
         self != Self::Local
     }
 
-    /// Returns the price-class label of a paid model, such as `cheap`, or
-    /// `free` for a local one.
+    /// Returns the price-class label of a paid model, such as `cheap`,
+    /// `plan` for one the user's plan covers, or `free` for a local one.
     #[must_use]
     pub fn label(self) -> &'static str {
         match self {
@@ -40,6 +44,7 @@ impl ModelCost {
             Self::Cheap => "cheap",
             Self::Standard => "standard",
             Self::Premium => "premium",
+            Self::Plan => "plan",
         }
     }
 }
@@ -52,6 +57,9 @@ pub enum HarnessModelStatus {
     /// The named environment variable must be set before the provider can
     /// serve requests.
     MissingConfiguration(&'static str),
+    /// The user must sign in with the named command, such as
+    /// `ag-harness login chatgpt`, before the provider can serve requests.
+    SignInRequired(&'static str),
     /// The server reports that the model cannot call tools, which every
     /// harness turn needs.
     NoToolSupport,
@@ -95,6 +103,9 @@ impl HarnessModelOption {
 /// a remembered local model wins even while its server is unreachable, so a
 /// stopped server never moves new sessions onto a paid provider. Without one,
 /// the first ready local model is preferred over the first ready paid model.
+/// When no model is ready, the first model that only needs a sign-in is
+/// returned, so the session can start and its first turn asks the user to
+/// sign in.
 #[must_use]
 pub fn default_harness_model(
     options: &[HarnessModelOption],
@@ -116,6 +127,11 @@ pub fn default_harness_model(
 
     first_ready(false)
         .or_else(|| first_ready(true))
+        .or_else(|| {
+            options
+                .iter()
+                .find(|option| matches!(option.status, HarnessModelStatus::SignInRequired(_)))
+        })
         .map(|option| option.model)
 }
 

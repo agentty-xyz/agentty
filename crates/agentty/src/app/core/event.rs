@@ -23,6 +23,7 @@ use tracing::warn;
 
 use super::state::{App, SyncReviewRequestTaskResult, UpdateStatus};
 use crate::analytics::TurnOutcome;
+use crate::app::chatgpt_sign_in::ChatGptSignInUpdate;
 use crate::app::prompt_intent::PromptImagePasteUpdate;
 use crate::app::session::{
     SessionTaskService, StatusTransition, SyncSessionStartError, TurnAppliedState,
@@ -125,6 +126,10 @@ pub(crate) enum AppEvent {
     AgentCliVersionsUpdated { agent_clis: Vec<AgentCliInfo> },
     /// Indicates a background listing of harness models finished.
     HarnessModelsUpdated { options: Vec<HarnessModelOption> },
+    /// Indicates progress of one background `ChatGPT` plan sign-in: its
+    /// browser URL is ready, or it finished. Stale request generations are
+    /// ignored.
+    ChatGptSignInUpdated { update: ChatGptSignInUpdate },
     /// Indicates progress of the background auto-update.
     UpdateStatusChanged { update_status: UpdateStatus },
     /// Indicates a session agent/model selection has been persisted.
@@ -390,6 +395,9 @@ pub(super) struct ReviewRequestStatusUpdate {
 pub(super) struct AppEventBatch {
     pub(super) agent_cli_updates: Option<Vec<AgentCliInfo>>,
     pub(super) harness_model_updates: Option<Vec<HarnessModelOption>>,
+    /// Retains sign-in progress in arrival order so a URL precedes its
+    /// completion.
+    pub(super) chatgpt_sign_in_updates: Vec<ChatGptSignInUpdate>,
     pub(super) applied_turns: HashMap<SessionId, TurnAppliedState>,
     pub(super) at_mention_entries_updates: HashMap<SessionId, Vec<FileEntry>>,
     pub(super) branch_publish_action_updates: Vec<BranchPublishActionUpdate>,
@@ -485,6 +493,7 @@ impl AppEventBatch {
             || self.should_reload_projects
             || self.agent_cli_updates.is_some()
             || self.harness_model_updates.is_some()
+            || !self.chatgpt_sign_in_updates.is_empty()
             || self.git_status_update.is_some()
             || self.latest_available_version_update.is_some()
             || self.update_status.is_some()
@@ -601,6 +610,7 @@ impl AppEventBatch {
             AppEvent::HarnessModelsUpdated { options } => {
                 self.harness_model_updates = Some(options);
             }
+            AppEvent::ChatGptSignInUpdated { update } => self.chatgpt_sign_in_updates.push(update),
             AppEvent::UpdateStatusChanged { update_status } => {
                 self.update_status = Some(update_status);
             }
@@ -731,6 +741,7 @@ impl AppEventBatch {
             | AppEvent::VersionAvailabilityUpdated { .. }
             | AppEvent::AgentCliVersionsUpdated { .. }
             | AppEvent::HarnessModelsUpdated { .. }
+            | AppEvent::ChatGptSignInUpdated { .. }
             | AppEvent::UpdateStatusChanged { .. }
             | AppEvent::SessionPermissionModeUpdated { .. }
             | AppEvent::SessionReasoningLevelUpdated { .. }
@@ -1655,9 +1666,22 @@ impl App {
         if let Some(agent_clis) = event_batch.agent_cli_updates.take() {
             self.services.replace_available_agent_clis(agent_clis);
         }
+        for update in std::mem::take(&mut event_batch.chatgpt_sign_in_updates) {
+            self.apply_chatgpt_sign_in_update(update).await;
+        }
         if let Some(options) = event_batch.harness_model_updates.take() {
-            if let AppMode::Prompt { slash_state, .. } = &mut self.mode {
-                slash_state.harness_models.clone_from(&options);
+            match &mut self.mode {
+                AppMode::Prompt { slash_state, .. } => {
+                    slash_state.harness_models.clone_from(&options);
+                }
+                AppMode::ChatGptSignIn { dialog } => {
+                    dialog
+                        .restore
+                        .slash_state
+                        .harness_models
+                        .clone_from(&options);
+                }
+                _ => {}
             }
             self.settings.replace_harness_models(options.clone()).await;
             self.services.replace_harness_model_options(options);
@@ -2040,6 +2064,7 @@ impl App {
                     },
                 ..
             } => view_id == session_id,
+            AppMode::ChatGptSignIn { dialog } => dialog.session_id() == session_id,
             AppMode::List
             | AppMode::SessionCreation { .. }
             | AppMode::StackAppendParentSelection { .. }

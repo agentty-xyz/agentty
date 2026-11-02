@@ -608,6 +608,20 @@ fn render_help_mode_restores_markdown_diff_preview_background() {
 }
 
 #[test]
+fn render_chatgpt_sign_in_popup_above_its_session() {
+    // Arrange
+    let mode = crate::test_support::chatgpt_sign_in_mode("session-overlay");
+
+    // Act
+    let (handled, text) = render_list_backed_mode(&mode);
+
+    // Assert
+    assert!(handled);
+    assert!(text.contains("Sign in with ChatGPT"));
+    assert!(text.contains("Enter: Sign in · Esc: Cancel"));
+}
+
+#[test]
 fn render_list_backed_modes_forward_frame_time_to_every_overlay() {
     // Arrange
     let restore_view = ConfirmationViewMode {

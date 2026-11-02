@@ -75,6 +75,18 @@ fn visible_review_session_id_includes_diff_comments() {
 }
 
 #[test]
+fn visible_review_session_id_includes_chatgpt_sign_in_composer() {
+    // Arrange
+    let mode = crate::test_support::chatgpt_sign_in_mode("session-id");
+
+    // Act
+    let session_id = visible_review_session_id(&mode);
+
+    // Assert
+    assert_eq!(session_id, Some("session-id"));
+}
+
+#[test]
 fn visible_review_session_id_includes_loading_diff() {
     // Arrange
     let mode = AppMode::DiffLoading {

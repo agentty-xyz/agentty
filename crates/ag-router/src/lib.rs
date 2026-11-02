@@ -6,6 +6,8 @@
 //! to execute. Provider credentials are supplied by the host.
 
 mod chat_completion;
+pub mod chatgpt;
+mod credential;
 mod http;
 mod input;
 mod local_server;
@@ -16,6 +18,7 @@ mod responses;
 mod schema;
 mod tool;
 
+pub use credential::BearerCredential;
 pub use input::{ImageContent, ImageMediaType, InputBlock, InputError, TurnInput};
 pub use local_server::{
     LocalInventory, LocalModel, LocalServer, LocalServerError, LocalServerKind,

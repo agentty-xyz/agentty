@@ -13,6 +13,7 @@ use tracing::instrument::WithSubscriber;
 
 use crate::analytics::TurnOutcome;
 use crate::app::branch_publish::BranchPublishTaskFailure;
+use crate::app::chatgpt_sign_in::ChatGptSignInUpdate;
 use crate::app::prompt_intent::PromptImagePasteUpdate;
 use crate::app::service::{AppServices, RealSessionRunFactory, SessionRunFactory};
 use crate::app::session::{SyncSessionStartError, TurnAppliedState};
@@ -78,6 +79,23 @@ fn app_event_label_names_session_review_comment_snapshot_loads() {
 
     // Assert
     assert_eq!(label, "SessionReviewCommentSnapshotLoaded");
+}
+
+#[test]
+fn app_event_label_names_chatgpt_sign_in_progress() {
+    // Arrange
+    let event = AppEvent::ChatGptSignInUpdated {
+        update: ChatGptSignInUpdate::Url {
+            request_id: 1,
+            url: "https://auth.example.test".to_string(),
+        },
+    };
+
+    // Act
+    let label = AppServices::app_event_label(&event);
+
+    // Assert
+    assert_eq!(label, "ChatGptSignInUpdated");
 }
 
 #[test]

@@ -808,6 +808,12 @@ pub enum AppMode {
         /// Popup title describing the current review-request phase.
         title: String,
     },
+    /// `ChatGPT` plan sign-in popup rendered above the prompt composer that
+    /// opened it.
+    ChatGptSignIn {
+        /// Sign-in step, target model, and composer restored afterwards.
+        dialog: Box<crate::presentation::chatgpt_sign_in::ChatGptSignInDialog>,
+    },
     /// Launch-configuration selector overlay opened from session view when
     /// multiple entries are configured.
     LaunchConfigurationSelector {

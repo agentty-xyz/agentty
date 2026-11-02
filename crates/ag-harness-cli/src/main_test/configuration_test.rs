@@ -175,8 +175,16 @@ fn chat_mode_accounts_for_both_terminal_streams_and_initial_prompt() {
         parse_cli(["ag-harness", "run", "muse"]).expect("chat arguments should parse");
     let resume = parse_cli(["ag-harness", "resume", "session-a", "continue"])
         .expect("resume arguments should parse");
+    let login = parse_cli(["ag-harness", "login", "chatgpt"]).expect("login should parse");
+    let unknown_login = parse_cli(["ag-harness", "login", "openai"])
+        .expect_err("only account providers support login");
 
     // Act and Assert
+    assert_eq!(
+        ChatMode::detect(&login, true, false),
+        ChatMode::NonInteractive
+    );
+    assert_eq!(unknown_login.kind(), clap::error::ErrorKind::InvalidValue);
     assert_eq!(
         ChatMode::detect(&with_prompt, true, true),
         ChatMode::Interactive
@@ -204,6 +212,7 @@ fn stored_model_identity_maps_supported_providers_and_rejects_incomplete_identit
     let qwen = stored_model_identity_parts(Some("alibaba_cloud"), Some("qwen-model"));
     let local = stored_model_identity_parts(Some("openai_compatible"), Some("qwen3:latest"));
     let openai = stored_model_identity_parts(Some("openai"), Some("gpt-6.1-sol"));
+    let chatgpt = stored_model_identity_parts(Some("openai_chatgpt"), Some("gpt-6.1-sol"));
     let unknown = stored_model_identity_parts(Some("unknown"), Some("model"));
     let missing_model = stored_model_identity_parts(Some("meta"), None);
 
@@ -215,6 +224,7 @@ fn stored_model_identity_maps_supported_providers_and_rejects_incomplete_identit
         matches!(local, Ok((ModelProvider::OpenAiCompatible, model)) if model == "qwen3:latest")
     );
     assert!(matches!(openai, Ok((ModelProvider::OpenAi, model)) if model == "gpt-6.1-sol"));
+    assert!(matches!(chatgpt, Ok((ModelProvider::ChatGpt, model)) if model == "gpt-6.1-sol"));
     assert!(matches!(unknown, Err(CliError::MissingModelIdentity)));
     assert!(matches!(missing_model, Err(CliError::MissingModelIdentity)));
 }

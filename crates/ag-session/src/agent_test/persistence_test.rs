@@ -224,6 +224,24 @@ fn test_legacy_missing_and_invalid_agent_values_have_deterministic_fallbacks() {
         (None, "gpt-5.5", AgentKind::Codex, AgentModel::Gpt61Sol),
         (None, "qwen-plus", AgentKind::Harness, AgentModel::QwenPlus),
         (
+            None,
+            "chatgpt/gpt-6.1-sol",
+            AgentKind::Harness,
+            AgentModel::ChatGptGpt61Sol,
+        ),
+        (
+            Some("harness"),
+            "chatgpt/gpt-6-sol",
+            AgentKind::Harness,
+            AgentModel::ChatGptGpt6Sol,
+        ),
+        (
+            Some("harness"),
+            "gpt-6.1-sol",
+            AgentKind::Harness,
+            AgentModel::Gpt61Sol,
+        ),
+        (
             Some("unknown"),
             "unknown-model",
             AgentKind::Gemini,

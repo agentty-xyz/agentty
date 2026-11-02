@@ -48,6 +48,7 @@ pub(crate) fn current_page_messages(
         | AppMode::Prompt { .. }
         | AppMode::Question { .. }
         | AppMode::ViewInfoPopup { .. }
+        | AppMode::ChatGptSignIn { .. }
         | AppMode::LaunchConfigurationSelector { .. }
         | AppMode::PublishBranchInput { .. }
         | AppMode::Confirmation {

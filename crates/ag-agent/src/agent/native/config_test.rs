@@ -1,22 +1,24 @@
 use std::collections::BTreeMap;
 use std::ffi::OsString;
 use std::os::unix::ffi::OsStringExt;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 
 use ag_contracts::{PermissionMode, ProviderCallBudget, ReasoningLevel};
+use ag_harness::lifecycle::LifecycleEvent;
 use ag_harness::model::{ModelProfile, ModelRequest, ReasoningEffort};
 use ag_harness::provider::{CostTier, ModelConfiguration, ModelProvider};
 use ag_harness::{Model, TurnInput};
 use ag_protocol::ProtocolRequestProfile;
-use ag_session::{AgentModel, HarnessModelStatus, ModelCost, ServedModel};
+use ag_session::{AgentModel, HarnessModelOption, HarnessModelStatus, ModelCost, ServedModel};
 use serde_json::json;
 use wiremock::matchers::{method, path};
 use wiremock::{Mock, MockServer, ResponseTemplate};
 
 use super::{
-    BudgetedModel, FALLBACK_MODEL_PROFILE, ModelSelection, NativeHarnessConfig, ResumeOnlyModel,
-    bash_environment, harness_models, model_cost, output_schema, provider_display_name,
-    reasoning_effort, repository, running_context_window, turn_options, unicode_environment,
+    BudgetedModel, FALLBACK_MODEL_PROFILE, HarnessContext, ModelSelection, NativeHarnessConfig,
+    ResumeOnlyModel, bash_environment, harness_models, model_cost, output_schema,
+    provider_display_name, reasoning_effort, repository, running_context_window, turn_options,
+    unicode_environment,
 };
 use crate::agent::model_profile;
 
@@ -39,6 +41,26 @@ fn unreachable_base_url() -> String {
     let address = listener.local_addr().expect("address");
 
     format!("http://{address}/v1")
+}
+
+/// Writes a stored `ChatGPT` sign-in and returns its directory and file path.
+fn signed_in_auth_file() -> (tempfile::TempDir, String) {
+    let directory = tempfile::tempdir().expect("auth directory");
+    let auth_file = directory.path().join("chatgpt.json");
+    let credentials = json!({
+        "access_token": "access",
+        "client_id": "client",
+        "email": null,
+        "expires_at": u64::MAX,
+        "ext_agent_host_id": "host",
+        "id_token": "id",
+        "refresh_token": "refresh",
+        "scopes": []
+    });
+    std::fs::write(&auth_file, credentials.to_string()).expect("credential file");
+    let auth_file = auth_file.to_str().expect("UTF-8 path").to_string();
+
+    (directory, auth_file)
 }
 
 /// Mounts Ollama's `/api/ps` reporting `qwen3:latest` loaded with `window`.
@@ -65,7 +87,7 @@ async fn harness_models_list_local_then_paid_models_with_their_status() {
     ]);
 
     // Act
-    let options = harness_models(&environment).await;
+    let options = harness_models(&environment, |_| false).await;
 
     // Assert
     let summary = options
@@ -76,6 +98,7 @@ async fn harness_models_list_local_then_paid_models_with_their_status() {
     let kimi = HarnessModelStatus::MissingConfiguration("KIMI_BASE_URL");
     let openai = HarnessModelStatus::MissingConfiguration("OPENAI_API_KEY");
     let ready = HarnessModelStatus::Ready;
+    let sign_in = HarnessModelStatus::SignInRequired("ag-harness login chatgpt");
     assert_eq!(
         summary,
         vec![
@@ -88,6 +111,14 @@ async fn harness_models_list_local_then_paid_models_with_their_status() {
             (AgentModel::QwenPlus, ModelCost::Cheap, dashscope),
             (AgentModel::Qwen38Flash, ModelCost::Cheap, dashscope),
             (AgentModel::Qwen37Flash, ModelCost::Cheap, dashscope),
+            (AgentModel::ChatGptGpt61Sol, ModelCost::Plan, sign_in),
+            (AgentModel::ChatGptGpt61Terra, ModelCost::Plan, sign_in),
+            (AgentModel::ChatGptGpt6Astra, ModelCost::Plan, sign_in),
+            (AgentModel::ChatGptGpt6Sol, ModelCost::Plan, sign_in),
+            (AgentModel::ChatGptGpt6Luna, ModelCost::Plan, sign_in),
+            (AgentModel::ChatGptGpt56Sol, ModelCost::Plan, sign_in),
+            (AgentModel::ChatGptGpt56Terra, ModelCost::Plan, sign_in),
+            (AgentModel::ChatGptGpt56Luna, ModelCost::Plan, sign_in),
             (AgentModel::Gpt61Sol, ModelCost::Standard, openai),
             (AgentModel::Gpt6Astra, ModelCost::Premium, openai),
             (AgentModel::Gpt6Luna, ModelCost::Cheap, openai),
@@ -98,7 +129,8 @@ async fn harness_models_list_local_then_paid_models_with_their_status() {
     assert_eq!(options[1].provider, "Muse");
     assert_eq!(options[3].provider, "Kimi");
     assert_eq!(options[5].provider, "Qwen");
-    assert_eq!(options[9].provider, "OpenAI");
+    assert_eq!(options[9].provider, "ChatGPT plan");
+    assert_eq!(options[17].provider, "OpenAI");
     // Only Muse's contributor tier lets the provider train on prompts.
     assert_eq!(
         options
@@ -108,6 +140,8 @@ async fn harness_models_list_local_then_paid_models_with_their_status() {
             .collect::<Vec<_>>(),
         [AgentModel::MuseSpark13Contributor]
     );
+    // The harness catalog declares the ChatGPT-plan windows.
+    assert_eq!(options[9].context_window, Some(500_000));
     // The harness catalog declares the Qwen flash window.
     assert_eq!(options[7].context_window, Some(1_000_000));
     assert_eq!(
@@ -116,11 +150,43 @@ async fn harness_models_list_local_then_paid_models_with_their_status() {
     );
     // Shared Codex models show the window the harness runs them with.
     assert_eq!(
-        options[9].context_window,
+        options[17].context_window,
         ModelProvider::OpenAi
             .declared_profile("gpt-6.1-sol", |_| Err(std::env::VarError::NotPresent))
             .expect("OpenAI profiles read no environment")
             .map(ModelProfile::context_window_tokens)
+    );
+}
+
+#[tokio::test]
+/// Marks ChatGPT-plan models ready once the credential file the environment
+/// locates exists, and asks for sign-in otherwise.
+async fn harness_models_report_the_chatgpt_sign_in() {
+    // Arrange
+    let environment = environment(&[
+        ("CHATGPT_AUTH_FILE", "/credentials/chatgpt.json"),
+        ("OPENAI_COMPATIBLE_BASE_URL", &unreachable_base_url()),
+    ]);
+    let plan_statuses = |options: Vec<HarnessModelOption>| {
+        options
+            .into_iter()
+            .filter(|option| option.cost == ModelCost::Plan)
+            .map(|option| option.status)
+            .collect::<Vec<_>>()
+    };
+
+    // Act
+    let signed_in = harness_models(&environment, |path| {
+        path == Path::new("/credentials/chatgpt.json")
+    })
+    .await;
+    let signed_out = harness_models(&environment, |_| false).await;
+
+    // Assert
+    assert_eq!(plan_statuses(signed_in), [HarnessModelStatus::Ready; 8]);
+    assert_eq!(
+        plan_statuses(signed_out),
+        [HarnessModelStatus::SignInRequired("ag-harness login chatgpt"); 8]
     );
 }
 
@@ -133,7 +199,14 @@ fn providers_have_display_names() {
             .iter()
             .map(|provider| provider_display_name(*provider))
             .collect::<Vec<_>>(),
-        ["Muse", "Kimi", "Qwen", "OpenAI", "OpenAI-compatible server"]
+        [
+            "Muse",
+            "Kimi",
+            "Qwen",
+            "OpenAI",
+            "ChatGPT plan",
+            "OpenAI-compatible server"
+        ]
     );
 }
 
@@ -143,6 +216,7 @@ fn catalog_cost_tiers_map_to_model_costs() {
     // Arrange
     let tiers = [
         CostTier::Local,
+        CostTier::Plan,
         CostTier::Cheap,
         CostTier::Standard,
         CostTier::Premium,
@@ -156,6 +230,7 @@ fn catalog_cost_tiers_map_to_model_costs() {
         costs,
         [
             ModelCost::Local,
+            ModelCost::Plan,
             ModelCost::Cheap,
             ModelCost::Standard,
             ModelCost::Premium
@@ -195,7 +270,7 @@ async fn harness_models_list_discovered_ollama_models() {
     ]);
 
     // Act
-    let options = harness_models(&environment).await;
+    let options = harness_models(&environment, |_| false).await;
 
     // Assert
     let local = options
@@ -425,11 +500,97 @@ fn model_selection_round_trips_registration_keys() {
 }
 
 #[test]
+/// Routes `chatgpt/<model>` ids only to the `ChatGPT` plan and bare ids only to
+/// API-billed providers, so neither silently stands in for the other.
+fn chatgpt_selection_never_shares_ids_with_openai() {
+    // Arrange
+    let environment = environment(&[]);
+
+    // Act
+    let plan = ModelSelection::resolve("chatgpt/gpt-6.1-sol", &environment)
+        .expect("a plan model should resolve");
+    let api =
+        ModelSelection::resolve("gpt-6.1-sol", &environment).expect("an API model should resolve");
+    let plan_only_bare = ModelSelection::resolve("gpt-6.1-terra", &environment);
+    let unknown_plan = ModelSelection::resolve("chatgpt/kimi-k3", &environment);
+
+    // Assert
+    assert_eq!(plan.provider, ModelProvider::ChatGpt);
+    assert_eq!(plan.model, "gpt-6.1-sol");
+    assert_eq!(plan.key(), "chatgpt/gpt-6.1-sol");
+    assert_eq!(api.provider, ModelProvider::OpenAi);
+    assert_eq!(api.key(), "openai/gpt-6.1-sol");
+    assert!(plan_only_bare.is_err());
+    assert_eq!(
+        unknown_plan,
+        Err("The harness does not serve model `chatgpt/kimi-k3`.".to_string())
+    );
+    assert_eq!(ModelSelection::from_key(&plan.key()), Some(plan));
+    assert_eq!(ModelSelection::from_key(&api.key()), Some(api));
+    assert_eq!(ModelSelection::from_key("openai/gpt-6.1-terra"), None);
+    assert_eq!(ModelSelection::from_key("chatgpt/kimi-k3"), None);
+}
+
+#[test]
+/// Asks for sign-in, not an API key, when the `ChatGPT` plan has none stored.
+fn chatgpt_registration_without_sign_in_names_the_login_command() {
+    // Arrange
+    let directory = tempfile::tempdir().expect("auth directory");
+    let missing = directory.path().join("chatgpt.json");
+    let environment = environment(&[("CHATGPT_AUTH_FILE", missing.to_str().expect("UTF-8"))]);
+    let selection =
+        ModelSelection::resolve("chatgpt/gpt-6-luna", &environment).expect("plan model");
+
+    // Act
+    let error = selection
+        .registry(&environment, None, None)
+        .err()
+        .expect("a missing sign-in should fail");
+
+    // Assert
+    assert!(
+        error.starts_with("Cannot use harness model `gpt-6-luna`"),
+        "{error}"
+    );
+    assert!(
+        error.ends_with("Run `ag-harness login chatgpt`, then retry."),
+        "{error}"
+    );
+    assert!(!error.contains("OPENAI_API_KEY"), "{error}");
+}
+
+#[test]
+/// Resumes a ChatGPT-plan session without a stored sign-in.
+fn chatgpt_resume_only_harness_needs_no_sign_in() {
+    // Arrange
+    let worktree = tempfile::tempdir().expect("worktree");
+    let real_path = std::env::var("PATH").expect("test PATH should be set");
+    let environment = environment(&[("PATH", &real_path)]);
+    let repository = repository(worktree.path(), &environment).expect("repository");
+    let selection =
+        ModelSelection::resolve("chatgpt/gpt-6.1-sol", &environment).expect("plan model");
+    let context = HarnessContext {
+        environment: &environment,
+        provider_call_budget: None,
+        reasoning_level: ReasoningLevel::Medium,
+        repository: &repository,
+        running_context_window: None,
+    };
+
+    // Act
+    let harness = selection.resume_only_harness(&context, |_: LifecycleEvent| {});
+
+    // Assert
+    assert!(harness.is_ok(), "{:?}", harness.err());
+}
+
+#[test]
 /// Registers each served model under the current revision with its declared
 /// context profile: the provider catalog's for `OpenAI` models, Agentty's for
 /// the others, and the conservative fallback for uncataloged models.
 fn registrations_declare_revision_and_per_model_context_profiles() {
     // Arrange
+    let (_directory, auth_file) = signed_in_auth_file();
     let environment = environment(&[
         ("DASHSCOPE_API_KEY", "key"),
         ("DASHSCOPE_BASE_URL", "http://qwen"),
@@ -437,6 +598,7 @@ fn registrations_declare_revision_and_per_model_context_profiles() {
         ("KIMI_BASE_URL", "http://kimi"),
         ("MODEL_API_KEY", "key"),
         ("OPENAI_API_KEY", "sk-key"),
+        ("CHATGPT_AUTH_FILE", &auth_file),
     ]);
     let models = ModelProvider::all().iter().flat_map(|provider| {
         provider
@@ -447,7 +609,12 @@ fn registrations_declare_revision_and_per_model_context_profiles() {
 
     // Act / Assert
     for (provider, model) in models {
-        let selection = ModelSelection::resolve(model, &environment).expect("served model");
+        let id = if provider == ModelProvider::ChatGpt {
+            format!("chatgpt/{model}")
+        } else {
+            model.to_string()
+        };
+        let selection = ModelSelection::resolve(&id, &environment).expect("served model");
         let registry = selection
             .registry(&environment, None, None)
             .expect("registry");
@@ -457,7 +624,7 @@ fn registrations_declare_revision_and_per_model_context_profiles() {
             .declared_profile(model, |_| Err(std::env::VarError::NotPresent))
             .expect("hosted catalog profiles read no environment")
             .or_else(|| {
-                AgentModel::parse_persisted(model)
+                AgentModel::parse_persisted(&id)
                     .ok()
                     .and_then(model_profile::declared)
             })
@@ -528,6 +695,7 @@ fn bash_environment_orders_essentials_and_drops_provider_variables() {
     // Arrange
     let environment = environment(&[
         ("AAA", "first"),
+        ("CHATGPT_AUTH_FILE", "/home/test/chatgpt.json"),
         ("DASHSCOPE_API_KEY", "secret"),
         ("HOME", "/home/test"),
         ("KIMI_BASE_URL", "http://kimi"),

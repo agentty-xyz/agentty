@@ -35,6 +35,34 @@ fn test_info_overlay_stores_injected_spinner_frame() {
 }
 
 #[test]
+fn test_info_overlay_render_uses_the_custom_action_label() {
+    // Arrange
+    let backend = ratatui::backend::TestBackend::new(100, 20);
+    let mut terminal = ratatui::Terminal::new(backend).expect("failed to create terminal");
+    let overlay = InfoOverlay::new("Sign in with ChatGPT", "Use your ChatGPT plan.")
+        .action_label("Enter: Sign in · Esc: Cancel");
+
+    // Act
+    terminal
+        .draw(|f| {
+            let area = f.area();
+            Component::render(&overlay, f, area);
+        })
+        .expect("failed to draw");
+
+    // Assert
+    let text: String = terminal
+        .backend()
+        .buffer()
+        .content()
+        .iter()
+        .map(ratatui::buffer::Cell::symbol)
+        .collect();
+    assert!(text.contains("Enter: Sign in · Esc: Cancel"));
+    assert!(!text.contains(" OK "));
+}
+
+#[test]
 fn test_info_overlay_render_includes_ok_indicator() {
     // Arrange
     let backend = ratatui::backend::TestBackend::new(100, 20);

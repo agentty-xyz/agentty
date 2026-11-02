@@ -260,6 +260,7 @@ impl SessionManager {
                 restore_view: ConfirmationViewMode { session_id, .. },
                 ..
             } => Some(session_id),
+            AppMode::ChatGptSignIn { dialog } => Some(dialog.session_id()),
             _ => None,
         }
     }

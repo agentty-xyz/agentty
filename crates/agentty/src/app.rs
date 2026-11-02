@@ -6,6 +6,7 @@
 mod assist;
 pub(crate) mod at_mention_task;
 mod branch_publish;
+mod chatgpt_sign_in;
 mod command_gateway;
 mod core;
 mod diff_prompt;

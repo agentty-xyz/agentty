@@ -111,9 +111,9 @@ const QWEN_PLUS_ESTIMATOR: HeuristicContextEstimator = HeuristicContextEstimator
 
 /// Returns the declared context profile of `model`, or `None` when its
 /// provider CLI manages context itself, the `ag-harness` provider catalog
-/// declares it, as for the Qwen flash models, or, for the OpenAI-compatible
-/// model, the environment declares it. Muse's contributor tier serves the
-/// same model as Muse Spark 1.3 and shares its profile.
+/// declares it, as for the Qwen flash and ChatGPT-plan models, or, for the
+/// OpenAI-compatible model, the environment declares it. Muse's contributor
+/// tier serves the same model as Muse Spark 1.3 and shares its profile.
 pub(crate) const fn declared(model: AgentModel) -> Option<ModelProfile> {
     match model {
         AgentModel::Gpt6Astra
@@ -129,6 +129,14 @@ pub(crate) const fn declared(model: AgentModel) -> Option<ModelProfile> {
         AgentModel::OpenAiCompatible(_)
         | AgentModel::Qwen38Flash
         | AgentModel::Qwen37Flash
+        | AgentModel::ChatGptGpt61Sol
+        | AgentModel::ChatGptGpt61Terra
+        | AgentModel::ChatGptGpt6Astra
+        | AgentModel::ChatGptGpt6Sol
+        | AgentModel::ChatGptGpt6Luna
+        | AgentModel::ChatGptGpt56Sol
+        | AgentModel::ChatGptGpt56Terra
+        | AgentModel::ChatGptGpt56Luna
         | AgentModel::Gemini4Argon
         | AgentModel::Gemini31Pro
         | AgentModel::Gemini38Flash

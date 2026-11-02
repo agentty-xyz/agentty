@@ -15,7 +15,9 @@ use ag_harness::model::{
     ModelCapabilities, ModelClient, ModelCompletion, ModelMetadata, ModelProfile, ModelRegistry,
     ModelRequest, ReasoningEffort,
 };
-use ag_harness::provider::{CostTier, LocalServerKind, ModelConfiguration, ModelProvider};
+use ag_harness::provider::{
+    ChatGptConfig, CostTier, LocalServerKind, ModelConfiguration, ModelProvider, chatgpt_auth_file,
+};
 use ag_harness::recovery::ExecutionIdentity;
 use ag_harness::{
     Harness, Model, ModelError, OutputSchema, Repository, RepositoryError, Tool, ToolPolicy,
@@ -55,9 +57,13 @@ const BASH_CAPTURE_BYTES: usize = 8192;
 /// Environment variable naming the model the OpenAI-compatible server serves
 /// for [`AgentModel::OpenAiCompatible`], such as Ollama's `qwen3:latest`.
 const OPENAI_COMPATIBLE_MODEL_ENV: &str = "OPENAI_COMPATIBLE_MODEL";
-/// Environment prefixes that carry provider keys and endpoints, withheld from
-/// `bash`. `OPENAI_` covers both `OpenAI` and OpenAI-compatible variables.
-const PROVIDER_ENVIRONMENT_PREFIXES: [&str; 4] = ["DASHSCOPE_", "KIMI_", "MODEL_", "OPENAI_"];
+/// Command that stores the sign-in [`ModelProvider::ChatGpt`] needs.
+const CHATGPT_SIGN_IN_COMMAND: &str = "ag-harness login chatgpt";
+/// Environment prefixes that carry provider keys, credential files, and
+/// endpoints, withheld from `bash`. `OPENAI_` covers both `OpenAI` and
+/// OpenAI-compatible variables.
+const PROVIDER_ENVIRONMENT_PREFIXES: [&str; 5] =
+    ["CHATGPT_", "DASHSCOPE_", "KIMI_", "MODEL_", "OPENAI_"];
 /// Variables granted to `bash` first, so the harness environment limit never
 /// drops them.
 const PRIORITY_ENVIRONMENT: [&str; 17] = [
@@ -157,19 +163,21 @@ pub(crate) fn process_environment() -> BTreeMap<String, String> {
 /// Returns the harness models a user can choose: the models the local
 /// OpenAI-compatible server serves, plus `OPENAI_COMPATIBLE_MODEL` when the
 /// server does not list it, then the paid hosted catalog models with the
-/// variable each still needs.
+/// variable or sign-in each still needs. `is_signed_in` reports whether
+/// a sign-in provider's credential file holds a usable sign-in.
 ///
 /// Listing the local server is bounded by short request timeouts; an
 /// unreachable server contributes no discovered models.
 pub(crate) async fn harness_models(
     environment: &BTreeMap<String, String>,
+    is_signed_in: impl Fn(&Path) -> bool,
 ) -> Vec<HarnessModelOption> {
     let mut options = local_models(environment).await;
     options.extend(
         AgentKind::Harness
             .models()
             .iter()
-            .filter_map(|model| hosted_model(*model, environment)),
+            .filter_map(|model| hosted_model(*model, environment, &is_signed_in)),
     );
 
     options
@@ -230,19 +238,17 @@ async fn local_models(environment: &BTreeMap<String, String>) -> Vec<HarnessMode
     options
 }
 
-/// Returns one paid catalog model with the variable its provider still
-/// needs, or `None` for a model no built-in provider serves.
+/// Returns one paid catalog model with the variable or sign-in its provider
+/// still needs, or `None` for a model no built-in provider serves.
 fn hosted_model(
     model: AgentModel,
     environment: &BTreeMap<String, String>,
+    is_signed_in: impl Fn(&Path) -> bool,
 ) -> Option<HarnessModelOption> {
     let selection = ModelSelection::resolve_known(model.as_str()).ok()?;
     let provider = selection.provider;
     let cost = model_cost(provider.cost_tier(&selection.model)?);
-    let status = missing_configuration(provider, environment)
-        .map_or(HarnessModelStatus::Ready, |variable| {
-            HarnessModelStatus::MissingConfiguration(variable)
-        });
+    let status = configuration_status(provider, environment, is_signed_in);
 
     Some(HarnessModelOption {
         context_window: selection
@@ -263,6 +269,7 @@ fn hosted_model(
 fn model_cost(tier: CostTier) -> ModelCost {
     match tier {
         CostTier::Local => ModelCost::Local,
+        CostTier::Plan => ModelCost::Plan,
         CostTier::Cheap => ModelCost::Cheap,
         CostTier::Standard => ModelCost::Standard,
         CostTier::Premium => ModelCost::Premium,
@@ -272,6 +279,7 @@ fn model_cost(tier: CostTier) -> ModelCost {
 /// Returns the name users know a hosted provider by.
 fn provider_display_name(provider: ModelProvider) -> &'static str {
     match provider {
+        ModelProvider::ChatGpt => "ChatGPT plan",
         ModelProvider::Kimi => "Kimi",
         ModelProvider::Muse => "Muse",
         ModelProvider::OpenAi => "OpenAI",
@@ -316,7 +324,7 @@ pub(crate) async fn running_context_window(
 }
 
 /// Reads `environment` as the lookup the harness provider catalog expects.
-fn lookup(
+pub(super) fn lookup(
     environment: &BTreeMap<String, String>,
 ) -> impl FnMut(&str) -> Result<String, env::VarError> + '_ {
     |name| {
@@ -337,22 +345,34 @@ fn unicode_environment(
         .collect()
 }
 
-/// Returns the first variable a provider still needs: its API key unless
-/// optional, then a base URL unless it has a default.
-fn missing_configuration(
+/// Returns whether a provider can serve requests now: a sign-in provider
+/// needs a usable sign-in, as `is_signed_in` reports; another needs
+/// its API key unless optional, then a base URL unless it has a default.
+fn configuration_status(
     provider: ModelProvider,
     environment: &BTreeMap<String, String>,
-) -> Option<&'static str> {
+    is_signed_in: impl Fn(&Path) -> bool,
+) -> HarnessModelStatus {
+    if provider.requires_sign_in() {
+        let signed_in =
+            chatgpt_auth_file(lookup(environment)).is_ok_and(|auth_file| is_signed_in(&auth_file));
+
+        return if signed_in {
+            HarnessModelStatus::Ready
+        } else {
+            HarnessModelStatus::SignInRequired(CHATGPT_SIGN_IN_COMMAND)
+        };
+    }
     if provider.requires_api_key() && !has_value(environment, provider.api_key_environment()) {
-        return Some(provider.api_key_environment());
+        return HarnessModelStatus::MissingConfiguration(provider.api_key_environment());
     }
     if provider.default_base_url().is_none()
         && !has_value(environment, provider.base_url_environment())
     {
-        return Some(provider.base_url_environment());
+        return HarnessModelStatus::MissingConfiguration(provider.base_url_environment());
     }
 
-    None
+    HarnessModelStatus::Ready
 }
 
 /// Returns the trimmed value of `name`, or `None` when it is unset or blank.
@@ -412,9 +432,9 @@ impl ModelSelection {
         })
     }
 
-    /// Resolves a recorded registration key such as `kimi/kimi-k3` or
-    /// `openai-compatible/qwen3:latest`, or `None` for a key without a known
-    /// provider and model.
+    /// Resolves a recorded registration key such as `kimi/kimi-k3`,
+    /// `chatgpt/gpt-6.1-sol`, or `openai-compatible/qwen3:latest`, or `None`
+    /// for a key without a known provider and model.
     pub(crate) fn from_key(key: &str) -> Option<Self> {
         let (provider, model) = key.split_once('/')?;
         if provider == ModelProvider::OpenAiCompatible.as_str() {
@@ -423,23 +443,48 @@ impl ModelSelection {
                 provider: ModelProvider::OpenAiCompatible,
             });
         }
+        // A ChatGPT-plan model id is its key, `chatgpt/<model>`.
+        let id = if provider == ModelProvider::ChatGpt.as_str() {
+            key
+        } else {
+            model
+        };
 
-        Self::resolve_known(model)
+        Self::resolve_known(id)
             .ok()
             .filter(|selection| selection.key() == key)
     }
 
-    /// Resolves a catalog model id to the built-in provider listing it.
+    /// Resolves a catalog model id to the built-in provider listing it. A
+    /// `chatgpt/<model>` id resolves only to [`ModelProvider::ChatGpt`], and
+    /// a bare id never does, so the `ChatGPT` plan and API-billed `OpenAI`
+    /// never stand in for each other.
     fn resolve_known(model: &str) -> Result<Self, String> {
+        let unknown = || format!("The harness does not serve model `{model}`.");
+        if let Some(plan_model) = model
+            .strip_prefix(ModelProvider::ChatGpt.as_str())
+            .and_then(|rest| rest.strip_prefix('/'))
+        {
+            return ModelProvider::ChatGpt
+                .known_models()
+                .contains(&plan_model)
+                .then(|| Self {
+                    model: plan_model.to_string(),
+                    provider: ModelProvider::ChatGpt,
+                })
+                .ok_or_else(unknown);
+        }
+
         ModelProvider::all()
             .iter()
             .copied()
+            .filter(|provider| !provider.requires_sign_in())
             .find(|provider| provider.known_models().contains(&model))
             .map(|provider| Self {
                 model: model.to_string(),
                 provider,
             })
-            .ok_or_else(|| format!("The harness does not serve model `{model}`."))
+            .ok_or_else(unknown)
     }
 
     /// Returns the stable registry key.
@@ -461,17 +506,22 @@ impl ModelSelection {
         let client = ModelConfiguration::new(self.provider, &self.model)
             .client_from_environment(lookup(environment))
             .map_err(|error| {
-                let remedy = if self.provider.requires_api_key() {
-                    format!("Set {}", self.provider.api_key_environment())
+                let remedy = if self.provider.requires_sign_in() {
+                    format!("Run `{CHATGPT_SIGN_IN_COMMAND}`, then retry.")
+                } else if self.provider.requires_api_key() {
+                    format!(
+                        "Set {} before starting Agentty.",
+                        self.provider.api_key_environment()
+                    )
                 } else {
                     format!(
-                        "Check {OPENAI_COMPATIBLE_MODEL_ENV} and {}",
+                        "Check {OPENAI_COMPATIBLE_MODEL_ENV} and {} before starting Agentty.",
                         self.provider.base_url_environment()
                     )
                 };
 
                 format!(
-                    "Cannot use harness model `{}`: {error}. {remedy} before starting Agentty.",
+                    "Cannot use harness model `{}`: {error}. {remedy}",
                     self.model
                 )
             })?;
@@ -518,12 +568,22 @@ impl ModelSelection {
         context: &HarnessContext<'_>,
         observer: impl LifecycleObserver + 'static,
     ) -> Result<Harness, String> {
-        let metadata = ModelConfiguration::new(self.provider, &self.model)
-            .base_url(RESUME_ONLY_BASE_URL)
-            .client_from_environment(|_| Ok(String::new()))
+        // A sign-in provider's client reads no credential until a request,
+        // so it needs no stored sign-in here.
+        let client = if self.provider.requires_sign_in() {
+            ModelClient::chatgpt(ChatGptConfig {
+                auth_file: PathBuf::new(),
+                base_url: RESUME_ONLY_BASE_URL.to_string(),
+                model: self.model.clone(),
+            })
             .map_err(failure("Invalid resume-only harness model"))?
-            .metadata()
-            .clone();
+        } else {
+            ModelConfiguration::new(self.provider, &self.model)
+                .base_url(RESUME_ONLY_BASE_URL)
+                .client_from_environment(|_| Ok(String::new()))
+                .map_err(failure("Invalid resume-only harness model"))?
+        };
+        let metadata = client.metadata().clone();
         let profile = self.profile(context.environment, None)?;
         let registry = self.register(ResumeOnlyModel { metadata }, profile)?;
 

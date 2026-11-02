@@ -31,6 +31,8 @@ use serde_json::{Map, Value};
 use thiserror::Error;
 use tokio::io::{AsyncBufRead, AsyncBufReadExt as _, AsyncWrite, AsyncWriteExt as _, BufReader};
 
+mod login;
+
 const CHAT_COMMAND_HELP: &str = concat!(
     "commands:\n",
     "  /model            list models\n",
@@ -122,6 +124,16 @@ enum Command {
     Run(RunArgs),
     /// Resumes a durable session.
     Resume(ResumeArgs),
+    /// Signs in to a provider that uses an account instead of an API key.
+    Login(LoginArgs),
+}
+
+/// Arguments for signing in to a provider.
+#[derive(Debug, Args)]
+struct LoginArgs {
+    /// Provider to sign in to; `chatgpt` bills requests to your `ChatGPT` plan.
+    #[arg(value_parser = PossibleValuesParser::new(["chatgpt"]))]
+    provider: String,
 }
 
 /// Arguments for a new durable model session.
@@ -262,6 +274,7 @@ impl ChatMode {
         let initial_prompt = match &cli.command {
             Command::Run(args) => &args.prompt,
             Command::Resume(args) => &args.prompt,
+            Command::Login(_) => &None,
         };
         if stdin_is_terminal && initial_prompt.is_some() {
             return Self::OneShot;
@@ -607,6 +620,14 @@ where
             )
             .await
         }
+        Command::Login(_) => login::login(
+            environment,
+            &login::SystemBrowser,
+            &mut io::stdout().lock(),
+            login::DEFAULT_PORT,
+        )
+        .await
+        .map_err(CliError::from),
     }
 }
 
@@ -772,6 +793,7 @@ fn stored_model_identity_parts(
         Some("moonshot_ai") => ModelProvider::Kimi,
         Some("alibaba_cloud") => ModelProvider::Qwen,
         Some("openai") => ModelProvider::OpenAi,
+        Some("openai_chatgpt") => ModelProvider::ChatGpt,
         Some("openai_compatible") => ModelProvider::OpenAiCompatible,
         _ => return Err(CliError::MissingModelIdentity),
     };
@@ -1097,6 +1119,8 @@ enum CliError {
     BaseUrlRequired { name: &'static str },
     #[error("one or more chat turns failed")]
     ChatTurnsFailed,
+    #[error(transparent)]
+    Login(#[from] ag_harness::provider::ChatGptSignInError),
     #[error("--database, AG_HARNESS_ROOT, or HOME is required for durable session storage")]
     DatabaseLocation,
     #[error("No valid Git executable was found in PATH; pass --git-executable <FILE>")]

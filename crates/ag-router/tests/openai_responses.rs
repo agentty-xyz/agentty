@@ -63,6 +63,7 @@ fn router(server: &MockServer) -> Result<Router, ModelError> {
         provider: Provider::OpenAi,
         api_key: Some("sk-test".to_string()),
         base_url: format!("{}/v1/", server.uri()),
+        credential: None,
     }])
 }
 

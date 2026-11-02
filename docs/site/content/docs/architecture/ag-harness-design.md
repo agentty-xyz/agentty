@@ -443,13 +443,29 @@ GPT-5.6, and OpenAI models declare their documented windows in the provider cata
 (`ModelProvider::declared_profile`) under the default estimator with a 50% margin until
 a live calibration fits one; the Qwen flash models are declared the same way.
 
+The `chatgpt` provider sends the same requests billed to the user's ChatGPT plan through
+OpenAI's documented "Sign in with ChatGPT" route for open-source clients, rather than
+impersonating Codex CLI against ChatGPT's private backend. Verified live in October
+2026, the plan route accepts the `openai` wire format unchanged (developer messages,
+flat function tools, the `json_schema` text format, and reasoning replay), so the
+providers share one policy and differ only in authentication. A `BearerCredential`
+replaces the static API key: the router asks it for a token before each request, and
+`ChatGptAuth` refreshes the one-hour access token from the stored sign-in, serializing
+rotating refresh tokens across processes with a file lock, because two processes
+refreshing one token would invalidate the sign-in. The sign-in has its own registered
+client and credential file instead of reusing Codex CLI's, for the same reason. A plan
+model never falls back to an API key, and its sessions record a distinct
+`openai_chatgpt` provider, so resuming one cannot move it to paid API usage. The plan
+models declare the windows the plan's model list reports.
+
 The provider catalog also declares each hosted model's price class
 (`ModelProvider::cost_tier`): cheap at most $2.50 per million output tokens, premium at
-least $15, standard between, and local for every OpenAI-compatible model. These are
-per-model facts from the providers' published prices, kept in one table beside the model
-identifiers; which model suits which task stays the host's choice. Agentty, for one,
-labels its model pickers with the class and lets a project's Fast model, which writes
-commit messages and titles, be a cheap harness model, but never selects one on its own.
+least $15, standard between, plan for models billed to a subscription's usage limits,
+and local for every OpenAI-compatible model. These are per-model facts from the
+providers' published prices, kept in one table beside the model identifiers; which model
+suits which task stays the host's choice. Agentty, for one, labels its model pickers
+with the class and lets a project's Fast model, which writes commit messages and titles,
+be a cheap harness model, but never selects one on its own.
 
 The `openai-compatible` provider serves local and self-hosted models (Ollama, llama.cpp,
 LM Studio, vLLM) under one conservative policy instead of one adapter per server,

@@ -69,6 +69,7 @@ explicit expectations so fixture reuse does not hide changes to those contracts.
 | Wall and monotonic time          | `Clock`                         |
 | Worktree launch commands         | `TmuxClient`                    |
 | Clipboard capture                | `ClipboardImageClient`          |
+| Browser sign-in pages            | `BrowserClient`                 |
 | Workspace agents                 | `AgentCatalogClient`            |
 | Process and temperature sampling | `ResourceClient`                |
 | Persistence                      | Repository traits in `ag-store` |
@@ -149,15 +150,22 @@ qualification, not a passed or silently skipped check. See
 limitations.
 
 `ag-router` tests use local HTTP servers to verify provider payloads, bounded transport,
-response decoding, and schema validation. `ag-harness` provider tests exercise its
-public adapter into the router, including tool-call translation and telemetry; live
-provider qualification remains separate. `ag-agent` native-harness tests inject the
-environment through `NativeHarnessConfig::with_environment` and drive session turns,
-utilities, cancellation, and `bash` against a scripted Chat Completions server; PTY
-scenarios run Harness sessions against the same kind of server. Local model listing and
-running-window checks reach the server only through `AgentAvailabilityProbe` in the
-application and `LocalServer` in `ag-router`, so app tests inject listed models and
-router, agent, and PTY tests script Ollama's `/api` endpoints on the same local server.
+response decoding, and schema validation. "Sign in with ChatGPT" tests point
+`ChatGptLogin` and `ChatGptAuth` at a local token endpoint through `with_issuer`, and
+`ag-harness-cli` drives its loopback callback listener through an injected `Browser`
+that plays the approving user; the live authorization server is exercised only by manual
+sign-in. Agentty's sign-in popup reaches the sign-in only through
+`AgentAvailabilityProbe::sign_in_chatgpt` and opens URLs through `BrowserClient`, so app
+tests script both, and its PTY scenario installs an approving `open` stand-in against a
+local token endpoint. `ag-harness` provider tests exercise its public adapter into the
+router, including tool-call translation and telemetry; live provider qualification
+remains separate. `ag-agent` native-harness tests inject the environment through
+`NativeHarnessConfig::with_environment` and drive session turns, utilities,
+cancellation, and `bash` against a scripted Chat Completions server; PTY scenarios run
+Harness sessions against the same kind of server. Local model listing and running-window
+checks reach the server only through `AgentAvailabilityProbe` in the application and
+`LocalServer` in `ag-router`, so app tests inject listed models and router, agent, and
+PTY tests script Ollama's `/api` endpoints on the same local server.
 
 Tool-trace tests feed deterministic provider events to verify metadata, opt-in content,
 credential suppression, and preview limits. Public trace-context tests cover capture

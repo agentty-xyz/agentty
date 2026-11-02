@@ -157,6 +157,7 @@ pub(super) fn visible_review_session_id(mode: &AppMode) -> Option<&str> {
         | AppMode::LaunchConfigurationSelector { restore_view, .. }
         | AppMode::PublishBranchInput { restore_view, .. }
         | AppMode::ViewInfoPopup { restore_view, .. } => Some(&restore_view.session_id),
+        AppMode::ChatGptSignIn { dialog } => Some(dialog.session_id()),
         AppMode::List
         | AppMode::SessionCreation { .. }
         | AppMode::StackAppendParentSelection { .. }

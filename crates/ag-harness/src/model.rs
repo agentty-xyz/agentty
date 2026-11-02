@@ -9,6 +9,7 @@
 use std::collections::HashSet;
 use std::error::Error;
 use std::ops::Deref;
+use std::sync::Arc;
 
 pub use ag_router::{CompletionMetadata, CompletionUsage};
 use async_trait::async_trait;
@@ -26,7 +27,9 @@ pub use crate::model_profile::ModelProfile;
 pub use crate::model_registry::{
     ModelCapabilities, ModelRegistration, ModelRegistry, ModelRegistryError,
 };
-use crate::provider::{KimiConfig, MuseConfig, OpenAiCompatibleConfig, OpenAiConfig, QwenConfig};
+use crate::provider::{
+    ChatGptConfig, KimiConfig, MuseConfig, OpenAiCompatibleConfig, OpenAiConfig, QwenConfig,
+};
 use crate::schema_contract::{OutputSchema, OutputValidationError, bounded_diagnostic};
 use crate::{telemetry, tool};
 
@@ -152,6 +155,27 @@ impl ModelClient {
         )
     }
 
+    /// Creates a client for `OpenAI`'s Responses API billed to the user's
+    /// `ChatGPT` plan. Requests carry the access token of the sign-in stored
+    /// at `config.auth_file`, refreshed before it expires; otherwise they
+    /// match [`Self::openai`].
+    ///
+    /// # Errors
+    ///
+    /// Returns [`ModelMetadataError`] when the configured model identifier is
+    /// empty or contains only whitespace.
+    pub fn chatgpt(config: ChatGptConfig) -> Result<Self, ModelMetadataError> {
+        Self::routed_with_credential(
+            ag_router::Provider::ChatGpt,
+            None,
+            Some(Arc::new(ag_router::chatgpt::ChatGptAuth::new(
+                config.auth_file,
+            ))),
+            config.base_url,
+            &config.model,
+        )
+    }
+
     /// Creates a client backed by a local or self-hosted server implementing
     /// the `OpenAI` Chat Completions API, such as Ollama, llama.cpp, LM
     /// Studio, or vLLM. Requests carry only portable fields: no prompt cache
@@ -269,12 +293,23 @@ impl ModelClient {
         base_url: String,
         model: &str,
     ) -> Result<Self, ModelMetadataError> {
+        Self::routed_with_credential(provider, api_key, None, base_url, model)
+    }
+
+    fn routed_with_credential(
+        provider: ag_router::Provider,
+        api_key: Option<String>,
+        credential: Option<Arc<dyn ag_router::BearerCredential>>,
+        base_url: String,
+        model: &str,
+    ) -> Result<Self, ModelMetadataError> {
         let metadata = ModelMetadata::new(provider_telemetry_name(provider), model)?;
         let router_model = format!("{}/{model}", provider.as_str());
         let router = ag_router::Router::single(ag_router::ProviderConfig {
             provider,
             api_key,
             base_url,
+            credential,
         });
 
         Ok(Self {
@@ -492,6 +527,7 @@ fn provider_telemetry_name(provider: ag_router::Provider) -> &'static str {
     match provider {
         ag_router::Provider::Kimi => telemetry::PROVIDER_MOONSHOT_AI,
         ag_router::Provider::Muse => telemetry::PROVIDER_META,
+        ag_router::Provider::ChatGpt => telemetry::PROVIDER_OPENAI_CHATGPT,
         ag_router::Provider::OpenAi => telemetry::PROVIDER_OPENAI,
         ag_router::Provider::OpenAiCompatible => telemetry::PROVIDER_OPENAI_COMPATIBLE,
         ag_router::Provider::Qwen => telemetry::PROVIDER_ALIBABA_CLOUD,

@@ -8,6 +8,7 @@ use tokio::sync::mpsc;
 
 use super::event::AppEvent;
 use super::state::{App, AppClients};
+use crate::app::chatgpt_sign_in::ChatGptSignIn;
 use crate::app::service::{AppServiceDeps, AppServices};
 use crate::app::session::{SessionManager, migrate_active_sessions_off_retired_models};
 use crate::app::setting::SettingsManager;
@@ -112,7 +113,6 @@ impl App {
             &clients,
         )
         .await?;
-        repositories.runs().recover().await?;
         Self::recover_startup_operations(
             repositories.clone(),
             base_path,
@@ -151,6 +151,7 @@ impl App {
                 clients.project_discovery_client,
                 clients.project_discovery_home,
             )),
+            chatgpt_sign_in: ChatGptSignIn::new(clients.browser_client),
             needs_redraw: true,
             settings,
             settings_presentation: SettingsPresentationState::default(),
@@ -448,7 +449,8 @@ impl App {
         HarnessModelCatalog::new(true, options, remembered)
     }
 
-    /// Completes durable operation recovery before startup admits sessions.
+    /// Completes durable run and operation recovery before startup admits
+    /// sessions.
     ///
     /// # Errors
     /// Returns an actionable error when recovery cannot complete.
@@ -458,6 +460,7 @@ impl App {
         git_client: Arc<dyn GitClient>,
         clock: Arc<dyn Clock>,
     ) -> Result<(), AppError> {
+        repositories.runs().recover().await?;
         repositories
             .sessions()
             .recover_session_preparations()

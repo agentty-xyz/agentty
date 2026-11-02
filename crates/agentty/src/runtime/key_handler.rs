@@ -67,6 +67,7 @@ where
             }
             AppMode::SyncBlockedPopup { .. } => Ok(mode::sync_blocked::handle(app, key)),
             AppMode::ViewInfoPopup { .. } => Ok(handle_view_info_popup_key(app, key)),
+            AppMode::ChatGptSignIn { .. } => Ok(mode::chatgpt_sign_in::handle(app, key)),
             AppMode::Confirmation { .. } => {
                 unreachable!("confirmation mode is handled before dispatch matching")
             }

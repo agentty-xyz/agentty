@@ -91,6 +91,15 @@ task; `AppEvent` completions update the foreground dialog. Cancellation stops tr
 cooperatively and invalidates late results. Only selected results are registered. Saved
 checkouts are validated when explicitly opened.
 
+## ChatGPT Sign-In
+
+The sign-in popup runs the browser sign-in on a background task through
+`AgentAvailabilityProbe::sign_in_chatgpt`, which the worker forwards to the harness
+adapter. `AppEvent::ChatGptSignInUpdated` delivers the sign-in URL, opened through
+`BrowserClient`, and the result; the reducer drops updates whose request generation no
+longer matches the popup. Success switches the session model and refreshes the harness
+model list.
+
 ## Session Channel Composition
 
 Composition injects `SessionRunFactory`, which returns a worker-owned

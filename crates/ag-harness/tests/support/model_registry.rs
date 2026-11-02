@@ -7,13 +7,13 @@ use ag_harness::model::{
     ContextBudgetError, ModelCapabilities, ModelCompletion, ModelMetadata, ModelProfile,
     ModelRegistry, ModelRegistryError, ModelRequest, ModelResponse,
 };
-use ag_harness::provider::{ModelConfiguration, ModelProvider};
+use ag_harness::provider::{ChatGptCredentials, ModelConfiguration, ModelProvider};
 use ag_harness::recovery::ExecutionIdentity;
 use ag_harness::store::SqliteStore;
 use ag_harness::{Harness, Model, ModelError, SessionError};
 use async_trait::async_trait;
 use serde_json::json;
-use wiremock::matchers::{body_partial_json, method, path};
+use wiremock::matchers::{bearer_token, body_partial_json, method, path};
 use wiremock::{Mock, MockServer, ResponseTemplate};
 
 use crate::context_budget_fixture::unbounded_context_budget;
@@ -336,7 +336,26 @@ async fn registered_builtin_configurations_execute_through_the_selected_client()
             .first()
             .copied()
             .unwrap_or("served-model");
-        let (endpoint, response) = if *provider == ModelProvider::OpenAi {
+        let sign_in = tempfile::tempdir().expect("temporary directory");
+        let auth_file = sign_in.path().join("chatgpt.json");
+        if provider.requires_sign_in() {
+            ChatGptCredentials {
+                access_token: "plan-token".to_string(),
+                client_id: "oaiapp_fixture".to_string(),
+                email: None,
+                expires_at: u64::MAX,
+                ext_agent_host_id: "urn:uuid:fixture".to_string(),
+                id_token: String::new(),
+                refresh_token: "refresh".to_string(),
+                scopes: vec!["chatgpt.tokens.use.direct".to_string()],
+            }
+            .save(&auth_file)
+            .expect("credentials");
+        }
+        let (endpoint, response) = if matches!(
+            provider,
+            ModelProvider::OpenAi | ModelProvider::ChatGpt
+        ) {
             let completed = json!({"type":"response.completed","response":{
                 "id":"response", "model":model, "status":"completed",
                 "output":[{"type":"message","role":"assistant","content":[
@@ -357,16 +376,30 @@ async fn registered_builtin_configurations_execute_through_the_selected_client()
                 })),
             )
         };
-        Mock::given(method("POST"))
+        let bearer = if provider.requires_sign_in() {
+            "plan-token"
+        } else {
+            "fixture-key"
+        };
+        let mock = Mock::given(method("POST"))
             .and(path(endpoint))
-            .and(body_partial_json(json!({"model":model})))
-            .respond_with(response)
-            .expect(1)
-            .mount(&server)
-            .await;
+            .and(body_partial_json(json!({"model":model})));
+        let mock = if *provider == ModelProvider::OpenAiCompatible {
+            mock
+        } else {
+            mock.and(bearer_token(bearer))
+        };
+        mock.respond_with(response).expect(1).mount(&server).await;
+        let auth_file_value = auth_file.to_string_lossy().into_owned();
         let client = ModelConfiguration::new(*provider, model)
             .base_url(server.uri())
-            .client_from_environment(|_| Ok("fixture-key".into()))
+            .client_from_environment(|name| {
+                Ok(if name == "CHATGPT_AUTH_FILE" {
+                    auth_file_value.clone()
+                } else {
+                    "fixture-key".into()
+                })
+            })
             .expect("client");
         let metadata = client.metadata().clone();
         let mut registry = ModelRegistry::new();
