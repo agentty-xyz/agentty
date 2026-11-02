@@ -89,11 +89,24 @@ async fn provider_discovery_uses_the_runtime_with_an_isolated_empty_search_path(
             .expect("Muse is listed");
         assert_eq!(muse.status, HarnessModelStatus::Ready);
         assert!(harness_models.iter().all(|option| option.cost.is_paid()));
+        let opened_urls = std::sync::Arc::new(std::sync::Mutex::new(Vec::<String>::new()));
+        let recorder = std::sync::Arc::clone(&opened_urls);
+        let sign_in = RealAgentAvailabilityProbe
+            .sign_in_chatgpt(Box::new(move |url| {
+                recorder.lock().expect("opened lock").push(url);
+            }))
+            .await;
+        assert!(sign_in.is_err_and(|error| !error.is_empty()));
+        assert!(opened_urls.lock().expect("opened lock").is_empty());
         return;
     }
+    let auth_directory = tempfile::tempdir().expect("auth directory");
+    let unreadable_auth_file = auth_directory.path().join("chatgpt.json");
+    std::fs::write(&unreadable_auth_file, "not json").expect("unreadable sign-in");
     // Act
     let output = Command::new(env::current_exe().expect("test executable"))
         .args(["--exact", "provider::tests::provider_discovery_uses_the_runtime_with_an_isolated_empty_search_path"])
+        .env("CHATGPT_AUTH_FILE", &unreadable_auth_file)
         .env(MARKER, "1").env("PATH", "").env("MODEL_API_KEY", "test-key")
         .env("OPENAI_COMPATIBLE_BASE_URL", "http://127.0.0.1:9/v1").env_remove("OPENAI_COMPATIBLE_MODEL")
         .output().expect("isolated discovery");

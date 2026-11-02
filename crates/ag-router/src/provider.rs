@@ -7,14 +7,21 @@ use crate::chat_completion::{
     self, ChatCompletionBackend, ChatCompletionProviderPolicy, ReasoningFormat,
     StructuredOutputMode,
 };
+use crate::credential::BearerCredential;
 use crate::http::HttpTransport;
-use crate::model::{Completion, GeneratedResponse, ModelError, ModelRequest, ReasoningEffort};
+use crate::model::{
+    Completion, GeneratedResponse, ModelError, ModelErrorType, ModelRequest, ReasoningEffort,
+};
 use crate::responses::{self, ResponsesBackend, ResponsesProviderPolicy};
 use crate::{OutputSchema, TurnInput};
 
 /// Built-in model provider.
 #[derive(Clone, Copy, Debug, Eq, Hash, PartialEq)]
 pub enum Provider {
+    /// `OpenAI` models billed to the user's `ChatGPT` plan through "Sign in
+    /// with `ChatGPT`": the Responses API authenticated by a refreshing
+    /// [`ProviderConfig::credential`].
+    ChatGpt,
     /// Moonshot AI Kimi.
     Kimi,
     /// Meta Model API Muse.
@@ -30,7 +37,8 @@ pub enum Provider {
 }
 
 impl Provider {
-    const ALL: [Self; 5] = [
+    const ALL: [Self; 6] = [
+        Self::ChatGpt,
         Self::Kimi,
         Self::Muse,
         Self::OpenAi,
@@ -41,6 +49,7 @@ impl Provider {
     /// Prefix used in a `provider/model` request identifier.
     pub const fn as_str(self) -> &'static str {
         match self {
+            Self::ChatGpt => "chatgpt",
             Self::Kimi => "kimi",
             Self::Muse => "muse",
             Self::OpenAi => "openai",
@@ -50,9 +59,10 @@ impl Provider {
     }
 
     /// Returns whether requests need an API key; local OpenAI-compatible
-    /// servers usually accept unauthenticated requests.
+    /// servers usually accept unauthenticated requests, and
+    /// [`Self::ChatGpt`] authenticates with a credential instead.
     const fn requires_api_key(self) -> bool {
-        !matches!(self, Self::OpenAiCompatible)
+        !matches!(self, Self::ChatGpt | Self::OpenAiCompatible)
     }
 }
 
@@ -61,11 +71,16 @@ pub struct ProviderConfig {
     /// Built-in provider implementation.
     pub provider: Provider,
     /// Bearer token sent to the provider, or `None` to send no
-    /// `Authorization` header. Only [`Provider::OpenAiCompatible`] accepts
-    /// `None`; every provider rejects a blank key.
+    /// `Authorization` header. Only [`Provider::OpenAiCompatible`] and a
+    /// provider with a [`Self::credential`] accept `None`; every provider
+    /// rejects a blank key.
     pub api_key: Option<String>,
     /// API base URL, including its version path.
     pub base_url: String,
+    /// Refreshing token source asked for a bearer token before each request,
+    /// taking precedence over [`Self::api_key`]. [`Provider::ChatGpt`]
+    /// requires one.
+    pub credential: Option<Arc<dyn BearerCredential>>,
 }
 
 /// Single entry point for configured model providers.
@@ -137,7 +152,14 @@ impl Router {
     /// # Errors
     /// Returns a routing, transport, decoding, or output validation error.
     pub async fn execute(&self, request: ModelRequest) -> Result<Completion, ModelError> {
-        let backend = self.backend(&request.model)?;
+        let (_, config, _) = self.route(&request.model)?;
+        let bearer = match &config.credential {
+            Some(credential) => Some(credential.bearer_token().await.map_err(|error| {
+                ModelError::classified_request(ModelErrorType::Provider, None, error)
+            })?),
+            None => None,
+        };
+        let backend = self.backend_with_bearer(&request.model, bearer)?;
         let response = backend.generate(&request).await?;
         match response {
             GeneratedResponse::Output {
@@ -164,6 +186,56 @@ impl Router {
     }
 
     fn backend(&self, id: &str) -> Result<Backend, ModelError> {
+        self.backend_with_bearer(id, None)
+    }
+
+    /// Builds the backend for `id`, authenticating with `bearer` when the
+    /// provider has a credential; validation-only callers pass `None`.
+    fn backend_with_bearer(&self, id: &str, bearer: Option<String>) -> Result<Backend, ModelError> {
+        let (provider, config, model) = self.route(id)?;
+        let api_key = if config.credential.is_some() {
+            bearer
+        } else {
+            let api_key_valid = config
+                .api_key
+                .as_deref()
+                .map_or(!provider.requires_api_key(), |key| !key.trim().is_empty());
+            if !api_key_valid {
+                return Err(ModelError::InvalidProviderConfig);
+            }
+            config.api_key.clone()
+        };
+        if config.base_url.trim().is_empty()
+            || (provider == Provider::ChatGpt && config.credential.is_none())
+        {
+            return Err(ModelError::InvalidProviderConfig);
+        }
+
+        Ok(match policy(provider, model) {
+            ProviderPolicy::ChatCompletion(policy) => {
+                Backend::ChatCompletion(ChatCompletionBackend::with_client(
+                    api_key,
+                    config.base_url.clone(),
+                    model.to_string(),
+                    policy,
+                    Arc::clone(&self.client),
+                ))
+            }
+            ProviderPolicy::Responses(policy) => Backend::Responses(ResponsesBackend::new(
+                api_key,
+                config.base_url.clone(),
+                model.to_string(),
+                policy,
+                Arc::clone(&self.responses),
+            )),
+        })
+    }
+
+    /// Resolves a `provider/model` identifier to its configured provider.
+    fn route<'id>(
+        &self,
+        id: &'id str,
+    ) -> Result<(Provider, &ProviderConfig, &'id str), ModelError> {
         let (prefix, model) = id.split_once('/').ok_or(ModelError::InvalidModelId)?;
         if model.trim().is_empty() || prefix.trim().is_empty() {
             return Err(ModelError::InvalidModelId);
@@ -176,32 +248,8 @@ impl Router {
             .providers
             .get(&provider)
             .ok_or(ModelError::UnknownProvider)?;
-        let api_key_valid = config
-            .api_key
-            .as_deref()
-            .map_or(!provider.requires_api_key(), |key| !key.trim().is_empty());
-        if !api_key_valid || config.base_url.trim().is_empty() {
-            return Err(ModelError::InvalidProviderConfig);
-        }
 
-        Ok(match policy(provider, model) {
-            ProviderPolicy::ChatCompletion(policy) => {
-                Backend::ChatCompletion(ChatCompletionBackend::with_client(
-                    config.api_key.clone(),
-                    config.base_url.clone(),
-                    model.to_string(),
-                    policy,
-                    Arc::clone(&self.client),
-                ))
-            }
-            ProviderPolicy::Responses(policy) => Backend::Responses(ResponsesBackend::new(
-                config.api_key.clone(),
-                config.base_url.clone(),
-                model.to_string(),
-                policy,
-                Arc::clone(&self.responses),
-            )),
-        })
+        Ok((provider, config, model))
     }
 }
 
@@ -324,20 +372,8 @@ fn policy(provider: Provider, model: &str) -> ProviderPolicy {
             unsupported_schema_reason: "Muse structured output requires an explicit object root \
                                         schema",
         }),
-        Provider::OpenAi => ProviderPolicy::Responses(ResponsesProviderPolicy {
-            context_overflow_markers: &[OPENAI_CONTEXT_OVERFLOW],
-            display_name: "OpenAI",
-            reasoning_effort: if OPENAI_MAX_EFFORT_PREFIXES
-                .iter()
-                .any(|prefix| model.starts_with(prefix))
-            {
-                ReasoningEffort::as_str
-            } else {
-                openai_xhigh_effort
-            },
-            unsupported_schema_reason: "OpenAI structured output requires an explicit object root \
-                                        schema",
-        }),
+        Provider::ChatGpt => openai_responses_policy("ChatGPT plan", model),
+        Provider::OpenAi => openai_responses_policy("OpenAI", model),
         Provider::OpenAiCompatible => {
             ProviderPolicy::ChatCompletion(ChatCompletionProviderPolicy {
                 context_overflow_markers: &[LLAMA_CPP_CONTEXT_OVERFLOW],
@@ -380,6 +416,25 @@ fn policy(provider: Provider, model: &str) -> ProviderPolicy {
             })
         }
     }
+}
+
+/// Responses API policy shared by the `OpenAI` models, reached with an API key
+/// or billed to a `ChatGPT` plan.
+fn openai_responses_policy(display_name: &'static str, model: &str) -> ProviderPolicy {
+    ProviderPolicy::Responses(ResponsesProviderPolicy {
+        context_overflow_markers: &[OPENAI_CONTEXT_OVERFLOW],
+        display_name,
+        reasoning_effort: if OPENAI_MAX_EFFORT_PREFIXES
+            .iter()
+            .any(|prefix| model.starts_with(prefix))
+        {
+            ReasoningEffort::as_str
+        } else {
+            openai_xhigh_effort
+        },
+        unsupported_schema_reason: "OpenAI structured output requires an explicit object root \
+                                    schema",
+    })
 }
 
 /// Maps `max` to `xhigh`, the deepest effort of `OpenAI` models before

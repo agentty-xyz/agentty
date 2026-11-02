@@ -219,6 +219,54 @@ define_model_catalog! {
             description: "Cheapest Qwen model for short, simple tasks.",
             fast: false,
         },
+        /// `gpt-6.1-sol` billed to the user's `ChatGPT` plan.
+        ChatGptGpt61Sol = 22 => {
+            id: "chatgpt/gpt-6.1-sol",
+            description: "GPT-6.1 Sol billed to your ChatGPT plan instead of API credits.",
+            fast: false,
+        },
+        /// `gpt-6.1-terra` billed to the user's `ChatGPT` plan.
+        ChatGptGpt61Terra = 23 => {
+            id: "chatgpt/gpt-6.1-terra",
+            description: "GPT-6.1 Terra billed to your ChatGPT plan instead of API credits.",
+            fast: false,
+        },
+        /// `gpt-6-astra` billed to the user's `ChatGPT` plan.
+        ChatGptGpt6Astra = 24 => {
+            id: "chatgpt/gpt-6-astra",
+            description: "GPT-6 Astra billed to your ChatGPT plan instead of API credits.",
+            fast: false,
+        },
+        /// `gpt-6-sol` billed to the user's `ChatGPT` plan.
+        ChatGptGpt6Sol = 25 => {
+            id: "chatgpt/gpt-6-sol",
+            description: "GPT-6 Sol billed to your ChatGPT plan instead of API credits.",
+            fast: false,
+        },
+        /// `gpt-6-luna` billed to the user's `ChatGPT` plan.
+        ChatGptGpt6Luna = 26 => {
+            id: "chatgpt/gpt-6-luna",
+            description: "GPT-6 Luna billed to your ChatGPT plan instead of API credits.",
+            fast: false,
+        },
+        /// `gpt-5.6-sol` billed to the user's `ChatGPT` plan.
+        ChatGptGpt56Sol = 27 => {
+            id: "chatgpt/gpt-5.6-sol",
+            description: "GPT-5.6 Sol billed to your ChatGPT plan instead of API credits.",
+            fast: false,
+        },
+        /// `gpt-5.6-terra` billed to the user's `ChatGPT` plan.
+        ChatGptGpt56Terra = 28 => {
+            id: "chatgpt/gpt-5.6-terra",
+            description: "GPT-5.6 Terra billed to your ChatGPT plan instead of API credits.",
+            fast: false,
+        },
+        /// `gpt-5.6-luna` billed to the user's `ChatGPT` plan.
+        ChatGptGpt56Luna = 29 => {
+            id: "chatgpt/gpt-5.6-luna",
+            description: "GPT-5.6 Luna billed to your ChatGPT plan instead of API credits.",
+            fast: false,
+        },
     }
 }
 
@@ -229,9 +277,12 @@ define_model_catalog! {
 /// [`AgentModel::OpenAiCompatible`] models are discovered at runtime and
 /// listed before these.
 ///
-/// The `OpenAI` models come last because `OPENAI_API_KEY` is often set for
-/// other tools, so its mere presence must not move sessions from a
-/// deliberately configured harness provider to paid `OpenAI` usage. The
+/// ChatGPT-plan models carry a `chatgpt/` id prefix, distinct from the bare
+/// ids of the same models on the API-billed `OpenAI` provider, so choosing
+/// one never bills API credits. They precede the `OpenAI` models, which come
+/// last because `OPENAI_API_KEY` is often set for other tools, so its mere
+/// presence must not move sessions from a deliberately configured harness
+/// provider to paid `OpenAI` usage. The
 /// harness library also catalogs the deprecated `gpt-5.3-codex`, which
 /// Agentty retires to [`AgentModel::Gpt61Sol`] instead of offering it. Cheap
 /// tiers follow their provider's other models, so adding one never changes
@@ -245,6 +296,14 @@ const HARNESS_MODELS: &[AgentModel] = &[
     AgentModel::QwenPlus,
     AgentModel::Qwen38Flash,
     AgentModel::Qwen37Flash,
+    AgentModel::ChatGptGpt61Sol,
+    AgentModel::ChatGptGpt61Terra,
+    AgentModel::ChatGptGpt6Astra,
+    AgentModel::ChatGptGpt6Sol,
+    AgentModel::ChatGptGpt6Luna,
+    AgentModel::ChatGptGpt56Sol,
+    AgentModel::ChatGptGpt56Terra,
+    AgentModel::ChatGptGpt56Luna,
     AgentModel::Gpt61Sol,
     AgentModel::Gpt6Astra,
     AgentModel::Gpt6Luna,

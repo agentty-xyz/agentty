@@ -68,6 +68,9 @@ pub(crate) const PROVIDER_ALIBABA_CLOUD: &str = "alibaba_cloud";
 pub(crate) const PROVIDER_META: &str = "meta";
 pub(crate) const PROVIDER_MOONSHOT_AI: &str = "moonshot_ai";
 pub(crate) const PROVIDER_OPENAI: &str = "openai";
+/// Provider name for `OpenAI` billed to a `ChatGPT` plan, kept apart from
+/// [`PROVIDER_OPENAI`] so a resumed session keeps its billing.
+pub(crate) const PROVIDER_OPENAI_CHATGPT: &str = "openai_chatgpt";
 /// Provider name for any OpenAI-compatible server, which `gen_ai` semantic
 /// conventions do not enumerate.
 pub(crate) const PROVIDER_OPENAI_COMPATIBLE: &str = "openai_compatible";

@@ -33,6 +33,7 @@ dependencies = [
  "thiserror 2.0.21",
  "tokio",
  "tokio-util",
+ "url",
  "uuid",
  "wiremock",
 ]
@@ -136,6 +137,7 @@ dependencies = [
  "testty",
  "thiserror 2.0.21",
  "tokio",
+ "url",
  "uuid",
  "wiremock",
 ]
@@ -161,8 +163,12 @@ dependencies = [
  "rustls",
  "serde",
  "serde_json",
+ "sha2 0.11.1",
+ "tempfile",
  "thiserror 2.0.21",
  "tokio",
+ "url",
+ "uuid",
  "wiremock",
 ]
 

@@ -34,6 +34,7 @@ fn router(provider: Provider, server: &MockServer) -> Result<Router, ModelError>
         provider,
         api_key: Some("test-key".to_string()),
         base_url: format!("{}/v1/", server.uri()),
+        credential: None,
     }])
 }
 
@@ -42,6 +43,7 @@ fn openai_compatible_router(server: &MockServer, api_key: Option<&str>) -> Route
         provider: Provider::OpenAiCompatible,
         api_key: api_key.map(str::to_string),
         base_url: format!("{}/v1", server.uri()),
+        credential: None,
     })
 }
 

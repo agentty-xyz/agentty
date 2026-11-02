@@ -10,7 +10,7 @@ use crate::app::prompt_intent::{
     PromptApplyOutcome, PromptCancellation, PromptImagePaste, PromptSessionMode, PromptSubmission,
     PromptWorkflowOutcome,
 };
-use crate::domain::agent::{AgentKind, ReasoningLevel, ResponseStyle, SpeedMode};
+use crate::domain::agent::{AgentKind, AgentSelection, ReasoningLevel, ResponseStyle, SpeedMode};
 use crate::domain::composer::PromptAttachment;
 use crate::domain::input::{InputCommand, InputEffect, InputState};
 use crate::domain::permission::PermissionMode;
@@ -201,6 +201,14 @@ fn show_prompt_diff(app: &mut App, session_id: &str) {
         DiffSidebarFocus::Files,
         false,
     );
+}
+
+/// Opens the `ChatGPT` sign-in popup for `selected_agent`, keeping the
+/// composer draft for when the popup closes.
+fn open_chatgpt_sign_in(app: &mut App, selected_agent: AgentSelection) {
+    if let Some(restore) = take_prompt_snapshot(&mut app.mode) {
+        app.open_chatgpt_sign_in(selected_agent, restore);
+    }
 }
 
 /// Snapshots the current prompt-mode state for later restoration.
@@ -788,6 +796,14 @@ async fn handle_prompt_submit_key(app: &mut App, prompt_context: &PromptContext)
 
         return;
     }
+    let has_draft = matches!(&app.mode, AppMode::Prompt { input, .. } if !input.text().is_empty());
+    if has_draft
+        && let Some(selected_agent) = app.chatgpt_sign_in_required(prompt_context.session_index)
+    {
+        open_chatgpt_sign_in(app, selected_agent);
+
+        return;
+    }
 
     let (composer, is_plan_armed) = match &app.mode {
         AppMode::Prompt {
@@ -962,6 +978,10 @@ async fn handle_prompt_slash_submit(app: &mut App, prompt_context: &PromptContex
             clear_prompt_slash_input(app).await;
             app.update_prompt_session_model(session_id, selected_agent)
                 .await;
+        }
+        Some(PromptSuggestionSelection::SignIn(selected_agent)) => {
+            clear_prompt_slash_input(app).await;
+            open_chatgpt_sign_in(app, selected_agent);
         }
         Some(PromptSuggestionSelection::Mode(permission_mode)) => {
             clear_prompt_slash_input(app).await;

@@ -1065,6 +1065,12 @@ fn labeled_harness_models() -> Vec<HarnessModelOption> {
             "Kimi",
             HarnessModelStatus::MissingConfiguration("KIMI_API_KEY"),
         ),
+        harness_option(
+            AgentModel::ChatGptGpt61Sol,
+            ModelCost::Plan,
+            "ChatGPT plan",
+            HarnessModelStatus::SignInRequired("ag-harness login chatgpt"),
+        ),
         HarnessModelOption {
             context_window: Some(512),
             ..harness_option(
@@ -1126,6 +1132,11 @@ fn harness_model_stage_labels_free_local_models_and_paid_price_classes() {
                 "cheap · Muse · trains on prompts"
             ),
             ("paid", "kimi-k3", "premium · Kimi · needs KIMI_API_KEY"),
+            (
+                "paid",
+                "chatgpt/gpt-6.1-sol",
+                "plan · ChatGPT plan · needs ag-harness login chatgpt"
+            ),
             (
                 "local",
                 "tiny",
@@ -1194,6 +1205,55 @@ fn harness_model_stage_selects_only_models_that_can_run() {
         )))
     );
     assert_eq!(missing_key, None);
+}
+
+#[test]
+fn harness_model_stage_offers_sign_in_for_models_that_need_it() {
+    // Arrange
+    let harness_models = vec![
+        harness_option(
+            served("qwen3:latest"),
+            ModelCost::Local,
+            "Ollama",
+            HarnessModelStatus::Ready,
+        ),
+        harness_option(
+            AgentModel::ChatGptGpt6Sol,
+            ModelCost::Plan,
+            "ChatGPT",
+            HarnessModelStatus::SignInRequired("ag-harness login chatgpt"),
+        ),
+        harness_option(
+            served("embed:latest"),
+            ModelCost::Local,
+            "Ollama",
+            HarnessModelStatus::NoToolSupport,
+        ),
+    ];
+
+    // Act
+    let sign_in = resolve_prompt_slash_selection(
+        "/model",
+        &harness_model_stage(harness_models.clone(), 1),
+        AgentKind::Harness,
+        true,
+    );
+    let no_tools = resolve_prompt_slash_selection(
+        "/model",
+        &harness_model_stage(harness_models, 2),
+        AgentKind::Harness,
+        true,
+    );
+
+    // Assert
+    assert_eq!(
+        sign_in,
+        Some(PromptSuggestionSelection::SignIn(AgentSelection::new(
+            AgentKind::Harness,
+            AgentModel::ChatGptGpt6Sol,
+        )))
+    );
+    assert_eq!(no_tools, None);
 }
 
 #[test]

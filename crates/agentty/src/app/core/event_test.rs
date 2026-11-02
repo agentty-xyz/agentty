@@ -414,6 +414,21 @@ async fn test_session_review_comment_result_ignores_stale_pages_and_surfaces_err
 }
 
 #[tokio::test]
+async fn chatgpt_sign_in_popup_is_viewing_its_composer_session() {
+    // Arrange
+    let mut app = crate::test_support::new_test_app_without_retained_base_dir().await;
+    app.mode = crate::test_support::chatgpt_sign_in_mode("sign-in-session");
+
+    // Act
+    let is_composer_session_visible = app.is_viewing_session("sign-in-session");
+    let is_other_session_visible = app.is_viewing_session("other-session");
+
+    // Assert
+    assert!(is_composer_session_visible);
+    assert!(!is_other_session_visible);
+}
+
+#[tokio::test]
 async fn diff_loading_mode_is_viewing_its_session() {
     // Arrange
     let mut app = crate::test_support::new_test_app_without_retained_base_dir().await;

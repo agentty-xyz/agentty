@@ -1,7 +1,7 @@
 //! Preview Harness sessions behind `--experimental-harness`.
 
 use std::fmt::Write as _;
-use std::os::unix::fs::symlink;
+use std::os::unix::fs::{PermissionsExt, symlink};
 use std::time::Duration;
 
 use serde_json::json;
@@ -572,9 +572,9 @@ fn open_model_picker() -> Journey {
         .step(Step::wait_for_text("/model Harness model", 3000))
 }
 
-/// Asserts the picker labels local rows free and paid rows with their price
-/// class, including the `OpenAI` models listed last, and that `Enter` on a
-/// model without tool calls keeps the picker open.
+/// Asserts the picker labels local rows free, paid rows with their price
+/// class, and ChatGPT-plan rows `plan` with the sign-in they need, and that
+/// `Enter` on a model without tool calls keeps the picker open.
 fn assert_picker_captures(report: &ProofReport, full: Region) {
     // Rows pad labels into a column, so compare words.
     let picker_text = common::frame_from_capture(&report.captures[0])
@@ -589,8 +589,7 @@ fn assert_picker_captures(report: &ProofReport, full: Region) {
         "[paid] muse-spark-1.3-contributor cheap · Muse · trains on prompts",
         "[paid] kimi-k3 premium · Kimi · needs KIMI_API_KEY",
         "[paid] qwen3.8-flash cheap · Qwen · needs DASHSCOPE_API_KEY",
-        "[paid] gpt-6-luna cheap · OpenAI · needs OPENAI_API_KEY",
-        "[paid] gpt-5.6-terra standard · OpenAI · needs OPENAI_API_KEY",
+        "[paid] chatgpt/gpt-6.1-sol plan · ChatGPT plan · needs",
     ] {
         assert!(picker_text.contains(row), "{row} in {picker_text}");
     }
@@ -612,6 +611,7 @@ async fn test_harness_model_picker_switches_between_local_and_paid_models() -> E
         .env("PATH", git_directory.path().to_string_lossy())
         .args(["--experimental-harness".to_string()])
         .env("DASHSCOPE_API_KEY", "")
+        .env("CHATGPT_AUTH_FILE", "")
         .env("KIMI_API_KEY", "")
         .env("OPENAI_API_KEY", "")
         .env("MODEL_API_KEY", "test-key")
@@ -630,7 +630,7 @@ async fn test_harness_model_picker_switches_between_local_and_paid_models() -> E
                     // local model.
                     .wait_for_text("harness/openai-compatible/qwen3:latest", 5000)
                     .compose(&open_model_picker())
-                    .wait_for_text("needs OPENAI_API_KEY", 3000)
+                    .wait_for_text("chatgpt/gpt-6.1-sol", 3000)
                     .capture_labeled("harness_model_picker", "Local and paid harness models")
                     // Rows: qwen3, gemma, muse-spark-1.3, kimi-k3, ...
                     .press_key("j")
@@ -837,6 +837,125 @@ async fn test_harness_fast_model_writes_commit_messages_on_a_cheap_model() -> E2
         .find(|body| body.contains(commit_prompt))
         .ok_or("the commit message should run on the cheap model")?;
     assert!(commit_request.contains(r#""model":"qwen3.8-flash""#));
+
+    Ok(())
+}
+
+/// `ChatGPT` authorization server whose token endpoint grants a plan
+/// credential for `user@example.com`.
+async fn chatgpt_token_server() -> MockServer {
+    let server = MockServer::start().await;
+    Mock::given(method("POST"))
+        .and(path("/api/accounts/oauth/token"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(json!({
+            "access_token": "access",
+            "expires_in": 3600,
+            "id_token": "header.eyJlbWFpbCI6InVzZXJAZXhhbXBsZS5jb20ifQ.signature",
+            "refresh_token": "refresh",
+            "scope": "openid chatgpt.tokens.use.direct",
+            "token_type": "Bearer"
+        })))
+        .mount(&server)
+        .await;
+
+    server
+}
+
+/// Installs `open` and `xdg-open` stand-ins into `directory` that approve
+/// the sign-in like a user: they request the loopback callback with the
+/// URL's `state`, using only Bash built-ins because `PATH` holds no tools.
+fn install_approving_browser(directory: &std::path::Path) -> std::io::Result<()> {
+    let script = concat!(
+        "#!/bin/bash\n",
+        "url=\"$1\"\n",
+        "state=\"${url#*&state=}\"; state=\"${state%%&*}\"\n",
+        "port=\"${url#*127.0.0.1%3A}\"; port=\"${port%%%2F*}\"\n",
+        "exec 3<>\"/dev/tcp/127.0.0.1/$port\" || exit 1\n",
+        "printf 'GET /auth/callback?state=%s&code=c&client_id=oaiapp_test HTTP/1.1\\r\\n",
+        "host: 127.0.0.1\\r\\n\\r\\n' \"$state\" >&3\n",
+        "while read -r -u 3 line; do :; done\n",
+    );
+    for name in ["open", "xdg-open"] {
+        let browser = directory.join(name);
+        std::fs::write(&browser, script)?;
+        std::fs::set_permissions(&browser, std::fs::Permissions::from_mode(0o750))?;
+    }
+
+    Ok(())
+}
+
+#[tokio::test]
+async fn test_harness_model_picker_signs_in_with_chatgpt() -> E2eResult {
+    // Arrange
+    let auth_server = chatgpt_token_server().await;
+    let paid = MockServer::start().await;
+    let git_directory = git_only_path()?;
+    install_approving_browser(git_directory.path())?;
+    let auth_directory = tempfile::tempdir()?;
+    let auth_file = auth_directory.path().join("chatgpt.json");
+
+    // Act, Assert
+    FeatureTest::new("harness_chatgpt_sign_in")
+        .with_git()
+        .with_stub_only_path()
+        .env("PATH", git_directory.path().to_string_lossy())
+        .args(["--experimental-harness".to_string()])
+        .env("CHATGPT_AUTH_FILE", auth_file.to_string_lossy())
+        .env("CHATGPT_AUTH_URL", auth_server.uri())
+        .env("DASHSCOPE_API_KEY", "")
+        .env("KIMI_API_KEY", "")
+        .env("OPENAI_API_KEY", "")
+        .env("MODEL_API_KEY", "test-key")
+        .env("MODEL_API_BASE_URL", paid.uri())
+        .env("OPENAI_COMPATIBLE_BASE_URL", NO_LOCAL_SERVER)
+        .env("OPENAI_COMPATIBLE_MODEL", "")
+        .run(
+            |scenario| {
+                let scenario = scenario
+                    .compose(&common::wait_for_agentty_startup())
+                    .compose(&common::switch_to_tab("Sessions"))
+                    .press_key("a")
+                    .wait_for_text("Install an agent CLI", 5000)
+                    .press_key("Enter")
+                    .wait_for_text("harness/muse-spark-1.3", 5000)
+                    .compose(&open_model_picker())
+                    .wait_for_text("chatgpt/gpt-6.1-sol", 3000);
+                // Rows: the no-local-models hint, two Muse, two Kimi, and
+                // four Qwen models precede `chatgpt/gpt-6.1-sol`.
+                (0..9)
+                    .fold(scenario, |scenario, _| scenario.press_key("j"))
+                    .press_key("Enter")
+                    .wait_for_text("Sign in with ChatGPT", 3000)
+                    .capture_labeled("chatgpt_sign_in", "ChatGPT sign-in popup")
+                    .press_key("Enter")
+                    .wait_for_text("Signed in as user@example.com", 15000)
+                    .capture_labeled("chatgpt_signed_in", "ChatGPT sign-in succeeded")
+                    .press_key("Enter")
+                    .wait_for_text("harness/chatgpt/gpt-6.1-sol", 5000)
+            },
+            |frame, report| {
+                Box::pin(async move {
+                    let full = Region::full(frame.cols(), frame.rows());
+                    assertion::assert_text_in_region(frame, "harness/chatgpt/gpt-6.1-sol", &full);
+                    let popup = common::frame_from_capture(&report.captures[0]).all_text();
+                    assert!(popup.contains("Use your ChatGPT plan for"), "{popup}");
+                    assert!(popup.contains("Enter: Sign in"), "{popup}");
+                })
+            },
+        )
+        .await?;
+
+    assert!(
+        auth_file.is_file(),
+        "the sign-in should store the credential"
+    );
+    assert!(
+        paid.received_requests()
+            .await
+            .unwrap_or_default()
+            .is_empty(),
+        "the paid provider must never be called"
+    );
 
     Ok(())
 }

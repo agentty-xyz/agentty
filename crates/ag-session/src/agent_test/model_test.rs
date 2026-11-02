@@ -341,6 +341,8 @@ fn test_harness_models_include_its_own_and_shared_codex_models() {
     assert!(AgentKind::Harness.supports_model(AgentModel::Gpt61Sol));
     assert!(AgentKind::Codex.supports_model(AgentModel::Gpt61Sol));
     assert!(!AgentKind::Harness.supports_model(AgentModel::Gpt53CodexSpark));
+    assert!(AgentKind::Harness.supports_model(AgentModel::ChatGptGpt61Sol));
+    assert!(!AgentKind::Codex.supports_model(AgentModel::ChatGptGpt61Sol));
     assert_eq!(AgentKind::Antigravity.declared_models(), &[]);
 }
 

@@ -65,7 +65,9 @@ use ag_harness::model::{
     CompletionMetadata, CompletionUsage, ContextBudget, ContextSummaryPolicy, ModelCapabilities,
     ModelCompletion, ModelMessage, ModelMetadata, ModelRegistry, ModelRequest, ModelResponse,
 };
-use ag_harness::provider::{CostTier, ModelConfiguration, ModelProvider, QWEN_PLUS, QWEN3_8_FLASH};
+use ag_harness::provider::{
+    ChatGptCredentials, CostTier, ModelConfiguration, ModelProvider, QWEN_PLUS, QWEN3_8_FLASH,
+};
 use ag_harness::recovery::ExecutionIdentity;
 use ag_harness::store::{MemoryStore, SessionInfo, SessionStore, WriteStatus};
 use ag_harness::tool::{FileSystem, LocalFileSystem, ToolCall};
@@ -472,12 +474,33 @@ fn external_consumer_configures_every_catalog_provider() {
             .copied()
             .unwrap_or("served-model")
     };
+    let sign_in = tempfile::tempdir().expect("temporary directory");
+    let auth_file = sign_in.path().join("chatgpt.json");
+    ChatGptCredentials {
+        access_token: "access".to_string(),
+        client_id: "oaiapp_test".to_string(),
+        email: None,
+        expires_at: u64::MAX,
+        ext_agent_host_id: "urn:uuid:host".to_string(),
+        id_token: String::new(),
+        refresh_token: "refresh".to_string(),
+        scopes: vec!["chatgpt.tokens.use.direct".to_string()],
+    }
+    .save(&auth_file)
+    .expect("credentials should save");
+    let auth_file = auth_file.to_string_lossy().into_owned();
     let clients = ModelProvider::all()
         .iter()
         .map(|provider| {
             ModelConfiguration::new(*provider, model(provider))
                 .base_url("https://models.example/v1")
-                .client_from_environment(|_| Ok("test-key".to_string()))
+                .client_from_environment(|name| {
+                    Ok(if name == "CHATGPT_AUTH_FILE" {
+                        auth_file.clone()
+                    } else {
+                        "test-key".to_string()
+                    })
+                })
                 .expect("catalog provider should construct a client")
         })
         .collect::<Vec<_>>();

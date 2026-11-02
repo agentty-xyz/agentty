@@ -2,6 +2,8 @@
 
 /// Workspace-only agent discovery boundary.
 pub mod agent_profile;
+/// Default-browser boundary for sign-in pages.
+pub mod browser;
 /// Clipboard image capture and persistence boundary for prompt attachments.
 pub(crate) mod clipboard_image;
 /// Wall-clock boundary used by app, runtime, and session orchestration.

@@ -29,6 +29,7 @@ use crate::domain::transient_message::{
     TransientMessage, TransientMessageAnchor, TransientMessageBody, TransientMessageLifecycle,
     TransientMessageSlot,
 };
+use crate::infra::browser::BrowserClient;
 use crate::infra::db;
 use crate::infra::db::AppRepositories;
 use crate::infra::project_discovery::ProjectDiscoveryClient;
@@ -619,6 +620,14 @@ impl AppClients {
         session_run_factory: Arc<dyn SessionRunFactory>,
     ) -> Self {
         self.session_run_factory = session_run_factory;
+
+        self
+    }
+
+    /// Replaces the browser boundary for deterministic sign-in tests.
+    #[must_use]
+    pub(crate) fn with_browser_client(mut self, browser_client: Arc<dyn BrowserClient>) -> Self {
+        self.browser_client = browser_client;
 
         self
     }

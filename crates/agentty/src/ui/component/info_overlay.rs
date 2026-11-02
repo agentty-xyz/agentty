@@ -20,6 +20,7 @@ const OVERLAY_WIDTH_PERCENT: u16 = 52;
 
 /// Centered informational popup used for non-destructive workflow guidance.
 pub struct InfoOverlay<'a> {
+    action_label: &'a str,
     is_loading: bool,
     loading_label: &'a str,
     message: &'a str,
@@ -31,12 +32,22 @@ impl<'a> InfoOverlay<'a> {
     /// Creates an informational popup with title and body message.
     pub fn new(title: &'a str, message: &'a str) -> Self {
         Self {
+            action_label: "OK",
             is_loading: false,
             loading_label: "Sync in progress...",
             message,
             spinner_frame: 0,
             title,
         }
+    }
+
+    /// Sets the action button label shown once loading finishes; defaults to
+    /// `OK`.
+    #[must_use]
+    pub fn action_label(mut self, action_label: &'a str) -> Self {
+        self.action_label = action_label;
+
+        self
     }
 
     /// Sets whether the overlay should display a loading indicator.
@@ -171,8 +182,11 @@ impl<'a> InfoOverlay<'a> {
             Line::from(vec![Span::styled(loading_text, loading_indicator_style())])
                 .alignment(Alignment::Center)
         } else {
-            Line::from(vec![Span::styled(" OK ", style::selection_style())])
-                .alignment(Alignment::Center)
+            Line::from(vec![Span::styled(
+                format!(" {} ", self.action_label),
+                style::selection_style(),
+            )])
+            .alignment(Alignment::Center)
         }
     }
 
@@ -235,7 +249,7 @@ impl<'a> InfoOverlay<'a> {
                 format!("{} {}", Icon::current_spinner(), self.loading_label).as_str(),
             )
         } else {
-            UnicodeWidthStr::width(" OK ")
+            UnicodeWidthStr::width(self.action_label) + 2
         };
 
         message_width.max(action_width)

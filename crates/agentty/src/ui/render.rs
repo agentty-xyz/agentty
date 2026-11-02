@@ -247,6 +247,7 @@ fn render_footer_bar(f: &mut Frame, footer_bar_area: Rect, context: FooterBarRen
             context: HelpContext::View { session_id, .. } | HelpContext::Diff { session_id, .. },
             ..
         } => Some(session_id.as_str()),
+        AppMode::ChatGptSignIn { dialog } => Some(dialog.session_id().as_str()),
         _ => None,
     };
     let session_for_footer = session_id

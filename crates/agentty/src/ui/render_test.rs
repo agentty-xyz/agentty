@@ -212,6 +212,48 @@ fn render_footer_bar_prefers_session_branch_for_view_info_popup() {
 }
 
 #[test]
+fn render_footer_bar_prefers_session_branch_for_chatgpt_sign_in_popup() {
+    // Arrange
+    let backend = ratatui::backend::TestBackend::new(120, 3);
+    let mut terminal = ratatui::Terminal::new(backend).expect("failed to create terminal");
+    let session_id = "sign-in";
+    let mut session = session_fixture(session_id, "/tmp/session-sign-in-folder");
+    session.published_upstream_ref = Some("origin/wt/sign-in".to_string());
+    let mode = crate::test_support::chatgpt_sign_in_mode(session_id);
+    let sessions = vec![session];
+    let session_index_by_id = session_index_by_id(&sessions);
+    let session_branch_names = HashMap::new();
+
+    // Act
+    terminal
+        .draw(|frame| {
+            render_footer_bar(
+                frame,
+                frame.area(),
+                FooterBarRenderContext {
+                    current_tab: Tab::Sessions,
+                    mode: &mode,
+                    project: ProjectFooterContext {
+                        git_branch: Some("main"),
+                        git_status: Some((2, 1)),
+                        git_upstream_ref: Some("origin/main"),
+                        working_dir: Path::new("/tmp/workspace-root"),
+                    },
+                    session_branch_names: &session_branch_names,
+                    session_git_statuses: &HashMap::new(),
+                    session_index_by_id: &session_index_by_id,
+                    sessions: &sessions,
+                },
+            );
+        })
+        .expect("failed to draw");
+
+    // Assert
+    let text = buffer_text(terminal.backend().buffer());
+    assert!(text.contains("wt/sign-in -> origin/wt/sign-in"));
+}
+
+#[test]
 fn render_footer_bar_uses_working_directory_when_mode_has_no_session() {
     // Arrange
     let backend = ratatui::backend::TestBackend::new(120, 3);

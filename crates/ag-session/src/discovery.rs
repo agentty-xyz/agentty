@@ -66,6 +66,17 @@ impl AgentCliInfo {
     }
 }
 
+/// Receives the browser URL of a `ChatGPT` sign-in once it is ready for the
+/// user, so the host can open it and show it as a fallback.
+pub type ChatGptSignInUrlHandler = Box<dyn FnOnce(String) + Send>;
+
+/// Account that a completed `ChatGPT` plan sign-in stored.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ChatGptSignInOutcome {
+    /// Signed-in account email, when the provider reports one.
+    pub email: Option<String>,
+}
+
 /// Detects which provider CLIs and harness models are runnable on the
 /// current machine.
 #[async_trait]
@@ -85,6 +96,21 @@ pub trait AgentAvailabilityProbe: Send + Sync {
     /// report none.
     async fn native_harness_models(&self) -> Vec<HarnessModelOption> {
         Vec::new()
+    }
+
+    /// Runs the browser sign-in that lets `chatgpt/…` harness models use
+    /// the user's `ChatGPT` plan, passing its URL to `on_url` before
+    /// waiting for the browser callback. Probes without harness discovery
+    /// do not support it.
+    ///
+    /// # Errors
+    /// Returns a user-facing message when the sign-in cannot start, is
+    /// denied, or cannot be stored.
+    async fn sign_in_chatgpt(
+        &self,
+        _on_url: ChatGptSignInUrlHandler,
+    ) -> Result<ChatGptSignInOutcome, String> {
+        Err("ChatGPT sign-in is unavailable in this launch.".to_string())
     }
 }
 

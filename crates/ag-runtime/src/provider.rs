@@ -1,7 +1,10 @@
 use std::path::Path;
 
 use ag_contracts::AgentError;
-use ag_session::{AgentAvailabilityProbe, AgentCliInfo, AgentKind, HarnessModelOption};
+use ag_session::{
+    AgentAvailabilityProbe, AgentCliInfo, AgentKind, ChatGptSignInOutcome, ChatGptSignInUrlHandler,
+    HarnessModelOption,
+};
 use async_trait::async_trait;
 
 /// Machine-scoped provider discovery through the concrete adapter registry.
@@ -20,6 +23,15 @@ impl AgentAvailabilityProbe for RealAgentAvailabilityProbe {
     async fn native_harness_models(&self) -> Vec<HarnessModelOption> {
         ag_agent::RealAgentAvailabilityProbe
             .native_harness_models()
+            .await
+    }
+
+    async fn sign_in_chatgpt(
+        &self,
+        on_url: ChatGptSignInUrlHandler,
+    ) -> Result<ChatGptSignInOutcome, String> {
+        ag_agent::RealAgentAvailabilityProbe
+            .sign_in_chatgpt(on_url)
             .await
     }
 }

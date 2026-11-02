@@ -820,6 +820,62 @@ async fn test_model_command_in_harness_session_opens_refreshed_harness_models() 
 }
 
 #[tokio::test]
+async fn test_model_slash_submit_on_sign_in_row_opens_the_sign_in_popup() {
+    // Arrange
+    let chatgpt_option =
+        crate::test_support::sign_in_required_harness_model(AgentModel::ChatGptGpt6Sol);
+    let (mut app, _base_dir) = new_test_prompt_app("/model", None).await;
+    if let AppMode::Prompt { slash_state, .. } = &mut app.mode {
+        *slash_state = PromptSlashState {
+            harness_models: vec![chatgpt_option],
+            selected_agent: Some(AgentKind::Harness),
+            selected_index: 1,
+            stage: PromptSlashStage::Model,
+            ..PromptSlashState::with_available_agent_kinds(vec![AgentKind::Harness])
+        };
+    }
+    let original_agent = app.sessions.sessions()[0].agent;
+    let prompt_context = prompt_context(&mut app).expect("expected prompt context");
+
+    // Act
+    handle_prompt_slash_submit(&mut app, &prompt_context).await;
+
+    // Assert
+    let AppMode::ChatGptSignIn { dialog } = &app.mode else {
+        unreachable!("expected the sign-in popup");
+    };
+    assert_eq!(
+        dialog.selection,
+        AgentSelection::new(AgentKind::Harness, AgentModel::ChatGptGpt6Sol)
+    );
+    assert!(dialog.restore.input.is_empty());
+    assert_eq!(dialog.restore.slash_state.stage, PromptSlashStage::Command);
+    assert_eq!(app.sessions.sessions()[0].agent, original_agent);
+}
+
+#[tokio::test]
+async fn test_prompt_submit_on_signed_out_chatgpt_model_opens_sign_in_and_keeps_draft() {
+    // Arrange
+    let chatgpt = AgentSelection::new(AgentKind::Harness, AgentModel::ChatGptGpt6Sol);
+    let (mut app, _base_dir) = new_test_prompt_app("explain the bug", None).await;
+    app.services.replace_harness_model_options(vec![
+        crate::test_support::sign_in_required_harness_model(AgentModel::ChatGptGpt6Sol),
+    ]);
+    app.sessions.sessions_mut()[0].agent = chatgpt;
+    let prompt_context = prompt_context(&mut app).expect("expected prompt context");
+
+    // Act
+    handle_prompt_submit_key(&mut app, &prompt_context).await;
+
+    // Assert
+    let AppMode::ChatGptSignIn { dialog } = &app.mode else {
+        unreachable!("expected the sign-in popup");
+    };
+    assert_eq!(dialog.selection, chatgpt);
+    assert_eq!(dialog.restore.input.text(), "explain the bug");
+}
+
+#[tokio::test]
 async fn test_model_command_in_cli_session_opens_the_agent_list() {
     // Arrange
     let (mut app, _base_dir) = new_test_prompt_app("/model", None).await;

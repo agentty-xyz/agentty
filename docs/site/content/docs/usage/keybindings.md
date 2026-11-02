@@ -197,6 +197,17 @@ reply and resolution behavior.
 | shared text-editing keys | Edit, paste, move, delete, undo, or redo           |
 | text keys                | Edit remote branch name, including the character q |
 
+## ChatGPT Sign-In Popup
+
+Opens from the Harness `/model` list on a `chatgpt/` model that needs a sign-in, or when
+sending a prompt on such a model. While it waits, the popup shows the sign-in URL in
+case the browser does not open.
+
+| Key     | Action                                                       |
+| ------- | ------------------------------------------------------------ |
+| `Enter` | Open the browser sign-in, or close the finished result       |
+| `Esc`   | Cancel, including a running sign-in, and return to the draft |
+
 ## Launch Configuration Selector
 
 | Key         | Action                                 |

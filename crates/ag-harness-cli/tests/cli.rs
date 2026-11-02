@@ -429,7 +429,7 @@ async fn provider_flags_select_alternate_wire_formats() {
                 expected_request["messages"][0]["content"] =
                     json!(tool_aware_structured_output_instruction());
             }
-            ModelProvider::Muse | ModelProvider::OpenAi => {
+            ModelProvider::ChatGpt | ModelProvider::Muse | ModelProvider::OpenAi => {
                 unreachable!("the test covers alternate Chat Completions providers")
             }
         }

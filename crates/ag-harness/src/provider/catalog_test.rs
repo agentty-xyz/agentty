@@ -1,5 +1,7 @@
 use std::env;
 
+use ag_router::chatgpt::{ChatGptAuthError, ChatGptCredentials};
+
 use super::{
     CostTier, ModelConfiguration, ModelConfigurationError, ModelProvider, ModelProviderParseError,
     kimi, muse, openai_compatible, qwen,
@@ -23,9 +25,38 @@ fn catalog_exposes_every_provider_and_known_model() {
             ModelProvider::Kimi,
             ModelProvider::Qwen,
             ModelProvider::OpenAi,
+            ModelProvider::ChatGpt,
             ModelProvider::OpenAiCompatible
         ]
     );
+    assert_eq!(
+        ModelProvider::ChatGpt.known_models(),
+        &[
+            "gpt-6.1-sol",
+            "gpt-6.1-terra",
+            "gpt-6-astra",
+            "gpt-6-sol",
+            "gpt-6-luna",
+            "gpt-5.6-sol",
+            "gpt-5.6-terra",
+            "gpt-5.6-luna"
+        ]
+    );
+    assert_eq!(
+        ModelProvider::ChatGpt.api_key_environment(),
+        "CHATGPT_AUTH_FILE"
+    );
+    assert_eq!(
+        ModelProvider::ChatGpt.base_url_environment(),
+        "CHATGPT_BASE_URL"
+    );
+    assert_eq!(
+        ModelProvider::ChatGpt.default_base_url(),
+        Some("https://api.openai.com/v1")
+    );
+    assert!(!ModelProvider::ChatGpt.requires_api_key());
+    assert!(ModelProvider::ChatGpt.requires_sign_in());
+    assert!(!ModelProvider::OpenAi.requires_sign_in());
     assert_eq!(
         ModelProvider::Muse.known_models(),
         &["muse-spark-1.3", "muse-spark-1.3-contributor"]
@@ -86,7 +117,14 @@ fn provider_identifiers_round_trip_and_display() {
     assert_eq!(parsed, ModelProvider::all());
     assert_eq!(
         displayed,
-        ["muse", "kimi", "qwen", "openai", "openai-compatible"]
+        [
+            "muse",
+            "kimi",
+            "qwen",
+            "openai",
+            "chatgpt",
+            "openai-compatible"
+        ]
     );
     assert_eq!(
         "unknown".parse::<ModelProvider>(),
@@ -99,7 +137,10 @@ fn provider_identifiers_round_trip_and_display() {
 #[test]
 fn configuration_uses_provider_environment() {
     // Arrange and Act
-    for provider in ModelProvider::all() {
+    for provider in ModelProvider::all()
+        .iter()
+        .filter(|provider| !provider.requires_sign_in())
+    {
         let model = provider.known_models().first().unwrap_or(&"served-model");
         let mut requested_environment = Vec::new();
         let client = ModelConfiguration::new(*provider, *model)
@@ -290,6 +331,7 @@ fn cost_tiers_order_and_display_from_local_to_premium() {
         CostTier::Premium,
         CostTier::Local,
         CostTier::Standard,
+        CostTier::Plan,
         CostTier::Cheap,
     ];
 
@@ -299,7 +341,98 @@ fn cost_tiers_order_and_display_from_local_to_premium() {
     let labels = sorted.map(|tier| tier.to_string());
 
     // Assert
-    assert_eq!(labels, ["local", "cheap", "standard", "premium"]);
+    assert_eq!(labels, ["local", "plan", "cheap", "standard", "premium"]);
+}
+
+#[test]
+fn chatgpt_models_are_plan_billed_and_profiled() {
+    // Arrange
+    let models = ModelProvider::ChatGpt.known_models();
+
+    // Act
+    let tiers = models
+        .iter()
+        .map(|model| ModelProvider::ChatGpt.cost_tier(model))
+        .collect::<Vec<_>>();
+    let windows = models
+        .iter()
+        .map(|model| {
+            ModelProvider::ChatGpt
+                .declared_profile(model, missing_environment)
+                .expect("plan profiles read nothing")
+                .map(ModelProfile::context_window_tokens)
+        })
+        .collect::<Vec<_>>();
+
+    // Assert
+    assert!(tiers.iter().all(|tier| *tier == Some(CostTier::Plan)));
+    assert_eq!(ModelProvider::ChatGpt.cost_tier("gpt-unlisted"), None);
+    assert_eq!(
+        windows,
+        [
+            Some(500_000),
+            Some(500_000),
+            Some(272_000),
+            Some(272_000),
+            Some(272_000),
+            Some(272_000),
+            Some(272_000),
+            Some(272_000)
+        ]
+    );
+    assert_eq!(
+        ModelProvider::ChatGpt
+            .declared_profile("gpt-unlisted", missing_environment)
+            .expect("unlisted models read nothing"),
+        None
+    );
+}
+
+#[test]
+fn chatgpt_configuration_requires_a_stored_sign_in() {
+    // Arrange
+    let directory = tempfile::tempdir().expect("temporary directory");
+    let auth_file = directory.path().join("auth/chatgpt.json");
+    let auth_file_value = auth_file.to_string_lossy().into_owned();
+    let environment = |name: &str| match name {
+        "CHATGPT_AUTH_FILE" => Ok(auth_file_value.clone()),
+        _ => Err(env::VarError::NotPresent),
+    };
+
+    // Act
+    let missing = ModelConfiguration::new(ModelProvider::ChatGpt, "gpt-6-luna")
+        .client_from_environment(environment);
+    ChatGptCredentials {
+        access_token: "access".to_string(),
+        client_id: "oaiapp_test".to_string(),
+        email: None,
+        expires_at: u64::MAX,
+        ext_agent_host_id: "urn:uuid:host".to_string(),
+        id_token: String::new(),
+        refresh_token: "refresh".to_string(),
+        scopes: vec!["chatgpt.tokens.use.direct".to_string()],
+    }
+    .save(&auth_file)
+    .expect("credentials should save");
+    let client = ModelConfiguration::new(ModelProvider::ChatGpt, "gpt-6-luna")
+        .client_from_environment(environment)
+        .expect("a stored sign-in should configure a client");
+    let unlocated = ModelConfiguration::new(ModelProvider::ChatGpt, "gpt-6-luna")
+        .client_from_environment(missing_environment);
+
+    // Assert
+    assert!(matches!(
+        missing,
+        Err(ModelConfigurationError::SignIn(
+            ChatGptAuthError::NotSignedIn { .. }
+        ))
+    ));
+    assert_eq!(client.metadata().provider(), "openai_chatgpt");
+    assert_eq!(client.metadata().model(), "gpt-6-luna");
+    assert!(matches!(
+        unlocated,
+        Err(ModelConfigurationError::AuthFile(_))
+    ));
 }
 
 #[test]

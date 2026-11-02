@@ -44,7 +44,8 @@ pub use agent_profile::{
     bundled_agent_definitions, parse_agent_definition, parse_agent_summary,
 };
 pub use discovery::{
-    AgentAvailabilityProbe, AgentCliInfo, AgentCliVersion, StaticAgentAvailabilityProbe,
+    AgentAvailabilityProbe, AgentCliInfo, AgentCliVersion, ChatGptSignInOutcome,
+    ChatGptSignInUrlHandler, StaticAgentAvailabilityProbe,
 };
 pub use env::{EnvId, ResolvedEnv};
 pub use error::SessionError;

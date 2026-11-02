@@ -45,6 +45,9 @@ pub enum PromptSuggestionSelection {
     Agent(AgentKind),
     /// Agent and model selected during `/model` model selection.
     Model(AgentSelection),
+    /// Harness model selected during `/model` that needs a provider sign-in
+    /// before it can run.
+    SignIn(AgentSelection),
     /// Session mode selected during `/mode` selection.
     Mode(PermissionMode),
     /// Session-scoped reasoning selection chosen during `/reasoning`.
@@ -1058,15 +1061,20 @@ fn selected_slash_action(
                 slash_state.selected_agent,
             )?;
             let models = model_rows(selected_agent_kind, &slash_state.harness_models);
-            let (_, selected_model) = models.get(clamp_selected_index(
+            let (_, choice) = models.get(clamp_selected_index(
                 slash_state.selected_index,
                 models.len(),
             ))?;
 
-            Some(PromptSuggestionSelection::Model(AgentSelection::new(
-                selected_agent_kind,
-                (*selected_model)?,
-            )))
+            match *choice {
+                ModelRowChoice::Ready(model) => Some(PromptSuggestionSelection::Model(
+                    AgentSelection::new(selected_agent_kind, model),
+                )),
+                ModelRowChoice::SignIn(model) => Some(PromptSuggestionSelection::SignIn(
+                    AgentSelection::new(selected_agent_kind, model),
+                )),
+                ModelRowChoice::Unavailable => None,
+            }
         }
         PromptSlashStage::Mode => {
             let selected_permission_mode = PermissionMode::ALL
@@ -1121,8 +1129,32 @@ fn resolve_model_stage_agent(
     })
 }
 
-/// Returns the `/model` rows for `agent_kind`, each with the model it
-/// selects, or `None` for a row that cannot run a turn now.
+/// What pressing `Enter` on one `/model` row does.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum ModelRowChoice {
+    /// Switches the session to the model.
+    Ready(AgentModel),
+    /// Offers the provider sign-in the model still needs.
+    SignIn(AgentModel),
+    /// Nothing; the row cannot run a turn now.
+    Unavailable,
+}
+
+impl ModelRowChoice {
+    /// Returns what selecting the row for one listed harness model does.
+    fn for_option(option: &HarnessModelOption) -> Self {
+        match option.status {
+            HarnessModelStatus::Ready => Self::Ready(option.model),
+            HarnessModelStatus::SignInRequired(_) => Self::SignIn(option.model),
+            HarnessModelStatus::MissingConfiguration(_) | HarnessModelStatus::NoToolSupport => {
+                Self::Unavailable
+            }
+        }
+    }
+}
+
+/// Returns the `/model` rows for `agent_kind`, each with what selecting it
+/// does: switch to a ready model, sign in for one, or nothing.
 ///
 /// Harness rows come from `harness_models`, local models first, badged
 /// `local` or `paid`, with the price class (`free`, `cheap`, `standard`, or
@@ -1134,7 +1166,7 @@ fn resolve_model_stage_agent(
 fn model_rows(
     agent_kind: AgentKind,
     harness_models: &[HarnessModelOption],
-) -> Vec<(PromptSuggestionItem, Option<AgentModel>)> {
+) -> Vec<(PromptSuggestionItem, ModelRowChoice)> {
     if agent_kind != AgentKind::Harness || harness_models.is_empty() {
         return agent_kind
             .models()
@@ -1147,7 +1179,7 @@ fn model_rows(
                     metadata: None,
                 };
 
-                (item, Some(*model))
+                (item, ModelRowChoice::Ready(*model))
             })
             .collect();
     }
@@ -1161,7 +1193,7 @@ fn model_rows(
                 metadata: Some(harness_model_metadata(option)),
             };
 
-            (item, option.is_ready().then_some(option.model))
+            (item, ModelRowChoice::for_option(option))
         })
         .collect::<Vec<_>>();
     if harness_models.iter().all(|option| option.cost.is_paid()) {
@@ -1171,7 +1203,7 @@ fn model_rows(
             label: "no local models".to_string(),
             metadata: Some("start Ollama or set OPENAI_COMPATIBLE_BASE_URL".to_string()),
         };
-        rows.insert(0, (hint, None));
+        rows.insert(0, (hint, ModelRowChoice::Unavailable));
     }
     align_row_metadata(&mut rows);
 
@@ -1180,7 +1212,7 @@ fn model_rows(
 
 /// Pads labels so every row's metadata starts in one column after its badge
 /// and label.
-fn align_row_metadata(rows: &mut [(PromptSuggestionItem, Option<AgentModel>)]) {
+fn align_row_metadata(rows: &mut [(PromptSuggestionItem, ModelRowChoice)]) {
     let badge_width = |item: &PromptSuggestionItem| item.badge.as_deref().map_or(0, str::len);
     let column = rows
         .iter()
@@ -1207,8 +1239,9 @@ fn harness_model_metadata(option: &HarnessModelOption) -> String {
         parts.push("trains on prompts".to_string());
     }
     match option.status {
-        HarnessModelStatus::MissingConfiguration(variable) => {
-            parts.push(format!("needs {variable}"));
+        HarnessModelStatus::MissingConfiguration(remedy)
+        | HarnessModelStatus::SignInRequired(remedy) => {
+            parts.push(format!("needs {remedy}"));
         }
         HarnessModelStatus::NoToolSupport => parts.push("no tool calls".to_string()),
         HarnessModelStatus::Ready => {

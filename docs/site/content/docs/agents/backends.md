@@ -77,6 +77,7 @@ provider:
 | Kimi         | Paid | `KIMI_API_KEY`                       | Required `KIMI_BASE_URL`              |
 | Qwen         | Paid | `DASHSCOPE_API_KEY`                  | Required `DASHSCOPE_BASE_URL`         |
 | OpenAI       | Paid | `OPENAI_API_KEY`                     | Optional `OPENAI_BASE_URL`            |
+| ChatGPT plan | Plan | `ag-harness login chatgpt` sign-in   | Optional `CHATGPT_BASE_URL`           |
 
 ### Choosing a Model
 
@@ -91,6 +92,7 @@ list. Local models come first, marked `[local]` and free; hosted models follow, 
 [paid] muse-spark-1.3-contributor cheap · Muse · trains on prompts · 1024k ctx
 [paid] kimi-k3                    premium · Kimi · needs KIMI_API_KEY
 [paid] qwen3.8-flash              cheap · Qwen · 976k ctx
+[paid] chatgpt/gpt-6.1-sol         plan · ChatGPT plan · needs ag-harness login chatgpt
 [paid] gpt-6.1-sol                standard · OpenAI · needs OPENAI_API_KEY
 ```
 
@@ -127,7 +129,8 @@ agentty --experimental-harness   # then choose a gpt-* model in the Harness /mod
 ```
 
 - Usage is billed to the API key's organization, not to a ChatGPT plan. To use a ChatGPT
-  subscription, run a **Codex** session instead; the Codex CLI signs in with ChatGPT.
+  subscription, pick a `chatgpt/` model
+  ([ChatGPT Plan Models](#backends-harness-chatgpt)) or run a **Codex** session.
 - `OPENAI_BASE_URL` (default `https://api.openai.com/v1`) points the harness at another
   Responses API endpoint.
 - OpenAI stores no responses for the harness; each request resends the session history,
@@ -136,6 +139,27 @@ agentty --experimental-harness   # then choose a gpt-* model in the Harness /mod
 - New Harness sessions start on an OpenAI model only when you pick one or no local or
   other hosted model is ready, so an `OPENAI_API_KEY` set for other tools never moves
   sessions to paid OpenAI usage on its own.
+
+### ChatGPT Plan Models
+
+<a id="backends-harness-chatgpt"></a> Models listed with a `chatgpt/` prefix, such as
+`chatgpt/gpt-6.1-sol`, run through the same Responses API billed to your ChatGPT plan
+instead of API credits. Sign in once; the harness stores and refreshes the sign-in in
+`~/.agentty/auth/chatgpt.json` (or `$AGENTTY_ROOT/auth/chatgpt.json`, or
+`CHATGPT_AUTH_FILE`):
+
+```sh
+ag-harness login chatgpt
+agentty --experimental-harness   # then choose a chatgpt/ model in the Harness /model list
+```
+
+- The rows say `plan` instead of a price class, and `needs ag-harness login chatgpt`
+  until the sign-in exists. Usage counts against your plan's limits.
+- You can also sign in from Agentty: pressing `Enter` on such a row, or sending a prompt
+  on a signed-out `chatgpt/` model, opens a sign-in popup that opens your browser and
+  then switches the session to the model.
+- A `chatgpt/` model always uses the plan and a bare `gpt-*` model always uses
+  `OPENAI_API_KEY`; neither falls back to the other.
 
 ### Local and Self-Hosted Models
 

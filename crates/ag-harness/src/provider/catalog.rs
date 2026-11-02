@@ -1,15 +1,20 @@
+use std::path::PathBuf;
 use std::str::FromStr;
 use std::{env, fmt};
 
 use ag_router::LocalServer;
+use ag_router::chatgpt::{ChatGptAuthError, ChatGptCredentials};
 use thiserror::Error;
 
-use super::{kimi, muse, openai, openai_compatible, qwen};
+use super::{chatgpt, kimi, muse, openai, openai_compatible, qwen};
 use crate::model::{ModelClient, ModelMetadataError, ModelProfile};
 
 /// Provider supported by the built-in model client catalog.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum ModelProvider {
+    /// `OpenAI`'s Responses API billed to the user's `ChatGPT` plan through
+    /// "Sign in with `ChatGPT`" instead of API credits.
+    ChatGpt,
     /// Moonshot AI's Kimi API.
     Kimi,
     /// Meta's Model API for Muse models.
@@ -24,11 +29,12 @@ pub enum ModelProvider {
 }
 
 impl ModelProvider {
-    const ALL: [Self; 5] = [
+    const ALL: [Self; 6] = [
         Self::Muse,
         Self::Kimi,
         Self::Qwen,
         Self::OpenAi,
+        Self::ChatGpt,
         Self::OpenAiCompatible,
     ];
 
@@ -40,6 +46,7 @@ impl ModelProvider {
     /// Returns the stable identifier for this provider.
     pub const fn as_str(self) -> &'static str {
         match self {
+            Self::ChatGpt => "chatgpt",
             Self::Kimi => "kimi",
             Self::Muse => "muse",
             Self::OpenAi => "openai",
@@ -52,6 +59,16 @@ impl ModelProvider {
     /// none for [`Self::OpenAiCompatible`], whose server names its models.
     pub const fn known_models(self) -> &'static [&'static str] {
         match self {
+            Self::ChatGpt => &[
+                chatgpt::CHATGPT_GPT_6_1_SOL,
+                chatgpt::CHATGPT_GPT_6_1_TERRA,
+                chatgpt::CHATGPT_GPT_6_ASTRA,
+                chatgpt::CHATGPT_GPT_6_SOL,
+                chatgpt::CHATGPT_GPT_6_LUNA,
+                chatgpt::CHATGPT_GPT_5_6_SOL,
+                chatgpt::CHATGPT_GPT_5_6_TERRA,
+                chatgpt::CHATGPT_GPT_5_6_LUNA,
+            ],
             Self::Kimi => &[kimi::KIMI_K3, kimi::KIMI_K2_6],
             Self::Muse => &[muse::MUSE_SPARK_1_3, muse::MUSE_SPARK_1_3_CONTRIBUTOR],
             Self::OpenAi => &[
@@ -73,10 +90,18 @@ impl ModelProvider {
 
     /// Returns the price class of `model`, or `None` for a model this
     /// catalog does not list. Every [`Self::OpenAiCompatible`] model is
-    /// [`CostTier::Local`].
+    /// [`CostTier::Local`], and every cataloged [`Self::ChatGpt`] model is
+    /// [`CostTier::Plan`].
     pub fn cost_tier(self, model: &str) -> Option<CostTier> {
-        if self == Self::OpenAiCompatible {
-            return Some(CostTier::Local);
+        match self {
+            Self::OpenAiCompatible => return Some(CostTier::Local),
+            Self::ChatGpt => {
+                return self
+                    .known_models()
+                    .contains(&model)
+                    .then_some(CostTier::Plan);
+            }
+            Self::Kimi | Self::Muse | Self::OpenAi | Self::Qwen => {}
         }
 
         MODEL_COST_TIERS
@@ -92,9 +117,11 @@ impl ModelProvider {
         self == Self::Muse && model == muse::MUSE_SPARK_1_3_CONTRIBUTOR
     }
 
-    /// Returns the environment variable containing the provider API key.
+    /// Returns the environment variable containing the provider API key, or
+    /// for [`Self::ChatGpt`] the optional override of its credential file.
     pub const fn api_key_environment(self) -> &'static str {
         match self {
+            Self::ChatGpt => chatgpt::CHATGPT_AUTH_FILE_ENV,
             Self::Kimi => kimi::KIMI_API_KEY_ENV,
             Self::Muse => muse::MODEL_API_KEY_ENV,
             Self::OpenAi => openai::OPENAI_API_KEY_ENV,
@@ -105,14 +132,21 @@ impl ModelProvider {
 
     /// Returns whether the provider needs an API key. A local
     /// OpenAI-compatible server usually accepts unauthenticated requests, so
-    /// its key is optional.
+    /// its key is optional, and [`Self::ChatGpt`] uses a stored sign-in.
     pub const fn requires_api_key(self) -> bool {
-        !matches!(self, Self::OpenAiCompatible)
+        !matches!(self, Self::ChatGpt | Self::OpenAiCompatible)
+    }
+
+    /// Returns whether the provider authenticates with a stored "Sign in
+    /// with `ChatGPT`" sign-in instead of an API key.
+    pub const fn requires_sign_in(self) -> bool {
+        matches!(self, Self::ChatGpt)
     }
 
     /// Returns the environment variable containing the provider base URL.
     pub const fn base_url_environment(self) -> &'static str {
         match self {
+            Self::ChatGpt => chatgpt::CHATGPT_BASE_URL_ENV,
             Self::Kimi => kimi::KIMI_BASE_URL_ENV,
             Self::Muse => muse::MODEL_API_BASE_URL_ENV,
             Self::OpenAi => openai::OPENAI_BASE_URL_ENV,
@@ -125,6 +159,7 @@ impl ModelProvider {
     /// override: Ollama's local endpoint for [`Self::OpenAiCompatible`].
     pub const fn default_base_url(self) -> Option<&'static str> {
         match self {
+            Self::ChatGpt => Some(chatgpt::DEFAULT_BASE_URL),
             Self::Muse => Some(muse::DEFAULT_BASE_URL),
             Self::OpenAi => Some(openai::DEFAULT_BASE_URL),
             Self::OpenAiCompatible => Some(openai_compatible::DEFAULT_BASE_URL),
@@ -155,6 +190,7 @@ impl ModelProvider {
         environment: impl FnMut(&str) -> Result<String, env::VarError>,
     ) -> Result<Option<ModelProfile>, ModelConfigurationError> {
         match self {
+            Self::ChatGpt => Ok(chatgpt::profile(model)),
             Self::OpenAi => Ok(openai::profile(model)),
             Self::OpenAiCompatible => {
                 openai_compatible::profile_from_environment(environment).map(Some)
@@ -186,7 +222,7 @@ impl ModelProvider {
             Self::OpenAiCompatible => {
                 openai_compatible::running_profile(environment, running_context_window).map(Some)
             }
-            Self::Kimi | Self::Muse | Self::OpenAi | Self::Qwen => Ok(None),
+            Self::ChatGpt | Self::Kimi | Self::Muse | Self::OpenAi | Self::Qwen => Ok(None),
         }
     }
 
@@ -207,17 +243,26 @@ impl ModelProvider {
     ) -> Result<Option<LocalServer>, ModelConfigurationError> {
         match self {
             Self::OpenAiCompatible => openai_compatible::local_server(environment).map(Some),
-            Self::Kimi | Self::Muse | Self::OpenAi | Self::Qwen => Ok(None),
+            Self::ChatGpt | Self::Kimi | Self::Muse | Self::OpenAi | Self::Qwen => Ok(None),
         }
     }
 
     fn client(
         self,
-        api_key: Option<String>,
+        credential: Credential,
         base_url: String,
         model: String,
     ) -> Result<ModelClient, ModelMetadataError> {
+        let (api_key, auth_file) = match credential {
+            Credential::ApiKey(api_key) => (api_key, None),
+            Credential::SignIn(auth_file) => (None, Some(auth_file)),
+        };
         match self {
+            Self::ChatGpt => ModelClient::chatgpt(chatgpt::ChatGptConfig {
+                auth_file: auth_file.unwrap_or_default(),
+                base_url,
+                model,
+            }),
             Self::Kimi => ModelClient::kimi(kimi::KimiConfig {
                 api_key: api_key.unwrap_or_default(),
                 base_url,
@@ -275,6 +320,9 @@ impl FromStr for ModelProvider {
 pub enum CostTier {
     /// Served by a local or self-hosted server with no per-token charge.
     Local,
+    /// Billed to the user's subscription plan, such as a `ChatGPT` plan, with
+    /// no per-token charge but subject to the plan's usage limits.
+    Plan,
     /// At most $2.50 per million output tokens; suited to simple,
     /// high-volume tasks such as titles and commit messages.
     Cheap,
@@ -289,6 +337,7 @@ impl CostTier {
     pub const fn as_str(self) -> &'static str {
         match self {
             Self::Local => "local",
+            Self::Plan => "plan",
             Self::Cheap => "cheap",
             Self::Standard => "standard",
             Self::Premium => "premium",
@@ -342,53 +391,86 @@ impl ModelConfiguration {
     ///
     /// Returns [`ModelConfigurationError`] when credentials, an endpoint, or
     /// the model identifier are unavailable or invalid.
+    ///
+    /// [`ModelProvider::ChatGpt`] locates its credential file through
+    /// [`chatgpt::auth_file`] and requires the user to have signed in.
     pub fn client_from_environment(
-        self,
+        mut self,
         mut environment: impl FnMut(&str) -> Result<String, env::VarError>,
     ) -> Result<ModelClient, ModelConfigurationError> {
-        let api_key_environment = self.provider.api_key_environment();
-        let api_key = match environment(api_key_environment) {
-            Ok(api_key) if self.provider.requires_api_key() || !api_key.trim().is_empty() => {
-                Some(api_key)
-            }
-            Ok(_) | Err(env::VarError::NotPresent) if !self.provider.requires_api_key() => None,
-            _ => {
-                return Err(ModelConfigurationError::ApiKey {
-                    name: api_key_environment,
-                });
-            }
-        };
-        let base_url_environment = self.provider.base_url_environment();
-        let base_url = if let Some(base_url) = self.base_url {
-            base_url
+        let credential = if self.provider.requires_sign_in() {
+            let auth_file = chatgpt::auth_file(&mut environment)?;
+            ChatGptCredentials::load(&auth_file)?;
+            Credential::SignIn(auth_file)
         } else {
-            match environment(base_url_environment) {
-                Ok(base_url) => base_url,
-                Err(env::VarError::NotPresent) => {
-                    self.provider.default_base_url().map(str::to_string).ok_or(
-                        ModelConfigurationError::BaseUrl {
-                            name: base_url_environment,
-                        },
-                    )?
+            let api_key_environment = self.provider.api_key_environment();
+            match environment(api_key_environment) {
+                Ok(api_key) if self.provider.requires_api_key() || !api_key.trim().is_empty() => {
+                    Credential::ApiKey(Some(api_key))
                 }
-                Err(source) => {
-                    return Err(ModelConfigurationError::Environment {
-                        name: base_url_environment,
-                        source,
+                Ok(_) | Err(env::VarError::NotPresent) if !self.provider.requires_api_key() => {
+                    Credential::ApiKey(None)
+                }
+                _ => {
+                    return Err(ModelConfigurationError::ApiKey {
+                        name: api_key_environment,
                     });
                 }
             }
         };
+        let base_url = self.resolve_base_url(environment)?;
 
         self.provider
-            .client(api_key, base_url, self.model)
+            .client(credential, base_url, self.model)
             .map_err(ModelConfigurationError::from)
     }
+
+    /// Returns the explicit base URL, else the provider's environment
+    /// variable, else its default.
+    fn resolve_base_url(
+        &mut self,
+        mut environment: impl FnMut(&str) -> Result<String, env::VarError>,
+    ) -> Result<String, ModelConfigurationError> {
+        if let Some(base_url) = self.base_url.take() {
+            return Ok(base_url);
+        }
+        let base_url_environment = self.provider.base_url_environment();
+
+        match environment(base_url_environment) {
+            Ok(base_url) => Ok(base_url),
+            Err(env::VarError::NotPresent) => {
+                self.provider.default_base_url().map(str::to_string).ok_or(
+                    ModelConfigurationError::BaseUrl {
+                        name: base_url_environment,
+                    },
+                )
+            }
+            Err(source) => Err(ModelConfigurationError::Environment {
+                name: base_url_environment,
+                source,
+            }),
+        }
+    }
+}
+
+/// How a configured client authenticates.
+enum Credential {
+    /// API key read from the provider's variable, or `None` when optional.
+    ApiKey(Option<String>),
+    /// Credential file of a stored "Sign in with `ChatGPT`" sign-in.
+    SignIn(PathBuf),
 }
 
 /// Failure returned while configuring a built-in model client.
 #[derive(Debug, Error)]
 pub enum ModelConfigurationError {
+    /// The `ChatGPT` credential file location is unknown.
+    #[error(transparent)]
+    AuthFile(#[from] chatgpt::AuthFileUnavailable),
+    /// The user has not signed in with `ChatGPT`, or the stored sign-in is
+    /// unreadable.
+    #[error(transparent)]
+    SignIn(#[from] ChatGptAuthError),
     /// The provider API key is missing or is not valid Unicode.
     #[error("{name} is unavailable")]
     ApiKey {

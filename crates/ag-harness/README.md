@@ -322,11 +322,21 @@ let profile = ModelProvider::OpenAi
     .expect("cataloged OpenAI models declare their profile");
 ```
 
+`ModelProvider::ChatGpt` serves the same Responses API billed to the user's ChatGPT plan
+through OpenAI's "Sign in with ChatGPT". Instead of an API key it reads the sign-in
+stored at `chatgpt_auth_file` (`CHATGPT_AUTH_FILE`, else `auth/chatgpt.json` under
+`AGENTTY_ROOT` or `~/.agentty`), written by `ag-harness login chatgpt` or by a host
+through `ChatGptLogin`. `client_from_environment` fails with
+`ModelConfigurationError::SignIn` until the user signs in, and each request refreshes
+the one-hour access token shortly before it expires, serializing rotating refreshes
+across processes with a lock file. Its models report `openai_chatgpt` as their provider,
+so resumed sessions keep plan billing.
+
 `ModelProvider::cost_tier` declares each cataloged model's `CostTier` (`Cheap`,
-`Standard`, or `Premium` from the provider's list price per million output tokens, and
-`Local` for every OpenAI-compatible model), so a host can route simple tasks to a cheap
-model. `ModelProvider::trains_on_prompts` flags tiers, such as
-`muse-spark-1.3-contributor`, that let the provider train on requests:
+`Standard`, or `Premium` from the provider's list price per million output tokens,
+`Plan` for every ChatGPT plan model, and `Local` for every OpenAI-compatible model), so
+a host can route simple tasks to a cheap model. `ModelProvider::trains_on_prompts` flags
+tiers, such as `muse-spark-1.3-contributor`, that let the provider train on requests:
 
 ```rust
 use ag_harness::provider::{CostTier, QWEN3_8_FLASH};

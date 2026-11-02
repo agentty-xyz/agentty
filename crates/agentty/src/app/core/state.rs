@@ -51,6 +51,7 @@ use crate::domain::transient_message::{
 };
 use crate::domain::turn_prompt::TurnPrompt;
 use crate::infra::agent_profile::{AgentCatalogClient, RealAgentCatalogClient};
+use crate::infra::browser::{BrowserClient, RealBrowserClient};
 use crate::infra::fs::{FsClient, RealFsClient};
 use crate::infra::project_discovery::{ProjectDiscoveryClient, RealProjectDiscoveryClient};
 use crate::infra::tmux::{self, RealTmuxClient, TmuxClient};
@@ -115,6 +116,8 @@ pub(crate) struct AppClients {
     pub(super) agent_availability_probe: Arc<dyn AgentAvailabilityProbe>,
     /// Whether startup should spawn background CLI version detection.
     pub(super) agent_cli_version_task_enabled: bool,
+    /// Opens sign-in pages in the user's browser.
+    pub(super) browser_client: Arc<dyn BrowserClient>,
     /// Whether Agentty started with `--experimental-harness`.
     pub(super) experimental_harness: bool,
     pub(super) fs_client: Arc<dyn FsClient>,
@@ -138,6 +141,7 @@ impl AppClients {
         Self {
             agent_availability_probe: Arc::new(RealAgentAvailabilityProbe),
             agent_cli_version_task_enabled: true,
+            browser_client: Arc::new(RealBrowserClient::new()),
             experimental_harness: false,
             runtime_config: RuntimeConfig::default(),
             fs_client: Arc::new(RealFsClient),
@@ -181,6 +185,8 @@ pub struct App {
     /// Counts automatic focused-review remediation turns in the current
     /// user-initiated cycle for each session.
     pub(crate) auto_address_review_iterations: HashMap<SessionId, u8>,
+    /// Owns the browser boundary and running `ChatGPT` plan sign-in.
+    pub(crate) chatgpt_sign_in: crate::app::chatgpt_sign_in::ChatGptSignIn,
     /// Version label projected to the status bar by frontend snapshots.
     pub(crate) current_version_display_text: String,
     /// Retains automatic focused-review triggers for completed sessions whose

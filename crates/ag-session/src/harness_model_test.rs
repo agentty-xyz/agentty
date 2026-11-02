@@ -155,6 +155,7 @@ fn model_cost_labels_free_local_models_and_paid_price_classes() {
         ModelCost::Cheap,
         ModelCost::Standard,
         ModelCost::Premium,
+        ModelCost::Plan,
     ];
 
     // Act
@@ -167,7 +168,47 @@ fn model_cost_labels_free_local_models_and_paid_price_classes() {
             ("free", false),
             ("cheap", true),
             ("standard", true),
-            ("premium", true)
+            ("premium", true),
+            ("plan", true)
         ]
     );
+}
+
+#[test]
+fn default_prefers_a_ready_model_over_one_that_needs_sign_in() {
+    // Arrange
+    let options = [
+        paid(
+            AgentModel::ChatGptGpt6Luna,
+            HarnessModelStatus::SignInRequired("ag-harness login chatgpt"),
+        ),
+        paid(AgentModel::KimiK3, HarnessModelStatus::Ready),
+    ];
+
+    // Act
+    let model = default_harness_model(&options, None);
+
+    // Assert
+    assert_eq!(model, Some(AgentModel::KimiK3));
+}
+
+#[test]
+fn default_falls_back_to_a_model_that_needs_sign_in_when_none_is_ready() {
+    // Arrange
+    let options = [
+        paid(
+            AgentModel::MuseSpark13,
+            HarnessModelStatus::MissingConfiguration("MODEL_API_KEY"),
+        ),
+        paid(
+            AgentModel::ChatGptGpt6Luna,
+            HarnessModelStatus::SignInRequired("ag-harness login chatgpt"),
+        ),
+    ];
+
+    // Act
+    let model = default_harness_model(&options, None);
+
+    // Assert
+    assert_eq!(model, Some(AgentModel::ChatGptGpt6Luna));
 }

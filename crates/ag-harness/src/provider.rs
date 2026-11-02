@@ -11,7 +11,10 @@
 //!
 //! [`ModelConfiguration`] selects a provider and model by name at runtime.
 //! [`ModelProvider::OpenAi`] serves `OpenAI` models through the stateless,
-//! streamed Responses API with `OPENAI_API_KEY`.
+//! streamed Responses API with `OPENAI_API_KEY`. [`ModelProvider::ChatGpt`]
+//! serves the same API billed to the user's `ChatGPT` plan, authenticated by
+//! the refreshing sign-in `ag-harness login chatgpt` stores at
+//! [`chatgpt_auth_file`].
 //! [`ModelProvider::OpenAiCompatible`] serves any model of a local or
 //! self-hosted OpenAI-compatible server, by default Ollama's
 //! `http://127.0.0.1:11434/v1`, with an optional API key and a context
@@ -22,6 +25,8 @@
 //! model's [`CostTier`], so hosts can route simple tasks to cheap models.
 
 mod catalog;
+mod chatgpt;
+mod chatgpt_sign_in;
 mod kimi;
 mod muse;
 mod openai;
@@ -30,9 +35,18 @@ mod qwen;
 #[cfg(test)]
 mod test_support;
 
+pub use ag_router::chatgpt::{ChatGptAuth, ChatGptAuthError, ChatGptCredentials, ChatGptLogin};
 pub use ag_router::{LocalInventory, LocalModel, LocalServer, LocalServerError, LocalServerKind};
 pub use catalog::{
     CostTier, ModelConfiguration, ModelConfigurationError, ModelProvider, ModelProviderParseError,
+};
+pub use chatgpt::{
+    AuthFileUnavailable, CHATGPT_AUTH_FILE_ENV, CHATGPT_GPT_5_6_LUNA, CHATGPT_GPT_5_6_SOL,
+    CHATGPT_GPT_5_6_TERRA, CHATGPT_GPT_6_1_SOL, CHATGPT_GPT_6_1_TERRA, CHATGPT_GPT_6_ASTRA,
+    CHATGPT_GPT_6_LUNA, CHATGPT_GPT_6_SOL, ChatGptConfig, auth_file as chatgpt_auth_file,
+};
+pub use chatgpt_sign_in::{
+    CHATGPT_AUTH_URL_ENV, ChatGptSignIn, ChatGptSignInError, PendingChatGptSignIn,
 };
 pub use kimi::{KIMI_K2_6, KIMI_K3, KimiConfig};
 pub use muse::{MUSE_SPARK_1_3, MUSE_SPARK_1_3_CONTRIBUTOR, Muse, MuseConfig};

@@ -4,7 +4,10 @@ use std::path::{Path, PathBuf};
 
 use ag_contracts::{AgentError, ExecutionPolicy, McpPolicy, ToolPolicy};
 use ag_scheduler::SessionAdmission;
-use ag_session::{AgentAvailabilityProbe, AgentCliInfo, AgentKind, HarnessModelOption};
+use ag_session::{
+    AgentAvailabilityProbe, AgentCliInfo, AgentKind, ChatGptSignInOutcome, ChatGptSignInUrlHandler,
+    HarnessModelOption,
+};
 use async_trait::async_trait;
 
 /// Provider configuration used by the worker to compose its runtimes.
@@ -115,6 +118,15 @@ impl AgentAvailabilityProbe for RealAgentAvailabilityProbe {
     async fn native_harness_models(&self) -> Vec<HarnessModelOption> {
         ag_runtime::RealAgentAvailabilityProbe
             .native_harness_models()
+            .await
+    }
+
+    async fn sign_in_chatgpt(
+        &self,
+        on_url: ChatGptSignInUrlHandler,
+    ) -> Result<ChatGptSignInOutcome, String> {
+        ag_runtime::RealAgentAvailabilityProbe
+            .sign_in_chatgpt(on_url)
             .await
     }
 }

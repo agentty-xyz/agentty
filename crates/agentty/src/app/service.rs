@@ -143,6 +143,12 @@ impl AppServices {
         self.harness_model_probe = probe;
     }
 
+    /// Returns the probe that lists harness models and runs provider
+    /// sign-ins.
+    pub(crate) fn harness_model_probe(&self) -> Arc<dyn AgentAvailabilityProbe> {
+        Arc::clone(&self.harness_model_probe)
+    }
+
     /// Returns the shared harness model list, which background workflows read
     /// when they start utility work.
     pub(crate) fn harness_models(&self) -> HarnessModels {
@@ -540,6 +546,7 @@ impl AppServices {
             AppEvent::VersionAvailabilityUpdated { .. } => "VersionAvailabilityUpdated",
             AppEvent::AgentCliVersionsUpdated { .. } => "AgentCliVersionsUpdated",
             AppEvent::HarnessModelsUpdated { .. } => "HarnessModelsUpdated",
+            AppEvent::ChatGptSignInUpdated { .. } => "ChatGptSignInUpdated",
             AppEvent::UpdateStatusChanged { .. } => "UpdateStatusChanged",
             AppEvent::SessionModelUpdated { .. } => "SessionModelUpdated",
             AppEvent::SessionPermissionModeUpdated { .. } => "SessionPermissionModeUpdated",

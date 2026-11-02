@@ -56,14 +56,14 @@ pub(super) fn provider_response(message: &str) -> ResponseTemplate {
 pub(super) fn run_arguments(command: Command) -> Option<RunArgs> {
     match command {
         Command::Run(args) => Some(args),
-        Command::Resume(_) => None,
+        Command::Resume(_) | Command::Login(_) => None,
     }
 }
 
 pub(super) fn resume_arguments(command: Command) -> Option<ResumeArgs> {
     match command {
         Command::Resume(args) => Some(args),
-        Command::Run(_) => None,
+        Command::Run(_) | Command::Login(_) => None,
     }
 }
 
@@ -77,6 +77,7 @@ pub(super) fn with_repository_controlled_git(mut cli: Cli) -> Result<Cli, io::Er
     match &mut cli.command {
         Command::Run(arguments) => arguments.read_dir = repository_root,
         Command::Resume(arguments) => arguments.read_dir = repository_root,
+        Command::Login(_) => {}
     }
 
     Ok(cli)

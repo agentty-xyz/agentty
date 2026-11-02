@@ -39,8 +39,20 @@ fn declared_profiles_preserve_proactive_compaction_budgets() {
         assert_eq!(profile.reserved_tokens(), expected.1, "{model:?}");
         assert_eq!(profile.input_token_budget(), expected.2, "{model:?}");
     }
-    // The harness catalog declares the Qwen flash profiles itself.
-    let catalog_profiled = [AgentModel::Qwen38Flash, AgentModel::Qwen37Flash];
+    // The harness catalog declares the Qwen flash and ChatGPT-plan profiles
+    // itself.
+    let catalog_profiled = [
+        AgentModel::Qwen38Flash,
+        AgentModel::Qwen37Flash,
+        AgentModel::ChatGptGpt61Sol,
+        AgentModel::ChatGptGpt61Terra,
+        AgentModel::ChatGptGpt6Astra,
+        AgentModel::ChatGptGpt6Sol,
+        AgentModel::ChatGptGpt6Luna,
+        AgentModel::ChatGptGpt56Sol,
+        AgentModel::ChatGptGpt56Terra,
+        AgentModel::ChatGptGpt56Luna,
+    ];
     assert_eq!(
         AgentKind::Harness.models().len(),
         harness_models.len() + catalog_profiled.len() + codex_models.len() - 1
@@ -67,14 +79,15 @@ fn declared_profiles_preserve_proactive_compaction_budgets() {
 #[test]
 fn harness_models_weigh_requests_with_measured_estimators() {
     // Arrange
-    // The harness profiles the shared Codex models and the Qwen flash models
-    // from its provider catalog, and served OpenAI-compatible models from the
-    // server or environment.
+    // The harness profiles the shared Codex models, the Qwen flash models, and
+    // the ChatGPT-plan models from its provider catalog, and served
+    // OpenAI-compatible models from the server or environment.
     let harness_models = AgentKind::Harness
         .models()
         .iter()
         .filter(|model| !AgentKind::Codex.supports_model(**model))
         .filter(|model| !matches!(model, AgentModel::Qwen38Flash | AgentModel::Qwen37Flash))
+        .filter(|model| !model.as_str().starts_with("chatgpt/"))
         .collect::<Vec<_>>();
 
     // Act

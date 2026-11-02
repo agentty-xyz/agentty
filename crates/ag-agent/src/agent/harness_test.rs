@@ -105,14 +105,22 @@ fn test_harness_parsers_return_no_content() {
 
 #[test]
 /// Verifies every Agentty harness model is a model the harness catalog
-/// knows, or the OpenAI-compatible provider whose server names its models.
+/// knows, under a `chatgpt/` prefix for ChatGPT-plan models, or the
+/// OpenAI-compatible provider whose server names its models.
 fn test_harness_models_match_harness_catalog() {
     // Arrange
     let known_models = ModelProvider::all()
         .iter()
-        .flat_map(|provider| provider.known_models())
-        .copied()
-        .chain([ModelProvider::OpenAiCompatible.as_str()])
+        .flat_map(|provider| {
+            provider.known_models().iter().map(move |model| {
+                if *provider == ModelProvider::ChatGpt {
+                    format!("chatgpt/{model}")
+                } else {
+                    (*model).to_string()
+                }
+            })
+        })
+        .chain([ModelProvider::OpenAiCompatible.as_str().to_string()])
         .collect::<Vec<_>>();
 
     // Act
@@ -120,7 +128,7 @@ fn test_harness_models_match_harness_catalog() {
         .models()
         .iter()
         .map(|model| model.as_str())
-        .filter(|model_id| !known_models.contains(model_id))
+        .filter(|model_id| !known_models.iter().any(|known| known == model_id))
         .collect::<Vec<_>>();
 
     // Assert

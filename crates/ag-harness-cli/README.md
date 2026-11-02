@@ -31,6 +31,10 @@ cargo run --locked -p ag-harness-cli -- \
 OPENAI_API_KEY=sk-... cargo run --locked -p ag-harness-cli -- \
   run gpt-6.1-sol --provider openai
 
+# Chat on your ChatGPT Plus or Pro plan instead of API credits (sign in once)
+cargo run --locked -p ag-harness-cli -- login chatgpt
+cargo run --locked -p ag-harness-cli -- run gpt-6.1-sol --provider chatgpt
+
 # Chat with a local Ollama model (no key; server running with a 40,960-token window)
 OPENAI_COMPATIBLE_CONTEXT_WINDOW=40960 cargo run --locked -p ag-harness-cli -- \
   run qwen3:latest --provider openai-compatible
@@ -39,6 +43,12 @@ OPENAI_COMPATIBLE_CONTEXT_WINDOW=40960 cargo run --locked -p ag-harness-cli -- \
 `--provider openai-compatible` works with any OpenAI-compatible server: set
 `OPENAI_COMPATIBLE_BASE_URL` (or `--base-url`) for llama.cpp, LM Studio, or vLLM, and
 `OPENAI_COMPATIBLE_API_KEY` when the server requires one.
+
+`login chatgpt` opens "Sign in with ChatGPT" in your browser, registers Agentty with
+OpenAI on first use, and stores the refreshing sign-in at `~/.agentty/auth/chatgpt.json`
+(`$AGENTTY_ROOT/auth/chatgpt.json`, or `CHATGPT_AUTH_FILE`), readable only by you.
+`--provider chatgpt` then bills requests to that plan's usage limits; it never falls
+back to an API key. When the plan limit is reached, requests fail until it resets.
 
 ## Chat commands
 

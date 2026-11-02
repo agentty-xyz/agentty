@@ -28,6 +28,7 @@ use crate::domain::agent::{
     ReasoningLevel,
 };
 use crate::domain::harness::HarnessModelCatalog;
+use crate::domain::input::InputState;
 use crate::domain::question::QuestionItem;
 use crate::domain::selection::SelectionState;
 use crate::domain::session::{
@@ -35,7 +36,11 @@ use crate::domain::session::{
 };
 use crate::domain::session_message::{SessionMessage, SessionMessageKind, SessionTranscript};
 use crate::domain::transient_message::TransientMessageStore;
+use crate::infra::browser::MockBrowserClient;
 use crate::infra::project_discovery::MockProjectDiscoveryClient;
+use crate::presentation::app_mode::{AppMode, PromptModeSnapshot};
+use crate::presentation::chatgpt_sign_in::ChatGptSignInDialog;
+use crate::presentation::prompt::{PromptAttachmentState, PromptHistoryState, PromptSlashState};
 /// Subscriber that enables tracing fields while unit tests exercise warning
 /// paths under source coverage.
 #[derive(Debug)]
@@ -319,9 +324,12 @@ pub(crate) fn test_app_clients_with_available_agent_kinds(
     project_discovery_client
         .expect_discover_project_paths()
         .times(0);
+    let mut browser_client = MockBrowserClient::new();
+    browser_client.expect_open().return_const(());
 
     app::test_support::AppClients::new()
         .with_background_tasks_disabled()
+        .with_browser_client(Arc::new(browser_client))
         .with_session_run_factory(Arc::new(app::test_support::TestSessionRunFactory::default()))
         .with_agent_availability_probe(Arc::new(StaticAgentAvailabilityProbe {
             available_agent_kinds,
@@ -366,6 +374,41 @@ pub(crate) fn ready_harness_model(model: AgentModel) -> HarnessModelOption {
         provider: "Kimi".to_string(),
         status: HarnessModelStatus::Ready,
         trains_on_prompts: false,
+    }
+}
+
+/// Returns a `ChatGPT`-plan harness option for `model` that still needs the
+/// browser sign-in.
+pub(crate) fn sign_in_required_harness_model(model: AgentModel) -> HarnessModelOption {
+    HarnessModelOption {
+        cost: ModelCost::Plan,
+        provider: "ChatGPT".to_string(),
+        status: HarnessModelStatus::SignInRequired("ag-harness login chatgpt"),
+        ..ready_harness_model(model)
+    }
+}
+
+/// Builds one restorable prompt composer for `session_id` holding `text`.
+pub(crate) fn prompt_mode_snapshot(session_id: &str, text: &str) -> PromptModeSnapshot {
+    PromptModeSnapshot {
+        at_mention_state: None,
+        attachment_state: PromptAttachmentState::default(),
+        history_state: PromptHistoryState::new(Vec::new()),
+        input: InputState::with_text(text.to_string()),
+        scroll_offset: None,
+        session_id: session_id.into(),
+        slash_state: PromptSlashState::default(),
+    }
+}
+
+/// Builds the `ChatGPT` sign-in confirmation popup for `chatgpt/gpt-6-sol`
+/// above a composer of `session_id` holding a draft.
+pub(crate) fn chatgpt_sign_in_mode(session_id: &str) -> AppMode {
+    AppMode::ChatGptSignIn {
+        dialog: Box::new(ChatGptSignInDialog::new(
+            AgentSelection::new(AgentKind::Harness, AgentModel::ChatGptGpt6Sol),
+            prompt_mode_snapshot(session_id, "draft"),
+        )),
     }
 }
 

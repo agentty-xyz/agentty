@@ -2,6 +2,7 @@
 
 pub(crate) mod at_mention;
 pub(crate) mod chat_scroll;
+pub(crate) mod chatgpt_sign_in;
 pub(crate) mod confirmation;
 pub(crate) mod diff;
 pub(crate) mod help;

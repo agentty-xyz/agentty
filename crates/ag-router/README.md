@@ -1,12 +1,12 @@
 # `ag-router`
 
 One Rust API for structured chat requests to Muse, Kimi, Qwen, `OpenAI` (`openai`,
-through the Responses API), and any OpenAI-compatible Chat Completions server
-(`openai-compatible`), such as Ollama, llama.cpp, LM Studio, or vLLM. The host supplies
-provider credentials and chooses the model explicitly as `provider/model`. The model
-component may itself contain `/`. Every request requires a named JSON Schema response
-format. The router returns locally validated JSON or generic function calls for the
-caller to execute.
+through the Responses API, or `chatgpt`, billed to a ChatGPT plan), and any
+OpenAI-compatible Chat Completions server (`openai-compatible`), such as Ollama,
+llama.cpp, LM Studio, or vLLM. The host supplies provider credentials and chooses the
+model explicitly as `provider/model`. The model component may itself contain `/`. Every
+request requires a named JSON Schema response format. The router returns locally
+validated JSON or generic function calls for the caller to execute.
 
 ```rust
 use ag_router::{
@@ -19,6 +19,7 @@ let router = Router::new([ProviderConfig {
     provider: Provider::Muse,
     api_key: Some(std::env::var("MODEL_API_KEY")?),
     base_url: "https://api.meta.ai/v1".to_string(),
+    credential: None,
 }])?;
 let format = JsonSchemaFormat::new(
     "answer",
@@ -90,3 +91,15 @@ tokens. An overflow is recognized from an HTTP rejection or from a streamed
 stream that closes before its terminal event is a transport failure. The current `Task`
 surface supports chat only. Streaming to callers and other model modes are not yet
 implemented.
+
+`chatgpt` sends the same Responses requests billed to the user's ChatGPT plan through
+OpenAI's "Sign in with ChatGPT" instead of API credits. It requires a
+`ProviderConfig::credential`, a `BearerCredential` the router asks for a token before
+each request. `chatgpt::ChatGptLogin` runs the browser sign-in (PKCE against
+`auth.openai.com`, registering the app as "Agentty" on first use and reusing that
+`client_id` afterwards) and `chatgpt::ChatGptAuth` reads the stored
+`chatgpt::ChatGptCredentials`, refreshing the one-hour access token five minutes before
+it expires. Refresh tokens rotate, so `ChatGptAuth` serializes refreshes within the
+process and, through an exclusive lock on a sibling `.lock` file, across processes, and
+a terminal refresh error asks the user to sign in again. A credential may replace the
+API key of any provider.
