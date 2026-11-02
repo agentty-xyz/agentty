@@ -1,5 +1,8 @@
 use std::fs;
-use std::time::{SystemTime, UNIX_EPOCH};
+#[cfg(unix)]
+use std::os::unix::fs::PermissionsExt as _;
+use std::path::Path;
+use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 use wiremock::matchers::{method, path};
 use wiremock::{Mock, MockServer, ResponseTemplate};
@@ -114,6 +117,7 @@ async fn propagates_a_sign_in_required_refresh_failure() {
             ResponseTemplate::new(400)
                 .set_body_json(serde_json::json!({"error": "refresh_token_reused"})),
         )
+        .expect(1)
         .mount(&server)
         .await;
     let directory = tempfile::tempdir().expect("temporary directory");
@@ -133,14 +137,69 @@ async fn propagates_a_sign_in_required_refresh_failure() {
     let bearer_error = bearer.expect_err("bearer token fails");
     assert!(matches!(
         bearer_error.downcast_ref::<ChatGptAuthError>(),
-        Some(ChatGptAuthError::SignInRequired { .. })
+        Some(ChatGptAuthError::SignInRequired { code }) if code == "signed_out"
     ));
+    let stored = ChatGptCredentials::load(&path).expect("registration stays");
+    assert!(!stored.is_signed_in());
+    assert_eq!(stored.access_token, "");
+    assert_eq!(stored.client_id, "client-1");
+    assert_eq!(stored.email.as_deref(), Some("ada@example.com"));
+}
+
+#[tokio::test]
+async fn refresh_completes_and_stores_the_rotation_when_the_request_is_cancelled() {
+    // Arrange
+    let server = MockServer::start().await;
+    Mock::given(method("POST"))
+        .and(path(TOKEN_PATH))
+        .respond_with(
+            ResponseTemplate::new(200)
+                .set_body_json(serde_json::json!({
+                    "access_token": "rotated-access",
+                    "expires_in": 3600,
+                    "refresh_token": "rotated-refresh"
+                }))
+                .set_delay(Duration::from_millis(300)),
+        )
+        .expect(1)
+        .mount(&server)
+        .await;
+    let directory = tempfile::tempdir().expect("temporary directory");
+    let path = directory.path().join("chatgpt.json");
+    credentials(0).save(&path).expect("credentials save");
+    let auth = ChatGptAuth::new(&path).with_issuer(server.uri());
+
+    // Act
+    let cancelled = tokio::time::timeout(Duration::from_millis(50), auth.access_token()).await;
+    let token = auth.access_token().await.expect("stored rotation is used");
+
+    // Assert
+    assert!(cancelled.is_err());
+    assert_eq!(token, "rotated-access");
     assert_eq!(
         ChatGptCredentials::load(&path)
-            .expect("credentials stay")
+            .expect("rotation stored")
             .refresh_token,
-        "stored-refresh"
+        "rotated-refresh"
     );
+}
+
+#[cfg(unix)]
+#[tokio::test]
+async fn creates_the_credential_directory_and_lock_file_private_to_the_owner() {
+    // Arrange
+    let directory = tempfile::tempdir().expect("temporary directory");
+    let auth_directory = directory.path().join("auth");
+    let path = auth_directory.join("chatgpt.json");
+
+    // Act
+    let result = ChatGptAuth::new(&path).access_token().await;
+
+    // Assert
+    assert!(matches!(result, Err(ChatGptAuthError::NotSignedIn { .. })));
+    let mode = |path: &Path| fs::metadata(path).expect("metadata").permissions().mode() & 0o777;
+    assert_eq!(mode(&auth_directory), 0o700);
+    assert_eq!(mode(&path.with_extension("lock")), 0o600);
 }
 
 #[tokio::test]

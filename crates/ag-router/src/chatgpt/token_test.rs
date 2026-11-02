@@ -1,19 +1,16 @@
 use std::net::TcpListener;
+use std::time::Duration;
 
 use wiremock::matchers::{body_string, header, method, path};
 use wiremock::{Mock, MockServer, ResponseTemplate};
 
-use super::{TokenResponse, request_tokens};
+use super::{
+    TOKEN_BODY_LIMIT_BYTES, TokenResponse, http_client, http_client_with_timeout, request_tokens,
+};
 use crate::chatgpt::error::ChatGptAuthError;
 use crate::http::ERROR_BODY_LIMIT_BYTES;
 
 const TOKEN_PATH: &str = "/api/accounts/oauth/token";
-
-fn http_client() -> reqwest::Client {
-    let _ = rustls::crypto::ring::default_provider().install_default();
-
-    reqwest::Client::new()
-}
 
 async fn token_server(response: ResponseTemplate) -> MockServer {
     let server = MockServer::start().await;
@@ -146,6 +143,49 @@ async fn reports_other_failures_with_a_bounded_body() {
         long_body_result,
         Err(ChatGptAuthError::TokenRequest { status: 502, ref body })
             if body.len() == ERROR_BODY_LIMIT_BYTES
+    ));
+}
+
+#[tokio::test]
+async fn rejects_an_oversized_grant_without_reading_it_all() {
+    // Arrange
+    let server = token_server(
+        ResponseTemplate::new(200).set_body_string("x".repeat(TOKEN_BODY_LIMIT_BYTES + 1)),
+    )
+    .await;
+
+    // Act
+    let result = request(&server).await;
+
+    // Assert
+    assert!(matches!(
+        result,
+        Err(ChatGptAuthError::TokenResponseTooLarge)
+    ));
+}
+
+#[tokio::test]
+async fn gives_up_on_a_token_endpoint_that_stops_responding() {
+    // Arrange
+    let server = token_server(
+        ResponseTemplate::new(200)
+            .set_body_string("{}")
+            .set_delay(Duration::from_secs(5)),
+    )
+    .await;
+
+    // Act
+    let result = request_tokens(
+        &http_client_with_timeout(Duration::from_millis(100)),
+        &server.uri(),
+        &[],
+    )
+    .await;
+
+    // Assert
+    assert!(matches!(
+        result,
+        Err(ChatGptAuthError::Transport(ref error)) if error.is_timeout()
     ));
 }
 

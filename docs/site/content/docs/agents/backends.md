@@ -154,7 +154,8 @@ agentty --experimental-harness   # then choose a chatgpt/ model in the Harness /
 ```
 
 - The rows say `plan` instead of a price class, and `needs ag-harness login chatgpt`
-  until the sign-in exists. Usage counts against your plan's limits.
+  until the sign-in exists. Usage counts against your plan's limits. When OpenAI ends
+  the sign-in, such as after a revocation, the rows ask for a sign-in again.
 - You can also sign in from Agentty: pressing `Enter` on such a row, or sending a prompt
   on a signed-out `chatgpt/` model, opens a sign-in popup that opens your browser and
   then switches the session to the model.

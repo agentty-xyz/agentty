@@ -169,16 +169,23 @@ impl App {
                         let account = outcome
                             .email
                             .unwrap_or_else(|| "your ChatGPT account".to_string());
-                        dialog.phase = ChatGptSignInPhase::Finished {
-                            message: format!(
-                                "Signed in as {account}. `{}` now uses your ChatGPT plan.",
-                                selection.model().as_str()
-                            ),
-                        };
+                        let model = selection.model().as_str();
                         self.mark_chatgpt_models_signed_in();
-                        self.update_prompt_session_model(&session_id, selection)
-                            .await;
+                        let message = if self
+                            .update_prompt_session_model(&session_id, selection)
+                            .await
+                        {
+                            format!("Signed in as {account}. `{model}` now uses your ChatGPT plan.")
+                        } else {
+                            format!(
+                                "Signed in as {account}, but switching this session to `{model}` \
+                                 failed. Pick it again with /model."
+                            )
+                        };
                         self.refresh_harness_models();
+                        if let AppMode::ChatGptSignIn { dialog } = &mut self.mode {
+                            dialog.phase = ChatGptSignInPhase::Finished { message };
+                        }
                     }
                     Err(error) => {
                         dialog.phase = ChatGptSignInPhase::Finished {

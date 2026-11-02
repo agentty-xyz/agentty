@@ -163,21 +163,21 @@ pub(crate) fn process_environment() -> BTreeMap<String, String> {
 /// Returns the harness models a user can choose: the models the local
 /// OpenAI-compatible server serves, plus `OPENAI_COMPATIBLE_MODEL` when the
 /// server does not list it, then the paid hosted catalog models with the
-/// variable or sign-in each still needs. `credential_exists` reports whether
-/// a sign-in provider's credential file exists.
+/// variable or sign-in each still needs. `is_signed_in` reports whether
+/// a sign-in provider's credential file holds a usable sign-in.
 ///
 /// Listing the local server is bounded by short request timeouts; an
 /// unreachable server contributes no discovered models.
 pub(crate) async fn harness_models(
     environment: &BTreeMap<String, String>,
-    credential_exists: impl Fn(&Path) -> bool,
+    is_signed_in: impl Fn(&Path) -> bool,
 ) -> Vec<HarnessModelOption> {
     let mut options = local_models(environment).await;
     options.extend(
         AgentKind::Harness
             .models()
             .iter()
-            .filter_map(|model| hosted_model(*model, environment, &credential_exists)),
+            .filter_map(|model| hosted_model(*model, environment, &is_signed_in)),
     );
 
     options
@@ -243,12 +243,12 @@ async fn local_models(environment: &BTreeMap<String, String>) -> Vec<HarnessMode
 fn hosted_model(
     model: AgentModel,
     environment: &BTreeMap<String, String>,
-    credential_exists: impl Fn(&Path) -> bool,
+    is_signed_in: impl Fn(&Path) -> bool,
 ) -> Option<HarnessModelOption> {
     let selection = ModelSelection::resolve_known(model.as_str()).ok()?;
     let provider = selection.provider;
     let cost = model_cost(provider.cost_tier(&selection.model)?);
-    let status = configuration_status(provider, environment, credential_exists);
+    let status = configuration_status(provider, environment, is_signed_in);
 
     Some(HarnessModelOption {
         context_window: selection
@@ -346,16 +346,16 @@ fn unicode_environment(
 }
 
 /// Returns whether a provider can serve requests now: a sign-in provider
-/// needs its credential file, as `credential_exists` reports; another needs
+/// needs a usable sign-in, as `is_signed_in` reports; another needs
 /// its API key unless optional, then a base URL unless it has a default.
 fn configuration_status(
     provider: ModelProvider,
     environment: &BTreeMap<String, String>,
-    credential_exists: impl Fn(&Path) -> bool,
+    is_signed_in: impl Fn(&Path) -> bool,
 ) -> HarnessModelStatus {
     if provider.requires_sign_in() {
-        let signed_in = chatgpt_auth_file(lookup(environment))
-            .is_ok_and(|auth_file| credential_exists(&auth_file));
+        let signed_in =
+            chatgpt_auth_file(lookup(environment)).is_ok_and(|auth_file| is_signed_in(&auth_file));
 
         return if signed_in {
             HarnessModelStatus::Ready

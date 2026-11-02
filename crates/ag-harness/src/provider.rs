@@ -44,6 +44,7 @@ pub use chatgpt::{
     AuthFileUnavailable, CHATGPT_AUTH_FILE_ENV, CHATGPT_GPT_5_6_LUNA, CHATGPT_GPT_5_6_SOL,
     CHATGPT_GPT_5_6_TERRA, CHATGPT_GPT_6_1_SOL, CHATGPT_GPT_6_1_TERRA, CHATGPT_GPT_6_ASTRA,
     CHATGPT_GPT_6_LUNA, CHATGPT_GPT_6_SOL, ChatGptConfig, auth_file as chatgpt_auth_file,
+    is_signed_in as chatgpt_is_signed_in,
 };
 pub use chatgpt_sign_in::{
     CHATGPT_AUTH_URL_ENV, ChatGptSignIn, ChatGptSignInError, PendingChatGptSignIn,

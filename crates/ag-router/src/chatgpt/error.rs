@@ -61,7 +61,10 @@ pub enum ChatGptAuthError {
         /// HTTP status code.
         status: u16,
     },
-    /// The token endpoint could not be reached.
+    /// The token endpoint returned a body larger than any grant.
+    #[error("the ChatGPT token response is too large")]
+    TokenResponseTooLarge,
+    /// The token endpoint could not be reached or did not answer in time.
     #[error("cannot reach the ChatGPT token endpoint: {0}")]
     Transport(#[source] reqwest::Error),
 }

@@ -434,13 +434,13 @@ impl App {
         self.services.refresh_harness_models();
     }
 
-    /// Persists one slash-selected model change and logs any failure with
-    /// session context.
+    /// Persists one slash-selected model change, logs any failure with session
+    /// context, and returns whether the session now uses `selected_agent`.
     pub(crate) async fn update_prompt_session_model(
         &mut self,
         session_id: &SessionId,
         selected_agent: AgentSelection,
-    ) {
+    ) -> bool {
         let should_disable_fast_mode = self
             .sessions
             .sessions()
@@ -464,7 +464,7 @@ impl App {
                 "failed to disable fast mode before switching to an incompatible model"
             );
 
-            return;
+            return false;
         }
 
         if let Err(error) = self.set_session_model(session_id, selected_agent).await {
@@ -475,7 +475,11 @@ impl App {
                 error = %error,
                 "failed to switch session model from prompt slash command"
             );
+
+            return false;
         }
+
+        true
     }
 
     /// Persists one slash-selected reasoning level and logs any failure with

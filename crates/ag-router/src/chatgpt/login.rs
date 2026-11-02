@@ -36,7 +36,6 @@ impl ChatGptLogin {
     /// With `previous` credentials, the sign-in reuses their registered
     /// client and host identifier; otherwise it registers this app.
     pub fn new(redirect_uri: impl Into<String>, previous: Option<ChatGptCredentials>) -> Self {
-        let _ = rustls::crypto::ring::default_provider().install_default();
         let ext_agent_host_id = previous.as_ref().map_or_else(
             || format!("urn:uuid:{}", uuid::Uuid::new_v4()),
             |credentials| credentials.ext_agent_host_id.clone(),
@@ -67,15 +66,18 @@ impl ChatGptLogin {
     }
 
     /// Returns the URL the user opens to approve the sign-in.
+    ///
+    /// The URL carries no stored token, so hosts may display it.
     pub fn authorize_url(&self) -> String {
         let challenge = URL_SAFE_NO_PAD.encode(Sha256::digest(self.code_verifier.as_bytes()));
         let mut query = url::form_urlencoded::Serializer::new(String::new());
         query.append_pair("client_id", self.client_id());
         match &self.previous {
-            Some(previous) if !previous.id_token.is_empty() => {
-                query.append_pair("id_token_hint", &previous.id_token);
+            Some(previous) => {
+                if let Some(email) = &previous.email {
+                    query.append_pair("login_hint", email);
+                }
             }
-            Some(_) => {}
             None => {
                 query.append_pair("agent_name_hint", AGENT_NAME);
             }
@@ -96,6 +98,13 @@ impl ChatGptLogin {
             self.issuer.trim_end_matches('/'),
             query.finish()
         )
+    }
+
+    /// Returns whether a callback query carries this sign-in's `state`, so a
+    /// host can ignore callbacks that belong to another sign-in.
+    pub fn is_own_callback(&self, callback_query: &str) -> bool {
+        url::form_urlencoded::parse(callback_query.trim_start_matches('?').as_bytes())
+            .any(|(key, value)| key == "state" && value == self.state)
     }
 
     /// Completes the sign-in from the callback's query string and exchanges
@@ -147,7 +156,7 @@ impl ChatGptLogin {
             (Some(previous), _) => previous.client_id.clone(),
         };
         let grant = token::request_tokens(
-            &reqwest::Client::new(),
+            &token::http_client(),
             &self.issuer,
             &[
                 ("grant_type", "authorization_code"),

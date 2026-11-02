@@ -2,12 +2,14 @@
 //! such as `ag-harness login chatgpt` and Agentty's sign-in popup.
 
 use std::path::{Path, PathBuf};
+use std::time::Duration;
 use std::{env, io};
 
 use ag_router::chatgpt::{ChatGptAuthError, ChatGptCredentials, ChatGptLogin};
 use thiserror::Error;
-use tokio::io::{AsyncBufReadExt as _, AsyncWriteExt as _, BufReader};
-use tokio::net::TcpListener;
+use tokio::io::{AsyncBufReadExt as _, AsyncReadExt as _, AsyncWriteExt as _, BufReader};
+use tokio::net::{TcpListener, TcpStream};
+use tokio::sync::mpsc;
 
 use super::chatgpt::{AuthFileUnavailable, auth_file};
 
@@ -17,10 +19,20 @@ pub const CHATGPT_AUTH_URL_ENV: &str = "CHATGPT_AUTH_URL";
 /// Loopback port `OpenAI` documents for sign-in callbacks.
 const CALLBACK_PORT: u16 = 1455;
 const CALLBACK_PATH: &str = "/auth/callback";
+/// Time one loopback connection gets to send its request line.
+const CONNECTION_READ_TIMEOUT: Duration = Duration::from_secs(10);
+/// Longest request line read from one loopback connection.
+const MAX_REQUEST_LINE_BYTES: u64 = 8 * 1024;
+/// Time the user gets to approve the sign-in in the browser.
+const SIGN_IN_TIMEOUT: Duration = Duration::from_mins(10);
+const NOT_FOUND_RESPONSE: &[u8] =
+    b"HTTP/1.1 404 Not Found\r\ncontent-length: 0\r\nconnection: close\r\n\r\n";
 const SUCCESS_PAGE: &str = "<!doctype html><title>Agentty</title><p>Signed in to Agentty with \
                             ChatGPT. You can close this tab.</p>";
 const FAILURE_PAGE: &str = "<!doctype html><title>Agentty</title><p>Agentty sign-in failed. \
                             Return to Agentty for details.</p>";
+const STALE_PAGE: &str = "<!doctype html><title>Agentty</title><p>This sign-in link is no longer \
+                          active. Use the newest link Agentty showed.</p>";
 
 /// Failure to run the browser sign-in.
 #[derive(Debug, Error)]
@@ -34,6 +46,9 @@ pub enum ChatGptSignInError {
     /// The loopback callback listener failed.
     #[error("cannot receive the sign-in callback on 127.0.0.1: {0}")]
     Callback(#[source] io::Error),
+    /// The user did not finish the browser sign-in in time.
+    #[error("timed out waiting for the ChatGPT sign-in in the browser")]
+    TimedOut,
 }
 
 /// Configuration of a browser sign-in that stores a `ChatGPT` plan
@@ -42,6 +57,7 @@ pub struct ChatGptSignIn {
     auth_file: PathBuf,
     issuer: Option<String>,
     port: u16,
+    timeout: Duration,
 }
 
 impl ChatGptSignIn {
@@ -63,6 +79,7 @@ impl ChatGptSignIn {
             auth_file: auth_file(environment)?,
             issuer,
             port: CALLBACK_PORT,
+            timeout: SIGN_IN_TIMEOUT,
         })
     }
 
@@ -71,6 +88,15 @@ impl ChatGptSignIn {
     #[must_use]
     pub fn with_port(mut self, port: u16) -> Self {
         self.port = port;
+
+        self
+    }
+
+    /// Replaces how long [`PendingChatGptSignIn::complete`] waits for the
+    /// user to approve the sign-in; the default is ten minutes.
+    #[must_use]
+    pub fn with_timeout(mut self, timeout: Duration) -> Self {
+        self.timeout = timeout;
 
         self
     }
@@ -114,6 +140,7 @@ impl ChatGptSignIn {
             auth_file: self.auth_file,
             listener,
             login,
+            timeout: self.timeout,
         })
     }
 }
@@ -123,6 +150,7 @@ pub struct PendingChatGptSignIn {
     auth_file: PathBuf,
     listener: TcpListener,
     login: ChatGptLogin,
+    timeout: Duration,
 }
 
 impl PendingChatGptSignIn {
@@ -131,56 +159,106 @@ impl PendingChatGptSignIn {
         self.login.authorize_url()
     }
 
-    /// Waits for the browser callback, answers it with a page telling the
-    /// user whether it worked, and stores the credential.
+    /// Waits for this sign-in's browser callback, stores the credential, and
+    /// answers the browser with a page telling the user whether it worked.
+    ///
+    /// Other requests, including callbacks of earlier sign-ins, are answered
+    /// and ignored.
     ///
     /// # Errors
     ///
-    /// Returns an error when the user denied access, the callback does not
-    /// belong to this sign-in, the token exchange fails, or the credential
-    /// cannot be stored.
+    /// Returns an error when the user denied access, the token exchange
+    /// fails, the credential cannot be stored, the listener fails, or the
+    /// user does not approve the sign-in in time.
     pub async fn complete(self) -> Result<ChatGptCredentials, ChatGptSignInError> {
-        loop {
-            let (stream, _) = self
-                .listener
-                .accept()
-                .await
-                .map_err(ChatGptSignInError::Callback)?;
-            let mut stream = BufReader::new(stream);
-            let mut request_line = String::new();
-            stream
-                .read_line(&mut request_line)
-                .await
-                .map_err(ChatGptSignInError::Callback)?;
-            let target = request_line.split_whitespace().nth(1).unwrap_or_default();
-            let Some(query) = target
-                .strip_prefix(CALLBACK_PATH)
-                .and_then(|rest| rest.strip_prefix('?'))
-            else {
-                let _ = stream
-                    .get_mut()
-                    .write_all(
-                        b"HTTP/1.1 404 Not Found\r\ncontent-length: 0\r\nconnection: close\r\n\r\n",
-                    )
-                    .await;
-                continue;
-            };
-            let result = self.login.finish(query).await;
-            let page = if result.is_ok() {
-                SUCCESS_PAGE
-            } else {
-                FAILURE_PAGE
-            };
-            let response = format!(
-                "HTTP/1.1 200 OK\r\ncontent-type: text/html; charset=utf-8\r\ncontent-length: \
-                 {}\r\nconnection: close\r\n\r\n{page}",
-                page.len()
-            );
-            let _ = stream.get_mut().write_all(response.as_bytes()).await;
-            let credentials = result?;
-            credentials.save(&self.auth_file)?;
+        let timeout = self.timeout;
 
-            return Ok(credentials);
+        tokio::time::timeout(timeout, self.serve_callbacks())
+            .await
+            .map_err(|_| ChatGptSignInError::TimedOut)?
+    }
+
+    /// Accepts loopback connections, reading each one's request line
+    /// concurrently so a silent connection cannot hold up the callback.
+    async fn serve_callbacks(self) -> Result<ChatGptCredentials, ChatGptSignInError> {
+        let (sender, mut requests) = mpsc::unbounded_channel();
+        loop {
+            tokio::select! {
+                accepted = self.listener.accept() => {
+                    let (stream, _) = accepted.map_err(ChatGptSignInError::Callback)?;
+                    let sender = sender.clone();
+                    tokio::spawn(async move {
+                        if let Some(request) = Self::read_request_target(stream).await {
+                            let _ = sender.send(request);
+                        }
+                    });
+                }
+                Some((mut stream, target)) = requests.recv() => {
+                    let Some(query) = target
+                        .strip_prefix(CALLBACK_PATH)
+                        .and_then(|rest| rest.strip_prefix('?'))
+                    else {
+                        let _ = stream.write_all(NOT_FOUND_RESPONSE).await;
+                        continue;
+                    };
+                    if !self.login.is_own_callback(query) {
+                        Self::respond(&mut stream, "400 Bad Request", STALE_PAGE).await;
+                        continue;
+                    }
+                    let result = self.finish(query).await;
+                    let page = if result.is_ok() {
+                        SUCCESS_PAGE
+                    } else {
+                        FAILURE_PAGE
+                    };
+                    Self::respond(&mut stream, "200 OK", page).await;
+
+                    return result;
+                }
+            }
         }
     }
+
+    /// Reads one bounded request line and returns the connection with its
+    /// request target, or `None` when the client stays silent or fails.
+    async fn read_request_target(stream: TcpStream) -> Option<(TcpStream, String)> {
+        let mut reader = BufReader::new(stream);
+        let mut request_line = String::new();
+        let mut bounded = (&mut reader).take(MAX_REQUEST_LINE_BYTES);
+        tokio::time::timeout(
+            CONNECTION_READ_TIMEOUT,
+            bounded.read_line(&mut request_line),
+        )
+        .await
+        .ok()?
+        .ok()?;
+        let target = request_line
+            .split_whitespace()
+            .nth(1)
+            .unwrap_or_default()
+            .to_string();
+
+        Some((reader.into_inner(), target))
+    }
+
+    /// Exchanges the callback's code and stores the credential.
+    async fn finish(&self, query: &str) -> Result<ChatGptCredentials, ChatGptSignInError> {
+        let credentials = self.login.finish(query).await?;
+        credentials.save(&self.auth_file)?;
+
+        Ok(credentials)
+    }
+
+    async fn respond(stream: &mut TcpStream, status: &str, page: &str) {
+        let response = format!(
+            "HTTP/1.1 {status}\r\ncontent-type: text/html; charset=utf-8\r\ncontent-length: \
+             {}\r\nconnection: close\r\n\r\n{page}",
+            page.len()
+        );
+        let _ = stream.write_all(response.as_bytes()).await;
+    }
 }
+
+#[cfg(test)]
+#[path = "chatgpt_sign_in_test.rs"]
+mod tests;

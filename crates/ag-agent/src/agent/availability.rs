@@ -8,6 +8,7 @@ use std::process::{Child, Command, Output, Stdio};
 use std::sync::{Mutex, OnceLock};
 use std::time::{Duration, Instant};
 
+use ag_harness::provider::chatgpt_is_signed_in;
 pub use ag_session::{AgentAvailabilityProbe, StaticAgentAvailabilityProbe};
 use ag_session::{AgentKind, ChatGptSignInOutcome, ChatGptSignInUrlHandler, HarnessModelOption};
 use async_trait::async_trait;
@@ -83,7 +84,8 @@ impl AgentAvailabilityProbe for RealAgentAvailabilityProbe {
     }
 
     async fn native_harness_models(&self) -> Vec<HarnessModelOption> {
-        super::native::harness_models(&super::native::process_environment(), Path::is_file).await
+        super::native::harness_models(&super::native::process_environment(), chatgpt_is_signed_in)
+            .await
     }
 
     async fn sign_in_chatgpt(

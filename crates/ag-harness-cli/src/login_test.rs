@@ -182,7 +182,8 @@ async fn login_reuses_the_registered_app_and_reports_denial() {
     assert!(browser.page().contains("sign-in failed"));
     let opened = browser.opened.lock().expect("opened lock")[0].clone();
     assert!(opened.contains("client_id=oaiapp_saved"));
-    assert!(opened.contains("id_token_hint=saved-id-token"));
+    assert!(!opened.contains("saved-id-token"));
+    assert!(!String::from_utf8_lossy(&output).contains("saved-id-token"));
     assert_eq!(
         ChatGptCredentials::load(&auth_file)
             .expect("unchanged sign-in")

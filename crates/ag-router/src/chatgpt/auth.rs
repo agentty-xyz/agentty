@@ -1,16 +1,22 @@
 //! Refreshing bearer credential backed by a stored `ChatGPT` sign-in.
 
 use std::error::Error;
-use std::fs::{self, File, OpenOptions};
+use std::fs::{File, OpenOptions};
+use std::io;
+#[cfg(unix)]
+use std::os::unix::fs::OpenOptionsExt as _;
 use std::path::{Path, PathBuf};
 
 use async_trait::async_trait;
 use tokio::sync::Mutex;
 
-use super::credentials::ChatGptCredentials;
+use super::credentials::{self, ChatGptCredentials};
 use super::error::ChatGptAuthError;
 use super::token::{self, DEFAULT_ISSUER, RESOURCE};
 use crate::credential::BearerCredential;
+
+/// `OAuth`-style code reported when the stored sign-in was already rejected.
+const SIGNED_OUT_CODE: &str = "signed_out";
 
 /// [`BearerCredential`] that reads a `ChatGPT` sign-in from a credential file
 /// and refreshes its access token shortly before it expires.
@@ -18,7 +24,11 @@ use crate::credential::BearerCredential;
 /// Refresh tokens rotate, so refreshes are serialized within the process
 /// and, through an exclusive lock on a sibling `.lock` file, across
 /// processes sharing the file; a process that waited re-reads the file and
-/// uses a token another process already refreshed.
+/// uses a token another process already refreshed. A refresh runs to
+/// completion even when the request awaiting it is cancelled, so a rotated
+/// refresh token is always stored. When `OpenAI` rejects the sign-in for
+/// good, the file keeps only the app registration, so hosts can offer a new
+/// sign-in.
 pub struct ChatGptAuth {
     cached: Mutex<Option<ChatGptCredentials>>,
     http: reqwest::Client,
@@ -29,11 +39,9 @@ pub struct ChatGptAuth {
 impl ChatGptAuth {
     /// Creates a credential backed by the sign-in stored at `path`.
     pub fn new(path: impl Into<PathBuf>) -> Self {
-        let _ = rustls::crypto::ring::default_provider().install_default();
-
         Self {
             cached: Mutex::new(None),
-            http: reqwest::Client::new(),
+            http: token::http_client(),
             issuer: DEFAULT_ISSUER.to_string(),
             path: path.into(),
         }
@@ -66,21 +74,55 @@ impl ChatGptAuth {
         {
             return Ok(credentials.access_token.clone());
         }
-        let lock = self.lock_file().await?;
-        let mut credentials = ChatGptCredentials::load(&self.path)?;
-        if !credentials.is_fresh() {
-            credentials = self.refresh(&credentials).await?;
-            credentials.save(&self.path)?;
-        }
-        drop(lock);
+        let refresh = tokio::spawn(Self::fresh_credentials(
+            self.http.clone(),
+            self.issuer.clone(),
+            self.path.clone(),
+        ));
+        let credentials = refresh.await.map_err(|error| ChatGptAuthError::Io {
+            path: self.path.clone(),
+            source: io::Error::other(error),
+        })??;
         let access_token = credentials.access_token.clone();
         *cached = Some(credentials);
 
         Ok(access_token)
     }
 
-    async fn lock_file(&self) -> Result<File, ChatGptAuthError> {
-        let path = self.path.with_extension("lock");
+    /// Loads the stored sign-in under the cross-process lock and refreshes
+    /// and stores it when its access token is near expiry.
+    async fn fresh_credentials(
+        http: reqwest::Client,
+        issuer: String,
+        path: PathBuf,
+    ) -> Result<ChatGptCredentials, ChatGptAuthError> {
+        let lock = Self::lock_file(&path).await?;
+        let credentials = ChatGptCredentials::load(&path)?;
+        if !credentials.is_signed_in() {
+            return Err(ChatGptAuthError::SignInRequired {
+                code: SIGNED_OUT_CODE.to_string(),
+            });
+        }
+        if credentials.is_fresh() {
+            return Ok(credentials);
+        }
+        let refreshed = match Self::refresh(&http, &issuer, &credentials).await {
+            Ok(refreshed) => refreshed,
+            Err(error @ ChatGptAuthError::SignInRequired { .. }) => {
+                credentials.signed_out().save(&path)?;
+
+                return Err(error);
+            }
+            Err(error) => return Err(error),
+        };
+        refreshed.save(&path)?;
+        drop(lock);
+
+        Ok(refreshed)
+    }
+
+    async fn lock_file(path: &Path) -> Result<File, ChatGptAuthError> {
+        let path = path.with_extension("lock");
         let io_error = |source| ChatGptAuthError::Io {
             path: path.clone(),
             source,
@@ -89,28 +131,28 @@ impl ChatGptAuth {
             .parent()
             .filter(|parent| !parent.as_os_str().is_empty())
         {
-            fs::create_dir_all(parent).map_err(io_error)?;
+            credentials::create_private_dir(parent).map_err(io_error)?;
         }
-        let file = OpenOptions::new()
-            .create(true)
-            .truncate(false)
-            .write(true)
-            .open(&path)
-            .map_err(io_error)?;
+        let mut options = OpenOptions::new();
+        options.create(true).truncate(false).write(true);
+        #[cfg(unix)]
+        options.mode(0o600);
+        let file = options.open(&path).map_err(io_error)?;
 
         tokio::task::spawn_blocking(move || file.lock().map(|()| file))
             .await
-            .map_err(|error| io_error(std::io::Error::other(error)))?
+            .map_err(|error| io_error(io::Error::other(error)))?
             .map_err(io_error)
     }
 
     async fn refresh(
-        &self,
+        http: &reqwest::Client,
+        issuer: &str,
         credentials: &ChatGptCredentials,
     ) -> Result<ChatGptCredentials, ChatGptAuthError> {
         let grant = token::request_tokens(
-            &self.http,
-            &self.issuer,
+            http,
+            issuer,
             &[
                 ("grant_type", "refresh_token"),
                 ("client_id", &credentials.client_id),

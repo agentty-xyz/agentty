@@ -156,6 +156,31 @@ async fn successful_sign_in_applies_the_model_and_marks_it_ready() {
 }
 
 #[tokio::test]
+async fn successful_sign_in_reports_a_model_switch_that_failed() {
+    // Arrange
+    let outcome = ChatGptSignInOutcome {
+        email: Some("ada@example.com".to_string()),
+    };
+    let (mut app, _base_dir, _session_id) =
+        sign_in_app(ScriptedSignIn::Finish(Ok(outcome)), 1).await;
+    open_popup(&mut app, &SessionId::from("missing-session"), "draft");
+
+    // Act
+    app.start_chatgpt_sign_in();
+    reduce_until_finished(&mut app).await;
+
+    // Assert
+    assert_eq!(
+        phase(&app),
+        ChatGptSignInPhase::Finished {
+            message: "Signed in as ada@example.com, but switching this session to \
+                      `chatgpt/gpt-6-sol` failed. Pick it again with /model."
+                .to_string(),
+        }
+    );
+}
+
+#[tokio::test]
 async fn sign_in_without_an_email_names_the_account_generically() {
     // Arrange
     let outcome = ChatGptSignInOutcome { email: None };

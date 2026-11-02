@@ -2,6 +2,8 @@
 //! file format.
 
 use std::io::{self, Write as _};
+#[cfg(unix)]
+use std::os::unix::fs::DirBuilderExt as _;
 use std::path::Path;
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 use std::{fmt, fs};
@@ -31,9 +33,10 @@ pub struct ChatGptCredentials {
     pub expires_at: u64,
     /// Stable identifier of this host, reused for later sign-ins.
     pub ext_agent_host_id: String,
-    /// ID token from the latest grant, sent as a hint when signing in again.
+    /// ID token from the latest grant.
     pub id_token: String,
-    /// Rotating refresh token; each refresh replaces it.
+    /// Rotating refresh token; each refresh replaces it. Empty once `OpenAI`
+    /// rejected the sign-in and the user must sign in again.
     pub refresh_token: String,
     /// Scopes the user granted.
     pub scopes: Vec<String>,
@@ -79,7 +82,7 @@ impl ChatGptCredentials {
             .parent()
             .filter(|parent| !parent.as_os_str().is_empty())
             .unwrap_or_else(|| Path::new("."));
-        fs::create_dir_all(parent).map_err(io_error)?;
+        create_private_dir(parent).map_err(io_error)?;
         // `tempfile` creates the file readable only by its owner.
         let mut file = tempfile::NamedTempFile::new_in(parent).map_err(io_error)?;
         let json = serde_json::to_vec_pretty(self)
@@ -90,6 +93,23 @@ impl ChatGptCredentials {
         file.persist(path).map_err(|error| io_error(error.error))?;
 
         Ok(())
+    }
+
+    /// Returns whether the sign-in can still serve requests. A sign-in that
+    /// `OpenAI` rejected is kept only for its app registration and account.
+    pub fn is_signed_in(&self) -> bool {
+        !self.refresh_token.is_empty()
+    }
+
+    /// Returns these credentials without tokens, keeping the app
+    /// registration and account the next sign-in reuses.
+    pub(super) fn signed_out(&self) -> Self {
+        Self {
+            access_token: String::new(),
+            expires_at: 0,
+            refresh_token: String::new(),
+            ..self.clone()
+        }
     }
 
     /// Returns whether the access token stays valid past the refresh margin.
@@ -146,6 +166,17 @@ impl fmt::Debug for ChatGptCredentials {
             .field("scopes", &self.scopes)
             .finish_non_exhaustive()
     }
+}
+
+/// Creates `directory` and its missing parents, accessible only by the owner
+/// where the platform supports it.
+pub(super) fn create_private_dir(directory: &Path) -> io::Result<()> {
+    let mut builder = fs::DirBuilder::new();
+    builder.recursive(true);
+    #[cfg(unix)]
+    builder.mode(0o700);
+
+    builder.create(directory)
 }
 
 /// Reads the `email` claim of an ID token received directly from the token

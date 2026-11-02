@@ -1,6 +1,7 @@
 use std::env;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 
+use ag_router::chatgpt::ChatGptCredentials;
 use thiserror::Error;
 
 use crate::model::{HeuristicContextEstimator, ModelProfile};
@@ -83,6 +84,12 @@ pub fn auth_file(
     let home = non_empty(environment("HOME")).ok_or(AuthFileUnavailable)?;
 
     Ok(PathBuf::from(home).join(".agentty").join(CREDENTIAL_FILE))
+}
+
+/// Returns whether `auth_file` holds a sign-in that can still serve
+/// requests: it exists, is readable, and `OpenAI` has not rejected it.
+pub fn is_signed_in(auth_file: &Path) -> bool {
+    ChatGptCredentials::load(auth_file).is_ok_and(|credentials| credentials.is_signed_in())
 }
 
 /// Returns the context profile of a cataloged plan model, or `None` for a

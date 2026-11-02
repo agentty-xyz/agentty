@@ -13,14 +13,14 @@ use crate::chatgpt::error::ChatGptAuthError;
 const REDIRECT_URI: &str = "http://127.0.0.1:1455/auth/callback";
 const TOKEN_PATH: &str = "/api/accounts/oauth/token";
 
-fn previous(id_token: &str) -> ChatGptCredentials {
+fn previous(email: Option<&str>) -> ChatGptCredentials {
     ChatGptCredentials {
         access_token: "old-access".to_string(),
         client_id: "client-registered".to_string(),
-        email: None,
+        email: email.map(str::to_string),
         expires_at: 0,
         ext_agent_host_id: "urn:uuid:saved-host".to_string(),
-        id_token: id_token.to_string(),
+        id_token: "saved-id-token".to_string(),
         refresh_token: "old-refresh".to_string(),
         scopes: vec!["chatgpt.tokens.use.direct".to_string()],
     }
@@ -89,28 +89,47 @@ fn first_sign_in_registers_the_app_with_a_pkce_challenge() {
 #[test]
 fn reauthorization_reuses_the_registered_client() {
     // Arrange
-    let with_hint = ChatGptLogin::new(REDIRECT_URI, Some(previous("saved-id-token")));
-    let without_hint = ChatGptLogin::new(REDIRECT_URI, Some(previous("")));
+    let with_hint = ChatGptLogin::new(REDIRECT_URI, Some(previous(Some("ada@example.com"))));
+    let without_hint = ChatGptLogin::new(REDIRECT_URI, Some(previous(None)));
 
     // Act
-    let with_hint_query = query_pairs(&with_hint.authorize_url());
+    let with_hint_url = with_hint.authorize_url();
+    let with_hint_query = query_pairs(&with_hint_url);
     let without_hint_query = query_pairs(&without_hint.authorize_url());
 
     // Assert
     assert_eq!(with_hint_query["client_id"], "client-registered");
-    assert_eq!(with_hint_query["id_token_hint"], "saved-id-token");
+    assert_eq!(with_hint_query["login_hint"], "ada@example.com");
     assert_eq!(with_hint_query["ext_agent_host_id"], "urn:uuid:saved-host");
     assert!(!with_hint_query.contains_key("agent_name_hint"));
+    assert!(!with_hint_url.contains("saved-id-token"));
     assert_eq!(without_hint_query["client_id"], "client-registered");
-    assert!(!without_hint_query.contains_key("id_token_hint"));
+    assert!(!without_hint_query.contains_key("login_hint"));
     assert!(!without_hint_query.contains_key("agent_name_hint"));
+}
+
+#[test]
+fn recognizes_only_callbacks_carrying_its_state() {
+    // Arrange
+    let login = ChatGptLogin::new(REDIRECT_URI, None);
+    let own = format!("?code=abc&state={}", login.state);
+
+    // Act
+    let is_own = login.is_own_callback(&own);
+    let is_other = login.is_own_callback("code=abc&state=other");
+    let is_stateless = login.is_own_callback("code=abc");
+
+    // Assert
+    assert!(is_own);
+    assert!(!is_other);
+    assert!(!is_stateless);
 }
 
 #[tokio::test]
 async fn finish_rejects_callbacks_that_do_not_complete_this_sign_in() {
     // Arrange
     let registration = ChatGptLogin::new(REDIRECT_URI, None);
-    let reauthorization = ChatGptLogin::new(REDIRECT_URI, Some(previous("id")));
+    let reauthorization = ChatGptLogin::new(REDIRECT_URI, Some(previous(None)));
     let registration_state = registration.state.clone();
     let reauthorization_state = reauthorization.state.clone();
 
@@ -192,7 +211,7 @@ async fn finish_exchanges_the_code_for_the_issued_client() {
 async fn finish_reauthorizes_with_the_saved_client() {
     // Arrange
     let server = token_server("chatgpt.tokens.use.direct").await;
-    let login = ChatGptLogin::new(REDIRECT_URI, Some(previous("id"))).with_issuer(server.uri());
+    let login = ChatGptLogin::new(REDIRECT_URI, Some(previous(None))).with_issuer(server.uri());
     let callback = format!(
         "state={}&code=auth-code&client_id=client-registered",
         login.state
@@ -215,7 +234,7 @@ async fn finish_reauthorizes_with_the_saved_client() {
 async fn finish_requires_the_plan_scope() {
     // Arrange
     let server = token_server("openid profile").await;
-    let login = ChatGptLogin::new(REDIRECT_URI, Some(previous("id"))).with_issuer(server.uri());
+    let login = ChatGptLogin::new(REDIRECT_URI, Some(previous(None))).with_issuer(server.uri());
     let callback = format!("state={}&code=auth-code", login.state);
 
     // Act
