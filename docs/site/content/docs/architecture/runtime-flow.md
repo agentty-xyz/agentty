@@ -74,13 +74,13 @@ transient plain-text block with compact status and command/argument rows, preser
 invocation counts when events are batched. Failed calls contribute to live totals
 without retaining rows; the renderer clips live rows to the pane width. Provider output
 deltas update the matching call. After the final answer or failure notice, a durable
-usage message replaces the live rows and includes failed-call previews capped at two
-output lines. These messages participate in render-cache invalidation and saved history,
-but are excluded from provider replay. Commit and rebase assistance collect utility
-activity concurrently and save the same usage footer immediately after their displayed
-answer or attempt failure notice, before propagating failures to the overall workflow.
-Existing session rebase-assistance turns clear their live rows before returning success,
-failure, or cancellation.
+usage message replaces the live rows with invocation and outcome counts. These messages
+participate in render-cache invalidation and saved history, but are excluded from
+provider replay. Commit and rebase assistance collect utility activity concurrently and
+save the same usage footer immediately after their displayed answer or attempt failure
+notice, before propagating failures to the overall workflow. Existing session
+rebase-assistance turns clear their live rows before returning success, failure, or
+cancellation.
 
 ## Project Access
 

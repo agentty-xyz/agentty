@@ -509,13 +509,12 @@ fit the pane. Successful output stays hidden. Codex, Claude, Gemini, and Antigra
 supply these details where available. Skill names require explicit provider reporting.
 
 Responses from these providers, including commit and rebase recovery assistance, include
-a usage footer when tool activity was observed. `Tools` lists invocation counts and
-failed or interrupted calls; `Skills` lists explicit Claude skill invocations. Footers
-remain attached to their responses in saved history, including failed recovery attempts.
-At turn completion, successful live rows collapse into the footer; failed call previews
-remain in saved history with reported nonzero exit codes and up to two output lines.
-Reading a skill file does not establish invocation. Providers without activity reporting
-and older saved responses have no footer.
+a usage footer when tool activity was observed. `Tools` lists invocation counts with
+failed or interrupted totals; `Skills` lists explicit Claude skill invocation counts.
+Footers remain attached to their responses in saved history, including failed recovery
+attempts. At turn completion, live rows collapse into counts without per-call command or
+output previews. Reading a skill file does not establish invocation. Providers without
+activity reporting and older saved responses have no footer.
 
 ## Session Sizes
 
