@@ -56,7 +56,7 @@ percent-encoding = "2"
 petgraph = { version = "0.8.3", default-features = false, features = ["std"] }
 portable-pty = "0.9"
 prost = "0.14"
-pulldown-cmark = { version = "0.13", default-features = false }
+pulldown-cmark = { version = "0.13.6", default-features = false }
 ratatui = { version = "0.30.1", default-features = false, features = ["crossterm", "layout-cache", "std", "underline-color"] }
 regex = "1"
 roxmltree = "0.21"
