@@ -67,6 +67,8 @@ podman run --rm \
   --env CARGO_HOME=/cache/cargo \
   --env PREK_HOME=/cache/prek \
   --env CARGO_TARGET_DIR=/cache/target \
+  --env CARGO_BUILD_JOBS=1 \
+  --env CARGO_PROFILE_DEV_DEBUG=0 \
   --env TESTTY_GIF_MODE=generate \
   "${e2e_image}" \
   cargo nextest run --locked --profile ci -p agentty --test e2e test_{name}
@@ -88,6 +90,10 @@ workflow also registers the exact `GITHUB_WORKSPACE` path as a Git `safe.directo
 before invoking `prek`. Always perform the nonempty-file check after recording: VHS can
 exit successfully after creating its screenshots even when GIF finalization has not
 produced a usable artifact.
+
+The local example uses one build job and disables development debug symbols to reduce
+linker memory use in smaller Podman machines. It retains the development profile's
+runtime debug assertions and the pinned recording stack.
 
 Review the changed GIF and `.{name}.hash` sidecar, then refresh the PNG poster for every
 regenerated GIF using the poster procedure below before committing all three together.

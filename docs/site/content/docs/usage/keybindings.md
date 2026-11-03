@@ -11,10 +11,38 @@ For session states and transition behavior, see [Workflow](@/docs/usage/workflow
 
 <!-- more -->
 
+## Execution Graph Inspector
+
+Press `w` from session view to open saved graphs. Actions appear only when supported by
+the displayed snapshot. See
+[Workflow](@/docs/usage/workflow.md#execution-graph-inspector) for acceptance and
+restart behavior.
+
+| Key                              | Action                                           |
+| -------------------------------- | ------------------------------------------------ |
+| `[` / `]`                        | Previous / next graph                            |
+| `j` / `k`, `Down` / `Up`         | Select node                                      |
+| `r`                              | Refresh graph state                              |
+| `o`                              | Inspect next output                              |
+| `J` / `K`, `PageDown` / `PageUp` | Scroll details                                   |
+| `Home`                           | Scroll to top                                    |
+| `a`                              | Accept the displayed output version              |
+| `n`                              | Answer all questions for the selected execution  |
+| `e`                              | Reply to or revise the selected task             |
+| `t`                              | Retry selected failed node                       |
+| `s`                              | Enter limits and resume paused graph dispatch    |
+| `x`                              | Confirm cancellation of the whole graph          |
+| `Enter`                          | Submit graph input or advance to next question   |
+| `Ctrl+r`                         | Refresh and reconcile a rejected draft           |
+| `PageUp` / `PageDown` in input   | Scroll the editor notice                         |
+| `Alt+Enter` / `Shift+Enter`      | Insert newline in graph input                    |
+| `Esc`                            | Cancel graph input, or return to session view    |
+| `q`                              | Return to session view while outside graph input |
+
 ## Shared Text Editing
 
-Prompt, question, publish-branch, and launch-configuration inputs share these keys.
-Completion menus and question options take precedence when open.
+Prompt, question, graph, publish-branch, and launch-configuration inputs share these
+keys. Completion menus and question options take precedence when open.
 
 | Key                                      | Action                              |
 | ---------------------------------------- | ----------------------------------- |
@@ -134,6 +162,7 @@ The full set in **Review** state, subject to session and forge availability:
 | `p`                 | Publish branch and create or refresh review request |
 | `c`                 | Show linked review-request comments                 |
 | `d`                 | Show diff when the session has changes              |
+| `w`                 | Inspect saved execution graphs                      |
 | `f`                 | Show, generate, or regenerate focused review        |
 | `F`                 | Fork session with copied transcript history         |
 | `m`                 | Add to merge queue after confirmation               |

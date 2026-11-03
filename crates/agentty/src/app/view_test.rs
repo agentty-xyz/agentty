@@ -87,6 +87,17 @@ fn visible_review_session_id_includes_chatgpt_sign_in_composer() {
 }
 
 #[test]
+fn inspector_does_not_project_the_session_review_over_its_graph_snapshot() {
+    // Arrange
+    let mode = AppMode::ExecutionGraph(Box::new(
+        crate::presentation::execution_graph::tests::graph_view(),
+    ));
+
+    // Act / Assert
+    assert_eq!(visible_review_session_id(&mode), None);
+}
+
+#[test]
 fn visible_review_session_id_includes_loading_diff() {
     // Arrange
     let mode = AppMode::DiffLoading {

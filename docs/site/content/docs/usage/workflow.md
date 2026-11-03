@@ -63,6 +63,36 @@ When the **Implementer** finishes without questions, the session starts the same
 [focused review](@/docs/usage/workflow.md#focused-review) as after an ordinary turn.
 Planner results, questions, and failed or canceled work do not start a review.
 
+## Execution Graph Inspector
+
+Press `w` in session view to inspect any saved execution graph, including branches and
+joins. Use `[` / `]` to switch graphs and `j` / `k` to select nodes. The inspector shows
+captured agents, objectives, prerequisites, execution state, blocked reasons, questions,
+and exact output versions. Press `r` to refresh the snapshot and `J` / `K` to scroll.
+Background session questions keep the inspector and its draft open; return to session
+chat to answer them.
+
+Available controls appear below the graph. Accept the displayed output with `a`, answer
+the selected node's questions with `n`, or send revision guidance with `e`. These
+replies go directly to that task conversation. Accepted outputs and outputs already
+consumed by started dependents cannot be revised. Rejected replies and clarification
+answers keep their draft and original execution/question bindings. Press `Ctrl+r` in the
+retained editor to refresh and reconcile, inspect the refreshed snapshot, then submit
+again. If that execution or its questions changed, resubmission stays blocked; `Esc`
+explicitly discards the draft. Other rejected actions refresh the view. Editor notices
+wrap below the input; use `PageUp` / `PageDown` to scroll longer reasons.
+
+Use `t` to retry a failed node, `s` to resume paused dispatch, and `x` to cancel the
+whole graph. Retry and answers record intent; they do not resume a stopped driver.
+Resuming after restart requires explicit provider-call limits for the displayed budget
+names (`calls=10` or `{"calls":10}`, for example). A retained live driver prefills its
+original limits and keeps its remaining credits. Cancellation requires typing `cancel`
+and permanently closes that graph. Nothing automatically replays on restart.
+
+Focused-review graphs can be inspected and canceled here. Use the session's existing
+regenerate-review action to start a new review generation with its checkpoints; generic
+node replies, retry, and resume are unavailable for these graphs.
+
 ## Interface Layout
 
 <a id="usage-interface-layout"></a> Use `Tab` and `Shift+Tab` to move between tabs:

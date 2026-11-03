@@ -5,6 +5,7 @@ pub(crate) mod chat_scroll;
 pub(crate) mod chatgpt_sign_in;
 pub(crate) mod confirmation;
 pub(crate) mod diff;
+pub(crate) mod execution_graph;
 pub(crate) mod help;
 pub(crate) mod input_key;
 pub(crate) mod list;

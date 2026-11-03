@@ -449,6 +449,11 @@ fn surface_for_mode_classifies_primary_page_modes() {
     // Act
     let help_is_list = matches!(surface_for_mode(&help_mode), Surface::List);
     let view_is_session = matches!(surface_for_mode(&view_mode), Surface::Session { .. });
+    let graph_mode = AppMode::ExecutionGraph(Box::new(
+        crate::presentation::execution_graph::tests::graph_view(),
+    ));
+    let graph_is_session = matches!(surface_for_mode(&graph_mode), Surface::Session { .. });
+    let _ = render_list_backed_mode(&graph_mode);
     let prompt_is_session = matches!(surface_for_mode(&prompt_mode), Surface::Session { .. });
     let question_is_session = matches!(surface_for_mode(&question_mode), Surface::Session { .. });
     let diff_is_diff = matches!(surface_for_mode(&diff_mode), Surface::Diff { .. });
@@ -465,6 +470,7 @@ fn surface_for_mode_classifies_primary_page_modes() {
     // Assert
     assert!(help_is_list);
     assert!(view_is_session);
+    assert!(graph_is_session);
     assert!(prompt_is_session);
     assert!(question_is_session);
     assert!(diff_is_diff);

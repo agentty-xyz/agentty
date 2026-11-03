@@ -121,6 +121,7 @@ async fn graph_lifecycle_api_routes_clarification_into_an_isolated_new_attempt()
     .await
     .expect("initial provider handoff");
     assert_eq!(first.request_kind, AgentRequestKind::SessionStart);
+    assert_eq!(app.execution_graph_resume_limits("graph"), r#"{"calls":2}"#);
     assert!(first.continuation.replay_transcript().is_none());
     let question = wait_for_status(&mut app, GraphNodeStatus::AwaitingAnswers).await;
     let action = ContinueGraphNodeRequest {

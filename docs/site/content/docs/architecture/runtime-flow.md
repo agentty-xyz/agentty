@@ -203,15 +203,22 @@ Completion replaces matching progress with its result in one reducer update. Sta
 results cannot persist notices. Rendering reads snapshots; it does not perform workflow
 side effects. Runtime-owned caches share derived layout between scrolling and painting.
 
-Session chat is the only task-chain surface. An armed `/plan` composer launches the
-chain, and the session's later messages become natural-language replies; both use the
-same command gateway as programmatic callers. Chain ownership is read from storage at
-submit time, so routing is correct before the transcript or graph snapshot loads after a
-restart. A reply waiting for an orchestrator decision is accepted at once; a failure of
-the decided action is appended as a transcript notice when it returns. Busy chains
-reject replies instead of queueing them, and the composer keeps the draft. Stopping a
-running role cancels the chain through the gateway, which records the cancellation
-before interrupting the attempt. Rendering never advances a workflow.
+The graph inspector loads an explicit session-scoped snapshot of saved graphs,
+authoritative progress, and exact output bodies. Controls revalidate that snapshot and
+enter the shared command gateway; graph replies never enter ordinary chat. Refresh is
+explicit, and editing retains the execution and question set originally inspected.
+Background session questions update session state without replacing the inspector;
+returning to session chat exposes the pending questions.
+
+Session chat is the conversational task-chain surface. An armed `/plan` composer
+launches the chain, and the session's later messages become natural-language replies;
+both use the same command gateway as programmatic callers. Chain ownership is read from
+storage at submit time, so routing is correct before the transcript or graph snapshot
+loads after a restart. A reply waiting for an orchestrator decision is accepted at once;
+a failure of the decided action is appended as a transcript notice when it returns. Busy
+chains reject replies instead of queueing them, and the composer keeps the draft.
+Stopping a running role cancels the chain through the gateway, which records the
+cancellation before interrupting the attempt. Rendering never advances a workflow.
 
 Launch admission saves the original request and execution-graph marker in its
 transaction; saving a chain-owned response likewise saves its role-attributed answer

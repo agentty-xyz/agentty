@@ -325,6 +325,16 @@ async fn handle_view_key(
     let view_context = view_key_context.context;
     let view_session_snapshot = view_key_context.session_snapshot;
 
+    if key.code == KeyCode::Char('w') && is_insertable_char_key(key) {
+        app.open_graph_view(ConfirmationViewMode {
+            session_id: view_context.session_id.clone(),
+            scroll_offset: view_context.scroll_offset,
+        })
+        .await;
+
+        return false;
+    }
+
     if let Some(should_apply_pending_update) = handle_primary_view_key(
         app,
         key,

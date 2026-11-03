@@ -51,6 +51,7 @@ where
         Ok(handle_publish_branch_input_key(app, key).await)
     } else {
         match &app.mode {
+            AppMode::ExecutionGraph(_) => Ok(mode::execution_graph::handle(app, key).await),
             AppMode::List => mode::list::handle(app, key).await,
             AppMode::ProjectCatalog { .. } => Ok(mode::project_catalog::handle(app, key).await),
             AppMode::SessionCreation { .. } => {

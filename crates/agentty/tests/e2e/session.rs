@@ -2,6 +2,7 @@
 
 mod archive;
 mod diff;
+mod execution_graph;
 mod fixture;
 mod harness;
 mod lifecycle;

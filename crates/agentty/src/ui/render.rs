@@ -222,6 +222,7 @@ fn render_footer_bar(f: &mut Frame, footer_bar_area: Rect, context: FooterBarRen
         sessions,
     } = context;
     let session_id = match mode {
+        AppMode::ExecutionGraph(view) => Some(view.restore.session_id.as_str()),
         AppMode::Confirmation {
             session_id: Some(session_id),
             ..

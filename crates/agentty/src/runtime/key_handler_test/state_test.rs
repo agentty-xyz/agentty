@@ -9,8 +9,45 @@ use crate::presentation::app_mode::{
     DiffLineCommentTarget, DiffLineComments, DiffLineSide, DiffPreview, DiffRestoreTarget,
     DiffReviewComments, DiffSidebarFocus, HelpContext, PromptModeSnapshot,
 };
+use crate::presentation::execution_graph::tests::graph_view;
+use crate::presentation::execution_graph::{GraphEditKind, GraphEditor};
 use crate::presentation::prompt::{PromptAttachmentState, PromptHistoryState, PromptSlashState};
 use crate::runtime::{EventResult, PresentationState};
+
+#[tokio::test]
+async fn graph_keys_preserve_rejected_drafts_and_mark_the_view_for_redraw() {
+    // Arrange
+    let (mut app, _directory) = crate::test_support::new_test_app().await;
+    let mut view = graph_view();
+    view.editor = Some(GraphEditor {
+        answers: Vec::new(),
+        input: InputState::with_text("Unsent guidance".into()),
+        kind: GraphEditKind::Reply,
+        needs_reconciliation: true,
+    });
+    let draft = view.editor.clone();
+    let progress = view.progress.clone();
+    app.mode = AppMode::ExecutionGraph(Box::new(view));
+    let mut terminal =
+        ratatui::Terminal::new(ratatui::backend::TestBackend::new(80, 24)).expect("terminal");
+    let presentation = PresentationState::default();
+    app.clear_redraw();
+
+    // Act
+    let result = handle_key_event(
+        &mut app,
+        &presentation,
+        &mut terminal,
+        KeyEvent::new(KeyCode::PageDown, KeyModifiers::NONE),
+    )
+    .await;
+
+    // Assert
+    assert!(matches!(result, Ok(EventResult::Continue)));
+    assert!(app.needs_redraw());
+    assert!(matches!(&app.mode, AppMode::ExecutionGraph(view)
+        if view.editor == draft && view.progress == progress && view.notice_scroll == 1));
+}
 
 #[tokio::test]
 async fn test_handle_key_event_routes_prompt_history_and_restores_draft() {

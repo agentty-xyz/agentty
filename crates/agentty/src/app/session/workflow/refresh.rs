@@ -235,6 +235,7 @@ impl SessionManager {
     /// current application mode.
     fn mode_session_id(mode: &AppMode) -> Option<&SessionId> {
         match mode {
+            AppMode::ExecutionGraph(view) => Some(&view.restore.session_id),
             AppMode::Confirmation {
                 session_id: Some(session_id),
                 ..

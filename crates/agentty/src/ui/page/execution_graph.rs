@@ -1,0 +1,271 @@
+//! Rendering only; action availability belongs to the inspector snapshot.
+
+use std::fmt::Write as _;
+
+use ag_session::{GraphBlockedReason, GraphCompletionGate};
+use ratatui::Frame;
+use ratatui::layout::{Constraint, Layout, Rect};
+use ratatui::style::Style;
+use ratatui::text::{Line, Text};
+use ratatui::widgets::{Block, Borders, Paragraph, Wrap};
+
+use crate::presentation::execution_graph::{GraphEditKind, GraphEditor, GraphView};
+use crate::ui::Component;
+use crate::ui::component::chat_input::ChatInput;
+use crate::ui::style::palette;
+
+pub(crate) fn render(frame: &mut Frame, area: Rect, view: &GraphView) {
+    let panes = Layout::vertical([
+        Constraint::Length(3),
+        Constraint::Min(0),
+        Constraint::Length(if view.editor.is_some() {
+            if view.notice.is_empty() { 9 } else { 13 }
+        } else {
+            7
+        }),
+    ])
+    .split(area);
+    let title = view.graph().map_or_else(
+        || "Execution graphs: none saved for this session".into(),
+        |graph| {
+            format!(
+                "Graph {}/{}: {} | revision {} | {}",
+                view.selected_graph + 1,
+                view.graphs.len(),
+                graph.id,
+                graph.revision,
+                view.progress.as_ref().map_or_else(
+                    || "Unavailable".into(),
+                    |progress| format!("{:?}", progress.status)
+                )
+            )
+        },
+    );
+    frame.render_widget(
+        Paragraph::new(title).block(block("Execution graphs")),
+        panes[0],
+    );
+    let columns = Layout::horizontal([Constraint::Percentage(30), Constraint::Percentage(70)])
+        .split(panes[1]);
+    let nodes = view.progress.as_ref().map_or_else(String::new, |progress| {
+        progress
+            .nodes
+            .iter()
+            .enumerate()
+            .fold(String::new(), |mut text, (index, node)| {
+                let _ = writeln!(
+                    text,
+                    "{} {}: {:?}",
+                    if index == view.selected_node {
+                        ">"
+                    } else {
+                        " "
+                    },
+                    node.node_id,
+                    node.status
+                );
+
+                text
+            })
+    });
+    let node_scroll = u16::try_from(view.selected_node)
+        .unwrap_or(u16::MAX)
+        .saturating_sub(columns[0].height.saturating_sub(3));
+    frame.render_widget(
+        Paragraph::new(nodes)
+            .scroll((node_scroll, 0))
+            .block(block("Nodes (j/k)")),
+        columns[0],
+    );
+    frame.render_widget(
+        Paragraph::new(details(view))
+            .wrap(Wrap { trim: false })
+            .scroll((view.scroll, 0))
+            .block(block("Node and exact output (J/K scroll)")),
+        columns[1],
+    );
+    if let Some(editor) = &view.editor {
+        render_editor(frame, panes[2], view, editor);
+    } else {
+        frame.render_widget(
+            Paragraph::new(format!("{}\n{}", actions(view).join(" | "), view.notice))
+                .wrap(Wrap { trim: false })
+                .block(block("Controls")),
+            panes[2],
+        );
+    }
+}
+
+fn render_editor(frame: &mut Frame, area: Rect, view: &GraphView, editor: &GraphEditor) {
+    let label = match editor.kind {
+        GraphEditKind::Reply => "Reply to selected task (Enter sends; Esc cancels)".into(),
+        GraphEditKind::Answers => view
+            .node()
+            .and_then(|node| node.questions.get(editor.answers.len()))
+            .map_or_else(String::new, |question| {
+                format!(
+                    "Question {}/{}: {} {}",
+                    editor.answers.len() + 1,
+                    view.node().map_or(0, |node| node.questions.len()),
+                    question.text,
+                    question.options.join(" / ")
+                )
+            }),
+        GraphEditKind::Cancel => "Type cancel, then Enter to cancel this graph".into(),
+        GraphEditKind::Resume => format!(
+            "Resume: enter budget=limit or a JSON map for {:?}. Fresh limits after restart; live \
+             limits must match. Enter confirms.",
+            view.budget_names()
+        ),
+    };
+    let editor_areas = Layout::vertical([
+        Constraint::Length(3),
+        Constraint::Min(3),
+        Constraint::Length(if view.notice.is_empty() { 1 } else { 5 }),
+    ])
+    .split(area);
+    frame.render_widget(
+        Paragraph::new(label).wrap(Wrap { trim: false }),
+        editor_areas[0],
+    );
+    ChatInput::new("Graph input", editor.input.text(), editor.input.cursor)
+        .footer(if editor.needs_reconciliation {
+            "Ctrl+r reconcile draft | Esc discard"
+        } else {
+            "Enter send | Alt+Enter newline | Esc cancel"
+        })
+        .render(frame, editor_areas[1]);
+    if !view.notice.is_empty() {
+        frame.render_widget(
+            Paragraph::new(view.notice.as_str())
+                .wrap(Wrap { trim: false })
+                .scroll((view.notice_scroll, 0))
+                .block(block("Notice (PgUp/PgDn scroll)")),
+            editor_areas[2],
+        );
+    }
+}
+
+fn block(title: &str) -> Block<'_> {
+    Block::default()
+        .title(title)
+        .borders(Borders::ALL)
+        .border_style(Style::default().fg(palette::border()))
+}
+
+fn actions(view: &GraphView) -> Vec<&'static str> {
+    let mut actions = vec!["q back", "[/] graph", "j/k node", "r refresh", "o output"];
+    if view.can_accept() {
+        actions.push("a accept displayed version");
+    }
+    if view.can_continue() {
+        actions.push("e reply/revise");
+        if view.node().is_some_and(|node| !node.questions.is_empty()) {
+            actions.push("n answer questions");
+        }
+    }
+    if view.can_retry() {
+        actions.push("t retry node");
+    }
+    if view.can_resume() {
+        actions.push("s resume graph");
+    }
+    if view.can_cancel() {
+        actions.push("x cancel graph");
+    }
+
+    actions
+}
+
+fn details(view: &GraphView) -> Text<'_> {
+    let Some(graph) = view.graph() else {
+        return "No saved execution graphs. Press q to return.".into();
+    };
+    let Some(node) = graph.nodes.get(view.selected_node) else {
+        return Text::default();
+    };
+    let mut text = format!(
+        "{}\nAgent: {} ({}, {})\nObjective: {}\n",
+        node.id,
+        node.definition.name,
+        node.agent.kind(),
+        node.agent.model().as_str(),
+        node.objective
+    );
+    if view.is_focused_review() {
+        text.push_str(
+            "Focused review: use Regenerate review in session view for a new generation with \
+             checkpoints. Generic retry/resume/reply is unavailable.\n",
+        );
+    }
+    for dependency in &node.dependencies {
+        let _ = writeln!(
+            text,
+            "Requires {}: {}",
+            dependency.node_id,
+            gate_label(&dependency.gate)
+        );
+    }
+    if let Some(progress) = view.node() {
+        let _ = writeln!(
+            text,
+            "Status: {:?} | Attempts: {}",
+            progress.status,
+            progress.executions.len()
+        );
+        for reason in &progress.blocked {
+            let reason = match reason {
+                GraphBlockedReason::Dependency { gate, node_id } => {
+                    format!("{node_id}: {}", gate_label(gate))
+                }
+                GraphBlockedReason::EnvironmentBusy => "Workspace is busy".into(),
+                GraphBlockedReason::AwaitingDispatch => {
+                    "Waiting for worker capacity or workspace".into()
+                }
+                GraphBlockedReason::BudgetExhausted(name) => {
+                    format!("Provider-call budget exhausted: {name}")
+                }
+                GraphBlockedReason::ResumeRequired => "Paused; resume required".into(),
+            };
+            let _ = writeln!(text, "Blocked: {reason}");
+        }
+        if let Some(error) = &progress.last_error {
+            let _ = writeln!(text, "Error: {error}");
+        }
+        for question in &progress.questions {
+            let _ = writeln!(
+                text,
+                "Question: {} {}",
+                question.text,
+                question.options.join(" / ")
+            );
+        }
+    }
+    let mut content = Text::from(text);
+    if let Some((result, body)) = view.outputs.get(view.selected_output) {
+        let reference = &result.reference;
+        content.extend(Text::from(format!(
+            "\nOutput {}/{}: {} v{} ({:?})\n",
+            view.selected_output + 1,
+            view.outputs.len(),
+            reference.output_name,
+            reference.version,
+            result.state
+        )));
+        content.extend(body.lines().map(Line::from));
+    }
+
+    content
+}
+
+fn gate_label(gate: &GraphCompletionGate) -> String {
+    match gate {
+        GraphCompletionGate::ExecutionSucceeded => "successful execution without questions".into(),
+        GraphCompletionGate::ResultValidated { output_name } => format!("validated {output_name}"),
+        GraphCompletionGate::ResultAccepted { output_name } => format!("accepted {output_name}"),
+    }
+}
+
+#[cfg(test)]
+#[path = "execution_graph_test.rs"]
+mod tests;
