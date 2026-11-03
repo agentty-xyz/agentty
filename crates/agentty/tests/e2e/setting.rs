@@ -10,29 +10,13 @@ use agentty::domain::agent::ReasoningLevel;
 use agentty::domain::theme::ColorTheme;
 use testty::assertion;
 use testty::frame::TerminalFrame;
-use testty::journey::Journey;
 use testty::proof::report::ProofReport;
 use testty::region::Region;
 use testty::scenario::Scenario;
-use testty::step::Step;
 
-use crate::common::{BuilderEnv, FeatureTest};
+use crate::common::{BuilderEnv, FeatureTest, SettingsRow};
 use crate::test_support::{persist_active_tab_for_test, persist_project_reasoning_levels_for_test};
 use crate::{common, selection};
-
-const MAX_SUBAGENTS_ROW_OFFSET: usize = 1;
-const DEFAULT_SMART_MODEL_ROW_OFFSET: usize = 2;
-const LAUNCH_CONFIGURATIONS_ROW_OFFSET: usize = 6;
-
-/// Moves from the initial Theme row to a known settings row.
-fn move_to_settings_row(name: &str, row_offset: usize) -> Journey {
-    let mut journey = Journey::new(format!("move_to_{name}"));
-    for _ in 0..row_offset {
-        journey = journey.step(Step::press_key("j"));
-    }
-
-    journey
-}
 
 /// Adds a Gemini CLI stub so the settings page exposes a real Gemini-owned
 /// model option.
@@ -419,9 +403,8 @@ fn settings_dropdown_scenario(scenario: Scenario) -> Scenario {
         .compose(&common::wait_for_agentty_startup())
         .wait_for_text("claude/claude-opus-5-5", 5000)
         .viewing_pause_ms(2000)
-        .compose(&move_to_settings_row(
-            "default_smart_model",
-            DEFAULT_SMART_MODEL_ROW_OFFSET,
+        .compose(&common::move_to_settings_row(
+            SettingsRow::DefaultSmartModel,
         ))
         .wait_for_stable_frame(200, 3000)
         .capture_labeled(
@@ -548,10 +531,7 @@ async fn settings_max_subagents_selects_limit() {
                     .compose(&common::wait_for_agentty_startup())
                     .wait_for_text("Max Subagents", 5000)
                     .capture_labeled("default_limit", "Max Subagents at its default")
-                    .compose(&move_to_settings_row(
-                        "max_subagents",
-                        MAX_SUBAGENTS_ROW_OFFSET,
-                    ))
+                    .compose(&common::move_to_settings_row(SettingsRow::MaxSubagents))
                     .press_key("Enter")
                     .wait_for_text("Select setting value", 3000)
                     .wait_for_stable_frame(200, 3000)
@@ -603,9 +583,8 @@ async fn settings_model_selector_separates_model_and_reasoning() {
                     .compose(&common::wait_for_agentty_startup())
                     .compose(&common::switch_to_tab("Sessions"))
                     .compose(&common::switch_to_tab("Settings"))
-                    .compose(&move_to_settings_row(
-                        "default_smart_model",
-                        DEFAULT_SMART_MODEL_ROW_OFFSET,
+                    .compose(&common::move_to_settings_row(
+                        SettingsRow::DefaultSmartModel,
                     ))
                     .wait_for_stable_frame(200, 3000)
                     .capture_labeled(
@@ -671,9 +650,8 @@ async fn settings_launch_configurations_list_editor() {
                     .compose(&common::switch_to_tab("Sessions"))
                     .compose(&common::switch_to_tab("Settings"))
                     .viewing_pause_ms(1500)
-                    .compose(&move_to_settings_row(
-                        "launch_configurations",
-                        LAUNCH_CONFIGURATIONS_ROW_OFFSET,
+                    .compose(&common::move_to_settings_row(
+                        SettingsRow::LaunchConfigurations,
                     ))
                     .wait_for_stable_frame(200, 3000)
                     .press_key("Enter")
@@ -777,9 +755,8 @@ async fn test_input_undo_redo() {
                     .compose(&common::wait_for_agentty_startup())
                     .compose(&common::switch_to_tab("Sessions"))
                     .compose(&common::switch_to_tab("Settings"))
-                    .compose(&move_to_settings_row(
-                        "launch_configurations",
-                        LAUNCH_CONFIGURATIONS_ROW_OFFSET,
+                    .compose(&common::move_to_settings_row(
+                        SettingsRow::LaunchConfigurations,
                     ))
                     .press_key("Enter")
                     .wait_for_stable_frame(200, 3000)

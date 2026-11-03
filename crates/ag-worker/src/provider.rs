@@ -57,9 +57,7 @@ impl RuntimeConfig {
     #[must_use]
     pub fn with_max_concurrent_subagents(mut self, limit: NonZeroUsize) -> Self {
         for policy in self.policies.values_mut() {
-            if policy.max_concurrent_subagents.is_some() {
-                policy.max_concurrent_subagents = Some(limit);
-            }
+            policy.max_concurrent_subagents = policy.max_concurrent_subagents.map(|_| limit);
         }
 
         self

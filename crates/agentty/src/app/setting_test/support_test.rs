@@ -259,8 +259,14 @@ impl SettingsTestHarness {
     }
 }
 
-/// Selects one settings row through the screen navigation action.
-pub(super) fn select_row(manager: &mut SettingsTestHarness, row_index: usize) {
+/// Selects the settings row with `label` through the screen navigation
+/// action, so tests do not depend on row positions.
+pub(super) fn select_row(manager: &mut SettingsTestHarness, label: &str) {
+    let row_index = manager
+        .settings_rows()
+        .iter()
+        .position(|(row_label, _)| *row_label == label)
+        .expect("settings row label should exist");
     for _ in 0..row_index {
         manager.next();
     }

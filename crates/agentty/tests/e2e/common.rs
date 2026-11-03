@@ -1477,6 +1477,64 @@ fn tab_page_marker(tab_name: &str) -> &'static str {
     }
 }
 
+/// One Settings tab row, so scenarios select rows by name instead of `j`
+/// counts.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) enum SettingsRow {
+    Theme,
+    MaxSubagents,
+    DefaultSmartModel,
+    DefaultFastModel,
+    DefaultReviewModel,
+    CoauthoredByAgentty,
+    LaunchConfigurations,
+    DefaultResponseStyle,
+}
+
+impl SettingsRow {
+    /// Rows in on-screen order, global rows first. Keep aligned with the
+    /// Settings tab.
+    const ORDER: [Self; 8] = [
+        Self::Theme,
+        Self::MaxSubagents,
+        Self::DefaultSmartModel,
+        Self::DefaultFastModel,
+        Self::DefaultReviewModel,
+        Self::CoauthoredByAgentty,
+        Self::LaunchConfigurations,
+        Self::DefaultResponseStyle,
+    ];
+
+    /// Returns the `snake_case` name used for this row's journey.
+    fn journey_name(self) -> &'static str {
+        match self {
+            Self::Theme => "theme",
+            Self::MaxSubagents => "max_subagents",
+            Self::DefaultSmartModel => "default_smart_model",
+            Self::DefaultFastModel => "default_fast_model",
+            Self::DefaultReviewModel => "default_review_model",
+            Self::CoauthoredByAgentty => "coauthored_by_agentty",
+            Self::LaunchConfigurations => "launch_configurations",
+            Self::DefaultResponseStyle => "default_response_style",
+        }
+    }
+}
+
+/// Moves the Settings selection from the initial `Theme` row to `row` by
+/// pressing `j`.
+pub(crate) fn move_to_settings_row(row: SettingsRow) -> Journey {
+    let row_offset = SettingsRow::ORDER
+        .iter()
+        .position(|candidate| *candidate == row)
+        .unwrap_or_default();
+    let mut journey = Journey::new(format!("move_to_{}", row.journey_name()));
+    for _ in 0..row_offset {
+        journey = journey.step(Step::press_key("j"));
+    }
+
+    journey
+}
+
 /// Open the quit confirmation dialog by pressing `q`.
 ///
 /// Waits for the dialog to render with a stable frame.

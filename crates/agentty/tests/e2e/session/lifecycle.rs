@@ -25,7 +25,7 @@ use super::fixture::{
     seed_review_ready_session, seed_running_stop_session, seed_session_title_candidate_project,
     seed_sessions_tab,
 };
-use crate::common::{BuilderEnv, FeatureTest, ReleaseGate, SessionSeed};
+use crate::common::{BuilderEnv, FeatureTest, ReleaseGate, SessionSeed, SettingsRow};
 use crate::{common, test_support};
 
 /// Seeds one review-ready session with a persisted reasoning level and timer.
@@ -451,10 +451,9 @@ async fn existing_session_keeps_persisted_reasoning_label() -> E2eResult {
                     .compose(&common::switch_to_tab("Sessions"))
                     .wait_for_text("Running session stop", 5000)
                     .compose(&common::switch_to_tab("Settings"))
-                    .press_key("j")
-                    .press_key("j")
-                    .press_key("j")
-                    .press_key("j")
+                    .compose(&common::move_to_settings_row(
+                        SettingsRow::DefaultReviewModel,
+                    ))
                     .press_key("Enter")
                     .press_key("Enter")
                     .press_key("j")

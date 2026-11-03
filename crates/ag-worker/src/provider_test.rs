@@ -17,7 +17,8 @@ use crate::{
 #[test]
 fn subagent_limit_replaces_only_policies_that_enforce_one() {
     // Arrange
-    let original = RuntimeConfig::default();
+    let original = RuntimeConfig::default()
+        .with_execution_policy(AgentKind::Gemini, ExecutionPolicy::default());
     let limit = NonZeroUsize::new(8).expect("limit is non-zero");
 
     // Act

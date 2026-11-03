@@ -16,7 +16,7 @@ async fn move_selected_launch_configuration_down_persists_reordered_commands() {
         "cargo test\nnpm run dev\nlazygit",
     )
     .await;
-    select_row(&mut manager, 6);
+    select_row(&mut manager, "Launch Configurations");
     manager.handle_enter();
 
     // Act
@@ -47,7 +47,7 @@ async fn selector_dropdown_selects_default_response_style_and_persists_value() {
     // Arrange
     let (services, project_id) = test_services().await;
     let mut manager = settings_manager(&services, project_id).await;
-    select_row(&mut manager, 7);
+    select_row(&mut manager, "Default Response Style");
 
     // Act
     manager.handle_enter();
@@ -75,7 +75,7 @@ async fn selector_dropdown_selects_default_response_style_and_persists_value() {
 fn navigation_actions_do_not_request_launch_configuration_persistence() {
     // Arrange
     let mut manager = new_settings_manager();
-    select_row(&mut manager, 6);
+    select_row(&mut manager, "Launch Configurations");
     manager.handle_enter();
 
     // Act
