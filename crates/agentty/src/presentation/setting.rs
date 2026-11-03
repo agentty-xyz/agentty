@@ -5,6 +5,7 @@ use crate::domain::agent::{
 };
 use crate::domain::input::{InputCommand, InputState};
 use crate::domain::selection::SelectionState;
+use crate::domain::subagent::SubagentLimit;
 use crate::domain::theme::ColorTheme;
 
 /// Immutable setting values and available choices required by the settings
@@ -26,6 +27,7 @@ pub(crate) struct SettingsView {
     pub(crate) fast_harness_models: Vec<HarnessModelOption>,
     pub(crate) include_coauthored_by_agentty: bool,
     pub(crate) launch_configuration: String,
+    pub(crate) max_concurrent_subagents: SubagentLimit,
     pub(crate) theme: ColorTheme,
     pub(crate) use_last_used_model_as_default: bool,
 }
@@ -52,6 +54,7 @@ pub(crate) enum SettingsOperation {
     },
     IncludeCoauthoredByAgentty(bool),
     LaunchConfiguration(String),
+    MaxConcurrentSubagents(SubagentLimit),
     Theme(ColorTheme),
 }
 
@@ -744,6 +747,9 @@ fn settings_operation_for_primary_selector(
         (SettingRow::DefaultResponseStyle, SettingSelectorValue::ResponseStyle(value)) => {
             Some(SettingsOperation::DefaultResponseStyle(value))
         }
+        (SettingRow::MaxConcurrentSubagents, SettingSelectorValue::SubagentLimit(value)) => {
+            Some(SettingsOperation::MaxConcurrentSubagents(value))
+        }
         (SettingRow::Theme, SettingSelectorValue::Theme(value)) => {
             Some(SettingsOperation::Theme(value))
         }
@@ -765,12 +771,14 @@ enum SettingRow {
     DefaultResponseStyle,
     IncludeCoauthoredByAgentty,
     LaunchConfiguration,
+    MaxConcurrentSubagents,
     Theme,
 }
 
 impl SettingRow {
-    const ALL: [Self; 7] = [
+    const ALL: [Self; 8] = [
         Self::Theme,
+        Self::MaxConcurrentSubagents,
         Self::DefaultSmartModel,
         Self::DefaultFastModel,
         Self::DefaultReviewModel,
@@ -778,7 +786,7 @@ impl SettingRow {
         Self::LaunchConfiguration,
         Self::DefaultResponseStyle,
     ];
-    const GLOBAL: [Self; 1] = [Self::Theme];
+    const GLOBAL: [Self; 2] = [Self::Theme, Self::MaxConcurrentSubagents];
     const PROJECT: [Self; 6] = [
         Self::DefaultSmartModel,
         Self::DefaultFastModel,
@@ -811,6 +819,7 @@ impl SettingRow {
             Self::DefaultResponseStyle => "Default Response Style",
             Self::IncludeCoauthoredByAgentty => "Coauthored by Agentty",
             Self::LaunchConfiguration => "Launch Configurations",
+            Self::MaxConcurrentSubagents => "Max Subagents",
             Self::Theme => "Theme",
         }
     }
@@ -989,6 +998,9 @@ impl SettingSelectorOption {
             (SettingRow::IncludeCoauthoredByAgentty, SettingSelectorValue::Bool(value)) => {
                 view.include_coauthored_by_agentty == value
             }
+            (SettingRow::MaxConcurrentSubagents, SettingSelectorValue::SubagentLimit(value)) => {
+                view.max_concurrent_subagents == value
+            }
             (SettingRow::Theme, SettingSelectorValue::Theme(value)) => view.theme == value,
             _ => false,
         }
@@ -1001,6 +1013,7 @@ enum SettingSelectorValue {
     LastUsedModel,
     ModelSelection(AgentSelection),
     ResponseStyle(ResponseStyle),
+    SubagentLimit(SubagentLimit),
     Theme(ColorTheme),
 }
 
@@ -1097,6 +1110,14 @@ fn selector_options_for_row(view: &SettingsView, row: SettingRow) -> Vec<Setting
             })
             .collect(),
         SettingRow::LaunchConfiguration => Vec::new(),
+        SettingRow::MaxConcurrentSubagents => SubagentLimit::ALL
+            .iter()
+            .copied()
+            .map(|value| SettingSelectorOption {
+                label: value.as_str().to_string(),
+                value: SettingSelectorValue::SubagentLimit(value),
+            })
+            .collect(),
         SettingRow::Theme => ColorTheme::ALL
             .iter()
             .copied()
@@ -1174,6 +1195,10 @@ fn display_value_for_row(view: &SettingsView, row: SettingRow) -> String {
         SettingRow::LaunchConfiguration => {
             display_launch_configuration_summary(&view.launch_configuration)
         }
+        SettingRow::MaxConcurrentSubagents => format!(
+            "{} (applies after restart)",
+            view.max_concurrent_subagents.as_str()
+        ),
         SettingRow::Theme => view.theme.label().to_string(),
     }
 }

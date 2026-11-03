@@ -43,6 +43,10 @@ fn test_as_str_returns_persisted_keys() {
             "LastUsedModelAsDefault",
         ),
         (
+            SettingName::MaxConcurrentSubagents,
+            "MaxConcurrentSubagents",
+        ),
+        (
             SettingName::TelemetryInstallationId,
             "TelemetryInstallationId",
         ),
@@ -83,6 +87,7 @@ fn test_display_matches_as_str() {
         SettingName::IncludeCoauthoredByAgentty,
         SettingName::LaunchConfiguration,
         SettingName::LastUsedModelAsDefault,
+        SettingName::MaxConcurrentSubagents,
         SettingName::ProjectCatalogVisible,
         SettingName::TelemetryInstallationId,
         SettingName::Theme,

@@ -6,6 +6,7 @@ use crate::domain::agent::{
     ReasoningLevel, ResponseStyle, SpeedMode,
 };
 use crate::domain::setting::SettingName;
+use crate::domain::subagent::SubagentLimit;
 use crate::domain::theme::ColorTheme;
 use crate::infra::db::AppRepositories;
 use crate::presentation::setting::{SettingsOperation, SettingsView};
@@ -319,6 +320,9 @@ pub struct SettingsManager {
     pub default_smart_speed_mode: SpeedMode,
     /// Optional command run in tmux when opening a session worktree.
     pub launch_configuration: String,
+    /// Saved cap on concurrent provider-native subagents; workers read it
+    /// at startup, so a change applies after restart.
+    pub max_concurrent_subagents: SubagentLimit,
     /// Active terminal color theme for the whole application.
     pub theme: ColorTheme,
     available_agent_kinds: Vec<AgentKind>,
@@ -421,6 +425,7 @@ impl SettingsManager {
         )
         .await;
         let theme = load_theme_setting_from_repositories(&repositories).await;
+        let max_concurrent_subagents = load_max_concurrent_subagents_setting(&repositories).await;
 
         Self {
             default_fast_reasoning_level: default_fast.reasoning_level,
@@ -434,6 +439,7 @@ impl SettingsManager {
             default_smart_selection: default_smart.selection,
             default_smart_speed_mode: default_smart.speed_mode,
             launch_configuration,
+            max_concurrent_subagents,
             theme,
             available_agent_kinds,
             harness_models,
@@ -495,6 +501,7 @@ impl SettingsManager {
             default_smart_speed_mode: self.default_smart_speed_mode,
             include_coauthored_by_agentty: self.include_coauthored_by_agentty,
             launch_configuration: self.launch_configuration.clone(),
+            max_concurrent_subagents: self.max_concurrent_subagents,
             theme: self.theme,
             use_last_used_model_as_default: self.use_last_used_model_as_default,
         }
@@ -549,6 +556,10 @@ impl SettingsManager {
             SettingsOperation::LaunchConfiguration(value) => {
                 self.launch_configuration = value;
                 self.persist_launch_configuration_setting().await;
+            }
+            SettingsOperation::MaxConcurrentSubagents(value) => {
+                self.max_concurrent_subagents = value;
+                self.persist_max_concurrent_subagents_setting().await;
             }
             SettingsOperation::Theme(value) => {
                 self.theme = value;
@@ -742,6 +753,19 @@ impl SettingsManager {
                 self.project_id,
                 SettingName::IncludeCoauthoredByAgentty,
                 &include_coauthored_by_agentty,
+            )
+            .await;
+    }
+
+    /// Persists the global subagent concurrency cap.
+    async fn persist_max_concurrent_subagents_setting(&self) {
+        // Best-effort: settings persistence failure is non-critical.
+        let _ = self
+            .repositories
+            .settings()
+            .upsert_setting(
+                SettingName::MaxConcurrentSubagents,
+                self.max_concurrent_subagents.as_str(),
             )
             .await;
     }
@@ -1013,6 +1037,20 @@ fn default_smart_fallback_selection(available_agent_kinds: &[AgentKind]) -> Agen
         AgentKind::Antigravity.default_model(),
         available_agent_kinds,
     )
+}
+
+/// Loads the saved subagent concurrency cap, falling back to the default when
+/// it is unset, unknown, or storage is unavailable.
+pub(crate) async fn load_max_concurrent_subagents_setting(
+    repositories: &AppRepositories,
+) -> SubagentLimit {
+    repositories
+        .settings()
+        .get_setting(SettingName::MaxConcurrentSubagents)
+        .await
+        .unwrap_or(None)
+        .and_then(|setting_value| SubagentLimit::parse_persisted(&setting_value))
+        .unwrap_or_default()
 }
 
 /// Loads the persisted terminal color theme through the settings repository.

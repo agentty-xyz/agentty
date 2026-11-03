@@ -20,8 +20,9 @@ use crate::common::{BuilderEnv, FeatureTest};
 use crate::test_support::{persist_active_tab_for_test, persist_project_reasoning_levels_for_test};
 use crate::{common, selection};
 
-const DEFAULT_SMART_MODEL_ROW_OFFSET: usize = 1;
-const LAUNCH_CONFIGURATIONS_ROW_OFFSET: usize = 5;
+const MAX_SUBAGENTS_ROW_OFFSET: usize = 1;
+const DEFAULT_SMART_MODEL_ROW_OFFSET: usize = 2;
+const LAUNCH_CONFIGURATIONS_ROW_OFFSET: usize = 6;
 
 /// Moves from the initial Theme row to a known settings row.
 fn move_to_settings_row(name: &str, row_offset: usize) -> Journey {
@@ -232,6 +233,9 @@ async fn settings_selection_highlight() {
                     .capture_labeled("initial", "Highlight on Theme")
                     .press_key("j")
                     .wait_for_stable_frame(200, 3000)
+                    .capture_labeled("global", "Highlight on Max Subagents")
+                    .press_key("j")
+                    .wait_for_stable_frame(200, 3000)
                     .capture_labeled("project", "Highlight on Default Smart Model")
                     .press_key("j")
                     .wait_for_stable_frame(200, 3000)
@@ -244,6 +248,7 @@ async fn settings_selection_highlight() {
                 Box::pin(async move {
                     let selected_labels = [
                         "Theme",
+                        "Max Subagents",
                         "Default Smart Model",
                         "Default Fast Model",
                         "Default Smart Model",
@@ -292,6 +297,9 @@ async fn settings_jk_navigation() {
                     .wait_for_text("Default Smart Model", 5000)
                     .viewing_pause_ms(2000)
                     .capture_labeled("initial", "Settings tab at first row")
+                    .press_key("j")
+                    .wait_for_stable_frame(200, 3000)
+                    .viewing_pause_ms(1500)
                     .press_key("j")
                     .wait_for_stable_frame(200, 3000)
                     .viewing_pause_ms(1500)
@@ -411,7 +419,10 @@ fn settings_dropdown_scenario(scenario: Scenario) -> Scenario {
         .compose(&common::wait_for_agentty_startup())
         .wait_for_text("claude/claude-opus-5-5", 5000)
         .viewing_pause_ms(2000)
-        .press_key("j")
+        .compose(&move_to_settings_row(
+            "default_smart_model",
+            DEFAULT_SMART_MODEL_ROW_OFFSET,
+        ))
         .wait_for_stable_frame(200, 3000)
         .capture_labeled(
             "before_edit",
@@ -521,6 +532,60 @@ fn assert_response_speed_selection(
             );
         }
     }
+}
+
+/// Verify that the global `Max Subagents` row offers the supported limits,
+/// saves the selected one, and says it applies after restart.
+#[tokio::test]
+async fn settings_max_subagents_selects_limit() {
+    // Arrange, Act, Assert
+    FeatureTest::new("settings_max_subagents")
+        .with_git()
+        .setup(|env| Box::pin(async move { seed_settings_tab(env).await }))
+        .run(
+            |scenario| {
+                scenario
+                    .compose(&common::wait_for_agentty_startup())
+                    .wait_for_text("Max Subagents", 5000)
+                    .capture_labeled("default_limit", "Max Subagents at its default")
+                    .compose(&move_to_settings_row(
+                        "max_subagents",
+                        MAX_SUBAGENTS_ROW_OFFSET,
+                    ))
+                    .press_key("Enter")
+                    .wait_for_text("Select setting value", 3000)
+                    .wait_for_stable_frame(200, 3000)
+                    .capture_labeled("limit_dropdown", "Choose the subagent limit")
+                    .press_key("j")
+                    .press_key("Enter")
+                    .wait_for_text("4 (applies after restart)", 3000)
+                    .wait_for_stable_frame(200, 3000)
+                    .capture_labeled("limit_selected", "Four subagents selected")
+            },
+            |frame, report| {
+                Box::pin(async move {
+                    assert_eq!(
+                        report.captures.len(),
+                        3,
+                        "Expected default, dropdown, and selected captures"
+                    );
+
+                    let default_frame = common::frame_from_capture(&report.captures[0]);
+                    assertion::assert_match_count(&default_frame, "2 (applies after restart)", 1);
+
+                    let dropdown_frame = common::frame_from_capture(&report.captures[1]);
+                    let dropdown_full = Region::full(dropdown_frame.cols(), dropdown_frame.rows());
+                    for limit in ["1", "2", "4", "8"] {
+                        assertion::assert_text_in_region(&dropdown_frame, limit, &dropdown_full);
+                    }
+
+                    assertion::assert_match_count(frame, "4 (applies after restart)", 1);
+                    assertion::assert_match_count(frame, "Select setting value", 0);
+                })
+            },
+        )
+        .await
+        .expect("feature test failed");
 }
 
 /// Verify that each role persists and shows its own default reasoning level.

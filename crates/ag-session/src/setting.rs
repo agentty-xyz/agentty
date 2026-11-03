@@ -45,6 +45,9 @@ pub enum SettingName {
     LaunchConfiguration,
     /// Persists whether the last used model should become the default.
     LastUsedModelAsDefault,
+    /// Persists the global cap on concurrent provider-native subagents that
+    /// each harness turn may run.
+    MaxConcurrentSubagents,
     /// Distinguishes registered projects from non-repository launch contexts.
     ProjectCatalogVisible,
     /// Records dismissal of the one-time project discovery suggestion.
@@ -78,6 +81,7 @@ impl SettingName {
             Self::IncludeCoauthoredByAgentty => "IncludeCoauthoredByAgentty",
             Self::LaunchConfiguration => "LaunchConfiguration",
             Self::LastUsedModelAsDefault => "LastUsedModelAsDefault",
+            Self::MaxConcurrentSubagents => "MaxConcurrentSubagents",
             Self::ProjectCatalogVisible => "ProjectCatalogVisible",
             Self::ProjectDiscoveryPromptSeen => "ProjectDiscoveryPromptSeen",
             Self::TelemetryInstallationId => "TelemetryInstallationId",

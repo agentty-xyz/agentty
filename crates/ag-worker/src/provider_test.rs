@@ -15,6 +15,27 @@ use crate::{
 };
 
 #[test]
+fn subagent_limit_replaces_only_policies_that_enforce_one() {
+    // Arrange
+    let original = RuntimeConfig::default();
+    let limit = NonZeroUsize::new(8).expect("limit is non-zero");
+
+    // Act
+    let changed = original.clone().with_max_concurrent_subagents(limit);
+
+    // Assert
+    for kind in [AgentKind::Claude, AgentKind::Codex] {
+        let policy = changed.execution_policy(kind);
+        assert_eq!(policy.max_concurrent_subagents, Some(limit));
+        assert_eq!(policy.tools, original.execution_policy(kind).tools);
+    }
+    assert_eq!(
+        changed.execution_policy(AgentKind::Gemini),
+        ExecutionPolicy::default()
+    );
+}
+
+#[test]
 fn worker_defaults_preserve_provider_policy_and_overrides_are_isolated() {
     // Arrange
     let original = RuntimeConfig::default();

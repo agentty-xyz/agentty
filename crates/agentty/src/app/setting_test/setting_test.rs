@@ -2,8 +2,8 @@ use ag_session::{AgentSelectionMetadata, test_support as model_fixture};
 
 use super::super::{
     ModelSelectorOption, SettingsManager, load_default_fast_agent_setting,
-    load_default_smart_agent_setting, load_default_smart_model_setting, normalized_speed_default,
-    selectable_model_options,
+    load_default_smart_agent_setting, load_default_smart_model_setting,
+    load_max_concurrent_subagents_setting, normalized_speed_default, selectable_model_options,
 };
 use super::support::{
     assert_role_defaults_persisted, new_settings_manager, select_row, settings_manager,
@@ -15,6 +15,7 @@ use crate::domain::agent::{
     AgentKind, AgentModel, AgentSelection, HarnessModelStatus, ReasoningLevel, SpeedMode,
 };
 use crate::domain::setting::SettingName;
+use crate::domain::subagent::SubagentLimit;
 use crate::domain::theme::ColorTheme;
 use crate::presentation::setting::SettingsOperation;
 
@@ -50,14 +51,15 @@ fn settings_rows_include_role_model_coauthor_and_launch_configuration_options() 
     let rows = manager.settings_rows();
 
     // Assert
-    assert_eq!(rows.len(), 7);
+    assert_eq!(rows.len(), 8);
     assert_eq!(rows[0].0, "Theme");
-    assert_eq!(rows[1].0, "Default Smart Model");
-    assert_eq!(rows[2].0, "Default Fast Model");
-    assert_eq!(rows[3].0, "Default Review Model");
-    assert_eq!(rows[4].0, "Coauthored by Agentty");
-    assert_eq!(rows[5].0, "Launch Configurations");
-    assert_eq!(rows[6].0, "Default Response Style");
+    assert_eq!(rows[1].0, "Max Subagents");
+    assert_eq!(rows[2].0, "Default Smart Model");
+    assert_eq!(rows[3].0, "Default Fast Model");
+    assert_eq!(rows[4].0, "Default Review Model");
+    assert_eq!(rows[5].0, "Coauthored by Agentty");
+    assert_eq!(rows[6].0, "Launch Configurations");
+    assert_eq!(rows[7].0, "Default Response Style");
 }
 
 #[test]
@@ -69,7 +71,7 @@ fn settings_rows_show_empty_placeholder_for_launch_configuration() {
     let rows = manager.settings_rows();
 
     // Assert
-    assert_eq!(rows[5].1, "(none)");
+    assert_eq!(rows[6].1, "(none)");
 }
 
 #[test]
@@ -82,7 +84,7 @@ fn settings_rows_show_single_launch_configuration_summary() {
     let rows = manager.settings_rows();
 
     // Assert
-    assert_eq!(rows[5].1, "http://localhost:5173");
+    assert_eq!(rows[6].1, "http://localhost:5173");
 }
 
 #[test]
@@ -96,7 +98,7 @@ fn settings_rows_show_multiple_launch_configuration_summary() {
     let rows = manager.settings_rows();
 
     // Assert
-    assert_eq!(rows[5].1, "cargo test (+2 more)");
+    assert_eq!(rows[6].1, "cargo test (+2 more)");
 }
 
 #[test]
@@ -109,7 +111,7 @@ fn settings_rows_show_last_used_model_as_default_value_when_enabled() {
     let rows = manager.settings_rows();
 
     // Assert
-    assert_eq!(rows[1].1, "Last used model as default [high]");
+    assert_eq!(rows[2].1, "Last used model as default [high]");
 }
 
 #[test]
@@ -123,7 +125,7 @@ fn settings_rows_show_default_smart_model_with_agent_prefix() {
     let rows = manager.settings_rows();
 
     // Assert
-    assert_eq!(rows[1].1, "antigravity/gemini-3.1-pro-preview [high]");
+    assert_eq!(rows[2].1, "antigravity/gemini-3.1-pro-preview [high]");
 }
 
 #[test]
@@ -141,7 +143,7 @@ fn settings_rows_show_default_smart_model_with_real_gemini_agent() {
     let rows = manager.settings_rows();
 
     // Assert
-    assert_eq!(rows[1].1, "gemini/gemini-3.1-pro-preview [high]");
+    assert_eq!(rows[2].1, "gemini/gemini-3.1-pro-preview [high]");
 }
 
 #[test]
@@ -155,7 +157,7 @@ fn settings_rows_show_default_fast_model_value() {
 
     // Assert
     assert_eq!(
-        rows[2].1,
+        rows[3].1,
         format!("codex/{} [low, Normal]", model_fixture::CODEX_MODEL_ID)
     );
 }
@@ -170,7 +172,7 @@ fn settings_rows_show_coauthored_by_agentty_value() {
     let rows = manager.settings_rows();
 
     // Assert
-    assert_eq!(rows[4].1, "Disabled");
+    assert_eq!(rows[5].1, "Disabled");
 }
 
 #[test]
@@ -410,7 +412,7 @@ async fn selector_dropdown_selects_coauthor_setting_and_persists_value() {
     // Arrange
     let (services, project_id) = test_services().await;
     let mut manager = settings_manager(&services, project_id).await;
-    select_row(&mut manager, 4);
+    select_row(&mut manager, 5);
 
     // Act
     manager.handle_enter();
@@ -468,6 +470,65 @@ async fn selector_dropdown_selects_theme_setting_and_persists_value() {
 }
 
 #[tokio::test]
+async fn selector_dropdown_selects_max_subagents_and_persists_global_value() {
+    // Arrange
+    let (services, project_id) = test_services().await;
+    let mut manager = settings_manager(&services, project_id).await;
+    select_row(&mut manager, 1);
+
+    // Act
+    manager.handle_enter();
+    let dropdown = manager
+        .selector_dropdown()
+        .expect("expected max subagents selector dropdown");
+    let option_labels = dropdown
+        .options
+        .iter()
+        .map(|option| option.label.clone())
+        .collect::<Vec<_>>();
+    let initial_index = dropdown.selected_index;
+    manager.next_selector_dropdown_option();
+    manager.select_selector_dropdown_option().await;
+    let persisted_limit = services
+        .db()
+        .settings()
+        .get_setting(SettingName::MaxConcurrentSubagents)
+        .await
+        .expect("failed to load max subagents setting");
+    let reloaded = load_max_concurrent_subagents_setting(services.db()).await;
+
+    // Assert
+    assert_eq!(option_labels, ["1", "2", "4", "8"]);
+    assert_eq!(initial_index, 1);
+    assert_eq!(
+        manager.settings().max_concurrent_subagents,
+        SubagentLimit::Four
+    );
+    assert_eq!(persisted_limit, Some("4".to_string()));
+    assert_eq!(reloaded, SubagentLimit::Four);
+}
+
+#[tokio::test]
+async fn max_subagents_setting_defaults_when_unset_or_invalid() {
+    // Arrange
+    let (services, _project_id) = test_services().await;
+    let unset = load_max_concurrent_subagents_setting(services.db()).await;
+    services
+        .db()
+        .settings()
+        .upsert_setting(SettingName::MaxConcurrentSubagents, "3")
+        .await
+        .expect("failed to persist invalid max subagents");
+
+    // Act
+    let invalid = load_max_concurrent_subagents_setting(services.db()).await;
+
+    // Assert
+    assert_eq!(unset, SubagentLimit::Two);
+    assert_eq!(invalid, SubagentLimit::Two);
+}
+
+#[tokio::test]
 async fn selector_dropdown_persists_last_used_flag_and_explicit_smart_model() {
     // Arrange
     let (services, project_id) = test_services().await;
@@ -497,7 +558,7 @@ async fn selector_dropdown_persists_last_used_flag_and_explicit_smart_model() {
         .await
         .expect("failed to persist smart selector fixture");
     let mut manager = settings_manager(&services, project_id).await;
-    select_row(&mut manager, 1);
+    select_row(&mut manager, 2);
 
     // Act
     manager.handle_enter();

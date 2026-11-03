@@ -3,8 +3,38 @@ use std::sync::Arc;
 
 use mockall::predicate::eq;
 
+use super::super::AppClients;
 use super::support::new_test_app_with_selected_session;
+use crate::domain::agent::AgentKind;
+use crate::domain::subagent::SubagentLimit;
 use crate::infra::tmux::MockTmuxClient;
+
+#[test]
+fn max_concurrent_subagents_caps_every_harness_that_enforces_a_limit() {
+    // Arrange
+    let clients = AppClients::new();
+
+    // Act
+    let clients = clients.with_max_concurrent_subagents(SubagentLimit::Eight);
+
+    // Assert
+    for kind in [AgentKind::Claude, AgentKind::Codex] {
+        assert_eq!(
+            clients
+                .runtime_config
+                .execution_policy(kind)
+                .max_concurrent_subagents,
+            Some(SubagentLimit::Eight.limit())
+        );
+    }
+    assert_eq!(
+        clients
+            .runtime_config
+            .execution_policy(AgentKind::Gemini)
+            .max_concurrent_subagents,
+        None
+    );
+}
 
 #[tokio::test]
 async fn open_session_worktree_in_tmux_skips_launch_configuration_when_setting_is_blank() {

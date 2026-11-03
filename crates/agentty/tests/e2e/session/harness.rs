@@ -736,6 +736,7 @@ fn open_fast_model_selector() -> Journey {
         .with_description("Open the Default Fast Model selector in Settings")
         .step(Step::press_key("j"))
         .step(Step::press_key("j"))
+        .step(Step::press_key("j"))
         .step(Step::wait_for_stable_frame(200, 3000))
         .step(Step::press_key("Enter"))
         .step(Step::wait_for_text("Select model", 3000))

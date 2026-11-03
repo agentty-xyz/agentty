@@ -11,7 +11,7 @@ use super::state::{App, AppClients};
 use crate::app::chatgpt_sign_in::ChatGptSignIn;
 use crate::app::service::{AppServiceDeps, AppServices};
 use crate::app::session::{SessionManager, migrate_active_sessions_off_retired_models};
-use crate::app::setting::SettingsManager;
+use crate::app::setting::{SettingsManager, load_max_concurrent_subagents_setting};
 use crate::app::startup::{AppStartup, StartupProjectContext, StartupSessionLoadContext};
 use crate::app::{AppError, review, sync, task};
 use crate::domain::agent::{AgentCliInfo, AgentKind};
@@ -37,7 +37,9 @@ impl App {
     /// hourly follow-up check. When `experimental_harness` is `true`, Harness
     /// sessions run in process and keep their history under
     /// [`AGENTTY_HARNESS_DIR`](super::AGENTTY_HARNESS_DIR).
-    /// `experimental_multi_agent` enables the `/plan` orchestrated chat.
+    /// `experimental_multi_agent` enables the `/plan` orchestrated chat. The
+    /// saved `Max Subagents` setting caps provider-native subagents for every
+    /// worker this launch composes.
     ///
     /// # Errors
     /// Returns an error if startup project metadata cannot be persisted,
@@ -52,6 +54,7 @@ impl App {
         git_branch: Option<String>,
         repositories: impl Into<AppRepositories>,
     ) -> Result<Self, AppError> {
+        let repositories = repositories.into();
         let clients = if experimental_harness {
             AppClients::new().with_experimental_harness(
                 crate::app::agentty_home().join(super::AGENTTY_HARNESS_DIR),
@@ -59,6 +62,9 @@ impl App {
         } else {
             AppClients::new()
         };
+        let clients = clients.with_max_concurrent_subagents(
+            load_max_concurrent_subagents_setting(&repositories).await,
+        );
         let current_version_display_text = current_version_display_text(
             std::env::var_os(E2E_PIN_DISPLAY_VERSION_ENV_VAR).as_deref(),
             env!("CARGO_PKG_VERSION"),
@@ -70,7 +76,7 @@ impl App {
             working_dir,
             git_branch,
             current_version_display_text,
-            repositories.into(),
+            repositories,
             clients,
         ))
         .await?;
