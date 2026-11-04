@@ -1311,7 +1311,8 @@ printf '{"type":"result","subtype":"success","result":"%s","usage":{"input_token
     Ok(())
 }
 
-/// Checks live replacement, readable previews, and the saved failure footer.
+/// Checks live replacement, readable previews, and the counts-only saved
+/// footer.
 fn assert_live_activity_report(frame: &TerminalFrame, report: &ProofReport) {
     let expected_labels: [&[&str]; 2] = [
         &[
@@ -1375,12 +1376,14 @@ fn assert_live_activity_report(frame: &TerminalFrame, report: &ProofReport) {
     assert!(!thinking.all_text().contains("printf activity-details"));
     let full = Region::full(frame.cols(), frame.rows());
     assertion::assert_text_in_region(frame, "Activity demo finished", &full);
+    assertion::assert_text_in_region(frame, "Tools: Bash ×3 (1 failed), Edit ×1", &full);
     assertion::assert_text_in_region(frame, "Skills: review ×1 (1 failed)", &full);
     assert!(!frame.all_text().contains("… Bash"));
     assert!(!frame.all_text().contains("✓ Bash"));
-    assertion::assert_text_in_region(frame, "first error line", &full);
-    assertion::assert_text_in_region(frame, "second error line", &full);
-    assertion::assert_text_in_region(frame, "✗ Bash · { cargo fmt; cargo test; }", &full);
+    assert!(!frame.all_text().contains("✗"));
+    assert!(!frame.all_text().contains("error line"));
+    assert!(!frame.all_text().contains("group failed"));
+    assert!(!frame.all_text().contains("{ cargo fmt; cargo test; }"));
     assert!(!frame.all_text().contains("✓ Edit"));
     assert!(!frame.all_text().contains("Status:"));
 }

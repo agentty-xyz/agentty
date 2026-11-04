@@ -103,21 +103,15 @@ impl TurnActivity {
         }
     }
 
-    /// Summarizes actual invocations; missing terminal events remain explicit.
+    /// Summarizes invocation and outcome counts without per-call previews.
     pub(super) fn summary(&self) -> String {
         let state = self
             .live
             .state
             .lock()
             .unwrap_or_else(std::sync::PoisonError::into_inner);
-        let mut summary = state.usage_text(true);
-        for event in &state.calls {
-            if ActivityState::status(event) == ActivityStatus::Failed {
-                ActivityState::append_call(&mut summary, event);
-            }
-        }
 
-        summary
+        state.usage_text(true)
     }
 }
 
@@ -248,8 +242,8 @@ impl ActivityState {
     }
 
     /// Shows rolling totals, recent interruptions, the last successful call,
-    /// and a bounded set of running calls. Failed previews remain in durable
-    /// summaries. The UI clips previews to the pane width.
+    /// and a bounded set of running calls. The UI clips previews to the pane
+    /// width.
     fn live_text(&self) -> String {
         if self.calls.is_empty() {
             return String::new();
@@ -348,11 +342,6 @@ impl ActivityState {
             let _ = write!(text, " · {input}");
         }
         text.push('\n');
-        if status == ActivityStatus::Failed
-            && let Some(output) = event.output.as_deref()
-        {
-            Self::append_failure_preview(text, output);
-        }
     }
 
     /// Keeps command text literal while extracting useful fields from tool
@@ -394,24 +383,6 @@ impl ActivityState {
             })
             .collect::<Vec<_>>()
             .join(" ")
-    }
-
-    /// Shows at most two nonempty error lines, with an inline truncation hint.
-    fn append_failure_preview(text: &mut String, preview: &str) {
-        let mut lines = preview
-            .lines()
-            .filter(|line| !line.trim().is_empty())
-            .peekable();
-        for index in 0..2 {
-            let Some(line) = lines.next() else {
-                break;
-            };
-            let _ = write!(text, "  {}", Self::single_line(line));
-            if index == 1 && lines.peek().is_some() {
-                text.push_str(" …");
-            }
-            text.push('\n');
-        }
     }
 }
 
