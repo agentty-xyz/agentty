@@ -40,6 +40,39 @@ fn test_render_markdown_wraps_fenced_code_on_word_boundaries() {
 }
 
 #[test]
+fn test_render_markdown_wraps_fenced_code_without_splitting_graphemes() {
+    // Arrange
+    let cases = [
+        ("a👩‍💻", 3, vec!["a👩‍💻"]),
+        ("a👩‍💻b", 3, vec!["a👩‍💻", "b"]),
+        ("a🇺🇳b", 2, vec!["a", "🇺🇳", "b"]),
+        ("ae\u{301}b", 2, vec!["ae\u{301}", "b"]),
+        ("👩‍💻x", 1, vec!["👩‍💻", "x"]),
+        ("  a👩‍💻 b  ", 3, vec!["  ", "a👩‍💻", " b ", " "]),
+        ("a\t👩‍💻", 3, vec!["a\t", "👩‍💻"]),
+        ("a👩‍💻", 0, vec!["a👩‍💻"]),
+    ];
+
+    for (code, width, expected) in cases {
+        let input = format!("```text\n{code}\n```");
+
+        // Act
+        let lines = render_markdown(&input, width);
+        let actual = lines.iter().map(ToString::to_string).collect::<Vec<_>>();
+
+        // Assert
+        assert_eq!(actual, expected, "{code:?}, width {width}");
+        assert_eq!(actual.concat(), code);
+        assert!(
+            lines
+                .iter()
+                .flat_map(|line| &line.spans)
+                .all(|span| { span.style == code_block_style() })
+        );
+    }
+}
+
+#[test]
 fn test_render_markdown_treats_unclosed_fence_as_code() {
     // Arrange
     let input = "```\n**raw**";

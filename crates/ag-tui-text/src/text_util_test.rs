@@ -6,7 +6,8 @@ use ratatui::widgets::{Paragraph, Widget};
 
 use crate::text_util::{
     format_duration_compact, format_token_count, inline_text, paint_line, span_display_width,
-    truncate_spans_with_ellipsis, truncate_with_ellipsis, wrap_lines, wrap_styled_line,
+    split_line_at_width, truncate_spans_with_ellipsis, truncate_with_ellipsis, wrap_lines,
+    wrap_lines_breaking_long_words, wrap_styled_line,
 };
 
 #[test]
@@ -98,6 +99,77 @@ fn test_wrap_lines_uses_terminal_width_for_wide_characters() {
     assert_eq!(wrapped.len(), 2);
     assert_eq!(wrapped[0].to_string(), "ab");
     assert_eq!(wrapped[1].to_string(), "\u{754c}");
+}
+
+#[test]
+fn test_wrap_lines_breaks_long_words_without_splitting_graphemes() {
+    // Arrange
+    let cases = [
+        ("hello world", 8, vec!["hello", "world"]),
+        (
+            "Path: abcdefghijk tail",
+            4,
+            vec!["Path", ":", "abcd", "efgh", "ijk", "tail"],
+        ),
+        ("ab界界界end", 5, vec!["ab界", "界界e", "nd"]),
+        (
+            "ae\u{301}e\u{301}e\u{301}z",
+            2,
+            vec!["ae\u{301}", "e\u{301}e\u{301}", "z"],
+        ),
+        ("👩‍💻👩‍💻x", 2, vec!["👩‍💻", "👩‍💻", "x"]),
+        ("界x", 1, vec!["界", "x"]),
+        ("\n", 3, vec!["", ""]),
+        ("abcdef", 0, vec!["abcdef"]),
+    ];
+
+    for (text, width, expected) in cases {
+        // Act
+        let actual = wrap_lines_breaking_long_words(text, width);
+
+        // Assert
+        let actual = actual.iter().map(Line::to_string).collect::<Vec<_>>();
+        assert_eq!(actual, expected, "{text:?}, width {width}");
+    }
+}
+
+#[test]
+fn test_split_line_preserves_graphemes_styles_alignment_and_whitespace() {
+    // Arrange
+    let line = Line::from(vec![
+        Span::styled("  ab界", Style::default().add_modifier(Modifier::BOLD)),
+        Span::styled("e\u{301}👩‍💻界 tail  ", Style::default().fg(Color::Red)),
+    ])
+    .style(Style::default().bg(Color::Blue))
+    .alignment(Alignment::Right);
+    let expected = line
+        .styled_graphemes(Style::default())
+        .map(|grapheme| (grapheme.symbol.to_string(), grapheme.style))
+        .collect::<Vec<_>>();
+
+    for width in [0, 1, 2, 5, 80] {
+        // Act
+        let lines = split_line_at_width(line.clone(), width);
+        let actual = lines
+            .iter()
+            .flat_map(|line| line.styled_graphemes(Style::default()))
+            .map(|grapheme| (grapheme.symbol.to_string(), grapheme.style))
+            .collect::<Vec<_>>();
+
+        // Assert
+        assert_eq!(actual, expected, "width {width}");
+        assert!(
+            lines
+                .iter()
+                .all(|part| part.style == line.style && part.alignment == line.alignment)
+        );
+        if width == 0 || line.width() <= width {
+            assert_eq!(lines, vec![line.clone()]);
+        } else {
+            assert!(lines.iter().all(|part| part.width() <= width
+                || part.styled_graphemes(Style::default()).count() == 1));
+        }
+    }
 }
 
 #[test]

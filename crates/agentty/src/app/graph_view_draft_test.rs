@@ -120,7 +120,7 @@ fn draft_view(kind: GraphEditKind) -> GraphView {
     if kind == GraphEditKind::Answers {
         progress.nodes[0].status = GraphNodeStatus::AwaitingAnswers;
         progress.nodes[0].results[0].state = GraphResultState::Produced;
-        view.outputs[0].0.state = GraphResultState::Produced;
+        view.outputs[0].result.state = GraphResultState::Produced;
         progress.nodes[0].questions = vec![
             QuestionItem::new("Which target?"),
             QuestionItem::new("Which scope?"),

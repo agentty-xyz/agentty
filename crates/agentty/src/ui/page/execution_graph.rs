@@ -3,18 +3,26 @@
 use std::fmt::Write as _;
 
 use ag_session::{GraphBlockedReason, GraphCompletionGate};
+use ag_tui_text::text_util::{
+    borrowed_paint_line, split_line_at_width, wrap_lines_breaking_long_words,
+};
 use ratatui::Frame;
 use ratatui::layout::{Constraint, Layout, Rect};
 use ratatui::style::Style;
-use ratatui::text::{Line, Text};
 use ratatui::widgets::{Block, Borders, Paragraph, Wrap};
 
 use crate::presentation::execution_graph::{GraphEditKind, GraphEditor, GraphView};
 use crate::ui::Component;
 use crate::ui::component::chat_input::ChatInput;
+use crate::ui::markdown::MarkdownRenderCache;
 use crate::ui::style::palette;
 
-pub(crate) fn render(frame: &mut Frame, area: Rect, view: &GraphView) {
+pub(crate) fn render(
+    frame: &mut Frame,
+    area: Rect,
+    view: &GraphView,
+    markdown: &MarkdownRenderCache,
+) {
     let panes = Layout::vertical([
         Constraint::Length(3),
         Constraint::Min(0),
@@ -77,13 +85,7 @@ pub(crate) fn render(frame: &mut Frame, area: Rect, view: &GraphView) {
             .block(block("Nodes (j/k)")),
         columns[0],
     );
-    frame.render_widget(
-        Paragraph::new(details(view))
-            .wrap(Wrap { trim: false })
-            .scroll((view.scroll, 0))
-            .block(block("Node and exact output (J/K scroll)")),
-        columns[1],
-    );
+    render_details(frame, columns[1], view, markdown);
     if let Some(editor) = &view.editor {
         render_editor(frame, panes[2], view, editor);
     } else {
@@ -94,6 +96,35 @@ pub(crate) fn render(frame: &mut Frame, area: Rect, view: &GraphView) {
             panes[2],
         );
     }
+}
+
+fn render_details(frame: &mut Frame, area: Rect, view: &GraphView, markdown: &MarkdownRenderCache) {
+    let block = block("Node and exact output (J/K scroll)");
+    let inner = block.inner(area);
+    let width = usize::from(inner.width);
+    let metadata = details(view);
+    let metadata = wrap_lines_breaking_long_words(&metadata, width);
+    let output = view
+        .outputs
+        .get(view.selected_output)
+        .filter(|_| {
+            view.graph()
+                .is_some_and(|graph| graph.nodes.get(view.selected_node).is_some())
+        })
+        .map_or_default(|output| markdown.render(output.display(), width));
+    // Split oversized Markdown tokens before slicing the viewport. Borrow
+    // cached spans for lines that fit, leaving the cached output shared.
+    let lines = metadata
+        .into_iter()
+        .chain(
+            output
+                .iter()
+                .flat_map(|line| split_line_at_width(borrowed_paint_line(line), width)),
+        )
+        .skip(usize::from(view.scroll))
+        .take(usize::from(inner.height))
+        .collect::<Vec<_>>();
+    frame.render_widget(Paragraph::new(lines).block(block), area);
 }
 
 fn render_editor(frame: &mut Frame, area: Rect, view: &GraphView, editor: &GraphEditor) {
@@ -177,12 +208,12 @@ fn actions(view: &GraphView) -> Vec<&'static str> {
     actions
 }
 
-fn details(view: &GraphView) -> Text<'_> {
+fn details(view: &GraphView) -> String {
     let Some(graph) = view.graph() else {
         return "No saved execution graphs. Press q to return.".into();
     };
     let Some(node) = graph.nodes.get(view.selected_node) else {
-        return Text::default();
+        return String::new();
     };
     let mut text = format!(
         "{}\nAgent: {} ({}, {})\nObjective: {}\n",
@@ -241,21 +272,21 @@ fn details(view: &GraphView) -> Text<'_> {
             );
         }
     }
-    let mut content = Text::from(text);
-    if let Some((result, body)) = view.outputs.get(view.selected_output) {
+    if let Some(output) = view.outputs.get(view.selected_output) {
+        let result = &output.result;
         let reference = &result.reference;
-        content.extend(Text::from(format!(
-            "\nOutput {}/{}: {} v{} ({:?})\n",
+        let _ = writeln!(
+            text,
+            "\nOutput {}/{}: {} v{} ({:?})",
             view.selected_output + 1,
             view.outputs.len(),
             reference.output_name,
             reference.version,
             result.state
-        )));
-        content.extend(body.lines().map(Line::from));
+        );
     }
 
-    content
+    text
 }
 
 fn gate_label(gate: &GraphCompletionGate) -> String {

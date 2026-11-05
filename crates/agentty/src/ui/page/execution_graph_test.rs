@@ -3,13 +3,173 @@ use ag_session::{
     ExecutionGraphStatus, GraphBlockedReason, GraphCompletionGate, GraphDependency,
     GraphNodeStatus, GraphWorkspaceAccess,
 };
+use ag_tui_text::text_util::wrap_lines_breaking_long_words;
 use ratatui::Terminal;
 use ratatui::backend::TestBackend;
+use ratatui::buffer::CellWidth;
+use ratatui::style::Modifier;
 
-use super::{details, gate_label, render};
+use super::{details, gate_label, render, render_details};
 use crate::domain::input::InputState;
 use crate::presentation::execution_graph::tests::graph_view;
-use crate::presentation::execution_graph::{GraphEditKind, GraphEditor};
+use crate::presentation::execution_graph::{GraphEditKind, GraphEditor, GraphViewOutput};
+use crate::ui::markdown::MarkdownRenderCache;
+
+#[test]
+fn output_markdown_wraps_once_and_scrolls_styled_rendered_lines() {
+    // Arrange
+    let mut view = graph_view();
+    let result = view.outputs.remove(0).result;
+    view.outputs.push(GraphViewOutput::new(result, r###"{"answer":"## Readable heading\n\n**Bold answer**\n\n- A list item with enough words to wrap in the narrow pane and remain visible.\n\n```rust\n    let ready = true;\n```"}"###.into()));
+    let markdown = MarkdownRenderCache::default();
+
+    // Act / Assert
+    for width in [80, 28] {
+        let mut terminal = Terminal::new(TestBackend::new(width + 2, 8)).expect("terminal");
+        let header_lines =
+            wrap_lines_breaking_long_words(&details(&view), usize::from(width)).len();
+        let output_lines = markdown.render(view.outputs[0].display(), usize::from(width));
+        let mut saw_bold = false;
+        let mut saw_code = false;
+        for (offset, expected) in output_lines.iter().enumerate() {
+            view.scroll = u16::try_from(header_lines + offset).expect("offset");
+            terminal
+                .draw(|frame| render_details(frame, frame.area(), &view, &markdown))
+                .expect("render output");
+            let buffer = terminal.backend().buffer();
+            let line: String = (1..=width)
+                .map(|column| buffer[(column, 1)].symbol())
+                .collect();
+            assert_eq!(
+                line.trim_end(),
+                expected.to_string().trim_end(),
+                "width {width}, offset {offset}"
+            );
+            saw_bold |=
+                (1..=width).any(|column| buffer[(column, 1)].modifier.contains(Modifier::BOLD));
+            saw_code |= line.contains("let ready = true;");
+            assert!(!line.contains(r#"{"answer""#));
+            assert!(!line.contains(r"\n"));
+        }
+        assert!(saw_bold, "Markdown styles must reach the terminal");
+        assert!(saw_code, "code must remain reachable by scrolling");
+    }
+}
+
+#[test]
+fn long_metadata_tokens_remain_complete_when_scrolling_narrow_panes() {
+    // Arrange
+    let mut view = graph_view();
+    let objective = "crates/agentty/src/ui/page/a_very_long_objective_path.rs";
+    let error = "https://example.test/a/very/long/error/reference/ERROR_SUFFIX";
+    let question = "界界界界界界界界界界界界界界界界界界QUESTION_SUFFIX";
+    view.graphs[0].nodes[0].objective = objective.into();
+    let progress = &mut view.progress.as_mut().expect("progress").nodes[0];
+    progress.last_error = Some(error.into());
+    progress.questions = vec![QuestionItem::new(question)];
+    view.outputs.clear();
+    let markdown = MarkdownRenderCache::default();
+
+    for width in [16, 23] {
+        let mut terminal = Terminal::new(TestBackend::new(width + 2, 5)).expect("terminal");
+        let metadata = details(&view);
+        let line_count = wrap_lines_breaking_long_words(&metadata, usize::from(width)).len();
+        let mut scrolled_text = String::new();
+
+        // Act
+        for offset in 0..line_count {
+            view.scroll = u16::try_from(offset).expect("offset");
+            terminal
+                .draw(|frame| render_details(frame, frame.area(), &view, &markdown))
+                .expect("render metadata");
+            let buffer = terminal.backend().buffer();
+            let mut line = String::new();
+            let mut column = 1;
+            while column <= width {
+                let symbol = buffer[(column, 1)].symbol();
+                line.push_str(symbol);
+                column += symbol.cell_width().max(1);
+            }
+            scrolled_text.push_str(line.trim_end());
+        }
+
+        // Assert
+        for token in [objective, error, question] {
+            assert!(
+                scrolled_text.contains(token),
+                "width {width}: {scrolled_text}"
+            );
+        }
+    }
+}
+
+#[test]
+fn long_answer_tokens_remain_complete_when_scrolling_narrow_panes() {
+    // Arrange
+    let markdown = MarkdownRenderCache::default();
+    let cases = [
+        (
+            "",
+            "crates/agentty/src/ui/page/a_very_long_answer_path/ANSWER_SUFFIX",
+            "",
+        ),
+        (
+            "`",
+            "https://example.test/a/very/long/answer/reference/INLINE_SUFFIX",
+            "`",
+        ),
+        (
+            "**",
+            "界界e\u{301}👩‍💻界界e\u{301}👩‍💻界界e\u{301}👩‍💻UNICODE_SUFFIX",
+            "**",
+        ),
+        ("```text\n", "a👩‍💻b👩‍💻CODE_SUFFIX", "\n```"),
+    ];
+
+    for (prefix, token, suffix) in cases {
+        for width in [3, 16, 23] {
+            let mut view = graph_view();
+            let result = view.outputs.remove(0).result;
+            let body = serde_json::json!({ "answer": format!("{prefix}{token}{suffix}") });
+            view.outputs
+                .push(GraphViewOutput::new(result, body.to_string()));
+            let header_lines =
+                wrap_lines_breaking_long_words(&details(&view), usize::from(width)).len();
+            let mut terminal = Terminal::new(TestBackend::new(width + 2, 5)).expect("terminal");
+            let mut scrolled_text = String::new();
+
+            // Act
+            for offset in 0..token.chars().count() + 8 {
+                view.scroll = u16::try_from(header_lines + offset).expect("offset");
+                terminal
+                    .draw(|frame| render_details(frame, frame.area(), &view, &markdown))
+                    .expect("render answer");
+                let buffer = terminal.backend().buffer();
+                let mut line = String::new();
+                let mut column = 1;
+                while column <= width {
+                    let symbol = buffer[(column, 1)].symbol();
+                    assert!(
+                        !symbol.contains('👩') || symbol == "👩‍💻",
+                        "partial joined emoji: {symbol:?}"
+                    );
+                    line.push_str(symbol);
+                    column += symbol.cell_width().max(1);
+                }
+                scrolled_text.push_str(line.trim_end());
+                if scrolled_text.contains(token) {
+                    break;
+                }
+            }
+
+            // Assert
+            assert!(
+                scrolled_text.contains(token),
+                "width {width}, prefix {prefix}: {scrolled_text}"
+            );
+        }
+    }
+}
 
 #[test]
 fn inspector_renders_blocks_exact_output_and_supported_controls() {
@@ -38,7 +198,7 @@ fn inspector_renders_blocks_exact_output_and_supported_controls() {
     node.last_error = Some("Previous failure".into());
 
     // Act
-    let text = details(&view).to_string();
+    let text = details(&view);
 
     // Assert
     assert_eq!(
@@ -56,7 +216,6 @@ fn inspector_renders_blocks_exact_output_and_supported_controls() {
         "Previous failure",
         "Which target?",
         "response v1 (Validated)",
-        "Exact output body",
     ] {
         assert!(text.contains(expected), "{expected}: {text}");
     }
@@ -75,7 +234,7 @@ fn inspector_renders_blocks_exact_output_and_supported_controls() {
             needs_reconciliation: matches!(kind, GraphEditKind::Reply),
         });
         terminal
-            .draw(|frame| render(frame, frame.area(), &view))
+            .draw(|frame| render(frame, frame.area(), &view, &MarkdownRenderCache::default()))
             .expect("render");
         let buffer = terminal.backend().buffer();
         let rendered: String = buffer
@@ -84,6 +243,7 @@ fn inspector_renders_blocks_exact_output_and_supported_controls() {
             .map(ratatui::buffer::Cell::symbol)
             .collect();
         assert!(rendered.contains("Execution graphs"));
+        assert!(rendered.contains("Exact output body"));
         assert!(rendered.contains(if kind.is_some() {
             "Graph input"
         } else {
@@ -129,17 +289,17 @@ fn inspector_renders_empty_failed_and_host_coordinated_graphs_at_small_sizes() {
                     GraphWorkspaceAccess::BackgroundRead;
             }
         }
-        let text = details(&view).to_string();
+        let text = details(&view);
         if scenario == "focused" {
             assert!(text.contains("new generation"));
         }
         if scenario == "no-output" {
-            assert!(!text.contains("Exact output body"));
+            assert!(!text.contains("Output 1/"));
         }
         for (width, height) in [(80, 24), (30, 12), (5, 3)] {
             let mut terminal = Terminal::new(TestBackend::new(width, height)).expect("terminal");
             terminal
-                .draw(|frame| render(frame, frame.area(), &view))
+                .draw(|frame| render(frame, frame.area(), &view, &MarkdownRenderCache::default()))
                 .expect("small render");
             if scenario == "no-progress" && width == 80 {
                 let rendered: String = terminal
@@ -177,7 +337,7 @@ fn editor_notices_wrap_and_scroll_without_hiding_the_draft() {
         for offset in 0..40 {
             view.notice_scroll = offset;
             terminal
-                .draw(|frame| render(frame, frame.area(), &view))
+                .draw(|frame| render(frame, frame.area(), &view, &MarkdownRenderCache::default()))
                 .expect("render");
             let rendered: String = terminal
                 .backend()
@@ -201,7 +361,7 @@ fn editor_notices_wrap_and_scroll_without_hiding_the_draft() {
     for (width, height) in [(5, 3), (0, 0)] {
         let mut terminal = Terminal::new(TestBackend::new(width, height)).expect("terminal");
         terminal
-            .draw(|frame| render(frame, frame.area(), &view))
+            .draw(|frame| render(frame, frame.area(), &view, &MarkdownRenderCache::default()))
             .expect("small render");
     }
 }

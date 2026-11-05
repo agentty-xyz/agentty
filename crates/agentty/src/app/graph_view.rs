@@ -9,7 +9,7 @@ use uuid::Uuid;
 use super::App;
 use super::command_gateway::{CommandDelivery, CommandInitiator, SessionCommand, SessionMutation};
 use crate::presentation::app_mode::{AppMode, ConfirmationViewMode};
-use crate::presentation::execution_graph::{GraphEditKind, GraphView};
+use crate::presentation::execution_graph::{GraphEditKind, GraphView, GraphViewOutput};
 
 impl App {
     pub(crate) async fn open_graph_view(&mut self, restore: ConfirmationViewMode) {
@@ -54,7 +54,7 @@ impl App {
                     .await
                     .map_err(|error| error.to_string())?
                 {
-                    outputs.push((result.clone(), stored.body));
+                    outputs.push(GraphViewOutput::new(result.clone(), stored.body));
                 }
             }
         }
@@ -124,7 +124,9 @@ impl App {
         let request = match action {
             GraphViewAction::Accept if view.can_accept() => {
                 SessionMutation::AcceptExecutionGraphResult {
-                    reference: Box::new(view.outputs[view.selected_output].0.reference.clone()),
+                    reference: Box::new(
+                        view.outputs[view.selected_output].result.reference.clone(),
+                    ),
                 }
             }
             GraphViewAction::Cancel if view.can_cancel() => {

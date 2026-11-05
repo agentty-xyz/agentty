@@ -6,6 +6,7 @@ use std::sync::Arc;
 use ratatui::style::{Color, Modifier, Style};
 use ratatui::text::{Line, Span};
 use rustc_hash::FxHasher;
+use unicode_segmentation::UnicodeSegmentation;
 use unicode_width::{UnicodeWidthChar, UnicodeWidthStr};
 
 use crate::style::TextRenderSettings;
@@ -1333,6 +1334,7 @@ fn wrap_verbatim_spans(spans: Vec<Span<'static>>, width: usize) -> Vec<Line<'sta
 ///
 /// The wrapper keeps original whitespace and style spans intact, unlike
 /// markdown inline wrapping which normalizes whitespace.
+/// Hard wrapping preserves extended grapheme clusters, including joined emoji.
 ///
 /// Implementation detail: this is a single-pass algorithm with a buffered
 /// pending word, so long lines with sparse whitespace stay linear-time without
@@ -1356,10 +1358,10 @@ fn wrap_verbatim_spans_with_word_boundaries(
         let style = span.style;
         let content = span.content.into_owned();
 
-        for character in content.chars() {
+        for grapheme in content.graphemes(true) {
             has_characters = true;
 
-            if character.is_whitespace() {
+            if grapheme.chars().all(char::is_whitespace) {
                 flush_pending_word_with_wrap(
                     &mut wrapped_lines,
                     &mut current_spans,
@@ -1368,20 +1370,22 @@ fn wrap_verbatim_spans_with_word_boundaries(
                     &mut pending_word_width,
                     width,
                 );
-                push_character_with_hard_wrap(
+                push_grapheme_with_hard_wrap(
                     &mut wrapped_lines,
                     &mut current_spans,
                     &mut current_width,
                     style,
-                    character,
+                    grapheme,
                     width,
                 );
 
                 continue;
             }
 
-            push_verbatim_span_character(&mut pending_word_spans, style, character);
-            pending_word_width += character_display_width(character);
+            for character in grapheme.chars() {
+                push_verbatim_span_character(&mut pending_word_spans, style, character);
+            }
+            pending_word_width += UnicodeWidthStr::width(grapheme);
         }
     }
 
@@ -1436,13 +1440,13 @@ fn flush_pending_word_with_wrap(
         let style = span.style;
         let content = span.content.into_owned();
 
-        for character in content.chars() {
-            push_character_with_hard_wrap(
+        for grapheme in content.graphemes(true) {
+            push_grapheme_with_hard_wrap(
                 wrapped_lines,
                 current_spans,
                 current_width,
                 style,
-                character,
+                grapheme,
                 width,
             );
         }
@@ -1454,24 +1458,25 @@ fn flush_pending_word_with_wrap(
     *pending_word_width = 0;
 }
 
-/// Appends one character to the current line, wrapping immediately when the
-/// line is already full.
-fn push_character_with_hard_wrap(
+/// Appends one complete grapheme, wrapping before it when the line is full.
+fn push_grapheme_with_hard_wrap(
     wrapped_lines: &mut Vec<Line<'static>>,
     current_spans: &mut Vec<Span<'static>>,
     current_width: &mut usize,
     style: Style,
-    character: char,
+    grapheme: &str,
     width: usize,
 ) {
-    let character_width = character_display_width(character);
-    if *current_width > 0 && character_width > 0 && *current_width + character_width > width {
+    let grapheme_width = UnicodeWidthStr::width(grapheme);
+    if *current_width > 0 && grapheme_width > 0 && *current_width + grapheme_width > width {
         wrapped_lines.push(Line::from(std::mem::take(current_spans)));
         *current_width = 0;
     }
 
-    push_verbatim_span_character(current_spans, style, character);
-    *current_width += character_width;
+    for character in grapheme.chars() {
+        push_verbatim_span_character(current_spans, style, character);
+    }
+    *current_width += grapheme_width;
 }
 
 fn push_verbatim_span_character(spans: &mut Vec<Span<'static>>, style: Style, character: char) {
