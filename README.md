@@ -34,6 +34,10 @@ appear alongside them, and answers retain saved usage counts.
 Press `w` in session view to inspect saved execution graphs, accept exact outputs,
 answer node questions, retry work, resume dispatch, or cancel a graph.
 
+With `--experimental-multi-agent`, `/graph <request>` generates an inspectable graph
+preview. `/graph query` shows its exact-version approval and cancellation commands;
+nodes launch only after approval.
+
 The `/plan` workflow uses bundled Markdown agent definitions. Repository overrides live
 in `.agents/agents/<id>/agent.md`; see the
 [workflow guide](https://agentty.xyz/docs/usage/workflow/) for the supported format.
@@ -179,7 +183,7 @@ agentty              # Launch with auto-update enabled (default)
 agentty --no-update  # Launch without automatic updates
 agentty --otlp-endpoint http://localhost:4318/v1/traces  # Export session traces
 agentty --experimental-harness  # Offer preview Harness sessions
-agentty --experimental-multi-agent  # Enable the /plan orchestrated chat
+agentty --experimental-multi-agent  # Enable /plan and /graph
 agentty --help       # Show supported command-line options
 agentty --version    # Show the installed Agentty version
 ```

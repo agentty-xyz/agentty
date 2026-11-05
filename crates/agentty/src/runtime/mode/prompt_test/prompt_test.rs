@@ -2301,6 +2301,21 @@ async fn test_handle_prompt_submit_key_routes_slash_command() {
 }
 
 #[tokio::test]
+async fn graph_command_reaches_application_admission_from_the_slash_composer() {
+    // Arrange
+    let (mut app, _base_dir) = new_test_prompt_app("/graph query", None).await;
+    app.experimental_multi_agent = true;
+    let context = prompt_context(&mut app).expect("prompt context");
+
+    // Act
+    handle_prompt_submit_key(&mut app, &context).await;
+
+    // Assert
+    assert!(!matches!(app.mode, AppMode::Prompt { .. }));
+    assert_eq!(app.sessions.sessions()[0].prompt, "");
+}
+
+#[tokio::test]
 async fn plan_slash_command_arms_the_composer_without_submitting_an_ordinary_turn() {
     // Arrange
     let (mut app, _root) = crate::test_support::new_test_app().await;

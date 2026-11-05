@@ -4,6 +4,7 @@ mod archive;
 mod diff;
 mod execution_graph;
 mod fixture;
+mod graph_proposal;
 mod harness;
 mod lifecycle;
 mod model;

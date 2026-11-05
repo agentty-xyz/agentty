@@ -210,6 +210,10 @@ impl App {
             return PromptWorkflowOutcome::KeepPrompt;
         }
 
+        if let Some(outcome) = self.submit_graph_command(&session_id, &prompt).await {
+            return outcome;
+        }
+
         if session_mode == PromptSessionMode::NewDraft
             && self
                 .services

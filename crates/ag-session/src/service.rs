@@ -86,6 +86,41 @@ pub enum DurableMessageVisibility {
 /// programmatic session capability without depending on a concrete frontend.
 #[async_trait]
 pub trait SessionBackend: Send + Sync {
+    /// Reserves generation without waiting for model completion.
+    async fn generate_graph_proposal(
+        &self,
+        request: crate::GenerateGraphProposalRequest,
+    ) -> Result<(), SessionError> {
+        let _ = request;
+        Err(SessionError::Operation(
+            "Host does not support graph proposals".into(),
+        ))
+    }
+
+    /// Reads retained state without generating or launching work.
+    async fn get_graph_proposal(
+        &self,
+        id: &str,
+    ) -> Result<Option<crate::GraphProposalState>, SessionError> {
+        let _ = id;
+        Err(SessionError::Operation(
+            "Host does not support graph proposals".into(),
+        ))
+    }
+
+    /// Applies an explicit action to the exact inspected version.
+    async fn act_on_graph_proposal(
+        &self,
+        id: &str,
+        version: u32,
+        action: crate::GraphProposalAction,
+    ) -> Result<(), SessionError> {
+        let _ = (id, version, action);
+        Err(SessionError::Operation(
+            "Host does not support graph proposals".into(),
+        ))
+    }
+
     /// Reads durable progress without launching or retrying work.
     async fn get_execution_graph(
         &self,
@@ -358,7 +393,7 @@ pub struct SessionService {
 }
 
 /// Explicit static-graph launch, separate from ordinary chat and `/plan`.
-#[derive(Clone, Debug, Eq, PartialEq)]
+#[derive(Clone, Debug, Eq, PartialEq, serde::Deserialize, serde::Serialize)]
 pub struct StartExecutionGraphRequest {
     /// Validated immutable snapshot to save before admitting nodes.
     pub graph: crate::ExecutionGraph,
@@ -369,6 +404,77 @@ pub struct StartExecutionGraphRequest {
 }
 
 impl SessionService {
+    /// Generates a proposal through the host's bounded worker workflow.
+    ///
+    /// # Errors
+    /// Returns admission, permissions, or persistence errors.
+    pub async fn generate_graph_proposal(
+        &self,
+        request: crate::GenerateGraphProposalRequest,
+    ) -> Result<(), SessionError> {
+        self.backend.generate_graph_proposal(request).await
+    }
+
+    /// Queries pending, restored, or approved state without execution.
+    ///
+    /// # Errors
+    /// Returns query delivery or persistence errors.
+    pub async fn get_graph_proposal(
+        &self,
+        id: &str,
+    ) -> Result<Option<crate::GraphProposalState>, SessionError> {
+        self.backend.get_graph_proposal(id).await
+    }
+
+    /// Answers the complete question set on an exact proposal version.
+    ///
+    /// # Errors
+    /// Returns stale-version, incomplete-answer, or generation-limit errors.
+    pub async fn answer_graph_proposal(
+        &self,
+        id: &str,
+        version: u32,
+        answers: Vec<String>,
+    ) -> Result<(), SessionError> {
+        self.backend
+            .act_on_graph_proposal(id, version, crate::GraphProposalAction::Answer(answers))
+            .await
+    }
+
+    /// Regenerates within the original captured generation ceiling.
+    ///
+    /// # Errors
+    /// Returns stale-version, approved-proposal, or exhausted-limit errors.
+    pub async fn regenerate_graph_proposal(
+        &self,
+        id: &str,
+        version: u32,
+    ) -> Result<(), SessionError> {
+        self.backend
+            .act_on_graph_proposal(id, version, crate::GraphProposalAction::Regenerate)
+            .await
+    }
+
+    /// Approves the exact preview before dispatch. Redelivery never dispatches.
+    ///
+    /// # Errors
+    /// Returns stale-version, resolution, permissions, or publication errors.
+    pub async fn approve_graph_proposal(&self, id: &str, version: u32) -> Result<(), SessionError> {
+        self.backend
+            .act_on_graph_proposal(id, version, crate::GraphProposalAction::Approve)
+            .await
+    }
+
+    /// Cancels a pending proposal and any active generating utility.
+    ///
+    /// # Errors
+    /// Returns stale-version or already-approved errors.
+    pub async fn cancel_graph_proposal(&self, id: &str, version: u32) -> Result<(), SessionError> {
+        self.backend
+            .act_on_graph_proposal(id, version, crate::GraphProposalAction::Cancel)
+            .await
+    }
+
     /// Reads graph/node progress and immutable execution history.
     ///
     /// # Errors

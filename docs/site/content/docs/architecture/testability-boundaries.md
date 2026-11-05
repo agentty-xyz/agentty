@@ -42,6 +42,17 @@ contract tests cover reservation ownership, refunds, overlapping ceilings, and r
 accounting under concurrent consumption. A scripted utility occupying worker capacity
 reproduces delayed provider consumption while graph admission proceeds.
 
+Public protocol tests cover proposal round trips, exclusive clarification and proposal
+outcomes, strict field ownership, and generated schema validation. Request-kind tests
+pin the dedicated proposal profile independently of execution or persistence.
+
+Proposal resolution tests exercise captured catalog, permission, size, and graph rules
+without I/O. `GraphProposalRepository` tests use SQLite transactions to establish atomic
+approval/publication, immutable versions, stale actions, cancellation, and restart
+receipts. Worker workflow tests inject `RunClient`; PTY scenarios cover the composer
+preview and explicit approval journey. Live prompt evaluations establish model behavior
+separately from these deterministic contracts.
+
 Application graph tests inject `SessionRunFactory` clients to verify isolated task
 requests, attachments, and completion after ordered effects. The ordinary session
 transcript and pending questions remain independent. Injected readiness reads make

@@ -73,6 +73,31 @@ async fn existing_hosts_reject_graph_capabilities_without_admitting_work() {
 }
 
 #[tokio::test]
+async fn existing_hosts_reject_graph_proposals_without_admitting_work() {
+    // Arrange
+    let service = SessionService::new(Arc::new(FakeBackend::default()));
+    let input = crate::test_support::graph_proposal_state("preview", "session").input;
+
+    // Act
+    let results = [
+        service.generate_graph_proposal(input).await,
+        service
+            .answer_graph_proposal("preview", 1, vec!["local".into()])
+            .await,
+        service.approve_graph_proposal("preview", 1).await,
+        service.cancel_graph_proposal("preview", 1).await,
+        service.regenerate_graph_proposal("preview", 1).await,
+    ];
+
+    // Assert
+    let expected = SessionError::Operation("Host does not support graph proposals".into());
+    for result in results {
+        assert_eq!(result, Err(expected.clone()));
+    }
+    assert_eq!(service.get_graph_proposal("preview").await, Err(expected));
+}
+
+#[tokio::test]
 async fn existing_hosts_report_unsupported_task_capability() {
     // Arrange
     let service = SessionService::new(Arc::new(FakeBackend::default()));

@@ -14,6 +14,16 @@ ledger.
 
 ## Graph and Node Identity
 
+Initial model proposals are separate from executable snapshots. The host captures the
+original request, catalog, model, permission ceiling, and bounded generation/execution
+limits. A read-only worker produces clarification or a logical proposal; pure resolution
+rejects unsupported profiles and escalation, allocates task identities, binds the
+session Env, and reuses graph validation. Exact-version approval publishes the resolved
+snapshot and its receipt in one transaction before dispatch. Proposal restoration and
+duplicate approval never replenish limits or start execution. Output acceptance remains
+a separate gate. See
+[the proposal workflow](@/docs/usage/workflow.md#generated-graph-proposals).
+
 An `ExecutionGraph` has an instance ID, a nonzero revision, and one owning session. Node
 IDs are unique within the graph. Each node captures its agent definition and model
 selection, objective, initial request, execution profile, Env reference, dependencies,

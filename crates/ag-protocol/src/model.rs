@@ -13,11 +13,13 @@ use super::question::QuestionItem;
 /// Session turns use [`AgentResponse`]. Isolated utilities, reviews, and
 /// metadata reconciliation have narrow wire schemas and normalize into
 /// `AgentResponse` only after request-specific validation.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 #[non_exhaustive]
 pub enum ProtocolRequestProfile {
     /// Isolated focused review with a direct structured review response.
     FocusedReview,
+    /// Initial graph proposal or clarification, before host resolution.
+    GraphProposal,
     /// Direct review-request title and description reconciliation.
     ReviewMetadata,
     /// Interactive session turn.

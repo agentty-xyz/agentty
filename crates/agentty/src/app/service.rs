@@ -36,6 +36,8 @@ pub struct AppServices {
     pub(super) graph_drivers: crate::app::execution_graph::GraphDrivers,
     pub(super) graph_resources: Arc<ag_worker::GraphResources>,
     pub(super) graph_wake: tokio::sync::watch::Sender<u64>,
+    pub(super) proposal_generations:
+        Arc<Mutex<HashMap<String, super::graph_proposal::ProposalGeneration>>>,
     analytics: Option<Analytics>,
     available_agent_clis: Arc<Mutex<Vec<AgentCliInfo>>>,
     available_agent_kinds: Arc<[AgentKind]>,
@@ -105,6 +107,7 @@ impl AppServices {
             )),
             graph_wake: tokio::sync::watch::channel(0).0,
             graph_drivers: Arc::default(),
+            proposal_generations: Arc::default(),
             analytics: None,
             available_agent_clis: Arc::new(Mutex::new(available_agent_clis)),
             available_agent_kinds: Arc::<[AgentKind]>::from(available_agent_kinds),
