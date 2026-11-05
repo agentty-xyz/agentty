@@ -147,6 +147,7 @@ name = "ag-protocol"
 version = "0.18.3"
 dependencies = [
  "askama",
+ "jsonschema",
  "schemars 1.2.3",
  "serde",
  "serde_json",

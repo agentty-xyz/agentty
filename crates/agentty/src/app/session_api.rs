@@ -26,6 +26,29 @@ use crate::infra::db::{SessionMessageRow, SessionReviewRequestRow, SessionRow};
 
 #[async_trait]
 impl SessionBackend for SessionRuntimeHandle {
+    async fn generate_graph_proposal(
+        &self,
+        request: ag_session::GenerateGraphProposalRequest,
+    ) -> Result<(), ApiSessionError> {
+        SessionRuntimeHandle::generate_graph_proposal(self, request).await
+    }
+
+    async fn get_graph_proposal(
+        &self,
+        id: &str,
+    ) -> Result<Option<ag_session::GraphProposalState>, ApiSessionError> {
+        SessionRuntimeHandle::get_graph_proposal(self, id).await
+    }
+
+    async fn act_on_graph_proposal(
+        &self,
+        id: &str,
+        version: u32,
+        action: ag_session::GraphProposalAction,
+    ) -> Result<(), ApiSessionError> {
+        SessionRuntimeHandle::act_on_graph_proposal(self, id, version, action).await
+    }
+
     async fn get_execution_graph(
         &self,
         graph_id: &str,
@@ -288,6 +311,16 @@ impl App {
     /// Routes mutations to shared admission and keeps reads on the query path.
     pub(crate) async fn apply_session_runtime_command(&mut self, command: SessionRuntimeCommand) {
         match command {
+            SessionRuntimeCommand::GetGraphProposal { id, response_tx } => {
+                let result = self
+                    .services
+                    .db()
+                    .graph_proposals()
+                    .get(&id, None)
+                    .await
+                    .map_err(|error| ApiSessionError::Operation(error.to_string()));
+                let _ = response_tx.send(result);
+            }
             SessionRuntimeCommand::GetExecutionGraph {
                 graph_id,
                 response_tx,

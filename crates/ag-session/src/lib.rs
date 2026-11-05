@@ -51,11 +51,13 @@ pub use env::{EnvId, ResolvedEnv};
 pub use error::SessionError;
 pub use execution_graph::{
     ContinueGraphNodeRequest, ExecutionGraph, ExecutionGraphProgress, ExecutionGraphStatus,
-    GraphBlockedReason, GraphCompletionGate, GraphContext, GraphContractError, GraphControlRequest,
-    GraphDependency, GraphExecutionProfile, GraphExecutionRef, GraphInputBinding, GraphNode,
-    GraphNodeContinuation, GraphNodeProgress, GraphNodeStatus, GraphOutput, GraphPostProcessing,
-    GraphQuestionAnswer, GraphResolvedInput, GraphResult, GraphResultRef, GraphResultState,
-    GraphWorkspaceAccess, ResumeExecutionGraphRequest,
+    GenerateGraphProposalRequest, GraphBlockedReason, GraphCompletionGate, GraphContext,
+    GraphContractError, GraphControlRequest, GraphDependency, GraphExecutionProfile,
+    GraphExecutionRef, GraphInputBinding, GraphNode, GraphNodeContinuation, GraphNodeProgress,
+    GraphNodeStatus, GraphOutput, GraphPostProcessing, GraphProposalAction, GraphProposalApproval,
+    GraphProposalLimits, GraphProposalResolution, GraphProposalState, GraphProposalVersion,
+    GraphProposalVersionOutcome, GraphQuestionAnswer, GraphResolvedInput, GraphResult,
+    GraphResultRef, GraphResultState, GraphWorkspaceAccess, ResumeExecutionGraphRequest,
 };
 pub use harness_model::{
     HarnessModelOption, HarnessModelStatus, MINIMUM_RUNNING_CONTEXT_WINDOW, ModelCost,

@@ -242,6 +242,11 @@ struct ProtocolInstructionUtilityPromptUsageTemplate;
 #[template(path = "protocol_instruction_focused_review_usage.md", escape = "none")]
 struct ProtocolInstructionFocusedReviewUsageTemplate;
 
+/// Askama view model for graph-proposal protocol usage instructions.
+#[derive(Template)]
+#[template(path = "protocol_instruction_graph_proposal_usage.md", escape = "none")]
+struct ProtocolInstructionGraphProposalUsageTemplate;
+
 /// Askama view model for session-turn refresh instructions.
 #[derive(Template)]
 #[template(path = "protocol_refresh_session_turn_instruction.md", escape = "none")]
@@ -257,6 +262,12 @@ struct ProtocolRefreshUtilityPromptInstructionTemplate;
 
 /// Renders the protocol usage instructions for one request profile.
 fn render_protocol_usage_instructions(profile: ProtocolRequestProfile) -> String {
+    if matches!(profile, ProtocolRequestProfile::GraphProposal) {
+        return render_template(
+            "protocol_instruction_graph_proposal_usage.md",
+            &ProtocolInstructionGraphProposalUsageTemplate,
+        );
+    }
     if matches!(profile, ProtocolRequestProfile::ReviewMetadata) {
         return "Return the direct review metadata object with title, description, and \
                 is_title_change_significant. Do not nest it inside answer."
@@ -285,6 +296,12 @@ fn render_protocol_usage_instructions(profile: ProtocolRequestProfile) -> String
 
 /// Renders the compact protocol refresh instructions for one request profile.
 fn render_protocol_refresh_instructions(profile: ProtocolRequestProfile) -> String {
+    if matches!(profile, ProtocolRequestProfile::GraphProposal) {
+        return render_template(
+            "protocol_instruction_graph_proposal_usage.md",
+            &ProtocolInstructionGraphProposalUsageTemplate,
+        );
+    }
     if matches!(profile, ProtocolRequestProfile::ReviewMetadata) {
         return "Return the direct review metadata object with title, description, and \
                 is_title_change_significant. Do not nest it inside answer."

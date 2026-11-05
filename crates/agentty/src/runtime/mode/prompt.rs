@@ -791,7 +791,9 @@ async fn handle_prompt_submit_key(app: &mut App, prompt_context: &PromptContext)
         return;
     }
 
-    if prompt_context.is_slash_command() {
+    let is_graph_command = matches!(&app.mode, AppMode::Prompt { input, .. }
+        if input.text().trim().strip_prefix("/graph").is_some_and(|remainder| remainder.is_empty() || remainder.starts_with(char::is_whitespace)));
+    if prompt_context.is_slash_command() && !is_graph_command {
         handle_prompt_slash_submit(app, prompt_context).await;
 
         return;

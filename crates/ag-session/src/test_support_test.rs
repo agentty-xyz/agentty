@@ -40,6 +40,55 @@ pub fn codex_selection() -> AgentSelection {
     AgentSelection::new(AgentKind::Codex, CODEX_MODEL)
 }
 
+/// Minimal utility proposal shared by resolution, persistence, and host tests.
+#[must_use]
+pub fn graph_proposal() -> ag_protocol::GraphProposal {
+    ag_protocol::GraphProposal {
+        nodes: vec![ag_protocol::GraphProposalNode {
+            agent_id: "inspector".into(),
+            dependencies: Vec::new(),
+            execution: ag_protocol::GraphProposalExecution {
+                context: ag_protocol::GraphProposalContext::Fresh,
+                post_processing: ag_protocol::GraphProposalPostProcessing::None,
+                response_profile: ag_protocol::ProtocolRequestProfile::UtilityPrompt,
+                workspace_access: ag_protocol::GraphProposalWorkspaceAccess::SharedRead,
+            },
+            id: "inspect".into(),
+            inputs: Vec::new(),
+            objective: "Inspect the requested change".into(),
+            outputs: vec![ag_protocol::GraphProposalOutput {
+                name: "report".into(),
+                schema: ag_protocol::ProtocolRequestProfile::UtilityPrompt,
+            }],
+        }],
+    }
+}
+
+/// Captured host inputs for a first, durably reserved proposal generation.
+#[must_use]
+pub fn graph_proposal_state(id: &str, session_id: &str) -> crate::GraphProposalState {
+    crate::GraphProposalState {
+        agent: codex_selection(),
+        definitions: vec![agent_definition("inspector")],
+        input: crate::GenerateGraphProposalRequest {
+            id: id.into(),
+            request: ag_protocol::TurnPrompt::from_text("Inspect the requested change".into()),
+            session_id: session_id.into(),
+        },
+        limits: crate::GraphProposalLimits::default(),
+        permission: crate::PermissionMode::AutoEdit,
+        version: crate::GraphProposalVersion {
+            answers: Vec::new(),
+            approval: None,
+            is_cancelled: false,
+            number: 1,
+            outcome: crate::GraphProposalVersionOutcome::Generating,
+            parent_id: format!("graph-proposal:{id}:1"),
+            utility_run_id: None,
+        },
+    }
+}
+
 #[test]
 fn codex_fixture_uses_an_explicit_supported_selection() {
     // Arrange

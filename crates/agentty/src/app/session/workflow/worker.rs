@@ -188,6 +188,10 @@ impl SessionCommand {
                 ..
             } => "focused_review",
             Self::Run {
+                request_kind: AgentRequestKind::GraphProposal,
+                ..
+            } => "graph_proposal",
+            Self::Run {
                 request_kind: AgentRequestKind::ReviewMetadata,
                 ..
             } => "review_metadata",

@@ -161,7 +161,20 @@ pub(crate) struct TaskChainReplyAction {
 }
 
 /// Application inputs for workflows that return an admission result.
+pub(crate) enum GraphProposalCommand {
+    Generate(Box<ag_session::GenerateGraphProposalRequest>),
+    Act {
+        id: String,
+        version: u32,
+        action: ag_session::GraphProposalAction,
+    },
+}
+
+/// Application inputs for workflows that return an admission result.
 pub(crate) enum SessionMutation {
+    GraphProposal {
+        command: GraphProposalCommand,
+    },
     CancelExecutionGraph {
         request: ag_session::GraphControlRequest,
     },
@@ -205,7 +218,9 @@ pub(crate) enum SessionMutation {
         request: ag_session::ContinueTaskChainRequest,
     },
     /// Requests cancellation without canceling unrelated session work.
-    CancelTaskChain { chain_id: String },
+    CancelTaskChain {
+        chain_id: String,
+    },
     /// Submits the terminal's prepared prompt without losing attachment or
     /// staging intent.
     Prompt {
@@ -214,7 +229,9 @@ pub(crate) enum SessionMutation {
         session_id: SessionId,
     },
     /// Starts a previously staged terminal draft.
-    StartStaged { session_id: SessionId },
+    StartStaged {
+        session_id: SessionId,
+    },
     /// Sends one user message.
     SendMessage {
         message: String,
@@ -236,22 +253,32 @@ pub(crate) enum SessionMutation {
         session_id: SessionId,
     },
     /// Records the caller's acceptance of a desired outcome.
-    CompleteTask { task_id: String },
+    CompleteTask {
+        task_id: String,
+    },
     /// Answers one complete clarification-question set.
     AnswerQuestions {
         request: AnswerQuestionsRequest,
         session_id: SessionId,
     },
     /// Cancels one session.
-    Cancel { session_id: SessionId },
+    Cancel {
+        session_id: SessionId,
+    },
     /// Enqueues one session for merge.
-    Merge { session_id: SessionId },
+    Merge {
+        session_id: SessionId,
+    },
 }
 
 impl SessionMutation {
     /// Describes the routing target without exposing message or answer content.
     pub(super) fn target(&self) -> (&'static str, Option<&SessionId>) {
         match self {
+            Self::GraphProposal {
+                command: GraphProposalCommand::Generate(request),
+            } => ("generate_graph_proposal", Some(&request.session_id)),
+            Self::GraphProposal { .. } => ("act_on_graph_proposal", None),
             Self::StartExecutionGraph { request } => {
                 ("start_execution_graph", Some(&request.graph.session_id))
             }

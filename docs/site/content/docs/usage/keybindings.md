@@ -311,6 +311,11 @@ navigation. Other file types keep showing diffs; unavailable files show a notice
 Use `/mode` to select `Auto Edit`, `Auto Edit + Auto Address Comments`, or `Read Only`.
 `Shift+Tab` cycles those modes in that order.
 
+With `agentty --experimental-multi-agent`, `/graph <request>` generates a preview;
+`/graph query` restores its inspection commands. Approval requires the displayed ID and
+version. See
+[generated graph proposals](@/docs/usage/workflow.md#generated-graph-proposals).
+
 With `agentty --experimental-multi-agent`, `/plan` arms the composer for a **Plan then
 implement** request; `Enter` sends the task to the Planner and `Esc` disarms the
 composer. Afterwards, every message in that session goes to the orchestrator, and
