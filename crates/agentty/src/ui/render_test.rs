@@ -45,6 +45,12 @@ fn render_footer_bar_prefers_session_folder_and_branch_for_session_modes() {
     let session_id = "session-view-mode";
     let session = session_fixture(session_id, "/tmp/session-view-folder");
     let modes = [
+        AppMode::ExecutionGraph(Box::new(
+            crate::presentation::execution_graph::GraphView::new(ConfirmationViewMode {
+                session_id: session_id.into(),
+                scroll_offset: None,
+            }),
+        )),
         AppMode::View {
             session_id: session_id.into(),
             scroll_offset: None,

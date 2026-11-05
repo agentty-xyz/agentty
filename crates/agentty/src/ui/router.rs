@@ -232,6 +232,11 @@ impl<'a> FrameResources<'a> {
 
 /// Routes the content-area render path by active `AppMode`.
 pub(crate) fn route_frame(f: &mut Frame, area: Rect, context: RenderContext<'_>) {
+    if let AppMode::ExecutionGraph(view) = context.mode {
+        page::execution_graph::render(f, area, view);
+
+        return;
+    }
     let RenderContext {
         active_project_id,
         archived_session_count,
@@ -314,6 +319,11 @@ pub(crate) fn surface_kind_for_mode(mode: &AppMode) -> SurfaceKind {
 /// Resolves the base page painted for every mode before any overlay.
 fn surface_for_mode(mode: &AppMode) -> Surface<'_> {
     match mode {
+        AppMode::ExecutionGraph(view) => Surface::Session {
+            mode: SessionSurfaceMode::View,
+            scroll_offset: view.restore.scroll_offset,
+            session_id: &view.restore.session_id,
+        },
         AppMode::Confirmation {
             confirmation_intent:
                 ConfirmationIntent::ContinueSession
@@ -545,6 +555,7 @@ fn render_mode_overlay(
 ) {
     match mode {
         AppMode::List
+        | AppMode::ExecutionGraph(_)
         | AppMode::View { .. }
         | AppMode::Prompt { .. }
         | AppMode::Question { .. }

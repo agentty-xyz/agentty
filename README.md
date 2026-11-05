@@ -31,6 +31,9 @@ Codex, Claude, Gemini, and Antigravity sessions show compact tool status and com
 previews, with output previews for failed calls. Explicit Claude skill invocations
 appear alongside them, and answers retain saved usage counts.
 
+Press `w` in session view to inspect saved execution graphs, accept exact outputs,
+answer node questions, retry work, resume dispatch, or cancel a graph.
+
 The `/plan` workflow uses bundled Markdown agent definitions. Repository overrides live
 in `.agents/agents/<id>/agent.md`; see the
 [workflow guide](https://agentty.xyz/docs/usage/workflow/) for the supported format.

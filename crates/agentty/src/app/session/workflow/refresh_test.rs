@@ -527,6 +527,9 @@ fn mode_session_id_uses_view_help_context() {
 fn mode_session_id_uses_diff_and_session_overlay_contexts() {
     // Arrange
     let modes = [
+        AppMode::ExecutionGraph(Box::new(
+            crate::presentation::execution_graph::tests::graph_view(),
+        )),
         AppMode::DiffLoading {
             fallback_view_scroll_offset: None,
             request_id: 1,
@@ -578,6 +581,7 @@ fn mode_session_id_uses_diff_and_session_overlay_contexts() {
     assert_eq!(
         session_ids,
         [
+            Some("sess"),
             Some("loading-session"),
             Some("diff-session"),
             Some("launch-session"),

@@ -120,7 +120,9 @@ impl App {
             AppMode::ChatGptSignIn { dialog } => {
                 dialog.is_loading() || self.session_has_tick_driven_ui(dialog.session_id())
             }
-            AppMode::DiffLoading { .. } | AppMode::Diff { .. } => false,
+            AppMode::ExecutionGraph(_) | AppMode::DiffLoading { .. } | AppMode::Diff { .. } => {
+                false
+            }
             AppMode::Help { context, .. } => self.help_overlay_has_tick_driven_ui(context),
         }
     }

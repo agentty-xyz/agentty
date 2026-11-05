@@ -2,6 +2,8 @@
 
 /// Scrollable session git-diff page.
 pub mod diff;
+/// Generic saved execution graph inspector.
+pub(crate) mod execution_graph;
 pub mod fyi;
 /// Project selection and activity list page.
 pub mod project_list;

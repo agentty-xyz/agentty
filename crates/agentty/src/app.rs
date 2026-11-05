@@ -12,6 +12,7 @@ mod core;
 mod diff_prompt;
 mod error;
 mod execution_graph;
+pub(crate) mod graph_view;
 mod merge_queue;
 mod message_admission;
 mod project;
