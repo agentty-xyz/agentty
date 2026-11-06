@@ -7,6 +7,49 @@ this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
 
 ## [Unreleased]
 
+## [v0.18.2] - 2026-11-05
+
+### Added
+
+- `agentty`: add configurable built-in and project-defined agents, a `/fast` speed
+  toggle, live command progress, and an execution graph inspector with readable Markdown
+  outputs.
+- `ag-harness`: support OpenAI Responses and OpenAI-compatible local providers, ChatGPT
+  sign-in, and inexpensive models with price tiers.
+- workspace: add durable execution graphs, worker dispatch, lifecycle controls, and
+  session task storage.
+
+### Changed
+
+- `agentty`: replace workflow planning with durable task chains and run focused reviews
+  through execution graphs.
+- `agentty`: improve diff review details, render cached transcript rows directly, and
+  keep saved activity summaries counts-only.
+- `ag-harness`: improve context reduction, cross-turn history replay, reasoning
+  retention, read-result limits, and prompt-cache reuse.
+- workspace: export usage events and context benchmarks through OTLP, and update
+  dependencies, GitHub Actions, and the Rust toolchain.
+- release: bump workspace crate metadata and lockfile package versions to `0.18.2`.
+
+### Fixed
+
+- `agentty`: prevent workflow relaunch on repeated approvals, finish queued tasks before
+  pushing review fixes, and refresh forked session change counts.
+- `agentty`: hide failed calls from live activity and give the Planner earlier session
+  context.
+- workspace: upgrade `ctutils` to address a RustSec advisory.
+
+### Removed
+
+- `agentty`: remove `/personality` and session personality selection in favor of
+  configurable agent definitions.
+
+### Contributors
+
+- @andagaev
+- @dependabot
+- @minev-dev
+
 ## [v0.18.1] - 2026-10-20
 
 ### Added
