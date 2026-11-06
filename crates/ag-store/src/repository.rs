@@ -14,6 +14,12 @@ pub struct AppRepositories {
 }
 
 impl AppRepositories {
+    /// Returns proposal versions and atomic publication after explicit
+    /// approval.
+    pub fn graph_proposals(&self) -> &dyn crate::GraphProposalRepository {
+        self.repositories.graph_proposal.as_ref()
+    }
+
     /// Returns atomic static-graph admission and result settlement.
     pub fn graph_dispatch(&self) -> Arc<dyn ag_worker::GraphDispatchRepository> {
         self.repositories.graph_dispatch.clone()
@@ -83,7 +89,8 @@ impl AppRepositories {
             repositories: Arc::new(RepositorySet {
                 activity: Arc::new(activity::SqliteActivityRepository::new(pool.clone())),
                 graph: graph.clone(),
-                graph_dispatch: graph,
+                graph_dispatch: graph.clone(),
+                graph_proposal: graph,
                 operation: Arc::new(operation::SqliteOperationRepository::new(
                     pool.clone(),
                     Arc::clone(&timestamp_source),
@@ -118,6 +125,7 @@ struct RepositorySet {
     activity: Arc<dyn activity::ActivityRepository>,
     graph: Arc<dyn crate::GraphRepository>,
     graph_dispatch: Arc<dyn ag_worker::GraphDispatchRepository>,
+    graph_proposal: Arc<dyn crate::GraphProposalRepository>,
     operation: Arc<dyn operation::OperationRepository<crate::DbError>>,
     project: Arc<dyn project::ProjectRepository>,
     review: Arc<dyn review::ReviewRepository>,

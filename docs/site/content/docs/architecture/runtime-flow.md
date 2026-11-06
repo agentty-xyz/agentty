@@ -409,6 +409,17 @@ responses, schemas, diagnostics, prompt envelopes, and repair requests. Session 
 return `answer`, `questions`, and `review_comment_outcomes`; utilities and reviews use
 narrower request-specific schemas.
 
+The `GraphProposal` profile returns either clarification or a complete declarative graph
+under `outcome`. Both remain typed JSON in the normalized answer so proposal questions
+stay separate from ordinary chat questions. Schemas, parsing, bootstrap instructions,
+and refresh instructions share this profile. Agentty reserves generation durably before
+submitting a scoped read-only utility through the Run Worker. Resolution captures agent
+definitions, the session model, Env, and limits without executing nodes. Proposal
+queries and clarification stay outside ordinary chat. Exact-version approval atomically
+records its receipt and publishes the executable snapshot before the existing executor
+starts. Duplicate delivery and startup reads never generate or dispatch work. Spent
+generation slots and approval receipts survive restart.
+
 Policy is delivered separately from user input and evidence. Workspace paths, history,
 malformed output, and diagnostics are encoded as data; quoted instructions never
 suppress policy. Long-history replay uses bounded excerpts and a complete temporary

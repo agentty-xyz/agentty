@@ -65,6 +65,31 @@ When the **Implementer** finishes without questions, the session starts the same
 [focused review](@/docs/usage/workflow.md#focused-review) as after an ordinary turn.
 Planner results, questions, and failed or canceled work do not start a review.
 
+## Generated Graph Proposals
+
+With `--experimental-multi-agent`, enter `/graph <request>` in a prepared idle session
+to generate a graph preview. Generation reads the workspace through the utility worker;
+no proposed node executes yet. `/graph query` shows the latest proposal, including after
+a restart. Queries never regenerate or launch work. Use `/graph new <id> <request>` to
+choose a delivery ID that can be retried safely.
+
+Inspect the proposal ID and version, model, captured agent instructions, objectives,
+access, dependencies, output gates, and limits. Use the displayed commands:
+
+- `/graph answer <id> <version> ["first answer", "second answer"]` answers the complete
+  clarification set. Every node receives the saved questions and answers when it
+  executes.
+- `/graph regenerate <id> <version>` spends another generation slot using the captured
+  model, catalog, and limits.
+- `/graph approve <id> <version>` approves that exact preview and starts execution.
+- `/graph cancel <id> <version>` discards a pending proposal and stops generation.
+
+Approval does not accept outputs produced later. Use `w` for execution controls and
+exact output acceptance. Duplicate approval returns its receipt without launching again.
+Pending previews survive restart; an interrupted generation needs explicit regeneration.
+Graphs that executed before restart cannot recreate spent provider credits and therefore
+cannot resume through proposal approval. Attachment paths are currently unsupported.
+
 ## Execution Graph Inspector
 
 Press `w` in session view to inspect any saved execution graph, including branches and

@@ -12,6 +12,8 @@ mod core;
 mod diff_prompt;
 mod error;
 mod execution_graph;
+mod graph_proposal;
+mod graph_proposal_chat;
 pub(crate) mod graph_view;
 mod merge_queue;
 mod message_admission;

@@ -158,6 +158,9 @@ impl App {
         request: SessionMutation,
     ) -> Result<(), SessionError> {
         match request {
+            SessionMutation::GraphProposal { command } => {
+                self.admit_graph_proposal_command(command).await
+            }
             SessionMutation::CancelExecutionGraph { request } => {
                 self.cancel_api_execution_graph(request).await
             }

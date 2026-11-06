@@ -8,6 +8,7 @@
 
 mod envelope;
 mod fence;
+mod graph_proposal;
 mod model;
 mod parse;
 mod prompt;
@@ -20,6 +21,12 @@ pub use envelope::{
     prepend_protocol_refresh_reminder, workspace_instructions,
 };
 pub use fence::diff_fence;
+pub use graph_proposal::{
+    GraphProposal, GraphProposalContext, GraphProposalDependency, GraphProposalExecution,
+    GraphProposalGate, GraphProposalInput, GraphProposalNode, GraphProposalOutcome,
+    GraphProposalOutput, GraphProposalPostProcessing, GraphProposalResponse,
+    GraphProposalWorkspaceAccess,
+};
 pub use model::{
     AgentResponse, AgentResponseParseError, ProtocolRequestProfile, ReviewCommentOutcome,
     ReviewCommentResolution, ReviewMetadata, UtilityResponse,
