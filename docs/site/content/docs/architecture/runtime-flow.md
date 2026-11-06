@@ -295,6 +295,11 @@ current role immediately in the foreground. An image reply awaiting plan accepta
 revises the Planner directly, keeping visual guidance out of the text-only approval
 decision.
 
+For each continued graph attempt, the worker delivers its explicit reply, clarification,
+or retry as current task input, alongside the original objective and pinned results.
+Earlier replies and responses remain isolated historical replay; the current instruction
+is excluded from that replay so evidence policy cannot demote a new user request.
+
 The host's opt-in tool-content capture policy travels with the execution trace context,
 including independent roots, queued work, and linked operations. Scoped utility clients
 retain an explicit capture policy across background task spawns, even when captured

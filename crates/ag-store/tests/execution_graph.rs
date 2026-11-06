@@ -97,6 +97,7 @@ async fn explicit_graph_continuation_and_cancellation_survive_reopening_without_
     reopened.pool().close().await;
     drop(reopened);
     let reopened = Database::open(&path).await?;
+    assert_retry_input(&reopened, &retry.record.execution).await?;
     assert_eq!(
         reopened
             .graphs()
@@ -120,6 +121,26 @@ async fn explicit_graph_continuation_and_cancellation_survive_reopening_without_
         ag_worker::GraphAdmission::Blocked
     ));
     reopened.pool().close().await;
+
+    Ok(())
+}
+
+async fn assert_retry_input(
+    database: &Database,
+    execution: &GraphExecutionRef,
+) -> Result<(), Box<dyn Error>> {
+    let history = database
+        .graphs()
+        .execution_history(execution)
+        .await?
+        .ok_or("current continuation survives reopening")?;
+    assert_eq!(history.text, "");
+    assert!(
+        history
+            .continuation_prompt
+            .ok_or("current retry")?
+            .contains("Explicitly retry")
+    );
 
     Ok(())
 }

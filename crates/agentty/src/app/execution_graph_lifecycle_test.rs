@@ -167,7 +167,8 @@ async fn graph_lifecycle_api_routes_clarification_into_an_isolated_new_attempt()
         .expect("isolated history");
     assert!(transcript.contains("Need target"));
     assert!(transcript.contains("Which target?"));
-    assert!(transcript.contains("Local only"));
+    assert!(!transcript.contains("Local only"));
+    assert!(second.prompt.text.contains("Local only"));
     assert_eq!(second.prompt.attachments, first.prompt.attachments);
     assert_eq!(
         app.services

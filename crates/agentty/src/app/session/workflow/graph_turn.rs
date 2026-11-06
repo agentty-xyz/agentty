@@ -397,13 +397,13 @@ async fn prepare(
     if let Some(history) = &history {
         reply_attachments.extend_from_slice(&history.attachments);
     }
-    let mut prompt = graph_prompt(request, &reply_attachments);
-    if history.is_some() {
-        prompt.text.push_str(
-            "\n\nContinue this node using the explicit retry, clarification, or reply in its \
-             isolated history.",
-        );
-    }
+    let prompt = graph_prompt(
+        request,
+        &reply_attachments,
+        history
+            .as_ref()
+            .and_then(|history| history.continuation_prompt.as_deref()),
+    );
     Ok(TurnRequest {
         agent_profile: AgentDefinitionPrompt::active(node.definition.prompt.clone(), true),
         continuation: history.map_or_else(TurnContinuation::fresh, |history| {
@@ -441,6 +441,7 @@ fn intersect_permissions(captured: PermissionMode, current: PermissionMode) -> P
 fn graph_prompt(
     request: &GraphRunRequest,
     reply_attachments: &[TurnPromptAttachment],
+    continuation_prompt: Option<&str>,
 ) -> TurnPrompt {
     let node = &request.dispatch.node;
     let mut prompt = TurnPrompt::from_agent_data(node.request.agent_text());
@@ -455,6 +456,14 @@ fn graph_prompt(
         prompt.text,
         "\n\nGraph objective and exact bound results (JSON data):\n{input}"
     );
+    if let Some(continuation) = continuation_prompt {
+        let _ = write!(
+            prompt.text,
+            "\n\nCurrent instruction for this attempt:\n{continuation}\n\nFollow this \
+             continuation with the original task and bound results as context. Prior responses \
+             are historical evidence; check the current workspace when addressing requested fixes."
+        );
+    }
     for (index, attachment) in node
         .request
         .attachments

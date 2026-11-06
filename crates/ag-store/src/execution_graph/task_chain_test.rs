@@ -332,7 +332,14 @@ async fn replies_revise_unaccepted_plans_and_carry_attachments() {
     assert!(stale.is_err());
     assert_eq!(attempt_id(&revised), revision.action_id);
     assert!(history.text.contains("Plan version 1"));
-    assert!(history.text.contains("Include search tests"));
+    assert!(!history.text.contains("Include search tests"));
+    assert!(
+        history
+            .continuation_prompt
+            .as_deref()
+            .expect("current reply")
+            .contains("Include search tests")
+    );
     assert_eq!(history.attachments.len(), 1);
     assert_eq!(chain(&database).await.phase, TaskChainPhase::Planning);
 }
