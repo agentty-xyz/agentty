@@ -7,6 +7,23 @@ this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
 
 ## [Unreleased]
 
+## [v0.18.3] - 2026-11-05
+
+### Changed
+
+- release: bump workspace crate metadata and lockfile package versions to `0.18.3`.
+
+### Fixed
+
+- `agentty`: deliver `/plan` follow-up replies, clarifications, and retries as current
+  instructions instead of historical replay.
+- ci: use `macos-latest` for native sandbox checks and macOS release builds to avoid
+  unsupported runner configurations.
+
+### Contributors
+
+- @minev-dev
+
 ## [v0.18.2] - 2026-11-05
 
 ### Added
