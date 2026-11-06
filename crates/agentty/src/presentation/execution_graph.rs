@@ -2,6 +2,7 @@
 
 use std::collections::{BTreeMap, BTreeSet};
 
+use ag_protocol::{ProtocolRequestProfile, parse_protocol_response_strict};
 use ag_session::{
     ExecutionGraph, ExecutionGraphProgress, ExecutionGraphStatus, GraphContext, GraphNodeProgress,
     GraphNodeStatus, GraphResult, GraphResultState, GraphWorkspaceAccess,
@@ -22,8 +23,8 @@ pub struct GraphView {
     pub(crate) notice: String,
     /// Vertical offset in the editor's wrapped diagnostic.
     pub(crate) notice_scroll: u16,
-    /// Bodies for the selected node's exact latest output references.
-    pub(crate) outputs: Vec<(GraphResult, String)>,
+    /// Exact results and display text derived once per snapshot load.
+    pub(crate) outputs: Vec<GraphViewOutput>,
     /// Latest authoritative projection for the selected graph.
     pub(crate) progress: Option<ExecutionGraphProgress>,
     /// Original live limits, or empty after restart; refresh replaces this
@@ -199,7 +200,7 @@ impl GraphView {
             && self
                 .outputs
                 .get(self.selected_output)
-                .is_some_and(|(result, _)| result.state == GraphResultState::Validated)
+                .is_some_and(|output| output.result.state == GraphResultState::Validated)
     }
 
     /// Budget names are host-captured. Resume cannot introduce additional
@@ -245,6 +246,43 @@ impl GraphView {
         }
 
         Ok(budgets)
+    }
+}
+
+/// Display conversion never changes the stored body or acceptance reference.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub(crate) struct GraphViewOutput {
+    pub(crate) body: String,
+    pub(crate) result: GraphResult,
+    display: Option<String>,
+}
+
+impl GraphViewOutput {
+    pub(crate) fn new(result: GraphResult, body: String) -> Self {
+        let schema = result.reference.schema;
+        let display = if matches!(
+            schema,
+            ProtocolRequestProfile::SessionTurn | ProtocolRequestProfile::UtilityPrompt
+        ) {
+            parse_protocol_response_strict(&body, schema)
+                .ok()
+                .map(|response| response.to_display_text())
+        } else {
+            serde_json::from_str::<serde_json::Value>(&body)
+                .and_then(|value| serde_json::to_string_pretty(&value))
+                .ok()
+                .map(|json| format!("```json\n{json}\n```"))
+        };
+
+        Self {
+            body,
+            result,
+            display,
+        }
+    }
+
+    pub(crate) fn display(&self) -> &str {
+        self.display.as_deref().unwrap_or(&self.body)
     }
 }
 

@@ -233,7 +233,12 @@ impl<'a> FrameResources<'a> {
 /// Routes the content-area render path by active `AppMode`.
 pub(crate) fn route_frame(f: &mut Frame, area: Rect, context: RenderContext<'_>) {
     if let AppMode::ExecutionGraph(view) = context.mode {
-        page::execution_graph::render(f, area, view);
+        page::execution_graph::render(
+            f,
+            area,
+            view,
+            context.render_cache_store.markdown_render_cache(),
+        );
 
         return;
     }

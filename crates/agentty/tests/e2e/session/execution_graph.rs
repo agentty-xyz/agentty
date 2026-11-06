@@ -48,7 +48,11 @@ async fn seed_graph(env: &BuilderEnv) -> E2eResult {
         },
         id: id.into(),
         inputs: Vec::new(),
-        objective: format!("Inspect {id}"),
+        objective: if id == "design" {
+            format!("Inspect {id}: {}METADATA_SUFFIX", "nested/".repeat(38))
+        } else {
+            format!("Inspect {id}")
+        },
         outputs: vec![GraphOutput {
             name: "response".into(),
             schema: ProtocolRequestProfile::SessionTurn,
@@ -110,11 +114,33 @@ async fn seed_graph(env: &BuilderEnv) -> E2eResult {
                 .operations()
                 .mark_session_operation_done(operation_id)
                 .await?;
-            database.graph_dispatch().finish(&dispatch, if *id == "design" { r#"{"answer":"Exact design output","questions":[],"review_comment_outcomes":[]}"# } else { r#"{"answer":"","questions":[{"text":"Which target?","options":["Local","Remote"]}],"review_comment_outcomes":[]}"# }).await?;
+            let body = node_output_body(id);
+            database.graph_dispatch().finish(&dispatch, &body).await?;
         }
     }
 
     Ok(())
+}
+
+fn node_output_body(id: &str) -> String {
+    let body = if id == "design" {
+        serde_json::json!({
+            "answer": format!(
+                "## Exact design output\n\n**Readable plan**\n\n- First step\n- Second step\n\n```rust\nlet ready = true;\n```\n\n`{}OUTPUT_SUFFIX`",
+                "nested/".repeat(200)
+            ),
+            "questions": [],
+            "review_comment_outcomes": []
+        })
+    } else {
+        serde_json::json!({
+            "answer": "",
+            "questions": [{ "text": "Which target?", "options": ["Local", "Remote"] }],
+            "review_comment_outcomes": []
+        })
+    };
+
+    body.to_string()
 }
 
 /// Waits for the editor to disappear as well as the controls to reappear.
@@ -135,6 +161,19 @@ fn wait_for_graph_controls() -> Journey {
     ))
 }
 
+fn inspect_long_output() -> Journey {
+    Journey::new("inspect_long_output")
+        .step(Step::eventually(
+            Duration::from_secs(5),
+            Duration::from_millis(50),
+            |frame| assertion::match_not_visible(frame, "OUTPUT_SUFFIX"),
+        ))
+        .step(Step::write_text("JJ"))
+        .step(Step::wait_for_text("OUTPUT_SUFFIX", 5000))
+        .step(Step::write_text("KK"))
+        .step(Step::wait_for_text("Exact design output", 5000))
+}
+
 #[tokio::test]
 async fn saved_execution_graph_controls() -> E2eResult {
     // Arrange
@@ -152,7 +191,10 @@ async fn saved_execution_graph_controls() -> E2eResult {
                     .wait_for_text("Enter: reply", 5000)
                     .press_key("w")
                     .wait_for_text("saved-branches", 5000)
+                    .wait_for_text("METADATA_SUFFIX", 5000)
                     .wait_for_text("Exact design output", 5000)
+                    .wait_for_text("let ready = true;", 5000)
+                    .compose(&inspect_long_output())
                     .press_key("a")
                     .wait_for_text("Accepted", 5000)
                     .capture_labeled("accepted", "Exact output accepted")
@@ -205,6 +247,21 @@ async fn saved_execution_graph_controls() -> E2eResult {
                         "response v1 (Accepted)",
                         &Region::full(accepted.cols(), accepted.rows()),
                     );
+                    for expected in [
+                        "Exact design output",
+                        "Readable plan",
+                        "First step",
+                        "let ready = true;",
+                    ] {
+                        assertion::assert_text_in_region(
+                            &accepted,
+                            expected,
+                            &Region::full(accepted.cols(), accepted.rows()),
+                        );
+                    }
+                    for wrapper in [r#"{"answer""#, r"\n", "**Readable plan**", "```rust"] {
+                        assertion::assert_not_visible(&accepted, wrapper);
+                    }
                     let join = common::frame_from_capture(&report.captures[1]);
                     assertion::assert_text_in_region(
                         &join,

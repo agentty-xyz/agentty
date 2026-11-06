@@ -68,9 +68,11 @@ Planner results, questions, and failed or canceled work do not start a review.
 Press `w` in session view to inspect any saved execution graph, including branches and
 joins. Use `[` / `]` to switch graphs and `j` / `k` to select nodes. The inspector shows
 captured agents, objectives, prerequisites, execution state, blocked reasons, questions,
-and exact output versions. Press `r` to refresh the snapshot and `J` / `K` to scroll.
-Background session questions keep the inspector and its draft open; return to session
-chat to answer them.
+and exact output versions. Node answers render as Markdown, including lists and code
+blocks, with emoji kept intact when code wraps. Long paths, URLs, and identifiers in
+metadata and answers wrap so their full text remains reachable. Press `r` to refresh the
+snapshot and `J` / `K` to scroll the rendered lines. Background session questions keep
+the inspector and its draft open; return to session chat to answer them.
 
 Available controls appear below the graph. Accept the displayed output with `a`, answer
 the selected node's questions with `n`, or send revision guidance with `e`. These

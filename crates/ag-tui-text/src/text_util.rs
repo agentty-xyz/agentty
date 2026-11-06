@@ -50,6 +50,56 @@ pub fn wrap_lines(text: &str, width: usize) -> Vec<Line<'_>> {
     wrapped
 }
 
+/// Word-wraps plain text, splitting oversized words at terminal-column
+/// boundaries.
+///
+/// Graphemes remain intact even when one is wider than the pane. A zero width
+/// leaves oversized words unsplit, matching [`wrap_lines`].
+pub fn wrap_lines_breaking_long_words(text: &str, width: usize) -> Vec<Line<'_>> {
+    wrap_lines(text, width)
+        .into_iter()
+        .flat_map(|line| split_line_at_width(line, width))
+        .collect()
+}
+
+/// Splits an oversized rendered line at terminal-column boundaries while
+/// preserving its styles, alignment, whitespace, and grapheme clusters.
+///
+/// Lines that fit and zero-width panes retain the original line. A grapheme
+/// wider than the pane occupies its own line without being split.
+pub fn split_line_at_width(line: Line<'_>, width: usize) -> Vec<Line<'_>> {
+    if width == 0 || line.width() <= width {
+        return vec![line];
+    }
+
+    let mut wrapped = Vec::new();
+    let mut segment = Line {
+        alignment: line.alignment,
+        style: line.style,
+        ..Line::default()
+    };
+    let mut segment_width = 0;
+    for grapheme in line.styled_graphemes(Style::default()) {
+        let grapheme_width = usize::from(grapheme.symbol.cell_width());
+        if segment_width > 0 && segment_width + grapheme_width > width {
+            wrapped.push(Line {
+                spans: std::mem::take(&mut segment.spans),
+                alignment: segment.alignment,
+                style: segment.style,
+            });
+            segment_width = 0;
+        }
+
+        for character in grapheme.symbol.chars() {
+            push_styled_character(&mut segment.spans, grapheme.style, character);
+        }
+        segment_width += grapheme_width;
+    }
+    wrapped.push(segment);
+
+    wrapped
+}
+
 /// Truncate text to `max_width` and append `...` when it overflows.
 pub fn truncate_with_ellipsis(text: &str, max_width: usize) -> String {
     if max_width == 0 {

@@ -83,7 +83,7 @@ async fn inspector_key_actions_show_admission_and_refresh_failures() {
         view.progress.as_mut().expect("progress").nodes.truncate(1);
         let graph = view.graphs[0].clone();
         let progress = view.progress.clone();
-        let result = view.outputs[0].0.clone();
+        let result = view.outputs[0].result.clone();
         let mut repository = MockGraphRepository::new();
         repository
             .expect_progress()
@@ -263,7 +263,7 @@ async fn failed_graph_navigation_restores_the_inspected_selection() {
 
     // Assert
     assert!(
-        matches!(&app.mode, AppMode::ExecutionGraph(view) if view.selected_graph == 0 && view.scroll == 2 && view.outputs[0].1 == "Exact output body" && view.notice.contains("Read failed"))
+        matches!(&app.mode, AppMode::ExecutionGraph(view) if view.selected_graph == 0 && view.scroll == 2 && view.outputs[0].body == "Exact output body" && view.notice.contains("Read failed"))
     );
 }
 
@@ -274,7 +274,7 @@ async fn inspector_loads_exact_result_body_and_dispatches_shared_acceptance() {
     let mut view = graph_view();
     let graph = view.graphs[0].clone();
     let progress = view.progress.clone();
-    let result = view.outputs[0].0.clone();
+    let result = view.outputs[0].result.clone();
     let expected = result.reference.clone();
     let mut repository = MockGraphRepository::new();
     repository
@@ -290,7 +290,7 @@ async fn inspector_loads_exact_result_body_and_dispatches_shared_acceptance() {
         .return_once(move |_| {
             Ok(Some(StoredGraphResult {
                 result,
-                body: "Persisted output".into(),
+                body: r#"{"answer":"**Persisted**\n\noutput"}"#.into(),
                 acceptance: None,
                 validation: None,
             }))
@@ -314,7 +314,11 @@ async fn inspector_loads_exact_result_body_and_dispatches_shared_acceptance() {
         .await;
 
     // Assert
-    assert_eq!(view.outputs[0].1, "Persisted output");
+    assert_eq!(
+        view.outputs[0].body,
+        r#"{"answer":"**Persisted**\n\noutput"}"#
+    );
+    assert_eq!(view.outputs[0].display(), "**Persisted**\n\noutput");
     assert_eq!(accepted, Ok(()));
 }
 

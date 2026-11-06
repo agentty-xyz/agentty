@@ -10,7 +10,7 @@ use ag_session::{
     GraphResultState, GraphWorkspaceAccess,
 };
 
-use super::{GraphEditKind, GraphEditor, GraphView};
+use super::{GraphEditKind, GraphEditor, GraphView, GraphViewOutput};
 use crate::domain::input::InputState;
 use crate::presentation::app_mode::ConfirmationViewMode;
 
@@ -100,9 +100,95 @@ pub(crate) fn graph_view() -> GraphView {
     };
     view.graphs = vec![graph];
     view.progress = Some(progress);
-    view.outputs = vec![(result, "Exact output body".into())];
+    view.outputs = vec![GraphViewOutput::new(result, "Exact output body".into())];
 
     view
+}
+
+#[test]
+fn output_display_decodes_by_result_schema_without_changing_the_original() {
+    // Arrange
+    let result = graph_view().outputs.remove(0).result;
+    let metadata =
+        r#"{"title":"Title","description":"Details","is_title_change_significant":false}"#;
+    let review = r#"{"project_impact":["Readable impact"],"suggestions":[]}"#;
+    let cases = [
+        (
+            ProtocolRequestProfile::SessionTurn,
+            r###"{"answer":"## Plan\n\n**Ready**\n\n```rust\nlet ready = true;\n```"}"###,
+            "## Plan\n\n**Ready**\n\n```rust\nlet ready = true;\n```".into(),
+        ),
+        (
+            ProtocolRequestProfile::SessionTurn,
+            r#"{"answer":"Plan","questions":[{"text":"Which target?","options":["Local"]}]}"#,
+            "Plan\n\nWhich target?".into(),
+        ),
+        (
+            ProtocolRequestProfile::SessionTurn,
+            r#"{"questions":[{"text":"Question only?"}]}"#,
+            "Question only?".into(),
+        ),
+        (
+            ProtocolRequestProfile::UtilityPrompt,
+            r#"{"answer":"First\nSecond"}"#,
+            "First\nSecond".into(),
+        ),
+        (
+            ProtocolRequestProfile::SessionTurn,
+            "Legacy raw output",
+            "Legacy raw output".into(),
+        ),
+        (
+            ProtocolRequestProfile::SessionTurn,
+            "{broken",
+            "{broken".into(),
+        ),
+        (ProtocolRequestProfile::UtilityPrompt, "", String::new()),
+        (
+            ProtocolRequestProfile::ReviewMetadata,
+            "Unparseable metadata",
+            "Unparseable metadata".into(),
+        ),
+    ];
+
+    for (schema, body, expected) in cases {
+        let mut result = result.clone();
+        result.reference.schema = schema;
+
+        // Act
+        let output = GraphViewOutput::new(result.clone(), body.into());
+
+        // Assert
+        assert_eq!(output.display(), expected, "{schema:?}: {body}");
+        assert_eq!(output.body, body);
+        assert_eq!(output.result, result);
+    }
+
+    for (schema, body) in [
+        (ProtocolRequestProfile::ReviewMetadata, metadata),
+        (ProtocolRequestProfile::FocusedReview, review),
+    ] {
+        // Arrange
+        let mut result = result.clone();
+        result.reference.schema = schema;
+
+        // Act
+        let output = GraphViewOutput::new(result.clone(), body.into());
+
+        // Assert
+        let json = output
+            .display()
+            .strip_prefix("```json\n")
+            .and_then(|text| text.strip_suffix("\n```"))
+            .expect("structured content is fenced as JSON");
+        assert!(json.contains("\n  \""), "structured content is indented");
+        assert_eq!(
+            serde_json::from_str::<serde_json::Value>(json).expect("display JSON"),
+            serde_json::from_str::<serde_json::Value>(body).expect("original JSON"),
+        );
+        assert_eq!(output.body, body);
+        assert_eq!(output.result, result);
+    }
 }
 
 #[test]
@@ -218,7 +304,7 @@ fn change_view(changed: &mut GraphView, scenario: &str) {
             changed.progress.as_mut().expect("progress").nodes[0].status =
                 GraphNodeStatus::Cancelled;
         }
-        "produced" => changed.outputs[0].0.state = GraphResultState::Produced,
+        "produced" => changed.outputs[0].result.state = GraphResultState::Produced,
         _ => changed.outputs.clear(),
     }
 }
