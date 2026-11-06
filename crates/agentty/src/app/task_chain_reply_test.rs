@@ -195,8 +195,13 @@ async fn clear_approval_accepts_the_plan_once_and_later_replies_reach_the_implem
     assert_eq!(continued, Ok(TaskChainReplyOutcome::Continued));
     assert_eq!(finished.phase, TaskChainPhase::Succeeded);
     assert_eq!(finished.current_role, TaskAgentRole::Implementer);
-    assert!(follow_up.prompt().contains("Also update the docs"));
-    assert!(follow_up.prompt().contains("Implemented"));
+    let request = follow_up.request();
+    assert!(request.prompt.text.contains("Also update the docs"));
+    assert!(request.prompt.text.contains("Exact plan"));
+    let replay = request.continuation.replay_transcript();
+    let history = replay.expect("prior implementation");
+    assert!(history.contains("Implemented"));
+    assert!(!history.contains("Also update the docs"));
 }
 
 #[tokio::test]

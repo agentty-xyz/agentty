@@ -377,10 +377,8 @@ impl SqliteGraphRepository {
         .await?;
         let mut history = String::new();
         let mut attachments = Vec::new();
+        let mut continuation_prompt = None;
         for (id, prompt, request, body, metadata) in rows {
-            if let Some(prompt) = prompt {
-                let _ = writeln!(history, "User: {prompt}");
-            }
             if let Some(request) = request {
                 let request: ContinueGraphNodeRequest = serde_json::from_str(&request)
                     .map_err(|error| Self::invalid(error.to_string()))?;
@@ -393,7 +391,11 @@ impl SqliteGraphRepository {
                 }
             }
             if id == current_id {
+                continuation_prompt = prompt;
                 break;
+            }
+            if let Some(prompt) = prompt {
+                let _ = writeln!(history, "User: {prompt}");
             }
             if let Some(body) = body {
                 let _ = writeln!(history, "Assistant (protocol data): {body}");
@@ -409,9 +411,12 @@ impl SqliteGraphRepository {
         }
         transaction.commit().await?;
 
-        Ok((!history.is_empty()).then_some(GraphNodeHistory {
-            attachments,
-            text: history,
-        }))
+        Ok(
+            (!history.is_empty() || continuation_prompt.is_some()).then_some(GraphNodeHistory {
+                attachments,
+                continuation_prompt,
+                text: history,
+            }),
+        )
     }
 }

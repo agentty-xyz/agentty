@@ -45,7 +45,9 @@ says what to send next.
   as a revision. Replies with images also revise the plan; approve it with a separate
   text reply after the Planner has considered the images.
 - **After implementation**: follow-up messages, `/apply`, and automatic review
-  remediation go to the Implementer. The Planner is not used again.
+  remediation go to the Implementer as its current instruction. Describe the fix in the
+  regular composer; the accepted plan and earlier implementation remain context. The
+  Planner is not used again.
 
 While a role is working or a reply is being decided, a new message is rejected rather
 than queued; Agentty keeps the draft in the composer and explains why. Press `Ctrl+C` in

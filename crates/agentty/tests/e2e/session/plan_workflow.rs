@@ -106,7 +106,8 @@ case "$prompt" in
       while [ -d "$stub_root" ]; do sleep 0.02; done
       exit 0
     fi
-    case "$prompt" in
+    current_instruction=$(printf '%s\n' "$prompt" | sed -n '/^Current instruction for this attempt:/,$p')
+    case "$current_instruction" in
       *'Also update the docs'*)
         printf 'Indexed search documentation\n' > search-guide.txt
         answer='Docs updated for indexed search.'
@@ -767,7 +768,11 @@ fn complete_reviewed_implementation(scenario: Scenario) -> Scenario {
     let scenario = send_chat_message(scenario, "Also update the docs")
         .wait_for_text("Docs updated for indexed search.", 20000)
         .wait_for_text(CLEAN_REVIEW_TEXT, 30000)
-        .wait_for_stable_frame(300, 5000);
+        .wait_for_stable_frame(300, 5000)
+        .press_key("d")
+        .wait_for_text("+Indexed search documentation", 10000)
+        .press_key("q")
+        .wait_for_text("Docs updated for indexed search.", 10000);
 
     open_composer(scenario)
         .wait_for_text("Ask the Implementer for more changes", 5000)
