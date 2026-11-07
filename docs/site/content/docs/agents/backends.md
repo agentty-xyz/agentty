@@ -237,9 +237,10 @@ never list them.
 ## Subagent Limits
 
 Agentty requests a limit of two concurrent subagents per Codex or Claude session,
-excluding the parent agent. It applies the limit when starting the provider process,
-including when resuming a saved session. Restart Agentty after updating to apply the
-limit to existing sessions.
+excluding the parent agent. Change it with the global `Max Subagents` setting (`1`, `2`,
+`4`, or `8`). Agentty reads the setting at startup and applies the limit when starting
+the provider process, including when resuming a saved session, so restart Agentty after
+changing it.
 
 Codex limits concurrently open child-agent threads. Claude limits ordinary subagent
 spawning, but provider exceptions such as resumed subagents can exceed the limit.

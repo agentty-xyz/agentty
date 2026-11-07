@@ -15,7 +15,7 @@ use wiremock::{Mock, MockServer, ResponseTemplate};
 
 use super::fixture::E2eResult;
 use crate::common;
-use crate::common::FeatureTest;
+use crate::common::{FeatureTest, SettingsRow};
 
 /// Answer the scripted provider returns after the write tool succeeds.
 const HARNESS_ANSWER: &str = "Created notes.txt through the harness.";
@@ -732,10 +732,11 @@ async fn cheap_qwen_provider() -> MockServer {
 
 /// Opens the Default Fast Model selector on the Settings tab.
 fn open_fast_model_selector() -> Journey {
-    Journey::new("open_fast_model_selector")
+    let mut journey = common::move_to_settings_row(SettingsRow::DefaultFastModel);
+    journey.name = "open_fast_model_selector".to_string();
+
+    journey
         .with_description("Open the Default Fast Model selector in Settings")
-        .step(Step::press_key("j"))
-        .step(Step::press_key("j"))
         .step(Step::wait_for_stable_frame(200, 3000))
         .step(Step::press_key("Enter"))
         .step(Step::wait_for_text("Select model", 3000))

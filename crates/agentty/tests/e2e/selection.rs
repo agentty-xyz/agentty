@@ -8,7 +8,7 @@ use testty::proof::report::ProofReport;
 use testty::region::Region;
 use testty::scenario::Scenario;
 
-use crate::common::{BuilderEnv, FeatureTest, SessionSeed};
+use crate::common::{BuilderEnv, FeatureTest, SessionSeed, SettingsRow};
 use crate::{common, test_support};
 
 type E2eResult = Result<(), Box<dyn std::error::Error>>;
@@ -95,8 +95,10 @@ fn selection_scenario(scenario: Scenario, theme_navigation: &str) -> Scenario {
         .capture_labeled("next_theme", "Highlight moved to another theme option")
         .press_key("Esc")
         .wait_for_stable_frame(200, 3000);
-    let scenario = (0..5).fold(scenario, |scenario, _| scenario.press_key("j"));
     scenario
+        .compose(&common::move_to_settings_row(
+            SettingsRow::LaunchConfigurations,
+        ))
         .press_key("Enter")
         .wait_for_text("J/K: reorder", 5000)
         .capture_labeled("launch_editor", "Selected launch command")

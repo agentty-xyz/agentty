@@ -642,11 +642,13 @@ refinement leaves the provisional title in place.
 The highlighted row is the selected setting. Move the selection with `j` / `k`, then
 press `Enter` to open or edit the setting.
 
-<a id="usage-settings-scope"></a> **Global settings** control the theme. Project
-settings include model, reasoning, speed and style defaults, commit trailers, and launch
-configurations. Defaults affect new sessions; use slash commands to change an existing
-one. See [Backend Defaults](@/docs/agents/backends.md#selecting-a-backend) for Smart,
-Fast, and Review roles.
+<a id="usage-settings-scope"></a> **Global settings** control the theme and the
+[subagent limit](@/docs/agents/backends.md#subagent-limits), which applies after
+restart. Project settings include model, reasoning, speed and style defaults, commit
+trailers, and launch configurations. Defaults affect new sessions; use slash commands to
+change an existing one. See
+[Backend Defaults](@/docs/agents/backends.md#selecting-a-backend) for Smart, Fast, and
+Review roles.
 
 `Launch Configurations` is a command list: add with `a`, edit with `e` or `Enter`,
 delete with `d`, and reorder with `J` / `K`. `Enter` saves an edit; `Esc` cancels it.

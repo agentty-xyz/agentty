@@ -553,7 +553,7 @@ async fn test_process_paste_event_updates_launch_configuration_input() {
     // Arrange
     let mut app = crate::test_support::new_test_app_without_retained_base_dir().await;
     app.tabs.set(crate::app::Tab::Settings);
-    for _ in 0..5 {
+    for _ in 0..6 {
         let view = app.settings.view();
         let _ = app.settings_presentation.apply(&view, SettingsAction::Next);
     }
