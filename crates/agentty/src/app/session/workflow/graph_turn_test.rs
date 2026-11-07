@@ -25,9 +25,11 @@ fn graph_images_disambiguate_reused_reply_markers_without_rewriting_json_data() 
         local_image_path: "revision.png".into(),
         placeholder: "[Image #1]".into(),
     }];
+    let continuation = "Use [Image #1], keeping literal [Task image #2] in the example.";
 
     // Act
-    let prompt = graph_prompt(&request, &replies);
+    let prompt = graph_prompt(&request, &replies, Some(continuation));
+    let initial = graph_prompt(&request, &[], None);
     let paths = prompt
         .content_parts()
         .into_iter()
@@ -40,10 +42,39 @@ fn graph_images_disambiguate_reused_reply_markers_without_rewriting_json_data() 
         .collect::<Vec<_>>();
 
     // Assert
+    assert!(initial.text.contains(&input));
+    assert!(
+        !initial
+            .text
+            .contains("Current instruction for this attempt:")
+    );
     assert!(prompt.text.contains(&input));
+    assert!(prompt.text.contains(continuation));
     assert_eq!(paths, ["initial.png", "revision.png"]);
     assert_eq!(prompt.attachments[0].placeholder, "[#Task image #1]");
-    assert_eq!(prompt.attachments[1].placeholder, "[Task image #2]");
+    assert_eq!(prompt.attachments[1].placeholder, "[#Task image #2]");
+}
+
+#[test]
+fn graph_continuations_are_current_instructions_with_literal_user_guidance() {
+    // Arrange
+    let request = run_request();
+    let continuation = "Explicit user reply (JSON data):\n{\"message\":\"Fix point 1, then check \
+                        \\\"search\\\".\\nKeep the tests.\"}";
+
+    // Act
+    let prompt = graph_prompt(&request, &[], Some(continuation));
+
+    // Assert
+    assert!(prompt.text.contains(&format!(
+        "Current instruction for this attempt:\n{continuation}"
+    )));
+    assert!(prompt.text.contains(&request.dispatch.node.objective));
+    assert!(
+        prompt
+            .text
+            .contains("Prior responses are historical evidence")
+    );
 }
 
 #[test]

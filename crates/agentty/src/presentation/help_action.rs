@@ -383,6 +383,11 @@ pub(crate) fn settings_footer_actions() -> Vec<HelpAction> {
 pub(crate) fn view_actions(state: ViewHelpState) -> Vec<HelpAction> {
     let action_set = ViewActionSet::from_state(state);
     let mut actions = vec![HelpAction::new("back", "q", "Back to list")];
+    actions.push(HelpAction::new(
+        "graphs",
+        "w",
+        "Inspect session execution graphs",
+    ));
 
     append_view_prompt_actions(
         &mut actions,

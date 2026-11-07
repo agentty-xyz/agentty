@@ -36,11 +36,14 @@ pub struct StoredGraphResult {
     pub validation: Option<StoredGraphEvidence>,
 }
 
-/// One node's replayed conversation before its current execution.
+/// One node's prior conversation and current continuation, kept separate.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct GraphNodeHistory {
     /// Images from free-form replies up to the current execution, in order.
     pub attachments: Vec<TurnPromptAttachment>,
+    /// Explicit retry, clarification, or reply addressed to this execution.
+    /// Deliver as current task input, not as historical replay.
+    pub continuation_prompt: Option<String>,
     /// Replayed explicit replies and settled responses, as text data.
     pub text: String,
 }

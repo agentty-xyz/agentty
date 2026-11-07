@@ -10,7 +10,7 @@ checksum = "320119579fcad9c21884f5c4861d16174d0e06250625266f50fe6898340abefa"
 
 [[package]]
 name = "ag-agent"
-version = "0.18.1"
+version = "0.18.3"
 dependencies = [
  "ag-contracts",
  "ag-harness",
@@ -40,7 +40,7 @@ dependencies = [
 
 [[package]]
 name = "ag-clipboard"
-version = "0.18.1"
+version = "0.18.3"
 dependencies = [
  "image",
  "mockall",
@@ -55,7 +55,7 @@ dependencies = [
 
 [[package]]
 name = "ag-contracts"
-version = "0.18.1"
+version = "0.18.3"
 dependencies = [
  "ag-protocol",
  "async-trait",
@@ -67,7 +67,7 @@ dependencies = [
 
 [[package]]
 name = "ag-forge"
-version = "0.18.1"
+version = "0.18.3"
 dependencies = [
  "mockall",
  "serde",
@@ -78,7 +78,7 @@ dependencies = [
 
 [[package]]
 name = "ag-git"
-version = "0.18.1"
+version = "0.18.3"
 dependencies = [
  "ag-telemetry",
  "mockall",
@@ -90,7 +90,7 @@ dependencies = [
 
 [[package]]
 name = "ag-harness"
-version = "0.18.1"
+version = "0.18.3"
 dependencies = [
  "ag-router",
  "ag-telemetry",
@@ -122,7 +122,7 @@ dependencies = [
 
 [[package]]
 name = "ag-harness-cli"
-version = "0.18.1"
+version = "0.18.3"
 dependencies = [
  "ag-harness",
  "ag-telemetry",
@@ -144,7 +144,7 @@ dependencies = [
 
 [[package]]
 name = "ag-protocol"
-version = "0.18.1"
+version = "0.18.3"
 dependencies = [
  "askama",
  "schemars 1.2.3",
@@ -154,7 +154,7 @@ dependencies = [
 
 [[package]]
 name = "ag-router"
-version = "0.18.1"
+version = "0.18.3"
 dependencies = [
  "async-trait",
  "base64 0.23.1",
@@ -174,7 +174,7 @@ dependencies = [
 
 [[package]]
 name = "ag-runtime"
-version = "0.18.1"
+version = "0.18.3"
 dependencies = [
  "ag-agent",
  "ag-contracts",
@@ -186,14 +186,14 @@ dependencies = [
 
 [[package]]
 name = "ag-scheduler"
-version = "0.18.1"
+version = "0.18.3"
 dependencies = [
  "tokio",
 ]
 
 [[package]]
 name = "ag-session"
-version = "0.18.1"
+version = "0.18.3"
 dependencies = [
  "ag-contracts",
  "ag-forge",
@@ -209,7 +209,7 @@ dependencies = [
 
 [[package]]
 name = "ag-store"
-version = "0.18.1"
+version = "0.18.3"
 dependencies = [
  "ag-contracts",
  "ag-protocol",
@@ -229,7 +229,7 @@ dependencies = [
 
 [[package]]
 name = "ag-telemetry"
-version = "0.18.1"
+version = "0.18.3"
 dependencies = [
  "opentelemetry",
  "opentelemetry-otlp",
@@ -248,16 +248,17 @@ dependencies = [
 
 [[package]]
 name = "ag-tui-text"
-version = "0.18.1"
+version = "0.18.3"
 dependencies = [
  "ratatui",
  "rustc-hash",
+ "unicode-segmentation",
  "unicode-width",
 ]
 
 [[package]]
 name = "ag-worker"
-version = "0.18.1"
+version = "0.18.3"
 dependencies = [
  "ag-contracts",
  "ag-protocol",
@@ -279,7 +280,7 @@ dependencies = [
 
 [[package]]
 name = "ag-xtask"
-version = "0.18.1"
+version = "0.18.3"
 dependencies = [
  "clap",
  "mockall",
@@ -339,7 +340,7 @@ dependencies = [
 
 [[package]]
 name = "agentty"
-version = "0.18.1"
+version = "0.18.3"
 dependencies = [
  "ag-clipboard",
  "ag-contracts",
@@ -2204,9 +2205,9 @@ dependencies = [
 
 [[package]]
 name = "ignore"
-version = "0.4.33"
+version = "0.4.34"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "00b69833ed729dc5aa7d19541d96d6cf8e9137194207a04916d658e43168402f"
+checksum = "484be5657551d7868d67587df967fb4fcbe9d266a761cc855aaa148fda0b3cc7"
 dependencies = [
  "crossbeam-deque",
  "globset",
@@ -3329,9 +3330,9 @@ dependencies = [
 
 [[package]]
 name = "pulldown-cmark"
-version = "0.13.5"
+version = "0.13.6"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "278e9268c93b9e498a2da46c34d90ba93a3255eb99009646398f34bc73ab36eb"
+checksum = "3db2be46835f013dd3f4fa7f5f7402c537787b54ebb6fe2b94bbdd7e2669bb7b"
 dependencies = [
  "bitflags 2.13.0",
  "memchr",
@@ -3651,9 +3652,9 @@ dependencies = [
 
 [[package]]
 name = "roxmltree"
-version = "0.21.1"
+version = "0.21.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "f1964b10c76125c36f8afe190065a4bf9a87bf324842c05701330bba9f1cacbb"
+checksum = "9da7f59328b09405b181fee1018925fad50f157afb43c0c0f5c522c256dd5907"
 dependencies = [
  "memchr",
 ]
@@ -3675,9 +3676,9 @@ dependencies = [
 
 [[package]]
 name = "rustix"
-version = "1.1.5"
+version = "1.1.6"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "891efababe418670775f199f0d233d84843c227a0949a883ce15b37c78d6629d"
+checksum = "e5e76742e5294153d4dde1207dbec5bdd81eef6fabdc0d2118babadabfd858aa"
 dependencies = [
  "bitflags 2.13.0",
  "errno",
@@ -4451,7 +4452,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "32497e9a4c7b38532efcdebeef879707aa9f794296a4f0244f6f69e9bc8574bd"
 dependencies = [
  "fastrand",
- "getrandom 0.4.2",
+ "getrandom 0.3.4",
  "once_cell",
  "rustix",
  "windows-sys 0.61.2",
@@ -4541,7 +4542,7 @@ dependencies = [
 
 [[package]]
 name = "testty"
-version = "0.18.1"
+version = "0.18.3"
 dependencies = [
  "base64 0.23.1",
  "clap",
@@ -4958,9 +4959,9 @@ dependencies = [
 
 [[package]]
 name = "unicode-width"
-version = "0.2.2"
+version = "0.2.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "b4ac048d71ede7ee76d585517add45da530660ef4390e49b098733c6e897f254"
+checksum = "ca718471876992059f251e33aafc334346ada08042b7661dd1fe313a9bced557"
 
 [[package]]
 name = "unicode-xid"
@@ -5006,9 +5007,9 @@ checksum = "06abde3611657adf66d383f00b093d7faecc7fa57071cce2578660c9f1010821"
 
 [[package]]
 name = "uuid"
-version = "1.28.0"
+version = "1.29.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "7cc1186384beb7dd8eedea376413fd654937285ea6c9cfbb928dc3043ea4b606"
+checksum = "4a0e2d11620c50695fe12bbbfde96b3477fe606e7284c22d505c12ce51214514"
 dependencies = [
  "atomic",
  "getrandom 0.4.2",

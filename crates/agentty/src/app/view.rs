@@ -158,7 +158,8 @@ pub(super) fn visible_review_session_id(mode: &AppMode) -> Option<&str> {
         | AppMode::PublishBranchInput { restore_view, .. }
         | AppMode::ViewInfoPopup { restore_view, .. } => Some(&restore_view.session_id),
         AppMode::ChatGptSignIn { dialog } => Some(dialog.session_id()),
-        AppMode::List
+        AppMode::ExecutionGraph(_)
+        | AppMode::List
         | AppMode::SessionCreation { .. }
         | AppMode::StackAppendParentSelection { .. }
         | AppMode::PreCommitHookWarning { .. }

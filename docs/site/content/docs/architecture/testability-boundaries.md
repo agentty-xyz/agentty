@@ -254,7 +254,8 @@ continuation intent separately. In-memory storage tests cover gate reasons, comp
 retry claims, exact clarification sets, cancellation fences, and pinned inputs. Public
 durability tests reopen the database without dispatching work. Application tests drive
 the session API and scripted workers to verify isolated continuation and explicit resume
-without replenishing live budgets.
+without replenishing live budgets. Continuation reads separate the current instruction
+from prior replay, and worker tests verify that replies reach the active task prompt.
 
 ## Prompt Behavior
 

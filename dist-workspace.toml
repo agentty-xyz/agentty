@@ -37,6 +37,11 @@ github-attestations-phase = "host"
 # Whether to install an updater program
 install-updater = true
 
+# Use the latest Apple Silicon runner for both macOS release targets.
+[dist.github-custom-runners]
+aarch64-apple-darwin = { runner = "macos-latest", host = "aarch64-apple-darwin" }
+x86_64-apple-darwin = { runner = "macos-latest", host = "aarch64-apple-darwin" }
+
 # Keep the generated `.github/workflows/release.yml` action refs pinned when
 # `dist init` regenerates the workflow.
 [dist.github-action-commits]

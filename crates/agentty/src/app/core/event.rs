@@ -2001,7 +2001,9 @@ impl App {
             return;
         }
 
-        if self.is_viewing_session(session_id) {
+        // Keep the inspector's snapshot and any unsent graph input intact.
+        // Session questions remain available when returning to session chat.
+        if self.is_viewing_session(session_id) && !matches!(self.mode, AppMode::ExecutionGraph(_)) {
             self.mode = AppMode::Question {
                 at_mention_state: None,
                 selected_option_index: default_option_index(&questions, 0),
@@ -2020,6 +2022,7 @@ impl App {
     /// session.
     fn is_viewing_session(&self, session_id: &str) -> bool {
         match &self.mode {
+            AppMode::ExecutionGraph(view) => view.restore.session_id == session_id,
             AppMode::View {
                 session_id: view_id,
                 ..

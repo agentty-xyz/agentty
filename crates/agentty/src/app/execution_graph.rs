@@ -86,6 +86,19 @@ impl Drop for GraphDriverRegistration {
 }
 
 impl App {
+    /// Prefills retained live limits without replenishing the executor's
+    /// credits.
+    pub(super) fn execution_graph_resume_limits(&self, graph_id: &str) -> String {
+        self.services
+            .graph_drivers
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .get(graph_id)
+            .map_or_else(String::new, |driver| {
+                serde_json::to_string(&driver.request.provider_call_limits).unwrap_or_default()
+            })
+    }
+
     pub(super) async fn execution_graph_progress(
         &self,
         graph_id: &str,

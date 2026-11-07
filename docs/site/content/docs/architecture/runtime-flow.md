@@ -74,13 +74,13 @@ transient plain-text block with compact status and command/argument rows, preser
 invocation counts when events are batched. Failed calls contribute to live totals
 without retaining rows; the renderer clips live rows to the pane width. Provider output
 deltas update the matching call. After the final answer or failure notice, a durable
-usage message replaces the live rows and includes failed-call previews capped at two
-output lines. These messages participate in render-cache invalidation and saved history,
-but are excluded from provider replay. Commit and rebase assistance collect utility
-activity concurrently and save the same usage footer immediately after their displayed
-answer or attempt failure notice, before propagating failures to the overall workflow.
-Existing session rebase-assistance turns clear their live rows before returning success,
-failure, or cancellation.
+usage message replaces the live rows with invocation and outcome counts. These messages
+participate in render-cache invalidation and saved history, but are excluded from
+provider replay. Commit and rebase assistance collect utility activity concurrently and
+save the same usage footer immediately after their displayed answer or attempt failure
+notice, before propagating failures to the overall workflow. Existing session
+rebase-assistance turns clear their live rows before returning success, failure, or
+cancellation.
 
 ## Project Access
 
@@ -203,15 +203,22 @@ Completion replaces matching progress with its result in one reducer update. Sta
 results cannot persist notices. Rendering reads snapshots; it does not perform workflow
 side effects. Runtime-owned caches share derived layout between scrolling and painting.
 
-Session chat is the only task-chain surface. An armed `/plan` composer launches the
-chain, and the session's later messages become natural-language replies; both use the
-same command gateway as programmatic callers. Chain ownership is read from storage at
-submit time, so routing is correct before the transcript or graph snapshot loads after a
-restart. A reply waiting for an orchestrator decision is accepted at once; a failure of
-the decided action is appended as a transcript notice when it returns. Busy chains
-reject replies instead of queueing them, and the composer keeps the draft. Stopping a
-running role cancels the chain through the gateway, which records the cancellation
-before interrupting the attempt. Rendering never advances a workflow.
+The graph inspector loads an explicit session-scoped snapshot of saved graphs,
+authoritative progress, and exact output bodies. Controls revalidate that snapshot and
+enter the shared command gateway; graph replies never enter ordinary chat. Refresh is
+explicit, and editing retains the execution and question set originally inspected.
+Background session questions update session state without replacing the inspector;
+returning to session chat exposes the pending questions.
+
+Session chat is the conversational task-chain surface. An armed `/plan` composer
+launches the chain, and the session's later messages become natural-language replies;
+both use the same command gateway as programmatic callers. Chain ownership is read from
+storage at submit time, so routing is correct before the transcript or graph snapshot
+loads after a restart. A reply waiting for an orchestrator decision is accepted at once;
+a failure of the decided action is appended as a transcript notice when it returns. Busy
+chains reject replies instead of queueing them, and the composer keeps the draft.
+Stopping a running role cancels the chain through the gateway, which records the
+cancellation before interrupting the attempt. Rendering never advances a workflow.
 
 Launch admission saves the original request and execution-graph marker in its
 transaction; saving a chain-owned response likewise saves its role-attributed answer
@@ -287,6 +294,11 @@ the runtime mailbox for ordinary admission. Every other settled phase continues 
 current role immediately in the foreground. An image reply awaiting plan acceptance
 revises the Planner directly, keeping visual guidance out of the text-only approval
 decision.
+
+For each continued graph attempt, the worker delivers its explicit reply, clarification,
+or retry as current task input, alongside the original objective and pinned results.
+Earlier replies and responses remain isolated historical replay; the current instruction
+is excluded from that replay so evidence policy cannot demote a new user request.
 
 The host's opt-in tool-content capture policy travels with the execution trace context,
 including independent roots, queued work, and linked operations. Scoped utility clients

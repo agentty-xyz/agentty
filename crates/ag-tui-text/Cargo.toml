@@ -13,4 +13,5 @@ workspace = true
 [dependencies]
 ratatui.workspace = true
 rustc-hash.workspace = true
+unicode-segmentation.workspace = true
 unicode-width.workspace = true

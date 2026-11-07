@@ -118,6 +118,20 @@ async fn reduce_until_finished(app: &mut App) {
     .expect("sign-in finishes");
 }
 
+/// Waits for a sign-in event independently of unrelated startup events.
+async fn next_sign_in_event(app: &mut App) -> AppEvent {
+    tokio::time::timeout(Duration::from_secs(5), async {
+        loop {
+            let event = app.next_app_event().await.expect("open event channel");
+            if matches!(event, AppEvent::ChatGptSignInUpdated { .. }) {
+                return event;
+            }
+        }
+    })
+    .await
+    .expect("sign-in event")
+}
+
 #[tokio::test]
 async fn successful_sign_in_applies_the_model_and_marks_it_ready() {
     // Arrange
@@ -243,10 +257,7 @@ async fn waiting_sign_in_shows_its_url_and_ignores_stale_updates() {
     let (mut app, _base_dir, session_id) = sign_in_app(ScriptedSignIn::Hang, 1).await;
     open_popup(&mut app, &session_id, "draft");
     app.start_chatgpt_sign_in();
-    let event = tokio::time::timeout(Duration::from_secs(5), app.next_app_event())
-        .await
-        .expect("url event")
-        .expect("open channel");
+    let event = next_sign_in_event(&mut app).await;
 
     // Act
     app.apply_app_events(event).await;
@@ -276,12 +287,16 @@ async fn closing_a_waiting_sign_in_restores_the_composer_and_drops_late_results(
     // Arrange
     let (mut app, _base_dir, session_id) = sign_in_app(ScriptedSignIn::Hang, 1).await;
     open_popup(&mut app, &session_id, "keep this draft");
+    app.services
+        .event_sender()
+        .send(AppEvent::SessionProgressUpdated {
+            progress_message: Some("Unrelated startup progress".into()),
+            session_id: session_id.clone(),
+        })
+        .expect("queue unrelated event before sign-in");
     app.start_chatgpt_sign_in();
     app.start_chatgpt_sign_in();
-    let url_event = tokio::time::timeout(Duration::from_secs(5), app.next_app_event())
-        .await
-        .expect("url event")
-        .expect("open channel");
+    let url_event = next_sign_in_event(&mut app).await;
     assert!(matches!(
         url_event,
         AppEvent::ChatGptSignInUpdated {

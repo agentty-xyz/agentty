@@ -27,6 +27,8 @@ use crate::presentation::app_mode::{
     AppMode, ChatFocus, DiffFocus, DiffLineCommentAnchor, DiffLineCommentTarget, DiffLineComments,
     DiffLineSide, DiffPreview,
 };
+use crate::presentation::execution_graph::tests::graph_view;
+use crate::presentation::execution_graph::{GraphEditKind, GraphEditor};
 use crate::presentation::prompt::{PromptAttachmentState, PromptHistoryState, PromptSlashState};
 use crate::presentation::setting::SettingsAction;
 use crate::runtime::{EventResult, FRAME_INTERVAL, PresentationState};
@@ -512,6 +514,38 @@ async fn test_process_paste_event_updates_publish_branch_input() {
         AppMode::PublishBranchInput { input, .. }
             if input.text() == "review/shared-input"
     ));
+}
+
+#[tokio::test]
+async fn graph_paste_updates_only_the_active_graph_editor() {
+    // Arrange
+    let mut app = crate::test_support::new_test_app_without_retained_base_dir().await;
+    for kind in [GraphEditKind::Reply, GraphEditKind::Answers] {
+        for pasted in ["First\r\nSecond", "First\rSecond", "First\nSecond"] {
+            let mut view = graph_view();
+            view.editor = Some(GraphEditor {
+                answers: Vec::new(),
+                input: InputState::default(),
+                kind,
+                needs_reconciliation: false,
+            });
+            app.mode = AppMode::ExecutionGraph(Box::new(view));
+
+            // Act
+            process_paste_event(&mut app, pasted).await;
+
+            // Assert
+            assert!(matches!(&app.mode, AppMode::ExecutionGraph(view)
+                if view.editor.as_ref().expect("editor").input.text() == "First\nSecond"));
+        }
+    }
+    app.mode = AppMode::ExecutionGraph(Box::new(graph_view()));
+
+    // Act
+    process_paste_event(&mut app, "No active editor\r\n").await;
+
+    // Assert
+    assert!(matches!(&app.mode, AppMode::ExecutionGraph(view) if view.editor.is_none()));
 }
 
 #[tokio::test]

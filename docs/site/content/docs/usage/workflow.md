@@ -45,7 +45,9 @@ says what to send next.
   as a revision. Replies with images also revise the plan; approve it with a separate
   text reply after the Planner has considered the images.
 - **After implementation**: follow-up messages, `/apply`, and automatic review
-  remediation go to the Implementer. The Planner is not used again.
+  remediation go to the Implementer as its current instruction. Describe the fix in the
+  regular composer; the accepted plan and earlier implementation remain context. The
+  Planner is not used again.
 
 While a role is working or a reply is being decided, a new message is rejected rather
 than queued; Agentty keeps the draft in the composer and explains why. Press `Ctrl+C` in
@@ -62,6 +64,38 @@ again after post-processing completes.
 When the **Implementer** finishes without questions, the session starts the same
 [focused review](@/docs/usage/workflow.md#focused-review) as after an ordinary turn.
 Planner results, questions, and failed or canceled work do not start a review.
+
+## Execution Graph Inspector
+
+Press `w` in session view to inspect any saved execution graph, including branches and
+joins. Use `[` / `]` to switch graphs and `j` / `k` to select nodes. The inspector shows
+captured agents, objectives, prerequisites, execution state, blocked reasons, questions,
+and exact output versions. Node answers render as Markdown, including lists and code
+blocks, with emoji kept intact when code wraps. Long paths, URLs, and identifiers in
+metadata and answers wrap so their full text remains reachable. Press `r` to refresh the
+snapshot and `J` / `K` to scroll the rendered lines. Background session questions keep
+the inspector and its draft open; return to session chat to answer them.
+
+Available controls appear below the graph. Accept the displayed output with `a`, answer
+the selected node's questions with `n`, or send revision guidance with `e`. These
+replies go directly to that task conversation. Accepted outputs and outputs already
+consumed by started dependents cannot be revised. Rejected replies and clarification
+answers keep their draft and original execution/question bindings. Press `Ctrl+r` in the
+retained editor to refresh and reconcile, inspect the refreshed snapshot, then submit
+again. If that execution or its questions changed, resubmission stays blocked; `Esc`
+explicitly discards the draft. Other rejected actions refresh the view. Editor notices
+wrap below the input; use `PageUp` / `PageDown` to scroll longer reasons.
+
+Use `t` to retry a failed node, `s` to resume paused dispatch, and `x` to cancel the
+whole graph. Retry and answers record intent; they do not resume a stopped driver.
+Resuming after restart requires explicit provider-call limits for the displayed budget
+names (`calls=10` or `{"calls":10}`, for example). A retained live driver prefills its
+original limits and keeps its remaining credits. Cancellation requires typing `cancel`
+and permanently closes that graph. Nothing automatically replays on restart.
+
+Focused-review graphs can be inspected and canceled here. Use the session's existing
+regenerate-review action to start a new review generation with its checkpoints; generic
+node replies, retry, and resume are unavailable for these graphs.
 
 ## Interface Layout
 
@@ -509,13 +543,12 @@ fit the pane. Successful output stays hidden. Codex, Claude, Gemini, and Antigra
 supply these details where available. Skill names require explicit provider reporting.
 
 Responses from these providers, including commit and rebase recovery assistance, include
-a usage footer when tool activity was observed. `Tools` lists invocation counts and
-failed or interrupted calls; `Skills` lists explicit Claude skill invocations. Footers
-remain attached to their responses in saved history, including failed recovery attempts.
-At turn completion, successful live rows collapse into the footer; failed call previews
-remain in saved history with reported nonzero exit codes and up to two output lines.
-Reading a skill file does not establish invocation. Providers without activity reporting
-and older saved responses have no footer.
+a usage footer when tool activity was observed. `Tools` lists invocation counts with
+failed or interrupted totals; `Skills` lists explicit Claude skill invocation counts.
+Footers remain attached to their responses in saved history, including failed recovery
+attempts. At turn completion, live rows collapse into counts without per-call command or
+output previews. Reading a skill file does not establish invocation. Providers without
+activity reporting and older saved responses have no footer.
 
 ## Session Sizes
 

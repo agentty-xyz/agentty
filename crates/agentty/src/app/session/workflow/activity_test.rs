@@ -44,7 +44,7 @@ fn summary_counts_invocations_not_updates_and_separates_attempts_and_skills() {
     // Assert
     assert_eq!(
         activity.summary(),
-        "Tools: Read ×2 (1 failed)\nSkills: review ×1 (1 interrupted)\n✗ Read\n"
+        "Tools: Read ×2 (1 failed)\nSkills: review ×1 (1 interrupted)\n"
     );
     assert_eq!(TurnActivity::default().summary(), "");
 }
@@ -82,10 +82,7 @@ fn summary_retains_failed_command_count_after_live_rows_clear() {
             session_id,
         })
     );
-    assert_eq!(
-        activity.summary(),
-        "Tools: run_command ×1 (1 failed)\n✗ run_command (exit 1)\n"
-    );
+    assert_eq!(activity.summary(), "Tools: run_command ×1 (1 failed)\n");
 }
 
 #[test]
@@ -200,7 +197,7 @@ fn live_rows_keep_invocation_order_update_status_and_clear() {
 }
 
 #[test]
-fn compact_failures_show_exit_codes_literal_input_and_two_output_lines() {
+fn failed_calls_retain_counts_without_command_or_output_previews() {
     // Arrange
     let mut activity = TurnActivity::default();
     let event = ActivityEvent {
@@ -231,16 +228,9 @@ fn compact_failures_show_exit_codes_literal_input_and_two_output_lines() {
         text,
         "Tools: shell ×1\nStatus: 0 succeeded · 1 failed · 0 running\n\n"
     );
-    assert_eq!(
-        summary,
-        "Tools: shell ×1 (1 failed)\n✗ shell (exit 1) · rg '**example**' README.md\n  line 1\n  \
-         line 2 …\n"
-    );
+    assert_eq!(summary, "Tools: shell ×1 (1 failed)\n");
     assert_eq!(activity.live.snapshot(), text);
-    assert_eq!(
-        activity.summary(),
-        "Tools: shell ×1 (1 failed)\n✗ shell (exit 1)\n"
-    );
+    assert_eq!(activity.summary(), summary);
 }
 
 #[test]
@@ -289,7 +279,10 @@ fn live_activity_bursts_bound_pending_snapshots_and_rearm_after_consumption() {
     ));
     assert_eq!(text.matches("! Read (interrupted)").count(), 3);
     assert!(!text.contains("final result"));
-    assert!(activity.summary().ends_with("✗ Read\n  final result\n"));
+    assert_eq!(
+        activity.summary(),
+        "Tools: Read ×100 (1 failed) (99 interrupted)\n"
+    );
     assert!(text.ends_with("+96 earlier interrupted calls\n"));
 
     // Act: reading rearms the mailbox; the next turn follows the clear.
@@ -385,22 +378,6 @@ fn compact_rows_hide_successful_output_and_flatten_multiline_commands() {
 }
 
 #[test]
-fn compact_failures_skip_empty_lines_and_mark_only_omitted_output() {
-    // Arrange, Act, Assert
-    for (output, expected) in [
-        ("", ""),
-        (" \n\t", ""),
-        ("\n first error \n\n", "  first error\n"),
-        ("one\n\ntwo\n\n", "  one\n  two\n"),
-        ("one\ntwo\nthree", "  one\n  two …\n"),
-    ] {
-        let mut text = String::new();
-        ActivityState::append_failure_preview(&mut text, output);
-        assert_eq!(text, expected);
-    }
-}
-
-#[test]
 fn rolling_activity_tracks_completion_order_and_bounds_parallel_rows() {
     // Arrange
     let mut activity = TurnActivity::default();
@@ -452,15 +429,11 @@ fn rolling_activity_tracks_completion_order_and_bounds_parallel_rows() {
     let settled = activity.live.snapshot();
     assert!(settled.contains("Status: 5 succeeded · 1 failed · 0 running"));
     assert!(settled.ends_with("\n\n✓ shell\n"));
-    assert!(
-        activity
-            .summary()
-            .ends_with("✗ shell\n  a retained failure\n")
-    );
+    assert_eq!(activity.summary(), "Tools: shell ×6 (1 failed)\n");
 }
 
 #[test]
-fn rolling_activity_bounds_interruptions_by_transition_order_and_saves_failures() {
+fn rolling_activity_bounds_interruptions_by_transition_order_and_counts_failures() {
     for (failure_status, exit_code) in [
         (ActivityStatus::Failed, None),
         (ActivityStatus::Completed, Some(1)),
@@ -519,9 +492,7 @@ fn rolling_activity_bounds_interruptions_by_transition_order_and_saves_failures(
         assert!(live.find("command-2") < live.find("command-3"));
         assert!(live.find("command-3") < live.find("command-0"));
         assert!(live.ends_with("+1 earlier interrupted calls\n"));
-        assert!(summary.starts_with("Tools: shell ×8 (4 failed) (4 interrupted)\n"));
-        assert!(summary.contains("updated error-1"));
-        assert_eq!(summary.matches("✗ shell").count(), 4);
+        assert_eq!(summary, "Tools: shell ×8 (4 failed) (4 interrupted)\n");
     }
 }
 
@@ -561,7 +532,7 @@ fn readable_inputs_extract_useful_fields_and_hide_payloads() {
 }
 
 #[test]
-fn command_previews_preserve_shell_syntax_in_live_and_saved_rows() {
+fn command_previews_preserve_shell_syntax_while_running() {
     for (input, expected) in [
         ("{ cargo fmt; cargo test; }", "{ cargo fmt; cargo test; }"),
         (
@@ -587,12 +558,11 @@ fn command_previews_preserve_shell_syntax_in_live_and_saved_rows() {
 
         // Assert
         assert!(running.contains(&format!("… shell · {expected}\n")));
-        let failure = format!("✗ shell · {expected}\n");
         assert_eq!(
             activity.live.snapshot(),
             "Tools: shell ×1\nStatus: 0 succeeded · 1 failed · 0 running\n\n"
         );
-        assert!(activity.summary().ends_with(&failure));
+        assert_eq!(activity.summary(), "Tools: shell ×1 (1 failed)\n");
     }
 }
 

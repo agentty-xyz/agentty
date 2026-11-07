@@ -728,6 +728,8 @@ pub enum ChatFocus {
 
 /// Represents the active UI mode for the application.
 pub enum AppMode {
+    /// Inspects and controls saved graphs for one session.
+    ExecutionGraph(Box<super::execution_graph::GraphView>),
     /// Explicit project registration, discovery, and startup suggestion.
     ProjectCatalog {
         /// Current project dialog state.

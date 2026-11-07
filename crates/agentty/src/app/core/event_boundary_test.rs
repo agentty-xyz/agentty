@@ -7,11 +7,16 @@ use crate::app::core::state::tests::support::{
     merged_review_request_status_update, new_test_app_with_database_pool,
     test_prompt_mode_snapshot, test_review_request_summary,
 };
-use crate::app::session::SyncSessionStartError;
+use crate::app::session::{SyncSessionStartError, TurnAppliedState};
 use crate::domain::file_entry::FileEntry;
 use crate::domain::input::InputState;
-use crate::domain::session::{PublishBranchAction, ReviewRequest, ReviewRequestState};
+use crate::domain::question::QuestionItem;
+use crate::domain::session::{
+    PublishBranchAction, ReviewRequest, ReviewRequestState, SessionStats, Status,
+};
 use crate::presentation::app_mode::{AppMode, ChatFocus, ConfirmationViewMode};
+use crate::presentation::execution_graph::tests::graph_view;
+use crate::presentation::execution_graph::{GraphEditKind, GraphEditor};
 use crate::test_support;
 
 #[tokio::test]
@@ -23,6 +28,9 @@ async fn session_composers_and_overlays_retain_their_viewed_session() {
         session_id: "viewed-session".into(),
     };
     let modes = [
+        AppMode::ExecutionGraph(Box::new(
+            crate::presentation::execution_graph::GraphView::new(restore_view.clone()),
+        )),
         test_prompt_mode_snapshot(restore_view.session_id.clone()).into_prompt_mode(),
         AppMode::Question {
             at_mention_state: None,
@@ -64,6 +72,63 @@ async fn session_composers_and_overlays_retain_their_viewed_session() {
         assert!(app.is_viewing_session("viewed-session"));
         assert!(!app.is_viewing_session("another-session"));
     }
+}
+
+#[tokio::test]
+async fn background_questions_preserve_graph_snapshots_and_bound_drafts() {
+    // Arrange
+    let mut app = test_support::new_test_app_without_retained_base_dir().await;
+    app.sessions.push_session(
+        test_support::SessionFixtureBuilder::new()
+            .id("sess")
+            .status(Status::Question)
+            .build(),
+    );
+    let turn = TurnAppliedState {
+        follow_up_tasks: Vec::new(),
+        questions: vec![QuestionItem::new("A background session question?")],
+        token_usage_delta: SessionStats::default(),
+    };
+    for kind in [
+        None,
+        Some(GraphEditKind::Reply),
+        Some(GraphEditKind::Answers),
+    ] {
+        for needs_reconciliation in [false, true] {
+            let mut view = graph_view();
+            view.editor = kind.map(|kind| GraphEditor {
+                answers: vec!["Previous graph answer".into()],
+                input: InputState::with_text("Unsent graph input".into()),
+                kind,
+                needs_reconciliation,
+            });
+            app.mode = AppMode::ExecutionGraph(Box::new(view.clone()));
+
+            // Act
+            app.apply_agent_response_received("sess", &turn);
+            app.reconcile_open_session_question_mode().await;
+
+            // Assert
+            assert!(matches!(&app.mode, AppMode::ExecutionGraph(current) if **current == view));
+            assert_eq!(
+                app.sessions
+                    .session_for_id("sess")
+                    .expect("session")
+                    .questions,
+                turn.questions
+            );
+        }
+    }
+
+    // Act: pending session questions remain available after leaving the
+    // inspector.
+    app.mode = graph_view().restore.into_view_mode();
+    app.reconcile_open_session_question_mode().await;
+
+    // Assert
+    assert!(
+        matches!(&app.mode, AppMode::Question { questions, .. } if *questions == turn.questions)
+    );
 }
 
 #[tokio::test]

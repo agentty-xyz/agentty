@@ -1267,25 +1267,64 @@ async fn failed_shutdown_cleanup_is_retried_before_the_next_turn() {
     .execute(&pool)
     .await
     .expect("outcome fault");
+    // ToolRequested precedes command admission. Wait for the durable intent
+    // so cancellation cannot skip the outcome write this test must fail.
+    tokio::time::timeout(Duration::from_secs(10), async {
+        loop {
+            let admitted = sqlx::query_scalar::<_, bool>(
+                "SELECT EXISTS(SELECT 1 FROM session_command WHERE session_id = 'session-stop' \
+                 AND outcome IS NULL)",
+            )
+            .fetch_one(&pool)
+            .await
+            .expect("command admission");
+            if admitted {
+                break;
+            }
+        }
+    })
+    .await
+    .expect("command must be journaled before cancellation");
+
+    // Act
     running.abort();
+    let cancelled = running.await.expect_err("running turn should be cancelled");
     let shutdown = channel.shutdown_session("session-stop".to_string()).await;
+    let pending = sqlx::query_scalar::<_, bool>(
+        "SELECT outcome IS NULL AND unresolved = 1 FROM session_command WHERE session_id = \
+         'session-stop'",
+    )
+    .fetch_one(&pool)
+    .await
+    .expect("unresolved command");
     sqlx::query("DROP TRIGGER fail_outcome")
         .execute(&pool)
         .await
         .expect("remove outcome fault");
-    pool.close().await;
     let mut request = turn_request(worktree.path(), MUSE_MODEL, "Next question");
     request.request_kind = AgentRequestKind::SessionResume;
-
-    // Act
     let (recovered, _) = run_turn(&channel, "session-stop", request).await;
+    let recorded = sqlx::query_scalar::<_, bool>(
+        "SELECT outcome IS NOT NULL AND unresolved = 0 FROM session_command WHERE session_id = \
+         'session-stop'",
+    )
+    .fetch_one(&pool)
+    .await
+    .expect("recorded command outcome");
+    pool.close().await;
 
     // Assert
+    assert!(cancelled.is_cancelled());
     let shutdown = shutdown.expect_err("unrecorded command outcome should fail the shutdown");
     assert!(
         shutdown.to_string().contains("Harness turn cleanup failed"),
         "{shutdown}"
     );
+    assert!(
+        pending,
+        "failed shutdown must retain the unresolved command"
+    );
+    assert!(recorded, "the next turn must persist the retried outcome");
     assert_eq!(
         recovered
             .expect("next turn should be admitted after cleanup is retried")

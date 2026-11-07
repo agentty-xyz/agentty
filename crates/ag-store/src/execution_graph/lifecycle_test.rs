@@ -278,10 +278,16 @@ async fn graph_lifecycle_clarification_is_exact_and_new_attempts_retain_history(
         .execution_history(&second.record.execution)
         .await
         .expect("history")
-        .expect("isolated replay")
-        .text;
-    assert!(history.contains("Need input"));
-    assert!(history.contains("Local"));
+        .expect("isolated replay");
+    assert!(history.text.contains("Need input"));
+    assert!(!history.text.contains("Explicit clarification answers"));
+    assert!(
+        history
+            .continuation_prompt
+            .as_deref()
+            .expect("current answer")
+            .contains("Local")
+    );
     assert_ne!(second.record.execution, first.record.execution);
     request.action_id = uuid::Uuid::new_v4().to_string();
     assert!(repository.continue_node(&request).await.is_err());
@@ -909,12 +915,17 @@ async fn graph_lifecycle_retry_history_omits_unobserved_failed_turns() {
         .execution_history(&retry.record.execution)
         .await
         .expect("history")
-        .expect("explicit retry")
-        .text;
+        .expect("explicit retry");
 
     // Assert
-    assert!(history.contains("Explicitly retry"));
-    assert!(!history.contains("Assistant"));
+    assert!(
+        history
+            .continuation_prompt
+            .as_deref()
+            .expect("current retry")
+            .contains("Explicitly retry")
+    );
+    assert_eq!(history.text, "");
 }
 
 #[tokio::test]
