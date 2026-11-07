@@ -44,6 +44,7 @@ use crate::domain::question::{QuestionItem, QuestionProgress, default_option_ind
 use crate::domain::session::{PublishBranchAction, Session, SessionDiffStats, SessionId, Status};
 use crate::domain::session_message::SessionTranscript;
 use crate::domain::setting::SettingName;
+use crate::domain::subagent::SubagentLimit;
 use crate::domain::transcript_notice::TranscriptNotice;
 use crate::domain::transient_message::{
     TransientMessage, TransientMessageAnchor, TransientMessageBody, TransientMessageLifecycle,
@@ -164,6 +165,19 @@ impl AppClients {
     pub(crate) fn with_experimental_harness(mut self, harness_data_root: PathBuf) -> Self {
         self.experimental_harness = true;
         self.runtime_config = self.runtime_config.with_native_harness(harness_data_root);
+        self.session_run_factory =
+            Arc::new(RealSessionRunFactory::new(self.runtime_config.clone()));
+
+        self
+    }
+
+    /// Caps concurrent provider-native subagents for every session and
+    /// utility worker this bundle composes.
+    #[must_use]
+    pub(crate) fn with_max_concurrent_subagents(mut self, limit: SubagentLimit) -> Self {
+        self.runtime_config = self
+            .runtime_config
+            .with_max_concurrent_subagents(limit.limit());
         self.session_run_factory =
             Arc::new(RealSessionRunFactory::new(self.runtime_config.clone()));
 

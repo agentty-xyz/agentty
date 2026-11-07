@@ -21,6 +21,8 @@ pub mod session;
 pub mod session_message;
 pub mod session_order;
 pub mod setting;
+/// User-selectable cap on concurrent provider-native subagents.
+pub mod subagent;
 pub mod theme;
 pub(crate) mod transcript_notice;
 pub(crate) mod transient_message;

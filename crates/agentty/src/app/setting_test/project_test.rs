@@ -33,8 +33,10 @@ fn settings_rows_split_theme_into_global_and_project_sections() {
     let project_rows = manager.project_settings_rows();
 
     // Assert
-    assert_eq!(global_rows.len(), 1);
+    assert_eq!(global_rows.len(), 2);
     assert_eq!(global_rows[0].0, "Theme");
+    assert_eq!(global_rows[1].0, "Max Subagents");
+    assert_eq!(global_rows[1].1, "2 (applies after restart)");
     assert_eq!(project_rows.len(), 6);
     assert_eq!(project_rows[0].0, "Default Smart Model");
     assert_eq!(project_rows[1].0, "Default Fast Model");

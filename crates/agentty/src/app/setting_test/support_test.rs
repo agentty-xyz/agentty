@@ -15,6 +15,7 @@ use crate::db::AppRepositories;
 use crate::domain::agent::{AgentKind, AgentSelection, ReasoningLevel, ResponseStyle, SpeedMode};
 use crate::domain::input::InputCommand;
 use crate::domain::setting::SettingName;
+use crate::domain::subagent::SubagentLimit;
 use crate::domain::theme::ColorTheme;
 use crate::infra::fs;
 use crate::presentation::setting::{
@@ -101,6 +102,7 @@ impl SettingsTestHarness {
                 fast_harness_models: Vec::new(),
                 include_coauthored_by_agentty: false,
                 launch_configuration: String::new(),
+                max_concurrent_subagents: SubagentLimit::Two,
                 theme: ColorTheme::Current,
                 use_last_used_model_as_default: false,
             },
@@ -257,8 +259,14 @@ impl SettingsTestHarness {
     }
 }
 
-/// Selects one settings row through the screen navigation action.
-pub(super) fn select_row(manager: &mut SettingsTestHarness, row_index: usize) {
+/// Selects the settings row with `label` through the screen navigation
+/// action, so tests do not depend on row positions.
+pub(super) fn select_row(manager: &mut SettingsTestHarness, label: &str) {
+    let row_index = manager
+        .settings_rows()
+        .iter()
+        .position(|(row_label, _)| *row_label == label)
+        .expect("settings row label should exist");
     for _ in 0..row_index {
         manager.next();
     }

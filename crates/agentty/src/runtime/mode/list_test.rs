@@ -10,6 +10,7 @@ use crate::domain::input::{InputCommand, InputState};
 use crate::domain::question::QuestionItem;
 use crate::domain::session::Status;
 use crate::domain::session_order::ArchiveAction;
+use crate::domain::subagent::SubagentLimit;
 use crate::domain::theme::ColorTheme;
 use crate::presentation::app_mode::{
     AppMode, ChatFocus, ConfirmationIntent, HelpContext, PromptModeSnapshot,
@@ -83,6 +84,7 @@ impl SettingsFixture {
             fast_harness_models: Vec::new(),
             include_coauthored_by_agentty: false,
             launch_configuration: launch_configuration.unwrap_or_default().to_string(),
+            max_concurrent_subagents: SubagentLimit::Two,
             theme: ColorTheme::Current,
             use_last_used_model_as_default: false,
         };
@@ -769,7 +771,7 @@ async fn test_settings_previous_key_wraps_to_default_response_style_row() {
         app.settings_presentation
             .snapshot(&app.settings.view())
             .selected_row_index,
-        Some(6)
+        Some(7)
     );
 }
 

@@ -58,21 +58,23 @@ impl Browser for ApprovingBrowser {
                 .next()
                 .unwrap_or_default()
                 .to_string();
+            // Each request goes out in one write: the listener may answer
+            // and close as soon as it reads the request line, so a request
+            // split across writes can fail with a broken pipe.
             let mut stream = TcpStream::connect(&address).expect("callback listener");
-            // A stray request first, which the listener answers with 404.
-            write!(
-                stream,
-                "GET /favicon.ico HTTP/1.1\r\nhost: {address}\r\n\r\n"
-            )
-            .expect("stray request");
+            // A stray request first, which the listener answers with 404;
+            // only the callback below matters, so its outcome is ignored.
+            let stray = format!("GET /favicon.ico HTTP/1.1\r\nhost: {address}\r\n\r\n");
+            let _ = stream.write_all(stray.as_bytes());
             let mut ignored = String::new();
             let _ = stream.read_to_string(&mut ignored);
             let mut stream = TcpStream::connect(&address).expect("callback listener");
-            write!(
-                stream,
+            let callback = format!(
                 "GET /auth/callback?state={state}{suffix} HTTP/1.1\r\nhost: {address}\r\n\r\n"
-            )
-            .expect("callback request");
+            );
+            stream
+                .write_all(callback.as_bytes())
+                .expect("callback request");
             let mut page = String::new();
             let _ = stream.read_to_string(&mut page);
 

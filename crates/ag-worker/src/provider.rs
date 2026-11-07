@@ -50,6 +50,19 @@ impl RuntimeConfig {
         self
     }
 
+    /// Replaces the subagent concurrency cap for every harness whose policy
+    /// already enforces one, for subsequently constructed workers. Harnesses
+    /// without subagent concurrency support keep inheriting their own
+    /// configuration.
+    #[must_use]
+    pub fn with_max_concurrent_subagents(mut self, limit: NonZeroUsize) -> Self {
+        for policy in self.policies.values_mut() {
+            policy.max_concurrent_subagents = policy.max_concurrent_subagents.map(|_| limit);
+        }
+
+        self
+    }
+
     /// Returns the configured controls for one harness.
     pub fn execution_policy(&self, kind: AgentKind) -> ExecutionPolicy {
         self.policies
