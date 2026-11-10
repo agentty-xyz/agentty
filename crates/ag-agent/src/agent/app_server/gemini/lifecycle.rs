@@ -8,7 +8,7 @@ use ag_protocol::{
 };
 use ag_session::AgentKind;
 use agent_client_protocol::schema::ProtocolVersion;
-use agent_client_protocol::schema::v1::{
+use agent_client_protocol::v1::schema::{
     AGENT_METHOD_NAMES, ContentBlock, ImageContent, InitializeRequest, InitializeResponse,
     NewSessionRequest, NewSessionResponse, PromptRequest, TextContent,
 };

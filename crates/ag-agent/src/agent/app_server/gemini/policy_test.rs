@@ -1,5 +1,5 @@
 use ag_contracts::PermissionMode;
-use agent_client_protocol::schema::v1::CLIENT_METHOD_NAMES;
+use agent_client_protocol::v1::schema::CLIENT_METHOD_NAMES;
 use serde_json::Value;
 
 use crate::agent::app_server::gemini::policy::build_permission_response;

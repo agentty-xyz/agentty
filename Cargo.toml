@@ -31,7 +31,7 @@ ag-tui-text = { path = "crates/ag-tui-text", version = "0.18.3" }
 ag-worker = { path = "crates/ag-worker", version = "0.18.3" }
 testty = { path = "crates/testty", version = "0.18.3" }
 async-trait = "0.1"
-agent-client-protocol = "3.2.0"
+agent-client-protocol = "5.0.0"
 assert_cmd = "2"
 askama = "0.16.1"
 base64 = "0.23"
