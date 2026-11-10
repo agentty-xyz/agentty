@@ -4,12 +4,16 @@
 //! spacing. The `session_output` component owns layout caching and Ratatui
 //! painting, so callers can exercise transcript projection without a frame.
 
-use std::collections::HashSet;
+use std::cell::RefCell;
+use std::collections::{HashMap, HashSet};
 use std::fmt::Write as _;
+use std::hash::{Hash, Hasher};
+use std::rc::Rc;
 use std::sync::Arc;
 
 use ag_tui_text::text_util;
 use ratatui::text::Line;
+use rustc_hash::FxHasher;
 
 use crate::domain::session::{QueuedMessage, Session, Status};
 use crate::domain::session_message::{SessionMessage, SessionMessageKind, SessionTranscript};
@@ -20,7 +24,8 @@ use crate::presentation::task_chain_graph::TaskChainGraph;
 use crate::ui::component::session_output;
 use crate::ui::markdown::{self, render_markdown};
 use crate::ui::prompt_block::{self, USER_PROMPT_PREFIX, USER_PROMPT_RIGHT_GUTTER_WIDTH};
-use crate::ui::{session_format, task_chain_format};
+use crate::ui::session_output_line::OutputLines;
+use crate::ui::{session_format, style, task_chain_format};
 
 const DRAFT_PREVIEW_HEADER: &str = "## Draft Session";
 
@@ -41,10 +46,76 @@ const DRAFT_PREVIEW_STACKED_STAGED_NOTE: &str =
 
 const USER_PROMPT_TAB_WIDTH: usize = 4;
 
+/// One current rendered segment per durable message, owned by the bounded body
+/// LRU. Removed messages are pruned on rebuild; content, width, theme, Markdown
+/// version and live graph fingerprints invalidate individual segments.
+#[derive(Default)]
+pub(crate) struct TranscriptRenderCache {
+    entries: RefCell<HashMap<i64, TranscriptRenderEntry>>,
+}
+
+impl TranscriptRenderCache {
+    fn retain_transcript(&self, session: &Session) {
+        let positions = session.transcript.as_ref().map_or_default(|transcript| {
+            transcript
+                .messages()
+                .iter()
+                .map(|message| message.position)
+                .collect::<HashSet<_>>()
+        });
+        self.entries
+            .borrow_mut()
+            .retain(|position, _| positions.contains(position));
+    }
+
+    fn render(
+        &self,
+        message: &SessionMessage,
+        input: TranscriptRenderInput<'_>,
+    ) -> Arc<OutputLines> {
+        let mut hasher = FxHasher::default();
+        message.kind.as_str().hash(&mut hasher);
+        message.content.hash(&mut hasher);
+        input.inner_width.hash(&mut hasher);
+        style::active_theme_cache_version().hash(&mut hasher);
+        input
+            .markdown_render_cache
+            .map_or(0, markdown::MarkdownRenderCache::version)
+            .hash(&mut hasher);
+        if message.kind == SessionMessageKind::AgentGraph {
+            input.task_chain_graph.hash(&mut hasher);
+        }
+        let fingerprint = hasher.finish();
+        if let Some(entry) = self.entries.borrow().get(&message.position)
+            && entry.fingerprint == fingerprint
+        {
+            return Arc::clone(&entry.lines);
+        }
+        let mut lines = OutputLines::default();
+        append_transcript_message(&mut lines, message, input);
+        let lines = Arc::new(lines);
+        self.entries.borrow_mut().insert(
+            message.position,
+            TranscriptRenderEntry {
+                fingerprint,
+                lines: Arc::clone(&lines),
+            },
+        );
+
+        lines
+    }
+}
+
+struct TranscriptRenderEntry {
+    fingerprint: u64,
+    lines: Arc<OutputLines>,
+}
+
 /// Cached transcript body that excludes the dynamic session-status tail.
 #[derive(Clone)]
 pub(crate) struct SessionOutputBody {
-    pub(crate) lines: Arc<[Line<'static>]>,
+    pub(crate) lines: Arc<OutputLines>,
+    pub(crate) message_cache: Rc<TranscriptRenderCache>,
     pub(crate) queued_line_indices: Arc<[usize]>,
     pub(crate) queued_lines: Arc<[Line<'static>]>,
     pub(crate) transient_loader_line_index: Option<usize>,
@@ -60,11 +131,15 @@ pub(crate) fn output_body(
     inner_width: usize,
     task_chain_graph: Option<&TaskChainGraph>,
     markdown_render_cache: Option<&markdown::MarkdownRenderCache>,
+    message_cache: Option<Rc<TranscriptRenderCache>>,
 ) -> SessionOutputBody {
+    let message_cache = message_cache.unwrap_or_default();
+    message_cache.retain_transcript(session);
     let mut assembly = output_assembly(session, inner_width, None, markdown_render_cache);
     assembly.task_chain_graph = task_chain_graph;
+    assembly.message_cache = Some(&message_cache);
 
-    assembly.into_output_body()
+    assembly.into_output_body(Rc::clone(&message_cache))
 }
 
 /// Dynamic rows rendered after the shared transcript body.
@@ -157,8 +232,9 @@ struct SessionOutputAssembly<'a> {
     active_turn_section: SessionOutputTranscriptSection<'a>,
     completed_turn_section: SessionOutputTranscriptSection<'a>,
     inner_width: usize,
-    lines: Vec<Line<'static>>,
+    lines: OutputLines,
     markdown_render_cache: Option<&'a markdown::MarkdownRenderCache>,
+    message_cache: Option<&'a TranscriptRenderCache>,
     queued_line_indices: Vec<usize>,
     session: &'a Session,
     status: Status,
@@ -168,7 +244,7 @@ struct SessionOutputAssembly<'a> {
 }
 
 impl<'assembly> SessionOutputAssembly<'assembly> {
-    fn into_output_body(mut self) -> SessionOutputBody {
+    fn into_output_body(mut self, message_cache: Rc<TranscriptRenderCache>) -> SessionOutputBody {
         for block in SESSION_OUTPUT_BLOCK_ORDER {
             if !matches!(
                 block,
@@ -177,7 +253,7 @@ impl<'assembly> SessionOutputAssembly<'assembly> {
                 self.append_block(block);
             }
         }
-        let mut queued_lines = Vec::new();
+        let mut queued_lines = OutputLines::default();
         let queued_line_indices = append_queued_entries(
             &mut queued_lines,
             self.session.transient_messages.messages(),
@@ -186,9 +262,10 @@ impl<'assembly> SessionOutputAssembly<'assembly> {
         );
 
         SessionOutputBody {
-            lines: Arc::from(self.lines),
+            lines: Arc::new(self.lines),
+            message_cache,
             queued_line_indices: Arc::from(queued_line_indices),
-            queued_lines: Arc::from(queued_lines),
+            queued_lines: queued_lines.iter().cloned().collect(),
             transient_loader_line_index: self.transient_loader_line_index,
         }
     }
@@ -215,6 +292,7 @@ impl<'assembly> SessionOutputAssembly<'assembly> {
         TranscriptRenderInput {
             inner_width: self.inner_width,
             markdown_render_cache: self.markdown_render_cache,
+            message_cache: self.message_cache,
             task_chain_graph: self.task_chain_graph,
         }
     }
@@ -292,8 +370,9 @@ fn output_assembly<'assembly>(
         active_turn_section: transcript_sections.active_turn,
         completed_turn_section: transcript_sections.completed_turn,
         inner_width,
-        lines: Vec::new(),
+        lines: OutputLines::default(),
         markdown_render_cache,
+        message_cache: None,
         queued_line_indices: Vec::new(),
         session,
         status,
@@ -303,7 +382,7 @@ fn output_assembly<'assembly>(
     }
 }
 
-fn append_block_separator(lines: &mut Vec<Line<'static>>, separator: SessionOutputSeparator) {
+fn append_block_separator(lines: &mut OutputLines, separator: SessionOutputSeparator) {
     trim_trailing_blank_lines(lines);
 
     if separator == SessionOutputSeparator::Always || !lines.is_empty() {
@@ -311,14 +390,14 @@ fn append_block_separator(lines: &mut Vec<Line<'static>>, separator: SessionOutp
     }
 }
 
-fn trim_trailing_blank_lines(lines: &mut Vec<Line<'static>>) {
+fn trim_trailing_blank_lines(lines: &mut OutputLines) {
     while lines.last().is_some_and(|line| line.width() == 0) {
         lines.pop();
     }
 }
 
 fn append_session_tail_lines(
-    lines: &mut Vec<Line<'static>>,
+    lines: &mut OutputLines,
     status: Status,
     active_progress: Option<&str>,
     review_status_message: Option<&str>,
@@ -400,7 +479,7 @@ fn review_comment_resolution_loading_message(session: &Session) -> Option<&str> 
 }
 
 fn append_transient_message(
-    lines: &mut Vec<Line<'static>>,
+    lines: &mut OutputLines,
     message: &TransientMessage,
     inner_width: usize,
     markdown_render_cache: Option<&markdown::MarkdownRenderCache>,
@@ -584,11 +663,7 @@ fn staged_draft_transcript_block(prompt_text: &str) -> String {
     format!("{}\n\n", formatted_lines.join("\n"))
 }
 
-fn append_plain_status_lines(
-    lines: &mut Vec<Line<'static>>,
-    status_message: &str,
-    inner_width: usize,
-) {
+fn append_plain_status_lines(lines: &mut OutputLines, status_message: &str, inner_width: usize) {
     let rendered_lines = text_util::wrap_lines(status_message, inner_width)
         .into_iter()
         .map(|line| Line::from(line.to_string()));
@@ -600,11 +675,12 @@ fn append_plain_status_lines(
 struct TranscriptRenderInput<'a> {
     inner_width: usize,
     markdown_render_cache: Option<&'a markdown::MarkdownRenderCache>,
+    message_cache: Option<&'a TranscriptRenderCache>,
     task_chain_graph: Option<&'a TaskChainGraph>,
 }
 
 fn append_transcript_section(
-    lines: &mut Vec<Line<'static>>,
+    lines: &mut OutputLines,
     section: &SessionOutputTranscriptSection<'_>,
     input: TranscriptRenderInput<'_>,
 ) {
@@ -625,41 +701,57 @@ fn append_transcript_section(
 }
 
 fn append_transcript_messages(
-    lines: &mut Vec<Line<'static>>,
+    lines: &mut OutputLines,
     messages: &[SessionMessage],
+    input: TranscriptRenderInput<'_>,
+) {
+    for message in messages {
+        if let Some(cache) = input.message_cache {
+            let rendered = cache.render(message, input);
+            if !rendered.is_empty() || message.kind == SessionMessageKind::ActivitySummary {
+                append_block_separator(lines, SessionOutputSeparator::AfterPreviousContent);
+                lines.append_shared(&rendered);
+            }
+        } else {
+            append_transcript_message(lines, message, input);
+        }
+    }
+}
+
+fn append_transcript_message(
+    lines: &mut OutputLines,
+    message: &SessionMessage,
     input: TranscriptRenderInput<'_>,
 ) {
     let TranscriptRenderInput {
         inner_width,
         markdown_render_cache,
         task_chain_graph,
+        ..
     } = input;
-    for message in messages {
-        match message.kind {
-            SessionMessageKind::UserPrompt => {
-                append_user_prompt(lines, &message.content, inner_width, markdown_render_cache);
-            }
-            SessionMessageKind::AgentPrompt => {}
-            SessionMessageKind::ActivitySummary => {
-                append_block_separator(lines, SessionOutputSeparator::AfterPreviousContent);
-                lines.extend(session_output::activity_summary_lines(
-                    &message.content,
-                    inner_width,
-                ));
-            }
-            SessionMessageKind::AgentAnswer => {
-                append_agent_answer(lines, message, inner_width, markdown_render_cache);
-            }
-            SessionMessageKind::AgentGraph => {
-                let graph = task_chain_graph.filter(|graph| {
-                    message.agent_graph_chain_id() == Some(graph.chain_id.as_str())
-                });
-                append_block_separator(lines, SessionOutputSeparator::AfterPreviousContent);
-                lines.extend(task_chain_format::graph_card_lines(graph, inner_width));
-            }
-            SessionMessageKind::AssistantAnswer | SessionMessageKind::WorkflowNotice => {
-                append_markdown_lines(lines, &message.content, inner_width, markdown_render_cache);
-            }
+    match message.kind {
+        SessionMessageKind::UserPrompt => {
+            append_user_prompt(lines, &message.content, inner_width, markdown_render_cache);
+        }
+        SessionMessageKind::AgentPrompt => {}
+        SessionMessageKind::ActivitySummary => {
+            append_block_separator(lines, SessionOutputSeparator::AfterPreviousContent);
+            lines.extend(session_output::activity_summary_lines(
+                &message.content,
+                inner_width,
+            ));
+        }
+        SessionMessageKind::AgentAnswer => {
+            append_agent_answer(lines, message, inner_width, markdown_render_cache);
+        }
+        SessionMessageKind::AgentGraph => {
+            let graph = task_chain_graph
+                .filter(|graph| message.agent_graph_chain_id() == Some(graph.chain_id.as_str()));
+            append_block_separator(lines, SessionOutputSeparator::AfterPreviousContent);
+            lines.extend(task_chain_format::graph_card_lines(graph, inner_width));
+        }
+        SessionMessageKind::AssistantAnswer | SessionMessageKind::WorkflowNotice => {
+            append_markdown_lines(lines, &message.content, inner_width, markdown_render_cache);
         }
     }
 }
@@ -668,7 +760,7 @@ fn append_transcript_messages(
 /// Markdown. Undecodable content falls back to plain Markdown so no stored
 /// text is hidden.
 fn append_agent_answer(
-    lines: &mut Vec<Line<'static>>,
+    lines: &mut OutputLines,
     message: &SessionMessage,
     inner_width: usize,
     markdown_render_cache: Option<&markdown::MarkdownRenderCache>,
@@ -693,7 +785,7 @@ fn append_agent_answer(
 }
 
 fn append_queued_entries(
-    lines: &mut Vec<Line<'static>>,
+    lines: &mut OutputLines,
     transient_messages: &[TransientMessage],
     queued_messages: &[QueuedMessage],
     inner_width: usize,
@@ -736,7 +828,7 @@ fn append_queued_entries(
 }
 
 fn append_queued_entry(
-    lines: &mut Vec<Line<'static>>,
+    lines: &mut OutputLines,
     queued_line_indices: &mut Vec<usize>,
     has_rendered_message: &mut bool,
     message: &str,
@@ -758,7 +850,7 @@ fn append_queued_entry(
 }
 
 fn append_user_prompt(
-    lines: &mut Vec<Line<'static>>,
+    lines: &mut OutputLines,
     prompt_text: &str,
     inner_width: usize,
     markdown_render_cache: Option<&markdown::MarkdownRenderCache>,
@@ -913,7 +1005,7 @@ fn restored_user_prompt_spans<'line>(
 }
 
 fn append_markdown_lines(
-    lines: &mut Vec<Line<'static>>,
+    lines: &mut OutputLines,
     markdown: &str,
     inner_width: usize,
     markdown_render_cache: Option<&markdown::MarkdownRenderCache>,

@@ -28,6 +28,33 @@ fn plain_key(code: KeyCode) -> KeyEvent {
 }
 
 #[test]
+fn test_scroll_keys_cross_terminal_coordinate_limit() {
+    // Arrange
+    let metrics = ChatScrollMetrics {
+        total_lines: 70_000,
+        view_height: 20,
+    };
+    let mut offset = Some(65_535);
+
+    // Act, Assert
+    for (key, expected) in [
+        (plain_key(KeyCode::Down), Some(65_536)),
+        (
+            KeyEvent::new(KeyCode::Char('d'), KeyModifiers::CONTROL),
+            Some(65_546),
+        ),
+        (plain_key(KeyCode::Up), Some(65_545)),
+        (plain_key(KeyCode::Char('G')), None),
+        (plain_key(KeyCode::Up), Some(69_979)),
+        (plain_key(KeyCode::Down), None),
+        (plain_key(KeyCode::Char('g')), Some(0)),
+    ] {
+        assert!(apply_scroll_key(&mut offset, metrics, key));
+        assert_eq!(offset, expected);
+    }
+}
+
+#[test]
 fn test_is_scroll_key_accepts_scroll_keys_and_rejects_other_keys() {
     // Arrange
     let scroll_keys = [

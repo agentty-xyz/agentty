@@ -447,7 +447,7 @@ pub enum ConfirmationIntent {
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct ConfirmationViewMode {
     /// Scroll position to restore in session view.
-    pub scroll_offset: Option<u16>,
+    pub scroll_offset: Option<usize>,
     /// Session to reopen when the overlay closes.
     pub session_id: SessionId,
 }
@@ -611,7 +611,7 @@ pub struct QuestionModeSnapshot {
     /// Collected responses aligned with `questions`.
     pub responses: Vec<String>,
     /// Transcript scroll position to restore.
-    pub scroll_offset: Option<u16>,
+    pub scroll_offset: Option<usize>,
     /// Highlighted predefined option, when any.
     pub selected_option_index: Option<usize>,
     /// Session receiving the clarification response.
@@ -652,7 +652,7 @@ pub struct PromptModeSnapshot {
     /// Editable prompt input and cursor state.
     pub input: InputState,
     /// Transcript scroll position to restore.
-    pub scroll_offset: Option<u16>,
+    pub scroll_offset: Option<usize>,
     /// Session receiving the restored prompt.
     pub session_id: SessionId,
     /// Slash-command selection state for the current input.
@@ -862,20 +862,20 @@ pub enum AppMode {
         input: InputState,
         /// Scroll position applied to the session transcript above the
         /// composer.
-        scroll_offset: Option<u16>,
+        scroll_offset: Option<usize>,
     },
     /// Displays one session transcript without an active input panel.
     View {
         /// Session whose transcript is visible.
         session_id: SessionId,
         /// Scroll position applied to the transcript.
-        scroll_offset: Option<u16>,
+        scroll_offset: Option<usize>,
     },
     /// Displays an immediately responsive loading page while the full session
     /// diff is computed outside the foreground event loop.
     DiffLoading {
         /// Scroll position restored when loading ends without opening diff.
-        fallback_view_scroll_offset: Option<u16>,
+        fallback_view_scroll_offset: Option<usize>,
         /// Request generation used to ignore a completion after cancellation.
         request_id: u64,
         /// Captured composer or question state restored when loading is
@@ -932,7 +932,7 @@ pub enum AppMode {
         input: InputState,
         /// Scroll position applied to the session transcript above the
         /// question panel.
-        scroll_offset: Option<u16>,
+        scroll_offset: Option<usize>,
         /// Highlighted option index when the current question has predefined
         /// options. `None` means free-text input is active.
         selected_option_index: Option<usize>,
@@ -981,7 +981,7 @@ pub enum HelpContext {
         /// Session lifecycle projection used to derive help actions.
         session_state: ViewSessionState,
         /// Transcript scroll position to restore.
-        scroll_offset: Option<u16>,
+        scroll_offset: Option<usize>,
     },
     /// Diff-view help context and restorable diff state.
     Diff {

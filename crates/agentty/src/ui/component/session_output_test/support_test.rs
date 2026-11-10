@@ -104,8 +104,8 @@ pub(super) fn set_conversation_transcript(
 
 impl SessionOutputLayoutLines {
     pub(super) fn iter(&self) -> impl Iterator<Item = &Line<'static>> {
-        self.body[..self.body_line_count]
-            .iter()
+        self.body
+            .visible_lines(0, self.body_line_count)
             .chain(self.tail.iter())
             .chain(self.queued.iter())
     }

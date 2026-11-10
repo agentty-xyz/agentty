@@ -139,6 +139,9 @@ video without a selector glyph.
 Session chat titles and their `[size]` prefixes keep the bold, in-progress highlight in
 every status.
 
+Scroll through the complete session history with `j` / `k` or the arrow keys. Press `g`
+for the oldest output and `G` to return to the newest output and keep following updates.
+
 Agentty restores your last list tab on startup. Session chat shows `[size]` before the
 title, immediately followed by green added-line and red removed-line totals. A linked
 review request appears on the right of the same row when it fits, or below the title in

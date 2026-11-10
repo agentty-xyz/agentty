@@ -171,7 +171,8 @@ impl<'a> ReviewCommentPage<'a> {
 
         if max_scroll_offset > 0 {
             let scrollbar_area = diff_util::diff_scrollbar_area(area, viewport_height);
-            VerticalScrollbar::new(scroll_offset, line_count).render(frame, scrollbar_area);
+            VerticalScrollbar::new(usize::from(scroll_offset), line_count)
+                .render(frame, scrollbar_area);
         }
     }
 }

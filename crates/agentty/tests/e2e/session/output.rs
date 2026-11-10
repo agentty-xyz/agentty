@@ -833,7 +833,7 @@ async fn session_active_loader_uses_tachyonfx_glyph() -> E2eResult {
     Ok(())
 }
 
-/// Verify navigation across hundreds of styled messages in a single session.
+/// Verify navigation past 65,535 rows across hundreds of styled messages.
 #[tokio::test]
 async fn session_long_transcript_scrolls() -> E2eResult {
     // Arrange, Act, Assert
@@ -850,8 +850,9 @@ async fn session_long_transcript_scrolls() -> E2eResult {
                             "scroll-output-0001",
                             SessionMessageKind::AssistantAnswer,
                             &format!(
-                                "## Message {index:04}\n\n**Styled** output with `code` and \
-                                 界.\n\nMore transcript content."
+                                "```text\n{}\n```\n\n## Message {index:04}\n\n**Styled** output \
+                                 with `code` and 界.",
+                                "History row\n".repeat(256)
                             ),
                         )
                         .await?;

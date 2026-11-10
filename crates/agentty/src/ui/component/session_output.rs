@@ -1,6 +1,7 @@
 use std::cell::RefCell;
 use std::collections::{HashMap, VecDeque};
 use std::hash::{Hash, Hasher};
+use std::rc::Rc;
 use std::sync::Arc;
 
 use ag_tui_text::text_util;
@@ -19,6 +20,7 @@ use crate::ui::component::vertical_scrollbar::VerticalScrollbar;
 use crate::ui::icon::{QUEUED_ACTION_WIDTH, TACHYON_LOADER_WIDTH};
 use crate::ui::input_layout::{bottom_pinned_scroll_offset, panel_inner_width};
 use crate::ui::session_output_assembly::{self, SessionOutputBody};
+use crate::ui::session_output_line::OutputLines;
 use crate::ui::{Component, markdown, session_format, style};
 
 const SCROLLBAR_PADDING_WIDTH: u16 = 1;
@@ -183,8 +185,8 @@ impl TranscriptFingerprint {
 pub(crate) struct SessionOutputLayout {
     /// Index of the active Tachyon loader row within `lines`, when present.
     pub(crate) active_loader_line_index: Option<usize>,
-    /// Number of rendered lines, saturated for scroll metric arithmetic.
-    pub(crate) line_count: u16,
+    /// Number of rendered transcript rows, independent of terminal dimensions.
+    pub(crate) line_count: usize,
     /// Rendered lines shared between scroll metrics and frame painting.
     pub(crate) lines: Arc<SessionOutputLayoutLines>,
     /// Indices of queued rows whose leading glyph receives a calm pulse.
@@ -198,7 +200,7 @@ pub(crate) struct SessionOutputLayout {
 /// `body_line_count` excludes trailing blank body rows when a status separator
 /// replaces them, without copying or changing the cached body.
 pub(crate) struct SessionOutputLayoutLines {
-    body: Arc<[Line<'static>]>,
+    body: Arc<OutputLines>,
     body_line_count: usize,
     queued: Arc<[Line<'static>]>,
     tail: Vec<Line<'static>>,
@@ -211,23 +213,22 @@ impl SessionOutputLayoutLines {
 
     /// Visits only visible rows, borrowing cached lines and their spans.
     fn visible_lines(&self, first: usize, height: usize) -> impl Iterator<Item = &Line<'static>> {
-        let mut segment_offset = 0;
-        [
-            &self.body[..self.body_line_count],
-            self.tail.as_slice(),
-            self.queued.as_ref(),
-        ]
-        .into_iter()
-        .flat_map(move |segment| {
-            let start = first.saturating_sub(segment_offset).min(segment.len());
-            let end = first
-                .saturating_add(height)
-                .saturating_sub(segment_offset)
-                .min(segment.len());
-            segment_offset += segment.len();
-
-            segment[start..end].iter()
-        })
+        self.body
+            .visible_lines(
+                first,
+                height.min(self.body_line_count.saturating_sub(first)),
+            )
+            .chain(
+                self.tail
+                    .iter()
+                    .skip(first.saturating_sub(self.body_line_count)),
+            )
+            .chain(
+                self.queued
+                    .iter()
+                    .skip(first.saturating_sub(self.body_line_count + self.tail.len())),
+            )
+            .take(height)
     }
 }
 
@@ -317,6 +318,15 @@ impl SessionOutputLayoutCache {
             markdown_render_cache.map_or(0, markdown::MarkdownRenderCache::version),
         );
         let body = self.cached_body(&body_key).unwrap_or_else(|| {
+            let message_cache = self
+                .body_entries
+                .borrow()
+                .iter()
+                .find(|entry| {
+                    entry.key.session_id == body_key.session_id
+                        && entry.key.output_width == body_key.output_width
+                })
+                .map(|entry| Rc::clone(&entry.body.message_cache));
             let inner_width =
                 panel_inner_width(output_area, session_format::session_output_panel_borders());
             let body = session_output_assembly::output_body(
@@ -324,6 +334,7 @@ impl SessionOutputLayoutCache {
                 inner_width,
                 context.task_chain_graph,
                 markdown_render_cache,
+                message_cache,
             );
             self.store_body_entry(SessionOutputBodyCacheEntry {
                 body: body.clone(),
@@ -513,7 +524,7 @@ pub struct SessionOutput<'a> {
     /// for scroll metrics and frame painting within the same session/update
     /// version.
     output_layout_cache: Option<&'a SessionOutputLayoutCache>,
-    scroll_offset: Option<u16>,
+    scroll_offset: Option<usize>,
     session: &'a Session,
     session_update_version: u64,
     spinner_frame: usize,
@@ -575,7 +586,7 @@ impl<'a> SessionOutput<'a> {
 
     /// Sets the vertical scroll offset.
     #[must_use]
-    pub fn scroll_offset(mut self, offset: u16) -> Self {
+    pub fn scroll_offset(mut self, offset: usize) -> Self {
         self.scroll_offset = Some(offset);
         self
     }
@@ -609,7 +620,7 @@ impl<'a> SessionOutput<'a> {
         context: SessionOutputLineContext<'_>,
         markdown_render_cache: Option<&markdown::MarkdownRenderCache>,
         output_layout_cache: Option<&SessionOutputLayoutCache>,
-    ) -> u16 {
+    ) -> usize {
         Self::resolved_layout(
             session,
             Rect::new(0, 0, output_width, 0),
@@ -721,6 +732,7 @@ impl<'a> SessionOutput<'a> {
             inner_width,
             context.task_chain_graph,
             markdown_render_cache,
+            None,
         );
 
         Self::layout_from_body(session, context.active_progress, &body)
@@ -742,15 +754,12 @@ impl<'a> SessionOutput<'a> {
             tail.lines.truncate(tail_line_count);
         }
         let body_line_count = if tail.trim_body || !body.queued_lines.is_empty() {
-            body.lines
-                .iter()
-                .rposition(|line| line.width() > 0)
-                .map_or(0, |index| index + 1)
+            body.lines.trimmed_len()
         } else {
             body.lines.len()
         };
         let queue_offset = body_line_count + tail.lines.len();
-        let line_count = u16::try_from(queue_offset + body.queued_lines.len()).unwrap_or(u16::MAX);
+        let line_count = queue_offset + body.queued_lines.len();
 
         SessionOutputLayout {
             active_loader_line_index: tail
@@ -865,7 +874,7 @@ impl<'a> SessionOutput<'a> {
     fn indicator_area(
         output_area: Rect,
         line_index: usize,
-        final_scroll: u16,
+        final_scroll: usize,
         indicator_width: u16,
     ) -> Option<Rect> {
         if output_area.width < indicator_width {
@@ -877,7 +886,7 @@ impl<'a> SessionOutput<'a> {
             return None;
         }
 
-        let first_visible_line_index = usize::from(final_scroll);
+        let first_visible_line_index = final_scroll;
         let last_visible_line_index =
             first_visible_line_index.saturating_add(usize::from(inner_area.height));
         if line_index < first_visible_line_index || line_index >= last_visible_line_index {
@@ -982,7 +991,7 @@ impl Component for SessionOutput<'_> {
         f.render_widget(block, output_area);
         for (line, row) in layout
             .lines
-            .visible_lines(usize::from(final_scroll), usize::from(inner_area.height))
+            .visible_lines(final_scroll, usize::from(inner_area.height))
             .zip(inner_area.rows())
         {
             text_util::paint_line(line, row, f.buffer_mut());

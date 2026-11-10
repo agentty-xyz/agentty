@@ -1541,7 +1541,8 @@ impl<'a> DiffPage<'a> {
             let scrollbar_area =
                 diff_util::diff_scrollbar_area(area, layout.render_layout.viewport_height);
 
-            VerticalScrollbar::new(scroll_offset, layout.line_count).render(f, scrollbar_area);
+            VerticalScrollbar::new(usize::from(scroll_offset), layout.line_count)
+                .render(f, scrollbar_area);
         }
     }
 
@@ -1778,7 +1779,7 @@ impl<'a> DiffPage<'a> {
                 if layout.show_scrollbar {
                     let scrollbar_area =
                         diff_util::diff_scrollbar_area(area, layout.viewport_height);
-                    VerticalScrollbar::new(scroll_offset, layout.lines.len())
+                    VerticalScrollbar::new(usize::from(scroll_offset), layout.lines.len())
                         .render(frame, scrollbar_area);
                 }
             }

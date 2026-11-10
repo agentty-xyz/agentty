@@ -39,7 +39,7 @@ use crate::ui::input_layout::{move_input_cursor_down, move_input_cursor_up};
 /// normal reply path even though the session still records draft origin.
 struct PromptContext {
     input_mode: PromptInputMode,
-    scroll_offset: Option<u16>,
+    scroll_offset: Option<usize>,
     session_id: SessionId,
     session_index: usize,
     session_mode: PromptSessionMode,
@@ -1147,7 +1147,7 @@ fn open_prompt_response_style_stage(app: &mut App, session_index: usize) {
 fn apply_prompt_workflow_outcome(
     app: &mut App,
     outcome: PromptWorkflowOutcome,
-    scroll_offset: Option<u16>,
+    scroll_offset: Option<usize>,
 ) {
     match outcome {
         PromptWorkflowOutcome::KeepPrompt => {}

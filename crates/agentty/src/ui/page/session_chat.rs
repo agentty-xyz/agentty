@@ -163,7 +163,7 @@ pub struct SessionChatPageInput<'a> {
     /// Focused-review output for the rendered session.
     pub review_text: Option<&'a str>,
     /// Current vertical output scroll offset.
-    pub scroll_offset: Option<u16>,
+    pub scroll_offset: Option<usize>,
     /// Index of the session being rendered.
     pub session_index: usize,
     /// Observable update version for the rendered session snapshot.
@@ -220,7 +220,7 @@ impl<'a> SessionChatPage<'a> {
         context: SessionOutputLineContext<'_>,
         markdown_render_cache: &markdown::MarkdownRenderCache,
         output_layout_cache: &SessionOutputLayoutCache,
-    ) -> u16 {
+    ) -> usize {
         SessionOutput::rendered_line_count(
             session,
             output_width,

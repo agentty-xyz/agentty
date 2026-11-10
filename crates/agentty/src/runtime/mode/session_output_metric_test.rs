@@ -8,7 +8,7 @@ pub(crate) fn rendered_output_line_count(
     session_index: usize,
     output_width: u16,
     viewport_height: u16,
-) -> u16 {
+) -> usize {
     rendered_output_line_count_with_cache(
         app,
         &RenderCacheStore::default(),

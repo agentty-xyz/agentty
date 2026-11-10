@@ -10,6 +10,7 @@ use super::super::{
 use super::support::{line_context, session_fixture};
 use crate::domain::session::SessionId;
 use crate::ui::icon::{QUEUED_ACTION_WIDTH, TACHYON_LOADER_WIDTH};
+use crate::ui::session_output_line::OutputLines;
 
 #[test]
 fn test_resolved_cache_evicts_old_sessions() {
@@ -60,14 +61,16 @@ fn test_indicator_area_skips_line_outside_viewport() {
 #[test]
 fn test_visible_lines_skip_rows_outside_viewport() {
     // Arrange
+    let mut body = OutputLines::default();
+    body.extend([
+        Line::from("hidden before viewport"),
+        Line::from("visible first row"),
+        Line::from("visible second row"),
+        Line::from("visible bottom row"),
+        Line::from("hidden after viewport"),
+    ]);
     let cached_lines = SessionOutputLayoutLines {
-        body: Arc::from([
-            Line::from("hidden before viewport"),
-            Line::from("visible first row"),
-            Line::from("visible second row"),
-            Line::from("visible bottom row"),
-            Line::from("hidden after viewport"),
-        ]),
+        body: Arc::new(body),
         body_line_count: 5,
         queued: Arc::from([]),
         tail: Vec::new(),
@@ -91,15 +94,21 @@ fn test_visible_lines_skip_rows_outside_viewport() {
     );
     assert!(std::ptr::eq(
         paint_lines[0],
-        &raw const cached_lines.body[1]
+        cached_lines
+            .body
+            .visible_lines(1, 1)
+            .next()
+            .expect("visible row")
     ));
 }
 
 #[test]
 fn test_visible_rows_cross_shared_body_and_tail_without_copying_hidden_rows() {
     // Arrange
+    let mut body = OutputLines::default();
+    body.extend([Line::from("one"), Line::from("two"), Line::from("")]);
     let lines = SessionOutputLayoutLines {
-        body: Arc::from([Line::from("one"), Line::from("two"), Line::from("")]),
+        body: Arc::new(body),
         body_line_count: 2,
         queued: Arc::from([Line::from("queued first"), Line::from("queued second")]),
         tail: vec![Line::from("status"), Line::from("done")],

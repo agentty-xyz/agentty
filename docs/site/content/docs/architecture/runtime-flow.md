@@ -202,6 +202,10 @@ replayed.
 Completion replaces matching progress with its result in one reducer update. Stale
 results cannot persist notices. Rendering reads snapshots; it does not perform workflow
 side effects. Runtime-owned caches share derived layout between scrolling and painting.
+Transcript layouts retain rendered message segments across updates, while transient rows
+are assembled separately. The bounded layout cache releases removed history and
+invalidates segments when their content, width, theme, or live graph changes. Transcript
+row positions are independent of terminal coordinate limits.
 
 The graph inspector loads an explicit session-scoped snapshot of saved graphs,
 authoritative progress, and exact output bodies. Controls revalidate that snapshot and

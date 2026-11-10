@@ -27,7 +27,7 @@ use crate::ui::RenderCacheStore;
 
 #[derive(Clone)]
 struct ViewContext {
-    scroll_offset: Option<u16>,
+    scroll_offset: Option<usize>,
     session_id: SessionId,
     session_index: usize,
 }
@@ -60,7 +60,7 @@ impl ViewContext {
 /// Pending review and scroll updates produced by one key event in session-view
 /// mode.
 struct ViewPendingUpdate {
-    scroll_offset: Option<u16>,
+    scroll_offset: Option<usize>,
 }
 
 impl ViewPendingUpdate {
@@ -698,7 +698,7 @@ fn view_session_snapshot(app: &App, view_context: &ViewContext) -> Option<ViewSe
 
 /// Applies in-place updates for active view review status/text and scroll
 /// position.
-fn apply_view_scroll_and_output_mode(mode: &mut AppMode, scroll_offset: Option<u16>) {
+fn apply_view_scroll_and_output_mode(mode: &mut AppMode, scroll_offset: Option<usize>) {
     if let AppMode::View {
         scroll_offset: view_scroll_offset,
         ..
@@ -898,7 +898,7 @@ async fn switch_view_to_prompt(
     view_context: &ViewContext,
     history_state: PromptHistoryState,
     input: InputState,
-    scroll_offset: Option<u16>,
+    scroll_offset: Option<usize>,
 ) {
     if input.is_empty() && app.restore_prompt_progress(&view_context.session_id).await {
         return;
@@ -923,7 +923,7 @@ async fn switch_view_to_prompt(
 async fn open_draft_prompt_with_pasted_image(
     app: &mut App,
     view_context: &ViewContext,
-    scroll_offset: Option<u16>,
+    scroll_offset: Option<usize>,
 ) {
     let Some(session) = app.sessions.session_at(view_context.session_index) else {
         return;

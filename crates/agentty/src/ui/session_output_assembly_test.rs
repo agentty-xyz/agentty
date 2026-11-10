@@ -1,3 +1,6 @@
+use std::rc::Rc;
+use std::sync::Arc;
+
 use ag_session::{AgentAnswerContent, TaskAgentRole};
 use ratatui::text::Line;
 
@@ -18,10 +21,167 @@ use crate::presentation::task_chain_graph::{
     ACCEPTED_PLAN_EDGE_LABEL, TaskChainGraph, TaskChainGraphEdge, TaskChainGraphNode,
     TaskChainNodeStatus,
 };
+use crate::ui::session_output_line::OutputLines;
 use crate::ui::{markdown, style};
 
 fn queued_message(order: u64, text: &str) -> QueuedMessage {
     QueuedMessage::new(order, TurnPrompt::from_text(text.to_string()))
+}
+
+#[test]
+fn test_cached_messages_preserve_spacing_for_empty_and_visible_content() {
+    // Arrange
+    for kind in [
+        SessionMessageKind::UserPrompt,
+        SessionMessageKind::AgentPrompt,
+        SessionMessageKind::AssistantAnswer,
+        SessionMessageKind::AgentAnswer,
+        SessionMessageKind::AgentGraph,
+        SessionMessageKind::ActivitySummary,
+        SessionMessageKind::WorkflowNotice,
+    ] {
+        for content in ["", " \n", "**Content**\n\n"] {
+            let mut session = crate::test_support::session_fixture("spacing", Status::Review);
+            session.transcript = Some(SessionTranscript::new(vec![
+                SessionMessage::new(0, SessionMessageKind::AssistantAnswer, "Earlier answer"),
+                SessionMessage::new(1, kind, content),
+            ]));
+
+            // Act
+            let uncached =
+                output_assembly(&session, 80, None, None).into_output_body(Rc::default());
+            let cached = output_body(&session, 80, None, None, None);
+
+            // Assert
+            assert_eq!(
+                body_texts(&cached.lines),
+                body_texts(&uncached.lines),
+                "{kind:?}: {content:?}"
+            );
+        }
+    }
+}
+
+#[test]
+fn test_message_segments_survive_updates_and_prune_removed_history() {
+    // Arrange
+    let mut session = crate::test_support::session_fixture("segments", Status::Review);
+    let mut messages = (0..128)
+        .map(|position| {
+            SessionMessage::conversation(
+                position,
+                SessionMessageKind::AssistantAnswer,
+                format!("**Answer {position}**"),
+            )
+        })
+        .collect::<Vec<_>>();
+    session.transcript = Some(SessionTranscript::new(messages.clone()));
+    let markdown = markdown::MarkdownRenderCache::default();
+    let first = output_body(&session, 80, None, Some(&markdown), None);
+    let initial_lines = Arc::clone(&first.message_cache.entries.borrow()[&0].lines);
+
+    // Act
+    messages.push(SessionMessage::conversation(
+        128,
+        SessionMessageKind::AssistantAnswer,
+        "New answer",
+    ));
+    session.transcript = Some(SessionTranscript::new(messages.clone()));
+    let appended = output_body(
+        &session,
+        80,
+        None,
+        Some(&markdown),
+        Some(Rc::clone(&first.message_cache)),
+    );
+
+    // Assert
+    assert!(Arc::ptr_eq(
+        &initial_lines,
+        &appended.message_cache.entries.borrow()[&0].lines
+    ));
+    assert_eq!(appended.message_cache.entries.borrow().len(), 129);
+    assert!(
+        body_texts(&appended.lines)
+            .iter()
+            .any(|line| line == "New answer")
+    );
+
+    // Act
+    messages[0].content = "Edited answer".into();
+    messages.remove(1);
+    session.transcript = Some(SessionTranscript::new(messages));
+    let edited = output_body(
+        &session,
+        80,
+        None,
+        Some(&markdown),
+        Some(Rc::clone(&appended.message_cache)),
+    );
+
+    // Assert
+    assert!(!Arc::ptr_eq(
+        &initial_lines,
+        &edited.message_cache.entries.borrow()[&0].lines
+    ));
+    assert!(!edited.message_cache.entries.borrow().contains_key(&1));
+    assert!(
+        body_texts(&edited.lines)
+            .iter()
+            .any(|line| line == "Edited answer")
+    );
+    assert!(
+        body_texts(&first.lines)
+            .iter()
+            .any(|line| line == "Answer 0")
+    );
+
+    // Act
+    let edited_lines = Arc::clone(&edited.message_cache.entries.borrow()[&0].lines);
+    markdown.bump_version();
+    let invalidated = output_body(
+        &session,
+        80,
+        None,
+        Some(&markdown),
+        Some(Rc::clone(&edited.message_cache)),
+    );
+
+    // Assert
+    assert!(!Arc::ptr_eq(
+        &edited_lines,
+        &invalidated.message_cache.entries.borrow()[&0].lines
+    ));
+
+    // Act
+    let previous_lines = Arc::clone(&invalidated.message_cache.entries.borrow()[&0].lines);
+    let resized = output_body(
+        &session,
+        6,
+        None,
+        Some(&markdown),
+        Some(Rc::clone(&invalidated.message_cache)),
+    );
+
+    // Assert
+    assert!(!Arc::ptr_eq(
+        &previous_lines,
+        &resized.message_cache.entries.borrow()[&0].lines
+    ));
+    assert!(resized.lines.len() > invalidated.lines.len());
+
+    // Act
+    session.transcript = None;
+    let cleared = output_body(
+        &session,
+        80,
+        None,
+        Some(&markdown),
+        Some(Rc::clone(&invalidated.message_cache)),
+    );
+
+    // Assert
+    assert!(cleared.message_cache.entries.borrow().is_empty());
 }
 
 #[test]
@@ -44,7 +204,7 @@ fn test_section_display_text_handles_empty_and_markdown_sections() {
 #[test]
 fn test_queued_messages_skip_blank_entries() {
     // Arrange
-    let mut lines = Vec::new();
+    let mut lines = OutputLines::default();
     let queued_messages = vec![
         queued_message(0, " \n\t"),
         queued_message(1, "queued reply"),
@@ -95,7 +255,7 @@ fn test_empty_preparation_marker_preserves_draft_output_rows() {
 #[test]
 fn test_transient_message_appender_skips_queued_actions() {
     // Arrange
-    let mut lines = Vec::new();
+    let mut lines = OutputLines::default();
     let message = TransientMessage {
         anchor: TransientMessageAnchor::Tail,
         body: TransientMessageBody::Queued(QueuedAction::new(
@@ -112,7 +272,7 @@ fn test_transient_message_appender_skips_queued_actions() {
 
     // Assert
     assert_eq!(loader_line_index, None);
-    assert_eq!(lines, []);
+    assert!(lines.is_empty());
 }
 
 #[test]
@@ -179,7 +339,8 @@ fn test_review_comment_resolution_loader_ignores_non_loading_body() {
 #[test]
 fn test_queued_entries_follow_shared_submission_order() {
     // Arrange
-    let mut lines = vec![Line::from("Active turn")];
+    let mut lines = OutputLines::default();
+    lines.push(Line::from("Active turn"));
     let transient_messages = vec![
         TransientMessage {
             anchor: TransientMessageAnchor::Tail,
@@ -226,19 +387,19 @@ fn test_queued_entries_follow_shared_submission_order() {
 #[test]
 fn test_blank_user_prompt_does_not_add_output_lines() {
     // Arrange
-    let mut lines = Vec::new();
+    let mut lines = OutputLines::default();
 
     // Act
     append_user_prompt(&mut lines, " \n\t", 80, None);
 
     // Assert
-    assert_eq!(lines, [] as [ratatui::prelude::Line<'_>; 0]);
+    assert!(lines.is_empty());
 }
 
 #[test]
 fn test_user_prompt_highlights_at_lookup_file() {
     // Arrange
-    let mut lines = Vec::new();
+    let mut lines = OutputLines::default();
     let lookup = "@crates/agentty/src/ui/markdown.rs";
 
     // Act
@@ -262,25 +423,25 @@ fn test_user_prompt_highlights_at_lookup_file() {
 #[test]
 fn test_zero_width_user_prompt_does_not_add_output_lines() {
     // Arrange
-    let mut lines = Vec::new();
+    let mut lines = OutputLines::default();
 
     // Act
     append_user_prompt(&mut lines, "\u{200b}", 80, None);
 
     // Assert
-    assert_eq!(lines, [] as [ratatui::prelude::Line<'_>; 0]);
+    assert!(lines.is_empty());
 }
 
 #[test]
 fn test_zero_width_markdown_does_not_add_output_lines() {
     // Arrange
-    let mut lines = Vec::new();
+    let mut lines = OutputLines::default();
 
     // Act
     append_markdown_lines(&mut lines, "\u{200b}", 80, None);
 
     // Assert
-    assert_eq!(lines, [] as [ratatui::prelude::Line<'_>; 0]);
+    assert!(lines.is_empty());
 }
 
 #[test]
@@ -357,9 +518,9 @@ fn test_task_chain_rows_render_role_headers_and_live_graph_card() {
     let other_graph = task_chain_graph("other-chain");
 
     // Act
-    let live = body_texts(&output_body(&session, 60, Some(&live_graph), None).lines);
-    let other = body_texts(&output_body(&session, 60, Some(&other_graph), None).lines);
-    let loading = body_texts(&output_body(&session, 60, None, None).lines);
+    let live = body_texts(&output_body(&session, 60, Some(&live_graph), None, None).lines);
+    let other = body_texts(&output_body(&session, 60, Some(&other_graph), None, None).lines);
+    let loading = body_texts(&output_body(&session, 60, None, None, None).lines);
 
     // Assert
     let graph_start = live
@@ -412,7 +573,7 @@ pub(crate) fn transcript_section_texts(
         section_display_text(&sections.trailing_notice),
     )
 }
-fn body_texts(lines: &[Line<'static>]) -> Vec<String> {
+fn body_texts(lines: &OutputLines) -> Vec<String> {
     lines.iter().map(ToString::to_string).collect()
 }
 
@@ -451,7 +612,10 @@ pub(crate) fn append_queued_message_lines(
     lines: &mut Vec<Line<'static>>,
     queued_messages: &[QueuedMessage],
 ) {
-    append_queued_entries(lines, &[], queued_messages, 80);
+    let mut output = OutputLines::default();
+    output.extend(std::mem::take(lines));
+    append_queued_entries(&mut output, &[], queued_messages, 80);
+    lines.extend(output.iter().cloned());
 }
 /// Appends one user prompt block while retaining its prompt marker and shading.
 pub(crate) fn append_user_prompt_markdown_lines(
@@ -460,7 +624,10 @@ pub(crate) fn append_user_prompt_markdown_lines(
     inner_width: usize,
     markdown_render_cache: Option<&markdown::MarkdownRenderCache>,
 ) {
-    append_user_prompt(lines, prompt_text, inner_width, markdown_render_cache);
+    let mut output = OutputLines::default();
+    output.extend(std::mem::take(lines));
+    append_user_prompt(&mut output, prompt_text, inner_width, markdown_render_cache);
+    lines.extend(output.iter().cloned());
 }
 impl SessionOutputAssembly<'_> {
     fn into_output_lines(mut self) -> SessionOutputLines {
@@ -470,7 +637,7 @@ impl SessionOutputAssembly<'_> {
 
         SessionOutputLines {
             active_loader_line_index: self.active_loader_line_index,
-            lines: self.lines,
+            lines: self.lines.iter().cloned().collect(),
             queued_line_indices: self.queued_line_indices,
             transient_loader_line_index: self.transient_loader_line_index,
         }
