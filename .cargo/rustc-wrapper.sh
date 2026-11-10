@@ -5,7 +5,7 @@ if command -v sccache >/dev/null 2>&1 && sccache --dist-status >/dev/null 2>&1; 
     sccache "$@"
     cache_status=$?
     # sccache reports fatal server errors (such as a deleted TMPDIR) as -2/254.
-    if [ "$cache_status" -ne 254 ]; then
+    if [[ "$cache_status" -ne 254 ]]; then
         exit "$cache_status"
     fi
     echo "rustc-wrapper: sccache failed; retrying the compiler directly" >&2
