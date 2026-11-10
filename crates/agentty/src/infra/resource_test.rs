@@ -5,6 +5,8 @@ use std::sync::mpsc;
 use std::thread;
 use std::time::{Duration, Instant};
 
+use sysinfo::{Components, Error};
+
 use super::{
     RealResourceClient, ResourceClient, TemperatureCache, hottest_cpu_temperature,
     parse_process_table, process_tree_resources,
@@ -205,6 +207,26 @@ fn temperature_overrides_pin_recordings_and_invalid_values_use_live_sensors() {
         RealResourceClient::temperature_with_override(None, || None),
         None
     );
+}
+
+#[test]
+fn failed_or_empty_sensor_discovery_is_unavailable() {
+    // Arrange
+    let discoveries = [
+        Err(Error::Unsupported),
+        Err(Error::Io(std::io::Error::other("sensor read failed"))),
+        Components::new(),
+    ];
+
+    // Act / Assert
+    for discovery in discoveries {
+        let client = RealResourceClient::default();
+        assert_eq!(client.host_cpu_temperature(|| discovery), None);
+        let mut cache = client.temperature.lock().expect("cache");
+        finish_temperature_read(&cache);
+        let worker = cache.pending.take().expect("sensor worker");
+        assert_eq!(worker.join().expect("discovery must not panic"), None);
+    }
 }
 
 #[test]

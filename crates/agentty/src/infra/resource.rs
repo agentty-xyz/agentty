@@ -56,10 +56,13 @@ impl RealResourceClient {
     }
 
     /// Polls the independent sensor worker without waiting for host I/O.
-    fn host_cpu_temperature(&self) -> Option<f32> {
+    fn host_cpu_temperature(
+        &self,
+        discover: impl FnOnce() -> Result<Components, sysinfo::Error> + Send + 'static,
+    ) -> Option<f32> {
         let read = || {
             self.temperature.lock().ok()?.sample(Instant::now(), || {
-                let components = Components::new_with_refreshed_list();
+                let components = discover().ok()?;
 
                 hottest_cpu_temperature(
                     components
@@ -136,7 +139,7 @@ impl ResourceClient for RealResourceClient {
         let mut samples = Self::parse_output(&output)?;
         let after = Self::identities(roots).await?;
         Self::bind_identities(&mut samples, &before, &after);
-        let temperature = self.host_cpu_temperature();
+        let temperature = self.host_cpu_temperature(Components::new_with_refreshed_list);
         for sample in &mut samples {
             sample.host_cpu_temperature_celsius = temperature;
         }
