@@ -130,6 +130,36 @@ async fn cancel_diff_view_load_restores_view_and_discards_completion() {
 }
 
 #[tokio::test]
+async fn empty_open_diff_completion_restores_view_scroll_offset() {
+    // Arrange
+    let (mut app, _base_dir, session_id) = review_app().await;
+    app.mode = AppMode::View {
+        scroll_offset: Some(7),
+        session_id: session_id.clone(),
+    };
+    assert!(app.start_diff_view_load(&session_id, None, DiffSidebarFocus::Files, false,));
+    let request_id = loading_request_id(&app).expect("diff loading mode should have a request");
+
+    // Act
+    app.apply_session_diff_update(SessionDiffUpdate {
+        request_id,
+        result: Ok(" \n\t".to_string()),
+        session_id: session_id.clone(),
+    })
+    .await;
+
+    // Assert
+    assert!(app.pending_session_diff_requests.is_empty());
+    assert!(matches!(
+        app.mode,
+        AppMode::View {
+            session_id: ref viewed_session_id,
+            scroll_offset: Some(7),
+        } if viewed_session_id == &session_id
+    ));
+}
+
+#[tokio::test]
 async fn stale_open_diff_completion_keeps_newer_loading_generation() {
     // Arrange
     let (mut app, _base_dir, session_id) = review_app().await;

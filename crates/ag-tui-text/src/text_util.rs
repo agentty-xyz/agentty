@@ -31,8 +31,7 @@ pub fn wrap_lines(text: &str, width: usize) -> Vec<Line<'_>> {
             let space_len = usize::from(current_width != 0);
 
             if current_width + space_len + word_len > width && !current_line.is_empty() {
-                wrapped.push(Line::from(current_line));
-                current_line = String::new();
+                wrapped.push(Line::from(std::mem::take(&mut current_line)));
                 current_width = 0;
             }
 

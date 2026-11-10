@@ -160,8 +160,8 @@ impl App {
         };
 
         self.pending_session_diff_requests.remove(&request_id);
-        self.mode = restore.map_or_else(
-            || AppMode::View {
+        self.mode = restore.map_or(
+            AppMode::View {
                 scroll_offset: fallback_view_scroll_offset,
                 session_id,
             },
@@ -859,8 +859,8 @@ impl App {
             }
         };
         if diff.trim().is_empty() && !allow_empty {
-            self.mode = restore.map_or_else(
-                || AppMode::View {
+            self.mode = restore.map_or(
+                AppMode::View {
                     scroll_offset: fallback_view_scroll_offset,
                     session_id,
                 },
