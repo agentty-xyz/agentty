@@ -67,33 +67,48 @@ Planner results, questions, and failed or canceled work do not start a review.
 
 ## Generated Graph Proposals
 
-With `--experimental-multi-agent`, enter `/graph <request>` in a prepared idle session
-to generate a graph preview. Generation reads the workspace through the utility worker;
-no proposed node executes yet. `/graph query` shows the latest proposal, including after
-a restart. Queries never regenerate or launch work. Use `/graph new <id> <request>` to
-choose a delivery ID that can be retried safely.
+With `--experimental-multi-agent`, select `/graph` in a prepared idle session, then
+describe the task and press `Enter`. `Esc` disarms the composer and keeps your draft.
+`/graph` only selects the mode; it has no subcommands. Conversation and clarification
+questions stay in the left chat pane; other proposal results appear there as one short
+line. The right pane uses at most 35% of the width for proposal status and the graph,
+drawn like the `/plan` card: each node with its status, and `│` / `▼` connectors from
+its dependencies. It indicates when input is needed without repeating the discussion. It
+updates automatically and restores saved proposals when you reopen the session. When the
+graph exceeds the pane height, a compact summary of one row per node, without
+connectors, prioritizes nodes needing input, failed or blocked nodes, and active work.
+It shows the number of hidden nodes and keeps the `w` inspector shortcut visible.
 
-Inspect the proposal ID and version, model, captured agent instructions, objectives,
-access, dependencies, output gates, and limits. Use the displayed commands:
+Generation reads the workspace through the utility worker; no proposed node executes
+yet. The sidebar restores the latest proposal after a restart.
 
-- `/graph answer <id> <version> ["first answer", "second answer"]` answers the complete
-  clarification set. Every node receives the saved questions and answers when it
-  executes.
-- `/graph regenerate <id> <version>` spends another generation slot using the captured
-  model, catalog, and limits.
-- `/graph approve <id> <version>` approves that exact preview and starts execution.
-- `/graph cancel <id> <version>` discards a pending proposal and stops generation.
+While a proposal is pending, reply in chat to act on it. The session model reads your
+reply and decides what it means, as with `/plan`:
+
+- Clear approval, such as "run it", approves the displayed version and starts execution.
+- A clear request to discard, such as "cancel", cancels the proposal.
+- Anything else, including answers to questions and requested changes, generates a new
+  version that includes your reply, within the captured generation limit.
+
+When unsure, it revises rather than running or discarding the graph. Wait for the
+decision on one reply before sending another. Replies take text only.
+
+Press `w` from chat view for read-only details: the proposal ID and version, model,
+captured agent instructions, objectives, access, dependencies, output gates, and limits.
+`r` refreshes; `J` / `K` scroll; `q` returns to chat. Opening the inspector never
+regenerates or launches work.
 
 Approval does not accept outputs produced later. Use `w` for execution controls and
 exact output acceptance. Duplicate approval returns its receipt without launching again.
-Pending previews survive restart; an interrupted generation needs explicit regeneration.
-Graphs that executed before restart cannot recreate spent provider credits and therefore
-cannot resume through proposal approval. Attachment paths are currently unsupported.
+Pending previews survive restart; reply to regenerate an interrupted generation. Graphs
+that executed before restart cannot recreate spent provider credits and therefore cannot
+resume through proposal approval. Attachment paths are currently unsupported.
 
 ## Execution Graph Inspector
 
-Press `w` in session view to inspect any saved execution graph, including branches and
-joins. Use `[` / `]` to switch graphs and `j` / `k` to select nodes. The inspector shows
+Press `w` in session view to inspect the latest pending proposal or saved execution
+graphs, including branches and joins. Use `[` / `]` to switch execution graphs, `p` to
+return to a pending proposal, and `j` / `k` to select nodes. The inspector shows
 captured agents, objectives, prerequisites, execution state, blocked reasons, questions,
 and exact output versions. Node answers render as Markdown, including lists and code
 blocks, with emoji kept intact when code wraps. Long paths, URLs, and identifiers in

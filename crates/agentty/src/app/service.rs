@@ -1,6 +1,6 @@
 //! Shared app dependency container for managers and background workflows.
 
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::num::NonZeroUsize;
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex, PoisonError};
@@ -38,6 +38,8 @@ pub struct AppServices {
     pub(super) graph_wake: tokio::sync::watch::Sender<u64>,
     pub(super) proposal_generations:
         Arc<Mutex<HashMap<String, super::graph_proposal::ProposalGeneration>>>,
+    /// Proposals whose chat reply is waiting for its background decision.
+    pub(super) proposal_reply_decisions: Arc<Mutex<HashSet<String>>>,
     analytics: Option<Analytics>,
     available_agent_clis: Arc<Mutex<Vec<AgentCliInfo>>>,
     available_agent_kinds: Arc<[AgentKind]>,
@@ -108,6 +110,7 @@ impl AppServices {
             graph_wake: tokio::sync::watch::channel(0).0,
             graph_drivers: Arc::default(),
             proposal_generations: Arc::default(),
+            proposal_reply_decisions: Arc::default(),
             analytics: None,
             available_agent_clis: Arc::new(Mutex::new(available_agent_clis)),
             available_agent_kinds: Arc::<[AgentKind]>::from(available_agent_kinds),

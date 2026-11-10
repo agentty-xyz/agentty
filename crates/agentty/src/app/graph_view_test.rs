@@ -14,6 +14,81 @@ use crate::test_support::new_test_app;
 mod draft;
 
 #[tokio::test]
+async fn proposal_inspector_admits_no_actions_for_the_displayed_proposal() {
+    // Arrange
+    let (mut app, _directory) = new_test_app().await;
+    crate::app::execution_graph::tests::seed_session(&mut app.sessions, app.services.db()).await;
+    app.experimental_multi_agent = true;
+    let state = ag_session::test_support::graph_proposal_state("preview", "sess");
+    app.services
+        .db()
+        .graph_proposals()
+        .create(&state)
+        .await
+        .expect("create");
+    let mut view = graph_view();
+    view.graphs.clear();
+    view.progress = None;
+    app.load_graph_view(&mut view).await.expect("load proposal");
+
+    // Act
+    let result = app
+        .apply_graph_view_action(&view, GraphViewAction::Cancel)
+        .await;
+
+    // Assert
+    assert_eq!(view.selected_proposal(), Some(&state));
+    assert_eq!(result, Err("No graph selected".into()));
+    let stored = app
+        .services
+        .db()
+        .graph_proposals()
+        .get("preview", None)
+        .await
+        .expect("read")
+        .expect("proposal");
+    assert_eq!(stored, state);
+}
+
+#[tokio::test]
+async fn inspector_selects_the_approved_graph_and_preserves_failed_proposal_reads() {
+    // Arrange
+    let (mut app, _directory) = new_test_app().await;
+    app.experimental_multi_agent = true;
+    let mut view = graph_view();
+    let mut state = ag_session::test_support::graph_proposal_state("preview", "sess");
+    state.version.approval = Some(ag_session::GraphProposalApproval {
+        graph_id: "graph".into(),
+        limits: state.limits.clone(),
+        version: 1,
+    });
+    let saved = state.clone();
+    let mut proposals = ag_store::MockGraphProposalRepository::new();
+    proposals
+        .expect_latest()
+        .once()
+        .return_once(move |_| Ok(Some(saved)));
+    proposals.expect_latest().once().return_once(|_| {
+        Err(DbError::InvalidData {
+            entity: "proposal",
+            reason: "unavailable".into(),
+        })
+    });
+    app.services
+        .set_graph_proposal_repository(Arc::new(proposals));
+
+    // Act / Assert
+    app.load_graph_view(&mut view)
+        .await
+        .expect("approved proposal");
+    assert!(!view.is_proposal_selected);
+    assert_eq!(view.proposal, Some(state));
+    let original = view.clone();
+    assert!(app.load_graph_view(&mut view).await.is_err());
+    assert_eq!(view, original);
+}
+
+#[tokio::test]
 async fn inspector_reads_are_atomic_and_missing_results_are_not_actionable() {
     for fault in [
         "progress",

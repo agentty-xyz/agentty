@@ -15,6 +15,7 @@ use crate::domain::session::{
 use crate::domain::{input, review};
 use crate::presentation::app_mode::{AppMode, ChatFocus};
 use crate::presentation::frame_time::FrameTime;
+use crate::presentation::graph_chat::GraphChatSnapshot;
 use crate::presentation::help_action::{self, ViewActionAvailability, ViewHelpState};
 use crate::presentation::prompt::PromptAtMentionState;
 use crate::presentation::task_chain_graph::TaskChainGraph;
@@ -27,6 +28,7 @@ use crate::ui::icon::Icon;
 use crate::ui::input_layout::{
     calculate_input_height, overlay_area_above, panel_inner_height, suggestion_dropdown_height,
 };
+use crate::ui::page::graph_chat;
 use crate::ui::{
     Component, Page, layout, markdown, prompt_format, question_format, session_format, style,
     task_chain_format,
@@ -175,6 +177,7 @@ pub struct SessionChatPageInput<'a> {
 pub struct SessionChatPage<'a> {
     /// Whether the session worktree can be opened externally.
     pub can_open_worktree: bool,
+    graph_chat: Option<&'a GraphChatSnapshot>,
     /// Borrowed render state shared with page construction.
     input: SessionChatPageInput<'a>,
 }
@@ -184,6 +187,7 @@ impl<'a> SessionChatPage<'a> {
     pub fn new(input: SessionChatPageInput<'a>) -> Self {
         Self {
             can_open_worktree: false,
+            graph_chat: None,
             input,
         }
     }
@@ -193,6 +197,13 @@ impl<'a> SessionChatPage<'a> {
     #[must_use]
     pub fn can_open_worktree(mut self, can_open_worktree: bool) -> Self {
         self.can_open_worktree = can_open_worktree;
+        self
+    }
+
+    /// Supplies the current graph proposal and execution status.
+    pub(crate) fn graph_chat(mut self, snapshot: Option<&'a GraphChatSnapshot>) -> Self {
+        self.graph_chat = snapshot;
+
         self
     }
 
@@ -224,6 +235,10 @@ impl<'a> SessionChatPage<'a> {
     /// Renders the session header, output panel, and context-aware bottom
     /// panel.
     fn render_session(&self, f: &mut Frame, area: Rect, session: &Session) {
+        let (area, graph_area) = graph_chat::areas(area, self.mode, self.graph_chat.is_some());
+        if let Some(graph_area) = graph_area {
+            graph_chat::render(f, graph_area, self.graph_chat);
+        }
         let layout_plan = SessionChatLayoutPlan::new(SessionChatLayoutInput {
             area,
             has_merge_conflict: self.has_merge_conflict,
@@ -386,11 +401,16 @@ impl<'a> SessionChatPage<'a> {
         timing_label: &str,
     ) {
         let (input, is_plan_armed) = composer;
-        let (title, placeholder) = prompt_composer_labels(
+        let (mut title, mut placeholder) = prompt_composer_labels(
             is_plan_armed,
             self.task_chain_graph,
             &prepared_prompt_panel.title,
         );
+        if matches!(self.mode, AppMode::Prompt { slash_state, .. } if slash_state.graph.is_armed())
+        {
+            title = "Graph".into();
+            placeholder = "Describe the task for the execution graph".into();
+        }
         let mut chat_input = ChatInput::new(&title, input.text(), input.cursor)
             .placeholder(&placeholder)
             .footer(timing_label)
@@ -570,8 +590,9 @@ fn prepare_prompt_panel(
     // the slash dropdown to avoid implying the menu is actionable. The
     // `@` mention dropdown is still useful for editing queued messages. An
     // armed plan composer also treats its task as literal text.
-    let suppress_slash_dropdown =
-        slash_state.is_plan_armed || session.status == crate::domain::session::Status::InProgress;
+    let suppress_slash_dropdown = slash_state.is_plan_armed
+        || slash_state.graph.is_armed()
+        || session.status == crate::domain::session::Status::InProgress;
     let has_active_mention = at_mention_state.is_some() && input.at_mention_query().is_some();
     let allow_apply_command = review::has_actionable_review_suggestions(review_text);
     let suggestion_list =

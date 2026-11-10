@@ -26,6 +26,9 @@ pub trait GraphProposalRepository: Send + Sync {
     ) -> Result<Option<GraphProposalState>, DbError>;
     /// Lists current proposals for a session, including pending restored work.
     async fn list(&self, session_id: &str) -> Result<Vec<GraphProposalState>, DbError>;
+    /// Loads only the session's most recently created proposal, so frequent
+    /// status reads stay independent of proposal history length.
+    async fn latest(&self, session_id: &str) -> Result<Option<GraphProposalState>, DbError>;
     /// Reserves a bounded explicit retry or complete clarification answer set.
     async fn reserve(
         &self,
@@ -200,6 +203,23 @@ impl GraphProposalRepository for SqliteGraphRepository {
         Ok(states)
     }
 
+    async fn latest(&self, session_id: &str) -> Result<Option<GraphProposalState>, DbError> {
+        let mut transaction = self.pool.begin().await?;
+        let id: Option<String> = sqlx::query_scalar(
+            "SELECT id FROM graph_proposal WHERE session_id = ? ORDER BY rowid DESC LIMIT 1",
+        )
+        .bind(session_id)
+        .fetch_optional(&mut *transaction)
+        .await?;
+        let state = match id {
+            Some(id) => Self::proposal_get(&mut transaction, &id, None).await?,
+            None => None,
+        };
+        transaction.commit().await?;
+
+        Ok(state)
+    }
+
     async fn reserve(
         &self,
         id: &str,
@@ -234,6 +254,33 @@ impl GraphProposalRepository for SqliteGraphRepository {
                 history.extend(questions.iter().zip(answers).map(|(question, answer)| {
                     serde_json::json!({"question": question.text, "answer": answer}).to_string()
                 }));
+                history
+            }
+            GraphProposalAction::Revise(feedback) => {
+                if feedback.trim().is_empty() {
+                    return Err(Self::invalid("Revision feedback is empty"));
+                }
+                let entry = match &state.version.outcome {
+                    GraphProposalVersionOutcome::Generated { response, .. } => {
+                        match &response.outcome {
+                            GraphProposalOutcome::Clarification { questions } => {
+                                let questions: Vec<&str> = questions
+                                    .iter()
+                                    .map(|question| question.text.as_str())
+                                    .collect();
+
+                                serde_json::json!({"questions": questions, "reply": feedback})
+                            }
+                            GraphProposalOutcome::Proposal { .. } => {
+                                serde_json::json!({"feedback": feedback})
+                            }
+                        }
+                    }
+                    _ => serde_json::json!({"feedback": feedback}),
+                };
+                let mut history = state.version.answers.clone();
+                history.push(entry.to_string());
+
                 history
             }
             _ => return Err(Self::invalid("Action cannot reserve generation")),

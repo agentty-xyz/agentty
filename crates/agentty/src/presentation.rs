@@ -8,6 +8,8 @@ pub mod chatgpt_sign_in;
 pub mod execution_graph;
 /// Deterministic wall-clock snapshot shared by one rendered frame.
 pub(crate) mod frame_time;
+/// Latest proposal and execution snapshot for the graph chat sidebar.
+pub(crate) mod graph_chat;
 /// Context-sensitive help actions and keybinding projections.
 pub mod help_action;
 /// Explicit project registration and discovery dialogs.

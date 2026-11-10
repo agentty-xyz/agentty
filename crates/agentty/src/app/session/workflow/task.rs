@@ -1447,6 +1447,30 @@ impl SessionTaskService {
         Self::emit_session_updated(app_event_tx, session_update_versions, id);
     }
 
+    /// Appends one user-authored message that starts no session turn, such
+    /// as a workflow reply, to the in-memory transcript and durable message
+    /// store.
+    pub(crate) async fn append_user_prompt(
+        transcript: &Arc<Mutex<SessionTranscript>>,
+        db: &AppRepositories,
+        app_event_tx: &mpsc::UnboundedSender<AppEvent>,
+        session_update_versions: &SessionUpdateVersionMap,
+        id: &str,
+        message: &str,
+    ) {
+        Self::append_live_and_persist_transcript_message(
+            transcript,
+            id,
+            SessionMessageKind::UserPrompt,
+            message,
+            db.sessions()
+                .append_session_message(id, SessionMessageKind::UserPrompt, message),
+            "failed to persist user prompt",
+        )
+        .await;
+        Self::emit_session_updated(app_event_tx, session_update_versions, id);
+    }
+
     /// Persists one workflow notice without exposing it to the live transcript.
     ///
     /// Reducer events use this when a transient status and its durable result

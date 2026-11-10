@@ -26,6 +26,9 @@ pub enum GraphProposalAction {
     Regenerate,
     /// Complete ordered answers to the exact question set.
     Answer(Vec<String>),
+    /// Regenerate with free-form user feedback added to the history. Feedback
+    /// on a clarification is recorded together with the open questions.
+    Revise(String),
     /// Accept the exact inspected version and its captured limits.
     Approve,
     /// Cancel generation or discard a pending proposal permanently.

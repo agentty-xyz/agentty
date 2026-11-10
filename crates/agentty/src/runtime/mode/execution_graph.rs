@@ -1,4 +1,5 @@
-//! Keyboard routing for the snapshot-bound graph inspector.
+//! Keyboard routing for the snapshot-bound graph inspector. Proposals are
+//! read-only here; chat replies act on them.
 
 use ag_session::GraphNodeContinuation;
 use crossterm::event::{KeyCode, KeyEvent};
@@ -90,8 +91,14 @@ fn resolve_key(view: &mut GraphView, key: KeyEvent) -> GraphKeyAction {
         return GraphKeyAction::None;
     }
     match key.code {
+        KeyCode::Char('p') if view.proposal.is_some() => {
+            view.is_proposal_selected = true;
+            view.scroll = 0;
+            return GraphKeyAction::Refresh;
+        }
         KeyCode::Char('r') => return GraphKeyAction::Refresh,
         KeyCode::Char('[' | ']') if !view.graphs.is_empty() => {
+            view.is_proposal_selected = false;
             let count = view.graphs.len();
             view.selected_graph = if key.code == KeyCode::Char(']') {
                 (view.selected_graph + 1) % count
@@ -199,7 +206,7 @@ fn resolve_editor_key(view: &mut GraphView, key: KeyEvent) -> GraphKeyAction {
         }
     }
     if input_key::is_enter_key(key.code) && !input_key::should_insert_newline(key) {
-        let question_count = view.node().map_or(0, |node| node.questions.len());
+        let question_count = view.questions().len();
         let Some(editor) = view.editor.as_mut() else {
             return GraphKeyAction::None;
         };

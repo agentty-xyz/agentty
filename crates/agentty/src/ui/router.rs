@@ -22,6 +22,7 @@ use crate::presentation::chatgpt_sign_in::{
     CHATGPT_SIGN_IN_LOADING_LABEL, CHATGPT_SIGN_IN_TITLE, ChatGptSignInDialog,
 };
 use crate::presentation::frame_time::FrameTime;
+use crate::presentation::graph_chat::GraphChatSnapshot;
 use crate::presentation::setting::SettingsScreenSnapshot;
 use crate::presentation::task_chain_graph::TaskChainGraphCache;
 use crate::ui::component::info_overlay::InfoOverlay;
@@ -156,6 +157,7 @@ enum SessionSurfaceMode<'a> {
 struct SessionChatRenderContext<'a> {
     active_prompt_outputs: &'a HashMap<SessionId, String>,
     frame_time: FrameTime,
+    graph_chat: Option<&'a GraphChatSnapshot>,
     is_tmux_session: bool,
     markdown_render_cache: &'a markdown::MarkdownRenderCache,
     mode: &'a AppMode,
@@ -180,6 +182,7 @@ struct FrameResources<'a> {
     active_prompt_outputs: &'a HashMap<SessionId, String>,
     diff_layout_cache: &'a page::diff::DiffLayoutCache,
     frame_time: FrameTime,
+    graph_chat: Option<&'a GraphChatSnapshot>,
     is_tmux_session: bool,
     markdown_render_cache: &'a markdown::MarkdownRenderCache,
     output_layout_cache: &'a component::session_output::SessionOutputLayoutCache,
@@ -205,6 +208,7 @@ impl<'a> FrameResources<'a> {
         'a: 'b,
     {
         SessionChatRenderContext {
+            graph_chat: self.graph_chat,
             active_prompt_outputs: self.active_prompt_outputs,
             is_tmux_session: self.is_tmux_session,
             markdown_render_cache: self.markdown_render_cache,
@@ -237,6 +241,7 @@ pub(crate) fn route_frame(f: &mut Frame, area: Rect, context: RenderContext<'_>)
         return;
     }
     let RenderContext {
+        graph_chat,
         active_project_id,
         archived_session_count,
         has_more_archived_sessions,
@@ -290,6 +295,7 @@ pub(crate) fn route_frame(f: &mut Frame, area: Rect, context: RenderContext<'_>)
     };
 
     let resources = FrameResources {
+        graph_chat,
         active_prompt_outputs,
         diff_layout_cache: render_cache_store.diff_layout_cache(),
         is_tmux_session,
@@ -802,6 +808,7 @@ fn render_diff_surface(
 /// Renders the session chat page for all session-chat modes.
 fn render_session_chat(f: &mut Frame, area: Rect, context: SessionChatRenderContext<'_>) {
     let SessionChatRenderContext {
+        graph_chat,
         active_prompt_outputs,
         is_tmux_session,
         markdown_render_cache,
@@ -861,6 +868,7 @@ fn render_session_chat(f: &mut Frame, area: Rect, context: SessionChatRenderCont
             .unwrap_or(&false);
 
     page::session_chat::SessionChatPage::new(page_input)
+        .graph_chat(graph_chat.filter(|snapshot| snapshot.proposal.input.session_id == session_id))
         .can_open_worktree(can_open_worktree)
         .render(f, area);
 }

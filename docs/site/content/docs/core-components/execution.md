@@ -157,10 +157,11 @@ requests; external harnesses manage their own model integrations.
 proposal response. It describes logical nodes, agent references, execution requirements,
 gates, and named handoffs, or asks clarification. Runtime identities, captured settings,
 validation, and approval evidence remain host-owned. Agentty submits initial generation
-through a scoped read-only `RunClient` utility. Durable proposal versions retain the
-captured catalog, model, limits, and generating run reference. Exact-version approval
-atomically publishes the resolved snapshot before executor dispatch; queries and
-duplicate approvals never launch nodes or replenish limits.
+through a scoped read-only `RunClient` utility; chat replies to a pending proposal are
+classified by another such utility before their action is admitted. Durable proposal
+versions retain the captured catalog, model, limits, and generating run reference.
+Exact-version approval atomically publishes the resolved snapshot before executor
+dispatch; queries and duplicate approvals never launch nodes or replenish limits.
 
 Static graph tasks enter the existing serial session worker with isolated runtime
 identities and captured instructions. Their completion includes ordered session effects.

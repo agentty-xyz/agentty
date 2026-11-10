@@ -207,12 +207,21 @@ are assembled separately. The bounded layout cache releases removed history and
 invalidates segments when their content, width, theme, or live graph changes. Transcript
 row positions are independent of terminal coordinate limits.
 
-The graph inspector loads an explicit session-scoped snapshot of saved graphs,
-authoritative progress, and exact output bodies. Controls revalidate that snapshot and
-enter the shared command gateway; graph replies never enter ordinary chat. Refresh is
-explicit, and editing retains the execution and question set originally inspected.
-Background session questions update session state without replacing the inspector;
-returning to session chat exposes the pending questions.
+Graph chat keeps one snapshot for the visible session's latest proposal and execution
+progress. Session updates invalidate it; live proposals and failed reads refresh at most
+once per second. Rendering and transcript scrolling share the same split geometry. The
+graph mode submits its initial task directly through the shared gateway. While the
+latest proposal is pending, composer messages are replies to it instead of turns: a
+read-only utility run on the Run Worker decides whether a reply approves, cancels, or
+revises the inspected version, and the background task admits that exact-version action
+through the gateway. One reply per proposal is decided at a time.
+
+The graph inspector loads an explicit session-scoped snapshot of the latest proposal
+(read-only), saved graphs, authoritative progress, and exact output bodies. Controls
+revalidate that snapshot and enter the shared command gateway; graph replies never enter
+ordinary chat. Refresh is explicit, and editing retains the execution and question set
+originally inspected. Background session questions update session state without
+replacing the inspector; returning to session chat exposes the pending questions.
 
 Session chat is the conversational task-chain surface. An armed `/plan` composer
 launches the chain, and the session's later messages become natural-language replies;

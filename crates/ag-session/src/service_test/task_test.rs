@@ -87,6 +87,9 @@ async fn existing_hosts_reject_graph_proposals_without_admitting_work() {
         service.approve_graph_proposal("preview", 1).await,
         service.cancel_graph_proposal("preview", 1).await,
         service.regenerate_graph_proposal("preview", 1).await,
+        service
+            .revise_graph_proposal("preview", 1, "add tests".into())
+            .await,
     ];
 
     // Assert

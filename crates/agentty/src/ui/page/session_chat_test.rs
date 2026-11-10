@@ -14,9 +14,11 @@ use crate::domain::session::{Session, Status};
 use crate::domain::session_message::SessionTranscript;
 use crate::presentation::app_mode::{AppMode, ChatFocus};
 use crate::presentation::frame_time::FrameTime;
+use crate::presentation::graph_chat::GraphChatSnapshot;
 use crate::presentation::help_action;
 use crate::presentation::prompt::{
-    PromptAtMentionState, PromptAttachmentState, PromptHistoryState, PromptSlashState,
+    PromptAtMentionState, PromptAttachmentState, PromptGraphState, PromptHistoryState,
+    PromptSlashState,
 };
 use crate::presentation::task_chain_graph::{
     TaskChainGraph, TaskChainGraphNode, TaskChainNodeStatus,
@@ -1261,6 +1263,52 @@ fn composer_shows_the_armed_plan_request_and_the_orchestrator_state() {
     assert!(viewing_text.contains("Orchestrator · Planner · Awaiting your approval"));
     assert!(ordinary_text.contains("Type your message"));
     assert!(slash_text.contains("/mode"));
+}
+
+#[test]
+fn graph_chat_renders_beside_the_armed_and_regular_composer() {
+    // Arrange
+    let session = session_fixture();
+    let snapshot = GraphChatSnapshot {
+        error: None,
+        progress: None,
+        proposal: model_fixture::graph_proposal_state("proposal", &session.id),
+    };
+    for armed in [true, false] {
+        let mut mode = prompt_mode("");
+        if let AppMode::Prompt {
+            slash_state, focus, ..
+        } = &mut mode
+        {
+            slash_state.graph = if armed {
+                PromptGraphState::Armed
+            } else {
+                PromptGraphState::Available
+            };
+            *focus = ChatFocus::Input;
+        }
+        let mut page =
+            test_session_chat_page(&session, &mode).graph_chat((!armed).then_some(&snapshot));
+        let mut terminal = ratatui::Terminal::new(ratatui::backend::TestBackend::new(120, 30))
+            .expect("test terminal");
+
+        // Act
+        terminal
+            .draw(|frame| page.render(frame, frame.area()))
+            .expect("render graph chat");
+        let text = buffer_text(terminal.backend().buffer());
+
+        // Assert
+        assert!(text.contains("Execution graph"));
+        assert!(text.contains(if armed {
+            "Describe the task for the execution graph"
+        } else {
+            "Type your message"
+        }));
+        if !armed {
+            assert!(text.contains("Generating preview"));
+        }
+    }
 }
 
 #[test]

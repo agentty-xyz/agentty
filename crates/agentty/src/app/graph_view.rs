@@ -23,7 +23,28 @@ impl App {
     /// Refresh is explicit so an action always targets what the user inspected.
     pub(crate) async fn load_graph_view(&self, view: &mut GraphView) -> Result<(), String> {
         let graphs = self.services.db().graphs();
-        let selected_id = view.graph().map(|graph| graph.id.clone());
+        let mut selected_id = view.graph().map(|graph| graph.id.clone());
+        let proposal = if self.experimental_multi_agent {
+            self.services
+                .db()
+                .graph_proposals()
+                .latest(&view.restore.session_id)
+                .await
+                .map_err(|error| error.to_string())?
+        } else {
+            None
+        };
+        let is_proposal_selected = view.is_proposal_selected
+            && proposal
+                .as_ref()
+                .is_some_and(|state| state.version.approval.is_none());
+        if view.is_proposal_selected
+            && let Some(approval) = proposal
+                .as_ref()
+                .and_then(|state| state.version.approval.as_ref())
+        {
+            selected_id = Some(approval.graph_id.clone());
+        }
         let definitions = graphs
             .list_graphs(&view.restore.session_id)
             .await
@@ -31,7 +52,10 @@ impl App {
         let selected_graph = selected_id
             .and_then(|id| definitions.iter().position(|graph| graph.id == id))
             .unwrap_or(0);
-        let progress = match definitions.get(selected_graph) {
+        let progress = match definitions
+            .get(selected_graph)
+            .filter(|_| !is_proposal_selected)
+        {
             Some(graph) => self
                 .execution_graph_progress(&graph.id)
                 .await
@@ -62,6 +86,8 @@ impl App {
         view.selected_graph = selected_graph;
         view.selected_node = selected_node;
         view.graphs = definitions;
+        view.is_proposal_selected = is_proposal_selected;
+        view.proposal = proposal;
         view.resume_limits = view.graph().map_or_else(String::new, |graph| {
             self.execution_graph_resume_limits(&graph.id)
         });

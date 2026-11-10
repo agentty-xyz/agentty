@@ -36,8 +36,8 @@ use crate::domain::session::{SessionId, Status};
 use crate::domain::session_message::{SessionMessageKind, SessionTranscript};
 use crate::presentation::app_mode::{AppMode, ChatFocus, DiffRestoreTarget};
 use crate::presentation::prompt::{
-    PendingImagePaste, PromptAtMentionState, PromptAttachmentState, PromptHistoryState,
-    PromptSlashStage, PromptSlashState, prompt_slash_option_count,
+    PendingImagePaste, PromptAtMentionState, PromptAttachmentState, PromptGraphState,
+    PromptHistoryState, PromptSlashStage, PromptSlashState, prompt_slash_option_count,
 };
 use crate::ui::RenderCacheStore;
 
@@ -2301,7 +2301,7 @@ async fn test_handle_prompt_submit_key_routes_slash_command() {
 }
 
 #[tokio::test]
-async fn graph_command_reaches_application_admission_from_the_slash_composer() {
+async fn graph_subcommands_do_not_bypass_the_mode_selector() {
     // Arrange
     let (mut app, _base_dir) = new_test_prompt_app("/graph query", None).await;
     app.experimental_multi_agent = true;
@@ -2311,8 +2311,54 @@ async fn graph_command_reaches_application_admission_from_the_slash_composer() {
     handle_prompt_submit_key(&mut app, &context).await;
 
     // Assert
-    assert!(!matches!(app.mode, AppMode::Prompt { .. }));
+    assert!(matches!(app.mode, AppMode::Prompt { .. }));
     assert_eq!(app.sessions.sessions()[0].prompt, "");
+}
+
+#[tokio::test]
+async fn graph_slash_command_arms_and_escape_preserves_the_draft() {
+    // Arrange
+    let (mut app, _root) = new_test_prompt_app("/graph", None).await;
+    app.experimental_multi_agent = true;
+    if let AppMode::Prompt { slash_state, .. } = &mut app.mode {
+        slash_state.graph = PromptGraphState::Available;
+    }
+    let context = prompt_context(&mut app).expect("context");
+
+    // Act
+    handle_prompt_submit_key(&mut app, &context).await;
+
+    // Assert
+    assert!(
+        matches!(&app.mode, AppMode::Prompt { input, slash_state, .. }
+        if input.text().is_empty() && slash_state.graph.is_armed() && !slash_state.is_plan_armed)
+    );
+
+    // Arrange
+    if let AppMode::Prompt { input, .. } = &mut app.mode {
+        *input = InputState::with_text("/mode is part of my task".into());
+    }
+    let context = prompt_context(&mut app).expect("context");
+    assert!(!context.is_slash_command());
+
+    // Act
+    app.experimental_multi_agent = false;
+    handle_prompt_submit_key(&mut app, &context).await;
+
+    // Assert: rejected graph requests preserve the armed draft.
+    assert!(
+        matches!(&app.mode, AppMode::Prompt { input, slash_state, .. }
+        if input.text() == "/mode is part of my task" && slash_state.graph.is_armed())
+    );
+
+    // Act
+    handle_prompt_cancel_key(&mut app, &context).await;
+
+    // Assert
+    assert!(
+        matches!(&app.mode, AppMode::Prompt { input, slash_state, .. }
+        if input.text() == "/mode is part of my task" && !slash_state.graph.is_armed())
+    );
 }
 
 #[tokio::test]

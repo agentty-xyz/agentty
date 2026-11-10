@@ -12,6 +12,7 @@ use ratatui::style::Style;
 use ratatui::widgets::{Block, Borders, Paragraph, Wrap};
 
 use crate::presentation::execution_graph::{GraphEditKind, GraphEditor, GraphView};
+use crate::presentation::graph_chat::proposal_preview;
 use crate::ui::Component;
 use crate::ui::component::chat_input::ChatInput;
 use crate::ui::markdown::MarkdownRenderCache;
@@ -33,21 +34,26 @@ pub(crate) fn render(
         }),
     ])
     .split(area);
-    let title = view.graph().map_or_else(
-        || "Execution graphs: none saved for this session".into(),
-        |graph| {
-            format!(
-                "Graph {}/{}: {} | revision {} | {}",
-                view.selected_graph + 1,
-                view.graphs.len(),
-                graph.id,
-                graph.revision,
-                view.progress.as_ref().map_or_else(
-                    || "Unavailable".into(),
-                    |progress| format!("{:?}", progress.status)
-                )
+    let title = view.selected_proposal().map_or_else(
+        || {
+            view.graph().map_or_else(
+                || "Execution graphs: none saved for this session".into(),
+                |graph| {
+                    format!(
+                        "Graph {}/{}: {} | revision {} | {}",
+                        view.selected_graph + 1,
+                        view.graphs.len(),
+                        graph.id,
+                        graph.revision,
+                        view.progress.as_ref().map_or_else(
+                            || "Unavailable".into(),
+                            |progress| format!("{:?}", progress.status)
+                        )
+                    )
+                },
             )
         },
+        |state| format!("Proposal {} v{}", state.input.id, state.version.number),
     );
     frame.render_widget(
         Paragraph::new(title).block(block("Execution graphs")),
@@ -79,13 +85,24 @@ pub(crate) fn render(
     let node_scroll = u16::try_from(view.selected_node)
         .unwrap_or(u16::MAX)
         .saturating_sub(columns[0].height.saturating_sub(3));
-    frame.render_widget(
-        Paragraph::new(nodes)
-            .scroll((node_scroll, 0))
-            .block(block("Nodes (j/k)")),
-        columns[0],
+    if view.selected_proposal().is_none() {
+        frame.render_widget(
+            Paragraph::new(nodes)
+                .scroll((node_scroll, 0))
+                .block(block("Nodes (j/k)")),
+            columns[0],
+        );
+    }
+    render_details(
+        frame,
+        if view.selected_proposal().is_some() {
+            panes[1]
+        } else {
+            columns[1]
+        },
+        view,
+        markdown,
     );
-    render_details(frame, columns[1], view, markdown);
     if let Some(editor) = &view.editor {
         render_editor(frame, panes[2], view, editor);
     } else {
@@ -99,7 +116,11 @@ pub(crate) fn render(
 }
 
 fn render_details(frame: &mut Frame, area: Rect, view: &GraphView, markdown: &MarkdownRenderCache) {
-    let block = block("Node and exact output (J/K scroll)");
+    let block = block(if view.selected_proposal().is_some() {
+        "Graph proposal (J/K scroll)"
+    } else {
+        "Node and exact output (J/K scroll)"
+    });
     let inner = block.inner(area);
     let width = usize::from(inner.width);
     let metadata = details(view);
@@ -130,18 +151,19 @@ fn render_details(frame: &mut Frame, area: Rect, view: &GraphView, markdown: &Ma
 fn render_editor(frame: &mut Frame, area: Rect, view: &GraphView, editor: &GraphEditor) {
     let label = match editor.kind {
         GraphEditKind::Reply => "Reply to selected task (Enter sends; Esc cancels)".into(),
-        GraphEditKind::Answers => view
-            .node()
-            .and_then(|node| node.questions.get(editor.answers.len()))
-            .map_or_else(String::new, |question| {
-                format!(
-                    "Question {}/{}: {} {}",
-                    editor.answers.len() + 1,
-                    view.node().map_or(0, |node| node.questions.len()),
-                    question.text,
-                    question.options.join(" / ")
-                )
-            }),
+        GraphEditKind::Answers => {
+            view.questions()
+                .get(editor.answers.len())
+                .map_or_else(String::new, |question| {
+                    format!(
+                        "Question {}/{}: {} {}",
+                        editor.answers.len() + 1,
+                        view.questions().len(),
+                        question.text,
+                        question.options.join(" / ")
+                    )
+                })
+        }
         GraphEditKind::Cancel => "Type cancel, then Enter to cancel this graph".into(),
         GraphEditKind::Resume => format!(
             "Resume: enter budget=limit or a JSON map for {:?}. Fresh limits after restart; live \
@@ -186,6 +208,19 @@ fn block(title: &str) -> Block<'_> {
 
 fn actions(view: &GraphView) -> Vec<&'static str> {
     let mut actions = vec!["q back", "[/] graph", "j/k node", "r refresh", "o output"];
+    if view.proposal.is_some() {
+        actions.push("p proposal");
+    }
+    if view.selected_proposal().is_some() {
+        let mut actions = vec!["q back", "[/] execution graphs", "r refresh", "J/K scroll"];
+        if view
+            .selected_proposal()
+            .is_some_and(|state| !state.version.is_cancelled && state.version.approval.is_none())
+        {
+            actions.push("reply in chat to approve, revise, or cancel");
+        }
+        return actions;
+    }
     if view.can_accept() {
         actions.push("a accept displayed version");
     }
@@ -209,6 +244,9 @@ fn actions(view: &GraphView) -> Vec<&'static str> {
 }
 
 fn details(view: &GraphView) -> String {
+    if let Some(proposal) = view.selected_proposal() {
+        return proposal_preview(proposal);
+    }
     let Some(graph) = view.graph() else {
         return "No saved execution graphs. Press q to return.".into();
     };

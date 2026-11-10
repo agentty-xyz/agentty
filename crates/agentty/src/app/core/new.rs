@@ -21,6 +21,7 @@ use crate::infra::clock::{self, Clock};
 use crate::infra::db;
 use crate::infra::db::AppRepositories;
 use crate::infra::resource::ResourceClient;
+use crate::presentation::graph_chat::GraphChatCache;
 use crate::presentation::setting::SettingsPresentationState;
 use crate::presentation::task_chain_graph::TaskChainGraphCache;
 
@@ -137,7 +138,7 @@ impl App {
         );
         let settings =
             Self::load_settings(&repositories, &services, startup.active_project_id).await;
-        let (sessions, review_cache, recoverable_focused_review_session_ids) =
+        let (sessions, review_cache, recoverable_review_sessions) =
             Self::load_startup_sessions_and_reviews(
                 &services,
                 Arc::clone(&clients.resource_client),
@@ -152,7 +153,7 @@ impl App {
         let sync_main_runner = clients
             .sync_main_runner
             .unwrap_or_else(|| sync_handle.sync_main_runner());
-        let mut app = Self {
+        let app = Self {
             mode: crate::presentation::app_mode::AppMode::List,
             project_catalog: Box::new(crate::app::project_catalog::ProjectCatalog::new(
                 clients.project_discovery_client,
@@ -196,12 +197,18 @@ impl App {
             sync_handle,
             sync_main_runner,
             task_chain_graphs: TaskChainGraphCache::default(),
+            graph_chat: GraphChatCache::default(),
             tmux_client: clients.tmux_client,
         };
-        app.recover_startup_focused_reviews(recoverable_focused_review_session_ids);
-        app.suggest_project_discovery().await;
+        Ok(app.complete_startup(recoverable_review_sessions).await)
+    }
 
-        Ok(app)
+    /// Starts recovered reviews and project discovery once all state exists.
+    async fn complete_startup(mut self, recoverable_review_sessions: Vec<String>) -> Self {
+        self.recover_startup_focused_reviews(recoverable_review_sessions);
+        self.suggest_project_discovery().await;
+
+        self
     }
 
     /// Loads sessions and focused-review recovery state for the launch project,

@@ -34,9 +34,11 @@ appear alongside them, and answers retain saved usage counts.
 Press `w` in session view to inspect saved execution graphs, accept exact outputs,
 answer node questions, retry work, resume dispatch, or cancel a graph.
 
-With `--experimental-multi-agent`, `/graph <request>` generates an inspectable graph
-preview. `/graph query` shows its exact-version approval and cancellation commands;
-nodes launch only after approval.
+With `--experimental-multi-agent`, select `/graph`, then describe your task. Regular
+chat stays on the left, with the graph preview and live status in a right pane using at
+most 35% of the width. Reply in chat to approve, revise, or cancel the proposal; `w`
+shows its details. Nodes launch only after approval. `/graph` is a mode selector with no
+subcommands.
 
 The `/plan` workflow uses bundled Markdown agent definitions. Repository overrides live
 in `.agents/agents/<id>/agent.md`; see the
