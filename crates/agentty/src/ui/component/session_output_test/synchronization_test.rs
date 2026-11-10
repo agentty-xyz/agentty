@@ -190,7 +190,7 @@ fn test_task_chain_graph_updates_refresh_cached_body_and_line_count() {
     assert!(live_text.contains("● Awaiting your approval"));
     assert!(!live_text.contains("Loading status…"));
     assert!(Arc::ptr_eq(&live.lines, &live_again.lines));
-    assert_eq!(usize::from(live.line_count), live.lines.len());
+    assert_eq!(live.line_count, live.lines.len());
     assert_eq!(measured, live.line_count);
     assert!(live.line_count > loading.line_count);
 }

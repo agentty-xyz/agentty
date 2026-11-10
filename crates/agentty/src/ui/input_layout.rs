@@ -148,8 +148,8 @@ pub fn bottom_pinned_scroll_offset(
     area: Rect,
     borders: Borders,
     line_count: usize,
-    scroll_offset: Option<u16>,
-) -> u16 {
+    scroll_offset: Option<usize>,
+) -> usize {
     if let Some(scroll_offset) = scroll_offset {
         return scroll_offset;
     }
@@ -162,7 +162,7 @@ pub fn bottom_pinned_scroll_offset(
             .saturating_sub(bottom_border_height),
     );
 
-    u16::try_from(line_count.saturating_sub(inner_height)).unwrap_or(u16::MAX)
+    line_count.saturating_sub(inner_height)
 }
 
 /// Calculates the cursor position for an empty chat input with placeholder

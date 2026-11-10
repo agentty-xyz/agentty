@@ -231,7 +231,7 @@ fn test_diff_line_comments_remove_blank_editor() {
 fn test_confirmation_view_mode_into_view_mode_restores_view_identity() {
     // Arrange
     let confirmation_view_mode = ConfirmationViewMode {
-        scroll_offset: Some(7),
+        scroll_offset: Some(70_000),
         session_id: "session-id".into(),
     };
 
@@ -243,7 +243,7 @@ fn test_confirmation_view_mode_into_view_mode_restores_view_identity() {
         mode,
         AppMode::View {
             ref session_id,
-            scroll_offset: Some(7),
+            scroll_offset: Some(70_000),
         } if session_id == "session-id"
     ));
 }

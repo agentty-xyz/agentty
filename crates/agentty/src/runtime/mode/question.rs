@@ -656,7 +656,7 @@ async fn submit_response(app: &mut App, response: String) {
 struct CompletedQuestionResponse {
     questions: Vec<QuestionItem>,
     responses: Vec<String>,
-    scroll_offset: Option<u16>,
+    scroll_offset: Option<usize>,
     session_id: SessionId,
 }
 

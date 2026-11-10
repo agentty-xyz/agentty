@@ -368,7 +368,7 @@ fn test_rendered_output_line_count_counts_wrapped_content() {
     );
 
     // Assert
-    assert!(rendered_line_count > raw_line_count);
+    assert!(rendered_line_count > usize::from(raw_line_count));
 }
 
 #[test]

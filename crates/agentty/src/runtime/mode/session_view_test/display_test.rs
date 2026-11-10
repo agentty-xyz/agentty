@@ -56,7 +56,7 @@ async fn test_view_total_lines_counts_wrapped_output_lines() {
         session_output_metric::tests::rendered_output_line_count(&app, &session_id, 0, 20, 5);
 
     // Assert
-    assert!(total_lines > raw_line_count);
+    assert!(total_lines > usize::from(raw_line_count));
 }
 
 #[tokio::test]

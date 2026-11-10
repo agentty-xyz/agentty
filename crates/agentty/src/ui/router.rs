@@ -118,7 +118,7 @@ enum Surface<'a> {
     List,
     Session {
         mode: SessionSurfaceMode<'a>,
-        scroll_offset: Option<u16>,
+        scroll_offset: Option<usize>,
         session_id: &'a str,
     },
 }
@@ -159,7 +159,7 @@ struct SessionChatRenderContext<'a> {
     mode: &'a AppMode,
     output_layout_cache: &'a component::session_output::SessionOutputLayoutCache,
     review_snapshot: Option<&'a SessionReviewSnapshot<'a>>,
-    scroll_offset: Option<u16>,
+    scroll_offset: Option<usize>,
     session_cpu_temperatures: &'a HashMap<SessionId, f32>,
     session_git_statuses: &'a HashMap<SessionId, SessionGitStatus>,
     session_id: &'a str,
@@ -203,7 +203,7 @@ impl<'a> FrameResources<'a> {
         sessions: &'b [Session],
         mode: &'b AppMode,
         session_id: &'b str,
-        scroll_offset: Option<u16>,
+        scroll_offset: Option<usize>,
     ) -> SessionChatRenderContext<'b>
     where
         'a: 'b,
@@ -728,7 +728,7 @@ fn render_session_surface(
     f: &mut Frame,
     area: Rect,
     mode: SessionSurfaceMode<'_>,
-    scroll_offset: Option<u16>,
+    scroll_offset: Option<usize>,
     session_id: &str,
     sessions: &[Session],
     resources: FrameResources<'_>,

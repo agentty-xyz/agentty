@@ -25,6 +25,46 @@ use crate::ui::render::Component;
 use crate::ui::{markdown, session_output_assembly, style};
 
 #[test]
+fn test_large_transcript_paints_newest_rows_and_preserves_full_metrics() {
+    // Arrange
+    let mut session = session_fixture();
+    session.status = Status::Review;
+    set_assistant_transcript(
+        &mut session,
+        &format!("```text\n{}newest row\n```", "history row\n".repeat(65_536)),
+    );
+    let cache = SessionOutputLayoutCache::default();
+    let mut terminal =
+        ratatui::Terminal::new(ratatui::backend::TestBackend::new(40, 10)).expect("terminal");
+
+    // Act
+    let count =
+        SessionOutput::rendered_line_count(&session, 40, 9, line_context(), None, Some(&cache));
+    terminal
+        .draw(|frame| {
+            SessionOutput::new(&session)
+                .output_layout_cache(&cache)
+                .render(frame, frame.area());
+        })
+        .expect("draw");
+
+    // Assert
+    assert!(count > 65_535);
+    let text = terminal
+        .backend()
+        .buffer()
+        .content()
+        .iter()
+        .map(ratatui::buffer::Cell::symbol)
+        .collect::<String>();
+    assert!(text.contains("newest row"));
+    assert_eq!(
+        terminal.backend().buffer()[(39, 9)].symbol(),
+        SCROLLBAR_THUMB_SYMBOL
+    );
+}
+
+#[test]
 fn test_resolved_layout_keeps_full_width_when_output_fits() {
     // Arrange
     let mut session = session_fixture();
@@ -51,7 +91,7 @@ fn test_resolved_layout_keeps_full_width_when_output_fits() {
     let resolved_layout = SessionOutput::resolved_layout(
         &session,
         output_area,
-        full_width_layout.line_count,
+        u16::try_from(full_width_layout.line_count).expect("small viewport"),
         context,
         Some(&markdown_render_cache),
         Some(&output_layout_cache),
@@ -171,7 +211,7 @@ fn test_rendered_line_count_counts_wrapped_content() {
     );
 
     // Assert
-    assert!(rendered_line_count > raw_line_count);
+    assert!(rendered_line_count > usize::from(raw_line_count));
 }
 
 #[test]
@@ -328,6 +368,20 @@ fn test_output_layout_cache_keys_workflow_notice() {
     // Assert
     assert!(!transcript_text.contains("[Commit] No changes to commit."));
     assert!(!Arc::ptr_eq(&base_layout.lines, &notice_layout.lines));
+    assert!(std::ptr::eq(
+        base_layout
+            .lines
+            .body
+            .visible_lines(0, 1)
+            .next()
+            .expect("original message"),
+        notice_layout
+            .lines
+            .body
+            .visible_lines(0, 1)
+            .next()
+            .expect("retained message"),
+    ));
     assert!(notice_text.contains("[Commit] No changes to commit."));
 }
 
@@ -523,7 +577,7 @@ fn test_segmented_layout_matches_assembled_status_rows() {
             layout.queued_line_indices.as_ref(),
             expected.queued_line_indices.as_slice()
         );
-        assert_eq!(usize::from(layout.line_count), layout.lines.len());
+        assert_eq!(layout.line_count, layout.lines.len());
     }
 }
 

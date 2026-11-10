@@ -12,7 +12,7 @@ pub(crate) fn rendered_output_line_count_with_cache(
     session_index: usize,
     output_width: u16,
     viewport_height: u16,
-) -> u16 {
+) -> usize {
     let active_progress = app.session_progress_message(session_id);
     let active_prompt_output = app
         .sessions

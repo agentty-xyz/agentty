@@ -12,13 +12,13 @@ pub(crate) const SCROLLBAR_TRACK_SYMBOL: &str = "│";
 pub(crate) const SCROLLBAR_THUMB_SYMBOL: &str = "█";
 /// Slim vertical scrollbar rendered within a caller-provided track area.
 pub(crate) struct VerticalScrollbar {
-    scroll_offset: u16,
+    scroll_offset: usize,
     total_lines: usize,
 }
 
 impl VerticalScrollbar {
     /// Creates a scrollbar for the current offset and full content length.
-    pub(crate) fn new(scroll_offset: u16, total_lines: usize) -> Self {
+    pub(crate) fn new(scroll_offset: usize, total_lines: usize) -> Self {
         Self {
             scroll_offset,
             total_lines,
@@ -35,7 +35,8 @@ impl VerticalScrollbar {
         let thumb_height = (track_height * track_height / self.total_lines).max(1);
         let max_scroll = self.total_lines.saturating_sub(track_height);
         let max_thumb_offset = track_height.saturating_sub(thumb_height);
-        let thumb_offset = usize::from(self.scroll_offset)
+        let thumb_offset = self
+            .scroll_offset
             .min(max_scroll)
             .saturating_mul(max_thumb_offset)
             .checked_div(max_scroll)

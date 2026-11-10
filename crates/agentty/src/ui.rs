@@ -28,6 +28,7 @@ pub mod review_comment_format;
 pub mod router;
 pub mod session_format;
 pub(crate) mod session_output_assembly;
+pub(crate) mod session_output_line;
 /// Shared theme-aware UI styling helpers and status-display helpers.
 pub mod style;
 /// Role headers and execution-graph cards for task-chain transcript rows.

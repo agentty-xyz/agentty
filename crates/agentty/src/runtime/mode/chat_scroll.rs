@@ -123,7 +123,7 @@ pub(crate) enum ChatFocusAction {
 #[derive(Clone, Copy)]
 pub(crate) struct ChatScrollMetrics {
     /// Rendered transcript height in terminal lines.
-    pub(crate) total_lines: u16,
+    pub(crate) total_lines: usize,
     /// Visible transcript height in terminal lines.
     pub(crate) view_height: u16,
 }
@@ -261,7 +261,7 @@ fn is_diff_preview_key(key: KeyEvent) -> bool {
 /// half-page steps. A `None` offset keeps the transcript pinned to the newest
 /// output. Returns `true` when the key was consumed as a scroll action.
 pub(crate) fn apply_scroll_key(
-    scroll_offset: &mut Option<u16>,
+    scroll_offset: &mut Option<usize>,
     metrics: ChatScrollMetrics,
     key: KeyEvent,
 ) -> bool {
@@ -335,14 +335,18 @@ impl ScrollStep {
 /// following the newest lines. A `None` offset already sits at that bottom, so
 /// scrolling down again stays pinned there.
 pub(crate) fn scroll_offset_down(
-    scroll_offset: Option<u16>,
+    scroll_offset: Option<usize>,
     metrics: ChatScrollMetrics,
-    step: u16,
-) -> Option<u16> {
+    step: usize,
+) -> Option<usize> {
     let current_offset = scroll_offset?;
 
     let next_offset = current_offset.saturating_add(step.max(1));
-    if next_offset >= metrics.total_lines.saturating_sub(metrics.view_height) {
+    if next_offset
+        >= metrics
+            .total_lines
+            .saturating_sub(usize::from(metrics.view_height))
+    {
         return None;
     }
 
@@ -350,16 +354,23 @@ pub(crate) fn scroll_offset_down(
 }
 
 /// Returns the next scroll offset after scrolling up by `step` lines.
-fn scroll_offset_up(scroll_offset: Option<u16>, metrics: ChatScrollMetrics, step: u16) -> u16 {
-    let current_offset =
-        scroll_offset.unwrap_or_else(|| metrics.total_lines.saturating_sub(metrics.view_height));
+fn scroll_offset_up(
+    scroll_offset: Option<usize>,
+    metrics: ChatScrollMetrics,
+    step: usize,
+) -> usize {
+    let current_offset = scroll_offset.unwrap_or_else(|| {
+        metrics
+            .total_lines
+            .saturating_sub(usize::from(metrics.view_height))
+    });
 
     current_offset.saturating_sub(step.max(1))
 }
 
 /// Returns the number of lines used for half-page scroll shortcuts.
-fn half_page_step(metrics: ChatScrollMetrics) -> u16 {
-    metrics.view_height / 2
+fn half_page_step(metrics: ChatScrollMetrics) -> usize {
+    usize::from(metrics.view_height) / 2
 }
 
 #[cfg(test)]
