@@ -373,8 +373,7 @@ impl ServedModel {
 
 /// Returns the process-lifetime copy of `id`, leaking it on first use.
 fn intern(id: String) -> &'static &'static str {
-    static INTERNED: OnceLock<Mutex<FxHashMap<&'static str, &'static &'static str>>> =
-        OnceLock::new();
+    static INTERNED: OnceLock<Mutex<FxHashMap<&str, &&str>>> = OnceLock::new();
     let mut interned = INTERNED
         .get_or_init(Mutex::default)
         .lock()
