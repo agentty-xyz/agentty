@@ -31,7 +31,7 @@ ag-tui-text = { path = "crates/ag-tui-text", version = "0.18.3" }
 ag-worker = { path = "crates/ag-worker", version = "0.18.3" }
 testty = { path = "crates/testty", version = "0.18.3" }
 async-trait = "0.1"
-agent-client-protocol = "3.2.0"
+agent-client-protocol = "5.0.0"
 assert_cmd = "2"
 askama = "0.16.1"
 base64 = "0.23"
@@ -71,7 +71,7 @@ serde_json = { version = "1", features = ["arbitrary_precision"] }
 serde_yaml_ng = "0.10"
 sha2 = "0.11.0"
 sqlx = { version = "0.9", default-features = false, features = ["macros", "migrate", "runtime-tokio", "sqlite"] }
-sysinfo = { version = "0.39", default-features = false, features = ["component"] }
+sysinfo = { version = "0.40", default-features = false, features = ["component"] }
 tachyonfx = { version = "0.25.2", default-features = false, features = ["std"] }
 tempfile = "3.27"
 thiserror = "2"
