@@ -14,14 +14,17 @@ description = "Agentty is an ADE (Agentic Development Environment) for structure
 repository = "https://github.com/agentty-xyz/agentty"
 
 [workspace.dependencies]
-ag-agent = { path = "crates/ag-agent", version = "0.18.3" }
+# Until the SQLx security pin below has a registry release, omit registry versions
+# along its dependent chain so those crates cannot publish against vulnerable
+# workspace crates already on crates.io.
+ag-agent = { path = "crates/ag-agent" }
 ag-contracts = { path = "crates/ag-contracts", version = "0.18.3" }
 ag-clipboard = { path = "crates/ag-clipboard", version = "0.18.3" }
 ag-forge = { path = "crates/ag-forge", version = "0.18.3" }
 ag-git = { path = "crates/ag-git", version = "0.18.3" }
-ag-harness = { path = "crates/ag-harness", version = "0.18.3" }
+ag-harness = { path = "crates/ag-harness" }
 ag-protocol = { path = "crates/ag-protocol", version = "0.18.3" }
-ag-runtime = { path = "crates/ag-runtime", version = "0.18.3" }
+ag-runtime = { path = "crates/ag-runtime" }
 ag-router = { path = "crates/ag-router", version = "0.18.3" }
 ag-scheduler = { path = "crates/ag-scheduler", version = "0.18.3" }
 ag-session = { path = "crates/ag-session", version = "0.18.3" }
@@ -70,7 +73,11 @@ serde = { version = "1", features = ["derive"] }
 serde_json = { version = "1", features = ["arbitrary_precision"] }
 serde_yaml_ng = "0.10"
 sha2 = "0.11.0"
-sqlx = { version = "0.9", default-features = false, features = ["macros", "migrate", "runtime-tokio", "sqlite"] }
+# Pin the upstream fix for RUSTSEC-2026-0459 until SQLx releases support for
+# libsqlite3-sys 0.39. Remove the Git source when that release is available.
+# Omit the registry version so Cargo rejects publication instead of replacing
+# the security fix with a vulnerable registry release.
+sqlx = { git = "https://github.com/transact-rs/sqlx", rev = "10462fa4414c6c7f1ed1d39bb31678e3b726878c", default-features = false, features = ["macros", "migrate", "runtime-tokio", "sqlite"] }
 sysinfo = { version = "0.40", default-features = false, features = ["component"] }
 tachyonfx = { version = "0.25.2", default-features = false, features = ["std"] }
 tempfile = "3.27"
