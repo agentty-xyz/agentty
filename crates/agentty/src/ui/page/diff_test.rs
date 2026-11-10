@@ -1000,8 +1000,8 @@ fn test_diff_content_snapshot_appends_change_totals_to_each_file_tree_line() {
     assert_eq!(
         line_text,
         [
-            "src/ +2/-1",
-            "├ ui/ +1/-0",
+            "  src/ +2/-1",
+            "  ├ ui/ +1/-0",
             "M │ └ diff.rs +1/-0",
             "M └ main.rs +1/-1",
             "M README.md +1/-0",

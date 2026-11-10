@@ -431,8 +431,8 @@ impl FileExplorer {
         )
     }
 
-    /// Gives names priority over totals and limits indentation on narrow
-    /// panels.
+    /// Gives names priority over totals while preserving tree connectors on
+    /// narrow panels.
     fn line_for_width(&self, line: &Line<'static>, max_width: usize) -> Line<'static> {
         let suffix_start = line
             .spans
@@ -441,27 +441,26 @@ impl FileExplorer {
         if suffix_start == 0 {
             return line.clone();
         }
-        let mut prefix_spans = line.spans[..suffix_start].to_vec();
-        let label_index = usize::from(
-            prefix_spans[0].content.len() == 2
-                && matches!(prefix_spans[0].content.as_ref(), "A " | "M " | "D " | "R "),
-        );
-        if let Some(label) = prefix_spans.get_mut(label_index) {
-            let name = label.content.trim_start_matches(['│', '├', '└', ' ']);
-            let indentation = &label.content[..label.content.len() - name.len()];
-            let indent_width = indentation.width();
-            let max_indent = max_width / 4;
-            if indent_width > max_indent {
-                label.content = format!("{}{name}", " ".repeat(max_indent)).into();
-            }
-        }
+        let prefix_spans = &line.spans[..suffix_start];
         let prefix_width = prefix_spans.iter().map(Span::width).sum::<usize>();
+        // Keep badges and connectors outside the filename's space allowance.
+        let minimum_prefix_width = prefix_spans
+            .iter()
+            .map(|span| {
+                let name_width = span
+                    .content
+                    .trim_start_matches(['│', '├', '└', ' '])
+                    .width();
+
+                span.width().saturating_sub(name_width) + name_width.min(20)
+            })
+            .sum::<usize>();
         let mut suffix_spans = line.spans[suffix_start..].to_vec();
         let suffix_width = suffix_spans.iter().map(Span::width).sum::<usize>();
         let is_folder = prefix_spans
             .last()
             .is_some_and(|span| span.content.ends_with('/'));
-        let show_totals = max_width >= suffix_width + prefix_width.min(20)
+        let show_totals = max_width >= suffix_width + minimum_prefix_width
             && (!is_folder || prefix_width + suffix_width <= max_width);
         if !show_totals {
             suffix_spans.clear();
@@ -471,7 +470,14 @@ impl FileExplorer {
         let mut remaining_width = available_prefix_width;
         let mut spans = Vec::new();
         for span in prefix_spans {
-            let text = Self::middle_truncate(&span.content, remaining_width);
+            let name = span.content.trim_start_matches(['│', '├', '└', ' ']);
+            let indentation = &span.content[..span.content.len() - name.len()];
+            let indentation = indentation
+                .chars()
+                .take(remaining_width)
+                .collect::<String>();
+            let name_width = remaining_width.saturating_sub(indentation.width());
+            let text = format!("{indentation}{}", Self::middle_truncate(name, name_width));
             remaining_width = remaining_width.saturating_sub(text.width());
             spans.push(Span::styled(text, span.style));
         }

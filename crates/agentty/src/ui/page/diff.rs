@@ -213,6 +213,10 @@ impl DiffContentSnapshot {
     ) {
         for (line, item) in file_list_lines.iter_mut().zip(tree_items) {
             let FileTreeItem::File(path) = item else {
+                // Reserve the status column so folder and file connectors
+                // align.
+                line.spans[0].content = format!("  {}", line.spans[0].content).into();
+
                 continue;
             };
             let Some(detail) = details.get(path) else {
