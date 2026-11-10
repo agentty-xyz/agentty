@@ -301,6 +301,26 @@ async fn seed_clean_review_session_with_worktree_edit(env: &BuilderEnv) -> E2eRe
     install_worktree_edit_tmux_stub(env)
 }
 
+/// Seeds branching folders deep enough to exercise narrow tree rendering.
+async fn seed_deep_diff_tree(env: &BuilderEnv) -> E2eResult {
+    seed_review_ready_session_with_review_request(env).await?;
+    let session_worktree = env.agentty_root.join("wt").join("review-s");
+    for path in [
+        "src/a/b/c/d/first.rs",
+        "src/a/b/c/d/last.rs",
+        "src/a/b/c/peer.rs",
+        "src/a/b/peer.rs",
+        "src/a/peer.rs",
+        "src/peer.rs",
+    ] {
+        let file = session_worktree.join(path);
+        std::fs::create_dir_all(file.parent().ok_or("file needs a parent")?)?;
+        std::fs::write(file, "fn example() {}\n")?;
+    }
+
+    Ok(())
+}
+
 /// Seeds a failing review diff whose Git wrapper stays busy long enough
 /// to prove that the TUI accepts cancellation before Git completes.
 async fn seed_slow_review_diff(env: &BuilderEnv) -> Result<(), Box<dyn std::error::Error>> {
@@ -504,8 +524,47 @@ async fn test_compact_diff_tree() -> E2eResult {
                         .into_iter()
                         .next()
                         .expect("compact tree should render its nested path");
-                    assert_eq!(root_match.rect.col, 2);
+                    assert_eq!(root_match.rect.col, 4);
                     assert_eq!(nested_match.rect.col, 6);
+                })
+            },
+        )
+        .await?;
+
+    Ok(())
+}
+
+/// Deep file rows keep their connectors aligned with the parent folders.
+#[tokio::test]
+async fn test_deep_diff_tree_connectors() -> E2eResult {
+    // Arrange
+    FeatureTest::new("deep_diff_tree_connectors")
+        .with_git()
+        .with_terminal_size(120, 30)
+        .setup(|env| Box::pin(async move { seed_deep_diff_tree(env).await }))
+        .run(
+            |scenario| {
+                // Act
+                scenario
+                    .compose(&common::wait_for_agentty_startup())
+                    .compose(&common::switch_to_tab("Sessions"))
+                    .compose(&common::open_selected_session_view())
+                    .press_key("d")
+                    .wait_for_text("first.rs", 5000)
+                    .wait_for_stable_frame(300, 5000)
+            },
+            |frame, _report| {
+                Box::pin(async move {
+                    // Assert
+                    let tree = diff_file_tree_region(frame);
+                    for text in [
+                        "  │ │ │ ├ d/",
+                        "A │ │ │ │ ├ first.rs",
+                        "A │ │ │ │ └ last.rs",
+                        "A │ │ │ └ peer.rs",
+                    ] {
+                        assertion::assert_text_in_region(frame, text, &tree);
+                    }
                 })
             },
         )
@@ -1302,7 +1361,7 @@ fn assert_diff_file_tree_change_totals(frame: &TerminalFrame) {
     let file_matches = frame.find_text_in_region("mai", &file_tree);
     let root_match = &root_matches[0];
     let file_match = &file_matches[0];
-    assert_eq!(root_match.rect.col, 2);
+    assert_eq!(root_match.rect.col, 4);
     assert_eq!(file_match.rect.col, 6);
 
     let text = frame.text_in_region(&file_tree);

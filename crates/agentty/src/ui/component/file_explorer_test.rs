@@ -111,7 +111,7 @@ fn test_render_right_aligns_totals_and_prioritizes_long_names() {
         .map(ratatui::buffer::Cell::symbol)
         .collect::<String>();
     assert!(text.contains("└ main.rs   +12/-3"));
-    assert!(text.contains("└ path/to…/main.rs"));
+    assert!(text.contains("└ path/to/…main.rs"));
 }
 
 const DIFF_SAME_PATH_HEADER: &str = "diff --git a/src/main.rs b/src/main.rs";
@@ -199,7 +199,7 @@ fn middle_truncation_preserves_extensions_and_terminal_width() {
 }
 
 #[test]
-fn narrow_rows_hide_totals_and_reduce_deep_indentation() {
+fn narrow_rows_hide_totals_and_preserve_deep_connectors() {
     // Arrange
     let explorer = FileExplorer::from_cached_lines(Arc::from([]), 4);
     let row = |name: &str| {
@@ -223,11 +223,67 @@ fn narrow_rows_hide_totals_and_reduce_deep_indentation() {
     // Assert
     assert!(!line_text(&folder_line).contains("+123456"));
     assert!(!line_text(&file_line).contains("+123456"));
-    assert!(line_text(&file_line).ends_with("_test.rs"));
-    assert!(line_text(&file_line).starts_with("      "));
+    assert_eq!(line_text(&file_line), "│ │ │ └ executio…test.rs");
+    assert!(line_text(&folder_line).starts_with("│ │ │ ├ "));
+    assert!(line_text(&file_line).starts_with("│ │ │ └ "));
     assert!(file_line.width() <= 24);
     assert_eq!(zero_width.width(), 0);
     assert_eq!(line_text(&placeholder), "No files");
+}
+
+#[test]
+fn deep_rows_reserve_filename_space_before_totals() {
+    // Arrange
+    let explorer = FileExplorer::from_cached_lines(Arc::from([]), 4);
+    let indentation = format!("{}└ ", "│ ".repeat(8));
+    let cases = [
+        ("M ", 26, "ma….rs"),
+        ("M ", 32, "main.rs     "),
+        ("M ", 33, "main.rs +1/-0"),
+        ("", 24, "ma….rs"),
+        ("", 31, "main.rs +1/-0"),
+    ];
+    for (badge, width, expected_name) in cases {
+        let row = Line::from(vec![
+            Span::raw(badge),
+            Span::raw(format!("{indentation}main.rs")),
+            Span::raw(" "),
+            Span::raw("+1"),
+            Span::raw("/"),
+            Span::raw("-0"),
+        ]);
+
+        // Act
+        let rendered = explorer.line_for_width(&row, width);
+
+        // Assert
+        assert_eq!(
+            line_text(&rendered),
+            format!("{badge}{indentation}{expected_name}")
+        );
+        assert_eq!(rendered.width(), width);
+    }
+}
+
+#[test]
+fn tree_connectors_survive_filename_truncation() {
+    // Arrange
+    let explorer = FileExplorer::from_cached_lines(Arc::from([]), 0);
+    let row = Line::from("│ │ │ │ └ 日本語資料.rs");
+    let cases = [
+        (24, "│ │ │ │ └ 日本語資料.rs "),
+        (18, "│ │ │ │ └ 日本….rs"),
+        (12, "│ │ │ │ └ …s"),
+        (6, "│ │ │ "),
+    ];
+    for (width, expected) in cases {
+        // Act
+        let rendered = explorer.line_for_width(&row, width);
+
+        // Assert
+        assert_eq!(line_text(&rendered), expected);
+        assert_eq!(rendered.width(), width);
+    }
 }
 
 #[test]
