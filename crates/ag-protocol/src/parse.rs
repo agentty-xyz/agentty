@@ -2,8 +2,10 @@
 
 use serde_json::Value;
 
+use super::graph_proposal::{GraphProposalOutcome, GraphProposalResponse};
 use super::model::{
-    AgentResponse, AgentResponseParseError, ProtocolRequestProfile, ReviewMetadata, UtilityResponse,
+    AgentResponse, AgentResponseParseError, MAX_QUESTIONS, ProtocolRequestProfile, ReviewMetadata,
+    UtilityResponse,
 };
 use super::review::FocusedReview;
 
@@ -80,7 +82,7 @@ pub fn parse_agent_response_strict(raw: &str) -> Result<AgentResponse, AgentResp
 
 /// Parses one response against the schema selected for its request profile.
 ///
-/// Reviews and metadata arrive as direct task objects so native
+/// Proposals, reviews, and metadata arrive as direct task objects so native
 /// provider schemas can enforce their fields. The validated object is
 /// normalized into `AgentResponse::answer` for existing application
 /// consumers.
@@ -109,6 +111,13 @@ pub fn parse_protocol_response_strict(
         })?;
         return Ok(AgentResponse::plain(response.answer));
     }
+    if matches!(profile, ProtocolRequestProfile::GraphProposal) {
+        return parse_graph_proposal_response(trimmed).map_err(|reason| {
+            AgentResponseParseError::InvalidFormat {
+                reason: format!("graph proposal parse failed ({reason})"),
+            }
+        });
+    }
     if matches!(profile, ProtocolRequestProfile::ReviewMetadata) {
         let response = serde_json::from_str::<ReviewMetadata>(trimmed).map_err(|error| {
             AgentResponseParseError::InvalidFormat {
@@ -128,6 +137,38 @@ pub fn parse_protocol_response_strict(
     let answer = serde_json::json!(review).to_string();
 
     Ok(AgentResponse::plain(answer))
+}
+
+/// Checks wire completeness only. Graph resolution, limits, and execution
+/// authority belong to the host. Both outcomes remain typed JSON in `answer`
+/// so proposal questions cannot enter the ordinary session question loop.
+fn parse_graph_proposal_response(raw: &str) -> Result<AgentResponse, String> {
+    let response: GraphProposalResponse =
+        serde_json::from_str(raw).map_err(|error| error.to_string())?;
+    match &response.outcome {
+        GraphProposalOutcome::Clarification { questions } => {
+            if questions.is_empty() || questions.len() > MAX_QUESTIONS {
+                return Err(format!(
+                    "expected 1 to {MAX_QUESTIONS} clarification questions"
+                ));
+            }
+            if questions
+                .iter()
+                .any(|question| question.text.trim().is_empty())
+            {
+                return Err("clarification question text must not be blank".to_string());
+            }
+        }
+        GraphProposalOutcome::Proposal { proposal } => {
+            if proposal.nodes.is_empty() {
+                return Err("a complete proposal must contain at least one node".to_string());
+            }
+        }
+    }
+
+    Ok(AgentResponse::plain(
+        serde_json::json!(response).to_string(),
+    ))
 }
 
 /// Retains utility wrapper recovery while enforcing the narrow wire fields.

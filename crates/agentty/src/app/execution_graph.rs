@@ -235,6 +235,7 @@ impl App {
         request: StartExecutionGraphRequest,
     ) -> Result<(), ag_session::SessionError> {
         let invalid = ag_session::SessionError::Operation;
+        self.validate_proposal_launch(&request).await?;
         request
             .graph
             .validate()

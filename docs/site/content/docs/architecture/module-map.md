@@ -66,9 +66,14 @@ contracts.
   and acceptance; execution consumes captured definitions independently of their IDs.
 - Generic [execution graph contracts](@/docs/architecture/execution-graphs.md) also
   belong to `ag-session`: pure graph validation, node requirements, and exact result
-  bindings. `ag-store` owns immutable revision snapshots, execution links, output
-  bodies, validation/acceptance evidence, and atomic static-node admission. `ag-worker`
-  owns deterministic graph dispatch, shared resource leases, and worker adapters behind
+  bindings. `ag-protocol` owns model-authored proposal responses, using logical agent,
+  node, and output references without runtime identities or approval evidence.
+  `ag-session` resolves proposals against captured host definitions and limits;
+  `ag-store` retains proposal versions separately and atomically publishes approved
+  snapshots. Agentty owns scoped worker generation and exact-version approval policy.
+  `ag-store` owns immutable revision snapshots, execution links, output bodies,
+  validation/acceptance evidence, and atomic static-node admission. `ag-worker` owns
+  deterministic graph dispatch, shared resource leases, and worker adapters behind
   `GraphNodeRunner`. The application owns explicit graph launch, wakeups, and the
   adapter into ordered session workers. Focused review owns its graph construction and
   phase runner; phase semantics stay in the review prompt module. `/plan` builds a fixed

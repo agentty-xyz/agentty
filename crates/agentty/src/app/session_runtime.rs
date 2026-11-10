@@ -23,8 +23,8 @@ use tokio_util::sync::CancellationToken;
 
 use crate::app::SessionManager;
 use crate::app::command_gateway::{
-    CommandDelivery, CommandInitiator, ReviewRequestCommand, SessionCommand, SessionMutation,
-    TaskChainReplyAction, TaskChainReplyCommand,
+    CommandDelivery, CommandInitiator, GraphProposalCommand, ReviewRequestCommand, SessionCommand,
+    SessionMutation, TaskChainReplyAction, TaskChainReplyCommand,
 };
 
 /// Maximum number of accepted API commands waiting for foreground execution.
@@ -34,6 +34,10 @@ const SESSION_RUNTIME_UNAVAILABLE: &str = "Session runtime is unavailable";
 
 /// A read query or an enveloped mutation awaiting foreground admission.
 pub(crate) enum SessionRuntimeCommand {
+    GetGraphProposal {
+        id: String,
+        response_tx: oneshot::Sender<Result<Option<ag_session::GraphProposalState>, SessionError>>,
+    },
     GetExecutionGraph {
         graph_id: String,
         response_tx:
@@ -82,6 +86,43 @@ pub(crate) struct SessionRuntimeHandle {
 }
 
 impl SessionRuntimeHandle {
+    pub(crate) async fn get_graph_proposal(
+        &self,
+        id: &str,
+    ) -> Result<Option<ag_session::GraphProposalState>, SessionError> {
+        self.request(|response_tx| SessionRuntimeCommand::GetGraphProposal {
+            id: id.into(),
+            response_tx,
+        })
+        .await
+    }
+
+    pub(crate) async fn generate_graph_proposal(
+        &self,
+        request: ag_session::GenerateGraphProposalRequest,
+    ) -> Result<(), SessionError> {
+        self.request_admission(SessionMutation::GraphProposal {
+            command: GraphProposalCommand::Generate(Box::new(request)),
+        })
+        .await
+    }
+
+    pub(crate) async fn act_on_graph_proposal(
+        &self,
+        id: &str,
+        version: u32,
+        action: ag_session::GraphProposalAction,
+    ) -> Result<(), SessionError> {
+        self.request_admission(SessionMutation::GraphProposal {
+            command: GraphProposalCommand::Act {
+                id: id.into(),
+                version,
+                action,
+            },
+        })
+        .await
+    }
+
     pub(crate) async fn get_execution_graph(
         &self,
         graph_id: &str,

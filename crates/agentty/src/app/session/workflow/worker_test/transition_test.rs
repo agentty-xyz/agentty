@@ -1523,93 +1523,37 @@ fn test_session_command_kind_values() {
         remote_branch_name: None,
         response: None,
     };
-    let start_command = SessionCommand::Run {
-        operation_id: "op-start".to_string(),
-        request_kind: AgentRequestKind::SessionStart,
-        replay_transcript: None,
-        prompt: "prompt".into(),
-        turn_metadata: TurnMetadata {
-            published_upstream_ref: None,
-            review_comment_thread_ids: Vec::new(),
-            session_agent: AgentSelection::new(
-                crate::domain::agent::AgentKind::Claude,
-                AgentModel::ClaudeSonnet55,
-            ),
-        },
-    };
-    let resume_command = SessionCommand::Run {
-        operation_id: "op-resume".to_string(),
-        request_kind: AgentRequestKind::SessionResume,
-        replay_transcript: None,
-        prompt: "prompt".into(),
-        turn_metadata: TurnMetadata {
-            published_upstream_ref: None,
-            review_comment_thread_ids: Vec::new(),
-            session_agent: AgentSelection::new(
-                crate::domain::agent::AgentKind::Claude,
-                AgentModel::ClaudeSonnet55,
-            ),
-        },
-    };
-    let account_read_command = SessionCommand::Run {
-        operation_id: "op-account-read".to_string(),
-        request_kind: AgentRequestKind::AccountRead,
-        replay_transcript: None,
-        prompt: "prompt".into(),
-        turn_metadata: TurnMetadata {
-            published_upstream_ref: None,
-            review_comment_thread_ids: Vec::new(),
-            session_agent: AgentSelection::new(
-                crate::domain::agent::AgentKind::Claude,
-                AgentModel::ClaudeSonnet55,
-            ),
-        },
-    };
-    let focused_review_command = SessionCommand::Run {
-        operation_id: "op-focused-review".to_string(),
-        request_kind: AgentRequestKind::FocusedReview,
-        replay_transcript: None,
-        prompt: "prompt".into(),
-        turn_metadata: TurnMetadata {
-            published_upstream_ref: None,
-            review_comment_thread_ids: Vec::new(),
-            session_agent: AgentSelection::new(
-                crate::domain::agent::AgentKind::Claude,
-                AgentModel::ClaudeSonnet55,
-            ),
-        },
-    };
-
-    let metadata_command = SessionCommand::Run {
-        operation_id: "op-metadata".to_string(),
-        request_kind: AgentRequestKind::ReviewMetadata,
-        replay_transcript: None,
-        prompt: "metadata".into(),
-        turn_metadata: TurnMetadata {
-            published_upstream_ref: None,
-            review_comment_thread_ids: Vec::new(),
-            session_agent: AgentSelection::new(
-                crate::domain::agent::AgentKind::Claude,
-                AgentModel::ClaudeSonnet55,
-            ),
-        },
-    };
 
     // Act
     let review_request_kind = review_request_command.kind();
-    let start_kind = start_command.kind();
-    let resume_kind = resume_command.kind();
-    let account_read_kind = account_read_command.kind();
-    let focused_review_kind = focused_review_command.kind();
-    let metadata_kind = metadata_command.kind();
 
     // Assert
     assert_eq!(review_request_kind, "create_review_request");
-    assert_eq!(start_kind, "start_prompt");
-    assert_eq!(resume_kind, "reply");
-    assert_eq!(account_read_kind, "account_read");
-    assert_eq!(focused_review_kind, "focused_review");
-    assert_eq!(metadata_kind, "review_metadata");
+
+    for (request_kind, expected) in [
+        (AgentRequestKind::SessionStart, "start_prompt"),
+        (AgentRequestKind::SessionResume, "reply"),
+        (AgentRequestKind::AccountRead, "account_read"),
+        (AgentRequestKind::FocusedReview, "focused_review"),
+        (AgentRequestKind::ReviewMetadata, "review_metadata"),
+        (AgentRequestKind::UtilityPrompt, "utility_prompt"),
+        (AgentRequestKind::GraphProposal, "graph_proposal"),
+    ] {
+        // Arrange
+        let command = SessionCommand::Run {
+            operation_id: "op-kind".to_string(),
+            request_kind,
+            replay_transcript: None,
+            prompt: "prompt".into(),
+            turn_metadata: default_turn_metadata(),
+        };
+
+        // Act
+        let kind = command.kind();
+
+        // Assert
+        assert_eq!(kind, expected);
+    }
 }
 
 #[tokio::test]

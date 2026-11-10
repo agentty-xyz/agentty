@@ -4,6 +4,8 @@ mod error;
 mod graph;
 mod lifecycle;
 mod node;
+mod proposal;
+mod proposal_state;
 mod result;
 mod selection;
 
@@ -21,6 +23,11 @@ pub use lifecycle::{
 pub use node::{
     GraphCompletionGate, GraphContext, GraphDependency, GraphExecutionProfile, GraphInputBinding,
     GraphNode, GraphOutput, GraphPostProcessing, GraphWorkspaceAccess,
+};
+pub use proposal::{GraphProposalLimits, GraphProposalResolution};
+pub use proposal_state::{
+    GenerateGraphProposalRequest, GraphProposalAction, GraphProposalApproval, GraphProposalState,
+    GraphProposalVersion, GraphProposalVersionOutcome,
 };
 pub use result::{
     GraphExecutionRef, GraphResolvedInput, GraphResult, GraphResultRef, GraphResultState,

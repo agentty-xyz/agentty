@@ -3,6 +3,7 @@
 
 use serde_json::Value;
 
+use super::graph_proposal::GraphProposalResponse;
 use super::model::{
     AgentResponse, ProtocolRequestProfile, ReviewMetadata, UtilityResponse,
     questions_field_description,
@@ -100,6 +101,13 @@ pub(crate) fn protocol_json_schema_json(profile: ProtocolRequestProfile) -> Stri
 fn protocol_schema(profile: ProtocolRequestProfile) -> Value {
     match profile {
         ProtocolRequestProfile::FocusedReview => focused_review_json_schema(),
+        ProtocolRequestProfile::GraphProposal => {
+            let mut schema = serde_json::json!(schemars::schema_for!(GraphProposalResponse));
+            normalize_proposal_unions(&mut schema);
+            inject_additional_properties_false(&mut schema);
+
+            schema
+        }
         ProtocolRequestProfile::SessionTurn => agent_response_json_schema(),
         ProtocolRequestProfile::UtilityPrompt => {
             serde_json::json!(schemars::schema_for!(UtilityResponse))
@@ -107,6 +115,27 @@ fn protocol_schema(profile: ProtocolRequestProfile) -> Value {
         ProtocolRequestProfile::ReviewMetadata => {
             serde_json::json!(schemars::schema_for!(ReviewMetadata))
         }
+    }
+}
+
+/// Tagged proposal variants are disjoint. `anyOf` preserves their meaning
+/// while avoiding `oneOf`, which structured-output transports do not support.
+fn normalize_proposal_unions(value: &mut Value) {
+    match value {
+        Value::Object(object) => {
+            if let Some(variants) = object.remove("oneOf") {
+                object.insert("anyOf".to_string(), variants);
+            }
+            for nested in object.values_mut() {
+                normalize_proposal_unions(nested);
+            }
+        }
+        Value::Array(items) => {
+            for item in items {
+                normalize_proposal_unions(item);
+            }
+        }
+        _ => {}
     }
 }
 

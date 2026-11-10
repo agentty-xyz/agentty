@@ -667,7 +667,7 @@ pub(crate) fn task_operation_id(execution: &ag_session::GraphExecutionRef) -> &s
     .expect("task execution")
 }
 
-async fn seed_session(manager: &mut SessionManager, db: &AppRepositories) {
+pub(in crate::app) async fn seed_session(manager: &mut SessionManager, db: &AppRepositories) {
     let project = db
         .projects()
         .upsert_project("project", None)

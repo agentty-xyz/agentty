@@ -36,6 +36,8 @@ pub trait LiveTranscript: fmt::Debug + Send + Sync {
 pub enum AgentRequestKind {
     /// Runs one focused code review with a direct structured review response.
     FocusedReview,
+    /// Proposes an initial graph or asks clarification without launching nodes.
+    GraphProposal,
     /// Reconcile review-request metadata using a direct typed result.
     ReviewMetadata,
     /// Starts a fresh interactive session turn with no prior context.
@@ -59,6 +61,7 @@ impl AgentRequestKind {
         match self {
             Self::SessionStart | Self::SessionResume => ProtocolRequestProfile::SessionTurn,
             Self::FocusedReview => ProtocolRequestProfile::FocusedReview,
+            Self::GraphProposal => ProtocolRequestProfile::GraphProposal,
             Self::ReviewMetadata => ProtocolRequestProfile::ReviewMetadata,
             Self::UtilityPrompt | Self::AccountRead => ProtocolRequestProfile::UtilityPrompt,
         }

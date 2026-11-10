@@ -111,6 +111,13 @@ impl SessionRunFactory for TestSessionRunFactory {
 }
 
 impl AppServices {
+    pub(crate) fn set_graph_proposal_repository(
+        &mut self,
+        repository: Arc<dyn ag_store::GraphProposalRepository>,
+    ) {
+        self.repositories = self.repositories.with_graph_proposal_repository(repository);
+    }
+
     /// Replaces workspace definition lookup independently of task persistence.
     pub(crate) fn set_agent_profile_catalog_client(&mut self, client: Arc<dyn AgentCatalogClient>) {
         self.agent_profile_catalog_client = client;

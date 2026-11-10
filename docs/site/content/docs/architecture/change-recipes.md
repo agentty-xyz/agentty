@@ -37,6 +37,11 @@ and preserve task snapshots when changing admission or continuation.
 
 ## Define a Generic Execution Graph
 
+For model-generated graphs, keep wire proposals in `ag-protocol`, pure resolution in
+`ag-session`, durable versions and atomic approval in `ag-store`, and scoped worker
+generation and approval policy in Agentty. Preserve exact-version inspection and
+captured limits; neither restoration nor duplicate approval may launch work.
+
 Keep pure graph shapes, node requirements, and exact result bindings in `ag-session`.
 Follow the [execution graph contracts](@/docs/architecture/execution-graphs.md), and
 test structural rules without storage or workers. `/plan` and focused review build their
