@@ -6,7 +6,7 @@ use ag_protocol::{ProtocolRequestProfile, TurnPrompt};
 use ag_session::AgentModel;
 use ag_telemetry::Span;
 use agent_client_protocol::schema::ProtocolVersion;
-use agent_client_protocol::schema::v1::{
+use agent_client_protocol::v1::schema::{
     AGENT_METHOD_NAMES, CLIENT_METHOD_NAMES, InitializeResponse, NewSessionResponse,
 };
 use mockall::Sequence;

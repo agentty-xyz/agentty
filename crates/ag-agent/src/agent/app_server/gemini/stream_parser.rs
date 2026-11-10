@@ -1,7 +1,7 @@
 //! Gemini ACP stream parsing helpers.
 
 use ag_protocol::{ProtocolRequestProfile, parse_protocol_response_strict};
-use agent_client_protocol::schema::v1::CLIENT_METHOD_NAMES;
+use agent_client_protocol::v1::schema::CLIENT_METHOD_NAMES;
 use serde_json::Value;
 
 use super::usage;
