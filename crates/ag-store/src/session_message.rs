@@ -53,13 +53,14 @@ impl SessionMessageStore {
 
     /// Appends normalized content within the caller's transaction, preserving
     /// transcript ordering and the owning session's modification timestamp.
+    /// Returns the new message id, or `None` when the session no longer exists.
     pub(super) async fn append_normalized_in_transaction(
         transaction: &mut sqlx::Transaction<'_, sqlx::Sqlite>,
         id: &str,
         kind: SessionMessageKind,
         content: &str,
         now: i64,
-    ) -> Result<(), DbError> {
+    ) -> Result<Option<i64>, DbError> {
         let update_result = sqlx::query!(
             r"
 UPDATE session
@@ -74,10 +75,10 @@ WHERE id = ?
         .db_context(APPEND_SESSION_MESSAGE)?;
 
         if update_result.rows_affected() == 0 {
-            return Ok(());
+            return Ok(None);
         }
 
-        sqlx::query(
+        let inserted = sqlx::query(
             r"
 INSERT INTO session_message (session_id, position, kind, content, created_at)
 SELECT ?, COALESCE(MAX(position), -1) + 1, ?, ?, ?
@@ -94,7 +95,7 @@ WHERE session_id = ?
         .await
         .db_context(APPEND_SESSION_MESSAGE)?;
 
-        Ok(())
+        Ok(Some(inserted.last_insert_rowid()))
     }
 }
 

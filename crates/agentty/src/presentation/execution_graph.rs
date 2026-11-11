@@ -2,7 +2,7 @@
 
 use std::collections::{BTreeMap, BTreeSet};
 
-use ag_protocol::{ProtocolRequestProfile, QuestionItem, parse_protocol_response_strict};
+use ag_protocol::{ProtocolRequestProfile, parse_protocol_response_strict};
 use ag_session::{
     ExecutionGraph, ExecutionGraphProgress, ExecutionGraphStatus, GraphContext, GraphNodeProgress,
     GraphNodeStatus, GraphProposalState, GraphResult, GraphResultState, GraphWorkspaceAccess,
@@ -77,12 +77,6 @@ impl GraphView {
         self.proposal.as_ref().filter(|_| self.is_proposal_selected)
     }
 
-    /// Questions of the selected node; proposal clarifications are answered
-    /// in chat.
-    pub(crate) fn questions(&self) -> &[QuestionItem] {
-        self.node().map_or(&[], |node| node.questions.as_slice())
-    }
-
     pub(crate) fn node(&self) -> Option<&GraphNodeProgress> {
         self.progress.as_ref()?.nodes.get(self.selected_node)
     }
@@ -106,7 +100,7 @@ impl GraphView {
         }
 
         match editor.kind {
-            GraphEditKind::Reply | GraphEditKind::Answers => {
+            GraphEditKind::Reply => {
                 refreshed.can_continue()
                     && self
                         .node()
@@ -114,7 +108,6 @@ impl GraphView {
                         .is_some_and(|(original, current)| {
                             original.node_id == current.node_id
                                 && original.executions.last() == current.executions.last()
-                                && original.questions == current.questions
                         })
             }
             GraphEditKind::Cancel => refreshed.can_cancel(),
@@ -150,6 +143,8 @@ impl GraphView {
         })
     }
 
+    /// Whether the selected node accepts reply or revision guidance here. A
+    /// node awaiting answers asked in session chat; the chat reply answers it.
     pub(crate) fn can_continue(&self) -> bool {
         let Some(graph) = self.graph() else {
             return false;
@@ -172,10 +167,7 @@ impl GraphView {
             )
             && matches!(
                 current.status,
-                GraphNodeStatus::Succeeded
-                    | GraphNodeStatus::AwaitingAnswers
-                    | GraphNodeStatus::Failed
-                    | GraphNodeStatus::Cancelled
+                GraphNodeStatus::Succeeded | GraphNodeStatus::Failed | GraphNodeStatus::Cancelled
             )
             && !current.executions.is_empty()
             && !current
@@ -308,7 +300,6 @@ impl GraphViewOutput {
 /// Explicit text entry separate from ordinary session chat.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub(crate) struct GraphEditor {
-    pub(crate) answers: Vec<String>,
     pub(crate) input: InputState,
     pub(crate) kind: GraphEditKind,
     /// A rejected draft must explicitly reconcile its original bindings before
@@ -318,7 +309,6 @@ pub(crate) struct GraphEditor {
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(crate) enum GraphEditKind {
-    Answers,
     Cancel,
     Reply,
     Resume,

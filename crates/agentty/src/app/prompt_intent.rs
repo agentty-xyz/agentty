@@ -196,8 +196,9 @@ impl App {
     /// session workflow and returns the requested navigation effect.
     ///
     /// A session's pending graph proposal receives the message as a reply
-    /// first; otherwise sessions that own a task chain send it to their
-    /// orchestrator instead of starting an ordinary turn.
+    /// first, then a graph node awaiting answers; otherwise sessions that own
+    /// a task chain send it to their orchestrator instead of starting an
+    /// ordinary turn.
     pub(crate) async fn submit_prompt(
         &mut self,
         submission: PromptSubmission,
@@ -230,6 +231,9 @@ impl App {
         }
         if session_mode != PromptSessionMode::NewDraft {
             if let Some(outcome) = self.submit_graph_proposal_reply(&session_id, &prompt).await {
+                return outcome;
+            }
+            if let Some(outcome) = self.submit_graph_node_reply(&session_id, &prompt).await {
                 return outcome;
             }
             if let Some(outcome) = self.submit_task_chain_prompt(&session_id, &prompt).await {

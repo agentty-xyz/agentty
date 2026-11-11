@@ -89,15 +89,10 @@ async fn background_questions_preserve_graph_snapshots_and_bound_drafts() {
         questions: vec![QuestionItem::new("A background session question?")],
         token_usage_delta: SessionStats::default(),
     };
-    for kind in [
-        None,
-        Some(GraphEditKind::Reply),
-        Some(GraphEditKind::Answers),
-    ] {
+    for kind in [None, Some(GraphEditKind::Reply)] {
         for needs_reconciliation in [false, true] {
             let mut view = graph_view();
             view.editor = kind.map(|kind| GraphEditor {
-                answers: vec!["Previous graph answer".into()],
                 input: InputState::with_text("Unsent graph input".into()),
                 kind,
                 needs_reconciliation,

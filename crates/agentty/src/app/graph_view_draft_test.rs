@@ -4,7 +4,7 @@ use std::sync::atomic::{AtomicUsize, Ordering};
 use ag_protocol::QuestionItem;
 use ag_session::{
     ExecutionGraphStatus, GraphExecutionRef, GraphNodeContinuation, GraphNodeStatus,
-    GraphQuestionAnswer, GraphResultState,
+    GraphResultState,
 };
 use ag_store::MockGraphRepository;
 use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
@@ -19,19 +19,17 @@ use crate::runtime::mode::execution_graph;
 use crate::test_support::new_test_app;
 
 #[tokio::test]
-async fn rejected_replies_and_answer_sets_require_explicit_reconciliation() {
+async fn rejected_replies_require_explicit_reconciliation() {
     // Arrange / Act / Assert
-    for kind in [GraphEditKind::Reply, GraphEditKind::Answers] {
-        for fault in ["stale", "persistence"] {
-            exercise_rejected_draft(kind, fault).await;
-        }
+    for fault in ["stale", "persistence"] {
+        exercise_rejected_draft(fault).await;
     }
 }
 
-async fn exercise_rejected_draft(kind: GraphEditKind, fault: &'static str) {
+async fn exercise_rejected_draft(fault: &'static str) {
     // Arrange
     let (mut app, _directory) = new_test_app().await;
-    let view = draft_view(kind);
+    let view = draft_view();
     let mut retained = view.editor.clone().expect("editor");
     retained.needs_reconciliation = true;
     let original_progress = view.progress.clone();
@@ -54,7 +52,10 @@ async fn exercise_rejected_draft(kind: GraphEditKind, fault: &'static str) {
         .returning(move |_| Ok(vec![graph.clone()]));
     repository.expect_load_result().returning(|_| Ok(None));
     let expected_execution = view.node().expect("node").executions[0].clone();
-    let expected_kind = draft_continuation(kind);
+    let expected_kind = GraphNodeContinuation::Reply {
+        attachments: Vec::new(),
+        message: "Preserved revision guidance".into(),
+    };
     let observed_writes = writes.clone();
     repository
         .expect_continue_node()
@@ -104,7 +105,7 @@ async fn exercise_rejected_draft(kind: GraphEditKind, fault: &'static str) {
     assert!(inspector(&app).notice.contains("Action admitted"));
 }
 
-fn draft_view(kind: GraphEditKind) -> GraphView {
+fn draft_view() -> GraphView {
     let mut view = graph_view();
     let progress = view.progress.as_mut().expect("progress");
     progress.status = ExecutionGraphStatus::Failed;
@@ -117,53 +118,13 @@ fn draft_view(kind: GraphEditKind) -> GraphView {
             operation_id: "other-operation".into(),
             task_id: "task-second".into(),
         });
-    if kind == GraphEditKind::Answers {
-        progress.nodes[0].status = GraphNodeStatus::AwaitingAnswers;
-        progress.nodes[0].results[0].state = GraphResultState::Produced;
-        view.outputs[0].result.state = GraphResultState::Produced;
-        progress.nodes[0].questions = vec![
-            QuestionItem::new("Which target?"),
-            QuestionItem::new("Which scope?"),
-        ];
-    }
     view.editor = Some(GraphEditor {
-        answers: if kind == GraphEditKind::Answers {
-            vec!["Local".into()]
-        } else {
-            Vec::new()
-        },
-        input: InputState::with_text(if kind == GraphEditKind::Answers {
-            "Docs".into()
-        } else {
-            "Preserved revision guidance".into()
-        }),
-        kind,
+        input: InputState::with_text("Preserved revision guidance".into()),
+        kind: GraphEditKind::Reply,
         needs_reconciliation: false,
     });
 
     view
-}
-
-fn draft_continuation(kind: GraphEditKind) -> GraphNodeContinuation {
-    if kind == GraphEditKind::Answers {
-        GraphNodeContinuation::Answer {
-            answers: vec![
-                GraphQuestionAnswer {
-                    question: "Which target?".into(),
-                    answer: "Local".into(),
-                },
-                GraphQuestionAnswer {
-                    question: "Which scope?".into(),
-                    answer: "Docs".into(),
-                },
-            ],
-        }
-    } else {
-        GraphNodeContinuation::Reply {
-            attachments: Vec::new(),
-            message: "Preserved revision guidance".into(),
-        }
-    }
 }
 
 fn inspector(app: &App) -> &GraphView {
@@ -176,18 +137,21 @@ fn inspector(app: &App) -> &GraphView {
 
 #[tokio::test]
 async fn failed_refresh_and_superseded_targets_leave_drafts_bound_and_blocked() {
-    for fault in ["refresh", "execution", "questions"] {
+    for fault in ["refresh", "execution", "awaiting-answers"] {
         // Arrange
         let (mut app, _directory) = new_test_app().await;
-        let mut view = draft_view(GraphEditKind::Answers);
+        let mut view = draft_view();
         view.editor.as_mut().expect("editor").needs_reconciliation = true;
         let mut current = view.progress.clone().expect("progress");
         if fault == "execution" {
             let execution = current.nodes[1].executions[0].clone();
             current.nodes[0].executions.push(execution);
         }
-        if fault == "questions" {
-            current.nodes[0].questions[1].text = "A new question?".into();
+        if fault == "awaiting-answers" {
+            // Questions are answered in chat, never through this draft.
+            current.nodes[0].status = GraphNodeStatus::AwaitingAnswers;
+            current.nodes[0].results[0].state = GraphResultState::Produced;
+            current.nodes[0].questions = vec![QuestionItem::new("Which target?")];
         }
         let graph = view.graphs[0].clone();
         let original = view.clone();

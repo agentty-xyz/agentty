@@ -115,6 +115,14 @@ pub trait GraphRepository: Send + Sync {
         &self,
         execution: &GraphExecutionRef,
     ) -> Result<Option<crate::TaskAgentTurnMetadata>, DbError>;
+
+    /// Returns the session message id of the chat question recorded with a
+    /// task turn; a later question has a larger id. `None` means the turn
+    /// asked nothing in chat or its question message no longer exists.
+    async fn task_question_message_id(
+        &self,
+        execution: &GraphExecutionRef,
+    ) -> Result<Option<i64>, DbError>;
     /// Saves a complete validated snapshot atomically. Creation requires
     /// revision one and no expected revision; updates require the current
     /// revision and its immediate successor. Identical historical redelivery
@@ -360,6 +368,25 @@ impl GraphRepository for SqliteGraphRepository {
                 })
             })
             .transpose()
+    }
+
+    async fn task_question_message_id(
+        &self,
+        execution: &GraphExecutionRef,
+    ) -> Result<Option<i64>, DbError> {
+        let mut connection = self.pool.acquire().await?;
+        let Some((id, _)) = Self::execution(&mut connection, execution).await? else {
+            return Ok(None);
+        };
+        let message_id: Option<Option<i64>> = sqlx::query_scalar(
+            "SELECT session_message_id FROM execution_graph_task_turn WHERE \
+             execution_graph_execution_id = ?",
+        )
+        .bind(id)
+        .fetch_optional(&mut *connection)
+        .await?;
+
+        Ok(message_id.flatten())
     }
 
     async fn save_graph(

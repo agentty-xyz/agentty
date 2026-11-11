@@ -8,7 +8,7 @@ use ag_contracts::{
 };
 use ag_session::{
     AgentAnswerContent, GraphExecutionRef, GraphPostProcessing, GraphWorkspaceAccess,
-    TaskAgentRole, TaskChain,
+    TaskAgentRole, TaskChain, node_question_notice,
 };
 use ag_worker::{GraphDispatch, GraphRunRequest, RunClient};
 use async_trait::async_trait;
@@ -235,8 +235,11 @@ async fn execute(
         // again during finalization to include any post-turn edits.
         post_turn::refresh_channel_diff_stats(&TurnFinalizerContext::from_worker(context)).await;
     }
-    if recorded && let Some(role) = role {
-        mirror_chain_answer(context, role, &result.assistant_message);
+    if recorded {
+        match role {
+            Some(role) => mirror_chain_answer(context, role, &result.assistant_message),
+            None => mirror_node_questions(context, &dispatch.node.id, &result.assistant_message),
+        }
     }
     let effects_succeeded = result.assistant_message.questions.is_empty();
     if dispatch.node.execution.post_processing == GraphPostProcessing::SessionWorkflow
@@ -309,6 +312,31 @@ fn mirror_chain_answer(
         &context.session_id,
         SessionMessageKind::AgentAnswer,
         &AgentAnswerContent { agent, text }.encode(),
+    );
+}
+
+/// Mirrors a generic graph node's durably recorded clarification questions
+/// into live chat, where the next reply answers them. Other answers stay in
+/// the node's task conversation.
+///
+/// Storage appends the same question with its response receipt, so the
+/// question is never lost when the response is saved, and redelivery never
+/// asks twice.
+fn mirror_node_questions(
+    context: &SessionWorkerContext,
+    node_id: &str,
+    response: &ag_protocol::AgentResponse,
+) {
+    let Some(notice) = node_question_notice(node_id, response) else {
+        return;
+    };
+    SessionTaskService::mirror_session_transcript_message(
+        &context.transcript,
+        &context.app_event_tx,
+        &context.session_update_versions,
+        &context.session_id,
+        SessionMessageKind::WorkflowNotice,
+        &notice,
     );
 }
 

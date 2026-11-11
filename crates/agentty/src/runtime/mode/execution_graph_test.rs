@@ -47,7 +47,6 @@ fn proposal_selection_is_read_only_and_ignores_former_action_keys() {
             .all(|action| matches!(action, GraphKeyAction::None))
     );
     assert!(inspected.graph().is_none());
-    assert_eq!(inspected.questions(), []);
     assert!(!deselected);
     assert!(matches!(reselected, GraphKeyAction::Refresh));
     assert!(view.is_proposal_selected);
@@ -229,46 +228,25 @@ fn actions_and_editors_keep_exact_node_intent() {
 }
 
 #[test]
-fn clarification_collects_the_complete_ordered_question_set() {
+fn nodes_awaiting_answers_open_no_inspector_editor() {
     // Arrange
     let mut view = graph_view();
     let node = &mut view.progress.as_mut().expect("progress").nodes[0];
     node.status = GraphNodeStatus::AwaitingAnswers;
-    node.questions = vec![
-        QuestionItem::new("Which target?"),
-        QuestionItem::new("Which scope?"),
-    ];
+    node.questions = vec![QuestionItem::new("Which target?")];
 
-    // Act / Assert
-    key(&mut view, KeyCode::Char('n'));
-    key(&mut view, KeyCode::Enter);
-    assert!(view.notice.contains("Enter an answer"));
-    view.editor.as_mut().expect("editor").input = InputState::with_text("Local".into());
-    assert!(matches!(
-        key(&mut view, KeyCode::Enter),
-        GraphKeyAction::None
-    ));
-    assert_eq!(view.editor.as_ref().expect("editor").answers, ["Local"]);
-    view.editor.as_mut().expect("editor").input = InputState::with_text("Docs".into());
-    let answers = match key(&mut view, KeyCode::Enter) {
-        GraphKeyAction::Submit(GraphViewAction::Continue(GraphNodeContinuation::Answer {
-            answers,
-        })) => Some(answers),
-        _ => None,
-    }
-    .expect("complete answers");
-    assert_eq!(
-        answers
+    // Act
+    let actions: Vec<GraphKeyAction> = ['n', 'e']
+        .into_iter()
+        .map(|code| key(&mut view, KeyCode::Char(code)))
+        .collect();
+
+    // Assert: chat replies answer the node's questions.
+    assert!(
+        actions
             .iter()
-            .map(|answer| (answer.question.as_str(), answer.answer.as_str()))
-            .collect::<Vec<_>>(),
-        [("Which target?", "Local"), ("Which scope?", "Docs")]
+            .all(|action| matches!(action, GraphKeyAction::None))
     );
-    assert_eq!(view.editor.as_ref().expect("editor").answers, ["Local"]);
-    assert_eq!(view.editor.as_ref().expect("editor").input.text(), "Docs");
-    open_editor(&mut view, GraphEditKind::Reply);
-    assert_eq!(
-        view.editor.as_ref().expect("editor").answers,
-        [] as [String; 0]
-    );
+    assert!(!view.can_continue());
+    assert!(view.editor.is_none());
 }

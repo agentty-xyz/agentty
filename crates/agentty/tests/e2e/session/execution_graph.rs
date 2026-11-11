@@ -6,9 +6,10 @@ use std::time::Duration;
 
 use ag_protocol::{ProtocolRequestProfile, TurnPrompt};
 use ag_session::{
-    AgentDefinition, EnvId, ExecutionGraph, GraphCompletionGate, GraphContext, GraphDependency,
-    GraphExecutionProfile, GraphExecutionRef, GraphNode, GraphOutput, GraphPostProcessing,
-    GraphWorkspaceAccess, test_support as model_fixture,
+    AgentDefinition, ContinueGraphNodeRequest, EnvId, ExecutionGraph, GraphCompletionGate,
+    GraphContext, GraphDependency, GraphExecutionProfile, GraphExecutionRef, GraphNode,
+    GraphNodeContinuation, GraphOutput, GraphPostProcessing, GraphWorkspaceAccess,
+    test_support as model_fixture,
 };
 use ag_worker::GraphAdmission;
 use testty::assertion;
@@ -200,11 +201,8 @@ async fn saved_execution_graph_controls() -> E2eResult {
                     .capture_labeled("accepted", "Exact output accepted")
                     .press_key("j")
                     .wait_for_text("Which target?", 5000)
+                    .wait_for_text("reply in chat to answer", 5000)
                     .press_key("n")
-                    .wait_for_text("Question 1/1", 5000)
-                    .write_text("Local")
-                    .press_key("Enter")
-                    .wait_for_text("Action admitted", 5000)
                     .press_key("j")
                     .wait_for_text("Fixture failure", 5000)
                     .press_key("t")
@@ -281,6 +279,55 @@ async fn saved_execution_graph_controls() -> E2eResult {
 }
 
 #[tokio::test]
+async fn graph_node_question_is_answered_in_chat() -> E2eResult {
+    // Arrange
+    FeatureTest::new("graph_node_question_chat_answer")
+        .with_git()
+        .with_terminal_size(120, 30)
+        .setup(|env| Box::pin(seed_graph(env)))
+        .run(
+            |scenario| {
+                // Act
+                scenario
+                    .compose(&common::wait_for_agentty_startup())
+                    .wait_for_text("Graph controls", 5000)
+                    .press_key("Enter")
+                    .wait_for_text("Enter: reply", 5000)
+                    .press_key("Enter")
+                    .write_text("Local documentation only")
+                    .press_key("Enter")
+                    .wait_for_text("Answer sent to", 5000)
+                    .capture_labeled("answered", "Chat reply answers the waiting graph node")
+                    .press_key("w")
+                    .wait_for_text("saved-branches", 5000)
+                    .press_key("j")
+                    .wait_for_text("Inspect inspect", 5000)
+            },
+            |frame, report| {
+                Box::pin(async move {
+                    // Assert
+                    let answered = common::frame_from_capture(&report.captures[0]);
+                    let full = Region::full(answered.cols(), answered.rows());
+                    for expected in ["Local documentation only", "inspect", "graph is paused"] {
+                        assertion::assert_text_in_region(&answered, expected, &full);
+                    }
+                    assertion::assert_not_visible(&answered, "Graph answer:");
+                    // The answered node no longer waits for input.
+                    assertion::assert_not_visible(frame, "reply in chat to answer");
+                    assertion::assert_text_in_region(
+                        frame,
+                        "inspect: Pending",
+                        &Region::full(frame.cols(), frame.rows()),
+                    );
+                })
+            },
+        )
+        .await?;
+
+    Ok(())
+}
+
+#[tokio::test]
 async fn rejected_graph_drafts_stay_visible_until_explicit_reconciliation() -> E2eResult {
     // Arrange
     FeatureTest::new("rejected_graph_drafts")
@@ -341,19 +388,13 @@ async fn rejected_graph_drafts_stay_visible_until_explicit_reconciliation() -> E
                     .capture_labeled("reconciled", "Explicit reconciliation retains guidance")
                     .press_key("Esc")
                     .compose(&wait_for_graph_controls())
-                    .press_key("j")
-                    .wait_for_text("Which target?", 5000)
-                    .press_key("n")
-                    .wait_for_text("Question 1/1", 5000)
-                    .write_text("Local documentation only")
-                    .press_key("Enter")
-                    .wait_for_text("Draft retained", 5000)
-                    .wait_for_text("Ctrl+r reconcile draft", 5000)
-                    .capture_labeled("answers", "Rejected answer stays bound to its question")
-                    .press_key("Esc")
-                    .compose(&wait_for_graph_controls())
                     .press_key("q")
                     .wait_for_text("Enter: reply", 5000)
+                    .press_key("Enter")
+                    .write_text("Local documentation only")
+                    .press_key("Enter")
+                    .wait_for_text("PERSISTENCE_REJECTED", 5000)
+                    .capture_labeled("answers", "Rejected chat answer keeps its draft")
             },
             |frame, report| {
                 Box::pin(async move {
@@ -374,8 +415,13 @@ async fn rejected_graph_drafts_stay_visible_until_explicit_reconciliation() -> E
                     let full = Region::full(reply.cols(), reply.rows());
                     assertion::assert_text_in_region(&reply, "Windows line", &full);
                     assertion::assert_text_in_region(&reply, "Classic line", &full);
+                    assertion::assert_text_in_region(
+                        frame,
+                        "Graph answer:",
+                        &Region::full(frame.cols(), frame.rows()),
+                    );
                     assertion::assert_not_visible(frame, "Preserved revision guidance");
-                    assertion::assert_not_visible(frame, "Local");
+                    assertion::assert_not_visible(frame, "Answer sent to");
                 })
             },
         )
@@ -401,6 +447,26 @@ async fn graph_draft_survives_a_background_session_question() -> E2eResult {
                     workspace.to_str().ok_or("UTF-8 fixture worktree path")?,
                 ])?;
                 let database = common::open_database(env).await?;
+                // An unanswered graph question would receive the chat message.
+                let progress = database
+                    .graphs()
+                    .progress("saved-branches")
+                    .await?
+                    .ok_or("Seeded graph missing")?;
+                database
+                    .graphs()
+                    .continue_node(&ContinueGraphNodeRequest {
+                        action_id: uuid::Uuid::from_u128(10).to_string(),
+                        execution: progress.nodes[1].executions[0].clone(),
+                        graph_id: progress.graph_id,
+                        kind: GraphNodeContinuation::Reply {
+                            attachments: Vec::new(),
+                            message: "Local".into(),
+                        },
+                        node_id: "inspect".into(),
+                        revision: progress.revision,
+                    })
+                    .await?;
                 database.sessions().update_session_agent_model(
                     SESSION, "claude", "claude-haiku-5-5",
                 ).await?;

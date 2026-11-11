@@ -77,6 +77,29 @@ fn proposal_inspector_renders_scrollable_details_and_available_actions() {
 }
 
 #[test]
+fn nodes_awaiting_answers_point_to_chat_instead_of_an_editor() {
+    // Arrange
+    let mut view = graph_view();
+    let node = &mut view.progress.as_mut().expect("progress").nodes[0];
+    node.status = GraphNodeStatus::AwaitingAnswers;
+    node.questions = vec![QuestionItem::new("Which target?")];
+
+    // Act
+    let awaiting = actions(&view);
+    view.progress.as_mut().expect("progress").nodes[0].status = GraphNodeStatus::Succeeded;
+    let settled = actions(&view);
+
+    // Assert
+    assert!(
+        awaiting.contains(&"reply in chat to answer"),
+        "{awaiting:?}"
+    );
+    assert!(!awaiting.contains(&"e reply/revise"), "{awaiting:?}");
+    assert!(!settled.contains(&"reply in chat to answer"), "{settled:?}");
+    assert!(settled.contains(&"e reply/revise"), "{settled:?}");
+}
+
+#[test]
 fn output_markdown_wraps_once_and_scrolls_styled_rendered_lines() {
     // Arrange
     let mut view = graph_view();
@@ -283,13 +306,11 @@ fn inspector_renders_blocks_exact_output_and_supported_controls() {
     for kind in [
         None,
         Some(GraphEditKind::Reply),
-        Some(GraphEditKind::Answers),
         Some(GraphEditKind::Cancel),
         Some(GraphEditKind::Resume),
     ] {
         let mut terminal = Terminal::new(TestBackend::new(120, 40)).expect("terminal");
         view.editor = kind.map(|kind| GraphEditor {
-            answers: Vec::new(),
             input: InputState::with_text("Graph input text".into()),
             kind,
             needs_reconciliation: matches!(kind, GraphEditKind::Reply),
@@ -381,7 +402,6 @@ fn editor_notices_wrap_and_scroll_without_hiding_the_draft() {
     // Arrange
     let mut view = graph_view();
     view.editor = Some(GraphEditor {
-        answers: Vec::new(),
         input: InputState::with_text("Preserved draft".into()),
         kind: GraphEditKind::Reply,
         needs_reconciliation: true,

@@ -142,12 +142,6 @@ fn resolve_key(view: &mut GraphView, key: KeyEvent) -> GraphKeyAction {
             return GraphKeyAction::Submit(GraphViewAction::Continue(GraphNodeContinuation::Retry));
         }
         KeyCode::Char('e') if view.can_continue() => open_editor(view, GraphEditKind::Reply),
-        KeyCode::Char('n')
-            if view.can_continue()
-                && view.node().is_some_and(|node| !node.questions.is_empty()) =>
-        {
-            open_editor(view, GraphEditKind::Answers);
-        }
         KeyCode::Char('x') if view.can_cancel() => open_editor(view, GraphEditKind::Cancel),
         KeyCode::Char('s') if view.can_resume() => open_editor(view, GraphEditKind::Resume),
         _ => {}
@@ -160,7 +154,6 @@ fn open_editor(view: &mut GraphView, kind: GraphEditKind) {
     view.notice.clear();
     view.notice_scroll = 0;
     view.editor = Some(GraphEditor {
-        answers: Vec::new(),
         input: if kind == GraphEditKind::Resume {
             InputState::with_text(view.resume_limits.clone())
         } else {
@@ -206,23 +199,8 @@ fn resolve_editor_key(view: &mut GraphView, key: KeyEvent) -> GraphKeyAction {
         }
     }
     if input_key::is_enter_key(key.code) && !input_key::should_insert_newline(key) {
-        let question_count = view.questions().len();
-        let Some(editor) = view.editor.as_mut() else {
+        if view.editor.is_none() {
             return GraphKeyAction::None;
-        };
-        if editor.kind == GraphEditKind::Answers {
-            let answer = editor.input.text().trim().to_string();
-            if answer.is_empty() {
-                view.notice = "Enter an answer to this question".into();
-
-                return GraphKeyAction::None;
-            }
-            if editor.answers.len() + 1 < question_count {
-                editor.answers.push(answer);
-                editor.input = InputState::default();
-
-                return GraphKeyAction::None;
-            }
         }
 
         return match App::graph_editor_action(view) {

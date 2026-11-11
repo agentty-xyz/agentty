@@ -141,7 +141,7 @@ async fn graph_gate_waits_cancel_and_release_partial_leases_without_provider_wor
 }
 
 #[tokio::test]
-async fn graph_task_failures_questions_and_cancellation_settle_without_chat_leaks() {
+async fn graph_task_failures_and_cancellation_stay_out_of_chat_while_questions_ask_there() {
     for scenario in [
         "factory",
         "provider",
@@ -218,26 +218,48 @@ async fn graph_task_failures_questions_and_cancellation_settle_without_chat_leak
                 TaskAttemptStatus::Failed
             }
         );
-        assert_eq!(
-            context
-                .db
-                .sessions()
-                .load_session_messages("sess")
-                .await
-                .expect("chat")
-                .len(),
-            0
-        );
-        assert_eq!(
-            context
-                .transcript
-                .lock()
-                .expect("transcript")
-                .messages()
-                .len(),
-            0
-        );
+        assert_only_questions_reach_chat(&context, scenario).await;
     }
+}
+
+/// Asserts persisted and live chat hold the question notice for the
+/// `questions` scenario and nothing otherwise.
+async fn assert_only_questions_reach_chat(context: &SessionWorkerContext, scenario: &str) {
+    let expected_chat: &[&str] = if scenario == "questions" {
+        &[
+            "task response\n\n`first` needs your input. Reply in chat to answer:\n1. Task \
+             question?",
+        ]
+    } else {
+        &[]
+    };
+    let persisted: Vec<(String, String)> = context
+        .db
+        .sessions()
+        .load_session_messages("sess")
+        .await
+        .expect("chat")
+        .into_iter()
+        .map(|message| (message.kind, message.content))
+        .collect();
+    let live: Vec<String> = context
+        .transcript
+        .lock()
+        .expect("transcript")
+        .messages()
+        .iter()
+        .map(|message| message.content.clone())
+        .collect();
+
+    assert_eq!(
+        persisted,
+        expected_chat
+            .iter()
+            .map(|text| ("workflow_notice".to_string(), (*text).to_string()))
+            .collect::<Vec<_>>(),
+        "{scenario}"
+    );
+    assert_eq!(live, expected_chat, "{scenario}");
 }
 
 #[tokio::test]

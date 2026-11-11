@@ -194,7 +194,6 @@ async fn inspector_key_actions_show_admission_and_refresh_failures() {
         }
         app.services.set_graph_repository(Arc::new(repository));
         view.editor = Some(crate::presentation::execution_graph::GraphEditor {
-            answers: Vec::new(),
             input: crate::domain::input::InputState::with_text("cancel".into()),
             kind: crate::presentation::execution_graph::GraphEditKind::Cancel,
             needs_reconciliation: false,

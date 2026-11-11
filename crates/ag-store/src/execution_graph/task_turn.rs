@@ -1,6 +1,7 @@
-use ag_protocol::{ProtocolRequestProfile, parse_protocol_response_strict};
+use ag_protocol::{AgentResponse, ProtocolRequestProfile, parse_protocol_response_strict};
 use ag_session::{
-    AgentAnswerContent, GraphExecutionRef, SessionMessageKind, TaskChain, stored_message_content,
+    AgentAnswerContent, ExecutionGraph, GraphExecutionRef, SessionMessageKind, TaskChain,
+    node_question_notice, stored_message_content,
 };
 use ag_worker::GraphDispatch;
 
@@ -66,14 +67,6 @@ impl SqliteGraphRepository {
         if !running {
             return Err(Self::invalid("Graph task is not running"));
         }
-        sqlx::query(
-            "INSERT INTO execution_graph_task_turn (execution_graph_execution_id, metadata) \
-             VALUES (?, ?)",
-        )
-        .bind(id)
-        .bind(encoded)
-        .execute(&mut *transaction)
-        .await?;
         let now = self.timestamp_source.now_timestamp_seconds();
         session::persist_turn_usage(
             &mut transaction,
@@ -85,25 +78,62 @@ impl SqliteGraphRepository {
             metadata.harness_turn_report.as_deref(),
         )
         .await?;
-        // Task-chain role answers join the visible session transcript with
-        // their response receipt; other graph conversations stay task-only.
-        let text = response.to_display_text();
-        if let Some(agent) = TaskChain::role(&graph.id, &dispatch.node)
-            && !text.trim().is_empty()
-        {
-            let answer = AgentAnswerContent { agent, text }.encode();
-            let content = stored_message_content(SessionMessageKind::AgentAnswer, &answer);
-            SessionMessageStore::append_normalized_in_transaction(
-                &mut transaction,
-                graph.session_id.as_str(),
-                SessionMessageKind::AgentAnswer,
-                &content,
-                now,
-            )
-            .await?;
-        }
+        let question_message_id =
+            Self::append_visible_turn_message(&mut transaction, &graph, dispatch, &response, now)
+                .await?;
+        sqlx::query(
+            "INSERT INTO execution_graph_task_turn (execution_graph_execution_id, metadata, \
+             session_message_id) VALUES (?, ?, ?)",
+        )
+        .bind(id)
+        .bind(encoded)
+        .bind(question_message_id)
+        .execute(&mut *transaction)
+        .await?;
         transaction.commit().await?;
 
         Ok(true)
+    }
+
+    /// Appends the response's visible chat message in the turn transaction.
+    ///
+    /// Task-chain role answers and generic node questions join the session
+    /// transcript with their response receipt; other graph conversation
+    /// answers stay task-only. Returns the id of an appended node question,
+    /// which orders pending questions for chat reply routing.
+    async fn append_visible_turn_message(
+        transaction: &mut sqlx::Transaction<'_, sqlx::Sqlite>,
+        graph: &ExecutionGraph,
+        dispatch: &GraphDispatch,
+        response: &AgentResponse,
+        now: i64,
+    ) -> Result<Option<i64>, DbError> {
+        let (kind, message) = match TaskChain::role(&graph.id, &dispatch.node) {
+            Some(agent) => {
+                let text = response.to_display_text();
+                let answer =
+                    (!text.trim().is_empty()).then(|| AgentAnswerContent { agent, text }.encode());
+
+                (SessionMessageKind::AgentAnswer, answer)
+            }
+            None => (
+                SessionMessageKind::WorkflowNotice,
+                node_question_notice(&dispatch.node.id, response),
+            ),
+        };
+        let Some(message) = message else {
+            return Ok(None);
+        };
+        let content = stored_message_content(kind, &message);
+        let message_id = SessionMessageStore::append_normalized_in_transaction(
+            transaction,
+            graph.session_id.as_str(),
+            kind,
+            &content,
+            now,
+        )
+        .await?;
+
+        Ok(message_id.filter(|_| kind == SessionMessageKind::WorkflowNotice))
     }
 }

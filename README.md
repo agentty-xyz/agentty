@@ -31,8 +31,9 @@ Codex, Claude, Gemini, and Antigravity sessions show compact tool status and com
 previews, with output previews for failed calls. Explicit Claude skill invocations
 appear alongside them, and answers retain saved usage counts.
 
-Press `w` in session view to inspect saved execution graphs, accept exact outputs,
-answer node questions, retry work, resume dispatch, or cancel a graph.
+Press `w` in session view to inspect saved execution graphs, accept exact outputs, retry
+work, resume dispatch, or cancel a graph. Graph nodes that need input ask in chat, and
+your chat reply answers them.
 
 With `--experimental-multi-agent`, select `/graph`, then describe your task. Regular
 chat stays on the left, with the graph preview and live status in a right pane using at

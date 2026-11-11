@@ -520,11 +520,10 @@ async fn test_process_paste_event_updates_publish_branch_input() {
 async fn graph_paste_updates_only_the_active_graph_editor() {
     // Arrange
     let mut app = crate::test_support::new_test_app_without_retained_base_dir().await;
-    for kind in [GraphEditKind::Reply, GraphEditKind::Answers] {
+    for kind in [GraphEditKind::Reply, GraphEditKind::Cancel] {
         for pasted in ["First\r\nSecond", "First\rSecond", "First\nSecond"] {
             let mut view = graph_view();
             view.editor = Some(GraphEditor {
-                answers: Vec::new(),
                 input: InputState::default(),
                 kind,
                 needs_reconciliation: false,

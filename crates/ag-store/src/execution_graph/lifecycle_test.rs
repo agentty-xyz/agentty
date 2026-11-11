@@ -803,6 +803,14 @@ async fn graph_lifecycle_retry_retains_observed_task_turns_when_ordered_effects_
 
     // Assert
     assert!(history.contains("Observed changes before effects failed"));
+    assert_eq!(
+        database
+            .graphs()
+            .task_question_message_id(&source.record.execution)
+            .await
+            .expect("question lookup"),
+        None
+    );
     assert!(
         database
             .graphs()
@@ -821,6 +829,67 @@ async fn graph_lifecycle_retry_retains_observed_task_turns_when_ordered_effects_
             .await
             .is_err()
     );
+}
+
+#[tokio::test]
+async fn graph_lifecycle_node_questions_join_chat_with_their_task_turn() {
+    // Arrange
+    let database = database(true).await;
+    let source = claim(&database, "first").await;
+    let operation_id = match &source.record.execution {
+        ag_session::GraphExecutionRef::TaskAttempt { operation_id, .. } => Some(operation_id),
+        ag_session::GraphExecutionRef::UtilityRun { .. } => None,
+    }
+    .expect("task");
+    database
+        .operations()
+        .mark_session_operation_running(operation_id)
+        .await
+        .expect("running");
+    let metadata = crate::TaskAgentTurnMetadata {
+        assistant_message: r#"{"answer":"Need target","questions":[{"text":"Which target?"}]}"#
+            .into(),
+        harness_turn_report: None,
+        instruction_conversation_id: None,
+        input_tokens: 1,
+        output_tokens: 2,
+        provider_conversation_id: None,
+    };
+
+    // Act
+    let recorded = database
+        .graphs()
+        .record_task_turn(&source, &metadata)
+        .await
+        .expect("question turn");
+    let question = database
+        .graphs()
+        .task_question_message_id(&source.record.execution)
+        .await
+        .expect("question lookup");
+    let unlinked = database
+        .graphs()
+        .task_question_message_id(&record("run").execution)
+        .await
+        .expect("unlinked lookup");
+
+    // Assert
+    let messages: Vec<(i64, String, String)> =
+        sqlx::query_as("SELECT id, kind, content FROM session_message ORDER BY id")
+            .fetch_all(database.pool())
+            .await
+            .expect("messages");
+    assert!(recorded);
+    assert_eq!(
+        messages,
+        [(
+            question.expect("question message"),
+            "workflow_notice".to_string(),
+            "Need target\n\n`first` needs your input. Reply in chat to answer:\n1. Which target?"
+                .to_string()
+        )]
+    );
+    assert_eq!(unlinked, None);
 }
 
 #[tokio::test]

@@ -75,7 +75,9 @@ pub use model::{
 pub use project::{
     Project, ProjectListItem, mru_project_order, ordered_project_items, project_name_from_path,
 };
-pub use question::{QuestionItem, default_option_index};
+pub use question::{
+    QuestionItem, default_option_index, node_question_notice, push_numbered_questions,
+};
 pub use review::{
     FocusedReviewStatus, build_apply_review_prompt, has_actionable_review_suggestions,
     review_suggestions,

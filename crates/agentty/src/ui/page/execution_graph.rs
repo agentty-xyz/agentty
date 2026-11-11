@@ -2,7 +2,7 @@
 
 use std::fmt::Write as _;
 
-use ag_session::{GraphBlockedReason, GraphCompletionGate};
+use ag_session::{GraphBlockedReason, GraphCompletionGate, GraphNodeStatus};
 use ag_tui_text::text_util::{
     borrowed_paint_line, split_line_at_width, wrap_lines_breaking_long_words,
 };
@@ -151,19 +151,6 @@ fn render_details(frame: &mut Frame, area: Rect, view: &GraphView, markdown: &Ma
 fn render_editor(frame: &mut Frame, area: Rect, view: &GraphView, editor: &GraphEditor) {
     let label = match editor.kind {
         GraphEditKind::Reply => "Reply to selected task (Enter sends; Esc cancels)".into(),
-        GraphEditKind::Answers => {
-            view.questions()
-                .get(editor.answers.len())
-                .map_or_else(String::new, |question| {
-                    format!(
-                        "Question {}/{}: {} {}",
-                        editor.answers.len() + 1,
-                        view.questions().len(),
-                        question.text,
-                        question.options.join(" / ")
-                    )
-                })
-        }
         GraphEditKind::Cancel => "Type cancel, then Enter to cancel this graph".into(),
         GraphEditKind::Resume => format!(
             "Resume: enter budget=limit or a JSON map for {:?}. Fresh limits after restart; live \
@@ -226,9 +213,12 @@ fn actions(view: &GraphView) -> Vec<&'static str> {
     }
     if view.can_continue() {
         actions.push("e reply/revise");
-        if view.node().is_some_and(|node| !node.questions.is_empty()) {
-            actions.push("n answer questions");
-        }
+    }
+    if view
+        .node()
+        .is_some_and(|node| node.status == GraphNodeStatus::AwaitingAnswers)
+    {
+        actions.push("reply in chat to answer");
     }
     if view.can_retry() {
         actions.push("t retry node");

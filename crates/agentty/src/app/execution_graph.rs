@@ -30,6 +30,13 @@ pub(super) struct GraphDriver {
     running: Arc<AtomicBool>,
 }
 
+impl GraphDriver {
+    /// Whether this driver still dispatches newly admitted work.
+    fn is_live(&self) -> bool {
+        self.running.load(Ordering::Acquire) && !self.cancellation.is_cancelled()
+    }
+}
+
 /// Active graph drivers keyed by graph identity, shared with lifecycle
 /// controls and session cleanup.
 pub(super) type GraphDrivers = Arc<Mutex<HashMap<String, GraphDriver>>>;
@@ -99,6 +106,17 @@ impl App {
             })
     }
 
+    /// Whether a live driver dispatches the graph's admitted continuations;
+    /// otherwise they wait for an explicit resume.
+    pub(super) fn has_live_graph_driver(&self, graph_id: &str) -> bool {
+        self.services
+            .graph_drivers
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .get(graph_id)
+            .is_some_and(GraphDriver::is_live)
+    }
+
     pub(super) async fn execution_graph_progress(
         &self,
         graph_id: &str,
@@ -118,9 +136,7 @@ impl App {
             .graph_drivers
             .lock()
             .unwrap_or_else(std::sync::PoisonError::into_inner);
-        let driver = drivers.get(graph_id).filter(|driver| {
-            driver.running.load(Ordering::Acquire) && !driver.cancellation.is_cancelled()
-        });
+        let driver = drivers.get(graph_id).filter(|driver| driver.is_live());
         for node in &mut progress.nodes {
             if node.status != GraphNodeStatus::Pending {
                 continue;
