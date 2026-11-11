@@ -66,3 +66,30 @@ pub(crate) fn review_request_fixture() -> ReviewRequest {
         },
     }
 }
+
+/// Process-wide `log` sink that keeps tracing's `log` fallback enabled.
+struct LogFallbackSink;
+
+impl tracing::log::Log for LogFallbackSink {
+    fn enabled(&self, _metadata: &tracing::log::Metadata<'_>) -> bool {
+        true
+    }
+
+    fn log(&self, record: &tracing::log::Record<'_>) {
+        let _rendered = record.args().to_string();
+    }
+
+    fn flush(&self) {}
+}
+
+/// Routes tracing events without a dispatcher through a process-wide `log`
+/// sink, so warning paths evaluate their fields under source coverage.
+///
+/// Nextest runs every test in its own process, so the calling test owns the
+/// logger and no tracing dispatcher is set. Under a shared-process runner the
+/// fallback may stay disabled, which changes no behavior the tests assert.
+pub(crate) fn enable_tracing_log_fallback() {
+    static SINK: LogFallbackSink = LogFallbackSink;
+    let _ = tracing::log::set_logger(&SINK);
+    tracing::log::set_max_level(tracing::log::LevelFilter::Trace);
+}

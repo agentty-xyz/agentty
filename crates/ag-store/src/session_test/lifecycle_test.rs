@@ -1,6 +1,6 @@
 use ag_session::ResponseStyle;
 
-use crate::{AppRepositories, DbError};
+use crate::{AppRepositories, DbError, test_support};
 
 #[tokio::test]
 async fn test_load_session_rejects_unknown_status() {
@@ -39,6 +39,7 @@ async fn test_load_session_rejects_unknown_status() {
 #[tokio::test]
 async fn test_load_session_collections_skip_unknown_status() {
     // Arrange
+    test_support::enable_tracing_log_fallback();
     let (database, pool) = AppRepositories::in_memory_with_pool()
         .await
         .expect("db should open");

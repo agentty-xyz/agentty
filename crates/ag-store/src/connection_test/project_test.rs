@@ -1,7 +1,7 @@
 use ag_session::{SessionDiffState, SessionStats, test_support as model_fixture};
 
-use crate::SessionTurnMetadata;
 use crate::connection::Database;
+use crate::{AppRepositories, SessionTurnMetadata};
 
 #[tokio::test]
 async fn test_load_projects_with_stats_returns_session_counts_tokens_and_last_update() {
@@ -112,4 +112,44 @@ async fn test_get_project_loads_persisted_favorite_state() {
 
     // Assert
     assert!(project.is_favorite);
+}
+
+#[tokio::test]
+async fn test_touch_project_last_opened_through_converted_repositories() {
+    // Arrange
+    let database = Database::in_memory()
+        .await
+        .expect("failed to open in-memory db");
+    let project_id = database
+        .projects()
+        .upsert_project("/tmp/project", None)
+        .await
+        .expect("failed to upsert project");
+    let repositories = AppRepositories::from(database);
+    let initial_project = repositories
+        .projects()
+        .get_project(project_id)
+        .await
+        .expect("failed to load project")
+        .expect("expected existing project");
+
+    // Act
+    repositories
+        .projects()
+        .touch_project_last_opened(project_id)
+        .await
+        .expect("failed to touch project");
+    let touched_project = repositories
+        .projects()
+        .get_project(project_id)
+        .await
+        .expect("failed to load project")
+        .expect("expected existing project");
+
+    // Assert
+    assert_eq!(initial_project.last_opened_at, None);
+    assert_eq!(
+        touched_project.last_opened_at,
+        Some(touched_project.updated_at)
+    );
 }

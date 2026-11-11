@@ -1055,6 +1055,61 @@ async fn graph_lifecycle_retry_rolls_back_when_its_inserted_receipt_disappears()
 }
 
 #[tokio::test]
+async fn graph_lifecycle_repeated_clarification_replays_earlier_answers() {
+    // Arrange
+    let (database, _, request) = clarification_fixture().await;
+    let repository = database.graphs();
+    assert!(
+        repository
+            .continue_node(&request)
+            .await
+            .expect("first reply")
+    );
+    let second = claim(&database, "first").await;
+    settle(
+        &database,
+        &second,
+        r#"{"answer":"Need more","questions":[{"text":"Which branch?","options":["Main"]}]}"#,
+    )
+    .await;
+    let second_request = action(
+        &second,
+        GraphNodeContinuation::Answer {
+            answers: vec![GraphQuestionAnswer {
+                question: "Which branch?".into(),
+                answer: "Main".into(),
+            }],
+        },
+    );
+    assert!(
+        repository
+            .continue_node(&second_request)
+            .await
+            .expect("second reply")
+    );
+    let third = claim(&database, "first").await;
+
+    // Act
+    let history = repository
+        .execution_history(&third.record.execution)
+        .await
+        .expect("history")
+        .expect("replay");
+
+    // Assert
+    assert!(history.text.contains("User: "));
+    assert!(history.text.contains("Local"));
+    assert!(history.text.contains("Need more"));
+    assert!(
+        history
+            .continuation_prompt
+            .as_deref()
+            .expect("current answer")
+            .contains("Main")
+    );
+}
+
+#[tokio::test]
 async fn graph_history_rejects_a_corrupt_continuation_request() {
     // Arrange
     let (database, _, request) = clarification_fixture().await;
