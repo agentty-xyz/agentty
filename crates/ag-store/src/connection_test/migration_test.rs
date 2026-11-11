@@ -1032,6 +1032,192 @@ async fn test_migrate_sonnet_5_to_55_consolidates_usage_without_losing_history()
     );
 }
 
+/// Verifies saved Gemini CLI sessions and task contexts move to Antigravity
+/// with fresh provider conversations while other agents stay untouched.
+#[tokio::test]
+async fn test_retire_gemini_agent_restarts_saved_conversations_on_antigravity() {
+    // Arrange
+    let database = Database::open_in_memory()
+        .await
+        .expect("database should open");
+    let project_id = database
+        .projects()
+        .upsert_project("/tmp/gemini-retirement", None)
+        .await
+        .expect("project should exist");
+    seed_gemini_retirement_conversations(&database, project_id).await;
+
+    // Act
+    rerun_embedded_migration(database.pool(), 109).await;
+    let sessions = sqlx::query_as::<_, (String, String, Option<String>, Option<String>)>(
+        "SELECT id, agent, provider_conversation_id, \
+         app_server_instruction_provider_conversation_id FROM session ORDER BY id",
+    )
+    .fetch_all(database.pool())
+    .await
+    .expect("sessions should load");
+    let task_contexts = sqlx::query_as::<_, (String, String, Option<String>, Option<String>)>(
+        "SELECT task_id, agent, provider_conversation_id, instruction_conversation_id FROM \
+         task_agent_context ORDER BY task_id",
+    )
+    .fetch_all(database.pool())
+    .await
+    .expect("task agent contexts should load");
+
+    // Assert
+    assert_eq!(
+        sessions,
+        vec![
+            (
+                "codex".to_string(),
+                "codex".to_string(),
+                Some("codex-thread".to_string()),
+                Some("codex-thread".to_string())
+            ),
+            (
+                "gemini-cleared".to_string(),
+                "antigravity".to_string(),
+                None,
+                Some(LEGACY_SESSION_AGENT_CLEAR_MARKER.to_string())
+            ),
+            (
+                "gemini-resumable".to_string(),
+                "antigravity".to_string(),
+                None,
+                None
+            ),
+        ]
+    );
+    assert_eq!(
+        task_contexts,
+        vec![
+            (
+                "codex-task".to_string(),
+                "codex".to_string(),
+                Some("codex-task-thread".to_string()),
+                Some("codex-task-instructions".to_string())
+            ),
+            (
+                "gemini-task".to_string(),
+                "antigravity".to_string(),
+                None,
+                None
+            ),
+        ]
+    );
+}
+
+/// Verifies saved Gemini CLI role defaults move to Antigravity while other
+/// agents and unrelated settings stay untouched.
+#[tokio::test]
+async fn test_retire_gemini_agent_moves_default_agent_settings_to_antigravity() {
+    // Arrange
+    let database = Database::open_in_memory()
+        .await
+        .expect("database should open");
+    let project_id = database
+        .projects()
+        .upsert_project("/tmp/gemini-retirement", None)
+        .await
+        .expect("project should exist");
+    for (name, value) in [
+        (SettingName::DefaultSmartAgent, "gemini"),
+        (SettingName::DefaultFastAgent, "codex"),
+        (SettingName::Theme, "gemini"),
+    ] {
+        database
+            .settings()
+            .upsert_project_setting(project_id, name, value)
+            .await
+            .expect("project setting should exist");
+    }
+    for (name, value) in [
+        (SettingName::DefaultReviewAgent, "gemini"),
+        (SettingName::Theme, "gemini"),
+    ] {
+        database
+            .settings()
+            .upsert_setting(name, value)
+            .await
+            .expect("global setting should exist");
+    }
+
+    // Act
+    rerun_embedded_migration(database.pool(), 109).await;
+    let global_settings =
+        sqlx::query_as::<_, (String, String)>("SELECT name, value FROM setting ORDER BY name")
+            .fetch_all(database.pool())
+            .await
+            .expect("global settings should load");
+    let project_settings = load_project_setting_rows(&database, project_id).await;
+
+    // Assert
+    assert_eq!(
+        global_settings,
+        vec![
+            ("DefaultReviewAgent".to_string(), "antigravity".to_string()),
+            ("Theme".to_string(), "gemini".to_string()),
+        ]
+    );
+    assert_eq!(
+        project_settings,
+        vec![
+            ("DefaultFastAgent".to_string(), "codex".to_string()),
+            ("DefaultSmartAgent".to_string(), "antigravity".to_string()),
+            ("Theme".to_string(), "gemini".to_string()),
+        ]
+    );
+}
+
+/// Seeds Codex and Gemini sessions and task contexts with saved provider
+/// conversations for the Gemini retirement migration.
+async fn seed_gemini_retirement_conversations(database: &Database, project_id: i64) {
+    for (session_id, agent, instruction_conversation_id) in [
+        ("codex", "codex", "codex-thread"),
+        (
+            "gemini-cleared",
+            "gemini",
+            LEGACY_SESSION_AGENT_CLEAR_MARKER,
+        ),
+        ("gemini-resumable", "gemini", "gemini-thread"),
+    ] {
+        insert_session_fixture(database, session_id, "main", "Review", project_id).await;
+        sqlx::query(
+            "UPDATE session SET agent = ?, provider_conversation_id = ?, \
+             app_server_instruction_provider_conversation_id = ? WHERE id = ?",
+        )
+        .bind(agent)
+        .bind(format!("{session_id}-thread"))
+        .bind(instruction_conversation_id)
+        .bind(session_id)
+        .execute(database.pool())
+        .await
+        .expect("legacy session agent should be stored");
+    }
+    for (task_id, agent) in [("codex-task", "codex"), ("gemini-task", "gemini")] {
+        sqlx::query(
+            "INSERT INTO task (id, session_id, objective, created_at) VALUES (?, 'codex', 'Plan', \
+             1)",
+        )
+        .bind(task_id)
+        .execute(database.pool())
+        .await
+        .expect("task should exist");
+        sqlx::query(
+            "INSERT INTO task_agent_context (task_id, role, agent, model, input, \
+             provider_conversation_id, instruction_conversation_id) VALUES (?, 'planner', ?, \
+             'gemini-3.1-pro-preview', 'Plan', ?, ?)",
+        )
+        .bind(task_id)
+        .bind(agent)
+        .bind(format!("{task_id}-thread"))
+        .bind(format!("{task_id}-instructions"))
+        .execute(database.pool())
+        .await
+        .expect("task agent context should exist");
+    }
+}
+
 /// Inserts one raw session-message row for migration compatibility tests.
 async fn insert_session_message_row(
     database: &Database,

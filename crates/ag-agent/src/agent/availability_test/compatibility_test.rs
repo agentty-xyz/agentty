@@ -62,11 +62,7 @@ fn test_cached_antigravity_support_tracks_refreshed_executable() {
     let path_value = env::join_paths([temp_directory.path()]).expect("valid path");
 
     // Act
-    let detected_version = refresh_agent_cli_version(
-        AgentKind::Antigravity,
-        &antigravity_path,
-        Some(path_value.as_os_str()),
-    );
+    let detected_version = refresh_agent_cli_version(AgentKind::Antigravity, &antigravity_path);
     let cached_result =
         ensure_cached_antigravity_cli_supported_on_path(Some(path_value.as_os_str()));
     fs::write(

@@ -25,10 +25,6 @@ const AGENT_CLI_VERSION_TIMEOUT: Duration = Duration::from_secs(2);
 const AGENT_CLI_UPDATE_TIMEOUT: Duration = Duration::from_mins(5);
 /// Poll interval used while waiting for one bounded provider CLI subprocess.
 const AGENT_CLI_COMMAND_POLL_INTERVAL: Duration = Duration::from_millis(25);
-/// Canonical npm-global path segment for the Gemini CLI package.
-const GEMINI_NPM_PACKAGE_PATH: &str = "/lib/node_modules/@google/gemini-cli/";
-/// npm package spec used to refresh a globally installed Gemini CLI.
-const GEMINI_NPM_PACKAGE_SPEC: &str = "@google/gemini-cli@latest";
 
 /// Cached result of validating one exact Antigravity executable.
 #[derive(Clone)]
@@ -53,22 +49,6 @@ struct AntigravityExecutableFingerprint {
 /// discovery and CLI refresh.
 static ANTIGRAVITY_COMPATIBILITY: OnceLock<Mutex<Option<AntigravityCompatibilitySnapshot>>> =
     OnceLock::new();
-
-/// Executable plus arguments for one provider CLI startup update.
-struct AgentCliUpdateCommand {
-    args: &'static [&'static str],
-    executable_path: PathBuf,
-}
-
-impl AgentCliUpdateCommand {
-    /// Creates one provider update command.
-    fn new(executable_path: PathBuf, args: &'static [&'static str]) -> Self {
-        Self {
-            args,
-            executable_path,
-        }
-    }
-}
 
 /// Production availability probe backed by `PATH` executable discovery.
 pub struct RealAgentAvailabilityProbe;
@@ -116,9 +96,7 @@ fn available_agent_clis_from_path(path_value: Option<&OsStr>) -> Vec<AgentCliInf
         })
         .collect();
 
-    refresh_agent_cli_versions(executable_agent_clis, |agent_kind, executable_path| {
-        refresh_agent_cli_version(agent_kind, executable_path, path_value)
-    })
+    refresh_agent_cli_versions(executable_agent_clis, refresh_agent_cli_version)
 }
 
 /// Returns agent kinds whose executables are present on one `PATH` value.
@@ -292,12 +270,8 @@ fn is_executable_file(candidate_path: &Path) -> bool {
 
 /// Runs one available CLI's update command, then extracts the installed
 /// version token from a fresh version probe.
-fn refresh_agent_cli_version(
-    agent_kind: AgentKind,
-    executable_path: &Path,
-    path_value: Option<&OsStr>,
-) -> Option<String> {
-    run_agent_cli_update(agent_kind, executable_path, path_value);
+fn refresh_agent_cli_version(agent_kind: AgentKind, executable_path: &Path) -> Option<String> {
+    let _ = run_agent_cli_update_with_timeout(executable_path, AGENT_CLI_UPDATE_TIMEOUT);
 
     let detected_version = detect_agent_cli_version(executable_path);
     if agent_kind == AgentKind::Antigravity {
@@ -335,68 +309,10 @@ fn refresh_agent_cli_versions(
     })
 }
 
-/// Runs one available CLI's best-effort provider or package-manager update.
-fn run_agent_cli_update(agent_kind: AgentKind, executable_path: &Path, path_value: Option<&OsStr>) {
-    let _ = run_agent_cli_update_with_timeout(
-        agent_kind,
-        executable_path,
-        path_value,
-        AGENT_CLI_UPDATE_TIMEOUT,
-    );
-}
-
-/// Runs one available CLI's best-effort update with a caller-provided timeout.
-fn run_agent_cli_update_with_timeout(
-    agent_kind: AgentKind,
-    executable_path: &Path,
-    path_value: Option<&OsStr>,
-    timeout: Duration,
-) -> bool {
-    let Some(update_command) = agent_cli_update_command(agent_kind, executable_path, path_value)
-    else {
-        return false;
-    };
-
-    command_status_with_timeout(&update_command, timeout).is_some()
-}
-
-/// Builds the supported startup update command for one provider CLI.
-fn agent_cli_update_command(
-    agent_kind: AgentKind,
-    executable_path: &Path,
-    path_value: Option<&OsStr>,
-) -> Option<AgentCliUpdateCommand> {
-    if agent_kind == AgentKind::Gemini {
-        return gemini_npm_update_command(executable_path, path_value);
-    }
-
-    Some(AgentCliUpdateCommand::new(
-        executable_path.to_path_buf(),
-        &["update"],
-    ))
-}
-
-/// Builds Gemini's supported npm-global update command when the discovered
-/// executable resolves into the global Gemini CLI package.
-///
-/// Canonicalization failure is treated as an unknown installation because
-/// Agentty cannot safely prove that npm owns the executable.
-fn gemini_npm_update_command(
-    executable_path: &Path,
-    path_value: Option<&OsStr>,
-) -> Option<AgentCliUpdateCommand> {
-    let canonical_executable_path = executable_path.canonicalize().ok()?;
-    let normalized_executable_path = canonical_executable_path.to_string_lossy();
-    if !normalized_executable_path.contains(GEMINI_NPM_PACKAGE_PATH) {
-        return None;
-    }
-
-    let npm_executable_path = executable_path_on_path(path_value, "npm")?;
-
-    Some(AgentCliUpdateCommand::new(
-        npm_executable_path,
-        &["install", "-g", GEMINI_NPM_PACKAGE_SPEC],
-    ))
+/// Runs one available CLI's best-effort `update` command with a
+/// caller-provided timeout and returns whether the command finished.
+fn run_agent_cli_update_with_timeout(executable_path: &Path, timeout: Duration) -> bool {
+    command_status_with_timeout(executable_path, &["update"], timeout).is_some()
 }
 
 /// Runs one available CLI's version command and extracts the installed
@@ -430,11 +346,12 @@ fn version_command_output(executable_path: &Path, timeout: Duration) -> Option<O
 /// Runs one provider CLI command with output discarded and stops waiting once
 /// the timeout expires.
 fn command_status_with_timeout(
-    update_command: &AgentCliUpdateCommand,
+    executable_path: &Path,
+    args: &[&str],
     timeout: Duration,
 ) -> Option<()> {
-    let mut child = Command::new(&update_command.executable_path)
-        .args(update_command.args)
+    let mut child = Command::new(executable_path)
+        .args(args)
         .stdin(Stdio::null())
         .stdout(Stdio::null())
         .stderr(Stdio::null())

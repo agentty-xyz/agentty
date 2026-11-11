@@ -244,7 +244,6 @@ pub(crate) fn review_loading_message(review_agent: ReviewAgent) -> String {
 fn review_agent_kind_label(agent_kind: AgentKind) -> &'static str {
     match agent_kind {
         AgentKind::Antigravity => "Antigravity",
-        AgentKind::Gemini => "Gemini",
         AgentKind::Claude => "Claude",
         AgentKind::Codex => "Codex",
         AgentKind::Harness => "Harness",

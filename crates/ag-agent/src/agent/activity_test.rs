@@ -233,7 +233,6 @@ fn malformed_non_tool_and_unknown_events_are_ignored() {
     for kind in [
         AgentKind::Claude,
         AgentKind::Codex,
-        AgentKind::Gemini,
         AgentKind::Antigravity,
         AgentKind::Harness,
     ] {
@@ -370,48 +369,6 @@ fn codex_tool_arguments_results_and_errors_are_projected() {
 }
 
 #[test]
-fn gemini_merges_partial_updates_and_preserves_completed_results() {
-    // Arrange
-    let mut observer = ActivityObserver::new(|_| {});
-
-    // Act
-    for update in [
-        json!({"sessionUpdate":"tool_call","toolCallId":"call","kind":"execute","name":"run_shell_command","status":"pending","rawInput":{"command":"pwd"}}),
-        json!({"sessionUpdate":"tool_call_update","toolCallId":"call","content":[{"content":{"text":"working"}}]}),
-        json!({"sessionUpdate":"tool_call_update","toolCallId":"call","kind":"execute","title":"Finished command","status":"completed","rawOutput":{"exitCode":0,"stdout":"project"}}),
-        json!({"sessionUpdate":"tool_call_update","toolCallId":"call"}),
-        json!({"sessionUpdate":"tool_call_update","toolCallId":"other","kind":"read","status":"failed","title":"Read README.md","rawOutput":null,"content":[{"content":{"text":"missing"}}]}),
-        json!({"sessionUpdate":"tool_call_update","toolCallId":"cancelled","status":"cancelled"}),
-    ] {
-        observer.observe(
-            AgentKind::Gemini,
-            &json!({"method":"session/update","params":{"update":update}}),
-        );
-    }
-
-    // Assert
-    assert_eq!(observer.calls["call"].name, "run_shell_command");
-    assert_eq!(observer.calls["call"].kind, ActivityKind::Command);
-    assert_eq!(observer.calls["call"].input.as_deref(), Some("pwd"));
-    assert_eq!(
-        observer.calls["call"].output.as_deref(),
-        Some(r#"{"exitCode":0,"stdout":"project"}"#)
-    );
-    assert_eq!(observer.calls["call"].exit_code, Some(0));
-    assert_eq!(observer.calls["call"].status, ActivityStatus::Completed);
-    assert_eq!(
-        observer.calls["other"].input.as_deref(),
-        Some("Read README.md")
-    );
-    assert_eq!(observer.calls["other"].output.as_deref(), Some("missing"));
-    assert_eq!(observer.calls["other"].status, ActivityStatus::Failed);
-    assert_eq!(
-        observer.calls["cancelled"].status,
-        ActivityStatus::Interrupted
-    );
-}
-
-#[test]
 fn antigravity_projects_tool_steps_with_commands_output_and_failures() {
     // Arrange
     let mut observer = ActivityObserver::new(|_| {});
@@ -495,47 +452,19 @@ fn antigravity_emits_failed_status_for_completed_nonzero_exits_without_errors() 
 }
 
 #[test]
-fn malformed_gemini_and_antigravity_updates_are_ignored() {
+fn malformed_antigravity_updates_are_ignored() {
     // Arrange
     let mut observer = ActivityObserver::new(|_| {});
 
     // Act
     for payload in [
-        json!({"method":"session/update"}),
-        json!({"method":"session/update","params":{"update":{"sessionUpdate":"agent_message_chunk"}}}),
-        json!({"method":"session/update","params":{"update":{"sessionUpdate":"tool_call"}}}),
         json!({"event":"step_update"}),
         json!({"event":"step_update","step_update":{"step_type":"agent_response"}}),
         json!({"event":"step_update","step_update":{"step_type":"tool"}}),
     ] {
-        observer.observe(AgentKind::Gemini, &payload);
         observer.observe(AgentKind::Antigravity, &payload);
     }
 
     // Assert
     assert!(observer.calls.is_empty());
-}
-
-#[test]
-fn gemini_structured_array_completion_replaces_progress_preview() {
-    // Arrange
-    let mut observer = ActivityObserver::new(|_| {});
-
-    // Act
-    for update in [
-        json!({"sessionUpdate":"tool_call","toolCallId":"call","status":"in_progress","content":[{"content":{"text":"working"}}]}),
-        json!({"sessionUpdate":"tool_call_update","toolCallId":"call","status":"completed","rawOutput":[{"path":"README.md"}],"content":[{"content":{"text":"finished"}}]}),
-    ] {
-        observer.observe(
-            AgentKind::Gemini,
-            &json!({"method":"session/update","params":{"update":update}}),
-        );
-    }
-
-    // Assert
-    assert_eq!(observer.calls["call"].status, ActivityStatus::Completed);
-    assert_eq!(
-        observer.calls["call"].output.as_deref(),
-        Some(r#"[{"path":"README.md"}]"#)
-    );
 }

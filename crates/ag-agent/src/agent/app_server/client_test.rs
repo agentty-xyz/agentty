@@ -404,6 +404,41 @@ async fn isolated_turns_reuse_process_with_fresh_context_and_discard_failed_rese
 }
 
 #[tokio::test]
+async fn retained_turns_keep_runtimes_that_ordinary_turns_release() {
+    // Arrange
+    let _counter_guard = reset_counters().await;
+    let client = ProviderRuntimeClient::<ResetProvider>::new();
+    let (stream, _) = mpsc::unbounded_channel();
+    let request = make_request();
+
+    // Act
+    client
+        .run_turn(request.clone(), stream.clone())
+        .await
+        .expect("ordinary turn");
+    let released_after_ordinary_turn = SHUTDOWN_COUNT.load(Ordering::SeqCst);
+    let first = client
+        .run_retained_turn(request.clone(), stream.clone())
+        .await
+        .expect("first retained turn");
+    let second = client
+        .run_retained_turn(request, stream)
+        .await
+        .expect("second retained turn");
+    let released_before_shutdown = SHUTDOWN_COUNT.load(Ordering::SeqCst);
+    client.shutdown_session("session-1".into()).await;
+
+    // Assert
+    assert_eq!(released_after_ordinary_turn, 1);
+    assert_eq!(released_before_shutdown, 1);
+    assert_eq!(first.assistant_message, "assistant");
+    assert_eq!(first.pid, second.pid);
+    assert_eq!(START_COUNT.load(Ordering::SeqCst), 2);
+    assert_eq!(RUN_COUNT.load(Ordering::SeqCst), 3);
+    assert_eq!(SHUTDOWN_COUNT.load(Ordering::SeqCst), 2);
+}
+
+#[tokio::test]
 async fn isolated_turns_restart_unsupported_or_incompatible_runtimes() {
     // Arrange
     let _counter_guard = reset_counters().await;
@@ -487,10 +522,11 @@ async fn failed_registry_store_after_context_reset_shuts_down_the_runtime() {
 #[test]
 fn counter_scenarios_are_isolated_when_run_in_one_process() {
     // Arrange
-    let scenarios: [fn(); 5] = [
+    let scenarios: [fn(); 6] = [
         runtime_client_retains_and_replaces_runtime_with_pid_updates,
         default_client_skips_replay_for_restored_context_and_ignores_unknown_sessions,
         isolated_turns_reuse_process_with_fresh_context_and_discard_failed_resets,
+        retained_turns_keep_runtimes_that_ordinary_turns_release,
         isolated_turns_restart_unsupported_or_incompatible_runtimes,
         failed_registry_store_after_context_reset_shuts_down_the_runtime,
     ];

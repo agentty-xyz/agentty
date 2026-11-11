@@ -133,15 +133,12 @@ impl<'host> InstructionCheck<'host> {
         document: &Path,
         errors: &mut Vec<String>,
     ) -> Result<(), String> {
-        for name in ["CLAUDE.md", "GEMINI.md"] {
-            let alias = document.with_file_name(name);
-            if self.inspect(&root.join(&alias))? != Some(Entry::Symlink(PathBuf::from("AGENTS.md")))
-            {
-                errors.push(format!(
-                    "{}: must be a symlink to AGENTS.md",
-                    alias.display()
-                ));
-            }
+        let alias = document.with_file_name("CLAUDE.md");
+        if self.inspect(&root.join(&alias))? != Some(Entry::Symlink(PathBuf::from("AGENTS.md"))) {
+            errors.push(format!(
+                "{}: must be a symlink to AGENTS.md",
+                alias.display()
+            ));
         }
 
         Ok(())
@@ -222,7 +219,6 @@ impl<'host> InstructionCheck<'host> {
         const FILES: &[&str] = &[
             "AGENTS.md",
             "CLAUDE.md",
-            "GEMINI.md",
             "README.md",
             "CONTRIBUTING.md",
             "Cargo.toml",

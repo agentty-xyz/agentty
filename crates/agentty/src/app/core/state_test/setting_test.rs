@@ -30,7 +30,7 @@ fn max_concurrent_subagents_caps_every_harness_that_enforces_a_limit() {
     assert_eq!(
         clients
             .runtime_config
-            .execution_policy(AgentKind::Gemini)
+            .execution_policy(AgentKind::Antigravity)
             .max_concurrent_subagents,
         None
     );

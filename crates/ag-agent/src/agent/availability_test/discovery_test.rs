@@ -78,7 +78,6 @@ fn test_executable_name_matches_agent_cli_names() {
     assert_eq!(executable_name(AgentKind::Antigravity), Some("agy"));
     assert_eq!(executable_name(AgentKind::Claude), Some("claude"));
     assert_eq!(executable_name(AgentKind::Codex), Some("codex"));
-    assert_eq!(executable_name(AgentKind::Gemini), Some("gemini"));
     assert_eq!(executable_name(AgentKind::Harness), None);
 }
 

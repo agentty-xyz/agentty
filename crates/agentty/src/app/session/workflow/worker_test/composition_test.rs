@@ -135,6 +135,7 @@ async fn model_switch_commits_before_retiring_runtime_and_discards_queue() {
     factory.expect_create().once().returning(move |id, _| {
         ag_worker::SessionRunClient::from_channel(id.to_string(), channel.clone())
     });
+    factory.expect_setup_backend().returning(|_, _| Ok(()));
     let clients = test_app_clients().with_session_run_factory(Arc::new(factory));
     let (mut app, _directory) = new_git_test_app_with_clients(clients).await;
     let session_id = app.create_session().await.expect("session");

@@ -131,8 +131,7 @@ Follow the nearest documentation guide for exact routing and integrity rules.
 - Do not duplicate inherited rules, implementation inventories, or facts readily
   recoverable from manifests, module routers, tests, or CLI help.
 - Do not use parent-directory-relative paths in an `AGENTS.md`.
-- When creating an `AGENTS.md`, add same-directory `CLAUDE.md` and `GEMINI.md` symlinks
-  targeting it.
+- When creating an `AGENTS.md`, add a same-directory `CLAUDE.md` symlink targeting it.
 - The `check-instructions` hook checks literal repository paths, local Markdown links,
   instruction aliases, and hook names in `prek run` examples. Keep its regression tests
   aligned when changing the instruction format.

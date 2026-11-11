@@ -589,8 +589,8 @@ succeeded, failed, running, and interrupted calls. A compact block retains the l
 successful call, up to three recent interrupted calls, and up to three running calls,
 with counts for additional calls. Failed calls contribute to totals without staying in
 the live block. Command previews and file paths replace raw argument JSON and shorten to
-fit the pane. Successful output stays hidden. Codex, Claude, Gemini, and Antigravity
-supply these details where available. Skill names require explicit provider reporting.
+fit the pane. Successful output stays hidden. Codex, Claude, and Antigravity supply
+these details where available. Skill names require explicit provider reporting.
 
 Responses from these providers, including commit and rebase recovery assistance, include
 a usage footer when tool activity was observed. `Tools` lists invocation counts with
@@ -795,7 +795,6 @@ and supported response, reasoning, compaction, checkpoint, and subagent phases:
 | ----------- | --------------------------------------------------------------- |
 | Codex       | Tools, responses, reasoning, compaction, subagents              |
 | Claude      | Tools, subagents                                                |
-| Gemini      | Tools                                                           |
 | Antigravity | Tools, responses, reasoning, compaction, checkpoints, subagents |
 | Harness     | Turns, model requests with token usage, tools                   |
 
@@ -817,26 +816,26 @@ by default.
 Add `--otlp-capture-content` alongside `--otlp-endpoint` to export tool commands,
 arguments, and results as previews of at most 4 KiB per attribute. Longer values keep
 their beginning and end around an omitted-byte count, so failure summaries at the end of
-command output stay visible. Separate stdout and stderr are included when present in
-Gemini's raw output; Codex supplies combined output. Original output sizes and
-truncation flags distinguish previews from complete results. Oversized structured
-arguments and results use the text attributes `agentty.tool.input.preview` and
-`agentty.tool.output.preview` instead of incomplete JSON in `gen_ai.tool.call.arguments`
-or `gen_ai.tool.call.result`. Complete structured values, including their redaction
-replacements, remain valid JSON. Exact output sizes still require walking the values,
-but metadata-only tracing does not serialize them. Larger payloads are not retained by
-tracing. Values containing common credential markers or URL credentials are replaced
-entirely with `[REDACTED]` before export, but arbitrary secrets and project paths may
-still appear. Enable this option only for content you intend to send to the configured
-receiver. Turn prompts, transcripts, reasoning, and subagent prompts remain excluded.
+command output stay visible. Codex supplies combined stdout and stderr. Original output
+sizes and truncation flags distinguish previews from complete results. Oversized
+structured arguments and results use the text attributes `agentty.tool.input.preview`
+and `agentty.tool.output.preview` instead of incomplete JSON in
+`gen_ai.tool.call.arguments` or `gen_ai.tool.call.result`. Complete structured values,
+including their redaction replacements, remain valid JSON. Exact output sizes still
+require walking the values, but metadata-only tracing does not serialize them. Larger
+payloads are not retained by tracing. Values containing common credential markers or URL
+credentials are replaced entirely with `[REDACTED]` before export, but arbitrary secrets
+and project paths may still appear. Enable this option only for content you intend to
+send to the configured receiver. Turn prompts, transcripts, reasoning, and subagent
+prompts remain excluded.
 
-Content previews are supported for Codex command, MCP, and dynamic-tool items, Claude
-tool messages, and Gemini ACP tool input/output. Antigravity exports tool identities;
-its input/output fields are not captured. Missing fields are omitted; tool categories
-and titles are not treated as provider-reported tool names. All observed spans are
-sampled while enabled. Export is asynchronous and best effort: a full queue or
-unavailable receiver may lose spans. Agentty reports a coalesced diagnostic summary
-after restoring the terminal and limits final export flushing to three seconds.
+Content previews are supported for Codex command, MCP, and dynamic-tool items and Claude
+tool messages. Antigravity exports tool identities; its input/output fields are not
+captured. Missing fields are omitted; tool categories and titles are not treated as
+provider-reported tool names. All observed spans are sampled while enabled. Export is
+asynchronous and best effort: a full queue or unavailable receiver may lose spans.
+Agentty reports a coalesced diagnostic summary after restoring the terminal and limits
+final export flushing to three seconds.
 
 ## Auto-Update
 

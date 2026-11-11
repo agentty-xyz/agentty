@@ -3,9 +3,11 @@ use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::time::Duration;
 
+use ag_contracts::AgentError;
 use ag_forge as forge;
 use ag_git::GitClient;
-use ag_session::{AgentAvailabilityProbe, test_support as model_fixture};
+use ag_session::{AgentAvailabilityProbe, TaskAgentContext, test_support as model_fixture};
+use ag_worker::SessionRunClient;
 use ag_worker::test_support::AppServerClient;
 use app::review::ReviewCacheEntry;
 use app::service::{RealSessionRunFactory, SessionRunFactory};
@@ -18,7 +20,7 @@ use crate::app;
 use crate::app::branch_publish::BranchPublishTaskSuccess;
 use crate::app::core::event::{AppEvent, ReviewRequestStatusUpdate};
 use crate::app::session;
-use crate::domain::agent::{ReasoningLevel, SpeedMode};
+use crate::domain::agent::{AgentKind, ReasoningLevel, SpeedMode};
 use crate::domain::input::InputState;
 use crate::domain::question::QuestionItem;
 use crate::domain::session::{
@@ -608,8 +610,9 @@ impl AppClients {
         app_server_client_override: Arc<dyn AppServerClient>,
     ) -> Self {
         self.runtime_config = ag_worker::RuntimeConfig::with_app_server(app_server_client_override);
-        self.session_run_factory =
-            Arc::new(RealSessionRunFactory::new(self.runtime_config.clone()));
+        self.session_run_factory = Arc::new(AppServerOverrideSessionRunFactory {
+            inner: RealSessionRunFactory::new(self.runtime_config.clone()),
+        });
 
         self
     }
@@ -683,5 +686,36 @@ impl AppClients {
         self.version_task_runner = crate::app::task::tests::mock_version_task_runner();
 
         self
+    }
+}
+
+/// Composes real session workers over an app-server override.
+///
+/// The override replaces every provider CLI, so workspace setup skips the
+/// host CLI validation that the real factory performs.
+struct AppServerOverrideSessionRunFactory {
+    inner: RealSessionRunFactory,
+}
+
+impl SessionRunFactory for AppServerOverrideSessionRunFactory {
+    fn create_graph_task(
+        &self,
+        context_id: &str,
+        session_id: &SessionId,
+        kind: AgentKind,
+    ) -> Result<SessionRunClient, AgentError> {
+        self.inner.create_graph_task(context_id, session_id, kind)
+    }
+
+    fn create(&self, session_id: &SessionId, kind: AgentKind) -> SessionRunClient {
+        self.inner.create(session_id, kind)
+    }
+
+    fn create_task(&self, context: &TaskAgentContext) -> Result<SessionRunClient, AgentError> {
+        self.inner.create_task(context)
+    }
+
+    fn setup_backend(&self, _kind: AgentKind, _folder: &Path) -> Result<(), AgentError> {
+        Ok(())
     }
 }

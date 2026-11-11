@@ -1124,7 +1124,7 @@ fn test_prompt_slash_command_list_omits_fast_for_unsupported_agent() {
 
     // Act
     let suggestion_list =
-        build_prompt_slash_suggestion_list("/", &slash_state, AgentKind::Gemini, false)
+        build_prompt_slash_suggestion_list("/", &slash_state, AgentKind::Antigravity, false)
             .expect("expected suggestion list");
 
     // Assert

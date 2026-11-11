@@ -46,8 +46,7 @@ fn test_parse_model_parses_current_codex_models() {
 }
 
 #[test]
-/// Ensures Antigravity parses raw Gemini model ids as shared Gemini model
-/// selections.
+/// Ensures Antigravity parses raw Gemini model ids as its model selections.
 fn test_parse_model_parses_antigravity() {
     // Arrange
     let antigravity_kind = AgentKind::Antigravity;
@@ -64,31 +63,36 @@ fn test_parse_model_parses_antigravity() {
 }
 
 #[test]
-/// Ensures direct Gemini parses the same raw Gemini model ids as
-/// Antigravity.
-fn test_parse_model_parses_direct_gemini() {
+/// Ensures Antigravity rejects the invalid non-preview Gemini 3.1 Pro
+/// identifier.
+fn test_parse_model_rejects_non_preview_gemini_31_pro() {
     // Arrange
-    let gemini_kind = AgentKind::Gemini;
+    let antigravity_kind = AgentKind::Antigravity;
 
     // Act
-    let parsed_model = gemini_kind.parse_model("gemini-3.8-flash");
+    let parsed_model = antigravity_kind.parse_model("gemini-3.1-pro");
 
     // Assert
-    assert_eq!(parsed_model, Some(AgentModel::Gemini38Flash));
+    assert_eq!(parsed_model, None);
 }
 
 #[test]
-/// Ensures both Google providers reject the invalid non-preview Gemini
-/// 3.1 Pro identifier.
-fn test_parse_model_rejects_non_preview_gemini_31_pro() {
+/// Ensures the retired `gemini` provider name loads as Antigravity, which
+/// serves the same models, while CLI-backed providers exclude it.
+fn test_retired_gemini_provider_name_parses_as_antigravity() {
     // Arrange
-    let agent_kinds = [AgentKind::Gemini, AgentKind::Antigravity];
+    let names = ["gemini", "Gemini", "antigravity", "agy"];
 
     // Act
-    let parsed_models = agent_kinds.map(|kind| kind.parse_model("gemini-3.1-pro"));
+    let parsed_kinds = names.map(|name| name.parse::<AgentKind>().ok());
 
     // Assert
-    assert_eq!(parsed_models, [None; 2]);
+    assert_eq!(parsed_kinds, [Some(AgentKind::Antigravity); 4]);
+    assert_eq!(
+        AgentKind::ALL,
+        &[AgentKind::Antigravity, AgentKind::Claude, AgentKind::Codex]
+    );
+    assert_eq!(AgentKind::Antigravity.name(), "antigravity");
 }
 
 #[test]
@@ -223,8 +227,8 @@ fn test_claude_models_are_supported_by_claude() {
 }
 
 #[test]
-/// Ensures shared Gemini models are supported by both Google providers.
-fn test_gemini_models_are_supported_by_gemini_and_antigravity() {
+/// Ensures Gemini models are supported by Antigravity only.
+fn test_gemini_models_are_supported_by_antigravity() {
     // Arrange
     let models = [
         AgentModel::Gemini4Argon,
@@ -235,31 +239,27 @@ fn test_gemini_models_are_supported_by_gemini_and_antigravity() {
 
     // Act
     let antigravity_supported = models.map(|model| AgentKind::Antigravity.supports_model(model));
-    let gemini_supported = models.map(|model| AgentKind::Gemini.supports_model(model));
     let codex_supported = models.map(|model| AgentKind::Codex.supports_model(model));
+    let harness_supported = models.map(|model| AgentKind::Harness.supports_model(model));
 
     // Assert
+    assert_eq!(AgentKind::Antigravity.models(), models);
     assert_eq!(antigravity_supported, [true; 4]);
-    assert_eq!(gemini_supported, [true; 4]);
     assert_eq!(codex_supported, [false; 4]);
+    assert_eq!(harness_supported, [false; 4]);
 }
 
 #[test]
 /// Ensures only providers with a response-speed control report support.
 fn test_supports_speed_mode_covers_claude_and_codex_only() {
     // Arrange
-    let kinds = [
-        AgentKind::Claude,
-        AgentKind::Codex,
-        AgentKind::Gemini,
-        AgentKind::Antigravity,
-    ];
+    let kinds = [AgentKind::Claude, AgentKind::Codex, AgentKind::Antigravity];
 
     // Act
     let supported = kinds.map(AgentKind::supports_speed_mode);
 
     // Assert
-    assert_eq!(supported, [true, true, false, false]);
+    assert_eq!(supported, [true, true, false]);
 }
 
 #[test]
@@ -331,12 +331,7 @@ fn test_harness_kind_metadata() {
 /// metadata.
 fn test_cli_kind_metadata() {
     // Arrange
-    let kinds = [
-        AgentKind::Antigravity,
-        AgentKind::Gemini,
-        AgentKind::Claude,
-        AgentKind::Codex,
-    ];
+    let kinds = [AgentKind::Antigravity, AgentKind::Claude, AgentKind::Codex];
 
     // Act
     let metadata = kinds.map(|kind| {
@@ -352,7 +347,6 @@ fn test_cli_kind_metadata() {
         metadata,
         [
             (Some("agy"), "antigravity", "Google Antigravity CLI agent."),
-            (Some("gemini"), "gemini", "Google Gemini CLI agent."),
             (Some("claude"), "claude", "Anthropic Claude Code agent."),
             (Some("codex"), "codex", "OpenAI Codex CLI agent."),
         ]
@@ -390,7 +384,10 @@ fn test_harness_models_include_its_own_and_shared_codex_models() {
     assert!(!AgentKind::Harness.supports_model(AgentModel::Gpt53CodexSpark));
     assert!(AgentKind::Harness.supports_model(AgentModel::ChatGptGpt61Sol));
     assert!(!AgentKind::Codex.supports_model(AgentModel::ChatGptGpt61Sol));
-    assert_eq!(AgentKind::Antigravity.declared_models(), &[]);
+    assert_eq!(
+        AgentKind::Antigravity.declared_models(),
+        AgentKind::Antigravity.models()
+    );
 }
 
 #[test]

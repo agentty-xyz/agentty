@@ -1,9 +1,9 @@
 use ag_session::{AgentSelectionMetadata, test_support as model_fixture};
 
 use super::super::{
-    ModelSelectorOption, SettingsManager, load_default_fast_agent_setting,
-    load_default_smart_agent_setting, load_default_smart_model_setting,
-    load_max_concurrent_subagents_setting, normalized_speed_default, selectable_model_options,
+    SettingsManager, load_default_fast_agent_setting, load_default_smart_agent_setting,
+    load_default_smart_model_setting, load_max_concurrent_subagents_setting,
+    normalized_speed_default, selectable_model_options,
 };
 use super::support::{
     assert_role_defaults_persisted, new_settings_manager, select_row, settings_manager,
@@ -24,11 +24,11 @@ use crate::test_support::enable_tracing_log_fallback;
 fn speed_defaults_normalize_provider_support_and_fast_model_compatibility() {
     // Arrange
     let codex_spark = AgentSelection::new(AgentKind::Codex, AgentModel::Gpt53CodexSpark);
-    let gemini = AgentSelection::new(AgentKind::Gemini, AgentModel::Gemini31Pro);
+    let antigravity = AgentSelection::new(AgentKind::Antigravity, AgentModel::Gemini31Pro);
 
     // Act
     let fast_codex = normalized_speed_default(codex_spark, SpeedMode::Fast);
-    let fast_gemini = normalized_speed_default(gemini, SpeedMode::Fast);
+    let fast_antigravity = normalized_speed_default(antigravity, SpeedMode::Fast);
     let normal_codex = normalized_speed_default(codex_spark, SpeedMode::Normal);
 
     // Assert
@@ -39,7 +39,7 @@ fn speed_defaults_normalize_provider_support_and_fast_model_compatibility() {
             SpeedMode::Fast,
         )
     );
-    assert_eq!(fast_gemini, (gemini, SpeedMode::Normal));
+    assert_eq!(fast_antigravity, (antigravity, SpeedMode::Normal));
     assert_eq!(normal_codex, (codex_spark, SpeedMode::Normal));
 }
 
@@ -127,24 +127,6 @@ fn settings_rows_show_default_smart_model_with_agent_prefix() {
 
     // Assert
     assert_eq!(rows[2].1, "antigravity/gemini-3.1-pro-preview [high]");
-}
-
-#[test]
-fn settings_rows_show_default_smart_model_with_real_gemini_agent() {
-    // Arrange
-    let mut manager = new_settings_manager();
-    let view = manager.fixture_view_mut();
-    view.available_model_selections = selectable_model_options(&[AgentKind::Gemini])
-        .into_iter()
-        .map(ModelSelectorOption::selection)
-        .collect();
-    view.default_smart_selection = AgentSelection::new(AgentKind::Gemini, AgentModel::Gemini31Pro);
-
-    // Act
-    let rows = manager.settings_rows();
-
-    // Assert
-    assert_eq!(rows[2].1, "gemini/gemini-3.1-pro-preview [high]");
 }
 
 #[test]
@@ -901,7 +883,7 @@ async fn load_default_smart_agent_setting_prefers_persisted_agent() {
     services
         .db()
         .settings()
-        .upsert_project_setting(project_id, SettingName::DefaultSmartAgent, "gemini")
+        .upsert_project_setting(project_id, SettingName::DefaultSmartAgent, "claude")
         .await
         .expect("failed to persist smart agent");
     services
@@ -910,7 +892,7 @@ async fn load_default_smart_agent_setting_prefers_persisted_agent() {
         .upsert_project_setting(
             project_id,
             SettingName::DefaultSmartModel,
-            AgentModel::Gemini31Pro.as_str(),
+            AgentModel::ClaudeOpus55.as_str(),
         )
         .await
         .expect("failed to persist smart model");
@@ -926,7 +908,7 @@ async fn load_default_smart_agent_setting_prefers_persisted_agent() {
     // Assert
     assert_eq!(
         loaded_selection,
-        AgentSelection::new(AgentKind::Gemini, AgentModel::Gemini31Pro)
+        AgentSelection::new(AgentKind::Claude, AgentModel::ClaudeOpus55)
     );
 }
 

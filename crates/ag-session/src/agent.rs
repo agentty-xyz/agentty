@@ -10,8 +10,6 @@ use rustc_hash::FxHashMap;
 pub enum AgentKind {
     /// Google Antigravity CLI/backend.
     Antigravity,
-    /// Google Gemini CLI/backend.
-    Gemini,
     /// Anthropic Claude Code CLI/backend.
     Claude,
     /// `OpenAI` Codex CLI/backend.
@@ -34,8 +32,8 @@ macro_rules! define_model_catalog {
     )* })*) => {
         /// Supported agent model names across all providers.
         ///
-        /// Gemini ids are shared by Gemini and Antigravity; provider ownership
-        /// lives on [`AgentSelection`]. Removing a variant is a Rust source API
+        /// Provider ownership lives on [`AgentSelection`] because some
+        /// providers share models. Removing a variant is a Rust source API
         /// change even when [`AgentModel::retired_replacement`] preserves saved ids.
         #[derive(Debug, Clone, Copy, Hash, PartialEq, Eq)]
         #[repr(u8)]
@@ -76,7 +74,6 @@ macro_rules! define_model_catalog {
             /// block, without the models it shares with another provider.
             const fn declared_models(self) -> &'static [AgentModel] {
                 match self {
-                    Self::Antigravity => &[],
                     $(Self::$provider => &[$(AgentModel::$model,)*],)*
                 }
             }
@@ -85,7 +82,7 @@ macro_rules! define_model_catalog {
 }
 
 define_model_catalog! {
-    Gemini {
+    Antigravity {
         /// Gemini Argon model backed by `gemini-4-argon`.
         Gemini4Argon = 17 => {
             id: "gemini-4-argon",
@@ -272,8 +269,7 @@ define_model_catalog! {
 
 /// Hosted models the native harness serves, in display order: its own
 /// catalog models, then the Codex models `OpenAI`'s Responses API also
-/// serves, which the harness shares with [`AgentKind::Codex`] like
-/// Antigravity shares the Gemini models. Served
+/// serves, which the harness shares with [`AgentKind::Codex`]. Served
 /// [`AgentModel::OpenAiCompatible`] models are discovered at runtime and
 /// listed before these.
 ///
@@ -444,7 +440,7 @@ impl AgentSelection {
         match self.kind {
             AgentKind::Claude => Self::new(AgentKind::Claude, AgentModel::ClaudeOpus55),
             AgentKind::Codex => Self::new(AgentKind::Codex, AgentKind::Codex.default_model()),
-            AgentKind::Antigravity | AgentKind::Gemini | AgentKind::Harness => self,
+            AgentKind::Antigravity | AgentKind::Harness => self,
         }
     }
 }
@@ -467,8 +463,8 @@ impl AgentModel {
 
     /// Returns the model identifier passed to provider transports.
     ///
-    /// Antigravity and Gemini use the same raw Gemini CLI model ids; callers
-    /// route those ids through the provider stored on [`AgentSelection`].
+    /// Callers route ids shared by several providers through the provider
+    /// stored on [`AgentSelection`].
     pub fn provider_model_str(self) -> &'static str {
         self.as_str()
     }
@@ -479,8 +475,6 @@ impl AgentModel {
     /// Stored retired Gemini, Claude, and Codex ids are migrated forward
     /// through [`AgentModel::retired_replacement`] so existing projects and
     /// sessions continue loading after model retirements.
-    /// Raw `gemini-*` ids parse to shared Gemini model variants; persisted
-    /// session agents decide whether Gemini or Antigravity owns the session.
     ///
     /// # Errors
     /// Returns an error when `value` is not a known current or retired model
@@ -546,9 +540,8 @@ impl AgentModel {
 ///
 /// Existing databases did not persist `agent`, so rows with a missing or
 /// invalid agent value fall back to a compatibility provider inferred from
-/// the persisted model string. Ambiguous raw `gemini-*` rows default to
-/// Antigravity because direct Gemini support had been removed before the new
-/// `agent` column was introduced.
+/// the persisted model string. Raw `gemini-*` rows belong to Antigravity,
+/// the only provider serving those models.
 pub fn parse_persisted_session_agent_model(
     agent_value: Option<&str>,
     model_value: &str,
@@ -660,9 +653,10 @@ pub fn resolve_model_for_available_agent_kinds(
 /// Resolves a provider kind that can run `model` from the available provider
 /// list.
 ///
-/// Shared Gemini model ids can be run by both Gemini and Antigravity. This
-/// helper uses the order of `agent_kinds` as the tie-breaker and returns
-/// `fallback_agent_kind` when no available provider supports `model`.
+/// Shared model ids, such as the Codex models the harness also serves, can be
+/// run by several providers. This helper uses the order of `agent_kinds` as the
+/// tie-breaker and returns `fallback_agent_kind` when no available provider
+/// supports `model`.
 #[must_use]
 pub fn resolve_agent_kind_for_model(
     model: AgentModel,
@@ -679,7 +673,7 @@ pub fn resolve_agent_kind_for_model(
 /// Resolves an [`AgentSelection`] for a model-only setting.
 ///
 /// `preferred_agent_kind` is kept when it can run `model`, which preserves the
-/// current session provider for shared Gemini model ids. Otherwise the
+/// current session provider for shared model ids. Otherwise the
 /// available provider order decides the owning provider, falling back to
 /// `preferred_agent_kind` when no available provider supports the model.
 #[must_use]
@@ -747,19 +741,13 @@ impl AgentKind {
     ///
     /// [`AgentKind::Harness`] runs in process, so it is never discovered from
     /// `PATH` and stays out of this list.
-    pub const ALL: &[AgentKind] = &[
-        AgentKind::Gemini,
-        AgentKind::Antigravity,
-        AgentKind::Claude,
-        AgentKind::Codex,
-    ];
+    pub const ALL: &[AgentKind] = &[AgentKind::Antigravity, AgentKind::Claude, AgentKind::Codex];
 
     /// Returns the provider CLI executable name, or `None` for the in-process
     /// harness.
     pub fn executable_name(self) -> Option<&'static str> {
         match self {
             Self::Antigravity => Some("agy"),
-            Self::Gemini => Some("gemini"),
             Self::Claude => Some("claude"),
             Self::Codex => Some("codex"),
             Self::Harness => None,
@@ -768,21 +756,19 @@ impl AgentKind {
 
     /// Returns this provider's models in their catalog display order.
     ///
-    /// Antigravity serves the Gemini models, and the harness serves the
-    /// Codex models available through `OpenAI`'s Responses API beside its
-    /// own.
+    /// The harness serves the Codex models available through `OpenAI`'s
+    /// Responses API beside its own.
     pub fn models(self) -> &'static [AgentModel] {
         match self {
-            Self::Antigravity => Self::Gemini.declared_models(),
             Self::Harness => HARNESS_MODELS,
-            Self::Claude | Self::Codex | Self::Gemini => self.declared_models(),
+            Self::Antigravity | Self::Claude | Self::Codex => self.declared_models(),
         }
     }
 
     /// Returns the default model for this agent kind.
     pub fn default_model(self) -> AgentModel {
         match self {
-            Self::Antigravity | Self::Gemini => AgentModel::Gemini31Pro,
+            Self::Antigravity => AgentModel::Gemini31Pro,
             Self::Claude => AgentModel::ClaudeFable52,
             Self::Codex => AgentModel::Gpt61Sol,
             Self::Harness => AgentModel::MuseSpark13,
@@ -822,8 +808,8 @@ impl AgentKind {
     ///
     /// Claude and Codex accept a per-turn speed selection, so `/speed` offers
     /// the picker and session surfaces display the active [`SpeedMode`].
-    /// Gemini and Antigravity have no equivalent control, so neither the
-    /// command nor the speed display is offered for them.
+    /// Antigravity has no equivalent control, so neither the command nor the
+    /// speed display is offered for it.
     ///
     /// [`SpeedMode`]: ag_contracts::SpeedMode
     pub fn supports_speed_mode(self) -> bool {
@@ -835,7 +821,6 @@ impl AgentSelectionMetadata for AgentKind {
     fn name(&self) -> &'static str {
         match self {
             Self::Antigravity => "antigravity",
-            Self::Gemini => "gemini",
             Self::Claude => "claude",
             Self::Codex => "codex",
             Self::Harness => "harness",
@@ -845,7 +830,6 @@ impl AgentSelectionMetadata for AgentKind {
     fn description(&self) -> &'static str {
         match self {
             Self::Antigravity => "Google Antigravity CLI agent.",
-            Self::Gemini => "Google Gemini CLI agent.",
             Self::Claude => "Anthropic Claude Code agent.",
             Self::Codex => "OpenAI Codex CLI agent.",
             Self::Harness => "Native Agentty harness agent.",
@@ -869,13 +853,17 @@ impl fmt::Display for AgentKind {
     }
 }
 
+/// Parses a provider name.
+///
+/// The retired `gemini` provider name parses as [`AgentKind::Antigravity`],
+/// which serves the same models, so saved settings and graph snapshots from
+/// the removed Gemini CLI backend keep loading.
 impl FromStr for AgentKind {
     type Err = String;
 
     fn from_str(s: &str) -> Result<Self, Self::Err> {
         match s.to_lowercase().as_str() {
-            "antigravity" | "agy" => Ok(Self::Antigravity),
-            "gemini" => Ok(Self::Gemini),
+            "antigravity" | "agy" | "gemini" => Ok(Self::Antigravity),
             "claude" => Ok(Self::Claude),
             "codex" => Ok(Self::Codex),
             "harness" => Ok(Self::Harness),

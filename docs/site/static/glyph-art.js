@@ -20,7 +20,7 @@
     'cargo install agentty',
     'gh pr create --draft',
     'status=Review queued=2 done=14',
-    'agent=claude agent=gemini agent=codex',
+    'agent=claude agent=agy agent=codex',
     'diff +42 -7 crates/agentty/src/app/session.rs',
     'commit="Keep session output responsive"',
     'npm install -g agentty',
