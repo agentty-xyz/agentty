@@ -419,6 +419,34 @@ fn selectors_cover_role_reasoning_speed_and_invalid_pairs() {
 }
 
 #[test]
+fn launch_input_is_ignored_while_browsing_and_cancel_leaves_add_mode() {
+    // Arrange
+    let view = test_settings_view("cargo test");
+    let mut state = launch_configuration_editor_state(&view);
+
+    // Act
+    let browse_operation = state.apply(&view, SettingsAction::Input(InputCommand::Insert('x')));
+    let browse_input = state
+        .launch_configuration_list_editor
+        .as_ref()
+        .map(|editor| editor.input.text().to_string());
+    let _ = state.apply(&view, SettingsAction::StartAddingLaunchConfiguration);
+    let _ = state.apply(&view, SettingsAction::Input(InputCommand::Insert('y')));
+    let cancel_operation = state.apply(&view, SettingsAction::Cancel);
+
+    // Assert
+    assert_eq!(browse_operation, None);
+    assert_eq!(browse_input, Some(String::new()));
+    assert_eq!(cancel_operation, None);
+    let editor = state
+        .launch_configuration_list_editor
+        .as_ref()
+        .expect("cancel should keep the browse editor open");
+    assert_eq!(editor.mode, LaunchConfigurationListEditorMode::Browse);
+    assert_eq!(editor.input.text(), "");
+}
+
+#[test]
 fn launch_input_handles_empty_edit_and_empty_add() {
     // Arrange
     let mut empty_edit = LaunchConfigurationListEditorState {

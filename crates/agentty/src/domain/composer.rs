@@ -760,6 +760,8 @@ pub fn current_line_delete_range(input: &InputState) -> Option<(usize, usize)> {
         line_end += 1;
     }
 
+    // A non-empty buffer always yields a non-empty range: a preceding or
+    // following newline is included, or the whole single line is removed.
     let delete_range = if line_start > 0 {
         (line_start - 1, line_end)
     } else if line_end < characters.len() {
@@ -767,10 +769,6 @@ pub fn current_line_delete_range(input: &InputState) -> Option<(usize, usize)> {
     } else {
         (line_start, line_end)
     };
-
-    if delete_range.0 == delete_range.1 {
-        return None;
-    }
 
     Some(delete_range)
 }

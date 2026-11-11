@@ -10,7 +10,8 @@ use ag_session::{
 use super::super::super::agent::AgentSelection;
 use super::super::{
     Session, SessionDiffStats, SessionSize, can_append_session_to_stack,
-    can_mutate_session_branch_in_stack, can_reply_to_session_in_stack,
+    can_merge_session_branch_in_stack, can_mutate_session_branch_in_stack,
+    can_rebase_session_branch_in_stack, can_reply_to_session_in_stack,
     can_start_staged_session_in_stack, has_reserved_branch_work_in_stack, session_is_descendant_of,
 };
 use super::support::test_session;
@@ -519,6 +520,24 @@ fn test_can_append_session_to_stack_rejects_active_parent_stack() {
 
     // Assert
     assert!(!can_append);
+}
+
+#[test]
+fn test_stack_branch_gates_fail_closed_for_unknown_session() {
+    // Arrange
+    let sessions = vec![SessionFixtureBuilder::new().id("known-session").build()];
+
+    // Act
+    let gate_results = [
+        can_start_staged_session_in_stack(&sessions, "missing-session"),
+        can_mutate_session_branch_in_stack(&sessions, "missing-session"),
+        can_merge_session_branch_in_stack(&sessions, "missing-session"),
+        can_rebase_session_branch_in_stack(&sessions, "missing-session"),
+        can_reply_to_session_in_stack(&sessions, "missing-session"),
+    ];
+
+    // Assert
+    assert_eq!(gate_results, [false; 5]);
 }
 
 #[test]

@@ -7,15 +7,16 @@ use crate::app::session::Clock;
 use crate::domain::agent::{AgentKind, AgentSelection};
 use crate::domain::selection::SelectionState;
 use crate::domain::session::{
-    Session, SessionDiffState, SessionDiffStats, SessionHandles, SessionId, SessionSize, Status,
+    Session, SessionDiffState, SessionDiffStats, SessionFollowUpTask, SessionHandles, SessionId,
+    SessionSize, Status,
 };
 use crate::domain::session_message::{SessionMessage, SessionMessageKind, SessionTranscript};
 use crate::domain::session_order::ArchiveAction;
 use crate::domain::transient_message::{
-    TransientMessage, TransientMessageAnchor, TransientMessageBody, TransientMessageLifecycle,
-    TransientMessageSlot,
+    QueuedAction, TransientMessage, TransientMessageAnchor, TransientMessageBody,
+    TransientMessageLifecycle, TransientMessageSlot,
 };
-use crate::test_support::SessionFixtureBuilder;
+use crate::test_support::{SessionFixtureBuilder, poison_lock};
 
 struct FixedClock {
     instant: Instant,
@@ -538,4 +539,161 @@ fn retain_follow_up_task_positions_clamps_and_drops_invalid_entries() {
     assert_eq!(state.follow_up_task_positions.get("session-1"), Some(&1));
     assert_eq!(state.follow_up_task_positions.get("session-2"), None);
     assert_eq!(state.follow_up_task_positions.get("session-3"), None);
+}
+
+/// Builds one follow-up task row for selection tests.
+fn follow_up_task(position: usize) -> SessionFollowUpTask {
+    SessionFollowUpTask {
+        id: i64::try_from(position).expect("test position fits in i64"),
+        launched_session_id: None,
+        position,
+        text: format!("Task {position}"),
+    }
+}
+
+/// Builds one state holding a session with `task_count` follow-up tasks.
+fn follow_up_state(task_count: usize) -> SessionState {
+    let mut session = state_session_fixture("session-1", Status::Done);
+    session.follow_up_tasks = (0..task_count).map(follow_up_task).collect();
+
+    SessionState::new(
+        HashMap::new(),
+        vec![session],
+        SelectionState::default(),
+        Arc::new(FixedClock::new()),
+        0,
+        0,
+    )
+}
+
+#[test]
+/// Verifies follow-up task selection wraps in both directions when several
+/// tasks exist.
+fn follow_up_task_selection_wraps_across_multiple_tasks() {
+    // Arrange
+    let mut state = follow_up_state(3);
+
+    // Act
+    state.select_previous_follow_up_task("session-1");
+    let wrapped_back = state.selected_follow_up_task_position("session-1");
+    state.select_previous_follow_up_task("session-1");
+    let moved_back = state.selected_follow_up_task_position("session-1");
+    state.select_next_follow_up_task("session-1");
+    state.select_next_follow_up_task("session-1");
+    let wrapped_forward = state.selected_follow_up_task_position("session-1");
+
+    // Assert
+    assert_eq!(wrapped_back, Some(2));
+    assert_eq!(moved_back, Some(1));
+    assert_eq!(wrapped_forward, Some(0));
+}
+
+#[test]
+/// Verifies follow-up task selection pins a single task, ignores taskless and
+/// unknown sessions, and clamps a stale stored position before moving.
+fn follow_up_task_selection_handles_single_empty_unknown_and_stale_positions() {
+    // Arrange
+    let mut single_task_state = follow_up_state(1);
+    let mut taskless_state = follow_up_state(0);
+    let mut stale_position_state = follow_up_state(2);
+    stale_position_state
+        .follow_up_task_positions
+        .insert("session-1".into(), 9);
+
+    // Act
+    single_task_state.select_previous_follow_up_task("session-1");
+    taskless_state.select_next_follow_up_task("session-1");
+    taskless_state.select_next_follow_up_task("missing-session");
+    stale_position_state.select_previous_follow_up_task("session-1");
+
+    // Assert
+    assert_eq!(
+        single_task_state.follow_up_task_positions.get("session-1"),
+        Some(&0)
+    );
+    assert!(taskless_state.follow_up_task_positions.is_empty());
+    assert_eq!(
+        stale_position_state.selected_follow_up_task_position("session-1"),
+        Some(0)
+    );
+}
+
+#[test]
+/// Verifies session-scoped mutations are no-ops for unknown sessions,
+/// unknown follow-up positions, and out-of-range removals.
+fn session_scoped_mutations_ignore_missing_targets() {
+    // Arrange
+    let mut state = follow_up_state(1);
+    let queued_action = TransientMessage {
+        anchor: TransientMessageAnchor::Tail,
+        body: TransientMessageBody::Queued(QueuedAction::new(1, "sync after turn".to_string())),
+        lifecycle: TransientMessageLifecycle::UntilResolved,
+        slot: TransientMessageSlot::SyncQueue,
+        turn_position: Some(0),
+    };
+
+    // Act
+    let removed_session = state.remove_session_at(5);
+    state.set_follow_up_task_launched_session_id(
+        "missing-session",
+        0,
+        Some("launched-session".into()),
+    );
+    state.set_follow_up_task_launched_session_id("session-1", 7, Some("launched-session".into()));
+    state.upsert_queued_action("missing-session", queued_action);
+    state.resolve_queued_action("missing-session", TransientMessageSlot::SyncQueue);
+    state.retain_follow_up_task_positions(&HashSet::new());
+    let launched_session_id_after_misses = state
+        .session_for_id("session-1")
+        .and_then(|session| session.follow_up_tasks[0].launched_session_id.clone());
+    state.set_follow_up_task_launched_session_id("session-1", 0, Some("launched-session".into()));
+
+    // Assert
+    assert!(removed_session.is_none());
+    assert_eq!(launched_session_id_after_misses, None);
+    let session = state
+        .session_for_id("session-1")
+        .expect("session should remain loaded");
+    assert_eq!(
+        session.follow_up_tasks[0].launched_session_id,
+        Some("launched-session".into())
+    );
+    assert_eq!(state.sessions.len(), 1);
+}
+
+#[test]
+/// Verifies cached follow-up selections for active ids without a loaded
+/// session snapshot are dropped.
+fn retain_follow_up_task_positions_drops_active_ids_without_loaded_session() {
+    // Arrange
+    let mut state = follow_up_state(1);
+    state.follow_up_task_positions.insert("unloaded".into(), 0);
+    let active_session_ids = HashSet::from(["unloaded".into()]);
+
+    // Act
+    state.retain_follow_up_task_positions(&active_session_ids);
+
+    // Assert
+    assert!(state.follow_up_task_positions.is_empty());
+}
+
+#[test]
+/// Verifies poisoned handle locks leave the previous snapshot values intact.
+fn sync_session_with_handles_keeps_snapshot_when_handle_locks_are_poisoned() {
+    // Arrange
+    let mut session = state_session_fixture("session-1", Status::Review);
+    session.transcript = Some(crate::test_support::assistant_transcript("kept"));
+    let handles = SessionHandles::new_with_transcript(
+        Status::InProgress,
+        crate::test_support::assistant_transcript("ignored"),
+    );
+    poison_lock(Arc::clone(&handles.status));
+    poison_lock(Arc::clone(&handles.transcript));
+
+    // Act
+    SessionState::sync_session_with_handles(&mut session, &handles);
+
+    // Assert
+    assert_eq!(session.status, Status::Review);
+    assert_eq!(session_replay_text(&session), "kept\n\n");
 }

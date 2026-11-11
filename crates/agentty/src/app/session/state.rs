@@ -289,13 +289,15 @@ impl SessionState {
     /// Copies current values from one runtime handle into its `Session`
     /// snapshot.
     pub fn sync_session_from_handle(&mut self, session_id: &str) {
-        let Some(session_index) = self.session_index_for_id(session_id) else {
-            return;
-        };
         let Some(session_handles) = self.runtime.handle(session_id) else {
             return;
         };
-        let Some(session) = self.sessions.get_mut(session_index) else {
+        let Some(session) = self
+            .session_index_by_id
+            .get(session_id)
+            .copied()
+            .and_then(|session_index| self.sessions.get_mut(session_index))
+        else {
             return;
         };
 
@@ -353,10 +355,7 @@ impl SessionState {
         session_id: &str,
         diff_stats: SessionDiffStats,
     ) {
-        let Some(session_index) = self.session_index_for_id(session_id) else {
-            return;
-        };
-        let Some(session) = self.sessions.get_mut(session_index) else {
+        let Some(session) = self.session_mut_for_id(session_id) else {
             return;
         };
 
@@ -554,11 +553,18 @@ impl SessionState {
             return;
         }
 
-        let next_position = match self.selected_follow_up_task_position(session_id) {
-            Some(current_position) if move_forward => (current_position + 1) % follow_up_task_count,
-            Some(0) => follow_up_task_count.saturating_sub(1),
-            Some(current_position) => current_position.saturating_sub(1),
-            None => 0,
+        let current_position = self
+            .follow_up_task_positions
+            .get(session_id)
+            .copied()
+            .unwrap_or(0)
+            .min(follow_up_task_count - 1);
+        let next_position = if move_forward {
+            (current_position + 1) % follow_up_task_count
+        } else if current_position == 0 {
+            follow_up_task_count - 1
+        } else {
+            current_position - 1
         };
         self.follow_up_task_positions
             .insert(SessionId::from(session_id), next_position);

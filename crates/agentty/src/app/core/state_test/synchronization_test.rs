@@ -207,6 +207,192 @@ async fn externally_merged_helpers_ignore_missing_session_runtime_state() {
 }
 
 #[tokio::test]
+async fn restore_queued_session_to_review_only_restores_queued_sessions_with_handles() {
+    // Arrange
+    let (mut app, _pool, _base_dir) = new_test_app_with_database_pool().await;
+    insert_review_session_with_data_dir(&app, "queued-session").await;
+    insert_review_session_with_data_dir(&app, "review-session").await;
+    app.refresh_sessions_now().await;
+    crate::test_support::set_session_status_for_test(&mut app, "queued-session", Status::Queued);
+    app.sessions.push_session(
+        crate::test_support::SessionFixtureBuilder::new()
+            .id("snapshot-only")
+            .status(Status::Queued)
+            .build(),
+    );
+    let handle_status = |app: &App, session_id: &str| {
+        *app.sessions
+            .session_handles_or_err(session_id)
+            .expect("expected session handles")
+            .status
+            .lock()
+            .expect("status lock poisoned")
+    };
+
+    // Act
+    app.restore_queued_session_to_review("review-session").await;
+    app.restore_queued_session_to_review("snapshot-only").await;
+    app.restore_queued_session_to_review("queued-session").await;
+
+    // Assert
+    assert_eq!(handle_status(&app, "review-session"), Status::Review);
+    assert_eq!(handle_status(&app, "queued-session"), Status::Review);
+    assert_eq!(
+        app.sessions
+            .session_for_id("snapshot-only")
+            .expect("snapshot should remain loaded")
+            .status,
+        Status::Queued
+    );
+}
+
+#[tokio::test]
+async fn merge_queue_drain_skips_failed_entries_when_not_stopping_on_failure() {
+    // Arrange
+    let (mut app, _base_dir) = crate::test_support::new_test_app().await;
+    app.sessions.push_session(
+        crate::test_support::SessionFixtureBuilder::new()
+            .id("unmergeable")
+            .status(Status::Queued)
+            .build(),
+    );
+    app.merge_queue.enqueue("unmergeable".into());
+
+    // Act
+    let result = app.start_next_merge_from_queue(false).await;
+
+    // Assert
+    assert!(result.is_ok());
+    assert!(!app.merge_queue.has_active());
+    assert!(!app.merge_queue.is_queued_or_active("unmergeable"));
+}
+
+#[tokio::test]
+async fn merge_session_rejects_queueing_when_live_status_cannot_enter_the_queue() {
+    // Arrange
+    let (mut app, _pool, _base_dir) = new_test_app_with_database_pool().await;
+    insert_review_session_with_data_dir(&app, "queued-session").await;
+    app.refresh_sessions_now().await;
+    *app.sessions
+        .session_handles_or_err("queued-session")
+        .expect("expected session handles")
+        .status
+        .lock()
+        .expect("status lock poisoned") = Status::Draft;
+    app.merge_queue.set_active("active-merge".into());
+
+    // Act
+    let result = app.merge_session("queued-session").await;
+
+    // Assert
+    assert_eq!(
+        result.map_err(|error| error.to_string()),
+        Err("Invalid status transition to Queued".to_string())
+    );
+    assert!(!app.merge_queue.is_queued_or_active("queued-session"));
+}
+
+#[tokio::test]
+async fn pre_commit_hook_warning_reports_only_missing_hooks() {
+    // Arrange
+    crate::test_support::enable_tracing_log_fallback();
+    let mut app = crate::test_support::new_test_app_without_retained_base_dir().await;
+    let mut mock_git_client = ag_git::MockGitClient::new();
+    mock_git_client
+        .expect_find_git_repo_root()
+        .times(3)
+        .returning(|path| Box::pin(async move { Some(path) }));
+    let check_results = std::sync::Mutex::new(std::collections::VecDeque::from([
+        Ok(()),
+        Err(ag_git::GitError::PreCommitHookMissing {
+            config_file: ".pre-commit-config.yaml".to_string(),
+        }),
+        Err(ag_git::GitError::OutputParse("unreadable hook".to_string())),
+    ]));
+    mock_git_client
+        .expect_check_pre_commit_hook_ready()
+        .times(3)
+        .returning(move |_| {
+            let result = check_results
+                .lock()
+                .expect("check results lock")
+                .pop_front()
+                .expect("one result per call");
+            Box::pin(async move { result })
+        });
+    install_mock_git_client(&mut app, mock_git_client);
+
+    // Act
+    let ready_warning = app.pre_commit_hook_warning().await;
+    let missing_warning = app.pre_commit_hook_warning().await;
+    let failed_check_warning = app.pre_commit_hook_warning().await;
+
+    // Assert
+    assert_eq!(ready_warning, None);
+    assert!(
+        missing_warning
+            .expect("missing hook should warn")
+            .contains("`.pre-commit-config.yaml`")
+    );
+    assert_eq!(failed_check_warning, None);
+}
+
+#[tokio::test]
+async fn project_sync_reports_undetected_default_branch() {
+    // Arrange
+    let (mut app, _base_dir) = crate::test_support::new_git_test_app().await;
+    let mut sync_main_runner = crate::app::test_support::MockSyncMainRunner::new();
+    sync_main_runner
+        .expect_start_sync_main()
+        .times(1)
+        .returning(|_, _, _, _| {});
+    app.sync_main_runner = Arc::new(sync_main_runner);
+    let mut sync_context = app.sync_handle.context_snapshot();
+    sync_context.project_branch_name = None;
+    app.sync_handle.publish_context(sync_context);
+
+    // Act
+    app.start_sync_main();
+
+    // Assert
+    assert_eq!(
+        app.project_sync_status
+            .as_ref()
+            .map(|status| status.context.default_branch.as_str()),
+        Some("not detected")
+    );
+}
+
+#[tokio::test]
+async fn open_session_ignores_unknown_sessions_and_restores_question_mode() {
+    // Arrange
+    let mut app = crate::test_support::new_test_app_without_retained_base_dir().await;
+    let questions = vec![QuestionItem::new("Which branch?")];
+    app.sessions.push_session(
+        crate::test_support::SessionFixtureBuilder::new()
+            .id("question-session")
+            .status(Status::Question)
+            .questions(questions.clone())
+            .build(),
+    );
+    app.mode = AppMode::List;
+
+    // Act
+    app.open_session("missing-session");
+    let mode_is_list_after_missing = matches!(app.mode, AppMode::List);
+    app.open_session("question-session");
+
+    // Assert
+    assert!(mode_is_list_after_missing);
+    assert!(matches!(
+        &app.mode,
+        AppMode::Question { session_id, questions: mode_questions, .. }
+            if session_id.as_str() == "question-session" && *mode_questions == questions
+    ));
+    assert_eq!(app.sessions.selected_session_index(), Some(0));
+}
+
+#[tokio::test]
 async fn stale_project_sync_completion_does_not_replace_newer_deferred_completion() {
     // Arrange
     let (mut app, _base_dir) = crate::test_support::new_test_app().await;

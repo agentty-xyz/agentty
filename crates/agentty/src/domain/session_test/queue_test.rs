@@ -1,3 +1,5 @@
+use std::sync::Arc;
+
 use ag_session::SessionStatus as Status;
 
 use super::super::SessionHandles;
@@ -5,6 +7,7 @@ use crate::domain::transient_message::{
     QueuedAction, TransientMessage, TransientMessageAnchor, TransientMessageBody,
     TransientMessageLifecycle, TransientMessageSlot,
 };
+use crate::test_support::poison_lock;
 
 #[test]
 fn test_status_transition_queued_to_merging() {
@@ -74,6 +77,29 @@ fn queued_action_snapshot_tracks_updates_and_clear() {
     // Assert
     assert_eq!(queued_actions, vec![branch_publish, sync.clone()]);
     assert_eq!(after_resolve, vec![sync]);
+    assert_eq!(handles.queued_action_snapshot(), []);
+}
+
+#[test]
+fn queued_action_updates_are_skipped_when_the_queue_lock_is_poisoned() {
+    // Arrange
+    let handles = SessionHandles::new(Status::InProgress);
+    let sync = TransientMessage {
+        anchor: TransientMessageAnchor::Tail,
+        body: TransientMessageBody::Queued(QueuedAction::new(1, "sync after turn".to_string())),
+        lifecycle: TransientMessageLifecycle::UntilResolved,
+        slot: TransientMessageSlot::SyncQueue,
+        turn_position: Some(0),
+    };
+    poison_lock(Arc::clone(&handles.queued_actions));
+
+    // Act
+    handles.upsert_queued_action(sync);
+    handles.resolve_queued_action(TransientMessageSlot::SyncQueue);
+    handles.clear_queued_actions();
+
+    // Assert
+    assert!(handles.queued_actions.is_poisoned());
     assert_eq!(handles.queued_action_snapshot(), []);
 }
 

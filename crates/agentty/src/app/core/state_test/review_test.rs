@@ -48,6 +48,73 @@ use crate::presentation::app_mode::{
 use crate::runtime::mode::diff;
 
 #[tokio::test]
+async fn review_output_reports_failures_and_caches_updates_for_unloaded_sessions() {
+    // Arrange
+    let mut app = crate::test_support::new_test_app_without_retained_base_dir().await;
+    app.review_cache.insert(
+        "failed-session".into(),
+        ReviewCacheEntry::Failed {
+            request_id: uuid::Uuid::nil(),
+            diff_hash: 7,
+            error: " model unavailable ".to_string(),
+        },
+    );
+
+    // Act
+    let (failed_status, failed_text) = app.review_view_state("failed-session");
+    let failed_text = failed_text.map(str::to_string);
+    let request_id = app.set_review_ready_output("unloaded-session", 11, "review".to_string());
+    let ready_entry_matches = matches!(
+        app.review_cache.get("unloaded-session"),
+        Some(ReviewCacheEntry::Ready { request_id: ready_request_id, diff_hash: 11, text })
+            if *ready_request_id == request_id && text == "review"
+    );
+    app.suppress_review_output("unloaded-session");
+
+    // Assert
+    assert_eq!(
+        failed_status.as_deref(),
+        Some("Review assist unavailable: model unavailable")
+    );
+    assert_eq!(failed_text, None);
+    assert!(ready_entry_matches);
+    assert!(matches!(
+        app.review_cache.get("unloaded-session"),
+        Some(ReviewCacheEntry::Suppressed)
+    ));
+}
+
+#[tokio::test]
+async fn start_publish_branch_action_reports_missing_session_for_branch_push() {
+    // Arrange
+    let mut app = crate::test_support::new_test_app_without_retained_base_dir().await;
+    let restore_view = ConfirmationViewMode {
+        scroll_offset: None,
+        session_id: "missing-session".into(),
+    };
+
+    // Act
+    app.start_publish_branch_action(
+        restore_view,
+        "missing-session",
+        PublishBranchAction::Push,
+        None,
+    )
+    .await;
+
+    // Assert
+    assert!(matches!(
+        app.mode,
+        AppMode::ViewInfoPopup {
+            is_loading: false,
+            ref message,
+            ref title,
+            ..
+        } if title == "Branch push failed" && message == "Session is no longer available."
+    ));
+}
+
+#[tokio::test]
 async fn push_session_branch_succeeds_without_review_request_link_for_unsupported_remote() {
     // Arrange
     let branch_session = BranchPublishTaskSession::from_session(

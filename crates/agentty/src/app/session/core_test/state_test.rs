@@ -8,7 +8,7 @@ use ag_worker::test_support::{
 };
 use tempfile::tempdir;
 
-use super::super::{SessionManager, session_folder};
+use super::super::{SessionManager, TurnAppliedState, session_folder};
 use super::support::{
     new_test_app_with_db, new_test_app_with_db_and_app_server, new_test_app_with_git,
     register_session_backend, test_session_manager, wait_for_status, wait_for_status_with_retries,
@@ -16,13 +16,17 @@ use super::support::{
 use crate::app::session::SessionLoadInput;
 use crate::app::session::workflow::task::SessionTaskService;
 use crate::app::test_support::TestSessionRunFactory;
-use crate::domain::agent::{ReasoningLevel, ResponseStyle, SpeedMode};
+use crate::domain::agent::{AgentKind, AgentSelection, ReasoningLevel, ResponseStyle, SpeedMode};
 use crate::domain::permission::PermissionMode;
-use crate::domain::session::{SESSION_DATA_DIR, SessionSize, Status};
+use crate::domain::session::{
+    SESSION_DATA_DIR, SessionFollowUpTask, SessionSize, SessionStats, Status,
+};
+use crate::domain::session_message::SessionMessageKind;
 use crate::domain::transient_message::{TransientMessageAnchor, TransientMessageSlot};
 use crate::infra::clock::RealClock;
 use crate::infra::db::AppRepositories;
 use crate::infra::fs;
+use crate::test_support::poison_lock;
 
 #[tokio::test]
 /// Ensures transitioning a Codex session to `Done` shuts down its
@@ -541,5 +545,138 @@ fn test_live_activity_replaces_rows_invalidates_cache_and_clears() {
             .transient_messages
             .get(TransientMessageSlot::Activity)
             .is_none()
+    );
+}
+
+#[test]
+/// Ensures session-scoped reducer updates leave the loaded snapshot unchanged
+/// when they target a session that is not loaded.
+fn test_session_reducer_updates_ignore_unloaded_sessions() {
+    // Arrange
+    let mut session_manager = test_session_manager("session-id", None);
+    let original_agent = session_manager.sessions()[0].agent;
+    let original_fingerprint = session_manager.sessions()[0]
+        .transient_messages
+        .fingerprint();
+
+    // Act
+    session_manager.apply_session_model_updated(
+        "other-session",
+        AgentSelection::new(AgentKind::Claude, AgentKind::Claude.default_model()),
+    );
+    session_manager.start_branch_publish("other-session", "Publishing...".to_string());
+    session_manager.append_workflow_notice("other-session", "[Sync] Ignored.".to_string());
+    session_manager.apply_turn_applied_state(
+        "other-session",
+        &TurnAppliedState {
+            follow_up_tasks: Vec::new(),
+            questions: Vec::new(),
+            token_usage_delta: SessionStats::default(),
+        },
+    );
+
+    // Assert
+    let session = &session_manager.sessions()[0];
+    assert_eq!(session.agent, original_agent);
+    assert_eq!(
+        session.transient_messages.fingerprint(),
+        original_fingerprint
+    );
+    assert_eq!(session_manager.sessions().len(), 1);
+}
+
+#[test]
+/// Ensures follow-up task navigation reports multiple tasks and wraps the
+/// selected task through the session state.
+fn test_follow_up_task_navigation_delegates_to_session_state() {
+    // Arrange
+    let mut session_manager = test_session_manager("session-id", None);
+    session_manager.sessions_mut()[0].follow_up_tasks = (0..2)
+        .map(|position| SessionFollowUpTask {
+            id: i64::try_from(position).expect("test position fits in i64"),
+            launched_session_id: None,
+            position,
+            text: format!("Task {position}"),
+        })
+        .collect();
+
+    // Act
+    let has_multiple_tasks = session_manager.has_multiple_follow_up_tasks("session-id");
+    let unknown_has_multiple_tasks = session_manager.has_multiple_follow_up_tasks("other-session");
+    session_manager.select_previous_follow_up_task("session-id");
+    let previous_position = session_manager
+        .state()
+        .selected_follow_up_task_position("session-id");
+    session_manager.select_next_follow_up_task("session-id");
+    let next_position = session_manager
+        .state()
+        .selected_follow_up_task_position("session-id");
+
+    // Assert
+    assert!(has_multiple_tasks);
+    assert!(!unknown_has_multiple_tasks);
+    assert_eq!(previous_position, Some(1));
+    assert_eq!(next_position, Some(0));
+}
+
+#[test]
+/// Ensures auto-push completion ignores untracked operations and retracts the
+/// loaded sync row without a notice.
+fn test_finish_published_branch_sync_ignores_untracked_and_clears_without_notice() {
+    // Arrange
+    let mut session_manager = test_session_manager("session-id", None);
+
+    // Act
+    let untracked = session_manager.finish_published_branch_sync("session-id", "sync-id", None);
+    session_manager.start_published_branch_sync("session-id", "sync-id".to_string());
+    let finished = session_manager.finish_published_branch_sync("session-id", "sync-id", None);
+
+    // Assert
+    assert!(!untracked);
+    assert!(finished);
+    let session = &session_manager.sessions()[0];
+    assert!(
+        session
+            .transient_messages
+            .get(TransientMessageSlot::PublishedBranchSync)
+            .is_none()
+    );
+    assert!(session.transcript.is_none());
+}
+
+#[test]
+/// Ensures a poisoned live transcript falls back to the loaded snapshot for
+/// the auto-push completion notice.
+fn test_finish_published_branch_sync_falls_back_to_snapshot_when_handle_is_poisoned() {
+    // Arrange
+    let mut session_manager = test_session_manager("session-id", None);
+    session_manager.start_published_branch_sync("session-id", "sync-id".to_string());
+    let transcript = Arc::clone(
+        &session_manager
+            .state()
+            .handle("session-id")
+            .expect("session handles should be loaded")
+            .transcript,
+    );
+    poison_lock(transcript);
+
+    // Act
+    let finished = session_manager.finish_published_branch_sync(
+        "session-id",
+        "sync-id",
+        Some("[Branch Push] Auto-pushed published branch."),
+    );
+
+    // Assert
+    assert!(finished);
+    let last_message = session_manager.sessions()[0]
+        .transcript
+        .as_ref()
+        .and_then(|transcript| transcript.messages().last().cloned())
+        .expect("notice should be appended to the snapshot");
+    assert_eq!(last_message.kind, SessionMessageKind::WorkflowNotice);
+    assert_eq!(
+        last_message.content,
+        "[Branch Push] Auto-pushed published branch."
     );
 }

@@ -331,11 +331,11 @@ impl SettingsPresentationState {
     fn cancel(&mut self) -> Option<SettingsOperation> {
         if self.is_selector_dropdown_open() {
             self.selector_dropdown = None;
-        } else if self.is_launch_configuration_list_editor_input_active() {
-            if let Some(editor) = &mut self.launch_configuration_list_editor {
-                editor.input = InputState::default();
-                editor.mode = LaunchConfigurationListEditorMode::Browse;
-            }
+        } else if let Some(editor) = &mut self.launch_configuration_list_editor
+            && editor.is_input_mode()
+        {
+            editor.input = InputState::default();
+            editor.mode = LaunchConfigurationListEditorMode::Browse;
         } else {
             self.launch_configuration_list_editor = None;
         }

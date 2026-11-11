@@ -1,6 +1,9 @@
 use ag_session::{SessionId, SessionStatus as Status};
 
-use super::super::{SessionSize, TERMINAL_CONTINUATION_PROMPT_INTRO, can_create_stacked_child};
+use super::super::{
+    FollowUpTaskAction, SessionFollowUpTask, SessionSize, TERMINAL_CONTINUATION_PROMPT_INTRO,
+    can_create_stacked_child,
+};
 use super::support::test_session;
 use crate::test_support::SessionFixtureBuilder;
 
@@ -344,6 +347,80 @@ fn test_session_continuation_prompt_seed_uses_transcript_for_canceled_session() 
     assert!(
         continuation_prompt_seed.contains("Previous session transcript:\nassistant transcript")
     );
+}
+
+#[test]
+fn test_session_size_buckets_labels_and_parsing_cover_every_size() {
+    // Arrange
+    let bucket_cases = [
+        (10, SessionSize::Xs),
+        (30, SessionSize::S),
+        (80, SessionSize::M),
+        (200, SessionSize::L),
+        (500, SessionSize::Xl),
+        (501, SessionSize::Xxl),
+    ];
+
+    // Act
+    let bucketed_sizes = bucket_cases
+        .map(|(changed_line_count, _)| SessionSize::from_changed_line_count(changed_line_count));
+    let labels = bucket_cases.map(|(_, size)| size.label());
+    let parsed_sizes = labels.map(str::parse::<SessionSize>);
+    let lowercase_sizes = ["xs", "s", "m", "l", "xl", "xxl"].map(str::parse::<SessionSize>);
+    let unknown_size = "huge".parse::<SessionSize>();
+
+    // Assert
+    assert_eq!(bucketed_sizes, bucket_cases.map(|(_, size)| size));
+    assert_eq!(labels, ["XS", "S", "M", "L", "XL", "XXL"]);
+    assert_eq!(parsed_sizes, bucket_cases.map(|(_, size)| Ok(size)));
+    assert_eq!(lowercase_sizes, bucket_cases.map(|(_, size)| Ok(size)));
+    assert_eq!(unknown_size, Err("Unknown session size: huge".to_string()));
+}
+
+#[test]
+fn test_follow_up_task_action_opens_launched_tasks_and_launches_others() {
+    // Arrange
+    let pending_task = SessionFollowUpTask {
+        id: 1,
+        launched_session_id: None,
+        position: 0,
+        text: "Add tests".to_string(),
+    };
+    let launched_task = SessionFollowUpTask {
+        launched_session_id: Some(SessionId::from("launched-session")),
+        ..pending_task.clone()
+    };
+
+    // Act
+    let pending_action = pending_task.action();
+    let launched_action = launched_task.action();
+
+    // Assert
+    assert_eq!(pending_action, FollowUpTaskAction::Launch);
+    assert_eq!(launched_action, FollowUpTaskAction::Open);
+}
+
+#[test]
+fn test_session_continuation_prompt_seed_falls_back_to_initial_prompt() {
+    // Arrange
+    let prompt_session = SessionFixtureBuilder::new()
+        .status(Status::Done)
+        .prompt("  initial prompt  ")
+        .build();
+    let empty_session = SessionFixtureBuilder::new()
+        .status(Status::Done)
+        .prompt("   ")
+        .build();
+
+    // Act
+    let continuation_prompt_seed = prompt_session
+        .continuation_prompt_seed()
+        .expect("expected continuation prompt seed");
+    let empty_prompt_seed = empty_session.continuation_prompt_seed();
+
+    // Assert
+    assert!(continuation_prompt_seed.contains("Previous session prompt:\ninitial prompt\n"));
+    assert_eq!(empty_prompt_seed, None);
 }
 
 #[test]

@@ -65,3 +65,23 @@ fn parse_persisted_returns_dark_horizon_theme() {
     // Assert
     assert_eq!(theme, Some(ColorTheme::DarkHorizon));
 }
+
+#[test]
+fn as_str_round_trips_and_display_uses_label() {
+    // Arrange
+    let themes = ColorTheme::ALL;
+
+    // Act
+    let persisted_values = themes.map(ColorTheme::as_str);
+    let displayed_values = themes.map(|theme| theme.to_string());
+
+    // Assert
+    assert_eq!(persisted_values, ["current", "green", "dark_horizon"]);
+    assert_eq!(
+        displayed_values,
+        ["Agentty Default", "Agentty Green", "Dark Horizon"]
+    );
+    for theme in themes {
+        assert_eq!(ColorTheme::parse_persisted(theme.as_str()), Some(theme));
+    }
+}

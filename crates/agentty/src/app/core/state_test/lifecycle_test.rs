@@ -22,6 +22,26 @@ use crate::infra::tmux::MockTmuxClient;
 use crate::presentation::app_mode::AppMode;
 
 #[tokio::test]
+async fn deferred_delete_without_selected_session_keeps_loaded_sessions() {
+    // Arrange
+    let mut app = crate::test_support::new_test_app_without_retained_base_dir().await;
+    app.sessions.push_session(
+        crate::test_support::SessionFixtureBuilder::new()
+            .id("unselected-session")
+            .status(Status::Review)
+            .build(),
+    );
+    app.sessions.select_session_index(None);
+
+    // Act
+    app.delete_selected_session_deferred_cleanup().await;
+
+    // Assert
+    assert_eq!(app.sessions.sessions().len(), 1);
+    assert_eq!(app.sessions.sessions()[0].id, "unselected-session");
+}
+
+#[tokio::test]
 async fn replacing_fixture_clients_preserves_utility_cancellation_and_deletion_cleanup() {
     for deleting_session in [false, true] {
         // Arrange

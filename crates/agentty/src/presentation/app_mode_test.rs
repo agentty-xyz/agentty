@@ -1,7 +1,8 @@
 use super::super::help_action::{HelpAction, ViewSessionState};
 use super::{
-    AppMode, ConfirmationViewMode, DiffCommentTarget, DiffLineCommentAnchor, DiffLineCommentTarget,
-    DiffLineComments, DiffLineSide, DiffPreview, DiffPreviewUnavailableReason, HelpContext,
+    AppMode, ConfirmationViewMode, DiffCommentTarget, DiffFocus, DiffLineCommentAnchor,
+    DiffLineCommentTarget, DiffLineComments, DiffLineSide, DiffPreview,
+    DiffPreviewUnavailableReason, DiffReviewComments, HelpContext,
 };
 use crate::domain::session::PublishBranchAction;
 
@@ -312,6 +313,43 @@ fn test_help_context_restore_mode_ignores_help_only_view_fields() {
             scroll_offset: Some(4),
             ..
         } if session_id == "session-id"
+    ));
+}
+
+#[test]
+fn test_help_context_restore_mode_unboxes_diff_review_comments() {
+    // Arrange
+    let context = HelpContext::Diff {
+        can_comment: true,
+        diff: "diff --git a/a.rs b/a.rs".to_string(),
+        file_explorer_selected_index: 2,
+        focus: DiffFocus::Content,
+        line_comments: DiffLineComments::default(),
+        preview: DiffPreview::Off { request_id: 3 },
+        review_comments: Some(Box::new(DiffReviewComments::loading(7))),
+        restore: None,
+        session_id: "session-id".into(),
+        scroll_offset: 5,
+        selected_diff_line_index: 1,
+    };
+
+    // Act
+    let mode = context.restore_mode();
+
+    // Assert
+    assert!(matches!(
+        mode,
+        AppMode::Diff {
+            file_explorer_selected_index: 2,
+            focus: DiffFocus::Content,
+            review_comments: Some(ref review_comments),
+            scroll_cache: None,
+            scroll_offset: 5,
+            selected_diff_line_index: 1,
+            ref session_id,
+            ..
+        } if *review_comments == DiffReviewComments::loading(7)
+            && session_id.as_str() == "session-id"
     ));
 }
 

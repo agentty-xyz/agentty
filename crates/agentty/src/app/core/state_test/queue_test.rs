@@ -2,8 +2,8 @@ use std::path::PathBuf;
 use std::sync::Arc;
 
 use super::support::{session_creation_resources, test_turn_applied_state, test_view_app_mode};
-use crate::app::AppError;
 use crate::app::core::event::AppEvent;
+use crate::app::{AppError, Tab};
 use crate::domain::session::{QueuedMessage, SessionFollowUpTask, SessionStats, Status};
 use crate::domain::session_message::SessionMessageKind;
 use crate::domain::transient_message::{
@@ -13,7 +13,10 @@ use crate::domain::transient_message::{
 use crate::domain::turn_prompt::TurnPrompt;
 use crate::infra::db;
 use crate::infra::tmux::MockTmuxClient;
-use crate::presentation::app_mode::AppMode;
+use crate::presentation::app_mode::{
+    AppMode, ConfirmationViewMode, DiffFocus, DiffLineComments, DiffPreview, HelpContext,
+};
+use crate::presentation::help_action::ViewSessionState;
 
 #[tokio::test]
 async fn queued_session_work_has_tick_driven_ui() {
@@ -55,6 +58,213 @@ async fn queued_session_work_has_tick_driven_ui() {
     // Assert
     assert!(queued_action_has_tick_driven_ui);
     assert!(queued_message_has_tick_driven_ui);
+}
+
+#[tokio::test]
+async fn help_and_info_overlays_follow_their_background_tick_driven_ui() {
+    // Arrange
+    let mut app = crate::test_support::new_test_app_without_retained_base_dir().await;
+    app.sessions.push_session(
+        crate::test_support::SessionFixtureBuilder::new()
+            .id("session-id")
+            .status(Status::InProgress)
+            .build(),
+    );
+    app.tabs.set(Tab::Sessions);
+    let overlay_cases = [
+        (
+            AppMode::Help {
+                context: HelpContext::List {
+                    keybindings: Vec::new(),
+                },
+                scroll_offset: 0,
+            },
+            true,
+        ),
+        (
+            AppMode::Help {
+                context: HelpContext::View {
+                    can_fork_session: false,
+                    can_merge_session_branch: false,
+                    can_mutate_session_branch: false,
+                    can_open_worktree: false,
+                    can_rebase_session_branch: false,
+                    can_show_diff: false,
+                    can_reply_to_session: false,
+                    can_start_staged_session: false,
+                    can_view_review_comments: false,
+                    publish_pull_request_action: None,
+                    session_id: "session-id".into(),
+                    session_state: ViewSessionState::InProgress,
+                    scroll_offset: None,
+                },
+                scroll_offset: 0,
+            },
+            true,
+        ),
+        (
+            AppMode::Help {
+                context: HelpContext::Diff {
+                    can_comment: false,
+                    diff: String::new(),
+                    file_explorer_selected_index: 0,
+                    focus: DiffFocus::Files,
+                    line_comments: DiffLineComments::default(),
+                    preview: DiffPreview::default(),
+                    review_comments: None,
+                    restore: None,
+                    session_id: "session-id".into(),
+                    scroll_offset: 0,
+                    selected_diff_line_index: 0,
+                },
+                scroll_offset: 0,
+            },
+            false,
+        ),
+        (
+            AppMode::ViewInfoPopup {
+                is_loading: true,
+                loading_label: "Publishing...".to_string(),
+                message: String::new(),
+                restore_view: ConfirmationViewMode {
+                    scroll_offset: None,
+                    session_id: "missing-session".into(),
+                },
+                title: "Publish".to_string(),
+            },
+            true,
+        ),
+    ];
+
+    for (case_index, (mode, expected_tick_driven_ui)) in overlay_cases.into_iter().enumerate() {
+        app.mode = mode;
+
+        // Act
+        let has_tick_driven_ui = app.has_visible_tick_driven_ui();
+
+        // Assert
+        assert_eq!(
+            has_tick_driven_ui, expected_tick_driven_ui,
+            "overlay case {case_index}"
+        );
+    }
+}
+
+#[tokio::test]
+async fn follow_up_task_navigation_and_index_lookup_delegate_to_sessions() {
+    // Arrange
+    let mut app = crate::test_support::new_test_app_without_retained_base_dir().await;
+    let mut session = crate::test_support::SessionFixtureBuilder::new()
+        .id("session-id")
+        .status(Status::Done)
+        .build();
+    session.follow_up_tasks = (0..2)
+        .map(|position| SessionFollowUpTask {
+            id: i64::try_from(position).expect("test position fits in i64"),
+            launched_session_id: None,
+            position,
+            text: format!("Task {position}"),
+        })
+        .collect();
+    app.sessions.push_session(session);
+
+    // Act
+    let has_multiple_tasks = app.has_multiple_follow_up_tasks("session-id");
+    app.select_previous_follow_up_task("session-id");
+    let previous_position = app
+        .sessions
+        .state()
+        .selected_follow_up_task_position("session-id");
+    app.select_next_follow_up_task("session-id");
+    let next_position = app
+        .sessions
+        .state()
+        .selected_follow_up_task_position("session-id");
+    let first_session_id = app.session_id_for_index(0);
+    let missing_session_id = app.session_id_for_index(1);
+
+    // Assert
+    assert!(has_multiple_tasks);
+    assert_eq!(previous_position, Some(1));
+    assert_eq!(next_position, Some(0));
+    assert_eq!(first_session_id, Some("session-id".into()));
+    assert_eq!(missing_session_id, None);
+}
+
+#[tokio::test]
+async fn launch_or_open_selected_follow_up_task_is_noop_without_tasks() {
+    // Arrange
+    let mut app = crate::test_support::new_test_app_without_retained_base_dir().await;
+    app.sessions.push_session(
+        crate::test_support::SessionFixtureBuilder::new()
+            .id("session-id")
+            .status(Status::Done)
+            .build(),
+    );
+    app.mode = AppMode::List;
+
+    // Act
+    let result = app
+        .launch_or_open_selected_follow_up_task("session-id")
+        .await;
+
+    // Assert
+    assert!(result.is_ok());
+    assert!(matches!(app.mode, AppMode::List));
+    assert_eq!(app.sessions.sessions().len(), 1);
+}
+
+#[tokio::test]
+async fn launch_or_open_selected_follow_up_task_launches_and_opens_new_sibling() {
+    // Arrange
+    let (mut app, _directory) = crate::test_support::new_git_test_app().await;
+    crate::app::test_support::TestSessionRunFactory::install(&mut app.services);
+    let source_id = app.create_session().await.expect("source");
+    crate::test_support::set_session_status_for_test(&mut app, &source_id, Status::Review);
+    app.sessions
+        .sessions_mut()
+        .iter_mut()
+        .find(|session| session.id == source_id)
+        .expect("source")
+        .follow_up_tasks = vec![SessionFollowUpTask {
+        id: 1,
+        launched_session_id: None,
+        position: 0,
+        text: "Follow up on the source".to_string(),
+    }];
+
+    // Act
+    let result = app.launch_or_open_selected_follow_up_task(&source_id).await;
+
+    // Assert
+    result.expect("follow-up launch should succeed");
+    let launched_session_id = match &app.mode {
+        AppMode::View { session_id, .. } => Some(session_id.clone()),
+        _ => None,
+    }
+    .expect("launching a follow-up task should open the sibling session");
+    assert_ne!(launched_session_id.as_str(), source_id.as_str());
+    let launched_session = app
+        .sessions
+        .session_for_id(&launched_session_id)
+        .expect("launched sibling should be loaded");
+    assert_eq!(launched_session.prompt, "Follow up on the source");
+    assert_eq!(app.sessions.sessions().len(), 2);
+}
+
+#[tokio::test]
+async fn latest_available_version_reports_stored_release() {
+    // Arrange
+    let mut app = crate::test_support::new_test_app_without_retained_base_dir().await;
+    let missing_version = app.latest_available_version().map(str::to_string);
+    app.latest_available_version = Some("v9.9.9".to_string());
+
+    // Act
+    let latest_version = app.latest_available_version();
+
+    // Assert
+    assert_eq!(missing_version, None);
+    assert_eq!(latest_version, Some("v9.9.9"));
 }
 
 #[tokio::test]
