@@ -111,3 +111,207 @@ test('source text has no whitespace so printed rows read as one stream', () => {
   // Assert
   assert.match(art.SOURCE_TEXT, /^\S+$/);
 });
+
+test('addPoses records per-pose levels and adds cells lit only in later poses', () => {
+  // Arrange
+  const cells = art.buildCells(['10'], 'ab');
+
+  // Act
+  art.addPoses(cells, [['10'], ['03']], 2, 'xy');
+
+  // Assert: the original cell keeps its character; the new one starts unlit.
+  assert.deepEqual(
+    Array.from(cells, (cell) => [cell.x, cell.level, cell.ch, Array.from(cell.levels)]),
+    [[0, 1, 'a', [1, 0]], [1, 0, 'y', [0, 3]]],
+  );
+});
+
+test('poseAt steps through the wag sequence and ends with -1', () => {
+  // Arrange
+  const wag = { step: 100, sequence: [1, 2, 0] };
+
+  // Act
+  const poses = [0, 99, 100, 250, 300].map((elapsed) => art.poseAt(wag, elapsed));
+
+  // Assert
+  assert.deepEqual(poses, [1, 1, 2, 0, -1]);
+});
+
+test('rotationAbout keeps the pivot fixed and turns other points around it', () => {
+  // Arrange
+  const m = art.rotationAbout(Math.PI / 2, 10, 20);
+  const apply = ([x, y]) => [m.a * x + m.c * y + m.e, m.b * x + m.d * y + m.f].map((v) => Math.round(v));
+
+  // Act
+  const points = [[10, 20], [11, 20]].map(apply);
+
+  // Assert
+  assert.deepEqual(points, [[10, 20], [10, 21]]);
+});
+
+test('nerpa wag only uses defined poses and ends at rest', () => {
+  // Arrange
+  const { poses, wag } = art.SCENES.nerpa;
+
+  // Assert
+  assert.equal(poses[0], 0);
+  assert.ok(wag.sequence.every((pose) => pose >= 0 && pose < poses.length));
+  assert.equal(wag.sequence.at(-1), 0);
+});
+
+/** 2D context stub: records nothing, returns itself from every call, and applies `overrides`. */
+function fakeContext(overrides) {
+  const ctx = new Proxy({}, {
+    get(target, key) {
+      if (key in overrides) return overrides[key];
+      if (key in target) return target[key];
+
+      return () => ctx;
+    },
+  });
+
+  return ctx;
+}
+
+/**
+ * Mount the nerpa scene in a fake browser with a manual clock, timers, and frames.
+ *
+ * Rasterized poses are fully lit when the hind flippers are turned and dark at
+ * rest, so each drawn frame's `fillText` count shows whether the tail is wagging.
+ */
+async function mountNerpa() {
+  let now = 0;
+  let turn = 0;
+  let drawn = 0;
+  let nextFrame = 0;
+  const frames = new Map();
+  const timers = [];
+  const rect = { width: 400, height: 240, top: 0, bottom: 240 };
+  const motion = { matches: false, addEventListener: (type, listener) => { motion.listener = listener; } };
+  const screen = fakeContext({ fillText: () => { drawn++; } });
+  const raster = fakeContext({
+    getImageData: (x, y, width, height) => ({ data: new Uint8ClampedArray(width * height * 4).fill(turn ? 255 : 0) }),
+  });
+  const box = {
+    dataset: { glyphArt: 'nerpa' },
+    classList: { add: () => {} },
+    addEventListener: () => {},
+    getBoundingClientRect: () => rect,
+    querySelector: () => ({ getContext: () => screen }),
+  };
+  const documentRef = {
+    hidden: false,
+    querySelectorAll: () => [box],
+    createElement: () => ({ getContext: () => raster }),
+  };
+  const win = {
+    document: documentRef,
+    innerHeight: 800,
+    performance: { now: () => now },
+    matchMedia: () => motion,
+    getComputedStyle: () => ({ getPropertyValue: () => '#fff' }),
+    addEventListener: () => {},
+    setTimeout: (callback) => { timers.push(callback); },
+    requestAnimationFrame: (callback) => { frames.set(++nextFrame, callback); return nextFrame; },
+    cancelAnimationFrame: (id) => { frames.delete(id); },
+    Path2D: class {
+      addPath(path, transform) { turn = transform.b; }
+    },
+  };
+  win.globalThis = win;
+  runInNewContext(source, win);
+  await new Promise((resolve) => setImmediate(resolve));
+
+  const page = {
+    document: documentRef,
+    frames,
+    rect,
+    timers,
+    advance(ms) { now += ms; },
+    fireTimer() { timers.shift()(); },
+    /** Run the queued frame and return how many glyphs it drew. */
+    runFrame() {
+      const [[id, callback]] = frames;
+      frames.delete(id);
+      drawn = 0;
+      callback(now);
+
+      return drawn;
+    },
+    /** Run frames `stepMs` apart until none are queued; return each frame's glyph count. */
+    runFrames(stepMs = 16) {
+      const counts = [];
+      while (frames.size) {
+        if (counts.length) now += stepMs;
+        counts.push(page.runFrame());
+      }
+
+      return counts;
+    },
+    /** Switch reduced motion on and return how many glyphs the settled redraw drew. */
+    setReducedMotion() {
+      motion.matches = true;
+      drawn = 0;
+      motion.listener();
+
+      return drawn;
+    },
+  };
+  page.runFrames();
+
+  return page;
+}
+
+test('nerpa plays its wag on the timer, then rests and queues the next one', async () => {
+  // Arrange
+  const page = await mountNerpa();
+  page.advance(5000);
+
+  // Act
+  page.fireTimer();
+  const counts = page.runFrames(art.SCENES.nerpa.wag.step);
+
+  // Assert: frames follow the wag sequence (pose 0 draws nothing), then stop.
+  assert.deepEqual(
+    counts.map((count) => count > 0),
+    [...art.SCENES.nerpa.wag.sequence.map((pose) => pose !== 0), false],
+  );
+  assert.equal(page.frames.size, 0);
+  assert.equal(page.timers.length, 1);
+});
+
+for (const [condition, apply] of [
+  ['the tab is hidden', (page) => { page.document.hidden = true; }],
+  ['the art is off screen', (page) => { page.rect.top = 900; page.rect.bottom = 1140; }],
+  ['reduced motion is on', (page) => { page.setReducedMotion(); }],
+]) {
+  test(`nerpa skips its wag and reschedules while ${condition}`, async () => {
+    // Arrange
+    const page = await mountNerpa();
+    apply(page);
+
+    // Act
+    page.fireTimer();
+
+    // Assert
+    assert.equal(page.frames.size, 0);
+    assert.equal(page.timers.length, 1);
+  });
+}
+
+test('turning reduced motion on mid-wag stops it and redraws the tail at rest', async () => {
+  // Arrange
+  const page = await mountNerpa();
+  page.advance(5000);
+  page.fireTimer();
+  const wagging = page.runFrame();
+
+  // Act
+  const atRest = page.setReducedMotion();
+
+  // Assert
+  assert.ok(wagging > 0);
+  assert.equal(atRest, 0);
+  assert.equal(page.frames.size, 0);
+  assert.equal(page.timers.length, 1);
+});
