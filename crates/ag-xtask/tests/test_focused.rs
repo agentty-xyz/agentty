@@ -8,8 +8,10 @@ use std::path::PathBuf;
 use std::process::{Command, Output};
 use std::{fs, io};
 
-use serde_yaml_ng::Value;
 use tempfile::TempDir;
+
+#[path = "support/hook_catalog.rs"]
+mod hook_catalog;
 
 struct Fixture {
     directory: TempDir,
@@ -26,26 +28,7 @@ impl Fixture {
              \"${AGENTTY_TEST_EXIT_CODE:-0}\"\n",
         )?;
         fs::set_permissions(&cargo, fs::Permissions::from_mode(0o755))?;
-        let catalog: Value =
-            serde_yaml_ng::from_str(include_str!("../../../.pre-commit-config.yaml"))?;
-        let hook = catalog["repos"]
-            .as_sequence()
-            .ok_or_else(|| io::Error::other("hook catalog has no repository list"))?
-            .iter()
-            .map(|repo| {
-                repo["hooks"]
-                    .as_sequence()
-                    .ok_or_else(|| io::Error::other("hook repository has no hook list"))
-            })
-            .collect::<Result<Vec<_>, _>>()?
-            .into_iter()
-            .flatten()
-            .find(|hook| hook["id"].as_str() == Some("test-focused"))
-            .ok_or_else(|| io::Error::other("hook catalog has no focused hook"))?;
-        let entry = hook["entry"]
-            .as_str()
-            .ok_or_else(|| io::Error::other("focused hook has no command"))?
-            .to_string();
+        let entry = hook_catalog::entry("test-focused")?;
 
         Ok(Self { directory, entry })
     }

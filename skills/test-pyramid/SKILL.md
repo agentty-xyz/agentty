@@ -12,8 +12,8 @@ where a behavior is proven; root `AGENTS.md` still defines which gates must pass
 ## Principle
 
 Prove each behavior once, at the lowest level that can observe it. A higher level may
-assert only what lower levels cannot see. Changed-line coverage is satisfied by the
-lowest test that reaches the line, never by adding a slower test.
+assert only what lower levels cannot see. Line and function coverage is satisfied by the
+lowest test that reaches the code, never by adding a slower test.
 
 ## Levels
 

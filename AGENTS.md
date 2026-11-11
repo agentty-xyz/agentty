@@ -54,9 +54,11 @@ and `crates/agentty/src/app/AGENTS.md` for workflow integration rules.
   artifact freshness.
 - Use integration tests appropriate to the public surface for other CLI, library, or
   backend features.
-- Every code change requires automated tests covering 100% of its coverable changed
-  lines. CI enforces this with the `coverage` hook, which generates a fresh report and
-  checks workspace and changed-line thresholds.
+- Every coverable line and function of production Rust code stays at 100% automated test
+  coverage. CI enforces this with the `coverage` hook, which generates a fresh report
+  and lists every gap; `coverage-focused` checks one package locally. Never add coverage
+  exclusions, such as `coverage(off)`, ignore patterns, or service-side exclusions, to
+  satisfy it.
 - Never bypass `prek`-managed hooks with `--no-verify`, `--no-gpg-sign`, or an
   equivalent flag. Fix the failure.
 - Prefer removing obsolete behavior within the requested scope. Ask only when choosing

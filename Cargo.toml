@@ -65,6 +65,7 @@ regex = "1"
 roxmltree = "0.21"
 reqwest = { version = "0.13.4", default-features = false, features = ["json", "rustls-no-provider"] }
 rustls = { version = "0.23", default-features = false, features = ["ring", "std", "tls12"] }
+rustc-demangle = "0.1.28"
 rustc-hash = "2"
 rustix = { version = "1.1", features = ["event", "fs", "process"] }
 schemars = { version = "1", features = ["derive"] }
