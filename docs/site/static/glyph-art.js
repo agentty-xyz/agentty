@@ -5,7 +5,9 @@
 // brightness levels (0 = empty, 8 = brightest), and redrawn on a visible
 // canvas where every lit cell is one character of `SOURCE_TEXT`. Dim cells use
 // smaller, darker glyphs so the picture keeps its tone. Cells arrive top to
-// bottom as scrambled noise and scramble again under the pointer.
+// bottom as scrambled noise and scramble again under the pointer. Scenes with
+// `poses` pre-render one grid per pose and periodically play a `wag` through
+// them; the nerpa uses this to flick its hind flippers.
 (function (root) {
   'use strict';
 
@@ -29,6 +31,7 @@
   var GLYPH_FONT = '"Martian Mono", "Share Tech Mono", monospace';
   var WORDMARK_FONT = '800 200px "Martian Mono", "Arial Black", sans-serif';
   var SAMPLES_PER_CELL = 4;
+  var TAIL_PIVOT = [862, 406];
 
   /** Convert one cell's average brightness (`0..1`) into a level (`0..8`). */
   function quantizeLevel(brightness) {
@@ -73,6 +76,53 @@
     });
 
     return cells;
+  }
+
+  /**
+   * Record each cell's level in every pose grid as `cell.levels[pose]`.
+   *
+   * Cells lit only in a later pose join the list unlit, with a character taken
+   * from their grid position, so swapping poses never reshuffles the characters
+   * already printed.
+   */
+  function addPoses(cells, poseLevels, cols, text) {
+    var byIndex = new Map(cells.map(function (cell) { return [cell.y * cols + cell.x, cell]; }));
+    cells.forEach(function (cell) { cell.levels = []; });
+    poseLevels.forEach(function (levels, pose) {
+      levels.forEach(function (row, y) {
+        for (var x = 0; x < row.length; x++) {
+          var level = Number(row[x]);
+          var cell = byIndex.get(y * cols + x);
+          if (!cell) {
+            if (!level) continue;
+            cell = { x: x, y: y, level: 0, ch: text[(y * cols + x) % text.length], at: 0, heat: 0, levels: [] };
+            cells.push(cell);
+            byIndex.set(y * cols + x, cell);
+          }
+          cell.levels[pose] = level;
+        }
+      });
+    });
+    cells.forEach(function (cell) {
+      for (var pose = 0; pose < poseLevels.length; pose++) cell.levels[pose] = cell.levels[pose] || 0;
+    });
+
+    return cells;
+  }
+
+  /** Pose index `elapsed` ms into a wag, or `-1` once the sequence is over. */
+  function poseAt(wag, elapsed) {
+    var index = Math.floor(elapsed / wag.step);
+
+    return index < wag.sequence.length ? wag.sequence[index] : -1;
+  }
+
+  /** 2D transform (`DOMMatrix2DInit`) rotating by `angle` radians about (`x`, `y`). */
+  function rotationAbout(angle, x, y) {
+    var cos = Math.cos(angle);
+    var sin = Math.sin(angle);
+
+    return { a: cos, b: sin, c: -sin, d: cos, e: x - cos * x + sin * y, f: y - sin * x - cos * y };
   }
 
   /**
@@ -144,16 +194,23 @@
     },
   };
 
-  /** Paint a Baikal seal resting on an ice floe, facing left. */
+  /**
+   * Paint a Baikal seal resting on an ice floe, facing left.
+   *
+   * Poses are hind-flipper angles in radians (positive turns the tip down);
+   * every few seconds the `wag` sequence flicks the tail through them.
+   */
   var nerpa = {
     cellPx: 3.4,
     minCols: 76,
     maxCols: 210,
     align: 'end',
+    poses: [0, -0.09, -0.18, 0.08],
+    wag: { every: 7000, step: 120, sequence: [1, 2, 1, 0, 3, 0, 1, 2, 1, 0] },
     bounds: function () {
       return { width: 1000, height: 600 };
     },
-    paint: function (ctx) {
+    paint: function (ctx, bounds, pose) {
       // Ice floe and water.
       ctx.fillStyle = gray(0.16);
       ctx.beginPath();
@@ -178,12 +235,25 @@
         ctx.stroke();
       });
 
+      // The hind flippers are a separate lobe that overlaps the body and turns
+      // about the tail joint by the pose angle.
       var body = new Path2D(
         'M110 300 C112 180 210 118 300 122 C410 128 520 190 640 262 C730 318 820 352 872 372 ' +
-        'C910 338 952 300 982 306 C994 332 970 378 930 402 C972 420 994 456 978 480 ' +
-        'C950 490 905 468 868 440 C760 488 580 496 440 490 C330 486 230 452 185 400 ' +
+        'C892 394 890 420 868 440 C760 488 580 496 440 490 C330 486 230 452 185 400 ' +
         'C160 372 115 345 110 300 Z'
       );
+      body.addPath(
+        new Path2D(
+          'M872 372 C910 338 952 300 982 306 C994 332 970 378 930 402 C972 420 994 456 978 480 ' +
+          'C950 490 905 468 868 440 C848 420 850 392 872 372 Z'
+        ),
+        rotationAbout(pose || 0, TAIL_PIVOT[0], TAIL_PIVOT[1])
+      );
+      // Stroke under the fill so only the outer silhouette shows, not the
+      // seam where the flippers overlap the body.
+      ctx.strokeStyle = gray(0.95);
+      ctx.lineWidth = 22;
+      ctx.stroke(body);
       var shade = ctx.createLinearGradient(0, 120, 0, 492);
       shade.addColorStop(0, gray(0.56));
       shade.addColorStop(1, gray(0.2));
@@ -211,10 +281,6 @@
         ctx.fill();
       });
       ctx.restore();
-
-      ctx.strokeStyle = gray(0.95);
-      ctx.lineWidth = 11;
-      ctx.stroke(body);
 
       // Front flipper.
       ctx.save();
@@ -271,8 +337,8 @@
 
   var SCENES = { wordmark: wordmark, nerpa: nerpa };
 
-  /** Render one scene into a level grid sized for `cols` columns. */
-  function rasterize(scene, cols, documentRef) {
+  /** Render one scene pose into a level grid sized for `cols` columns. */
+  function rasterize(scene, cols, documentRef, pose) {
     var probe = documentRef.createElement('canvas').getContext('2d');
     var bounds = scene.bounds(probe);
     var rows = Math.max(1, Math.round((cols * bounds.height) / bounds.width / CELL_RATIO));
@@ -283,7 +349,7 @@
     ctx.fillStyle = '#000';
     ctx.fillRect(0, 0, canvas.width, canvas.height);
     ctx.scale(canvas.width / bounds.width, canvas.height / bounds.height);
-    scene.paint(ctx, bounds);
+    scene.paint(ctx, bounds, pose);
     var pixels = ctx.getImageData(0, 0, canvas.width, canvas.height).data;
 
     return { cols: cols, rows: rows, levels: sampleLevels(pixels, canvas.width, canvas.height, cols, rows) };
@@ -298,7 +364,10 @@
     var still = motion.matches;
     var grid = null;
     var cells = [];
+    var moving = [];
     var byIndex = new Map();
+    var pose = 0;
+    var wagStart = -1;
     var ramp = [];
     var hot = '';
     var cw = 0;
@@ -326,8 +395,20 @@
     function rebuild(width) {
       var cols = columnsFor(width, scene);
       if (grid && grid.cols === cols) return false;
-      grid = rasterize(scene, cols, documentRef);
-      cells = buildCells(grid.levels, SOURCE_TEXT);
+      var grids = (scene.poses || [0]).map(function (angle) {
+        return rasterize(scene, cols, documentRef, angle);
+      });
+      grid = grids[0];
+      cells = addPoses(
+        buildCells(grid.levels, SOURCE_TEXT),
+        grids.map(function (poseGrid) { return poseGrid.levels; }),
+        cols,
+        SOURCE_TEXT
+      );
+      moving = cells.filter(function (cell) {
+        return cell.levels.some(function (level) { return level !== cell.levels[0]; });
+      });
+      pose = 0;
       byIndex = new Map(cells.map(function (cell) { return [cell.y * grid.cols + cell.x, cell]; }));
 
       return true;
@@ -367,8 +448,22 @@
       var elapsed = now - started;
       var busy = false;
       var lastLevel = -1;
+      if (wagStart >= 0) {
+        var next = poseAt(scene.wag, now - wagStart);
+        if (next < 0) {
+          wagStart = -1;
+          scheduleWag();
+        } else {
+          busy = true;
+        }
+        setPose(Math.max(0, next));
+      }
       ctx.clearRect(0, 0, canvas.width, canvas.height);
       cells.forEach(function (cell) {
+        if (!cell.level) {
+          cell.heat = 0;
+          return;
+        }
         var px = ox + cell.x * cw + cw / 2;
         var py = oy + cell.y * ch + ch / 2;
         if (elapsed < cell.at) {
@@ -405,6 +500,27 @@
       if (!frame) frame = win.requestAnimationFrame(draw);
     }
 
+    /** Show pose `next`; only cells whose level differs between poses change. */
+    function setPose(next) {
+      if (next === pose) return;
+      pose = next;
+      moving.forEach(function (cell) { cell.level = cell.levels[pose]; });
+    }
+
+    /** Queue the next wag a few seconds out; skip it while still, hidden, or off screen. */
+    function scheduleWag() {
+      if (!scene.wag) return;
+      win.setTimeout(function () {
+        var rect = box.getBoundingClientRect();
+        if (still || documentRef.hidden || rect.bottom < 0 || rect.top > win.innerHeight) {
+          scheduleWag();
+          return;
+        }
+        wagStart = win.performance.now();
+        kick();
+      }, scene.wag.every * (0.7 + Math.random() * 0.6));
+    }
+
     function start() {
       if (live) return;
       live = true;
@@ -413,6 +529,7 @@
       box.classList.add('is-live');
       arrive(win.performance.now());
       kick();
+      scheduleWag();
     }
 
     if ('ResizeObserver' in win) {
@@ -442,6 +559,11 @@
       still = motion.matches;
       if (!still || !live) return;
       if (frame) win.cancelAnimationFrame(frame);
+      if (wagStart >= 0) {
+        wagStart = -1;
+        scheduleWag();
+      }
+      setPose(0);
       settle(cells);
       draw(win.performance.now());
     }
@@ -478,11 +600,15 @@
   }
 
   root.AgenttyGlyphArt = {
+    SCENES: SCENES,
     SOURCE_TEXT: SOURCE_TEXT,
+    addPoses: addPoses,
     buildCells: buildCells,
     columnsFor: columnsFor,
     heatAround: heatAround,
+    poseAt: poseAt,
     quantizeLevel: quantizeLevel,
+    rotationAbout: rotationAbout,
     sampleLevels: sampleLevels,
     settle: settle,
   };
