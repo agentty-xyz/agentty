@@ -8,6 +8,7 @@ mod uri;
 
 use std::path::PathBuf;
 
+#[cfg(any(test, feature = "test-utils"))]
 pub use backend::ClipboardBackend;
 pub use error::ClipboardError;
 pub use image_data::RgbaImageData;
@@ -33,7 +34,9 @@ impl Clipboard {
     /// Creates a clipboard reader over a caller-provided backend, such as an
     /// in-memory source in host tests.
     ///
-    /// Unlike [`Clipboard::new`], this ignores `AGENTTY_DISABLE_CLIPBOARD`.
+    /// Available with the `test-utils` feature. Unlike [`Clipboard::new`],
+    /// this ignores `AGENTTY_DISABLE_CLIPBOARD`.
+    #[cfg(any(test, feature = "test-utils"))]
     pub fn from_backend(backend: Box<dyn ClipboardBackend>) -> Self {
         Self { backend }
     }
@@ -78,7 +81,7 @@ impl Clipboard {
 
         let backend = backend_factory().into_backend_result()?;
 
-        Ok(Self::from_backend(backend))
+        Ok(Self { backend })
     }
 
     fn disabled_by_env() -> Option<ClipboardError> {
