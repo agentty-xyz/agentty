@@ -21,8 +21,8 @@ use crate::presentation::app_mode::{
     AppMode, ChatFocus, DiffRestoreTarget, DiffSidebarFocus, PromptModeSnapshot,
 };
 use crate::presentation::prompt::{
-    PendingImagePaste, PromptAtMentionState, PromptSlashStage, PromptSuggestionSelection,
-    apply_prompt_delete_range as apply_prompt_delete_range_components,
+    PendingImagePaste, PromptAtMentionState, PromptSlashStage, PromptSlashState,
+    PromptSuggestionSelection, apply_prompt_delete_range as apply_prompt_delete_range_components,
     current_line_delete_range as prompt_current_line_delete_range, drain_prompt_submission,
     insert_prompt_text, needs_space_after_image_placeholder, prompt_slash_option_count,
     resolve_prompt_slash_selection,
@@ -151,16 +151,14 @@ fn handle_chat_focus_key<B: Backend>(
 where
     B::Error: std::error::Error + Send + Sync + 'static,
 {
-    let AppMode::Prompt { focus, .. } = &app.mode else {
+    let AppMode::Prompt { focus, .. } = &mut app.mode else {
         return Ok(false);
     };
 
     match chat_scroll::classify_chat_focus_action(*focus, key) {
         None => Ok(false),
         Some(chat_scroll::ChatFocusAction::ToggleFocus) => {
-            if let AppMode::Prompt { focus, .. } = &mut app.mode {
-                chat_scroll::toggle_chat_focus(focus);
-            }
+            chat_scroll::toggle_chat_focus(focus);
 
             Ok(true)
         }
@@ -178,10 +176,7 @@ where
                 prompt_context.session_index,
                 Rect::new(0, 0, terminal_size.width, terminal_size.height),
             );
-
-            if let AppMode::Prompt { scroll_offset, .. } = &mut app.mode {
-                chat_scroll::apply_scroll_key(scroll_offset, metrics, key);
-            }
+            chat_scroll::apply_scroll_key_to_mode(&mut app.mode, metrics, key);
 
             Ok(true)
         }
@@ -340,7 +335,6 @@ fn apply_prompt_input_to_mode(mode: &mut AppMode, command: InputCommand) -> Vec<
         return apply_prompt_delete_to_mode(mode, start, end);
     }
 
-    let is_history_restore = matches!(command, InputCommand::Undo | InputCommand::Redo);
     let mut unreachable_attachments = Vec::new();
     if let AppMode::Prompt {
         attachment_state,
@@ -355,10 +349,12 @@ fn apply_prompt_input_to_mode(mode: &mut AppMode, command: InputCommand) -> Vec<
         let edit_span = prompt_command_edit_span(input, &command);
         let effect = input.apply(command);
         if effect == InputEffect::TextChanged {
-            if is_history_restore {
-                attachment_state.sync_after_history_restore(input);
-            } else if let Some((old_start, old_end, new_end)) = edit_span {
+            // Deletions return early above, so `Undo` and `Redo` are the only
+            // text-changing commands without an edit span.
+            if let Some((old_start, old_end, new_end)) = edit_span {
                 attachment_state.sync_after_edit(input, old_start, old_end, new_end);
+            } else {
+                attachment_state.sync_after_history_restore(input);
             }
             unreachable_attachments = attachment_state.prune_unreachable(input);
             history_state.reset_navigation();
@@ -509,16 +505,13 @@ fn prompt_context(app: &mut App) -> Option<PromptContext> {
     let session_mode = session.map_or(PromptSessionMode::Existing, |session| {
         let is_new_session = session.status == crate::domain::session::Status::Draft;
 
-        match (
-            is_new_session,
-            session.is_draft_session(),
-            session.has_staged_drafts(),
-        ) {
-            (true, true, _) => PromptSessionMode::NewDraft,
-            (true, false, false) if session.transient_messages.get(crate::domain::transient_message::TransientMessageSlot::WorkspacePreparation).is_some() => PromptSessionMode::NewRegular,
-            (true, false, false) => PromptSessionMode::NewDeletable,
-            (true, false, true) => PromptSessionMode::NewRegular,
-            (false, _, _) => PromptSessionMode::Existing,
+        // Staged drafts exist only on draft sessions, so a new regular session
+        // is kept only while its workspace preparation is visible.
+        match (is_new_session, session.is_draft_session()) {
+            (true, true) => PromptSessionMode::NewDraft,
+            (true, false) if session.transient_messages.get(crate::domain::transient_message::TransientMessageSlot::WorkspacePreparation).is_some() => PromptSessionMode::NewRegular,
+            (true, false) => PromptSessionMode::NewDeletable,
+            (false, _) => PromptSessionMode::Existing,
         }
     });
     // While the session is `InProgress` or `Rebasing` the composer queues the
@@ -560,10 +553,6 @@ fn is_active_at_mention(
 /// This keeps previously inserted `@path` tokens editable after the user types
 /// more text elsewhere and later moves the cursor back into the mention.
 fn sync_prompt_at_mention_state(app: &mut App) {
-    let Some(prompt_context) = prompt_context(app) else {
-        return;
-    };
-
     let sync_action = match &app.mode {
         AppMode::Prompt {
             at_mention_state,
@@ -572,28 +561,43 @@ fn sync_prompt_at_mention_state(app: &mut App) {
         } => at_mention::sync_action(input, at_mention_state.as_ref()),
         _ => return,
     };
+    let Some(prompt_context) = prompt_context(app) else {
+        return;
+    };
 
     match sync_action {
         at_mention::AtMentionSyncAction::Activate if !prompt_context.is_slash_command() => {
             activate_at_mention(app, &prompt_context);
         }
         at_mention::AtMentionSyncAction::Dismiss => dismiss_at_mention(app),
-        at_mention::AtMentionSyncAction::KeepOpen => {
-            if let AppMode::Prompt {
-                at_mention_state: Some(state),
-                ..
-            } = &mut app.mode
-            {
-                at_mention::reset_selection(state);
-            }
-        }
+        at_mention::AtMentionSyncAction::KeepOpen => reset_at_mention_selection(&mut app.mode),
         at_mention::AtMentionSyncAction::Activate => {}
     }
 }
 
+/// Highlights the first entry of an open prompt `@` mention dropdown.
+///
+/// Other modes and a closed dropdown are left unchanged.
+fn reset_at_mention_selection(mode: &mut AppMode) {
+    if let AppMode::Prompt {
+        at_mention_state: Some(state),
+        ..
+    } = mode
+    {
+        at_mention::reset_selection(state);
+    }
+}
+
 fn reset_prompt_slash_state(app: &mut App) {
-    if let AppMode::Prompt { slash_state, .. } = &mut app.mode {
-        slash_state.reset();
+    update_prompt_slash_state(&mut app.mode, PromptSlashState::reset);
+}
+
+/// Applies `update` to the prompt slash-command state.
+///
+/// Other modes are left unchanged.
+fn update_prompt_slash_state(mode: &mut AppMode, update: impl FnOnce(&mut PromptSlashState)) {
+    if let AppMode::Prompt { slash_state, .. } = mode {
+        update(slash_state);
     }
 }
 
@@ -779,14 +783,15 @@ fn move_prompt_slash_selection(app: &mut App, is_next: bool) {
         return;
     }
 
-    if let AppMode::Prompt { slash_state, .. } = &mut app.mode {
-        let selected_index = selected_index.min(option_count - 1);
-        slash_state.selected_index = if is_next {
-            (selected_index + 1) % option_count
-        } else {
-            selected_index.checked_sub(1).unwrap_or(option_count - 1)
-        };
-    }
+    let selected_index = selected_index.min(option_count - 1);
+    let selected_index = if is_next {
+        (selected_index + 1) % option_count
+    } else {
+        selected_index.checked_sub(1).unwrap_or(option_count - 1)
+    };
+    update_prompt_slash_state(&mut app.mode, |slash_state| {
+        slash_state.selected_index = selected_index;
+    });
 }
 
 /// Submits the active prompt when it passes prompt-mode validation.
@@ -989,11 +994,11 @@ async fn handle_prompt_slash_submit(app: &mut App, prompt_context: &PromptContex
             }
         }
         Some(PromptSuggestionSelection::Agent(selected_agent)) => {
-            if let AppMode::Prompt { slash_state, .. } = &mut app.mode {
+            update_prompt_slash_state(&mut app.mode, |slash_state| {
                 slash_state.selected_agent = Some(selected_agent);
                 slash_state.stage = PromptSlashStage::Model;
                 slash_state.selected_index = 0;
-            }
+            });
         }
         Some(PromptSuggestionSelection::Model(selected_agent)) => {
             clear_prompt_slash_input(app).await;
@@ -1119,11 +1124,16 @@ fn open_prompt_permission_mode_stage(app: &mut App, session_index: usize) {
         .position(|permission_mode| *permission_mode == selected_permission_mode)
         .unwrap_or(0);
 
-    if let AppMode::Prompt { slash_state, .. } = &mut app.mode {
-        slash_state.stage = PromptSlashStage::Mode;
+    open_prompt_slash_stage(&mut app.mode, PromptSlashStage::Mode, selected_index);
+}
+
+/// Opens one slash-command stage with `selected_index` highlighted.
+fn open_prompt_slash_stage(mode: &mut AppMode, stage: PromptSlashStage, selected_index: usize) {
+    update_prompt_slash_state(mode, |slash_state| {
+        slash_state.stage = stage;
         slash_state.selected_agent = None;
         slash_state.selected_index = selected_index;
-    }
+    });
 }
 
 /// Opens `/reasoning` with the effective session level preselected.
@@ -1138,11 +1148,7 @@ fn open_prompt_reasoning_stage(app: &mut App, session_index: usize) {
         .position(|level| *level == selected_reasoning_level)
         .unwrap_or(0);
 
-    if let AppMode::Prompt { slash_state, .. } = &mut app.mode {
-        slash_state.stage = PromptSlashStage::Reasoning;
-        slash_state.selected_agent = None;
-        slash_state.selected_index = selected_index;
-    }
+    open_prompt_slash_stage(&mut app.mode, PromptSlashStage::Reasoning, selected_index);
 }
 
 /// Opens `/style` with the current session preference preselected.
@@ -1155,11 +1161,7 @@ fn open_prompt_response_style_stage(app: &mut App, session_index: usize) {
         .position(|response_style| *response_style == selected_response_style)
         .unwrap_or(0);
 
-    if let AppMode::Prompt { slash_state, .. } = &mut app.mode {
-        slash_state.stage = PromptSlashStage::Style;
-        slash_state.selected_agent = None;
-        slash_state.selected_index = selected_index;
-    }
+    open_prompt_slash_stage(&mut app.mode, PromptSlashStage::Style, selected_index);
 }
 
 /// Applies the navigation requested by one app-layer prompt workflow.
@@ -1214,11 +1216,18 @@ pub(crate) fn paste_image_into_active_prompt(app: &mut App, session_id: &Session
         session_id: session_id.clone(),
     });
 
+    mark_prompt_image_paste_pending(&mut app.mode, request_id);
+}
+
+/// Anchors one running clipboard-image capture at the prompt cursor.
+///
+/// Other modes are left unchanged.
+fn mark_prompt_image_paste_pending(mode: &mut AppMode, request_id: u64) {
     if let AppMode::Prompt {
         attachment_state,
         input,
         ..
-    } = &mut app.mode
+    } = mode
     {
         attachment_state.pending_image_paste = Some(PendingImagePaste {
             anchor: Some(input.cursor),
@@ -1355,19 +1364,22 @@ fn apply_prompt_delete_to_mode(
 /// Draft sessions in `Draft` state defer worktree creation. Regular drafts
 /// index the active project working directory, while stacked drafts index the
 /// parent worktree until their own folder is materialized.
+///
+/// Other modes are left unchanged and load no entries.
 fn activate_at_mention(app: &mut App, prompt_context: &PromptContext) {
+    let AppMode::Prompt {
+        at_mention_state, ..
+    } = &mut app.mode
+    else {
+        return;
+    };
+    *at_mention_state = Some(PromptAtMentionState::new(Vec::new()));
+
     let lookup_root = app.at_mention_lookup_root(&prompt_context.session_id);
     let session_id = prompt_context.session_id.clone();
     let event_tx = app.services.event_sender();
 
     at_mention::start_loading_entries(event_tx, lookup_root, session_id, &mut app.sessions);
-
-    if let AppMode::Prompt {
-        at_mention_state, ..
-    } = &mut app.mode
-    {
-        *at_mention_state = Some(PromptAtMentionState::new(Vec::new()));
-    }
 }
 
 /// Clears the at-mention state.

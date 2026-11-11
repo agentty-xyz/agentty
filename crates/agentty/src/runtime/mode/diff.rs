@@ -507,18 +507,16 @@ fn sync_comment_at_mention(app: &mut App) {
     let Some(index) = line_comments.editing_index else {
         return;
     };
-    match at_mention::sync_action(
-        &line_comments.comments[index].input,
-        line_comments.at_mention_state.as_deref(),
-    ) {
-        at_mention::AtMentionSyncAction::Dismiss => line_comments.at_mention_state = None,
-        at_mention::AtMentionSyncAction::KeepOpen => {
-            if let Some(state) = &mut line_comments.at_mention_state {
-                at_mention::reset_selection(state);
-            }
-        }
-        at_mention::AtMentionSyncAction::Activate => {
-            line_comments.at_mention_state = Some(Box::new(PromptAtMentionState::new(Vec::new())));
+    // Mirrors `at_mention::sync_action` while binding the open dropdown.
+    let has_mention_query = line_comments.comments[index]
+        .input
+        .at_mention_query()
+        .is_some();
+    match (has_mention_query, &mut line_comments.at_mention_state) {
+        (false, at_mention_state) => *at_mention_state = None,
+        (true, Some(state)) => at_mention::reset_selection(state),
+        (true, at_mention_state @ None) => {
+            *at_mention_state = Some(Box::new(PromptAtMentionState::new(Vec::new())));
             let session_id = session_id.clone();
             let lookup_root = app.at_mention_lookup_root(&session_id);
             at_mention::start_loading_entries(
@@ -751,16 +749,15 @@ fn apply_navigation_key(
             return DiffNavigationAction::TogglePreview;
         }
         KeyCode::Char('c')
-            if *navigation.focus == DiffFocus::Files
-                && is_plain_char_key(key, 'c')
-                && navigation.review_comments.is_some() =>
+            if *navigation.focus == DiffFocus::Files && is_plain_char_key(key, 'c') =>
         {
-            *navigation.focus = DiffFocus::Files;
-            focus_review_comments(
-                navigation.review_comments,
-                navigation.scroll_cache,
-                navigation.scroll_offset,
-            );
+            if let Some(review_comments) = navigation.review_comments.as_mut() {
+                focus_review_comments(
+                    review_comments,
+                    navigation.scroll_cache,
+                    navigation.scroll_offset,
+                );
+            }
         }
         _ => {}
     }
@@ -1014,13 +1011,11 @@ fn selected_preview_is_visible(
 }
 
 fn focus_review_comments(
-    review_comments: &mut Option<DiffReviewComments>,
+    review_comments: &mut DiffReviewComments,
     scroll_cache: &mut Option<DiffScrollCache>,
     scroll_offset: &mut u16,
 ) {
-    if let Some(review_comments) = review_comments {
-        review_comments.sidebar_focus = DiffSidebarFocus::Comments;
-    }
+    review_comments.sidebar_focus = DiffSidebarFocus::Comments;
     *scroll_cache = None;
     *scroll_offset = 0;
 }

@@ -20,38 +20,80 @@ use crate::ui::page;
 
 #[test]
 fn test_navigation_escape_returns_changed_line_focus_to_files() {
-    // Arrange
-    let mut mode = AppMode::Diff {
-        diff: scrollable_diff_fixture(),
-        file_explorer_selected_index: 0,
-        focus: DiffFocus::Content,
-        line_comments: DiffLineComments::default(),
-        preview: DiffPreview::default(),
-        review_comments: None,
-        restore: None,
-        scroll_cache: None,
-        scroll_offset: 4,
-        selected_diff_line_index: 8,
-        session_id: "session-id".into(),
-    };
-
-    // Act
-    let action = navigate(
-        &mut mode,
-        TEST_TERMINAL_SIZE,
-        KeyEvent::new(KeyCode::Esc, KeyModifiers::NONE),
-    );
-
-    // Assert
-    assert_eq!(action, DiffNavigationAction::None);
-    assert!(matches!(
-        mode,
-        AppMode::Diff {
-            focus: DiffFocus::Files,
+    for key_code in [KeyCode::Esc, KeyCode::Left] {
+        // Arrange
+        let mut mode = AppMode::Diff {
+            diff: scrollable_diff_fixture(),
+            file_explorer_selected_index: 0,
+            focus: DiffFocus::Content,
+            line_comments: DiffLineComments::default(),
+            preview: DiffPreview::default(),
+            review_comments: None,
+            restore: None,
+            scroll_cache: None,
+            scroll_offset: 4,
             selected_diff_line_index: 8,
-            ..
-        }
-    ));
+            session_id: "session-id".into(),
+        };
+
+        // Act
+        let action = navigate(
+            &mut mode,
+            TEST_TERMINAL_SIZE,
+            KeyEvent::new(key_code, KeyModifiers::NONE),
+        );
+
+        // Assert
+        assert_eq!(action, DiffNavigationAction::None);
+        assert!(matches!(
+            mode,
+            AppMode::Diff {
+                focus: DiffFocus::Files,
+                selected_diff_line_index: 8,
+                ..
+            }
+        ));
+    }
+}
+
+#[test]
+fn file_keys_without_another_file_or_review_comments_keep_the_view() {
+    for key_code in [KeyCode::Char('j'), KeyCode::Char('c')] {
+        // Arrange
+        let mut mode = AppMode::Diff {
+            diff: "diff --git a/README.md b/README.md\n+first\n".to_string(),
+            file_explorer_selected_index: 0,
+            focus: DiffFocus::Files,
+            line_comments: DiffLineComments::default(),
+            preview: DiffPreview::default(),
+            review_comments: None,
+            restore: None,
+            scroll_cache: None,
+            scroll_offset: 4,
+            selected_diff_line_index: 8,
+            session_id: "session-id".into(),
+        };
+
+        // Act
+        let action = navigate(
+            &mut mode,
+            TEST_TERMINAL_SIZE,
+            KeyEvent::new(key_code, KeyModifiers::NONE),
+        );
+
+        // Assert
+        assert_eq!(action, DiffNavigationAction::None);
+        assert!(matches!(
+            mode,
+            AppMode::Diff {
+                file_explorer_selected_index: 0,
+                focus: DiffFocus::Files,
+                scroll_offset: 4,
+                selected_diff_line_index: 8,
+                ..
+            }
+        ));
+    }
 }
 
 #[tokio::test]

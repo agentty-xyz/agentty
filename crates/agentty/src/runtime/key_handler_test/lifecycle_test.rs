@@ -366,6 +366,91 @@ async fn test_handle_confirmation_decision_confirm_opens_continuation_draft_prom
     );
 }
 
+/// Builds one confirmation overlay that restores the `restore-session` view.
+fn session_confirmation(
+    confirmation_intent: ConfirmationIntent,
+    session_id: Option<&str>,
+) -> AppMode {
+    AppMode::Confirmation {
+        confirmation_intent,
+        confirmation_message: "Confirm?".to_string(),
+        confirmation_title: "Confirm".to_string(),
+        restore_view: Some(ConfirmationViewMode {
+            scroll_offset: Some(4),
+            session_id: "restore-session".into(),
+        }),
+        session_id: session_id.map(Into::into),
+        selected_confirmation_index: 0,
+    }
+}
+
+#[tokio::test]
+async fn unavailable_continue_and_fork_sources_restore_the_view() {
+    for confirmation_intent in [
+        ConfirmationIntent::ContinueSession,
+        ConfirmationIntent::ForkSession,
+    ] {
+        for session_id in [None, Some("missing-session")] {
+            // Arrange
+            let mut app = crate::test_support::new_test_app_without_retained_base_dir().await;
+            app.mode = session_confirmation(confirmation_intent, session_id);
+
+            // Act
+            let event_result =
+                handle_confirmation_decision(&mut app, ConfirmationDecision::Confirm).await;
+
+            // Assert
+            assert!(matches!(event_result, Ok(EventResult::Continue)));
+            assert!(matches!(
+                app.mode,
+                AppMode::View {
+                    ref session_id,
+                    scroll_offset: Some(4),
+                } if session_id == "restore-session"
+            ));
+            assert!(app.sessions.sessions().is_empty());
+        }
+    }
+}
+
+#[tokio::test]
+async fn confirmed_fork_opens_the_forked_session() {
+    // Arrange
+    let (mut app, _base_dir) = crate::test_support::new_git_test_app_with_mock_tmux_client().await;
+    let source_session_id = app
+        .create_session()
+        .await
+        .expect("failed to create source session");
+    app.services
+        .db()
+        .sessions()
+        .update_session_status_with_timing_at(
+            &source_session_id,
+            &crate::domain::session::Status::Review.to_string(),
+            0,
+        )
+        .await
+        .expect("failed to mark source as review");
+    crate::test_support::set_session_status_for_test(
+        &mut app,
+        &source_session_id,
+        crate::domain::session::Status::Review,
+    );
+    app.mode = session_confirmation(ConfirmationIntent::ForkSession, Some(&source_session_id));
+
+    // Act
+    let event_result = handle_confirmation_decision(&mut app, ConfirmationDecision::Confirm).await;
+    crate::test_support::finish_session_creation_tasks(&mut app).await;
+
+    // Assert
+    assert!(matches!(event_result, Ok(EventResult::Continue)));
+    assert!(matches!(
+        app.mode,
+        AppMode::View { ref session_id, .. } if session_id.as_str() != source_session_id
+    ));
+    assert_eq!(app.sessions.sessions().len(), 2);
+}
+
 #[tokio::test]
 async fn test_handle_session_creation_key_creates_harness_session_when_available() {
     // Arrange

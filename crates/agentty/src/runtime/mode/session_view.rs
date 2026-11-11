@@ -283,7 +283,7 @@ pub(crate) async fn handle_with_cache<B: Backend>(
 where
     B::Error: std::error::Error + Send + Sync + 'static,
 {
-    let Some(view_context) = view_context(app) else {
+    let Some((view_context, view_session_snapshot)) = view_key_state(app) else {
         return Ok(EventResult::Continue);
     };
     let mut pending_update = ViewPendingUpdate::from_context(&view_context);
@@ -295,9 +295,6 @@ where
         return Ok(EventResult::Continue);
     }
 
-    let Some(view_session_snapshot) = view_session_snapshot(app, &view_context) else {
-        return Ok(EventResult::Continue);
-    };
     let view_key_context = ViewKeyContext {
         context: &view_context,
         session_snapshot: &view_session_snapshot,
@@ -512,14 +509,10 @@ async fn handle_workflow_view_key(
         }
         KeyCode::Char(character)
             if character.eq_ignore_ascii_case(&'p')
-                && !key.modifiers.contains(event::KeyModifiers::CONTROL)
-                && view_session_snapshot.publish_pull_request_action.is_some() =>
+                && !key.modifiers.contains(event::KeyModifiers::CONTROL) =>
         {
-            let Some(publish_pull_request_action) =
-                view_session_snapshot.publish_pull_request_action
-            else {
-                return Some(true);
-            };
+            // Without a publish action `p` has no session-view meaning.
+            let publish_pull_request_action = view_session_snapshot.publish_pull_request_action?;
             open_publish_branch_input(
                 &mut app.mode,
                 &app.sessions,
@@ -999,6 +992,16 @@ fn view_context(app: &mut App) -> Option<ViewContext> {
     ViewContext::from_mode(&mut app.mode, &app.sessions)
 }
 
+/// Resolves the active view context together with its session snapshot.
+///
+/// Returns `None` when the app is not viewing a loaded session.
+fn view_key_state(app: &mut App) -> Option<(ViewContext, ViewSessionSnapshot)> {
+    let view_context = view_context(app)?;
+    let view_session_snapshot = view_session_snapshot(app, &view_context)?;
+
+    Some((view_context, view_session_snapshot))
+}
+
 fn view_metrics<B: Backend>(
     app: &App,
     render_cache_store: &RenderCacheStore,
@@ -1090,16 +1093,12 @@ fn show_diff_for_view_session(app: &mut App, view_context: &ViewContext) -> bool
     )
 }
 
-/// Starts session sync and reports whether the rebase command was accepted.
-async fn rebase_view_session(app: &mut App, session_id: &str) -> bool {
+/// Starts session sync and reports a rejected rebase in the transcript.
+async fn rebase_view_session(app: &mut App, session_id: &str) {
     if let Err(error) = app.rebase_session(session_id).await {
         app.append_output_for_session(session_id, &TranscriptNotice::RebaseError.format(error))
             .await;
-
-        return false;
     }
-
-    true
 }
 
 #[cfg(test)]

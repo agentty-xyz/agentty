@@ -1,3 +1,4 @@
+use std::collections::HashMap;
 use std::future::Future;
 use std::io;
 use std::io::ErrorKind;
@@ -17,12 +18,16 @@ use super::{
     process_events, process_events_with_handler, process_events_with_scroll_handler,
     process_paste_event, spawn_event_reader, spawn_event_reader_with_source,
 };
-use crate::app::{App, AppEvent};
+use crate::app::session::{SESSION_REFRESH_INTERVAL, SessionDefaults};
+use crate::app::{App, AppEvent, SessionManager, SessionState};
+use crate::domain::agent::AgentKind;
 use crate::domain::input::InputState;
 use crate::domain::question::QuestionItem;
+use crate::domain::selection::SelectionState;
 use crate::domain::session::{Session, SessionSize, SessionStats, Status};
 use crate::domain::transient_message::TransientMessageStore;
 use crate::infra::clock::Clock;
+use crate::infra::resource::MockResourceClient;
 use crate::presentation::app_mode::{
     AppMode, ChatFocus, DiffFocus, DiffLineCommentAnchor, DiffLineCommentTarget, DiffLineComments,
     DiffLineSide, DiffPreview,
@@ -831,6 +836,7 @@ async fn test_process_events_with_handler_drives_app_runtime_events() {
 #[tokio::test]
 async fn test_process_events_with_handler_keeps_events_over_budget_queued() {
     // Arrange
+    crate::test_support::enable_tracing_log_fallback();
     let mut app = crate::test_support::new_test_app_without_retained_base_dir().await;
     let mut terminal = ();
     let (event_tx, mut event_rx) = mpsc::unbounded_channel();
@@ -936,6 +942,75 @@ impl Clock for BatchClock {
     fn now_system_time(&self) -> std::time::SystemTime {
         std::time::SystemTime::UNIX_EPOCH
     }
+}
+
+/// Verifies an idle tick that reloads changed session metadata marks the
+/// frame dirty.
+#[tokio::test]
+async fn idle_tick_marks_the_frame_dirty_after_a_session_refresh() {
+    // Arrange
+    let mut app = crate::test_support::new_test_app_without_retained_base_dir().await;
+    let session_clock = Arc::new(BatchClock {
+        elapsed_millis: AtomicUsize::new(0),
+        start: std::time::Instant::now(),
+    });
+    let mut resource_client = MockResourceClient::new();
+    resource_client.expect_sample().returning(|| None);
+    let stale_session = crate::test_support::SessionFixtureBuilder::new()
+        .id("stale-session")
+        .build();
+    app.sessions = SessionManager::new(
+        SessionDefaults {
+            model: AgentKind::Codex.default_model(),
+        },
+        Arc::new(ag_git::MockGitClient::new()),
+        SessionState::new(
+            HashMap::new(),
+            vec![stale_session],
+            SelectionState::default(),
+            session_clock.clone(),
+            1,
+            0,
+        ),
+        Vec::new(),
+    )
+    .with_resource_client(Arc::new(resource_client))
+    .into();
+    let refresh_due_millis =
+        usize::try_from(SESSION_REFRESH_INTERVAL.as_millis()).expect("interval fits usize");
+    session_clock
+        .elapsed_millis
+        .store(refresh_due_millis, Ordering::Relaxed);
+    app.clear_redraw();
+    let (_event_tx, mut event_rx) = mpsc::unbounded_channel::<Event>();
+    let mut tick = tokio::time::interval(Duration::from_mins(1));
+    // The tick must be the only ready loop signal so the refresh path runs.
+    assert!(
+        tokio::time::timeout(Duration::ZERO, app.next_runtime_event())
+            .await
+            .is_err(),
+        "no runtime event should be pending"
+    );
+
+    // Act
+    let result = process_events_with_handler(
+        &crate::test_support::FixedClock::unix_epoch(),
+        &mut app,
+        &mut (),
+        &mut event_rx,
+        &mut tick,
+        |_, (), event| {
+            assert!(event.is_none());
+
+            Box::pin(async { Ok(EventResult::Continue) })
+        },
+    )
+    .await;
+
+    // Assert
+    assert!(matches!(result, Ok(EventResult::Continue)));
+    assert!(app.needs_redraw());
+    assert!(app.sessions.sessions().is_empty());
 }
 
 #[tokio::test]

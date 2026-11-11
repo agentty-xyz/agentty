@@ -4,20 +4,30 @@ use crossterm::event;
 use crossterm::event::{KeyCode, KeyEvent};
 
 use super::super::{
-    handle_prompt_slash_submit, is_plain_char_key, prompt_context, take_prompt_snapshot,
+    activate_at_mention, apply_prompt_delete_to_mode, apply_prompt_paste_to_mode,
+    clear_prompt_slash_input, dismiss_at_mention, exit_to_list_saving_progress,
+    handle_at_mention_down, handle_at_mention_select, handle_at_mention_up, handle_prompt_down_key,
+    handle_prompt_slash_submit, handle_prompt_up_key, handle_with_cache, is_plain_char_key,
+    mark_prompt_image_paste_pending, move_prompt_slash_selection, prompt_context,
+    reset_at_mention_selection, sync_prompt_at_mention_state, take_prompt_snapshot,
+    update_prompt_slash_state,
 };
 use super::support::{
     apply_next_session_diff, install_mock_fs_client, install_mock_git_client, new_test_prompt_app,
-    press_prompt_key, prompt_focus,
+    new_test_prompt_mode, press_prompt_key, prompt_focus, test_terminal,
 };
+use crate::app::App;
 use crate::domain::agent::AgentKind;
 use crate::domain::composer::PromptAttachment;
+use crate::domain::file_entry::FileEntry;
 use crate::domain::input::InputState;
 use crate::infra::fs;
 use crate::presentation::app_mode::{AppMode, ChatFocus};
 use crate::presentation::prompt::{
-    PromptAttachmentState, PromptHistoryState, PromptSlashStage, PromptSlashState,
+    PromptAtMentionState, PromptAttachmentState, PromptHistoryState, PromptSlashStage,
+    PromptSlashState,
 };
+use crate::ui::RenderCacheStore;
 
 #[tokio::test]
 async fn test_handle_apply_command_invalidates_cache_when_diff_hash_mismatches() {
@@ -272,4 +282,254 @@ fn test_is_plain_char_key_rejects_other_character() {
 
     // Assert
     assert!(!result);
+}
+
+/// Sends one key event, including modifiers, through the prompt handler.
+async fn press_prompt_event(app: &mut App, key: KeyEvent) {
+    let mut terminal = test_terminal();
+
+    handle_with_cache(app, &RenderCacheStore::default(), &mut terminal, key)
+        .await
+        .expect("prompt key handling failed");
+}
+
+/// Returns the composer text and cursor, panicking outside prompt mode.
+fn prompt_input(app: &App) -> (String, usize) {
+    let AppMode::Prompt { input, .. } = &app.mode else {
+        unreachable!("expected AppMode::Prompt");
+    };
+
+    (input.text().to_string(), input.cursor)
+}
+
+/// Returns the open `@` mention selection, or `None` when it is closed.
+fn mention_selection(app: &App) -> Option<usize> {
+    let AppMode::Prompt {
+        at_mention_state, ..
+    } = &app.mode
+    else {
+        unreachable!("expected AppMode::Prompt");
+    };
+
+    at_mention_state.as_ref().map(|state| state.selected_index)
+}
+
+/// Builds an open mention dropdown over two `src` files.
+fn src_mention_state(selected_index: usize) -> PromptAtMentionState {
+    let mut state = PromptAtMentionState::new(vec![
+        FileEntry {
+            is_dir: false,
+            path: "src/alpha.rs".to_string(),
+        },
+        FileEntry {
+            is_dir: false,
+            path: "src/beta.rs".to_string(),
+        },
+    ]);
+    state.selected_index = selected_index;
+
+    state
+}
+
+#[tokio::test]
+async fn cancel_keys_close_a_blank_new_session() {
+    for key in [
+        KeyEvent::new(KeyCode::Esc, event::KeyModifiers::NONE),
+        KeyEvent::new(KeyCode::Char('c'), event::KeyModifiers::CONTROL),
+    ] {
+        // Arrange
+        let (mut app, _base_dir) = new_test_prompt_app("", None).await;
+
+        // Act
+        press_prompt_event(&mut app, key).await;
+
+        // Assert
+        assert!(matches!(app.mode, AppMode::List));
+        assert!(app.sessions.sessions().is_empty());
+    }
+}
+
+#[tokio::test]
+async fn history_and_unbound_keys_keep_a_single_line_draft() {
+    for key in [
+        KeyEvent::new(KeyCode::Char('p'), event::KeyModifiers::CONTROL),
+        KeyEvent::new(KeyCode::Char('n'), event::KeyModifiers::CONTROL),
+        KeyEvent::new(KeyCode::F(1), event::KeyModifiers::NONE),
+    ] {
+        // Arrange
+        let (mut app, _base_dir) = new_test_prompt_app("draft", None).await;
+
+        // Act
+        press_prompt_event(&mut app, key).await;
+
+        // Assert
+        assert_eq!(prompt_input(&app), ("draft".to_string(), 5));
+    }
+}
+
+#[tokio::test]
+async fn vertical_keys_move_between_draft_lines() {
+    // Arrange
+    let (mut app, _base_dir) = new_test_prompt_app("first\nsecond", None).await;
+
+    // Act
+    press_prompt_key(&mut app, KeyCode::Up).await;
+    let (_, cursor_after_up) = prompt_input(&app);
+    press_prompt_key(&mut app, KeyCode::Down).await;
+
+    // Assert
+    let (text, cursor_after_down) = prompt_input(&app);
+    assert_eq!(text, "first\nsecond");
+    assert!(cursor_after_up <= "first".chars().count());
+    assert!(cursor_after_down > "first\n".chars().count());
+}
+
+#[tokio::test]
+async fn vim_keys_move_the_slash_menu_selection() {
+    // Arrange
+    let (mut app, _base_dir) = new_test_prompt_app("/", None).await;
+
+    // Act
+    press_prompt_key(&mut app, KeyCode::Char('j')).await;
+    let selection_after_j = prompt_slash_selection(&app);
+    press_prompt_key(&mut app, KeyCode::Char('k')).await;
+
+    // Assert
+    assert_eq!(selection_after_j, 1);
+    assert_eq!(prompt_slash_selection(&app), 0);
+    assert_eq!(prompt_input(&app).0, "/");
+}
+
+/// Returns the highlighted slash-menu row, panicking outside prompt mode.
+fn prompt_slash_selection(app: &App) -> usize {
+    let AppMode::Prompt { slash_state, .. } = &app.mode else {
+        unreachable!("expected AppMode::Prompt");
+    };
+
+    slash_state.selected_index
+}
+
+#[tokio::test]
+async fn mention_dropdown_claims_navigation_and_completion_keys() {
+    // Arrange
+    let (mut app, _base_dir) = new_test_prompt_app("@src", Some(src_mention_state(0))).await;
+
+    // Act
+    press_prompt_key(&mut app, KeyCode::Down).await;
+    let selection_after_down = mention_selection(&app);
+    press_prompt_key(&mut app, KeyCode::Up).await;
+    let selection_after_up = mention_selection(&app);
+    press_prompt_key(&mut app, KeyCode::Tab).await;
+
+    // Assert
+    assert_eq!(selection_after_down, Some(1));
+    assert_eq!(selection_after_up, Some(0));
+    // Fuzzy ranking lists the shorter matching path first.
+    assert_eq!(prompt_input(&app).0, "@src/beta.rs ");
+    assert_eq!(mention_selection(&app), None);
+}
+
+#[tokio::test]
+async fn escape_closes_the_mention_dropdown_and_keeps_the_draft() {
+    // Arrange
+    let (mut app, _base_dir) = new_test_prompt_app("@src", Some(src_mention_state(1))).await;
+
+    // Act
+    press_prompt_key(&mut app, KeyCode::Esc).await;
+
+    // Assert
+    assert_eq!(mention_selection(&app), None);
+    assert_eq!(prompt_input(&app).0, "@src");
+    assert_eq!(app.sessions.sessions().len(), 1);
+}
+
+#[tokio::test]
+async fn typing_inside_an_open_mention_resets_its_selection() {
+    // Arrange
+    let (mut app, _base_dir) = new_test_prompt_app("@sr", Some(src_mention_state(1))).await;
+
+    // Act
+    press_prompt_key(&mut app, KeyCode::Char('c')).await;
+
+    // Assert
+    assert_eq!(prompt_input(&app).0, "@src");
+    assert_eq!(mention_selection(&app), Some(0));
+}
+
+#[tokio::test]
+async fn mentions_do_not_open_inside_slash_commands() {
+    // Arrange
+    let (mut app, _base_dir) = new_test_prompt_app("/model ", None).await;
+
+    // Act
+    press_prompt_key(&mut app, KeyCode::Char('@')).await;
+
+    // Assert
+    assert_eq!(prompt_input(&app).0, "/model @");
+    assert_eq!(mention_selection(&app), None);
+}
+
+#[tokio::test]
+async fn keys_for_a_missing_prompt_session_return_to_the_list() {
+    // Arrange
+    let (mut app, _base_dir) = new_test_prompt_app("draft", None).await;
+    app.mode = new_test_prompt_mode("draft");
+
+    // Act
+    press_prompt_key(&mut app, KeyCode::Char('x')).await;
+
+    // Assert
+    assert!(matches!(app.mode, AppMode::List));
+}
+
+#[tokio::test]
+async fn prompt_helpers_leave_other_modes_unchanged() {
+    // Arrange
+    let (mut app, _base_dir) = new_test_prompt_app("draft", None).await;
+    let prompt_context = prompt_context(&mut app).expect("expected prompt context");
+    let terminal = test_terminal();
+    app.mode = new_test_prompt_mode("draft");
+
+    // Act
+    sync_prompt_at_mention_state(&mut app);
+    let mode_after_missing_session_sync = matches!(app.mode, AppMode::List);
+    exit_to_list_saving_progress(&mut app);
+    sync_prompt_at_mention_state(&mut app);
+    activate_at_mention(&mut app, &prompt_context);
+    dismiss_at_mention(&mut app);
+    handle_at_mention_up(&mut app);
+    handle_at_mention_down(&mut app);
+    handle_at_mention_select(&mut app).await;
+    clear_prompt_slash_input(&mut app).await;
+    move_prompt_slash_selection(&mut app, true);
+    handle_prompt_up_key(&mut app, &terminal, &prompt_context).expect("up key should not fail");
+    handle_prompt_down_key(&mut app, &terminal, &prompt_context).expect("down key should not fail");
+
+    // Assert
+    assert!(mode_after_missing_session_sync);
+    assert!(matches!(app.mode, AppMode::List));
+    assert!(
+        !app.restore_prompt_progress(&prompt_context.session_id)
+            .await
+    );
+}
+
+#[test]
+fn prompt_reducers_leave_other_modes_unchanged() {
+    // Arrange
+    let mut mode = AppMode::List;
+    let mut slash_state_updated = false;
+
+    // Act
+    let paste_cleanup = apply_prompt_paste_to_mode(&mut mode, "pasted");
+    let delete_cleanup = apply_prompt_delete_to_mode(&mut mode, 0, 1);
+    reset_at_mention_selection(&mut mode);
+    update_prompt_slash_state(&mut mode, |_| slash_state_updated = true);
+    mark_prompt_image_paste_pending(&mut mode, 7);
+
+    // Assert
+    assert_eq!(paste_cleanup, Some(Vec::new()));
+    assert_eq!(delete_cleanup, Vec::<PromptAttachment>::new());
+    assert!(!slash_state_updated);
+    assert!(matches!(mode, AppMode::List));
 }

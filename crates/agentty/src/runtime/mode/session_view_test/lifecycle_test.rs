@@ -10,8 +10,8 @@ use super::super::{
     view_session_snapshot,
 };
 use super::support::{
-    apply_next_prompt_image_paste, apply_next_session_diff, install_mock_clipboard_image_client,
-    new_test_app_with_session,
+    apply_next_prompt_image_paste, apply_next_session_diff, handle,
+    install_mock_clipboard_image_client, new_test_app_with_session,
 };
 use crate::app::AppEvent;
 use crate::domain::session::Status;
@@ -19,6 +19,7 @@ use crate::infra::tmux::MockTmuxClient;
 use crate::presentation::app_mode::AppMode;
 use crate::presentation::help_action;
 use crate::presentation::help_action::ViewSessionState;
+use crate::runtime::EventResult;
 use crate::test_support::{SessionFixtureBuilder, session_manager_with_sessions};
 
 #[tokio::test]
@@ -88,6 +89,63 @@ async fn start_key_rechecks_parent_readiness_and_preserves_staged_draft() {
             .await
             .expect("preparation")
             .is_none()
+    );
+}
+
+#[tokio::test]
+async fn start_key_admits_a_staged_draft_under_a_review_ready_parent() {
+    // Arrange
+    let (mut app, _base_dir, parent_session_id) = new_test_app_with_session().await;
+    crate::test_support::set_session_status_for_test(&mut app, &parent_session_id, Status::Review);
+    let session_id = app
+        .create_stacked_draft_session(&parent_session_id)
+        .await
+        .expect("draft");
+    app.stage_draft_message(&session_id, "saved draft")
+        .await
+        .expect("stage prompt");
+    app.mode = AppMode::View {
+        session_id: session_id.clone().into(),
+        scroll_offset: Some(1),
+    };
+    let context = view_context(&mut app).expect("view context");
+    let snapshot = view_session_snapshot(&app, &context).expect("view snapshot");
+    let mut pending_update = ViewPendingUpdate::from_context(&context);
+
+    // Act
+    let should_apply = handle_view_key(
+        &mut app,
+        KeyEvent::new(KeyCode::Char('s'), KeyModifiers::NONE),
+        ViewKeyContext {
+            context: &context,
+            session_snapshot: &snapshot,
+        },
+        &mut pending_update,
+    )
+    .await;
+
+    // Assert
+    let messages = app
+        .services
+        .db()
+        .sessions()
+        .load_session_messages(&session_id)
+        .await
+        .expect("transcript");
+    assert!(
+        !messages
+            .iter()
+            .any(|message| message.content.contains("[Start Error]"))
+    );
+    assert!(!should_apply);
+    assert!(
+        app.services
+            .db()
+            .sessions()
+            .load_session_preparation(&session_id)
+            .await
+            .expect("preparation")
+            .is_some()
     );
 }
 
@@ -363,7 +421,6 @@ async fn test_open_draft_prompt_with_pasted_image_inserts_clipboard_image() {
         session_id: session_id.clone().into(),
         scroll_offset: Some(2),
     };
-    let view_context = view_context(&mut app).expect("expected view context");
     let expected_session_id = session_id.clone();
     let expected_session_id_for_mock = expected_session_id.clone();
     let mut clipboard_image_client = crate::infra::clipboard_image::MockClipboardImageClient::new();
@@ -381,12 +438,21 @@ async fn test_open_draft_prompt_with_pasted_image_inserts_clipboard_image() {
             })
         });
     install_mock_clipboard_image_client(&mut app, clipboard_image_client);
+    let mut terminal =
+        ratatui::Terminal::new(ratatui::backend::TestBackend::new(120, 30)).expect("terminal");
 
     // Act
-    open_draft_prompt_with_pasted_image(&mut app, &view_context, Some(2)).await;
+    let result = handle(
+        &mut app,
+        &mut terminal,
+        KeyEvent::new(KeyCode::Char('v'), KeyModifiers::CONTROL),
+    )
+    .await
+    .expect("paste shortcut should be handled");
     apply_next_prompt_image_paste(&mut app).await;
 
     // Assert
+    assert!(matches!(result, EventResult::Continue));
     assert!(matches!(
         app.mode,
         AppMode::Prompt {

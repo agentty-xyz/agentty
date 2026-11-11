@@ -91,12 +91,7 @@ impl ChatScrollBatch {
 
             metrics
         };
-        if let AppMode::View { scroll_offset, .. }
-        | AppMode::Prompt { scroll_offset, .. }
-        | AppMode::Question { scroll_offset, .. } = &mut app.mode
-        {
-            apply_scroll_key(scroll_offset, metrics, key);
-        }
+        apply_scroll_key_to_mode(&mut app.mode, metrics, key);
         app.mark_dirty();
 
         Ok(true)
@@ -296,6 +291,22 @@ pub(crate) fn apply_scroll_key(
     }
 
     true
+}
+
+/// Applies one transcript scroll key to the active chat page's offset.
+///
+/// Modes without a session transcript are left unchanged.
+pub(crate) fn apply_scroll_key_to_mode(
+    mode: &mut AppMode,
+    metrics: ChatScrollMetrics,
+    key: KeyEvent,
+) {
+    if let AppMode::View { scroll_offset, .. }
+    | AppMode::Prompt { scroll_offset, .. }
+    | AppMode::Question { scroll_offset, .. } = mode
+    {
+        apply_scroll_key(scroll_offset, metrics, key);
+    }
 }
 
 /// One transcript movement requested by a scroll key.

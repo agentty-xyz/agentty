@@ -59,10 +59,10 @@ pub(crate) async fn handle_with_cache(
         return EventResult::Continue;
     }
 
+    // The focused chat transcript consumes every key above, so `Ctrl+C`
+    // reaches this point only while the answer input holds focus.
     if is_ctrl_c(key) {
-        if is_answer_input_focused(app) {
-            end_turn_no_answer(app).await;
-        }
+        end_turn_no_answer(app).await;
 
         return EventResult::Continue;
     }
@@ -163,18 +163,15 @@ fn handle_chat_focus_key(
 ) -> bool {
     let AppMode::Question {
         focus, session_id, ..
-    } = &app.mode
+    } = &mut app.mode
     else {
         return false;
     };
-    let focus = *focus;
 
-    match chat_scroll::classify_chat_focus_action(focus, key) {
+    match chat_scroll::classify_chat_focus_action(*focus, key) {
         None => false,
         Some(chat_scroll::ChatFocusAction::ToggleFocus) => {
-            if let AppMode::Question { focus, .. } = &mut app.mode {
-                chat_scroll::toggle_chat_focus(focus);
-            }
+            chat_scroll::toggle_chat_focus(focus);
 
             true
         }
@@ -186,11 +183,10 @@ fn handle_chat_focus_key(
             true
         }
         Some(chat_scroll::ChatFocusAction::Scroll) => {
-            if let Some(metrics) = question_scroll_metrics(app, render_cache_store, terminal_size)
-                && let AppMode::Question { scroll_offset, .. } = &mut app.mode
-            {
-                chat_scroll::apply_scroll_key(scroll_offset, metrics, key);
-            }
+            let session_id = session_id.clone();
+            let metrics =
+                question_scroll_metrics(app, render_cache_store, terminal_size, &session_id);
+            chat_scroll::apply_scroll_key_to_mode(&mut app.mode, metrics, key);
 
             true
         }
@@ -198,32 +194,23 @@ fn handle_chat_focus_key(
     }
 }
 
-/// Returns transcript scroll metrics while question mode focuses the chat.
+/// Returns transcript scroll metrics for the chat-focused question session.
 ///
-/// Returns `None` when the answer input holds focus, so scroll keys stay
-/// available as answer text. Questions raised for a session that is not loaded
-/// into the session list scroll over an empty transcript.
+/// Questions raised for a session that is not loaded into the session list
+/// scroll over an empty transcript.
 fn question_scroll_metrics(
     app: &App,
     render_cache_store: &RenderCacheStore,
     terminal_size: Rect,
-) -> Option<ChatScrollMetrics> {
-    let AppMode::Question {
-        focus: ChatFocus::Chat,
-        session_id,
-        ..
-    } = &app.mode
-    else {
-        return None;
-    };
-
+    session_id: &SessionId,
+) -> ChatScrollMetrics {
     let session_index = app
         .sessions
         .sessions()
         .iter()
         .position(|session| session.id == *session_id);
 
-    Some(session_index.map_or_else(
+    session_index.map_or_else(
         || ChatScrollMetrics::empty(terminal_size),
         |session_index| {
             ChatScrollMetrics::new(
@@ -234,7 +221,7 @@ fn question_scroll_metrics(
                 terminal_size,
             )
         },
-    ))
+    )
 }
 
 /// Opens the diff preview from question mode.
@@ -357,12 +344,13 @@ fn resolve_question_action(mode: &mut AppMode, key: KeyEvent) -> Option<Question
                 resolve_enter_action(input, questions, *current_index, selected_option_index)
             }
             KeyCode::Up | KeyCode::Char('k') if is_navigating_options => {
-                navigate_option_up(selected_option_index);
+                *selected_option_index = selected_option_index.and_then(previous_option_index);
 
                 QuestionAction::Continue
             }
             KeyCode::Down | KeyCode::Char('j') if is_navigating_options => {
-                navigate_option_down(selected_option_index, option_count);
+                *selected_option_index = selected_option_index
+                    .and_then(|option_index| next_option_index(option_index, option_count));
 
                 QuestionAction::Continue
             }
@@ -417,38 +405,18 @@ fn resolve_enter_action(
     }
 }
 
-/// Moves the selected option index up, entering free-text mode when wrapping
-/// past the first predefined option.
-///
-/// # Invariant
-///
-/// The caller in `resolve_question_action` only routes `Up`/`k` here when
-/// `is_navigating_options` (i.e. `selected_option_index.is_some()`) holds, so
-/// `*selected_option_index` is always `Some(_)` on entry. Reaching the `None`
-/// arm means a key handler regressed.
-fn navigate_option_up(selected_option_index: &mut Option<usize>) {
-    *selected_option_index = match *selected_option_index {
-        Some(0) => None,
-        Some(index) => Some(index.saturating_sub(1)),
-        None => unreachable!("navigate_option_up requires selected_option_index = Some(_)"),
-    };
+/// Returns the option above `option_index`, or `None` to enter free-text mode
+/// when moving up from the first predefined option.
+fn previous_option_index(option_index: usize) -> Option<usize> {
+    option_index.checked_sub(1)
 }
 
-/// Moves the selected option index down, entering free-text mode when
-/// advancing past the last predefined option.
-///
-/// # Invariant
-///
-/// The caller in `resolve_question_action` only routes `Down`/`j` here when
-/// `is_navigating_options` (i.e. `selected_option_index.is_some()`) holds, so
-/// `*selected_option_index` is always `Some(_)` on entry. Reaching the `None`
-/// arm means a key handler regressed.
-fn navigate_option_down(selected_option_index: &mut Option<usize>, option_count: usize) {
-    *selected_option_index = match *selected_option_index {
-        Some(index) if index + 1 >= option_count => None,
-        Some(index) => Some(index + 1),
-        None => unreachable!("navigate_option_down requires selected_option_index = Some(_)"),
-    };
+/// Returns the option below `option_index`, or `None` to enter free-text mode
+/// when moving down from the last predefined option.
+fn next_option_index(option_index: usize, option_count: usize) -> Option<usize> {
+    let next_index = option_index + 1;
+
+    (next_index < option_count).then_some(next_index)
 }
 
 /// Resolves a key event in free-text input mode (no option selected).
@@ -522,32 +490,42 @@ fn sync_question_at_mention_state(app: &mut App) {
         at_mention::AtMentionSyncAction::Activate => activate_question_at_mention(app, &session_id),
         at_mention::AtMentionSyncAction::Dismiss => dismiss_question_at_mention(app),
         at_mention::AtMentionSyncAction::KeepOpen => {
-            if let AppMode::Question {
-                at_mention_state: Some(state),
-                ..
-            } = &mut app.mode
-            {
-                at_mention::reset_selection(state);
-            }
+            reset_question_at_mention_selection(&mut app.mode);
         }
+    }
+}
+
+/// Highlights the first entry of an open question `@` mention dropdown.
+///
+/// Other modes and a closed dropdown are left unchanged.
+fn reset_question_at_mention_selection(mode: &mut AppMode) {
+    if let AppMode::Question {
+        at_mention_state: Some(state),
+        ..
+    } = mode
+    {
+        at_mention::reset_selection(state);
     }
 }
 
 /// Starts asynchronous loading of file entries for the question-mode
 /// at-mention dropdown.
+///
+/// Other modes are left unchanged and load no entries.
 fn activate_question_at_mention(app: &mut App, session_id: &str) {
+    let AppMode::Question {
+        at_mention_state, ..
+    } = &mut app.mode
+    else {
+        return;
+    };
+    *at_mention_state = Some(PromptAtMentionState::new(Vec::new()));
+
     let lookup_root = app.at_mention_lookup_root(session_id);
     let owned_session_id = SessionId::from(session_id);
     let event_tx = app.services.event_sender();
 
     at_mention::start_loading_entries(event_tx, lookup_root, owned_session_id, &mut app.sessions);
-
-    if let AppMode::Question {
-        at_mention_state, ..
-    } = &mut app.mode
-    {
-        *at_mention_state = Some(PromptAtMentionState::new(Vec::new()));
-    }
 }
 
 /// Clears the question-mode at-mention dropdown state.
@@ -586,25 +564,21 @@ fn handle_question_at_mention_down(app: &mut App) {
 /// Selects the currently highlighted file and inserts it into the question
 /// input.
 fn handle_question_at_mention_select(app: &mut App) {
-    let replacement = match &app.mode {
+    let inserted_selection = match &mut app.mode {
         AppMode::Question {
             at_mention_state: Some(state),
             input,
             ..
-        } => at_mention::selected_replacement(input, state),
+        } => at_mention::selected_replacement(input, state).map(|selection| {
+            input.replace_range(selection.at_start, selection.at_end, &selection.text);
+        }),
         _ => return,
     };
 
-    if replacement.is_none() {
+    if inserted_selection.is_none() {
         dismiss_question_at_mention(app);
 
         return;
-    }
-
-    if let Some(selection) = replacement
-        && let AppMode::Question { input, .. } = &mut app.mode
-    {
-        input.replace_range(selection.at_start, selection.at_end, &selection.text);
     }
 
     sync_question_at_mention_state(app);

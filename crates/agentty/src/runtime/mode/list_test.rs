@@ -15,6 +15,7 @@ use crate::domain::theme::ColorTheme;
 use crate::presentation::app_mode::{
     AppMode, ChatFocus, ConfirmationIntent, HelpContext, PromptModeSnapshot,
 };
+use crate::presentation::help_action::settings_actions;
 use crate::presentation::prompt::{PromptAttachmentState, PromptHistoryState, PromptSlashState};
 use crate::presentation::setting::{
     SettingsAction, SettingsInput, SettingsOperation, SettingsPresentationState, SettingsView,
@@ -1187,6 +1188,102 @@ async fn test_handle_cancel_key_ignores_non_review_session() {
     // Assert
     assert!(matches!(event_result, EventResult::Continue));
     assert!(matches!(app.mode, AppMode::List));
+}
+
+#[tokio::test]
+async fn test_handle_enter_key_ignores_a_stale_session_selection() {
+    // Arrange
+    let (mut app, _base_dir) = crate::test_support::new_test_app().await;
+    app.tabs.set(Tab::Sessions);
+    app.sessions.select_session_index(Some(3));
+    app.mode = AppMode::List;
+
+    // Act
+    let event_result = handle(&mut app, KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE))
+        .await
+        .expect("failed to handle key");
+
+    // Assert
+    assert!(matches!(event_result, EventResult::Continue));
+    assert!(matches!(app.mode, AppMode::List));
+}
+
+#[tokio::test]
+async fn vertical_keys_move_the_session_and_project_selections() {
+    // Arrange
+    let (mut app, _base_dir) = crate::test_support::new_test_app().await;
+    app.sessions
+        .push_session(SessionFixtureBuilder::new().id("first").build());
+    app.sessions
+        .push_session(SessionFixtureBuilder::new().id("second").build());
+    app.sessions.select_session_index(Some(0));
+    let initial_project_id = app.projects.selected_project_id();
+
+    // Act
+    app.tabs.set(Tab::Sessions);
+    handle(
+        &mut app,
+        KeyEvent::new(KeyCode::Char('j'), KeyModifiers::NONE),
+    )
+    .await
+    .expect("failed to handle key");
+    let selected_session_index = app.sessions.selected_session_index();
+    app.tabs.set(Tab::Projects);
+    handle(
+        &mut app,
+        KeyEvent::new(KeyCode::Char('k'), KeyModifiers::NONE),
+    )
+    .await
+    .expect("failed to handle key");
+
+    // Assert
+    assert_eq!(selected_session_index, Some(1));
+    assert_eq!(app.projects.selected_project_id(), initial_project_id);
+    assert!(matches!(app.mode, AppMode::List));
+}
+
+#[tokio::test]
+async fn test_settings_selector_dropdown_keeps_open_for_unmapped_key() {
+    // Arrange
+    let (mut app, _base_dir) = crate::test_support::new_test_app().await;
+    app.tabs.set(Tab::Settings);
+    handle(&mut app, KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE))
+        .await
+        .expect("failed to open settings selector dropdown");
+
+    // Act
+    let event_result = handle(&mut app, KeyEvent::new(KeyCode::F(1), KeyModifiers::NONE))
+        .await
+        .expect("failed to handle key");
+
+    // Assert
+    assert!(matches!(event_result, EventResult::Continue));
+    assert!(app.settings_presentation.is_selector_dropdown_open());
+}
+
+#[tokio::test]
+async fn test_handle_question_mark_opens_settings_help_on_settings_tab() {
+    // Arrange
+    let (mut app, _base_dir) = crate::test_support::new_test_app().await;
+    app.tabs.set(Tab::Settings);
+
+    // Act
+    let event_result = handle(
+        &mut app,
+        KeyEvent::new(KeyCode::Char('?'), KeyModifiers::NONE),
+    )
+    .await
+    .expect("failed to handle key");
+
+    // Assert
+    assert!(matches!(event_result, EventResult::Continue));
+    assert!(matches!(
+        app.mode,
+        AppMode::Help {
+            context: HelpContext::List { ref keybindings },
+            scroll_offset: 0,
+        } if *keybindings == settings_actions()
+    ));
 }
 
 #[tokio::test]

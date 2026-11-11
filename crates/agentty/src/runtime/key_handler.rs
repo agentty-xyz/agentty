@@ -33,102 +33,76 @@ where
 {
     // Further input keeps background creation from interrupting the user.
 
-    let result = if let AppMode::Confirmation {
-        selected_confirmation_index,
-        ..
-    } = &mut app.mode
-    {
-        let decision = mode::confirmation::handle(selected_confirmation_index, key);
+    // Diff mode needs the pre-key line-comment submission state both to route
+    // the key and to submit after the diff handler runs.
+    let submit_line_comments = mode::diff::should_submit_line_comments(app, key);
+    let result = match &mut app.mode {
+        AppMode::Confirmation {
+            selected_confirmation_index,
+            ..
+        } => {
+            let decision = mode::confirmation::handle(selected_confirmation_index, key);
 
-        handle_confirmation_decision(app, decision).await
-    } else if matches!(app.mode, AppMode::SessionCreation { .. }) {
-        handle_session_creation_key(app, key).await
-    } else if matches!(app.mode, AppMode::ProjectSwitcher { .. }) {
-        handle_project_switcher_key(app, key).await
-    } else if matches!(app.mode, AppMode::LaunchConfigurationSelector { .. }) {
-        handle_launch_configuration_selector_key(app, key).await
-    } else if matches!(app.mode, AppMode::PublishBranchInput { .. }) {
-        Ok(handle_publish_branch_input_key(app, key).await)
-    } else {
-        match &app.mode {
-            AppMode::ExecutionGraph(_) => Ok(mode::execution_graph::handle(app, key).await),
-            AppMode::List => mode::list::handle(app, key).await,
-            AppMode::ProjectCatalog { .. } => Ok(mode::project_catalog::handle(app, key).await),
-            AppMode::SessionCreation { .. } => {
-                unreachable!("session creation mode is handled before dispatch matching")
-            }
-            AppMode::StackAppendParentSelection { .. } => {
-                handle_stack_append_parent_key(app, key).await
-            }
-            AppMode::PreCommitHookWarning { .. } => {
-                Ok(handle_pre_commit_hook_warning_key(app, key))
-            }
-            AppMode::ProjectSwitcher { .. } => {
-                unreachable!("project switcher mode is handled before dispatch matching")
-            }
-            AppMode::SyncBlockedPopup { .. } => Ok(mode::sync_blocked::handle(app, key)),
-            AppMode::ViewInfoPopup { .. } => Ok(handle_view_info_popup_key(app, key)),
-            AppMode::ChatGptSignIn { .. } => Ok(mode::chatgpt_sign_in::handle(app, key)),
-            AppMode::Confirmation { .. } => {
-                unreachable!("confirmation mode is handled before dispatch matching")
-            }
-            AppMode::View { .. } => {
-                mode::session_view::handle_with_cache(
-                    app,
-                    presentation.render_cache_store(),
-                    terminal,
-                    key,
-                )
-                .await
-            }
-            AppMode::Prompt { .. } => {
-                mode::prompt::handle_with_cache(
-                    app,
-                    presentation.render_cache_store(),
-                    terminal,
-                    key,
-                )
-                .await
-            }
-            AppMode::Question { .. } => handle_question_key(app, presentation, terminal, key).await,
-            AppMode::DiffLoading { .. } => Ok(mode::diff::handle_loading(app, key)),
-            AppMode::Diff {
-                review_comments: Some(review_comments),
-                ..
-            } if review_comments.sidebar_focus == DiffSidebarFocus::Comments
-                && !mode::diff::should_submit_line_comments(app, key)
-                && !matches!(key.code, KeyCode::Char('?' | 'q')) =>
-            {
-                handle_review_comment_key(app, presentation, terminal, key).await
-            }
-            AppMode::Diff { .. } => {
-                let size = terminal.size().map_err(backend_err)?;
-                let terminal_rect = Rect::new(0, 0, size.width, size.height);
-                let content_area = content_area_for_terminal(terminal_rect);
-                let submit_line_comments = mode::diff::should_submit_line_comments(app, key);
-
-                let result = mode::diff::handle_with_cache(
-                    app,
-                    presentation.render_cache_store(),
-                    content_area,
-                    key,
-                );
-                if submit_line_comments && matches!(app.mode, AppMode::Prompt { .. }) {
-                    mode::prompt::submit_current_text_prompt(app).await;
-                }
-
-                Ok(result)
-            }
-            AppMode::Help { .. } => Ok(mode::help::handle(&mut app.mode, key)),
-            AppMode::LaunchConfigurationSelector { .. } => {
-                unreachable!(
-                    "launch-configuration selector mode is handled before dispatch matching"
-                )
-            }
-            AppMode::PublishBranchInput { .. } => {
-                unreachable!("publish-branch input mode is handled before dispatch matching")
-            }
+            handle_confirmation_decision(app, decision).await
         }
+        AppMode::SessionCreation { .. } => handle_session_creation_key(app, key).await,
+        AppMode::ProjectSwitcher { .. } => handle_project_switcher_key(app, key).await,
+        AppMode::LaunchConfigurationSelector { .. } => {
+            handle_launch_configuration_selector_key(app, key).await
+        }
+        AppMode::PublishBranchInput { .. } => Ok(handle_publish_branch_input_key(app, key).await),
+        AppMode::ExecutionGraph(_) => Ok(mode::execution_graph::handle(app, key).await),
+        AppMode::List => mode::list::handle(app, key).await,
+        AppMode::ProjectCatalog { .. } => Ok(mode::project_catalog::handle(app, key).await),
+        AppMode::StackAppendParentSelection { .. } => {
+            handle_stack_append_parent_key(app, key).await
+        }
+        AppMode::PreCommitHookWarning { .. } => Ok(handle_pre_commit_hook_warning_key(app, key)),
+        AppMode::SyncBlockedPopup { .. } => Ok(mode::sync_blocked::handle(app, key)),
+        AppMode::ViewInfoPopup { .. } => Ok(handle_view_info_popup_key(app, key)),
+        AppMode::ChatGptSignIn { .. } => Ok(mode::chatgpt_sign_in::handle(app, key)),
+        AppMode::View { .. } => {
+            mode::session_view::handle_with_cache(
+                app,
+                presentation.render_cache_store(),
+                terminal,
+                key,
+            )
+            .await
+        }
+        AppMode::Prompt { .. } => {
+            mode::prompt::handle_with_cache(app, presentation.render_cache_store(), terminal, key)
+                .await
+        }
+        AppMode::Question { .. } => handle_question_key(app, presentation, terminal, key).await,
+        AppMode::DiffLoading { .. } => Ok(mode::diff::handle_loading(app, key)),
+        AppMode::Diff {
+            review_comments: Some(review_comments),
+            ..
+        } if review_comments.sidebar_focus == DiffSidebarFocus::Comments
+            && !submit_line_comments
+            && !matches!(key.code, KeyCode::Char('?' | 'q')) =>
+        {
+            handle_review_comment_key(app, presentation, terminal, key).await
+        }
+        AppMode::Diff { .. } => {
+            let size = terminal.size().map_err(backend_err)?;
+            let terminal_rect = Rect::new(0, 0, size.width, size.height);
+            let content_area = content_area_for_terminal(terminal_rect);
+
+            let result = mode::diff::handle_with_cache(
+                app,
+                presentation.render_cache_store(),
+                content_area,
+                key,
+            );
+            if submit_line_comments && matches!(app.mode, AppMode::Prompt { .. }) {
+                mode::prompt::submit_current_text_prompt(app).await;
+            }
+
+            Ok(result)
+        }
+        AppMode::Help { .. } => Ok(mode::help::handle(&mut app.mode, key)),
     };
 
     if result.is_ok() {
@@ -225,7 +199,7 @@ async fn handle_session_creation_key(app: &mut App, key: KeyEvent) -> io::Result
             select_next_session_creation_option(app);
         }
         KeyCode::Enter => {
-            create_selected_session(app).await?;
+            create_selected_session(app).await;
         }
         _ => {}
     }
@@ -274,45 +248,52 @@ fn select_next_session_creation_option(app: &mut App) {
 /// Every row except Harness runs on an agent CLI, so a Harness-only launch
 /// offers only the Harness row.
 fn session_creation_option_is_enabled(app: &App, option_index: usize) -> bool {
+    session_creation_choice(app, option_index).is_some()
+}
+
+/// Action taken when one enabled creation-selector row is confirmed.
+enum SessionCreationChoice {
+    /// Opens the parent selector that appends this review-ready session to a
+    /// stack.
+    AppendToStack(SessionId),
+    /// Creates one session in the given mode.
+    Create(CreateSessionMode),
+}
+
+/// Resolves the action behind one creation-selector row, or `None` when the
+/// row cannot currently be chosen.
+fn session_creation_choice(app: &App, option_index: usize) -> Option<SessionCreationChoice> {
     match option_index {
-        0..=3 if !app.services.has_agent_cli() => false,
-        0..=1 => true,
-        2 => selected_stacked_parent_session_id(app).is_some(),
-        3 => selected_stack_append_session_id(app).is_some(),
-        HARNESS_OPTION_INDEX => app.services.harness_availability().is_available(),
-        _ => false,
+        0..=3 if !app.services.has_agent_cli() => None,
+        0 => Some(SessionCreationChoice::Create(CreateSessionMode::Regular)),
+        1 => Some(SessionCreationChoice::Create(CreateSessionMode::Draft)),
+        2 => selected_stacked_parent_session_id(app).map(|parent_session_id| {
+            SessionCreationChoice::Create(CreateSessionMode::Stacked { parent_session_id })
+        }),
+        3 => selected_stack_append_session_id(app).map(SessionCreationChoice::AppendToStack),
+        HARNESS_OPTION_INDEX => app
+            .services
+            .harness_availability()
+            .is_available()
+            .then_some(SessionCreationChoice::Create(CreateSessionMode::Harness)),
+        _ => None,
     }
 }
 
 /// Creates the selected session type and opens its prompt composer.
-async fn create_selected_session(app: &mut App) -> io::Result<()> {
+async fn create_selected_session(app: &mut App) {
     let selected_option_index = current_session_creation_selection(app);
-    if !session_creation_option_is_enabled(app, selected_option_index) {
-        return Ok(());
-    }
-    let mode = match selected_option_index {
-        0 => CreateSessionMode::Regular,
-        1 => CreateSessionMode::Draft,
-        HARNESS_OPTION_INDEX => CreateSessionMode::Harness,
-        2 => {
-            let Some(parent_session_id) = selected_stacked_parent_session_id(app) else {
-                return Ok(());
-            };
-
-            CreateSessionMode::Stacked { parent_session_id }
-        }
-        3 => {
-            let Some(session_id) = selected_stack_append_session_id(app) else {
-                return Ok(());
-            };
+    let mode = match session_creation_choice(app, selected_option_index) {
+        Some(SessionCreationChoice::Create(mode)) => mode,
+        Some(SessionCreationChoice::AppendToStack(session_id)) => {
             app.mode = AppMode::StackAppendParentSelection {
                 selected_parent_index: 0,
                 session_id,
             };
 
-            return Ok(());
+            return;
         }
-        _ => return Ok(()),
+        None => return,
     };
     let project_id = app.active_project_id();
     app.start_session_creation(
@@ -324,8 +305,6 @@ async fn create_selected_session(app: &mut App) -> io::Result<()> {
         None,
     )
     .await;
-
-    Ok(())
 }
 
 /// Handles the advisory shown before session-type selection.
@@ -410,8 +389,9 @@ fn update_stack_append_parent_selection(app: &mut App, move_up: bool) {
     else {
         return;
     };
-    let parent_count = stack_append_parent_session_ids(app, session_id).len();
-    let updated_index = if move_up {
+    let session_id = session_id.clone();
+    let parent_count = stack_append_parent_session_ids(app, &session_id).len();
+    let selected_parent_index = if move_up {
         selected_parent_index.saturating_sub(1)
     } else {
         selected_parent_index
@@ -419,13 +399,10 @@ fn update_stack_append_parent_selection(app: &mut App, move_up: bool) {
             .min(parent_count.saturating_sub(1))
     };
 
-    if let AppMode::StackAppendParentSelection {
+    app.mode = AppMode::StackAppendParentSelection {
         selected_parent_index,
-        ..
-    } = &mut app.mode
-    {
-        *selected_parent_index = updated_index;
-    }
+        session_id,
+    };
 }
 
 /// Returns eligible parent identifiers in visible session order.
@@ -600,9 +577,20 @@ fn handle_view_info_popup_key(app: &mut App, key: KeyEvent) -> EventResult {
 /// Only `Esc` cancels the overlay. Plain character keys continue to edit the
 /// branch name so session-view shortcuts like `q` and `p` do not leak through
 /// while the text field has focus.
+///
+/// Any other mode is left unchanged.
 async fn handle_publish_branch_input_key(app: &mut App, key: KeyEvent) -> EventResult {
-    let publish_branch_input =
-        PublishBranchInputModeState::from_mode(std::mem::replace(&mut app.mode, AppMode::List));
+    let publish_branch_input = match PublishBranchInputModeState::from_mode(std::mem::replace(
+        &mut app.mode,
+        AppMode::List,
+    )) {
+        Ok(publish_branch_input) => publish_branch_input,
+        Err(mode) => {
+            app.mode = *mode;
+
+            return EventResult::Continue;
+        }
+    };
     let input_locked = publish_branch_input.locked_upstream_ref.is_some();
 
     match key.code {
@@ -658,24 +646,25 @@ struct PublishBranchInputModeState {
 
 impl PublishBranchInputModeState {
     /// Extracts publish-branch overlay fields from an app mode value.
-    fn from_mode(mode: AppMode) -> Self {
-        let AppMode::PublishBranchInput {
-            default_branch_name,
-            input,
-            locked_upstream_ref,
-            publish_branch_action,
-            restore_view,
-        } = mode
-        else {
-            unreachable!("mode must be publish-branch input in this handler");
-        };
-
-        Self {
-            default_branch_name,
-            input,
-            locked_upstream_ref,
-            publish_branch_action,
-            restore_view,
+    ///
+    /// # Errors
+    /// Returns the unchanged mode when it is not the publish-branch overlay.
+    fn from_mode(mode: AppMode) -> Result<Self, Box<AppMode>> {
+        match mode {
+            AppMode::PublishBranchInput {
+                default_branch_name,
+                input,
+                locked_upstream_ref,
+                publish_branch_action,
+                restore_view,
+            } => Ok(Self {
+                default_branch_name,
+                input,
+                locked_upstream_ref,
+                publish_branch_action,
+                restore_view,
+            }),
+            mode => Err(Box::new(mode)),
         }
     }
 
@@ -703,19 +692,25 @@ impl PublishBranchInputModeState {
 
 /// Handles key input while the app is in launch-configuration selector overlay
 /// mode.
+///
+/// Any other mode is left unchanged.
 async fn handle_launch_configuration_selector_key(
     app: &mut App,
     key: KeyEvent,
 ) -> io::Result<EventResult> {
-    let mode = std::mem::replace(&mut app.mode, AppMode::List);
-    let AppMode::LaunchConfigurationSelector {
-        commands,
-        restore_view,
-        selected_command_index,
-    } = mode
-    else {
-        unreachable!("mode must be launch-configuration selector in this handler");
-    };
+    let (commands, restore_view, selected_command_index) =
+        match std::mem::replace(&mut app.mode, AppMode::List) {
+            AppMode::LaunchConfigurationSelector {
+                commands,
+                restore_view,
+                selected_command_index,
+            } => (commands, restore_view, selected_command_index),
+            mode => {
+                app.mode = mode;
+
+                return Ok(EventResult::Continue);
+            }
+        };
 
     match key.code {
         KeyCode::Esc | KeyCode::Char('q') => {

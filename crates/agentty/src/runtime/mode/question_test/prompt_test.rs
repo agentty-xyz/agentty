@@ -1,7 +1,9 @@
 use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
 
 use super::super::{NO_ANSWER, handle_paste};
-use super::support::{TEST_TERMINAL_SIZE, handle, question_mode_with_options};
+use super::support::{
+    TEST_TERMINAL_SIZE, free_text_question_mode, handle, question_mode_with_options,
+};
 use crate::domain::input::InputState;
 use crate::domain::question::QuestionItem;
 use crate::presentation::app_mode::{AppMode, ChatFocus};
@@ -32,6 +34,22 @@ async fn test_handle_paste_normalizes_line_endings_in_free_text_mode() {
     assert!(matches!(
         app.mode,
         AppMode::Question { ref input, .. } if input.text() == "line1\nline2\nline3"
+    ));
+}
+
+#[tokio::test]
+async fn test_handle_paste_ignores_empty_clipboard_text() {
+    // Arrange
+    let mut app = crate::test_support::new_test_app_without_retained_base_dir().await;
+    app.mode = free_text_question_mode("draft", 5);
+
+    // Act
+    handle_paste(&mut app, "");
+
+    // Assert
+    assert!(matches!(
+        app.mode,
+        AppMode::Question { ref input, .. } if input.text() == "draft" && input.cursor == 5
     ));
 }
 

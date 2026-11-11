@@ -170,6 +170,76 @@ async fn test_handle_ctrl_c_updates_session_handle_status_to_review() {
 }
 
 #[tokio::test]
+async fn test_handle_ctrl_c_keeps_question_mode_when_review_status_cannot_persist() {
+    // Arrange
+    let base_dir = tempfile::tempdir().expect("failed to create temp dir");
+    let database = crate::db::Database::in_memory()
+        .await
+        .expect("failed to open in-memory db");
+    let pool = database.pool().clone();
+    let mut app = crate::app::App::new_with_clients(
+        base_dir.path().to_path_buf(),
+        base_dir.path().to_path_buf(),
+        None,
+        database,
+        crate::test_support::test_app_clients(),
+    )
+    .await
+    .expect("failed to build app");
+    let project_id = app
+        .services
+        .db()
+        .projects()
+        .upsert_project("/tmp/test", None)
+        .await
+        .expect("failed to upsert project");
+    app.services
+        .db()
+        .sessions()
+        .insert_session(
+            "session-id",
+            "gemini-3.8-flash",
+            "main",
+            "Question",
+            project_id,
+        )
+        .await
+        .expect("failed to insert session");
+    sqlx::query(
+        "CREATE TRIGGER fail_status_update BEFORE UPDATE OF status ON session BEGIN SELECT \
+         RAISE(FAIL, 'forced status failure'); END",
+    )
+    .execute(&pool)
+    .await
+    .expect("failure trigger should be installed");
+    app.mode = AppMode::Question {
+        at_mention_state: None,
+        session_id: "session-id".into(),
+        questions: vec![QuestionItem::new("Q?")],
+        responses: Vec::new(),
+        current_index: 0,
+        focus: ChatFocus::Input,
+        input: InputState::with_text("draft".to_string()),
+        scroll_offset: None,
+        selected_option_index: None,
+    };
+
+    // Act
+    let _ = handle(
+        &mut app,
+        TEST_TERMINAL_SIZE,
+        KeyEvent::new(KeyCode::Char('c'), KeyModifiers::CONTROL),
+    )
+    .await;
+
+    // Assert
+    assert!(matches!(
+        app.mode,
+        AppMode::Question { ref input, .. } if input.text() == "draft"
+    ));
+}
+
+#[tokio::test]
 async fn test_handle_ctrl_c_closes_open_in_progress_timer_before_review() {
     // Arrange — persisted state still has an open active-work interval
     // when question mode exits.
@@ -271,8 +341,8 @@ async fn test_question_scroll_metrics_uses_default_review_model_for_loading_fall
     let output_width = terminal_size.width.saturating_sub(2);
     let render_cache_store = RenderCacheStore::default();
     // Act
-    let metrics = question_scroll_metrics(&app, &render_cache_store, terminal_size)
-        .expect("chat-focused question mode should have scroll metrics");
+    let metrics =
+        question_scroll_metrics(&app, &render_cache_store, terminal_size, &session_id.into());
 
     let session = &app.sessions.sessions()[0];
     let expected = SessionChatPage::rendered_output_line_count(

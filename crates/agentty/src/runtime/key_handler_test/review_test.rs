@@ -81,55 +81,58 @@ async fn test_handle_publish_branch_input_key_escape_restores_view_mode() {
 
 #[tokio::test]
 async fn test_handle_publish_branch_input_key_enter_starts_pull_request_publish() {
-    // Arrange
-    let (mut app, _base_dir) = crate::test_support::new_git_test_app_with_mock_tmux_client().await;
-    let session_id = app
-        .create_session()
-        .await
-        .expect("failed to create session");
-    crate::test_support::set_session_status_for_test(
-        &mut app,
-        &session_id,
-        crate::domain::session::Status::Review,
-    );
-    app.mode = AppMode::PublishBranchInput {
-        default_branch_name: "wt/session".to_string(),
-        input: crate::domain::input::InputState::with_text("review/custom".to_string()),
-        locked_upstream_ref: None,
-        publish_branch_action: crate::domain::session::PublishBranchAction::PublishPullRequest,
-        restore_view: ConfirmationViewMode {
-            scroll_offset: Some(4),
-            session_id: session_id.clone().into(),
-        },
-    };
+    for locked_upstream_ref in [None, Some("origin/review/custom".to_string())] {
+        // Arrange
+        let (mut app, _base_dir) =
+            crate::test_support::new_git_test_app_with_mock_tmux_client().await;
+        let session_id = app
+            .create_session()
+            .await
+            .expect("failed to create session");
+        crate::test_support::set_session_status_for_test(
+            &mut app,
+            &session_id,
+            crate::domain::session::Status::Review,
+        );
+        app.mode = AppMode::PublishBranchInput {
+            default_branch_name: "wt/session".to_string(),
+            input: crate::domain::input::InputState::with_text("review/custom".to_string()),
+            locked_upstream_ref,
+            publish_branch_action: crate::domain::session::PublishBranchAction::PublishPullRequest,
+            restore_view: ConfirmationViewMode {
+                scroll_offset: Some(4),
+                session_id: session_id.clone().into(),
+            },
+        };
 
-    // Act
-    let event_result = handle_publish_branch_input_key(
-        &mut app,
-        KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE),
-    )
-    .await;
+        // Act
+        let event_result = handle_publish_branch_input_key(
+            &mut app,
+            KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE),
+        )
+        .await;
 
-    // Assert
-    assert!(matches!(event_result, EventResult::Continue));
-    assert!(matches!(
-        app.mode,
-        AppMode::View {
-            session_id: ref viewed_session_id,
-            scroll_offset: Some(4),
-        } if viewed_session_id == &session_id
-    ));
-    assert_eq!(
-        app.sessions
-            .session_at(0)
-            .and_then(|session| {
-                session
-                    .transient_messages
-                    .get(crate::domain::transient_message::TransientMessageSlot::BranchPublish)
-            })
-            .map(|message| message.body.text()),
-        Some("Publishing review request...")
-    );
+        // Assert
+        assert!(matches!(event_result, EventResult::Continue));
+        assert!(matches!(
+            app.mode,
+            AppMode::View {
+                session_id: ref viewed_session_id,
+                scroll_offset: Some(4),
+            } if viewed_session_id == &session_id
+        ));
+        assert_eq!(
+            app.sessions
+                .session_at(0)
+                .and_then(|session| {
+                    session
+                        .transient_messages
+                        .get(crate::domain::transient_message::TransientMessageSlot::BranchPublish)
+                })
+                .map(|message| message.body.text()),
+            Some("Publishing review request...")
+        );
+    }
 }
 
 #[tokio::test]

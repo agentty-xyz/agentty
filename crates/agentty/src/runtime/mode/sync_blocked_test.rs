@@ -1,7 +1,7 @@
 use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
 
 use super::handle;
-use crate::presentation::app_mode::AppMode;
+use crate::presentation::app_mode::{AppMode, HelpContext};
 use crate::runtime::EventResult;
 
 #[tokio::test]
@@ -48,23 +48,48 @@ async fn test_handle_enter_closes_sync_blocked_popup() {
 async fn test_handle_other_key_keeps_sync_blocked_popup_open() {
     // Arrange
     let (mut app, _base_dir) = crate::test_support::new_test_app().await;
-    app.mode = AppMode::SyncBlockedPopup {
-        default_branch: None,
-        is_loading: false,
-        message: "Main is dirty".to_string(),
-        project_name: None,
-        title: "Sync blocked".to_string(),
+
+    for key_code in [KeyCode::Char('x'), KeyCode::Tab] {
+        app.mode = AppMode::SyncBlockedPopup {
+            default_branch: None,
+            is_loading: false,
+            message: "Main is dirty".to_string(),
+            project_name: None,
+            title: "Sync blocked".to_string(),
+        };
+
+        // Act
+        let event_result = handle(&mut app, KeyEvent::new(key_code, KeyModifiers::NONE));
+
+        // Assert
+        assert!(matches!(event_result, EventResult::Continue));
+        assert!(matches!(app.mode, AppMode::SyncBlockedPopup { .. }));
+    }
+}
+
+#[tokio::test]
+async fn closing_keys_leave_other_modes_unchanged() {
+    // Arrange
+    let (mut app, _base_dir) = crate::test_support::new_test_app().await;
+    app.mode = AppMode::Help {
+        context: HelpContext::List {
+            keybindings: Vec::new(),
+        },
+        scroll_offset: 2,
     };
 
     // Act
-    let event_result = handle(
-        &mut app,
-        KeyEvent::new(KeyCode::Char('x'), KeyModifiers::NONE),
-    );
+    let event_result = handle(&mut app, KeyEvent::new(KeyCode::Esc, KeyModifiers::NONE));
 
     // Assert
     assert!(matches!(event_result, EventResult::Continue));
-    assert!(matches!(app.mode, AppMode::SyncBlockedPopup { .. }));
+    assert!(matches!(
+        app.mode,
+        AppMode::Help {
+            scroll_offset: 2,
+            ..
+        }
+    ));
 }
 
 #[tokio::test]
