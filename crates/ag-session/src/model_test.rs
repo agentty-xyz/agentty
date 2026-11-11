@@ -48,6 +48,107 @@ fn session_id_supports_owned_conversions_and_comparisons() {
 }
 
 #[test]
+fn session_id_exposes_borrowed_string_views() {
+    // Arrange
+    let session_id = SessionId::from("session-1");
+
+    // Act
+    let as_str: &str = session_id.as_ref();
+    let as_path: &Path = session_id.as_ref();
+    let borrowed: &str = std::borrow::Borrow::borrow(&session_id);
+    let dereferenced: &str = &session_id;
+
+    // Assert
+    assert_eq!(as_str, "session-1");
+    assert_eq!(as_path, Path::new("session-1"));
+    assert_eq!(borrowed, "session-1");
+    assert_eq!(dereferenced.len(), 9);
+    assert_eq!(session_id, *"session-1");
+    assert_eq!(session_id, "session-1");
+    assert_ne!(session_id, "session-2");
+}
+
+/// One lifecycle capability predicate.
+type StatusCapability = fn(SessionStatus) -> bool;
+
+#[test]
+fn session_status_capabilities_follow_lifecycle_state() {
+    // Arrange
+    let capabilities: [(StatusCapability, Vec<SessionStatus>); 8] = [
+        (
+            SessionStatus::allows_chat_composer,
+            vec![
+                SessionStatus::Draft,
+                SessionStatus::InProgress,
+                SessionStatus::Review,
+                SessionStatus::AgentReview,
+                SessionStatus::Question,
+                SessionStatus::Rebasing,
+            ],
+        ),
+        (
+            SessionStatus::allows_session_actions,
+            vec![
+                SessionStatus::Draft,
+                SessionStatus::Review,
+                SessionStatus::AgentReview,
+                SessionStatus::Question,
+            ],
+        ),
+        (
+            SessionStatus::allows_diff_view,
+            vec![
+                SessionStatus::InProgress,
+                SessionStatus::Review,
+                SessionStatus::AgentReview,
+                SessionStatus::Merged,
+                SessionStatus::Done,
+                SessionStatus::Canceled,
+            ],
+        ),
+        (
+            SessionStatus::allows_rebase_action,
+            vec![
+                SessionStatus::InProgress,
+                SessionStatus::Review,
+                SessionStatus::AgentReview,
+            ],
+        ),
+        (
+            SessionStatus::allows_review_actions,
+            vec![SessionStatus::Review, SessionStatus::AgentReview],
+        ),
+        (SessionStatus::is_read_only, vec![SessionStatus::Merged]),
+        (
+            SessionStatus::allows_stacked_child_start,
+            vec![SessionStatus::Review, SessionStatus::AgentReview],
+        ),
+        (
+            SessionStatus::is_stack_branch_mutating,
+            vec![
+                SessionStatus::InProgress,
+                SessionStatus::Question,
+                SessionStatus::Queued,
+                SessionStatus::Rebasing,
+                SessionStatus::Merging,
+                SessionStatus::Merged,
+            ],
+        ),
+    ];
+
+    for (capability, expected_statuses) in capabilities {
+        // Act
+        let statuses = SessionStatus::ALL
+            .into_iter()
+            .filter(|status| capability(*status))
+            .collect::<Vec<_>>();
+
+        // Assert
+        assert_eq!(statuses, expected_statuses);
+    }
+}
+
+#[test]
 fn session_status_round_trips_persisted_values() {
     // Arrange
     let statuses = SessionStatus::ALL;

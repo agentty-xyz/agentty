@@ -153,6 +153,19 @@ fn test_parse_agent_summary_returns_metadata_without_prompt_body() {
 }
 
 #[test]
+fn test_parse_agent_summary_skips_disabled_definitions() {
+    // Arrange
+    let definition =
+        "---\nid: reviewer\nname: Reviewer\ndescription: Reviews code\nenabled: false\n---\nBody.";
+
+    // Act
+    let summary = parse_agent_summary("fallback", definition).expect("definition should parse");
+
+    // Assert
+    assert_eq!(summary, None);
+}
+
+#[test]
 fn test_parse_agent_definition_uses_directory_id_when_id_is_missing() {
     // Arrange
     let definition = "---\nname: Planner\ndescription: Plans work\nenabled: true\n---\nPlan first.";

@@ -111,3 +111,7 @@ pub enum TaskAttemptStatus {
     /// Workflow was canceled before or during execution.
     Canceled,
 }
+
+#[cfg(test)]
+#[path = "task_test.rs"]
+mod tests;

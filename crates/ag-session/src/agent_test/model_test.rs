@@ -1,4 +1,4 @@
-use crate::agent::{AgentKind, AgentModel, AgentSelectionMetadata, ServedModel};
+use crate::agent::{AgentKind, AgentModel, AgentSelection, AgentSelectionMetadata, ServedModel};
 
 #[test]
 /// Ensures model parsing is constrained to the selected provider.
@@ -324,6 +324,53 @@ fn test_harness_kind_metadata() {
     assert_eq!(harness_kind.default_model(), AgentModel::MuseSpark13);
     assert!(!harness_kind.supports_speed_mode());
     assert!(!AgentKind::ALL.contains(&harness_kind));
+}
+
+#[test]
+/// Ensures every CLI-backed provider exposes its executable and selector
+/// metadata.
+fn test_cli_kind_metadata() {
+    // Arrange
+    let kinds = [
+        AgentKind::Antigravity,
+        AgentKind::Gemini,
+        AgentKind::Claude,
+        AgentKind::Codex,
+    ];
+
+    // Act
+    let metadata = kinds.map(|kind| {
+        (
+            kind.executable_name(),
+            AgentSelectionMetadata::name(&kind),
+            AgentSelectionMetadata::description(&kind),
+        )
+    });
+
+    // Assert
+    assert_eq!(
+        metadata,
+        [
+            (Some("agy"), "antigravity", "Google Antigravity CLI agent."),
+            (Some("gemini"), "gemini", "Google Gemini CLI agent."),
+            (Some("claude"), "claude", "Anthropic Claude Code agent."),
+            (Some("codex"), "codex", "OpenAI Codex CLI agent."),
+        ]
+    );
+}
+
+#[test]
+/// Ensures a selection never pairs a provider with another provider's model.
+fn test_agent_selection_falls_back_to_the_provider_default_model() {
+    // Arrange
+    let kind = AgentKind::Claude;
+
+    // Act
+    let selection = AgentSelection::new(kind, AgentModel::Gpt61Sol);
+
+    // Assert
+    assert_eq!(selection.kind, kind);
+    assert_eq!(selection.model, kind.default_model());
 }
 
 #[test]

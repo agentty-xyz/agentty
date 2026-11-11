@@ -11,6 +11,24 @@ use crate::test_support::{graph_proposal, graph_proposal_state};
 use crate::{GraphContext, GraphProposalResolution, GraphProposalState, PermissionMode};
 
 #[test]
+fn graph_proposal_state_persists_its_permission_ceiling_as_a_stable_label() {
+    // Arrange
+    let mut state = graph_proposal_state("proposal", "session");
+    state.permission = PermissionMode::ReadOnly;
+
+    // Act
+    let mut value = serde_json::to_value(&state).expect("state should serialize");
+    let restored =
+        serde_json::from_value::<GraphProposalState>(value.clone()).expect("state should load");
+    value["permission"] = serde_json::json!("unrestricted");
+    let invalid = serde_json::from_value::<GraphProposalState>(value);
+
+    // Assert
+    assert_eq!(restored, state);
+    assert!(invalid.is_err());
+}
+
+#[test]
 fn graph_proposal_resolution_captures_host_authority_and_rejects_invalid_requirements() {
     for case in [
         "valid",
