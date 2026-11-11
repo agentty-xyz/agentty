@@ -24,7 +24,8 @@ use crate::presentation::prompt::{
     PendingImagePaste, PromptAtMentionState, PromptSlashStage, PromptSuggestionSelection,
     apply_prompt_delete_range as apply_prompt_delete_range_components,
     current_line_delete_range as prompt_current_line_delete_range, drain_prompt_submission,
-    insert_prompt_text, prompt_slash_option_count, resolve_prompt_slash_selection,
+    insert_prompt_text, needs_space_after_image_placeholder, prompt_slash_option_count,
+    resolve_prompt_slash_selection,
 };
 use crate::runtime::EventResult;
 use crate::runtime::mode::chat_scroll::{self, ChatScrollMetrics};
@@ -350,6 +351,7 @@ fn apply_prompt_input_to_mode(mode: &mut AppMode, command: InputCommand) -> Vec<
     } = mode
     {
         attachment_state.remember_current_revision(input);
+        let command = separate_text_from_image_placeholder(input, command);
         let edit_span = prompt_command_edit_span(input, &command);
         let effect = input.apply(command);
         if effect == InputEffect::TextChanged {
@@ -365,6 +367,19 @@ fn apply_prompt_input_to_mode(mode: &mut AppMode, command: InputCommand) -> Vec<
     }
 
     unreachable_attachments
+}
+
+/// Prefixes a typed character with a space when it would otherwise run into
+/// the `[Image #n]` placeholder ending at the cursor.
+fn separate_text_from_image_placeholder(input: &InputState, command: InputCommand) -> InputCommand {
+    match command {
+        InputCommand::Insert(character)
+            if needs_space_after_image_placeholder(input.text(), input.cursor, character) =>
+        {
+            InputCommand::InsertText(format!(" {character}"))
+        }
+        command => command,
+    }
 }
 
 /// Returns the prompt-aware range for shared deletion commands.

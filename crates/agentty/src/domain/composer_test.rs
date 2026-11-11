@@ -8,7 +8,8 @@ use super::{
     PromptHistoryState, PromptSlashStage, PromptSlashState, PromptSuggestionItem,
     PromptSuggestionList, PromptSuggestionSelection, build_prompt_slash_suggestion_list,
     current_line_delete_range, drain_prompt_submission, insert_prompt_local_image,
-    insert_prompt_local_image_at, prompt_slash_option_count, resolve_prompt_slash_selection,
+    insert_prompt_local_image_at, needs_space_after_image_placeholder, prompt_slash_option_count,
+    resolve_prompt_slash_selection,
 };
 use crate::domain::agent::{
     AgentKind, AgentModel, AgentSelection, HarnessModelOption, HarnessModelStatus, ModelCost,
@@ -168,12 +169,14 @@ fn test_prompt_attachment_state_drops_pending_image_paste_anchor_on_text_replace
 fn test_insert_prompt_local_image_at_keeps_cursor_on_its_text() {
     // Arrange
     let cases = [
-        // Cursor after the anchor moves past the placeholder.
-        (8, 4, "abc [Image #1]defgh", 18),
-        // Cursor at the anchor ends after the placeholder.
-        (4, 4, "abc [Image #1]defgh", 14),
+        // Cursor after the anchor moves past the placeholder and separator.
+        (8, 4, "abc [Image #1] defgh", 19),
+        // Cursor at the anchor ends after the placeholder and separator.
+        (4, 4, "abc [Image #1] defgh", 15),
         // Cursor before the anchor stays put.
-        (1, 4, "abc [Image #1]defgh", 1),
+        (1, 4, "abc [Image #1] defgh", 1),
+        // Anchors before whitespace add no separator.
+        (8, 3, "abc[Image #1] defgh", 18),
         // Anchors past the text end are clamped.
         (8, 20, "abc defgh[Image #1]", 8),
     ];
@@ -199,6 +202,39 @@ fn test_insert_prompt_local_image_at_keeps_cursor_on_its_text() {
         assert_eq!(input.text(), expected_text);
         assert_eq!(input.cursor, expected_cursor);
         assert_eq!(attachment_state.attachments.len(), 1);
+    }
+}
+
+#[test]
+fn test_needs_space_after_image_placeholder_only_for_text_starting_at_token_end() {
+    // Arrange
+    let text = "See [Image #1] and [Image #2]";
+    let cases = [
+        // Words and opening punctuation after a placeholder need a space.
+        (29, 'w', true),
+        (29, '(', true),
+        (29, '@', true),
+        // Whitespace and closing punctuation attach directly.
+        (29, ' ', false),
+        (29, '\n', false),
+        (29, '!', false),
+        (29, ',', false),
+        (29, ')', false),
+        // Positions not at a placeholder end never need a space.
+        (28, 'w', false),
+        (3, 'w', false),
+        (0, 'w', false),
+    ];
+
+    for (cursor, character, expected) in cases {
+        // Act
+        let needs_space = needs_space_after_image_placeholder(text, cursor, character);
+
+        // Assert
+        assert_eq!(
+            needs_space, expected,
+            "cursor {cursor}, character {character:?}"
+        );
     }
 }
 
