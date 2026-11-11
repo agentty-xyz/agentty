@@ -8,7 +8,7 @@ use super::{
     RealAgentCatalogClient, SUMMARY_BODY_BUFFER_BYTES, body_contains_non_whitespace,
     contain_agent_profile_definition, direct_agent_directory, is_agent_profile_definition,
     is_agent_profile_directory, list_catalog_agent_profile_summaries, next_agent_directory,
-    read_agent_profile_summary_source,
+    read_agent_profile_summary_source, resolve_workspace_agent_profile,
 };
 use crate::domain::agent_profile::AgentDefinitionSummary;
 use crate::infra::agent_profile::AgentCatalogClient;
@@ -337,6 +337,47 @@ async fn test_real_catalog_skips_unavailable_entries_and_returns_none() {
     assert!(mismatched.is_none());
     assert!(unreadable.is_none());
     assert!(missing.is_none());
+}
+
+#[tokio::test]
+async fn test_resolution_skips_invalid_and_mismatched_direct_directories() {
+    // Arrange
+    let workspace = tempfile::tempdir().expect("create workspace");
+    write_definition(
+        workspace.path(),
+        "broken",
+        "---\nname: Broken\n---\nNo description.",
+    )
+    .await;
+    write_definition(
+        workspace.path(),
+        "reviewer",
+        "---\nid: critic\nname: Critic\ndescription: Directory named reviewer\n---\nCritique.",
+    )
+    .await;
+    write_definition(
+        workspace.path(),
+        "zeta",
+        "---\nid: reviewer\nname: Reviewer\ndescription: Declares reviewer\n---\nReview.",
+    )
+    .await;
+    let catalog = RealAgentCatalogClient;
+
+    // Act
+    let resolved = catalog
+        .resolve(workspace.path().to_path_buf(), "reviewer".to_string())
+        .with_subscriber(crate::test_support::TestSubscriber)
+        .await;
+    let removed_after_listing = resolve_workspace_agent_profile(workspace.path(), "absent")
+        .with_subscriber(crate::test_support::TestSubscriber)
+        .await;
+
+    // Assert
+    assert_eq!(
+        resolved.map(|agent_profile| (agent_profile.name, agent_profile.prompt)),
+        Some(("Reviewer".to_string(), "Review.".to_string()))
+    );
+    assert!(removed_after_listing.is_none());
 }
 
 #[tokio::test]

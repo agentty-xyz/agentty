@@ -1,14 +1,20 @@
 use std::ffi::OsString;
-use std::io;
+use std::os::unix::fs::PermissionsExt;
 use std::path::PathBuf;
+use std::{env, fs, io};
 
 use mockall::Sequence;
 use mockall::predicate::eq;
+use tempfile::tempdir;
 
 use super::{
-    MockTmuxCommandRunner, ProcessTmuxCommandRunner, RealTmuxClient, TmuxCommandOutput,
+    MockTmuxCommandRunner, ProcessTmuxCommandRunner, RealTmuxClient, TmuxClient, TmuxCommandOutput,
     has_tmux_environment,
 };
+
+/// Marks the child test process that runs [`RealTmuxClient`] against a fake
+/// `tmux` on an isolated `PATH`; its value is the session folder to open.
+const REAL_TMUX_CLIENT_CHILD_ENV: &str = "AGENTTY_TEST_REAL_TMUX_CLIENT_CHILD";
 
 #[test]
 fn tmux_environment_detects_nonempty_tmux_variable() {
@@ -178,15 +184,84 @@ async fn run_command_in_window_with_runner_stops_when_literal_send_exits_unsucce
 }
 
 #[test]
-fn parse_tmux_window_id_returns_none_for_invalid_utf8() {
+fn parse_tmux_window_id_returns_none_for_invalid_utf8_or_blank_output() {
     // Arrange
-    let stdout = [0x80];
+    let invalid_utf8_stdout = [0x80];
+    let blank_stdout = b" \n";
 
     // Act
-    let window_id = RealTmuxClient::parse_tmux_window_id(&stdout);
+    let invalid_utf8_window_id = RealTmuxClient::parse_tmux_window_id(&invalid_utf8_stdout);
+    let blank_window_id = RealTmuxClient::parse_tmux_window_id(blank_stdout);
 
     // Assert
-    assert_eq!(window_id, None);
+    assert_eq!(invalid_utf8_window_id, None);
+    assert_eq!(blank_window_id, None);
+}
+
+#[tokio::test]
+async fn real_tmux_client_runs_tmux_from_path_for_window_and_command() {
+    if let Some(session_folder) = env::var_os(REAL_TMUX_CLIENT_CHILD_ENV) {
+        // Arrange
+        let tmux_client = RealTmuxClient;
+
+        // Act
+        let window_id = tmux_client
+            .open_window_for_folder(PathBuf::from(session_folder))
+            .await;
+        tmux_client
+            .run_command_in_window("@7".to_string(), "git status".to_string())
+            .await;
+
+        // Assert
+        assert_eq!(window_id, Some("@7".to_string()));
+
+        return;
+    }
+
+    // Arrange
+    let command_dir = tempdir().expect("failed to create fake tmux directory");
+    let invocation_log = command_dir.path().join("tmux.log");
+    let session_folder = command_dir.path().join("session");
+    let tmux_path = command_dir.path().join("tmux");
+    fs::write(
+        &tmux_path,
+        "#!/bin/sh\nprintf '%s\\n' \"$*\" >> \"$AGENTTY_TEST_TMUX_LOG\"\nif [ \"$1\" = new-window \
+         ]; then printf '@7\\n'; fi\n",
+    )
+    .expect("failed to write fake tmux command");
+    let mut permissions = fs::metadata(&tmux_path)
+        .expect("failed to load fake tmux metadata")
+        .permissions();
+    permissions.set_mode(0o750);
+    fs::set_permissions(&tmux_path, permissions).expect("failed to make fake tmux executable");
+    let current_test_binary = env::current_exe().expect("failed to resolve current test binary");
+
+    // Act
+    let output = tokio::process::Command::new(current_test_binary)
+        .arg("--exact")
+        .arg("infra::tmux::tests::real_tmux_client_runs_tmux_from_path_for_window_and_command")
+        .arg("--nocapture")
+        .env("PATH", command_dir.path())
+        .env("AGENTTY_TEST_TMUX_LOG", &invocation_log)
+        .env(REAL_TMUX_CLIENT_CHILD_ENV, &session_folder)
+        .output()
+        .await
+        .expect("failed to run isolated tmux client test");
+
+    // Assert
+    assert!(
+        output.status.success(),
+        "isolated tmux client test failed: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    assert_eq!(
+        fs::read_to_string(&invocation_log).expect("fake tmux should record invocations"),
+        format!(
+            "new-window -P -F #{{window_id}} -c {}\nsend-keys -t @7 -l git status\nsend-keys -t \
+             @7 C-m\n",
+            session_folder.display()
+        )
+    );
 }
 
 #[test]

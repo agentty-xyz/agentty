@@ -104,6 +104,29 @@ async fn test_real_fs_client_read_file_returns_error_for_missing_file() {
     assert!(message.contains("No such file") || message.contains("cannot find the path"));
 }
 
+/// Verifies `RealFsClient::remove_file()` ignores missing files but surfaces
+/// other removal failures.
+#[tokio::test]
+async fn test_real_fs_client_remove_file_ignores_missing_files_only() {
+    // Arrange
+    let temp_dir = tempdir().expect("create temp dir");
+    let fs_client = RealFsClient;
+
+    // Act
+    let missing_result = fs_client
+        .remove_file(temp_dir.path().join("missing.txt"))
+        .await;
+    let directory_result = fs_client.remove_file(temp_dir.path().to_path_buf()).await;
+
+    // Assert
+    assert!(missing_result.is_ok());
+    assert!(matches!(
+        directory_result,
+        Err(FsError::Io(error)) if error.kind() != std::io::ErrorKind::NotFound
+    ));
+    assert!(temp_dir.path().exists());
+}
+
 /// Verifies `RealFsClient::is_file()` distinguishes files from
 /// directories.
 #[tokio::test]
