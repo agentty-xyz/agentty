@@ -10,7 +10,7 @@ mod wayland;
 #[cfg(any(target_os = "linux", test))]
 mod x11;
 
-pub(crate) use contract::ClipboardBackend;
+pub use contract::ClipboardBackend;
 #[cfg(target_os = "linux")]
 pub(crate) use linux::new_backend;
 #[cfg(target_os = "macos")]

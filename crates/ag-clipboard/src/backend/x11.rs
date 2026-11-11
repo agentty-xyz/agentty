@@ -3,18 +3,16 @@ use std::time::{Duration, Instant};
 
 use image::ImageFormat;
 use rustix::event::{self, PollFd, PollFlags, Timespec};
-use x11rb::NONE;
 use x11rb::connection::Connection;
+use x11rb::cookie::Cookie;
+use x11rb::errors::{ConnectError, ReplyError};
 use x11rb::protocol::Event;
 use x11rb::protocol::xproto::{
-    Atom, ConnectionExt, GetPropertyReply, Property, PropertyNotifyEvent, SelectionNotifyEvent,
-    Time,
+    Atom, ConnectionExt, CreateWindowAux, EventMask, GetPropertyReply, Property,
+    PropertyNotifyEvent, SelectionNotifyEvent, Time, Window, WindowClass,
 };
-#[cfg(target_os = "linux")]
-use x11rb::protocol::xproto::{CreateWindowAux, EventMask, WindowClass};
 use x11rb::rust_connection::RustConnection;
-#[cfg(target_os = "linux")]
-use x11rb::{COPY_DEPTH_FROM_PARENT, COPY_FROM_PARENT};
+use x11rb::{COPY_DEPTH_FROM_PARENT, COPY_FROM_PARENT, NONE};
 
 use super::ClipboardBackend;
 use crate::{ClipboardError, RgbaImageData, format, uri};
@@ -51,20 +49,40 @@ pub(crate) struct X11Clipboard {
 }
 
 impl X11Clipboard {
-    #[cfg(target_os = "linux")]
+    /// Connects to the X11 display named by `DISPLAY`.
     pub(crate) fn new() -> Result<Self, ClipboardError> {
+        Self::from_connect_result(RustConnection::connect(None))
+    }
+
+    /// Maps a display connection attempt into a ready clipboard reader.
+    fn from_connect_result(
+        connect_result: Result<(RustConnection, usize), ConnectError>,
+    ) -> Result<Self, ClipboardError> {
         let (connection, screen_number) =
-            RustConnection::connect(None).map_err(|error| ClipboardError::Unavailable {
+            connect_result.map_err(|error| ClipboardError::Unavailable {
                 reason: format!("X11 clipboard connection failed: {error}"),
             })?;
-        let screen =
-            connection
-                .setup()
-                .roots
-                .get(screen_number)
-                .ok_or_else(|| ClipboardError::Backend {
-                    reason: "X11 screen was not found".to_string(),
-                })?;
+
+        Self::from_connection(connection, screen_number)
+    }
+
+    /// Creates the hidden selection-owner window and loads the clipboard
+    /// atoms on an established connection.
+    ///
+    /// The atom reply flushes the window request, so no separate flush is
+    /// needed before waiting for it.
+    fn from_connection(
+        connection: RustConnection,
+        screen_number: usize,
+    ) -> Result<Self, ClipboardError> {
+        let root_window = connection
+            .setup()
+            .roots
+            .get(screen_number)
+            .ok_or_else(|| ClipboardError::Backend {
+                reason: "X11 screen was not found".to_string(),
+            })?
+            .root;
         let window_id = connection
             .generate_id()
             .map_err(|error| ClipboardError::backend("failed to allocate X11 window id", error))?;
@@ -74,7 +92,7 @@ impl X11Clipboard {
             .create_window(
                 COPY_DEPTH_FROM_PARENT,
                 window_id,
-                screen.root,
+                root_window,
                 0,
                 0,
                 1,
@@ -87,9 +105,6 @@ impl X11Clipboard {
             .map_err(|error| {
                 ClipboardError::backend("failed to create X11 clipboard window", error)
             })?;
-        connection.flush().map_err(|error| {
-            ClipboardError::backend("failed to flush X11 clipboard window", error)
-        })?;
         let atoms = AtomCollection::new(&connection)
             .map_err(|error| {
                 ClipboardError::backend("failed to request X11 clipboard atoms", error)
@@ -222,23 +237,13 @@ impl X11Clipboard {
             return Ok(SelectionRead::Ignored);
         }
 
-        let mut property = self
-            .connection
-            .get_property(
-                true,
-                event.requestor,
-                event.property,
-                event.target,
-                0,
-                MAX_CLIPBOARD_PROPERTY_LONG_LENGTH,
-            )
-            .map_err(|error| {
-                ClipboardError::backend("failed to read X11 clipboard property", error)
-            })?
-            .reply()
-            .map_err(|error| {
-                ClipboardError::backend("failed to receive X11 clipboard property", error)
-            })?;
+        let mut property = self.take_property(
+            event.requestor,
+            event.property,
+            event.target,
+            MAX_CLIPBOARD_PROPERTY_LONG_LENGTH,
+            "clipboard property",
+        )?;
         Self::ensure_property_payload_within_limit(&property)?;
 
         if property.type_ == target_format {
@@ -250,19 +255,13 @@ impl X11Clipboard {
             });
         }
 
-        property = self
-            .connection
-            .get_property(
-                true,
-                event.requestor,
-                event.property,
-                self.atoms.INCR,
-                0,
-                INCR_HEADER_LONG_LENGTH,
-            )
-            .map_err(|error| ClipboardError::backend("failed to read X11 INCR header", error))?
-            .reply()
-            .map_err(|error| ClipboardError::backend("failed to receive X11 INCR header", error))?;
+        property = self.take_property(
+            event.requestor,
+            event.property,
+            self.atoms.INCR,
+            INCR_HEADER_LONG_LENGTH,
+            "INCR header",
+        )?;
         if let Some(minimum_byte_count) = Self::minimum_incr_byte_count(&property) {
             incr_transfer.reserve_at_least(minimum_byte_count)?;
         }
@@ -287,21 +286,13 @@ impl X11Clipboard {
             return Ok(false);
         }
 
-        let property = self
-            .connection
-            .get_property(
-                true,
-                event.window,
-                event.atom,
-                target_format,
-                0,
-                MAX_CLIPBOARD_PROPERTY_LONG_LENGTH,
-            )
-            .map_err(|error| ClipboardError::backend("failed to read X11 INCR segment", error))?
-            .reply()
-            .map_err(|error| {
-                ClipboardError::backend("failed to receive X11 INCR segment", error)
-            })?;
+        let property = self.take_property(
+            event.window,
+            event.atom,
+            target_format,
+            MAX_CLIPBOARD_PROPERTY_LONG_LENGTH,
+            "INCR segment",
+        )?;
         Self::ensure_property_payload_within_limit(&property)?;
         if property.value_len == 0 {
             return Ok(true);
@@ -311,6 +302,25 @@ impl X11Clipboard {
         *timeout_end = Self::next_incr_timeout(Instant::now(), incr_transfer_timeout_end);
 
         Ok(false)
+    }
+
+    /// Reads and deletes one window property, naming `payload_name` when
+    /// sending the request or receiving its reply fails.
+    fn take_property(
+        &self,
+        window: Window,
+        property: Atom,
+        property_type: Atom,
+        long_length: u32,
+        payload_name: &str,
+    ) -> Result<GetPropertyReply, ClipboardError> {
+        self.connection
+            .get_property(true, window, property, property_type, 0, long_length)
+            .map_err(ReplyError::from)
+            .and_then(Cookie::reply)
+            .map_err(|error| {
+                ClipboardError::backend(&format!("failed to read X11 {payload_name}"), error)
+            })
     }
 
     fn wait_for_x11_event(

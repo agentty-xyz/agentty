@@ -14,18 +14,18 @@ const PASTEBOARD_TYPE_STRING: &str = "public.utf8-plain-text";
 const PASTEBOARD_TYPE_TIFF: &str = "public.tiff";
 
 pub(crate) fn new_backend() -> Box<dyn ClipboardBackend> {
-    Box::new(MacosClipboard::new())
+    Box::new(MacosClipboard::new(NSPasteboard::generalPasteboard()))
 }
 
+/// Clipboard reader over one `NSPasteboard`, the general pasteboard in
+/// production.
 struct MacosClipboard {
     pasteboard: Retained<NSPasteboard>,
 }
 
 impl MacosClipboard {
-    fn new() -> Self {
-        Self {
-            pasteboard: NSPasteboard::generalPasteboard(),
-        }
+    fn new(pasteboard: Retained<NSPasteboard>) -> Self {
+        Self { pasteboard }
     }
 
     fn read_first_string_for_type(
@@ -98,3 +98,7 @@ impl ClipboardBackend for MacosClipboard {
         format::decode_image_rgba(&tiff_bytes, ImageFormat::Tiff)
     }
 }
+
+#[cfg(test)]
+#[path = "macos_test.rs"]
+mod tests;

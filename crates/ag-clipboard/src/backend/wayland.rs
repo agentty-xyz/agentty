@@ -1,7 +1,5 @@
-#[cfg(target_os = "linux")]
 use std::io;
 use std::path::PathBuf;
-#[cfg(target_os = "linux")]
 use std::process::Command;
 
 use image::ImageFormat;
@@ -22,7 +20,6 @@ const TEXT_URI_LIST_MIME: &str = "text/uri-list";
 #[cfg(target_os = "linux")]
 const WL_PASTE_COMMAND: &str = "wl-paste";
 const WL_PASTE_LIST_TYPES_ARGS: &[&str] = &["--list-types"];
-#[cfg(target_os = "linux")]
 const WL_PASTE_VERSION_ARGS: &[&str] = &["--version"];
 
 pub(crate) struct WaylandClipboard {
@@ -32,7 +29,14 @@ pub(crate) struct WaylandClipboard {
 impl WaylandClipboard {
     #[cfg(target_os = "linux")]
     pub(crate) fn new() -> Result<Self, ClipboardError> {
-        let clipboard = Self::with_runner(Box::new(SystemWaylandCommandRunner));
+        Self::with_available_runner(Box::new(SystemWaylandCommandRunner::new(WL_PASTE_COMMAND)))
+    }
+
+    /// Wraps `runner` after checking that it can run `wl-paste --version`.
+    fn with_available_runner(
+        runner: Box<dyn WaylandCommandRunner>,
+    ) -> Result<Self, ClipboardError> {
+        let clipboard = Self::with_runner(runner);
         clipboard.ensure_wl_paste_available()?;
 
         Ok(clipboard)
@@ -42,7 +46,6 @@ impl WaylandClipboard {
         Self { runner }
     }
 
-    #[cfg(target_os = "linux")]
     fn ensure_wl_paste_available(&self) -> Result<(), ClipboardError> {
         let output = self.run_wl_paste(WL_PASTE_VERSION_ARGS)?;
         if !output.status_success {
@@ -178,13 +181,22 @@ trait WaylandCommandRunner {
     fn run(&self, args: &[String]) -> Result<WaylandCommandOutput, ClipboardError>;
 }
 
-#[cfg(target_os = "linux")]
-struct SystemWaylandCommandRunner;
+/// Runs the `wl-paste` executable named by `program` as a child process.
+struct SystemWaylandCommandRunner {
+    program: PathBuf,
+}
 
-#[cfg(target_os = "linux")]
+impl SystemWaylandCommandRunner {
+    fn new(program: impl Into<PathBuf>) -> Self {
+        Self {
+            program: program.into(),
+        }
+    }
+}
+
 impl WaylandCommandRunner for SystemWaylandCommandRunner {
     fn run(&self, args: &[String]) -> Result<WaylandCommandOutput, ClipboardError> {
-        let output = Command::new(WL_PASTE_COMMAND)
+        let output = Command::new(&self.program)
             .args(args)
             .output()
             .map_err(map_wl_paste_spawn_error)?;
@@ -197,7 +209,6 @@ impl WaylandCommandRunner for SystemWaylandCommandRunner {
     }
 }
 
-#[cfg(target_os = "linux")]
 fn map_wl_paste_spawn_error(error: io::Error) -> ClipboardError {
     if error.kind() == io::ErrorKind::NotFound {
         return ClipboardError::Unavailable {
