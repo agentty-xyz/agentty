@@ -82,3 +82,7 @@ pub trait RunRepository: Send + Sync {
 #[cfg(test)]
 #[path = "run_mock_test.rs"]
 pub(crate) mod mock;
+
+#[cfg(test)]
+#[path = "run_test.rs"]
+mod tests;

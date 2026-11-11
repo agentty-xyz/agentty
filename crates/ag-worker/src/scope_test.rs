@@ -1,7 +1,9 @@
+use std::sync::Arc;
+
 use ag_telemetry::{Context, TraceContextExt as _};
 use opentelemetry::trace::{SpanContext, SpanId, TraceFlags, TraceId, TraceState};
 
-use super::{CURRENT, RunContext};
+use super::{CURRENT, RunContext, with_execution_resource};
 
 #[tokio::test]
 async fn inherited_phase_links_must_match_the_captured_ownership_trace() {
@@ -23,6 +25,26 @@ async fn inherited_phase_links_must_match_the_captured_ownership_trace() {
         );
         assert_eq!(inherited.phase_trace.is_some(), trace_id == 2);
     }
+}
+
+#[tokio::test]
+async fn execution_resources_are_retained_only_while_scoped_work_runs() {
+    // Arrange
+    let resource = Arc::new(());
+
+    // Act
+    let (retained_count, resource_count) = with_execution_resource(Arc::clone(&resource), async {
+        (
+            RunContext::current().resources.len(),
+            Arc::strong_count(&resource),
+        )
+    })
+    .await;
+
+    // Assert
+    assert_eq!(retained_count, 1);
+    assert_eq!(resource_count, 2);
+    assert_eq!(Arc::strong_count(&resource), 1);
 }
 
 fn context(trace: u128, span: u64) -> Context {
