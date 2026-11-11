@@ -54,6 +54,49 @@ async fn test_review_request_web_url_returns_linked_review_request_url() {
     );
 }
 
+#[tokio::test]
+async fn test_review_request_web_url_reports_missing_link_and_forge_failures() {
+    for linked in [false, true] {
+        // Arrange
+        let mut session = test_session("Prompt", Status::Review, Some("Title"), "");
+        if linked {
+            session.review_request = Some(ReviewRequest {
+                last_refreshed_at: 42,
+                summary: review_request_summary("#11"),
+            });
+        }
+        let database = database_with_session(&session).await;
+        let session_manager = session_manager_with_one_session(session);
+        let mut mock_review_request_client = forge::MockReviewRequestClient::new();
+        mock_review_request_client
+            .expect_review_request_web_url()
+            .times(usize::from(linked))
+            .returning(|_| {
+                Err(forge::ReviewRequestError::UnsupportedRemote {
+                    repo_url: "file:///tmp/project".to_string(),
+                })
+            });
+        let services = test_services(
+            &database,
+            Arc::new(git::MockGitClient::new()),
+            Arc::new(mock_review_request_client),
+        );
+
+        // Act
+        let error = session_manager
+            .review_request_web_url(&services, "session-id")
+            .expect_err("URL lookup should fail");
+
+        // Assert
+        let expected = if linked {
+            "file:///tmp/project"
+        } else {
+            "Session has no linked review request"
+        };
+        assert!(error.to_string().contains(expected), "{error}");
+    }
+}
+
 /// Ensures the review-comment reply entry point rejects stale session
 /// identifiers before attempting to enqueue worker commands.
 #[tokio::test]

@@ -5,8 +5,9 @@ use ag_git as git;
 use ag_session::test_support as model_fixture;
 
 use super::support::{
-    database_with_session, session_manager_with_one_session, test_services,
-    test_services_with_event_receiver, test_session,
+    database_with_session, database_with_session_and_pool, load_persisted_session_row,
+    session_manager_with_one_session, test_services, test_services_with_event_receiver,
+    test_session,
 };
 use crate::app::AppEvent;
 use crate::domain::agent::{AgentKind, AgentModel, AgentSelection, ServedModel};
@@ -175,6 +176,35 @@ async fn set_session_model_keeps_conversation_state_when_model_does_not_change()
         }
     );
     assert!(!session_manager.should_replay_history("session-id"));
+}
+
+#[tokio::test]
+async fn set_session_model_without_project_skips_project_default_lookup() {
+    // Arrange
+    let session = test_session("Prompt", Status::Review, Some("Title"), "");
+    let (database, pool) = database_with_session_and_pool(&session).await;
+    sqlx::query("UPDATE session SET project_id = NULL WHERE id = 'session-id'")
+        .execute(&pool)
+        .await
+        .expect("detach project");
+    let mut session_manager = session_manager_with_one_session(session);
+    let services = test_services(
+        &database,
+        Arc::new(git::MockGitClient::new()),
+        Arc::new(forge::MockReviewRequestClient::new()),
+    );
+
+    // Act
+    session_manager
+        .set_session_model(&services, "session-id", model_fixture::codex_selection())
+        .await
+        .expect("set session model should succeed");
+
+    // Assert
+    assert_eq!(
+        load_persisted_session_row(&database).await.model,
+        model_fixture::CODEX_MODEL.as_str()
+    );
 }
 
 #[tokio::test]

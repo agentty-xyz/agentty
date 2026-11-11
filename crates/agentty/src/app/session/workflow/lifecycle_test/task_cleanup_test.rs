@@ -16,7 +16,8 @@ use crate::app::{AppServices, ProjectManager, SessionManager};
 use crate::domain::session::Status;
 use crate::infra::clock::RealClock;
 use crate::infra::db::AppRepositories;
-use crate::infra::fs::MockFsClient;
+use crate::infra::fs::{FsError, MockFsClient};
+use crate::test_support::enable_tracing_log_fallback;
 
 #[tokio::test]
 async fn deletion_retains_task_history_ownership_before_cascade() {
@@ -68,6 +69,71 @@ async fn deletion_retains_task_history_ownership_before_cascade() {
                 .any(|path| path.ends_with(&runtime_ids[0]))
         );
     }
+}
+
+#[tokio::test]
+async fn deletion_continues_when_record_and_staged_draft_removal_fail() {
+    // Arrange
+    let session = test_session("", Status::Review, None, "");
+    let (repositories, pool) = database_with_session_and_pool(&session).await;
+    sqlx::query(
+        "CREATE TRIGGER reject_session_delete BEFORE DELETE ON session BEGIN SELECT RAISE(FAIL, \
+         'delete rejected'); END",
+    )
+    .execute(&pool)
+    .await
+    .expect("failure trigger");
+    let removal_attempts = Arc::new(Mutex::new(Vec::new()));
+    let recorded_attempts = Arc::clone(&removal_attempts);
+    let mut filesystem = MockFsClient::new();
+    filesystem.expect_is_dir().return_const(true);
+    filesystem.expect_remove_dir_all().returning(move |path| {
+        recorded_attempts
+            .lock()
+            .expect("removal attempts")
+            .push(path);
+        Box::pin(async { Err(FsError::Io(std::io::Error::other("directory busy"))) })
+    });
+    let services = test_services_with_fs_client(
+        &repositories,
+        Arc::new(RealClock),
+        Arc::new(filesystem),
+        Arc::new(MockGitClient::new()),
+        Arc::new(MockReviewRequestClient::new()),
+    );
+    let projects = ProjectManager::new(
+        1,
+        "/tmp/project".into(),
+        None,
+        None,
+        Vec::new(),
+        "/tmp/project".into(),
+    );
+    let mut manager = session_manager_with_one_session(session);
+    manager.select_session_index(Some(0));
+    enable_tracing_log_fallback();
+
+    // Act
+    manager.delete_selected_session(&projects, &services).await;
+
+    // Assert: the in-memory session is gone, while the rejected record and
+    // the staged draft root were both still attempted.
+    assert!(manager.sessions().is_empty());
+    assert!(
+        repositories
+            .sessions()
+            .load_session("session-id")
+            .await
+            .expect("session lookup")
+            .is_some()
+    );
+    assert!(
+        removal_attempts
+            .lock()
+            .expect("removal attempts")
+            .iter()
+            .any(|path| path == &PathBuf::from("/tmp/agentty-tests/session-id"))
+    );
 }
 
 #[tokio::test]

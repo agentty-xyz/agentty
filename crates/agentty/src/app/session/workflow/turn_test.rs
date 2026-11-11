@@ -1,7 +1,11 @@
 use std::path::PathBuf;
 use std::sync::{Arc, Mutex};
 
-use ag_contracts::{AgentDefinitionPrompt, AgentRequestKind, MockAgentChannel};
+use ag_contracts::{
+    AgentDefinitionPrompt, AgentError, AgentRequestKind, MockAgentChannel, TurnResult,
+};
+use ag_git::{GitError, MockGitClient};
+use ag_protocol::AgentResponse;
 use ag_session::{EnvId, ResolvedEnv, SessionStats, test_support as model_fixture};
 use ag_worker::SessionRunClient;
 use tokio::sync::mpsc;
@@ -9,8 +13,9 @@ use tokio_util::sync::CancellationToken;
 
 use super::super::worker::{SessionWorkerContext, TurnMetadata};
 use super::{
-    READ_ONLY_CHAT_PROMPT, load_session_permission_mode, load_session_response_style,
-    load_title_reasoning_level, prepare_turn_request,
+    MainCheckoutSnapshot, READ_ONLY_CHAT_PROMPT, add_main_checkout_warning,
+    fresh_turn_cancel_token, live_transcript_source, load_session_permission_mode,
+    load_session_response_style, load_title_reasoning_level, prepare_turn_request,
 };
 use crate::app::service::HarnessModels;
 use crate::app::session::SessionError;
@@ -19,12 +24,13 @@ use crate::domain::agent::{
 };
 use crate::domain::permission::PermissionMode;
 use crate::domain::session::Status;
-use crate::domain::session_message::SessionTranscript;
+use crate::domain::session_message::{SessionMessage, SessionMessageKind, SessionTranscript};
 use crate::domain::turn_prompt::TurnPrompt;
 use crate::infra::db::{
     AppRepositories, DbError, LEGACY_SESSION_AGENT_CLEAR_MARKER, PersistedSessionCreation,
     SessionTurnMetadata,
 };
+use crate::test_support::poison_lock;
 
 #[tokio::test]
 async fn resumed_upgrade_clears_legacy_instructions_until_successful_persistence() {
@@ -428,6 +434,75 @@ async fn title_reasoning_level_defaults_without_project() {
 
     // Assert
     assert_eq!(reasoning_level, ReasoningLevel::High);
+}
+
+#[test]
+fn live_transcript_source_replays_the_shared_transcript() {
+    // Arrange
+    let transcript = Arc::new(Mutex::new(SessionTranscript::new(vec![
+        SessionMessage::conversation(0, SessionMessageKind::UserPrompt, "question"),
+        SessionMessage::conversation(1, SessionMessageKind::AssistantAnswer, "answer"),
+    ])));
+    let expected = transcript.lock().expect("transcript").replay_text();
+
+    // Act
+    let replay = live_transcript_source(&transcript).replay_text();
+
+    // Assert
+    assert!(expected.is_some());
+    assert_eq!(replay, expected);
+}
+
+#[tokio::test]
+async fn main_checkout_status_failure_after_the_turn_fails_the_turn() {
+    // Arrange
+    let mut context = turn_test_context(AppRepositories::in_memory().await.expect("db"));
+    let mut git_client = MockGitClient::new();
+    git_client
+        .expect_tracked_worktree_status()
+        .once()
+        .returning(|_| Box::pin(async { Err(GitError::OutputParse("status unavailable".into())) }));
+    context.git_client = Arc::new(git_client);
+    let snapshot = MainCheckoutSnapshot {
+        main_repo_root: PathBuf::from("/project"),
+        tracked_status_output: String::new(),
+    };
+    let turn_result = TurnResult {
+        assistant_message: AgentResponse::plain("done"),
+        context_reset: false,
+        harness_report: None,
+        input_tokens: 0,
+        output_tokens: 0,
+        provider_conversation_id: None,
+    };
+
+    // Act
+    let result = add_main_checkout_warning(&context, Some(&snapshot), Ok(turn_result)).await;
+
+    // Assert
+    let error = result.expect_err("post-turn status failure");
+    assert!(
+        matches!(&error, AgentError::Backend(message) if message.contains("status unavailable")),
+        "{error}"
+    );
+}
+
+#[tokio::test]
+async fn fresh_turn_cancel_token_rejects_a_poisoned_token_slot() {
+    // Arrange
+    let context = turn_test_context(AppRepositories::in_memory().await.expect("db"));
+    poison_lock(Arc::clone(&context.cancel_token));
+
+    // Act
+    let result = fresh_turn_cancel_token(&context);
+
+    // Assert
+    assert!(
+        result
+            .expect_err("poisoned token slot")
+            .to_string()
+            .contains("cancel token lock poisoned")
+    );
 }
 
 /// Request preparation needs persisted state but no filesystem or worker

@@ -1,3 +1,8 @@
+#[cfg(unix)]
+use std::ffi::OsStr;
+#[cfg(unix)]
+use std::os::unix::ffi::OsStrExt as _;
+
 use tempfile::tempdir;
 
 use super::{
@@ -81,6 +86,35 @@ async fn test_store_staged_draft_attachments_creates_missing_metadata_directory(
     let loaded_attachments =
         load_staged_draft_attachments(&fs_client, temp_dir.path(), "session-1").await;
     assert_eq!(loaded_attachments, attachments);
+}
+
+#[cfg(unix)]
+#[tokio::test]
+/// Ensures attachment paths that JSON cannot represent fail before any
+/// metadata is written.
+async fn test_store_staged_draft_attachments_rejects_non_utf8_attachment_paths() {
+    // Arrange
+    let temp_dir = tempdir().expect("failed to create temp dir");
+    let fs_client = RealFsClient;
+    let attachments = vec![TurnPromptAttachment {
+        placeholder: "[Image #1]".to_string(),
+        local_image_path: temp_dir.path().join(OsStr::from_bytes(b"image-\xff.png")),
+    }];
+    let attachment_path = staged_draft_attachment_path(temp_dir.path(), "session-1");
+
+    // Act
+    let result =
+        store_staged_draft_attachments(&fs_client, temp_dir.path(), "session-1", &attachments)
+            .await;
+
+    // Assert
+    assert!(
+        result
+            .expect_err("non-UTF-8 paths cannot be serialized")
+            .to_string()
+            .contains("UTF-8")
+    );
+    assert!(!attachment_path.exists());
 }
 
 #[tokio::test]

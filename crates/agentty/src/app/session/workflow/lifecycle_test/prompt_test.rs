@@ -20,6 +20,7 @@ use crate::app::SessionManager;
 use crate::domain::session::Status;
 use crate::domain::turn_prompt::{TurnPrompt, TurnPromptAttachment, TurnPromptTextSource};
 use crate::infra::{db, fs};
+use crate::test_support::enable_tracing_log_fallback;
 
 #[test]
 /// Ensures first replies persist the full prompt as the one-time title.
@@ -91,6 +92,47 @@ async fn test_cleanup_prompt_attachment_paths_preserves_sibling_files_in_shared_
         image_directory.exists(),
         "shared image directory must be preserved while sibling attachments remain"
     );
+}
+
+#[tokio::test]
+/// Ensures failed file and directory removals do not stop cleanup of the
+/// remaining managed attachments.
+async fn test_cleanup_prompt_attachment_paths_continues_after_removal_failures() {
+    // Arrange
+    let managed_tmp_root = PathBuf::from("/virtual/tmp");
+    let image_directory = managed_tmp_root.join("session-id").join("images");
+    let attachment_paths = vec![
+        image_directory.join("image-1.png"),
+        image_directory.join("image-2.png"),
+    ];
+    let mut mock_fs_client = fs::MockFsClient::new();
+    mock_fs_client.expect_remove_file().times(2).returning(|_| {
+        Box::pin(async { Err(fs::FsError::Io(std::io::Error::other("file busy"))) })
+    });
+    let expected_directory = image_directory.clone();
+    mock_fs_client
+        .expect_remove_dir()
+        .once()
+        .withf(move |path| *path == expected_directory)
+        .returning(|_| {
+            Box::pin(async {
+                Err(fs::FsError::Io(std::io::Error::from(
+                    std::io::ErrorKind::PermissionDenied,
+                )))
+            })
+        });
+    enable_tracing_log_fallback();
+
+    // Act
+    SessionManager::cleanup_prompt_attachment_paths_in_root(
+        Arc::new(mock_fs_client),
+        &managed_tmp_root,
+        attachment_paths,
+    )
+    .await;
+
+    // Assert: the mock verifies every file and the shared directory were
+    // still attempted after earlier failures.
 }
 
 #[tokio::test]

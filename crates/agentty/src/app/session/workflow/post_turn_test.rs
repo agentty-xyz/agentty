@@ -14,8 +14,8 @@ use tokio_util::sync::CancellationToken;
 use super::super::worker::TurnMetadata;
 use super::{
     PostTurnContext, TURN_ERROR_NOTICE_MAX_CHARS, TurnEffectPolicy,
-    prepare_review_comment_resolutions, run_auto_commit, start_published_branch_auto_push,
-    truncate_turn_error_notice, validate_review_comment_outcomes,
+    has_review_ready_stacked_children, prepare_review_comment_resolutions, run_auto_commit,
+    start_published_branch_auto_push, truncate_turn_error_notice, validate_review_comment_outcomes,
 };
 use crate::app::service::HarnessModels;
 use crate::app::session::SessionError;
@@ -24,6 +24,7 @@ use crate::domain::session::QueuedMessage;
 use crate::domain::session_message::SessionTranscript;
 use crate::domain::turn_prompt::TurnPrompt;
 use crate::infra::db::AppRepositories;
+use crate::test_support::enable_tracing_log_fallback;
 
 #[tokio::test]
 async fn task_publication_awaits_success_and_propagates_blocked_failed_and_panicked_effects() {
@@ -455,6 +456,7 @@ async fn test_unfinished_rebase_check_fails_closed_when_operation_query_fails() 
         session_id: "session-id".into(),
         transcript: Arc::new(Mutex::new(SessionTranscript::default())),
     };
+    enable_tracing_log_fallback();
 
     // Act
     let should_skip_auto_push = context.has_unfinished_branch_operation().await;
@@ -464,6 +466,35 @@ async fn test_unfinished_rebase_check_fails_closed_when_operation_query_fails() 
         should_skip_auto_push,
         "operation-query failures must suppress post-turn auto-push"
     );
+}
+
+#[tokio::test]
+async fn stacked_child_lookup_fails_closed_when_project_or_sessions_cannot_load() {
+    for (session_seeded, failure_sql) in [
+        (false, None),
+        (true, Some("DROP TABLE session_review_request")),
+    ] {
+        // Arrange
+        let (db, pool) = AppRepositories::in_memory_with_pool()
+            .await
+            .expect("db should open");
+        if session_seeded {
+            insert_review_session(&db, "session-id").await;
+        }
+        if let Some(failure_sql) = failure_sql {
+            sqlx::query(failure_sql)
+                .execute(&pool)
+                .await
+                .expect("failure injection");
+        }
+        let context = review_operation_test_context(db, MockGitClient::new());
+
+        // Act
+        let has_children = has_review_ready_stacked_children(&context).await;
+
+        // Assert
+        assert!(!has_children, "seeded: {session_seeded}");
+    }
 }
 
 #[tokio::test]

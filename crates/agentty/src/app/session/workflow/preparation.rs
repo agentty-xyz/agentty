@@ -41,7 +41,7 @@ impl SessionManager {
             .ok_or(SessionError::NotFound)?;
         let selection = parse_persisted_session_agent_model(Some(&row.agent), &row.model);
         let result = Self::prepare_workspace(services, &preparation, &row, |folder| {
-            ag_worker::setup_backend(selection.kind(), folder).map_err(|error| error.to_string())
+            ag_worker::setup_backend(selection.kind(), folder)
         })
         .await;
         let error = result.as_ref().err().map(ToString::to_string);
@@ -82,11 +82,11 @@ impl SessionManager {
 
     /// Materializes an owned checkout or validates one left by interrupted
     /// setup.
-    async fn prepare_workspace(
+    async fn prepare_workspace<SetupError: std::fmt::Display>(
         services: &AppServices,
         preparation: &SessionPreparationRow,
         row: &SessionRow,
-        setup: impl FnOnce(&Path) -> Result<(), String>,
+        setup: impl FnOnce(&Path) -> Result<(), SetupError>,
     ) -> Result<(), SessionError> {
         let session_id = &preparation.session_id;
         let project = services

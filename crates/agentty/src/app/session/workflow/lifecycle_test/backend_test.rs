@@ -3,7 +3,7 @@ use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
 use ag_forge::MockReviewRequestClient;
-use ag_git::MockGitClient;
+use ag_git::{GitError, MockGitClient};
 use tokio::process::Command;
 
 use super::support::{
@@ -40,14 +40,14 @@ async fn unavailable_backend_preserves_draft_and_cleans_only_new_worktrees() {
 
         return;
     }
-    for existing in [true, false] {
+    for (existing, cleanup_fails) in [(true, false), (false, false), (false, true)] {
         // Arrange
         let mut session = test_session("staged request", Status::Draft, None, "");
         session.is_draft = true;
         session.agent = AgentSelection::new(AgentKind::Antigravity, AgentModel::Gemini38Flash);
         let database = database_with_session(&session).await;
         let mut manager = session_manager_with_one_session(session);
-        let (fs, git) = draft_workspace_boundaries(existing);
+        let (fs, git) = draft_workspace_boundaries(existing, cleanup_fails);
         let services = test_services_with_fs_client(
             &database,
             Arc::new(RealClock),
@@ -69,6 +69,11 @@ async fn unavailable_backend_preserves_draft_and_cleans_only_new_worktrees() {
                 .to_string()
                 .contains("Failed to setup session backend")
         );
+        assert_eq!(
+            error.to_string().contains("Cleanup also failed"),
+            cleanup_fails,
+            "{error}"
+        );
         assert!(
             manager
                 .session_or_err("session-id")
@@ -81,7 +86,10 @@ async fn unavailable_backend_preserves_draft_and_cleans_only_new_worktrees() {
     }
 }
 
-fn draft_workspace_boundaries(existing: bool) -> (MockFsClient, MockGitClient) {
+fn draft_workspace_boundaries(
+    existing: bool,
+    cleanup_fails: bool,
+) -> (MockFsClient, MockGitClient) {
     let mut fs = MockFsClient::new();
     let mut git = MockGitClient::new();
     fs.expect_is_dir()
@@ -113,9 +121,15 @@ fn draft_workspace_boundaries(existing: bool) -> (MockFsClient, MockGitClient) {
         fs.expect_create_dir_all()
             .once()
             .returning(|_| Box::pin(async { Ok(()) }));
-        git.expect_remove_worktree()
-            .once()
-            .returning(|_| Box::pin(async { Ok(()) }));
+        git.expect_remove_worktree().once().returning(move |_| {
+            Box::pin(async move {
+                if cleanup_fails {
+                    Err(GitError::OutputParse("worktree removal failed".to_string()))
+                } else {
+                    Ok(())
+                }
+            })
+        });
         git.expect_delete_branch()
             .once()
             .returning(|_, _| Box::pin(async { Ok(()) }));

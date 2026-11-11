@@ -154,30 +154,6 @@ impl ReplyEligibility {
     }
 }
 
-/// Transcript and output treatment for a submitted reply prompt.
-#[derive(Clone, Copy)]
-enum ReplyPromptPresentation {
-    /// Persist and render a normal user prompt.
-    Visible,
-    /// Persist generated agent context without rendering it in chat.
-    HiddenAgent,
-}
-
-impl ReplyPromptPresentation {
-    /// Returns the durable transcript kind for this presentation mode.
-    fn message_kind(self) -> SessionMessageKind {
-        match self {
-            Self::Visible => SessionMessageKind::UserPrompt,
-            Self::HiddenAgent => SessionMessageKind::AgentPrompt,
-        }
-    }
-
-    /// Returns whether the submitted prompt should render in session output.
-    fn is_visible(self) -> bool {
-        matches!(self, Self::Visible)
-    }
-}
-
 /// Reply-command behavior selected by the caller.
 struct ReplyOptions {
     defer_prompt_until_enqueued: bool,
@@ -185,7 +161,6 @@ struct ReplyOptions {
     joins_worker_queue: bool,
     operation_id: Option<String>,
     persist_prompt: bool,
-    prompt_presentation: ReplyPromptPresentation,
     review_comment_thread_ids: Vec<String>,
     task: Option<ag_session::SubmitTaskRequest>,
 }
@@ -198,7 +173,6 @@ impl ReplyOptions {
             eligibility: ReplyEligibility::Standard,
             operation_id: None,
             persist_prompt: true,
-            prompt_presentation: ReplyPromptPresentation::Visible,
             joins_worker_queue: false,
             review_comment_thread_ids,
             task: None,
@@ -213,7 +187,6 @@ impl ReplyOptions {
             eligibility: ReplyEligibility::QuestionAnswer,
             operation_id: None,
             persist_prompt: true,
-            prompt_presentation: ReplyPromptPresentation::Visible,
             joins_worker_queue,
             review_comment_thread_ids: Vec::new(),
             task: None,
@@ -227,7 +200,6 @@ impl ReplyOptions {
             eligibility: ReplyEligibility::Standard,
             operation_id: Some(operation_id),
             persist_prompt,
-            prompt_presentation: ReplyPromptPresentation::Visible,
             joins_worker_queue: false,
             review_comment_thread_ids: Vec::new(),
             task: None,
@@ -240,9 +212,9 @@ impl ReplyOptions {
             defer_prompt_until_enqueued: true,
             eligibility: ReplyEligibility::ReviewComments,
             operation_id: None,
-            // The worker persists generated context only when execution starts.
+            // The worker persists generated context only when execution
+            // starts, so the host never records or renders the prompt.
             persist_prompt: false,
-            prompt_presentation: ReplyPromptPresentation::HiddenAgent,
             joins_worker_queue,
             review_comment_thread_ids,
             task: None,
@@ -535,15 +507,12 @@ impl SessionManager {
                 old_stack_base_commit_hash.clone(),
             )
             .await?;
-        if let Some(session) = self
+        let session = self
             .state
-            .sessions
-            .iter_mut()
-            .find(|session| session.id.as_str() == session_id)
-        {
-            session.base_branch.clone_from(&parent_branch);
-            session.parent_session_id = Some(SessionId::from(parent_session_id));
-        }
+            .session_mut_for_id(session_id)
+            .ok_or(SessionError::NotFound)?;
+        session.base_branch.clone_from(&parent_branch);
+        session.parent_session_id = Some(SessionId::from(parent_session_id));
 
         if let Err(error) = self.rebase_session(services, session_id).await {
             services
@@ -556,15 +525,12 @@ impl SessionManager {
                     old_stack_base_commit_hash,
                 )
                 .await?;
-            if let Some(session) = self
+            let session = self
                 .state
-                .sessions
-                .iter_mut()
-                .find(|session| session.id.as_str() == session_id)
-            {
-                session.base_branch = old_base_branch;
-                session.parent_session_id = old_parent_session_id;
-            }
+                .session_mut_for_id(session_id)
+                .ok_or(SessionError::NotFound)?;
+            session.base_branch = old_base_branch;
+            session.parent_session_id = old_parent_session_id;
 
             return Err(error);
         }
@@ -1169,10 +1135,10 @@ impl SessionManager {
             .clear_session_draft_flag(session_id)
             .await?;
 
-        let session_index = self.session_index_or_err(session_id)?;
-        if let Some(session) = self.session_at_mut(session_index) {
-            session.is_draft = false;
-        }
+        self.state
+            .session_mut_for_id(session_id)
+            .ok_or(SessionError::NotFound)?
+            .is_draft = false;
 
         Ok(())
     }
@@ -1383,12 +1349,13 @@ impl SessionManager {
 
         let title_generation_prompt = staged_prompt.clone();
 
-        if let Some(session) = self.session_at_mut(session_index) {
-            session.prompt = staged_prompt;
-            session.draft_attachments = staged_attachments;
-            if let Some(title_to_save) = title_to_save {
-                session.title = Some(title_to_save);
-            }
+        let session = self
+            .session_at_mut(session_index)
+            .ok_or(SessionError::NotFound)?;
+        session.prompt = staged_prompt;
+        session.draft_attachments = staged_attachments;
+        if let Some(title_to_save) = title_to_save {
+            session.title = Some(title_to_save);
         }
 
         self.schedule_staged_draft_title_generation(
@@ -2503,10 +2470,11 @@ impl SessionManager {
             .update_session_review_request(&session_id, Some(review_request.clone()))
             .await?;
 
-        let Some(session) = self.state.sessions.get_mut(session_index) else {
-            return Err(SessionError::NotFound);
-        };
-        session.review_request = Some(review_request.clone());
+        self.state
+            .sessions
+            .get_mut(session_index)
+            .ok_or(SessionError::NotFound)?
+            .review_request = Some(review_request.clone());
 
         Ok(review_request)
     }
@@ -2545,7 +2513,6 @@ impl SessionManager {
             eligibility,
             operation_id,
             persist_prompt,
-            prompt_presentation,
             joins_worker_queue,
             review_comment_thread_ids,
             task,
@@ -2591,7 +2558,6 @@ impl SessionManager {
                 &services.event_sender(),
                 &persisted_session_id,
                 &prompt,
-                prompt_presentation,
             )
             .await;
         }
@@ -2637,7 +2603,6 @@ impl SessionManager {
                 &services.event_sender(),
                 &persisted_session_id,
                 &prompt,
-                prompt_presentation,
             )
             .await;
         }
@@ -2859,7 +2824,8 @@ impl SessionManager {
         }
     }
 
-    /// Appends the user reply marker line to session output.
+    /// Persists the user reply prompt and renders its marker line in session
+    /// output.
     async fn append_reply_prompt_line(
         &mut self,
         services: &AppServices,
@@ -2867,7 +2833,6 @@ impl SessionManager {
         app_event_tx: &mpsc::UnboundedSender<AppEvent>,
         session_id: &str,
         prompt: &TurnPrompt,
-        presentation: ReplyPromptPresentation,
     ) {
         let prompt_transcript_text = prompt.transcript_text();
         SessionTaskService::append_session_transcript_message(
@@ -2877,15 +2842,13 @@ impl SessionManager {
             &services.session_update_versions(),
             session_id,
             SessionTranscriptMessageAppend {
-                kind: presentation.message_kind(),
+                kind: SessionMessageKind::UserPrompt,
                 raw_content: &prompt_transcript_text,
             },
         )
         .await;
-        if presentation.is_visible() {
-            let reply_line = Self::formatted_prompt_output(prompt, true);
-            self.set_active_prompt_output(session_id, reply_line);
-        }
+        let reply_line = Self::formatted_prompt_output(prompt, true);
+        self.set_active_prompt_output(session_id, reply_line);
     }
 
     /// Formats one user prompt block for persisted session output.

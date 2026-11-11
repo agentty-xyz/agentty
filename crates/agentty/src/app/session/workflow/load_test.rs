@@ -1,5 +1,6 @@
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
+use std::sync::Arc;
 use std::time::{Instant, SystemTime};
 
 use ag_git::{GitError, MockGitClient};
@@ -7,9 +8,10 @@ use ag_session::test_support as model_fixture;
 
 use super::super::session_folder;
 use super::{
-    SessionLoadInput, load_session_transcript, merge_loaded_session_status,
-    migrate_active_sessions_off_retired_models, migrate_session_off_retired_model,
-    parse_questions_json, parse_review_request, should_skip_missing_folder_session,
+    SessionLoadInput, load_active_session_detail, load_session_transcript,
+    merge_loaded_session_status, migrate_active_sessions_off_retired_models,
+    migrate_session_off_retired_model, parse_questions_json, parse_review_request,
+    should_skip_missing_folder_session, status_and_transcript_from_existing_handle,
     sync_handle_transcript_with_loaded,
 };
 use crate::app::SessionManager;
@@ -31,6 +33,9 @@ use crate::infra::db::{
     SessionReviewRequestRow,
 };
 use crate::infra::fs;
+use crate::test_support::{
+    enable_tracing_log_fallback, poison_lock, session_manager_with_sessions,
+};
 
 #[test]
 fn test_workspace_preparation_shows_failures_and_clears_them_on_retry() {
@@ -140,6 +145,7 @@ async fn load_sessions_skips_invalid_permission_mode_without_hiding_valid_siblin
         .expect("permission mode should be corrupted");
     let mock_fs_client = create_folder_lookup_mock(Vec::new());
     let mut handles = HashMap::new();
+    enable_tracing_log_fallback();
 
     // Act
     let (sessions, _, session_worktree_availability, _) =
@@ -1181,6 +1187,74 @@ fn merge_loaded_session_status_prefers_read_only_and_terminal_status_from_db() {
     // Assert
     assert_eq!(merged_status, Status::Merged);
     assert_eq!(done_status, Status::Done);
+}
+
+#[test]
+/// Verifies a poisoned handle status falls back to the persisted status and
+/// stays untouched.
+fn existing_handle_with_poisoned_status_uses_persisted_status() {
+    // Arrange
+    let handles =
+        SessionHandles::new_with_transcript(Status::InProgress, SessionTranscript::default());
+    poison_lock(Arc::clone(&handles.status));
+
+    // Act
+    let (status, transcript) =
+        status_and_transcript_from_existing_handle(&handles, Status::Review, None);
+
+    // Assert
+    assert_eq!(status, Status::Review);
+    assert_eq!(transcript, None);
+    assert!(handles.status.is_poisoned());
+}
+
+#[tokio::test]
+/// Verifies an active session whose detail row is unavailable loads without
+/// detail or transcript.
+async fn active_session_detail_is_empty_when_detail_row_is_missing() {
+    // Arrange
+    let db = AppRepositories::in_memory().await.expect("db should open");
+
+    // Act
+    let (detail, transcript) =
+        load_active_session_detail(&db, Some("missing-session"), "missing-session").await;
+
+    // Assert
+    assert!(detail.is_none());
+    assert!(transcript.is_none());
+}
+
+#[tokio::test]
+/// Verifies hydrating detail for a persisted session absent from the loaded
+/// snapshot leaves the snapshot unchanged.
+async fn session_detail_hydration_ignores_sessions_missing_from_state() {
+    // Arrange
+    let db = AppRepositories::in_memory().await.expect("db should open");
+    let project_id = db
+        .projects()
+        .upsert_project("/tmp/test", None)
+        .await
+        .expect("project should be created");
+    db.sessions()
+        .insert_session(
+            "unloaded-session",
+            model_fixture::CODEX_MODEL_ID,
+            "main",
+            "Review",
+            project_id,
+        )
+        .await
+        .expect("session should be created");
+    let mut manager = session_manager_with_sessions(Vec::new());
+
+    // Act
+    let result = manager
+        .try_load_session_detail_into_state(&db, "unloaded-session")
+        .await;
+
+    // Assert
+    assert!(result.is_ok());
+    assert!(manager.session_for_id("unloaded-session").is_none());
 }
 
 #[test]

@@ -27,6 +27,7 @@ use crate::app::session::SessionError;
 use crate::domain::agent::{AgentKind, AgentModel, AgentSelection};
 use crate::domain::session::Status;
 use crate::infra::db::AppRepositories;
+use crate::test_support::{enable_tracing_log_fallback, poison_lock};
 
 #[tokio::test]
 /// Verifies process-only events do not append transcript content.
@@ -125,6 +126,95 @@ async fn test_consume_turn_events_coalesces_ready_thought_delta_bursts() {
             },
         ]
     );
+}
+
+#[tokio::test]
+/// Verifies blank thoughts, reserved terminal events, and a repeated thought
+/// after an exhausted coalescing budget publish no extra progress updates.
+async fn test_consume_turn_events_skips_blank_terminal_and_repeated_progress_events() {
+    // Arrange
+    let (event_tx, event_rx) = mpsc::unbounded_channel();
+    let (app_event_tx, mut app_event_rx) = mpsc::unbounded_channel();
+    let completed = || TurnEvent::Completed {
+        context_reset: false,
+        input_tokens: 0,
+        output_tokens: 0,
+    };
+    let mut events = vec![
+        TurnEvent::ThoughtDelta("   ".to_string()),
+        completed(),
+        TurnEvent::Failed("reserved".to_string()),
+        TurnEvent::ThoughtDelta("same".to_string()),
+        completed(),
+        TurnEvent::Failed("reserved".to_string()),
+        TurnEvent::ThoughtDelta(" ".to_string()),
+        TurnEvent::PidUpdate(Some(4242)),
+    ];
+    // Fill the rest of the coalescing budget and leave one repeated thought
+    // for the next consumer iteration.
+    events.extend((0..60).map(|_| TurnEvent::ThoughtDelta("same".to_string())));
+    for event in events {
+        event_tx.send(event).expect("failed to send turn event");
+    }
+    drop(event_tx);
+    let child_pid = Arc::new(Mutex::new(None));
+    enable_tracing_log_fallback();
+
+    // Act
+    consume_turn_events(
+        event_rx,
+        app_event_tx,
+        "session-1".into(),
+        Arc::clone(&child_pid),
+    )
+    .await;
+    let events = std::iter::from_fn(|| app_event_rx.try_recv().ok()).collect::<Vec<_>>();
+
+    // Assert
+    assert_eq!(*child_pid.lock().expect("pid lock poisoned"), Some(4242));
+    assert_eq!(
+        events,
+        vec![
+            AppEvent::SessionProgressUpdated {
+                progress_message: Some("same".to_string()),
+                session_id: "session-1".into(),
+            },
+            AppEvent::SessionProgressUpdated {
+                progress_message: None,
+                session_id: "session-1".into(),
+            },
+        ]
+    );
+}
+
+#[tokio::test]
+/// Verifies a poisoned PID slot keeps its last value instead of failing the
+/// event consumer.
+async fn test_consume_turn_events_skips_pid_updates_for_a_poisoned_pid_slot() {
+    // Arrange
+    let (event_tx, event_rx) = mpsc::unbounded_channel();
+    let child_pid = Arc::new(Mutex::new(None));
+    poison_lock(Arc::clone(&child_pid));
+    event_tx
+        .send(TurnEvent::PidUpdate(Some(4242)))
+        .expect("failed to send pid update");
+    drop(event_tx);
+
+    // Act
+    consume_turn_events(
+        event_rx,
+        mpsc::unbounded_channel().0,
+        "session-1".into(),
+        Arc::clone(&child_pid),
+    )
+    .await;
+
+    // Assert
+    let pid = child_pid
+        .lock()
+        .expect_err("pid slot stays poisoned")
+        .into_inner();
+    assert_eq!(*pid, None);
 }
 
 #[tokio::test]

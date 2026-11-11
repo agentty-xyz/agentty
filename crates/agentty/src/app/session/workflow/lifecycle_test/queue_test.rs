@@ -14,6 +14,7 @@ use crate::app::{AppEvent, SessionManager};
 use crate::domain::session::{QueuedMessage, Status};
 use crate::domain::session_message::SessionMessageKind;
 use crate::domain::turn_prompt::TurnPrompt;
+use crate::test_support::poison_lock;
 
 #[test]
 fn retracting_from_a_poisoned_queue_preserves_its_pending_message() {
@@ -116,6 +117,42 @@ async fn test_enqueue_message_emits_session_updated_event_only() {
         event_rx.try_recv().is_err(),
         "enqueue_message must not emit additional events (especially not RefreshSessions) so the \
          reducer skips the full DB-backed reload"
+    );
+}
+
+#[tokio::test]
+/// Ensures queueing into a poisoned queue drops the message instead of
+/// failing the foreground.
+async fn test_enqueue_message_skips_a_poisoned_queue() {
+    // Arrange
+    let session = test_session("Prompt", Status::InProgress, Some("Title"), "");
+    let database = database_with_session(&session).await;
+    let mut session_manager = session_manager_with_one_session(session);
+    let services = test_services(
+        &database,
+        Arc::new(git::MockGitClient::new()),
+        Arc::new(forge::MockReviewRequestClient::new()),
+    );
+    let queue = Arc::clone(
+        &session_manager
+            .session_handles()
+            .get("session-id")
+            .expect("handles")
+            .queued_messages,
+    );
+    poison_lock(Arc::clone(&queue));
+
+    // Act
+    let result = session_manager.enqueue_message(&services, "session-id", "queued reply");
+
+    // Assert
+    assert!(result.is_ok());
+    assert!(
+        queue
+            .lock()
+            .expect_err("queue stays poisoned")
+            .get_ref()
+            .is_empty()
     );
 }
 
