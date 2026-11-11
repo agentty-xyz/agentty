@@ -42,6 +42,21 @@ fn feature_demo_defaults_to_feature_demo_gif_settings() {
 }
 
 #[test]
+fn feature_demo_gif_settings_configurable() {
+    // Arrange
+    let settings = VhsTapeSettings {
+        width: 640,
+        ..VhsTapeSettings::feature_demo()
+    };
+
+    // Act
+    let demo = FeatureDemo::new("settings_override").gif_settings(settings);
+
+    // Assert
+    assert_eq!(demo.gif_settings.width, 640);
+}
+
+#[test]
 fn feature_demo_gif_output_dir_configurable() {
     // Arrange / Act
     let demo = FeatureDemo::new("dir_check").gif_output_dir("/tmp/gifs");
@@ -70,6 +85,25 @@ fn feature_demo_run_wires_check_only_vhs_context() {
     // Assert
     assert!(matches!(result.gif_status, GifStatus::Stale { .. }));
     assert!(result.frame.all_text().contains("ready"));
+}
+
+#[test]
+fn feature_demo_run_without_output_dir_skips_gif() {
+    // Arrange
+    let scenario = Scenario::new("no_output_dir")
+        .wait_for_text("ready", 3_000)
+        .capture_labeled("ready", "Shell is ready");
+    let builder = PtySessionBuilder::new("/bin/sh").args(["-c", "printf 'ready\\n'; sleep 60"]);
+    let demo = FeatureDemo::new("no_output_dir");
+
+    // Act
+    let result = demo
+        .run(&scenario, builder, Path::new("/bin/true"), &[])
+        .expect("feature demo should run");
+
+    // Assert
+    assert!(matches!(result.gif_status, GifStatus::NoOutputDir));
+    assert_eq!(result.report.captures.len(), 1);
 }
 
 #[test]

@@ -48,6 +48,24 @@ fn is_highlighted_detects_background_color() {
 }
 
 #[test]
+fn is_highlighted_detects_inverse() {
+    // Arrange — inverse flag (`0x08`) without bold or background.
+    let span = MatchedSpan {
+        text: "row".to_string(),
+        rect: Region::new(0, 0, 3, 1),
+        foreground: None,
+        background: None,
+        style: CellStyle::from_raw(0x08),
+    };
+
+    // Act / Assert
+    assert!(span.is_inverse());
+    assert!(!span.is_bold());
+    assert!(span.is_highlighted());
+    assert!(!sample_span().is_inverse());
+}
+
+#[test]
 fn not_highlighted_when_plain() {
     // Arrange
     let span = MatchedSpan {

@@ -59,8 +59,9 @@ fn run(output: &mut impl Write) -> io::Result<()> {
 
     // --- Example 4: Per-cell inspection ---
     writeln!(output, "--- Example 4: Per-Cell Inspection ---")?;
+    // `b` changes text, a bold `C` changes style, and a bold `d` changes both.
     let line_before = TerminalFrame::new(10, 1, b"ABCDE");
-    let line_after = TerminalFrame::new(10, 1, b"AbCdE");
+    let line_after = TerminalFrame::new(10, 1, b"Ab\x1b[1mCd\x1b[0mE");
     let diff = FrameDiff::compute(&line_before, &line_after);
 
     write!(output, "  Cell changes: ")?;
@@ -74,7 +75,10 @@ fn run(output: &mut impl Write) -> io::Result<()> {
         };
         write!(output, "{marker}")?;
     }
-    writeln!(output, "  (. = unchanged, T = text changed)")?;
+    writeln!(
+        output,
+        "  (. = unchanged, T = text, S = style, B = both changed)"
+    )?;
 
     writeln!(output, "\n=== Frame diffing showcase complete! ===")?;
 

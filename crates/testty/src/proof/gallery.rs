@@ -132,24 +132,21 @@ fn render_gallery(dir: &Path, artifacts: &[Artifact]) -> Result<String, ProofErr
 fn write_artifact(html: &mut String, dir: &Path, artifact: &Artifact) -> Result<(), ProofError> {
     let escaped_name = escape_html(&artifact.name);
 
-    write!(html, "<section>\n<h2>{escaped_name}</h2>\n")
-        .map_err(|error| ProofError::Format(error.to_string()))?;
+    // Writing into a `String` cannot fail, so the `fmt::Result`s are ignored.
+    let _ = write!(html, "<section>\n<h2>{escaped_name}</h2>\n");
 
     match artifact.kind {
         ArtifactKind::Text => {
             let content = std::fs::read_to_string(dir.join(&artifact.name))?;
-            writeln!(html, "<pre>{}</pre>", escape_html(&content))
-                .map_err(|error| ProofError::Format(error.to_string()))?;
+            let _ = writeln!(html, "<pre>{}</pre>", escape_html(&content));
         }
         ArtifactKind::Image | ArtifactKind::Animation => {
             let url = relative_url(&artifact.name);
-            writeln!(html, "<img src=\"{url}\" alt=\"{escaped_name}\">")
-                .map_err(|error| ProofError::Format(error.to_string()))?;
+            let _ = writeln!(html, "<img src=\"{url}\" alt=\"{escaped_name}\">");
         }
         ArtifactKind::Html => {
             let url = relative_url(&artifact.name);
-            writeln!(html, "<a href=\"{url}\">{escaped_name}</a>")
-                .map_err(|error| ProofError::Format(error.to_string()))?;
+            let _ = writeln!(html, "<a href=\"{url}\">{escaped_name}</a>");
         }
     }
 

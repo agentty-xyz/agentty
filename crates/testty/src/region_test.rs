@@ -73,6 +73,23 @@ fn percent_region_computes_correctly() {
 }
 
 #[test]
+fn quadrants_and_panels_split_odd_dimensions() {
+    // Arrange
+    let cols = 81;
+    let rows = 25;
+
+    // Act
+    let top_left = Region::top_left(cols, rows);
+    let left_panel = Region::left_panel(cols, rows);
+    let right_panel = Region::right_panel(cols, rows);
+
+    // Assert — the right half takes the extra column.
+    assert_eq!(top_left, Region::new(0, 0, 40, 12));
+    assert_eq!(left_panel, Region::new(0, 0, 40, 25));
+    assert_eq!(right_panel, Region::new(40, 0, 41, 25));
+}
+
+#[test]
 fn top_right_covers_right_half() {
     // Arrange / Act
     let region = Region::top_right(80, 24);

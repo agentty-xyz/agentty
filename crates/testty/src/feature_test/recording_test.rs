@@ -259,6 +259,37 @@ fn finalize_gif_recording_reports_replacement_failure() {
 }
 
 #[test]
+fn generate_gif_reports_output_dir_creation_failure() {
+    // Arrange — the output directory would have to live under a file.
+    let temp = tempfile::TempDir::new().expect("failed to create temp dir");
+    let blocking_file = temp.path().join("not_a_dir");
+    std::fs::write(&blocking_file, b"file").expect("write blocking file");
+    let output_dir = blocking_file.join("gifs");
+    let name = "dir_create";
+    let report = ProofReport::new(name);
+    let scenario = Scenario::new(name);
+    let settings = VhsTapeSettings::feature_demo();
+    let vhs = test_vhs_context(&settings, vhs_available, failed_tape_execution);
+
+    // Act
+    let status = generate_gif(
+        &scenario,
+        &report,
+        name,
+        &output_dir,
+        GifContext {
+            mode: GifMode::GenerateIfStale,
+            redactions: &[],
+        },
+        vhs,
+    );
+
+    // Assert
+    assert!(matches!(status, GifStatus::DirCreateFailed(_)));
+    assert!(!output_dir.exists());
+}
+
+#[test]
 fn generate_gif_missing_vhs_preserves_artifacts() {
     // Arrange
     let temp = tempfile::TempDir::new().expect("failed to create temp dir");

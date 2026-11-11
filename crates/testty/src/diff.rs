@@ -141,11 +141,12 @@ impl FrameDiff {
                 let row = changed_region.region.row;
                 let start_col = changed_region.region.col;
                 let end_col = start_col + changed_region.region.width - 1;
+                // `changed_regions()` never yields an `Unchanged` span, so it
+                // shares the most general label.
                 let change_label = match changed_region.change_type {
                     CellChange::TextChanged => "text changed",
                     CellChange::StyleChanged => "style changed",
-                    CellChange::BothChanged => "text and style changed",
-                    CellChange::Unchanged => "unchanged",
+                    CellChange::BothChanged | CellChange::Unchanged => "text and style changed",
                 };
 
                 let mut description = String::new();

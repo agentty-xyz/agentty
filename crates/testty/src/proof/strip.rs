@@ -4,7 +4,7 @@
 //! renderer and composes them vertically into a single tall PNG image with
 //! step labels between each frame.
 
-use image::{Rgba, RgbaImage};
+use image::{Rgba, RgbaImage, imageops};
 
 use super::backend::{ProofBackend, RenderContext};
 use super::report::{ProofCapture, ProofError, ProofReport};
@@ -40,9 +40,7 @@ impl ProofBackend for ScreenshotStripBackend {
 
         let rendered_frames = render_all_frames(report);
         let strip = compose_strip(&rendered_frames, report);
-        strip
-            .save(context.output)
-            .map_err(|err| ProofError::Format(err.to_string()))?;
+        strip.save(context.output).map_err(ProofError::format)?;
 
         Ok(())
     }
@@ -106,7 +104,7 @@ fn compose_strip(frames: &[(RgbaImage, &ProofCapture)], report: &ProofReport) ->
         current_y += LABEL_HEIGHT;
 
         // Copy frame image.
-        copy_image_onto(&mut strip, frame_image, 0, current_y);
+        imageops::replace(&mut strip, frame_image, 0, i64::from(current_y));
         current_y += frame_image.height();
 
         // Add padding between frames.
@@ -128,13 +126,7 @@ fn draw_label_header(
     description: &str,
 ) {
     // Fill background.
-    for pixel_y in start_y..start_y + LABEL_HEIGHT {
-        for pixel_x in 0..width {
-            if pixel_x < image.width() && pixel_y < image.height() {
-                image.put_pixel(pixel_x, pixel_y, LABEL_BG);
-            }
-        }
-    }
+    renderer::fill_rect(image, 0, start_y, width, LABEL_HEIGHT, LABEL_BG);
 
     // Render label text using the bitmap font.
     let text = format!("Step {step_number}: [{label}] {description}");
@@ -173,33 +165,14 @@ fn draw_bitmap_char(
     }
 
     let glyph_index = (code - 0x20) as usize;
-    let glyph = &renderer::ASCII_GLYPHS[glyph_index];
 
-    for (glyph_row, &byte) in glyph.iter().enumerate() {
-        let row_offset = u32::try_from(glyph_row).unwrap_or(0);
-        for bit in 0..8u32 {
-            if byte & (0x80 >> bit) != 0 {
-                let target_x = pixel_x + bit;
-                let target_y = pixel_y + row_offset;
-                if target_x < image.width() && target_y < image.height() {
-                    image.put_pixel(target_x, target_y, color);
-                }
-            }
-        }
-    }
-}
-
-/// Copy a source image onto a destination at the given offset.
-fn copy_image_onto(destination: &mut RgbaImage, source: &RgbaImage, offset_x: u32, offset_y: u32) {
-    for source_y in 0..source.height() {
-        for source_x in 0..source.width() {
-            let target_x = offset_x + source_x;
-            let target_y = offset_y + source_y;
-            if target_x < destination.width() && target_y < destination.height() {
-                destination.put_pixel(target_x, target_y, *source.get_pixel(source_x, source_y));
-            }
-        }
-    }
+    renderer::draw_glyph(
+        image,
+        pixel_x,
+        pixel_y,
+        &renderer::ASCII_GLYPHS[glyph_index],
+        color,
+    );
 }
 
 #[cfg(test)]

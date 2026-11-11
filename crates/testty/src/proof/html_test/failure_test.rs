@@ -168,6 +168,77 @@ fn html_renders_color_expectation_with_rgb() {
 }
 
 #[test]
+fn html_describes_first_match_style_expectations() {
+    // Arrange
+    let cases = [
+        (
+            Expected::BackgroundColor {
+                needle: "Save".to_string(),
+                color: CellColor::new(0, 0, 128),
+            },
+            "first match of 'Save' with background color rgb(0, 0, 128)",
+        ),
+        (
+            Expected::Highlighted {
+                needle: "Save".to_string(),
+            },
+            "first match of 'Save' to be highlighted",
+        ),
+        (
+            Expected::NotHighlighted {
+                needle: "Save".to_string(),
+            },
+            "first match of 'Save' to not be highlighted",
+        ),
+    ];
+
+    for (expected, description) in cases {
+        let failure = AssertionFailure {
+            message: "style mismatch".to_string(),
+            expected,
+            region: None,
+            matched_spans: Vec::new(),
+            frame_excerpt: "Save".to_string(),
+        };
+        let report = report_with_structured_failure(&failure);
+
+        // Act
+        let html = build_html(&report).expect("should build HTML");
+
+        // Assert
+        assert!(html.contains(description), "missing `{description}`");
+    }
+}
+
+#[test]
+fn html_format_span_lists_every_style_flag() {
+    // Arrange — italic, underline, inverse, and dim without bold.
+    let span = MatchedSpan {
+        text: "Save".to_string(),
+        rect: Region::new(0, 0, 4, 1),
+        foreground: None,
+        background: None,
+        style: CellStyle::from_raw(0b0001_1110),
+    };
+    let failure = AssertionFailure {
+        message: "styled".to_string(),
+        expected: Expected::NotHighlighted {
+            needle: "Save".to_string(),
+        },
+        region: None,
+        matched_spans: vec![span],
+        frame_excerpt: "Save".to_string(),
+    };
+    let report = report_with_structured_failure(&failure);
+
+    // Act
+    let html = build_html(&report).expect("should build HTML");
+
+    // Assert
+    assert!(html.contains("'Save' at col=0 row=0 width=4 style=italic,underline,inverse,dim</li>"));
+}
+
+#[test]
 fn html_format_span_includes_actual_fg_bg_and_style() {
     // Arrange — color failure whose first matched span carries the
     // actual foreground/background and `bold` style. The detail

@@ -199,10 +199,12 @@ fn default_version() -> u32 {
 }
 
 /// Reject a second key in a single-key step/expect map.
+///
+/// `kind` names the map with its article, such as `a step`.
 fn reject_extra_key<'de, A: MapAccess<'de>>(map: &mut A, kind: &str) -> Result<(), A::Error> {
     if map.next_key::<IgnoredAny>()?.is_some() {
         return Err(de::Error::custom(format!(
-            "a {kind} must have exactly one key"
+            "{kind} must have exactly one key"
         )));
     }
 
@@ -276,7 +278,7 @@ impl<'de> Deserialize<'de> for StepSpec {
                     other => return Err(de::Error::custom(format!("unknown step `{other}`"))),
                 };
 
-                reject_extra_key(&mut map, "step")?;
+                reject_extra_key(&mut map, "a step")?;
 
                 Ok(step)
             }
@@ -327,7 +329,7 @@ impl<'de> Deserialize<'de> for ExpectSpec {
                     }
                 };
 
-                reject_extra_key(&mut map, "expectation")?;
+                reject_extra_key(&mut map, "an expectation")?;
 
                 Ok(expect)
             }

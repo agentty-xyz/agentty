@@ -170,21 +170,7 @@ impl TerminalFrame {
         let mut text = String::with_capacity(usize::from(cols));
 
         for col in 0..cols {
-            let Some(cell) = screen.cell(row, col) else {
-                text.push(' ');
-                continue;
-            };
-
-            if cell.is_wide_continuation() {
-                continue;
-            }
-
-            let contents = cell.contents();
-            if contents.is_empty() {
-                text.push(' ');
-            } else {
-                text.push_str(contents);
-            }
+            Self::append_cell_text(screen, row, col, &mut text);
         }
 
         text.trim_end().to_string()
@@ -247,21 +233,7 @@ impl TerminalFrame {
             let mut line = String::new();
 
             for col in region.col..region.right().min(self.cols()) {
-                let Some(cell) = screen.cell(row, col) else {
-                    line.push(' ');
-                    continue;
-                };
-
-                if cell.is_wide_continuation() {
-                    continue;
-                }
-
-                let contents = cell.contents();
-                if contents.is_empty() {
-                    line.push(' ');
-                } else {
-                    line.push_str(contents);
-                }
+                Self::append_cell_text(screen, row, col, &mut line);
             }
 
             lines.push(line.trim_end().to_string());
@@ -401,21 +373,42 @@ impl TerminalFrame {
         (text, byte_to_col)
     }
 
+    /// Append one cell's text, as rendered by [`Self::row_text`], to `text`.
+    ///
+    /// Wide-character continuation cells contribute nothing. Blank cells and
+    /// positions outside the screen contribute a single space so column
+    /// positions are preserved.
+    fn append_cell_text(screen: &vt100::Screen, row: u16, col: u16, text: &mut String) {
+        let Some(cell) = screen.cell(row, col) else {
+            text.push(' ');
+
+            return;
+        };
+
+        if cell.is_wide_continuation() {
+            return;
+        }
+
+        let contents = cell.contents();
+        if contents.is_empty() {
+            text.push(' ');
+        } else {
+            text.push_str(contents);
+        }
+    }
+
     /// Extract a [`MatchedSpan`] for a range of cells on a single row.
     fn extract_span(&self, row: u16, col: u16, length: u16) -> MatchedSpan {
         let screen = self.parser.screen();
-        let mut text = String::new();
 
         let first_cell = screen.cell(row, col);
         let foreground = first_cell.and_then(|cell| convert_vt100_color(cell.fgcolor()));
         let background = first_cell.and_then(|cell| convert_vt100_color(cell.bgcolor()));
         let style = first_cell.map_or_default(CellStyle::from_cell);
-
-        for offset in 0..length {
-            if let Some(cell) = screen.cell(row, col + offset) {
-                text.push_str(cell.contents());
-            }
-        }
+        let text = (0..length)
+            .filter_map(|offset| screen.cell(row, col + offset))
+            .map(vt100::Cell::contents)
+            .collect();
 
         MatchedSpan {
             text,
