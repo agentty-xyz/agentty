@@ -57,6 +57,49 @@ fn speed_mode_round_trips_persisted_values() {
 }
 
 #[test]
+fn response_style_prompt_instructions_lead_with_the_outcome() {
+    // Arrange, Act
+    let instructions = ResponseStyle::ALL.map(ResponseStyle::prompt_instruction);
+
+    // Assert
+    assert!(
+        instructions
+            .iter()
+            .all(|instruction| instruction.starts_with("Lead with the outcome."))
+    );
+    assert!(instructions[0].contains("compact"));
+    assert!(instructions[1].contains("without exhaustive detail"));
+    assert!(instructions[2].contains("trade-offs"));
+}
+
+#[test]
+fn speed_mode_exposes_stable_labels_and_descriptions() {
+    // Arrange, Act
+    let values = SpeedMode::ALL.map(|speed_mode| (speed_mode.name(), speed_mode.description()));
+
+    // Assert
+    assert_eq!(
+        values,
+        [
+            ("Normal", "Standard response speed and provider pricing."),
+            ("Fast", "Faster responses at a higher provider cost."),
+        ]
+    );
+}
+
+#[test]
+fn line_change_counts_ignore_file_header_markers() {
+    // Arrange
+    let diff = "--- a/file.rs\n+++ b/file.rs\n@@ -1,2 +1,2 @@\n-old\n+new\n+extra\n context";
+
+    // Act
+    let counts = SessionStats::line_change_counts(diff);
+
+    // Assert
+    assert_eq!(counts, (2, 1));
+}
+
+#[test]
 fn speed_mode_rejects_unknown_persisted_value() {
     // Arrange, Act
     let result = "turbo".parse::<SpeedMode>();

@@ -43,3 +43,31 @@ fn test_reasoning_level_as_str_returns_stable_persisted_values() {
     assert_eq!(ReasoningLevel::XHigh.as_str(), "xhigh");
     assert_eq!(ReasoningLevel::Max.as_str(), "max");
 }
+
+#[test]
+/// Ensures every reasoning level has its own UI description.
+fn test_reasoning_level_description_returns_ui_copy() {
+    // Arrange
+    let levels = [
+        ReasoningLevel::Low,
+        ReasoningLevel::Medium,
+        ReasoningLevel::High,
+        ReasoningLevel::XHigh,
+        ReasoningLevel::Max,
+    ];
+
+    // Act
+    let descriptions = levels.map(ReasoningLevel::description);
+
+    // Assert
+    assert_eq!(
+        descriptions,
+        [
+            "Fastest responses with lighter reasoning.",
+            "Balanced speed and reasoning depth.",
+            "Deeper reasoning for tougher tasks.",
+            "Extra-high reasoning for complex tasks.",
+            "Maximum reasoning effort for the hardest tasks.",
+        ]
+    );
+}
