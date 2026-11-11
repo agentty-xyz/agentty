@@ -284,6 +284,19 @@ fn project_failures(emitter: &LifecycleEmitter, metadata: &ModelMetadata) {
 
 fn project_optional_metadata(emitter: &LifecycleEmitter, metadata: ModelMetadata) {
     emitter
+        .start_model_request(Some(metadata.clone()), 0, None)
+        .expect("observer should enable standalone calls")
+        .completed(
+            Some(CompletionMetadata::new(
+                "stop".to_string(),
+                None,
+                Some("usage-free-model".to_string()),
+                None,
+                None,
+            )),
+            ModelResponseType::Output,
+        );
+    emitter
         .start_model_request(Some(metadata), 0, None)
         .expect("observer should enable standalone calls")
         .completed(
@@ -470,9 +483,22 @@ fn assert_optional_metadata(spans: &[SpanData]) {
             span.name == "chat test-model"
                 && attributes(span).contains_key(telemetry::ATTRIBUTE_RESPONSE_FINISH_REASONS)
                 && !attributes(span).contains_key(telemetry::ATTRIBUTE_RESPONSE_ID)
+                && !attributes(span).contains_key(telemetry::ATTRIBUTE_RESPONSE_MODEL)
         })
         .expect("completion without optional identity should be exported");
+    let usage_free = spans
+        .iter()
+        .find(|span| {
+            attributes(span).get(telemetry::ATTRIBUTE_RESPONSE_MODEL)
+                == Some(&"usage-free-model".to_string())
+        })
+        .expect("completion without usage should be exported");
     assert!(!attributes(oversized_usage).contains_key(telemetry::ATTRIBUTE_USAGE_INPUT_TOKENS));
+    assert!(
+        !attributes(usage_free)
+            .keys()
+            .any(|key| key.starts_with("gen_ai.usage."))
+    );
 }
 
 #[tokio::test]
@@ -500,7 +526,7 @@ async fn projects_correlated_semantic_spans_for_every_lifecycle_outcome() {
         .expect("finished spans should be readable");
 
     // Assert
-    assert_eq!(spans.len(), 23);
+    assert_eq!(spans.len(), 24);
     assert_success_spans(&spans);
     assert_interleaved_spans(&spans);
     assert_failure_spans(&spans);

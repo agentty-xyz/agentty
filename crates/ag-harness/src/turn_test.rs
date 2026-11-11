@@ -200,6 +200,13 @@ fn tool_activity_display_formats_every_outcome_safely() {
         start_line: 1,
         truncated: false,
     };
+    let ranged_read = ToolActivity::Read {
+        duration: Duration::from_millis(7),
+        end_line: Some(9),
+        path: "src/lib.rs".to_string(),
+        start_line: 3,
+        truncated: true,
+    };
     let inspection = ToolActivity::ReadInspection {
         action: ReadAction::List,
         arguments: r#"{"action":"list"}"#.to_string(),
@@ -238,6 +245,7 @@ fn tool_activity_display_formats_every_outcome_safely() {
     // Act
     let displays = [
         read.to_string(),
+        ranged_read.to_string(),
         inspection.to_string(),
         rejected_inspection.to_string(),
         rejected_read.to_string(),
@@ -252,6 +260,7 @@ fn tool_activity_display_formats_every_outcome_safely() {
         displays,
         [
             "read empty\u{fffd}\u{fffd}]52;c;Y2xpcGJvYXJk\u{fffd}.txt (line 1; <1 ms)",
+            "read src/lib.rs (lines 3-9, truncated; 7 ms)",
             "read list . (completed; 1 ms)",
             "read search needle (rejected; 1 ms)",
             "read missing.rs (rejected; 2 ms)",

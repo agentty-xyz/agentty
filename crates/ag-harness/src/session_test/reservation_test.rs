@@ -134,6 +134,38 @@ END
 }
 
 #[tokio::test]
+async fn beginning_a_turn_reports_unique_turn_conflicts_as_busy() {
+    // Arrange
+    let database = Database::open_in_memory()
+        .await
+        .expect("database should open");
+    database
+        .create_session(&NewSession::new("session-a", schema()), None, 100_000)
+        .await
+        .expect("session should be created");
+    complete_first_turn(&database).await;
+    sqlx::query("CREATE UNIQUE INDEX injected_single_turn_idx ON session_turn (session_id)")
+        .execute(&database.pool)
+        .await
+        .expect("conflicting index should be created");
+
+    // Act
+    let error = AcquiredTurn::begin(
+        Arc::new(database.clone()),
+        "session-a",
+        &TurnInput::from("second"),
+        &turn_options(),
+        0,
+    )
+    .await
+    .err()
+    .expect("unique conflict should be reported");
+
+    // Assert
+    assert!(matches!(error, SessionError::Busy { id } if id == "session-a"));
+}
+
+#[tokio::test]
 async fn beginning_a_turn_does_not_reserve_when_history_loading_fails() {
     // Arrange
     let database = Database::open_in_memory()

@@ -3250,7 +3250,9 @@ pub(crate) fn repeated_read_result(same_as_call: &str) -> String {
 pub(crate) fn deferred_read_result(arguments: &ReadArguments) -> String {
     let note = "Not shown: this response's earlier results fill one round's share of the context \
                 window. Call read with these arguments in a later response.";
-    let call = serde_json::to_string(arguments).unwrap_or_else(|_| "{}".to_string());
+    // Read arguments hold only strings, integers, and unit enums, so their
+    // JSON conversion cannot fail.
+    let call = serde_json::json!(arguments);
 
     // Fields are written in this order so the result starts with
     // `DEFERRED_READ_PREFIX`.

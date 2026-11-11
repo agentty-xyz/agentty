@@ -381,11 +381,14 @@ impl<'a> RequestMetrics<'a> {
         }
     }
 
-    /// Records a successful request and provider-reported token usage.
-    pub(crate) fn completed(mut self, metadata: &CompletionMetadata) {
+    /// Records a successful request and any provider-reported token usage.
+    pub(crate) fn completed(mut self, metadata: Option<&CompletionMetadata>) {
         self.is_active = false;
         self.record_duration(None);
-        self.record_token_usage(metadata);
+
+        if let Some(metadata) = metadata {
+            self.record_token_usage(metadata);
+        }
     }
 
     /// Records a failed request with a bounded error classification.

@@ -462,14 +462,11 @@ impl LocalFileSystem {
     #[cfg(any(target_os = "android", target_os = "linux"))]
     fn access_metadata(file: &std::fs::File) -> io::Result<AccessMetadata> {
         let metadata = rustix::fs::fstat(file).map_err(io::Error::from)?;
-        let attributes = Self::extended_attribute_names(file)?
-            .into_iter()
-            .map(|name| {
-                let value = Self::extended_attribute(file, &name)?;
-
-                Ok(ExtendedAttribute { name, value })
-            })
-            .collect::<io::Result<Vec<_>>>()?;
+        let mut attributes = Vec::new();
+        for name in Self::extended_attribute_names(file)? {
+            let value = Self::extended_attribute(file, &name)?;
+            attributes.push(ExtendedAttribute { name, value });
+        }
 
         Ok(AccessMetadata {
             attributes,

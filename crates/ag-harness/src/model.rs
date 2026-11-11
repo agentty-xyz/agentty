@@ -252,26 +252,20 @@ impl ModelClient {
             Some(lifecycle) => lifecycle.scope(operation).await,
             None => operation.await,
         };
-        let (result, failure_metadata) = match generated {
+        let (result, metadata) = match generated {
             Ok(completion) => {
                 let metadata = match &completion {
                     ag_router::Completion::Output { metadata, .. }
                     | ag_router::Completion::ToolCalls { metadata, .. } => metadata.clone(),
                 };
-                let result = Self::from_router_completion(completion);
-                let failure_metadata = result.as_ref().err().map(|_| metadata);
-                (result, failure_metadata)
+                (Self::from_router_completion(completion), Some(metadata))
             }
             Err((error, metadata)) => (Err(error), metadata),
         };
 
         match &result {
-            Ok(completion) => {
-                if let Some(metadata) = completion.metadata() {
-                    metrics.completed(metadata);
-                }
-            }
-            Err(error) => metrics.failed(error, failure_metadata.as_ref()),
+            Ok(_) => metrics.completed(metadata.as_ref()),
+            Err(error) => metrics.failed(error, metadata.as_ref()),
         }
 
         if let Some(lifecycle) = lifecycle {
@@ -444,18 +438,7 @@ impl ModelClient {
             } => ModelCompletion::new(metadata, ModelResponse::Output(value))
                 .with_reasoning_content(reasoning_content),
             ag_router::Completion::ToolCalls { calls, metadata } => {
-                let mut calls = calls
-                    .into_iter()
-                    .map(|call| {
-                        tool::ToolCall::from_json(
-                            call.id().to_string(),
-                            call.name(),
-                            &call.arguments_json(),
-                            call.reasoning_content().map(str::to_string),
-                        )?
-                        .with_assistant_text(call.assistant_text().map(str::to_string))
-                    })
-                    .collect::<Result<Vec<_>, _>>()?;
+                let mut calls = Self::from_router_calls(calls)?;
                 let response = if calls.len() == 1 {
                     ModelResponse::ToolCall(calls.remove(0))
                 } else {
@@ -464,6 +447,27 @@ impl ModelClient {
                 ModelCompletion::new(metadata, response)
             }
         })
+    }
+
+    /// Converts router-decoded tool calls into harness tool calls.
+    ///
+    /// The router already enforces the same identifier, content-size, and
+    /// advertised-name rules, so this fails only if the two contracts diverge.
+    fn from_router_calls(
+        calls: Vec<ag_router::ToolCall>,
+    ) -> Result<Vec<tool::ToolCall>, ModelError> {
+        calls
+            .into_iter()
+            .map(|call| {
+                tool::ToolCall::from_json(
+                    call.id().to_string(),
+                    call.name(),
+                    &call.arguments_json(),
+                    call.reasoning_content().map(str::to_string),
+                )?
+                .with_assistant_text(call.assistant_text().map(str::to_string))
+            })
+            .collect()
     }
 
     fn from_router_error(error: ag_router::ModelError) -> ModelError {

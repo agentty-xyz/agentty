@@ -286,6 +286,22 @@ async fn repository_verification_rejects_failed_discovery() {
 }
 
 #[tokio::test]
+async fn repository_verification_rejects_non_utf8_git_root() {
+    // Arrange
+    let root = Path::new(env!("CARGO_MANIFEST_DIR"));
+    let output = command_output(0, vec![0xff, b'\n']);
+
+    // Act
+    let error = LocalRepositoryCommandRunner::verify_repository_root(root, output)
+        .await
+        .expect_err("non-UTF-8 Git root should be rejected");
+
+    // Assert
+    assert_eq!(error.kind(), io::ErrorKind::InvalidData);
+    assert_eq!(error.to_string(), "Git root is not UTF-8");
+}
+
+#[tokio::test]
 async fn treats_repository_path_filters_as_literal() {
     // Arrange
     let tool = ReadTool::new(

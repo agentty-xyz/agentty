@@ -1115,6 +1115,37 @@ fn continued_requests_route_the_schema_their_conversation_used() {
     assert_eq!(plain.options.prefix_schema, None);
 }
 
+#[test]
+fn routed_request_preserves_system_and_assistant_history() {
+    // Arrange
+    let client = ModelClient::qwen(QwenConfig {
+        api_key: "test-key".to_string(),
+        base_url: "https://example.com/v1".to_string(),
+        model: "qwen-plus".to_string(),
+    })
+    .expect("valid model identity");
+    let request = test_request().with_fitted_messages(vec![
+        ModelMessage::System("instructions".to_string()),
+        ModelMessage::User("question".to_string()),
+        ModelMessage::Assistant("answer".to_string()),
+    ]);
+
+    // Act
+    let routed = client
+        .to_router_request(&request)
+        .expect("history request routes");
+
+    // Assert
+    assert_eq!(
+        routed.messages(),
+        [
+            ag_router::ModelMessage::System("instructions".to_string()),
+            ag_router::ModelMessage::User("question".to_string()),
+            ag_router::ModelMessage::Assistant("answer".to_string()),
+        ]
+    );
+}
+
 #[tokio::test]
 async fn routed_request_rejects_invalid_replayed_tool_call_before_network() {
     // Arrange

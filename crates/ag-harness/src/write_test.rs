@@ -160,6 +160,8 @@ fn rejects_malformed_unified_diffs() {
         "--- a/file\n+++ b/file\n@@ -1 1 @@\n x\n",
         "--- a/file\n+++ b/file\n@@ -x +1 @@\n x\n",
         "--- a/file\n+++ b/file\n@@ -1 +x @@\n x\n",
+        "--- a/file\n+++ b/file\n@@ -1,x +1 @@\n x\n",
+        "--- a/file\n+++ b/file\n@@ -1 +1 @@\n\n",
         "--- a/file\n+++ b/file\n@@ -1 +1 @@\n",
         "--- a/file\n+++ b/file\n@@ -1 +1 @@\n?x\n",
         "--- a/file\n+++ b/file\n@@ -1 +1 @@\n\\ No newline at end of file\n",
