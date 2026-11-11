@@ -558,10 +558,16 @@ fn execute_steps_surfaces_eventually_assertion_failure() {
 fn waits_time_out_when_output_never_satisfies_them() {
     // Arrange
     let mut text_session = fake_session(FakeChild::running(), Box::new(io::sink()), &[b"other"]);
+    // The disconnected fake output drains instantly, so this wait polls again
+    // after its first miss until the deadline passes.
+    let mut polling_text_session =
+        fake_session(FakeChild::running(), Box::new(io::sink()), &[b"other"]);
     let mut stable_session = fake_session(FakeChild::running(), Box::new(io::sink()), &[b"busy"]);
 
     // Act
     let text_result = text_session.wait_for_text("needle", Duration::ZERO);
+    let polling_text_result =
+        polling_text_session.wait_for_text("needle", Duration::from_millis(100));
     let stable_result =
         stable_session.wait_for_stable_frame(Duration::from_mins(1), Duration::ZERO);
 
@@ -570,6 +576,11 @@ fn waits_time_out_when_output_never_satisfies_them() {
         matches!(&text_result, Err(PtySessionError::Timeout(message))
             if message == "Text 'needle' did not appear within 0ms"),
         "unexpected text wait result"
+    );
+    assert!(
+        matches!(&polling_text_result, Err(PtySessionError::Timeout(message))
+            if message == "Text 'needle' did not appear within 100ms"),
+        "unexpected polling text wait result"
     );
     assert!(
         matches!(&stable_result, Err(PtySessionError::Timeout(message))
