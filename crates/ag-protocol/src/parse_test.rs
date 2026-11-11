@@ -1,10 +1,12 @@
+use std::io::{self, Read};
+
 use crate::model::{
     AgentResponse, AgentResponseParseError, ProtocolRequestProfile, ReviewCommentOutcome,
     ReviewCommentResolution,
 };
 use crate::parse::{
-    format_protocol_parse_debug_details, parse_agent_response_strict,
-    parse_protocol_response_strict,
+    describe_json_error_category, format_protocol_parse_debug_details, parse_agent_response_strict,
+    parse_protocol_response_strict, push_character_boundary_debug_lines,
 };
 
 #[test]
@@ -358,6 +360,184 @@ fn test_parse_agent_response_strict_recovers_embedded_code_fence_in_prose() {
         response.expect("response should parse").answer,
         "Refined commit message"
     );
+}
+
+#[test]
+/// Strict parsing reports empty input, schema mismatches, and fenced
+/// payloads without a protocol object as distinct failures.
+fn test_parse_agent_response_strict_reports_failure_reasons() {
+    // Arrange
+    let cases = [
+        ("  \n ", AgentResponseParseError::Empty),
+        (
+            r#"{"answer":5}"#,
+            AgentResponseParseError::InvalidFormat {
+                reason: concat!(
+                    "direct parse failed (response is not valid protocol JSON: schema validation ",
+                    "failed (invalid type: number, expected a string)); no markdown ",
+                    "wrapper/embedded protocol object found",
+                )
+                .to_string(),
+            },
+        ),
+        (
+            "```json\n{\"reasoning\":\"x\"}\n```",
+            AgentResponseParseError::InvalidFormat {
+                reason: concat!(
+                    "markdown code fence extraction failed (response is not valid protocol ",
+                    "JSON: json object is missing all protocol keys (answer, questions, ",
+                    "review_comment_outcomes))",
+                )
+                .to_string(),
+            },
+        ),
+    ];
+
+    for (raw, expected_error) in cases {
+        // Act
+        let response = parse_agent_response_strict(raw);
+
+        // Assert
+        assert_eq!(response, Err(expected_error), "{raw:?}");
+    }
+}
+
+#[test]
+/// Strict parsing recovers a trailing protocol object from prose inside a
+/// leading or embedded code fence.
+fn test_parse_agent_response_strict_recovers_prose_wrapped_payload_inside_fences() {
+    // Arrange
+    let leading_fence = "```text\nNotes first {\"answer\":\"From fence\"}\n```";
+    let embedded_fence = "Intro\n```text\nNotes first {\"answer\":\"From embedded\"}\n```";
+
+    // Act
+    let leading_response = parse_agent_response_strict(leading_fence);
+    let embedded_response = parse_agent_response_strict(embedded_fence);
+
+    // Assert
+    assert_eq!(
+        leading_response.expect("leading fence should parse").answer,
+        "From fence"
+    );
+    assert_eq!(
+        embedded_response
+            .expect("embedded fence should parse")
+            .answer,
+        "From embedded"
+    );
+}
+
+#[test]
+/// Session-turn profile parsing uses the strict agent response parser.
+fn test_parse_protocol_response_strict_session_turn_uses_agent_response_parser() {
+    // Arrange
+    let raw = r#"{"answer":"Done."}"#;
+
+    // Act
+    let response = parse_protocol_response_strict(raw, ProtocolRequestProfile::SessionTurn);
+
+    // Assert
+    assert_eq!(response.expect("response should parse").answer, "Done.");
+}
+
+#[test]
+/// Debug formatting stops after size metadata for blank responses.
+fn test_format_protocol_parse_debug_details_reports_blank_response_sizes_only() {
+    // Arrange
+    let raw = " \n ";
+
+    // Act
+    let details = format_protocol_parse_debug_details(raw);
+
+    // Assert
+    assert_eq!(
+        details,
+        "response_len: 3 chars\nresponse_lines: 2\ntrimmed_len: 0 \
+         chars\nwrapped_in_markdown_fence: false"
+    );
+}
+
+#[test]
+/// Debug formatting describes fenced JSON, recognized protocol keys,
+/// non-object values, and end-of-input JSON errors.
+fn test_format_protocol_parse_debug_details_reports_fence_types_and_keys() {
+    // Arrange
+    let cases = [
+        (
+            "```json\n{\"answer\":\"x\"}\n```",
+            vec![
+                "wrapped_in_markdown_fence: true",
+                "code_fence_inner_len: 14 chars",
+                "code_fence_json_recognized_protocol_keys: answer",
+                "embedded_json_candidate: none",
+            ],
+        ),
+        ("null", vec!["direct_json_type: null"]),
+        ("true", vec!["direct_json_type: boolean"]),
+        ("1", vec!["direct_json_type: number"]),
+        ("\"text\"", vec!["direct_json_type: string"]),
+        ("[1]", vec!["direct_json_type: array"]),
+        (
+            "{",
+            vec![
+                "direct_json_error_category: eof",
+                "embedded_json_candidate: none",
+            ],
+        ),
+    ];
+
+    for (raw, expected_lines) in cases {
+        // Act
+        let details = format_protocol_parse_debug_details(raw);
+
+        // Assert
+        for expected_line in expected_lines {
+            assert!(
+                details.lines().any(|line| line == expected_line),
+                "{raw:?} should report {expected_line:?} in:\n{details}"
+            );
+        }
+    }
+}
+
+#[test]
+/// Character-boundary diagnostics add nothing for empty text.
+fn test_push_character_boundary_debug_lines_skips_empty_text() {
+    // Arrange
+    let mut detail_lines = Vec::new();
+
+    // Act
+    push_character_boundary_debug_lines(&mut detail_lines, "");
+
+    // Assert
+    assert_eq!(detail_lines, Vec::<String>::new());
+}
+
+#[test]
+/// JSON error categories map every serde category to a stable label.
+fn test_describe_json_error_category_labels_io_and_data_errors() {
+    // Arrange
+    let io_error = serde_json::from_reader::<_, serde_json::Value>(FailingReader)
+        .expect_err("reader failure should surface");
+    let data_error =
+        serde_json::from_str::<u8>("\"text\"").expect_err("type mismatch should surface");
+
+    // Act
+    let io_category = describe_json_error_category(&io_error);
+    let data_category = describe_json_error_category(&data_error);
+
+    // Assert
+    assert_eq!(io_category, "io");
+    assert_eq!(data_category, "data");
+}
+
+/// Reader that always fails so serde reports an I/O error category.
+struct FailingReader;
+
+impl Read for FailingReader {
+    fn read(&mut self, _buffer: &mut [u8]) -> io::Result<usize> {
+        Err(io::Error::other("read failed"))
+    }
 }
 
 #[test]

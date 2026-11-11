@@ -1,6 +1,6 @@
 use crate::model::{
-    AgentResponse, MAX_QUESTIONS, ReviewCommentOutcome, ReviewCommentResolution,
-    questions_field_description, render_field_description_template,
+    AgentResponse, AgentResponseParseError, MAX_QUESTIONS, ReviewCommentOutcome,
+    ReviewCommentResolution, questions_field_description, render_field_description_template,
 };
 use crate::question::QuestionItem;
 
@@ -42,6 +42,51 @@ fn test_agent_response_to_display_text_joins_answer_and_questions() {
 
     // Assert
     assert_eq!(display_text, "Primary answer\n\nNeed one clarification.");
+}
+
+#[test]
+/// Ensures answer-only display text and answer lists skip blank answers.
+fn test_agent_response_answers_skip_blank_answer_text() {
+    // Arrange
+    let answered = AgentResponse {
+        answer: "Primary answer".to_string(),
+        questions: vec![QuestionItem::new("Hidden from answer text.")],
+        review_comment_outcomes: Vec::new(),
+    };
+    let blank = AgentResponse::plain(" \n ");
+
+    // Act
+    let answered_text = answered.to_answer_display_text();
+    let answered_list = answered.answers();
+    let blank_text = blank.to_answer_display_text();
+    let blank_list = blank.answers();
+
+    // Assert
+    assert_eq!(answered_text, "Primary answer");
+    assert_eq!(answered_list, vec!["Primary answer".to_string()]);
+    assert_eq!(blank_text, "");
+    assert_eq!(blank_list, Vec::<String>::new());
+}
+
+#[test]
+/// Ensures parse errors render user-facing descriptions.
+fn test_agent_response_parse_error_display() {
+    // Arrange
+    let empty = AgentResponseParseError::Empty;
+    let invalid = AgentResponseParseError::InvalidFormat {
+        reason: "missing answer".to_string(),
+    };
+
+    // Act
+    let empty_text = empty.to_string();
+    let invalid_text = invalid.to_string();
+
+    // Assert
+    assert_eq!(empty_text, "response is empty");
+    assert_eq!(
+        invalid_text,
+        "response is not valid protocol JSON: missing answer"
+    );
 }
 
 #[test]

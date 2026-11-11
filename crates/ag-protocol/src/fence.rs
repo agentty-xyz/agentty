@@ -24,3 +24,7 @@ pub fn diff_fence(content: &str) -> String {
 
     "`".repeat(fence_length)
 }
+
+#[cfg(test)]
+#[path = "fence_test.rs"]
+mod tests;

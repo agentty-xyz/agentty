@@ -35,30 +35,18 @@ pub fn parse_agent_response_strict(raw: &str) -> Result<AgentResponse, AgentResp
         return Err(AgentResponseParseError::Empty);
     }
 
-    let direct_parse = parse_structured_json_response_with_reason(trimmed);
-    if let Ok(response) = direct_parse {
-        return Ok(response);
-    }
-
-    let direct_parse_error = match direct_parse {
+    let direct_parse_error = match parse_structured_json_response_with_reason(trimmed) {
+        Ok(response) => return Ok(response),
         Err(error) => error.to_string(),
-        Ok(_) => unreachable!("direct parse branch already returned successful parse"),
     };
 
     if let Some(inner) = strip_markdown_code_fence(trimmed) {
-        if let Some(response) = parse_structured_json_response_with_recovery(inner) {
-            return Ok(response);
-        }
-
-        let fence_parse_error = parse_structured_json_response_with_reason(inner)
-            .err()
-            .map_or_else(
-                || "no protocol payload found in markdown code fence".to_string(),
-                |error| error.to_string(),
-            );
-
-        return Err(AgentResponseParseError::InvalidFormat {
-            reason: format!("markdown code fence extraction failed ({fence_parse_error})"),
+        return parse_structured_json_response_with_reason(inner).or_else(|fence_parse_error| {
+            recover_embedded_structured_json_response(inner).ok_or_else(|| {
+                AgentResponseParseError::InvalidFormat {
+                    reason: format!("markdown code fence extraction failed ({fence_parse_error})"),
+                }
+            })
         });
     }
 
@@ -313,6 +301,10 @@ fn recover_embedded_structured_json_response(raw: &str) -> Option<AgentResponse>
 ///
 /// Handles the pattern where a provider prepends commentary before a fenced
 /// JSON payload (e.g., `"Some explanation\n` ` ```json\n{...}\n``` ` `"`).
+///
+/// The returned body is never empty: the text before the closing fence is
+/// trimmed, so any newline found after the opening fence is followed by at
+/// least one non-whitespace character.
 fn find_embedded_code_fence_content(raw: &str) -> Option<&str> {
     let closing_fence_start = raw.rfind("```")?;
     let before_closing = raw[..closing_fence_start].trim_end();
@@ -321,14 +313,8 @@ fn find_embedded_code_fence_content(raw: &str) -> Option<&str> {
     let after_opening_backticks = &before_closing[opening_fence_start + 3..];
 
     let body_start = after_opening_backticks.find('\n').map(|index| index + 1)?;
-    let inner = &after_opening_backticks[body_start..];
-    let trimmed = inner.trim();
 
-    if trimmed.is_empty() {
-        return None;
-    }
-
-    Some(trimmed)
+    Some(after_opening_backticks[body_start..].trim())
 }
 
 /// Finds the last JSON object embedded in a response when it consumes the full
