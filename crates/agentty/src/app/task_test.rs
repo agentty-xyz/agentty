@@ -259,6 +259,22 @@ impl ag_session::AgentAvailabilityProbe for PanickingAgentAvailabilityProbe {
     }
 }
 
+/// Reports one available Claude CLI with a fixed refreshed version.
+struct FixedAgentAvailabilityProbe;
+
+impl ag_session::AgentAvailabilityProbe for FixedAgentAvailabilityProbe {
+    fn available_agent_kinds(&self) -> Vec<AgentKind> {
+        vec![AgentKind::Claude]
+    }
+
+    fn available_agent_clis(&self) -> Vec<AgentCliInfo> {
+        vec![AgentCliInfo::new(
+            AgentKind::Claude,
+            Some("2.1.39".to_string()),
+        )]
+    }
+}
+
 /// Seeds one archived session diff for background diff fallback tests.
 async fn archived_diff_repositories(
     archived_diff: Option<&str>,
@@ -341,43 +357,50 @@ async fn session_diff_task_falls_back_to_archived_managed_merge_diff() {
 
 #[tokio::test]
 async fn session_diff_task_preserves_git_error_without_archived_fallback() {
-    // Arrange
-    let repositories = archived_diff_repositories(None).await;
-    let mut git_client = MockGitClient::new();
-    git_client.expect_diff().once().returning(|_, _| {
-        Box::pin(async {
-            Err(ag_git::GitError::RepositoryUnavailable {
-                detail: "worktree removed".to_string(),
+    // Arrange: a fallback store without an archived diff, and no store.
+    let archived_fallbacks = [Some(archived_diff_repositories(None).await), None];
+
+    for archived_fallback in archived_fallbacks {
+        let has_fallback_store = archived_fallback.is_some();
+        let mut git_client = MockGitClient::new();
+        git_client.expect_diff().once().returning(|_, _| {
+            Box::pin(async {
+                Err(ag_git::GitError::RepositoryUnavailable {
+                    detail: "worktree removed".to_string(),
+                })
             })
-        })
-    });
-    let (app_event_tx, mut app_event_rx) = mpsc::unbounded_channel();
-    let input = SessionDiffTaskInput {
-        app_event_tx,
-        folder: PathBuf::from("/tmp/removed-worktree"),
-        session_id: "session-id".into(),
-        source: SessionDiffTaskSource::Worktree {
-            archived_fallback: Some(repositories),
-            base_branch: "main".to_string(),
-            git_client: Arc::new(git_client),
-        },
-    };
+        });
+        let (app_event_tx, mut app_event_rx) = mpsc::unbounded_channel();
+        let input = SessionDiffTaskInput {
+            app_event_tx,
+            folder: PathBuf::from("/tmp/removed-worktree"),
+            session_id: "session-id".into(),
+            source: SessionDiffTaskSource::Worktree {
+                archived_fallback,
+                base_branch: "main".to_string(),
+                git_client: Arc::new(git_client),
+            },
+        };
 
-    // Act
-    TaskService::spawn_session_diff_task(input);
-    let app_event = tokio::time::timeout(Duration::from_secs(1), app_event_rx.recv())
-        .await
-        .expect("timed out waiting for session diff event")
-        .expect("session diff task should emit one event");
+        // Act
+        TaskService::spawn_session_diff_task(input);
+        let app_event = tokio::time::timeout(Duration::from_secs(1), app_event_rx.recv())
+            .await
+            .expect("timed out waiting for session diff event")
+            .expect("session diff task should emit one event");
 
-    // Assert
-    assert!(matches!(
-        app_event,
-        AppEvent::SessionDiffLoaded {
-            result: Err(error),
-            ..
-        } if error == "Failed to run git diff: worktree removed"
-    ));
+        // Assert
+        assert!(
+            matches!(
+                app_event,
+                AppEvent::SessionDiffLoaded {
+                    result: Err(ref error),
+                    ..
+                } if error == "Failed to run git diff: worktree removed"
+            ),
+            "unexpected event with fallback store {has_fallback_store}: {app_event:?}"
+        );
+    }
 }
 
 #[tokio::test]
@@ -1017,6 +1040,36 @@ async fn load_agent_cli_availability_uses_startup_kinds_when_probe_panics() {
     // Assert
     assert_eq!(agent_clis, vec![AgentCliInfo::new(AgentKind::Claude, None)]);
     assert_eq!(agent_kinds, AgentKind::ALL.to_vec());
+}
+
+#[tokio::test]
+/// Ensures the background CLI version task publishes the probe's refreshed
+/// snapshot through the app event bus.
+async fn agent_cli_version_task_publishes_probe_snapshot() {
+    // Arrange
+    let (app_event_tx, mut app_event_rx) = mpsc::unbounded_channel();
+
+    // Act
+    TaskService::spawn_agent_cli_version_task(
+        &app_event_tx,
+        Arc::new(FixedAgentAvailabilityProbe),
+        vec![AgentKind::Codex],
+    );
+    let app_event = tokio::time::timeout(Duration::from_secs(5), app_event_rx.recv())
+        .await
+        .expect("timed out waiting for agent CLI versions")
+        .expect("version task should emit one event");
+
+    // Assert
+    assert_eq!(
+        app_event,
+        AppEvent::AgentCliVersionsUpdated {
+            agent_clis: vec![AgentCliInfo::new(
+                AgentKind::Claude,
+                Some("2.1.39".to_string()),
+            )],
+        }
+    );
 }
 
 #[test]
