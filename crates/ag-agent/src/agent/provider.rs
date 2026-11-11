@@ -50,6 +50,16 @@ pub(crate) fn parse_stream_output_line(
     (provider_descriptor(kind).parse_stream_output_line)(stdout_line)
 }
 
+/// Extracts verbatim model reasoning text from one CLI stream line.
+///
+/// Returns `None` for providers without a CLI reasoning stream and for lines
+/// that carry no reasoning text.
+pub(crate) fn parse_stream_reasoning_line(kind: AgentKind, stdout_line: &str) -> Option<String> {
+    provider_descriptor(kind)
+        .parse_stream_reasoning_line
+        .and_then(|parse| parse(stdout_line))
+}
+
 /// Returns transport mode for the selected provider.
 pub fn transport_mode(kind: AgentKind) -> AgentTransport {
     provider_descriptor(kind).transport
@@ -136,6 +146,7 @@ struct AgentProviderDescriptor {
     backend_factory: fn() -> Box<dyn AgentBackend>,
     parse_response: fn(&str, &str) -> ParsedResponse,
     parse_stream_output_line: fn(&str) -> Option<(String, bool)>,
+    parse_stream_reasoning_line: Option<fn(&str) -> Option<String>>,
     prompt_transport: AgentPromptTransport,
     protocol_schema_instruction_mode: ProtocolSchemaInstructionMode,
     transport: AgentTransport,
@@ -154,6 +165,7 @@ fn provider_descriptor(kind: AgentKind) -> AgentProviderDescriptor {
             backend_factory: || Box::new(super::antigravity::AntigravityBackend::new()),
             parse_response: super::response_parser::parse_antigravity_response_with_fallback,
             parse_stream_output_line: super::response_parser::parse_antigravity_stream_output_line,
+            parse_stream_reasoning_line: None,
             prompt_transport: AgentPromptTransport::Argv,
             protocol_schema_instruction_mode: ProtocolSchemaInstructionMode::TransportSchema,
             transport: AgentTransport::AppServer,
@@ -169,6 +181,7 @@ fn provider_descriptor(kind: AgentKind) -> AgentProviderDescriptor {
             backend_factory: || Box::new(super::gemini::GeminiBackend),
             parse_response: super::response_parser::parse_gemini_response_with_fallback,
             parse_stream_output_line: super::response_parser::parse_gemini_stream_output_line,
+            parse_stream_reasoning_line: None,
             prompt_transport: AgentPromptTransport::Argv,
             protocol_schema_instruction_mode: ProtocolSchemaInstructionMode::PromptSchema,
             transport: AgentTransport::AppServer,
@@ -179,6 +192,9 @@ fn provider_descriptor(kind: AgentKind) -> AgentProviderDescriptor {
             backend_factory: || Box::new(super::claude::ClaudeBackend),
             parse_response: super::response_parser::parse_claude_response_with_fallback,
             parse_stream_output_line: super::response_parser::parse_claude_stream_output_line,
+            parse_stream_reasoning_line: Some(
+                super::response_parser::parse_claude_stream_reasoning_line,
+            ),
             prompt_transport: AgentPromptTransport::Stdin,
             protocol_schema_instruction_mode: ProtocolSchemaInstructionMode::TransportSchema,
             transport: AgentTransport::Cli,
@@ -194,6 +210,7 @@ fn provider_descriptor(kind: AgentKind) -> AgentProviderDescriptor {
             backend_factory: || Box::new(super::codex::CodexBackend),
             parse_response: super::response_parser::parse_codex_response_with_fallback,
             parse_stream_output_line: super::response_parser::parse_codex_stream_output_line,
+            parse_stream_reasoning_line: None,
             prompt_transport: AgentPromptTransport::Argv,
             protocol_schema_instruction_mode: ProtocolSchemaInstructionMode::TransportSchema,
             transport: AgentTransport::AppServer,
@@ -204,6 +221,7 @@ fn provider_descriptor(kind: AgentKind) -> AgentProviderDescriptor {
             backend_factory: || Box::new(super::harness::HarnessBackend),
             parse_response: super::harness::parse_response,
             parse_stream_output_line: super::harness::parse_stream_output_line,
+            parse_stream_reasoning_line: None,
             prompt_transport: AgentPromptTransport::Argv,
             protocol_schema_instruction_mode: ProtocolSchemaInstructionMode::TransportSchema,
             transport: AgentTransport::Native,

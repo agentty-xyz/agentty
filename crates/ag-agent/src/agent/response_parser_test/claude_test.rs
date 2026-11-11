@@ -1,5 +1,6 @@
 use crate::agent::response_parser::{
     parse_claude_response_with_fallback, parse_claude_stream_output_line,
+    parse_claude_stream_reasoning_line,
 };
 
 #[test]
@@ -164,4 +165,40 @@ fn test_parse_claude_stream_output_line_maps_tool_use_blocks_to_progress() {
 
     // Assert
     assert_eq!(parsed_line, Some(("Running a command".to_string(), false)));
+}
+
+#[test]
+fn test_parse_claude_stream_reasoning_line_reads_thinking_blocks() {
+    // Arrange
+    let stdout_line = concat!(
+        r#"{"type":"assistant","message":{"role":"assistant","content":["#,
+        r#"{"type":"thinking","thinking":"First idea.","signature":"a"},"#,
+        r#"{"type":"text","text":"answer"},"#,
+        r#"{"type":"thinking","thinking":" \n","signature":"b"},"#,
+        r#"{"type":"thinking","thinking":"Second idea.","signature":"c"}]}}"#
+    );
+
+    // Act
+    let reasoning = parse_claude_stream_reasoning_line(stdout_line);
+
+    // Assert
+    assert_eq!(reasoning.as_deref(), Some("First idea.\nSecond idea.\n"));
+}
+
+#[test]
+fn test_parse_claude_stream_reasoning_line_ignores_lines_without_reasoning() {
+    // Arrange
+    let lines = [
+        "not json",
+        r#"{"type":"result","result":"done"}"#,
+        r#"{"type":"assistant","message":{"role":"assistant","content":"plain"}}"#,
+        r#"{"type":"assistant","message":{"role":"assistant","content":[{"type":"text","text":"answer"}]}}"#,
+        r#"{"type":"assistant","message":{"role":"assistant","content":[{"type":"thinking","thinking":"","signature":"a"}]}}"#,
+    ];
+
+    // Act
+    let reasoning = lines.map(parse_claude_stream_reasoning_line);
+
+    // Assert
+    assert_eq!(reasoning, [None, None, None, None, None]);
 }

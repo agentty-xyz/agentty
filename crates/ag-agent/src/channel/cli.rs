@@ -23,7 +23,9 @@ use crate::agent::{self as agent, AgentBackend, BuildCommandRequest};
 ///
 /// Stdout lines are classified by
 /// [`agent::parse_stream_output_line`] and transient loader updates are
-/// forwarded as [`TurnEvent::ThoughtDelta`]. A kill signal transitions the
+/// forwarded as [`TurnEvent::ThoughtDelta`]; provider reasoning text from
+/// [`agent::parse_stream_reasoning_line`] is forwarded as
+/// [`TurnEvent::ReasoningDelta`]. A kill signal transitions the
 /// turn to a failed state with a `[Stopped]` banner. A spawn failure is
 /// surfaced through [`AgentError`].
 pub(crate) struct CliAgentChannel {
@@ -125,6 +127,11 @@ impl CliExecutionObserver for CliTurnObserver {
         if !self.show_progress {
             return;
         }
+        if let Some(reasoning) = agent::parse_stream_reasoning_line(self.kind, line) {
+            let _ = self.events.send(TurnEvent::ReasoningDelta(reasoning));
+
+            return;
+        }
         let Some((text, is_response_content)) = agent::parse_stream_output_line(self.kind, line)
         else {
             return;
@@ -181,7 +188,8 @@ impl AgentChannel for CliAgentChannel {
     ///
     /// Stdout lines are parsed with the provider-specific stream parser and
     /// loader-oriented interim text is forwarded as
-    /// [`TurnEvent::ThoughtDelta`]. After the process exits, usage
+    /// [`TurnEvent::ThoughtDelta`] or [`TurnEvent::ReasoningDelta`]. After the
+    /// process exits, usage
     /// statistics are extracted from the raw stdout/stderr and the final
     /// parsed response is returned in [`TurnResult`].
     ///

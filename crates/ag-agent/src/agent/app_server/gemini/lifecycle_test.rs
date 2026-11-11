@@ -110,6 +110,63 @@ async fn gemini_transport_traces_tool_lifecycle_for_the_current_session() {
     assert_eq!(activity[0].attempt_id, activity[1].attempt_id);
 }
 
+#[tokio::test]
+async fn gemini_thought_chunks_stream_reasoning_instead_of_thinking_label() {
+    // Arrange
+    let prompt_id = Arc::new(Mutex::new(String::new()));
+    let mut transport = MockAppServerRuntimeTransport::new();
+    let written_id = Arc::clone(&prompt_id);
+    transport
+        .expect_write_json_line()
+        .once()
+        .returning(move |payload| {
+            *written_id.lock().expect("id") =
+                payload["id"].as_str().expect("prompt id").to_string();
+
+            Box::pin(async { Ok(()) })
+        });
+    // Updates are popped from the end, so they stream bottom to top.
+    let updates = Arc::new(Mutex::new(vec![
+        serde_json::json!({"sessionUpdate": "agent_thought_chunk", "content": {"type": "text", "text": " then edit"}}),
+        serde_json::json!({"sessionUpdate": "agent_thought_chunk", "content": {"type": "image", "data": "", "mimeType": "image/png"}}),
+        serde_json::json!({"sessionUpdate": "agent_thought_chunk", "content": {"type": "text", "text": ""}}),
+        serde_json::json!({"sessionUpdate": "agent_thought_chunk", "content": {"type": "text", "text": "**Plan** read docs"}}),
+    ]));
+    transport.expect_next_stdout().times(5).returning(move || {
+        let line = if let Some(update) = updates.lock().expect("updates").pop() {
+            serde_json::json!({"method": "session/update", "params": {"sessionId": "session-1", "update": update}})
+        } else {
+            serde_json::json!({"id": prompt_id.lock().expect("id").clone(), "result": {"response": "done"}})
+        }
+        .to_string();
+
+        Box::pin(async move { Ok(Some(line)) })
+    });
+    let (stream_tx, mut stream_rx) = mpsc::unbounded_channel();
+
+    // Act
+    run_turn_with_runtime(
+        &mut transport,
+        "session-1",
+        PermissionMode::ReadOnly,
+        "prompt",
+        ProtocolRequestProfile::SessionTurn,
+        stream_tx,
+    )
+    .await
+    .expect("turn");
+
+    // Assert
+    let events = std::iter::from_fn(|| stream_rx.try_recv().ok()).collect::<Vec<_>>();
+    assert_eq!(
+        events,
+        vec![
+            AppServerStreamEvent::ReasoningDelta("**Plan** read docs".to_string()),
+            AppServerStreamEvent::ReasoningDelta(" then edit".to_string()),
+        ]
+    );
+}
+
 fn turn_request(folder: PathBuf, permission_mode: PermissionMode) -> AppServerTurnRequest {
     AppServerTurnRequest {
         execution_policy: ag_contracts::ExecutionPolicy::default(),

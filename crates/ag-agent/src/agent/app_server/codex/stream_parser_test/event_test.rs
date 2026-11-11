@@ -134,12 +134,62 @@ fn extract_agent_message_delta_supports_v2_plan_and_reasoning_deltas() {
 }
 
 #[test]
-fn extract_agent_message_delta_ignores_blank_or_non_reasoning_items() {
+fn extract_agent_message_delta_preserves_reasoning_line_breaks() {
+    // Arrange
+    let responses = [
+        serde_json::json!({
+            "method": "item/reasoning/summaryTextDelta",
+            "params": { "delta": "**Inspecting files**" }
+        }),
+        serde_json::json!({
+            "method": "item/reasoning/summaryTextDelta",
+            "params": { "delta": "\n\n" }
+        }),
+        serde_json::json!({
+            "method": "item/reasoning/summaryTextDelta",
+            "params": { "delta": "Reading the parser" }
+        }),
+        serde_json::json!({
+            "method": "item/reasoning/summaryPartAdded",
+            "params": { "itemId": "reasoning-1", "summaryIndex": 1 }
+        }),
+        serde_json::json!({
+            "method": "item/reasoning/summary_text_delta",
+            "params": { "delta": "**Editing**" }
+        }),
+        serde_json::json!({
+            "method": "item/updated",
+            "params": { "item": { "type": "reasoning", "delta": "\n" } }
+        }),
+    ];
+
+    // Act
+    let deltas = responses
+        .iter()
+        .map(|response| extract_agent_message_delta(response).map(|delta| delta.message))
+        .collect::<Vec<_>>();
+
+    // Assert
+    assert_eq!(
+        deltas,
+        [
+            Some("**Inspecting files**".to_string()),
+            Some("\n\n".to_string()),
+            Some("Reading the parser".to_string()),
+            Some("\n".to_string()),
+            Some("**Editing**".to_string()),
+            Some("\n".to_string()),
+        ]
+    );
+}
+
+#[test]
+fn extract_agent_message_delta_ignores_empty_or_non_reasoning_items() {
     // Arrange
     let blank_response = serde_json::json!({
         "method": "item/reasoning/text_delta",
         "params": {
-            "delta": "  "
+            "delta": ""
         }
     });
     let non_reasoning_response = serde_json::json!({

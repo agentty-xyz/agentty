@@ -16,6 +16,7 @@ use tracing::debug;
 
 use super::lifecycle::SessionTitleGenerationTaskInput;
 use super::post_turn::PostTurnContext;
+use super::progress::TurnProgress;
 use super::worker::{SessionWorkerContext, SessionWorkerService, TurnMetadata};
 use super::{SessionTaskService, StatusTransition, isolation, post_turn};
 use crate::app::service::HarnessModels;
@@ -636,8 +637,9 @@ pub(super) async fn load_session_speed_mode(
 ///
 /// - [`TurnEvent::Activity`]: publishes live rows and reduces the usage
 ///   summary.
-/// - [`TurnEvent::ThoughtDelta`]: coalesces immediately ready thought bursts
-///   and updates the transient thinking loader text with the latest message.
+/// - [`TurnEvent::ThoughtDelta`] / [`TurnEvent::ReasoningDelta`]: coalesce
+///   immediately ready bursts and update the transient loader text with the
+///   latest status label or newest reasoning line.
 /// - [`TurnEvent::PidUpdate`]: writes the new PID into `child_pid`.
 /// - [`TurnEvent::Completed`] / [`TurnEvent::Failed`]: reserved; ignored here
 ///   because completion is signalled by `run_turn`'s return value.
@@ -648,38 +650,37 @@ pub(super) async fn consume_turn_events(
     child_pid: Arc<Mutex<Option<u32>>>,
 ) -> super::activity::TurnActivity {
     let mut activity = super::activity::TurnActivity::default();
+    let mut progress = TurnProgress::default();
     let mut active_progress: Option<String> = None;
 
     while let Some(event) = event_rx.recv().await {
-        match event {
-            TurnEvent::Activity(event) => activity.observe_live(event, &app_event_tx, &session_id),
-            TurnEvent::ThoughtDelta(thought) => {
-                let Some(thought) = normalize_thinking_stream_text(&thought) else {
-                    continue;
-                };
-                let thought = coalesce_ready_turn_progress_events(
-                    &mut event_rx,
-                    child_pid.as_ref(),
-                    thought,
-                    &session_id,
-                    &app_event_tx,
-                    &mut activity,
-                );
-                if active_progress.as_deref() == Some(thought.as_str()) {
-                    continue;
-                }
-
-                active_progress = Some(thought.clone());
-                SessionTaskService::set_session_progress(&app_event_tx, &session_id, Some(thought));
-            }
-            TurnEvent::PidUpdate(pid) => {
-                set_child_pid(child_pid.as_ref(), pid);
-            }
-            TurnEvent::Completed { .. } | TurnEvent::Failed(_) => {
-                // Completion is signalled by run_turn's return value; these
-                // variants are reserved for future use and ignored here.
-            }
+        let progress_observed = apply_turn_event(
+            event,
+            &mut progress,
+            &mut activity,
+            child_pid.as_ref(),
+            &app_event_tx,
+            &session_id,
+        );
+        if !progress_observed {
+            continue;
         }
+
+        coalesce_ready_turn_progress_events(
+            &mut event_rx,
+            &mut progress,
+            &mut activity,
+            child_pid.as_ref(),
+            &app_event_tx,
+            &session_id,
+        );
+        let message = progress.message();
+        if message.is_none() || active_progress == message {
+            continue;
+        }
+
+        active_progress.clone_from(&message);
+        SessionTaskService::set_session_progress(&app_event_tx, &session_id, message);
     }
 
     activity.finish_live(&app_event_tx, &session_id);
@@ -690,21 +691,51 @@ pub(super) async fn consume_turn_events(
     activity
 }
 
-/// Coalesces immediately ready turn progress events before app-event enqueue.
+/// Applies one turn event and returns whether it carried loader progress.
 ///
-/// PID updates are still applied as they are encountered, while repeated
-/// thought deltas collapse to the newest normalized message. Completion events
-/// remain ignored here because turn completion is handled by the channel
-/// result.
+/// Completion events are ignored because turn completion is handled by the
+/// channel result.
+fn apply_turn_event(
+    event: TurnEvent,
+    progress: &mut TurnProgress,
+    activity: &mut super::activity::TurnActivity,
+    child_pid: &Mutex<Option<u32>>,
+    app_event_tx: &mpsc::UnboundedSender<AppEvent>,
+    session_id: &SessionId,
+) -> bool {
+    match event {
+        TurnEvent::Activity(event) => {
+            activity.observe_live(event, app_event_tx, session_id);
+
+            false
+        }
+        TurnEvent::ThoughtDelta(label) => progress.observe_label(&label),
+        TurnEvent::ReasoningDelta(fragment) => {
+            progress.observe_reasoning(&fragment);
+
+            true
+        }
+        TurnEvent::PidUpdate(pid) => {
+            set_child_pid(child_pid, pid);
+
+            false
+        }
+        TurnEvent::Completed { .. } | TurnEvent::Failed(_) => false,
+    }
+}
+
+/// Coalesces immediately ready turn events before progress app-event enqueue.
+///
+/// Every ready event is applied in order, so PID and activity updates are not
+/// delayed while repeated progress collapses to one loader update.
 fn coalesce_ready_turn_progress_events(
     event_rx: &mut mpsc::UnboundedReceiver<TurnEvent>,
-    child_pid: &Mutex<Option<u32>>,
-    initial_thought: String,
-    session_id: &SessionId,
-    app_event_tx: &mpsc::UnboundedSender<AppEvent>,
+    progress: &mut TurnProgress,
     activity: &mut super::activity::TurnActivity,
-) -> String {
-    let mut latest_thought = initial_thought;
+    child_pid: &Mutex<Option<u32>>,
+    app_event_tx: &mpsc::UnboundedSender<AppEvent>,
+    session_id: &SessionId,
+) {
     let mut coalesced_events = 0;
 
     for _ in 1..TURN_EVENT_PROGRESS_COALESCE_BUDGET {
@@ -713,16 +744,14 @@ fn coalesce_ready_turn_progress_events(
         };
 
         coalesced_events += 1;
-        match event {
-            TurnEvent::Activity(event) => activity.observe_live(event, app_event_tx, session_id),
-            TurnEvent::ThoughtDelta(thought) => {
-                if let Some(thought) = normalize_thinking_stream_text(&thought) {
-                    latest_thought = thought;
-                }
-            }
-            TurnEvent::PidUpdate(pid) => set_child_pid(child_pid, pid),
-            TurnEvent::Completed { .. } | TurnEvent::Failed(_) => {}
-        }
+        apply_turn_event(
+            event,
+            progress,
+            activity,
+            child_pid,
+            app_event_tx,
+            session_id,
+        );
     }
 
     let remaining_events = event_rx.len();
@@ -735,8 +764,6 @@ fn coalesce_ready_turn_progress_events(
             "turn event progress coalesce budget exhausted with queued events remaining"
         );
     }
-
-    latest_thought
 }
 
 /// Records the latest child process id observed from a provider turn stream.
@@ -873,16 +900,6 @@ async fn load_title_reasoning_level(
         .load_project_reasoning_level(project_id, SettingName::DefaultFastReasoningLevel)
         .await
         .unwrap_or_default()
-}
-
-/// Returns one normalized thinking text line.
-fn normalize_thinking_stream_text(text: &str) -> Option<String> {
-    let trimmed_text = text.trim();
-    if trimmed_text.is_empty() {
-        return None;
-    }
-
-    Some(trimmed_text.to_string())
 }
 
 #[cfg(test)]

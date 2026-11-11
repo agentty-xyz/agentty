@@ -195,3 +195,11 @@ retains at most 2048 calls per turn. These are bounded observations, not an exha
 audit log. Utility callers may supply `OneShotRequest::activity_tx` through
 `RunClient::submit` to receive the same events, including repairs. Hosts own persistence
 and rendering.
+
+## Reasoning Stream
+
+`TurnEvent::ReasoningDelta` carries raw model reasoning for the transient loader: Codex
+reasoning and plan deltas, Gemini ACP thought chunks, and completed Claude `thinking`
+blocks. Fragments concatenate verbatim until the next `TurnEvent::ThoughtDelta` status
+label starts a new stream. Reasoning is display-only; it never enters transcripts,
+provider replay, or protocol repair streams.

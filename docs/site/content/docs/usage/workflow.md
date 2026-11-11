@@ -568,6 +568,10 @@ the live block. Command previews and file paths replace raw argument JSON and sh
 fit the pane. Successful output stays hidden. Codex, Claude, Gemini, and Antigravity
 supply these details where available. Skill names require explicit provider reporting.
 
+The `Working...` loader shows the newest line of the model's reasoning when Codex,
+Claude, or Gemini share it, and otherwise a short status such as `Thinking`. Reasoning
+is not saved and disappears when the turn ends.
+
 Responses from these providers, including commit and rebase recovery assistance, include
 a usage footer when tool activity was observed. `Tools` lists invocation counts with
 failed or interrupted totals; `Skills` lists explicit Claude skill invocation counts.

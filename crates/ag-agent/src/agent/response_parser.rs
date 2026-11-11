@@ -468,6 +468,35 @@ pub(super) fn parse_claude_stream_output_line(stdout_line: &str) -> Option<(Stri
     Some((progress_message, false))
 }
 
+/// Extracts model reasoning text from one Claude `stream-json` line.
+///
+/// Claude reports each completed `thinking` content block in one assistant
+/// event. Every block ends with a line break so the next block starts a new
+/// reasoning line. Redacted or empty blocks return `None`, leaving the
+/// compact `Thinking` progress label in place.
+pub(super) fn parse_claude_stream_reasoning_line(stdout_line: &str) -> Option<String> {
+    let stream_event = serde_json::from_str::<serde_json::Value>(stdout_line.trim()).ok()?;
+    let content_blocks = extract_claude_stream_assistant_message(&stream_event)?
+        .get("content")
+        .and_then(serde_json::Value::as_array)?;
+    let reasoning = content_blocks
+        .iter()
+        .filter(|block| block.get("type").and_then(serde_json::Value::as_str) == Some("thinking"))
+        .filter_map(|block| block.get("thinking").and_then(serde_json::Value::as_str))
+        .filter(|thinking| !thinking.trim().is_empty())
+        .fold(String::new(), |mut reasoning, thinking| {
+            reasoning.push_str(thinking);
+            reasoning.push('\n');
+
+            reasoning
+        });
+    if reasoning.is_empty() {
+        return None;
+    }
+
+    Some(reasoning)
+}
+
 /// Parses Gemini JSON/stream output into final response text and usage.
 fn parse_gemini_response(stdout: &str) -> Option<ParsedResponse> {
     let trimmed_stdout = stdout.trim();

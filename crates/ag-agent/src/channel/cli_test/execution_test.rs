@@ -61,6 +61,28 @@ fn test_cli_turn_observer_ignores_blank_progress_text() {
 }
 
 #[test]
+fn test_cli_turn_observer_forwards_claude_thinking_as_reasoning() {
+    // Arrange
+    let (events, mut event_receiver) = mpsc::unbounded_channel();
+    let observer = CliTurnObserver::new(events, AgentKind::Claude, true);
+
+    // Act
+    observer.stdout_line(r#"{"type":"assistant","message":{"role":"assistant","content":[{"type":"thinking","thinking":"Check the parser first.","signature":"sig"}]}}"#);
+    observer.stdout_line(r#"{"type":"assistant","message":{"role":"assistant","content":[{"type":"thinking","thinking":"","signature":"sig"}]}}"#);
+    drop(observer);
+    let events = std::iter::from_fn(|| event_receiver.try_recv().ok()).collect::<Vec<_>>();
+
+    // Assert
+    assert_eq!(
+        events,
+        vec![
+            TurnEvent::ReasoningDelta("Check the parser first.\n".to_string()),
+            TurnEvent::ThoughtDelta("Thinking".to_string()),
+        ]
+    );
+}
+
+#[test]
 fn test_build_command_request_uses_agent_facing_prompt_text() {
     // Arrange
     let request = TurnRequest {

@@ -21,8 +21,8 @@ use crate::app_server::{AppServerClient, AppServerStreamEvent, AppServerTurnRequ
 ///
 /// Turn execution is delegated to [`AppServerClient::run_turn`].
 /// [`AppServerStreamEvent`]s emitted by the provider are bridged to
-/// [`TurnEvent::ThoughtDelta`] values when transient loader text should be
-/// updated.
+/// [`TurnEvent::ThoughtDelta`] status labels and [`TurnEvent::ReasoningDelta`]
+/// reasoning text when transient loader text should be updated.
 pub(crate) struct AppServerAgentChannel {
     /// Provider-specific app-server client.
     client: Arc<dyn AppServerClient>,
@@ -64,17 +64,17 @@ impl AppServerAgentChannel {
                             phase,
                             is_delta,
                         } => {
-                            let trimmed = message.trim_end();
-                            if trimmed.trim().is_empty() {
-                                continue;
-                            }
-
                             if agent::is_app_server_thought_chunk(kind, is_delta, phase.as_deref())
+                                && !message.is_empty()
                             {
                                 // Fire-and-forget: receiver may be dropped
-                                // during
-                                // shutdown.
-                                let _ = events.send(TurnEvent::ThoughtDelta(trimmed.to_string()));
+                                // during shutdown.
+                                let _ = events.send(TurnEvent::ReasoningDelta(message));
+                            }
+                        }
+                        AppServerStreamEvent::ReasoningDelta(reasoning) => {
+                            if !reasoning.is_empty() {
+                                let _ = events.send(TurnEvent::ReasoningDelta(reasoning));
                             }
                         }
                         AppServerStreamEvent::ProgressUpdate(progress) => {
@@ -111,9 +111,11 @@ impl AgentChannel for AppServerAgentChannel {
     ///
     /// Assistant stream chunks are never appended directly to the transcript.
     /// Instead, Codex thought-style deltas (`phase: thinking/plan`) and
-    /// provider progress updates are bridged to [`TurnEvent::ThoughtDelta`] so
-    /// the UI loader can reflect transient state while the final persisted
-    /// output still comes only from the parsed [`TurnResult`].
+    /// provider reasoning chunks are bridged verbatim to
+    /// [`TurnEvent::ReasoningDelta`], and provider progress updates to
+    /// [`TurnEvent::ThoughtDelta`], so the UI loader can reflect transient
+    /// state while the final persisted output still comes only from the
+    /// parsed [`TurnResult`].
     /// Every terminal error clears the tracked PID, including failed repair.
     ///
     /// # Errors

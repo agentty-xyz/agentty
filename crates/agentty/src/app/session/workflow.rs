@@ -19,6 +19,7 @@ pub(super) mod load;
 pub(super) mod merge;
 pub(super) mod post_turn;
 pub(super) mod preparation;
+mod progress;
 mod prompt_context;
 pub(super) mod published_branch;
 pub(super) mod refresh;

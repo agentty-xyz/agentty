@@ -128,6 +128,57 @@ async fn test_consume_turn_events_coalesces_ready_thought_delta_bursts() {
 }
 
 #[tokio::test]
+/// Verifies streamed reasoning replaces the status label with its newest
+/// line, and a later label replaces that reasoning.
+async fn test_consume_turn_events_routes_reasoning_to_progress_state() {
+    // Arrange
+    let (event_tx, event_rx) = mpsc::unbounded_channel();
+    let (app_event_tx, mut app_event_rx) = mpsc::unbounded_channel();
+    let child_pid = Arc::new(Mutex::new(None));
+    let progress = |message: Option<&str>| AppEvent::SessionProgressUpdated {
+        progress_message: message.map(str::to_string),
+        session_id: "session-1".into(),
+    };
+
+    // Act
+    let consumer = tokio::spawn(consume_turn_events(
+        event_rx,
+        app_event_tx,
+        "session-1".into(),
+        child_pid,
+    ));
+    let mut received = Vec::new();
+    for (event, expected_events) in [
+        (TurnEvent::ThoughtDelta("Thinking".to_string()), 1),
+        (TurnEvent::ReasoningDelta(" \n".to_string()), 0),
+        (TurnEvent::ReasoningDelta("**Plan**\n\nRead".to_string()), 1),
+        (TurnEvent::ReasoningDelta(" the docs".to_string()), 1),
+        (TurnEvent::ThoughtDelta(" ".to_string()), 0),
+        (TurnEvent::ThoughtDelta("Running a command".to_string()), 1),
+    ] {
+        event_tx.send(event).expect("failed to send turn event");
+        for _ in 0..expected_events {
+            received.push(app_event_rx.recv().await.expect("progress event"));
+        }
+    }
+    drop(event_tx);
+    consumer.await.expect("consumer task");
+    received.extend(std::iter::from_fn(|| app_event_rx.try_recv().ok()));
+
+    // Assert
+    assert_eq!(
+        received,
+        vec![
+            progress(Some("Thinking")),
+            progress(Some("Read")),
+            progress(Some("Read the docs")),
+            progress(Some("Running a command")),
+            progress(None),
+        ]
+    );
+}
+
+#[tokio::test]
 /// Verifies a turn that dirties the main checkout records a warning while
 /// preserving the successful agent response.
 async fn test_run_channel_turn_warns_when_main_checkout_status_changes() {

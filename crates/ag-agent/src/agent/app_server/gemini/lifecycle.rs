@@ -386,7 +386,20 @@ pub(super) async fn run_turn_with_runtime<Transport: AppServerRuntimeTransport>(
             {
                 operation_trace.observe(AgentKind::Gemini, &response_value);
                 activity.observe(AgentKind::Gemini, &response_value);
-                let _ = stream_tx.send(AppServerStreamEvent::ProgressUpdate(progress));
+                // Thought chunks carry the reasoning text itself, which
+                // replaces the generic `Thinking` label in the loader.
+                // Textless chunks send nothing so they never reset streamed
+                // reasoning back to a label.
+                match stream_parser::extract_thought_chunk(&response_value, session_id) {
+                    Some(reasoning) => {
+                        if !reasoning.is_empty() {
+                            let _ = stream_tx.send(AppServerStreamEvent::ReasoningDelta(reasoning));
+                        }
+                    }
+                    None => {
+                        let _ = stream_tx.send(AppServerStreamEvent::ProgressUpdate(progress));
+                    }
+                }
             }
 
             if let Some(chunk) =

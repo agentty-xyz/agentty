@@ -138,9 +138,21 @@ pub(super) fn extract_turn_id_from_turn_started_notification(
 /// Extracts incremental assistant message text from delta notifications.
 ///
 /// Supports both legacy `item/updated` payloads and current v2 thought-delta
-/// notifications.
+/// notifications. Whitespace-only deltas are kept because paragraph breaks
+/// separate reasoning lines, and each new reasoning-summary part starts on a
+/// new line so consecutive parts never run together.
 pub(super) fn extract_agent_message_delta(response_value: &Value) -> Option<ExtractedAgentMessage> {
     let method = response_value.get("method").and_then(Value::as_str)?;
+    if matches!(
+        method,
+        "item/reasoning/summaryPartAdded" | "item/reasoning/summary_part_added"
+    ) {
+        return Some(ExtractedAgentMessage {
+            message: "\n".to_string(),
+            phase: Some("thinking".to_string()),
+        });
+    }
+
     if matches!(
         method,
         "item/plan/delta"
@@ -153,7 +165,7 @@ pub(super) fn extract_agent_message_delta(response_value: &Value) -> Option<Extr
             .get("params")?
             .get("delta")
             .and_then(Value::as_str)?;
-        if delta.trim().is_empty() {
+        if delta.is_empty() {
             return None;
         }
         let phase = if method == "item/plan/delta" {
@@ -183,7 +195,7 @@ pub(super) fn extract_agent_message_delta(response_value: &Value) -> Option<Extr
     }
 
     let delta = item.get("delta").and_then(Value::as_str)?;
-    if delta.trim().is_empty() {
+    if delta.is_empty() {
         return None;
     }
 

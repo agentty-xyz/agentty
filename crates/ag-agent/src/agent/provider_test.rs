@@ -3,8 +3,8 @@ use ag_session::AgentKind;
 
 use crate::agent::backend::{AgentPromptTransport, AgentTransport};
 use crate::agent::provider::{
-    is_app_server_thought_chunk, parse_turn_response, prompt_transport,
-    protocol_schema_instruction_mode, transport_mode,
+    is_app_server_thought_chunk, parse_stream_reasoning_line, parse_turn_response,
+    prompt_transport, protocol_schema_instruction_mode, transport_mode,
 };
 
 #[test]
@@ -114,4 +114,19 @@ fn test_is_app_server_thought_chunk_reports_codex_phase_labels() {
         true,
         Some("thinking"),
     ));
+}
+
+#[test]
+/// Ensures only providers with a CLI reasoning stream parse reasoning lines.
+fn test_parse_stream_reasoning_line_reads_only_claude_thinking() {
+    // Arrange
+    let stdout_line = r#"{"type":"assistant","message":{"content":[{"type":"thinking","thinking":"Plan the edit."}]}}"#;
+
+    // Act
+    let claude_reasoning = parse_stream_reasoning_line(AgentKind::Claude, stdout_line);
+    let codex_reasoning = parse_stream_reasoning_line(AgentKind::Codex, stdout_line);
+
+    // Assert
+    assert_eq!(claude_reasoning.as_deref(), Some("Plan the edit.\n"));
+    assert_eq!(codex_reasoning, None);
 }

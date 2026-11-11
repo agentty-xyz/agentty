@@ -48,6 +48,9 @@ pub enum AppServerStreamEvent {
     },
     /// An `item/started` event produced a progress description.
     ProgressUpdate(String),
+    /// Raw model reasoning text emitted by providers with a dedicated
+    /// reasoning stream, forwarded verbatim as display-only loader text.
+    ReasoningDelta(String),
 }
 
 /// Input payload for one app-server turn execution.

@@ -1312,6 +1312,69 @@ printf '{"type":"result","subtype":"success","result":"%s","usage":{"input_token
     Ok(())
 }
 
+/// Streamed model reasoning appears beside the working loader and clears
+/// when the turn completes.
+#[tokio::test]
+async fn test_session_loader_shows_reasoning() -> E2eResult {
+    // Arrange, Act, Assert
+    let thinking = ReleaseGate::new()?;
+    let hold_thinking = thinking.shell_wait();
+    FeatureTest::new("session_loader_shows_reasoning")
+        .with_git()
+        .with_terminal_size(100, 30)
+        .setup(move |env| Box::pin(async move {
+            let script = r#"#!/bin/sh
+if [ "$1" = "update" ]; then exit 0; fi
+if [ "$1" = "--version" ]; then printf 'claude 0.0.0-test\n'; exit 0; fi
+input=$(cat)
+case "$input" in
+  *"Generate a concise, commit-style title"*) answer='Reasoning demo' ;;
+  *"Show reasoning demo"*)
+    printf '%s\n' '{"type":"assistant","message":{"role":"assistant","content":[{"type":"thinking","thinking":"**Planning**\n\nInspect the parser before editing.","signature":"sig"}]}}'
+    __THINKING_GATE__
+    answer='Reasoning demo finished' ;;
+  *) answer='Ready' ;;
+esac
+result='{\"answer\":\"'"$answer"'\"}'
+printf '{"type":"result","subtype":"success","result":"%s","usage":{"input_tokens":5,"output_tokens":9}}\n' "$result"
+"#
+                .replace("__THINKING_GATE__", &hold_thinking);
+            let path = env.stub_bin.join("claude");
+            std::fs::write(&path, script)?;
+            #[cfg(unix)]
+            std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o750))?;
+            seed_project_settings(env, &[("DefaultSmartModel", "claude-haiku-4-5-20251001")]).await
+        }))
+        .run(move |scenario| {
+            scenario
+                .compose(&common::wait_for_agentty_startup())
+                .compose(&common::switch_to_tab("Sessions"))
+                .press_key("a")
+                .press_key("Enter")
+                .wait_for_text("Tab: focus | Enter: send", 5000)
+                .write_text("Show reasoning demo")
+                .press_key("Enter")
+                .wait_for_text("Working... Inspect the parser before editing.", 15000)
+                .capture_labeled("reasoning", "Reasoning beside the loader")
+                .compose(&thinking.release())
+                .wait_for_text("Enter: reply", 15000)
+        }, |frame, report| Box::pin(async move {
+            let reasoning = common::frame_from_capture(&report.captures[0]);
+            assertion::assert_match_count(
+                &reasoning,
+                "Working... Inspect the parser before editing.",
+                1,
+            );
+            assert!(!reasoning.all_text().contains("**"));
+            let full = Region::full(frame.cols(), frame.rows());
+            assertion::assert_text_in_region(frame, "Reasoning demo finished", &full);
+            assert!(!frame.all_text().contains("Inspect the parser"));
+        }))
+        .await?;
+
+    Ok(())
+}
+
 /// Checks live replacement, readable previews, and the counts-only saved
 /// footer.
 fn assert_live_activity_report(frame: &TerminalFrame, report: &ProofReport) {

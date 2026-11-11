@@ -315,7 +315,13 @@ pub struct TurnRequest {
 pub enum TurnEvent {
     /// Provider-observed tool or skill lifecycle snapshot.
     Activity(crate::ActivityEvent),
-    /// A streamed thinking/planning or tool-status fragment shown in the
+    /// Raw model reasoning text fragment shown in the transient loader.
+    ///
+    /// Consecutive fragments concatenate verbatim, including whitespace, into
+    /// one reasoning stream; the next [`TurnEvent::ThoughtDelta`] starts a new
+    /// one. Reasoning is display-only and never enters the transcript.
+    ReasoningDelta(String),
+    /// A compact thinking/planning or tool-status label shown in the
     /// transient loader.
     ThoughtDelta(String),
     /// The turn completed successfully with final token counts.
@@ -416,11 +422,12 @@ pub trait AgentChannel: Send + Sync {
 
     /// Executes one prompt turn and streams incremental events to `events`.
     ///
-    /// Implementations may emit [`TurnEvent::ThoughtDelta`] values for
-    /// transient loader updates. Final transcript output is derived from the
-    /// returned [`TurnResult`] after the turn finishes.
-    /// Dropping the returned future must release its owned execution resources;
-    /// cancellation callers will not poll the future again to drain it.
+    /// Implementations may emit [`TurnEvent::ThoughtDelta`] and
+    /// [`TurnEvent::ReasoningDelta`] values for transient loader updates. Final
+    /// transcript output is derived from the returned [`TurnResult`] after the
+    /// turn finishes. Dropping the returned future must release its owned
+    /// execution resources; cancellation callers will not poll the future again
+    /// to drain it.
     ///
     /// # Errors
     /// Returns [`AgentError`] when the turn cannot be executed (spawn failure,

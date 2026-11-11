@@ -133,18 +133,21 @@ async fn test_run_turn_suppresses_non_delta_structured_json_streaming() {
 }
 
 #[tokio::test]
-/// Verifies Codex thought-phase deltas are routed to `ThoughtDelta`.
-async fn test_run_turn_routes_codex_thinking_delta_to_thought_event() {
+/// Verifies Codex thought-phase deltas are routed verbatim, including
+/// whitespace-only line breaks, to `ReasoningDelta`.
+async fn test_run_turn_routes_codex_thinking_delta_to_reasoning_event() {
     // Arrange
     let mut mock_client = MockAppServerClient::new();
     mock_client
         .expect_run_turn()
         .returning(|_request, stream_tx| {
-            let _ = stream_tx.send(AppServerStreamEvent::AssistantMessage {
-                message: "Inspecting files".to_string(),
-                phase: Some("thinking".to_string()),
-                is_delta: true,
-            });
+            for message in ["Inspecting ", "\n\n", ""] {
+                let _ = stream_tx.send(AppServerStreamEvent::AssistantMessage {
+                    message: message.to_string(),
+                    phase: Some("thinking".to_string()),
+                    is_delta: true,
+                });
+            }
 
             Box::pin(async { Ok(make_ok_response(r#"{"answer":"Done.","questions":[]}"#)) })
         });
@@ -158,17 +161,57 @@ async fn test_run_turn_routes_codex_thinking_delta_to_thought_event() {
 
     // Assert
     assert!(result.is_ok());
-    let event = events_rx.try_recv().expect("should have received an event");
+    let reasoning = std::iter::from_fn(|| events_rx.try_recv().ok())
+        .filter(|event| !matches!(event, TurnEvent::PidUpdate(_)))
+        .collect::<Vec<_>>();
     assert_eq!(
-        event,
-        TurnEvent::ThoughtDelta("Inspecting files".to_string())
+        reasoning,
+        vec![
+            TurnEvent::ReasoningDelta("Inspecting ".to_string()),
+            TurnEvent::ReasoningDelta("\n\n".to_string()),
+        ]
+    );
+}
+
+#[tokio::test]
+/// Verifies provider reasoning stream events are forwarded verbatim while
+/// empty fragments are dropped.
+async fn test_run_turn_forwards_reasoning_stream_events() {
+    // Arrange
+    let mut mock_client = MockAppServerClient::new();
+    mock_client
+        .expect_run_turn()
+        .returning(|_request, stream_tx| {
+            let _ = stream_tx.send(AppServerStreamEvent::ReasoningDelta(String::new()));
+            let _ = stream_tx.send(AppServerStreamEvent::ReasoningDelta(
+                "Reading docs\n".to_string(),
+            ));
+
+            Box::pin(async { Ok(make_ok_response(r#"{"answer":"Done.","questions":[]}"#)) })
+        });
+    let channel = AppServerAgentChannel::new(Arc::new(mock_client), AgentKind::Gemini);
+    let (events_tx, mut events_rx) = mpsc::unbounded_channel();
+
+    // Act
+    let result = channel
+        .run_turn("sess-1".to_string(), make_turn_request(), events_tx)
+        .await;
+
+    // Assert
+    assert!(result.is_ok());
+    let reasoning = std::iter::from_fn(|| events_rx.try_recv().ok())
+        .filter(|event| !matches!(event, TurnEvent::PidUpdate(_)))
+        .collect::<Vec<_>>();
+    assert_eq!(
+        reasoning,
+        vec![TurnEvent::ReasoningDelta("Reading docs\n".to_string())]
     );
 }
 
 #[tokio::test]
 /// Verifies Codex thought-phase matching is case-insensitive for streamed
 /// thought routing.
-async fn test_run_turn_routes_uppercase_codex_thinking_delta_to_thought_event() {
+async fn test_run_turn_routes_uppercase_codex_thinking_delta_to_reasoning_event() {
     // Arrange
     let mut mock_client = MockAppServerClient::new();
     mock_client
@@ -195,7 +238,7 @@ async fn test_run_turn_routes_uppercase_codex_thinking_delta_to_thought_event() 
     let event = events_rx.try_recv().expect("should have received an event");
     assert_eq!(
         event,
-        TurnEvent::ThoughtDelta("Inspecting files".to_string())
+        TurnEvent::ReasoningDelta("Inspecting files".to_string())
     );
 }
 

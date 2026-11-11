@@ -47,16 +47,29 @@ pub(super) fn extract_assistant_message_chunk(
         return None;
     }
 
-    let content = response_value
-        .get("params")
-        .and_then(|params| params.get("update"))
-        .and_then(|update| update.get("content"))
-        .and_then(usage::extract_text_from_content_value)?;
+    let content = extract_update_content_text(response_value)?;
     if content.trim().is_empty() {
         return None;
     }
 
     Some(content)
+}
+
+/// Extracts raw reasoning text from ACP `agent_thought_chunk` updates.
+///
+/// Returns `Some` for every thought chunk of the session, with empty text when
+/// the chunk carries no text content, so callers can tell a textless thought
+/// chunk from other updates. Whitespace-only chunks are kept because they can
+/// carry the line breaks between streamed reasoning paragraphs.
+pub(super) fn extract_thought_chunk(
+    response_value: &Value,
+    expected_session_id: &str,
+) -> Option<String> {
+    if extract_session_update_kind(response_value, expected_session_id)? != "agent_thought_chunk" {
+        return None;
+    }
+
+    Some(extract_update_content_text(response_value).unwrap_or_default())
 }
 
 /// Extracts a short user-facing progress label from ACP `session/update`.
@@ -109,6 +122,15 @@ pub(super) fn extract_session_update_kind<'value>(
         .get("update")
         .and_then(|update| update.get("sessionUpdate"))
         .and_then(Value::as_str)
+}
+
+/// Returns text from the `params.update.content` block of one ACP update.
+fn extract_update_content_text(response_value: &Value) -> Option<String> {
+    response_value
+        .get("params")
+        .and_then(|params| params.get("update"))
+        .and_then(|update| update.get("content"))
+        .and_then(usage::extract_text_from_content_value)
 }
 
 #[cfg(test)]
