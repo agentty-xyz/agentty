@@ -1,18 +1,13 @@
 {% set posthog_project_token = config.extra.posthog_project_token %}
 {% set posthog_api_host = config.extra.posthog_api_host %}
+{# Zola omits `current_path` when rendering `404.html`. #}
+{% set nav_path = current_path | default(value="") %}
 <!DOCTYPE html>
 <html lang="en">
     <head>
         <meta charset="utf-8">
         <meta name="viewport" content="width=device-width, initial-scale=1">
-        <title>
-            {% block title %}
-                {{ config.title }}
-            {% endblock title %}
-        </title>
-        <meta name="description" content="{{ config.description }}">
-        <link rel="canonical"
-              href="{% block canonical %}{{ config.base_url }}{% endblock canonical %}">
+        {% include "partials/seo.html" %}
         <link rel="icon" href="{{ config.base_url }}/favicon.ico">
         <link rel="stylesheet" href="{{ get_url(path='site.css') }}">
         <noscript>
@@ -66,16 +61,16 @@
                         {% block nav_links %}
                             <a class="site-nav-link"
                                href="{{ config.base_url }}/"
-                               {% if current_path == "/" %}aria-current="page"{% endif %}>home</a>
+                               {% if nav_path == "/" %}aria-current="page"{% endif %}>home</a>
                             <a class="site-nav-link"
                                href="{{ features_section.permalink }}"
-                               {% if current_path is starting_with("/features/") %}aria-current="page"{% endif %}>features</a>
+                               {% if nav_path is starting_with("/features/") %}aria-current="page"{% endif %}>features</a>
                             <a class="site-nav-link"
                                href="{{ docs_section.permalink }}"
-                               {% if current_path is starting_with("/docs/") %}aria-current="page"{% endif %}>docs</a>
+                               {% if nav_path is starting_with("/docs/") %}aria-current="page"{% endif %}>docs</a>
                             <a class="site-nav-link"
                                href="{{ blog_section.permalink }}"
-                               {% if current_path is starting_with("/blog/") %}aria-current="page"{% endif %}>blog</a>
+                               {% if nav_path is starting_with("/blog/") %}aria-current="page"{% endif %}>blog</a>
                         {% endblock nav_links %}
                     </div>
                 </div>

@@ -23,12 +23,6 @@
             {{ self::render_blog_nav(section_path=subsection_path, current_permalink=current_permalink, nested=true) }}
         {% endfor %}
     {% endmacro render_blog_nav %}
-    {% block title %}
-        {{ page.title }} | {{ config.title }} Blog
-    {% endblock title %}
-    {% block canonical %}
-        {{ page.permalink }}
-    {% endblock canonical %}
     {% block main_width_class %}
         site-container-full
     {% endblock main_width_class %}

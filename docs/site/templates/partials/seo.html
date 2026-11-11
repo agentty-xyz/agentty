@@ -1,0 +1,154 @@
+{# Derive search and social metadata once from the rendered page or section. #}
+{# Override the generated title with `extra.seo_title`; descriptions fall back to `config.description`. #}
+{% set seo_title = "Page not found | " ~ config.title %}
+{% set seo_description = config.description %}
+{% set seo_url = "" %}
+{% set seo_type = "website" %}
+{% set seo_robots = "noindex, follow" %}
+{# `social-card.png` is a 1200x630 still of the home page glyph art: the `AGENTTY` wordmark and the nerpa. #}
+{% set seo_image = get_url(path="social-card.png") %}
+{% set seo_image_width = 1200 %}
+{% set seo_image_height = 630 %}
+{% set seo_image_alt = "AGENTTY wordmark and a Baikal seal drawn in terminal command glyphs" %}
+{% set seo_is_home = false %}
+{% if page or section %}
+    {% if page %}
+        {% set seo_entry = page %}
+    {% else %}
+        {% set seo_entry = section %}
+    {% endif %}
+    {% set seo_url = seo_entry.permalink %}
+    {% set seo_robots = "index, follow, max-image-preview:large, max-snippet:-1" %}
+    {% if seo_entry.description %}
+        {% set seo_description = seo_entry.description %}
+    {% endif %}
+    {% set seo_suffix = " | " ~ config.title %}
+    {% if page or seo_entry.components | length > 1 %}
+        {% if current_path is starting_with("/docs/") %}
+            {% set seo_suffix = seo_suffix ~ " Docs" %}
+        {% elif current_path is starting_with("/blog/") %}
+            {% set seo_suffix = seo_suffix ~ " Blog" %}
+        {% elif current_path is starting_with("/features/") %}
+            {% set seo_suffix = seo_suffix ~ " Features" %}
+        {% endif %}
+    {% endif %}
+    {% if seo_entry.extra.seo_title %}
+        {% set seo_title = seo_entry.extra.seo_title %}
+    {% else %}
+        {% set seo_title = seo_entry.title ~ seo_suffix %}
+    {% endif %}
+    {% if section and section.path == "/" %}
+        {% set seo_is_home = true %}
+    {% endif %}
+    {% if page and page.date %}
+        {% set seo_type = "article" %}
+    {% endif %}
+    {% if page and page.extra.gif %}
+        {% set seo_poster_path = "features/" ~ page.extra.gif | replace(from=".gif", to=".png") %}
+        {% set seo_image = get_url(path=seo_poster_path) %}
+        {% set seo_image_width = 1600 %}
+        {% set seo_image_height = 800 %}
+        {% set seo_image_alt = page.title ~ " in the Agentty terminal interface" %}
+    {% endif %}
+{% endif %}
+<title>{{ seo_title }}</title>
+<meta name="description" content="{{ seo_description }}">
+<meta name="robots" content="{{ seo_robots }}">
+<meta name="theme-color" content="#070b08">
+{% if seo_url %}<link rel="canonical" href="{{ seo_url }}">{% endif %}
+<link rel="alternate"
+      type="application/atom+xml"
+      title="{{ config.title }} Blog"
+      href="{{ get_url(path='blog/atom.xml') }}">
+<meta property="og:site_name" content="{{ config.title }}">
+<meta property="og:locale" content="en_US">
+<meta property="og:type" content="{{ seo_type }}">
+<meta property="og:title" content="{{ seo_title }}">
+<meta property="og:description" content="{{ seo_description }}">
+{% if seo_url %}<meta property="og:url" content="{{ seo_url }}">{% endif %}
+<meta property="og:image" content="{{ seo_image }}">
+<meta property="og:image:type" content="image/png">
+<meta property="og:image:width" content="{{ seo_image_width }}">
+<meta property="og:image:height" content="{{ seo_image_height }}">
+<meta property="og:image:alt" content="{{ seo_image_alt }}">
+{% if seo_type == "article" %}
+    <meta property="article:published_time" content="{{ page.date }}">
+    <meta property="article:modified_time"
+          content="{{ page.updated | default(value=page.date) }}">
+{% endif %}
+<meta name="twitter:card" content="summary_large_image">
+<meta name="twitter:title" content="{{ seo_title }}">
+<meta name="twitter:description" content="{{ seo_description }}">
+<meta name="twitter:image" content="{{ seo_image }}">
+<meta name="twitter:image:alt" content="{{ seo_image_alt }}">
+{% if seo_url %}
+    {% set seo_site_url = get_url(path="/") %}
+    {# Breadcrumbs follow the section tree from the home page to the current entry. #}
+    {% set seo_ancestors = seo_entry.ancestors %}
+    {% set seo_last_position = seo_ancestors | length + 1 %}
+    {% set seo_website_id = seo_site_url ~ "#website" %}
+    {% set seo_software_id = seo_site_url ~ "#software" %}
+    {% set seo_main_id = seo_url ~ "#main" %}
+    {% set seo_breadcrumb_id = seo_url ~ "#breadcrumb" %}
+    <script type="application/ld+json">
+        {
+            "@context": "https://schema.org",
+            "@graph": [
+                {
+                    "@type": "WebSite",
+                    "@id": {{ seo_website_id | json_encode | safe }},
+                    "name": {{ config.title | json_encode | safe }},
+                    "url": {{ seo_site_url | json_encode | safe }},
+                    "description": {{ config.description | json_encode | safe }},
+                    "inLanguage": "en"
+                },
+                {% if seo_is_home %}
+                    {
+                        "@type": "SoftwareApplication",
+                        "@id": {{ seo_software_id | json_encode | safe }},
+                        "name": {{ config.title | json_encode | safe }},
+                        "description": {{ seo_description | json_encode | safe }},
+                        "url": {{ seo_site_url | json_encode | safe }},
+                        "image": {{ seo_image | json_encode | safe }},
+                        "applicationCategory": "DeveloperApplication",
+                        "operatingSystem": "macOS, Linux",
+                        "license": "https://www.apache.org/licenses/LICENSE-2.0",
+                        "downloadUrl": {{ config.extra.npm_package | json_encode | safe }},
+                        "sameAs": [{{ config.extra.github_repo | json_encode | safe }}, {{ config.extra.npm_package | json_encode | safe }}],
+                        "offers": {"@type": "Offer", "price": "0", "priceCurrency": "USD"}
+                    }
+                {% else %}
+                    {
+                        "@type": {% if seo_type == "article" %}"BlogPosting"{% elif current_path is starting_with("/docs/") %}"TechArticle"{% else %}"WebPage"{% endif %},
+                        "@id": {{ seo_main_id | json_encode | safe }},
+                        "headline": {{ seo_entry.title | json_encode | safe }},
+                        "name": {{ seo_title | json_encode | safe }},
+                        "description": {{ seo_description | json_encode | safe }},
+                        "url": {{ seo_url | json_encode | safe }},
+                        "image": {{ seo_image | json_encode | safe }},
+                        "inLanguage": "en",
+                        "isPartOf": {"@id": {{ seo_website_id | json_encode | safe }}},
+                        {% if seo_type == "article" %}
+                            "datePublished": {{ page.date | json_encode | safe }},
+                            "dateModified": {{ page.updated | default(value=page.date) | json_encode | safe }},
+                            "author": {"@type": "Organization", "name": {{ config.title | json_encode | safe }}, "url": {{ seo_site_url | json_encode | safe }}},
+                            "publisher": {"@type": "Organization", "name": {{ config.title | json_encode | safe }}, "url": {{ seo_site_url | json_encode | safe }}},
+                        {% endif %}
+                        "breadcrumb": {"@id": {{ seo_breadcrumb_id | json_encode | safe }}}
+                    },
+                    {
+                        "@type": "BreadcrumbList",
+                        "@id": {{ seo_breadcrumb_id | json_encode | safe }},
+                        "itemListElement": [
+                            {% for ancestor_path in seo_ancestors %}
+                                {% set ancestor = get_section(path=ancestor_path, metadata_only=true) %}
+                                {"@type": "ListItem", "position": {{ loop.index }}, "name": {{ ancestor.title | json_encode | safe }}, "item": {{ ancestor.permalink | json_encode | safe }}},
+                            {% endfor %}
+                            {"@type": "ListItem", "position": {{ seo_last_position }}, "name": {{ seo_entry.title | json_encode | safe }}, "item": {{ seo_url | json_encode | safe }}}
+                        ]
+                    }
+                {% endif %}
+            ]
+        }
+    </script>
+{% endif %}

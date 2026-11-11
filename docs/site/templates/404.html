@@ -1,0 +1,10 @@
+{% extends "base.html" %}
+{% block content %}
+    <header class="docs-section-header">
+        <p class="section-eyebrow">// 404</p>
+        <h1 class="docs-page-title">Page not found</h1>
+        <p class="docs-section-intro">
+            This page moved or never existed. Start from the <a href="{{ get_url(path='@/docs/getting-started/installation.md') }}">installation guide</a>, browse the <a href="{{ get_url(path='@/features/_index.md') }}">feature demos</a>, or press <kbd>/</kbd> to search.
+        </p>
+    </header>
+{% endblock content %}

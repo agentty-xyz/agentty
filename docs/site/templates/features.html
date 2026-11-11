@@ -1,10 +1,4 @@
 {% extends "base.html" %}
-{% block title %}
-    {{ section.title }} | {{ config.title }}
-{% endblock title %}
-{% block canonical %}
-    {{ section.permalink }}
-{% endblock canonical %}
 {% block main_width_class %}
     site-container
 {% endblock main_width_class %}
@@ -19,9 +13,9 @@
         {% for feature in features_section.pages %}
             {% set feature_poster = feature.extra.gif | replace(from=".gif", to=".png") %}
             <article class="feature-demo-card">
-                <h3 class="feature-demo-title">
+                <h2 class="feature-demo-title">
                     <a href="{{ feature.permalink }}">{{ feature.title }}</a>
-                </h3>
+                </h2>
                 <p class="feature-demo-text">{{ feature.description }}</p>
                 <div class="feature-demo-frame">
                     <picture>

@@ -30,6 +30,20 @@ documentation maintainable as it grows.
   documentation sidebar uses the same generated index and filters its results to
   `/docs/` routes.
 
+## Keep Search Metadata Complete
+
+- `templates/partials/seo.html` derives the title, meta description, canonical URL, Open
+  Graph and Twitter tags, and JSON-LD for every page. Do not add per-template `<title>`
+  or canonical tags.
+- Give every page and section a specific `description` of about 150 characters; it
+  becomes the search snippet and social preview text.
+- Set `extra.seo_title` only when the generated `<page> | Agentty <Section>` title does
+  not fit, and keep it under 60 characters.
+- Set `extra.sitemap_exclude = true` on sections that only redirect.
+- `static/social-card.png` is the 1200x630 link preview for every page except feature
+  pages, which use their own poster. It is a still of the home page glyph art, so
+  re-capture it when `static/glyph-art.js` scenes or the theme colors change.
+
 ## Preserve the Site Design System
 
 - Treat `sass/site.scss` as the source of truth for semantic color, typography, radius,
