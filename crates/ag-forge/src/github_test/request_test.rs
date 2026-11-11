@@ -102,7 +102,9 @@ fn status_command_requests_only_merge_state_for_readiness() {
     assert!(!query.contains("comments"));
     assert!(!query.contains("reviewThreads"));
     assert!(!query.contains("reviews("));
-    assert!(!query.contains("statusCheckRollup"));
+    assert!(query.contains("statusCheckRollup { state }"));
+    assert!(!query.contains("contexts"));
+    assert!(query.contains("viewerCanMergeAsAdmin"));
     assert!(command.arguments.contains(&"number=42".to_string()));
     assert!(!command.arguments.contains(&"--paginate".to_string()));
 }
@@ -173,6 +175,70 @@ fn github_clean_status_without_required_review_is_ready() {
     assert_eq!(
         summary.status_summary.as_deref(),
         Some("Mergeable, PR ready")
+    );
+}
+
+#[test]
+fn github_status_marks_bypass_ready_only_when_admin_approval_is_missing() {
+    // Arrange
+    let mut bypass_ready: serde_json::Value =
+        serde_json::from_str(&github_view_json()).expect("fixture should be valid JSON");
+    let pull_request = &mut bypass_ready["data"]["repository"]["pullRequest"];
+    pull_request["mergeStateStatus"] = serde_json::json!("BLOCKED");
+    pull_request["reviewDecision"] = serde_json::json!("REVIEW_REQUIRED");
+    pull_request["statusCheckRollup"] = serde_json::json!({"state": "SUCCESS"});
+    pull_request["viewerCanMergeAsAdmin"] = serde_json::json!(true);
+    let unready_cases = [
+        (
+            "/data/repository/pullRequest/viewerCanMergeAsAdmin",
+            serde_json::json!(false),
+        ),
+        (
+            "/data/repository/pullRequest/reviewDecision",
+            serde_json::json!("CHANGES_REQUESTED"),
+        ),
+        (
+            "/data/repository/pullRequest/statusCheckRollup",
+            serde_json::json!({"state": "PENDING"}),
+        ),
+        (
+            "/data/repository/pullRequest/statusCheckRollup",
+            serde_json::Value::Null,
+        ),
+        (
+            "/data/repository/pullRequest/isDraft",
+            serde_json::json!(true),
+        ),
+        (
+            "/data/repository/pullRequest/mergeStateStatus",
+            serde_json::json!("DIRTY"),
+        ),
+    ];
+
+    // Act
+    let bypass_summary = GitHubReviewRequestAdapter::parse_view_response(&bypass_ready.to_string())
+        .expect("bypass-ready response should parse");
+    let unready_summaries = unready_cases.map(|(path, value)| {
+        let mut response = bypass_ready.clone();
+        *response
+            .pointer_mut(path)
+            .expect("fixture path should exist") = value;
+
+        GitHubReviewRequestAdapter::parse_view_response(&response.to_string())
+            .expect("unready response should parse")
+    });
+
+    // Assert
+    assert!(bypass_summary.is_github_pr_bypass_ready());
+    assert!(!bypass_summary.is_github_pr_ready());
+    assert_eq!(
+        bypass_summary.status_summary.as_deref(),
+        Some("Review required, Blocked, PR ready with bypass")
+    );
+    assert!(
+        unready_summaries
+            .iter()
+            .all(|summary| !summary.is_github_pr_bypass_ready() && !summary.is_github_pr_ready())
     );
 }
 

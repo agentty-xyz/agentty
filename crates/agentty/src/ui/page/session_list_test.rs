@@ -7,9 +7,9 @@ use ratatui::widgets::TableState;
 
 use super::{
     EMPTY_SESSIONS_HINT, SessionListPage, TABLE_COLUMN_SPACING, column_width, model_column_width,
-    prepare_grouped_table_state, prepared_session_rows, reasoning_level_color, selected_render_row,
-    selected_session_id, session_list_help_line, size_color, status_column_width,
-    timer_column_width, tree_position_label,
+    pr_ready_label, prepare_grouped_table_state, prepared_session_rows, reasoning_level_color,
+    selected_render_row, selected_session_id, session_list_help_line, size_color,
+    status_column_width, timer_column_width, tree_position_label,
 };
 use crate::app::session_state::SessionGitStatus;
 use crate::domain::agent::{AgentModel, ReasoningLevel};
@@ -308,6 +308,33 @@ fn test_render_selected_ready_pr_label_stays_readable() {
     let label_cell = find_text_start_cell(terminal.backend().buffer(), "[ready]")
         .expect("ready PR label should be visible");
     assert_eq!(label_cell.fg, style::palette::success());
+}
+
+#[test]
+fn test_pr_ready_label_distinguishes_clean_and_bypass_readiness() {
+    // Arrange
+    let mut summary = ReviewRequestSummary {
+        display_id: "#42".to_string(),
+        forge_kind: ForgeKind::GitHub,
+        source_branch: "feature".to_string(),
+        state: ReviewRequestState::Open,
+        status_summary: Some("Mergeable, PR ready".to_string()),
+        target_branch: "main".to_string(),
+        title: "Ready PR session".to_string(),
+        web_url: "https://github.com/example/repo/pull/42".to_string(),
+    };
+
+    // Act
+    let clean_label = pr_ready_label(&summary);
+    summary.status_summary = Some("Review required, Blocked, PR ready with bypass".to_string());
+    let bypass_label = pr_ready_label(&summary);
+    summary.status_summary = Some("Review required, Blocked".to_string());
+    let blocked_label = pr_ready_label(&summary);
+
+    // Assert
+    assert_eq!(clean_label, Some(" [ready]"));
+    assert_eq!(bypass_label, Some(" [ready [bypass]]"));
+    assert_eq!(blocked_label, None);
 }
 
 #[test]

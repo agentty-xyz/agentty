@@ -17,7 +17,8 @@ use super::{
 const PULL_REQUEST_STATUS_QUERY: &str =
     "query($owner: String!, $repo: String!, $number: Int!) { repository(owner: $owner, name: \
      $repo) { pullRequest(number: $number) { number title state url baseRefName headRefName \
-     isDraft mergeStateStatus reviewDecision mergedAt } } }";
+     isDraft mergeStateStatus reviewDecision mergedAt statusCheckRollup { state } \
+     viewerCanMergeAsAdmin } } }";
 
 /// Paginated GraphQL query used to fetch review threads for one pull request.
 const REVIEW_THREADS_QUERY: &str =
@@ -891,8 +892,12 @@ struct GitHubViewResponse {
     #[serde(rename = "reviewDecision")]
     review_decision: Option<String>,
     state: String,
+    #[serde(rename = "statusCheckRollup")]
+    status_check_rollup: Option<GitHubStatusCheckRollup>,
     title: String,
     url: String,
+    #[serde(default, rename = "viewerCanMergeAsAdmin")]
+    viewer_can_merge_as_admin: bool,
 }
 
 impl GitHubViewResponse {
@@ -927,6 +932,8 @@ impl GitHubViewResponse {
 
         if self.is_ready() {
             parts.push(ReviewRequestSummary::GITHUB_READY_STATUS_COMPONENT.to_string());
+        } else if self.is_bypass_ready() {
+            parts.push(ReviewRequestSummary::GITHUB_BYPASS_READY_STATUS_COMPONENT.to_string());
         }
 
         status_summary_parts(&parts)
@@ -934,9 +941,25 @@ impl GitHubViewResponse {
 
     /// Rely on GitHub's merge state to apply the repository's merge rules.
     fn is_ready(&self) -> bool {
-        self.state == "OPEN"
-            && !self.is_draft
-            && self.merge_state_status.as_deref() == Some("CLEAN")
+        self.is_open_non_draft() && self.merge_state_status.as_deref() == Some("CLEAN")
+    }
+
+    /// Returns whether only a required approval blocks a merge the viewer may
+    /// perform by bypassing branch protections.
+    fn is_bypass_ready(&self) -> bool {
+        self.is_open_non_draft()
+            && self.viewer_can_merge_as_admin
+            && self.merge_state_status.as_deref() == Some("BLOCKED")
+            && self.review_decision.as_deref() == Some("REVIEW_REQUIRED")
+            && self
+                .status_check_rollup
+                .as_ref()
+                .is_some_and(|rollup| rollup.state == "SUCCESS")
+    }
+
+    /// Returns whether the pull request is open and published for review.
+    fn is_open_non_draft(&self) -> bool {
+        self.state == "OPEN" && !self.is_draft
     }
 
     /// Formats one GitHub review-decision label for the UI.
@@ -962,6 +985,12 @@ impl GitHubViewResponse {
             Some(other) => Some(normalize_provider_label(other)),
         }
     }
+}
+
+/// Aggregate check and commit-status state for the pull-request head.
+#[derive(Deserialize)]
+struct GitHubStatusCheckRollup {
+    state: String,
 }
 
 /// GitHub pull-request title/body payload returned by `gh pr view --json`.
