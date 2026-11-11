@@ -2,11 +2,14 @@
 
 use std::collections::BTreeMap;
 use std::error::Error;
+use std::fmt::Debug;
 use std::fs;
 use std::path::{Path, PathBuf};
 use std::process::{Command, Output};
 
-use ag_git::{GitClient, GitFuture, RealGitClient, SingleCommitMessageStrategy};
+use ag_git::{
+    GitClient, GitError, GitFuture, RealGitClient, RebaseStepResult, SingleCommitMessageStrategy,
+};
 use tempfile::tempdir;
 
 /// Fallible fixture result that can cross the `Send` client futures.
@@ -471,6 +474,98 @@ const WORKTREE_AND_REBASE_CASES: &[ContractCase] = &[
         expected: "Ok(()) parent=Advance main",
     },
     ContractCase {
+        operation: "rebase",
+        prepare: diverge_conflicting_branch,
+        observe: |repository| {
+            Box::pin(async move {
+                let result = RealGitClient
+                    .rebase(repository.local.clone(), "main".to_string())
+                    .await;
+                let in_progress = RealGitClient
+                    .is_rebase_in_progress(repository.local.clone())
+                    .await;
+
+                format!(
+                    "{} rebasing={in_progress:?} subject={}",
+                    render_outcome(result),
+                    repository.subject("HEAD")
+                )
+            })
+        },
+        expected: "Err(git rebase: Failed to rebase onto main) rebasing=Ok(false) \
+                   subject=Conflict edit",
+    },
+    ContractCase {
+        operation: "rebase_start",
+        prepare: diverge_conflicting_branch,
+        observe: |repository| {
+            Box::pin(async move {
+                let step = RealGitClient
+                    .rebase_start(repository.local.clone(), "main".to_string())
+                    .await;
+                let in_progress = RealGitClient.is_rebase_in_progress(repository.local).await;
+
+                format!("{} rebasing={in_progress:?}", render_rebase_step(step))
+            })
+        },
+        expected: "Ok(Conflict) detail=true rebasing=Ok(true)",
+    },
+    ContractCase {
+        operation: "rebase_start",
+        prepare: KEEP_STANDARD_LAYOUT,
+        observe: |repository| {
+            Box::pin(async move {
+                let step = RealGitClient
+                    .rebase_start(repository.local, "missing".to_string())
+                    .await;
+
+                render_rebase_step(step)
+            })
+        },
+        expected: "Err(git rebase: Failed to rebase onto missing)",
+    },
+    ContractCase {
+        operation: "rebase_onto_start",
+        prepare: KEEP_STANDARD_LAYOUT,
+        observe: |repository| {
+            Box::pin(async move {
+                let step = RealGitClient
+                    .rebase_onto_start(repository.local, "missing".to_string(), "main".to_string())
+                    .await;
+
+                render_rebase_step(step)
+            })
+        },
+        expected: "Err(git rebase --onto: Failed to rebase onto missing after main)",
+    },
+    ContractCase {
+        operation: "rebase_continue",
+        prepare: start_conflicting_rebase,
+        observe: |repository| {
+            Box::pin(async move {
+                let step = RealGitClient
+                    .rebase_continue(repository.local.clone())
+                    .await;
+                let in_progress = RealGitClient.is_rebase_in_progress(repository.local).await;
+
+                format!("{} rebasing={in_progress:?}", render_rebase_step(step))
+            })
+        },
+        expected: "Ok(Conflict) detail=true rebasing=Ok(true)",
+    },
+    ContractCase {
+        operation: "rebase_continue",
+        prepare: KEEP_STANDARD_LAYOUT,
+        observe: |repository| {
+            Box::pin(async move {
+                let step = RealGitClient.rebase_continue(repository.local).await;
+
+                render_rebase_step(step)
+            })
+        },
+        expected: "Err(git rebase --continue: Failed to continue rebase)",
+    },
+    ContractCase {
         operation: "rebase_start",
         prepare: diverge_feature_from_main,
         observe: |repository| {
@@ -604,6 +699,31 @@ const WORKTREE_AND_REBASE_CASES: &[ContractCase] = &[
             })
         },
         expected: r#"Ok(["README.md"])"#,
+    },
+    ContractCase {
+        operation: "list_staged_conflict_marker_files",
+        prepare: KEEP_STANDARD_LAYOUT,
+        observe: |repository| {
+            Box::pin(async move {
+                let no_paths = RealGitClient
+                    .list_staged_conflict_marker_files(repository.local.clone(), Vec::new())
+                    .await;
+                let outside_path = RealGitClient
+                    .list_staged_conflict_marker_files(
+                        repository.local,
+                        vec!["../outside.txt".to_string()],
+                    )
+                    .await;
+
+                format!(
+                    "no_paths={} outside_path={}",
+                    render_outcome(no_paths),
+                    render_outcome(outside_path)
+                )
+            })
+        },
+        expected: "no_paths=Ok([]) outside_path=Err(git grep: Failed to check for staged conflict \
+                   markers)",
     },
 ];
 
@@ -844,11 +964,17 @@ fn diverge_feature_from_main(repository: &ContractRepository) -> TestResult<()> 
     Ok(())
 }
 
-/// Leaves a `conflict` branch stopped mid-rebase on a `README.md` conflict.
-fn start_conflicting_rebase(repository: &ContractRepository) -> TestResult<()> {
+/// Checks out a `conflict` branch whose `README.md` edit conflicts with `main`.
+fn diverge_conflicting_branch(repository: &ContractRepository) -> TestResult<()> {
     repository.commit_file("README.md", "main\n", "Main edit")?;
     repository.git(&["checkout", "--quiet", "-b", "conflict", "main~1"])?;
-    repository.commit_file("README.md", "conflict\n", "Conflict edit")?;
+
+    repository.commit_file("README.md", "conflict\n", "Conflict edit")
+}
+
+/// Leaves a `conflict` branch stopped mid-rebase on a `README.md` conflict.
+fn start_conflicting_rebase(repository: &ContractRepository) -> TestResult<()> {
+    diverge_conflicting_branch(repository)?;
 
     let rebase = git_output(&repository.local, &["rebase", "main"])?;
     if rebase.status.success() {
@@ -870,6 +996,30 @@ fn fall_behind_origin(repository: &ContractRepository) -> TestResult<()> {
     repository.git(&["reset", "--quiet", "--hard", "HEAD~1"])?;
 
     Ok(())
+}
+
+/// Renders a client result with command failures reduced to the command and
+/// the error context before Git's own version-dependent diagnostic.
+fn render_outcome<T: Debug>(result: Result<T, GitError>) -> String {
+    match result {
+        Ok(value) => format!("Ok({value:?})"),
+        Err(GitError::CommandFailed { command, stderr }) => {
+            let context = stderr.split(':').next().unwrap_or_default();
+
+            format!("Err({command}: {context})")
+        }
+        Err(error) => format!("Err({error})"),
+    }
+}
+
+/// Renders a rebase step with the conflict detail reduced to its presence.
+fn render_rebase_step(step: Result<RebaseStepResult, GitError>) -> String {
+    match step {
+        Ok(RebaseStepResult::Conflict { detail }) => {
+            format!("Ok(Conflict) detail={}", !detail.is_empty())
+        }
+        step => render_outcome(step),
+    }
 }
 
 /// Renders a fixture Git result for an observation string.

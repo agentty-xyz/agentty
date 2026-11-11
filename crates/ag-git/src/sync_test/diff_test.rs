@@ -8,7 +8,7 @@ use crate::error::GitError;
 use crate::sync::{
     classify_diff_repository_error, delete_branch, diff, diff_changed_files,
     diff_output_after_index_resolution, diff_repository_probe_is_unavailable,
-    resolve_diff_index_path,
+    last_leading_applied_commit, resolve_diff_index_path, resolve_diff_target,
 };
 
 #[tokio::test]
@@ -74,6 +74,71 @@ async fn diff_preserves_staged_changes_and_includes_untracked_files() {
     );
     assert_eq!(cached_diff_after, cached_diff_before);
     assert_eq!(status_after, status_before);
+}
+
+#[tokio::test]
+async fn diff_reads_linked_worktree_through_its_absolute_index_path() {
+    // Arrange
+    let temp_dir = tempdir().expect("failed to create temp dir");
+    let repo_path = temp_dir.path().join("repo");
+    let worktree_path = temp_dir.path().join("session");
+    fs::create_dir(&repo_path).expect("failed to create repository directory");
+    setup_test_git_repo(&repo_path);
+    let worktree_path_text = worktree_path.to_string_lossy().into_owned();
+    run_git_command(
+        &repo_path,
+        &["worktree", "add", "-b", "session", &worktree_path_text],
+    );
+    fs::write(worktree_path.join("session.txt"), "session change\n")
+        .expect("failed to write session file");
+    let index_path =
+        resolve_diff_index_path(&worktree_path).expect("worktree index path should resolve");
+
+    // Act
+    let result = diff(worktree_path.clone(), "main".to_string()).await;
+
+    // Assert
+    assert!(PathBuf::from(index_path.trim()).is_absolute());
+    assert!(
+        result
+            .expect("linked worktree diff should succeed")
+            .contains("+session change")
+    );
+}
+
+#[test]
+fn diff_target_falls_back_to_merge_base_when_cherry_fails() {
+    // Arrange
+    let temp_dir = tempdir().expect("failed to create temp dir");
+    setup_test_git_repo(temp_dir.path());
+
+    // Act
+    let target = resolve_diff_target(temp_dir.path(), "missing-base-reference", "merge-base");
+
+    // Assert
+    assert_eq!(
+        target.expect("cherry failure should fall back"),
+        "merge-base"
+    );
+}
+
+#[test]
+fn last_leading_applied_commit_reads_only_the_leading_applied_block() {
+    // Arrange
+    let cases = [
+        ("", None),
+        ("\n- aaa\n- bbb\n+ ccc\n- ddd\n", Some("bbb")),
+        ("- aaa\n? bbb\n- ccc\n", Some("aaa")),
+        ("+ aaa\n- bbb\n", None),
+    ];
+
+    for (cherry_output, expected) in cases {
+        // Act
+        let commit = last_leading_applied_commit(cherry_output);
+
+        // Assert
+        assert_eq!(commit, expected, "{cherry_output:?}");
+    }
 }
 
 #[tokio::test]

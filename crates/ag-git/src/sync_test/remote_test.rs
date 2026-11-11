@@ -16,11 +16,12 @@ use crate::sync::{
     PullRebaseResult, SingleCommitMessageStrategy, advertised_commit, branch_tracking_statuses,
     commit_all_preserving_single_commit, current_branch_name, current_branch_remote_name,
     current_upstream_reference, fetch_remote_branch_commits_with_runner, get_ref_ahead_behind,
-    parse_branch_push_updated, parse_branch_tracking_statuses, parse_current_branch_remote_output,
-    primary_upstream_reference, pull_rebase, pull_rebase_with_runner, push_current_branch,
-    push_current_branch_to_new_remote_branch, push_current_branch_to_new_remote_branch_with_runner,
-    push_current_branch_to_remote_branch, push_current_branch_to_remote_branch_with_runner,
-    push_current_branch_with_runner, remote_branch_exists, remote_branch_exists_with_runner,
+    parse_ahead_behind_counts, parse_branch_push_updated, parse_branch_tracking_statuses,
+    parse_current_branch_remote_output, primary_upstream_reference, pull_rebase,
+    pull_rebase_with_runner, push_current_branch, push_current_branch_to_new_remote_branch,
+    push_current_branch_to_new_remote_branch_with_runner, push_current_branch_to_remote_branch,
+    push_current_branch_to_remote_branch_with_runner, push_current_branch_with_runner,
+    remote_branch_exists, remote_branch_exists_with_runner,
 };
 
 #[test]
@@ -298,6 +299,51 @@ fn parse_current_branch_remote_output_preserves_fatal_config_error() {
         GitError::CommandFailed { command, stderr }
             if command == "git config --get branch.main.remote"
                 && stderr.contains("Failed to resolve current branch remote")
+    ));
+}
+
+#[test]
+fn parse_current_branch_remote_output_rejects_empty_remote_name() {
+    // Arrange
+    let output = async_git_output(0, " \n", Vec::new());
+
+    // Act
+    let error = parse_current_branch_remote_output(&output, "branch.main.remote")
+        .expect_err("empty remote name should be rejected");
+
+    // Assert
+    assert!(matches!(
+        error,
+        GitError::OutputParse(message)
+            if message == "Failed to resolve current branch remote `branch.main.remote`: empty \
+                           output"
+    ));
+}
+
+#[tokio::test]
+async fn branch_name_lookups_reject_empty_git_output() {
+    // Arrange
+    let mut command_runner = MockAsyncGitCommandRunner::new();
+    command_runner
+        .expect_run()
+        .times(2)
+        .returning(|_| Box::pin(async { Ok(async_git_output(0, " \n\n", Vec::new())) }));
+
+    // Act
+    let upstream_reference =
+        primary_upstream_reference(Path::new("test-repo"), &command_runner).await;
+    let branch_name = current_branch_name(Path::new("test-repo"), &command_runner).await;
+
+    // Assert
+    assert!(matches!(
+        upstream_reference,
+        Err(GitError::OutputParse(message))
+            if message == "Failed to resolve upstream branch: empty output"
+    ));
+    assert!(matches!(
+        branch_name,
+        Err(GitError::OutputParse(message))
+            if message == "Failed to resolve current branch name: empty output"
     ));
 }
 
@@ -689,12 +735,17 @@ async fn push_without_upstream_reuses_configured_remote() {
 #[test]
 fn parse_branch_tracking_statuses_reads_repo_wide_branch_snapshot() {
     // Arrange
-    let output = "\
-main\torigin/main\tbehind 2\nwt/1234abcd\torigin/wt/1234abcd\tahead 3, behind \
-                  1\nfeature/local\t\t\nfeature/gone\torigin/feature/gone\tgone\n";
+    let output = [
+        "main\torigin/main\tbehind 2",
+        "wt/1234abcd\torigin/wt/1234abcd\tahead 3, behind 1",
+        "feature/local\t\t",
+        "feature/gone\torigin/feature/gone\tgone",
+        "feature/marker\torigin/feature/marker\tahead 4, unknown 7",
+    ]
+    .join("\n");
 
     // Act
-    let branch_tracking_statuses = parse_branch_tracking_statuses(output);
+    let branch_tracking_statuses = parse_branch_tracking_statuses(&output);
 
     // Assert
     assert_eq!(branch_tracking_statuses.get("main"), Some(&Some((0, 2))));
@@ -704,6 +755,29 @@ main\torigin/main\tbehind 2\nwt/1234abcd\torigin/wt/1234abcd\tahead 3, behind \
     );
     assert_eq!(branch_tracking_statuses.get("feature/local"), Some(&None));
     assert_eq!(branch_tracking_statuses.get("feature/gone"), Some(&None));
+    assert_eq!(
+        branch_tracking_statuses.get("feature/marker"),
+        Some(&Some((4, 0)))
+    );
+}
+
+#[test]
+fn parse_ahead_behind_counts_requires_both_counts() {
+    // Arrange
+    let complete_output = "3\t1\n";
+    let incomplete_output = "3\n";
+
+    // Act
+    let counts = parse_ahead_behind_counts(complete_output);
+    let incomplete = parse_ahead_behind_counts(incomplete_output);
+
+    // Assert
+    assert_eq!(counts.expect("complete output should parse"), (3, 1));
+    assert!(matches!(
+        incomplete,
+        Err(GitError::OutputParse(message))
+            if message == "Unexpected output format from git rev-list"
+    ));
 }
 
 #[tokio::test]

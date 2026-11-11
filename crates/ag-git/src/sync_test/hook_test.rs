@@ -83,17 +83,50 @@ fn ensure_pre_commit_hook_ready_accepts_custom_executable_hook() {
         "repos: []\n",
     )
     .expect("failed to write pre-commit configuration");
-    run_git_command(
-        temp_dir.path(),
-        &["config", "core.hooksPath", ".custom-hooks"],
-    );
-    write_executable_pre_commit_hook(&temp_dir.path().join(".custom-hooks").join("pre-commit"));
+    let absolute_hooks_path = temp_dir.path().join(".absolute-hooks");
+    let absolute_hooks_path_text = absolute_hooks_path.to_string_lossy().into_owned();
+
+    for (configured_hooks_path, hooks_path) in [
+        (".custom-hooks", temp_dir.path().join(".custom-hooks")),
+        (absolute_hooks_path_text.as_str(), absolute_hooks_path),
+    ] {
+        run_git_command(
+            temp_dir.path(),
+            &["config", "core.hooksPath", configured_hooks_path],
+        );
+        write_executable_pre_commit_hook(&hooks_path.join("pre-commit"));
+
+        // Act
+        let result = ensure_pre_commit_hook_ready(temp_dir.path());
+
+        // Assert
+        assert!(result.is_ok(), "{configured_hooks_path}: {result:?}");
+    }
+}
+
+#[test]
+fn ensure_pre_commit_hook_ready_reports_unreadable_hooks_path_config() {
+    // Arrange
+    let temp_dir = tempdir().expect("failed to create temp dir");
+    setup_test_git_repo(temp_dir.path());
+    fs::write(
+        temp_dir.path().join(".pre-commit-config.yaml"),
+        "repos: []\n",
+    )
+    .expect("failed to write pre-commit configuration");
+    fs::write(temp_dir.path().join(".git").join("config"), "[core\n")
+        .expect("failed to corrupt repository configuration");
 
     // Act
     let result = ensure_pre_commit_hook_ready(temp_dir.path());
 
     // Assert
-    assert!(result.is_ok());
+    assert!(matches!(
+        result,
+        Err(GitError::CommandFailed { ref command, ref stderr })
+            if command == "git config --path --get core.hooksPath"
+                && stderr.contains("bad config")
+    ));
 }
 
 #[cfg(unix)]

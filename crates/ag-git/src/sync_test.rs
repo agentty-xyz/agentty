@@ -1,6 +1,8 @@
 #[path = "sync_test/support_test.rs"]
 mod support;
 
+#[path = "sync_test/commit_test.rs"]
+mod commit;
 #[path = "sync_test/diff_test.rs"]
 mod diff;
 #[path = "sync_test/hook_test.rs"]

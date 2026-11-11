@@ -195,24 +195,19 @@ fn pre_commit_hook_result(output: Result<Output, GitError>) -> Result<(), GitErr
 /// # Errors
 /// Returns a [`GitError`] if resolving `HEAD` fails.
 pub(crate) async fn head_short_hash(repo_path: PathBuf) -> Result<String, GitError> {
-    let hash = run_git_command(
+    let error_context = "Failed to resolve HEAD hash";
+    let output = run_git_command(
         repo_path,
         vec![
             "rev-parse".to_string(),
             "--short".to_string(),
             "HEAD".to_string(),
         ],
-        "Failed to resolve HEAD hash".to_string(),
+        error_context.to_string(),
     )
     .await?;
-    let hash = hash.trim().to_string();
-    if hash.is_empty() {
-        return Err(GitError::OutputParse(
-            "Failed to resolve HEAD hash: empty output".to_string(),
-        ));
-    }
 
-    Ok(hash)
+    parse_resolved_hash(&output, error_context)
 }
 
 /// Returns the full hash of the current `HEAD` commit.
@@ -226,20 +221,15 @@ pub(crate) async fn head_short_hash(repo_path: PathBuf) -> Result<String, GitErr
 /// # Errors
 /// Returns a [`GitError`] if resolving `HEAD` fails.
 pub(crate) async fn head_hash(repo_path: PathBuf) -> Result<String, GitError> {
-    let hash = run_git_command(
+    let error_context = "Failed to resolve HEAD hash";
+    let output = run_git_command(
         repo_path,
         vec!["rev-parse".to_string(), "HEAD".to_string()],
-        "Failed to resolve HEAD hash".to_string(),
+        error_context.to_string(),
     )
     .await?;
-    let hash = hash.trim().to_string();
-    if hash.is_empty() {
-        return Err(GitError::OutputParse(
-            "Failed to resolve HEAD hash: empty output".to_string(),
-        ));
-    }
 
-    Ok(hash)
+    parse_resolved_hash(&output, error_context)
 }
 
 /// Returns the full commit hash for a git reference.
@@ -254,24 +244,32 @@ pub(crate) async fn head_hash(repo_path: PathBuf) -> Result<String, GitError> {
 /// # Errors
 /// Returns a [`GitError`] if the reference cannot be resolved to a commit.
 pub(crate) async fn ref_hash(repo_path: PathBuf, reference: String) -> Result<String, GitError> {
-    let hash = run_git_command(
+    let error_context = format!("Failed to resolve `{reference}` hash");
+    let output = run_git_command(
         repo_path,
         vec![
             "rev-parse".to_string(),
             "--verify".to_string(),
             format!("{reference}^{{commit}}"),
         ],
-        format!("Failed to resolve `{reference}` hash"),
+        error_context.clone(),
     )
     .await?;
-    let hash = hash.trim().to_string();
+
+    parse_resolved_hash(&output, &error_context)
+}
+
+/// Returns the trimmed hash printed by `git rev-parse`, rejecting empty
+/// output with `error_context`.
+fn parse_resolved_hash(output: &str, error_context: &str) -> Result<String, GitError> {
+    let hash = output.trim();
     if hash.is_empty() {
         return Err(GitError::OutputParse(format!(
-            "Failed to resolve `{reference}` hash: empty output"
+            "{error_context}: empty output"
         )));
     }
 
-    Ok(hash)
+    Ok(hash.to_string())
 }
 
 /// Returns the full `HEAD` commit message, or `None` when no commits exist.
@@ -867,31 +865,13 @@ async fn pull_rebase_arguments(
     ])
 }
 
-/// Returns the first upstream reference reported for `HEAD`.
+/// Returns the first upstream reference reported for `HEAD` (for example,
+/// `origin/main`).
 ///
 /// Git can return multiple lines when multiple merge targets are configured.
 /// Pulling with rebase needs one concrete target, so this selects the first
 /// non-empty line.
 async fn primary_upstream_reference(
-    repo_path: &Path,
-    command_runner: &dyn AsyncGitCommandRunner,
-) -> Result<String, GitError> {
-    let upstream_reference = upstream_reference_name(repo_path, command_runner).await?;
-    let Some(primary_reference) = upstream_reference
-        .lines()
-        .map(str::trim)
-        .find(|line| !line.is_empty())
-    else {
-        return Err(GitError::OutputParse(
-            "Failed to resolve upstream branch: empty output".to_string(),
-        ));
-    };
-
-    Ok(primary_reference.to_string())
-}
-
-/// Returns the full upstream reference for `HEAD` (for example, `origin/main`).
-async fn upstream_reference_name(
     repo_path: &Path,
     command_runner: &dyn AsyncGitCommandRunner,
 ) -> Result<String, GitError> {
@@ -909,14 +889,17 @@ async fn upstream_reference_name(
         command_runner,
     )
     .await?;
-    let upstream_reference = upstream_reference.trim().to_string();
-    if upstream_reference.is_empty() {
+    let Some(primary_reference) = upstream_reference
+        .lines()
+        .map(str::trim)
+        .find(|line| !line.is_empty())
+    else {
         return Err(GitError::OutputParse(
             "Failed to resolve upstream branch: empty output".to_string(),
         ));
-    }
+    };
 
-    Ok(upstream_reference)
+    Ok(primary_reference.to_string())
 }
 
 /// Returns the configured remote name for the current local branch.
@@ -1489,15 +1472,20 @@ pub(crate) async fn has_commits_since(
             &["rev-list", "--count", &format!("{base_branch}..HEAD")],
             "Failed to count commits since base branch",
         )?;
-        let commit_count = rev_list_output.trim().parse::<u32>().map_err(|error| {
-            GitError::OutputParse(format!(
-                "Failed to parse commit count since base branch `{base_branch}`: {error}"
-            ))
-        })?;
+        let commit_count = parse_commit_count(&rev_list_output, &base_branch)?;
 
         Ok(commit_count > 0)
     })
     .await?
+}
+
+/// Parses one `git rev-list --count` output counted from `base_branch`.
+fn parse_commit_count(rev_list_output: &str, base_branch: &str) -> Result<u32, GitError> {
+    rev_list_output.trim().parse::<u32>().map_err(|error| {
+        GitError::OutputParse(format!(
+            "Failed to parse commit count since base branch `{base_branch}`: {error}"
+        ))
+    })
 }
 
 /// Parses newline-delimited commit subjects from `git log` output.
@@ -1519,16 +1507,12 @@ fn parse_branch_tracking_statuses(output: &str) -> BranchTrackingMap {
         .map(str::trim)
         .filter(|line| !line.is_empty())
     {
-        let mut parts = line.splitn(3, '\t');
-        let Some(branch_name) = parts
-            .next()
-            .map(str::trim)
-            .filter(|value| !value.is_empty())
-        else {
-            continue;
-        };
-        let upstream_ref = parts.next().map_or_default(str::trim);
-        let track = parts.next().map_or_default(str::trim);
+        // The trimmed, non-empty line starts with the branch name, so the
+        // first field is never empty.
+        let mut parts = line.splitn(3, '\t').map(str::trim);
+        let branch_name = parts.next().unwrap_or_default();
+        let upstream_ref = parts.next().unwrap_or_default();
+        let track = parts.next().unwrap_or_default();
 
         let status = if upstream_ref.is_empty() {
             None

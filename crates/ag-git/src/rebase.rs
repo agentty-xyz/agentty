@@ -132,15 +132,9 @@ pub(crate) async fn rebase(repo_path: PathBuf, target_branch: String) -> Result<
     match rebase_start(repo_path.clone(), target_branch.clone()).await? {
         RebaseStepResult::Completed => Ok(()),
         RebaseStepResult::Conflict { detail } => {
-            let abort_suffix = match abort_rebase(repo_path).await {
-                Ok(()) => String::new(),
-                Err(error) => format!(" {error}"),
-            };
+            let abort_result = abort_rebase(repo_path).await;
 
-            Err(GitError::CommandFailed {
-                command: "git rebase".to_string(),
-                stderr: format!("Failed to rebase onto {target_branch}: {detail}.{abort_suffix}"),
-            })
+            Err(rebase_conflict_error(&target_branch, &detail, abort_result))
         }
     }
 }
@@ -449,6 +443,24 @@ pub(crate) async fn list_conflicted_files(repo_path: PathBuf) -> Result<Vec<Stri
     .await?
 }
 
+/// Builds the error for a conflicted rebase, appending the abort failure when
+/// the conflicted rebase could not be aborted.
+fn rebase_conflict_error(
+    target_branch: &str,
+    detail: &str,
+    abort_result: Result<(), GitError>,
+) -> GitError {
+    let abort_suffix = match abort_result {
+        Ok(()) => String::new(),
+        Err(error) => format!(" {error}"),
+    };
+
+    GitError::CommandFailed {
+        command: "git rebase".to_string(),
+        stderr: format!("Failed to rebase onto {target_branch}: {detail}.{abort_suffix}"),
+    }
+}
+
 /// Runs one rebase command and maps git output to a step result.
 fn run_rebase_step(
     repo_path: &Path,
@@ -587,7 +599,9 @@ fn run_git_command_with_index_lock_retry_with_dependencies(
         .map(|(key, value)| (String::from(*key), String::from(*value)))
         .collect::<Vec<_>>();
 
-    for attempt in 0..GIT_INDEX_LOCK_RETRY_ATTEMPTS {
+    let mut attempt_count = 0;
+    loop {
+        attempt_count += 1;
         let output =
             command_runner.run_git_command_output_with_env(repo_path, &args, &environment)?;
         if output.status.success() {
@@ -595,15 +609,13 @@ fn run_git_command_with_index_lock_retry_with_dependencies(
         }
 
         let detail = command_output_detail(&output.stdout, &output.stderr);
-        let is_last_attempt = attempt + 1 == GIT_INDEX_LOCK_RETRY_ATTEMPTS;
+        let is_last_attempt = attempt_count == GIT_INDEX_LOCK_RETRY_ATTEMPTS;
         if !is_git_index_lock_error(&detail) || is_last_attempt {
             return Ok(output);
         }
 
         sleeper.sleep(GIT_INDEX_LOCK_RETRY_DELAY);
     }
-
-    unreachable!("index lock retry loop should always return an output")
 }
 
 /// Returns whether git output detail indicates a rebase conflict state.
