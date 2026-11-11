@@ -650,7 +650,6 @@ async fn session_chat_keeps_session_age_across_focus_changes() -> E2eResult {
                                     .contains("Ctrl+V/Alt+V"))
                             );
                         }
-                        assert!(!label_rows[0].contains("Processes:"));
                         assert!(!label_rows[0].contains("2026-"));
                     }
                 })

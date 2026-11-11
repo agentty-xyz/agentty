@@ -58,7 +58,6 @@ serde.workspace = true
 serde_json.workspace = true
 semver.workspace = true
 sqlx.workspace = true
-sysinfo.workspace = true
 tachyonfx.workspace = true
 time.workspace = true
 thiserror.workspace = true
@@ -67,9 +66,6 @@ tokio-util.workspace = true
 tracing.workspace = true
 uuid.workspace = true
 unicode-width.workspace = true
-
-[target.'cfg(target_os = "macos")'.dependencies]
-libproc.workspace = true
 
 [dev-dependencies]
 opentelemetry.workspace = true

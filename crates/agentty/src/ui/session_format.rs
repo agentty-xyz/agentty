@@ -5,7 +5,6 @@ use ratatui::style::{Modifier, Style};
 use ratatui::text::{Line, Span};
 use ratatui::widgets::Borders;
 
-use crate::domain::resource::SessionResources;
 use crate::domain::review;
 use crate::domain::session::{COMMITTING_PROGRESS_LABEL, Session, Status};
 use crate::presentation::frame_time::FrameTime;
@@ -20,40 +19,6 @@ const REVIEW_PROJECT_IMPACT_HEADER: &str = "### Project Impact";
 const REVIEW_SUGGESTIONS_HEADER: &str = "### Suggestions";
 const REVIEW_SUGGESTIONS_HEADER_WITH_HINT: &str =
     "### Suggestions (type \"/apply\" to verify and apply)";
-
-/// Formats the bounded chat row for the tracked agent process tree.
-pub(crate) fn session_resources_line(
-    resources: Option<SessionResources>,
-    host_cpu_temperature_celsius: Option<f32>,
-    width: u16,
-) -> Line<'static> {
-    let mut text = resources.map_or_else(
-        || "Processes: --  CPU: --  Memory: --".to_string(),
-        |resources| {
-            let memory = resources.resident_memory_kib;
-
-            format!(
-                "Processes: {}  CPU: {:.1}%  Memory: {}.{} MiB",
-                resources.process_count,
-                resources.cpu_percent,
-                memory / 1024,
-                memory % 1024 * 10 / 1024,
-            )
-        },
-    );
-
-    let temperature = host_cpu_temperature_celsius.map_or_else(
-        || "--".to_string(),
-        |temperature| format!("{temperature:.1}°C"),
-    );
-    text.push_str("  Host CPU temp: ");
-    text.push_str(&temperature);
-
-    Line::styled(
-        text_util::truncate_with_ellipsis(&text, usize::from(width)),
-        Style::default().fg(style::palette::text_muted()),
-    )
-}
 
 /// Formats active-work duration alongside the session age, omitting the age
 /// when the combined label exceeds the available footer width.

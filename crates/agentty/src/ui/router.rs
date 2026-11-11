@@ -47,6 +47,8 @@ struct RouteSharedContext<'a> {
     is_archive_expanded: bool,
     /// Cached most-recently-opened ordering over `projects`.
     mru_project_order: &'a [usize],
+    /// Latest Agentty process-tree totals shown in the tab header.
+    process_resources: Option<SessionResources>,
     project_table_state: &'a mut TableState,
     projects: &'a [ProjectListItem],
     session_git_statuses: &'a HashMap<SessionId, SessionGitStatus>,
@@ -160,12 +162,9 @@ struct SessionChatRenderContext<'a> {
     output_layout_cache: &'a component::session_output::SessionOutputLayoutCache,
     review_snapshot: Option<&'a SessionReviewSnapshot<'a>>,
     scroll_offset: Option<usize>,
-    session_cpu_temperatures: &'a HashMap<SessionId, f32>,
     session_git_statuses: &'a HashMap<SessionId, SessionGitStatus>,
     session_id: &'a str,
     session_progress_messages: &'a HashMap<SessionId, String>,
-    /// Latest tracked process-tree totals.
-    session_resources: &'a HashMap<SessionId, SessionResources>,
     session_update_versions: &'a HashMap<SessionId, u64>,
     session_worktree_availability: &'a HashMap<SessionId, bool>,
     sessions: &'a [Session],
@@ -185,11 +184,8 @@ struct FrameResources<'a> {
     markdown_render_cache: &'a markdown::MarkdownRenderCache,
     output_layout_cache: &'a component::session_output::SessionOutputLayoutCache,
     review_snapshot: Option<&'a SessionReviewSnapshot<'a>>,
-    session_cpu_temperatures: &'a HashMap<SessionId, f32>,
     session_git_statuses: &'a HashMap<SessionId, SessionGitStatus>,
     session_progress_messages: &'a HashMap<SessionId, String>,
-    /// Latest tracked process-tree totals.
-    session_resources: &'a HashMap<SessionId, SessionResources>,
     session_update_versions: &'a HashMap<SessionId, u64>,
     session_worktree_availability: &'a HashMap<SessionId, bool>,
     task_chain_graphs: &'a TaskChainGraphCache,
@@ -217,8 +213,6 @@ impl<'a> FrameResources<'a> {
             review_snapshot: self.review_snapshot,
             session_id,
             session_git_statuses: self.session_git_statuses,
-            session_cpu_temperatures: self.session_cpu_temperatures,
-            session_resources: self.session_resources,
             session_progress_messages: self.session_progress_messages,
             session_update_versions: self.session_update_versions,
             session_worktree_availability: self.session_worktree_availability,
@@ -255,13 +249,12 @@ pub(crate) fn route_frame(f: &mut Frame, area: Rect, context: RenderContext<'_>)
         harness_availability,
         mode,
         mru_project_order,
+        process_resources,
         render_cache_store,
         project_table_state,
         projects,
         session_review_snapshot,
         session_git_statuses,
-        session_cpu_temperatures,
-        session_resources,
         session_progress_messages,
         session_update_versions,
         session_worktree_availability,
@@ -286,6 +279,7 @@ pub(crate) fn route_frame(f: &mut Frame, area: Rect, context: RenderContext<'_>)
         has_more_archived_sessions,
         is_archive_expanded,
         mru_project_order,
+        process_resources,
         project_table_state,
         projects,
         session_git_statuses,
@@ -303,8 +297,6 @@ pub(crate) fn route_frame(f: &mut Frame, area: Rect, context: RenderContext<'_>)
         output_layout_cache: render_cache_store.session_output_layout_cache(),
         review_snapshot: session_review_snapshot,
         session_git_statuses,
-        session_cpu_temperatures,
-        session_resources,
         session_progress_messages,
         session_update_versions,
         session_worktree_availability,
@@ -817,8 +809,6 @@ fn render_session_chat(f: &mut Frame, area: Rect, context: SessionChatRenderCont
         output_layout_cache,
         review_snapshot,
         session_id,
-        session_cpu_temperatures,
-        session_resources,
         session_progress_messages,
         session_git_statuses,
         session_update_versions,
@@ -851,8 +841,6 @@ fn render_session_chat(f: &mut Frame, area: Rect, context: SessionChatRenderCont
     let page_input = page::session_chat::SessionChatPageInput {
         active_prompt_output,
         active_progress,
-        resources: session_resources.get(session_id).copied(),
-        host_cpu_temperature_celsius: session_cpu_temperatures.get(session_id).copied(),
         has_merge_conflict,
         markdown_render_cache,
         mode,
@@ -893,6 +881,7 @@ fn render_list_background(
         shared.active_project_id,
         shared.projects,
     )
+    .process_stats(shared.process_resources)
     .render(f, chunks[0]);
 
     match shared.current_tab {

@@ -15,9 +15,6 @@ pub mod file_index;
 pub mod fs;
 /// Agentty data-directory path resolution.
 pub mod home;
-/// Process-management utilities for agent subprocess lifecycle.
-/// Native process creation identities for resource accounting.
-pub(crate) mod process_identity;
 /// Startup project-discovery boundary for home-directory repository scans.
 pub mod project_discovery;
 /// Host process-accounting boundary.

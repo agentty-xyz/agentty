@@ -246,10 +246,9 @@ Actor queries read persisted state and never dispatch or resume work. Continuati
 retains the attempt shown when composition began; admission rejects a stale source
 before it can reach another stage or role.
 
-Resource sampling runs behind `ResourceClient`. Process creation identities guard
-against PID reuse. Temperature sampling runs independently and expires stale readings,
-so sensor I/O cannot block accounting or terminal input. Accounting PIDs never authorize
-cancellation.
+Resource sampling runs behind `ResourceClient` and totals the process tree rooted at
+Agentty's own PID, so it needs no per-session runtime PIDs. Samples run in the
+background, so process-table I/O cannot block terminal input.
 
 ## Session Turn Data Flow
 

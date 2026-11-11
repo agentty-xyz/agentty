@@ -20,6 +20,7 @@ use crate::domain::setting::SettingName;
 use crate::infra::clock::{self, Clock};
 use crate::infra::db;
 use crate::infra::db::AppRepositories;
+use crate::infra::resource::ResourceClient;
 use crate::presentation::setting::SettingsPresentationState;
 use crate::presentation::task_chain_graph::TaskChainGraphCache;
 
@@ -138,8 +139,8 @@ impl App {
             Self::load_settings(&repositories, &services, startup.active_project_id).await;
         let (sessions, review_cache, recoverable_focused_review_session_ids) =
             Self::load_startup_sessions_and_reviews(
-                &repositories,
                 &services,
+                Arc::clone(&clients.resource_client),
                 startup.active_project_id,
                 startup.startup_working_dir.as_path(),
             )
@@ -203,10 +204,11 @@ impl App {
         Ok(app)
     }
 
-    /// Loads sessions and focused-review recovery state for the launch project.
+    /// Loads sessions and focused-review recovery state for the launch project,
+    /// sampling tab-bar resource stats through `resource_client`.
     async fn load_startup_sessions_and_reviews(
-        repositories: &AppRepositories,
         services: &AppServices,
+        resource_client: Arc<dyn ResourceClient>,
         active_project_id: i64,
         working_dir: &Path,
     ) -> Result<
@@ -218,7 +220,10 @@ impl App {
         AppError,
     > {
         let mut sessions =
-            Self::load_and_restack_startup_sessions(services, active_project_id, working_dir).await;
+            Self::load_and_restack_startup_sessions(services, active_project_id, working_dir)
+                .await
+                .with_resource_client(resource_client);
+        let repositories = services.db();
         let review_cache = Self::load_focused_review_cache(repositories, active_project_id).await;
         let recoverable_session_ids =
             Self::load_recoverable_focused_review_session_ids(repositories, active_project_id)

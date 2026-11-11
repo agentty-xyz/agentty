@@ -4,10 +4,9 @@ use ratatui::style::Modifier;
 use super::{
     prompt_session_status, session_header_lines, session_output_queued_lines,
     session_output_status_icon, session_output_status_message, session_output_uses_tachyon_loader,
-    session_resources_line, session_speed_display, session_started_label,
+    session_speed_display, session_started_label,
 };
 use crate::domain::agent::{AgentModel, ResponseStyle};
-use crate::domain::resource::SessionResources;
 use crate::domain::session::{
     ForgeKind, ReviewRequest, ReviewRequestState, ReviewRequestSummary, Session, Status,
 };
@@ -37,53 +36,6 @@ fn queued_preview_compacts_and_truncates_to_terminal_columns() {
     assert!(full[0].style.add_modifier.contains(Modifier::ITALIC));
     assert_eq!(blank, Vec::<ratatui::text::Line<'_>>::new());
     assert_eq!(zero_width, Vec::<ratatui::text::Line<'_>>::new());
-}
-
-#[test]
-fn resource_row_formats_values_unavailable_and_narrow_widths() {
-    // Arrange
-    let resources = SessionResources {
-        cpu_percent: 128.5,
-        process_count: 3,
-        resident_memory_kib: 3584,
-    };
-
-    // Act
-    let row = session_resources_line(Some(resources), None, 80);
-    let unavailable = session_resources_line(None, None, 80);
-    let narrow = session_resources_line(Some(resources), None, 15);
-
-    // Assert
-    assert_eq!(
-        row.to_string(),
-        "Processes: 3  CPU: 128.5%  Memory: 3.5 MiB  Host CPU temp: --"
-    );
-    assert_eq!(
-        unavailable.to_string(),
-        "Processes: --  CPU: --  Memory: --  Host CPU temp: --"
-    );
-    assert!(narrow.width() <= 15);
-    assert_eq!(session_resources_line(Some(resources), None, 0).width(), 0);
-    assert!(
-        session_resources_line(Some(SessionResources::default()), None, 80)
-            .to_string()
-            .contains("Processes: 0  CPU: 0.0%  Memory: 0.0 MiB")
-    );
-}
-
-#[test]
-fn resource_row_shows_host_cpu_temperature_in_celsius() {
-    // Arrange
-    let resources = SessionResources::default();
-
-    // Act
-    let row = session_resources_line(Some(resources), Some(64.5), 80);
-
-    // Assert
-    assert_eq!(
-        row.to_string(),
-        "Processes: 0  CPU: 0.0%  Memory: 0.0 MiB  Host CPU temp: 64.5°C"
-    );
 }
 
 fn session_with_review_request(url: &str) -> Session {

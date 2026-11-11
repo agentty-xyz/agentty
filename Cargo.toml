@@ -78,7 +78,6 @@ sha2 = "0.11.0"
 # Omit the registry version so Cargo rejects publication instead of replacing
 # the security fix with a vulnerable registry release.
 sqlx = { git = "https://github.com/transact-rs/sqlx", rev = "10462fa4414c6c7f1ed1d39bb31678e3b726878c", default-features = false, features = ["macros", "migrate", "runtime-tokio", "sqlite"] }
-sysinfo = { version = "0.40", default-features = false, features = ["component"] }
 tachyonfx = { version = "0.25.2", default-features = false, features = ["std"] }
 tempfile = "3.27"
 thiserror = "2"

@@ -14,6 +14,7 @@ mod confirmation;
 mod demo;
 mod navigation;
 mod project;
+mod resource;
 mod selection;
 mod session;
 mod setting;

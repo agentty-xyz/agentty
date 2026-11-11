@@ -10,7 +10,6 @@ use super::{
 use crate::domain::agent::ReasoningLevel;
 use crate::domain::input::InputState;
 use crate::domain::question::QuestionItem;
-use crate::domain::resource::SessionResources;
 use crate::domain::session::{Session, Status};
 use crate::domain::session_message::SessionTranscript;
 use crate::presentation::app_mode::{AppMode, ChatFocus};
@@ -42,8 +41,6 @@ fn test_page_input<'a>(session: &'a Session, mode: &'a AppMode) -> SessionChatPa
     SessionChatPageInput {
         active_prompt_output: None,
         active_progress: None,
-        resources: None,
-        host_cpu_temperature_celsius: None,
         frame_time: FrameTime::new(0, 0, 0),
         has_merge_conflict: false,
         markdown_render_cache: test_markdown_render_cache(),
@@ -507,12 +504,6 @@ fn test_render_session_view_keeps_settings_in_an_inactive_composer() {
         let session = &sessions[1];
         let mut page = SessionChatPage::new(SessionChatPageInput {
             has_merge_conflict: true,
-            host_cpu_temperature_celsius: Some(62.5),
-            resources: Some(SessionResources {
-                cpu_percent: 12.5,
-                process_count: 3,
-                resident_memory_kib: 2048,
-            }),
             session_index: 1,
             session_update_version: 7,
             sessions: &sessions,
@@ -550,8 +541,7 @@ fn test_render_session_view_keeps_settings_in_an_inactive_composer() {
         assert!(buffer_row_text(buffer, height - 1, width).contains("q: back"));
         let text = buffer_text(buffer);
         assert!(text.contains("Merge conflict with main"));
-        assert!(text.contains("Processes: 3  CPU: 12.5%  Memory: 2.0 MiB"));
-        assert!(text.contains("Host CPU temp: 62.5°C"));
+        assert!(!text.contains("CPU"));
     }
 }
 
@@ -1179,11 +1169,9 @@ fn test_render_session_preserves_timer_across_composer_modes_and_widths() {
             "Timer: 1h 1m 0s · Started 2h 0m ago"
         };
         let label_rows: Vec<&String> = rows.iter().filter(|row| row.contains(label)).collect();
-        let resource_row = rows.iter().find(|row| row.contains("Processes: --"));
         assert_eq!(label_rows.len(), 1, "rows: {rows:#?}");
         assert!(label_rows[0].contains("╰"));
         assert!(label_rows[0].trim_end().ends_with("╯"));
-        assert!(resource_row.is_some_and(|row| !row.contains("Started")));
     }
 }
 
