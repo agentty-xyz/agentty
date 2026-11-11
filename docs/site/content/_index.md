@@ -1,10 +1,10 @@
 +++
 title = "Agentty"
 template = "index.html"
-description = "Agentty is a terminal Agentic Development Environment (ADE) for running Codex, Claude, Gemini, and Antigravity coding agents and reviewing their changes."
+description = "An Agentic Development Environment (ADE) for structured, controllable AI-assisted development."
 [extra]
 seo_title = "Agentty | Agentic Development Environment for the Terminal"
 +++
 
-An **Agentic Development Environment (ADE)** for running coding agents and reviewing
-changes from your terminal.
+An **Agentic Development Environment (ADE)** for structured, controllable AI-assisted
+development.
