@@ -12,25 +12,54 @@
 {% block main_extra_classes %}
     home-layout
 {% endblock main_extra_classes %}
+{% block extra_css %}
+    <link href="https://fonts.googleapis.com/css2?family=Martian+Mono:wght@400..800&display=swap"
+          rel="stylesheet">
+    <noscript>
+        <style>
+            .glyph-art-nerpa {
+                display: none;
+            }
+        </style>
+    </noscript>
+{% endblock extra_css %}
 {% block content %}
-    <section class="hero-section">
-        <pre class="logo" aria-hidden="true">    _    ____ _____ _   _ _____ _____ __   __
+    {# Glyph art is painted by `glyph-art.js`; the ASCII logo stays as the no-script fallback. #}
+    <section class="hero-section home-hero" aria-labelledby="home-hero-title">
+        <div class="glyph-art glyph-art-wordmark"
+             data-glyph-art="wordmark"
+             aria-hidden="true">
+            <canvas class="glyph-art-canvas"></canvas>
+            <pre class="logo glyph-art-still">    _    ____ _____ _   _ _____ _____ __   __
    / \  / ___| ____| \ | |_   _|_   _|\ \ / /
   / _ \| |  _|  _| |  \| | | |   | |   \ V /
  / ___ \ |_| | |___| |\  | | |   | |    | |
 /_/   \_\____|_____|_| \_| |_|   |_|    |_|</pre>
-        <p class="hero-eyebrow">// terminal-first agent workflows</p>
-        <h1 class="hero-title">Ship AI-assisted changes with control.</h1>
-        <div class="hero-description">{{ section.content | safe }}</div>
-        <div class="hero-actions">
-            <a class="button button-primary"
-               href="/docs/getting-started/installation/"
-               data-analytics-event="get_started_clicked">Get started</a>
-            <a class="button button-secondary"
-               href="{{ config.extra.github_repo }}"
-               target="_blank"
-               rel="noopener"
-               data-analytics-event="github_clicked">View on GitHub</a>
+        </div>
+        <div class="home-hero-grid">
+            <div class="home-hero-text">
+                <p class="hero-eyebrow">// terminal-first agent workflows</p>
+                <h1 class="hero-title" id="home-hero-title">Ship AI-assisted changes with control.</h1>
+                <div class="hero-description">{{ section.content | safe }}</div>
+                <div class="hero-actions">
+                    <a class="button button-primary"
+                       href="/docs/getting-started/installation/"
+                       data-analytics-event="get_started_clicked">Get started</a>
+                    <a class="button button-secondary"
+                       href="{{ config.extra.github_repo }}"
+                       target="_blank"
+                       rel="noopener"
+                       data-analytics-event="github_clicked">View on GitHub</a>
+                </div>
+                <p class="home-hero-meta">
+                    open source <span aria-hidden="true">/</span> one terminal <span aria-hidden="true">/</span> Codex, Claude, Gemini, Antigravity
+                </p>
+            </div>
+            <div class="glyph-art glyph-art-nerpa"
+                 data-glyph-art="nerpa"
+                 aria-hidden="true">
+                <canvas class="glyph-art-canvas"></canvas>
+            </div>
         </div>
     </section>
     <section class="site-section">
@@ -230,3 +259,6 @@
         <p class="roadmap-caption">Strategic directions, not release commitments.</p>
     </section>
 {% endblock content %}
+{% block extra_scripts %}
+    <script defer src="{{ get_url(path='glyph-art.js') }}"></script>
+{% endblock extra_scripts %}
