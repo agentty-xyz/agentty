@@ -35,6 +35,30 @@ fn ready_pr_marker_requires_open_github_request_and_exact_component() {
 }
 
 #[test]
+fn bypass_ready_pr_marker_is_distinct_from_clean_ready_marker() {
+    // Arrange
+    let mut summary = ReviewRequestSummary {
+        display_id: "#42".to_string(),
+        forge_kind: ForgeKind::GitHub,
+        source_branch: "feature".to_string(),
+        state: ReviewRequestState::Open,
+        status_summary: Some("Review required, Blocked, PR ready with bypass".to_string()),
+        target_branch: "main".to_string(),
+        title: "Feature".to_string(),
+        web_url: "https://github.com/example/repo/pull/42".to_string(),
+    };
+
+    // Act, Assert
+    assert!(summary.is_github_pr_bypass_ready());
+    assert!(!summary.is_github_pr_ready());
+    summary.state = ReviewRequestState::Closed;
+    assert!(!summary.is_github_pr_bypass_ready());
+    summary.state = ReviewRequestState::Open;
+    summary.status_summary = Some("Approved, Mergeable, PR ready".to_string());
+    assert!(!summary.is_github_pr_bypass_ready());
+}
+
+#[test]
 fn review_comment_thread_is_actionable_until_agentty_addresses_latest_feedback() {
     // Arrange
     let actionable = review_comment_thread();

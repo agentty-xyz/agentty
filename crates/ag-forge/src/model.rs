@@ -172,19 +172,32 @@ pub struct ReviewRequestSummary {
 }
 
 impl ReviewRequestSummary {
+    /// Status-summary component persisted for a GitHub PR whose checks pass
+    /// and whose only missing requirement is an approval the viewer may bypass.
+    pub const GITHUB_BYPASS_READY_STATUS_COMPONENT: &str = "PR ready with bypass";
     /// Status-summary component persisted for a GitHub PR with a clean merge
     /// state at the latest forge refresh.
     pub const GITHUB_READY_STATUS_COMPONENT: &str = "PR ready";
 
     /// Returns whether the latest GitHub refresh marked this open PR ready.
     pub fn is_github_pr_ready(&self) -> bool {
+        self.has_open_github_status_component(Self::GITHUB_READY_STATUS_COMPONENT)
+    }
+
+    /// Returns whether the latest GitHub refresh marked this open PR ready to
+    /// merge by bypassing its missing required approval.
+    pub fn is_github_pr_bypass_ready(&self) -> bool {
+        self.has_open_github_status_component(Self::GITHUB_BYPASS_READY_STATUS_COMPONENT)
+    }
+
+    /// Returns whether this open GitHub PR status contains `component`.
+    fn has_open_github_status_component(&self, component: &str) -> bool {
         self.forge_kind == ForgeKind::GitHub
             && self.state == ReviewRequestState::Open
-            && self.status_summary.as_deref().is_some_and(|summary| {
-                summary
-                    .split(", ")
-                    .any(|part| part == Self::GITHUB_READY_STATUS_COMPONENT)
-            })
+            && self
+                .status_summary
+                .as_deref()
+                .is_some_and(|summary| summary.split(", ").any(|part| part == component))
     }
 }
 

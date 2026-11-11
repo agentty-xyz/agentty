@@ -306,6 +306,21 @@ async fn seed_ready_pr_status(env: &BuilderEnv) -> Result<(), Box<dyn std::error
     Ok(())
 }
 
+/// Seeds one linked PR whose passing checks leave only a required approval
+/// the viewer may bypass.
+async fn seed_bypass_ready_pr_status(env: &BuilderEnv) -> Result<(), Box<dyn std::error::Error>> {
+    seed_review_ready_session_with_review_request(env).await?;
+    let gh_path = env.stub_bin.join("gh");
+    let gh_script = std::fs::read_to_string(&gh_path)?.replace(
+        "\"mergedAt\":null",
+        "\"mergedAt\":null,\"statusCheckRollup\":{\"state\":\"SUCCESS\"},\"viewerCanMergeAsAdmin\"\
+         :true",
+    );
+    std::fs::write(&gh_path, gh_script)?;
+
+    Ok(())
+}
+
 /// Seeds a merged parent and merged stacked child whose review target still
 /// names the parent branch, plus a remote for the manual main sync.
 async fn seed_merged_stacked_review_requests(
@@ -488,6 +503,37 @@ async fn test_pr_ready_label() -> E2eResult {
                 Box::pin(async move {
                     let full = Region::full(frame.cols(), frame.rows());
                     assertion::assert_text_in_region(frame, "[ready]", &full);
+                })
+            },
+        )
+        .await?;
+
+    Ok(())
+}
+
+/// Verify a linked PR blocked only by a bypassable required approval paints
+/// the bypass ready label in the session list.
+#[tokio::test]
+async fn test_pr_bypass_ready_label() -> E2eResult {
+    // Arrange, Act, Assert
+    FeatureTest::new("pr_bypass_ready_label")
+        .with_git()
+        .setup(|env| Box::pin(async move { seed_bypass_ready_pr_status(env).await }))
+        .run(
+            |scenario| {
+                scenario
+                    .compose(&common::wait_for_agentty_startup())
+                    .compose(&common::switch_to_tab("Sessions"))
+                    .wait_for_text("[ready [bypass]]", 10_000)
+                    .capture_labeled(
+                        "pr_bypass_ready_label",
+                        "Linked pull request ready with bypass in Sessions",
+                    )
+            },
+            |frame, _report| {
+                Box::pin(async move {
+                    let full = Region::full(frame.cols(), frame.rows());
+                    assertion::assert_text_in_region(frame, "[ready [bypass]]", &full);
                 })
             },
         )

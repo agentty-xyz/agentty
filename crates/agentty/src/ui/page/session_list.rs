@@ -11,7 +11,7 @@ use ratatui::widgets::{Block, Borders, Cell, Paragraph, Row, Table, TableState};
 
 use crate::app::session_state::SessionGitStatus;
 use crate::domain::agent::ReasoningLevel;
-use crate::domain::session::{Session, SessionId, SessionSize, Status};
+use crate::domain::session::{ReviewRequestSummary, Session, SessionId, SessionSize, Status};
 use crate::domain::session_order::{
     self, ArchiveAction, GroupedSessionRow, SessionGroup, SessionTreePosition,
 };
@@ -27,7 +27,12 @@ const EMPTY_SESSIONS_HINT: &str = "No sessions. Press 'a' to start one.";
 
 /// Warning suffix appended to titles whose branches conflict with their base.
 const MERGE_CONFLICT_LABEL: &str = " [merge conflict]";
+/// Success suffix appended to titles whose linked pull request can merge.
 const PR_READY_LABEL: &str = " [ready]";
+
+/// Success suffix appended to titles whose linked pull request can merge only
+/// by bypassing a missing required approval.
+const PR_BYPASS_READY_LABEL: &str = " [ready [bypass]]";
 
 /// Tree branch prefix for child rows that have siblings after them.
 const TREE_BRANCH_MIDDLE: &str = "├ ";
@@ -741,11 +746,11 @@ fn render_session_title(
         ),
     );
 
-    let is_pr_ready = session
+    let pr_ready_label = session
         .review_request
         .as_ref()
-        .is_some_and(|request| request.summary.is_github_pr_ready());
-    if !has_merge_conflict && !is_pr_ready {
+        .and_then(|request| pr_ready_label(&request.summary));
+    if !has_merge_conflict && pr_ready_label.is_none() {
         return truncate_spans_with_ellipsis(title_spans, title_column_width);
     }
 
@@ -753,11 +758,7 @@ fn render_session_title(
         MERGE_CONFLICT_LABEL.chars().count()
     } else {
         0
-    } + if is_pr_ready {
-        PR_READY_LABEL.chars().count()
-    } else {
-        0
-    };
+    } + pr_ready_label.map_or(0, |label| label.chars().count());
     let mut title_spans =
         truncate_spans_with_ellipsis(title_spans, title_column_width.saturating_sub(label_width));
     if has_merge_conflict {
@@ -766,14 +767,25 @@ fn render_session_title(
             Style::default().fg(style::palette::danger()),
         ));
     }
-    if is_pr_ready {
+    if let Some(label) = pr_ready_label {
         title_spans.push(Span::styled(
-            PR_READY_LABEL,
+            label,
             Style::default().fg(style::palette::success()),
         ));
     }
 
     truncate_spans_with_ellipsis(title_spans, title_column_width)
+}
+
+/// Returns the readiness suffix for a linked pull request, if any.
+fn pr_ready_label(summary: &ReviewRequestSummary) -> Option<&'static str> {
+    if summary.is_github_pr_ready() {
+        Some(PR_READY_LABEL)
+    } else if summary.is_github_pr_bypass_ready() {
+        Some(PR_BYPASS_READY_LABEL)
+    } else {
+        None
+    }
 }
 
 /// Returns the palette color representing each session size bucket.
