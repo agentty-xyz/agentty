@@ -86,6 +86,10 @@ through `prek`. Focused E2E and container recording commands in
   `RUSTC_WRAPPER`, `TMPDIR`, or `CARGO_TARGET_DIR`, or copy registries, toolchains, or
   caches into the worktree. Report environment failures instead of building a
   replacement environment.
+- Render browser screenshots through Playwright, Puppeteer, or `chrome-headless-shell`.
+  Launch a full Chrome or Chromium binary directly only with `--use-mock-keychain` and
+  `--password-store=basic`; otherwise each macOS launch requests the user's login
+  keychain password.
 - Before container work, read `docs/contributing/feature-test/recording.md`. Use only
   cataloged hooks and commands in `docs/contributing/feature-test/`; do not compose ad
   hoc container invocations, images, or wrappers.
