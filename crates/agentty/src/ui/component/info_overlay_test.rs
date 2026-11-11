@@ -232,6 +232,34 @@ fn test_markdown_message_with_block_headers_formats_sync_sections() {
 }
 
 #[test]
+fn test_markdown_message_with_block_headers_keeps_unrelated_numbered_lines() {
+    // Arrange
+    let message = "1. Summary\n.5 Pull\n2) Push\n) Pull\nx) Push\nPull";
+
+    // Act
+    let formatted_message = InfoOverlay::markdown_message_with_block_headers(message);
+
+    // Assert
+    assert_eq!(
+        formatted_message,
+        "1. Summary\n.5 Pull\n\n## 2) Push\n) Pull\nx) Push\nPull"
+    );
+}
+
+#[test]
+fn test_message_lines_keep_one_blank_line_for_an_empty_message() {
+    // Arrange
+    let overlay = InfoOverlay::new("Sync complete", "");
+
+    // Act
+    let message_lines = overlay.message_lines(80);
+
+    // Assert
+    assert_eq!(message_lines.len(), 1);
+    assert_eq!(rendered_line_text(&message_lines[0]), "");
+}
+
+#[test]
 fn test_markdown_message_with_block_headers_inserts_missing_section_spacing() {
     // Arrange
     let message = concat!(

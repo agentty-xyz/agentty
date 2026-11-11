@@ -223,20 +223,12 @@ pub fn question_panel_layout(
     input: &str,
     max_input_panel_height: u16,
 ) -> QuestionPanelLayout {
-    let question_text_height = wrapped_text_height(question, width);
-    // +1 for the "Question N/M" title line when there is question text.
-    let requested_question_height = if question_text_height > 0 {
-        question_text_height.saturating_add(1)
-    } else {
-        0
-    };
+    // The wrapped question always occupies at least one row; +1 for the
+    // "Question N/M" title line.
+    let requested_question_height = wrapped_text_height(question, width).saturating_add(1);
     let requested_input_height = input_layout::calculate_input_height(width, input)
         .min(max_input_panel_height.max(CHAT_INPUT_MIN_PANEL_HEIGHT));
-    let requested_spacer_height = if requested_question_height > 0 {
-        QUESTION_PANEL_SPACER_HEIGHT
-    } else {
-        0
-    };
+    let requested_spacer_height = QUESTION_PANEL_SPACER_HEIGHT;
     let preferred_total_height = requested_question_height
         .saturating_add(requested_input_height)
         .saturating_add(requested_spacer_height)

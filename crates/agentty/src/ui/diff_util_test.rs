@@ -1,10 +1,11 @@
 use ratatui::layout::Rect;
 
 use super::{
-    DEFAULT_REVIEW_COMMENT, DiffLine, DiffLineKind, FileTreeItem, build_review_text,
-    diff_header_new_path, diff_header_paths, diff_line_change_totals, diff_line_gutter_width,
-    diff_page_areas, diff_view_max_scroll_offset, filter_diff_lines, max_diff_line_number,
-    parse_diff_lines, parse_git_path_token, parse_hunk_header, wrap_diff_content,
+    DEFAULT_REVIEW_COMMENT, DiffLine, DiffLineKind, DiffRenderLayout, FileTreeItem,
+    build_review_text, diff_header_new_path, diff_header_paths, diff_line_change_totals,
+    diff_line_gutter_width, diff_page_areas, diff_view_max_scroll_offset, filter_diff_lines,
+    max_diff_line_number, parse_diff_lines, parse_git_path_token, parse_hunk_header,
+    rendered_diff_line_count, wrap_diff_content,
 };
 
 const DIFF_MAIN_HEADER: &str = "diff --git a/src/main.rs b/src/main.rs";
@@ -310,8 +311,10 @@ index abc..def 100644
 #[test]
 fn test_filter_diff_lines_by_file() {
     // Arrange
-    let diff =
-        format!("{DIFF_MAIN_HEADER}\n+added in main\n{DIFF_README_HEADER}\n+added in readme");
+    let diff = format!(
+        "{DIFF_MAIN_HEADER}\n+added in main\n{DIFF_README_HEADER}\n+added in readme\ndiff --git \
+         malformed\n+added without path"
+    );
     let parsed_lines = parse_diff_lines(&diff);
     let item = FileTreeItem::File("src/main.rs".to_string());
 
@@ -451,6 +454,72 @@ fn test_diff_view_max_scroll_offset_returns_zero_for_short_diff() {
 }
 
 #[test]
+fn test_diff_view_max_scroll_offset_returns_zero_without_viewport_rows() {
+    // Arrange
+    let diff = "+line\n".repeat(40);
+    let parsed_lines = parse_diff_lines(&diff);
+    let terminal_area = Rect::new(0, 0, 120, 3);
+
+    // Act
+    let max_scroll_offset = diff_view_max_scroll_offset(&parsed_lines, terminal_area, 18);
+
+    // Assert
+    assert_eq!(max_scroll_offset, 0);
+}
+
+#[test]
+fn test_rendered_diff_line_count_separates_files_and_counts_headers() {
+    // Arrange
+    let diff = format!(
+        "{DIFF_MAIN_HEADER}\nindex 1111111..2222222 100644\n@@ -1,1 +1,1 \
+         @@\n+abcdefghij\n{DIFF_README_HEADER}\n@@ -1 +1 @@\n ctx"
+    );
+    let parsed_lines = parse_diff_lines(&diff);
+    let layout = DiffRenderLayout {
+        content_width: 9,
+        gutter_width: 1,
+        prefix_width: 5,
+        viewport_height: 10,
+    };
+
+    // Act
+    let rendered_line_count = rendered_diff_line_count(&parsed_lines, layout);
+    let empty_line_count = rendered_diff_line_count(&[], layout);
+
+    // Assert
+    // Main file: header, index, hunk, and a 10-cell addition wrapped into 3
+    // rows of 4 cells. README: separator, header, hunk, and one context row.
+    assert_eq!(rendered_line_count, 10);
+    assert_eq!(empty_line_count, 1);
+}
+
+#[test]
+fn test_parse_diff_lines_keeps_counters_for_malformed_hunk_header() {
+    // Arrange
+    let diff = "@@ -3,1 +7,1 @@\n context\n@@ malformed @@\n+added";
+
+    // Act
+    let lines = parse_diff_lines(diff);
+
+    // Assert
+    assert_eq!(lines[2].kind, DiffLineKind::HunkHeader);
+    assert_eq!(lines[3].kind, DiffLineKind::Addition);
+    assert_eq!(lines[3].new_line, Some(8));
+}
+
+#[test]
+fn test_wrap_diff_content_keeps_content_whole_for_zero_width() {
+    // Arrange
+    let content = "abcdefghij";
+
+    // Act
+    let chunks = wrap_diff_content(content, 0);
+
+    // Assert
+    assert_eq!(chunks, vec!["abcdefghij"]);
+}
+
+#[test]
 fn test_diff_view_max_scroll_offset_counts_wrapped_overflow() {
     // Arrange
     let diff = format!("+{}", "0123456789".repeat(20));
@@ -519,6 +588,34 @@ diff --git a/src/main.rs b/src/main.rs
     assert!(review.contains(DEFAULT_REVIEW_COMMENT));
     assert!(review.contains("General code change; inspect full diff for context."));
     assert!(review.contains("src/main.rs"));
+}
+
+#[test]
+fn test_build_review_text_tracks_context_lines_and_skips_blank_changes() {
+    // Arrange
+    let long_value = "lorem ipsum ".repeat(12);
+    let diff = format!(
+        "diff --git a/src/lib.rs b/src/lib.rs\nindex 1111111..2222222 100644\n--- \
+         a/src/lib.rs\n+++ b/src/lib.rs\n@@ -10,4 +10,5 @@\n fn context() {{}}\n-   \n+   \n+let \
+         summary = \"{long_value}\";\n fn trailing_context() {{}}\n\\ No newline at end of \
+         file\n+let tail = 1;"
+    );
+
+    // Act
+    let review = build_review_text(&diff);
+
+    // Assert
+    let highlight_lines = review
+        .lines()
+        .filter(|line| line.starts_with("- `src/lib.rs`"))
+        .collect::<Vec<_>>();
+    assert_eq!(highlight_lines.len(), 2);
+    assert!(highlight_lines[0].starts_with("- `src/lib.rs`:12 + `let summary = \"lorem ipsum"));
+    assert!(highlight_lines[0].contains("...` — General code change"));
+    assert_eq!(
+        highlight_lines[1],
+        "- `src/lib.rs`:14 + `let tail = 1;` — General code change; inspect full diff for context."
+    );
 }
 
 #[test]

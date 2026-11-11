@@ -325,19 +325,20 @@ impl<'a> SessionChatPage<'a> {
             return;
         }
 
+        // Layout planning prepares a prompt panel for every non-archived prompt
+        // mode.
         if let AppMode::Prompt {
             input, slash_state, ..
         } = self.mode
+            && let Some(prepared_prompt_panel) = layout_plan.prompt_panel.as_ref()
         {
-            if let Some(prepared_prompt_panel) = layout_plan.prompt_panel.as_ref() {
-                self.render_prompt_composer(
-                    f,
-                    bottom_area,
-                    prepared_prompt_panel,
-                    (input, slash_state.is_plan_armed),
-                    timing_label,
-                );
-            }
+            self.render_prompt_composer(
+                f,
+                bottom_area,
+                prepared_prompt_panel,
+                (input, slash_state.is_plan_armed),
+                timing_label,
+            );
 
             return;
         }
@@ -853,16 +854,17 @@ fn render_question_at_mention_overlay(
     input_area: Rect,
     at_mention_menu: Option<SuggestionList>,
 ) {
-    let Some(menu) = at_mention_menu else {
-        return;
-    };
-
-    let dropdown_height = suggestion_dropdown_height(menu.items.len());
-    let Some(dropdown_area) = overlay_area_above(bottom_area, input_area, dropdown_height) else {
-        return;
-    };
-
-    ChatInput::render_suggestion_dropdown(f, dropdown_area, &menu);
+    // A menu exists only when at least one lookup row fits above the input,
+    // so the dropdown area is available whenever a menu is present.
+    if let Some(menu) = at_mention_menu
+        && let Some(dropdown_area) = overlay_area_above(
+            bottom_area,
+            input_area,
+            suggestion_dropdown_height(menu.items.len()),
+        )
+    {
+        ChatInput::render_suggestion_dropdown(f, dropdown_area, &menu);
+    }
 }
 
 impl Page for SessionChatPage<'_> {

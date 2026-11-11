@@ -468,6 +468,120 @@ fn test_output_layout_cache_keeps_tachyon_effect_state_per_session() {
 }
 
 #[test]
+fn test_output_layout_cache_reuses_existing_tachyon_effect_for_a_session() {
+    // Arrange
+    let output_layout_cache = SessionOutputLayoutCache::default();
+    let area = Rect::new(0, 0, TACHYON_LOADER_WIDTH, 1);
+    let mut buffer = Buffer::empty(area);
+    for column in 0..TACHYON_LOADER_WIDTH {
+        buffer[(column, 0)].set_symbol("▌");
+    }
+    let session_id = SessionId::from("reused-loader-session");
+
+    // Act
+    output_layout_cache.apply_tachyon_loader_effect(&session_id, &mut buffer, area, 5);
+    output_layout_cache.apply_tachyon_loader_effect(&session_id, &mut buffer, area, 2);
+
+    // Assert
+    // A fresh effect would paint frame 2 on the first cell; the retained
+    // effect keeps the frame-5 phase because the spinner moved backwards.
+    assert_eq!(output_layout_cache.tachyon_loader_effects.borrow().len(), 1);
+    assert_eq!(buffer[(1, 0)].fg, style::palette::warning());
+}
+
+#[test]
+fn test_output_layout_cache_keeps_tachyon_effect_while_session_has_another_layout() {
+    // Arrange
+    let output_layout_cache = SessionOutputLayoutCache::default();
+    let markdown_render_cache = markdown::MarkdownRenderCache::default();
+    let loader_area = Rect::new(0, 0, TACHYON_LOADER_WIDTH, 1);
+    let mut retained_session = session_fixture();
+    retained_session.id = SessionId::from("multi-width-session");
+    set_assistant_transcript(&mut retained_session, "active output");
+    retained_session.status = Status::InProgress;
+    let mut loader_buffer = Buffer::empty(loader_area);
+    output_layout_cache.apply_tachyon_loader_effect(
+        &retained_session.id,
+        &mut loader_buffer,
+        loader_area,
+        0,
+    );
+
+    // Act
+    for output_width in [80, 100] {
+        output_layout_cache.layout(
+            &retained_session,
+            Rect::new(0, 0, output_width, 8),
+            line_context(),
+            Some(&markdown_render_cache),
+        );
+    }
+    for session_index in 1..SESSION_OUTPUT_LAYOUT_CACHE_ENTRY_LIMIT {
+        let mut session = session_fixture();
+        session.id = SessionId::from(format!("filler-session-{session_index:02}"));
+        set_assistant_transcript(&mut session, &format!("filler output {session_index}"));
+        output_layout_cache.layout(
+            &session,
+            Rect::new(0, 0, 80, 8),
+            line_context(),
+            Some(&markdown_render_cache),
+        );
+    }
+
+    // Assert
+    let entries = output_layout_cache.entries.borrow();
+    assert_eq!(entries.len(), SESSION_OUTPUT_LAYOUT_CACHE_ENTRY_LIMIT);
+    assert_eq!(
+        entries
+            .iter()
+            .filter(|entry| entry.key.session_id == retained_session.id)
+            .count(),
+        1
+    );
+    assert!(
+        output_layout_cache
+            .tachyon_loader_effects
+            .borrow()
+            .contains_key(&retained_session.id)
+    );
+}
+
+#[test]
+fn test_render_without_layout_cache_paints_stateless_loader_and_progress() {
+    // Arrange
+    let mut session = session_fixture();
+    set_assistant_transcript(&mut session, "active output");
+    session.status = Status::InProgress;
+    let mut terminal =
+        ratatui::Terminal::new(ratatui::backend::TestBackend::new(60, 10)).expect("terminal");
+
+    // Act
+    terminal
+        .draw(|frame| {
+            SessionOutput::new(&session)
+                .active_progress("Compiling crates")
+                .spinner_frame(0)
+                .render(frame, frame.area());
+        })
+        .expect("draw");
+
+    // Assert
+    let buffer = terminal.backend().buffer();
+    let text = buffer
+        .content()
+        .iter()
+        .map(ratatui::buffer::Cell::symbol)
+        .collect::<String>();
+    assert!(text.contains("Compiling crates"));
+    assert!(
+        buffer
+            .content()
+            .iter()
+            .any(|cell| cell.symbol() == "▌" && cell.fg == style::palette::warning())
+    );
+}
+
+#[test]
 fn test_output_layout_cache_evicts_tachyon_effects_with_layout_lru() {
     // Arrange
     let output_layout_cache = SessionOutputLayoutCache::default();

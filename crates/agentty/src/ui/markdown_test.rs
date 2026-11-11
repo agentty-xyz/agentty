@@ -103,6 +103,51 @@ fn test_markdown_render_cache_keeps_html_entries_separate_and_invalidates_them()
 }
 
 #[test]
+fn test_render_markdown_renders_clarification_block_as_plain_markdown() {
+    // Arrange
+    let input = " › Clarifications:\n   1. Use **SQLite**\n\nassistant";
+
+    // Act
+    let lines = render_markdown(input, 80);
+    let rendered_lines = lines
+        .iter()
+        .map(|line| line.to_string().trim_end().to_string())
+        .collect::<Vec<_>>();
+
+    // Assert
+    assert!(
+        rendered_lines
+            .iter()
+            .any(|line| line.contains("Clarifications:"))
+    );
+    assert!(
+        rendered_lines
+            .iter()
+            .any(|line| line.contains("Use **SQLite**"))
+    );
+    assert_eq!(rendered_lines.last().map(String::as_str), Some("assistant"));
+    let span_backgrounds = lines
+        .iter()
+        .flat_map(|line| line.spans.iter())
+        .filter_map(|span| span.style.bg)
+        .collect::<Vec<_>>();
+    assert!(span_backgrounds.contains(&style::palette::surface_clarification()));
+    assert!(!span_backgrounds.contains(&style::palette::surface_prompt()));
+}
+
+#[test]
+fn test_render_markdown_renders_blank_prompt_as_one_padding_row() {
+    // Arrange
+    let input = " › ";
+
+    // Act
+    let lines = render_markdown(input, 12);
+
+    // Assert
+    assert_eq!(lines, vec![prompt_block::user_prompt_padding_line(12)]);
+}
+
+#[test]
 fn test_render_markdown_keeps_consecutive_prompt_blocks_separate() {
     // Arrange
     let input = " › first prompt\n › second prompt";

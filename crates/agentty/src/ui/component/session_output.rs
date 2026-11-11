@@ -452,10 +452,9 @@ impl SessionOutputLayoutCache {
             });
             entries.push_front(entry);
 
-            while entries.len() > SESSION_OUTPUT_LAYOUT_CACHE_ENTRY_LIMIT {
-                let Some(evicted_entry) = entries.pop_back() else {
-                    continue;
-                };
+            while entries.len() > SESSION_OUTPUT_LAYOUT_CACHE_ENTRY_LIMIT
+                && let Some(evicted_entry) = entries.pop_back()
+            {
                 let evicted_session_id = evicted_entry.key.session_id;
                 if !entries
                     .iter()

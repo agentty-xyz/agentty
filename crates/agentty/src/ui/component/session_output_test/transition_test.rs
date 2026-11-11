@@ -5,10 +5,11 @@ use ratatui::text::Line;
 
 use super::super::{
     SESSION_OUTPUT_LAYOUT_CACHE_ENTRY_LIMIT, SessionOutput, SessionOutputLayoutCache,
-    SessionOutputLayoutLines,
+    SessionOutputLayoutLines, TranscriptFingerprint,
 };
 use super::support::{line_context, session_fixture};
 use crate::domain::session::SessionId;
+use crate::domain::session_message::SessionTranscript;
 use crate::ui::icon::{QUEUED_ACTION_WIDTH, TACHYON_LOADER_WIDTH};
 use crate::ui::session_output_line::OutputLines;
 
@@ -32,6 +33,39 @@ fn test_resolved_cache_evicts_old_sessions() {
             .iter()
             .all(|entry| entry.key.session_id.as_str() != "resolved-0")
     );
+}
+
+#[test]
+fn test_transcript_fingerprint_treats_empty_transcript_like_missing_transcript() {
+    // Arrange
+    let mut missing_transcript_session = session_fixture();
+    missing_transcript_session.transcript = None;
+    let mut empty_transcript_session = session_fixture();
+    empty_transcript_session.transcript = Some(SessionTranscript::new(Vec::new()));
+
+    // Act
+    let missing_fingerprint = TranscriptFingerprint::from_session(&missing_transcript_session);
+    let empty_fingerprint = TranscriptFingerprint::from_session(&empty_transcript_session);
+
+    // Assert
+    assert_eq!(empty_fingerprint, missing_fingerprint);
+    assert!(!empty_fingerprint.is_some);
+}
+
+#[test]
+fn test_indicator_area_rejects_areas_without_room_for_the_indicator() {
+    // Arrange
+    let narrow_area = Rect::new(0, 0, TACHYON_LOADER_WIDTH - 1, 8);
+    let borders_only_area = Rect::new(0, 0, 80, 1);
+
+    // Act
+    let narrow_loader_area = SessionOutput::indicator_area(narrow_area, 0, 0, TACHYON_LOADER_WIDTH);
+    let borders_only_loader_area =
+        SessionOutput::indicator_area(borders_only_area, 0, 0, TACHYON_LOADER_WIDTH);
+
+    // Assert
+    assert_eq!(narrow_loader_area, None);
+    assert_eq!(borders_only_loader_area, None);
 }
 
 #[test]

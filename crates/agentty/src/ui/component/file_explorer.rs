@@ -49,7 +49,8 @@ struct FileLeaf {
 /// Parsed and normalized file path details extracted from a diff header.
 #[derive(Debug)]
 struct ParsedPath {
-    path_segments: Vec<String>,
+    file_name: String,
+    folder_segments: Vec<String>,
     rename_from: Option<String>,
 }
 
@@ -65,20 +66,18 @@ impl FileTreeNode {
     /// needed.
     fn insert(&mut self, parsed_path: ParsedPath) {
         let ParsedPath {
-            path_segments,
+            file_name,
+            folder_segments,
             rename_from,
         } = parsed_path;
-        let Some((file_name, folder_segments)) = path_segments.split_last() else {
-            return;
-        };
 
         let mut current_node = self;
         for folder_name in folder_segments {
-            current_node = current_node.folders.entry(folder_name.clone()).or_default();
+            current_node = current_node.folders.entry(folder_name).or_default();
         }
 
         current_node.files.push(FileLeaf {
-            name: file_name.clone(),
+            name: file_name,
             rename_from,
         });
     }
@@ -300,21 +299,20 @@ impl FileExplorer {
     /// insertion.
     fn parse_path(file_header_line: &str) -> Option<ParsedPath> {
         if let Some((old_path, new_path)) = diff_header_paths(file_header_line) {
-            let path_segments = Self::split_path_segments(&new_path);
-            if path_segments.is_empty() {
-                return None;
-            }
-
+            let mut folder_segments = Self::split_path_segments(&new_path);
+            let file_name = folder_segments.pop()?;
             let rename_from = (old_path != new_path).then_some(old_path);
 
             return Some(ParsedPath {
-                path_segments,
+                file_name,
+                folder_segments,
                 rename_from,
             });
         }
 
         Some(ParsedPath {
-            path_segments: vec![file_header_line.replace(DIFF_GIT_FALLBACK_PREFIX, "")],
+            file_name: file_header_line.replace(DIFF_GIT_FALLBACK_PREFIX, ""),
+            folder_segments: Vec::new(),
             rename_from: None,
         })
     }

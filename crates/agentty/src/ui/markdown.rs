@@ -80,6 +80,8 @@ impl MarkdownRenderCache {
 
 /// Converts markdown text into styled, word-wrapped lines using Agentty's
 /// active UI theme.
+///
+/// The result always contains at least one line, even for empty input.
 pub fn render_markdown(text: &str, width: usize) -> Vec<Line<'static>> {
     if !has_prompt_blocks(text) {
         return render_shared_markdown(text, width);
@@ -118,10 +120,9 @@ fn render_markdown_with_prompt_blocks(text: &str, width: usize) -> Vec<Line<'sta
         line_index = prompt_block.next_line_index;
     }
 
+    // Callers only take this path when at least one prompt block exists, and
+    // every prompt block renders at least one line.
     append_shared_markdown_lines(&mut rendered_lines, &mut normal_lines, width);
-    if rendered_lines.is_empty() {
-        rendered_lines.push(Line::from(""));
-    }
 
     rendered_lines
 }

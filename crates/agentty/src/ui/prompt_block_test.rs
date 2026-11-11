@@ -1,6 +1,10 @@
 use ratatui::style::Color;
+use ratatui::text::Span;
 
-use super::{user_prompt_content_style, user_prompt_prefix_style};
+use super::{
+    USER_PROMPT_PREFIX, user_prompt_content_style, user_prompt_markdown_line,
+    user_prompt_prefix_style,
+};
 use crate::domain::theme::ColorTheme;
 use crate::ui::style;
 
@@ -16,6 +20,21 @@ fn test_user_prompt_styles_use_prompt_surface_background() {
     // Assert
     assert_eq!(prefix_style.bg, Some(style::palette::surface_prompt()));
     assert_eq!(content_style.bg, Some(style::palette::surface_prompt()));
+}
+
+#[test]
+fn test_user_prompt_markdown_line_adds_no_padding_when_content_fills_width() {
+    // Arrange
+    let rendered_spans = vec![Span::raw("fits")];
+    let prefix_style = user_prompt_prefix_style();
+
+    // Act
+    let line = user_prompt_markdown_line(rendered_spans, USER_PROMPT_PREFIX, prefix_style, 7);
+
+    // Assert
+    assert_eq!(line.to_string(), " › fits");
+    assert_eq!(line.spans.len(), 2);
+    assert_eq!(line.spans[1].style, user_prompt_content_style());
 }
 
 #[test]

@@ -83,6 +83,17 @@ impl FooterBar {
         self
     }
 
+    /// Abbreviates `working_dir` with `~` when it lives under `home_dir`, and
+    /// returns it unchanged otherwise or when no home directory is known.
+    fn display_path(working_dir: &str, home_dir: Option<&Path>) -> String {
+        home_dir
+            .and_then(|home_dir| Path::new(working_dir).strip_prefix(home_dir).ok())
+            .map_or_else(
+                || working_dir.to_string(),
+                |relative_path| format!("~/{}", relative_path.display()),
+            )
+    }
+
     /// Returns the footer branch label, including the tracked upstream when
     /// available.
     fn branch_label(&self, branch: &str) -> String {
@@ -156,15 +167,7 @@ impl Component for FooterBar {
             return;
         }
 
-        let display_path = if let Some(home) = env::home_dir() {
-            if let Ok(path) = Path::new(&self.working_dir).strip_prefix(home) {
-                format!("~/{}", path.display())
-            } else {
-                self.working_dir.clone()
-            }
-        } else {
-            self.working_dir.clone()
-        };
+        let display_path = Self::display_path(&self.working_dir, env::home_dir().as_deref());
 
         let path_style = Style::default()
             .fg(style::palette::text())

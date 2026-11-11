@@ -94,6 +94,49 @@ fn test_launch_configuration_list_editor_input_lines_show_cursor() {
 }
 
 #[test]
+fn test_launch_configuration_list_editor_edit_lines_show_mid_text_cursor() {
+    // Arrange
+    let mut input = InputState::with_text("cargo test".to_string());
+    input.cursor = 5;
+    let editor = LaunchConfigurationListEditorSnapshot {
+        commands: vec!["cargo test".to_string()],
+        input: Some(input),
+        mode: LaunchConfigurationListEditorMode::Edit,
+        selected_index: 0,
+    };
+    let component = LaunchConfigurationListEditor::new(&editor);
+
+    // Act
+    let lines = component.lines(24, 12);
+
+    // Assert
+    assert!(lines[0].to_string().contains("Edit command"));
+    assert!(lines[2].to_string().contains("cargo| test"));
+    assert!(!lines[2].to_string().contains("test|"));
+}
+
+#[test]
+fn test_launch_configuration_list_editor_browse_lines_explain_empty_list() {
+    // Arrange
+    let editor = LaunchConfigurationListEditorSnapshot {
+        commands: Vec::new(),
+        input: None,
+        mode: LaunchConfigurationListEditorMode::Browse,
+        selected_index: 0,
+    };
+    let component = LaunchConfigurationListEditor::new(&editor);
+
+    // Act
+    let lines = component.lines(24, 12);
+
+    // Assert
+    assert_eq!(lines[0].to_string(), "(no commands configured)");
+    assert_eq!(lines[0].alignment, Some(ratatui::layout::Alignment::Center));
+    assert_eq!(lines[1].to_string(), "");
+    assert!(lines[2].to_string().contains("a: add"));
+}
+
+#[test]
 fn test_command_window_start_keeps_tail_selection_visible() {
     // Arrange
     let command_count = 10;

@@ -152,6 +152,77 @@ fn test_heatmap_intensity_level_scales_from_zero_to_max() {
 }
 
 #[test]
+fn test_build_activity_heatmap_grid_ignores_days_outside_the_window() {
+    // Arrange
+    let end_day_key = 0_i64;
+    let activity = vec![
+        DailyActivity {
+            day_key: -400,
+            session_count: 5,
+        },
+        DailyActivity {
+            day_key: 4,
+            session_count: 7,
+        },
+    ];
+
+    // Act
+    let grid = build_activity_heatmap_grid(&activity, end_day_key);
+
+    // Assert
+    assert_eq!(heatmap_max_count(&grid), 0);
+}
+
+#[test]
+fn test_month_rows_clip_a_label_that_starts_in_the_last_week() {
+    // Arrange
+    // 1970-06-01 is a Monday, so the newest week starts a new month.
+    let end_day_key = 151_i64;
+
+    // Act
+    let markers = heatmap_month_markers(end_day_key);
+    let month_row = build_heatmap_month_row(end_day_key, 4, 1);
+    let visible_month_row = build_visible_heatmap_month_row(end_day_key, 4, 1, 1);
+
+    // Assert
+    assert_eq!(markers.last(), Some(&(52, "Jun")));
+    assert_eq!(month_row.chars().count(), 57);
+    assert!(month_row.ends_with('J'));
+    assert_eq!(visible_month_row, "    J");
+}
+
+#[test]
+fn test_build_visible_heatmap_month_row_skips_overlapping_labels() {
+    // Arrange
+    // The oldest week starts on 1969-05-26, so June starts one week later.
+    let end_day_key = 144_i64;
+
+    // Act
+    let markers = heatmap_month_markers(end_day_key);
+    let month_row = build_visible_heatmap_month_row(end_day_key, 4, 2, 53);
+
+    // Assert
+    assert_eq!(&markers[..2], &[(0, "May"), (1, "Jun")]);
+    assert!(month_row.starts_with("    May "));
+    assert!(!month_row.contains("Jun"));
+}
+
+#[test]
+fn test_heatmap_month_markers_repeat_every_gregorian_cycle_before_year_zero() {
+    // Arrange
+    // A 400-year Gregorian cycle is exactly 146,097 days (20,871 weeks).
+    let end_day_key = 0_i64;
+    let distant_end_day_key = end_day_key - (6 * 146_097);
+
+    // Act
+    let markers = heatmap_month_markers(end_day_key);
+    let distant_markers = heatmap_month_markers(distant_end_day_key);
+
+    // Assert
+    assert_eq!(distant_markers, markers);
+}
+
+#[test]
 fn test_heatmap_max_count_returns_largest_daily_value() {
     // Arrange
     let grid = vec![vec![0, 2, 1], vec![3, 4, 0]];
