@@ -200,8 +200,9 @@ old report cannot satisfy it. CI retains `coverage.lcov` as an artifact, includi
 a failed gate, so platform-specific gaps can be checked locally.
 
 The gap report lists each file's uncovered line ranges and uncovered functions by start
-line and demangled name. The gate reads per-line `DA` records and per-file function
-totals, the same line data SonarCloud and Codecov import.
+line and demangled name. The gate reads per-line `DA` records, the same line data
+SonarCloud and Codecov import, plus function records and per-file totals; a file record
+without `DA` lines or any `FNF`, `FNH`, `LF`, or `LH` total fails.
 
 To work on one package's gaps, run its tests with coverage and check only its sources:
 

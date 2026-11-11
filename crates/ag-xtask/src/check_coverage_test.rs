@@ -132,7 +132,17 @@ fn complete_reports_pass_when_one_instantiation_covers_each_definition() {
 #[test]
 fn path_prefixes_select_whole_components_and_reject_empty_selections() {
     // Arrange
-    let uncovered = |source: &str| text(&[source, "DA:1,0", "LF:1", "LH:0", "end_of_record"]);
+    let uncovered = |source: &str| {
+        text(&[
+            source,
+            "FNF:0",
+            "FNH:0",
+            "DA:1,0",
+            "LF:1",
+            "LH:0",
+            "end_of_record",
+        ])
+    };
     let report = format!(
         "{}{}{}",
         covered_file("crates/a/src/lib.rs"),
@@ -251,6 +261,130 @@ fn gap_report_lists_zero_count_lines_and_uncovered_functions_only() {
             "  FNF-FNH is 1 but the function records show 0 uncovered functions",
         ])
     );
+}
+
+#[test]
+fn never_run_function_records_fail_when_totals_show_no_gap() {
+    for totals in [["FNF:0", "FNH:0"], ["FNF:2", "FNH:2"]] {
+        // Arrange
+        let report = text(&[
+            "SF:/repo/a.rs",
+            "FN:1,f",
+            "FN:2,g",
+            "FNDA:0,f",
+            "FNDA:1,g",
+            totals[0],
+            totals[1],
+            "DA:1,1",
+            "DA:2,1",
+            "LF:2",
+            "LH:2",
+            "end_of_record",
+        ]);
+
+        // Act
+        let (result, output) = checked(&report, &[]);
+
+        // Assert
+        assert_eq!(
+            result,
+            Err(
+                "Coverage incomplete in 1 of 1 files: 0 uncovered lines and 1 uncovered functions"
+                    .to_string()
+            ),
+            "{totals:?}"
+        );
+        assert_eq!(
+            output,
+            text(&[
+                "a.rs",
+                "  uncovered functions (start line, name):",
+                "    1 f",
+                "  FNF-FNH is 0 but the function records show 1 uncovered functions",
+            ]),
+            "{totals:?}"
+        );
+    }
+}
+
+#[test]
+fn incomplete_records_fail_naming_the_file_and_missing_data() {
+    for (lines, expected) in [
+        (
+            &["SF:/repo/a.rs", "end_of_record"][..],
+            "LCOV line 2: the record for a.rs lacks totals: `FNF`, `FNH`, `LF`, `LH`",
+        ),
+        (
+            &[
+                "SF:/repo/a.rs",
+                "FN:1,f",
+                "FNDA:0,f",
+                "DA:1,1",
+                "LF:1",
+                "LH:1",
+                "end_of_record",
+            ][..],
+            "LCOV line 7: the record for a.rs lacks totals: `FNF`, `FNH`",
+        ),
+        (
+            &[
+                "SF:/repo/a.rs",
+                "FN:1,f",
+                "FNDA:1,f",
+                "FNF:1",
+                "FNH:1",
+                "DA:1,1",
+                "LF:1",
+                "end_of_record",
+            ][..],
+            "LCOV line 8: the record for a.rs lacks totals: `LH`",
+        ),
+        (
+            &[
+                "SF:/repo/a.rs",
+                "FNF:0",
+                "FNH:0",
+                "LF:0",
+                "LH:0",
+                "end_of_record",
+            ][..],
+            "LCOV line 6: the record for a.rs has no `DA` line records",
+        ),
+        (
+            &[
+                "SF:/repo/a.rs",
+                "FNF:1",
+                "FNH:2",
+                "DA:1,1",
+                "LF:1",
+                "LH:1",
+                "end_of_record",
+            ][..],
+            "LCOV line 7: the record for a.rs has `FNH` 2 above `FNF` 1",
+        ),
+        (
+            &[
+                "SF:/repo/a.rs",
+                "FNF:0",
+                "FNH:0",
+                "DA:1,1",
+                "LF:1",
+                "LH:2",
+                "end_of_record",
+            ][..],
+            "LCOV line 7: the record for a.rs has `LH` 2 above `LF` 1",
+        ),
+    ] {
+        // Arrange
+        let report = text(lines);
+
+        // Act
+        let (result, output) = checked(&report, &[]);
+
+        // Assert
+        assert_eq!(result, Err(expected.to_string()), "{report:?}");
+        assert_eq!(output, "");
+    }
 }
 
 #[test]

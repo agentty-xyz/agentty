@@ -1,6 +1,9 @@
 //! Complete line and function coverage gate over an LCOV report.
 //!
-//! A file passes when it has no zero-count `DA` line and `FNF` equals `FNH`.
+//! A file passes when it has no zero-count `DA` line, `FNF` equals `FNH`, and
+//! every function has a record that ran. `llvm-cov export` writes `DA` lines
+//! and the `FNF`, `FNH`, `LF`, and `LH` totals in every file record, so a
+//! record without them cannot prove coverage and is rejected.
 //! `llvm-cov export` writes one `FN`/`FNDA` pair per function instantiation:
 //! every generic monomorphization and every crate build, such as a unit-test
 //! binary and the library linked into other tests, has its own record, while
@@ -13,6 +16,9 @@ use std::path::{Path, PathBuf};
 use std::{env, fs};
 
 use clap::Args;
+
+/// Per-file totals `llvm-cov export` writes in every record, in report order.
+const REQUIRED_TOTALS: [&str; 4] = ["FNF", "FNH", "LF", "LH"];
 
 /// Coverage report and the repository paths it must cover completely.
 #[derive(Args)]
@@ -99,6 +105,7 @@ fn parse(report: &str, root: &Path) -> Result<Vec<FileCoverage>, String> {
             let file = current.take().ok_or_else(|| {
                 format!("LCOV line {line_number}: `end_of_record` outside a source file record")
             })?;
+            file.validate(line_number)?;
             files.push(file);
 
             continue;
@@ -140,9 +147,9 @@ fn parse(report: &str, root: &Path) -> Result<Vec<FileCoverage>, String> {
 struct FileCoverage {
     function_lines: BTreeMap<String, u64>,
     functions: BTreeMap<(u64, String), FunctionGroup>,
-    functions_found: u64,
-    functions_hit: u64,
+    has_line_records: bool,
     path: PathBuf,
+    totals: BTreeMap<String, u64>,
     uncovered_lines: Vec<u64>,
 }
 
@@ -154,15 +161,47 @@ impl FileCoverage {
         Self {
             function_lines: BTreeMap::new(),
             functions: BTreeMap::new(),
-            functions_found: 0,
-            functions_hit: 0,
+            has_line_records: false,
             path: source.strip_prefix(root).unwrap_or(source).to_path_buf(),
+            totals: BTreeMap::new(),
             uncovered_lines: Vec::new(),
         }
     }
 
-    /// Applies one record; other record kinds, including the `LF`/`LH` line
-    /// totals, are ignored.
+    /// Rejects a finished section that lacks line records or a total, or
+    /// whose hit totals exceed the found totals.
+    fn validate(&self, line_number: usize) -> Result<(), String> {
+        let path = self.path.display();
+        let missing: Vec<String> = REQUIRED_TOTALS
+            .iter()
+            .filter(|kind| !self.totals.contains_key(**kind))
+            .map(|kind| format!("`{kind}`"))
+            .collect();
+        if !missing.is_empty() {
+            return Err(format!(
+                "LCOV line {line_number}: the record for {path} lacks totals: {}",
+                missing.join(", ")
+            ));
+        }
+        if !self.has_line_records {
+            return Err(format!(
+                "LCOV line {line_number}: the record for {path} has no `DA` line records"
+            ));
+        }
+        for (found, hit) in [("FNF", "FNH"), ("LF", "LH")] {
+            if self.totals[hit] > self.totals[found] {
+                return Err(format!(
+                    "LCOV line {line_number}: the record for {path} has `{hit}` {} above \
+                     `{found}` {}",
+                    self.totals[hit], self.totals[found]
+                ));
+            }
+        }
+
+        Ok(())
+    }
+
+    /// Applies one record; other record kinds are ignored.
     fn record(&mut self, kind: &str, value: &str, line_number: usize) -> Result<(), String> {
         match kind {
             "DA" => {
@@ -171,6 +210,7 @@ impl FileCoverage {
                 if Self::number(count, line_number)? == 0 {
                     self.uncovered_lines.push(line);
                 }
+                self.has_line_records = true;
             }
             "FN" => {
                 let (start, name) = Self::pair(value, line_number)?;
@@ -185,8 +225,10 @@ impl FileCoverage {
                 })?;
                 self.add_instantiation(start, name, executed);
             }
-            "FNF" => self.functions_found = Self::number(value, line_number)?,
-            "FNH" => self.functions_hit = Self::number(value, line_number)?,
+            "FNF" | "FNH" | "LF" | "LH" => {
+                self.totals
+                    .insert(kind.to_string(), Self::number(value, line_number)?);
+            }
             _ => {}
         }
 
@@ -221,20 +263,24 @@ impl FileCoverage {
 
     /// Returns this file's gaps, or `None` when its lines and functions are
     /// complete.
+    ///
+    /// A function record that never ran is a gap even when `FNF` equals
+    /// `FNH`. Totals are present because [`Self::validate`] accepted the
+    /// section.
     fn gap(&self) -> Option<FileGap> {
-        let function_gap = self.functions_found.saturating_sub(self.functions_hit);
+        let function_gap = self.totals["FNF"] - self.totals["FNH"];
         let mut uncovered_lines = self.uncovered_lines.clone();
         uncovered_lines.sort_unstable();
         uncovered_lines.dedup();
-        if uncovered_lines.is_empty() && function_gap == 0 {
-            return None;
-        }
-        let uncovered_functions = self
+        let uncovered_functions: Vec<String> = self
             .functions
             .iter()
             .filter(|(_, group)| !group.executed)
             .map(|((start, _), group)| format!("{start} {}", group.name))
             .collect();
+        if uncovered_lines.is_empty() && function_gap == 0 && uncovered_functions.is_empty() {
+            return None;
+        }
 
         Some(FileGap {
             function_gap,
@@ -368,14 +414,18 @@ impl FileGap {
     }
 }
 
-/// Totals every gap kind across the selected files.
+/// Totals every gap kind across the selected files, counting each file's
+/// uncovered functions as the larger of `FNF-FNH` and its never-run records.
 fn summary(gaps: &[FileGap], checked_files: usize) -> String {
     let uncovered_lines: usize = gaps.iter().map(|gap| gap.uncovered_lines.len()).sum();
-    let function_gap: u64 = gaps.iter().map(|gap| gap.function_gap).sum();
+    let uncovered_functions: u64 = gaps
+        .iter()
+        .map(|gap| gap.function_gap.max(gap.uncovered_functions.len() as u64))
+        .sum();
 
     format!(
         "Coverage incomplete in {} of {checked_files} files: {uncovered_lines} uncovered lines \
-         and {function_gap} uncovered functions",
+         and {uncovered_functions} uncovered functions",
         gaps.len()
     )
 }
