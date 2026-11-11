@@ -1,6 +1,7 @@
 #[cfg(unix)]
 use std::os::unix::fs::PermissionsExt;
 use std::path::PathBuf;
+use std::sync::Mutex;
 use std::{env, fs};
 
 use ag_session::AgentKind;
@@ -8,7 +9,7 @@ use tempfile::tempdir;
 
 use super::support::antigravity_cache_test_guard;
 use crate::agent::availability::{
-    AntigravityCompatibilitySnapshot, AntigravityExecutableFingerprint,
+    ANTIGRAVITY_COMPATIBILITY, AntigravityCompatibilitySnapshot, AntigravityExecutableFingerprint,
     available_agent_kinds_from_path, ensure_antigravity_cli_supported_on_path,
     ensure_cached_antigravity_cli_supported_on_path, refresh_agent_cli_version,
     validate_antigravity_cli_version, validate_cached_antigravity_cli_support,
@@ -197,4 +198,36 @@ fn test_ensure_antigravity_cli_supported_on_path_rejects_missing_executable() {
     assert!(error.contains("`agy` was not found on `PATH`"));
     assert!(error.contains("Install it or run `agy update`"));
     assert_eq!(cached_error, error);
+}
+
+#[test]
+/// Ensures a poisoned compatibility cache is never trusted: validation still
+/// reports its result, and cached checks treat Antigravity as unvalidated.
+fn test_poisoned_antigravity_cache_reports_unvalidated_support() {
+    // Arrange
+    let _cache_guard = antigravity_cache_test_guard();
+    let temp_directory = tempdir().expect("failed to create temp dir");
+    let path_value = env::join_paths([temp_directory.path()]).expect("valid path");
+    let compatibility_cache = ANTIGRAVITY_COMPATIBILITY.get_or_init(|| Mutex::new(None));
+    let poisoning_result = std::thread::scope(|scope| {
+        scope
+            .spawn(|| {
+                let _snapshot = compatibility_cache.lock();
+                std::panic::resume_unwind(Box::new("fixture panic while the cache lock is held"));
+            })
+            .join()
+    });
+
+    // Act
+    let validation_error = ensure_antigravity_cli_supported_on_path(Some(path_value.as_os_str()))
+        .expect_err("missing Antigravity should be rejected");
+    let cached_error =
+        ensure_cached_antigravity_cli_supported_on_path(Some(path_value.as_os_str()))
+            .expect_err("a poisoned cache should not validate Antigravity");
+    compatibility_cache.clear_poison();
+
+    // Assert
+    assert!(poisoning_result.is_err());
+    assert!(validation_error.contains("`agy` was not found on `PATH`"));
+    assert!(cached_error.contains("has not been validated yet"));
 }

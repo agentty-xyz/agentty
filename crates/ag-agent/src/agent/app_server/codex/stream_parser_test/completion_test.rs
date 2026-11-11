@@ -37,7 +37,11 @@ fn preferred_completed_assistant_message_falls_back_to_protocol_then_plain_text(
         "plain answer".to_string(),
         r#"{"answer":"protocol answer","questions":[]}"#.to_string(),
     ];
-    let plain_messages = vec!["  ".to_string(), " plain answer ".to_string()];
+    let plain_messages = vec![
+        "  ".to_string(),
+        " plain answer ".to_string(),
+        "\n".to_string(),
+    ];
 
     // Act
     let protocol_preferred = preferred_completed_assistant_message(
@@ -211,6 +215,13 @@ fn extract_turn_completed_agent_message_uses_matching_terminal_item() {
         &serde_json::json!({"method": "turn/started"}),
         Some("turn-123"),
     );
+    let malformed_items_message = extract_turn_completed_agent_message(
+        &serde_json::json!({
+            "method": "turn/completed",
+            "params": {"turn": {"id": "turn-123", "items": "not a list"}}
+        }),
+        Some("turn-123"),
+    );
 
     // Assert
     assert_eq!(
@@ -223,6 +234,7 @@ fn extract_turn_completed_agent_message_uses_matching_terminal_item() {
     assert_eq!(other_turn_message, None);
     assert_eq!(missing_turn_message, None);
     assert_eq!(non_completion_message, None);
+    assert_eq!(malformed_items_message, None);
 }
 
 #[test]
@@ -377,11 +389,18 @@ fn interrupted_turn_completion_without_error_requires_matching_turn_and_status()
         is_interrupted_turn_completion_without_error(&response_value, Some("other-turn"));
     let errored =
         is_interrupted_turn_completion_without_error(&errored_response, Some("active-turn"));
+    let other_method = is_interrupted_turn_completion_without_error(
+        &serde_json::json!({"method": "turn/started"}),
+        Some("active-turn"),
+    );
+    let untracked_turn = is_interrupted_turn_completion_without_error(&response_value, None);
 
     // Assert
     assert!(interrupted);
     assert!(!wrong_turn);
     assert!(!errored);
+    assert!(!other_method);
+    assert!(!untracked_turn);
 }
 
 #[test]
@@ -400,11 +419,17 @@ fn extract_handoff_turn_id_from_completion_requires_waiting_without_expected_tur
         extract_handoff_turn_id_from_completion(&response_value, Some("active-turn"), true);
     let idle_wait_blocks_handoff =
         extract_handoff_turn_id_from_completion(&response_value, None, false);
+    let other_method_blocks_handoff = extract_handoff_turn_id_from_completion(
+        &serde_json::json!({"method": "turn/started", "params": {"turn_id": "handoff-turn"}}),
+        None,
+        true,
+    );
 
     // Assert
     assert_eq!(handoff_turn_id, Some("handoff-turn".to_string()));
     assert_eq!(expected_turn_blocks_handoff, None);
     assert_eq!(idle_wait_blocks_handoff, None);
+    assert_eq!(other_method_blocks_handoff, None);
 }
 
 #[test]

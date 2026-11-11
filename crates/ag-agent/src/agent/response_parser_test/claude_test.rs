@@ -152,6 +152,77 @@ fn test_parse_claude_stream_output_line_ignores_result_events_for_delta_streamin
 }
 
 #[test]
+fn test_claude_parse_response_recovers_stream_text_and_falls_back_without_it() {
+    // Arrange
+    let whitespace_blocks = concat!(
+        r#"{"type":"assistant","message":{"role":"assistant","content":["#,
+        r#"{"type":"text","text":"  "}]}}"#
+    );
+    let whitespace_text = r#"{"type":"message","role":"assistant","content":"   "}"#;
+    let response_cases = [
+        ("", "auth failed", "auth failed".to_string()),
+        (
+            "\n{\"type\":\"message\",\"role\":\"assistant\",\"content\":\"Hi\"}\n\n",
+            "",
+            "Hi".to_string(),
+        ),
+        (
+            concat!(
+                r#"[{"type":"assistant","message":{"role":"assistant","content":["#,
+                r#"{"type":"text_delta","delta":{"text":"Array reply"}}]}}]"#
+            ),
+            "",
+            "Array reply".to_string(),
+        ),
+        (whitespace_blocks, "", whitespace_blocks.to_string()),
+        (whitespace_text, "", whitespace_text.to_string()),
+    ];
+
+    for (stdout, stderr, expected_content) in response_cases {
+        // Act
+        let parsed = parse_claude_response_with_fallback(stdout, stderr);
+
+        // Assert
+        assert_eq!(parsed.content, expected_content, "stdout: {stdout:?}");
+    }
+}
+
+#[test]
+fn test_parse_claude_stream_output_line_maps_progress_labels_from_each_field() {
+    // Arrange
+    let line_cases = [
+        ("  ", None),
+        (
+            r#"{"type":"x","item":{"type":"web_search"}}"#,
+            Some("Searching the web"),
+        ),
+        (r#"{"name":"Bash"}"#, Some("Running a command")),
+        (
+            r#"{"tool":{"name":"WebSearch"}}"#,
+            Some("Searching the web"),
+        ),
+        (r#"{"event":"thinking"}"#, Some("Thinking")),
+        (
+            r#"{"subtype":"compact_boundary"}"#,
+            Some("Compacting context"),
+        ),
+        (r#"{"type":"tool_call"}"#, Some("Running a command")),
+    ];
+
+    for (stdout_line, expected_progress) in line_cases {
+        // Act
+        let parsed_line = parse_claude_stream_output_line(stdout_line);
+
+        // Assert
+        assert_eq!(
+            parsed_line,
+            expected_progress.map(|progress| (progress.to_string(), false)),
+            "line: {stdout_line:?}"
+        );
+    }
+}
+
+#[test]
 fn test_parse_claude_stream_output_line_maps_tool_use_blocks_to_progress() {
     // Arrange
     let stdout_line = concat!(

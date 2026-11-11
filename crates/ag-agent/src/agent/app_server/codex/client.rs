@@ -62,13 +62,9 @@ impl RuntimeClientProvider for CodexRuntimeProvider {
         request: AppServerTurnRequest,
     ) -> AppServerFuture<Result<Self::Runtime, AppServerError>> {
         Box::pin(async move {
-            let (child, transport, state) = lifecycle::start_runtime(&request).await?;
-
-            Ok(CodexSessionRuntime {
-                child,
-                state,
-                transport,
-            })
+            lifecycle::start_runtime(&request)
+                .await
+                .map(CodexSessionRuntime::from_parts)
         })
     }
 
@@ -100,6 +96,24 @@ pub(crate) struct CodexSessionRuntime {
     child: app_server_transport::AppServerRuntimeChild,
     state: CodexRuntimeState,
     transport: AppServerStdioTransport,
+}
+
+impl CodexSessionRuntime {
+    /// Wraps one bootstrapped Codex app-server process with its transport and
+    /// thread state.
+    fn from_parts(
+        (child, transport, state): (
+            app_server_transport::AppServerRuntimeChild,
+            AppServerStdioTransport,
+            CodexRuntimeState,
+        ),
+    ) -> Self {
+        Self {
+            child,
+            state,
+            transport,
+        }
+    }
 }
 
 impl RuntimeClientRuntime for CodexSessionRuntime {

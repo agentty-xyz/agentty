@@ -14,6 +14,13 @@ fn extract_turn_id_from_turn_start_response_supports_nested_and_flat_fields() {
             }
         }
     });
+    let nested_snake_response = serde_json::json!({
+        "result": {
+            "turn": {
+                "turn_id": "nested-snake-turn"
+            }
+        }
+    });
     let flat_response = serde_json::json!({
         "result": {
             "turn_id": "flat-turn"
@@ -22,10 +29,12 @@ fn extract_turn_id_from_turn_start_response_supports_nested_and_flat_fields() {
 
     // Act
     let nested_turn_id = extract_turn_id_from_turn_start_response(&nested_response);
+    let nested_snake_turn_id = extract_turn_id_from_turn_start_response(&nested_snake_response);
     let flat_turn_id = extract_turn_id_from_turn_start_response(&flat_response);
 
     // Assert
     assert_eq!(nested_turn_id, Some("nested-turn".to_string()));
+    assert_eq!(nested_snake_turn_id, Some("nested-snake-turn".to_string()));
     assert_eq!(flat_turn_id, Some("flat-turn".to_string()));
 }
 
@@ -41,30 +50,45 @@ fn extract_item_started_progress_normalizes_camel_case_item_type() {
         }
     });
 
-    // Act
-    let progress = extract_item_started_progress(&response_value);
-
-    // Assert
-    assert_eq!(progress, Some("Running a command".to_string()));
-}
-
-#[test]
-fn extract_turn_id_from_turn_started_notification_supports_nested_flat_turn_fields() {
-    // Arrange
-    let response_value = serde_json::json!({
-        "method": "turn/started",
+    let untyped_response_value = serde_json::json!({
+        "method": "item/started",
         "params": {
-            "turn": {
-                "turn_id": "turn-nested"
+            "item": {
+                "type": 7
             }
         }
     });
 
     // Act
-    let turn_id = extract_turn_id_from_turn_started_notification(&response_value);
+    let progress = extract_item_started_progress(&response_value);
+    let untyped_progress = extract_item_started_progress(&untyped_response_value);
 
     // Assert
-    assert_eq!(turn_id, Some("turn-nested".to_string()));
+    assert_eq!(progress, Some("Running a command".to_string()));
+    assert_eq!(untyped_progress, None);
+}
+
+#[test]
+fn extract_turn_id_from_turn_started_notification_supports_nested_flat_turn_fields() {
+    // Arrange
+    let params_cases = [
+        serde_json::json!({"turn": {"turn_id": "turn-nested"}}),
+        serde_json::json!({"turnId": "turn-nested"}),
+        serde_json::json!({"turn_id": "turn-nested"}),
+    ];
+
+    for params in params_cases {
+        let response_value = serde_json::json!({
+            "method": "turn/started",
+            "params": params,
+        });
+
+        // Act
+        let turn_id = extract_turn_id_from_turn_started_notification(&response_value);
+
+        // Assert
+        assert_eq!(turn_id, Some("turn-nested".to_string()), "params: {params}");
+    }
 }
 
 #[test]
@@ -142,6 +166,15 @@ fn extract_agent_message_delta_ignores_blank_or_non_reasoning_items() {
             "delta": "  "
         }
     });
+    let blank_legacy_response = serde_json::json!({
+        "method": "item/updated",
+        "params": {
+            "item": {
+                "type": "reasoning",
+                "delta": " \n"
+            }
+        }
+    });
     let non_reasoning_response = serde_json::json!({
         "method": "item/updated",
         "params": {
@@ -154,10 +187,12 @@ fn extract_agent_message_delta_ignores_blank_or_non_reasoning_items() {
 
     // Act
     let blank_delta = extract_agent_message_delta(&blank_response);
+    let blank_legacy_delta = extract_agent_message_delta(&blank_legacy_response);
     let non_reasoning_delta = extract_agent_message_delta(&non_reasoning_response);
 
     // Assert
     assert_eq!(blank_delta, None);
+    assert_eq!(blank_legacy_delta, None);
     assert_eq!(non_reasoning_delta, None);
 }
 
@@ -216,6 +251,15 @@ fn extract_agent_message_ignores_intermediate_blank_status_and_unsupported_items
             }
         }
     });
+    let status_content_response = serde_json::json!({
+        "method": "item/completed",
+        "params": {
+            "item": {
+                "type": "assistant_message",
+                "content": [{"text": "Search completed."}]
+            }
+        }
+    });
     let unsupported_response = serde_json::json!({
         "method": "item/completed",
         "params": {
@@ -232,6 +276,7 @@ fn extract_agent_message_ignores_intermediate_blank_status_and_unsupported_items
     let blank_text_message = extract_agent_message(&blank_text_response);
     let blank_content_message = extract_agent_message(&blank_content_response);
     let status_message = extract_agent_message(&status_response);
+    let status_content_message = extract_agent_message(&status_content_response);
     let unsupported_message = extract_agent_message(&unsupported_response);
 
     // Assert
@@ -240,6 +285,7 @@ fn extract_agent_message_ignores_intermediate_blank_status_and_unsupported_items
     assert_eq!(blank_text_message, None);
     assert_eq!(blank_content_message, None);
     assert_eq!(status_message, None);
+    assert_eq!(status_content_message, None);
     assert_eq!(unsupported_message, None);
 }
 
@@ -247,14 +293,17 @@ fn extract_agent_message_ignores_intermediate_blank_status_and_unsupported_items
 fn camel_to_snake_preserves_lowercase_and_splits_uppercase_boundaries() {
     // Arrange
     let camel_case = "commandExecution";
+    let pascal_case = "AgentMessage";
     let lowercase = "command";
 
     // Act
     let normalized_camel_case = camel_to_snake(camel_case);
+    let normalized_pascal_case = camel_to_snake(pascal_case);
     let normalized_lowercase = camel_to_snake(lowercase);
 
     // Assert
     assert_eq!(normalized_camel_case, "command_execution");
+    assert_eq!(normalized_pascal_case, "agent_message");
     assert_eq!(normalized_lowercase, "command");
 }
 

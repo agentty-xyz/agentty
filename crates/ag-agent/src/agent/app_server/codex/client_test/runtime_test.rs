@@ -1,8 +1,8 @@
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
-use ag_contracts::{ReasoningLevel, SpeedMode};
-use ag_protocol::{ProtocolRequestProfile, TurnPrompt};
+use ag_contracts::{ReasoningLevel, SpeedMode, ToolPolicy};
+use ag_protocol::{ProtocolRequestProfile, ProtocolSchemaInstructionMode, TurnPrompt};
 use ag_session::test_support as model_fixture;
 use mockall::Sequence;
 use serde_json::Value;
@@ -52,6 +52,89 @@ async fn runtime_reuse_requires_matching_execution_policy() {
     // Assert
     assert!(original_matches);
     assert!(!changed_matches);
+}
+
+#[tokio::test]
+async fn bootstrapped_runtime_reports_its_restored_thread() {
+    // Arrange
+    let folder = tempdir().expect("runtime folder");
+    let mut stopped_runtime = build_stopped_session_runtime("thread-restored");
+    let mut request = runtime_request(&stopped_runtime);
+    stopped_runtime.shutdown_runtime().await;
+    request.folder = folder.path().to_path_buf();
+    request.provider_conversation_id = Some("thread-restored".to_string());
+    let script = r#"while IFS= read -r request; do
+        case "$request" in *'"method":"initialized"'*) continue ;; esac
+        request_id=$(printf '%s' "$request" | sed -n 's/.*"id":"\([^"]*\)".*/\1/p')
+        printf '{"id":"%s","result":{"thread":{"id":"thread-restored"}}}\n' "$request_id"
+    done"#;
+    let mut command = std::process::Command::new("sh");
+    command.arg("-c").arg(script);
+
+    // Act
+    let mut runtime = lifecycle::start_runtime_with_built_command(command, &request)
+        .await
+        .map(CodexSessionRuntime::from_parts)
+        .expect("fixture bootstrap should succeed");
+
+    // Assert
+    assert!(runtime.pid().is_some());
+    assert_eq!(
+        runtime.provider_conversation_id().as_deref(),
+        Some("thread-restored")
+    );
+    assert!(runtime.restored_context());
+    assert!(runtime.matches_request(&request));
+    runtime.shutdown_runtime().await;
+}
+
+#[tokio::test]
+async fn provider_conversation_id_is_absent_until_a_thread_is_assigned() {
+    // Arrange
+    let mut runtime = build_stopped_session_runtime("thread-assigned");
+    let assigned_conversation_id = runtime.provider_conversation_id();
+
+    // Act
+    runtime.state.thread_id.clear();
+    let pending_conversation_id = runtime.provider_conversation_id();
+    runtime.shutdown_runtime().await;
+
+    // Assert
+    assert_eq!(assigned_conversation_id.as_deref(), Some("thread-assigned"));
+    assert_eq!(pending_conversation_id, None);
+}
+
+#[tokio::test]
+async fn start_runtime_rejects_unsupported_execution_policy_without_spawning() {
+    // Arrange
+    let mut stopped_runtime = build_stopped_session_runtime("thread-policy");
+    let mut request = runtime_request(&stopped_runtime);
+    stopped_runtime.shutdown_runtime().await;
+    request.execution_policy.tools = ToolPolicy::AllowOnly(vec!["Read".to_string()]);
+
+    // Act
+    let result = CodexRuntimeProvider::start_runtime(request).await;
+
+    // Assert
+    assert!(matches!(
+        result,
+        Err(AppServerError::Provider(message))
+            if message.starts_with("Failed to build `codex app-server` command")
+    ));
+}
+
+#[test]
+fn codex_runtimes_are_retained_and_enforce_schema_at_transport_level() {
+    // Arrange / Act
+    let retains_runtime = CodexRuntimeProvider::retain_runtime_after_turn();
+    let schema_instruction_mode = CodexRuntimeProvider::schema_instruction_mode();
+
+    // Assert
+    assert!(retains_runtime);
+    assert_eq!(
+        schema_instruction_mode,
+        ProtocolSchemaInstructionMode::TransportSchema
+    );
 }
 
 #[tokio::test]

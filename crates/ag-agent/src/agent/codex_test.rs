@@ -13,6 +13,23 @@ fn session_resume_request_kind(_replay_transcript: Option<&str>) -> AgentRequest
     AgentRequestKind::SessionResume
 }
 
+/// Verifies Codex setup leaves the session worktree untouched.
+#[test]
+fn setup_creates_no_files() {
+    // Arrange
+    let temp_directory = tempdir().expect("failed to create temp dir");
+    let backend = CodexBackend;
+
+    // Act
+    AgentBackend::setup(&backend, temp_directory.path()).expect("setup should succeed");
+
+    // Assert
+    let entry_count = std::fs::read_dir(temp_directory.path())
+        .expect("failed to read dir")
+        .count();
+    assert_eq!(entry_count, 0);
+}
+
 /// Verifies Codex start requests build the persistent app-server command.
 #[test]
 fn build_command_builds_app_server_runtime_for_start_requests() {

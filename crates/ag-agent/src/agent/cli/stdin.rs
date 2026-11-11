@@ -2,7 +2,7 @@
 
 use std::io;
 
-use tokio::io::AsyncWriteExt as _;
+use tokio::io::{AsyncWrite, AsyncWriteExt as _};
 use tokio::task::JoinHandle;
 
 /// Starts one background stdin writer when the child needs prompt input.
@@ -52,16 +52,20 @@ where
 
 /// Writes one optional stdin payload into the spawned CLI subprocess.
 ///
+/// Generic over the writer so the closed-pipe tolerance and error mapping can
+/// be exercised without a subprocess.
+///
 /// # Errors
 /// Returns an error when stdin was requested but not available or the write
 /// fails before EOF is signaled.
-async fn write_optional_stdin<Error>(
-    child_stdin: Option<tokio::process::ChildStdin>,
+async fn write_optional_stdin<Writer, Error>(
+    child_stdin: Option<Writer>,
     stdin_payload: Vec<u8>,
     unavailable_message: &'static str,
     format_error: fn(String) -> Error,
 ) -> Result<(), Error>
 where
+    Writer: AsyncWrite + Unpin,
     Error: Send + 'static,
 {
     let mut child_stdin =

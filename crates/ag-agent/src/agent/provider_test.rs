@@ -103,12 +103,22 @@ fn test_parse_turn_response_rejects_invalid_payload() {
 /// Ensures Codex app-server phase labels map to thought deltas through the
 /// shared provider descriptor.
 fn test_is_app_server_thought_chunk_reports_codex_phase_labels() {
-    // Arrange / Act / Assert
-    assert!(is_app_server_thought_chunk(
-        AgentKind::Codex,
-        true,
-        Some("thinking"),
-    ));
+    // Arrange
+    let phase_cases = [
+        ("thinking", true),
+        ("PLAN", true),
+        (" Reasoning ", true),
+        ("thought", true),
+        ("final_answer", false),
+    ];
+
+    for (phase, expected_thought) in phase_cases {
+        // Act
+        let is_thought = is_app_server_thought_chunk(AgentKind::Codex, true, Some(phase));
+
+        // Assert
+        assert_eq!(is_thought, expected_thought, "phase label `{phase}`");
+    }
     assert!(!is_app_server_thought_chunk(
         AgentKind::Gemini,
         true,

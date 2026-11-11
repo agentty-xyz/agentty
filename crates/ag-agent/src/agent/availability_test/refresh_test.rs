@@ -300,6 +300,40 @@ fn test_detect_agent_cli_version_with_timeout_handles_hanging_commands() {
 }
 
 #[test]
+/// Ensures failed version commands report no version and stderr-only
+/// version output is still recognized.
+fn test_detect_agent_cli_version_with_timeout_reads_status_and_stderr() {
+    // Arrange
+    let temp_directory = tempdir().expect("failed to create temp dir");
+    let version_cases = [
+        (
+            "failing",
+            "#!/bin/sh\nprintf 'codex 1.2.3\\n'\nexit 1\n",
+            None,
+        ),
+        (
+            "stderr",
+            "#!/bin/sh\nprintf 'codex 1.2.3\\n' >&2\n",
+            Some("1.2.3".to_string()),
+        ),
+    ];
+
+    for (name, script, expected_version) in version_cases {
+        let codex_path = temp_directory.path().join(name);
+        fs::write(&codex_path, script).expect("failed to create codex executable");
+        fs::set_permissions(&codex_path, fs::Permissions::from_mode(0o750))
+            .expect("failed to mark codex executable");
+
+        // Act
+        let detected_version =
+            detect_agent_cli_version_with_timeout(&codex_path, Duration::from_secs(10));
+
+        // Assert
+        assert_eq!(detected_version, expected_version, "{name} version command");
+    }
+}
+
+#[test]
 /// Ensures non-version text falls back to the first useful output line.
 fn test_parse_agent_cli_version_output_falls_back_to_line() {
     // Arrange

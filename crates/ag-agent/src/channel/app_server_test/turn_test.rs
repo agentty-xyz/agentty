@@ -1,7 +1,7 @@
 use std::path::PathBuf;
 use std::sync::Arc;
 
-use ag_contracts::{AgentChannel, ReasoningLevel, TurnEvent};
+use ag_contracts::{AgentChannel, ReasoningLevel, StartSessionRequest, TurnEvent};
 use ag_protocol::TurnPromptAttachment;
 use ag_session::AgentKind;
 use tokio::sync::mpsc;
@@ -9,6 +9,33 @@ use tokio::sync::mpsc;
 use super::support::{collect_pid_updates, make_ok_response, make_turn_request};
 use crate::app_server::{AppServerStreamEvent, AppServerTurnResponse, MockAppServerClient};
 use crate::channel::app_server::AppServerAgentChannel;
+
+#[tokio::test]
+async fn session_start_is_lazy_and_shutdown_releases_the_client_session() {
+    // Arrange
+    let mut client = MockAppServerClient::new();
+    client.expect_run_turn().never();
+    client
+        .expect_shutdown_session()
+        .withf(|session_id| session_id == "session")
+        .times(1)
+        .returning(|_| Box::pin(async {}));
+    let channel = AppServerAgentChannel::new(Arc::new(client), AgentKind::Codex);
+
+    // Act
+    let session = channel
+        .start_session(StartSessionRequest {
+            folder: PathBuf::from("/tmp"),
+            session_id: "session".to_string(),
+        })
+        .await
+        .expect("session start should not contact the runtime");
+    let shutdown = channel.shutdown_session("session".to_string()).await;
+
+    // Assert
+    assert_eq!(session.session_id, "session");
+    assert!(shutdown.is_ok());
+}
 
 #[tokio::test]
 async fn forwards_runtime_pid_and_clears_it_after_non_retained_turn() {

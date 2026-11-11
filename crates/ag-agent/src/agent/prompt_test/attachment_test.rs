@@ -44,13 +44,20 @@ fn test_render_prompt_with_local_images_replaces_placeholders_in_order() {
 
 #[test]
 /// Ensures CLI prompt rendering appends local image paths when attachment
-/// metadata survives without a placeholder match.
+/// metadata survives without a placeholder match, separating each path from
+/// preceding text by exactly one line break.
 fn test_render_prompt_with_local_images_appends_missing_paths() {
     // Arrange
-    let attachments = vec![TurnPromptAttachment {
-        placeholder: "[Image #1]".to_string(),
-        local_image_path: PathBuf::from("/tmp/first-image.png"),
-    }];
+    let attachments = vec![
+        TurnPromptAttachment {
+            placeholder: "[Image #1]".to_string(),
+            local_image_path: PathBuf::from("/tmp/first-image.png"),
+        },
+        TurnPromptAttachment {
+            placeholder: "[Image #2]".to_string(),
+            local_image_path: PathBuf::from("/tmp/second-image.png"),
+        },
+    ];
 
     // Act
     let rendered_prompt =
@@ -60,7 +67,7 @@ fn test_render_prompt_with_local_images_appends_missing_paths() {
     // Assert
     assert_eq!(
         rendered_prompt,
-        "Review this change\n/tmp/first-image.png\n"
+        "Review this change\n/tmp/first-image.png\n/tmp/second-image.png\n"
     );
 }
 

@@ -1,4 +1,4 @@
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
@@ -15,12 +15,14 @@ use tokio::sync::mpsc;
 
 use super::support::remember_request_id;
 use crate::agent::app_server::codex::lifecycle::{
-    CodexRuntimeState, CodexTurnEventLoopState, compaction_timeout_error, finalize_turn_completion,
-    initialize_runtime, start_runtime, start_runtime_with_built_command,
-    turn_completed_timeout_error,
+    CodexRuntimeState, CodexTurnEventLoopInput, CodexTurnEventLoopState, compaction_timeout_error,
+    execute_turn_event_loop, finalize_turn_completion, initialize_runtime, resume_thread,
+    start_runtime, start_runtime_with_built_command, start_thread, turn_completed_timeout_error,
 };
+use crate::agent::app_server::codex::usage;
 use crate::agent::app_server::stdio_transport::MockAppServerRuntimeTransport as MockCodexRuntimeTransport;
-use crate::app_server::{AppServerError, AppServerTurnRequest};
+use crate::app_server::{AppServerError, AppServerStreamEvent, AppServerTurnRequest};
+use crate::app_server_transport::AppServerTransportError;
 use crate::telemetry::TRACER_PROVIDER_LOCK;
 
 #[tokio::test]
@@ -691,4 +693,266 @@ async fn resumed_turns_with_only_cumulative_usage_never_bill_retained_history() 
         })
         .collect::<Vec<_>>();
     assert_eq!(known, [false, true, false, true]);
+}
+
+#[tokio::test]
+async fn thread_bootstrap_rejects_non_json_responses() {
+    // Arrange
+    let folder = PathBuf::from("/tmp/agentty-codex-bootstrap");
+    let mut start_transport = non_json_response_transport();
+    let mut resume_transport = non_json_response_transport();
+
+    // Act
+    let started = start_thread(
+        &mut start_transport,
+        &folder,
+        model_fixture::CODEX_MODEL.as_str(),
+        PermissionMode::AutoEdit,
+        ReasoningLevel::default(),
+        SpeedMode::default(),
+    )
+    .await;
+    let resumed = resume_thread(
+        &mut resume_transport,
+        &folder,
+        "thread-1",
+        model_fixture::CODEX_MODEL.as_str(),
+        PermissionMode::AutoEdit,
+        ReasoningLevel::default(),
+        SpeedMode::default(),
+    )
+    .await;
+
+    // Assert
+    assert!(matches!(
+        started,
+        Err(AppServerError::Provider(message))
+            if message.starts_with("Failed to parse thread/start response JSON")
+    ));
+    assert!(matches!(
+        resumed,
+        Err(AppServerError::Provider(message))
+            if message.starts_with("Failed to parse thread/resume response JSON")
+    ));
+}
+
+/// Builds a transport that accepts one request and answers it with non-JSON.
+fn non_json_response_transport() -> MockCodexRuntimeTransport {
+    let mut transport = MockCodexRuntimeTransport::new();
+    transport
+        .expect_write_json_line()
+        .times(1)
+        .returning(|_| Box::pin(async { Ok(()) }));
+    transport
+        .expect_wait_for_response_line()
+        .times(1)
+        .returning(|_| Box::pin(async { Ok("not json".to_string()) }));
+
+    transport
+}
+
+#[test]
+fn turn_start_error_without_message_uses_default_description() {
+    // Arrange
+    let (stream_tx, _stream_rx) = mpsc::unbounded_channel();
+    let mut state =
+        CodexTurnEventLoopState::new(stream_tx, ProtocolRequestProfile::SessionTurn, "thread-1");
+
+    // Act
+    let result = state.process_turn_start_response(&serde_json::json!({"error": {"code": -1}}));
+
+    // Assert
+    assert!(matches!(
+        result,
+        Err(AppServerError::Provider(message))
+            if message == "Codex app-server returned an error for `turn/start`"
+    ));
+}
+
+#[test]
+fn turn_tracking_follows_started_and_handoff_turns_and_streams_phase_progress() {
+    // Arrange
+    let (stream_tx, mut stream_rx) = mpsc::unbounded_channel();
+    let mut state =
+        CodexTurnEventLoopState::new(stream_tx, ProtocolRequestProfile::SessionTurn, "thread-1");
+    let pending_events = [
+        serde_json::json!({"method": "item/reasoning/textDelta", "params": {"turnId": "turn-1", "delta": "Plan"}}),
+        serde_json::json!({"method": "item/reasoning/textDelta", "params": {"turnId": "turn-1", "delta": " more"}}),
+        serde_json::json!({"method": "turn/completed", "params": {"turn": {"id": "turn-1", "status": "interrupted"}}}),
+        serde_json::json!({"method": "item/updated", "params": {"item": {"type": "reasoning", "delta": "Handoff"}}}),
+        serde_json::json!({"method": "item/completed", "params": {"item": {"type": "agentMessage", "text": "Unphased"}}}),
+        serde_json::json!({"method": "item/completed", "params": {"item": {"type": "agentMessage", "phase": "final_answer", "text": "Draft"}}}),
+    ];
+
+    // Act
+    let untracked_turn_start =
+        state.process_turn_start_response(&serde_json::json!({"result": {}}));
+    let started = state.process_stream_response(
+        &serde_json::json!({"method": "turn/started", "params": {"turn": {"id": "turn-1"}}}),
+    );
+    let late_turn_start = state
+        .process_turn_start_response(&serde_json::json!({"result": {"turn": {"id": "turn-0"}}}));
+    let pending_results = pending_events
+        .iter()
+        .map(|event| {
+            state
+                .process_stream_response(event)
+                .map(|result| result.is_none())
+        })
+        .collect::<Vec<_>>();
+    let completion = state
+        .process_stream_response(&serde_json::json!({
+            "method": "turn/completed",
+            "params": {"turn": {
+                "id": "turn-2",
+                "status": "completed",
+                "items": [{"type": "agentMessage", "phase": "final_answer", "text": "Done"}]
+            }}
+        }))
+        .expect("handoff turn completion")
+        .expect("handoff turn should complete");
+
+    // Assert
+    assert!(untracked_turn_start.is_ok());
+    assert!(matches!(started, Ok(None)));
+    assert!(late_turn_start.is_ok());
+    assert!(
+        pending_results
+            .iter()
+            .all(|result| matches!(result, Ok(true)))
+    );
+    assert_eq!(completion.0, "Done");
+    let streamed = std::iter::from_fn(|| stream_rx.try_recv().ok())
+        .filter(|event| {
+            matches!(
+                event,
+                AppServerStreamEvent::ProgressUpdate(_)
+                    | AppServerStreamEvent::AssistantMessage { .. }
+            )
+        })
+        .collect::<Vec<_>>();
+    let delta = |message: &str| AppServerStreamEvent::AssistantMessage {
+        is_delta: true,
+        message: message.to_string(),
+        phase: Some("thinking".to_string()),
+    };
+    assert_eq!(
+        streamed,
+        [
+            AppServerStreamEvent::ProgressUpdate("Phase: thinking".to_string()),
+            delta("Plan"),
+            delta(" more"),
+            delta("Handoff"),
+            AppServerStreamEvent::AssistantMessage {
+                is_delta: false,
+                message: "Unphased".to_string(),
+                phase: None,
+            },
+            AppServerStreamEvent::ProgressUpdate("Phase: final_answer".to_string()),
+            AppServerStreamEvent::AssistantMessage {
+                is_delta: false,
+                message: "Draft".to_string(),
+                phase: Some("final_answer".to_string()),
+            },
+        ]
+    );
+}
+
+#[tokio::test]
+async fn turn_event_loop_skips_unusable_lines_until_the_runtime_exits() {
+    // Arrange
+    let folder = tempdir().expect("runtime folder");
+    let mut transport = MockCodexRuntimeTransport::new();
+    let mut sequence = Sequence::new();
+    transport
+        .expect_write_json_line()
+        .times(1)
+        .returning(|_| Box::pin(async { Ok(()) }));
+    for stdout_line in [Some("  "), Some("not json"), None] {
+        transport
+            .expect_next_stdout()
+            .times(1)
+            .in_sequence(&mut sequence)
+            .returning(move || Box::pin(async move { Ok(stdout_line.map(ToString::to_string)) }));
+    }
+    let (stream_tx, _stream_rx) = mpsc::unbounded_channel();
+    let mut usage_state = usage::UsageTracker::default();
+
+    // Act
+    let result = execute_turn_event_loop(
+        &mut transport,
+        turn_event_loop_input(
+            folder.path(),
+            stream_tx,
+            Duration::from_secs(60),
+            &mut usage_state,
+        ),
+    )
+    .await;
+
+    // Assert
+    assert!(matches!(
+        result,
+        Err(AppServerError::Provider(message))
+            if message == "Codex app-server terminated before `turn/completed` was received"
+    ));
+}
+
+#[tokio::test(start_paused = true)]
+async fn turn_event_loop_times_out_when_completion_never_arrives() {
+    // Arrange
+    let folder = tempdir().expect("runtime folder");
+    let mut transport = MockCodexRuntimeTransport::new();
+    transport
+        .expect_write_json_line()
+        .times(1)
+        .returning(|_| Box::pin(async { Ok(()) }));
+    transport.expect_next_stdout().times(1).returning(|| {
+        Box::pin(std::future::pending::<
+            Result<Option<String>, AppServerTransportError>,
+        >())
+    });
+    let (stream_tx, _stream_rx) = mpsc::unbounded_channel();
+    let mut usage_state = usage::UsageTracker::default();
+
+    // Act
+    let result = execute_turn_event_loop(
+        &mut transport,
+        turn_event_loop_input(
+            folder.path(),
+            stream_tx,
+            Duration::from_secs(5),
+            &mut usage_state,
+        ),
+    )
+    .await;
+
+    // Assert
+    assert!(matches!(
+        result,
+        Err(AppServerError::Provider(message))
+            if message == "Timed out waiting for Codex app-server `turn/completed` after 5 seconds"
+    ));
+}
+
+/// Builds one auto-edit session-turn event-loop input for transport tests.
+fn turn_event_loop_input<'a>(
+    folder: &'a Path,
+    stream_tx: mpsc::UnboundedSender<AppServerStreamEvent>,
+    turn_timeout: Duration,
+    usage_state: &'a mut usage::UsageTracker,
+) -> CodexTurnEventLoopInput<'a> {
+    CodexTurnEventLoopInput {
+        folder,
+        model: model_fixture::CODEX_MODEL.as_str(),
+        permission_mode: PermissionMode::AutoEdit,
+        prompt: TurnPrompt::from("Do work"),
+        protocol_profile: ProtocolRequestProfile::SessionTurn,
+        reasoning_level: ReasoningLevel::default(),
+        speed_mode: SpeedMode::default(),
+        stream_tx,
+        thread_id: "thread-1",
+        turn_timeout,
+        usage_state,
+    }
 }

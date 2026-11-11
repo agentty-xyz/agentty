@@ -8,6 +8,7 @@ use serde_json::Value;
 use crate::agent::app_server::codex::lifecycle::{
     CodexTurnStartPayloadInput, build_local_image_input_item, build_thread_resume_payload,
     build_thread_start_payload, build_turn_input_items, build_turn_start_payload,
+    push_text_input_item,
 };
 use crate::agent::app_server::codex::policy;
 
@@ -261,6 +262,22 @@ fn build_turn_input_items_interleaves_text_and_local_image_items_in_placeholder_
     assert_eq!(
         items[2].get("text").and_then(Value::as_str),
         Some(" please")
+    );
+}
+
+#[test]
+fn push_text_input_item_skips_empty_fragments() {
+    // Arrange
+    let mut input_items = Vec::new();
+
+    // Act
+    push_text_input_item(&mut input_items, "");
+    push_text_input_item(&mut input_items, "Compare");
+
+    // Assert
+    assert_eq!(
+        input_items,
+        vec![serde_json::json!({"type": "text", "text": "Compare", "text_elements": []})]
     );
 }
 
