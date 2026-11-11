@@ -435,10 +435,7 @@ where
 /// Disables optional index writes and interactive prompts for Git subprocesses.
 /// Required locks for staging, commits, and other mutations remain enabled.
 fn apply_non_interactive_environment(command: &mut Command) {
-    let git_ssh_command = std::env::var("GIT_SSH_COMMAND").map_or_else(
-        |_| "ssh -o BatchMode=yes".to_string(),
-        |configured_command| format!("{configured_command} -o BatchMode=yes"),
-    );
+    let git_ssh_command = batch_mode_ssh_command(std::env::var("GIT_SSH_COMMAND").ok());
 
     command
         .env("GIT_OPTIONAL_LOCKS", "0")
@@ -449,16 +446,22 @@ fn apply_non_interactive_environment(command: &mut Command) {
 
 /// Disables optional index writes and interactive prompts for async Git.
 fn apply_non_interactive_environment_async(command: &mut AsyncCommand) {
-    let git_ssh_command = std::env::var("GIT_SSH_COMMAND").map_or_else(
-        |_| "ssh -o BatchMode=yes".to_string(),
-        |configured_command| format!("{configured_command} -o BatchMode=yes"),
-    );
+    let git_ssh_command = batch_mode_ssh_command(std::env::var("GIT_SSH_COMMAND").ok());
 
     command
         .env("GIT_OPTIONAL_LOCKS", "0")
         .env("GIT_TERMINAL_PROMPT", "0")
         .env("GCM_INTERACTIVE", "never")
         .env("GIT_SSH_COMMAND", git_ssh_command);
+}
+
+/// Appends SSH batch mode to the configured `GIT_SSH_COMMAND`, or uses plain
+/// `ssh` in batch mode when none is configured.
+fn batch_mode_ssh_command(configured_command: Option<String>) -> String {
+    match configured_command {
+        Some(configured_command) => format!("{configured_command} -o BatchMode=yes"),
+        None => "ssh -o BatchMode=yes".to_string(),
+    }
 }
 
 /// Extracts the best human-readable error detail from command output.
@@ -567,7 +570,7 @@ async fn repo_root_from_git_dir_async(
     repo_path: &Path,
     git_dir: &Path,
 ) -> Result<PathBuf, GitError> {
-    if let Some(repo_root) = repo_root_from_dot_git_dir(git_dir)? {
+    if let Some(repo_root) = repo_root_from_dot_git_dir(git_dir) {
         return Ok(repo_root);
     }
 
@@ -583,7 +586,7 @@ async fn repo_root_from_git_dir_async(
 
 /// Converts a git directory path into a repository root synchronously.
 fn repo_root_from_git_dir(repo_path: &Path, git_dir: &Path) -> Result<PathBuf, GitError> {
-    if let Some(repo_root) = repo_root_from_dot_git_dir(git_dir)? {
+    if let Some(repo_root) = repo_root_from_dot_git_dir(git_dir) {
         return Ok(repo_root);
     }
 
@@ -597,25 +600,15 @@ fn repo_root_from_git_dir(repo_path: &Path, git_dir: &Path) -> Result<PathBuf, G
 }
 
 /// Returns the parent of a conventional `.git` directory when applicable.
-fn repo_root_from_dot_git_dir(git_dir: &Path) -> Result<Option<PathBuf>, GitError> {
-    if git_dir
-        .file_name()
-        .and_then(std::ffi::OsStr::to_str)
-        .is_none_or(|name| name != ".git")
-    {
-        return Ok(None);
+///
+/// Returns `None` for any other directory name. A path ending in a `.git`
+/// component always has a parent, so the conventional case cannot fail.
+fn repo_root_from_dot_git_dir(git_dir: &Path) -> Option<PathBuf> {
+    if git_dir.file_name() != Some(std::ffi::OsStr::new(".git")) {
+        return None;
     }
 
-    git_dir
-        .parent()
-        .map(Path::to_path_buf)
-        .map(Some)
-        .ok_or_else(|| {
-            GitError::OutputParse(format!(
-                "Git directory has no parent: {}",
-                git_dir.display()
-            ))
-        })
+    git_dir.parent().map(Path::to_path_buf)
 }
 
 /// Parses a non-empty `git rev-parse --show-toplevel` response.

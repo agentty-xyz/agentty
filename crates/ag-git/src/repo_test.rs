@@ -7,10 +7,10 @@ use tempfile::tempdir;
 
 use crate::error::GitError;
 use crate::repo::{
-    AsyncGitCommand, apply_non_interactive_environment, command_output_detail,
-    format_git_invocation, main_checkout_working_tree_sync, main_repo_root, normalize_repo_url,
-    repo_root_from_git_dir_async, resolve_git_dir, run_git_command_sync,
-    run_git_command_with_timeout,
+    AsyncGitCommand, apply_non_interactive_environment, batch_mode_ssh_command,
+    command_output_detail, format_git_invocation, main_checkout_working_tree_sync, main_repo_root,
+    normalize_repo_url, parse_git_directory_paths, parse_repo_root, repo_root_from_git_dir_async,
+    resolve_git_dir, run_git_command_sync, run_git_command_with_timeout,
 };
 
 #[test]
@@ -47,6 +47,39 @@ fn test_apply_non_interactive_environment_sets_git_prompt_controls() {
         env_pairs
             .iter()
             .any(|(key, value)| key == "GIT_SSH_COMMAND" && value.contains("BatchMode=yes"))
+    );
+}
+
+#[test]
+fn test_batch_mode_ssh_command_extends_configured_command_or_defaults_to_ssh() {
+    // Arrange
+    let configured_command = Some("ssh -i /keys/agentty".to_string());
+
+    // Act
+    let extended_command = batch_mode_ssh_command(configured_command);
+    let default_command = batch_mode_ssh_command(None);
+
+    // Assert
+    assert_eq!(extended_command, "ssh -i /keys/agentty -o BatchMode=yes");
+    assert_eq!(default_command, "ssh -o BatchMode=yes");
+}
+
+#[tokio::test]
+async fn test_async_git_command_reports_spawn_failure_for_missing_directory() {
+    // Arrange
+    let temp_dir = tempdir().expect("failed to create temp dir");
+    let command = AsyncGitCommand::new(temp_dir.path().join("missing"), vec!["status".to_string()]);
+
+    // Act
+    let error = run_git_command_with_timeout(command, Duration::from_secs(5))
+        .await
+        .expect_err("missing working directory should fail to spawn git");
+
+    // Assert
+    assert!(
+        matches!(&error, GitError::CommandFailed { command, stderr }
+                if command == "git status" && !stderr.is_empty()),
+        "unexpected error: {error:?}"
     );
 }
 
@@ -327,6 +360,84 @@ fn test_non_bare_layout_resolves_main_working_checkout_for_linked_worktree() {
         working_checkout,
         Some(fs::canonicalize(&main_checkout).expect("failed to canonicalize main checkout"))
     );
+}
+
+#[test]
+fn test_main_checkout_working_tree_resolves_standalone_and_separated_git_dirs() {
+    // Arrange
+    let temp_dir = tempdir().expect("failed to create temp dir");
+    let root = fs::canonicalize(temp_dir.path()).expect("failed to canonicalize temp dir");
+    let standalone_checkout = root.join("standalone");
+    let separated_checkout = root.join("separated");
+    let separated_git_dir = root.join("separated-metadata");
+    run_setup_git(
+        &root,
+        &[
+            "init",
+            "--quiet",
+            standalone_checkout
+                .to_str()
+                .expect("standalone path is utf-8"),
+        ],
+    );
+    run_setup_git(
+        &root,
+        &[
+            "init",
+            "--quiet",
+            "--separate-git-dir",
+            separated_git_dir
+                .to_str()
+                .expect("separated git dir is utf-8"),
+            separated_checkout
+                .to_str()
+                .expect("separated path is utf-8"),
+        ],
+    );
+
+    for checkout in [standalone_checkout, separated_checkout] {
+        // Act
+        let working_checkout =
+            main_checkout_working_tree_sync(&checkout).expect("failed to resolve working checkout");
+
+        // Assert
+        assert_eq!(working_checkout, Some(checkout));
+    }
+}
+
+#[test]
+fn test_parse_git_directory_paths_rejects_missing_paths() {
+    // Arrange
+    let repo_path = Path::new("repository");
+
+    // Act
+    let missing_git_dir = parse_git_directory_paths(repo_path, "\n  \n");
+    let missing_common_dir = parse_git_directory_paths(repo_path, ".git\n");
+
+    // Assert
+    assert!(matches!(
+        missing_git_dir,
+        Err(GitError::OutputParse(ref detail))
+            if detail == "Git rev-parse output missing git-dir"
+    ));
+    assert!(matches!(
+        missing_common_dir,
+        Err(GitError::OutputParse(ref detail))
+            if detail == "Git rev-parse output missing git-common-dir"
+    ));
+}
+
+#[test]
+fn test_parse_repo_root_rejects_blank_output() {
+    // Arrange / Act
+    let result = parse_repo_root(" \n");
+
+    // Assert
+    assert!(matches!(
+        result,
+        Err(GitError::OutputParse(ref detail))
+            if detail == "Git rev-parse --show-toplevel returned empty output"
+    ));
 }
 
 #[test]

@@ -378,18 +378,14 @@ pub(crate) async fn squash_merge(
         // `git diff --cached --quiet` exits 0 when index matches `HEAD`.
         let cached_diff =
             run_git_command_output_sync(&repo_path, &["diff", "--cached", "--quiet"])?;
+        let has_staged_changes = classify_cached_diff(
+            cached_diff.status.code(),
+            &cached_diff.stdout,
+            &cached_diff.stderr,
+        )?;
 
-        if cached_diff.status.success() {
+        if !has_staged_changes {
             return Ok(SquashMergeOutcome::AlreadyPresentInTarget);
-        }
-
-        if cached_diff.status.code() != Some(1) {
-            let detail = command_output_detail(&cached_diff.stdout, &cached_diff.stderr);
-
-            return Err(GitError::CommandFailed {
-                command: "git diff --cached".to_string(),
-                stderr: detail,
-            });
         }
 
         run_git_command_sync(
@@ -401,6 +397,27 @@ pub(crate) async fn squash_merge(
         Ok(SquashMergeOutcome::Committed)
     })
     .await?
+}
+
+/// Interprets `git diff --cached --quiet`, which exits `0` when the index
+/// matches `HEAD` and `1` when staged changes exist.
+///
+/// # Errors
+/// Returns [`GitError::CommandFailed`] with the command detail for any other
+/// exit status, including termination by a signal.
+fn classify_cached_diff(
+    exit_code: Option<i32>,
+    stdout: &[u8],
+    stderr: &[u8],
+) -> Result<bool, GitError> {
+    match exit_code {
+        Some(0) => Ok(false),
+        Some(1) => Ok(true),
+        _ => Err(GitError::CommandFailed {
+            command: "git diff --cached".to_string(),
+            stderr: command_output_detail(stdout, stderr),
+        }),
+    }
 }
 
 #[cfg(test)]
