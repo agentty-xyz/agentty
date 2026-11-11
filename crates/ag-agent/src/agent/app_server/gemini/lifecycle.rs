@@ -198,6 +198,9 @@ pub(super) async fn initialize_runtime<Transport: AppServerRuntimeTransport>(
 
 /// Builds a typed ACP `initialize` request with conservative client
 /// capabilities.
+///
+/// The typed request always serializes its params as a JSON object, whose
+/// advertised client capabilities are replaced with an empty object.
 pub(super) fn build_initialize_request_payload(request_id: &str) -> Result<Value, AppServerError> {
     let initialize_params = InitializeRequest::new(ProtocolVersion::LATEST);
     let mut initialize_payload = build_json_rpc_request_payload(
@@ -205,20 +208,7 @@ pub(super) fn build_initialize_request_payload(request_id: &str) -> Result<Value
         AGENT_METHOD_NAMES.initialize,
         initialize_params,
     )?;
-    let Some(params) = initialize_payload.get_mut("params") else {
-        return Err(AppServerError::Provider(
-            "Failed to build Gemini ACP `initialize` request params".to_string(),
-        ));
-    };
-    let Some(params) = params.as_object_mut() else {
-        return Err(AppServerError::Provider(
-            "Failed to build Gemini ACP `initialize` request params object".to_string(),
-        ));
-    };
-    params.insert(
-        "clientCapabilities".to_string(),
-        Value::Object(serde_json::Map::new()),
-    );
+    initialize_payload["params"]["clientCapabilities"] = Value::Object(serde_json::Map::new());
 
     Ok(initialize_payload)
 }
@@ -423,21 +413,10 @@ pub(super) fn stream_assistant_chunk(
 }
 
 /// Builds Gemini ACP content blocks for one structured prompt payload.
+///
+/// Attachment images are read through Tokio's blocking-pool file API so the
+/// turn loop never blocks an async worker on disk reads.
 pub(super) async fn build_prompt_content_blocks(
-    prompt: &TurnPrompt,
-) -> Result<Vec<ContentBlock>, AppServerError> {
-    let prompt = prompt.clone();
-
-    tokio::task::spawn_blocking(move || build_prompt_content_blocks_blocking(&prompt))
-        .await
-        .map_err(|error| {
-            AppServerError::Provider(format!("Gemini prompt-image task failed: {error}"))
-        })?
-}
-
-/// Builds Gemini ACP content blocks for one prompt on a blocking worker
-/// thread.
-pub(super) fn build_prompt_content_blocks_blocking(
     prompt: &TurnPrompt,
 ) -> Result<Vec<ContentBlock>, AppServerError> {
     if !prompt.has_attachments() {
@@ -454,7 +433,7 @@ pub(super) fn build_prompt_content_blocks_blocking(
             }
             TurnPromptContentPart::Attachment(attachment)
             | TurnPromptContentPart::OrphanAttachment(attachment) => {
-                content_blocks.push(build_image_content_block(attachment)?);
+                content_blocks.push(build_image_content_block(attachment).await?);
             }
         }
     }
@@ -473,15 +452,17 @@ pub(super) fn push_text_content_block(content_blocks: &mut Vec<ContentBlock>, te
 
 /// Builds one Gemini ACP image content block from a persisted local prompt
 /// attachment.
-pub(super) fn build_image_content_block(
+pub(super) async fn build_image_content_block(
     attachment: &TurnPromptAttachment,
 ) -> Result<ContentBlock, AppServerError> {
-    let image_bytes = std::fs::read(&attachment.local_image_path).map_err(|error| {
-        AppServerError::Provider(format!(
-            "Failed to read Gemini prompt image `{}`: {error}",
-            attachment.local_image_path.display()
-        ))
-    })?;
+    let image_bytes = tokio::fs::read(&attachment.local_image_path)
+        .await
+        .map_err(|error| {
+            AppServerError::Provider(format!(
+                "Failed to read Gemini prompt image `{}`: {error}",
+                attachment.local_image_path.display()
+            ))
+        })?;
     let mime_type = prompt_image_mime_type(&attachment.local_image_path);
 
     Ok(ContentBlock::Image(ImageContent::new(

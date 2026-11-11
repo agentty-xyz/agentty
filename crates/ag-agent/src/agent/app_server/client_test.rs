@@ -278,6 +278,34 @@ async fn runtime_client_retains_and_replaces_runtime_with_pid_updates() {
     assert_eq!(SHUTDOWN_COUNT.load(Ordering::SeqCst), 2);
 }
 
+#[tokio::test]
+async fn default_client_skips_replay_for_restored_context_and_ignores_unknown_sessions() {
+    // Arrange
+    let _counter_guard = reset_counters().await;
+    let client = ProviderRuntimeClient::<TestProvider>::default();
+    let mut request = make_request();
+    request.replay_transcript = Some("Earlier conversation".to_string());
+    let (stream_tx, _stream_rx) = mpsc::unbounded_channel();
+
+    // Act
+    let response = client
+        .run_turn(request, stream_tx)
+        .await
+        .expect("turn should succeed");
+    client.shutdown_session("unknown-session".to_string()).await;
+
+    // Assert
+    assert!(!response.context_reset);
+    assert_eq!(SHUTDOWN_COUNT.load(Ordering::SeqCst), 0);
+    assert!(
+        client
+            .sessions
+            .take_session("session-1")
+            .expect("registry should remain available")
+            .is_some()
+    );
+}
+
 struct ResetProvider;
 
 impl RuntimeClientProvider for ResetProvider {
@@ -459,8 +487,9 @@ async fn failed_registry_store_after_context_reset_shuts_down_the_runtime() {
 #[test]
 fn counter_scenarios_are_isolated_when_run_in_one_process() {
     // Arrange
-    let scenarios: [fn(); 4] = [
+    let scenarios: [fn(); 5] = [
         runtime_client_retains_and_replaces_runtime_with_pid_updates,
+        default_client_skips_replay_for_restored_context_and_ignores_unknown_sessions,
         isolated_turns_reuse_process_with_fresh_context_and_discard_failed_resets,
         isolated_turns_restart_unsupported_or_incompatible_runtimes,
         failed_registry_store_after_context_reset_shuts_down_the_runtime,

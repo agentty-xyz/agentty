@@ -35,6 +35,7 @@ ag-contracts = { workspace = true, features = ["test-utils"] }
 ag-session = { workspace = true, features = ["test-utils"] }
 mockall.workspace = true
 sqlx.workspace = true
+tokio = { workspace = true, features = ["test-util"] }
 url.workspace = true
 wiremock.workspace = true
 

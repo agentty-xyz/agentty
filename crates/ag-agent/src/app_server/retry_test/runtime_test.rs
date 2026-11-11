@@ -635,6 +635,215 @@ async fn run_turn_with_restart_retry_skips_replay_when_runtime_restores_context(
     assert!(!captured_prompt.contains("previous transcript"));
 }
 
+/// Builds a session-start request for retry scenarios that need no replay.
+fn retry_request(session_id: &str) -> AppServerTurnRequest {
+    AppServerTurnRequest {
+        execution_policy: ag_contracts::ExecutionPolicy::default(),
+        provider_call_budget: None,
+        folder: PathBuf::from("/tmp"),
+        live_transcript: None,
+        main_checkout_root: None,
+        model: "model-a".to_string(),
+        permission_mode: ag_contracts::PermissionMode::AutoEdit,
+        agent_profile: ag_contracts::AgentDefinitionPrompt::default(),
+        prompt: "Do work".into(),
+        request_kind: session_start_request_kind(),
+        replay_transcript: None,
+        provider_conversation_id: None,
+        persisted_instruction_conversation_id: None,
+        reasoning_level: ReasoningLevel::default(),
+        session_id: session_id.to_string(),
+        speed_mode: ag_contracts::SpeedMode::default(),
+    }
+}
+
+/// Verifies an incompatible idle runtime is stopped before startup and that
+/// a failed retry stops its restarted runtime: an interruption is surfaced
+/// as-is, while any other retry failure reports both attempts.
+#[tokio::test]
+async fn failed_retry_stops_every_runtime_and_reports_the_retry_outcome() {
+    for cancel_retry in [false, true] {
+        // Arrange
+        let sessions = AppServerSessionRegistry::new("Test");
+        sessions
+            .store_session_or_recover(
+                "session-1".to_string(),
+                TestRuntime {
+                    model: "model-old".to_string(),
+                },
+            )
+            .expect("store should succeed");
+        let run_count = Arc::new(AtomicUsize::new(0));
+        let shutdown_models = Arc::new(Mutex::new(Vec::new()));
+
+        // Act
+        let result = run_turn_with_restart_retry(
+            &sessions,
+            retry_request("session-1"),
+            RuntimeInspector {
+                matches_request: |runtime: &TestRuntime, request| runtime.model == request.model,
+                pid: |_runtime| Some(42),
+                provider_conversation_id: |_runtime| None,
+                retain_runtime_after_turn: true,
+                restored_context: |_runtime| false,
+            },
+            ProtocolSchemaInstructionMode::PromptSchema,
+            |request: &AppServerTurnRequest| {
+                let model = request.model.clone();
+
+                Box::pin(async move { Ok(TestRuntime { model }) })
+            },
+            {
+                let run_count = Arc::clone(&run_count);
+                let sessions = sessions.clone();
+                move |_runtime, _prompt| {
+                    let attempt = run_count.fetch_add(1, Ordering::SeqCst);
+                    let sessions = sessions.clone();
+
+                    Box::pin(async move {
+                        if attempt == 0 {
+                            return Err(AppServerError::Provider("first failure".to_string()));
+                        }
+                        if cancel_retry {
+                            sessions
+                                .cancel_active_turn("session-1")
+                                .expect("cancel should signal active turn");
+
+                            return std::future::pending().await;
+                        }
+
+                        Err(AppServerError::Provider("retry failure".to_string()))
+                    })
+                }
+            },
+            {
+                let shutdown_models = Arc::clone(&shutdown_models);
+                move |runtime: &mut TestRuntime| {
+                    shutdown_models
+                        .lock()
+                        .expect("shutdown models")
+                        .push(runtime.model.clone());
+
+                    runtime.shutdown()
+                }
+            },
+        )
+        .await;
+
+        // Assert
+        let error = result.expect_err("failed retry should fail the turn");
+        if cancel_retry {
+            assert!(matches!(error, AppServerError::InterruptedByUser(_)));
+        } else {
+            assert!(matches!(
+                &error,
+                AppServerError::RetryExhausted {
+                    provider: "Test",
+                    first_error,
+                    retry_error,
+                } if first_error == "first failure" && retry_error == "retry failure"
+            ));
+        }
+        assert_eq!(run_count.load(Ordering::SeqCst), 2);
+        assert_eq!(
+            *shutdown_models.lock().expect("shutdown models"),
+            ["model-old", "model-a", "model-a"]
+        );
+        assert!(
+            sessions
+                .take_session("session-1")
+                .expect("registry")
+                .is_none()
+        );
+    }
+}
+
+/// Runtime whose drop can panic while the registry lock is held, poisoning it.
+struct DropPanicRuntime {
+    panic_on_drop: bool,
+}
+
+impl Drop for DropPanicRuntime {
+    fn drop(&mut self) {
+        assert!(
+            !self.panic_on_drop,
+            "fixture panic while registry lock is held"
+        );
+    }
+}
+
+/// Verifies a successful turn whose runtime cannot be retained stops that
+/// runtime before reporting the registry failure.
+#[tokio::test]
+async fn successful_turn_stops_runtime_when_registry_store_fails() {
+    // Arrange
+    let sessions = AppServerSessionRegistry::new("Test");
+    let shutdown_count = Arc::new(AtomicUsize::new(0));
+
+    // Act
+    let result = run_turn_with_restart_retry(
+        &sessions,
+        retry_request("session-1"),
+        RuntimeInspector {
+            matches_request: |_: &DropPanicRuntime, _| true,
+            pid: |_runtime| Some(42),
+            provider_conversation_id: |_runtime| None,
+            retain_runtime_after_turn: true,
+            restored_context: |_runtime| false,
+        },
+        ProtocolSchemaInstructionMode::PromptSchema,
+        |_| {
+            Box::pin(async {
+                Ok(DropPanicRuntime {
+                    panic_on_drop: false,
+                })
+            })
+        },
+        {
+            let sessions = sessions.clone();
+            move |_runtime, _prompt| {
+                assert!(
+                    sessions
+                        .store_session_or_recover(
+                            "poison".into(),
+                            DropPanicRuntime {
+                                panic_on_drop: true
+                            }
+                        )
+                        .is_ok()
+                );
+                let poisoning = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                    let _ = sessions.store_session_or_recover(
+                        "poison".into(),
+                        DropPanicRuntime {
+                            panic_on_drop: false,
+                        },
+                    );
+                }));
+                assert!(poisoning.is_err());
+
+                Box::pin(async { Ok(("done".to_string(), 1, 1)) })
+            }
+        },
+        {
+            let shutdown_count = Arc::clone(&shutdown_count);
+            move |_runtime| {
+                shutdown_count.fetch_add(1, Ordering::SeqCst);
+
+                Box::pin(async {})
+            }
+        },
+    )
+    .await;
+
+    // Assert
+    assert!(matches!(
+        result,
+        Err(AppServerError::LockPoisoned { provider: "Test" })
+    ));
+    assert_eq!(shutdown_count.load(Ordering::SeqCst), 1);
+}
+
 #[tokio::test]
 async fn size_rejections_shutdown_without_restarting() {
     // Arrange

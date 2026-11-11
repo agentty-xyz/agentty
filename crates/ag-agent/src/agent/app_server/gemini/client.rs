@@ -56,13 +56,9 @@ impl RuntimeClientProvider for GeminiRuntimeProvider {
         request: AppServerTurnRequest,
     ) -> AppServerFuture<Result<Self::Runtime, AppServerError>> {
         Box::pin(async move {
-            let (child, transport, state) = lifecycle::start_runtime(&request).await?;
-
-            Ok(GeminiSessionRuntime {
-                child,
-                state,
-                transport,
-            })
+            lifecycle::start_runtime(&request)
+                .await
+                .map(GeminiSessionRuntime::from_parts)
         })
     }
 
@@ -93,6 +89,24 @@ pub(crate) struct GeminiSessionRuntime {
     child: app_server_transport::AppServerRuntimeChild,
     state: GeminiRuntimeState,
     transport: AppServerStdioTransport,
+}
+
+impl GeminiSessionRuntime {
+    /// Wraps one bootstrapped Gemini ACP process with its transport and
+    /// session state.
+    fn from_parts(
+        (child, transport, state): (
+            app_server_transport::AppServerRuntimeChild,
+            AppServerStdioTransport,
+            GeminiRuntimeState,
+        ),
+    ) -> Self {
+        Self {
+            child,
+            state,
+            transport,
+        }
+    }
 }
 
 impl RuntimeClientRuntime for GeminiSessionRuntime {

@@ -1,4 +1,57 @@
+use std::sync::{Arc, Mutex};
+
+use crate::app_server::AppServerError;
 use crate::app_server::registry::AppServerSessionRegistry;
+
+/// Poisons one registry mutex by panicking on another thread while it is held.
+fn poison_lock<T: Send + 'static>(mutex: &Arc<Mutex<T>>) {
+    let mutex = Arc::clone(mutex);
+    let poisoning = std::thread::spawn(move || {
+        let _guard = mutex.lock();
+        std::panic::resume_unwind(Box::new("fixture panic while registry lock is held"));
+    });
+
+    assert!(poisoning.join().is_err());
+}
+
+#[test]
+fn poisoned_locks_fail_registry_operations_without_breaking_guard_drop() {
+    // Arrange
+    let registry = AppServerSessionRegistry::<String>::new("test-provider");
+    let active_turn = registry
+        .register_active_turn("session-1")
+        .expect("register should succeed");
+    let active_turn_token = active_turn.token();
+    poison_lock(&registry.sessions);
+    poison_lock(&registry.active_turn_cancellations);
+
+    // Act
+    let taken = registry.take_session("session-1");
+    let registered = registry.register_active_turn("session-2");
+    let cancelled = registry.cancel_active_turn("session-1");
+    drop(active_turn);
+
+    // Assert
+    assert!(matches!(
+        taken,
+        Err(AppServerError::LockPoisoned {
+            provider: "test-provider"
+        })
+    ));
+    assert!(matches!(
+        registered,
+        Err(AppServerError::LockPoisoned {
+            provider: "test-provider"
+        })
+    ));
+    assert!(matches!(
+        cancelled,
+        Err(AppServerError::LockPoisoned {
+            provider: "test-provider"
+        })
+    ));
+    assert!(!active_turn_token.is_cancelled());
+}
 
 #[test]
 fn new_returns_registry_with_provider_name() {

@@ -3,7 +3,39 @@ use std::time::Duration;
 use crate::agent::app_server::stdio_transport::{
     AppServerRuntimeTransport, AppServerStdioTransport,
 };
-use crate::app_server_transport;
+use crate::app_server_transport::{self, AppServerTransportError};
+
+#[tokio::test]
+async fn next_stdout_reports_unreadable_output_with_transport_context() {
+    // Arrange
+    let mut command = std::process::Command::new("sh");
+    command.args(["-c", r"printf '\377\n'"]);
+    let (mut child, stdin, stdout) =
+        app_server_transport::spawn_runtime_command(command, "invalid-output fixture")
+            .expect("invalid-output fixture should spawn");
+    let mut transport = AppServerStdioTransport::new(
+        stdin,
+        stdout,
+        "test stdin is unavailable",
+        "failed reading test stdout",
+    );
+
+    // Act
+    let result = transport.next_stdout().await;
+
+    // Assert
+    assert!(
+        matches!(
+            &result,
+            Err(AppServerTransportError::Io { context, source })
+                if context == "failed reading test stdout"
+                    && source.kind() == std::io::ErrorKind::InvalidData
+        ),
+        "unexpected stdout result: {result:?}"
+    );
+    transport.close_stdin();
+    app_server_transport::shutdown_child(&mut child).await;
+}
 
 #[tokio::test]
 async fn explicit_response_timeout_round_trips_matching_line() {

@@ -47,6 +47,14 @@ pub enum AppServerError {
     Transport(Box<dyn Error + Send + Sync>),
 }
 
+impl AppServerError {
+    /// Wraps one prompt preparation failure, such as a replay archive or
+    /// template rendering error, as [`AppServerError::PromptRender`].
+    pub(crate) fn prompt_render(error: impl std::fmt::Display) -> Self {
+        Self::PromptRender(error.to_string())
+    }
+}
+
 impl From<AppServerTransportError> for AppServerError {
     fn from(error: AppServerTransportError) -> Self {
         Self::Transport(Box::new(error))

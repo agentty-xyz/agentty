@@ -96,6 +96,9 @@ impl Drop for AppServerRuntimeChild {
 
 /// Writes one JSON-RPC payload as a newline-delimited line to `stdin`.
 ///
+/// The payload and its trailing newline are written as one buffer so a
+/// partially failed write cannot leave a line without its terminator.
+///
 /// # Errors
 ///
 /// Returns an error when the write or flush to stdin fails.
@@ -103,29 +106,19 @@ pub(crate) async fn write_json_line(
     stdin: &mut tokio::process::ChildStdin,
     payload: &Value,
 ) -> Result<(), AppServerTransportError> {
-    let serialized_payload = payload.to_string();
+    let mut serialized_line = payload.to_string();
+    serialized_line.push('\n');
 
-    stdin
-        .write_all(serialized_payload.as_bytes())
-        .await
-        .map_err(|source| AppServerTransportError::Io {
-            context: "Failed writing to app-server stdin".to_string(),
-            source,
-        })?;
-    stdin
-        .write_all(b"\n")
-        .await
-        .map_err(|source| AppServerTransportError::Io {
-            context: "Failed writing newline to app-server stdin".to_string(),
-            source,
-        })?;
-    stdin
-        .flush()
-        .await
-        .map_err(|source| AppServerTransportError::Io {
-            context: "Failed flushing app-server stdin".to_string(),
-            source,
-        })
+    async {
+        stdin.write_all(serialized_line.as_bytes()).await?;
+
+        stdin.flush().await
+    }
+    .await
+    .map_err(|source| AppServerTransportError::Io {
+        context: "Failed writing to app-server stdin".to_string(),
+        source,
+    })
 }
 
 /// Reads stdout lines until a JSON-RPC response carrying `response_id` arrives.
@@ -265,6 +258,28 @@ pub(crate) fn spawn_runtime_command(
     let child = command.spawn().map_err(|error| {
         AppServerError::Provider(format!("Failed to spawn `{runtime_name}`: {error}"))
     })?;
+
+    take_runtime_stdio(child, runtime_name)
+}
+
+/// Adopts one spawned runtime into its process-group handle and takes its
+/// stdin/stdout pipes.
+///
+/// # Errors
+///
+/// Returns a provider error when either stdio pipe was not captured; the
+/// adopted runtime group is terminated when the handle drops.
+fn take_runtime_stdio(
+    child: tokio::process::Child,
+    runtime_name: &str,
+) -> Result<
+    (
+        AppServerRuntimeChild,
+        tokio::process::ChildStdin,
+        tokio::process::ChildStdout,
+    ),
+    AppServerError,
+> {
     let process_group_id = child
         .id()
         .and_then(|pid| i32::try_from(pid).ok())

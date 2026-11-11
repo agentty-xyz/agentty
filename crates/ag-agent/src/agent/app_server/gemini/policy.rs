@@ -62,47 +62,23 @@ pub(super) fn build_permission_response(
 }
 
 /// Builds a JSON-RPC `result` payload from one ACP permission decision.
+///
+/// The typed ACP response holds only string identifiers, unit variants, and
+/// string-keyed metadata, so its JSON serialization cannot fail.
 fn build_permission_result_payload(
     request_id: &Value,
     selected_option_id: Option<String>,
 ) -> Value {
-    let outcome =
-        selected_option_id
-            .as_ref()
-            .map_or(RequestPermissionOutcome::Cancelled, |option_id| {
-                RequestPermissionOutcome::Selected(SelectedPermissionOutcome::new(
-                    option_id.clone(),
-                ))
-            });
+    let outcome = selected_option_id.map_or(RequestPermissionOutcome::Cancelled, |option_id| {
+        RequestPermissionOutcome::Selected(SelectedPermissionOutcome::new(option_id))
+    });
     let permission_response = RequestPermissionResponse::new(outcome);
-    let result_value = match serde_json::to_value(permission_response) {
-        Ok(result_value) => result_value,
-        Err(_) => build_permission_result_value_fallback(selected_option_id),
-    };
 
     serde_json::json!({
         "jsonrpc": "2.0",
         "id": request_id,
-        "result": result_value
+        "result": permission_response
     })
-}
-
-/// Builds a fallback ACP permission response result payload from raw values.
-fn build_permission_result_value_fallback(selected_option_id: Option<String>) -> Value {
-    if let Some(option_id) = selected_option_id {
-        serde_json::json!({
-            "outcome": {
-                "outcome": "selected",
-                "optionId": option_id
-            }
-        })
-    } else {
-        serde_json::json!({
-            "outcome": {
-                "outcome": "cancelled"
-            }
-        })
-    }
 }
 
 /// Selects the preferred allow option from typed ACP permission choices.
