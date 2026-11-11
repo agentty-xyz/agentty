@@ -100,8 +100,12 @@ impl AgentBackend for ClaudeBackend {
     }
 }
 
-/// Appends per-turn Claude Code settings that keep known non-session
-/// checkouts read-only.
+/// Appends per-turn Claude Code permission and sandbox settings.
+///
+/// Edit-tool deny rules keep known non-session checkouts read-only. `Auto
+/// Edit` disables Claude Code's command sandbox to match Codex full access, so
+/// commands can use host caches, local ports, PTYs, and container sockets.
+/// `Read Only` keeps a sandbox that denies writes and unsandboxed retries.
 fn append_claude_workspace_settings(
     command: &mut Command,
     workspace_folder: &Path,
@@ -117,31 +121,29 @@ fn append_claude_workspace_settings(
         deny_write_paths.push(main_checkout_root.to_string_lossy().into_owned());
     }
 
-    let allow_write_paths = if permission_mode.is_read_only() {
+    let sandbox = if permission_mode.is_read_only() {
         deny_rules.push(format!(
             "Edit({}/**)",
             claude_absolute_permission_path(workspace_folder)
         ));
         deny_write_paths.push(workspace_folder.to_string_lossy().into_owned());
-        Vec::new()
+
+        serde_json::json!({
+            "enabled": true,
+            "filesystem": {
+                "allowWrite": [],
+                "denyWrite": deny_write_paths,
+            },
+            "network": {
+                "allowedDomains": [],
+                "allowLocalBinding": false,
+                "allowUnixSockets": []
+            },
+            "allowUnsandboxedCommands": false
+        })
     } else {
-        vec![workspace_folder.to_string_lossy().into_owned()]
+        serde_json::json!({ "enabled": false })
     };
-    let mut sandbox = serde_json::json!({
-        "enabled": true,
-        "filesystem": {
-            "allowWrite": allow_write_paths,
-            "denyWrite": deny_write_paths,
-        }
-    });
-    if permission_mode.is_read_only() {
-        sandbox["network"] = serde_json::json!({
-            "allowedDomains": [],
-            "allowLocalBinding": false,
-            "allowUnixSockets": []
-        });
-        sandbox["allowUnsandboxedCommands"] = serde_json::json!(false);
-    }
     let settings = serde_json::json!({
         "fastMode": session::claude_fast_mode(speed_mode),
         "permissions": {

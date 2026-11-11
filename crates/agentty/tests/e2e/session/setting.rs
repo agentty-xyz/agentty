@@ -86,6 +86,51 @@ done
     .await
 }
 
+/// Visible confirmation emitted only when Claude receives Auto Edit settings
+/// that disable Claude Code's command sandbox.
+const CLAUDE_AUTO_EDIT_POLICY_CONFIRMED_TEXT: &str = "Claude Auto Edit unsandboxed policy applied.";
+
+/// Installs a Claude stub that verifies Auto Edit disables the command
+/// sandbox in the per-turn `--settings` payload.
+async fn seed_claude_auto_edit_policy_project(
+    env: &BuilderEnv,
+) -> Result<(), Box<dyn std::error::Error>> {
+    let claude_path = env.stub_bin.join("claude");
+    let script = r#"#!/bin/sh
+if [ "$1" = "update" ]; then exit 0; fi
+if [ "$1" = "--version" ]; then printf 'claude 0.0.0-test\n'; exit 0; fi
+prompt=$(cat)
+answer='Claude policy test title.'
+case "$prompt" in
+  *'Generate a concise, commit-style title'*)
+    ;;
+  *'Verify Claude Auto Edit permissions'*)
+    answer='Claude Auto Edit policy mismatch.'
+    case " $* " in
+      *'"sandbox":{"enabled":false}'*) answer='Claude Auto Edit unsandboxed policy applied.' ;;
+    esac
+    ;;
+esac
+printf '%s\n' '{"type":"system","subtype":"init"}'
+printf '{"type":"assistant","message":{"role":"assistant","content":[{"type":"text","text":"{\\"answer\\":\\"%s\\",\\"questions\\":[]}"}]}}\n' "$answer"
+printf '{"type":"result","subtype":"success","result":"{\"answer\":\"%s\",\"questions\":[]}","usage":{"input_tokens":5,"output_tokens":9}}\n' "$answer"
+"#;
+    std::fs::write(&claude_path, script)?;
+    #[cfg(unix)]
+    std::fs::set_permissions(&claude_path, std::fs::Permissions::from_mode(0o750))?;
+
+    seed_project_settings(
+        env,
+        &[
+            ("DefaultSmartAgent", "claude"),
+            ("DefaultSmartModel", "claude-haiku-4-5-20251001"),
+            ("DefaultFastAgent", "claude"),
+            ("DefaultFastModel", "claude-haiku-4-5-20251001"),
+        ],
+    )
+    .await
+}
+
 /// Seeds a review-ready session with Detailed response style selected so the
 /// semantic run and GIF replay remain idempotent.
 async fn seed_detailed_response_style_session(
@@ -250,6 +295,48 @@ async fn codex_auto_edit_uses_unrestricted_app_server_policy() -> E2eResult {
                         &full,
                     );
                     assertion::assert_not_visible(frame, "Codex Auto Edit policy mismatch.");
+                })
+            },
+        )
+        .await?;
+
+    Ok(())
+}
+
+/// Verify a submitted Claude Auto Edit turn disables Claude Code's command
+/// sandbox and completes visibly through the real session runtime boundary.
+#[tokio::test]
+async fn claude_auto_edit_disables_command_sandbox() -> E2eResult {
+    // Arrange, Act, Assert
+    FeatureTest::new("claude_auto_edit_unsandboxed_policy")
+        .with_git()
+        .setup(|env| Box::pin(async move { seed_claude_auto_edit_policy_project(env).await }))
+        .run(
+            |scenario| {
+                scenario
+                    .compose(&common::wait_for_agentty_startup())
+                    .compose(&common::switch_to_tab("Sessions"))
+                    .press_key("a")
+                    .wait_for_text("Regular", 5000)
+                    .press_key("Enter")
+                    .wait_for_text("· Normal · Auto Edit", 5000)
+                    .write_text("Verify Claude Auto Edit permissions")
+                    .press_key("Enter")
+                    .wait_for_text(CLAUDE_AUTO_EDIT_POLICY_CONFIRMED_TEXT, 30000)
+                    .capture_labeled(
+                        "claude_auto_edit_unsandboxed_policy",
+                        "Claude completes with unsandboxed Auto Edit commands",
+                    )
+            },
+            |frame, _report| {
+                Box::pin(async move {
+                    let full = Region::full(frame.cols(), frame.rows());
+                    assertion::assert_text_in_region(
+                        frame,
+                        CLAUDE_AUTO_EDIT_POLICY_CONFIRMED_TEXT,
+                        &full,
+                    );
+                    assertion::assert_not_visible(frame, "Claude Auto Edit policy mismatch.");
                 })
             },
         )

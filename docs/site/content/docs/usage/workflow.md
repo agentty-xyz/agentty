@@ -607,9 +607,8 @@ a fresh composer, replacing any saved draft. The picker supports fuzzy matching.
 
 `/apply` requires a completed focused review. `/mode` selects:
 
-- **Auto Edit**: Standard editing permissions. Codex has full command access; Claude can
-  retry commands outside its sandbox. Commands are not necessarily confined to the
-  worktree.
+- **Auto Edit**: Standard editing permissions. Codex and Claude have full command
+  access, so commands are not confined to the worktree.
 - **Auto Edit + Auto Address Comments**: The same permissions, plus automatic
   verification and application of focused-review suggestions. Stops when none remain or
   after three application turns. A new prompt or mode selection resets that limit.

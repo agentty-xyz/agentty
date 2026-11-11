@@ -29,7 +29,8 @@ fn test_claude_absolute_permission_path_normalizes_windows_separators() {
 }
 
 #[test]
-/// Verifies Claude sessions allow Agentty's required edit and web tools.
+/// Verifies Claude sessions allow Agentty's required edit and web tools and
+/// run commands without Claude Code's sandbox, matching Codex full access.
 fn test_claude_auto_edit_mode_uses_write_capable_allowed_tools() {
     // Arrange
     let temp_directory = tempdir().expect("failed to create temp dir");
@@ -101,12 +102,9 @@ fn test_claude_auto_edit_mode_uses_write_capable_allowed_tools() {
             .is_some_and(|rule| rule.starts_with("Edit(//") && rule.ends_with("/main/**)"))
     }));
     assert_eq!(
-        settings
-            .pointer("/sandbox/enabled")
-            .and_then(Value::as_bool),
-        Some(true)
+        settings.get("sandbox"),
+        Some(&serde_json::json!({ "enabled": false }))
     );
-    assert!(settings.pointer("/sandbox/network").is_none());
 }
 
 #[test]
@@ -158,6 +156,12 @@ fn test_claude_read_only_mode_uses_plan_tools_and_denies_writes() {
     assert_eq!(flag_value("--permission-mode"), "plan");
     assert!(!CLAUDE_READ_ONLY_TOOLS.contains("Bash"));
     assert!(!CLAUDE_READ_ONLY_TOOLS.contains("Write"));
+    assert_eq!(
+        settings
+            .pointer("/sandbox/enabled")
+            .and_then(Value::as_bool),
+        Some(true)
+    );
     assert_eq!(
         settings.pointer("/sandbox/filesystem/allowWrite"),
         Some(&serde_json::json!([]))
