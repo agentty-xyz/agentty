@@ -15,6 +15,7 @@ use crate::domain::resource::SessionResources;
 use crate::domain::session::{DailyActivity, Session, SessionId};
 use crate::presentation::app_mode::{AppMode, ConfirmationViewMode, HelpContext};
 use crate::presentation::frame_time::FrameTime;
+use crate::presentation::graph_chat::GraphChatSnapshot;
 use crate::presentation::task_chain_graph::TaskChainGraphCache;
 use crate::ui::{RenderCacheStore, component, layout, page, router};
 
@@ -115,6 +116,8 @@ pub struct RenderContext<'a> {
     pub working_dir: &'a Path,
     /// One coherent wall-clock snapshot used by this render pass.
     pub(crate) frame_time: FrameTime,
+    /// Latest graph proposal and execution status for the visible chat.
+    pub(crate) graph_chat: Option<&'a GraphChatSnapshot>,
     /// Latest Agentty process-tree totals shown in the list tab header.
     pub(crate) process_resources: Option<SessionResources>,
     /// Latest explicit project-sync lifecycle state.

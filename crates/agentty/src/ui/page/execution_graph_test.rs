@@ -9,11 +9,72 @@ use ratatui::backend::TestBackend;
 use ratatui::buffer::CellWidth;
 use ratatui::style::Modifier;
 
-use super::{details, gate_label, render, render_details};
+use super::{actions, details, gate_label, render, render_details};
 use crate::domain::input::InputState;
 use crate::presentation::execution_graph::tests::graph_view;
 use crate::presentation::execution_graph::{GraphEditKind, GraphEditor, GraphViewOutput};
 use crate::ui::markdown::MarkdownRenderCache;
+
+#[test]
+fn proposal_inspector_renders_scrollable_details_and_available_actions() {
+    // Arrange
+    let mut view = graph_view();
+    let mut proposal = ag_session::test_support::graph_proposal_state("preview", "sess");
+    proposal.version.outcome = ag_session::GraphProposalVersionOutcome::Generated {
+        launch: Some(Box::new(ag_session::StartExecutionGraphRequest {
+            graph: view.graphs[0].clone(),
+            provider_call_limits: std::collections::BTreeMap::default(),
+        })),
+        response: ag_protocol::GraphProposalResponse {
+            outcome: ag_protocol::GraphProposalOutcome::Proposal {
+                proposal: ag_session::test_support::graph_proposal(),
+            },
+        },
+    };
+    view.proposal = Some(proposal);
+    view.progress = None;
+    let mut terminal = Terminal::new(TestBackend::new(100, 30)).expect("terminal");
+    let markdown = MarkdownRenderCache::default();
+
+    // Act
+    terminal
+        .draw(|frame| render(frame, frame.area(), &view, &markdown))
+        .expect("render");
+
+    // Assert
+    let rendered = (0..30)
+        .map(|row| {
+            (1..99)
+                .map(|column| terminal.backend().buffer()[(column, row)].symbol())
+                .collect::<String>()
+        })
+        .collect::<Vec<_>>()
+        .join(" ");
+    let buffer = rendered.split_whitespace().collect::<Vec<_>>().join(" ");
+    assert!(buffer.contains("Proposal preview v1"));
+    let hint = "reply in chat to approve, revise, or cancel";
+    assert!(buffer.contains(hint), "{buffer}");
+    assert!(!buffer.contains("approve displayed version"), "{buffer}");
+    assert!(details(&view).contains("Captured instructions"));
+    assert_eq!(
+        actions(&view),
+        [
+            "q back",
+            "[/] execution graphs",
+            "r refresh",
+            "J/K scroll",
+            hint
+        ]
+    );
+    view.proposal
+        .as_mut()
+        .expect("proposal")
+        .version
+        .is_cancelled = true;
+    assert!(!actions(&view).contains(&hint));
+    view.is_proposal_selected = false;
+    assert!(actions(&view).contains(&"p proposal"));
+}
 
 #[test]
 fn output_markdown_wraps_once_and_scrolls_styled_rendered_lines() {

@@ -5,6 +5,8 @@ pub mod diff;
 /// Generic saved execution graph inspector.
 pub(crate) mod execution_graph;
 pub mod fyi;
+/// Graph proposal and live execution sidebar beside session chat.
+pub(crate) mod graph_chat;
 /// Project selection and activity list page.
 pub mod project_list;
 /// Session-linked forge-review panels embedded in Diff mode.

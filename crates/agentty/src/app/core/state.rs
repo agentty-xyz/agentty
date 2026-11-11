@@ -61,6 +61,7 @@ use crate::presentation::app_mode::{
     AppMode, ChatFocus, ConfirmationViewMode, DiffLineComments, DiffReviewComments,
     PromptModeSnapshot,
 };
+use crate::presentation::graph_chat::GraphChatCache;
 use crate::presentation::setting::SettingsPresentationState;
 use crate::presentation::task_chain_graph::TaskChainGraphCache;
 
@@ -220,6 +221,8 @@ pub struct App {
     pub(crate) diff_comment_progress: HashMap<SessionId, DiffLineComments>,
     /// Enables the preview `/plan` command that starts an orchestrated chat.
     pub(crate) experimental_multi_agent: bool,
+    /// Latest proposal and execution snapshot for the visible session.
+    pub(crate) graph_chat: GraphChatCache,
     /// Receives app events emitted by background tasks and workflows.
     pub(super) event_rx: mpsc::UnboundedReceiver<AppEvent>,
     /// Whether Agentty was launched from inside a `tmux` session.
@@ -1854,6 +1857,7 @@ impl App {
     /// state.
     pub async fn refresh_sessions_if_needed(&mut self) -> bool {
         self.refresh_task_chain_graph_if_needed();
+        let graph_refreshed = self.refresh_graph_chat_if_needed().await;
         let resources_refreshed = self.sessions.refresh_resources().await;
         let refreshed = self
             .sessions
@@ -1868,7 +1872,7 @@ impl App {
             app::review::hydrate_review_transients(&self.review_cache, self.sessions.state_mut());
         }
 
-        refreshed || resources_refreshed
+        refreshed || resources_refreshed || graph_refreshed
     }
 
     /// Forces immediate session list reload.

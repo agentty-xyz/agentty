@@ -21,6 +21,7 @@ use crate::presentation::app_mode::{
     DiffPreview, DiffReviewComments, DiffSidebarFocus, HelpContext,
 };
 use crate::presentation::frame_time::FrameTime;
+use crate::presentation::graph_chat::GraphChatSnapshot;
 use crate::presentation::prompt::{PromptAttachmentState, PromptHistoryState, PromptSlashState};
 use crate::presentation::setting::{
     LaunchConfigurationListEditorMode, LaunchConfigurationListEditorSnapshot,
@@ -221,6 +222,7 @@ fn render_list_backed_mode(mode: &AppMode) -> (bool, String) {
                     session_worktree_availability: &session_worktree_availability,
                     frame_time: FrameTime::new(90, 90_000, -28_800),
                     task_chain_graphs: &TaskChainGraphCache::default(),
+                    graph_chat: None,
                 },
             );
             render_mode_overlay(
@@ -241,6 +243,7 @@ fn render_list_backed_mode(mode: &AppMode) -> (bool, String) {
                     session_worktree_availability: &session_worktree_availability,
                     frame_time: FrameTime::new(90, 90_000, -28_800),
                     task_chain_graphs: &TaskChainGraphCache::default(),
+                    graph_chat: None,
                 },
             );
             handled = true;
@@ -560,46 +563,29 @@ fn render_help_mode_restores_markdown_diff_preview_background() {
     let mut handled = false;
     terminal
         .draw(|frame| {
+            let resources = FrameResources {
+                active_prompt_outputs: &HashMap::new(),
+                diff_layout_cache: &diff_layout_cache,
+                is_tmux_session: true,
+                markdown_render_cache: &markdown_render_cache,
+                output_layout_cache: &output_layout_cache,
+                review_snapshot: None,
+                session_git_statuses: &HashMap::new(),
+                session_progress_messages: &HashMap::new(),
+                session_update_versions: &HashMap::new(),
+                session_worktree_availability: &HashMap::new(),
+                frame_time: FrameTime::new(0, 0, 0),
+                task_chain_graphs: &TaskChainGraphCache::default(),
+                graph_chat: None,
+            };
             render_surface(
                 frame,
                 frame.area(),
                 surface_for_mode(&mode),
                 &mut shared,
-                FrameResources {
-                    active_prompt_outputs: &HashMap::new(),
-                    diff_layout_cache: &diff_layout_cache,
-                    is_tmux_session: true,
-                    markdown_render_cache: &markdown_render_cache,
-                    output_layout_cache: &output_layout_cache,
-                    review_snapshot: None,
-                    session_git_statuses: &HashMap::new(),
-                    session_progress_messages: &HashMap::new(),
-                    session_update_versions: &HashMap::new(),
-                    session_worktree_availability: &HashMap::new(),
-                    frame_time: FrameTime::new(0, 0, 0),
-                    task_chain_graphs: &TaskChainGraphCache::default(),
-                },
+                resources,
             );
-            render_mode_overlay(
-                frame,
-                frame.area(),
-                &mode,
-                &shared,
-                FrameResources {
-                    active_prompt_outputs: &HashMap::new(),
-                    diff_layout_cache: &diff_layout_cache,
-                    is_tmux_session: true,
-                    markdown_render_cache: &markdown_render_cache,
-                    output_layout_cache: &output_layout_cache,
-                    review_snapshot: None,
-                    session_git_statuses: &HashMap::new(),
-                    session_progress_messages: &HashMap::new(),
-                    session_update_versions: &HashMap::new(),
-                    session_worktree_availability: &HashMap::new(),
-                    frame_time: FrameTime::new(0, 0, 0),
-                    task_chain_graphs: &TaskChainGraphCache::default(),
-                },
-            );
+            render_mode_overlay(frame, frame.area(), &mode, &shared, resources);
             handled = true;
         })
         .expect("failed to draw diff help mode");
@@ -793,6 +779,11 @@ fn render_session_surface_renders_view_session_content() {
     let backend = ratatui::backend::TestBackend::new(120, 30);
     let mut terminal = ratatui::Terminal::new(backend).expect("failed to create terminal");
     let session_id = "session-1234";
+    let graph_chat = GraphChatSnapshot {
+        error: None,
+        progress: None,
+        proposal: ag_session::test_support::graph_proposal_state("proposal", session_id),
+    };
     let sessions = vec![session_fixture(session_id)];
     let mode = AppMode::View {
         session_id: session_id.into(),
@@ -838,6 +829,7 @@ fn render_session_surface_renders_view_session_content() {
                     )]),
                     frame_time: FrameTime::new(0, 0, 0),
                     task_chain_graphs: &TaskChainGraphCache::default(),
+                    graph_chat: Some(&graph_chat),
                 },
             );
         })
@@ -846,6 +838,7 @@ fn render_session_surface_renders_view_session_content() {
     // Assert
     let text = buffer_text(terminal.backend().buffer());
     assert!(text.contains("Router Session"));
+    assert!(text.contains("Execution graph"));
     assert!(text.contains("Captured output"));
     assert!(text.contains("Merge conflict with main"));
     assert!(!text.contains("o: open"));
@@ -892,6 +885,7 @@ fn render_session_surface_keeps_background_when_session_is_missing() {
                     session_worktree_availability: &HashMap::new(),
                     frame_time: FrameTime::new(0, 0, 0),
                     task_chain_graphs: &TaskChainGraphCache::default(),
+                    graph_chat: None,
                 },
             );
         })
@@ -951,6 +945,7 @@ fn render_diff_surface_renders_page_for_matching_session() {
                     session_worktree_availability: &HashMap::new(),
                     frame_time: FrameTime::new(0, 0, 0),
                     task_chain_graphs: &TaskChainGraphCache::default(),
+                    graph_chat: None,
                 },
             );
         })
@@ -1006,6 +1001,7 @@ fn render_diff_surface_preserves_frame_for_missing_session() {
                     session_worktree_availability: &HashMap::new(),
                     frame_time: FrameTime::new(0, 0, 0),
                     task_chain_graphs: &TaskChainGraphCache::default(),
+                    graph_chat: None,
                 },
             );
         })
@@ -1066,6 +1062,7 @@ fn render_diff_surface_renders_linked_comments_for_matching_session() {
                     session_worktree_availability: &HashMap::new(),
                     frame_time: FrameTime::new(0, 0, 0),
                     task_chain_graphs: &TaskChainGraphCache::default(),
+                    graph_chat: None,
                 },
             );
         })

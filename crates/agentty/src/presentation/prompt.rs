@@ -1,7 +1,7 @@
 pub use crate::domain::composer::{
     PendingImagePaste, PromptAttachment, PromptAttachmentState, PromptComposerState,
-    PromptComposerSubmission, PromptHistoryState, PromptSlashStage, PromptSlashState,
-    PromptSuggestionItem, PromptSuggestionList, PromptSuggestionSelection,
+    PromptComposerSubmission, PromptGraphState, PromptHistoryState, PromptSlashStage,
+    PromptSlashState, PromptSuggestionItem, PromptSuggestionList, PromptSuggestionSelection,
     apply_prompt_delete_range, build_prompt_slash_suggestion_list, current_line_delete_range,
     drain_prompt_submission, expand_delete_range_to_image_tokens, image_token_ranges,
     insert_prompt_character, insert_prompt_local_image_at, insert_prompt_text,

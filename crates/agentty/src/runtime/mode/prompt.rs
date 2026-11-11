@@ -490,7 +490,9 @@ fn prompt_context(app: &mut App) -> Option<PromptContext> {
             ..
         } => (
             is_active_at_mention(at_mention_state.as_ref(), input),
-            input.text().starts_with('/') && !slash_state.is_plan_armed,
+            input.text().starts_with('/')
+                && !slash_state.is_plan_armed
+                && !slash_state.graph.is_armed(),
             *scroll_offset,
             session_id.clone(),
         ),
@@ -806,9 +808,7 @@ async fn handle_prompt_submit_key(app: &mut App, prompt_context: &PromptContext)
         return;
     }
 
-    let is_graph_command = matches!(&app.mode, AppMode::Prompt { input, .. }
-        if input.text().trim().strip_prefix("/graph").is_some_and(|remainder| remainder.is_empty() || remainder.starts_with(char::is_whitespace)));
-    if prompt_context.is_slash_command() && !is_graph_command {
+    if prompt_context.is_slash_command() {
         handle_prompt_slash_submit(app, prompt_context).await;
 
         return;
@@ -822,7 +822,7 @@ async fn handle_prompt_submit_key(app: &mut App, prompt_context: &PromptContext)
         return;
     }
 
-    let (composer, is_plan_armed) = match &app.mode {
+    let (composer, is_plan_armed, is_graph_armed) = match &app.mode {
         AppMode::Prompt {
             input,
             attachment_state,
@@ -831,8 +831,9 @@ async fn handle_prompt_submit_key(app: &mut App, prompt_context: &PromptContext)
         } => (
             Some((input.clone(), attachment_state.clone())),
             slash_state.is_plan_armed,
+            slash_state.graph.is_armed(),
         ),
-        _ => (None, false),
+        _ => (None, false, false),
     };
     let (prompt, archived_attachments) = take_submitted_turn_prompt(&mut app.mode);
     let submission = PromptSubmission {
@@ -842,6 +843,8 @@ async fn handle_prompt_submit_key(app: &mut App, prompt_context: &PromptContext)
     };
     let outcome = if is_plan_armed {
         app.submit_plan_request(submission).await
+    } else if is_graph_armed {
+        app.submit_graph_request(submission).await
     } else {
         app.submit_prompt(submission).await
     };
@@ -895,9 +898,10 @@ async fn handle_prompt_cancel_key(app: &mut App, prompt_context: &PromptContext)
         return;
     }
     if let AppMode::Prompt { slash_state, .. } = &mut app.mode
-        && slash_state.is_plan_armed
+        && (slash_state.is_plan_armed || slash_state.graph.is_armed())
     {
         slash_state.is_plan_armed = false;
+        slash_state.graph.disarm();
 
         return;
     }
@@ -938,8 +942,8 @@ async fn handle_prompt_slash_submit(app: &mut App, prompt_context: &PromptContex
                 session_agent_kind,
                 allow_apply_command,
             );
-            if matches!(selection, Some(PromptSuggestionSelection::Command("/plan"))) {
-                slash_state.is_plan_armed = true;
+            if let Some(PromptSuggestionSelection::Command(command)) = selection {
+                slash_state.arm_workflow(command);
             }
 
             selection
@@ -947,7 +951,7 @@ async fn handle_prompt_slash_submit(app: &mut App, prompt_context: &PromptContex
         _ => None,
     };
     match selection {
-        Some(PromptSuggestionSelection::Command("/plan")) => {
+        Some(PromptSuggestionSelection::Command("/plan" | "/graph")) => {
             clear_prompt_slash_input(app).await;
         }
         Some(PromptSuggestionSelection::Command("/apply")) => {

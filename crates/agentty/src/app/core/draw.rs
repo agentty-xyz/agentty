@@ -5,6 +5,7 @@ use crate::app::tab::Tab;
 use crate::domain::agent::AgentKind;
 use crate::domain::session::{Session, Status};
 use crate::presentation::app_mode::{AppMode, ConfirmationViewMode, HelpContext};
+use crate::presentation::prompt::PromptGraphState;
 
 impl App {
     /// Returns the active project identifier.
@@ -60,6 +61,11 @@ impl App {
         if is_harness_session {
             slash_state.harness_models = self.services.harness_model_options();
         }
+        slash_state.graph = if self.experimental_multi_agent {
+            PromptGraphState::Available
+        } else {
+            PromptGraphState::Disabled
+        };
         slash_state.allow_plan_command =
             self.experimental_multi_agent && !self.session_shows_task_chain(session_id);
 

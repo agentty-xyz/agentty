@@ -2,10 +2,10 @@
 
 use std::collections::{BTreeMap, BTreeSet};
 
-use ag_protocol::{ProtocolRequestProfile, parse_protocol_response_strict};
+use ag_protocol::{ProtocolRequestProfile, QuestionItem, parse_protocol_response_strict};
 use ag_session::{
     ExecutionGraph, ExecutionGraphProgress, ExecutionGraphStatus, GraphContext, GraphNodeProgress,
-    GraphNodeStatus, GraphResult, GraphResultState, GraphWorkspaceAccess,
+    GraphNodeStatus, GraphProposalState, GraphResult, GraphResultState, GraphWorkspaceAccess,
 };
 
 use super::app_mode::ConfirmationViewMode;
@@ -19,6 +19,8 @@ pub struct GraphView {
     pub(crate) editor: Option<GraphEditor>,
     /// Current persisted graph definitions in creation order.
     pub(crate) graphs: Vec<ExecutionGraph>,
+    /// Selects the proposal instead of a launched execution graph.
+    pub(crate) is_proposal_selected: bool,
     /// Most recent action or refresh diagnostic.
     pub(crate) notice: String,
     /// Vertical offset in the editor's wrapped diagnostic.
@@ -27,6 +29,8 @@ pub struct GraphView {
     pub(crate) outputs: Vec<GraphViewOutput>,
     /// Latest authoritative projection for the selected graph.
     pub(crate) progress: Option<ExecutionGraphProgress>,
+    /// Latest retained proposal, shown read-only; chat replies act on it.
+    pub(crate) proposal: Option<GraphProposalState>,
     /// Original live limits, or empty after restart; refresh replaces this
     /// hint.
     pub(crate) resume_limits: String,
@@ -47,10 +51,12 @@ impl GraphView {
         Self {
             editor: None,
             graphs: Vec::new(),
+            is_proposal_selected: true,
             notice: String::new(),
             notice_scroll: 0,
             outputs: Vec::new(),
             progress: None,
+            proposal: None,
             resume_limits: String::new(),
             restore,
             scroll: 0,
@@ -61,7 +67,20 @@ impl GraphView {
     }
 
     pub(crate) fn graph(&self) -> Option<&ExecutionGraph> {
+        if self.selected_proposal().is_some() {
+            return None;
+        }
         self.graphs.get(self.selected_graph)
+    }
+
+    pub(crate) fn selected_proposal(&self) -> Option<&GraphProposalState> {
+        self.proposal.as_ref().filter(|_| self.is_proposal_selected)
+    }
+
+    /// Questions of the selected node; proposal clarifications are answered
+    /// in chat.
+    pub(crate) fn questions(&self) -> &[QuestionItem] {
+        self.node().map_or(&[], |node| node.questions.as_slice())
     }
 
     pub(crate) fn node(&self) -> Option<&GraphNodeProgress> {

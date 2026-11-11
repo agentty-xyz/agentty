@@ -14,6 +14,7 @@ use crate::domain::theme::ColorTheme;
 use crate::infra::clock::{self, Clock};
 use crate::presentation::app_mode::{AppMode, HelpContext};
 use crate::presentation::frame_time::FrameTime;
+use crate::presentation::graph_chat::GraphChatSnapshot;
 use crate::presentation::setting::SettingsScreenSnapshot;
 use crate::presentation::task_chain_graph::TaskChainGraphCache;
 
@@ -39,6 +40,7 @@ pub(crate) struct AppViewSnapshot<'a> {
     pub(crate) git_branch: Option<&'a str>,
     pub(crate) git_status: Option<(u32, u32)>,
     pub(crate) git_upstream_ref: Option<&'a str>,
+    pub(crate) graph_chat: Option<&'a GraphChatSnapshot>,
     /// Whether this launch offers Harness sessions.
     pub(crate) harness_availability: HarnessAvailability,
     /// Whether the session list has an archive pagination action.
@@ -129,6 +131,7 @@ impl App {
             stats_activity: sessions.stats_activity,
             status_bar_fyi_rotation_index,
             task_chain_graphs: &self.task_chain_graphs,
+            graph_chat: visible_session_id.and_then(|id| self.graph_chat.snapshot(id)),
             theme: self.settings.theme,
             update_status: self.update_status.as_ref(),
             working_dir: project.working_dir,

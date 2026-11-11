@@ -455,6 +455,23 @@ impl SessionService {
             .await
     }
 
+    /// Regenerates with user feedback added to the generation history,
+    /// within the original captured generation ceiling.
+    ///
+    /// # Errors
+    /// Returns stale-version, empty-feedback, approved-proposal, or
+    /// exhausted-limit errors.
+    pub async fn revise_graph_proposal(
+        &self,
+        id: &str,
+        version: u32,
+        feedback: String,
+    ) -> Result<(), SessionError> {
+        self.backend
+            .act_on_graph_proposal(id, version, crate::GraphProposalAction::Revise(feedback))
+            .await
+    }
+
     /// Approves the exact preview before dispatch. Redelivery never dispatches.
     ///
     /// # Errors

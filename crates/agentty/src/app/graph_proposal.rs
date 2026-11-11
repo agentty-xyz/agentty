@@ -194,6 +194,7 @@ impl App {
             .await
             .map_err(proposal_error)?
         {
+            self.graph_chat.invalidate();
             self.spawn_graph_proposal_generation(state, folder);
         }
 
@@ -279,7 +280,9 @@ impl App {
                     self.start_api_execution_graph(*launch).await?;
                 }
             }
-            GraphProposalAction::Answer(_) | GraphProposalAction::Regenerate => {
+            GraphProposalAction::Answer(_)
+            | GraphProposalAction::Regenerate
+            | GraphProposalAction::Revise(_) => {
                 let folder = self
                     .sessions
                     .session_for_id(&state.input.session_id)
@@ -368,7 +371,7 @@ impl App {
                 completed.version.outcome = outcome;
                 SessionTaskService::append_workflow_notice(
                     &transcript, services.db(), &services.event_sender(), &services.session_update_versions(),
-                    &state.input.session_id, &crate::app::graph_proposal_chat::proposal_preview(&completed),
+                    &state.input.session_id, &crate::presentation::graph_chat::proposal_chat_notice(&completed),
                 ).await;
             }
             services.wake_graphs();

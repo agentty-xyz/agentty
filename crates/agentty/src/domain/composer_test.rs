@@ -5,7 +5,7 @@ use ag_session::test_support as model_fixture;
 
 use super::{
     PendingImagePaste, PromptAttachment, PromptAttachmentState, PromptComposerState,
-    PromptHistoryState, PromptSlashStage, PromptSlashState, PromptSuggestionItem,
+    PromptGraphState, PromptHistoryState, PromptSlashStage, PromptSlashState, PromptSuggestionItem,
     PromptSuggestionList, PromptSuggestionSelection, build_prompt_slash_suggestion_list,
     current_line_delete_range, drain_prompt_submission, insert_prompt_local_image,
     insert_prompt_local_image_at, needs_space_after_image_placeholder, prompt_slash_option_count,
@@ -925,6 +925,41 @@ fn plan_command_availability_keeps_rendering_selection_and_navigation_aligned() 
             enabled.then_some(PromptSuggestionSelection::Command("/plan"))
         );
         assert_eq!(count, usize::from(enabled));
+    }
+}
+
+#[test]
+fn graph_command_availability_keeps_menu_and_selection_aligned() {
+    for enabled in [false, true] {
+        // Arrange
+        let slash_state = PromptSlashState {
+            graph: if enabled {
+                PromptGraphState::Available
+            } else {
+                PromptGraphState::Disabled
+            },
+            ..PromptSlashState::default()
+        };
+
+        // Act
+        let menu = build_prompt_slash_suggestion_list("/", &slash_state, AgentKind::Codex, false)
+            .expect("slash menu");
+        let selection =
+            resolve_prompt_slash_selection("/graph", &slash_state, AgentKind::Codex, false);
+
+        // Assert
+        assert_eq!(
+            menu.items.iter().any(|item| item.label == "/graph"),
+            enabled
+        );
+        assert_eq!(
+            selection,
+            enabled.then_some(PromptSuggestionSelection::Command("/graph"))
+        );
+        assert_eq!(
+            prompt_slash_option_count("/graph", &slash_state, AgentKind::Codex, false),
+            usize::from(enabled)
+        );
     }
 }
 

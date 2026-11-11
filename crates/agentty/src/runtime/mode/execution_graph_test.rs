@@ -1,5 +1,7 @@
 use ag_protocol::QuestionItem;
-use ag_session::{ExecutionGraphStatus, GraphNodeContinuation, GraphNodeStatus};
+use ag_session::{
+    ExecutionGraphStatus, GraphNodeContinuation, GraphNodeStatus, GraphProposalVersionOutcome,
+};
 use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
 
 use super::{GraphKeyAction, open_editor, resolve_editor_key, resolve_key};
@@ -10,6 +12,47 @@ use crate::presentation::execution_graph::{GraphEditKind, GraphView};
 
 fn key(view: &mut GraphView, code: KeyCode) -> GraphKeyAction {
     resolve_key(view, KeyEvent::new(code, KeyModifiers::NONE))
+}
+
+#[test]
+fn proposal_selection_is_read_only_and_ignores_former_action_keys() {
+    // Arrange
+    let mut view = graph_view();
+    let mut proposal = ag_session::test_support::graph_proposal_state("preview", "sess");
+    proposal.version.outcome = GraphProposalVersionOutcome::Generated {
+        launch: None,
+        response: ag_protocol::GraphProposalResponse {
+            outcome: ag_protocol::GraphProposalOutcome::Clarification {
+                questions: vec![QuestionItem::new("Target?")],
+            },
+        },
+    };
+    view.proposal = Some(proposal);
+    view.progress = None;
+    let inspected = view.clone();
+
+    // Act
+    let actions: Vec<GraphKeyAction> = ['a', 'g', 'n', 'x', 'e', 't', 's']
+        .into_iter()
+        .map(|code| key(&mut view, KeyCode::Char(code)))
+        .collect();
+    key(&mut view, KeyCode::Char(']'));
+    let deselected = view.is_proposal_selected;
+    let reselected = key(&mut view, KeyCode::Char('p'));
+
+    // Assert
+    assert!(
+        actions
+            .iter()
+            .all(|action| matches!(action, GraphKeyAction::None))
+    );
+    assert!(inspected.graph().is_none());
+    assert_eq!(inspected.questions(), []);
+    assert!(!deselected);
+    assert!(matches!(reselected, GraphKeyAction::Refresh));
+    assert!(view.is_proposal_selected);
+    assert!(view.editor.is_none());
+    assert!(!view.can_reconcile_editor(&view.clone()));
 }
 
 #[test]

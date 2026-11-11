@@ -243,6 +243,78 @@ async fn graph_proposal_clarification_versions_limits_and_cancellation_are_durab
     Ok(())
 }
 
+#[tokio::test]
+async fn graph_proposal_revision_records_feedback_with_open_questions() -> Result<(), Box<dyn Error>>
+{
+    // Arrange
+    let database = Database::in_memory().await?;
+    seed(&database).await?;
+    let mut state = graph_proposal_state("preview", "session");
+    state.limits.generations = 4;
+    database.graph_proposals().create(&state).await?;
+    let clarification = GraphProposalVersionOutcome::Generated {
+        launch: None,
+        response: GraphProposalResponse {
+            outcome: GraphProposalOutcome::Clarification {
+                questions: vec![QuestionItem::new("Which target?")],
+            },
+        },
+    };
+    database
+        .graph_proposals()
+        .finish("preview", 1, &clarification)
+        .await?;
+    let empty = database
+        .graph_proposals()
+        .reserve("preview", 1, &GraphProposalAction::Revise(" ".into()))
+        .await;
+
+    // Act
+    let answered = database
+        .graph_proposals()
+        .reserve(
+            "preview",
+            1,
+            &GraphProposalAction::Revise("The local one".into()),
+        )
+        .await?;
+    database
+        .graph_proposals()
+        .finish("preview", 2, &resolved(&answered)?)
+        .await?;
+    let revised = database
+        .graph_proposals()
+        .reserve(
+            "preview",
+            2,
+            &GraphProposalAction::Revise("Add a test node".into()),
+        )
+        .await?;
+    let superseded = database
+        .graph_proposals()
+        .reserve(
+            "preview",
+            3,
+            &GraphProposalAction::Revise("Also lint".into()),
+        )
+        .await?;
+
+    // Assert
+    assert!(empty.is_err());
+    assert_eq!(
+        answered.version.answers,
+        [r#"{"questions":["Which target?"],"reply":"The local one"}"#]
+    );
+    assert_eq!(revised.version.number, 3);
+    assert_eq!(
+        revised.version.answers[1],
+        r#"{"feedback":"Add a test node"}"#
+    );
+    assert_eq!(superseded.version.answers[2], r#"{"feedback":"Also lint"}"#);
+
+    Ok(())
+}
+
 async fn assert_incomplete_answers_rejected(database: &Database) {
     for action in [
         GraphProposalAction::Answer(vec![]),
@@ -410,6 +482,30 @@ async fn graph_proposal_actions_reject_missing_and_incomplete_captures()
                 .contains(expected)
         );
     }
+
+    Ok(())
+}
+
+#[tokio::test]
+async fn graph_proposal_latest_loads_only_the_newest_session_proposal() -> Result<(), Box<dyn Error>>
+{
+    // Arrange
+    let database = Database::in_memory().await?;
+    seed(&database).await?;
+    let first = graph_proposal_state("first", "session");
+    let second = graph_proposal_state("second", "session");
+
+    // Act
+    let empty = database.graph_proposals().latest("session").await?;
+    database.graph_proposals().create(&first).await?;
+    database.graph_proposals().create(&second).await?;
+    let latest = database.graph_proposals().latest("session").await?;
+    let other = database.graph_proposals().latest("other").await?;
+
+    // Assert
+    assert!(empty.is_none());
+    assert_eq!(latest, Some(second));
+    assert!(other.is_none());
 
     Ok(())
 }

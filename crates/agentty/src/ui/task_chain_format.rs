@@ -172,7 +172,9 @@ pub(crate) fn composer_placeholder(graph: &TaskChainGraph) -> String {
 }
 
 /// Returns the glyph and label spans for one node status.
-fn status_spans(status: TaskChainNodeStatus) -> [Span<'static>; 2] {
+///
+/// Shared with the `/graph` sidebar so both graph views use one status style.
+pub(crate) fn status_spans(status: TaskChainNodeStatus) -> [Span<'static>; 2] {
     let (glyph, color) = status_glyph(status);
     let style = Style::default().fg(color);
 
@@ -180,6 +182,11 @@ fn status_spans(status: TaskChainNodeStatus) -> [Span<'static>; 2] {
         Span::styled(format!("{glyph} "), style),
         Span::styled(status.label(), style),
     ]
+}
+
+/// Returns the rendered width of one status glyph plus label.
+pub(crate) fn status_label_width(status: TaskChainNodeStatus) -> usize {
+    status_glyph(status).0.width() + 1 + status.label().width()
 }
 
 /// Returns the per-status glyph and semantic color.
@@ -193,11 +200,6 @@ fn status_glyph(status: TaskChainNodeStatus) -> (&'static str, Color) {
         TaskChainNodeStatus::Failed => ("✗", style::palette::danger()),
         TaskChainNodeStatus::Canceled => ("⊘", style::palette::text_subtle()),
     }
-}
-
-/// Returns the rendered width of one status glyph plus label.
-fn status_label_width(status: TaskChainNodeStatus) -> usize {
-    status_glyph(status).0.width() + 1 + status.label().width()
 }
 
 fn muted_style() -> Style {

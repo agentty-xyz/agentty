@@ -195,8 +195,9 @@ impl App {
     /// Routes one presentation-owned prompt submission through the matching
     /// session workflow and returns the requested navigation effect.
     ///
-    /// Sessions that own a task chain send the message to its orchestrator
-    /// instead of starting an ordinary turn.
+    /// A session's pending graph proposal receives the message as a reply
+    /// first; otherwise sessions that own a task chain send it to their
+    /// orchestrator instead of starting an ordinary turn.
     pub(crate) async fn submit_prompt(
         &mut self,
         submission: PromptSubmission,
@@ -208,10 +209,6 @@ impl App {
         } = submission;
         if prompt.is_empty() {
             return PromptWorkflowOutcome::KeepPrompt;
-        }
-
-        if let Some(outcome) = self.submit_graph_command(&session_id, &prompt).await {
-            return outcome;
         }
 
         if session_mode == PromptSessionMode::NewDraft
@@ -232,6 +229,9 @@ impl App {
             return PromptWorkflowOutcome::KeepPrompt;
         }
         if session_mode != PromptSessionMode::NewDraft {
+            if let Some(outcome) = self.submit_graph_proposal_reply(&session_id, &prompt).await {
+                return outcome;
+            }
             if let Some(outcome) = self.submit_task_chain_prompt(&session_id, &prompt).await {
                 return outcome;
             }

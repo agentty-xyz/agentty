@@ -142,6 +142,11 @@ impl ChatScrollMetrics {
         terminal_size: Rect,
     ) -> Self {
         let page_area = layout::app_frame_areas(terminal_size).content_area;
+        let (page_area, _) = crate::ui::page::graph_chat::areas(
+            page_area,
+            &app.mode,
+            app.graph_chat.snapshot(session_id).is_some(),
+        );
         let session = app.sessions.session_at(session_index);
         let output_width = page_area.width.saturating_sub(2);
         let (_, review_text) = app.review_view_state(session_id);

@@ -338,53 +338,17 @@ async fn assert_changed_permission_rejected(app: &mut crate::app::App) {
 }
 
 #[tokio::test]
-async fn graph_proposal_composer_routes_inspected_actions_and_retains_invalid_drafts() {
-    for command in [
-        "plain",
-        "/graphish",
-        "/graph",
-        "/graph query",
-        "/graph query preview",
-        "/graph query missing",
-        "/graph approve",
-        "/graph approve preview",
-        "/graph approve preview nope",
-        "/graph approve preview 1",
-        "/graph answer preview 1",
-        "/graph answer preview 1 {",
-        "/graph answer preview 1 [\"Local\"]",
-        "/graph answer\t preview  1  [\"Local  only\"]",
-        "/graph regenerate preview 1",
+async fn graph_mode_submits_literal_requests_without_subcommands() {
+    for text in [
+        "Inspect",
+        "query the architecture",
+        "approve the design",
         "/graph cancel preview 1",
-        "/graph new",
-        "/graph new named Inspect",
-        "/graph Inspect",
     ] {
         // Arrange
         let (mut app, _directory) = new_test_app().await;
         seed_session(&mut app.sessions, app.services.db()).await;
         app.experimental_multi_agent = true;
-        let state = graph_proposal_state("preview", "sess");
-        app.services
-            .db()
-            .graph_proposals()
-            .create(&state)
-            .await
-            .expect("capture");
-        let clarification = GraphProposalVersionOutcome::Generated {
-            launch: None,
-            response: GraphProposalResponse {
-                outcome: GraphProposalOutcome::Clarification {
-                    questions: vec![ag_protocol::QuestionItem::new("Target?")],
-                },
-            },
-        };
-        app.services
-            .db()
-            .graph_proposals()
-            .finish("preview", 1, &clarification)
-            .await
-            .expect("questions");
         let mut client = MockRunClient::new();
         client.expect_submit().times(0..=1).returning(|_| {
             Ok(OneShotSubmission {
@@ -403,37 +367,59 @@ async fn graph_proposal_composer_routes_inspected_actions_and_retains_invalid_dr
 
         // Act
         let outcome = app
-            .submit_graph_command(
-                &SessionId::from("sess"),
-                &ag_protocol::TurnPrompt::from_text(command.into()),
-            )
+            .submit_graph_request(crate::app::prompt_intent::PromptSubmission {
+                session_id: SessionId::from("sess"),
+                session_mode: crate::app::prompt_intent::PromptSessionMode::Existing,
+                prompt: ag_protocol::TurnPrompt::from_text(text.into()),
+            })
             .await;
 
         // Assert
-        let is_command = !["plain", "/graphish"].contains(&command);
-        assert_eq!(outcome.is_some(), is_command, "{command}");
-        let valid = [
-            "/graph",
-            "/graph query",
-            "/graph query preview",
-            "/graph answer preview 1 [\"Local\"]",
-            "/graph answer\t preview  1  [\"Local  only\"]",
-            "/graph regenerate preview 1",
-            "/graph cancel preview 1",
-            "/graph new named Inspect",
-            "/graph Inspect",
-        ]
-        .contains(&command);
-        assert_eq!(
-            matches!(
-                outcome,
-                Some(crate::app::prompt_intent::PromptWorkflowOutcome::ShowSession { .. })
-            ),
-            valid,
-            "{command}"
-        );
+        assert!(matches!(
+            outcome,
+            crate::app::prompt_intent::PromptWorkflowOutcome::ShowSession { .. }
+        ));
+        let states = app
+            .services
+            .db()
+            .graph_proposals()
+            .list(&SessionId::from("sess"))
+            .await
+            .expect("proposals");
+        assert_eq!(states.len(), 1);
+        assert_eq!(states[0].input.request.text, text);
         app.services.wait_for_cleanup_tasks(None).await;
     }
+}
+
+#[tokio::test]
+async fn created_proposal_refreshes_an_empty_graph_sidebar_without_a_session_update() {
+    // Arrange
+    let (mut app, _directory) = new_test_app().await;
+    seed_session(&mut app.sessions, app.services.db()).await;
+    app.experimental_multi_agent = true;
+    let mut client = MockRunClient::new();
+    client
+        .expect_submit()
+        .times(0..=1)
+        .returning(|_| Err(OneShotError::new("offline")));
+    app.services.set_run_client(Arc::new(client));
+    let now = std::time::Instant::now();
+    app.graph_chat.complete("sess".into(), 0, now, Ok(None));
+    let request = ag_session::GenerateGraphProposalRequest {
+        id: "api-preview".into(),
+        request: ag_protocol::TurnPrompt::from_text("Inspect".into()),
+        session_id: "sess".into(),
+    };
+
+    // Act
+    app.generate_api_graph_proposal(request)
+        .await
+        .expect("generation admitted");
+
+    // Assert
+    assert!(app.graph_chat.needs_refresh("sess", 0, now));
+    app.services.wait_for_cleanup_tasks(None).await;
 }
 
 #[tokio::test]
@@ -685,19 +671,19 @@ fn graph_proposal_preview_explains_outcomes_and_separates_output_acceptance() {
         }
 
         // Act
-        let preview = crate::app::graph_proposal_chat::proposal_preview(&state);
+        let preview = crate::presentation::graph_chat::proposal_preview(&state);
 
         // Assert
         assert!(preview.contains("Graph proposal preview v1"));
         assert!(preview.contains("Limits:"));
         let expected = match case {
-            "generating" => "Query never restarts generation",
+            "generating" => "sidebar updates automatically",
             "failed" => "Unavailable",
             "cancelled" => "Cancelled",
             "approved" => "output acceptance remains separate",
-            "questions" => "/graph answer preview 1",
-            "proposal" => "/graph approve preview 1",
-            _ => "/graph cancel preview 1",
+            "questions" => "Clarification required",
+            "proposal" => "Preview awaiting exact-version approval",
+            _ => "Reply in chat to approve, revise, or cancel",
         };
         assert!(preview.contains(expected), "{case}");
         if case == "proposal" {
