@@ -66,25 +66,25 @@ explicit expectations so fixture reuse does not hide changes to those contracts.
 
 <a id="architecture-testability-boundaries"></a> Major injectable contracts:
 
-| Boundary                         | Contract                        |
-| -------------------------------- | ------------------------------- |
-| Git and worktrees                | `GitClient`                     |
-| Filesystem and path probes       | `FsClient`                      |
-| Session turns                    | `AgentChannel`                  |
-| Isolated model calls             | `OneShotClient`                 |
-| Provider setup                   | `AgentBackend`                  |
-| Provider runtime lifecycle       | `AppServerClient`               |
-| Forge requests and comments      | `ReviewRequestClient`           |
-| Programmatic session lifecycle   | `SessionBackend`                |
-| Terminal events                  | `EventSource`                   |
-| Wall and monotonic time          | `Clock`                         |
-| Worktree launch commands         | `TmuxClient`                    |
-| Clipboard capture                | `ClipboardImageClient`          |
-| Browser sign-in pages            | `BrowserClient`                 |
-| Workspace agents                 | `AgentCatalogClient`            |
-| Process and temperature sampling | `ResourceClient`                |
-| Persistence                      | Repository traits in `ag-store` |
-| Storage timestamps               | `TimestampSource`               |
+| Boundary                       | Contract                        |
+| ------------------------------ | ------------------------------- |
+| Git and worktrees              | `GitClient`                     |
+| Filesystem and path probes     | `FsClient`                      |
+| Session turns                  | `AgentChannel`                  |
+| Isolated model calls           | `OneShotClient`                 |
+| Provider setup                 | `AgentBackend`                  |
+| Provider runtime lifecycle     | `AppServerClient`               |
+| Forge requests and comments    | `ReviewRequestClient`           |
+| Programmatic session lifecycle | `SessionBackend`                |
+| Terminal events                | `EventSource`                   |
+| Wall and monotonic time        | `Clock`                         |
+| Worktree launch commands       | `TmuxClient`                    |
+| Clipboard capture              | `ClipboardImageClient`          |
+| Browser sign-in pages          | `BrowserClient`                 |
+| Workspace agents               | `AgentCatalogClient`            |
+| Process sampling               | `ResourceClient`                |
+| Persistence                    | Repository traits in `ag-store` |
+| Storage timestamps             | `TimestampSource`               |
 
 `GitClient` keeps committed-tree publication evidence separate from worktree diffs. It
 acquires advertised branch commits independently of fetch refspecs without changing
@@ -143,9 +143,8 @@ not alter production contracts. Project catalog visibility loads in one settings
 independent of catalog size. Session-list archive windows are bounded by the repository
 query; test pagination with real SQLite and selection behavior through the host and PTY.
 
-Resource tests inject process identities and readings to cover PID reuse, stale data,
-and sensor stalls. Host tests separately verify native access. A stalled sensor must not
-block process accounting or shutdown.
+Resource tests inject process tables to cover missing roots and failed samples. Host
+tests separately verify native `ps` access.
 
 PTY expiration scenarios can advance monotonic time through the pinned `Clock` adapter
 after observing the state whose deadline they exercise. Wall time stays fixed for

@@ -34,6 +34,7 @@ use crate::domain::transient_message::{
     QueuedAction, TransientMessage, TransientMessageAnchor, TransientMessageBody,
     TransientMessageLifecycle, TransientMessageSlot,
 };
+use crate::infra::resource::ResourceClient;
 
 /// Low-frequency fallback interval for metadata-based session refresh.
 pub(crate) const SESSION_REFRESH_INTERVAL: Duration = Duration::from_secs(5);
@@ -67,17 +68,16 @@ pub(crate) struct SessionCreationSettings {
 pub(crate) struct SessionRenderParts<'a> {
     /// Exact prompt transcript blocks keyed by session id for active turns.
     pub(crate) active_prompt_outputs: &'a HashMap<SessionId, String>,
+    /// Latest totals for the Agentty process and all of its descendants.
+    pub(crate) process_resources: Option<SessionResources>,
     /// Selected session row index.
     pub(crate) selected_index: Option<usize>,
     /// Detected session worktree branch names keyed by session id.
     pub(crate) session_branch_names: &'a HashMap<SessionId, String>,
-    pub(crate) session_cpu_temperatures: &'a HashMap<SessionId, f32>,
     /// Latest session-branch ahead/behind snapshots keyed by session id.
     pub(crate) session_git_statuses: &'a HashMap<SessionId, SessionGitStatus>,
     /// Cached session list positions keyed by stable session id.
     pub(crate) session_index_by_id: &'a HashMap<SessionId, usize>,
-    /// Latest resource totals for tracked agent process trees.
-    pub(crate) session_resources: &'a HashMap<SessionId, SessionResources>,
     /// Whether each rendered session currently has a materialized worktree on
     /// disk, keyed by session id.
     pub(crate) session_worktree_availability: &'a HashMap<SessionId, bool>,
@@ -173,9 +173,10 @@ impl SessionManager {
 
         Self {
             active_prompt_outputs: HashMap::new(),
-            resources: super::resource::ResourceMonitor::new(Arc::new(
-                crate::infra::resource::RealResourceClient::default(),
-            )),
+            resources: super::resource::ResourceMonitor::new(
+                Arc::new(crate::infra::resource::RealResourceClient),
+                std::process::id(),
+            ),
             at_mention_indexes: HashMap::new(),
             default_session_model: defaults.model,
             git_client,
@@ -189,6 +190,15 @@ impl SessionManager {
             },
             worker_service: SessionWorkerService::new(),
         }
+    }
+
+    /// Replaces the process-table boundary used for the tab-bar resource
+    /// stats, sampling the tree rooted at the current Agentty process.
+    #[must_use]
+    pub(crate) fn with_resource_client(mut self, resource_client: Arc<dyn ResourceClient>) -> Self {
+        self.resources = super::resource::ResourceMonitor::new(resource_client, std::process::id());
+
+        self
     }
 
     /// Replaces any in-flight staged title-generation task for one session.
@@ -305,8 +315,7 @@ impl SessionManager {
     pub(crate) fn render_parts(&self) -> SessionRenderParts<'_> {
         SessionRenderParts {
             active_prompt_outputs: &self.active_prompt_outputs,
-            session_cpu_temperatures: &self.resources.temperatures,
-            session_resources: &self.resources.values,
+            process_resources: self.resources.resources,
             session_branch_names: &self.state.session_branch_names,
             session_git_statuses: &self.state.session_git_statuses,
             session_index_by_id: &self.state.session_index_by_id,
@@ -317,25 +326,10 @@ impl SessionManager {
         }
     }
 
-    /// Refreshes live process accounting through the background sampler.
+    /// Refreshes Agentty process-tree accounting through the background
+    /// sampler.
     pub(crate) async fn refresh_resources(&mut self) -> bool {
-        let roots = self
-            .state
-            .handles()
-            .iter()
-            .filter_map(|(id, handles)| {
-                handles
-                    .child_pid
-                    .lock()
-                    .ok()
-                    .and_then(|pid| *pid)
-                    .map(|pid| (id.clone(), pid))
-            })
-            .collect();
-
-        self.resources
-            .refresh(roots, self.state.clock.now_instant())
-            .await
+        self.resources.refresh(self.state.clock.now_instant()).await
     }
 
     /// Returns all loaded session snapshots in current list order.

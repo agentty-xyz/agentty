@@ -1,11 +1,14 @@
 use std::path::PathBuf;
 
+use ratatui::Terminal;
+use ratatui::backend::TestBackend;
 use ratatui::style::Modifier;
 
-use super::tab_spans;
+use super::{Tabs, process_stats_label, tab_spans};
 use crate::app::Tab;
 use crate::domain::project::{Project, ProjectListItem};
-use crate::ui::style;
+use crate::domain::resource::SessionResources;
+use crate::ui::{Component, style};
 
 #[test]
 fn test_tab_spans_use_equal_spacing_between_labels() {
@@ -105,6 +108,80 @@ fn test_tab_spans_dim_project_scope_when_no_project_is_selected() {
     // Assert
     assert_eq!(spans[2].content.as_ref(), " Project: None ");
     assert_eq!(spans[2].style.fg, Some(style::palette::text_subtle()));
+}
+
+#[test]
+fn test_process_stats_label_uses_short_keys() {
+    // Arrange
+    let resources = SessionResources {
+        cpu_percent: 128.5,
+        process_count: 3,
+        resident_memory_kib: 3584,
+    };
+
+    // Act
+    let available = process_stats_label(Some(resources), 80);
+    let narrow = process_stats_label(Some(resources), 30);
+    let too_narrow = process_stats_label(Some(resources), 3);
+    let unsampled = process_stats_label(None, 80);
+
+    // Assert
+    assert_eq!(
+        available.as_deref(),
+        Some("Processes: 3  CPU: 128.5%  RAM: 3.5 MiB")
+    );
+    assert_eq!(narrow.as_deref(), Some("Processes: 3  CPU: 128.5%"));
+    assert_eq!(too_narrow, None);
+    assert_eq!(unsampled, None);
+}
+
+#[test]
+fn test_tabs_right_align_process_stats_beside_tabs() {
+    // Arrange
+    let resources = SessionResources {
+        cpu_percent: 12.5,
+        process_count: 2,
+        resident_memory_kib: 3072,
+    };
+    let tabs = Tabs::new(Tab::Sessions, 0, &[]).process_stats(Some(resources));
+
+    // Act
+    let wide_row = rendered_tab_row(&tabs, 100);
+    let narrow_row = rendered_tab_row(&tabs, 70);
+
+    // Assert
+    assert!(wide_row.starts_with(" Projects | Project: None | Sessions | Settings "));
+    assert!(wide_row.ends_with("Processes: 2  CPU: 12.5%  RAM: 3.0 MiB"));
+    assert!(narrow_row.starts_with(" Projects | Project: None | Sessions | Settings "));
+    assert!(narrow_row.ends_with("  Processes: 2"));
+}
+
+#[test]
+fn test_tabs_omit_process_stats_before_the_first_sample() {
+    // Arrange
+    let tabs = Tabs::new(Tab::Sessions, 0, &[]);
+
+    // Act
+    let tab_row = rendered_tab_row(&tabs, 100);
+
+    // Assert
+    assert_eq!(
+        tab_row.trim_end(),
+        " Projects | Project: None | Sessions | Settings"
+    );
+}
+
+/// Renders tabs at `width` columns and returns the tab-label row.
+fn rendered_tab_row(tabs: &Tabs<'_>, width: u16) -> String {
+    let mut terminal = Terminal::new(TestBackend::new(width, 3)).expect("create terminal");
+    terminal
+        .draw(|frame| tabs.render(frame, frame.area()))
+        .expect("draw tabs");
+    let buffer = terminal.backend().buffer();
+
+    (0..buffer.area.width)
+        .map(|column| buffer[(column, 1)].symbol())
+        .collect()
 }
 
 /// Creates a `ProjectListItem` for tab-label rendering tests.

@@ -93,8 +93,6 @@ pub struct RenderContext<'a> {
     pub session_index_by_id: &'a HashMap<SessionId, usize>,
     /// Background thinking messages keyed by session id.
     pub session_progress_messages: &'a HashMap<SessionId, String>,
-    /// Latest tracked process-tree totals.
-    pub session_resources: &'a HashMap<SessionId, SessionResources>,
     /// Focused-review state for the visible session, projected from the app
     /// cache for this render pass.
     pub session_review_snapshot: Option<&'a SessionReviewSnapshot<'a>>,
@@ -117,10 +115,10 @@ pub struct RenderContext<'a> {
     pub working_dir: &'a Path,
     /// One coherent wall-clock snapshot used by this render pass.
     pub(crate) frame_time: FrameTime,
+    /// Latest Agentty process-tree totals shown in the list tab header.
+    pub(crate) process_resources: Option<SessionResources>,
     /// Latest explicit project-sync lifecycle state.
     pub(crate) project_sync_status: Option<&'a ProjectSyncStatus>,
-    /// Internal host-temperature sidecar for the tracked process roots.
-    pub(crate) session_cpu_temperatures: &'a HashMap<SessionId, f32>,
     /// Settings-screen projection when the active tab can render it.
     pub(crate) settings_screen: Option<&'a crate::presentation::setting::SettingsScreenSnapshot>,
     /// Latest live task-chain graphs keyed by session.

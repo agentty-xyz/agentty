@@ -38,6 +38,7 @@ use crate::domain::session_message::{SessionMessage, SessionMessageKind, Session
 use crate::domain::transient_message::TransientMessageStore;
 use crate::infra::browser::MockBrowserClient;
 use crate::infra::project_discovery::MockProjectDiscoveryClient;
+use crate::infra::resource::MockResourceClient;
 use crate::presentation::app_mode::{AppMode, PromptModeSnapshot};
 use crate::presentation::chatgpt_sign_in::ChatGptSignInDialog;
 use crate::presentation::prompt::{PromptAttachmentState, PromptHistoryState, PromptSlashState};
@@ -326,6 +327,9 @@ pub(crate) fn test_app_clients_with_available_agent_kinds(
         .times(0);
     let mut browser_client = MockBrowserClient::new();
     browser_client.expect_open().return_const(());
+    // Host process sampling would make idle redraws depend on machine load.
+    let mut resource_client = MockResourceClient::new();
+    resource_client.expect_sample().returning(|| None);
 
     app::test_support::AppClients::new()
         .with_background_tasks_disabled()
@@ -336,6 +340,7 @@ pub(crate) fn test_app_clients_with_available_agent_kinds(
         }))
         .with_project_discovery_client(Arc::new(project_discovery_client))
         .with_project_discovery_home(None)
+        .with_resource_client(Arc::new(resource_client))
 }
 
 /// Builds one client bundle with deterministic agent availability for test

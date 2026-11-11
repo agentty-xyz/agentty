@@ -14,7 +14,6 @@ mod prompt;
 mod provider;
 mod question;
 mod queue;
-mod resource;
 mod review;
 mod review_comment;
 mod review_request;
@@ -23,6 +22,3 @@ mod stack;
 mod sync;
 mod telemetry;
 mod worktree;
-
-// Host temperature scenarios supplement the shared resource suite.
-mod temperature;

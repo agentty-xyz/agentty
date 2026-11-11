@@ -7,7 +7,9 @@ use std::time::Duration;
 
 use agentty::domain::session_message::SessionMessageKind;
 use testty::assertion;
+use testty::journey::Journey;
 use testty::region::Region;
+use testty::step::Step;
 use tokio::process::Command;
 
 use super::fixture::{
@@ -744,7 +746,7 @@ async fn test_session_pre_commit_hook_warning() -> E2eResult {
                         Duration::from_millis(100),
                         |frame| assertion::match_not_visible(frame, "Committing..."),
                     )
-                    .wait_for_text("Enter: reply", 5000)
+                    .compose(&wait_for_settled_review())
                     .write_text("g")
                     .eventually(
                         Duration::from_secs(5),
@@ -813,6 +815,21 @@ async fn test_session_pre_commit_hook_warning() -> E2eResult {
         .await?;
 
     Ok(())
+}
+
+/// Wait for the session to accept replies and for the background review after
+/// an auto-commit to stop appending output, so later scrolling acts on a
+/// settled transcript.
+fn wait_for_settled_review() -> Journey {
+    Journey::new("settled_review")
+        .with_description("Wait for the post-commit review to finish")
+        .step(Step::wait_for_text("Enter: reply", 5000))
+        .step(Step::wait_for_stable_frame(1000, 30000))
+        .step(Step::eventually(
+            Duration::from_secs(30),
+            Duration::from_millis(100),
+            |frame| assertion::match_not_visible(frame, "Reviewing changes"),
+        ))
 }
 
 /// Verify that Claude sessions are launched with web-capable Claude Code

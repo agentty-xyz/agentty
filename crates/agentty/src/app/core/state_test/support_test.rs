@@ -33,6 +33,7 @@ use crate::infra::browser::BrowserClient;
 use crate::infra::db;
 use crate::infra::db::AppRepositories;
 use crate::infra::project_discovery::ProjectDiscoveryClient;
+use crate::infra::resource::ResourceClient;
 use crate::infra::tmux::{MockTmuxClient, TmuxClient};
 use crate::presentation::app_mode::{AppMode, PromptModeSnapshot};
 use crate::presentation::prompt::{PromptAttachmentState, PromptHistoryState, PromptSlashState};
@@ -636,6 +637,14 @@ impl AppClients {
     #[must_use]
     pub(crate) fn with_git_client(mut self, git_client: Arc<dyn GitClient>) -> Self {
         self.git_client = git_client;
+
+        self
+    }
+
+    /// Replaces the process-table boundary for deterministic resource stats.
+    #[must_use]
+    pub(crate) fn with_resource_client(mut self, resource_client: Arc<dyn ResourceClient>) -> Self {
+        self.resource_client = resource_client;
 
         self
     }

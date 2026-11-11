@@ -55,6 +55,7 @@ use crate::infra::agent_profile::{AgentCatalogClient, RealAgentCatalogClient};
 use crate::infra::browser::{BrowserClient, RealBrowserClient};
 use crate::infra::fs::{FsClient, RealFsClient};
 use crate::infra::project_discovery::{ProjectDiscoveryClient, RealProjectDiscoveryClient};
+use crate::infra::resource::{RealResourceClient, ResourceClient};
 use crate::infra::tmux::{self, RealTmuxClient, TmuxClient};
 use crate::presentation::app_mode::{
     AppMode, ChatFocus, ConfirmationViewMode, DiffLineComments, DiffReviewComments,
@@ -127,6 +128,8 @@ pub(crate) struct AppClients {
     pub(super) agent_profile_catalog_client: Arc<dyn AgentCatalogClient>,
     pub(super) project_discovery_home: Option<PathBuf>,
     pub(super) project_discovery_client: Arc<dyn ProjectDiscoveryClient>,
+    /// Samples the host process table for the tab-bar resource stats.
+    pub(super) resource_client: Arc<dyn ResourceClient>,
     pub(super) review_request_client: Arc<dyn ReviewRequestClient>,
     pub(super) runtime_config: RuntimeConfig,
     pub(super) session_run_factory: Arc<dyn SessionRunFactory>,
@@ -151,6 +154,7 @@ impl AppClients {
             agent_profile_catalog_client: Arc::new(RealAgentCatalogClient),
             project_discovery_home: RealProjectDiscoveryClient::home_directory(),
             project_discovery_client: Arc::new(RealProjectDiscoveryClient),
+            resource_client: Arc::new(RealResourceClient),
             review_request_client: Arc::new(RealReviewRequestClient::default()),
             session_run_factory: Arc::new(RealSessionRunFactory::new(RuntimeConfig::default())),
             sync_main_runner: None,

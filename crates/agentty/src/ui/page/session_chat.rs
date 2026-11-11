@@ -7,7 +7,6 @@ use ratatui::text::Line;
 use ratatui::widgets::Paragraph;
 
 use crate::domain::question::QuestionItem;
-use crate::domain::resource::SessionResources;
 use crate::domain::session::{
     Session, Status, can_merge_session_branch_in_stack, can_mutate_session_branch_in_stack,
     can_rebase_session_branch_in_stack, can_reply_to_session_in_stack,
@@ -89,16 +88,11 @@ struct SessionChatLayoutPlan {
 impl SessionChatLayoutPlan {
     /// Resolves all session-chat geometry and prepared prompt data once.
     fn new(input: SessionChatLayoutInput<'_>) -> Self {
-        let mut header_lines = session_format::session_header_lines(
+        let header_lines = session_format::session_header_lines(
             input.session,
             input.area.width.saturating_sub(2),
             input.has_merge_conflict,
         );
-        header_lines.push(session_format::session_resources_line(
-            None,
-            None,
-            input.area.width.saturating_sub(2),
-        ));
         let (prompt_panel, bottom_height) =
             if matches!(input.session.status, Status::Done | Status::Canceled) {
                 (
@@ -158,8 +152,6 @@ pub struct SessionChatPageInput<'a> {
     pub mode: &'a AppMode,
     /// Shared output-layout cache for this render pass.
     pub output_layout_cache: &'a SessionOutputLayoutCache,
-    /// Most recent tracked agent process-tree totals.
-    pub resources: Option<SessionResources>,
     /// Focused-review output for the rendered session.
     pub review_text: Option<&'a str>,
     /// Current vertical output scroll offset.
@@ -172,8 +164,6 @@ pub struct SessionChatPageInput<'a> {
     pub sessions: &'a [Session],
     /// One coherent render-time clock snapshot.
     pub(crate) frame_time: FrameTime,
-    /// Host temperature supplied by the internal monitoring sidecar.
-    pub(crate) host_cpu_temperature_celsius: Option<f32>,
     /// Latest live graph for the session's task chain, when loaded.
     pub(crate) task_chain_graph: Option<&'a TaskChainGraph>,
 }
@@ -234,21 +224,13 @@ impl<'a> SessionChatPage<'a> {
     /// Renders the session header, output panel, and context-aware bottom
     /// panel.
     fn render_session(&self, f: &mut Frame, area: Rect, session: &Session) {
-        let mut layout_plan = SessionChatLayoutPlan::new(SessionChatLayoutInput {
+        let layout_plan = SessionChatLayoutPlan::new(SessionChatLayoutInput {
             area,
             has_merge_conflict: self.has_merge_conflict,
             mode: self.mode,
             review_text: self.review_text,
             session,
         });
-
-        if let Some(line) = layout_plan.header_lines.last_mut() {
-            *line = session_format::session_resources_line(
-                self.resources,
-                self.host_cpu_temperature_celsius,
-                area.width.saturating_sub(2),
-            );
-        }
 
         let mut output = SessionOutput::new(session)
             .markdown_render_cache(self.markdown_render_cache)

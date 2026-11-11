@@ -5,30 +5,30 @@ use tempfile::tempdir;
 
 use super::support::{new_test_app, new_test_app_with_db, test_session_manager};
 use crate::app::Tab;
+use crate::app::session::resource::ResourceMonitor;
+use crate::domain::resource::SessionResources;
 use crate::infra::db::AppRepositories;
+use crate::infra::resource::{MockResourceClient, ProcessSample};
 
 #[tokio::test]
-async fn resource_refresh_projects_only_current_worker_pids() {
+async fn resource_refresh_projects_process_tree_totals() {
     // Arrange
     let mut manager = test_session_manager("tracked", None);
-    let mut client = crate::infra::resource::MockResourceClient::new();
-    client.expect_sample().times(1).returning(|_| {
-        Some(vec![crate::infra::resource::ProcessSample {
-            host_cpu_temperature_celsius: None,
+    let mut client = MockResourceClient::new();
+    let totals = SessionResources {
+        process_count: 1,
+        cpu_percent: 5.0,
+        resident_memory_kib: 1024,
+    };
+    client.expect_sample().times(1).returning(move || {
+        Some(vec![ProcessSample {
             is_alive: true,
-            identity: Some(crate::infra::process_identity::ProcessIdentity(1_000_001)),
             pid: 42,
             parent_pid: 1,
-            resources: crate::domain::resource::SessionResources {
-                process_count: 1,
-                cpu_percent: 5.0,
-                resident_memory_kib: 1024,
-            },
+            resources: totals,
         }])
     });
-    manager.resources = crate::app::session::resource::ResourceMonitor::new(Arc::new(client));
-    let pid = Arc::clone(&manager.state.handle("tracked").expect("handles").child_pid);
-    *pid.lock().expect("pid") = Some(42);
+    manager.resources = ResourceMonitor::new(Arc::new(client), 42);
 
     // Act
     manager.refresh_resources().await;
@@ -39,15 +39,10 @@ async fn resource_refresh_projects_only_current_worker_pids() {
     })
     .await
     .expect("sample completion");
+    let render_parts = manager.render_parts();
 
     // Assert
-    assert_eq!(
-        manager.render_parts().session_resources["tracked"].process_count,
-        1
-    );
-    *pid.lock().expect("pid") = None;
-    assert!(manager.refresh_resources().await);
-    assert!(manager.render_parts().session_resources.is_empty());
+    assert_eq!(render_parts.process_resources, Some(totals));
 }
 
 #[tokio::test]

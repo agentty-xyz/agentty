@@ -188,14 +188,12 @@ to save only the selected repositories.
 
 ### Resource Usage
 
-`Processes`, `CPU`, and `Memory` cover the tracked agent and its descendants, refreshed
-about every two seconds. CPU can exceed `100%`; resident memory may count shared pages
-more than once. Detached processes and Agentty itself are excluded. `--` means no
-current measurement is available.
-
-`Host CPU temp` measures the whole host, including other workloads. Sensor support
-varies by hardware and OS. Readings refresh at most every ten seconds and expire after
-twenty seconds if a sensor stalls.
+The right side of the list tab header shows `Processes`, `CPU`, and `RAM` (resident
+memory) for Agentty and all of its descendants, including every session's agent,
+refreshed about every two seconds. CPU can exceed `100%`; resident memory may count
+shared pages more than once. Detached processes are excluded. The stats are hidden while
+no current measurement is available, and narrow terminals drop trailing stats so the
+tabs stay visible.
 
 ### Project Sync
 
