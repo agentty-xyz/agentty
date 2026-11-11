@@ -10,6 +10,8 @@ render = true
 transparent = false
 aliases = [ "/documentation/"]
 redirect_to = "docs/getting-started/installation/"
+[extra]
+sitemap_exclude = true
 +++
 
 <a id="docs-overview"></a> Browse setup and workflow guides for `agentty`.

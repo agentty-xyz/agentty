@@ -4,6 +4,7 @@ description = "Notes from building Agentty in Agentty."
 template = "blog.html"
 page_template = "blog-page.html"
 sort_by = "date"
+generate_feeds = true
 insert_anchor_links = "right"
 in_search_index = true
 render = true

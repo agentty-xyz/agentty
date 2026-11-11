@@ -1,6 +1,7 @@
 base_url = "https://agentty.xyz"
 title = "Agentty"
 description = "Agentty is an ADE (Agentic Development Environment) for structured, controllable AI-assisted software development."
+author = "Agentty"
 default_language = "en"
 compile_sass = true
 minify_html = true
