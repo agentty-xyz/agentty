@@ -559,6 +559,43 @@ async fn runtime_backend_loads_inherited_creation_before_acknowledging_event_bac
 }
 
 #[tokio::test]
+async fn api_creation_reports_parent_and_source_session_read_failures() {
+    // Arrange
+    let (app, _temp_dir, pool) = crate::test_support::new_git_test_app_with_pool().await;
+    let project_id = app.active_project_id();
+    let source_session_id = SessionId::from("source-session");
+    sqlx::query("DROP TABLE session")
+        .execute(&pool)
+        .await
+        .expect("session reads should fail");
+
+    // Act
+    let stacked_error = app
+        .validate_api_session_request(&CreateSessionRequest {
+            inherit_from_session_id: None,
+            mode: CreateSessionMode::Stacked {
+                parent_session_id: SessionId::from("parent-session"),
+            },
+            project_id,
+        })
+        .await
+        .expect_err("parent lookup should fail");
+    let inherited_error = app
+        .inherited_creation_settings(Some(&source_session_id), project_id)
+        .await
+        .err()
+        .expect("source lookup should fail");
+
+    // Assert
+    for error in [stacked_error, inherited_error] {
+        assert!(
+            matches!(&error, ApiSessionError::Operation(message) if message.contains("session")),
+            "{error:?}"
+        );
+    }
+}
+
+#[tokio::test]
 async fn finishing_api_creation_schedules_registration_retry_after_load_failure() {
     // Arrange
     let (mut app, _temp_dir, pool) = crate::test_support::new_git_test_app_with_pool().await;

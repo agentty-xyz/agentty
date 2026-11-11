@@ -7,7 +7,7 @@ use std::time::Duration;
 use ag_contracts::{OneShotError, OneShotRequest, OneShotSubmission};
 use ag_forge::{
     ForgeKind, ForgeRemote, MockReviewRequestClient, ReviewComment, ReviewCommentAnchorSide,
-    ReviewCommentSnapshot,
+    ReviewCommentSnapshot, ReviewCommentThread,
 };
 use ag_git::MockGitClient;
 use ag_protocol::{AgentResponse, parse_agent_response_strict};
@@ -21,6 +21,7 @@ use super::{
     MockVersionTaskRunner, REVIEW_DEADLINE, RealVersionTaskRunner, ReviewAssistLaunch,
     ReviewAssistTaskInput, SessionDiffTaskInput, SessionDiffTaskSource, TaskService,
     VERSION_CHECK_INTERVAL, VersionTaskRunner, review_comment_anchor_side_order,
+    sorted_review_comment_snapshot,
 };
 use crate::app::error::AppError;
 use crate::app::review_graph::test_support::{ReviewGraphFixture, SESSION_ID};
@@ -29,6 +30,7 @@ use crate::app::{AppEvent, UpdateStatus};
 use crate::domain::agent::{AgentCliInfo, AgentKind, AgentModel, AgentSelection, ReasoningLevel};
 use crate::domain::file_entry::FileEntry;
 use crate::infra::fs::MockFsClient;
+use crate::test_support::enable_tracing_log_fallback;
 
 /// Generates review text through the production graph with a fresh session.
 async fn review_assist_text(
@@ -249,7 +251,7 @@ struct PanickingAgentAvailabilityProbe;
 
 impl ag_session::AgentAvailabilityProbe for PanickingAgentAvailabilityProbe {
     fn available_agent_kinds(&self) -> Vec<AgentKind> {
-        vec![AgentKind::Claude]
+        std::panic::resume_unwind(Box::new("availability probe failed".to_string()));
     }
 
     fn available_agent_clis(&self) -> Vec<AgentCliInfo> {
@@ -471,6 +473,7 @@ async fn join_at_mention_entries_returns_empty_index_for_panicking_worker() {
     let load_handle = tokio::task::spawn_blocking(|| -> Vec<FileEntry> {
         std::panic::resume_unwind(Box::new("file index failed".to_string()));
     });
+    enable_tracing_log_fallback();
 
     // Act
     let entries = TaskService::join_at_mention_entries(load_handle, &"session-id".into()).await;
@@ -484,6 +487,7 @@ fn publish_at_mention_entries_tolerates_closed_event_receiver() {
     // Arrange
     let (app_event_tx, app_event_rx) = mpsc::unbounded_channel();
     drop(app_event_rx);
+    enable_tracing_log_fallback();
 
     // Act
     TaskService::publish_at_mention_entries(
@@ -563,6 +567,121 @@ async fn load_session_review_comment_snapshot_returns_worktree_error_without_fal
 
     // Assert
     assert!(matches!(result, Err(error) if error.contains("session worktree was removed")));
+}
+
+#[tokio::test]
+async fn load_session_review_comment_snapshot_reports_forge_failures() {
+    // Arrange
+    for (failure, expected_error) in [
+        ("fallback_detect", "fallback remote rejected"),
+        ("detect", "worktree remote rejected"),
+        ("fetch", "comments unavailable"),
+    ] {
+        let mut mock_git_client = MockGitClient::new();
+        mock_git_client
+            .expect_repo_url()
+            .once()
+            .returning(move |_| {
+                Box::pin(async move {
+                    if failure == "fallback_detect" {
+                        return Err(ag_git::GitError::Io(std::io::Error::new(
+                            std::io::ErrorKind::NotFound,
+                            "session worktree was removed",
+                        )));
+                    }
+
+                    Ok("https://github.com/agentty-xyz/agentty.git".to_string())
+                })
+            });
+        let mut mock_review_request_client = MockReviewRequestClient::new();
+        mock_review_request_client
+            .expect_detect_remote()
+            .once()
+            .returning(move |_| match failure {
+                "fallback_detect" => Err(ag_forge::ReviewRequestError::OperationFailed {
+                    forge_kind: ForgeKind::GitHub,
+                    message: "fallback remote rejected".to_string(),
+                }),
+                "detect" => Err(ag_forge::ReviewRequestError::OperationFailed {
+                    forge_kind: ForgeKind::GitHub,
+                    message: "worktree remote rejected".to_string(),
+                }),
+                _ => Ok(forge_remote()),
+            });
+        mock_review_request_client
+            .expect_fetch_review_comment_snapshot()
+            .times(usize::from(failure == "fetch"))
+            .returning(|_, _| {
+                Box::pin(async {
+                    Err(ag_forge::ReviewRequestError::OperationFailed {
+                        forge_kind: ForgeKind::GitHub,
+                        message: "comments unavailable".to_string(),
+                    })
+                })
+            });
+
+        // Act
+        let result = TaskService::load_session_review_comment_snapshot(
+            PathBuf::from("/tmp/session"),
+            (failure == "fallback_detect")
+                .then(|| "https://github.com/agentty-xyz/agentty".to_string()),
+            "#42".to_string(),
+            &mock_git_client,
+            &mock_review_request_client,
+        )
+        .await;
+
+        // Assert
+        let error = result.expect_err(failure);
+        assert!(error.contains(expected_error), "{failure}: {error}");
+    }
+}
+
+#[test]
+fn sorted_review_comment_snapshot_orders_threads_by_path_line_and_side() {
+    // Arrange
+    let thread = |id: &str, path: &str, line: Option<u32>, anchor_side| ReviewCommentThread {
+        anchor_side,
+        comments: Vec::new(),
+        id: id.to_string(),
+        is_outdated: None,
+        is_resolved: false,
+        line,
+        path: path.to_string(),
+        start_line: None,
+    };
+    let snapshot = ReviewCommentSnapshot {
+        pr_level_comments: Vec::new(),
+        threads: vec![
+            thread("b-file", "src/b.rs", None, ReviewCommentAnchorSide::File),
+            thread(
+                "a-new-10",
+                "src/a.rs",
+                Some(10),
+                ReviewCommentAnchorSide::New,
+            ),
+            thread(
+                "a-old-10",
+                "src/a.rs",
+                Some(10),
+                ReviewCommentAnchorSide::Old,
+            ),
+            thread("a-new-2", "src/a.rs", Some(2), ReviewCommentAnchorSide::New),
+        ],
+    };
+
+    // Act
+    let sorted = sorted_review_comment_snapshot(snapshot);
+
+    // Assert
+    assert_eq!(
+        sorted
+            .threads
+            .iter()
+            .map(|thread| thread.id.as_str())
+            .collect::<Vec<_>>(),
+        ["a-new-2", "a-old-10", "a-new-10", "b-file"]
+    );
 }
 
 #[tokio::test]
@@ -880,7 +999,8 @@ async fn real_version_task_runner_uses_external_commands_when_enabled() {
 
 #[tokio::test]
 /// Ensures CLI update/version fallback rows preserve the
-/// startup-discovered availability subset when the blocking probe panics.
+/// startup-discovered availability subset when the blocking probe panics, and
+/// that kind discovery then assumes every agent kind.
 async fn load_agent_cli_availability_uses_startup_kinds_when_probe_panics() {
     // Arrange
     let fallback_agent_kinds = vec![AgentKind::Claude];
@@ -891,9 +1011,12 @@ async fn load_agent_cli_availability_uses_startup_kinds_when_probe_panics() {
         fallback_agent_kinds,
     )
     .await;
+    let agent_kinds =
+        TaskService::load_agent_availability(Arc::new(PanickingAgentAvailabilityProbe)).await;
 
     // Assert
     assert_eq!(agent_clis, vec![AgentCliInfo::new(AgentKind::Claude, None)]);
+    assert_eq!(agent_kinds, AgentKind::ALL.to_vec());
 }
 
 #[test]

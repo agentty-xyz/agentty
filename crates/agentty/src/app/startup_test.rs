@@ -2,6 +2,7 @@ use std::path::Path;
 use std::sync::Arc;
 
 use ag_git::{GitClient, MockGitClient};
+use ag_session::test_support as model_fixture;
 
 use super::AppStartup;
 use crate::app::Tab;
@@ -92,6 +93,111 @@ async fn startup_uses_launch_project_without_probing_saved_paths() {
     assert_eq!(context.active_project_id, current);
     assert_eq!(context.startup_working_dir, Path::new("/launch/repo"));
     assert_eq!(context.project_items.len(), 2);
+}
+
+#[tokio::test]
+async fn startup_project_context_reports_project_persistence_failures() {
+    // Arrange
+    for (trigger_sql, expected_message) in [
+        (
+            "CREATE TRIGGER reject_project BEFORE UPDATE OF git_branch ON project BEGIN SELECT \
+             RAISE(ABORT, 'project rejected'); END",
+            "Failed to persist active startup project `/launch/repo`",
+        ),
+        (
+            "CREATE TRIGGER reject_project BEFORE UPDATE OF last_opened_at ON project BEGIN \
+             SELECT RAISE(ABORT, 'project rejected'); END",
+            "Failed to update startup project activity for `/launch/repo`",
+        ),
+    ] {
+        let (database, pool) = AppRepositories::in_memory_with_pool().await.expect("db");
+        let project_id = database
+            .projects()
+            .upsert_project("/launch/repo", None)
+            .await
+            .expect("launch project");
+        sqlx::query(trigger_sql)
+            .execute(&pool)
+            .await
+            .expect("trigger");
+        let git: Arc<dyn GitClient> = Arc::new(MockGitClient::new());
+        let fs = MockFsClient::new();
+
+        // Act
+        let result = AppStartup::load_startup_project_context(
+            &database,
+            &git,
+            &fs,
+            Path::new("/launch/repo"),
+            None,
+            project_id,
+        )
+        .await;
+
+        // Assert
+        let error = result.err().expect("startup should fail").to_string();
+        assert!(error.contains(expected_message), "{error}");
+    }
+}
+
+#[tokio::test]
+async fn startup_project_persistence_reports_session_backfill_failure() {
+    // Arrange
+    let (database, pool) = AppRepositories::in_memory_with_pool().await.expect("db");
+    let project_id = database
+        .projects()
+        .upsert_project("/legacy/repo", None)
+        .await
+        .expect("legacy project");
+    database
+        .sessions()
+        .insert_session(
+            "legacy-session",
+            model_fixture::CODEX_MODEL_ID,
+            "main",
+            "Review",
+            project_id,
+        )
+        .await
+        .expect("legacy session");
+    sqlx::query("UPDATE session SET project_id = NULL")
+        .execute(&pool)
+        .await
+        .expect("detach legacy session");
+    sqlx::query(
+        "CREATE TRIGGER reject_backfill BEFORE UPDATE OF project_id ON session BEGIN SELECT \
+         RAISE(ABORT, 'backfill rejected'); END",
+    )
+    .execute(&pool)
+    .await
+    .expect("trigger");
+
+    // Act
+    let result =
+        AppStartup::persist_startup_project(&database, Path::new("/launch/repo"), None).await;
+
+    // Assert
+    let error = result.expect_err("startup should fail").to_string();
+    assert!(
+        error.contains("Failed to backfill startup sessions for project `/launch/repo`"),
+        "{error}"
+    );
+}
+
+#[tokio::test]
+async fn startup_project_falls_back_to_launch_directory_when_row_is_missing() {
+    // Arrange
+    let database = AppRepositories::in_memory().await.expect("db");
+
+    // Act
+    let project =
+        AppStartup::load_project(&database, 404, Path::new("/launch/repo"), Some("main")).await;
+
+    // Assert
+    assert_eq!(project.id, 404);
+    assert_eq!(project.path, Path::new("/launch/repo"));
+    assert_eq!(project.git_branch.as_deref(), Some("main"));
+    assert_eq!(project.display_name, None);
 }
 
 /// Catalog rows are database snapshots, including currently inaccessible paths.

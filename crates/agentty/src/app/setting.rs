@@ -412,14 +412,14 @@ impl SettingsManager {
 
         let include_coauthored_by_agentty = load_project_bool_setting_from_repositories(
             &repositories,
-            Some(project_id),
+            project_id,
             SettingName::IncludeCoauthoredByAgentty,
             false,
         )
         .await;
         let use_last_used_model_as_default = load_project_bool_setting_from_repositories(
             &repositories,
-            Some(project_id),
+            project_id,
             SettingName::LastUsedModelAsDefault,
             false,
         )
@@ -824,14 +824,10 @@ fn parse_launch_configurations(launch_configuration_setting: &str) -> Vec<String
 /// dependency used by [`SettingsManager`].
 async fn load_project_bool_setting_from_repositories(
     repositories: &AppRepositories,
-    project_id: Option<i64>,
+    project_id: i64,
     setting_name: SettingName,
     default_value: bool,
 ) -> bool {
-    let Some(project_id) = project_id else {
-        return default_value;
-    };
-
     repositories
         .settings()
         .get_project_setting(project_id, setting_name)

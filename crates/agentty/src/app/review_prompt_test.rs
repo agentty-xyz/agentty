@@ -1,3 +1,4 @@
+use std::collections::{BTreeMap, VecDeque};
 use std::fmt::Write as _;
 use std::path::PathBuf;
 use std::sync::{Arc, Mutex};
@@ -17,8 +18,8 @@ use async_trait::async_trait;
 use tokio::sync::{mpsc, oneshot};
 
 use super::{
-    MAX_REVIEW_PROVIDER_CALLS, REVIEW_CONCURRENCY, cross_file_review, file_headers, merge,
-    reduce_review, split_candidates,
+    BatchOutcome, MAX_REVIEW_PROVIDER_CALLS, REVIEW_CONCURRENCY, ReviewOutcome, cross_file_review,
+    file_headers, merge, reduce_review, split_candidates,
 };
 use crate::app::diff_prompt::PROMPT_BUDGET;
 use crate::app::review::ReviewProgress;
@@ -1392,6 +1393,40 @@ async fn reduction_respects_remaining_budget_and_never_summarizes_oversized_cand
             assert!(text.contains("provider call limit reached"));
         }
     }
+}
+
+#[test]
+fn completed_discovery_reports_a_cross_file_pass_that_never_ran() {
+    // Arrange
+    let empty_review = FocusedReview {
+        candidate_decisions: Vec::new(),
+        project_impact: Vec::new(),
+        suggestions: Vec::new(),
+    };
+    let outcome = ReviewOutcome {
+        batches: BatchOutcome {
+            completed: BTreeMap::from([(vec![0], empty_review)]),
+            failure: None,
+            pending: VecDeque::new(),
+        },
+        consolidation: None,
+        context: String::new(),
+        cross_file: None,
+        stopped: OneShotError::new("review budget exhausted"),
+    };
+
+    // Act
+    let text = outcome
+        .render("diff --git a/src/lib.rs b/src/lib.rs\n")
+        .expect("completed discovery renders");
+
+    // Assert
+    assert!(
+        text.contains(
+            "all 1 batches completed, but the cross-file pass failed: review budget exhausted"
+        ),
+        "{text}"
+    );
 }
 
 #[tokio::test]

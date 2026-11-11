@@ -29,6 +29,40 @@ fn test_previous_project_wraps_to_last_row() {
     assert_eq!(manager.table_state.selected(), Some(1));
 }
 
+#[test]
+fn project_navigation_steps_back_starts_at_first_row_and_clears_empty_list() {
+    // Arrange
+    let next: fn(&mut ProjectManager) = ProjectManager::next_project;
+    let previous: fn(&mut ProjectManager) = ProjectManager::previous_project;
+    let cases = [
+        (
+            "previous from second row",
+            previous,
+            Some(1),
+            false,
+            Some(0),
+        ),
+        ("next without selection", next, None, false, Some(0)),
+        ("previous without selection", previous, None, false, Some(0)),
+        ("next in empty list", next, Some(0), true, None),
+        ("previous in empty list", previous, Some(0), true, None),
+    ];
+
+    for (name, navigate, selected, is_empty, expected) in cases {
+        let mut manager = project_manager_fixture();
+        if is_empty {
+            manager.project_items.clear();
+        }
+        manager.table_state.select(selected);
+
+        // Act
+        navigate(&mut manager);
+
+        // Assert
+        assert_eq!(manager.table_state.selected(), expected, "{name}");
+    }
+}
+
 fn project_manager_fixture() -> ProjectManager {
     let project_items = vec![
         ProjectListItem {

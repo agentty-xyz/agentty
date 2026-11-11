@@ -11,8 +11,8 @@ use super::{
     ReviewRequestCreationInfo, branch_push_success_message, create_or_refresh_review_request,
     detected_forge_kind_from_git_push_error, git_push_authentication_message,
     is_git_push_authentication_error, load_review_request_create_input, publish_pull_request,
-    push_session_branch_to_remote, review_request_created_notice, review_request_queued_label,
-    review_request_remote,
+    push_session_branch, push_session_branch_to_remote, review_request_created_notice,
+    review_request_queued_label, review_request_remote,
 };
 use crate::app::review_request::ReviewRequestGenerator;
 use crate::domain::session::{PublishBranchAction, ReviewRequest, Status};
@@ -355,7 +355,15 @@ fn expect_safe_session_branch_push(mock_git_client: &mut git::MockGitClient, ses
 
 /// Creates the persisted review session used by branch publication tests.
 async fn review_session_database() -> AppRepositories {
-    let database = AppRepositories::in_memory().await.expect("db should open");
+    review_session_database_with_pool().await.0
+}
+
+/// Creates the persisted review session and returns the pool used to inject
+/// persistence failures.
+async fn review_session_database_with_pool() -> (AppRepositories, sqlx::SqlitePool) {
+    let (database, pool) = AppRepositories::in_memory_with_pool()
+        .await
+        .expect("db should open");
     let project_id = database
         .projects()
         .upsert_project("/tmp/project", Some("main".to_string()))
@@ -373,7 +381,7 @@ async fn review_session_database() -> AppRepositories {
         .await
         .expect("failed to insert session");
 
-    database
+    (database, pool)
 }
 
 async fn push_session_branch_to_remote_with_mock(
@@ -445,6 +453,159 @@ async fn review_request_remote_attaches_session_worktree_to_detected_remote() {
     // Assert
     assert_eq!(remote.command_working_directory, Some(session_folder));
     assert_eq!(remote.forge_kind, forge::ForgeKind::GitLab);
+}
+
+#[tokio::test]
+async fn review_request_remote_reports_repository_and_forge_detection_failures() {
+    // Arrange
+    for (failure, expected_message) in [
+        (
+            "repo_url",
+            "Failed to resolve repository remote for review request: git remote get-url origin: \
+             no origin",
+        ),
+        ("detect", "forge rejected remote"),
+    ] {
+        let branch_publish_session = BranchPublishTaskSession {
+            base_branch: "main".to_string(),
+            folder: PathBuf::from("/tmp/session-worktree"),
+            id: "session-id".into(),
+            published_upstream_ref: None,
+            review_request: None,
+            status: Status::Review,
+        };
+        let mut mock_git_client = git::MockGitClient::new();
+        mock_git_client
+            .expect_repo_url()
+            .once()
+            .returning(move |_| {
+                Box::pin(async move {
+                    if failure == "repo_url" {
+                        return Err(git::GitError::CommandFailed {
+                            command: "git remote get-url origin".into(),
+                            stderr: "no origin".into(),
+                        });
+                    }
+
+                    Ok("https://github.com/agentty-xyz/agentty.git".to_string())
+                })
+            });
+        let mut mock_review_request_client = forge::MockReviewRequestClient::new();
+        mock_review_request_client
+            .expect_detect_remote()
+            .times(usize::from(failure == "detect"))
+            .returning(|_| {
+                Err(forge::ReviewRequestError::OperationFailed {
+                    forge_kind: forge::ForgeKind::GitHub,
+                    message: "forge rejected remote".into(),
+                })
+            });
+
+        // Act
+        let result = review_request_remote(
+            &branch_publish_session,
+            Arc::new(mock_git_client),
+            &mock_review_request_client,
+        )
+        .await;
+
+        // Assert
+        let failure_popup = result.expect_err("remote resolution should fail");
+        assert_eq!(failure_popup.title, "Review request publish failed");
+        assert!(
+            failure_popup.message.contains(expected_message),
+            "{failure}: {}",
+            failure_popup.message
+        );
+    }
+}
+
+#[tokio::test]
+async fn review_request_forge_and_persistence_failures_abort_publication() {
+    // Arrange
+    for failure in [
+        "linked_refresh",
+        "find",
+        "found_refresh",
+        "create",
+        "persist",
+    ] {
+        let (database, pool) = review_session_database_with_pool().await;
+        database
+            .sessions()
+            .update_session_published_upstream_ref("session-id", Some("origin/review/topic".into()))
+            .await
+            .expect("published branch");
+        if failure == "persist" {
+            sqlx::query("DROP TABLE session_review_request")
+                .execute(&pool)
+                .await
+                .expect("drop review-request table");
+        }
+        let branch_publish_session = BranchPublishTaskSession {
+            base_branch: "main".into(),
+            folder: PathBuf::from("/tmp/session-worktree"),
+            id: "session-id".into(),
+            published_upstream_ref: Some("origin/review/topic".into()),
+            review_request: (failure == "linked_refresh").then(published_review_request),
+            status: Status::Review,
+        };
+        let mock_review_request_client = failing_publication_forge_client(failure);
+        let mut mock_git_client = git::MockGitClient::new();
+        let mut run_client = ag_worker::MockRunClient::new();
+        if matches!(failure, "create" | "persist") {
+            mock_git_client
+                .expect_head_commit_message()
+                .once()
+                .returning(|_| Box::pin(async { Ok(Some("Publish changes".to_string())) }));
+            expect_published_commit_diff(&mut mock_git_client, "main", "review/topic");
+            run_client = publication_run_client();
+        }
+        let git_client: Arc<dyn git::GitClient> = Arc::new(mock_git_client);
+        let transcript = Mutex::new(SessionTranscript::default());
+        let generator = ReviewRequestGenerator {
+            db: &database,
+            folder: &branch_publish_session.folder,
+            git_client: &git_client,
+            run_client: &run_client,
+            session_agent: model_fixture::codex_selection(),
+            session_id: "session-id",
+            transcript: &transcript,
+        };
+        let clock: Arc<dyn crate::infra::clock::Clock> = Arc::new(FixedClock::unix_epoch());
+        let remote =
+            forge::detect_remote("https://github.com/agentty-xyz/agentty.git").expect("remote");
+
+        // Act
+        let result = create_or_refresh_review_request(
+            &branch_publish_session,
+            &clock,
+            Arc::new(mock_review_request_client),
+            &generator,
+            remote,
+            "review/topic".into(),
+        )
+        .await;
+
+        // Assert
+        let failure_popup = result.expect_err("publication should fail");
+        assert_eq!(failure_popup.title, "Review request publish failed");
+        if failure == "persist" {
+            assert!(
+                failure_popup
+                    .message
+                    .contains("could not persist the linked review request"),
+                "{}",
+                failure_popup.message
+            );
+        } else {
+            assert!(
+                failure_popup.message.contains("forge unavailable"),
+                "{failure}: {}",
+                failure_popup.message
+            );
+        }
+    }
 }
 
 #[tokio::test]
@@ -605,6 +766,55 @@ async fn publish_pull_request_returns_pushed_upstream_and_persists_review_reques
     );
 }
 
+/// Builds a forge client whose lookup, refresh, or creation step fails for
+/// one `failure` case; `persist` creates successfully.
+fn failing_publication_forge_client(failure: &'static str) -> forge::MockReviewRequestClient {
+    let forge_failure = || forge::ReviewRequestError::OperationFailed {
+        forge_kind: forge::ForgeKind::GitHub,
+        message: "forge unavailable".into(),
+    };
+    let summary = published_review_request().summary;
+    let mut client = forge::MockReviewRequestClient::new();
+    let found_summary = summary.clone();
+    client
+        .expect_find_by_source_branch()
+        .times(usize::from(failure != "linked_refresh"))
+        .returning(move |_, _| {
+            let found_summary = found_summary.clone();
+
+            Box::pin(async move {
+                match failure {
+                    "find" => Err(forge_failure()),
+                    "found_refresh" => Ok(Some(found_summary)),
+                    _ => Ok(None),
+                }
+            })
+        });
+    client
+        .expect_refresh_review_request()
+        .times(usize::from(matches!(
+            failure,
+            "linked_refresh" | "found_refresh"
+        )))
+        .returning(move |_, _| Box::pin(async move { Err(forge_failure()) }));
+    client
+        .expect_create_review_request()
+        .times(usize::from(matches!(failure, "create" | "persist")))
+        .returning(move |_, _| {
+            let summary = summary.clone();
+
+            Box::pin(async move {
+                if failure == "create" {
+                    return Err(forge_failure());
+                }
+
+                Ok(summary)
+            })
+        });
+
+    client
+}
+
 fn published_review_request() -> ReviewRequest {
     ReviewRequest {
         last_refreshed_at: 0,
@@ -690,6 +900,21 @@ fn branch_push_failure_handles_multiple_auth_error_formats() {
                 expected_cli_guidance: Some("glab auth login"),
             },
             AuthGuidanceCase {
+                name: "remote push rejection with gh hint uses gh guidance",
+                error: "error: failed to push some refs to origin: permission denied; run gh auth login",
+                expected_cli_guidance: Some("gh auth login"),
+            },
+            AuthGuidanceCase {
+                name: "remote push rejection with glab hint uses glab guidance",
+                error: "remote rejected push: access denied, run glab auth login",
+                expected_cli_guidance: Some("glab auth login"),
+            },
+            AuthGuidanceCase {
+                name: "empty prompt host falls back to generic guidance",
+                error: "Git push failed: fatal: could not read Username for '': terminal prompts disabled",
+                expected_cli_guidance: None,
+            },
+            AuthGuidanceCase {
                 name: "non-forge host falls back to generic guidance",
                 error: "Git push failed: fatal: could not read Username for 'https://example.com/openai/agentty': terminal prompts disabled",
                 expected_cli_guidance: None,
@@ -741,12 +966,24 @@ fn branch_push_success_message_uses_gitlab_merge_request_copy() {
         web_url: Some("https://gitlab.com/agentty-xyz/agentty/-/merge_requests/new".to_string()),
     };
 
+    let manual_review_request_creation = ReviewRequestCreationInfo {
+        forge_kind: forge::ForgeKind::GitLab,
+        web_url: None,
+    };
+
     // Act
     let message = branch_push_success_message("wt/session-1", Some(&review_request_creation));
+    let manual_message =
+        branch_push_success_message("wt/session-1", Some(&manual_review_request_creation));
 
     // Assert
     assert!(message.contains("create the merge request"));
     assert!(message.contains("gitlab.com/agentty-xyz/agentty/-/merge_requests/new"));
+    assert_eq!(
+        manual_message,
+        "Pushed session branch `wt/session-1`.\n\nCreate the merge request manually from your \
+         forge UI."
+    );
 }
 
 #[test]
@@ -1193,6 +1430,127 @@ async fn push_shows_auth_guidance_when_ls_remote_returns_auth_error() {
     assert!(failure.message.contains("Git push requires authentication"));
     assert!(failure.message.contains("push the branch again"));
     assert!(failure.message.contains("gh auth login"));
+}
+
+#[tokio::test]
+async fn push_reports_remote_lookup_and_upstream_persistence_failures() {
+    // Arrange
+    for (failure, expected_message) in [
+        (
+            "lookup",
+            "Failed to check remote branch existence: git ls-remote: network unreachable",
+        ),
+        (
+            "persist",
+            "Branch push succeeded, but Agentty could not persist the upstream reference",
+        ),
+    ] {
+        let (database, pool) = review_session_database_with_pool().await;
+        sqlx::query(
+            "CREATE TRIGGER reject_upstream BEFORE UPDATE OF published_upstream_ref ON session \
+             BEGIN SELECT RAISE(ABORT, 'upstream rejected'); END",
+        )
+        .execute(&pool)
+        .await
+        .expect("trigger");
+        let mut mock_git_client = git::MockGitClient::new();
+        expect_safe_session_branch_push(&mut mock_git_client, "session-id");
+        mock_git_client
+            .expect_remote_branch_exists()
+            .once()
+            .returning(move |_, _| {
+                Box::pin(async move {
+                    if failure == "lookup" {
+                        return Err(git::GitError::CommandFailed {
+                            command: "git ls-remote".to_string(),
+                            stderr: "network unreachable".to_string(),
+                        });
+                    }
+
+                    Ok(false)
+                })
+            });
+        mock_git_client
+            .expect_push_current_branch_to_new_remote_branch()
+            .times(usize::from(failure == "persist"))
+            .returning(|_, _| Box::pin(async { Ok("origin/feature/new-branch".to_string()) }));
+
+        // Act
+        let result = push_session_branch_to_remote(
+            &database,
+            PathBuf::from("/tmp/session-worktree"),
+            Arc::new(mock_git_client),
+            PublishBranchAction::Push,
+            "session-id",
+            Some("feature/new-branch"),
+            None,
+        )
+        .await;
+
+        // Assert
+        let failure_popup = result.expect_err("push should fail");
+        assert_eq!(failure_popup.title, "Branch push failed");
+        assert!(
+            failure_popup.message.contains(expected_message),
+            "{failure}: {}",
+            failure_popup.message
+        );
+    }
+}
+
+#[tokio::test]
+async fn push_without_repository_remote_omits_review_request_creation_link() {
+    // Arrange
+    let database = review_session_database().await;
+    let branch_publish_session = BranchPublishTaskSession {
+        base_branch: "main".into(),
+        folder: PathBuf::from("/tmp/session-worktree"),
+        id: "session-id".into(),
+        published_upstream_ref: Some("origin/wt/session-id".into()),
+        review_request: None,
+        status: Status::Review,
+    };
+    let mut mock_git_client = git::MockGitClient::new();
+    expect_safe_session_branch_push(&mut mock_git_client, "session-id");
+    mock_git_client
+        .expect_push_current_branch_to_remote_branch_with_outcome()
+        .once()
+        .returning(|_, _| {
+            Box::pin(async {
+                Ok(BranchPushOutcome {
+                    updated: true,
+                    upstream_reference: "origin/wt/session-id".to_string(),
+                })
+            })
+        });
+    mock_git_client.expect_repo_url().once().returning(|_| {
+        Box::pin(async {
+            Err(git::GitError::CommandFailed {
+                command: "git remote get-url origin".into(),
+                stderr: "no origin".into(),
+            })
+        })
+    });
+
+    // Act
+    let result = push_session_branch(
+        PublishBranchAction::Push,
+        &branch_publish_session,
+        database,
+        Arc::new(mock_git_client),
+        None,
+    )
+    .await;
+
+    // Assert
+    assert_eq!(
+        result.expect("push should succeed"),
+        BranchPublishTaskSuccess::Pushed {
+            branch_name: session::session_branch("session-id"),
+            review_request_creation: None,
+            upstream_reference: "origin/wt/session-id".to_string(),
+        }
+    );
 }
 
 #[tokio::test]

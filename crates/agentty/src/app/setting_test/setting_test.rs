@@ -18,6 +18,7 @@ use crate::domain::setting::SettingName;
 use crate::domain::subagent::SubagentLimit;
 use crate::domain::theme::ColorTheme;
 use crate::presentation::setting::SettingsOperation;
+use crate::test_support::enable_tracing_log_fallback;
 
 #[test]
 fn speed_defaults_normalize_provider_support_and_fast_model_compatibility() {
@@ -707,6 +708,80 @@ async fn apply_operation_persists_role_model_reasoning_and_speed_settings() {
         (review_selection, ReasoningLevel::XHigh, SpeedMode::Fast),
     )
     .await;
+}
+
+#[tokio::test]
+async fn apply_operation_keeps_role_selections_when_persistence_fails() {
+    // Arrange
+    let (repositories, pool) = AppRepositories::in_memory_with_pool()
+        .await
+        .expect("db should open");
+    let project_id = repositories
+        .projects()
+        .upsert_project("/tmp/project", Some("main".to_string()))
+        .await
+        .expect("failed to create project");
+    let mut manager = SettingsManager::from_repositories(
+        repositories.clone(),
+        AgentKind::ALL.to_vec(),
+        Vec::new(),
+        project_id,
+    )
+    .await;
+    sqlx::query(
+        "CREATE TRIGGER reject_project_setting BEFORE INSERT ON project_setting BEGIN SELECT \
+         RAISE(ABORT, 'setting rejected'); END",
+    )
+    .execute(&pool)
+    .await
+    .expect("trigger");
+    let selection = AgentSelection::new(AgentKind::Claude, AgentModel::ClaudeOpus55);
+    enable_tracing_log_fallback();
+
+    // Act
+    manager
+        .apply_operation(SettingsOperation::DefaultFastSelection {
+            reasoning_level: ReasoningLevel::Low,
+            selection,
+            speed_mode: SpeedMode::Normal,
+        })
+        .await;
+    manager
+        .apply_operation(SettingsOperation::DefaultReviewSelection {
+            reasoning_level: ReasoningLevel::XHigh,
+            selection,
+            speed_mode: SpeedMode::Normal,
+        })
+        .await;
+    manager
+        .apply_operation(SettingsOperation::DefaultSmartSelection {
+            reasoning_level: ReasoningLevel::Max,
+            selection,
+            speed_mode: SpeedMode::Normal,
+            use_last_used_model_as_default: true,
+        })
+        .await;
+
+    // Assert
+    let view = manager.view();
+    assert_eq!(view.default_fast_selection, selection);
+    assert_eq!(view.default_review_selection, selection);
+    assert_eq!(view.default_smart_selection, selection);
+    assert!(view.use_last_used_model_as_default);
+    for setting_name in [
+        SettingName::DefaultFastModel,
+        SettingName::DefaultReviewModel,
+        SettingName::DefaultSmartModel,
+    ] {
+        assert_eq!(
+            repositories
+                .settings()
+                .get_project_setting(project_id, setting_name)
+                .await
+                .expect("setting should load"),
+            None
+        );
+    }
 }
 
 #[test]

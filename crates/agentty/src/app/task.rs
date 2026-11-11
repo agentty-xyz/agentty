@@ -764,12 +764,12 @@ impl TaskService {
     /// Renders the review assist prompt from the markdown template.
     ///
     /// # Errors
-    /// Returns an error when Askama template rendering fails.
+    /// Returns the Askama error when template rendering fails.
     fn review_assist_prompt(
         review_diff: &str,
         session_chat_history: Option<&str>,
         review_rules: &str,
-    ) -> Result<String, AppError> {
+    ) -> Result<String, askama::Error> {
         let trimmed_diff = review_diff.trim();
         let fence = ag_protocol::diff_fence(trimmed_diff);
         let fenced_diff = format!("{fence}diff\n{trimmed_diff}\n{fence}");
@@ -783,11 +783,7 @@ impl TaskService {
             session_chat_history: &fenced_session_chat_history,
         };
 
-        template.render().map_err(|error| {
-            AppError::Workflow(format!(
-                "Failed to render `review_assist_prompt.md`: {error}"
-            ))
-        })
+        template.render()
     }
 }
 

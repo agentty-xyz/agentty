@@ -140,6 +140,36 @@ async fn handle_reports_unavailable_when_command_response_drops() {
 }
 
 #[tokio::test]
+async fn graph_handoff_reports_unavailable_when_admission_drops() {
+    // Arrange
+    let mut runtime = SessionRuntime::new(crate::test_support::session_manager_with_handles(
+        Vec::new(),
+        std::collections::HashMap::new(),
+    ));
+    let handle = runtime.handle();
+    let _consumer = runtime.foreground_consumer();
+    let work = tokio::spawn(async move {
+        handle
+            .run_graph_node(
+                crate::app::execution_graph::tests::run_request(),
+                tokio_util::sync::CancellationToken::new(),
+            )
+            .await
+    });
+    let command = runtime.next_command().await;
+    drop(command);
+
+    // Act
+    let error = work
+        .await
+        .expect("graph handoff task should complete")
+        .expect_err("dropped admission should fail");
+
+    // Assert
+    assert_eq!(error.to_string(), SESSION_RUNTIME_UNAVAILABLE);
+}
+
+#[tokio::test]
 async fn live_undriven_runtime_rejects_requests_without_waiting() {
     // Arrange
     let runtime = SessionRuntime::new(crate::test_support::session_manager_with_handles(

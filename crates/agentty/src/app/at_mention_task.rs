@@ -44,3 +44,7 @@ pub(crate) fn finish_pending_load(session_id: &str, request_id: u64) {
         pending_loads.remove(session_id);
     }
 }
+
+#[cfg(test)]
+#[path = "at_mention_task_test.rs"]
+mod tests;

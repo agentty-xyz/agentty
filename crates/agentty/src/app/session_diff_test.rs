@@ -8,6 +8,7 @@ use super::{
     SessionDiffUpdate,
 };
 use crate::app::review::ReviewCacheEntry;
+use crate::app::task::SessionDiffTaskSource;
 use crate::app::{App, review, session};
 use crate::domain::input::InputState;
 use crate::domain::review::FocusedReviewStatus;
@@ -534,6 +535,7 @@ async fn transient_deferred_auto_review_persistence_failure_retains_and_retries_
         .await
         .expect("failed to insert inactive review session");
     let (retry_tx, mut retry_rx) = tokio::sync::mpsc::unbounded_channel();
+    crate::test_support::enable_tracing_log_fallback();
     let retry_scheduled = App::handle_deferred_auto_review_persistence_result(
         &mut app.deferred_auto_review_session_ids,
         retry_tx,
@@ -974,6 +976,95 @@ async fn automatic_empty_review_diff_preserves_cached_output() {
             if *diff_hash == cached_diff_hash && text.contains("Existing finding")
     ));
     assert_eq!(app.sessions.sessions()[0].status, Status::Review);
+}
+
+#[tokio::test]
+async fn review_diff_completion_for_session_outside_review_clears_only_uncached_output() {
+    for (cached_diff_hash, expects_cleared) in [(None, true), (Some(7), false)] {
+        // Arrange
+        let (mut app, _base_dir, session_id) = review_app_with_mock_backend().await;
+        crate::test_support::set_session_status_for_test(&mut app, &session_id, Status::InProgress);
+        app.review_cache.insert(
+            session_id.clone(),
+            ReviewCacheEntry::Ready {
+                request_id: uuid::Uuid::nil(),
+                diff_hash: 7,
+                text: "## Review\nStale finding.".to_string(),
+            },
+        );
+        let update = SessionDiffUpdate {
+            request_id: 1,
+            result: Ok("diff --git a/file b/file".to_string()),
+            session_id: session_id.clone(),
+        };
+        let target = test_review_target(&app, &session_id);
+
+        // Act
+        app.apply_review_diff_update(update, cached_diff_hash, false, target)
+            .await;
+
+        // Assert
+        assert_eq!(
+            !app.review_cache.contains_key(&session_id),
+            expects_cleared,
+            "{cached_diff_hash:?}"
+        );
+        assert_eq!(
+            app.review_diff_hashes.contains_key(&session_id),
+            expects_cleared
+        );
+    }
+}
+
+#[tokio::test]
+async fn merging_session_diff_target_keeps_archived_fallback() {
+    // Arrange
+    let (app, base_dir) = crate::test_support::new_test_app().await;
+    let mut session =
+        crate::test_support::session_fixture_with_folder(base_dir.path().to_path_buf());
+    session.status = Status::Merging;
+
+    // Act
+    let (folder, source) = app.session_diff_task_target(&session);
+
+    // Assert
+    assert_eq!(folder, base_dir.path());
+    assert!(matches!(
+        source,
+        SessionDiffTaskSource::Worktree {
+            archived_fallback: Some(_),
+            ref base_branch,
+            ..
+        } if base_branch == "main"
+    ));
+}
+
+#[tokio::test]
+async fn manual_review_diff_load_for_unloaded_session_tracks_loading_review() {
+    // Arrange
+    let (mut app, base_dir) = crate::test_support::new_test_app().await;
+    let session_id = SessionId::from("unloaded-review-session");
+    let target = test_review_target(&app, &session_id);
+    let source = SessionDiffTaskSource::Archived {
+        repositories: app.services.db().clone(),
+    };
+
+    // Act
+    let started = app.start_review_diff_load_for_target(
+        &session_id,
+        true,
+        target,
+        base_dir.path().to_path_buf(),
+        source,
+    );
+
+    // Assert
+    assert!(started);
+    assert_eq!(app.pending_session_diff_requests.len(), 1);
+    assert!(matches!(
+        app.review_cache.get(&session_id),
+        Some(ReviewCacheEntry::Loading { .. })
+    ));
 }
 
 #[tokio::test]

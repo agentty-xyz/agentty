@@ -2,6 +2,7 @@ use tokio::sync::mpsc;
 
 use super::super::core::AppEvent;
 use super::{APP_EVENT_DRAIN_BUDGET, AppEventReducer};
+use crate::test_support::enable_tracing_log_fallback;
 
 #[test]
 fn drain_keeps_events_over_budget_queued_for_later_cycle() {
@@ -12,6 +13,7 @@ fn drain_keeps_events_over_budget_queued_for_later_cycle() {
             .send(AppEvent::RefreshSessions)
             .expect("event receiver should be open");
     }
+    enable_tracing_log_fallback();
 
     // Act
     let drained_events = AppEventReducer::drain(&mut event_rx, AppEvent::RefreshProjects);
