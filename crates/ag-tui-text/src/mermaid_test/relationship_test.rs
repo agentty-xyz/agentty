@@ -1,5 +1,50 @@
+use std::fmt::Write;
+
 use super::support::diagram_text;
-use crate::mermaid::render_mermaid;
+use crate::mermaid::{MAX_EDGE_COUNT, MAX_NODE_COUNT, render_mermaid};
+
+#[test]
+fn test_render_mermaid_er_treats_blank_label_as_unlabeled() {
+    // Arrange
+    let blank_label = "erDiagram\n    PROJECT ||--o{ SESSION :  ";
+    let unlabeled = "erDiagram\n    PROJECT ||--o{ SESSION";
+
+    // Act
+    let blank_label_diagram = render_mermaid(blank_label).expect("blank label should render");
+    let unlabeled_diagram = render_mermaid(unlabeled).expect("unlabeled link should render");
+
+    // Assert
+    assert_eq!(blank_label_diagram.lines, unlabeled_diagram.lines);
+}
+
+#[test]
+fn test_render_mermaid_er_rejects_malformed_and_oversized_statements() {
+    // Arrange
+    let mut too_many_entities = String::from("erDiagram");
+    for entity_index in 0..=MAX_NODE_COUNT {
+        write!(&mut too_many_entities, "\n    E{entity_index}")
+            .expect("writing to String should succeed");
+    }
+    let mut too_many_relationships = String::from("erDiagram");
+    for _ in 0..=MAX_EDGE_COUNT {
+        too_many_relationships.push_str("\n    A ||--o{ B");
+    }
+    let sources = [
+        "erDiagram\n    A ||--o{ B {".to_string(),
+        "erDiagram\n    A ||--o{ B C".to_string(),
+        "erDiagram\n    A@ ||--o{ B".to_string(),
+        too_many_entities,
+        too_many_relationships,
+    ];
+
+    for source in sources {
+        // Act
+        let diagram = render_mermaid(&source);
+
+        // Assert
+        assert!(diagram.is_none(), "{source:?}");
+    }
+}
 
 #[test]
 fn test_render_mermaid_draws_er_diagram_with_cardinality_markers() {

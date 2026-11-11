@@ -1,5 +1,7 @@
 #[path = "mermaid_test/cache_test.rs"]
 mod cache;
+#[path = "mermaid_test/canvas_test.rs"]
+mod canvas;
 #[path = "mermaid_test/cycle_test.rs"]
 mod cycle;
 #[path = "mermaid_test/flow_test.rs"]

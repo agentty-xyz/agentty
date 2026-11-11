@@ -774,6 +774,9 @@ fn graph_path_exists(
 }
 
 /// Splits long graph edges into adjacent-layer segments through hidden nodes.
+///
+/// Longest-path layering places every edge target at least one layer below
+/// its source, so each edge either spans one layer or is expanded.
 fn expand_long_edges(mut graph: MermaidGraph) -> Option<MermaidGraph> {
     let node_layers = assign_node_layers(&graph)?;
     let mut edges = Vec::with_capacity(graph.edges.len());
@@ -782,10 +785,6 @@ fn expand_long_edges(mut graph: MermaidGraph) -> Option<MermaidGraph> {
     for edge in graph.edges {
         let from_layer = node_layers[edge.from_index];
         let to_layer = node_layers[edge.to_index];
-        if to_layer <= from_layer {
-            return None;
-        }
-
         if to_layer == from_layer + 1 {
             edges.push(edge);
 
@@ -1588,16 +1587,15 @@ fn layout_layers(graph: &MermaidGraph) -> Option<GraphLayout> {
 }
 
 /// Assigns every node to a topological layer using longest-path layering.
+///
+/// Returns `None` when a cycle, including a self-link, leaves nodes that
+/// never become ready.
 fn assign_node_layers(graph: &MermaidGraph) -> Option<Vec<usize>> {
     let node_count = graph.nodes.len();
     let mut indegrees = vec![0_usize; node_count];
     let mut outgoing: Vec<Vec<usize>> = vec![Vec::new(); node_count];
 
     for edge in &graph.edges {
-        if edge.from_index == edge.to_index {
-            return None;
-        }
-
         indegrees[edge.to_index] += 1;
         outgoing[edge.from_index].push(edge.to_index);
     }
@@ -1766,14 +1764,12 @@ fn top_down_layer_top_rows(
     let layer_count = layout.layer_members.len();
     let mut layer_top_rows = Vec::with_capacity(layer_count);
     let mut next_row = 0;
-    for region_edges_after_layer in region_edges.iter().take(layer_count.saturating_sub(1)) {
+    for layer_index in 0..layer_count {
         layer_top_rows.push(next_row);
         next_row += NODE_BOX_HEIGHT;
-        next_row += region_edges_after_layer.len() + 2;
-    }
-    if layer_count > 0 {
-        layer_top_rows.push(next_row);
-        next_row += NODE_BOX_HEIGHT;
+        if let Some(region_edges_after_layer) = region_edges.get(layer_index) {
+            next_row += region_edges_after_layer.len() + 2;
+        }
     }
 
     (layer_top_rows, next_row)
@@ -2298,14 +2294,15 @@ impl Canvas {
     /// horizontal connector, keeping other edges' verticals intact.
     fn try_write_label(&mut self, start_column: usize, row: usize, label: &str) {
         let character_count = label.chars().count();
-        let Some(row_cells) = self.cells.get(row) else {
+        let Some(target_cells) = self
+            .cells
+            .get(row)
+            .and_then(|row_cells| row_cells.get(start_column..start_column + character_count))
+        else {
             return;
         };
-        if start_column + character_count > row_cells.len() {
-            return;
-        }
 
-        let is_writable = row_cells[start_column..start_column + character_count].iter().all(|cell| {
+        let is_writable = target_cells.iter().all(|cell| {
             matches!(cell, CanvasCell::Empty)
                 || matches!(cell, CanvasCell::Connector(mask) if *mask == CONNECT_LEFT | CONNECT_RIGHT)
         });

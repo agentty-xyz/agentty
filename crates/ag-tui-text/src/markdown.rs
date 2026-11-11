@@ -654,10 +654,6 @@ fn render_markdown_line(raw_line: &str, width: usize) -> Vec<Line<'static>> {
         return vec![Line::from("")];
     }
 
-    if raw_line.starts_with(USER_PROMPT_PREFIX) {
-        return render_prompt_block_line(raw_line, true, width, PromptBlockKind::UserPrompt);
-    }
-
     if let Some((level, content)) = parse_heading(raw_line) {
         return render_inline_line(content, heading_style(level), width);
     }
@@ -1256,13 +1252,10 @@ fn table_cell_padding(available_padding: usize, alignment: TableAlignment) -> (u
     }
 }
 
+/// Wraps one non-empty verbatim line at character boundaries.
 fn wrap_verbatim_line(content: &str, style: Style, width: usize) -> Vec<Line<'static>> {
     if width == 0 {
         return vec![Line::from(vec![Span::styled(content.to_string(), style)])];
-    }
-
-    if content.is_empty() {
-        return vec![Line::from("")];
     }
 
     let mut wrapped_lines = Vec::new();
@@ -1283,17 +1276,13 @@ fn wrap_verbatim_line(content: &str, style: Style, width: usize) -> Vec<Line<'st
         current_width += character_width;
     }
 
-    if !current_segment.is_empty() {
-        wrapped_lines.push(Line::from(vec![Span::styled(current_segment, style)]));
-    }
-
-    if wrapped_lines.is_empty() {
-        wrapped_lines.push(Line::from(""));
-    }
+    // Non-empty content always leaves its last character in the segment.
+    wrapped_lines.push(Line::from(vec![Span::styled(current_segment, style)]));
 
     wrapped_lines
 }
 
+/// Wraps non-empty styled spans at character boundaries.
 fn wrap_verbatim_spans(spans: Vec<Span<'static>>, width: usize) -> Vec<Line<'static>> {
     if width == 0 {
         return vec![Line::from(spans)];
@@ -1319,13 +1308,8 @@ fn wrap_verbatim_spans(spans: Vec<Span<'static>>, width: usize) -> Vec<Line<'sta
         }
     }
 
-    if !current_spans.is_empty() {
-        wrapped_lines.push(Line::from(current_spans));
-    }
-
-    if wrapped_lines.is_empty() {
-        wrapped_lines.push(Line::from(""));
-    }
+    // Non-empty spans always leave their last character on the current line.
+    wrapped_lines.push(Line::from(current_spans));
 
     wrapped_lines
 }
@@ -1402,13 +1386,9 @@ fn wrap_verbatim_spans_with_word_boundaries(
         return vec![Line::from("")];
     }
 
-    if !current_spans.is_empty() {
-        wrapped_lines.push(Line::from(current_spans));
-    }
-
-    if wrapped_lines.is_empty() {
-        wrapped_lines.push(Line::from(""));
-    }
+    // The final grapheme, whether whitespace or part of the flushed word, is
+    // always on the current line.
+    wrapped_lines.push(Line::from(current_spans));
 
     wrapped_lines
 }

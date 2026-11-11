@@ -1,3 +1,5 @@
+use std::borrow::Cow;
+
 use ratatui::buffer::Buffer;
 use ratatui::layout::{Alignment, Rect};
 use ratatui::style::{Color, Modifier, Style};
@@ -5,9 +7,9 @@ use ratatui::text::{Line, Span};
 use ratatui::widgets::{Paragraph, Widget};
 
 use crate::text_util::{
-    format_duration_compact, format_token_count, inline_text, paint_line, span_display_width,
-    split_line_at_width, truncate_spans_with_ellipsis, truncate_with_ellipsis, wrap_lines,
-    wrap_lines_breaking_long_words, wrap_styled_line,
+    borrowed_paint_lines, format_duration_compact, format_token_count, inline_text, paint_line,
+    span_display_width, split_line_at_width, truncate_spans_with_ellipsis, truncate_with_ellipsis,
+    wrap_lines, wrap_lines_breaking_long_words, wrap_styled_line,
 };
 
 #[test]
@@ -210,7 +212,7 @@ fn test_wrap_styled_line_zero_width_returns_original_line() {
 fn test_wrap_styled_line_collapses_extra_whitespace() {
     // Arrange
     let spans = vec![
-        Span::styled("hello   ".to_string(), Style::default().fg(Color::Green)),
+        Span::styled("  hello   ".to_string(), Style::default().fg(Color::Green)),
         Span::styled("   world".to_string(), Style::default().fg(Color::Red)),
     ];
 
@@ -220,6 +222,44 @@ fn test_wrap_styled_line_collapses_extra_whitespace() {
     // Assert
     assert_eq!(wrapped.len(), 1);
     assert_eq!(wrapped[0].to_string(), "hello world");
+}
+
+#[test]
+fn test_wrap_styled_line_returns_one_empty_line_for_whitespace_only_spans() {
+    // Arrange
+    let spans = vec![Span::raw("  \t ".to_string()), Span::raw("\n".to_string())];
+
+    // Act
+    let wrapped = wrap_styled_line(spans, 20);
+
+    // Assert
+    assert_eq!(wrapped, vec![Line::from("")]);
+}
+
+#[test]
+fn test_borrowed_paint_lines_borrow_cached_span_text() {
+    // Arrange
+    let lines = vec![
+        Line::from(vec![
+            Span::styled("cached".to_string(), Style::default().fg(Color::Red)),
+            Span::raw(" row".to_string()),
+        ])
+        .alignment(Alignment::Center)
+        .style(Style::default().bg(Color::Blue)),
+        Line::from("second".to_string()),
+    ];
+
+    // Act
+    let borrowed = borrowed_paint_lines(&lines);
+
+    // Assert
+    assert_eq!(borrowed, lines);
+    for (borrowed_line, cached_line) in borrowed.iter().zip(&lines) {
+        for (borrowed_span, cached_span) in borrowed_line.spans.iter().zip(&cached_line.spans) {
+            assert!(matches!(borrowed_span.content, Cow::Borrowed(_)));
+            assert_eq!(borrowed_span.content.as_ptr(), cached_span.content.as_ptr());
+        }
+    }
 }
 
 #[test]

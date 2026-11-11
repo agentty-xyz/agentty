@@ -59,9 +59,30 @@ fn test_render_mermaid_rejects_node_and_edge_over_preview_limits() {
         too_many_edges.push_str("\n    A --> B");
     }
 
+    // A 16-node chain plus three edges into its tail needs 14 + 13 + 12
+    // hidden routing nodes, exceeding the dummy-node budget.
+    let mut too_many_dummy_nodes = String::from("graph TD");
+    for node_index in 1..MAX_NODE_COUNT {
+        write!(
+            &mut too_many_dummy_nodes,
+            "\n    N{} --> N{node_index}",
+            node_index - 1
+        )
+        .expect("writing to String should succeed");
+    }
+    for source_index in 0..3 {
+        write!(
+            &mut too_many_dummy_nodes,
+            "\n    N{source_index} --> N{}",
+            MAX_NODE_COUNT - 1
+        )
+        .expect("writing to String should succeed");
+    }
+
     // Act & Assert
     assert!(render_mermaid(&too_many_nodes).is_none());
     assert!(render_mermaid(&too_many_edges).is_none());
+    assert!(render_mermaid(&too_many_dummy_nodes).is_none());
 }
 
 #[test]

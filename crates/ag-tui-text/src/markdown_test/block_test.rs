@@ -220,6 +220,106 @@ fn test_render_markdown_renders_pipe_table() {
 }
 
 #[test]
+fn test_render_markdown_handles_table_edge_rows() {
+    // Arrange
+    let cases = [
+        (
+            "A | B | C\n:---: | --- | ---\nx | y\n| | y | z |\nplain",
+            vec![
+                "┌─────┬─────┬─────┐",
+                "│  A  │ B   │ C   │",
+                "├─────┼─────┼─────┤",
+                "│  x  │ y   │     │",
+                "│     │ y   │ z   │",
+                "└─────┴─────┴─────┘",
+                "plain",
+            ],
+        ),
+        (
+            "| A | B |\n| --- | --- |\n| x | y |\n| --- | --- |",
+            vec![
+                "┌─────┬─────┐",
+                "│ A   │ B   │",
+                "├─────┼─────┤",
+                "│ x   │ y   │",
+                "└─────┴─────┘",
+                "| --- | --- |",
+            ],
+        ),
+        ("a |", vec!["a |"]),
+    ];
+
+    for (input, expected) in cases {
+        // Act
+        let lines = render_markdown(input, 80);
+        let rendered_lines = lines.iter().map(ToString::to_string).collect::<Vec<_>>();
+
+        // Assert
+        assert_eq!(rendered_lines, expected, "{input:?}");
+    }
+}
+
+#[test]
+fn test_render_markdown_keeps_minimum_table_columns_when_width_cannot_fit() {
+    // Arrange
+    let input = "| A | B |\n| --- | --- |";
+    let expected = vec![
+        "┌─────┬─────┐",
+        "│ A   │ B   │",
+        "├─────┼─────┤",
+        "└─────┴─────┘",
+    ];
+
+    for width in [0, 5] {
+        // Act
+        let lines = render_markdown(input, width);
+        let rendered_lines = lines.iter().map(ToString::to_string).collect::<Vec<_>>();
+
+        // Assert
+        assert_eq!(rendered_lines, expected, "width {width}");
+    }
+}
+
+#[test]
+fn test_render_markdown_handles_narrow_and_empty_block_output() {
+    // Arrange
+    let metric_line = format!("{:<STATS_LABEL_WIDTH$}value", "key");
+    let cases = [
+        ("```", 80, vec![String::new()]),
+        ("---", 0, vec![String::new()]),
+        ("- item", 1, vec!["-".to_string(), "item".to_string()]),
+        (
+            "```stats\n\nTokens Usage\nplain stats\n```",
+            80,
+            vec![
+                String::new(),
+                "Tokens Usage".to_string(),
+                "plain stats".to_string(),
+            ],
+        ),
+        (
+            "```stats\nab\nkey\tvalue\n```",
+            0,
+            vec!["ab".to_string(), metric_line],
+        ),
+        (
+            "```stats\nabcdef\n```",
+            4,
+            vec!["abcd".to_string(), "ef".to_string()],
+        ),
+    ];
+
+    for (input, width, expected) in cases {
+        // Act
+        let lines = render_markdown(input, width);
+        let rendered_lines = lines.iter().map(ToString::to_string).collect::<Vec<_>>();
+
+        // Assert
+        assert_eq!(rendered_lines, expected, "{input:?}, width {width}");
+    }
+}
+
+#[test]
 fn test_markdown_block_preservation_mask_uses_shared_block_classifiers() {
     // Arrange
     let input = concat!(

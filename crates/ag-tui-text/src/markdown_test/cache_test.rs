@@ -103,6 +103,7 @@ fn test_markdown_render_cache_bump_version_clears_styled_entries() {
     // Arrange
     let cache = MarkdownRenderCache::default();
     let initial_lines = cache.render("# Entry", 24);
+    let initial_version = cache.version();
 
     // Act
     cache.bump_version();
@@ -111,5 +112,6 @@ fn test_markdown_render_cache_bump_version_clears_styled_entries() {
     // Assert
     assert!(!Arc::ptr_eq(&initial_lines, &refreshed_lines));
     assert_eq!(cache.entries.borrow().len(), 1);
-    assert_eq!(cache.version.get(), 1);
+    assert_eq!(initial_version, 0);
+    assert_eq!(cache.version(), 1);
 }

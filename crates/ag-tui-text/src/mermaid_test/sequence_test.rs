@@ -1,5 +1,63 @@
+use std::fmt::Write;
+
 use super::support::diagram_text;
-use crate::mermaid::{render_mermaid, render_mermaid_for_width};
+use crate::mermaid::{
+    Canvas, MAX_EDGE_COUNT, MAX_NODE_COUNT, draw_sequence_message_label,
+    is_ignorable_sequence_statement, render_mermaid, render_mermaid_for_width,
+};
+
+#[test]
+fn test_render_mermaid_rejects_invalid_and_oversized_sequence_diagrams() {
+    // Arrange
+    let mut too_many_participants = String::from("sequenceDiagram");
+    for participant_index in 0..=MAX_NODE_COUNT {
+        write!(
+            &mut too_many_participants,
+            "\n    participant P{participant_index}"
+        )
+        .expect("writing to String should succeed");
+    }
+    let mut too_many_messages = String::from("sequenceDiagram");
+    for _ in 0..=MAX_EDGE_COUNT {
+        too_many_messages.push_str("\n    A->>B: ping");
+    }
+    let sources = [
+        "sequenceDiagram\n    participant A".to_string(),
+        "sequenceDiagram\n    A: missing operator".to_string(),
+        "sequenceDiagram\n    participant A.B\n    A.B->>C: dotted".to_string(),
+        too_many_participants,
+        too_many_messages,
+    ];
+
+    for source in sources {
+        // Act
+        let diagram = render_mermaid(&source);
+
+        // Assert
+        assert!(diagram.is_none(), "{source:?}");
+    }
+}
+
+#[test]
+fn test_is_ignorable_sequence_statement_skips_blank_statements() {
+    // Arrange, Act, Assert
+    assert!(is_ignorable_sequence_statement(""));
+    assert!(is_ignorable_sequence_statement("Note over A: hi"));
+    assert!(!is_ignorable_sequence_statement("A->>B: hi"));
+}
+
+#[test]
+fn test_draw_sequence_message_label_skips_label_wider_than_run() {
+    // Arrange
+    let mut canvas = Canvas::new(6, 2);
+
+    // Act
+    draw_sequence_message_label(&mut canvas, 0, 3, 1, "long");
+    let diagram = canvas.into_diagram();
+
+    // Assert
+    assert_eq!(diagram.width, 0);
+}
 
 #[test]
 fn test_render_mermaid_draws_sequence_diagram() {

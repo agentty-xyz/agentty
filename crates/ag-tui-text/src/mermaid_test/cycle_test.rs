@@ -1,5 +1,7 @@
 use super::support::diagram_text;
-use crate::mermaid::render_mermaid;
+use crate::mermaid::{
+    Canvas, MermaidEdge, draw_feedback_edge_label, layout_layers, parse_graph, render_mermaid,
+};
 
 #[test]
 fn test_render_mermaid_draws_left_right_feedback_cycle() {
@@ -155,4 +157,67 @@ fn test_render_mermaid_renders_small_cycles() {
     // Assert
     assert!(diagram_text(&top_down_diagram).contains("B ───▶ A"));
     assert!(diagram_text(&left_right_diagram).contains("C ───▶ A"));
+}
+
+#[test]
+fn test_render_mermaid_draws_two_node_feedback_arrow_variants() {
+    // Arrange
+    let cases = [
+        ("flowchart LR\n    A --> B\n    B ~~~ A", 1, 0),
+        ("flowchart LR\n    A <--> B\n    B --- A", 1, 1),
+        ("flowchart LR\n    A --> B\n    B <--> A", 2, 1),
+    ];
+
+    for (source, expected_right_arrows, expected_left_arrows) in cases {
+        // Act
+        let diagram = render_mermaid(source).expect("two-node feedback graph should render");
+        let text = diagram_text(&diagram);
+
+        // Assert
+        assert_eq!(text.matches('▶').count(), expected_right_arrows, "{source}");
+        assert_eq!(text.matches('◀').count(), expected_left_arrows, "{source}");
+    }
+}
+
+#[test]
+fn test_draw_feedback_edge_label_skips_label_wider_than_run() {
+    // Arrange
+    let mut canvas = Canvas::new(6, 1);
+    let edge = MermaidEdge {
+        from_index: 0,
+        has_arrow: true,
+        has_source_arrow: false,
+        is_visible: true,
+        label: Some("long".to_string()),
+        source_marker: None,
+        target_marker: None,
+        to_index: 1,
+    };
+
+    // Act
+    draw_feedback_edge_label(&mut canvas, &edge, 0, 3, 0);
+    let diagram = canvas.into_diagram();
+
+    // Assert
+    assert_eq!(diagram.width, 0);
+}
+
+#[test]
+fn test_layout_layers_rejects_cycles_and_layer_skipping_edges() {
+    // Arrange
+    let sources = [
+        "graph TD\n    A --> B\n    B --> A",
+        "graph TD\n    A --> A",
+        "graph TD\n    A --> B --> C\n    A --> C",
+    ];
+
+    for source in sources {
+        let graph = parse_graph(source).expect("graph should parse");
+
+        // Act
+        let layout = layout_layers(&graph);
+
+        // Assert
+        assert!(layout.is_none(), "{source:?}");
+    }
 }
