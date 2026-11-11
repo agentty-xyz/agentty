@@ -31,18 +31,17 @@ All CLI backends accept pasted local prompt images from the Agentty composer (`C
 `Ctrl+Shift+V`, or `Alt+V` in prompt mode) and run their turns non-interactively inside
 the session worktree.
 
-Codex `Auto Edit` turns run with full command access so browser tests, local services,
-and other tools that cannot run inside the provider sandbox remain available. This also
-means Codex commands are not confined to the session worktree; review the session diff
-and use `Read Only` for inspection-only work.
+Codex and Claude `Auto Edit` turns run commands with full access, outside the provider
+sandbox, so browser tests, local services, PTY tools, container runtimes, and tool
+caches remain available. This also means commands are not confined to the session
+worktree; review the session diff and use `Read Only` for inspection-only work.
 
 Codex `Read Only` turns, including the `/plan` Planner, allow shell network requests for
 external research while keeping filesystem writes and permission escalation denied.
 
 Claude turns also allow Claude Code's `WebSearch` and `WebFetch` tools, so prompts that
 need current external information can use the web without an interactive permission
-grant. Claude `Auto Edit` retains Claude Code's unsandboxed command fallback for tools
-that cannot run inside its sandbox.
+grant. Claude's file-edit tool still cannot edit the main checkout.
 
 Agentty's instructions keep project edits inside the session worktree. Required build,
 test, and recording commands may use documented external caches, temporary files, and

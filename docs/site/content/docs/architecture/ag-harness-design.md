@@ -582,8 +582,8 @@ only when Agentty starts with `--experimental-harness` and a provider is configu
   history eviction re-send the full contract.
 - `ReadOnly` maps to `read`. Edit modes add `write` and unsandboxed `bash`, which
   inherits Agentty's environment except the `MODEL_*`, `KIMI_*`, and `DASHSCOPE_*`
-  provider key and URL variables. Like Codex full access, and unlike Claude, `bash` does
-  not keep the main checkout read-only.
+  provider key and URL variables. Like Codex and Claude full access, `bash` does not
+  keep the main checkout read-only.
 - Each session's database lives under the Agentty data root, outside the session
   worktree, so session commits and worktree cleanup never include it; session deletion
   removes it explicitly.

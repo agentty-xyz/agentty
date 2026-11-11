@@ -30,8 +30,8 @@ pub(super) struct PermissionModePolicy {
 /// Codex app-server policy for Agentty's non-interactive auto-edit mode.
 ///
 /// The `never` approval policy keeps normal turns from blocking on user
-/// approvals. Full access matches the effective Claude auto-edit policy, which
-/// permits Bash commands to retry outside Claude's sandbox when required.
+/// approvals. Full access matches the Claude auto-edit policy, which disables
+/// Claude Code's command sandbox.
 const AUTO_EDIT_POLICY: PermissionModePolicy = PermissionModePolicy {
     approval_policy: "never",
     legacy_pre_action_decision: "approved",
