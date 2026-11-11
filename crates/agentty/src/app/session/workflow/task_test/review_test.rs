@@ -53,6 +53,8 @@ fn test_review_request_metadata_prompt_preserves_payload_boundaries() {
             .contains("examples in existing inline, fenced, indented, or HTML code")
     );
     assert!(prompt.contains("Keep visible content outside HTML comments"));
+    assert!(prompt.contains("HTML comments in PR/MR templates are"));
+    assert!(prompt.contains("do not copy them into the description"));
     assert!(prompt.contains("code fences and HTML comments explicitly"));
 }
 
