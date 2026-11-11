@@ -16,6 +16,15 @@
     --color-roadmap-future: #e8c45a;
     --color-roadmap-grid: color-mix(in srgb, var(--color-border) 32%, transparent);
     --color-roadmap-horizon: #b7a4ff;
+    --glyph-0: #1c3a24;
+    --glyph-1: #24502f;
+    --glyph-2: #2f6a3d;
+    --glyph-3: #3f8a50;
+    --glyph-4: #57ad69;
+    --glyph-5: #7fce8e;
+    --glyph-6: #b3e8bd;
+    --glyph-7: #e4fbe8;
+    --glyph-hot: #4ae477;
     --font-sans: Inter, ui-sans-serif, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
     --font-mono: "Share Tech Mono", "Courier New", monospace;
 
@@ -43,6 +52,15 @@
     --color-border: #333333;
     --color-border-strong: #5d5d5d;
     --color-focus: #ffffff;
+    --glyph-0: #262626;
+    --glyph-1: #363636;
+    --glyph-2: #4a4a4a;
+    --glyph-3: #646464;
+    --glyph-4: #858585;
+    --glyph-5: #a8a8a8;
+    --glyph-6: #cfcfcf;
+    --glyph-7: #f4f4f4;
+    --glyph-hot: #ffffff;
 }
 
 * {
@@ -411,9 +429,11 @@ svg {
     max-width: 760px;
 }
 
-/* Keep the homepage introduction, demo, and installation close across viewport sizes. */
+/* Keep the homepage introduction, demo, and installation close across viewport sizes.
+   The hero wordmark uses one gap above and below so it sits evenly between rules. */
 .site-main.home-layout {
-    padding-top: clamp(2.5rem, 6vw, 3.5rem);
+    --home-wordmark-gap: clamp(1rem, 3vw, 2rem);
+    padding-top: var(--home-wordmark-gap);
 }
 
 .home-layout .hero-section {
@@ -489,6 +509,112 @@ svg {
     flex-wrap: wrap;
     justify-content: center;
     gap: 0.75rem;
+}
+
+/* Homepage: terminal-theme layout with square panels and glyph-printed art. */
+.site-main.home-layout {
+    --radius-sm: 0;
+    --radius-md: 0;
+    --radius-lg: 0;
+}
+
+.home-layout .site-section {
+    padding-top: clamp(2rem, 5vw, 3rem);
+    border-top: 1px solid var(--color-border);
+}
+
+/* Break the hero out of the 800px reading column without horizontal overflow. */
+.home-layout .home-hero {
+    --home-hero-width: min(1180px, calc(100vw - 2rem));
+    width: var(--home-hero-width);
+    max-width: none;
+    margin-inline: calc((100% - var(--home-hero-width)) / 2);
+    text-align: left;
+}
+
+.home-hero-grid {
+    display: grid;
+    grid-template-columns: minmax(0, 5fr) minmax(0, 7fr);
+    gap: clamp(1.5rem, 4vw, 3rem);
+    align-items: center;
+    margin-top: var(--home-wordmark-gap);
+    padding-top: clamp(1.5rem, 4vw, 2.5rem);
+    border-top: 1px solid var(--color-border);
+}
+
+.home-hero .hero-title {
+    max-width: none;
+    margin: 0 0 1.1rem;
+    font-family: "Martian Mono", var(--font-mono);
+    font-size: clamp(1.8rem, 3.2vw, 2.6rem);
+    font-weight: 700;
+    letter-spacing: -0.04em;
+    line-height: 1.08;
+}
+
+.home-hero .hero-description {
+    margin: 0 0 1.7rem;
+}
+
+.home-hero .hero-actions {
+    justify-content: flex-start;
+}
+
+.home-hero-meta {
+    margin: 1.25rem 0 0;
+    color: var(--color-muted);
+    font-family: var(--font-mono);
+    font-size: 0.85rem;
+}
+
+.home-hero-meta span {
+    margin-inline: 0.6ch;
+    color: var(--color-border-strong);
+}
+
+.glyph-art {
+    position: relative;
+}
+
+.glyph-art-canvas {
+    position: absolute;
+    inset: 0;
+    display: none;
+    width: 100%;
+    height: 100%;
+}
+
+.glyph-art.is-live .glyph-art-canvas {
+    display: block;
+}
+
+.glyph-art.is-live .glyph-art-still {
+    display: none;
+}
+
+.glyph-art-wordmark {
+    display: grid;
+    place-items: center;
+    aspect-ratio: 4.8;
+}
+
+.glyph-art-wordmark .logo {
+    margin: 0;
+}
+
+.glyph-art-nerpa {
+    aspect-ratio: 1000 / 600;
+}
+
+@media (max-width: 860px) {
+    .home-hero-grid {
+        grid-template-columns: 1fr;
+    }
+
+    .glyph-art-nerpa {
+        width: min(100%, 560px);
+        margin-left: auto;
+    }
 }
 
 .button {
