@@ -766,6 +766,19 @@ pub fn image_token_ranges(text: &str) -> Vec<(usize, usize, String)> {
     ranges
 }
 
+/// Returns whether typing `character` at `cursor` should first insert a
+/// space so the new text does not run into an `[Image #n]` placeholder that
+/// ends there.
+///
+/// Whitespace and closing punctuation attach directly to the placeholder.
+#[must_use]
+pub fn needs_space_after_image_placeholder(text: &str, cursor: usize, character: char) -> bool {
+    starts_text_after_image_placeholder(character)
+        && image_token_ranges(text)
+            .iter()
+            .any(|(_, token_end, _)| *token_end == cursor)
+}
+
 /// Inserts pasted prompt text and clears transient slash/history state.
 ///
 /// This is the canonical field-level mutation path used by runtime code.
@@ -800,6 +813,9 @@ pub fn insert_prompt_character(
 
 /// Inserts one pasted image placeholder and records the attachment metadata.
 ///
+/// When the cursor sits directly before text, a space follows the placeholder
+/// so that text does not run into it.
+///
 /// This is the canonical field-level mutation path used by runtime code.
 /// [`PromptComposerState::insert_local_image`] delegates here to keep
 /// behavior centralized.
@@ -812,8 +828,17 @@ pub fn insert_prompt_local_image(
 ) {
     attachment_state.remember_current_revision(input);
     let placeholder_start = input.cursor;
-    let placeholder = PromptAttachment::placeholder_for(attachment_state.next_attachment_number);
-    input.insert_text(&placeholder);
+    let mut placeholder_text =
+        PromptAttachment::placeholder_for(attachment_state.next_attachment_number);
+    if input
+        .text()
+        .chars()
+        .nth(placeholder_start)
+        .is_some_and(starts_text_after_image_placeholder)
+    {
+        placeholder_text.push(' ');
+    }
+    input.insert_text(&placeholder_text);
     attachment_state.sync_after_edit(input, placeholder_start, placeholder_start, input.cursor);
     attachment_state.register_local_image(local_image_path, placeholder_start);
     attachment_state.remember_current_revision(input);
@@ -826,7 +851,8 @@ pub fn insert_prompt_local_image(
 ///
 /// Background clipboard captures use this so the placeholder lands where the
 /// paste shortcut was pressed even after the user kept editing. A cursor at
-/// or after `anchor` moves past the placeholder.
+/// or after `anchor` moves past the placeholder and any separator space
+/// added before text typed while the capture ran.
 pub fn insert_prompt_local_image_at(
     attachment_state: &mut PromptAttachmentState,
     history_state: &mut PromptHistoryState,
@@ -1423,6 +1449,16 @@ fn permission_mode_suggestion_items() -> Vec<PromptSuggestionItem> {
             metadata: None,
         })
         .collect()
+}
+
+/// Returns whether `character` begins text that needs a space between it and
+/// a preceding image placeholder.
+fn starts_text_after_image_placeholder(character: char) -> bool {
+    !character.is_whitespace()
+        && !matches!(
+            character,
+            '.' | ',' | ';' | ':' | '!' | '?' | ')' | ']' | '}'
+        )
 }
 
 /// Returns the exclusive end index for an `[Image #n]` placeholder token that

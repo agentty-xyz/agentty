@@ -1538,6 +1538,56 @@ async fn test_prompt_image_paste_completion_lands_at_paste_position() {
     ));
 }
 
+/// Verifies typing right after a pasted image placeholder separates the new
+/// word from the placeholder with one automatic space.
+#[tokio::test]
+async fn test_prompt_typing_after_image_placeholder_inserts_space() {
+    // Arrange
+    let (mut app, _base_dir) = new_test_prompt_app("Review ", None).await;
+    let prompt_context = prompt_context(&mut app).expect("expected prompt context");
+    install_pasted_image_clipboard(&mut app);
+    handle_prompt_image_paste(&mut app, &prompt_context);
+    apply_next_prompt_image_paste(&mut app).await;
+
+    // Act
+    press_prompt_key(&mut app, KeyCode::Char('w')).await;
+    press_prompt_key(&mut app, KeyCode::Char('h')).await;
+
+    // Assert
+    assert!(matches!(
+        &app.mode,
+        AppMode::Prompt { attachment_state, input, .. }
+            if input.text() == "Review [Image #1] wh"
+                && input.cursor == 20
+                && attachment_state.attachments.len() == 1
+    ));
+}
+
+/// Verifies a capture completing after the user typed at the paste position
+/// separates the placeholder from that text with one space.
+#[tokio::test]
+async fn test_prompt_image_paste_completion_separates_text_typed_meanwhile() {
+    // Arrange
+    let (mut app, _base_dir) = new_test_prompt_app("Review ", None).await;
+    let prompt_context = prompt_context(&mut app).expect("expected prompt context");
+    install_pasted_image_clipboard(&mut app);
+    handle_prompt_image_paste(&mut app, &prompt_context);
+    press_prompt_key(&mut app, KeyCode::Char('w')).await;
+    press_prompt_key(&mut app, KeyCode::Char('h')).await;
+
+    // Act
+    apply_next_prompt_image_paste(&mut app).await;
+
+    // Assert
+    assert!(matches!(
+        &app.mode,
+        AppMode::Prompt { attachment_state, input, .. }
+            if input.text() == "Review [Image #1] wh"
+                && input.cursor == 20
+                && attachment_state.attachments.len() == 1
+    ));
+}
+
 /// Verifies `Enter` is ignored while a capture runs, so the pasted image is
 /// not dropped from the submitted turn.
 #[tokio::test]
