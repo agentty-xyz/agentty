@@ -140,3 +140,35 @@ fn eventually_debug_redacts_predicate_body() {
     assert!(rendered.contains("Eventually"));
     assert!(rendered.contains("frame predicate"));
 }
+
+#[test]
+fn debug_renders_every_data_variant() {
+    // Arrange
+    let cases = [
+        (Step::write_text("hi"), r#"WriteText("hi")"#),
+        (Step::press_key("Enter"), r#"PressKey("Enter")"#),
+        (Step::sleep_ms(5), "Sleep(5ms)"),
+        (
+            Step::wait_for_text("Ready", 100),
+            r#"WaitForText { needle: "Ready", timeout_ms: 100 }"#,
+        ),
+        (
+            Step::wait_for_stable_frame(50, 200),
+            "WaitForStableFrame { stable_ms: 50, timeout_ms: 200 }",
+        ),
+        (Step::capture(), "Capture"),
+        (
+            Step::capture_labeled("start", "App started"),
+            r#"CaptureLabeled { label: "start", description: "App started" }"#,
+        ),
+        (Step::viewing_pause_ms(7), "ViewingPause(7ms)"),
+    ];
+
+    for (step, expected) in cases {
+        // Act
+        let rendered = format!("{step:?}");
+
+        // Assert
+        assert_eq!(rendered, expected);
+    }
+}

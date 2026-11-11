@@ -90,55 +90,15 @@ impl PtySession {
         env_vars: &[(&str, &str)],
         workdir: Option<&Path>,
     ) -> Result<Self, PtySessionError> {
-        let pty_system = NativePtySystem::default();
-
-        let pair = pty_system
-            .openpty(PtySize {
-                rows,
-                cols,
-                pixel_width: 0,
-                pixel_height: 0,
-            })
-            .map_err(|err| PtySessionError::PtyCreation(err.to_string()))?;
-
-        let mut command = CommandBuilder::new(binary_path);
-        if let Some(directory) = workdir {
-            command.cwd(directory);
-        }
-        for arg in args {
-            command.arg(arg);
-        }
-        for (key, value) in env_vars {
-            command.env(key, value);
-        }
-
-        let child = pair
-            .slave
-            .spawn_command(command)
-            .map_err(|err| PtySessionError::SpawnFailed(err.to_string()))?;
-
-        let reader = pair
-            .master
-            .try_clone_reader()
-            .map_err(|err| PtySessionError::PtyCreation(err.to_string()))?;
-        let writer = pair
-            .master
-            .take_writer()
-            .map_err(|err| PtySessionError::PtyCreation(err.to_string()))?;
-
-        let (output_sender, output_receiver) = mpsc::channel();
-        thread::spawn(move || Self::read_pty_output(reader, &output_sender));
-
-        Ok(Self {
-            binary_path: binary_path.to_path_buf(),
+        Self::spawn_with_pty_system(
+            &NativePtySystem::default(),
+            binary_path,
             cols,
             rows,
-            output_buffer: Vec::new(),
-            writer,
-            output_receiver,
-            query_scan_offset: 0,
-            child,
-        })
+            args,
+            env_vars,
+            workdir,
+        )
     }
 
     /// Write raw bytes to the PTY input.
@@ -441,6 +401,68 @@ impl PtySession {
                 }
             }
         }
+    }
+
+    /// Spawn a binary in a PTY opened by `pty_system`.
+    ///
+    /// [`Self::spawn_with_size`] passes the native PTY system; tests pass a
+    /// fake one to reach PTY allocation and handle failures deterministically.
+    fn spawn_with_pty_system(
+        pty_system: &dyn PtySystem,
+        binary_path: &Path,
+        cols: u16,
+        rows: u16,
+        args: &[&str],
+        env_vars: &[(&str, &str)],
+        workdir: Option<&Path>,
+    ) -> Result<Self, PtySessionError> {
+        let pair = pty_system
+            .openpty(PtySize {
+                rows,
+                cols,
+                pixel_width: 0,
+                pixel_height: 0,
+            })
+            .map_err(|err| PtySessionError::PtyCreation(err.to_string()))?;
+
+        let mut command = CommandBuilder::new(binary_path);
+        if let Some(directory) = workdir {
+            command.cwd(directory);
+        }
+        for arg in args {
+            command.arg(arg);
+        }
+        for (key, value) in env_vars {
+            command.env(key, value);
+        }
+
+        let child = pair
+            .slave
+            .spawn_command(command)
+            .map_err(|err| PtySessionError::SpawnFailed(err.to_string()))?;
+
+        let reader = pair
+            .master
+            .try_clone_reader()
+            .map_err(|err| PtySessionError::PtyCreation(err.to_string()))?;
+        let writer = pair
+            .master
+            .take_writer()
+            .map_err(|err| PtySessionError::PtyCreation(err.to_string()))?;
+
+        let (output_sender, output_receiver) = mpsc::channel();
+        thread::spawn(move || Self::read_pty_output(reader, &output_sender));
+
+        Ok(Self {
+            binary_path: binary_path.to_path_buf(),
+            cols,
+            rows,
+            output_buffer: Vec::new(),
+            writer,
+            output_receiver,
+            query_scan_offset: 0,
+            child,
+        })
     }
 
     /// Replies to each complete DA1 request after the last scanned offset.

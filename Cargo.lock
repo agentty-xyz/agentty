@@ -4540,6 +4540,7 @@ dependencies = [
 name = "testty"
 version = "0.18.3"
 dependencies = [
+ "anyhow",
  "base64 0.23.1",
  "clap",
  "image",

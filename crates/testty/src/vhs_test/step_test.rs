@@ -16,6 +16,37 @@ fn key_to_vhs_command_maps_common_keys() {
     assert_eq!(key_to_vhs_command("escape"), "Escape");
     assert_eq!(key_to_vhs_command("up"), "Up");
     assert_eq!(key_to_vhs_command("ctrl+c"), "Ctrl+C");
+    assert_eq!(key_to_vhs_command("backspace"), "Backspace");
+    assert_eq!(key_to_vhs_command("down"), "Down");
+    assert_eq!(key_to_vhs_command("right"), "Right");
+    assert_eq!(key_to_vhs_command("left"), "Left");
+    assert_eq!(key_to_vhs_command("space"), "Space");
+    assert_eq!(key_to_vhs_command("pageup"), "PageUp");
+    assert_eq!(key_to_vhs_command("pagedown"), "PageDown");
+    assert_eq!(key_to_vhs_command(r#"say"x"#), r#"Type "say\"x""#);
+}
+
+#[test]
+fn compile_step_emits_input_and_stability_commands() {
+    // Arrange
+    let cases = [
+        (
+            Step::write_text(r#"echo "hi""#),
+            "Type \"echo \\\"hi\\\"\"\n",
+        ),
+        (Step::press_key("Tab"), "Tab\n"),
+        (Step::wait_for_stable_frame(300, 5000), "Sleep 300ms\n"),
+    ];
+
+    for (step, expected) in cases {
+        let mut tape = String::new();
+
+        // Act
+        compile_step(&mut tape, &step, Path::new("/tmp/shot.png"));
+
+        // Assert
+        assert_eq!(tape, expected);
+    }
 }
 
 #[test]

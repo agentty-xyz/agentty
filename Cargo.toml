@@ -35,6 +35,7 @@ ag-worker = { path = "crates/ag-worker", version = "0.18.3" }
 testty = { path = "crates/testty", version = "0.18.3" }
 async-trait = "0.1"
 agent-client-protocol = "5.0.0"
+anyhow = "1"
 assert_cmd = "2"
 askama = "0.16.1"
 base64 = "0.23"
