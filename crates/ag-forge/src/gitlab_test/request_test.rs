@@ -166,7 +166,7 @@ async fn create_authenticated_review_request_builds_create_command_and_returns_s
 }
 
 #[test]
-fn gitlab_view_response_maps_terminal_states() {
+fn gitlab_view_response_maps_terminal_states_without_status_labels() {
     // Arrange
     let cases = [
         (
@@ -196,6 +196,7 @@ fn gitlab_view_response_maps_terminal_states() {
         };
 
         assert_eq!(response.review_request_state(), expected);
+        assert_eq!(response.status_summary(), None);
     }
 }
 

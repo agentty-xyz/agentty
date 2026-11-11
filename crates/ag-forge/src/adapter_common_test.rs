@@ -1,10 +1,11 @@
+use std::sync::Arc;
 use std::time::Duration;
 
 use crate::adapter_common::{
     ReviewRequestMetadataPlan, ReviewRequestOperations, normalize_provider_label, operation_failed,
     status_summary_parts,
 };
-use crate::command::ForgeCommandError;
+use crate::command::{ForgeCommand, ForgeCommandError, ForgeCommandOutput, MockForgeCommandRunner};
 use crate::model::{
     ForgeKind, ForgeRemote, ReviewRequestError, ReviewRequestMetadata,
     ReviewRequestMetadataFieldUpdate, UpdateReviewRequestInput,
@@ -330,6 +331,113 @@ fn map_spawn_error_reports_command_timeout() {
             message: "`gh` timed out after 30 seconds while contacting github.com".to_string(),
         }
     );
+}
+
+#[tokio::test]
+async fn ensure_authenticated_normalizes_spawn_and_host_resolution_failures() {
+    // Arrange
+    let remote = sample_remote(ForgeKind::GitHub);
+    let cases = [
+        (
+            Err(ForgeCommandError::ExecutableNotFound {
+                executable: "gh".to_string(),
+            }),
+            ReviewRequestError::CliNotInstalled {
+                forge_kind: ForgeKind::GitHub,
+            },
+        ),
+        (
+            Ok(failed_output("could not resolve host: github.com")),
+            ReviewRequestError::HostResolutionFailed {
+                forge_kind: ForgeKind::GitHub,
+                host: "github.com".to_string(),
+            },
+        ),
+    ];
+
+    for (command_result, expected_error) in cases {
+        let operations = operations_returning(command_result);
+
+        // Act
+        let error = operations
+            .ensure_authenticated(&remote, sample_command())
+            .await
+            .expect_err("failed authentication check should be rejected");
+
+        // Assert
+        assert_eq!(error, expected_error);
+    }
+}
+
+#[tokio::test]
+async fn run_review_command_normalizes_spawn_host_and_operation_failures() {
+    // Arrange
+    let remote = sample_remote(ForgeKind::GitLab);
+    let cases = [
+        (
+            Err(ForgeCommandError::ExecutableNotFound {
+                executable: "glab".to_string(),
+            }),
+            ReviewRequestError::CliNotInstalled {
+                forge_kind: ForgeKind::GitLab,
+            },
+        ),
+        (
+            Ok(failed_output("dial tcp: no such host")),
+            ReviewRequestError::HostResolutionFailed {
+                forge_kind: ForgeKind::GitLab,
+                host: "gitlab.example.internal".to_string(),
+            },
+        ),
+        (
+            Ok(failed_output("HTTP 422: validation failed")),
+            ReviewRequestError::OperationFailed {
+                forge_kind: ForgeKind::GitLab,
+                message: "create merge request: HTTP 422: validation failed".to_string(),
+            },
+        ),
+    ];
+
+    for (command_result, expected_error) in cases {
+        let operations = operations_returning(command_result);
+
+        // Act
+        let error = operations
+            .run_review_command(&remote, sample_command(), "create merge request")
+            .await
+            .expect_err("failed review command should be rejected");
+
+        // Assert
+        assert_eq!(error, expected_error);
+    }
+}
+
+/// Builds shared operations whose runner returns `command_result` once.
+fn operations_returning(
+    command_result: Result<ForgeCommandOutput, ForgeCommandError>,
+) -> ReviewRequestOperations {
+    let mut command_runner = MockForgeCommandRunner::new();
+    command_runner.expect_run().once().returning(move |_| {
+        let command_result = command_result.clone();
+
+        Box::pin(async move { command_result })
+    });
+
+    ReviewRequestOperations::new(Arc::new(command_runner))
+}
+
+/// Builds one placeholder command; the mocked runner ignores its contents.
+fn sample_command() -> ForgeCommand {
+    ForgeCommand::new("gh", vec!["auth".to_string(), "status".to_string()])
+}
+
+/// Builds one failed command output carrying `stderr`.
+fn failed_output(stderr: &str) -> ForgeCommandOutput {
+    ForgeCommandOutput {
+        exit_code: Some(1),
+        stderr: stderr.to_string(),
+        stdout: String::new(),
+    }
 }
 
 fn sample_remote(forge_kind: ForgeKind) -> ForgeRemote {

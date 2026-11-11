@@ -124,6 +124,10 @@ fn github_status_marks_only_open_clean_pr_ready() {
             serde_json::json!("MERGED"),
         ),
         (
+            "/data/repository/pullRequest/state",
+            serde_json::json!("CLOSED"),
+        ),
+        (
             "/data/repository/pullRequest/mergeStateStatus",
             serde_json::json!("BLOCKED"),
         ),
@@ -152,6 +156,10 @@ fn github_status_marks_only_open_clean_pr_ready() {
 
     // Assert
     assert!(ready_summary.is_github_pr_ready());
+    assert_eq!(
+        [unready_summaries[1].state, unready_summaries[2].state],
+        [ReviewRequestState::Merged, ReviewRequestState::Closed]
+    );
     assert!(
         unready_summaries
             .iter()
@@ -319,6 +327,59 @@ async fn create_authenticated_review_request_builds_create_command_and_returns_s
     assert_eq!(
         review_request.status_summary.as_deref(),
         Some("Approved, Mergeable, PR ready")
+    );
+}
+
+#[tokio::test]
+async fn create_authenticated_review_request_fails_when_created_pull_request_is_not_found() {
+    // Arrange
+    let remote = github_remote();
+    let input = CreateReviewRequestInput {
+        body: None,
+        source_branch: "feature/forge".to_string(),
+        target_branch: "main".to_string(),
+        title: "Add forge review support".to_string(),
+    };
+    let mut sequence = Sequence::new();
+    let mut command_runner = MockForgeCommandRunner::new();
+    command_runner
+        .expect_run()
+        .once()
+        .in_sequence(&mut sequence)
+        .withf({
+            let remote = remote.clone();
+            let input = input.clone();
+
+            move |command| command == &GitHubReviewRequestAdapter::create_command(&remote, &input)
+        })
+        .returning(|_| Box::pin(async { Ok(success_output(String::new())) }));
+    command_runner
+        .expect_run()
+        .once()
+        .in_sequence(&mut sequence)
+        .withf({
+            let remote = remote.clone();
+
+            move |command| {
+                command == &GitHubReviewRequestAdapter::lookup_command(&remote, "feature/forge")
+            }
+        })
+        .returning(|_| Box::pin(async { Ok(success_output("[]".to_string())) }));
+    let adapter = GitHubReviewRequestAdapter::new(Arc::new(command_runner));
+
+    // Act
+    let error = adapter
+        .create_authenticated_review_request(remote, input)
+        .await
+        .expect_err("missing reloaded pull request should fail");
+
+    // Assert
+    assert_eq!(
+        error,
+        ReviewRequestError::OperationFailed {
+            forge_kind: ForgeKind::GitHub,
+            message: "GitHub pull request was created but could not be reloaded".to_string(),
+        }
     );
 }
 
