@@ -10,6 +10,7 @@ use crate::step::Step;
 fn key_to_vhs_command_maps_common_keys() {
     // Arrange / Act / Assert
     assert_eq!(key_to_vhs_command("Enter"), "Enter");
+    assert_eq!(key_to_vhs_command("Alt+Enter"), "Alt+Enter");
     assert_eq!(key_to_vhs_command("tab"), "Tab");
     assert_eq!(key_to_vhs_command("BackTab"), "Shift+Tab");
     assert_eq!(key_to_vhs_command("shift+tab"), "Shift+Tab");

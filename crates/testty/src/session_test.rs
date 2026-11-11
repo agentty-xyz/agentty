@@ -36,6 +36,15 @@ fn pty_session_builder_args_appends_across_calls() {
 }
 
 #[test]
+fn key_to_bytes_returns_alt_enter() {
+    // Arrange / Act
+    let bytes = PtySession::key_to_bytes("Alt+Enter");
+
+    // Assert — Alt+Enter is the escape prefix followed by a carriage return.
+    assert_eq!(bytes, vec![0x1b, b'\r']);
+}
+
+#[test]
 fn key_to_bytes_returns_ctrl_a() {
     // Arrange / Act
     let bytes = PtySession::key_to_bytes("ctrl+a");

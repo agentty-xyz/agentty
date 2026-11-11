@@ -410,6 +410,9 @@ fn compile_step(tape: &mut String, step: &Step, screenshot_path: &Path) {
 fn key_to_vhs_command(key: &str) -> String {
     match key.to_lowercase().as_str() {
         "enter" | "return" => "Enter".to_string(),
+        // VHS sends the escape prefix and carriage return as one key event;
+        // typing them separately lets the application see a bare `Escape`.
+        "alt+enter" => "Alt+Enter".to_string(),
         "tab" => "Tab".to_string(),
         "backtab" | "shift+tab" => "Shift+Tab".to_string(),
         "escape" | "esc" => "Escape".to_string(),

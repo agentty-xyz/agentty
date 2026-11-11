@@ -496,8 +496,8 @@ async fn prompt_backspace_on_empty_input() -> E2eResult {
 /// Verify that Alt+Enter inserts a newline in the prompt input,
 /// producing multiline content.
 ///
-/// Alt+Enter is sent as ESC (0x1b) followed by CR (0x0d) which crossterm
-/// interprets as `KeyCode::Enter` with `KeyModifiers::ALT`.
+/// Alt+Enter is sent as one key event, ESC (0x1b) followed by CR (0x0d),
+/// which crossterm interprets as `KeyCode::Enter` with `KeyModifiers::ALT`.
 #[tokio::test]
 async fn prompt_multiline_via_alt_enter() -> E2eResult {
     // Arrange, Act, Assert
@@ -522,8 +522,7 @@ async fn prompt_multiline_via_alt_enter() -> E2eResult {
                     .wait_for_text("first line", 3000)
                     .viewing_pause_ms(2000)
                     .capture_labeled("first_line", "First line typed")
-                    // Alt+Enter: ESC (0x1b) followed by CR (0x0d).
-                    .write_text("\x1b\r")
+                    .press_key("Alt+Enter")
                     .wait_for_stable_frame(300, 3000)
                     .write_text("second line")
                     .wait_for_text("second line", 3000)

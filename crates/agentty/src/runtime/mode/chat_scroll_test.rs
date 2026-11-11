@@ -294,7 +294,7 @@ async fn test_metrics_use_footer_only_viewport_when_session_is_missing() {
 }
 
 #[tokio::test]
-async fn test_metrics_place_merge_conflict_alert_in_header_spacer_row() {
+async fn test_metrics_reserve_header_row_for_merge_conflict_alert() {
     // Arrange
     let (mut app, _base_dir) = crate::test_support::new_test_app().await;
     let session = SessionFixtureBuilder::new().status(Status::Review).build();
@@ -331,8 +331,8 @@ async fn test_metrics_place_merge_conflict_alert_in_header_spacer_row() {
     );
 
     // Assert
-    // The two-row header minimum already reserves the alert's row.
-    assert_eq!(conflict_metrics.view_height, normal_metrics.view_height);
+    // The alert adds a header row below the title, shrinking the transcript.
+    assert_eq!(conflict_metrics.view_height + 1, normal_metrics.view_height);
 }
 
 #[tokio::test]

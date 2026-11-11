@@ -100,10 +100,12 @@ async fn test_{name}() -> Result<(), Box<dyn std::error::Error>> {
   assertion closure, and generate the GIF when recording mode is enabled.
 
 VHS replay sets `VHS_REPLAY_ENV_VAR` so command fixtures can use recording delays where
-the PTY proof uses Rust-controlled gates. If the proof mutates fixture state, write a
-reset script named `VHS_SETUP_SCRIPT_NAME` under `BuilderEnv::stub_bin`. The launcher
-runs it from the proof workdir before starting replay and stops if it fails. Restore
-only that scenario's isolated fixture state.
+the PTY proof uses Rust-controlled gates. `FeatureTest` snapshots the database after
+setup and restores it before replay, so VHS starts from the same sessions and active tab
+as the proof. If the proof mutates other fixture state, write a reset script named
+`VHS_SETUP_SCRIPT_NAME` under `BuilderEnv::stub_bin`. The launcher runs it from the
+proof workdir after the database restore and stops if it fails. Restore only that
+scenario's isolated fixture state.
 
 #### Common `Journey` helpers
 

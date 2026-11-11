@@ -6,13 +6,10 @@ use std::time::Duration;
 
 #[cfg(unix)]
 use ag_session::test_support as model_fixture;
-use agentty::db::{DB_DIR, DB_FILE};
 use agentty::domain::session::{
     ForgeKind, ReviewRequest, ReviewRequestState, ReviewRequestSummary,
 };
 use agentty::domain::session_message::SessionMessageKind;
-use sqlx::sqlite::SqliteConnectOptions;
-use sqlx::{ConnectOptions, Connection};
 use testty::assertion;
 use testty::region::Region;
 use testty::scenario::Scenario;
@@ -43,27 +40,14 @@ async fn seed_gated_review_request_publish(
 
     seed_successful_review_request_publish(env, hold_push, hold_create, "wt/review-s", false)?;
 
-    // Replay must start before publication, including the database's initial
-    // tab, upstream reference, transcript, and review-request state.
-    let db_path = env.agentty_root.join(DB_DIR).join(DB_FILE);
-    let snapshot = env.agentty_root.join("before-publish.sqlite");
-    let mut connection = SqliteConnectOptions::new()
-        .filename(&db_path)
-        .connect()
-        .await?;
-    sqlx::query("VACUUM INTO ?")
-        .bind(snapshot.to_string_lossy().as_ref())
-        .execute(&mut connection)
-        .await?;
-    connection.close().await?;
+    // `FeatureTest` restores the post-setup database before VHS replay; the
+    // replay must also start before the forge stub recorded a publication.
     let quote = |path: &Path| format!("'{}'", path.to_string_lossy().replace('\'', "'\"'\"'"));
     std::fs::write(
         env.stub_bin.join(VHS_SETUP_SCRIPT_NAME),
         format!(
-            "set -e\nrm -f {db}-wal {db}-shm {marker}\ncp {snapshot} {db}\n",
-            db = quote(&db_path),
+            "set -e\nrm -f {marker}\n",
             marker = quote(&env.stub_bin.join("gh.created")),
-            snapshot = quote(&snapshot),
         ),
     )?;
 
