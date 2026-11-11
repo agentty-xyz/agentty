@@ -351,6 +351,23 @@ fn rejects_oversized_structured_value() {
 }
 
 #[test]
+fn validates_bounded_structured_value_against_the_schema() {
+    // Arrange
+    let schema = OutputSchema::new(json!({ "type": "string" })).expect("schema should be valid");
+
+    // Act
+    let valid = schema.validate_value(&Value::String("Ada".to_string()));
+    let invalid = schema.validate_value(&json!(7));
+
+    // Assert
+    assert_eq!(valid, Ok(()));
+    assert!(matches!(
+        invalid,
+        Err(OutputValidationError::SchemaViolation { .. })
+    ));
+}
+
+#[test]
 fn flushes_content_size_writer() {
     // Arrange
     let mut writer = ContentSizeWriter { bytes_written: 0 };

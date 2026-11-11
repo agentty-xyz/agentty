@@ -118,7 +118,8 @@ fn selects_provider_policies_and_reasoning_wire_values() {
         if name(ReasoningEffort::Low) == "low" && name(ReasoningEffort::Medium) == "high")
     );
     assert!(
-        matches!(muse.reasoning_format, ReasoningFormat::Effort(name) if name(ReasoningEffort::Max) == "xhigh")
+        matches!(muse.reasoning_format, ReasoningFormat::Effort(name)
+        if name(ReasoningEffort::Max) == "xhigh" && name(ReasoningEffort::Medium) == "medium")
     );
     assert!(matches!(
         qwen_plus.reasoning_format,
