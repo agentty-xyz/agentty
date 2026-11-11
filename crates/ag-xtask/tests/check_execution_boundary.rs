@@ -6,9 +6,12 @@ use std::{fs, io};
 
 use tempfile::tempdir;
 
+/// Runs the checker without `CARGO`, as when invoked outside Cargo, so it
+/// resolves `cargo` from `PATH`.
 fn check_execution_boundary(workspace: &Path) -> io::Result<Output> {
     Command::new(env!("CARGO_BIN_EXE_ag-xtask"))
         .current_dir(workspace)
+        .env_remove("CARGO")
         .arg("check-execution-boundary")
         .output()
 }

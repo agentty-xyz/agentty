@@ -370,8 +370,7 @@ impl ProcessHost {
             .split(|byte| *byte == 0)
             .filter(|path| !path.is_empty())
         {
-            let path =
-                PathBuf::from(std::str::from_utf8(bytes).map_err(|error| error.to_string())?);
+            let path = PathBuf::from(std::str::from_utf8(bytes).map_err(error_text)?);
             if path
                 .components()
                 .any(|part| !matches!(part, Component::Normal(_)))
@@ -406,9 +405,11 @@ impl ProcessHost {
             }
             if path.is_dir() {
                 include(b"directory");
-                if directories.insert(path.canonicalize().map_err(|error| error.to_string())?) {
-                    for entry in fs::read_dir(&path).map_err(|error| error.to_string())? {
-                        pending.insert(entry.map_err(|error| error.to_string())?.path());
+                // These directory reads fail only when the tree changes
+                // underneath the walk.
+                if directories.insert(path.canonicalize().map_err(error_text)?) {
+                    for entry in fs::read_dir(&path).map_err(error_text)? {
+                        pending.insert(entry.map_err(error_text)?.path());
                     }
                 }
                 continue;
@@ -440,7 +441,7 @@ impl ProcessHost {
                 path = if link.is_absolute() {
                     link
                 } else {
-                    path.parent().unwrap_or_else(|| Path::new(".")).join(link)
+                    path.parent().unwrap_or(Path::new(".")).join(link)
                 };
             } else if let Some(parent) = path
                 .parent()
@@ -498,7 +499,8 @@ impl Host for ProcessHost {
     fn metadata(&self) -> Result<Metadata, String> {
         let mut metadata = Metadata::load()?;
         if metadata.target_directory.is_absolute() {
-            let root = std::env::current_dir().map_err(|error| error.to_string())?;
+            // `cargo metadata` already succeeded from this directory.
+            let root = std::env::current_dir().map_err(error_text)?;
             metadata.target_directory = metadata
                 .target_directory
                 .strip_prefix(root)
@@ -536,8 +538,9 @@ impl Host for ProcessHost {
         if !resolved.starts_with(&root) {
             return Err("Validation target resolves outside the workspace".into());
         }
-        fs::create_dir_all(target).map_err(|error| error.to_string())?;
-        if target.canonicalize().map_err(|error| error.to_string())? == root {
+        fs::create_dir_all(target).map_err(error_text)?;
+        // The directory was just created or already existed.
+        if target.canonicalize().map_err(error_text)? == root {
             return Err("CARGO_TARGET_DIR must not be the workspace root".into());
         }
         let file = OpenOptions::new()
@@ -547,14 +550,16 @@ impl Host for ProcessHost {
             .write(true)
             .open(target.join("agentty-validation.lock"))
             .map_err(|error| error.to_string())?;
-        file.lock().map_err(|error| error.to_string())?;
+        // Blocking advisory locks on an open regular file fail only on
+        // unsupported filesystems.
+        file.lock().map_err(error_text)?;
 
         Ok(Box::new(file))
     }
 
     fn load(&self, target: &Path) -> Result<Ledger, String> {
         match fs::read(target.join("agentty-validation.json")) {
-            Ok(bytes) => serde_json::from_slice(&bytes).map_err(|error| error.to_string()),
+            Ok(bytes) => serde_json::from_slice(&bytes).map_err(error_text),
             Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(Ledger::new()),
             Err(error) => Err(error.to_string()),
         }
@@ -586,7 +591,9 @@ impl Host for ProcessHost {
             .split(|byte| *byte == 0)
             .filter(|path| !path.is_empty())
         {
-            let path = Path::new(std::str::from_utf8(bytes).map_err(|error| error.to_string())?);
+            // Tracked repository paths are UTF-8, so this rejects only a
+            // corrupted Git inventory.
+            let path = Path::new(std::str::from_utf8(bytes).map_err(error_text)?);
             if path.starts_with(relative) {
                 return Err("CARGO_TARGET_DIR must not contain tracked source files".into());
             }
@@ -691,12 +698,18 @@ impl Host for ProcessHost {
     }
 
     fn save(&self, target: &Path, ledger: &Ledger) -> Result<(), String> {
-        let bytes = serde_json::to_vec(ledger).map_err(|error| error.to_string())?;
+        // Ledgers hold only string-keyed maps, so serialization cannot fail.
+        let bytes = serde_json::to_vec(ledger).map_err(error_text)?;
         let pending = target.join("agentty-validation.pending");
         fs::write(&pending, bytes).map_err(|error| error.to_string())?;
-        fs::rename(pending, target.join("agentty-validation.json"))
-            .map_err(|error| error.to_string())
+        fs::rename(pending, target.join("agentty-validation.json")).map_err(error_text)
     }
+}
+
+/// Renders one filesystem, inventory, or ledger failure as a validation
+/// diagnostic.
+pub(crate) fn error_text(error: impl std::fmt::Display) -> String {
+    error.to_string()
 }
 
 #[cfg(test)]
