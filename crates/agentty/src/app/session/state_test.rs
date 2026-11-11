@@ -234,7 +234,8 @@ fn sync_session_with_handles_replaces_stale_transcript() {
 
 #[test]
 /// Verifies known and unknown diff updates patch the in-memory snapshot
-/// without discarding the last known line totals.
+/// without discarding the last known line totals, and updates for an
+/// unloaded session are ignored.
 fn apply_session_diff_stats_updated_updates_matching_session() {
     // Arrange
     let session_id = "session-3".to_string();
@@ -259,8 +260,18 @@ fn apply_session_diff_stats_updated_updates_matching_session() {
         },
     );
     state.apply_session_diff_stats_updated(&session_id, SessionDiffStats::Unknown);
+    state.apply_session_diff_stats_updated(
+        "unloaded-session",
+        SessionDiffStats::Known {
+            added_lines: 99,
+            deleted_lines: 99,
+            has_diff: true,
+            session_size: SessionSize::L,
+        },
+    );
 
     // Assert
+    assert_eq!(state.sessions.len(), 1);
     assert_eq!(state.sessions[0].stats.added_lines, 12);
     assert_eq!(state.sessions[0].stats.deleted_lines, 4);
     assert_eq!(

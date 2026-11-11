@@ -1,3 +1,4 @@
+use std::collections::{HashMap, HashSet};
 use std::fs;
 use std::path::PathBuf;
 use std::sync::Arc;
@@ -265,6 +266,36 @@ async fn merge_queue_drain_skips_failed_entries_when_not_stopping_on_failure() {
     assert!(result.is_ok());
     assert!(!app.merge_queue.has_active());
     assert!(!app.merge_queue.is_queued_or_active("unmergeable"));
+}
+
+#[tokio::test]
+async fn merge_queue_progress_reads_the_active_session_status_from_the_snapshot() {
+    // Arrange
+    let mut app = crate::test_support::new_test_app_without_retained_base_dir().await;
+    for (session_id, status) in [("other", Status::Review), ("active-merge", Status::Merging)] {
+        app.sessions.push_session(
+            crate::test_support::SessionFixtureBuilder::new()
+                .id(session_id)
+                .status(status)
+                .build(),
+        );
+    }
+    app.merge_queue.set_active("active-merge".into());
+    let session_ids = HashSet::from([SessionId::from("active-merge")]);
+    let previous_session_states =
+        HashMap::from([(SessionId::from("active-merge"), Status::Merging)]);
+
+    // Act
+    app.handle_merge_queue_progress(&session_ids, &previous_session_states)
+        .await;
+    let still_merging = app.merge_queue.is_queued_or_active("active-merge");
+    crate::test_support::set_session_status_for_test(&mut app, "active-merge", Status::Review);
+    app.handle_merge_queue_progress(&session_ids, &previous_session_states)
+        .await;
+
+    // Assert
+    assert!(still_merging);
+    assert!(!app.merge_queue.has_active());
 }
 
 #[tokio::test]
