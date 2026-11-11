@@ -161,19 +161,19 @@ fn test_parse_model_parses_current_claude_models() {
     // Act
     let parsed_opus_55 = claude_kind.parse_model("claude-opus-5-5");
     let parsed_sonnet_55 = claude_kind.parse_model("claude-sonnet-5-5");
-    let parsed_fable_51 = claude_kind.parse_model("claude-fable-5-1");
-    let parsed_haiku_45 = claude_kind.parse_model("claude-haiku-4-5-20251001");
+    let parsed_fable_52 = claude_kind.parse_model("claude-fable-5-2");
+    let parsed_haiku_55 = claude_kind.parse_model("claude-haiku-5-5");
 
     // Assert
     assert_eq!(parsed_opus_55, Some(AgentModel::ClaudeOpus55));
     assert_eq!(parsed_sonnet_55, Some(AgentModel::ClaudeSonnet55));
-    assert_eq!(parsed_fable_51, Some(AgentModel::ClaudeFable51));
-    assert_eq!(AgentModel::ClaudeFable51.as_str(), "claude-fable-5-1");
+    assert_eq!(parsed_fable_52, Some(AgentModel::ClaudeFable52));
+    assert_eq!(AgentModel::ClaudeFable52.as_str(), "claude-fable-5-2");
     assert_eq!(
-        AgentModel::ClaudeFable51.description(),
+        AgentModel::ClaudeFable52.description(),
         "Claude Fable model for creative, narrative-heavy tasks."
     );
-    assert_eq!(parsed_haiku_45, Some(AgentModel::ClaudeHaiku4520251001));
+    assert_eq!(parsed_haiku_55, Some(AgentModel::ClaudeHaiku55));
     assert_eq!(AgentModel::ClaudeOpus55.as_str(), "claude-opus-5-5");
     assert_eq!(
         AgentModel::ClaudeOpus55.description(),
@@ -209,8 +209,8 @@ fn test_claude_models_are_supported_by_claude() {
     let models = [
         AgentModel::ClaudeOpus55,
         AgentModel::ClaudeSonnet55,
-        AgentModel::ClaudeFable51,
-        AgentModel::ClaudeHaiku4520251001,
+        AgentModel::ClaudeFable52,
+        AgentModel::ClaudeHaiku55,
     ];
 
     // Act

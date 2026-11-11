@@ -24,7 +24,7 @@ async fn test_session_host_cpu_temperature() -> E2eResult {
                     env,
                     &[
                         ("DefaultSmartAgent", "claude"),
-                        ("DefaultSmartModel", "claude-haiku-4-5-20251001"),
+                        ("DefaultSmartModel", "claude-haiku-5-5"),
                         ("DefaultFastAgent", "codex"),
                         ("DefaultFastModel", model_fixture::CODEX_MODEL_ID),
                     ],

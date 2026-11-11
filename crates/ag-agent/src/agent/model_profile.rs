@@ -141,10 +141,10 @@ pub(crate) const fn declared(model: AgentModel) -> Option<ModelProfile> {
         | AgentModel::Gemini31Pro
         | AgentModel::Gemini38Flash
         | AgentModel::Gemini35FlashLite
-        | AgentModel::ClaudeFable51
+        | AgentModel::ClaudeFable52
         | AgentModel::ClaudeOpus55
         | AgentModel::ClaudeSonnet55
-        | AgentModel::ClaudeHaiku4520251001 => None,
+        | AgentModel::ClaudeHaiku55 => None,
     }
 }
 

@@ -323,7 +323,7 @@ async fn test_create_session_reads_default_smart_model_and_speed_from_db_setting
         .upsert_project_setting(
             active_project_id,
             SettingName::DefaultSmartModel,
-            AgentModel::ClaudeHaiku4520251001.as_str(),
+            AgentModel::ClaudeHaiku55.as_str(),
         )
         .await
         .expect("failed to upsert default smart model setting");
@@ -373,7 +373,7 @@ async fn test_create_session_uses_default_smart_model_setting_and_most_recent_pe
     db.sessions()
         .insert_session(
             "beta00002",
-            AgentModel::ClaudeHaiku4520251001.as_str(),
+            AgentModel::ClaudeHaiku55.as_str(),
             "main",
             "Done",
             project_id,
@@ -384,7 +384,7 @@ async fn test_create_session_uses_default_smart_model_setting_and_most_recent_pe
         .upsert_project_setting(
             project_id,
             SettingName::DefaultSmartModel,
-            AgentModel::ClaudeHaiku4520251001.as_str(),
+            AgentModel::ClaudeHaiku55.as_str(),
         )
         .await
         .expect("failed to upsert default smart model setting");
@@ -416,10 +416,7 @@ async fn test_create_session_uses_default_smart_model_setting_and_most_recent_pe
         .iter()
         .find(|session| session.id == created_session_id)
         .expect("missing created session");
-    assert_eq!(
-        created_session.agent.model(),
-        AgentModel::ClaudeHaiku4520251001
-    );
+    assert_eq!(created_session.agent.model(), AgentModel::ClaudeHaiku55);
 }
 
 #[tokio::test]

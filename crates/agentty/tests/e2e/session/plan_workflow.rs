@@ -20,7 +20,7 @@ use tokio::process::Command;
 use crate::common::{self, BuilderEnv, FeatureTest};
 use crate::session::fixture::{E2eResult, run_git, seed_project_settings};
 
-const WORKFLOW_MODEL_ID: &str = "claude-haiku-4-5-20251001";
+const WORKFLOW_MODEL_ID: &str = "claude-haiku-5-5";
 
 const IMPLEMENTER_REVIEW_TEXT: &str = "Implementer focused review completed.";
 const CLEAN_REVIEW_TEXT: &str = "No suggestions remain after implementation review.";

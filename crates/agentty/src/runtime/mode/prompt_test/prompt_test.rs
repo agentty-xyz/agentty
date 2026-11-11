@@ -79,7 +79,7 @@ fn test_prompt_edit_prunes_attachment_after_undo_revision_eviction() {
 async fn test_fast_slash_submit_toggles_speed_and_preserves_compatible_model() {
     for (initial_agent, fast_agent) in [
         (
-            AgentSelection::new(AgentKind::Claude, AgentModel::ClaudeFable51),
+            AgentSelection::new(AgentKind::Claude, AgentModel::ClaudeFable52),
             AgentSelection::new(AgentKind::Claude, AgentModel::ClaudeOpus55),
         ),
         (

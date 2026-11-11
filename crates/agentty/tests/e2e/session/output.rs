@@ -1278,7 +1278,7 @@ printf '{"type":"result","subtype":"success","result":"%s","usage":{"input_token
             std::fs::write(&path, script)?;
             #[cfg(unix)]
             std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o750))?;
-            seed_project_settings(env, &[("DefaultSmartModel", "claude-haiku-4-5-20251001")]).await
+            seed_project_settings(env, &[("DefaultSmartModel", "claude-haiku-5-5")]).await
         }))
         .run(move |scenario| {
             scenario

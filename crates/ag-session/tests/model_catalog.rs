@@ -31,12 +31,12 @@ fn provider_catalog_preserves_wire_ids_order_and_defaults() {
         (
             AgentKind::Claude,
             vec![
-                "claude-fable-5-1",
+                "claude-fable-5-2",
                 "claude-opus-5-5",
                 "claude-sonnet-5-5",
-                "claude-haiku-4-5-20251001",
+                "claude-haiku-5-5",
             ],
-            "claude-fable-5-1",
+            "claude-fable-5-2",
         ),
         (
             AgentKind::Codex,
@@ -133,6 +133,16 @@ fn every_catalog_model_has_unique_roundtrippable_metadata() {
     assert!("claude-fable-5".parse::<AgentModel>().is_err());
     assert_eq!(
         AgentModel::parse_persisted("claude-fable-5"),
-        Ok(AgentModel::ClaudeFable51)
+        Ok(AgentModel::ClaudeFable52)
+    );
+    assert!("claude-fable-5-1".parse::<AgentModel>().is_err());
+    assert_eq!(
+        AgentModel::parse_persisted("claude-fable-5-1"),
+        Ok(AgentModel::ClaudeFable52)
+    );
+    assert!("claude-haiku-4-5-20251001".parse::<AgentModel>().is_err());
+    assert_eq!(
+        AgentModel::parse_persisted("claude-haiku-4-5-20251001"),
+        Ok(AgentModel::ClaudeHaiku55)
     );
 }

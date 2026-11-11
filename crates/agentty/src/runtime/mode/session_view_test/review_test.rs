@@ -241,7 +241,7 @@ async fn test_view_total_lines_uses_default_review_model_for_loading_fallback() 
     let (mut app, _base_dir, session_id) = new_test_app_with_session().await;
     app.settings.default_review_selection = crate::domain::agent::AgentSelection::new(
         crate::domain::agent::AgentKind::Claude,
-        AgentModel::ClaudeHaiku4520251001,
+        AgentModel::ClaudeHaiku55,
     );
     app.sessions.sessions_mut()[0].agent = model_fixture::codex_selection();
     app.sessions.sessions_mut()[0].status = Status::AgentReview;

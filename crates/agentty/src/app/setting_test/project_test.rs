@@ -154,12 +154,9 @@ async fn load_default_smart_model_setting_prefers_project_override() {
         .expect("failed to persist smart model");
 
     // Act
-    let loaded_model = load_default_smart_model_setting(
-        &services,
-        Some(project_id),
-        AgentModel::ClaudeHaiku4520251001,
-    )
-    .await;
+    let loaded_model =
+        load_default_smart_model_setting(&services, Some(project_id), AgentModel::ClaudeHaiku55)
+            .await;
 
     // Assert
     assert_eq!(loaded_model, model_fixture::CODEX_MODEL);

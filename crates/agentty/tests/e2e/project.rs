@@ -88,7 +88,7 @@ async fn seed_legacy_subdirectory(env: &BuilderEnv) -> Result<(), Box<dyn std::e
         .sessions()
         .insert_session(
             "legacy-session",
-            "claude-haiku-4-5-20251001",
+            "claude-haiku-5-5",
             "main",
             "Review",
             legacy_id,

@@ -44,7 +44,7 @@ async fn seed_question_refresh_project(env: &BuilderEnv) -> Result<(), Box<dyn s
         env,
         SessionSeed::regular(
             QUESTION_REFRESH_SELECTED_SESSION_ID,
-            "claude-haiku-4-5-20251001",
+            "claude-haiku-5-5",
             "main",
             "Done",
         )
@@ -82,9 +82,9 @@ printf '%s\n' "{{\"type\":\"result\",\"subtype\":\"success\",\"result\":\"$resul
         env,
         &[
             ("DefaultSmartAgent", "claude"),
-            ("DefaultSmartModel", "claude-haiku-4-5-20251001"),
+            ("DefaultSmartModel", "claude-haiku-5-5"),
             ("DefaultFastAgent", "claude"),
-            ("DefaultFastModel", "claude-haiku-4-5-20251001"),
+            ("DefaultFastModel", "claude-haiku-5-5"),
         ],
     )
     .await?;
@@ -116,7 +116,7 @@ printf '%s\n' '{{"type":"result","subtype":"success","result":"{{\"answer\":\"Ne
     #[cfg(unix)]
     std::fs::set_permissions(&claude_path, std::fs::Permissions::from_mode(0o750))?;
 
-    seed_project_settings(env, &[("DefaultSmartModel", "claude-haiku-4-5-20251001")]).await
+    seed_project_settings(env, &[("DefaultSmartModel", "claude-haiku-5-5")]).await
 }
 
 /// Seeds clarification questions and a file lookup target without a live agent.
@@ -124,7 +124,7 @@ async fn seed_question_at_lookup_session(env: &BuilderEnv) -> E2eResult {
     let session_id = "question-lookup-session";
     common::seed_session(
         env,
-        SessionSeed::regular(session_id, "claude-haiku-4-5-20251001", "main", "Question")
+        SessionSeed::regular(session_id, "claude-haiku-5-5", "main", "Question")
             .with_title("File answer"),
     )
     .await?;

@@ -100,7 +100,7 @@ esac
             std::fs::write(&path, script)?;
             #[cfg(unix)]
             std::fs::set_permissions(path, std::fs::Permissions::from_mode(0o750))?;
-            seed_project_settings(env, &[("DefaultReviewAgent", "claude"), ("DefaultReviewModel", "claude-haiku-4-5-20251001")]).await
+            seed_project_settings(env, &[("DefaultReviewAgent", "claude"), ("DefaultReviewModel", "claude-haiku-5-5")]).await
         }))
         .run(|scenario| scenario
             .compose(&common::wait_for_agentty_startup())
@@ -274,7 +274,7 @@ printf '%s\n' "{\"type\":\"result\",\"subtype\":\"success\",\"result\":\"$result
         env,
         &[
             ("DefaultReviewAgent", "claude"),
-            ("DefaultReviewModel", "claude-haiku-4-5-20251001"),
+            ("DefaultReviewModel", "claude-haiku-5-5"),
         ],
     )
     .await
@@ -680,7 +680,7 @@ async fn seed_auto_address_review_lifecycle(
         let database = common::open_database(env).await?;
         database
             .sessions()
-            .update_session_model("review-shortcut-0001", "claude-haiku-4-5-20251001")
+            .update_session_model("review-shortcut-0001", "claude-haiku-5-5")
             .await
     })
     .await?;
@@ -763,9 +763,9 @@ printf '%s\n' "{\"type\":\"result\",\"subtype\":\"success\",\"result\":\"$result
         env,
         &[
             ("DefaultSmartAgent", "claude"),
-            ("DefaultSmartModel", "claude-haiku-4-5-20251001"),
+            ("DefaultSmartModel", "claude-haiku-5-5"),
             ("DefaultReviewAgent", "claude"),
-            ("DefaultReviewModel", "claude-haiku-4-5-20251001"),
+            ("DefaultReviewModel", "claude-haiku-5-5"),
         ],
     )
     .await
@@ -1317,7 +1317,7 @@ async fn focused_review_progress_survives_sync() -> E2eResult {
                     env,
                     &[
                         ("DefaultReviewAgent", "claude"),
-                        ("DefaultReviewModel", "claude-haiku-4-5-20251001"),
+                        ("DefaultReviewModel", "claude-haiku-5-5"),
                     ],
                 )
                 .await

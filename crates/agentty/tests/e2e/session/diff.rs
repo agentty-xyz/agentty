@@ -242,7 +242,7 @@ printf '%s\n' '{"type":"result","subtype":"success","result":"{\"project_impact\
         env,
         &[
             ("DefaultReviewAgent", "claude"),
-            ("DefaultReviewModel", "claude-haiku-4-5-20251001"),
+            ("DefaultReviewModel", "claude-haiku-5-5"),
         ],
     )
     .await

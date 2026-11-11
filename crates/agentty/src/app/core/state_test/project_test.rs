@@ -148,7 +148,7 @@ async fn test_switch_project_reloads_project_scoped_settings() {
         .upsert_project_setting(
             first_project_id,
             SettingName::DefaultSmartModel,
-            AgentModel::ClaudeHaiku4520251001.as_str(),
+            AgentModel::ClaudeHaiku55.as_str(),
         )
         .await
         .expect("failed to persist first project smart model");

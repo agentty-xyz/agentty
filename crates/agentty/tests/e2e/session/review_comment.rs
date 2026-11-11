@@ -96,7 +96,7 @@ async fn seed_review_comment_agent_resolution(
         let database = common::open_database(env).await?;
         database
             .sessions()
-            .update_session_model("review-shortcut-0001", "claude-haiku-4-5-20251001")
+            .update_session_model("review-shortcut-0001", "claude-haiku-5-5")
             .await?;
         database
             .sessions()
