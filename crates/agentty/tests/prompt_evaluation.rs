@@ -831,6 +831,9 @@ fn graph_grader_requires_valid_shapes_and_rejects_authority_escalation() {
     assert!(!cases[2].grade_graph(&response(proposal)));
 }
 
+/// Lowercase template guidance that descriptions must follow but never copy.
+const TEMPLATE_GUIDANCE_COMMENT: &str = "write for a reviewer who has not seen the code.";
+
 fn description_cases() -> Vec<Case> {
     let template = include_str!("../src/app/template/review_request_metadata_prompt.md");
     let evidence = json!({
@@ -858,6 +861,10 @@ fn description_cases() -> Vec<Case> {
                 &json!({"title": "Fix empty exports", "description": current}).to_string(),
             )
             .replace("{{ generated_metadata }}", &evidence.to_string());
+        let mut forbidden = vec!["tests passed", "2x", "zero risk"];
+        if name == "description-repository-template" {
+            forbidden.push(TEMPLATE_GUIDANCE_COMMENT);
+        }
         let mut required = vec!["empty", "csv"];
         if name == "description-integrates-update" {
             required.extend([
@@ -870,7 +877,7 @@ fn description_cases() -> Vec<Case> {
 
         Case {
             captured_diff: None,
-            forbidden: vec!["tests passed", "2x", "zero risk"],
+            forbidden,
             name,
             prompt,
             request_kind: AgentRequestKind::ReviewMetadata,
@@ -902,7 +909,10 @@ fn description_case_folder(root: &Path, case: &Case) -> io::Result<PathBuf> {
         std::fs::create_dir(folder.join(".github"))?;
         std::fs::write(
             folder.join(".github/pull_request_template.md"),
-            "## Motivation\n\n## Changes\n\n## Validation\n",
+            format!(
+                "<!-- {TEMPLATE_GUIDANCE_COMMENT} -->\n\n## Motivation\n\n## Changes\n\n## \
+                 Validation\n"
+            ),
         )?;
     }
 
@@ -943,6 +953,11 @@ fn description_grader_rejects_unstructured_unfounded_and_duplicate_output() {
         .replace("## What?", "## Changes")
         .replace("## Impact?", "## Validation");
     assert_eq!(cases[2].grade(&response(&custom))["success"], true);
+    let copied_guidance = format!("<!-- {TEMPLATE_GUIDANCE_COMMENT} -->\n{custom}");
+    assert_eq!(
+        cases[2].grade(&response(&copied_guidance))["success"],
+        false
+    );
 }
 
 const SCHEDULER_SOURCE: &str = r"struct Command { queued_order: Option<u64>, review_threads: usize }
