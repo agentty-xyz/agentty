@@ -84,3 +84,26 @@ fn graph_selection_decoding_rejects_unknown_or_incoherent_provider_model_pairs()
         serde_json::from_value(serde_json::json!(snapshot)).expect("harness snapshot");
     assert_eq!(decoded, snapshot);
 }
+
+#[test]
+fn graph_selection_decoding_restores_retired_model_ids_as_replacements() {
+    // Arrange
+    let mut value = serde_json::json!(graph());
+
+    for (retired_model, replacement) in [
+        ("claude-fable-5-1", AgentModel::ClaudeFable52),
+        ("claude-haiku-4-5-20251001", AgentModel::ClaudeHaiku55),
+    ] {
+        value["nodes"][0]["agent"] = serde_json::json!(("Claude", retired_model));
+
+        // Act
+        let decoded: ExecutionGraph =
+            serde_json::from_value(value.clone()).expect("retired model snapshot");
+
+        // Assert
+        assert_eq!(
+            decoded.nodes[0].agent,
+            AgentSelection::new(AgentKind::Claude, replacement)
+        );
+    }
+}

@@ -303,7 +303,7 @@ async fn settings_manager_preserves_retired_default_when_provider_is_unavailable
     // Assert
     assert_eq!(
         unavailable_manager.default_smart_selection,
-        AgentSelection::new(AgentKind::Claude, AgentModel::ClaudeFable51)
+        AgentSelection::new(AgentKind::Claude, AgentModel::ClaudeFable52)
     );
     assert_eq!(
         persisted_model.as_deref(),
@@ -871,15 +871,12 @@ async fn load_default_smart_model_setting_falls_back_to_default() {
         .expect("failed to persist invalid smart model");
 
     // Act
-    let fallback_loaded_model = load_default_smart_model_setting(
-        &services,
-        Some(project_id),
-        AgentModel::ClaudeHaiku4520251001,
-    )
-    .await;
+    let fallback_loaded_model =
+        load_default_smart_model_setting(&services, Some(project_id), AgentModel::ClaudeHaiku55)
+            .await;
 
     // Assert
-    assert_eq!(fallback_loaded_model, AgentModel::ClaudeHaiku4520251001);
+    assert_eq!(fallback_loaded_model, AgentModel::ClaudeHaiku55);
 }
 
 #[tokio::test]

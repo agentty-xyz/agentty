@@ -95,7 +95,7 @@ async fn test_session_resources() -> E2eResult {
                 env,
                 &[
                     ("DefaultSmartAgent", "claude"),
-                    ("DefaultSmartModel", "claude-haiku-4-5-20251001"),
+                    ("DefaultSmartModel", "claude-haiku-5-5"),
                     ("DefaultFastAgent", "codex"),
                     ("DefaultFastModel", model_fixture::CODEX_MODEL_ID),
                 ],
@@ -170,7 +170,7 @@ async fn seed_retained_resource_runtime(env: &BuilderEnv) -> E2eResult {
             ("DefaultSmartAgent", "codex"),
             ("DefaultSmartModel", model_fixture::CODEX_MODEL_ID),
             ("DefaultFastAgent", "claude"),
-            ("DefaultFastModel", "claude-haiku-4-5-20251001"),
+            ("DefaultFastModel", "claude-haiku-5-5"),
         ],
     )
     .await?;

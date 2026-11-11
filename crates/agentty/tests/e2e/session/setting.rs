@@ -123,9 +123,9 @@ printf '{"type":"result","subtype":"success","result":"{\"answer\":\"%s\",\"ques
         env,
         &[
             ("DefaultSmartAgent", "claude"),
-            ("DefaultSmartModel", "claude-haiku-4-5-20251001"),
+            ("DefaultSmartModel", "claude-haiku-5-5"),
             ("DefaultFastAgent", "claude"),
-            ("DefaultFastModel", "claude-haiku-4-5-20251001"),
+            ("DefaultFastModel", "claude-haiku-5-5"),
         ],
     )
     .await

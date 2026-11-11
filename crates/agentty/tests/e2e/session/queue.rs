@@ -157,11 +157,11 @@ printf '%s\n' "{{\"type\":\"result\",\"subtype\":\"success\",\"result\":\"$resul
         env,
         &[
             ("DefaultSmartAgent", "claude"),
-            ("DefaultSmartModel", "claude-haiku-4-5-20251001"),
+            ("DefaultSmartModel", "claude-haiku-5-5"),
             ("DefaultFastAgent", "claude"),
-            ("DefaultFastModel", "claude-haiku-4-5-20251001"),
+            ("DefaultFastModel", "claude-haiku-5-5"),
             ("DefaultReviewAgent", "claude"),
-            ("DefaultReviewModel", "claude-haiku-4-5-20251001"),
+            ("DefaultReviewModel", "claude-haiku-5-5"),
         ],
     )
     .await
@@ -204,7 +204,7 @@ printf '%s\n' '{{"type":"result","subtype":"success","result":"{{\"answer\":\"{Q
         install_sync_validation_failure_git_stub(env, &validation_failure_marker)?;
     }
 
-    seed_project_settings(env, &[("DefaultSmartModel", "claude-haiku-4-5-20251001")]).await
+    seed_project_settings(env, &[("DefaultSmartModel", "claude-haiku-5-5")]).await
 }
 
 /// Installs a held Claude turn that ends with a clarification question so the
@@ -230,7 +230,7 @@ printf '%s\n' '{{"type":"result","subtype":"success","result":"{{\"answer\":\"Ne
     #[cfg(unix)]
     std::fs::set_permissions(&claude_path, std::fs::Permissions::from_mode(0o750))?;
 
-    seed_project_settings(env, &[("DefaultSmartModel", "claude-haiku-4-5-20251001")]).await
+    seed_project_settings(env, &[("DefaultSmartModel", "claude-haiku-5-5")]).await
 }
 
 /// Installs a Git wrapper that fails only the marked queued-sync validation.
@@ -377,7 +377,7 @@ esac
     #[cfg(unix)]
     std::fs::set_permissions(&gh_path, std::fs::Permissions::from_mode(0o750))?;
 
-    seed_project_settings(env, &[("DefaultSmartModel", "claude-haiku-4-5-20251001")]).await
+    seed_project_settings(env, &[("DefaultSmartModel", "claude-haiku-5-5")]).await
 }
 
 /// Extends the queued-review stubs with enough turn latency for a deliberate

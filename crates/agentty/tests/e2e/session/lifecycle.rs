@@ -989,7 +989,7 @@ async fn session_creation_recovers_unreleased_first_prompt() -> E2eResult {
                     env,
                     SessionSeed::regular(
                         "unreleased-first",
-                        "claude-haiku-4-5-20251001",
+                        "claude-haiku-5-5",
                         "main",
                         "InProgress",
                     )

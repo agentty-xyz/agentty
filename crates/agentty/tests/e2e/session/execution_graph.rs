@@ -402,7 +402,7 @@ async fn graph_draft_survives_a_background_session_question() -> E2eResult {
                 ])?;
                 let database = common::open_database(env).await?;
                 database.sessions().update_session_agent_model(
-                    SESSION, "claude", "claude-haiku-4-5-20251001",
+                    SESSION, "claude", "claude-haiku-5-5",
                 ).await?;
                 let script = format!(r#"#!/bin/sh
 if [ "$1" = "update" ]; then exit 0; fi

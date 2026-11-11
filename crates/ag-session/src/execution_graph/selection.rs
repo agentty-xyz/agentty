@@ -1,4 +1,5 @@
 //! Graph snapshots retain provider and model together without default fallback.
+//! Retired model ids restore as their registered replacement models.
 
 use std::borrow::Borrow;
 
@@ -24,7 +25,7 @@ where
 {
     let (kind, model) = <(String, String)>::deserialize(deserializer)?;
     let kind: AgentKind = kind.parse().map_err(de::Error::custom)?;
-    let model: AgentModel = model.parse().map_err(de::Error::custom)?;
+    let model = AgentModel::parse_persisted(&model).map_err(de::Error::custom)?;
     if !kind.supports_model(model) {
         return Err(de::Error::custom("graph model does not belong to provider"));
     }

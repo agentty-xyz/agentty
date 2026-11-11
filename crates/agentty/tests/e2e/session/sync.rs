@@ -164,7 +164,7 @@ async fn seed_published_session_output_chronology(
     let session_id = "review-shortcut-0001";
     common::seed_session(
         env,
-        SessionSeed::regular(session_id, "claude-haiku-4-5-20251001", "main", "Review")
+        SessionSeed::regular(session_id, "claude-haiku-5-5", "main", "Review")
             .with_title("Chronological session output"),
     )
     .await?;

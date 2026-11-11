@@ -247,7 +247,7 @@ async fn test_question_scroll_metrics_uses_default_review_model_for_loading_fall
     let session_id = "session-review-model";
     app.settings.default_review_selection = crate::domain::agent::AgentSelection::new(
         crate::domain::agent::AgentKind::Claude,
-        AgentModel::ClaudeHaiku4520251001,
+        AgentModel::ClaudeHaiku55,
     );
     app.sessions.push_session(
         crate::test_support::SessionFixtureBuilder::new()

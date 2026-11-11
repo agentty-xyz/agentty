@@ -87,7 +87,7 @@ printf '{{"type":"result","subtype":"success","result":"{{\"answer\":\"{BARE_LAY
     #[cfg(unix)]
     std::fs::set_permissions(&claude_path, std::fs::Permissions::from_mode(0o750))?;
 
-    seed_project_settings(env, &[("DefaultSmartModel", "claude-haiku-4-5-20251001")]).await
+    seed_project_settings(env, &[("DefaultSmartModel", "claude-haiku-5-5")]).await
 }
 
 /// Verify that Agentty can create a session and drive one turn to review when

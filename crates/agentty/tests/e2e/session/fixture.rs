@@ -144,9 +144,9 @@ printf '{"type":"result","subtype":"success","result":"{\\"answer\\":\\"%s\\"}",
         env,
         &[
             ("DefaultSmartAgent", "claude"),
-            ("DefaultSmartModel", "claude-haiku-4-5-20251001"),
+            ("DefaultSmartModel", "claude-haiku-5-5"),
             ("DefaultFastAgent", "claude"),
-            ("DefaultFastModel", "claude-haiku-4-5-20251001"),
+            ("DefaultFastModel", "claude-haiku-5-5"),
         ],
     )
     .await?;
@@ -216,7 +216,7 @@ printf '{{"type":"result","subtype":"success","result":"{{\\"project_impact\\":[
         env,
         &[
             ("DefaultReviewAgent", "claude"),
-            ("DefaultReviewModel", "claude-haiku-4-5-20251001"),
+            ("DefaultReviewModel", "claude-haiku-5-5"),
         ],
     )
     .await
@@ -368,7 +368,7 @@ printf '%s\n' '{{"type":"result","subtype":"success","result":"","structured_out
     #[cfg(unix)]
     std::fs::set_permissions(&claude_path, std::fs::Permissions::from_mode(0o750))?;
 
-    seed_project_settings(env, &[("DefaultSmartModel", "claude-haiku-4-5-20251001")]).await?;
+    seed_project_settings(env, &[("DefaultSmartModel", "claude-haiku-5-5")]).await?;
 
     Ok(())
 }

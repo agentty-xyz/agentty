@@ -18,7 +18,7 @@ async fn seed(env: &BuilderEnv) -> E2eResult {
     common::seed_active_project_setting(env).await?;
     common::seed_session(
         env,
-        SessionSeed::regular(SESSION, "claude-haiku-4-5-20251001", "main", "Review")
+        SessionSeed::regular(SESSION, "claude-haiku-5-5", "main", "Review")
             .with_title("Graph proposals"),
     )
     .await?;
@@ -157,7 +157,7 @@ async fn graph_proposal_restored_pending_preview() -> E2eResult {
                 let mut state = fixture::graph_proposal_state("restored", SESSION);
                 state.agent = ag_session::AgentSelection::new(
                     ag_session::AgentKind::Claude,
-                    ag_session::AgentModel::ClaudeHaiku4520251001,
+                    ag_session::AgentModel::ClaudeHaiku55,
                 );
                 state.definitions[0].prompt = "Saved instructions from the proposal \
                                                snapshot.\nPreserve these after restart."

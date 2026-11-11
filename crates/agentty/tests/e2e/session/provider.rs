@@ -66,9 +66,9 @@ printf '{"type":"result","subtype":"success","result":"","structured_output":%s,
         env,
         &[
             ("DefaultSmartAgent", "claude"),
-            ("DefaultSmartModel", "claude-haiku-4-5-20251001"),
+            ("DefaultSmartModel", "claude-haiku-5-5"),
             ("DefaultFastAgent", "claude"),
-            ("DefaultFastModel", "claude-haiku-4-5-20251001"),
+            ("DefaultFastModel", "claude-haiku-5-5"),
         ],
     )
     .await
@@ -154,9 +154,9 @@ printf '%s\n' '{"type":"result","subtype":"success","result":"","structured_outp
         env,
         &[
             ("DefaultSmartAgent", "claude"),
-            ("DefaultSmartModel", "claude-haiku-4-5-20251001"),
+            ("DefaultSmartModel", "claude-haiku-5-5"),
             ("DefaultFastAgent", "claude"),
-            ("DefaultFastModel", "claude-haiku-4-5-20251001"),
+            ("DefaultFastModel", "claude-haiku-5-5"),
         ],
     )
     .await?;
@@ -200,7 +200,7 @@ printf '%s\n' '{{"type":"result","subtype":"success","result":"{payload}"}}'
     #[cfg(unix)]
     std::fs::set_permissions(&claude_path, std::fs::Permissions::from_mode(0o750))?;
 
-    seed_project_settings(env, &[("DefaultSmartModel", "claude-haiku-4-5-20251001")]).await?;
+    seed_project_settings(env, &[("DefaultSmartModel", "claude-haiku-5-5")]).await?;
 
     Ok(())
 }
@@ -387,7 +387,7 @@ printf '{"type":"result","subtype":"success","result":"{\"answer\":\"%s\",\"ques
     #[cfg(unix)]
     std::fs::set_permissions(&claude_path, std::fs::Permissions::from_mode(0o750))?;
 
-    seed_project_settings(env, &[("DefaultSmartModel", "claude-haiku-4-5-20251001")]).await
+    seed_project_settings(env, &[("DefaultSmartModel", "claude-haiku-5-5")]).await
 }
 
 /// Verify that provider output which fails protocol validation surfaces a
@@ -899,9 +899,9 @@ printf '{"type":"result","subtype":"success","result":"","structured_output":%s,
         env,
         &[
             ("DefaultSmartAgent", "claude"),
-            ("DefaultSmartModel", "claude-haiku-4-5-20251001"),
+            ("DefaultSmartModel", "claude-haiku-5-5"),
             ("DefaultFastAgent", "claude"),
-            ("DefaultFastModel", "claude-haiku-4-5-20251001"),
+            ("DefaultFastModel", "claude-haiku-5-5"),
         ],
     )
     .await
