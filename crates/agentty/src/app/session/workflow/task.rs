@@ -686,7 +686,11 @@ impl SessionTaskService {
     ) -> Result<Option<SessionCommitOutcome>, SessionError> {
         let mut failure_tracker =
             FailureTracker::new(AUTO_COMMIT_ASSIST_POLICY.max_identical_failure_streak);
-        for assist_attempt in 1..=AUTO_COMMIT_ASSIST_POLICY.max_attempts + 1 {
+        // Every failed attempt past `max_attempts` returns its commit error,
+        // so this loop always ends through one of the match arms below.
+        let mut assist_attempt = 0;
+        loop {
+            assist_attempt += 1;
             match Self::commit_changes_with_git_client(context).await {
                 Ok(commit_outcome) => {
                     return Ok(Some(commit_outcome));
@@ -726,10 +730,6 @@ impl SessionTaskService {
                 }
             }
         }
-
-        Err(SessionError::Workflow(
-            "Failed to auto-commit after assistance attempts".to_string(),
-        ))
     }
 
     /// Commits all worktree changes and returns the current `HEAD` short hash.
@@ -802,7 +802,7 @@ impl SessionTaskService {
         commit_error: &str,
     ) -> Result<(), SessionError> {
         let compacted_error = compact_commit_error_for_assist(commit_error);
-        let prompt = Self::auto_commit_assist_prompt(&compacted_error)?;
+        let prompt = Self::auto_commit_assist_prompt(&compacted_error);
 
         run_agent_assist(context, &prompt)
             .await
@@ -810,20 +810,15 @@ impl SessionTaskService {
     }
 
     /// Renders the commit-assistance prompt from the markdown template.
-    ///
-    /// # Errors
-    /// Returns an error if Askama template rendering fails.
-    fn auto_commit_assist_prompt(commit_error: &str) -> Result<String, SessionError> {
+    fn auto_commit_assist_prompt(commit_error: &str) -> String {
         let commit_error = serde_json::json!(commit_error.trim()).to_string();
         let template = AutoCommitAssistPromptTemplate {
             commit_error: &commit_error,
         };
 
-        template.render().map_err(|error| {
-            SessionError::Workflow(format!(
-                "Failed to render `auto_commit_assist_prompt.md`: {error}"
-            ))
-        })
+        // This template writes borrowed strings into a `String`, whose
+        // formatter cannot fail.
+        template.render().unwrap_or_default()
     }
 
     fn format_commit_error_for_display(commit_error: &str) -> String {
@@ -832,15 +827,12 @@ impl SessionTaskService {
 
     /// Renders the commit-message generation prompt from the markdown
     /// template.
-    ///
-    /// # Errors
-    /// Returns an error if Askama template rendering fails.
     fn session_commit_message_prompt(
         diff: &str,
         current_commit_message: Option<&str>,
         user_requests: &str,
         fallback: bool,
-    ) -> Result<String, SessionError> {
+    ) -> String {
         let stripped_current_commit_message =
             current_commit_message.map_or_else(String::new, strip_agentty_coauthor_trailer);
         let fence = ag_protocol::diff_fence(diff);
@@ -854,11 +846,9 @@ impl SessionTaskService {
             fenced_diff: &fenced_diff,
         };
 
-        template.render().map_err(|error| {
-            SessionError::Workflow(format!(
-                "Failed to render `session_commit_message_prompt.md`: {error}"
-            ))
-        })
+        // This template writes borrowed strings and a boolean into a
+        // `String`, whose formatter cannot fail.
+        template.render().unwrap_or_default()
     }
 
     /// Renders the semantic review-request metadata reconciliation prompt.
@@ -1187,7 +1177,7 @@ impl SessionTaskService {
             Some(&bounded_message),
             user_requests,
             fallback,
-        )?;
+        );
         preparation.attribute("agentty.input.compacted", bounded_diff != diff);
         preparation.finish(Outcome::Completed);
         if prompt.len() > crate::app::diff_prompt::PROMPT_BUDGET {

@@ -20,6 +20,7 @@ use crate::domain::agent::{AgentCliInfo, AgentKind, AgentModel, AgentSelection};
 use crate::domain::session::{SessionHandles, Status};
 use crate::domain::session_message::{SessionMessage, SessionMessageKind, SessionTranscript};
 use crate::infra::fs;
+use crate::test_support::{enable_tracing_log_fallback, poison_lock};
 
 #[tokio::test]
 async fn test_append_workflow_notice_updates_live_and_durable_workflow_transcript() {
@@ -334,6 +335,164 @@ async fn test_run_agent_assist_task_returns_error_for_non_zero_exit_status() {
     let error_text = result.expect_err("expected non-zero exit to fail");
     assert!(error_text.to_string().contains("exit code 7"));
     assert!(error_text.to_string().contains("assist failed"));
+}
+
+#[tokio::test]
+/// Verifies assist output stays successful when its stats and usage rows
+/// cannot be persisted.
+async fn test_run_agent_assist_task_tolerates_stats_and_usage_persistence_failures() {
+    // Arrange
+    enable_tracing_log_fallback();
+    let (database, pool) = AppRepositories::in_memory_with_pool()
+        .await
+        .expect("db should open");
+    insert_review_session(&database, model_fixture::CODEX_MODEL_ID).await;
+    sqlx::query(
+        "CREATE TRIGGER reject_stats BEFORE UPDATE OF input_tokens ON session BEGIN SELECT \
+         RAISE(ABORT, 'stats failure'); END",
+    )
+    .execute(&pool)
+    .await
+    .expect("failing stats fixture");
+    sqlx::query("DROP TABLE session_usage")
+        .execute(&pool)
+        .await
+        .expect("failing usage fixture");
+    let (app_event_tx, _app_event_rx) = mpsc::unbounded_channel();
+    let transcript = Arc::new(Mutex::new(SessionTranscript::default()));
+    let mut run_client = MockRunClient::new();
+    run_client
+        .expect_submit()
+        .once()
+        .returning(|_| Ok(one_shot_submission("Resolved the conflict", 5, 7)));
+
+    // Act
+    let result = SessionTaskService::run_agent_assist_task(RunAgentAssistTaskInput {
+        app_event_tx,
+        child_pid: Arc::new(Mutex::new(None)),
+        db: database.clone(),
+        folder: PathBuf::from("/tmp/project"),
+        id: "session-id".to_string(),
+        run_client: Arc::new(run_client),
+        prompt: "Resolve conflict".to_string(),
+        session_agent: model_fixture::codex_selection(),
+        session_update_versions: Arc::default(),
+        transcript: Arc::clone(&transcript),
+    })
+    .await;
+    let session_row = database
+        .sessions()
+        .load_sessions()
+        .await
+        .expect("failed to load sessions")
+        .into_iter()
+        .find(|row| row.id == "session-id")
+        .expect("missing session row");
+
+    // Assert
+    result.expect("assist output should survive persistence failures");
+    assert_eq!(session_row.input_tokens, 0);
+    assert!(
+        transcript
+            .lock()
+            .expect("transcript lock should not be poisoned")
+            .replay_text()
+            .is_some_and(|text| text.contains("Resolved the conflict"))
+    );
+}
+
+#[tokio::test]
+/// Verifies a poisoned live status lock rejects the transition without
+/// touching persistence or the reducer.
+async fn test_update_status_rejects_poisoned_status_lock() {
+    // Arrange
+    let database = AppRepositories::in_memory().await.expect("db should open");
+    insert_review_session(&database, model_fixture::CODEX_MODEL_ID).await;
+    let status = Arc::new(Mutex::new(Status::Review));
+    poison_lock(Arc::clone(&status));
+    let clock = StaticClock::new(SystemTime::UNIX_EPOCH);
+    let (app_event_tx, mut app_event_rx) = mpsc::unbounded_channel();
+
+    // Act
+    let status_updated = SessionTaskService::update_status(
+        &status,
+        &clock,
+        &database,
+        &app_event_tx,
+        &Arc::default(),
+        "session-id",
+        Status::InProgress,
+    )
+    .await;
+
+    // Assert
+    assert!(!status_updated);
+    assert!(app_event_rx.try_recv().is_err());
+}
+
+#[tokio::test]
+/// Verifies status and notice writes keep their live effects when
+/// persistence rejects them and the reducer has already shut down.
+async fn test_status_and_notice_failures_keep_live_effects_after_reducer_shutdown() {
+    // Arrange
+    enable_tracing_log_fallback();
+    let (database, pool) = AppRepositories::in_memory_with_pool()
+        .await
+        .expect("db should open");
+    insert_review_session(&database, model_fixture::CODEX_MODEL_ID).await;
+    sqlx::query(
+        "CREATE TRIGGER reject_status BEFORE UPDATE OF status ON session BEGIN SELECT \
+         RAISE(ABORT, 'status failure'); END",
+    )
+    .execute(&pool)
+    .await
+    .expect("failing status fixture");
+    sqlx::query(
+        "CREATE TRIGGER reject_message BEFORE INSERT ON session_message BEGIN SELECT RAISE(ABORT, \
+         'message failure'); END",
+    )
+    .execute(&pool)
+    .await
+    .expect("failing message fixture");
+    let status = Mutex::new(Status::Review);
+    let clock = StaticClock::new(SystemTime::UNIX_EPOCH);
+    let app_event_tx = mpsc::unbounded_channel().0;
+
+    // Act
+    let status_updated = SessionTaskService::update_status(
+        &status,
+        &clock,
+        &database,
+        &app_event_tx,
+        &Arc::default(),
+        "session-id",
+        Status::InProgress,
+    )
+    .await;
+    SessionTaskService::persist_workflow_notice(&database, "session-id", "[Commit] Done").await;
+    SessionTaskService::request_git_status_refresh(&app_event_tx);
+    let session_row = database
+        .sessions()
+        .load_sessions()
+        .await
+        .expect("failed to load sessions")
+        .into_iter()
+        .find(|row| row.id == "session-id")
+        .expect("missing session row");
+    let messages = database
+        .sessions()
+        .load_session_messages("session-id")
+        .await
+        .expect("failed to load session messages");
+
+    // Assert
+    assert!(status_updated);
+    assert_eq!(
+        *status.lock().expect("status lock should not be poisoned"),
+        Status::InProgress
+    );
+    assert_eq!(session_row.status, Status::Review.to_string());
+    assert_eq!(messages, Vec::new());
 }
 
 #[tokio::test]

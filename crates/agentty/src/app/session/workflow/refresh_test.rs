@@ -258,30 +258,200 @@ async fn review_request_remote_uses_live_worktree_for_detected_remote() {
     assert_eq!(remote.forge_kind, ForgeKind::GitHub);
 }
 
+#[tokio::test]
+async fn review_request_remote_reports_unresolvable_remotes() {
+    // Arrange
+    let stored_review_request = ReviewRequest {
+        last_refreshed_at: 12,
+        summary: review_request_summary("#42", ReviewRequestState::Open),
+    };
+    let cases = [
+        (
+            Some("https://example.com/live"),
+            None,
+            "This repository remote is not supported: `https://example.com/live`.",
+        ),
+        (
+            None,
+            None,
+            "Failed to resolve repository remote for linked review request",
+        ),
+        (
+            None,
+            Some(stored_review_request),
+            "This repository remote is not supported: `https://github.com/agentty-xyz/agentty`.",
+        ),
+    ];
+
+    for (live_repo_url, review_request, expected_error) in cases {
+        let session = test_session(PathBuf::from("/tmp/session"), None, Status::Done);
+        let database = database_with_session(&session).await;
+        let clock: Arc<dyn Clock> =
+            Arc::new(FakeClock::new(Instant::now(), SystemTime::UNIX_EPOCH));
+        let session_manager = session_manager_with_session(clock, session);
+        let mut mock_git_client = git::MockGitClient::new();
+        mock_git_client
+            .expect_repo_url()
+            .once()
+            .returning(move |_| {
+                Box::pin(async move {
+                    live_repo_url.map(str::to_string).ok_or_else(|| {
+                        git::GitError::OutputParse("missing worktree remote".to_string())
+                    })
+                })
+            });
+        let mut mock_review_request_client = forge::MockReviewRequestClient::new();
+        mock_review_request_client
+            .expect_detect_remote()
+            .times(0..=1)
+            .returning(|repo_url| Err(forge::ReviewRequestError::UnsupportedRemote { repo_url }));
+        let services = test_services(
+            &database,
+            Arc::new(mock_git_client),
+            Arc::new(mock_review_request_client),
+        );
+
+        // Act
+        let error = session_manager
+            .review_request_remote(
+                &services,
+                &session_manager.state.sessions[0],
+                review_request.as_ref(),
+            )
+            .await
+            .expect_err("remote resolution should fail");
+
+        // Assert
+        assert!(
+            error.to_string().contains(expected_error),
+            "unexpected error: {error}"
+        );
+    }
+}
+
 #[test]
 fn review_request_repo_url_derives_gitlab_project_url() {
     // Arrange
-    let review_request = ReviewRequest {
-        last_refreshed_at: 10,
-        summary: ReviewRequestSummary {
-            display_id: "!42".to_string(),
-            forge_kind: ForgeKind::GitLab,
-            source_branch: "wt/session-".to_string(),
-            state: ReviewRequestState::Open,
-            status_summary: Some("Draft".to_string()),
-            target_branch: "main".to_string(),
-            title: "Add forge review support".to_string(),
-            web_url: "https://gitlab.com/agentty-xyz/agentty/-/merge_requests/42".to_string(),
-        },
-    };
+    let web_urls = [
+        "https://gitlab.com/agentty-xyz/agentty/-/merge_requests/42",
+        "https://gitlab.com/agentty-xyz/agentty/merge_requests/42/",
+    ];
+
+    for web_url in web_urls {
+        let review_request = ReviewRequest {
+            last_refreshed_at: 10,
+            summary: ReviewRequestSummary {
+                display_id: "!42".to_string(),
+                forge_kind: ForgeKind::GitLab,
+                source_branch: "wt/session-".to_string(),
+                state: ReviewRequestState::Open,
+                status_summary: Some("Draft".to_string()),
+                target_branch: "main".to_string(),
+                title: "Add forge review support".to_string(),
+                web_url: web_url.to_string(),
+            },
+        };
+
+        // Act
+        let repo_url = SessionManager::review_request_repo_url(&review_request);
+
+        // Assert
+        assert_eq!(
+            repo_url.as_deref(),
+            Some("https://gitlab.com/agentty-xyz/agentty"),
+            "web URL: {web_url}"
+        );
+    }
+}
+
+#[tokio::test]
+async fn refresh_review_request_rejects_session_without_linked_review_request() {
+    // Arrange
+    let session = test_session(PathBuf::from("/tmp/session"), None, Status::Review);
+    let database = database_with_session(&session).await;
+    let clock: Arc<dyn Clock> = Arc::new(FakeClock::new(Instant::now(), SystemTime::UNIX_EPOCH));
+    let mut session_manager = session_manager_with_session(clock, session);
+    let services = test_services(
+        &database,
+        Arc::new(git::MockGitClient::new()),
+        Arc::new(forge::MockReviewRequestClient::new()),
+    );
 
     // Act
-    let repo_url = SessionManager::review_request_repo_url(&review_request);
+    let error = session_manager
+        .refresh_review_request(&services, "session-id")
+        .await
+        .expect_err("session without a review request should fail");
+
+    // Assert
+    assert_eq!(error.to_string(), "Session has no linked review request");
+}
+
+#[tokio::test]
+async fn refresh_review_request_reports_provider_refresh_failure() {
+    // Arrange
+    let linked_review_request = ReviewRequest {
+        last_refreshed_at: 12,
+        summary: review_request_summary("#42", ReviewRequestState::Open),
+    };
+    let session = test_session(
+        PathBuf::from("/tmp/session"),
+        Some(linked_review_request.clone()),
+        Status::Review,
+    );
+    let database = database_with_session(&session).await;
+    let clock: Arc<dyn Clock> = Arc::new(FakeClock::new(Instant::now(), SystemTime::UNIX_EPOCH));
+    let mut session_manager = session_manager_with_session(clock, session);
+    let mut mock_git_client = git::MockGitClient::new();
+    mock_git_client.expect_repo_url().once().returning(|_| {
+        Box::pin(async { Ok("https://github.com/agentty-xyz/agentty".to_string()) })
+    });
+    let mut mock_review_request_client = forge::MockReviewRequestClient::new();
+    mock_review_request_client
+        .expect_detect_remote()
+        .once()
+        .returning(|repo_url| {
+            Ok(forge::ForgeRemote {
+                command_working_directory: None,
+                forge_kind: ForgeKind::GitHub,
+                host: "github.com".to_string(),
+                namespace: "agentty-xyz".to_string(),
+                project: "agentty".to_string(),
+                web_url: repo_url.clone(),
+                repo_url,
+            })
+        });
+    mock_review_request_client
+        .expect_refresh_review_request()
+        .once()
+        .returning(|_, _| {
+            Box::pin(async {
+                Err(forge::ReviewRequestError::OperationFailed {
+                    forge_kind: ForgeKind::GitHub,
+                    message: "rate limited".to_string(),
+                })
+            })
+        });
+    let services = test_services(
+        &database,
+        Arc::new(mock_git_client),
+        Arc::new(mock_review_request_client),
+    );
+
+    // Act
+    let error = session_manager
+        .refresh_review_request(&services, "session-id")
+        .await
+        .expect_err("provider refresh failure should fail");
 
     // Assert
     assert_eq!(
-        repo_url.as_deref(),
-        Some("https://gitlab.com/agentty-xyz/agentty")
+        error.to_string(),
+        "GitHub review-request operation failed: rate limited"
+    );
+    assert_eq!(
+        session_manager.state.sessions[0].review_request,
+        Some(linked_review_request)
     );
 }
 
@@ -709,6 +879,45 @@ async fn refresh_sessions_if_needed_advances_deadline_and_skips_reload_when_meta
     assert!(session_manager.state.refresh_deadline > original_deadline);
     assert_eq!(session_manager.state.row_count, 0);
     assert_eq!(session_manager.state.updated_at_max, 0);
+}
+
+#[tokio::test]
+async fn session_metadata_failures_keep_cached_counts() {
+    // Arrange
+    let (database, pool) = AppRepositories::in_memory_with_pool()
+        .await
+        .expect("db should open");
+    let now = Instant::now();
+    let fake_clock = Arc::new(FakeClock::new(now, SystemTime::UNIX_EPOCH));
+    let clock: Arc<dyn Clock> = fake_clock.clone();
+    let mut session_manager = session_manager_fixture(clock);
+    session_manager.state.row_count = 5;
+    session_manager.state.updated_at_max = 7;
+    let services = test_services(
+        &database,
+        Arc::new(git::MockGitClient::new()),
+        Arc::new(forge::MockReviewRequestClient::new()),
+    );
+    let temp_dir = tempdir().expect("temp dir should be created");
+    let projects = empty_project_manager(temp_dir.path().to_path_buf());
+    let mut mode = AppMode::List;
+    let original_deadline = session_manager.state.refresh_deadline;
+    fake_clock.set_now_instant(now + SESSION_REFRESH_INTERVAL);
+    pool.close().await;
+
+    // Act
+    let refreshed = session_manager
+        .refresh_sessions_if_needed(&mut mode, &projects, &services)
+        .await;
+    session_manager
+        .update_sessions_metadata_cache(&services)
+        .await;
+
+    // Assert
+    assert!(!refreshed);
+    assert!(session_manager.state.refresh_deadline > original_deadline);
+    assert_eq!(session_manager.state.row_count, 5);
+    assert_eq!(session_manager.state.updated_at_max, 7);
 }
 
 #[tokio::test]

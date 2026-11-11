@@ -13,6 +13,7 @@ use crate::db::AppRepositories;
 use crate::domain::agent::{AgentKind, AgentModel, AgentSelection};
 use crate::domain::session_message::SessionTranscript;
 use crate::domain::setting::SettingName;
+use crate::test_support::enable_tracing_log_fallback;
 
 #[test]
 /// Verifies append-only handling adds the coauthor trailer once
@@ -402,6 +403,7 @@ async fn test_load_include_coauthored_by_agentty_setting_defaults_to_false() {
 /// stored value cannot be parsed as a boolean.
 async fn test_load_include_coauthored_by_agentty_setting_defaults_invalid_value_to_false() {
     // Arrange
+    enable_tracing_log_fallback();
     let database = AppRepositories::in_memory().await.expect("db should open");
     insert_review_session(&database, model_fixture::CODEX_MODEL.as_str()).await;
     let project_id = database
@@ -427,4 +429,56 @@ async fn test_load_include_coauthored_by_agentty_setting_defaults_invalid_value_
 
     // Assert
     assert!(!include_coauthored_by_agentty);
+}
+
+#[tokio::test]
+/// Verifies project-setting reads that fail in persistence fall back to
+/// the disabled coauthor trailer and the caller's utility selection.
+async fn test_session_setting_loads_fall_back_when_persistence_fails() {
+    for failure in ["project lookup", "setting lookup"] {
+        // Arrange
+        enable_tracing_log_fallback();
+        let (database, pool) = AppRepositories::in_memory_with_pool()
+            .await
+            .expect("db should open");
+        insert_review_session(&database, model_fixture::CODEX_MODEL.as_str()).await;
+        let project_id = database
+            .sessions()
+            .load_session_project_id("session-id")
+            .await
+            .expect("failed to load session project id")
+            .expect("session should have project id");
+        database
+            .settings()
+            .upsert_project_setting(project_id, SettingName::IncludeCoauthoredByAgentty, "true")
+            .await
+            .expect("failed to persist coauthor flag");
+        if failure == "project lookup" {
+            pool.close().await;
+        } else {
+            sqlx::query("DROP TABLE project_setting")
+                .execute(&pool)
+                .await
+                .expect("make project settings unavailable");
+        }
+
+        // Act
+        let include_coauthored_by_agentty =
+            SessionTaskService::load_include_coauthored_by_agentty_setting(&database, "session-id")
+                .await;
+        let auto_commit_agent = SessionTaskService::load_auto_commit_agent_setting(
+            &database,
+            "session-id",
+            model_fixture::codex_selection(),
+            &[AgentKind::Antigravity],
+            &[],
+        )
+        .await;
+
+        // Assert
+        assert!(!include_coauthored_by_agentty, "{failure}");
+        if failure == "project lookup" {
+            assert_eq!(auto_commit_agent, model_fixture::codex_selection());
+        }
+    }
 }

@@ -394,14 +394,6 @@ impl RebaseAssistLoopInput {
         }
     }
 
-    /// Returns final exhausted-attempts error text for the active workflow.
-    fn exhausted_error(&self) -> String {
-        match self {
-            Self::Session(_) => "Failed to complete assisted rebase".to_string(),
-            Self::Project(_) => "Failed to complete assisted sync rebase".to_string(),
-        }
-    }
-
     /// Loads conflicted files for the active workflow.
     ///
     /// # Errors
@@ -719,9 +711,7 @@ impl SessionMergeService {
         projects: &ProjectManager,
         services: &AppServices,
     ) -> Result<(), SessionError> {
-        let session = manager
-            .session_or_err(session_id)
-            .map_err(|_| SessionError::NotFound)?;
+        let session = manager.session_or_err(session_id)?;
         let environment = services.try_environment_write(session_id)?;
         if !(session.status.allows_review_actions() || session.status == Status::Queued) {
             return Err(SessionError::Workflow(
@@ -750,9 +740,7 @@ impl SessionMergeService {
             services.session_update_versions(),
         );
 
-        let handles = manager
-            .session_handles_or_err(session_id)
-            .map_err(|_| SessionError::HandlesNotFound)?;
+        let handles = manager.session_handles_or_err(session_id)?;
         let (child_pid, status, transcript) = (
             Arc::clone(&handles.child_pid),
             Arc::clone(&handles.status),
@@ -930,8 +918,7 @@ impl SessionMergeService {
             Self::load_rebase_start_context(manager, services, session_id).await?;
         let branch_operation_lock = manager
             .session_handles_or_err(session_id)
-            .map(|handles| Arc::clone(&handles.branch_operation_lock))
-            .map_err(|_| SessionError::HandlesNotFound)?;
+            .map(|handles| Arc::clone(&handles.branch_operation_lock))?;
         // Reserve an idle branch while the operation is persisted. An active
         // owner already serializes execution in the worker, so the foreground
         // event loop must never wait here.
@@ -960,9 +947,7 @@ impl SessionMergeService {
                 .await?;
             manager.queue_session_sync(persisted_session_id.as_str(), queued_order);
         } else {
-            let handles = manager
-                .session_handles_or_err(session_id)
-                .map_err(|_| SessionError::HandlesNotFound)?;
+            let handles = manager.session_handles_or_err(session_id)?;
             let status_transition =
                 StatusTransition::from_services(services, handles, persisted_session_id.clone());
 
@@ -1000,41 +985,43 @@ impl SessionMergeService {
     ) -> Vec<(SessionId, SessionError)> {
         let child_session_ids =
             Self::rebaseable_stacked_child_session_ids(manager, parent_session_id);
-        let mut failures = Vec::new();
-        for child_session_id in child_session_ids {
-            if let Err(error) = Self::enqueue_stacked_child_auto_rebase(
-                manager,
-                services,
-                child_session_id.as_str(),
-            )
-            .await
-            {
-                failures.push((child_session_id, error));
-            }
-        }
 
-        failures
+        Self::enqueue_stacked_child_auto_rebases(manager, services, child_session_ids).await
     }
 
     /// Starts automatic deterministic rebases for children retargeted by a
     /// completed parent merge.
+    ///
+    /// Only children that currently allow review actions are rebased.
     async fn rebase_sessions_after_parent_merge(
         &self,
         manager: &mut SessionManager,
         services: &AppServices,
         child_session_ids: Vec<SessionId>,
     ) -> Vec<(SessionId, SessionError)> {
+        let child_session_ids = child_session_ids
+            .into_iter()
+            .filter(|child_session_id| {
+                manager
+                    .sessions()
+                    .iter()
+                    .find(|session| session.id == *child_session_id)
+                    .is_some_and(|session| session.status.allows_review_actions())
+            })
+            .collect();
+
+        Self::enqueue_stacked_child_auto_rebases(manager, services, child_session_ids).await
+    }
+
+    /// Enqueues one automatic rebase per stacked child and returns the
+    /// children whose rebase could not start.
+    async fn enqueue_stacked_child_auto_rebases(
+        manager: &mut SessionManager,
+        services: &AppServices,
+        child_session_ids: Vec<SessionId>,
+    ) -> Vec<(SessionId, SessionError)> {
         let mut failures = Vec::new();
         for child_session_id in child_session_ids {
-            let should_rebase_child = manager
-                .sessions()
-                .iter()
-                .find(|session| session.id == child_session_id)
-                .is_some_and(|session| session.status.allows_review_actions());
-            if !should_rebase_child {
-                continue;
-            }
-
             if let Err(error) = Self::enqueue_stacked_child_auto_rebase(
                 manager,
                 services,
@@ -1088,9 +1075,7 @@ impl SessionMergeService {
         child_session_id: &str,
     ) -> Result<(), SessionError> {
         let (base_branch, previous_status, persisted_session_id) = {
-            let session = manager
-                .session_or_err(child_session_id)
-                .map_err(|_| SessionError::NotFound)?;
+            let session = manager.session_or_err(child_session_id)?;
             let base_branch = services
                 .db()
                 .sessions()
@@ -1103,9 +1088,7 @@ impl SessionMergeService {
             (base_branch, session.status, session.id.clone())
         };
 
-        let handles = manager
-            .session_handles_or_err(child_session_id)
-            .map_err(|_| SessionError::HandlesNotFound)?;
+        let handles = manager.session_handles_or_err(child_session_id)?;
         let status_transition =
             StatusTransition::from_services(services, handles, persisted_session_id.clone());
         status_transition
@@ -1165,9 +1148,7 @@ impl SessionMergeService {
         services: &AppServices,
         session_id: &str,
     ) -> Result<(String, Status, SessionId), SessionError> {
-        let session = manager
-            .session_or_err(session_id)
-            .map_err(|_| SessionError::NotFound)?;
+        let session = manager.session_or_err(session_id)?;
         if !session.status.allows_review_actions() && session.status != Status::InProgress {
             return Err(SessionError::Workflow(
                 "Session must be in review status or in progress".to_string(),
@@ -1861,7 +1842,7 @@ impl SessionManager {
             &input.base_branch,
             conflicted_files,
             RebaseAssistWorkspace::MainCheckout,
-        )?;
+        );
         input
             .sync_assist_client
             .resolve_rebase_conflicts(input.folder.clone(), prompt, input.session_agent)
@@ -2490,6 +2471,10 @@ impl SessionManager {
     /// Runs each bounded rebase-assistance attempt until completion or
     /// exhaustion.
     ///
+    /// The final attempt never asks for another retry: unresolved conflicts or
+    /// conflicted continuations at `max_attempts` return their own errors, so
+    /// the loop always ends through completion or an error.
+    ///
     /// # Errors
     /// Returns an error when conflict resolution fails, git operations fail,
     /// or the retry budget is exhausted.
@@ -2501,8 +2486,10 @@ impl SessionManager {
             Self::rebase_failure_tracker_with_initial_detail(initial_conflict_detail);
         let mut assist_outcome = RebaseAssistOutcome::empty();
         let mut previous_conflict_files: Vec<String> = vec![];
+        let mut assist_attempt = 0;
 
-        for assist_attempt in 1..=REBASE_ASSIST_POLICY.max_attempts {
+        loop {
+            assist_attempt += 1;
             let attempt_outcome = Self::run_rebase_assist_attempt(
                 assist_input,
                 &mut failure_tracker,
@@ -2516,8 +2503,6 @@ impl SessionManager {
                 return Ok(assist_outcome);
             }
         }
-
-        Err(SessionError::Workflow(assist_input.exhausted_error()))
     }
 
     /// Builds the no-progress tracker and seeds it with the initial conflict
@@ -2886,7 +2871,7 @@ impl SessionManager {
             input.rebase_plan.target_label(),
             conflicted_files,
             RebaseAssistWorkspace::SessionWorktree,
-        )?;
+        );
 
         Self::run_rebase_assist_prompt(input, prompt).await
     }
@@ -2958,14 +2943,11 @@ impl SessionManager {
     }
 
     /// Renders the rebase-assist prompt from the markdown template.
-    ///
-    /// # Errors
-    /// Returns an error if Askama template rendering fails.
     fn rebase_assist_prompt(
         base_branch: &str,
         conflicted_files: &[String],
         workspace: RebaseAssistWorkspace,
-    ) -> Result<String, SessionError> {
+    ) -> String {
         let conflicted_files = Self::format_conflicted_file_list(conflicted_files);
         let template = RebaseAssistPromptTemplate {
             base_branch,
@@ -2973,11 +2955,9 @@ impl SessionManager {
             workspace_note: workspace.note(),
         };
 
-        template.render().map_err(|error| {
-            SessionError::Workflow(format!(
-                "Failed to render `rebase_assist_prompt.md`: {error}"
-            ))
-        })
+        // This template writes borrowed strings into a `String`, whose
+        // formatter cannot fail.
+        template.render().unwrap_or_default()
     }
 
     /// Formats conflicted file paths as a bullet list for prompt rendering.

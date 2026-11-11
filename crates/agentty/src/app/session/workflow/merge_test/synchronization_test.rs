@@ -9,7 +9,7 @@ use ag_session::test_support as model_fixture;
 use ag_worker::MockRunClient;
 use mockall::Sequence;
 use tempfile::tempdir;
-use tokio::sync::mpsc;
+use tokio::sync::{Notify, mpsc};
 
 use super::super::super::StatusTransition;
 use super::super::super::worker::has_unfinished_rebase_operation;
@@ -38,31 +38,94 @@ use crate::domain::agent::{AgentKind, AgentModel, AgentSelection};
 use crate::domain::session::{PublishedBranchSyncStatus, Status};
 use crate::infra::db::AppRepositories;
 use crate::infra::fs;
+use crate::test_support::enable_tracing_log_fallback;
 
-/// Verifies sync assistance aborts when the conflicted file fingerprint
-/// repeats across attempts without any file changes.
+/// Verifies session and sync assistance abort when the conflicted file
+/// fingerprint repeats across attempts without any file changes.
 #[tokio::test]
 async fn test_run_sync_rebase_assist_loop_aborts_for_unchanged_conflict_files() {
-    // Arrange
-    let temp_dir = tempdir().expect("create temp dir");
-    let conflict_file = temp_dir.path().join("src/lib.rs");
-    std::fs::create_dir_all(
-        conflict_file
-            .parent()
-            .expect("conflict file should have a parent directory"),
-    )
-    .expect("create conflict directory");
-    std::fs::write(&conflict_file, "<<<<<<< HEAD\none\n=======\ntwo\n>>>>>>>")
-        .expect("write conflict file");
+    for (is_project, expected_error) in [
+        (
+            true,
+            "Sync rebase assistance made no progress: conflicted files did not change",
+        ),
+        (
+            false,
+            "Rebase assistance made no progress: conflicted files did not change",
+        ),
+    ] {
+        // Arrange
+        let (temp_dir, input) =
+            rebase_assist_loop_input(is_project, unchanged_conflict_git_client(), {
+                let mut mock_sync_assist_client = MockSyncAssistClient::new();
+                mock_sync_assist_client
+                    .expect_resolve_rebase_conflicts()
+                    .times(if is_project {
+                        REBASE_ASSIST_POLICY.max_attempts - 1
+                    } else {
+                        0
+                    })
+                    .returning(|_, _, _| Box::pin(async { Ok(()) }));
 
-    let fingerprint_fs_client = create_passthrough_mock_fs_client();
-    let fingerprint = SessionManager::conflicted_file_fingerprint(
-        &fingerprint_fs_client,
-        temp_dir.path(),
-        &["src/lib.rs".to_string()],
-    )
-    .await;
+                mock_sync_assist_client
+            })
+            .await;
+        let conflict_file = temp_dir.path().join("src/lib.rs");
+        std::fs::create_dir_all(
+            conflict_file
+                .parent()
+                .expect("conflict file should have a parent directory"),
+        )
+        .expect("create conflict directory");
+        std::fs::write(&conflict_file, "<<<<<<< HEAD\none\n=======\ntwo\n>>>>>>>")
+            .expect("write conflict file");
+        let fingerprint_fs_client = create_passthrough_mock_fs_client();
+        let fingerprint = SessionManager::conflicted_file_fingerprint(
+            &fingerprint_fs_client,
+            temp_dir.path(),
+            &["src/lib.rs".to_string()],
+        )
+        .await;
 
+        // Act
+        let result = SessionManager::run_rebase_assist_loop_core(input, Some(fingerprint)).await;
+
+        // Assert
+        assert_eq!(
+            result.map(|_| ()).map_err(|error| error.to_string()),
+            Err(expected_error.to_string())
+        );
+    }
+}
+
+/// Builds one session or project assist-loop input around a git mock.
+///
+/// Project inputs use `sync_assist_client`; session inputs use the one-shot
+/// run client from the shared rebase fixture.
+async fn rebase_assist_loop_input(
+    is_project: bool,
+    mock_git_client: git::MockGitClient,
+    mock_sync_assist_client: MockSyncAssistClient,
+) -> (tempfile::TempDir, RebaseAssistLoopInput) {
+    if is_project {
+        let temp_dir = tempdir().expect("create temp dir");
+        let input = build_sync_rebase_input_for_test(
+            temp_dir.path().to_path_buf(),
+            Arc::new(mock_git_client),
+            Arc::new(mock_sync_assist_client),
+        );
+
+        return (temp_dir, RebaseAssistLoopInput::Project(input));
+    }
+
+    let (temp_dir, input) = build_rebase_assist_input_for_test(Arc::new(mock_git_client)).await;
+
+    (temp_dir, RebaseAssistLoopInput::Session(Box::new(input)))
+}
+
+/// Builds a git mock whose conflicted file stays unresolved on every
+/// assistance attempt.
+fn unchanged_conflict_git_client() -> git::MockGitClient {
     let mut mock_git_client = git::MockGitClient::new();
     mock_git_client
         .expect_list_conflicted_files()
@@ -85,26 +148,7 @@ async fn test_run_sync_rebase_assist_loop_aborts_for_unchanged_conflict_files() 
         .times(1)
         .returning(|_| Box::pin(async { Ok(()) }));
 
-    let mut mock_sync_assist_client = MockSyncAssistClient::new();
-    mock_sync_assist_client
-        .expect_resolve_rebase_conflicts()
-        .times(REBASE_ASSIST_POLICY.max_attempts - 1)
-        .returning(|_, _, _| Box::pin(async { Ok(()) }));
-
-    let input = build_sync_rebase_input_for_test(
-        temp_dir.path().to_path_buf(),
-        Arc::new(mock_git_client),
-        Arc::new(mock_sync_assist_client),
-    );
-
-    // Act
-    let result = SessionManager::run_sync_rebase_assist_loop(input, fingerprint).await;
-
-    // Assert
-    assert_eq!(
-        result.map_err(|error| error.to_string()),
-        Err("Sync rebase assistance made no progress: conflicted files did not change".to_string())
-    );
+    mock_git_client
 }
 
 #[tokio::test]
@@ -236,6 +280,118 @@ async fn test_ensure_merge_target_clean_blocks_dirty_main_checkout() {
     );
 }
 
+/// Verifies each merge-start precondition failure restores `Review`, and a
+/// session canceled meanwhile keeps its terminal status.
+#[tokio::test]
+async fn test_merge_start_failures_restore_review_status() {
+    // Arrange
+    enable_tracing_log_fallback();
+    let cases = [
+        (
+            "base branch lookup",
+            Status::Merging,
+            "attempted to acquire a connection on a closed pool",
+            Status::Review,
+        ),
+        (
+            "repository root",
+            Status::Merging,
+            "Failed to find git repository root",
+            Status::Review,
+        ),
+        (
+            "target status",
+            Status::Merging,
+            "Failed to inspect `main` before merge: status failed",
+            Status::Review,
+        ),
+        (
+            "repository root",
+            Status::Canceled,
+            "Failed to find git repository root",
+            Status::Canceled,
+        ),
+    ];
+
+    for (failure, initial_status, expected_error, expected_status) in cases {
+        let (db, pool) = AppRepositories::in_memory_with_pool()
+            .await
+            .expect("db should open");
+        let project_id = db
+            .projects()
+            .upsert_project("/tmp/project", Some("main".to_string()))
+            .await
+            .expect("failed to insert project");
+        db.sessions()
+            .insert_session(
+                "session-123",
+                model_fixture::CODEX_MODEL_ID,
+                "main",
+                &initial_status.to_string(),
+                project_id,
+            )
+            .await
+            .expect("failed to insert merge session row");
+        let status = Arc::new(Mutex::new(initial_status));
+        let (app_event_tx, _app_event_rx) = mpsc::unbounded_channel();
+        let mut mock_git_client = git::MockGitClient::new();
+        mock_git_client
+            .expect_find_git_repo_root()
+            .returning(|_| Box::pin(async { None }));
+        mock_git_client.expect_is_worktree_clean().returning(|_| {
+            Box::pin(async { Err(GitError::OutputParse("status failed".to_string())) })
+        });
+        let status_transition = StatusTransition::from_parts(
+            app_event_tx,
+            Arc::new(crate::infra::clock::RealClock),
+            db.clone(),
+            "session-123",
+            Arc::default(),
+            Arc::clone(&status),
+        );
+        let restore_context = MergeStartRestoreContext {
+            db: &db,
+            session_id: "session-123",
+            status_transition: &status_transition,
+        };
+        if failure == "base branch lookup" {
+            pool.close().await;
+        }
+
+        // Act
+        let error = match failure {
+            "base branch lookup" => SessionMergeService::load_merge_base_branch(&restore_context)
+                .await
+                .map(|_| ()),
+            "repository root" => SessionMergeService::find_merge_repo_root(
+                &mock_git_client,
+                PathBuf::from("/tmp/project"),
+                &restore_context,
+            )
+            .await
+            .map(|_| ()),
+            _ => {
+                SessionMergeService::ensure_merge_target_clean(
+                    &mock_git_client,
+                    PathBuf::from("/tmp/project"),
+                    "main",
+                    &restore_context,
+                )
+                .await
+            }
+        }
+        .expect_err("merge start should fail");
+
+        // Assert
+        assert_eq!(error.to_string(), expected_error, "{failure}");
+        assert_eq!(
+            *status.lock().expect("status lock poisoned"),
+            expected_status,
+            "{failure}"
+        );
+    }
+}
+
 #[test]
 fn test_rebase_assist_prompt_includes_branch_and_files() {
     // Arrange
@@ -247,14 +403,12 @@ fn test_rebase_assist_prompt_includes_branch_and_files() {
         base_branch,
         &conflicted_files,
         RebaseAssistWorkspace::SessionWorktree,
-    )
-    .expect("rebase assist prompt should render");
+    );
     let main_checkout_prompt = SessionManager::rebase_assist_prompt(
         base_branch,
         &conflicted_files,
         RebaseAssistWorkspace::MainCheckout,
-    )
-    .expect("main-checkout rebase assist prompt should render");
+    );
 
     // Assert
     assert!(prompt.contains("rebasing onto `main`"));
@@ -712,6 +866,82 @@ async fn test_finalize_rebase_task_skips_auto_push_without_published_branch() {
     assert!(transcript_text.contains("[Sync] Successfully synced"));
 }
 
+/// Verifies a finished rebase still starts the published-branch push when
+/// the reducer is closed and the session was canceled meanwhile.
+#[tokio::test]
+async fn test_finalize_rebase_task_starts_auto_push_after_reducer_shutdown() {
+    // Arrange
+    enable_tracing_log_fallback();
+    let db = AppRepositories::in_memory().await.expect("db should open");
+    insert_published_rebase_session_with_review_request(&db).await;
+    let app_event_tx = mpsc::unbounded_channel().0;
+    let temp_dir = tempdir().expect("failed to create temp dir");
+    let folder = temp_dir.path().join("sess-rebase");
+    let session_update_versions = Arc::default();
+    let status = Arc::new(Mutex::new(Status::Canceled));
+    let transcript = empty_transcript();
+    let clock: Arc<dyn Clock> = Arc::new(crate::infra::clock::RealClock);
+    let review_request_client = empty_review_request_client();
+    let status_transition = StatusTransition::from_parts(
+        app_event_tx.clone(),
+        Arc::clone(&clock),
+        db.clone(),
+        "sess-rebase",
+        Arc::clone(&session_update_versions),
+        Arc::clone(&status),
+    );
+    let push_started = Arc::new(Notify::new());
+    let mut mock_git_client = git::MockGitClient::new();
+    mock_git_client
+        .expect_in_progress_operation()
+        .once()
+        .returning({
+            let push_started = Arc::clone(&push_started);
+
+            move |_| {
+                push_started.notify_one();
+
+                Box::pin(async { Err(GitError::OutputParse("state unreadable".to_string())) })
+            }
+        });
+    let git_client: Arc<dyn GitClient> = Arc::new(mock_git_client);
+    let branch_operation_lock = Arc::new(tokio::sync::Mutex::new(()));
+    let branch_operation_guard = Arc::clone(&branch_operation_lock).lock_owned().await;
+
+    // Act
+    SessionManager::finalize_rebase_task(FinalizeRebaseInput {
+        app_event_tx: &app_event_tx,
+        branch_operation_guard,
+        clock: &clock,
+        db: &db,
+        folder: &folder,
+        git_client: &git_client,
+        id: "sess-rebase",
+        run_client: &test_run_client(),
+        rebase_result: Ok("Successfully synced wt/sess-rebase onto main".to_string()),
+        review_request_client: &review_request_client,
+        session_agent: test_session_agent(),
+        session_update_versions: &session_update_versions,
+        status_transition: &status_transition,
+        transcript: &transcript,
+    })
+    .await;
+    push_started.notified().await;
+    let _released_guard = branch_operation_lock.lock().await;
+
+    // Assert
+    assert_eq!(
+        *status.lock().expect("status lock poisoned"),
+        Status::Canceled
+    );
+    let transcript_text = transcript
+        .lock()
+        .expect("transcript lock poisoned")
+        .replay_text()
+        .unwrap_or_default();
+    assert!(transcript_text.contains("[Sync] Successfully synced"));
+}
+
 #[tokio::test]
 async fn test_run_rebase_assist_loop_core_aborts_on_early_error() {
     // Arrange
@@ -801,10 +1031,21 @@ async fn test_run_rebase_assist_loop_core_aborts_after_pre_commit_repairs_are_ex
     );
 }
 
-/// Verifies session rebase assistance stops when the same conflict detail
-/// repeats after the initial conflict state.
+/// Verifies session and sync rebase assistance stop when the same conflict
+/// detail repeats after the initial conflict state.
 #[tokio::test]
 async fn test_run_rebase_assist_loop_core_stops_on_repeated_conflict_detail() {
+    for (is_project, error_prefix) in [
+        (false, "Rebase assistance"),
+        (true, "Sync rebase assistance"),
+    ] {
+        assert_repeated_conflict_detail_stops_assistance(is_project, error_prefix).await;
+    }
+}
+
+/// Runs one assist loop whose continuation repeats the initial conflict and
+/// asserts the workflow-specific no-progress error.
+async fn assert_repeated_conflict_detail_stops_assistance(is_project: bool, error_prefix: &str) {
     // Arrange
     let repeated_detail = "CONFLICT (content): Merge conflict in src/lib.rs".to_string();
     let mut mock_git_client = git::MockGitClient::new();
@@ -840,21 +1081,19 @@ async fn test_run_rebase_assist_loop_core_stops_on_repeated_conflict_detail() {
         .expect_abort_rebase()
         .times(1)
         .returning(|_| Box::pin(async { Ok(()) }));
-    let (_temp_dir, input) = build_rebase_assist_input_for_test(Arc::new(mock_git_client)).await;
+    let (_temp_dir, input) =
+        rebase_assist_loop_input(is_project, mock_git_client, MockSyncAssistClient::new()).await;
 
     // Act
-    let result = SessionManager::run_rebase_assist_loop_core(
-        RebaseAssistLoopInput::Session(Box::new(input)),
-        Some(repeated_detail.clone()),
-    )
-    .await;
+    let result =
+        SessionManager::run_rebase_assist_loop_core(input, Some(repeated_detail.clone())).await;
 
     // Assert
     let error = result.expect_err("assist loop should stop on repeated conflict detail");
     assert_eq!(
         error.to_string(),
         format!(
-            "Rebase assistance made no progress: repeated identical conflict state. Last detail: \
+            "{error_prefix} made no progress: repeated identical conflict state. Last detail: \
              {repeated_detail}"
         )
     );
@@ -950,6 +1189,14 @@ async fn test_run_rebase_assist_loop_tracks_initial_rebase_conflict_detail() {
 /// is exhausted.
 #[tokio::test]
 async fn test_run_rebase_assist_loop_core_reports_retry_exhaustion_detail() {
+    for (is_project, error_prefix) in [(false, "Rebase"), (true, "Sync rebase")] {
+        assert_retry_exhaustion_reports_final_conflict(is_project, error_prefix).await;
+    }
+}
+
+/// Runs one assist loop whose continuations report distinct conflicts and
+/// asserts the workflow-specific final-conflict error.
+async fn assert_retry_exhaustion_reports_final_conflict(is_project: bool, error_prefix: &str) {
     // Arrange
     let mut mock_git_client = git::MockGitClient::new();
     let mut sequence = Sequence::new();
@@ -991,58 +1238,188 @@ async fn test_run_rebase_assist_loop_core_reports_retry_exhaustion_detail() {
         .expect_abort_rebase()
         .times(1)
         .returning(|_| Box::pin(async { Ok(()) }));
-    let (_temp_dir, input) = build_rebase_assist_input_for_test(Arc::new(mock_git_client)).await;
+    let (_temp_dir, input) =
+        rebase_assist_loop_input(is_project, mock_git_client, MockSyncAssistClient::new()).await;
 
     // Act
-    let result = SessionManager::run_rebase_assist_loop_core(
-        RebaseAssistLoopInput::Session(Box::new(input)),
-        None,
-    )
-    .await;
+    let result = SessionManager::run_rebase_assist_loop_core(input, None).await;
 
     // Assert
     let error = result.expect_err("assist loop should report the final retry conflict");
     assert_eq!(
         error.to_string(),
-        "Rebase still has conflicts after assistance: CONFLICT (content): Merge conflict in \
-         README.md"
+        format!(
+            "{error_prefix} still has conflicts after assistance: CONFLICT (content): Merge \
+             conflict in README.md"
+        )
     );
 }
 
 #[tokio::test]
 async fn test_run_rebase_start_recovers_stale_rebase_state_and_retries() {
+    for stale_error in [
+        "fatal: It seems that there is already a rebase-merge directory",
+        "fatal: It seems that there is already a Rebase-Apply directory",
+        "You are in the middle of another rebase",
+    ] {
+        // Arrange
+        let mut mock_git_client = git::MockGitClient::new();
+        let mut sequence = Sequence::new();
+        mock_git_client
+            .expect_rebase_start()
+            .times(1)
+            .in_sequence(&mut sequence)
+            .returning(move |_, _| {
+                Box::pin(async move { Err(GitError::OutputParse(stale_error.to_string())) })
+            });
+        mock_git_client
+            .expect_abort_rebase()
+            .times(1)
+            .in_sequence(&mut sequence)
+            .returning(|_| Box::pin(async { Ok(()) }));
+        mock_git_client
+            .expect_rebase_start()
+            .times(1)
+            .in_sequence(&mut sequence)
+            .returning(|_, _| Box::pin(async { Ok(git::RebaseStepResult::Completed) }));
+        let (_temp_dir, input) =
+            build_rebase_assist_input_for_test(Arc::new(mock_git_client)).await;
+
+        // Act
+        let result = SessionManager::run_rebase_start(&input).await;
+
+        // Assert
+        let step_result = result.expect("rebase start should succeed");
+        assert_eq!(
+            step_result,
+            git::RebaseStepResult::Completed,
+            "{stale_error}"
+        );
+    }
+}
+
+#[tokio::test]
+async fn test_run_rebase_start_returns_non_stale_errors_without_cleanup() {
     // Arrange
     let mut mock_git_client = git::MockGitClient::new();
-    let mut sequence = Sequence::new();
     mock_git_client
         .expect_rebase_start()
-        .times(1)
-        .in_sequence(&mut sequence)
+        .once()
         .returning(|_, _| {
-            Box::pin(async {
-                Err(GitError::OutputParse(
-                    "fatal: It seems that there is already a rebase-merge directory".to_string(),
-                ))
-            })
+            Box::pin(async { Err(GitError::OutputParse("invalid upstream".to_string())) })
         });
-    mock_git_client
-        .expect_abort_rebase()
-        .times(1)
-        .in_sequence(&mut sequence)
-        .returning(|_| Box::pin(async { Ok(()) }));
-    mock_git_client
-        .expect_rebase_start()
-        .times(1)
-        .in_sequence(&mut sequence)
-        .returning(|_, _| Box::pin(async { Ok(git::RebaseStepResult::Completed) }));
+    mock_git_client.expect_abort_rebase().never();
     let (_temp_dir, input) = build_rebase_assist_input_for_test(Arc::new(mock_git_client)).await;
 
     // Act
     let result = SessionManager::run_rebase_start(&input).await;
 
     // Assert
-    let step_result = result.expect("rebase start should succeed");
-    assert_eq!(step_result, git::RebaseStepResult::Completed);
+    assert_eq!(
+        result.map_err(|error| error.to_string()),
+        Err("invalid upstream".to_string())
+    );
+}
+
+/// Verifies a rebase that is already paused goes straight to assistance and
+/// still reports the original failure when the cleanup abort fails.
+#[tokio::test]
+async fn test_run_rebase_assist_loop_resumes_in_progress_rebase_and_reports_failed_abort() {
+    // Arrange
+    enable_tracing_log_fallback();
+    let mut mock_git_client = git::MockGitClient::new();
+    mock_git_client
+        .expect_is_rebase_in_progress()
+        .once()
+        .returning(|_| Box::pin(async { Ok(true) }));
+    mock_git_client.expect_rebase_start().never();
+    mock_git_client
+        .expect_list_conflicted_files()
+        .once()
+        .returning(|_| {
+            Box::pin(async { Err(GitError::OutputParse("status unreadable".to_string())) })
+        });
+    mock_git_client
+        .expect_abort_rebase()
+        .once()
+        .returning(|_| Box::pin(async { Err(GitError::OutputParse("abort failed".to_string())) }));
+    let (_temp_dir, input) = build_rebase_assist_input_for_test(Arc::new(mock_git_client)).await;
+
+    // Act
+    let result = SessionManager::run_rebase_assist_loop(input).await;
+
+    // Assert
+    assert_eq!(
+        result.map_err(|error| error.to_string()),
+        Err("status unreadable".to_string())
+    );
+}
+
+/// Verifies a successful deterministic `--onto` restack reports its new base
+/// and clears the stack-base hash of a child whose parent link is gone.
+#[tokio::test]
+async fn test_execute_rebase_workflow_completes_onto_restack_and_clears_stack_base() {
+    // Arrange
+    let mut mock_git_client = git::MockGitClient::new();
+    mock_git_client
+        .expect_is_worktree_clean()
+        .once()
+        .returning(|_| Box::pin(async { Ok(true) }));
+    mock_git_client
+        .expect_is_rebase_in_progress()
+        .once()
+        .returning(|_| Box::pin(async { Ok(false) }));
+    mock_git_client
+        .expect_rebase_onto_start()
+        .once()
+        .withf(|_, new_base, old_base| new_base == "main" && old_base == "parent-tip")
+        .returning(|_, _, _| Box::pin(async { Ok(git::RebaseStepResult::Completed) }));
+    let (_temp_dir, mut input) =
+        build_rebase_assist_input_for_test(Arc::new(mock_git_client)).await;
+    input.rebase_plan = RebasePlan::Onto {
+        new_base: "main".to_string(),
+        old_base: "parent-tip".to_string(),
+    };
+    let project_id = input
+        .db
+        .projects()
+        .upsert_project("/tmp/project", Some("main".to_string()))
+        .await
+        .expect("failed to insert project");
+    input
+        .db
+        .sessions()
+        .insert_session(
+            "session-123",
+            model_fixture::CODEX_MODEL_ID,
+            "main",
+            "Rebasing",
+            project_id,
+        )
+        .await
+        .expect("failed to insert session row");
+    input
+        .db
+        .sessions()
+        .update_session_stack_base_commit_hash("session-123", Some("parent-tip".to_string()))
+        .await
+        .expect("failed to seed stack base");
+    let db = input.db.clone();
+
+    // Act
+    let result = SessionManager::execute_rebase_workflow(input).await;
+    let stack_base = db
+        .sessions()
+        .get_session_stack_base_commit_hash("session-123")
+        .await
+        .expect("failed to load stack base");
+
+    // Assert
+    assert_eq!(
+        result.map_err(|error| error.to_string()),
+        Ok("Successfully synced wt/session- onto main".to_string())
+    );
+    assert_eq!(stack_base, None);
 }
 
 #[tokio::test]
@@ -1289,42 +1666,52 @@ async fn test_load_sync_conflicted_files_merges_and_sorts_results() {
 
 #[tokio::test]
 async fn test_resolve_session_rebase_target_keeps_local_base_for_unpublished_session() {
-    // Arrange
-    let db = AppRepositories::in_memory().await.expect("db should open");
-    let temp_dir = tempdir().expect("failed to create temporary test directory");
-    let project_path = temp_dir.path().to_string_lossy().to_string();
-    let project_id = db
-        .projects()
-        .upsert_project(&project_path, Some("main".to_string()))
-        .await
-        .expect("failed to upsert project");
-    db.sessions()
-        .insert_session(
+    // A published reference without a remote prefix cannot be fetched either.
+    for published_upstream_ref in [None, Some("wt-session-local")] {
+        // Arrange
+        let db = AppRepositories::in_memory().await.expect("db should open");
+        let temp_dir = tempdir().expect("failed to create temporary test directory");
+        let project_path = temp_dir.path().to_string_lossy().to_string();
+        let project_id = db
+            .projects()
+            .upsert_project(&project_path, Some("main".to_string()))
+            .await
+            .expect("failed to upsert project");
+        db.sessions()
+            .insert_session(
+                "sess-local",
+                model_fixture::CODEX_MODEL_ID,
+                "main",
+                "Review",
+                project_id,
+            )
+            .await
+            .expect("failed to insert session");
+        db.sessions()
+            .update_session_published_upstream_ref(
+                "sess-local",
+                published_upstream_ref.map(str::to_string),
+            )
+            .await
+            .expect("failed to persist published branch");
+        let mut mock_git_client = git::MockGitClient::new();
+        mock_git_client.expect_fetch_remote().times(0);
+        let folder = temp_dir.path().join("sess-local");
+
+        // Act
+        let rebase_target = SessionManager::resolve_session_rebase_target(
+            &db,
+            &mock_git_client,
+            &folder,
             "sess-local",
-            model_fixture::CODEX_MODEL_ID,
             "main",
-            "Review",
-            project_id,
         )
         .await
-        .expect("failed to insert session");
-    let mut mock_git_client = git::MockGitClient::new();
-    mock_git_client.expect_fetch_remote().times(0);
-    let folder = temp_dir.path().join("sess-local");
+        .expect("failed to resolve local rebase target");
 
-    // Act
-    let rebase_target = SessionManager::resolve_session_rebase_target(
-        &db,
-        &mock_git_client,
-        &folder,
-        "sess-local",
-        "main",
-    )
-    .await
-    .expect("failed to resolve local rebase target");
-
-    // Assert
-    assert_eq!(rebase_target, "main");
+        // Assert
+        assert_eq!(rebase_target, "main", "{published_upstream_ref:?}");
+    }
 }
 
 #[tokio::test]
@@ -1486,6 +1873,7 @@ async fn test_resolve_session_rebase_target_reports_published_fetch_failure() {
 #[tokio::test]
 async fn test_execute_merge_workflow_reuses_session_head_commit_message() {
     // Arrange
+    enable_tracing_log_fallback();
     let expected_merged_commit_hash = "704de31d0f4b5a1234567890abcdef1234567890";
     let canonical_commit_message = "Refine merge flow\n\n- Reuse the session commit body";
     let mut mock_git_client = git::MockGitClient::new();
@@ -1594,6 +1982,161 @@ async fn test_execute_merge_workflow_reuses_session_head_commit_message() {
     assert_merge_metadata(&db, expected_merged_commit_hash).await;
 }
 
+/// Verifies merge failures are reported in the transcript and restore
+/// `Review`, while a session canceled meanwhile keeps its terminal status.
+#[tokio::test]
+async fn test_run_merge_task_reports_failures_and_restores_review() {
+    // Arrange
+    enable_tracing_log_fallback();
+
+    for (expected_error, initial_status, configure_git_client) in merge_task_failure_cases() {
+        let mut mock_git_client = git::MockGitClient::new();
+        configure_git_client(&mut mock_git_client);
+        let (_temp_dir, mut input) =
+            build_merge_task_input_for_test(Arc::new(mock_git_client)).await;
+        input.status = Arc::new(Mutex::new(initial_status));
+        let project_id = input
+            .db
+            .projects()
+            .upsert_project("/tmp/project", Some("main".to_string()))
+            .await
+            .expect("failed to insert project");
+        input
+            .db
+            .sessions()
+            .insert_session(
+                "session-123",
+                model_fixture::CODEX_MODEL_ID,
+                "main",
+                &initial_status.to_string(),
+                project_id,
+            )
+            .await
+            .expect("failed to insert merge session row");
+        let status = Arc::clone(&input.status);
+        let transcript = Arc::clone(&input.transcript);
+
+        // Act
+        SessionManager::run_merge_task(input).await;
+
+        // Assert
+        let transcript_text = transcript
+            .lock()
+            .expect("transcript lock poisoned")
+            .replay_text()
+            .unwrap_or_default();
+        assert!(
+            transcript_text.contains(expected_error),
+            "{expected_error}: {transcript_text}"
+        );
+        let expected_status = if initial_status == Status::Canceled {
+            Status::Canceled
+        } else {
+            Status::Review
+        };
+        assert_eq!(
+            *status.lock().expect("status lock poisoned"),
+            expected_status
+        );
+    }
+}
+
+/// Configures one git mock for a table-driven workflow case.
+type ConfigureGitClient = fn(&mut git::MockGitClient);
+
+/// Returns expected merge errors, initial statuses, and git setups for
+/// failing merge tasks.
+fn merge_task_failure_cases() -> [(&'static str, Status, ConfigureGitClient); 6] {
+    [
+        (
+            "Merge failed during rebase step: Failed to commit pending changes before sync:",
+            Status::Merging,
+            |git_client| {
+                git_client.expect_is_worktree_clean().returning(|_| {
+                    Box::pin(async { Err(GitError::OutputParse("status failed".to_string())) })
+                });
+            },
+        ),
+        (
+            "Merge failed during rebase step: Failed to commit pending changes before sync:",
+            Status::Canceled,
+            |git_client| {
+                git_client.expect_is_worktree_clean().returning(|_| {
+                    Box::pin(async { Err(GitError::OutputParse("status failed".to_string())) })
+                });
+            },
+        ),
+        (
+            "Failed to inspect merge diff: diff failed",
+            Status::Merging,
+            |git_client| {
+                expect_merge_rebase_completes(git_client);
+                git_client.expect_squash_merge_diff().returning(|_, _, _| {
+                    Box::pin(async { Err(GitError::OutputParse("diff failed".to_string())) })
+                });
+            },
+        ),
+        (
+            "Session branch has no commit message to reuse for merge",
+            Status::Merging,
+            |git_client| {
+                expect_merge_rebase_completes(git_client);
+                expect_nonempty_squash_diff(git_client);
+                git_client
+                    .expect_head_commit_message()
+                    .returning(|_| Box::pin(async { Ok(None) }));
+            },
+        ),
+        (
+            "Session branch has a blank commit message to reuse for merge",
+            Status::Merging,
+            |git_client| {
+                expect_merge_rebase_completes(git_client);
+                expect_nonempty_squash_diff(git_client);
+                git_client
+                    .expect_head_commit_message()
+                    .returning(|_| Box::pin(async { Ok(Some("  \n".to_string())) }));
+            },
+        ),
+        (
+            "Merged successfully but failed to remove worktree: worktree busy",
+            Status::Merging,
+            |git_client| {
+                expect_merge_rebase_completes(git_client);
+                git_client
+                    .expect_squash_merge_diff()
+                    .returning(|_, _, _| Box::pin(async { Ok(String::new()) }));
+                git_client.expect_remove_worktree().returning(|_| {
+                    Box::pin(async { Err(GitError::OutputParse("worktree busy".to_string())) })
+                });
+            },
+        ),
+    ]
+}
+
+/// Expects the clean, conflict-free rebase that precedes a squash merge.
+fn expect_merge_rebase_completes(git_client: &mut git::MockGitClient) {
+    git_client
+        .expect_is_worktree_clean()
+        .returning(|_| Box::pin(async { Ok(true) }));
+    git_client
+        .expect_is_rebase_in_progress()
+        .returning(|_| Box::pin(async { Ok(false) }));
+    git_client
+        .expect_rebase_start()
+        .returning(|_, _| Box::pin(async { Ok(git::RebaseStepResult::Completed) }));
+    git_client
+        .expect_head_hash()
+        .returning(|_| Box::pin(async { Ok("parent-tip".to_string()) }));
+}
+
+/// Expects a squash diff with changes that require a commit message.
+fn expect_nonempty_squash_diff(git_client: &mut git::MockGitClient) {
+    git_client
+        .expect_squash_merge_diff()
+        .returning(|_, _, _| Box::pin(async { Ok("diff --git a/file b/file".to_string()) }));
+}
+
 #[tokio::test]
 async fn test_execute_merge_workflow_skips_commit_creation_for_empty_squash_diff() {
     // Arrange
@@ -1682,26 +2225,150 @@ async fn test_execute_merge_workflow_skips_commit_creation_for_empty_squash_diff
 
 #[tokio::test]
 async fn test_merge_session_rejects_linked_review_request_before_workflow_start() {
+    let cases = [
+        (
+            crate::test_support::SessionFixtureBuilder::new()
+                .review_request(Some(linked_github_review_request()))
+                .build(),
+            "Merge cannot run for linked review requests or while another stack session is active",
+        ),
+        (
+            crate::test_support::SessionFixtureBuilder::new()
+                .status(Status::InProgress)
+                .build(),
+            "Session must be in review or queued status",
+        ),
+    ];
+
+    for (session, expected_error) in cases {
+        // Arrange
+        let mut app = crate::test_support::new_test_app_without_retained_base_dir().await;
+        app.sessions.push_session(session);
+
+        // Act
+        let result = app
+            .sessions
+            .merge_session("session-id", &app.projects, &app.services)
+            .await;
+
+        // Assert
+        let error = result.expect_err("merge workflow should not start");
+        assert_eq!(error.to_string(), expected_error);
+    }
+}
+
+/// Verifies a sync requested during a turn is not queued twice while an
+/// unfinished rebase operation already exists for the session.
+#[tokio::test]
+async fn test_rebase_session_skips_duplicate_unfinished_rebase_for_running_turn() {
     // Arrange
-    let mut app = crate::test_support::new_test_app_without_retained_base_dir().await;
-    app.sessions.push_session(
-        crate::test_support::SessionFixtureBuilder::new()
-            .review_request(Some(linked_github_review_request()))
-            .build(),
+    let app = crate::test_support::new_test_app_without_retained_base_dir().await;
+    let db = app.services.db().clone();
+    let project_id = db
+        .projects()
+        .upsert_project("/tmp/project", Some("main".to_string()))
+        .await
+        .expect("failed to insert project");
+    db.sessions()
+        .insert_session(
+            "session-id",
+            model_fixture::CODEX_MODEL_ID,
+            "main",
+            "InProgress",
+            project_id,
+        )
+        .await
+        .expect("failed to insert session row");
+    db.operations()
+        .insert_session_operation("rebase-1", "session-id", "rebase")
+        .await
+        .expect("failed to insert unfinished rebase");
+    let mut manager = crate::test_support::session_manager_with_handles(
+        vec![crate::test_support::session_fixture(
+            "session-id",
+            Status::InProgress,
+        )],
+        std::collections::HashMap::from([(
+            "session-id".into(),
+            crate::domain::session::SessionHandles::new(Status::InProgress),
+        )]),
     );
 
     // Act
-    let result = app
+    let result = manager.rebase_session(&app.services, "session-id").await;
+    let unfinished_operations = db
+        .operations()
+        .load_unfinished_session_operations()
+        .await
+        .expect("failed to load unfinished operations");
+
+    // Assert
+    result.expect("duplicate sync should be accepted without queueing");
+    assert_eq!(
+        unfinished_operations
+            .iter()
+            .map(|operation| operation.id.as_str())
+            .collect::<Vec<_>>(),
+        ["rebase-1"]
+    );
+}
+
+/// Verifies stacked-child restacks only target review-ready children of a
+/// review-ready parent and report children whose worktree is missing.
+#[tokio::test]
+async fn test_stacked_child_restacks_report_children_without_worktrees() {
+    // Arrange
+    let mut app = crate::test_support::new_test_app_without_retained_base_dir().await;
+    for (id, parent_session_id, status) in [
+        ("parent", None, Status::Review),
+        ("child", Some("parent"), Status::Review),
+        ("draft-child", Some("parent"), Status::Draft),
+    ] {
+        app.sessions.push_session(
+            crate::test_support::SessionFixtureBuilder::new()
+                .id(id)
+                .parent_session_id(parent_session_id.map(Into::into))
+                .status(status)
+                .build(),
+        );
+    }
+    let expected_failures = vec![(
+        "child".to_string(),
+        "No git worktree for this session".to_string(),
+    )];
+
+    // Act
+    let missing_parent_failures = app
         .sessions
-        .merge_session("session-id", &app.projects, &app.services)
+        .rebase_stacked_children_after_parent_turn(&app.services, "missing")
+        .await;
+    let draft_parent_failures = app
+        .sessions
+        .rebase_stacked_children_after_parent_turn(&app.services, "draft-child")
+        .await;
+    let turn_failures = app
+        .sessions
+        .rebase_stacked_children_after_parent_turn(&app.services, "parent")
+        .await;
+    let merge_failures = app
+        .sessions
+        .rebase_sessions_after_parent_merge(
+            &app.services,
+            vec!["draft-child".into(), "child".into()],
+        )
         .await;
 
     // Assert
-    let error = result.expect_err("linked review request should block merge workflow");
-    assert_eq!(
-        error.to_string(),
-        "Merge cannot run for linked review requests or while another stack session is active"
-    );
+    let failure_text = |failures: Vec<(crate::domain::session::SessionId, SessionError)>| {
+        failures
+            .into_iter()
+            .map(|(session_id, error)| (session_id.as_str().to_string(), error.to_string()))
+            .collect::<Vec<_>>()
+    };
+    assert!(missing_parent_failures.is_empty());
+    assert!(draft_parent_failures.is_empty());
+    assert_eq!(failure_text(turn_failures), expected_failures);
+    assert_eq!(failure_text(merge_failures), expected_failures);
 }
 
 #[test]
@@ -1934,4 +2601,157 @@ async fn test_sync_main_for_project_fails_after_max_assistance_attempts() {
             .contains("Conflicts remain unresolved after maximum assistance attempts"),
         "error detail should mention unresolved conflicts"
     );
+}
+
+/// Verifies sync reports each git failure that stops it before or after the
+/// pull, including a failed cleanup after conflict assistance breaks.
+#[tokio::test]
+async fn test_sync_main_for_project_reports_git_failures() {
+    // Arrange
+    enable_tracing_log_fallback();
+    let cases: [(&str, ConfigureGitClient, &str); 4] = [
+        (
+            "missing repository",
+            |git_client| {
+                git_client
+                    .expect_find_git_repo_root()
+                    .returning(|_| Box::pin(async { None }));
+            },
+            "Failed to find git repository root",
+        ),
+        (
+            "status failure",
+            |git_client| {
+                expect_sync_repo_root(git_client);
+                git_client.expect_is_worktree_clean().returning(|_| {
+                    Box::pin(async { Err(GitError::OutputParse("status failed".to_string())) })
+                });
+            },
+            "status failed",
+        ),
+        (
+            "push failure",
+            |git_client| {
+                expect_sync_pull(git_client, git::PullRebaseResult::Completed);
+                expect_sync_after_pull(git_client);
+                git_client.expect_push_current_branch().returning(|_| {
+                    Box::pin(async { Err(GitError::OutputParse("push rejected".to_string())) })
+                });
+            },
+            "push rejected",
+        ),
+        (
+            "conflict cleanup failure",
+            |git_client| {
+                expect_sync_pull(
+                    git_client,
+                    git::PullRebaseResult::Conflict {
+                        detail: "CONFLICT in src/lib.rs".to_string(),
+                    },
+                );
+                git_client.expect_list_conflicted_files().returning(|_| {
+                    Box::pin(async { Err(GitError::OutputParse("status unreadable".to_string())) })
+                });
+                git_client.expect_abort_rebase().returning(|_| {
+                    Box::pin(async { Err(GitError::OutputParse("abort failed".to_string())) })
+                });
+            },
+            "Sync stopped on rebase conflicts while updating `main`: CONFLICT in src/lib.rs. \
+             Assisted resolution failed: status unreadable",
+        ),
+    ];
+
+    for (case, configure_git_client, expected_error) in cases {
+        let mut mock_git_client = git::MockGitClient::new();
+        configure_git_client(&mut mock_git_client);
+
+        // Act
+        let result = SessionManager::sync_main_for_project_with_assist_client(
+            Some("main".to_string()),
+            PathBuf::from("/tmp/project"),
+            None,
+            test_fs_client(),
+            Arc::new(mock_git_client),
+            test_session_agent(),
+            Arc::new(MockSyncAssistClient::new()),
+        )
+        .await;
+
+        // Assert
+        assert_eq!(
+            result.map_err(|error| error.detail_message()),
+            Err(expected_error.to_string()),
+            "{case}"
+        );
+    }
+}
+
+/// Verifies sync falls back to the pre-pull ahead count when the post-pull
+/// ahead/behind lookup fails.
+#[tokio::test]
+async fn test_sync_main_for_project_uses_pre_pull_ahead_count_when_post_pull_lookup_fails() {
+    // Arrange
+    let mut mock_git_client = git::MockGitClient::new();
+    expect_sync_pull(&mut mock_git_client, git::PullRebaseResult::Completed);
+    mock_git_client
+        .expect_get_ahead_behind()
+        .returning(|_| Box::pin(async { Err(GitError::OutputParse("no upstream".to_string())) }));
+    mock_git_client
+        .expect_list_local_commit_titles()
+        .returning(|_| Box::pin(async { Ok(Vec::new()) }));
+    mock_git_client
+        .expect_push_current_branch()
+        .returning(|_| Box::pin(async { Ok("origin/main".to_string()) }));
+
+    // Act
+    let outcome = SessionManager::sync_main_for_project_with_assist_client(
+        Some("main".to_string()),
+        PathBuf::from("/tmp/project"),
+        None,
+        test_fs_client(),
+        Arc::new(mock_git_client),
+        test_session_agent(),
+        Arc::new(MockSyncAssistClient::new()),
+    )
+    .await
+    .expect("sync should succeed");
+
+    // Assert
+    assert_eq!(outcome.pulled_commits, Some(4));
+    assert_eq!(outcome.pushed_commits, Some(3));
+}
+
+/// Expects the repository-root lookup that starts every project sync.
+fn expect_sync_repo_root(git_client: &mut git::MockGitClient) {
+    git_client
+        .expect_find_git_repo_root()
+        .returning(|folder| Box::pin(async move { Some(folder) }));
+}
+
+/// Expects a clean checkout, the pre-pull summary, and one pull result.
+fn expect_sync_pull(git_client: &mut git::MockGitClient, pull_result: git::PullRebaseResult) {
+    expect_sync_repo_root(git_client);
+    git_client
+        .expect_is_worktree_clean()
+        .returning(|_| Box::pin(async { Ok(true) }));
+    git_client
+        .expect_get_ahead_behind()
+        .times(1)
+        .returning(|_| Box::pin(async { Ok((3, 4)) }));
+    git_client
+        .expect_list_upstream_commit_titles()
+        .returning(|_| Box::pin(async { Ok(Vec::new()) }));
+    git_client
+        .expect_pull_rebase()
+        .return_once(move |_| Box::pin(async move { Ok(pull_result) }));
+}
+
+/// Expects the post-pull summary lookups before the push.
+fn expect_sync_after_pull(git_client: &mut git::MockGitClient) {
+    git_client
+        .expect_get_ahead_behind()
+        .returning(|_| Box::pin(async { Ok((3, 0)) }));
+    git_client
+        .expect_list_local_commit_titles()
+        .returning(|_| Box::pin(async { Ok(Vec::new()) }));
 }
