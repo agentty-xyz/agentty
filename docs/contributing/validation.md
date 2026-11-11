@@ -218,6 +218,12 @@ otherwise every reported file is checked. The hook writes a fresh
 through other packages' tests appears uncovered there; the `coverage` gate remains
 authoritative.
 
+A focused run rebuilds only the selected packages. Instrumented test binaries left in
+the coverage build directory by unselected dependents still contain a changed crate's
+old code, and the report can then list gaps at line numbers that no longer match the
+source. Add those dependents to `AGENTTY_TEST_PACKAGES` and keep execution narrow with
+`AGENTTY_TEST_FILTER='package(=<package>)'` to rebuild them.
+
 ## Instruction and Hook Maintenance
 
 `check-instructions` validates instruction aliases, literal repository paths, local
