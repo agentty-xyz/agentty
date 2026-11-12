@@ -51,7 +51,7 @@ export function readHero(indexHtml) {
 export function readThemeColors(siteScss) {
   const block = capture(siteScss, /^:root \{\n([^}]*)\n\}/m, 'the default `:root` theme block');
   const colors = {};
-  for (const match of block.matchAll(/^\s*(--(?:color|glyph)-[\w-]+):\s*([^;]+);/gm)) {
+  for (const match of block.matchAll(/^[ \t]*(--(?:color|glyph)-[\w-]+):([^;\n]+);/gm)) {
     colors[match[1]] = match[2].trim();
   }
 

@@ -429,10 +429,14 @@ svg {
     max-width: 760px;
 }
 
-/* Keep the homepage introduction, demo, and installation close across viewport sizes.
+/* Homepage: terminal-theme layout with square panels and glyph-printed art.
+   Keep the introduction, demo, and installation close across viewport sizes.
    The hero wordmark uses one gap above and below so it sits evenly between rules. */
 .site-main.home-layout {
     --home-wordmark-gap: clamp(1rem, 3vw, 2rem);
+    --radius-sm: 0;
+    --radius-md: 0;
+    --radius-lg: 0;
     padding-top: var(--home-wordmark-gap);
 }
 
@@ -509,13 +513,6 @@ svg {
     flex-wrap: wrap;
     justify-content: center;
     gap: 0.75rem;
-}
-
-/* Homepage: terminal-theme layout with square panels and glyph-printed art. */
-.site-main.home-layout {
-    --radius-sm: 0;
-    --radius-md: 0;
-    --radius-lg: 0;
 }
 
 .home-layout .site-section {

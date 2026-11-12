@@ -225,6 +225,15 @@ old code, and the report can then list gaps at line numbers that no longer match
 source. Add those dependents to `AGENTTY_TEST_PACKAGES` and keep execution narrow with
 `AGENTTY_TEST_FILTER='package(=<package>)'` to rebuild them.
 
+## SonarQube Issues
+
+Pull-request CI fails on any open SonarQube issue in the changed code. The built-in
+quality gate grades new code by rating, which passes a pull request that still adds
+issues. The coverage job therefore makes the scan wait for the gate, reads the
+analysis's `new_violations` count, and annotates each issue. Fix the reported code. Add
+a rule exception to `sonar-project.properties` only with a comment explaining why the
+rule does not apply. Pull requests from forks are not scanned.
+
 ## Instruction and Hook Maintenance
 
 `check-instructions` validates instruction aliases, literal repository paths, local

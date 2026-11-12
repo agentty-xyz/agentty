@@ -394,7 +394,7 @@
 
     function rebuild(width) {
       var cols = columnsFor(width, scene);
-      if (grid && grid.cols === cols) return false;
+      if (grid?.cols === cols) return false;
       var grids = (scene.poses || [0]).map(function (angle) {
         return rasterize(scene, cols, documentRef, angle);
       });
@@ -479,13 +479,13 @@
         if (arriving) {
           busy = true;
           ctx.fillStyle = ramp[Math.min(7, cell.level)];
-          ctx.fillText(NOISE[(Math.random() * NOISE.length) | 0], px, py);
+          ctx.fillText(NOISE[Math.trunc(Math.random() * NOISE.length)], px, py);
           return;
         }
         if (cell.heat > 0.04) {
           busy = true;
           ctx.fillStyle = cell.heat > 0.5 ? hot : ramp[Math.min(7, cell.level + 1)];
-          ctx.fillText(cell.heat > 0.25 ? NOISE[(Math.random() * NOISE.length) | 0] : cell.ch, px, py);
+          ctx.fillText(cell.heat > 0.25 ? NOISE[Math.trunc(Math.random() * NOISE.length)] : cell.ch, px, py);
           cell.heat *= 0.9;
           return;
         }
