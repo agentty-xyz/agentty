@@ -2,7 +2,7 @@
 
 use std::collections::{BTreeMap, HashMap};
 use std::path::PathBuf;
-use std::sync::Mutex;
+use std::sync::{Arc, Mutex};
 
 use ag_contracts::{AgentRequestKind, OneShotRequest, PermissionMode, ProviderCallBudget};
 use ag_protocol::{GraphProposalOutcome, GraphProposalResponse};
@@ -140,10 +140,10 @@ impl App {
             ));
         }
         self.sessions.sync_session_from_handle(&input.session_id);
-        let session = self
+        let (session, handles) = self
             .sessions
-            .session_for_id(&input.session_id)
-            .ok_or(SessionError::NotFound)?;
+            .session_and_handles_or_err(&input.session_id)
+            .map_err(|_| SessionError::NotFound)?;
         if !matches!(
             session.status,
             Status::Draft | Status::Review | Status::AgentReview
@@ -153,10 +153,11 @@ impl App {
                 "Graph generation requires a prepared idle session".into(),
             ));
         }
-        let (agent, permission, folder) = (
+        let (agent, permission, folder, transcript) = (
             session.agent,
             session.permission_mode,
             session.folder.clone(),
+            Arc::clone(&handles.transcript),
         );
         let catalog = self.services.agent_profile_catalog_client();
         let mut definitions = Vec::new();
@@ -194,6 +195,17 @@ impl App {
             .await
             .map_err(proposal_error)?
         {
+            // Record the request so the transcript shows what the proposal
+            // answers, live and after reload.
+            SessionTaskService::append_user_prompt(
+                &transcript,
+                self.services.db(),
+                &self.services.event_sender(),
+                &self.services.session_update_versions(),
+                &state.input.session_id,
+                &state.input.request.transcript_text(),
+            )
+            .await;
             self.graph_chat.invalidate();
             self.spawn_graph_proposal_generation(state, folder);
         }

@@ -388,6 +388,22 @@ async fn graph_mode_submits_literal_requests_without_subcommands() {
             .expect("proposals");
         assert_eq!(states.len(), 1);
         assert_eq!(states[0].input.request.text, text);
+        let messages = app
+            .services
+            .db()
+            .sessions()
+            .load_session_messages("sess")
+            .await
+            .expect("messages");
+        let position = |kind: &str, content: &str| {
+            messages
+                .iter()
+                .position(|message| message.kind == kind && message.content == content)
+        };
+        let prompt = position("user_prompt", text).expect("request echoed as user prompt");
+        let notice =
+            position("workflow_notice", "Generating execution graph…").expect("generation notice");
+        assert!(prompt < notice, "request precedes the generation notice");
         app.services.wait_for_cleanup_tasks(None).await;
     }
 }

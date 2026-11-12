@@ -173,11 +173,12 @@ async fn graph_proposal_request_preview_approval_execution() -> E2eResult {
                             .text_in_region(&sidebar)
                             .contains("Graph execution complete")
                     );
-                    assertion::assert_text_in_region(
-                        &preview,
+                    for text in [
+                        "query the current architecture",
                         "Graph proposal v1 ready: 2 nodes. Reply to approve, revise, or cancel it.",
-                        &chat,
-                    );
+                    ] {
+                        assertion::assert_text_in_region(&preview, text, &chat);
+                    }
                     assertion::assert_text_in_region(
                         &execution,
                         "Graph proposal v1 approved · execution started",
