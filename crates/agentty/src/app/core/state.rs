@@ -36,6 +36,7 @@ use tracing::warn;
 use super::event::AppEvent;
 use crate::analytics::Analytics;
 use crate::app;
+use crate::app::graph_question::{GraphQuestionState, GraphQuestionTarget};
 use crate::app::session_diff::PendingSessionDiffRequest;
 use crate::app::{AppError, session};
 use crate::domain::agent::{AgentKind, ReasoningLevel};
@@ -223,6 +224,9 @@ pub struct App {
     pub(crate) experimental_multi_agent: bool,
     /// Latest proposal and execution snapshot for the visible session.
     pub(crate) graph_chat: GraphChatCache,
+    /// Graph work answered by the open question panel and pending graph
+    /// question checks for the viewed session.
+    pub(crate) graph_questions: GraphQuestionState,
     /// Receives app events emitted by background tasks and workflows.
     pub(super) event_rx: mpsc::UnboundedReceiver<AppEvent>,
     /// Whether Agentty was launched from inside a `tmux` session.
@@ -1851,13 +1855,15 @@ impl App {
             .and_then(|transcript| transcript.conversation_replay_text())
     }
 
-    /// Reloads sessions when metadata cache indicates changes.
+    /// Reloads sessions when metadata cache indicates changes and opens the
+    /// question panel for the viewed session's pending graph questions.
     ///
     /// Returns `true` when the fallback poll refreshed render-visible session
     /// state.
     pub async fn refresh_sessions_if_needed(&mut self) -> bool {
         self.refresh_task_chain_graph_if_needed();
         let graph_refreshed = self.refresh_graph_chat_if_needed().await;
+        let graph_questions_opened = self.reconcile_graph_question_mode().await;
         let resources_refreshed = self.sessions.refresh_resources().await;
         let refreshed = self
             .sessions
@@ -1872,7 +1878,7 @@ impl App {
             app::review::hydrate_review_transients(&self.review_cache, self.sessions.state_mut());
         }
 
-        refreshed || resources_refreshed || graph_refreshed
+        refreshed || resources_refreshed || graph_refreshed || graph_questions_opened
     }
 
     /// Forces immediate session list reload.
@@ -2038,11 +2044,13 @@ impl App {
     }
 
     /// Opens one session by id and preserves question mode for clarification
-    /// sessions.
+    /// sessions. Graph questions dismissed earlier open again once the view
+    /// reconciles.
     fn open_session(&mut self, target_session_id: &str) {
         let Some(session) = self.sessions.session_for_id(target_session_id) else {
             return;
         };
+        self.graph_questions.forget_dismissal(target_session_id);
         let questions = (session.status == Status::Question).then(|| session.questions.clone());
         let session_index = self.session_index_for_id(target_session_id);
         self.sessions.select_session_index(session_index);
@@ -2183,10 +2191,26 @@ impl App {
     /// match the session's question list, so leaving question mode with `q`
     /// does not lose already-submitted answers.
     pub(crate) fn enter_question_mode(&mut self, session_id: &str, questions: Vec<QuestionItem>) {
+        self.open_question_panel(session_id, questions, None);
+    }
+
+    /// Opens the question panel for an ordinary turn (`target` is `None`) or
+    /// for the graph work that asked.
+    ///
+    /// Saved partial answers are restored only for the same turn or graph
+    /// work they were saved for and only while they match `questions`.
+    pub(crate) fn open_question_panel(
+        &mut self,
+        session_id: &str,
+        questions: Vec<QuestionItem>,
+        target: Option<GraphQuestionTarget>,
+    ) {
+        let progress_target = self.graph_questions.take_progress_target(session_id);
         let progress = self
             .question_progress
             .remove(session_id)
-            .filter(|progress| progress.applies_to(&questions));
+            .filter(|progress| progress_target == target && progress.applies_to(&questions));
+        self.graph_questions.activate(session_id, target);
         let (current_index, input, responses, selected_option_index) = match progress {
             Some(progress) => (
                 progress.current_index,

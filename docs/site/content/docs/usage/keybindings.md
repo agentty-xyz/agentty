@@ -341,7 +341,7 @@ When predefined options are shown:
 | `Enter`                   | Send highlighted option         |
 | `Tab`                     | Focus chat output for scrolling |
 | `q`                       | Return to sessions list         |
-| `Ctrl+C`                  | End turn without answering      |
+| `Ctrl+C`                  | End turn or close graph panel   |
 
 ## Question Input — Free Text
 
@@ -353,7 +353,7 @@ exist:
 | `Enter`                          | Send response; blank means no answer |
 | `Alt+Enter` / `Shift+Enter`      | Insert newline                       |
 | `Ctrl+J` / `Ctrl+M`              | Insert newline (terminal fallback)   |
-| `Ctrl+C`                         | End turn without answering           |
+| `Ctrl+C`                         | End turn or close graph panel        |
 | `Left` / `Right` / `Up` / `Down` | Move cursor                          |
 | `Backspace` / `Delete`           | Delete character                     |
 | `Home` / `End`                   | Move to start / end                  |

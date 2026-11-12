@@ -9,10 +9,16 @@
 use std::path::PathBuf;
 use std::sync::{Arc, Mutex, PoisonError};
 
-use ag_session::{GraphProposalAction, GraphProposalState, SessionError};
+use ag_protocol::GraphProposalOutcome;
+use ag_session::{
+    GraphProposalAction, GraphProposalState, GraphProposalVersionOutcome, QuestionItem,
+    SessionError,
+};
 
 use crate::app::App;
+use crate::app::graph_node_reply::QUESTIONS_NOT_PENDING;
 use crate::app::graph_proposal_decision::{GraphProposalReply, GraphProposalReplyDecision};
+use crate::app::graph_question::GraphAnswerOutcome;
 use crate::app::prompt_intent::PromptWorkflowOutcome;
 use crate::app::session::SessionTaskService;
 use crate::domain::session::SessionId;
@@ -42,32 +48,98 @@ impl App {
         session_id: &SessionId,
         prompt: &TurnPrompt,
     ) -> Option<PromptWorkflowOutcome> {
+        let state = match self.pending_graph_proposal(session_id).await {
+            Ok(state) => state?,
+            Err(error) => {
+                return Some(self.reject_graph_proposal_reply(session_id, &error).await);
+            }
+        };
+
+        Some(
+            self.reply_to_graph_proposal(session_id, &state, prompt)
+                .await,
+        )
+    }
+
+    /// Returns the session's latest proposal while chat replies still act on
+    /// it, or `None` when proposals are disabled or none is pending.
+    ///
+    /// # Errors
+    /// Returns a displayable error when the proposal lookup fails.
+    pub(crate) async fn pending_graph_proposal(
+        &self,
+        session_id: &SessionId,
+    ) -> Result<Option<GraphProposalState>, String> {
         if !self.experimental_multi_agent {
-            return None;
+            return Ok(None);
         }
-        let state = match self
-            .services
+
+        self.services
             .db()
             .graph_proposals()
             .latest(session_id)
             .await
-        {
-            Ok(state) => state.filter(is_pending)?,
+            .map(|state| state.filter(is_pending))
+            .map_err(|error| format!("Graph proposal: {error}"))
+    }
+
+    /// Returns whether an earlier reply to the proposal is still being
+    /// decided.
+    pub(crate) fn is_deciding_graph_proposal_reply(&self, proposal_id: &str) -> bool {
+        self.services
+            .proposal_reply_decisions
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+            .contains(proposal_id)
+    }
+
+    /// Sends answers to the exact proposal version whose clarification
+    /// questions the user answered, rejecting them as stale once that version
+    /// no longer waits for answers.
+    pub(crate) async fn answer_graph_proposal_questions(
+        &mut self,
+        session_id: &SessionId,
+        proposal_id: &str,
+        version: u32,
+        prompt: &TurnPrompt,
+    ) -> GraphAnswerOutcome {
+        let state = match self.pending_graph_proposal(session_id).await {
+            Ok(state) => state.filter(|state| {
+                state.input.id == proposal_id
+                    && state.version.number == version
+                    && !clarification_questions(state).is_empty()
+            }),
             Err(error) => {
-                return Some(
-                    self.reject_graph_proposal_reply(
-                        session_id,
-                        &format!("Graph proposal: {error}"),
-                    )
-                    .await,
-                );
+                self.reject_graph_proposal_reply(session_id, &error).await;
+
+                return GraphAnswerOutcome::Retry;
             }
         };
+        let Some(state) = state else {
+            self.reject_graph_proposal_reply(session_id, QUESTIONS_NOT_PENDING)
+                .await;
+
+            return GraphAnswerOutcome::Stale;
+        };
+
+        GraphAnswerOutcome::from_reply(
+            &self
+                .reply_to_graph_proposal(session_id, &state, prompt)
+                .await,
+        )
+    }
+
+    /// Echoes one reply in chat and decides it in the background.
+    async fn reply_to_graph_proposal(
+        &mut self,
+        session_id: &SessionId,
+        state: &GraphProposalState,
+        prompt: &TurnPrompt,
+    ) -> PromptWorkflowOutcome {
         if prompt.has_attachments() {
-            return Some(
-                self.reject_graph_proposal_reply(session_id, ATTACHMENTS_UNSUPPORTED)
-                    .await,
-            );
+            return self
+                .reject_graph_proposal_reply(session_id, ATTACHMENTS_UNSUPPORTED)
+                .await;
         }
         let Some((folder, transcript)) = self
             .sessions
@@ -75,7 +147,7 @@ impl App {
             .ok()
             .map(|(session, handles)| (session.folder.clone(), Arc::clone(&handles.transcript)))
         else {
-            return Some(PromptWorkflowOutcome::KeepPrompt);
+            return PromptWorkflowOutcome::KeepPrompt;
         };
         if !self
             .services
@@ -84,10 +156,9 @@ impl App {
             .unwrap_or_else(PoisonError::into_inner)
             .insert(state.input.id.clone())
         {
-            return Some(
-                self.reject_graph_proposal_reply(session_id, DECISION_PENDING)
-                    .await,
-            );
+            return self
+                .reject_graph_proposal_reply(session_id, DECISION_PENDING)
+                .await;
         }
         SessionTaskService::append_user_prompt(
             &transcript,
@@ -98,11 +169,11 @@ impl App {
             &prompt.transcript_text(),
         )
         .await;
-        self.spawn_graph_proposal_reply_decision(&state, folder, prompt.text.clone(), transcript);
+        self.spawn_graph_proposal_reply_decision(state, folder, prompt.text.clone(), transcript);
 
-        Some(PromptWorkflowOutcome::ShowSession {
+        PromptWorkflowOutcome::ShowSession {
             session_id: session_id.clone(),
-        })
+        }
     }
 
     /// Reports a rejected reply and keeps the composer open.
@@ -181,6 +252,18 @@ fn is_pending(state: &GraphProposalState) -> bool {
     !state.version.is_cancelled && state.version.approval.is_none()
 }
 
+/// Returns the clarification questions a generated proposal version asks,
+/// or none when it generated a graph, failed, or is still generating.
+pub(crate) fn clarification_questions(state: &GraphProposalState) -> &[QuestionItem] {
+    match &state.version.outcome {
+        GraphProposalVersionOutcome::Generated { response, .. } => match &response.outcome {
+            GraphProposalOutcome::Clarification { questions } => questions,
+            GraphProposalOutcome::Proposal { .. } => &[],
+        },
+        GraphProposalVersionOutcome::Failed(_) | GraphProposalVersionOutcome::Generating => &[],
+    }
+}
+
 /// Describes a rejected decided action.
 fn reply_failure(error: &SessionError) -> String {
     TranscriptNotice::ReplyError.format(format!("Graph proposal: {error}"))
@@ -188,4 +271,4 @@ fn reply_failure(error: &SessionError) -> String {
 
 #[cfg(test)]
 #[path = "graph_proposal_reply_test.rs"]
-mod tests;
+pub(crate) mod tests;

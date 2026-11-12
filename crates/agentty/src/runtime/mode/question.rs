@@ -3,6 +3,7 @@ use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
 use ratatui::layout::Rect;
 use tracing::warn;
 
+use crate::app::graph_question::GraphAnswerOutcome;
 use crate::app::session::SessionTaskService;
 use crate::app::{self, App, AppEvent};
 use crate::domain::input::InputState;
@@ -123,9 +124,10 @@ fn should_exit_to_list_on_q(app: &App) -> bool {
 
 /// Saves in-progress clarification answers and returns to the sessions list.
 ///
-/// The saved progress is restored by `App::enter_question_mode` the next
-/// time the session's question mode opens, so answers already submitted for
-/// earlier questions survive leaving the view with `q`.
+/// The saved progress is restored by `App::open_question_panel` the next
+/// time the session's question mode opens for the same turn or graph work, so
+/// answers already submitted for earlier questions survive leaving the view
+/// with `q`.
 fn exit_to_list_saving_progress(app: &mut App) {
     let mode = std::mem::replace(&mut app.mode, AppMode::List);
 
@@ -138,6 +140,7 @@ fn exit_to_list_saving_progress(app: &mut App) {
         ..
     } = mode
     {
+        app.graph_questions.record_progress_target(&session_id);
         app.question_progress.insert(
             session_id,
             QuestionProgress {
@@ -585,6 +588,11 @@ fn handle_question_at_mention_select(app: &mut App) {
 }
 
 /// Stores one question response and runs follow-up reply when complete.
+///
+/// Completed graph questions are sent to the graph work that asked. A
+/// retryable rejection reopens the panel at its final question; answers the
+/// work no longer waits for return to the session view, where the questions
+/// pending now open.
 async fn submit_response(app: &mut App, response: String) {
     let Some(completed_response) = store_question_response(app, response) else {
         return;
@@ -597,6 +605,16 @@ async fn submit_response(app: &mut App, response: String) {
         session_id: session_id.clone(),
         scroll_offset: None,
     };
+    if let Some(target) = app.graph_questions.active_target(&session_id).cloned() {
+        let outcome = app
+            .answer_graph_questions(&session_id, &target, &answers)
+            .await;
+        if outcome == GraphAnswerOutcome::Retry {
+            restore_completed_question_response(app, completed_response);
+        }
+
+        return;
+    }
     let service = app.session_view_service();
     let request = service.answer_questions(&session_id, AnswerQuestionsRequest { answers });
     let reply_enqueued = match app.drive_session_request(request).await {
@@ -710,7 +728,9 @@ fn mark_session_in_progress(app: &mut App, session_id: &str) {
 
 /// Ends the question turn without sending a reply to the agent.
 ///
-/// Triggered by `Ctrl+C` or `Esc` while the answer input is focused. The
+/// Triggered by `Ctrl+C` or `Esc` while the answer input is focused. Graph
+/// questions only close the panel; the graph work keeps waiting for a chat
+/// reply. For a session turn, the
 /// session status is reverted to `Review` so the
 /// user can inspect the current diff or start a new follow-up manually.
 /// If the database write fails the mode stays on `Question` so the user
@@ -730,6 +750,9 @@ async fn end_turn_no_answer(app: &mut App) {
     };
 
     let session_id = session_id.clone();
+    if app.dismiss_graph_questions(&session_id) {
+        return;
+    }
     let timestamp_seconds =
         app::session::unix_timestamp_from_system_time(app.services.clock().now_system_time());
 

@@ -9,6 +9,7 @@ use tokio::sync::mpsc;
 use super::event::AppEvent;
 use super::state::{App, AppClients};
 use crate::app::chatgpt_sign_in::ChatGptSignIn;
+use crate::app::graph_question::GraphQuestionState;
 use crate::app::service::{AppServiceDeps, AppServices};
 use crate::app::session::{SessionManager, migrate_active_sessions_off_retired_models};
 use crate::app::setting::{SettingsManager, load_max_concurrent_subagents_setting};
@@ -198,6 +199,7 @@ impl App {
             sync_main_runner,
             task_chain_graphs: TaskChainGraphCache::default(),
             graph_chat: GraphChatCache::default(),
+            graph_questions: GraphQuestionState::default(),
             tmux_client: clients.tmux_client,
         };
         Ok(app.complete_startup(recoverable_review_sessions).await)

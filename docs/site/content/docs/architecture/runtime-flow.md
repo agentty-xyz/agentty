@@ -217,12 +217,20 @@ revises the inspected version, and the background task admits that exact-version
 through the gateway. One reply per proposal is decided at a time.
 
 A graph node outside a task chain asks its clarification questions in session chat:
-saving the node's response also saves them, after its answer, as one workflow notice in
-the same transaction, and the session worker mirrors that notice into live chat. While a
-node awaits answers, the next composer message is its reply; when several wait, the
-reply goes to the node whose question was saved last. The message is shown in chat and
-admitted through the gateway as a continuation of the exact execution that asked;
+saving the node's response also saves a workflow notice listing them, after its answer,
+in the same transaction, and the session worker mirrors that notice into live chat.
+While a node awaits answers, the next composer message is its reply; when several wait,
+the reply goes to the node whose question was saved last. The message is shown in chat
+and admitted through the gateway as a continuation of the exact execution that asked;
 storage rejects a second continuation of the same execution.
+
+On each foreground tick the reducer checks the viewed session for pending graph
+questions, following the same precedence as chat routing: a pending proposal's
+clarification first, then the waiting node. It opens the ordinary question panel for
+them and records the asking proposal version or node execution. Completed answers use
+the ordinary clarification reply format and are sent to that exact target, so a reply
+never reaches work that asked later. Answers that target no longer waits for close the
+panel, so the next check can open the questions pending now.
 
 The graph inspector loads an explicit session-scoped snapshot of the latest proposal
 (read-only), saved graphs, authoritative progress, and exact output bodies. Controls

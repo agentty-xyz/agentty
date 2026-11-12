@@ -4,7 +4,7 @@ use ag_session::{
     SessionError as ApiSessionError, SessionId, SessionStatus,
 };
 
-use super::super::{question_answer_message, question_restore_error, validate_question_answers};
+use super::super::{question_restore_error, validate_question_answers};
 use super::support::{request_question_answers, request_session, request_session_creation};
 
 #[tokio::test]
@@ -188,7 +188,6 @@ fn structured_question_answers_require_current_non_empty_pairs() {
         .expect_err("stale answer should fail");
     let empty_error = validate_question_answers(&questions, &empty_answers)
         .expect_err("empty answer should fail");
-    let message = question_answer_message(&valid_answers);
 
     // Assert
     assert_eq!(valid_result, Ok(()));
@@ -207,10 +206,6 @@ fn structured_question_answers_require_current_non_empty_pairs() {
     assert_eq!(
         empty_error,
         ApiSessionError::Operation("Question answer 1 is empty".to_string())
-    );
-    assert_eq!(
-        message,
-        "Clarifications:\n1. Q: Which target?\n   A: main\n2. Q: Run tests?\n   A: yes"
     );
 }
 
