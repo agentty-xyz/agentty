@@ -53,10 +53,7 @@ async fn existing_hosts_reject_graph_capabilities_without_admitting_work() {
     let progress = service.get_execution_graph("graph").await;
     let cancelled = service.cancel_execution_graph(control.clone()).await;
     let resumed = service
-        .resume_execution_graph(crate::ResumeExecutionGraphRequest {
-            graph: control,
-            provider_call_limits: BTreeMap::new(),
-        })
+        .resume_execution_graph(crate::ResumeExecutionGraphRequest { graph: control })
         .await;
     let continued = service.continue_execution_graph_node(action).await;
     let accepted = service.accept_execution_graph_result(reference).await;

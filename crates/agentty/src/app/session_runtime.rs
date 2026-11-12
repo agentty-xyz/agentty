@@ -77,6 +77,20 @@ pub(crate) struct SessionRuntimeHandle {
 }
 
 impl SessionRuntimeHandle {
+    /// Returns whether `error` reports that the foreground runtime did not
+    /// answer the command, so its caller may deliver the command again.
+    pub(crate) fn is_unavailable(error: &SessionError) -> bool {
+        matches!(error, SessionError::Operation(message) if message == SESSION_RUNTIME_UNAVAILABLE)
+    }
+
+    /// Waits until a foreground consumer accepts commands, for work that
+    /// starts before the terminal loop does.
+    pub(crate) async fn wait_until_available(&self) {
+        let mut consumer_rx = self.consumer_state.subscribe();
+        // This handle keeps the sender alive, so the wait cannot fail.
+        let _ = consumer_rx.wait_for(|is_active| *is_active).await;
+    }
+
     pub(crate) async fn get_graph_proposal(
         &self,
         id: &str,

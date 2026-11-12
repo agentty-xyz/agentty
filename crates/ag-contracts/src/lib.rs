@@ -27,6 +27,6 @@ pub use input_size::is_input_size_error;
 pub use one_shot::MockOneShotClient;
 pub use one_shot::{OneShotClient, OneShotError, OneShotRequest, OneShotSubmission};
 pub use permission::PermissionMode;
-pub use provider_call_budget::ProviderCallBudget;
+pub use provider_call_budget::{ProviderCallBudget, ProviderCallLedger};
 pub use reasoning::ReasoningLevel;
 pub use session::{ResponseStyle, SessionDiffState, SessionStats, SpeedMode};

@@ -1,5 +1,5 @@
 use ag_protocol::TurnPromptAttachment;
-use ag_session::GraphResult;
+use ag_session::{GraphProposalReplyOutcome, GraphResult};
 pub use ag_worker::GraphExecutionRecord;
 
 /// Trusted host evidence for an exact result, supplied separately from output.
@@ -46,4 +46,23 @@ pub struct GraphNodeHistory {
     pub continuation_prompt: Option<String>,
     /// Replayed explicit replies and settled responses, as text data.
     pub text: String,
+}
+
+/// One chat reply to an exact proposal version and its first decision.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct GraphProposalReplyRecord {
+    /// Caller delivery identity.
+    pub id: String,
+    /// Whether the decided action was attempted, or the reply was abandoned.
+    pub is_settled: bool,
+    /// User-authored reply text.
+    pub message: String,
+    /// Decision recorded for this reply, absent until decided.
+    pub outcome: Option<GraphProposalReplyOutcome>,
+    /// Owning proposal.
+    pub proposal_id: String,
+    /// Session that owns the proposal.
+    pub session_id: String,
+    /// Exact proposal version the reply answered.
+    pub version: u32,
 }

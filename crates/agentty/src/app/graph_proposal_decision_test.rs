@@ -7,12 +7,12 @@ use ag_contracts::{
 use ag_protocol::{AgentResponse, GraphProposalOutcome, GraphProposalResponse, QuestionItem};
 use ag_session::test_support::{graph_proposal, graph_proposal_state};
 use ag_session::{
-    GraphProposalResolution, GraphProposalState, GraphProposalVersionOutcome,
-    StartExecutionGraphRequest,
+    GraphProposalReplyOutcome, GraphProposalResolution, GraphProposalState,
+    GraphProposalVersionOutcome, StartExecutionGraphRequest,
 };
 use ag_worker::MockRunClient;
 
-use super::{GraphProposalReply, GraphProposalReplyDecision};
+use super::GraphProposalReplyDecision;
 
 #[test]
 fn prompt_passes_proposal_and_reply_only_as_json_encoded_data() {
@@ -110,19 +110,19 @@ fn summary_describes_questions_nodes_failures_and_approvability() {
 async fn decision_accepts_only_contract_words_and_gates_approval() {
     // Arrange
     let cases = [
-        ("approve", true, GraphProposalReply::Approve),
-        (" `Approve`.\n", true, GraphProposalReply::Approve),
-        ("approve", false, GraphProposalReply::Revise),
-        ("cancel", false, GraphProposalReply::Cancel),
-        ("\"CANCEL\"", true, GraphProposalReply::Cancel),
-        ("revise", true, GraphProposalReply::Revise),
-        ("approve it", true, GraphProposalReply::Revise),
+        ("approve", true, GraphProposalReplyOutcome::Approve),
+        (" `Approve`.\n", true, GraphProposalReplyOutcome::Approve),
+        ("approve", false, GraphProposalReplyOutcome::Revise),
+        ("cancel", false, GraphProposalReplyOutcome::Cancel),
+        ("\"CANCEL\"", true, GraphProposalReplyOutcome::Cancel),
+        ("revise", true, GraphProposalReplyOutcome::Revise),
+        ("approve it", true, GraphProposalReplyOutcome::Revise),
         (
             r#"{"decision":"approve"}"#,
             true,
-            GraphProposalReply::Revise,
+            GraphProposalReplyOutcome::Revise,
         ),
-        ("", true, GraphProposalReply::Revise),
+        ("", true, GraphProposalReplyOutcome::Revise),
     ];
 
     for (answer, can_approve, expected) in cases {
@@ -131,6 +131,13 @@ async fn decision_accepts_only_contract_words_and_gates_approval() {
             assert_eq!(request.folder, PathBuf::from("/workspace/session"));
             assert_eq!(request.permission_mode, PermissionMode::ReadOnly);
             assert_eq!(request.request_kind, AgentRequestKind::UtilityPrompt);
+            assert_eq!(
+                request
+                    .provider_call_budget
+                    .as_ref()
+                    .map(ag_contracts::ProviderCallBudget::remaining),
+                Some(3)
+            );
             assert!(request.prompt.contains(r#""Run it""#));
 
             Ok(OneShotSubmission {
@@ -171,7 +178,7 @@ async fn failed_decision_run_revises_the_proposal() {
     let reply = decision.decide(&run_client).await;
 
     // Assert
-    assert_eq!(reply, GraphProposalReply::Revise);
+    assert_eq!(reply, GraphProposalReplyOutcome::Revise);
 }
 
 /// Returns a proposal whose first version has a resolved, approvable preview.

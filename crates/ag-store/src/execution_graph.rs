@@ -1,18 +1,21 @@
 //! Durable immutable graph snapshots, execution links, and exact result
 //! evidence.
 
+mod budget;
 mod dispatch;
 mod execution;
 mod lifecycle;
 mod model;
 mod progress;
 mod proposal;
+mod proposal_reply;
 mod repository;
 mod result;
 mod task_turn;
 
 pub use model::{
-    GraphEvidence, GraphExecutionRecord, GraphNodeHistory, StoredGraphEvidence, StoredGraphResult,
+    GraphEvidence, GraphExecutionRecord, GraphNodeHistory, GraphProposalReplyRecord,
+    StoredGraphEvidence, StoredGraphResult,
 };
 pub use proposal::GraphProposalRepository;
 #[cfg(any(test, feature = "test-utils"))]

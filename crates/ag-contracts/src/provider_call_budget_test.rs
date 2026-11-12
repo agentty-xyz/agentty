@@ -1,6 +1,7 @@
-use std::sync::Barrier;
+use std::sync::atomic::{AtomicUsize, Ordering};
+use std::sync::{Arc, Barrier, Mutex};
 
-use crate::ProviderCallBudget;
+use crate::{ProviderCallBudget, ProviderCallLedger};
 
 #[test]
 fn workflow_ceilings_preserve_local_limits_and_refund_unused_reservations() {
@@ -317,4 +318,113 @@ fn concurrent_clones_can_redeem_the_reserved_call_only_once() {
     drop(reservation);
     assert_eq!(budget.remaining(), 0);
     assert!(budget.reserve().is_err());
+}
+
+/// Counts ledger notifications so tests can compare them with the pool.
+#[derive(Default)]
+struct CountingLedger {
+    charges: AtomicUsize,
+    refunds: AtomicUsize,
+}
+
+impl ProviderCallLedger for CountingLedger {
+    fn charged(&self) {
+        self.charges.fetch_add(1, Ordering::Relaxed);
+    }
+
+    fn refunded(&self) {
+        self.refunds.fetch_add(1, Ordering::Relaxed);
+    }
+}
+
+impl CountingLedger {
+    fn spent(&self) -> usize {
+        self.charges.load(Ordering::Relaxed) - self.refunds.load(Ordering::Relaxed)
+    }
+}
+
+#[test]
+fn ledger_reports_redeemed_and_extra_calls_but_nets_out_unused_reservations() {
+    // Arrange
+    let ledger = Arc::new(CountingLedger::default());
+    let budget = ProviderCallBudget::with_ledger(3, ledger.clone());
+
+    // Act
+    let unused = budget.reserve().expect("reserve unused call");
+    drop(unused);
+    let redeemed = budget.reserve().expect("reserve initial call");
+    redeemed.consume().expect("redeem initial call");
+    redeemed.consume().expect("charge a repair");
+    drop(redeemed);
+
+    // Assert
+    assert_eq!(ledger.charges.load(Ordering::Relaxed), 3);
+    assert_eq!(ledger.refunds.load(Ordering::Relaxed), 1);
+    assert_eq!(ledger.spent(), 2);
+    assert_eq!(budget.remaining(), 1);
+    assert!(format!("{budget:?}").contains("has_ledger: true"));
+}
+
+#[test]
+fn ledger_is_not_charged_when_a_ceiling_rejects_the_call() {
+    // Arrange
+    let ledger = Arc::new(CountingLedger::default());
+    let graph = ProviderCallBudget::with_ledger(2, ledger.clone());
+    let constrained = graph.clone().with_ceiling(ProviderCallBudget::new(0));
+    let child = ProviderCallBudget::new(2).with_ceiling(graph.clone());
+    let empty = ProviderCallBudget::with_ledger(0, ledger.clone());
+
+    // Act
+    let rejected = constrained.consume();
+    let charged = child.consume();
+    let exhausted_pool = empty.consume();
+
+    // Assert
+    assert!(rejected.is_err());
+    assert!(charged.is_ok());
+    assert!(exhausted_pool.is_err());
+    assert_eq!(ledger.refunds.load(Ordering::Relaxed), 1);
+    assert_eq!(ledger.spent(), 1);
+    assert_eq!(graph.remaining(), 1);
+}
+
+/// Records how many calls the pool offered when a refund was reported.
+#[derive(Default)]
+struct RefundObserver {
+    budget: Mutex<Option<ProviderCallBudget>>,
+    remaining_at_refund: Mutex<Option<usize>>,
+}
+
+impl ProviderCallLedger for RefundObserver {
+    fn charged(&self) {}
+
+    fn refunded(&self) {
+        let remaining = self
+            .budget
+            .lock()
+            .expect("observed budget")
+            .as_ref()
+            .map(ProviderCallBudget::remaining);
+        *self.remaining_at_refund.lock().expect("observation") = remaining;
+    }
+}
+
+#[test]
+fn ledger_hears_a_refund_before_its_call_can_be_charged_again() {
+    // Arrange
+    let ledger = Arc::new(RefundObserver::default());
+    let budget = ProviderCallBudget::with_ledger(1, ledger.clone());
+    *ledger.budget.lock().expect("observed budget") = Some(budget.clone());
+    let unused = budget.reserve().expect("reserve the only call");
+
+    // Act
+    drop(unused);
+
+    // Assert
+    assert_eq!(
+        *ledger.remaining_at_refund.lock().expect("observation"),
+        Some(0)
+    );
+    assert_eq!(budget.remaining(), 1);
+    ledger.budget.lock().expect("observed budget").take();
 }

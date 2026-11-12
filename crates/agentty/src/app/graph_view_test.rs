@@ -1,3 +1,4 @@
+use std::collections::BTreeMap;
 use std::sync::Arc;
 
 use ag_session::{GraphNodeContinuation, GraphNodeStatus};
@@ -240,11 +241,15 @@ async fn inspector_resume_enters_the_existing_host_boundary() {
         .expect_load_graph()
         .once()
         .return_once(move |_, _| Ok(Some(graph)));
+    repository
+        .expect_budget_limits()
+        .once()
+        .return_once(|_| Ok(BTreeMap::from([("calls".into(), 3)])));
     app.services.set_graph_repository(Arc::new(repository));
 
     // Act
     let result = app
-        .apply_graph_view_action(&view, GraphViewAction::Resume("calls=3".into()))
+        .apply_graph_view_action(&view, GraphViewAction::Resume)
         .await;
 
     // Assert
@@ -454,7 +459,7 @@ async fn inspector_routes_cancellation_continuation_and_rejects_stale_actions() 
                 message: "Rework output".into(),
             }),
             "retry" => GraphViewAction::Continue(GraphNodeContinuation::Retry),
-            "unavailable" => GraphViewAction::Resume("calls=3".into()),
+            "unavailable" => GraphViewAction::Resume,
             _ => GraphViewAction::Cancel,
         };
         if scenario == "unavailable" {

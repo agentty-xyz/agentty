@@ -1,4 +1,3 @@
-use std::collections::BTreeMap;
 use std::num::NonZeroU64;
 
 use ag_protocol::TurnPromptAttachment;
@@ -18,11 +17,9 @@ pub struct GraphControlRequest {
 /// Explicit restart of dispatch, never an implicit retry of an admitted node.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct ResumeExecutionGraphRequest {
-    /// Graph to resume.
+    /// Graph to resume. Provider-call limits were fixed at first launch;
+    /// resume continues from the credit that remains after recorded spending.
     pub graph: GraphControlRequest,
-    /// Fresh limits after a process restart. A retained live executor keeps
-    /// its remaining credits and requires its original limits.
-    pub provider_call_limits: BTreeMap<String, usize>,
 }
 
 /// An explicit action against the exact latest execution of a node.

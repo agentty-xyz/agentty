@@ -1,24 +1,31 @@
+use std::fs;
 use std::sync::Arc;
 use std::time::Duration;
 
 use ag_contracts::{AgentRequestKind, OneShotSubmission, SessionStats};
+use ag_git::MockGitClient;
 use ag_protocol::{
     AgentResponse, GraphProposalOutcome, GraphProposalResponse, QuestionItem, TurnPrompt,
     TurnPromptAttachment,
 };
 use ag_session::test_support::{graph_proposal, graph_proposal_state};
-use ag_session::{GraphProposalState, GraphProposalVersionOutcome};
+use ag_session::{GraphProposalReplyOutcome, GraphProposalState, GraphProposalVersionOutcome};
 use ag_store::{DbError, MockGraphProposalRepository};
 use ag_worker::MockRunClient;
 use tempfile::TempDir;
+use tokio_util::sync::CancellationToken;
 
-use super::{DECISION_PENDING, clarification_questions};
-use crate::app::App;
+use super::{DECISION_PENDING, ProposalReplyDecision, clarification_questions};
 use crate::app::execution_graph::tests::seed_session;
 use crate::app::graph_proposal_decision::tests::resolved_state;
 use crate::app::prompt_intent::{PromptSessionMode, PromptSubmission, PromptWorkflowOutcome};
+use crate::app::{App, session};
 use crate::domain::session::SessionId;
+use crate::infra::db::GraphProposalReplyRecord;
 use crate::test_support::new_test_app;
+
+/// Lets a recovered reply reach its wait for the session runtime.
+const RUNTIME_WAIT_GRACE: Duration = Duration::from_millis(50);
 
 #[tokio::test]
 async fn cancel_reply_discards_the_inspected_version_and_reports_it_in_chat() {
@@ -133,11 +140,7 @@ async fn reply_during_a_pending_decision_keeps_the_composer_and_starts_no_decisi
     // Arrange
     let (mut app, _directory) = pending_app(clarification_state(), "cancel").await;
     let prompt = TurnPrompt::from_text("Local".into());
-    app.services
-        .proposal_reply_decisions
-        .lock()
-        .expect("decision lock")
-        .insert("preview".into());
+    mark_deciding(&app, "preview");
 
     // Act
     let outcome = app
@@ -403,6 +406,18 @@ pub(in crate::app) async fn pending_app(
 ) -> (App, TempDir) {
     let (mut app, directory) = new_test_app().await;
     seed_session(&mut app.sessions, app.services.db()).await;
+    install_pending_proposal(&mut app, outcome_state, decision).await;
+
+    (app, directory)
+}
+
+/// Stores version 1 of the `preview` proposal of `sess` with
+/// `outcome_state`'s outcome and scripts every reply decision as `decision`.
+async fn install_pending_proposal(
+    app: &mut App,
+    outcome_state: GraphProposalState,
+    decision: &'static str,
+) {
     app.experimental_graph = true;
     let mut state = graph_proposal_state("preview", "sess");
     state.limits = outcome_state.limits;
@@ -438,8 +453,6 @@ pub(in crate::app) async fn pending_app(
         })
     });
     app.services.set_run_client(Arc::new(client));
-
-    (app, directory)
 }
 
 pub(in crate::app) fn clarification_state() -> GraphProposalState {
@@ -508,4 +521,426 @@ pub(in crate::app) async fn wait_for_message(app: &App, text: &str) -> String {
     })
     .await
     .expect("notice")
+}
+
+/// Marks a proposal as having a reply decision in flight.
+pub(in crate::app) fn mark_deciding(app: &App, proposal_id: &str) {
+    app.services
+        .proposal_reply_decisions
+        .lock()
+        .expect("decision lock")
+        .insert(
+            proposal_id.into(),
+            ProposalReplyDecision {
+                cancellation: CancellationToken::new(),
+                is_abandoned: Arc::default(),
+                session_id: "sess".into(),
+            },
+        );
+}
+
+#[tokio::test]
+async fn restart_recovery_decides_an_undecided_reply_once_per_proposal() {
+    // Arrange
+    let (mut app, _directory) = pending_app(clarification_state(), "cancel").await;
+    let _consumer = app.sessions.foreground_consumer();
+    record_reply(&app, "first", "Never mind, drop it").await;
+    record_reply(&app, "second", "Also drop it").await;
+
+    // Act
+    app.recover_graph_proposal_replies().await;
+    apply_next_command(&mut app).await;
+    wait_for_message(&app, "Graph proposal v1 cancelled.").await;
+    wait_for_idle_decisions(&app).await;
+
+    // Assert
+    assert!(stored(&app).await.version.is_cancelled);
+    assert_eq!(unsettled(&app).await, Vec::<String>::new());
+}
+
+#[tokio::test]
+async fn restart_recovery_reapplies_a_recorded_decision_without_deciding_again() {
+    // Arrange
+    let (mut app, _directory) = pending_app(clarification_state(), "revise").await;
+    let _consumer = app.sessions.foreground_consumer();
+    record_cancel_decision(&app).await;
+
+    // Act
+    app.recover_graph_proposal_replies().await;
+    apply_next_command(&mut app).await;
+    wait_for_message(&app, "Graph proposal v1 cancelled.").await;
+
+    // Assert
+    assert!(stored(&app).await.version.is_cancelled);
+    assert_eq!(stored(&app).await.version.number, 1);
+}
+
+#[tokio::test]
+async fn startup_recovery_applies_a_recorded_decision_once_the_runtime_accepts_commands() {
+    // Arrange
+    let (mut app, _directory) = pending_app(clarification_state(), "revise").await;
+    record_cancel_decision(&app).await;
+
+    // Act
+    app.recover_graph_proposal_replies().await;
+    tokio::time::sleep(RUNTIME_WAIT_GRACE).await;
+    let unsettled_before_start = unsettled(&app).await;
+    let has_notice_before_start = has_workflow_notice(&app).await;
+    let _consumer = app.sessions.foreground_consumer();
+    apply_next_command(&mut app).await;
+    wait_for_message(&app, "Graph proposal v1 cancelled.").await;
+    wait_for_idle_decisions(&app).await;
+
+    // Assert
+    assert_eq!(unsettled_before_start, ["reply"]);
+    assert!(!has_notice_before_start);
+    assert!(stored(&app).await.version.is_cancelled);
+    assert_eq!(unsettled(&app).await, Vec::<String>::new());
+}
+
+#[tokio::test]
+async fn recorded_decision_stays_unsettled_when_the_runtime_stops_before_answering() {
+    for stops in ["before-start", "mid-action"] {
+        // Arrange
+        let (mut app, _directory) = pending_app(clarification_state(), "revise").await;
+        record_cancel_decision(&app).await;
+        let consumer = (stops == "mid-action").then(|| app.sessions.foreground_consumer());
+
+        // Act
+        app.recover_graph_proposal_replies().await;
+        if consumer.is_some() {
+            // The runtime takes the command and stops without answering it.
+            let _unanswered = app.sessions.next_command().await;
+            drop(consumer);
+            wait_for_idle_decisions(&app).await;
+        } else {
+            tokio::time::sleep(RUNTIME_WAIT_GRACE).await;
+        }
+        app.services.wait_for_cleanup_tasks(None).await;
+
+        // Assert
+        assert!(!app.is_deciding_graph_proposal_reply("preview"), "{stops}");
+        assert!(!stored(&app).await.version.is_cancelled, "{stops}");
+        assert!(!has_workflow_notice(&app).await, "{stops}");
+        assert_eq!(unsettled(&app).await, ["reply"], "{stops}");
+    }
+}
+
+#[tokio::test]
+async fn project_switch_recovers_a_reply_left_in_the_other_project() {
+    // Arrange
+    let (mut app, _directory, project_id) = app_with_unopened_session("cancel").await;
+    let _consumer = app.sessions.foreground_consumer();
+    record_reply(&app, "reply", "Never mind, drop it").await;
+    app.recover_graph_proposal_replies().await;
+    let deciding_before_switch = app.is_deciding_graph_proposal_reply("preview");
+
+    // Act
+    app.switch_project(project_id).await.expect("switch");
+    let deciding_after_switch = app.is_deciding_graph_proposal_reply("preview");
+    apply_next_command(&mut app).await;
+    wait_for_message(&app, "Graph proposal v1 cancelled.").await;
+    wait_for_idle_decisions(&app).await;
+
+    // Assert
+    assert!(!deciding_before_switch);
+    assert!(deciding_after_switch);
+    assert!(stored(&app).await.version.is_cancelled);
+    assert_eq!(unsettled(&app).await, Vec::<String>::new());
+}
+
+#[tokio::test]
+async fn reply_decided_after_switching_away_is_applied_on_return() {
+    // Arrange
+    let (mut app, directory, project_id) = app_with_unopened_session("revise").await;
+    let away_project_id = add_project(&app, &directory, "away").await;
+    let _consumer = app.sessions.foreground_consumer();
+    app.switch_project(project_id).await.expect("open project");
+    app.submit_graph_proposal_reply(
+        &SessionId::from("sess"),
+        &TurnPrompt::from_text("The local target".into()),
+    )
+    .await;
+    let command = app.sessions.next_command().await;
+
+    // Act
+    app.switch_project(away_project_id)
+        .await
+        .expect("switch away");
+    app.apply_session_runtime_command(command).await;
+    wait_for_idle_decisions(&app).await;
+    let outcomes_while_away: Vec<_> = app
+        .services
+        .db()
+        .graph_proposals()
+        .unsettled_replies("sess")
+        .await
+        .expect("unsettled replies")
+        .into_iter()
+        .map(|reply| reply.outcome)
+        .collect();
+    let version_while_away = stored(&app).await.version.number;
+    let has_notice_while_away = has_workflow_notice(&app).await;
+    app.switch_project(project_id).await.expect("switch back");
+    apply_next_command(&mut app).await;
+    wait_for_message(&app, "Generating graph proposal v2…").await;
+    wait_for_idle_decisions(&app).await;
+    app.services.wait_for_cleanup_tasks(None).await;
+
+    // Assert
+    assert_eq!(
+        outcomes_while_away,
+        [Some(GraphProposalReplyOutcome::Revise)]
+    );
+    assert_eq!(version_while_away, 1);
+    assert!(!has_notice_while_away);
+    assert_eq!(stored(&app).await.version.number, 2);
+    assert_eq!(unsettled(&app).await, Vec::<String>::new());
+}
+
+#[tokio::test]
+async fn restart_recovery_is_inactive_without_multi_agent_support() {
+    // Arrange
+    let (mut app, _directory) = pending_app(clarification_state(), "cancel").await;
+    record_reply(&app, "reply", "Drop it").await;
+    app.experimental_graph = false;
+
+    // Act
+    app.recover_graph_proposal_replies().await;
+
+    // Assert
+    assert!(!app.is_deciding_graph_proposal_reply("preview"));
+    assert_eq!(unsettled(&app).await, ["reply"]);
+}
+
+#[tokio::test]
+async fn stopping_the_session_abandons_an_undecided_reply() {
+    // Arrange
+    let (mut app, _directory) = pending_app(clarification_state(), "revise").await;
+    record_reply(&app, "reply", "Local").await;
+
+    // Act
+    app.recover_graph_proposal_replies().await;
+    app.services.cancel_proposal_reply_decisions(Some("other"));
+    app.services.cancel_agent_runs("sess");
+    wait_for_message(&app, "reply decision was canceled").await;
+    wait_for_idle_decisions(&app).await;
+
+    // Assert
+    assert_eq!(stored(&app).await.version.number, 1);
+    assert_eq!(unsettled(&app).await, Vec::<String>::new());
+}
+
+#[tokio::test]
+async fn shutdown_leaves_an_undecided_reply_for_restart_recovery() {
+    // Arrange
+    let (mut app, _directory) = pending_app(clarification_state(), "revise").await;
+    record_reply(&app, "reply", "Local").await;
+
+    // Act
+    app.recover_graph_proposal_replies().await;
+    app.services.wait_for_cleanup_tasks(None).await;
+
+    // Assert
+    assert!(!app.is_deciding_graph_proposal_reply("preview"));
+    assert_eq!(stored(&app).await.version.number, 1);
+    assert_eq!(unsettled(&app).await, ["reply"]);
+}
+
+#[tokio::test]
+async fn failed_reply_persistence_keeps_the_composer_and_reports_the_error() {
+    for failure in ["record", "decide"] {
+        // Arrange
+        let (mut app, _directory) = new_test_app().await;
+        seed_session(&mut app.sessions, app.services.db()).await;
+        app.experimental_graph = true;
+        let mut proposals = MockGraphProposalRepository::new();
+        proposals
+            .expect_latest()
+            .returning(|_| Ok(Some(clarification_state())));
+        proposals
+            .expect_record_reply()
+            .return_once(move |_, _, _, _| match failure {
+                "record" => Err(unavailable("record unavailable")),
+                _ => Ok(true),
+            });
+        proposals
+            .expect_decide_reply()
+            .returning(|_, _| Err(unavailable("decision unavailable")));
+        app.services
+            .set_graph_proposal_repository(Arc::new(proposals));
+        let mut client = MockRunClient::new();
+        client.expect_submit().returning(|_| {
+            Ok(OneShotSubmission {
+                response: AgentResponse::plain("cancel"),
+                stats: SessionStats::default(),
+            })
+        });
+        app.services.set_run_client(Arc::new(client));
+
+        // Act
+        let outcome = app
+            .submit_graph_proposal_reply(
+                &SessionId::from("sess"),
+                &TurnPrompt::from_text("Drop it".into()),
+            )
+            .await;
+
+        // Assert
+        if failure == "record" {
+            assert_eq!(outcome, Some(PromptWorkflowOutcome::KeepPrompt));
+            assert!(
+                messages(&app)
+                    .await
+                    .iter()
+                    .any(|(_, content)| content.contains("record unavailable"))
+            );
+        } else {
+            wait_for_message(&app, "decision unavailable").await;
+            wait_for_idle_decisions(&app).await;
+        }
+    }
+}
+
+/// Records a reply to the pending version, as an interrupted run left it.
+async fn record_reply(app: &App, reply_id: &str, message: &str) {
+    app.services
+        .db()
+        .graph_proposals()
+        .record_reply(reply_id, "preview", 1, message)
+        .await
+        .expect("record reply");
+}
+
+/// Records the `reply` reply with a saved cancel decision whose action an
+/// interrupted run never attempted.
+async fn record_cancel_decision(app: &App) {
+    record_reply(app, "reply", "Drop it").await;
+    app.services
+        .db()
+        .graph_proposals()
+        .decide_reply("reply", GraphProposalReplyOutcome::Cancel)
+        .await
+        .expect("decide");
+}
+
+async fn has_workflow_notice(app: &App) -> bool {
+    messages(app)
+        .await
+        .iter()
+        .any(|(kind, _)| kind == "workflow_notice")
+}
+
+/// Stores `sess` with a pending clarification proposal in a second project
+/// that is not open yet, and scripts every reply decision as `decision`.
+async fn app_with_unopened_session(decision: &'static str) -> (App, TempDir, i64) {
+    let (mut app, directory) = new_test_app().await;
+    let project_id = add_project(&app, &directory, "other").await;
+    app.services
+        .db()
+        .sessions()
+        .insert_session("sess", "gpt-6.1-sol", "main", "Review", project_id)
+        .await
+        .expect("session");
+    fs::create_dir_all(session::session_folder(app.services.base_path(), "sess"))
+        .expect("session folder");
+    install_pending_proposal(&mut app, clarification_state(), decision).await;
+    let mut git_client = MockGitClient::new();
+    git_client
+        .expect_detect_git_info()
+        .returning(|_| Box::pin(async { None }));
+    app.services.set_git_client(Arc::new(git_client));
+
+    (app, directory, project_id)
+}
+
+/// Registers an openable project directory named `name`.
+async fn add_project(app: &App, directory: &TempDir, name: &str) -> i64 {
+    let path = directory.path().join(name);
+    fs::create_dir_all(path.join(".git")).expect("repository marker");
+
+    app.services
+        .db()
+        .projects()
+        .upsert_project(&path.to_string_lossy(), None)
+        .await
+        .expect("project")
+}
+
+async fn unsettled(app: &App) -> Vec<String> {
+    app.services
+        .db()
+        .graph_proposals()
+        .unsettled_replies("sess")
+        .await
+        .expect("unsettled replies")
+        .into_iter()
+        .map(|reply| reply.id)
+        .collect()
+}
+
+async fn wait_for_idle_decisions(app: &App) {
+    tokio::time::timeout(Duration::from_secs(5), async {
+        while app.is_deciding_graph_proposal_reply("preview") {
+            tokio::time::sleep(Duration::from_millis(10)).await;
+        }
+    })
+    .await
+    .expect("decision settles");
+}
+
+fn unavailable(reason: &str) -> DbError {
+    DbError::InvalidData {
+        entity: "proposal",
+        reason: reason.into(),
+    }
+}
+
+#[tokio::test]
+async fn recovery_skips_lost_proposals_and_tolerates_a_failed_abandonment_write() {
+    // Arrange
+    let (mut app, _directory) = new_test_app().await;
+    seed_session(&mut app.sessions, app.services.db()).await;
+    app.experimental_graph = true;
+    let mut proposals = MockGraphProposalRepository::new();
+    proposals.expect_unsettled_replies().returning(|_| {
+        Ok(["lost", "other"]
+            .map(|proposal_id| GraphProposalReplyRecord {
+                id: format!("{proposal_id}-reply"),
+                is_settled: false,
+                message: "Local".into(),
+                outcome: None,
+                proposal_id: proposal_id.into(),
+                session_id: "sess".into(),
+                version: 1,
+            })
+            .to_vec())
+    });
+    proposals
+        .expect_get()
+        .returning(|id, _| Ok((id == "other").then(clarification_state)));
+    proposals
+        .expect_settle_reply()
+        .once()
+        .returning(|_| Err(unavailable("settlement unavailable")));
+    app.services
+        .set_graph_proposal_repository(Arc::new(proposals));
+    let mut client = MockRunClient::new();
+    client.expect_submit().returning(|_| {
+        Ok(OneShotSubmission {
+            response: AgentResponse::plain("revise"),
+            stats: SessionStats::default(),
+        })
+    });
+    app.services.set_run_client(Arc::new(client));
+
+    // Act
+    app.recover_graph_proposal_replies().await;
+    let lost_deciding = app.is_deciding_graph_proposal_reply("lost");
+    app.services.cancel_agent_runs("sess");
+    wait_for_message(&app, "reply decision was canceled").await;
+
+    // Assert
+    assert!(!lost_deciding);
+    assert!(!app.is_deciding_graph_proposal_reply("other"));
 }

@@ -51,8 +51,8 @@ impl App {
     }
 
     /// Proposal snapshots may only launch after their own exact-version
-    /// receipt. Recovery cannot recreate credits already used before the
-    /// restart.
+    /// receipt, with the limits that approval fixed. Relaunching after a
+    /// restart resumes from the spending recorded against those limits.
     pub(super) async fn validate_proposal_launch(
         &self,
         request: &StartExecutionGraphRequest,
@@ -86,26 +86,6 @@ impl App {
                 "Launch does not match exact proposal approval and limits".into(),
             ));
         }
-        let retained = self
-            .services
-            .graph_drivers
-            .lock()
-            .unwrap_or_else(std::sync::PoisonError::into_inner)
-            .contains_key(&request.graph.id);
-        if !retained
-            && !self
-                .services
-                .db()
-                .graphs()
-                .list_executions(&request.graph.id, request.graph.revision)
-                .await
-                .map_err(proposal_error)?
-                .is_empty()
-        {
-            return Err(SessionError::Operation(
-                "Restored proposal execution cannot recreate spent provider credits".into(),
-            ));
-        }
 
         Ok(())
     }
@@ -130,13 +110,7 @@ impl App {
             }
             return Ok(());
         }
-        if input.request.text.trim().is_empty()
-            || input.request.text.len() > GraphProposalLimits::default().bytes
-        {
-            return Err(SessionError::Operation(
-                "Graph requests require text within host limits".into(),
-            ));
-        }
+        Self::require_supported_graph_request(&input)?;
         self.sessions.sync_session_from_handle(&input.session_id);
         let (session, handles) = self
             .sessions
@@ -314,6 +288,22 @@ impl App {
         if !self.experimental_graph {
             return Err(SessionError::Operation(
                 "Graph proposals require --experimental-graph".into(),
+            ));
+        }
+
+        Ok(())
+    }
+
+    /// Graph requests must carry non-empty text within host limits; pasted
+    /// images travel with the request.
+    fn require_supported_graph_request(
+        input: &GenerateGraphProposalRequest,
+    ) -> Result<(), SessionError> {
+        if input.request.text.trim().is_empty()
+            || input.request.text.len() > GraphProposalLimits::default().bytes
+        {
+            return Err(SessionError::Operation(
+                "Graph requests require text within host limits".into(),
             ));
         }
 

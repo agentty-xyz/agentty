@@ -45,8 +45,10 @@ permissions and provider-call budget.
 
 A provider-call budget is one shared limit across a request, its retries, repairs, and
 utility children; a child's own limit remains an additional ceiling. A coordinator can
-reserve the first call before durable admission; an unused reservation is refunded.
-Budgets live in the running process and are not durable usage ledgers.
+reserve the first call before durable admission; an unused reservation is refunded. A
+budget built with `ProviderCallBudget::with_ledger` reports each charge and refund to a
+host `ProviderCallLedger`, which graph hosts persist so restarts never replenish spent
+calls. Other budgets live only in the running process.
 
 ## Task Contexts
 

@@ -1,17 +1,19 @@
 //! Operate saved branches and a join without ordinary-chat routing.
 
+use std::collections::BTreeMap;
 use std::num::NonZeroU64;
 use std::os::unix::fs::PermissionsExt;
 use std::time::Duration;
 
 use ag_protocol::{ProtocolRequestProfile, TurnPrompt};
 use ag_session::{
-    AgentDefinition, ContinueGraphNodeRequest, EnvId, ExecutionGraph, GraphCompletionGate,
-    GraphContext, GraphDependency, GraphExecutionProfile, GraphExecutionRef, GraphNode,
-    GraphNodeContinuation, GraphOutput, GraphPostProcessing, GraphWorkspaceAccess,
-    test_support as model_fixture,
+    AgentDefinition, AgentKind, AgentModel, AgentSelection, ContinueGraphNodeRequest, EnvId,
+    ExecutionGraph, GraphCompletionGate, GraphContext, GraphDependency, GraphExecutionProfile,
+    GraphExecutionRef, GraphNode, GraphNodeContinuation, GraphOutput, GraphPostProcessing,
+    GraphWorkspaceAccess, test_support as model_fixture,
 };
 use ag_worker::GraphAdmission;
+use agentty::db::Database;
 use testty::assertion;
 use testty::journey::Journey;
 use testty::region::Region;
@@ -22,7 +24,7 @@ use crate::common::{self, BuilderEnv, FeatureTest, ReleaseGate, SessionSeed};
 
 const SESSION: &str = "graph-ui-session";
 
-async fn seed_graph(env: &BuilderEnv) -> E2eResult {
+async fn seed_graph(env: &BuilderEnv, agent: AgentSelection) -> E2eResult {
     std::fs::create_dir_all(env.agentty_root.join("wt").join("graph-ui"))?;
     common::seed_active_project_setting(env).await?;
     common::seed_session(
@@ -34,7 +36,7 @@ async fn seed_graph(env: &BuilderEnv) -> E2eResult {
     let database = common::open_database(env).await?;
     let definition = AgentDefinition::bundled("planner").ok_or("Bundled planner missing")?;
     let node = |id: &str| GraphNode {
-        agent: model_fixture::codex_selection(),
+        agent,
         definition: definition.clone(),
         dependencies: Vec::new(),
         env_id: EnvId::SessionWorktree(SESSION.into()),
@@ -79,7 +81,7 @@ async fn seed_graph(env: &BuilderEnv) -> E2eResult {
         revision: NonZeroU64::MIN,
         session_id: SESSION.into(),
     };
-    database.graphs().save_graph(&graph, None).await?;
+    launch_restored(&database, &graph).await?;
     for (index, id) in ["design", "inspect", "check"].iter().enumerate() {
         let admission = database
             .graph_dispatch()
@@ -119,6 +121,21 @@ async fn seed_graph(env: &BuilderEnv) -> E2eResult {
             database.graph_dispatch().finish(&dispatch, &body).await?;
         }
     }
+
+    Ok(())
+}
+
+/// Restored after a restart: limits fixed at launch, with three of four
+/// calls already spent by the earlier run.
+async fn launch_restored(database: &Database, graph: &ExecutionGraph) -> E2eResult {
+    database
+        .graphs()
+        .launch_graph(graph, &BTreeMap::from([("calls".into(), 4)]))
+        .await?;
+    database
+        .graphs()
+        .record_budget_spending(&graph.id, "calls", 3)
+        .await?;
 
     Ok(())
 }
@@ -190,7 +207,7 @@ async fn saved_execution_graph_controls() -> E2eResult {
     FeatureTest::new("saved_execution_graph_controls")
         .with_git()
         .with_terminal_size(140, 40)
-        .setup(|env| Box::pin(seed_graph(env)))
+        .setup(|env| Box::pin(seed_graph(env, model_fixture::codex_selection())))
         .run(
             |scenario| {
                 // Act
@@ -220,22 +237,6 @@ async fn saved_execution_graph_controls() -> E2eResult {
                     .wait_for_text("Requires design", 5000)
                     .wait_for_text("resume required", 5000)
                     .capture_labeled("join", "Join remains paused after explicit continuations")
-                    .press_key("s")
-                    .step(Step::eventually(
-                        Duration::from_secs(5),
-                        Duration::from_millis(50),
-                        |frame| {
-                            assertion::match_text_in_region(
-                                frame,
-                                "Fresh limits after restart",
-                                &Region::full(frame.cols(), frame.rows()),
-                            )?;
-
-                            assertion::match_not_visible(frame, "q back")
-                        },
-                    ))
-                    .press_key("Esc")
-                    .compose(&wait_for_graph_controls())
                     .press_key("x")
                     .wait_for_text("Type cancel", 5000)
                     .write_text("cancel")
@@ -270,11 +271,13 @@ async fn saved_execution_graph_controls() -> E2eResult {
                         assertion::assert_not_visible(&accepted, wrapper);
                     }
                     let join = common::frame_from_capture(&report.captures[1]);
-                    assertion::assert_text_in_region(
-                        &join,
-                        "Requires inspect",
-                        &Region::full(join.cols(), join.rows()),
-                    );
+                    for expected in ["Requires inspect", "s resume graph"] {
+                        assertion::assert_text_in_region(
+                            &join,
+                            expected,
+                            &Region::full(join.cols(), join.rows()),
+                        );
+                    }
                     let cancelled = common::frame_from_capture(&report.captures[2]);
                     assertion::assert_not_visible(&cancelled, "s resume graph");
                     assertion::assert_not_visible(frame, "Local");
@@ -293,7 +296,7 @@ async fn graph_node_question_is_answered_in_question_panel() -> E2eResult {
     FeatureTest::new("graph_node_question_panel_answer")
         .with_git()
         .with_terminal_size(120, 30)
-        .setup(|env| Box::pin(seed_graph(env)))
+        .setup(|env| Box::pin(seed_graph(env, model_fixture::codex_selection())))
         .run(
             |scenario| {
                 // Act
@@ -350,7 +353,7 @@ async fn rejected_graph_drafts_stay_visible_until_explicit_reconciliation() -> E
         .with_terminal_size(80, 24)
         .setup(|env| {
             Box::pin(async move {
-                seed_graph(env).await?;
+                seed_graph(env, model_fixture::codex_selection()).await?;
                 let database = common::open_database(env).await?;
                 sqlx::query(
                     "CREATE TRIGGER reject_graph_continuation BEFORE INSERT ON \
@@ -455,7 +458,7 @@ async fn graph_draft_survives_a_background_session_question() -> E2eResult {
         .with_terminal_size(100, 30)
         .setup(move |env| {
             Box::pin(async move {
-                seed_graph(env).await?;
+                seed_graph(env, model_fixture::codex_selection()).await?;
                 let workspace = env.agentty_root.join("wt").join("graph-ui");
                 run_git(&env.workdir, &[
                     "worktree", "add", "-b", "wt/graph-ui",
@@ -541,6 +544,103 @@ printf '%s\n' '{{"type":"result","subtype":"success","result":"{{\"answer\":\"Ba
                         frame, "Question 1/1", &Region::full(frame.cols(), frame.rows()),
                     );
                     assertion::assert_not_visible(frame, "Unsent graph guidance");
+                })
+            },
+        )
+        .await?;
+
+    Ok(())
+}
+
+#[tokio::test]
+async fn restored_graph_resumes_from_recorded_spending_after_an_answer() -> E2eResult {
+    // Arrange
+    FeatureTest::new("restored_graph_resume_after_answer")
+        .with_git()
+        .with_terminal_size(120, 30)
+        .setup(|env| {
+            Box::pin(async move {
+                seed_graph(
+                    env,
+                    AgentSelection::new(AgentKind::Claude, AgentModel::ClaudeHaiku55),
+                )
+                .await?;
+                let workspace = env.agentty_root.join("wt").join("graph-ui");
+                run_git(&env.workdir, &[
+                    "worktree", "add", "-b", "wt/graph-ui",
+                    workspace.to_str().ok_or("UTF-8 fixture worktree path")?,
+                ])?;
+                // The answered node asks a follow-up, which proves it ran.
+                let script = r#"#!/bin/sh
+if [ "$1" = "update" ]; then exit 0; fi
+if [ "$1" = "--version" ]; then printf 'claude 0.0.0-test\n'; exit 0; fi
+cat > /dev/null 2>&1
+printf '%s\n' '{"type":"system","subtype":"init"}'
+printf '%s\n' '{"type":"result","subtype":"success","result":"{\"answer\":\"Remote target inspected.\",\"questions\":[{\"text\":\"Which branch next?\",\"options\":[\"main\",\"release\"]}]}","usage":{"input_tokens":5,"output_tokens":9}}'
+"#;
+                let executable = env.stub_bin.join("claude");
+                std::fs::write(&executable, script)?;
+                std::fs::set_permissions(executable, std::fs::Permissions::from_mode(0o750))?;
+
+                Ok(())
+            })
+        })
+        .run(
+            |scenario| {
+                // Act
+                scenario
+                    .compose(&common::wait_for_agentty_startup())
+                    .wait_for_text("Graph controls", 5000)
+                    .press_key("Enter")
+                    .wait_for_text("Which target?", 5000)
+                    .press_key("Down")
+                    .press_key("Enter")
+                    .wait_for_text("graph is paused", 5000)
+                    .press_key("w")
+                    .wait_for_text("saved-branches", 5000)
+                    .press_key("j")
+                    .wait_for_text("Inspect inspect", 5000)
+                    .press_key("j")
+                    .wait_for_text("Fixture failure", 5000)
+                    .press_key("t")
+                    .wait_for_text("Action admitted", 5000)
+                    .wait_for_text("resume required", 5000)
+                    .capture_labeled("paused", "Restored graph waits for explicit resume")
+                    .press_key("s")
+                    .press_key("q")
+                    .wait_for_text("Which branch next?", 15000)
+                    .wait_for_text("Question 1/1", 5000)
+                    .capture_labeled("continued", "Resumed node continues with the answer")
+                    .compose(&close_graph_question())
+                    .press_key("w")
+                    .wait_for_text("saved-branches", 5000)
+                    .press_key("j")
+                    .press_key("j")
+                    .wait_for_text("Inspect check", 5000)
+                    .wait_for_text("Provider-call budget exhausted: calls", 5000)
+                    .capture_labeled("exhausted", "Resume never replenishes spent credit")
+            },
+            |_, report| {
+                Box::pin(async move {
+                    // Assert
+                    let paused = common::frame_from_capture(&report.captures[0]);
+                    let full = Region::full(paused.cols(), paused.rows());
+                    for expected in ["resume required", "s resume graph"] {
+                        assertion::assert_text_in_region(&paused, expected, &full);
+                    }
+                    let continued = common::frame_from_capture(&report.captures[1]);
+                    let full = Region::full(continued.cols(), continued.rows());
+                    for expected in ["A: Remote", "Remote target inspected.", "Question 1/1"] {
+                        assertion::assert_text_in_region(&continued, expected, &full);
+                    }
+                    // The one credit left after recorded spending went to the
+                    // answered node, so the retried node cannot dispatch.
+                    let exhausted = common::frame_from_capture(&report.captures[2]);
+                    let full = Region::full(exhausted.cols(), exhausted.rows());
+                    for expected in ["check: Pending", "Provider-call budget exhausted: calls"] {
+                        assertion::assert_text_in_region(&exhausted, expected, &full);
+                    }
+                    assertion::assert_not_visible(&exhausted, "s resume graph");
                 })
             },
         )

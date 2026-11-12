@@ -351,7 +351,9 @@ async fn stacked_session_creation() -> E2eResult {
                     .capture_labeled("stacked_draft_view", "Stacked draft action footer")
                     .write_text("Stack level 5")
                     .press_key("Enter")
-                    .wait_for_text("Draft Session", 5000)
+                    // The empty draft already shows its header, so wait for
+                    // the action only a staged draft offers.
+                    .wait_for_text("s: start", 5000)
                     .capture_labeled(
                         "stacked_draft_ready",
                         "Stacked draft staged with start action available",

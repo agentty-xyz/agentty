@@ -83,6 +83,7 @@ impl App {
         ))
         .await?;
         app.experimental_graph = experimental_graph;
+        app.recover_graph_proposal_replies().await;
 
         Ok(app)
     }

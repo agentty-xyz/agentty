@@ -143,7 +143,9 @@ fn resolve_key(view: &mut GraphView, key: KeyEvent) -> GraphKeyAction {
         }
         KeyCode::Char('e') if view.can_continue() => open_editor(view, GraphEditKind::Reply),
         KeyCode::Char('x') if view.can_cancel() => open_editor(view, GraphEditKind::Cancel),
-        KeyCode::Char('s') if view.can_resume() => open_editor(view, GraphEditKind::Resume),
+        KeyCode::Char('s') if view.can_resume() => {
+            return GraphKeyAction::Submit(GraphViewAction::Resume);
+        }
         _ => {}
     }
 
@@ -154,11 +156,7 @@ fn open_editor(view: &mut GraphView, kind: GraphEditKind) {
     view.notice.clear();
     view.notice_scroll = 0;
     view.editor = Some(GraphEditor {
-        input: if kind == GraphEditKind::Resume {
-            InputState::with_text(view.resume_limits.clone())
-        } else {
-            InputState::default()
-        },
+        input: InputState::default(),
         kind,
         needs_reconciliation: false,
     });
@@ -204,13 +202,6 @@ fn resolve_editor_key(view: &mut GraphView, key: KeyEvent) -> GraphKeyAction {
         }
 
         return match App::graph_editor_action(view) {
-            Ok(GraphViewAction::Resume(text)) => match view.parse_budgets(&text) {
-                Ok(_) => GraphKeyAction::Submit(GraphViewAction::Resume(text)),
-                Err(error) => {
-                    view.notice = error;
-                    GraphKeyAction::None
-                }
-            },
             Ok(action) => GraphKeyAction::Submit(action),
             Err(error) => {
                 view.notice = error;

@@ -18,9 +18,15 @@ original request, catalog, model, permission ceiling, and bounded generation/exe
 limits. A read-only worker produces clarification or a logical proposal; pure resolution
 rejects unsupported profiles and escalation, allocates task identities, binds the
 session Env, and reuses graph validation. Exact-version approval publishes the resolved
-snapshot and its receipt in one transaction before dispatch. Proposal restoration and
-duplicate approval never replenish limits or start execution. Output acceptance remains
-a separate gate. See
+snapshot, its receipt, and its execution limits in one transaction before dispatch.
+Proposal restoration and duplicate approval never replenish limits or start execution.
+Each chat reply to a pending proposal is recorded with its visible prompt and bound to
+the exact version. A bounded read-only decision run classifies it; the first decision is
+durable and its action is admitted through the gateway. A reply settles once its action
+is attempted against a loaded session; one the session runtime never answered stays
+unsettled. Recovery at startup and after a project switch decides or applies unsettled
+replies to versions that still accept replies; stopping the session abandons an
+undecided reply. Output acceptance remains a separate gate. See
 [the proposal workflow](@/docs/usage/workflow.md#generated-graph-proposals).
 
 An `ExecutionGraph` has an instance ID, a nonzero revision, and one owning session. Node
@@ -59,9 +65,9 @@ repairs. The static executor resolves that ID to the same shared counter for eve
 consumer and rejects unknown budgets. Before durable admission, it atomically reserves
 the initial provider call and transfers that reservation through worker execution.
 Blocked or existing admissions return unused reservations. If no call is available, the
-node remains unclaimed until a later call supplies a fresh budget. The first provider
-attempt redeems its reservation; retries charge the shared counter. Hosts must reject
-unsupported requirements and continue submitting all model work through
+node remains unclaimed. The first provider attempt redeems its reservation; retries
+charge the shared counter. Hosts must reject unsupported requirements and continue
+submitting all model work through
 [workers and runtime](@/docs/core-components/execution-components/execution-boundary.md).
 
 ## Gates and Exact Handoffs
@@ -171,11 +177,16 @@ remain separate. Task identities must be unused at first admission.
 
 `SessionService::start_execution_graph` explicitly saves and starts a static graph in a
 prepared session. Named provider-call limits remain shared across the launch, including
-retries, repairs, and ordered utility children. Identical active launches do not refill
-those limits. Acceptance uses `accept_execution_graph_result` with an exact validated
-reference. Acceptance and Env release wake the active drivers; launch-time snapshots are
-never discovered and replayed automatically at startup. Graph writers exclude ordinary
-session work, merge workflows, and focused-review readers.
+retries, repairs, and ordered utility children. The first launch saves the snapshot and
+fixes its limits in one transaction; each budget reports every charge and refund to a
+durable ledger as it happens. A failed ledger write keeps its calls pending and is
+retried. Each write follows its charge, so a crash can lose the calls charged just
+before it. Relaunching with different limits is rejected, and no launch refills spent
+calls: a relaunch is rejected while a stopped driver of the same graph still holds
+unrecorded spending. Acceptance uses `accept_execution_graph_result` with an exact
+validated reference. Acceptance and Env release wake the active drivers; launch-time
+snapshots are never discovered and replayed automatically at startup. Graph writers
+exclude ordinary session work, merge workflows, and focused-review readers.
 
 ## Focused Review Graph
 
@@ -227,8 +238,9 @@ independent branches may proceed.
 
 Startup restores records without dispatching them. `resume_execution_graph` explicitly
 starts dispatch for the saved revision; admitted nodes require a separate continuation
-action before another execution. Live launches retain their original shared limits and
-remaining credits across resume calls. After process restart, explicit resume supplies
-new limits for that live execution period; budget counters are not durable usage
-ledgers. Recording continuation intent alone never recreates a driver or replenishes
+action before another execution. Resume takes no limits: a live driver keeps its
+counters, and after a process restart the new driver starts from the limits fixed at
+first launch minus recorded spending. A reservation held during a crash stays charged.
+Graphs that executed before the ledger existed cannot gain fresh limits and must be
+canceled. Recording continuation intent alone never recreates a driver or replenishes
 credits. Graph proposals and runtime expansion remain separate work.

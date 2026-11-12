@@ -2,14 +2,14 @@
 
 use ag_protocol::GraphProposalOutcome;
 use ag_session::{
-    GraphProposalAction, GraphProposalApproval, GraphProposalState, GraphProposalVersion,
-    GraphProposalVersionOutcome,
+    GraphProposalAction, GraphProposalApproval, GraphProposalReplyOutcome, GraphProposalState,
+    GraphProposalVersion, GraphProposalVersionOutcome,
 };
 use async_trait::async_trait;
 use sqlx::{Row, SqliteConnection};
 
 use crate::DbError;
-use crate::execution_graph::SqliteGraphRepository;
+use crate::execution_graph::{GraphProposalReplyRecord, SqliteGraphRepository};
 
 /// Narrow persistence boundary; querying never generates or dispatches work.
 #[cfg_attr(any(test, feature = "test-utils"), mockall::automock)]
@@ -48,10 +48,39 @@ pub trait GraphProposalRepository: Send + Sync {
     async fn approve(&self, id: &str, version: u32) -> Result<bool, DbError>;
     /// Permanently discards one current unapproved proposal.
     async fn cancel(&self, id: &str, version: u32) -> Result<(), DbError>;
+    /// Records a chat reply to the current pending version together with its
+    /// visible user prompt. Returns false for identical redelivery; reuse with
+    /// different inputs, or a stale, approved, or canceled version, fails.
+    async fn record_reply(
+        &self,
+        reply_id: &str,
+        proposal_id: &str,
+        version: u32,
+        message: &str,
+    ) -> Result<bool, DbError>;
+    /// Records the first decision for a reply and returns the stored one;
+    /// later decisions never replace it.
+    async fn decide_reply(
+        &self,
+        reply_id: &str,
+        outcome: GraphProposalReplyOutcome,
+    ) -> Result<GraphProposalReplyRecord, DbError>;
+    /// Marks that a reply's decided action was attempted, or that the reply
+    /// was abandoned, so restart recovery no longer acts on it.
+    async fn settle_reply(&self, reply_id: &str) -> Result<(), DbError>;
+    /// Lists a session's unsettled replies to proposal versions that still
+    /// accept replies, in recording order.
+    async fn unsettled_replies(
+        &self,
+        session_id: &str,
+    ) -> Result<Vec<GraphProposalReplyRecord>, DbError>;
 }
 
 impl SqliteGraphRepository {
-    async fn proposal_lock(connection: &mut SqliteConnection, id: &str) -> Result<(), DbError> {
+    pub(super) async fn proposal_lock(
+        connection: &mut SqliteConnection,
+        id: &str,
+    ) -> Result<(), DbError> {
         sqlx::query("UPDATE graph_proposal SET version = version WHERE id = ?")
             .bind(id)
             .execute(connection)
@@ -92,7 +121,7 @@ impl SqliteGraphRepository {
         .transpose()
     }
 
-    async fn proposal_current(
+    pub(super) async fn proposal_current(
         connection: &mut SqliteConnection,
         id: &str,
         version: u32,
@@ -410,11 +439,15 @@ impl GraphProposalRepository for SqliteGraphRepository {
                 "Resolved snapshot or limits do not match inspected proposal",
             ));
         }
-        Self::save_in(
+        // Approval fixes the inspected execution limits with the published
+        // snapshot, so execution spending is durable from its first call.
+        let now = self.timestamp_source.now_timestamp_seconds();
+        Self::save_in(&mut transaction, &launch.graph, None, now).await?;
+        Self::open_budgets(
             &mut transaction,
-            &launch.graph,
-            None,
-            self.timestamp_source.now_timestamp_seconds(),
+            &launch.graph.id,
+            &launch.provider_call_limits,
+            now,
         )
         .await?;
         let receipt = GraphProposalApproval {
@@ -456,5 +489,35 @@ impl GraphProposalRepository for SqliteGraphRepository {
         transaction.commit().await?;
 
         Ok(())
+    }
+
+    async fn record_reply(
+        &self,
+        reply_id: &str,
+        proposal_id: &str,
+        version: u32,
+        message: &str,
+    ) -> Result<bool, DbError> {
+        self.save_proposal_reply(reply_id, proposal_id, version, message)
+            .await
+    }
+
+    async fn decide_reply(
+        &self,
+        reply_id: &str,
+        outcome: GraphProposalReplyOutcome,
+    ) -> Result<GraphProposalReplyRecord, DbError> {
+        self.save_proposal_reply_decision(reply_id, outcome).await
+    }
+
+    async fn settle_reply(&self, reply_id: &str) -> Result<(), DbError> {
+        self.settle_proposal_reply(reply_id).await
+    }
+
+    async fn unsettled_replies(
+        &self,
+        session_id: &str,
+    ) -> Result<Vec<GraphProposalReplyRecord>, DbError> {
+        self.unsettled_proposal_replies(session_id).await
     }
 }

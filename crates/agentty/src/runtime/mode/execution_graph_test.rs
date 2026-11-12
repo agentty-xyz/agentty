@@ -212,14 +212,11 @@ fn actions_and_editors_keep_exact_node_intent() {
         GraphKeyAction::Submit(GraphViewAction::Cancel)
     ));
     key(&mut view, KeyCode::Esc);
-    key(&mut view, KeyCode::Char('s'));
-    key(&mut view, KeyCode::Enter);
-    assert!(view.notice.contains("budget names"));
-    view.editor.as_mut().expect("editor").input = InputState::with_text("calls=4".into());
-    assert!(
-        matches!(key(&mut view, KeyCode::Enter), GraphKeyAction::Submit(GraphViewAction::Resume(text)) if text == "calls=4")
-    );
-    key(&mut view, KeyCode::Esc);
+    assert!(matches!(
+        key(&mut view, KeyCode::Char('s')),
+        GraphKeyAction::Submit(GraphViewAction::Resume)
+    ));
+    assert!(view.editor.is_none());
     view.progress.as_mut().expect("progress").status = ExecutionGraphStatus::Cancelled;
     assert!(matches!(
         key(&mut view, KeyCode::Char('s')),

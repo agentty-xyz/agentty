@@ -1,3 +1,4 @@
+use std::collections::BTreeMap;
 use std::num::NonZeroU64;
 use std::sync::Arc;
 
@@ -73,6 +74,30 @@ pub trait GraphRepository: Send + Sync {
         graph: &ExecutionGraph,
         expected_revision: Option<NonZeroU64>,
     ) -> Result<bool, DbError>;
+
+    /// Saves a launch snapshot and fixes its provider-call limits atomically,
+    /// or verifies that an earlier launch fixed the same limits. Returns the
+    /// calls each budget still has after recorded spending, so relaunching
+    /// after a restart never replenishes credit. A graph that executed
+    /// without a ledger cannot gain one.
+    async fn launch_graph(
+        &self,
+        graph: &ExecutionGraph,
+        provider_call_limits: &BTreeMap<String, usize>,
+    ) -> Result<BTreeMap<String, usize>, DbError>;
+
+    /// Loads the provider-call limits fixed at first launch; empty when the
+    /// graph has no ledger.
+    async fn budget_limits(&self, graph_id: &str) -> Result<BTreeMap<String, usize>, DbError>;
+
+    /// Adds spent calls to one budget, or subtracts refunded reservations,
+    /// clamped between zero and the fixed limit.
+    async fn record_budget_spending(
+        &self,
+        graph_id: &str,
+        budget_id: &str,
+        calls: i64,
+    ) -> Result<(), DbError>;
 
     /// Loads a specified immutable revision, or the current revision for None.
     async fn load_graph(
@@ -345,6 +370,27 @@ impl GraphRepository for SqliteGraphRepository {
         transaction.commit().await?;
 
         Ok(saved)
+    }
+
+    async fn launch_graph(
+        &self,
+        graph: &ExecutionGraph,
+        provider_call_limits: &BTreeMap<String, usize>,
+    ) -> Result<BTreeMap<String, usize>, DbError> {
+        self.launch_with_budgets(graph, provider_call_limits).await
+    }
+
+    async fn budget_limits(&self, graph_id: &str) -> Result<BTreeMap<String, usize>, DbError> {
+        self.budget_limits_for(graph_id).await
+    }
+
+    async fn record_budget_spending(
+        &self,
+        graph_id: &str,
+        budget_id: &str,
+        calls: i64,
+    ) -> Result<(), DbError> {
+        self.add_budget_spending(graph_id, budget_id, calls).await
     }
 
     async fn load_graph(

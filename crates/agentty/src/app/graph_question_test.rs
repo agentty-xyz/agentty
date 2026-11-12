@@ -13,7 +13,7 @@ use crate::app::App;
 use crate::app::graph_node_reply::QUESTIONS_NOT_PENDING;
 use crate::app::graph_node_reply::tests::{app_with, awaiting_graph, messages};
 use crate::app::graph_proposal_reply::tests::{
-    apply_next_command, clarification_state, pending_app, stored, wait_for_message,
+    apply_next_command, clarification_state, mark_deciding, pending_app, stored, wait_for_message,
 };
 use crate::domain::input::InputState;
 use crate::domain::question::QuestionProgress;
@@ -234,11 +234,7 @@ async fn proposal_clarifications_open_the_panel_until_a_reply_is_being_decided()
     let opened = app.reconcile_graph_question_mode().await;
     let active = app.graph_questions.active_target("sess").cloned();
     let panel_questions = question_panel(&app);
-    app.services
-        .proposal_reply_decisions
-        .lock()
-        .expect("decision lock")
-        .insert("preview".into());
+    mark_deciding(&app, "preview");
     app.mode = view_mode("sess");
     app.graph_questions.checked = None;
     let opened_while_deciding = app.reconcile_graph_question_mode().await;

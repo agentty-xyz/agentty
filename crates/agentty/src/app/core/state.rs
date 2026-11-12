@@ -550,6 +550,7 @@ impl App {
         self.refresh_sessions_now().await;
         self.apply_pending_project_sync_completion().await;
         self.resume_deferred_auto_reviews(recoverable_focused_review_session_ids);
+        self.recover_graph_proposal_replies().await;
 
         Ok(())
     }

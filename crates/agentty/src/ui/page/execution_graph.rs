@@ -150,13 +150,8 @@ fn render_details(frame: &mut Frame, area: Rect, view: &GraphView, markdown: &Ma
 
 fn render_editor(frame: &mut Frame, area: Rect, view: &GraphView, editor: &GraphEditor) {
     let label = match editor.kind {
-        GraphEditKind::Reply => "Reply to selected task (Enter sends; Esc cancels)".into(),
-        GraphEditKind::Cancel => "Type cancel, then Enter to cancel this graph".into(),
-        GraphEditKind::Resume => format!(
-            "Resume: enter budget=limit or a JSON map for {:?}. Fresh limits after restart; live \
-             limits must match. Enter confirms.",
-            view.budget_names()
-        ),
+        GraphEditKind::Reply => "Reply to selected task (Enter sends; Esc cancels)",
+        GraphEditKind::Cancel => "Type cancel, then Enter to cancel this graph",
     };
     let editor_areas = Layout::vertical([
         Constraint::Length(3),
