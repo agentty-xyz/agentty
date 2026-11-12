@@ -5,6 +5,7 @@ use std::num::NonZeroU64;
 use ag_protocol::{
     GraphProposal, GraphProposalContext, GraphProposalGate, GraphProposalNode,
     GraphProposalPostProcessing, GraphProposalWorkspaceAccess, ProtocolRequestProfile, TurnPrompt,
+    TurnPromptAttachment,
 };
 use serde::{Deserialize, Serialize};
 
@@ -61,6 +62,8 @@ pub struct GraphProposalResolution<'a> {
     /// Original prompt; resolution appends answers and retains its source
     /// classification.
     pub request: &'a TurnPrompt,
+    /// Revision feedback images, appended after the request images.
+    pub revision_attachments: &'a [TurnPromptAttachment],
     /// Session whose shared Env is bound to every node.
     pub session_id: &'a SessionId,
 }
@@ -69,13 +72,10 @@ impl GraphProposalResolution<'_> {
     /// Resolves only supported profiles and rejects escalation before approval.
     ///
     /// # Errors
-    /// Rejects size limits, attachments (currently unsupported by graph
-    /// utilities), unknown definitions, unsupported profiles, permissions, and
-    /// invalid graphs.
+    /// Rejects size limits, unknown definitions, unsupported profiles,
+    /// permissions, and invalid graphs. Request attachments, followed by
+    /// revision attachments, are copied to every node unchanged.
     pub fn resolve(&self, proposal: &GraphProposal) -> Result<ExecutionGraph, String> {
-        if self.request.has_attachments() {
-            return Err("Graph proposals do not yet support attachment paths".into());
-        }
         if self.limits.generations == 0
             || self.limits.generation_provider_calls == 0
             || self.limits.provider_calls == 0
@@ -92,6 +92,9 @@ impl GraphProposalResolution<'_> {
             return Err("Graph proposal exceeds captured limits or has an empty request".into());
         }
         let mut request = self.request.clone();
+        request
+            .attachments
+            .extend_from_slice(self.revision_attachments);
         if !self.answers.is_empty() {
             request
                 .text

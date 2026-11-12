@@ -1,6 +1,6 @@
 //! Durable proposal inspection and explicit action contracts.
 
-use ag_protocol::{GraphProposalResponse, TurnPrompt};
+use ag_protocol::{GraphProposalResponse, TurnPrompt, TurnPromptAttachment};
 use serde::{Deserialize, Serialize};
 
 use super::GraphProposalLimits;
@@ -27,8 +27,9 @@ pub enum GraphProposalAction {
     /// Complete ordered answers to the exact question set.
     Answer(Vec<String>),
     /// Regenerate with free-form user feedback added to the history. Feedback
-    /// on a clarification is recorded together with the open questions.
-    Revise(String),
+    /// on a clarification is recorded together with the open questions;
+    /// feedback images are kept for every later generation and node.
+    Revise(TurnPrompt),
     /// Accept the exact inspected version and its captured limits.
     Approve,
     /// Cancel generation or discard a pending proposal permanently.
@@ -62,6 +63,10 @@ pub struct GraphProposalVersion {
     pub answers: Vec<String>,
     /// Approval receipt, bound to this exact outcome and limits.
     pub approval: Option<GraphProposalApproval>,
+    /// Revision feedback images, oldest first, delivered after the original
+    /// request images.
+    #[serde(default)]
+    pub attachments: Vec<TurnPromptAttachment>,
     /// Terminal discard flag, including cancellation during generation.
     pub is_cancelled: bool,
     /// Consecutive host-assigned generation version.

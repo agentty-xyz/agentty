@@ -285,7 +285,10 @@ async fn execute_one_shot_app_server_turns(
         model: request.model.clone(),
         permission_mode: request.permission_mode,
         agent_profile: ag_contracts::AgentDefinitionPrompt::default(),
-        prompt: ag_protocol::TurnPrompt::from_agent_data(request.prompt.clone()),
+        prompt: ag_protocol::TurnPrompt {
+            attachments: request.attachments.clone(),
+            ..ag_protocol::TurnPrompt::from_agent_data(request.prompt.clone())
+        },
         request_kind: request.request_kind.clone(),
         replay_transcript: None,
         provider_conversation_id: None,
@@ -362,6 +365,7 @@ async fn submit_one_shot_with_backend(
                 let repair_prompt =
                     build_protocol_repair_prompt(&parse_error, &parsed_response.content)?;
                 let request = OneShotRequest {
+                    attachments: Vec::new(),
                     permission_mode: PermissionMode::ReadOnly,
                     ..request
                 };
@@ -501,11 +505,10 @@ async fn execute_one_shot_command(
     if let Some(budget) = &request.provider_call_budget {
         budget.consume().map_err(|error| error.to_string())?;
     }
-    let prompt_payload = ag_protocol::TurnPrompt::from_agent_data(prompt.to_string());
     let agent_kind = request.harness.parse::<AgentKind>()?;
     let build_request = BuildCommandRequest {
         execution_policy: &request.execution_policy,
-        attachments: &prompt_payload.attachments,
+        attachments: &request.attachments,
         folder: &request.folder,
         main_checkout_root: None,
         replay_transcript: None,

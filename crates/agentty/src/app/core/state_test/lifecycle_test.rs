@@ -96,6 +96,7 @@ async fn replacing_fixture_clients_preserves_utility_cancellation_and_deletion_c
         let client = app.services.session_run_client("owned-session");
         let request = OneShotRequest {
             activity_tx: None,
+            attachments: Vec::new(),
             execution_policy: ag_contracts::ExecutionPolicy::default(),
             child_pid: None,
             folder: directory.path().into(),

@@ -435,6 +435,7 @@ impl Case {
             limits: &state.limits,
             permission: state.permission,
             request: &state.input.request,
+            revision_attachments: &state.version.attachments,
             session_id: &state.input.session_id,
         }
         .resolve(&proposal)
@@ -1066,6 +1067,7 @@ fn request(
 ) -> OneShotRequest {
     OneShotRequest {
         activity_tx: None,
+        attachments: Vec::new(),
         execution_policy: ag_contracts::ExecutionPolicy::default(),
         child_pid: None,
         folder: folder.to_path_buf(),

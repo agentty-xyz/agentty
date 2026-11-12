@@ -102,6 +102,7 @@ impl LiveTranscript for LiveText {
 fn utility_request(folder: &Path, budget: Option<ProviderCallBudget>) -> OneShotRequest {
     OneShotRequest {
         activity_tx: None,
+        attachments: Vec::new(),
         child_pid: None,
         execution_policy: ExecutionPolicy::default(),
         folder: folder.to_path_buf(),
@@ -532,13 +533,23 @@ async fn image_attachments_are_rejected_before_any_provider_call() {
         local_image_path: data_root.path().join("image.png"),
         placeholder: "[Image #1]".to_string(),
     }];
+    let client = RealOneShotClient::pooled(None).with_native_harness(config.clone());
+    let mut utility = utility_request(worktree.path(), None);
+    utility.attachments.clone_from(&request.prompt.attachments);
 
     // Act
     let (result, _) = run_turn(&channel, "session-image", request).await;
+    let utility_result = client.submit(utility).await;
 
     // Assert
     let error = result.expect_err("image attachments should be rejected");
     assert!(error.contains("do not support image attachments"));
+    assert!(
+        utility_result
+            .expect_err("utility image attachments should be rejected")
+            .to_string()
+            .contains("do not support image attachments")
+    );
     assert_eq!(request_bodies(&server).await, Vec::<String>::new());
     assert!(!data_root.path().join("session-image").exists());
 }

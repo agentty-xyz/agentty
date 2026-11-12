@@ -1,6 +1,5 @@
 //! Isolated task execution on the owning session's serialized worker.
 
-use std::fmt::Write as _;
 use std::sync::{Arc, Mutex};
 
 use ag_contracts::{
@@ -20,7 +19,7 @@ use crate::app::session::SessionError;
 use crate::domain::permission::PermissionMode;
 use crate::domain::session::Status;
 use crate::domain::session_message::{SessionMessage, SessionMessageKind, SessionTranscript};
-use crate::domain::turn_prompt::{TurnPrompt, TurnPromptAttachment};
+use crate::domain::turn_prompt::TurnPrompt;
 use crate::infra::db::{TaskAgentHistoryRow, TaskAgentTurnMetadata};
 
 /// Executes a role-bound attempt with its own provider conversation and
@@ -259,27 +258,11 @@ async fn prepare(
 }
 
 /// Places images after the JSON input with unique transport placeholders.
-/// Composer numbering can restart on each reply, so cumulative attachments
-/// must not reuse those markers or replace strings inside the JSON data.
 fn task_prompt(request: &SubmitAgentTaskRequest) -> TurnPrompt {
     let input = serde_json::json!(request.input).to_string();
     let mut prompt =
         TurnPrompt::from_agent_data(format!("Explicit task input (JSON data):\n{input}"));
-    for (index, attachment) in request.input.attachments.iter().enumerate() {
-        let mut placeholder = format!("[Task image #{}]", index + 1);
-        while prompt.text.contains(&placeholder) {
-            placeholder.insert(1, '#');
-        }
-        let _ = write!(
-            prompt.text,
-            "\n\nTask input attachment {}: {placeholder}",
-            index + 1
-        );
-        prompt.attachments.push(TurnPromptAttachment {
-            local_image_path: attachment.local_image_path.clone(),
-            placeholder,
-        });
-    }
+    prompt.append_trailing_attachments(&request.input.attachments);
 
     prompt
 }

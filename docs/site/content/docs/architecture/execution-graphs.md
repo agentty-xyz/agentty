@@ -160,14 +160,14 @@ so its Env lease still excludes graph writers during that cleanup.
 
 The supplied `GraphUtilityRunner` supports fresh text, focused-review, and
 review-metadata nodes through the existing utility worker, retaining their preadmitted
-identities. It rejects attachments; explicitly launched graphs admit fresh nodes only as
-shared readers, routing writers through task conversations and session stack policy.
-Agentty's task adapter retains attachments, captured instructions and model selection,
-and exact bound inputs. Each static task starts an isolated conversation using its
-durable attempt UUID for runtime resources. Observed responses, provider continuation,
-and usage persist before effects; failed effects cannot publish a validated output.
-Ordinary chat history, provider continuation, and pending questions remain separate.
-Task identities must be unused at first admission.
+identities, and delivers request images after the node data. Explicitly launched graphs
+admit fresh nodes only as shared readers, routing writers through task conversations and
+session stack policy. Agentty's task adapter retains attachments, captured instructions
+and model selection, and exact bound inputs. Each static task starts an isolated
+conversation using its durable attempt UUID for runtime resources. Observed responses,
+provider continuation, and usage persist before effects; failed effects cannot publish a
+validated output. Ordinary chat history, provider continuation, and pending questions
+remain separate. Task identities must be unused at first admission.
 
 `SessionService::start_execution_graph` explicitly saves and starts a static graph in a
 prepared session. Named provider-call limits remain shared across the launch, including

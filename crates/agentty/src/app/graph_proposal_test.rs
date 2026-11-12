@@ -3,7 +3,9 @@ use std::sync::Arc;
 use ag_contracts::{
     AgentRequestKind, OneShotError, OneShotSubmission, PermissionMode, SessionStats,
 };
-use ag_protocol::{AgentResponse, GraphProposalOutcome, GraphProposalResponse};
+use ag_protocol::{
+    AgentResponse, GraphProposalOutcome, GraphProposalResponse, TurnPromptAttachment,
+};
 use ag_session::test_support::{graph_proposal, graph_proposal_state};
 use ag_session::{GraphProposalState, GraphProposalVersionOutcome, SessionId};
 use ag_worker::MockRunClient;
@@ -641,14 +643,7 @@ async fn graph_request_title_metadata_failures_do_not_start_generation() {
 
 #[tokio::test]
 async fn graph_proposal_admission_rejects_invalid_requests_without_generation() {
-    for case in [
-        "feature",
-        "empty",
-        "attachments",
-        "large",
-        "missing-session",
-        "conflict",
-    ] {
+    for case in ["feature", "empty", "large", "missing-session", "conflict"] {
         // Arrange
         let (mut app, _directory) = new_test_app().await;
         seed_session(&mut app.sessions, app.services.db()).await;
@@ -656,13 +651,6 @@ async fn graph_proposal_admission_rejects_invalid_requests_without_generation() 
         let mut input = graph_proposal_state("preview", "sess").input;
         match case {
             "empty" => input.request.text.clear(),
-            "attachments" => input
-                .request
-                .attachments
-                .push(ag_protocol::TurnPromptAttachment {
-                    local_image_path: "image.png".into(),
-                    placeholder: "[Image #1]".into(),
-                }),
             "large" => input.request.text = "x".repeat(70_000),
             "missing-session" => input.session_id = SessionId::from("missing"),
             "conflict" => {
@@ -958,4 +946,120 @@ async fn wait_graph(db: &AppRepositories, mut wake: watch::Receiver<u64>, id: &s
         }
         wake.changed().await.expect("graph wake");
     }
+}
+
+#[tokio::test]
+async fn generation_sends_request_and_revision_images_and_resolves_them_onto_every_node() {
+    // Arrange
+    let mut state = graph_proposal_state("preview", "session");
+    state.input.request.text.push_str(" [Image #1]");
+    state.input.request.attachments.push(TurnPromptAttachment {
+        local_image_path: "design.png".into(),
+        placeholder: "[Image #1]".into(),
+    });
+    state.version.attachments.push(TurnPromptAttachment {
+        local_image_path: "revision.png".into(),
+        placeholder: "[Image #1]".into(),
+    });
+    let response = GraphProposalResponse {
+        outcome: GraphProposalOutcome::Proposal {
+            proposal: graph_proposal(),
+        },
+    };
+    let mut client = MockRunClient::new();
+    client
+        .expect_submit()
+        .once()
+        .withf(|request| {
+            request.attachments
+                == [
+                    TurnPromptAttachment {
+                        local_image_path: "design.png".into(),
+                        placeholder: "[Task image #1]".into(),
+                    },
+                    TurnPromptAttachment {
+                        local_image_path: "revision.png".into(),
+                        placeholder: "[Task image #2]".into(),
+                    },
+                ]
+                && request.prompt.ends_with(
+                    "\n\nTask input attachment 1: [Task image #1]\n\nTask input attachment 2: \
+                     [Task image #2]",
+                )
+        })
+        .return_once(move |_| {
+            Ok(OneShotSubmission {
+                response: AgentResponse::plain(serde_json::json!(response).to_string()),
+                stats: SessionStats::default(),
+            })
+        });
+
+    // Act
+    let outcome = generate(&state, "workspace".into(), &client).await;
+
+    // Assert
+    let launch = match outcome {
+        GraphProposalVersionOutcome::Generated { launch, .. } => launch,
+        _ => None,
+    }
+    .expect("Expected resolved graph");
+    let expected = [
+        state.input.request.attachments.as_slice(),
+        &state.version.attachments,
+    ]
+    .concat();
+    assert!(
+        launch
+            .graph
+            .nodes
+            .iter()
+            .all(|node| node.request.attachments == expected)
+    );
+}
+
+#[tokio::test]
+async fn graph_mode_admits_requests_with_pasted_images() {
+    // Arrange
+    let (mut app, _directory) = new_test_app().await;
+    seed_session(&mut app.sessions, app.services.db()).await;
+    app.experimental_graph = true;
+    let mut client = MockRunClient::new();
+    expect_title_requests(&mut client);
+    client
+        .expect_submit()
+        .times(0..=1)
+        .returning(|_| Err(OneShotError::new("offline")));
+    app.services.set_run_client(Arc::new(client));
+    let prompt = ag_protocol::TurnPrompt {
+        attachments: vec![TurnPromptAttachment {
+            local_image_path: "design.png".into(),
+            placeholder: "[Image #1]".into(),
+        }],
+        ..ag_protocol::TurnPrompt::from_text("Match [Image #1]".into())
+    };
+
+    // Act
+    let outcome = app
+        .submit_graph_request(crate::app::prompt_intent::PromptSubmission {
+            session_id: SessionId::from("sess"),
+            session_mode: crate::app::prompt_intent::PromptSessionMode::Existing,
+            prompt: prompt.clone(),
+        })
+        .await;
+
+    // Assert
+    assert!(matches!(
+        outcome,
+        crate::app::prompt_intent::PromptWorkflowOutcome::ShowSession { .. }
+    ));
+    let states = app
+        .services
+        .db()
+        .graph_proposals()
+        .list(&SessionId::from("sess"))
+        .await
+        .expect("proposals");
+    assert_eq!(states.len(), 1);
+    assert_eq!(states[0].input.request, prompt);
+    app.services.wait_for_cleanup_tasks(None).await;
 }

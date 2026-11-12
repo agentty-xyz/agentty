@@ -67,6 +67,7 @@ async fn default_submit_cancellable_prefers_cancellation_and_otherwise_submits()
 fn request() -> OneShotRequest {
     OneShotRequest {
         activity_tx: None,
+        attachments: Vec::new(),
         child_pid: None,
         execution_policy: ExecutionPolicy::default(),
         folder: PathBuf::from("."),

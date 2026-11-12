@@ -162,6 +162,7 @@ fn trace_context(policy: Option<bool>, span_id: Option<u64>) -> Context {
 fn request() -> OneShotRequest {
     OneShotRequest {
         activity_tx: None,
+        attachments: Vec::new(),
         execution_policy: ag_contracts::ExecutionPolicy::default(),
         child_pid: None,
         folder: "repository".into(),

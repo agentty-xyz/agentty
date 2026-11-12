@@ -21,15 +21,17 @@ Start Agentty with `--experimental-graph` to enable `/graph`. Without this flag,
 
 Select `/graph` in a prepared idle session, then describe the task and press `Enter`.
 `Esc` disarms the composer and keeps your draft. `/graph` only selects the mode; it has
-no subcommands. Conversation and clarification questions stay in the left chat pane;
-other proposal results appear there as one short line. The right pane uses at most 35%
-of the width for proposal status and the graph: each node with its status (Waiting,
-Working, Needs your input, Done, Failed, or Canceled), and `│` / `▼` connectors from its
-dependencies. It indicates when input is needed without repeating the discussion. It
-updates automatically and restores saved proposals when you reopen the session. When the
-graph exceeds the pane height, a compact summary of one row per node, without
-connectors, prioritizes nodes needing input, failed or blocked nodes, and active work.
-It shows the number of hidden nodes and keeps the `w` inspector shortcut visible.
+no subcommands. The composer works as in regular chat, including pasted images;
+generation and every proposed node receive them. Conversation and clarification
+questions stay in the left chat pane; other proposal results appear there as one short
+line. The right pane uses at most 35% of the width for proposal status and the graph:
+each node with its status (Waiting, Working, Needs your input, Done, Failed, or
+Canceled), and `│` / `▼` connectors from its dependencies. It indicates when input is
+needed without repeating the discussion. It updates automatically and restores saved
+proposals when you reopen the session. When the graph exceeds the pane height, a compact
+summary of one row per node, without connectors, prioritizes nodes needing input, failed
+or blocked nodes, and active work. It shows the number of hidden nodes and keeps the `w`
+inspector shortcut visible.
 
 Generation reads the workspace through the utility worker; no proposed node executes
 yet. The sidebar restores the latest proposal after a restart.
@@ -43,7 +45,10 @@ reply and decides what it means:
   version that includes your reply, within the captured generation limit.
 
 When unsure, it revises rather than running or discarding the graph. Wait for the
-decision on one reply before sending another. Replies take text only.
+decision on one reply before sending another. Images in a revision reply stay with every
+later version and its nodes. An approving reply with images revises instead, so the new
+version considers them; send a separate text approval afterward. At the generation limit
+it approves without the images and says so in chat.
 
 Press `w` from chat view for read-only details: the proposal ID and version, model,
 captured agent instructions, objectives, access, dependencies, output gates, and limits.
@@ -64,7 +69,7 @@ Approval does not accept outputs produced later. Use `w` for execution controls 
 exact output acceptance. Duplicate approval returns its receipt without launching again.
 Pending previews survive restart; reply to regenerate an interrupted generation. Graphs
 that executed before restart cannot recreate spent provider credits and therefore cannot
-resume through proposal approval. Attachment paths are currently unsupported.
+resume through proposal approval.
 
 ## Execution Graph Inspector
 

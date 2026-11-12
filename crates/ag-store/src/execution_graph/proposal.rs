@@ -134,15 +134,12 @@ impl GraphProposalRepository for SqliteGraphRepository {
         if state.input.id.trim().is_empty()
             || state.version.number != 1
             || state.input.request.text.trim().is_empty()
-            || state.input.request.has_attachments()
             || state.limits.generations == 0
             || state.version.outcome != GraphProposalVersionOutcome::Generating
             || state.version.approval.is_some()
             || state.version.is_cancelled
         {
-            return Err(Self::invalid(
-                "Invalid initial proposal capture; attachment paths are unsupported",
-            ));
+            return Err(Self::invalid("Invalid initial proposal capture"));
         }
         let mut transaction = self.pool.begin().await?;
         let inserted = sqlx::query(
@@ -234,6 +231,7 @@ impl GraphProposalRepository for SqliteGraphRepository {
                 "Proposal is approved or generation limit is exhausted",
             ));
         }
+        let mut attachments = state.version.attachments.clone();
         let answers = match action {
             GraphProposalAction::Regenerate => state.version.answers.clone(),
             GraphProposalAction::Answer(answers) => {
@@ -257,10 +255,11 @@ impl GraphProposalRepository for SqliteGraphRepository {
                 history
             }
             GraphProposalAction::Revise(feedback) => {
-                if feedback.trim().is_empty() {
+                if feedback.text.trim().is_empty() {
                     return Err(Self::invalid("Revision feedback is empty"));
                 }
-                let entry = match &state.version.outcome {
+                let text = &feedback.text;
+                let mut entry = match &state.version.outcome {
                     GraphProposalVersionOutcome::Generated { response, .. } => {
                         match &response.outcome {
                             GraphProposalOutcome::Clarification { questions } => {
@@ -269,15 +268,32 @@ impl GraphProposalRepository for SqliteGraphRepository {
                                     .map(|question| question.text.as_str())
                                     .collect();
 
-                                serde_json::json!({"questions": questions, "reply": feedback})
+                                serde_json::json!({"questions": questions, "reply": text})
                             }
                             GraphProposalOutcome::Proposal { .. } => {
-                                serde_json::json!({"feedback": feedback})
+                                serde_json::json!({"feedback": text})
                             }
                         }
                     }
-                    _ => serde_json::json!({"feedback": feedback}),
+                    _ => serde_json::json!({"feedback": text}),
                 };
+                if feedback.has_attachments() {
+                    // Images are delivered after the request images and
+                    // earlier feedback images, numbered from one.
+                    let first = state.input.request.attachments.len() + attachments.len() + 1;
+                    entry["images"] = feedback
+                        .attachments
+                        .iter()
+                        .zip(first..)
+                        .map(|(attachment, number)| {
+                            serde_json::json!({
+                                "placeholder": attachment.placeholder,
+                                "task_input_attachment": number,
+                            })
+                        })
+                        .collect();
+                }
+                attachments.extend_from_slice(&feedback.attachments);
                 let mut history = state.version.answers.clone();
                 history.push(entry.to_string());
 
@@ -293,6 +309,7 @@ impl GraphProposalRepository for SqliteGraphRepository {
         state.version = GraphProposalVersion {
             answers,
             approval: None,
+            attachments,
             is_cancelled: false,
             number: version + 1,
             outcome: GraphProposalVersionOutcome::Generating,
@@ -377,6 +394,7 @@ impl GraphProposalRepository for SqliteGraphRepository {
             limits: &state.limits,
             permission: state.permission,
             request: &state.input.request,
+            revision_attachments: &state.version.attachments,
             session_id: &state.input.session_id,
         }
         .resolve(proposal)

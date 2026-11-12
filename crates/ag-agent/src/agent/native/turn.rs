@@ -137,6 +137,7 @@ pub(crate) async fn run_one_shot(
     request: OneShotRequest,
     cancellation: CancellationToken,
 ) -> Result<OneShotSubmission, String> {
+    reject_attachments(&request.attachments)?;
     execution_policy::validate(AgentKind::Harness, &request.execution_policy)
         .map_err(|error| error.to_string())?;
     let environment = config.environment();

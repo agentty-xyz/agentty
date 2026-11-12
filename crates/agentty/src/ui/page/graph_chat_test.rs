@@ -402,6 +402,7 @@ fn graph_snapshot(node_count: usize) -> GraphChatSnapshot {
         limits: &proposal.limits,
         permission: proposal.permission,
         request: &proposal.input.request,
+        revision_attachments: &proposal.version.attachments,
         session_id: &proposal.input.session_id,
     }
     .resolve(&declaration)

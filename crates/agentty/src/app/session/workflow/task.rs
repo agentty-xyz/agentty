@@ -635,6 +635,7 @@ impl SessionTaskService {
         let submission = run_client
             .submit(ag_contracts::OneShotRequest {
                 activity_tx: None,
+                attachments: Vec::new(),
                 execution_policy: ag_contracts::ExecutionPolicy::default(),
                 provider_call_budget: Some(ag_contracts::ProviderCallBudget::new(8)),
                 harness: (session_agent.kind()).to_string(),
@@ -1208,6 +1209,7 @@ impl SessionTaskService {
                     },
                     run_client.submit(ag_contracts::OneShotRequest {
                         activity_tx: None,
+                        attachments: Vec::new(),
                         execution_policy: ag_contracts::ExecutionPolicy::default(),
                         provider_call_budget: Some(call_budget.clone()),
                         harness: (session_agent.kind()).to_string(),
@@ -1276,6 +1278,7 @@ impl SessionTaskService {
         let (assist_submission, activity) = tokio::join!(
             run_client.submit(ag_contracts::OneShotRequest {
                 activity_tx: Some(activity_tx),
+                attachments: Vec::new(),
                 execution_policy: ag_contracts::ExecutionPolicy::default(),
                 provider_call_budget: None,
                 harness: (session_agent.kind()).to_string(),

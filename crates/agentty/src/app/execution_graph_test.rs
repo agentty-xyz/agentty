@@ -45,7 +45,6 @@ async fn graph_launch_rejects_missing_budgets_and_unsupported_profiles_before_pe
     let service = app.session_service();
     for scenario in [
         "budget",
-        "fresh-attachments",
         "fresh-writer",
         "invalid",
         "missing-session",
@@ -55,17 +54,13 @@ async fn graph_launch_rejects_missing_budgets_and_unsupported_profiles_before_pe
         let mut limits = BTreeMap::from([("calls".into(), 1)]);
         match scenario {
             "budget" => limits.clear(),
-            "fresh-attachments" | "fresh-writer" => {
+            "fresh-writer" => {
                 graph.nodes.truncate(1);
                 graph.nodes[0].execution.context = GraphContext::Fresh;
                 graph.nodes[0].execution.response_profile = ProtocolRequestProfile::UtilityPrompt;
                 graph.nodes[0].outputs[0].schema = ProtocolRequestProfile::UtilityPrompt;
-                if scenario == "fresh-writer" {
-                    graph.nodes[0].request.attachments.clear();
-                    graph.nodes[0].definition.read_only = false;
-                    graph.nodes[0].execution.workspace_access =
-                        GraphWorkspaceAccess::ExclusiveWrite;
-                }
+                graph.nodes[0].definition.read_only = false;
+                graph.nodes[0].execution.workspace_access = GraphWorkspaceAccess::ExclusiveWrite;
             }
             "invalid" => graph.nodes.clear(),
             "missing-session" => {

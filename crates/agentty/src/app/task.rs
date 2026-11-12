@@ -713,6 +713,7 @@ impl TaskService {
                     graph_id,
                     request: ag_contracts::OneShotRequest {
                         activity_tx: None,
+                        attachments: Vec::new(),
                         execution_policy: ag_contracts::ExecutionPolicy::default(),
                         provider_call_budget: None,
                         harness: (review_selection.kind()).to_string(),

@@ -110,6 +110,7 @@ async fn deleting_or_canceling_sessions_waits_for_utilities_before_removing_reso
 fn utility_request(folder: PathBuf) -> OneShotRequest {
     OneShotRequest {
         activity_tx: None,
+        attachments: Vec::new(),
         execution_policy: ag_contracts::ExecutionPolicy::default(),
         child_pid: None,
         folder,

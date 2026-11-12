@@ -1,7 +1,7 @@
 use std::path::PathBuf;
 use std::sync::{Arc, Mutex};
 
-use ag_protocol::AgentResponse;
+use ag_protocol::{AgentResponse, TurnPromptAttachment};
 use async_trait::async_trait;
 use tokio_util::sync::CancellationToken;
 
@@ -13,6 +13,9 @@ use crate::{AgentRequestKind, PermissionMode, ReasoningLevel, SessionStats, Spee
 pub struct OneShotRequest {
     /// Optional live activity sink, including retries and protocol repairs.
     pub activity_tx: Option<tokio::sync::mpsc::UnboundedSender<crate::ActivityEvent>>,
+    /// Local images referenced by placeholders in `prompt`, sent with the
+    /// initial provider turn only; protocol repairs stay text-only.
+    pub attachments: Vec<TurnPromptAttachment>,
     /// Optional PID slot for resource accounting while a prompt is running.
     /// Subprocess lifetime and cancellation belong to the runtime adapter.
     pub child_pid: Option<Arc<Mutex<Option<u32>>>>,

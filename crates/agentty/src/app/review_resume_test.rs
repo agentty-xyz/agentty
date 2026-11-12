@@ -17,6 +17,7 @@ use crate::app::review_graph::test_support::ReviewGraphFixture;
 fn request() -> OneShotRequest {
     OneShotRequest {
         activity_tx: None,
+        attachments: Vec::new(),
         execution_policy: ag_contracts::ExecutionPolicy::default(),
         child_pid: None,
         folder: ".".into(),
