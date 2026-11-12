@@ -515,6 +515,7 @@ impl PtySession {
     fn key_to_bytes(key: &str) -> Vec<u8> {
         match key.to_lowercase().as_str() {
             "enter" | "return" => vec![b'\r'],
+            "alt+enter" => vec![0x1b, b'\r'],
             "tab" => vec![b'\t'],
             "backtab" | "shift+tab" => vec![0x1b, b'[', b'Z'],
             "escape" | "esc" => vec![0x1b],

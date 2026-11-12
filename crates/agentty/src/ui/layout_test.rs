@@ -127,6 +127,21 @@ fn test_session_chat_areas_reserve_margin_header_and_bottom_panel() {
 }
 
 #[test]
+fn test_session_chat_areas_keep_one_row_for_title_only_header() {
+    // Arrange
+    let area = Rect::new(0, 0, 80, 24);
+
+    // Act
+    let title_only_areas = session_chat_areas(area, 5, 1);
+    let empty_header_areas = session_chat_areas(area, 5, 0);
+
+    // Assert
+    assert_eq!(title_only_areas.header_area, Rect::new(1, 1, 78, 1));
+    assert_eq!(title_only_areas.output_area, Rect::new(1, 2, 78, 17));
+    assert_eq!(empty_header_areas, title_only_areas);
+}
+
+#[test]
 fn test_session_chat_areas_expand_for_three_line_header() {
     // Arrange
     let area = Rect::new(0, 0, 80, 24);

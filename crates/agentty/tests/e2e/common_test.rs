@@ -1,6 +1,8 @@
 use std::path::{Path, PathBuf};
 
 use ag_git::{GitClient, RealGitClient};
+use ag_session::SettingName;
+use agentty::app::Tab;
 use testty::feature::{GifMode, GifStatus};
 use testty::frame::TerminalFrame;
 use testty::proof::report::ProofReport;
@@ -10,8 +12,9 @@ use super::{
     PINNED_CLOCK_UNIX_SECONDS, PINNED_CLOCK_UTC_OFFSET_ENV_VAR, PINNED_CLOCK_UTC_OFFSET_SECONDS,
     PINNED_DISPLAY_VERSION_ENV_VAR, STUB_AGENT_EXECUTABLES, VHS_REPLAY_ENV_VAR,
     VHS_SETUP_SCRIPT_NAME, capture_frames_text, feature_gif_mode_for_artifacts, gif_exists_on_disk,
-    parse_gif_mode, tab_page_marker,
+    open_database, parse_gif_mode, tab_page_marker,
 };
+use crate::test_support::persist_active_tab_for_test;
 
 #[test]
 fn capture_frames_text_labels_every_capture() {
@@ -185,6 +188,46 @@ async fn builder_env_without_git_has_no_repository_root() {
 
     // Assert
     assert_eq!(repository_root, None);
+}
+
+#[tokio::test]
+async fn builder_env_vhs_launcher_restores_post_setup_database() {
+    // Arrange
+    let temp = tempfile::TempDir::new().expect("failed to create temporary directory");
+    let env = BuilderEnv::new(temp.path()).expect("failed to create builder environment");
+    let database = open_database(&env).await.expect("open setup database");
+    persist_active_tab_for_test(&database, Tab::Projects)
+        .await
+        .expect("seed setup tab");
+    database.pool().close().await;
+    env.snapshot_replay_database()
+        .await
+        .expect("snapshot setup database");
+    let database = open_database(&env).await.expect("open proof database");
+    persist_active_tab_for_test(&database, Tab::Settings)
+        .await
+        .expect("persist proof tab");
+    database.pool().close().await;
+    let launcher = env
+        .create_vhs_launcher(Path::new("/bin/sh"))
+        .expect("failed to create VHS launcher");
+
+    // Act
+    let output = std::process::Command::new(launcher)
+        .env("PATH", env.stub_only_path())
+        .args(["-c", "true"])
+        .output()
+        .expect("failed to execute VHS launcher");
+
+    // Assert
+    assert!(output.status.success());
+    let database = open_database(&env).await.expect("open replay database");
+    let active_tab = database
+        .settings()
+        .get_setting(SettingName::ActiveTab)
+        .await
+        .expect("load replay tab");
+    assert_eq!(active_tab.as_deref(), Some(Tab::Projects.title()));
 }
 
 #[test]

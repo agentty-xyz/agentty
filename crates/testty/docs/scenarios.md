@@ -24,9 +24,9 @@ let scenario = Scenario::new("tab_switch")
 - `.capture()` — snapshot the terminal
 - `.capture_labeled("init", "App launched")` — snapshot for proof reports
 
-**Supported keys:** `Enter`, `Tab`, `Escape`/`Esc`, `Backspace`, `Up`, `Down`, `Left`,
-`Right`, `Home`, `End`, `Delete`, `PageUp`, `PageDown`, `Space`, `Ctrl+<letter>`.
-Unknown keys are sent as raw bytes.
+**Supported keys:** `Enter`, `Alt+Enter`, `Tab`, `Escape`/`Esc`, `Backspace`, `Up`,
+`Down`, `Left`, `Right`, `Home`, `End`, `Delete`, `PageUp`, `PageDown`, `Space`,
+`Ctrl+<letter>`. Unknown keys are sent as raw bytes.
 
 ## Waiting strategies
 

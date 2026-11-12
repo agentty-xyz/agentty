@@ -174,6 +174,11 @@ impl BuilderEnv {
 
     /// Creates an npm-global Gemini CLI fixture whose package-manager update
     /// changes the version reported by the linked `gemini` executable.
+    ///
+    /// Other invocations read one stdin line before failing. Exiting before
+    /// Agentty writes its first app-server request would race that write, so
+    /// the session transcript would show either a broken-pipe error or a
+    /// terminated-process error and published frame hashes would vary.
     fn create_gemini_cli_stub(stub_bin: &Path) -> std::io::Result<()> {
         let gemini_package_directory = stub_bin.join("lib/node_modules/@google/gemini-cli/bundle");
         let gemini_package_path = gemini_package_directory.join("gemini.js");
@@ -186,8 +191,8 @@ impl BuilderEnv {
             format!(
                 "#!/bin/sh\nif [ \"$1\" = \"update\" ]; then exit 91; fi\nif [ \"$1\" = \
                  \"--version\" ]; then if [ -f \"{}\" ]; then read version < \"{}\"; else \
-                 version='0.0.0-test'; fi; printf 'gemini %s\\n' \"$version\"; exit 0; fi\nexit \
-                 1\n",
+                 version='0.0.0-test'; fi; printf 'gemini %s\\n' \"$version\"; exit 0; fi\nIFS= \
+                 read -r request_line\nexit 1\n",
                 version_path.display(),
                 version_path.display(),
             ),
@@ -254,12 +259,54 @@ impl BuilderEnv {
         self.as_vhs_env_pairs_with_path(self.path_with_stub_bin())
     }
 
-    /// Creates a launcher that gives VHS the same working directory as the
-    /// semantic PTY proof before executing the requested binary.
+    /// Snapshots the fixture database so VHS replay starts from the
+    /// post-setup state.
+    ///
+    /// The PTY proof runs first and mutates the shared `AGENTTY_ROOT`: it
+    /// creates sessions and persists the active tab. Without a restore, the
+    /// replay would start where the proof ended and its keys would drive a
+    /// different journey than the one the proof asserted.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if the database cannot be opened or copied.
+    async fn snapshot_replay_database(&self) -> Result<(), Box<dyn std::error::Error>> {
+        let database = open_database(self).await?;
+        sqlx::query("VACUUM INTO ?")
+            .bind(
+                self.replay_database_snapshot_path()
+                    .to_string_lossy()
+                    .as_ref(),
+            )
+            .execute(database.pool())
+            .await?;
+        database.pool().close().await;
+
+        Ok(())
+    }
+
+    /// Creates a launcher that gives VHS the same working directory and
+    /// post-setup database as the semantic PTY proof before executing the
+    /// requested binary.
+    ///
+    /// Restore and setup utilities use absolute paths because scenarios
+    /// recorded with [`FeatureTest::with_stub_only_path`] expose no system
+    /// commands on `PATH`.
     fn create_vhs_launcher(&self, binary_path: &Path) -> std::io::Result<PathBuf> {
         let launcher_path = self.stub_bin.join("agentty-vhs-launcher");
         let quote_path =
             |path: &Path| format!("'{}'", path.to_string_lossy().replace('\'', "'\"'\"'"));
+        let snapshot_path = self.replay_database_snapshot_path();
+        let restore = if snapshot_path.is_file() {
+            let database_path = quote_path(&self.agentty_root.join(DB_DIR).join(DB_FILE));
+
+            format!(
+                "/bin/rm -f {database_path}-wal {database_path}-shm\n/bin/cp {} {database_path}\n",
+                quote_path(&snapshot_path),
+            )
+        } else {
+            String::new()
+        };
         let setup_path = self.stub_bin.join(VHS_SETUP_SCRIPT_NAME);
         let setup = if setup_path.is_file() {
             format!("/bin/sh {}\n", quote_path(&setup_path))
@@ -267,7 +314,8 @@ impl BuilderEnv {
             String::new()
         };
         let launcher = format!(
-            "#!/bin/sh\nset -e\nexport {VHS_REPLAY_ENV_VAR}=1\ncd -- {}\n{setup}exec {} \"$@\"\n",
+            "#!/bin/sh\nset -e\nexport {VHS_REPLAY_ENV_VAR}=1\ncd -- {}\n{restore}{setup}exec {} \
+             \"$@\"\n",
             quote_path(&self.workdir),
             quote_path(binary_path),
         );
@@ -275,6 +323,12 @@ impl BuilderEnv {
         std::fs::set_permissions(&launcher_path, std::fs::Permissions::from_mode(0o750))?;
 
         Ok(launcher_path)
+    }
+
+    /// Returns where [`BuilderEnv::snapshot_replay_database`] stores the
+    /// post-setup database that VHS replay restores.
+    fn replay_database_snapshot_path(&self) -> PathBuf {
+        self.agentty_root.join("vhs-replay-baseline.sqlite")
     }
 
     /// Return VHS environment variable pairs with an explicit `PATH`.
@@ -731,8 +785,9 @@ pub(crate) const TESTTY_GIF_MODE_ENV_VAR: &str = "TESTTY_GIF_MODE";
 /// recording delays; VHS cannot execute the callbacks that release gates.
 pub(crate) const VHS_REPLAY_ENV_VAR: &str = "AGENTTY_E2E_VHS_REPLAY";
 
-/// Optional script under `stub_bin` that resets a fixture before VHS replay.
-/// The launcher runs it from the proof workdir and stops on failure.
+/// Optional script under `stub_bin` that resets non-database fixture state
+/// before VHS replay. The launcher runs it from the proof workdir after
+/// restoring the post-setup database, and stops on failure.
 pub(crate) const VHS_SETUP_SCRIPT_NAME: &str = "agentty-vhs-setup";
 
 /// Environment variable that pins the agentty wall clock for feature runs.
@@ -1165,6 +1220,7 @@ impl FeatureTest {
             setup(&env).await?;
         }
 
+        env.snapshot_replay_database().await?;
         let scenario = build_scenario(Scenario::new(&self.name));
         let vhs_binary_path = env.create_vhs_launcher(&cargo_bin("agentty"))?;
         let terminal_cols = self.terminal_cols;
