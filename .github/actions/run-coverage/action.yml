@@ -102,6 +102,7 @@ runs:
     # The built-in quality gate grades new code by rating, which still passes
     # a pull request that adds issues. Any open issue fails the job instead.
     - name: Reject pull request SonarQube issues
+      id: sonar-issues
       if: ${{ !cancelled() && steps.sonar-scan.outcome == 'success' && github.event_name == 'pull_request' }}
       shell: bash
       env:
@@ -122,7 +123,10 @@ runs:
           https://sonarcloud.io/api/measures/component)"
         total="$(jq --exit-status --raw-output '
           .component.measures[] | select(.metric == "new_violations") | .periods[0].value | tonumber
-        ' <<<"$measures")"
+        ' <<<"$measures")" || {
+          echo "::error::SonarQube returned no new-issue count for pull request #${PULL_REQUEST}."
+          exit 1
+        }
         if [ "$total" -eq 0 ]; then
           echo "SonarQube reports no open issues in pull request #${PULL_REQUEST}."
           exit 0

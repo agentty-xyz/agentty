@@ -234,6 +234,9 @@ analysis's `new_violations` count, and annotates each issue. Fix the reported co
 a rule exception to `sonar-project.properties` only with a comment explaining why the
 rule does not apply. Pull requests from forks are not scanned.
 
+`crates/ag-xtask/tests/sonar_issue_gate.rs` runs that step with a stub `curl` and saved
+responses: no issue, counted issues, and a failed or unusable count.
+
 ## Instruction and Hook Maintenance
 
 `check-instructions` validates instruction aliases, literal repository paths, local
