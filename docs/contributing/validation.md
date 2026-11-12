@@ -189,8 +189,9 @@ independent. Default-setup CodeQL runs are managed separately.
 
 Native Harness Sandbox qualifies only the macOS launcher, and pull requests run it only
 when they touch `ag-harness`, its workspace dependencies, or shared build and CI
-configuration. The coverage job installs Bubblewrap and runs every `ag-harness` sandbox
-suite, so it is the Linux qualification.
+configuration. `crates/ag-xtask/tests/harness_sandbox_filter.rs` fails when the filter's
+crate list drifts from Cargo's dependency graph. The coverage job installs Bubblewrap
+and runs every `ag-harness` sandbox suite, so it is the Linux qualification.
 
 ## Coverage
 

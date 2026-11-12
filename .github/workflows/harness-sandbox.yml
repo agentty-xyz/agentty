@@ -9,9 +9,9 @@ on:
     branches:
       - main
   # Pull requests skip qualification unless they touch `ag-harness`, a crate it
-  # depends on, or shared build and CI configuration. Keep the crate list in
-  # sync with `cargo tree -p ag-harness -e normal,build,dev`; `main` still runs
-  # on every push.
+  # depends on, or shared build and CI configuration. The
+  # `harness_sandbox_filter` test in `ag-xtask` fails when the crate list drifts
+  # from Cargo's dependency graph; `main` still runs on every push.
   pull_request:
     paths:
       - .cargo/**
