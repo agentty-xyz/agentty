@@ -186,6 +186,12 @@ Compare timings from the same final head and completed run attempt; cancelled sa
 measure superseded work, not suite speed. Merge-group, main, and manual runs remain
 independent. Default-setup CodeQL runs are managed separately.
 
+Presubmit skips the E2E suite for a pull request that changes only documentation,
+`skills/`, root-level Markdown, or GitHub contributor templates, and reports the
+required `Run suite` check as skipped. Feature and demo captures and feature pages under
+`docs/site/` still run it, because the suite checks them. Merge queue, postsubmit, and
+release runs always run the suite.
+
 ## Coverage
 
 ```sh

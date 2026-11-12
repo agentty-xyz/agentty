@@ -2,6 +2,14 @@ name: Agentty E2E
 
 on:
   workflow_call:
+    inputs:
+      run-suite:
+        description: >-
+          Run the suite. False skips the job, which still reports a successful
+          `Run suite` check for a change that cannot affect it.
+        required: false
+        type: boolean
+        default: true
 
 permissions:
   contents: read
@@ -9,6 +17,7 @@ permissions:
 jobs:
   test:
     name: Run suite
+    if: ${{ inputs['run-suite'] }}
     runs-on: ubuntu-latest
     env:
       CARGO_TARGET_DIR: target

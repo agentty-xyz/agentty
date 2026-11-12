@@ -40,9 +40,67 @@ jobs:
           sonar-token: ${{ secrets.SONAR_TOKEN }}
           trunk-token: ${{ secrets.TRUNK_API_TOKEN }}
 
+  scope:
+    name: Change scope
+    runs-on: ubuntu-latest
+    outputs:
+      e2e: ${{ steps.scope.outputs.e2e }}
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          # The pull request merge commit and its base parent.
+          fetch-depth: 2
+          persist-credentials: false
+
+      - name: Select suites the change can affect
+        id: scope
+        env:
+          EVENT_NAME: ${{ github.event_name }}
+        run: |
+          # Every merge queue candidate runs the full suite.
+          if [ "$EVENT_NAME" != pull_request ]; then
+            echo "e2e=true" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+          # The merge commit's first parent is the base it merges into, so this
+          # lists exactly the pull request's changes. A failed diff fails the
+          # job, which leaves the required E2E check missing instead of skipped.
+          changed="$RUNNER_TEMP/changed-paths"
+          git diff --name-only --no-renames -z HEAD^1 HEAD > "$changed"
+          e2e=false
+          while IFS= read -r -d '' path; do
+            case "$path" in
+              # The suite checks feature and demo captures and feature pages.
+              docs/site/static/features/* | docs/site/static/demo/* | docs/site/content/features/*)
+                e2e=true ;;
+              docs/* | skills/* | .github/ISSUE_TEMPLATE/* | .github/pull_request_template.md | .github/CODEOWNERS | LICENSE)
+                ;;
+              */*)
+                e2e=true ;;
+              # Root-level Markdown, such as `README.md` and `CHANGELOG.md`.
+              *.md)
+                ;;
+              *)
+                e2e=true ;;
+            esac
+            if [ "$e2e" = true ]; then
+              echo "E2E runs: $path can affect the suite."
+              break
+            fi
+          done < "$changed"
+          if [ "$e2e" = false ]; then
+            echo "E2E skipped: only documentation and contributor guidance changed."
+          fi
+          echo "e2e=$e2e" >> "$GITHUB_OUTPUT"
+
   e2e:
     name: End-to-end feature tests
+    needs: scope
     uses: $/.github/workflows/e2e.yml
+    with:
+      run-suite: ${{ needs.scope.outputs.e2e == 'true' }}
 
   validate:
     name: Workspace checks
