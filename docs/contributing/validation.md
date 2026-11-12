@@ -190,7 +190,8 @@ Presubmit skips the E2E suite for a pull request that changes only documentation
 `skills/`, root-level Markdown, or GitHub contributor templates, and reports the
 required `Run suite` check as skipped. Feature and demo captures and feature pages under
 `docs/site/` still run it, because the suite checks them. Merge queue, postsubmit, and
-release runs always run the suite.
+release runs always run the suite. `crates/ag-xtask/tests/presubmit_scope.rs` runs the
+workflow's scope script against these cases; update it with the path rules.
 
 ## Coverage
 
