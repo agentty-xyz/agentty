@@ -94,6 +94,53 @@ runs:
       uses: SonarSource/sonarqube-scan-action@e805d875275f728fac1885b413934be6d7c63f65 # v8.4.1
       env:
         SONAR_TOKEN: ${{ inputs.sonar-token }}
+      with:
+        # A pull request waits for its quality gate, so a failed gate fails
+        # the scan and the analysis is complete before its issues are counted.
+        args: ${{ github.event_name == 'pull_request' && '-Dsonar.qualitygate.wait=true' || '' }}
+
+    # The built-in quality gate grades new code by rating, which still passes
+    # a pull request that adds issues. Any open issue fails the job instead.
+    - name: Reject pull request SonarQube issues
+      id: sonar-issues
+      if: ${{ !cancelled() && steps.sonar-scan.outcome == 'success' && github.event_name == 'pull_request' }}
+      shell: bash
+      env:
+        PULL_REQUEST: ${{ github.event.pull_request.number }}
+        SONAR_TOKEN: ${{ inputs.sonar-token }}
+      run: |
+        # Fail when the pull request analysis counts an unresolved issue.
+        project_key="$(sed -n 's/^sonar\.projectKey=//p' sonar-project.properties)"
+        sonar_get() {
+          curl --fail-with-body --silent --show-error --get \
+            --header "Authorization: Bearer ${SONAR_TOKEN}" \
+            --data-urlencode "pullRequest=${PULL_REQUEST}" "$@"
+        }
+        # The analysis itself computes this count. A missing analysis or
+        # measure fails the request or the filter instead of reading as zero.
+        measures="$(sonar_get --data-urlencode "component=${project_key}" \
+          --data-urlencode 'metricKeys=new_violations' \
+          https://sonarcloud.io/api/measures/component)"
+        total="$(jq --exit-status --raw-output '
+          .component.measures[] | select(.metric == "new_violations") | .periods[0].value | tonumber
+        ' <<<"$measures")" || {
+          echo "::error::SonarQube returned no new-issue count for pull request #${PULL_REQUEST}."
+          exit 1
+        }
+        if [ "$total" -eq 0 ]; then
+          echo "SonarQube reports no open issues in pull request #${PULL_REQUEST}."
+          exit 0
+        fi
+        issues="$(sonar_get --data-urlencode "componentKeys=${project_key}" \
+          --data-urlencode 'issueStatuses=OPEN,CONFIRMED' --data-urlencode 'ps=500' \
+          https://sonarcloud.io/api/issues/search)"
+        jq --raw-output '
+          .issues[]
+          | "::error file=\(.component | sub("^[^:]*:"; "")),line=\(.line // 1),title=SonarQube issue::"
+            + ("\(.message) (\(.rule))" | gsub("%"; "%25") | gsub("\r"; "%0D") | gsub("\n"; "%0A"))
+        ' <<<"$issues"
+        echo "::error::SonarQube reports ${total} open issue(s) in this pull request. Fix each one: https://sonarcloud.io/project/issues?id=${project_key}&pullRequest=${PULL_REQUEST}&issueStatuses=OPEN,CONFIRMED"
+        exit 1
 
     - name: Save SonarQube scanner cache
       if: ${{ steps.sonar-scan.outcome == 'success' && steps.sonar-cache.outputs.cache-hit != 'true' && github.event_name == 'push' && github.ref == 'refs/heads/main' }}
