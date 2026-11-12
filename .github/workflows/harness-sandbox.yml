@@ -1,11 +1,32 @@
 name: Native Harness Sandbox
 
+# Linux sandbox qualification runs in the coverage job, which installs the same
+# Bubblewrap setup and runs every `ag-harness` sandbox suite, so this workflow
+# only qualifies the macOS launcher.
 on:
   # Runs on `main` so its Rust caches exist for pull requests to restore.
   push:
     branches:
       - main
+  # Pull requests skip qualification unless they touch `ag-harness`, a crate it
+  # depends on, or shared build and CI configuration. The
+  # `harness_sandbox_filter` test in `ag-xtask` fails when the crate list drifts
+  # from Cargo's dependency graph; `main` still runs on every push.
   pull_request:
+    paths:
+      - .cargo/**
+      - .config/nextest.toml
+      - .github/actions/setup-rust-prek/**
+      - .github/actions/test-timing/**
+      - .github/actions/upload-test-results/**
+      - .github/workflows/harness-sandbox.yml
+      - .pre-commit-config.yaml
+      - Cargo.lock
+      - Cargo.toml
+      - crates/ag-harness/**
+      - crates/ag-router/**
+      - crates/ag-telemetry/**
+      - rust-toolchain.toml
   merge_group:
     types: [checks_requested]
   workflow_dispatch:
@@ -13,20 +34,16 @@ on:
 permissions:
   contents: read
 
-# PR pushes replace obsolete qualification; main, merge queue, and manual runs
-# keep independent groups and cannot cancel one another.
+# A newer revision of the same PR, or a newer `main` push, supersedes an
+# obsolete run. Merge queue and manual runs keep independent groups.
 concurrency:
-  group: ${{ github.workflow }}-${{ github.event_name == 'pull_request' && format('pr-{0}', github.event.pull_request.number) || github.run_id }}
-  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+  group: ${{ github.workflow }}-${{ github.event_name == 'pull_request' && format('pr-{0}', github.event.pull_request.number) || github.event_name == 'push' && github.ref || github.run_id }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' || github.event_name == 'push' }}
 
 jobs:
   native:
-    name: Native sandbox (${{ matrix.os }})
-    strategy:
-      fail-fast: false
-      matrix:
-        os: [ubuntu-24.04, macos-latest]
-    runs-on: ${{ matrix.os }}
+    name: Native sandbox (macOS)
+    runs-on: macos-latest
     timeout-minutes: 30
     steps:
       - name: Checkout
@@ -39,9 +56,6 @@ jobs:
         with:
           cargo-llvm-cov: "true"
           llvm-tools-preview: "true"
-      - name: Install native Linux isolation
-        if: runner.os == 'Linux'
-        uses: $/.github/actions/setup-native-sandbox
       - name: Record qualification environment
         run: |
           uname -a
@@ -50,7 +64,7 @@ jobs:
         uses: $/.github/actions/test-timing
         with:
           phase: prepare
-          suite: native-sandbox-test-results-${{ matrix.os }}
+          suite: native-sandbox-test-results-macos
           build-directory: target/llvm-cov-target
           exact-cache-hit: ${{ steps.rust-setup.outputs.exact-cache-hit }}
       - name: Native sandbox public contract and launcher coverage
@@ -60,6 +74,6 @@ jobs:
         if: ${{ always() }}
         uses: $/.github/actions/upload-test-results
         with:
-          name: native-sandbox-test-results-${{ matrix.os }}
+          name: native-sandbox-test-results-macos
           build-directory: target/llvm-cov-target
           outcome: ${{ steps.sandbox-tests.outcome }}

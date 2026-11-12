@@ -164,9 +164,7 @@ an authentication method that is permitted for your account, plan, and usage pat
 
 ## Usage
 
-Launch Agentty from the repository you want to work in. Project discovery is opt-in: the
-startup suggestion defaults to **Skip**, and the **Projects** tab supports adding a
-repository by path (`a`) or scanning a chosen folder (`d`).
+Launch Agentty from the repository you want to work in:
 
 ```sh
 agentty              # Launch with auto-update enabled (default)
@@ -178,44 +176,23 @@ agentty --help       # Show supported command-line options
 agentty --version    # Show the installed Agentty version
 ```
 
-Start with `agentty --experimental-multi-agent` to enable `/plan`. Use it in a session
-with a prepared worktree, including a new **Regular** session, to turn the chat into a
-**Plan then implement** conversation. Answer or revise the read-only **Planner**
-proposal in the composer, then approve it in your own words to run the **Implementer**;
-follow-ups go to the Implementer.
-
-`--experimental-harness` adds a preview **Harness** session type that runs Agentty's
-built-in agent loop against a free local model, such as one a running Ollama serves, or
-against paid Muse, Kimi, or Qwen using `MODEL_API_KEY`, `KIMI_API_KEY` with
-`KIMI_BASE_URL`, or `DASHSCOPE_API_KEY` with `DASHSCOPE_BASE_URL`, or OpenAI's GPT
-models with a paid `OPENAI_API_KEY` or on your ChatGPT Plus or Pro plan after
-`ag-harness login chatgpt`. Its `/model` picker lists local models first, marks each
-model free, plan, or paid with a cheap, standard, or premium price class, and remembers
-your choice for new Harness sessions. A project's Default Fast Model can be a cheap
-harness model, such as `qwen3.8-flash`, for commit messages and titles. Its edit mode
-runs unsandboxed shell commands. See
-[Harness sessions](https://agentty.xyz/docs/agents/backends/#backends-harness).
-
-Session tracing is disabled unless `--otlp-endpoint` supplies a complete OTLP
-HTTP/protobuf traces URL. Authentication headers can come from
-`OTEL_EXPORTER_OTLP_TRACES_HEADERS` or `OTEL_EXPORTER_OTLP_HEADERS`. Traces contain step
-timings, tool identities, available executable names, exit codes, and output sizes. Add
-`--otlp-capture-content` to include tool commands, arguments, and results as previews of
-at most 4 KiB each. Common credential markers suppress the entire affected preview;
-arbitrary secrets may still appear. Prompts and reasoning are excluded. See the
-[session tracing documentation](https://agentty.xyz/docs/usage/workflow/#session-traces)
-for provider limitations. A traces URL ending in `/v1/traces` also sends the usage
-events below as OTLP log records to the sibling `/v1/logs` URL, even when PostHog
-telemetry is disabled.
-
-Only one Agentty instance can use a given Agentty root at a time. Close the running
-instance before launching another. Separate `AGENTTY_ROOT` directories can run
-independently.
-
-Telemetry is enabled by default: release builds send events to the Agentty PostHog
-project. Set `AGENTTY_TELEMETRY_ENABLED=0` to disable it. See the
-[telemetry details](docs/site/content/docs/usage/workflow.md#telemetry) for the exact
-events and fields.
+- **Projects**: discovery is opt-in. In the **Projects** tab, add a repository by path
+  (`a`) or scan a chosen folder (`d`).
+- **Instances**: only one Agentty instance can use a given Agentty root at a time.
+  Separate `AGENTTY_ROOT` directories can run independently.
+- **Multi-agent**: `--experimental-multi-agent` enables the `/plan` and `/graph`
+  [workflows](https://agentty.xyz/docs/usage/workflow/).
+- **Harness**: `--experimental-harness` adds a preview session type that runs Agentty's
+  built-in agent loop against local or hosted models. Its edit mode runs unsandboxed
+  shell commands. See
+  [Harness sessions](https://agentty.xyz/docs/agents/backends/#backends-harness).
+- **Tracing**: disabled unless `--otlp-endpoint` supplies a complete OTLP HTTP/protobuf
+  traces URL. A URL ending in `/v1/traces` also sends usage events as OTLP log records
+  to the sibling `/v1/logs` URL, even when telemetry is disabled. See
+  [session traces](https://agentty.xyz/docs/usage/workflow/#session-traces).
+- **Telemetry**: enabled by default; release builds send events to the Agentty PostHog
+  project. Set `AGENTTY_TELEMETRY_ENABLED=0` to disable it. See the
+  [telemetry details](https://agentty.xyz/docs/usage/workflow/#telemetry).
 
 ## Documentation
 

@@ -105,7 +105,9 @@ Apply the smallest documentation update matching the change:
 - Keep Rust doc comments current for touched public APIs and related elements.
 - Update `docs/site/content/docs/` for user-visible behavior; route architecture changes
   using the canonical references below.
-- Update `README.md` for public prerequisites, usage, features, or crate information.
+- Keep the root `README.md` concise. Update it only for public prerequisites, usage,
+  features, or crate information a new reader needs, in a sentence or short bullet. Put
+  the details in `docs/site/content/docs/` and link to them instead of repeating them.
 - Update `CHANGELOG.md` for shipped behavior during release work.
 - In prose, wrap code identifiers, file names, key bindings, and configuration literals
   in backticks.
