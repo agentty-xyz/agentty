@@ -27,12 +27,11 @@ restart behavior.
 | `J` / `K`, `PageDown` / `PageUp` | Scroll details                                   |
 | `Home`                           | Scroll to top                                    |
 | `a`                              | Accept the displayed output version              |
-| `n`                              | Answer all questions for the selected execution  |
 | `e`                              | Reply to or revise the selected task             |
 | `t`                              | Retry selected failed node                       |
 | `s`                              | Enter limits and resume paused graph dispatch    |
 | `x`                              | Confirm cancellation of the whole graph          |
-| `Enter`                          | Submit graph input or advance to next question   |
+| `Enter`                          | Submit graph input                               |
 | `Ctrl+r`                         | Refresh and reconcile a rejected draft           |
 | `PageUp` / `PageDown` in input   | Scroll the editor notice                         |
 | `Alt+Enter` / `Shift+Enter`      | Insert newline in graph input                    |

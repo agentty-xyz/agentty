@@ -13,6 +13,7 @@ mod diff_prompt;
 mod error;
 mod execution_graph;
 mod graph_chat;
+mod graph_node_reply;
 mod graph_proposal;
 mod graph_proposal_chat;
 mod graph_proposal_decision;

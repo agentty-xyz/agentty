@@ -6,6 +6,7 @@ use std::time::{Duration, Instant};
 use ag_protocol::GraphProposalOutcome;
 use ag_session::{
     ExecutionGraphProgress, GraphProposalState, GraphProposalVersionOutcome, SessionId,
+    push_numbered_questions,
 };
 
 /// Short chat report for a settled proposal version. Clarification questions
@@ -23,12 +24,7 @@ pub(crate) fn proposal_chat_notice(state: &GraphProposalState) -> String {
         GraphProposalVersionOutcome::Generated { launch, response } => match &response.outcome {
             GraphProposalOutcome::Clarification { questions } => {
                 let mut text = "The graph needs your input. Reply in chat to answer:".to_string();
-                for (index, question) in questions.iter().enumerate() {
-                    let _ = write!(text, "\n{}. {}", index + 1, question.text);
-                    if !question.options.is_empty() {
-                        let _ = write!(text, " ({})", question.options.join(" / "));
-                    }
-                }
+                push_numbered_questions(&mut text, questions);
 
                 text
             }

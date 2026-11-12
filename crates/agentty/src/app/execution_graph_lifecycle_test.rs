@@ -5,7 +5,7 @@ use std::time::Duration;
 
 use ag_contracts::{AgentRequestKind, MockAgentChannel, TurnResult};
 use ag_git::MockGitClient;
-use ag_protocol::{AgentResponse, QuestionItem};
+use ag_protocol::{AgentResponse, QuestionItem, TurnPrompt};
 use ag_session::{
     ContinueGraphNodeRequest, ExecutionGraphProgress, ExecutionGraphStatus, GraphBlockedReason,
     GraphControlRequest, GraphNodeContinuation, GraphNodeStatus, GraphQuestionAnswer,
@@ -16,6 +16,7 @@ use tokio::sync::{mpsc, watch};
 
 use super::{graph, seed_session};
 use crate::app::App;
+use crate::app::prompt_intent::{PromptSessionMode, PromptSubmission, PromptWorkflowOutcome};
 use crate::app::service::MockSessionRunFactory;
 use crate::infra::db::AppRepositories;
 use crate::infra::fs::MockFsClient;
@@ -170,18 +171,91 @@ async fn graph_lifecycle_api_routes_clarification_into_an_isolated_new_attempt()
     assert!(!transcript.contains("Local only"));
     assert!(second.prompt.text.contains("Local only"));
     assert_eq!(second.prompt.attachments, first.prompt.attachments);
-    assert_eq!(
-        app.services
-            .db()
-            .sessions()
-            .load_session_messages("sess")
-            .await
-            .expect("ordinary history")
-            .len(),
-        0
-    );
+    assert_eq!(chat_messages(&app).await, [question_notice()]);
     assert!(observed_rx.try_recv().is_err());
     app.services.wait_for_cleanup_tasks(None).await;
+}
+
+#[tokio::test]
+async fn graph_node_questions_are_asked_and_answered_in_session_chat() {
+    // Arrange
+    let (mut app, _directory, mut observed_rx) = clarification_app().await;
+    let _consumer = app.sessions.foreground_consumer();
+    let service = app.session_service();
+    let mut snapshot = graph();
+    snapshot.nodes.truncate(1);
+    let request = StartExecutionGraphRequest {
+        graph: snapshot,
+        provider_call_limits: BTreeMap::from([("calls".into(), 2)]),
+    };
+    app.drive_session_request(service.start_execution_graph(request))
+        .await
+        .expect("start");
+    wait_for_status(&mut app, GraphNodeStatus::AwaitingAnswers).await;
+    let asked = chat_messages(&app).await;
+
+    // Act
+    let outcome = app
+        .submit_prompt(PromptSubmission {
+            prompt: TurnPrompt::from_text("Local only".into()),
+            session_id: "sess".into(),
+            session_mode: PromptSessionMode::Existing,
+        })
+        .await;
+    let continued = tokio::time::timeout(
+        Duration::from_secs(5),
+        app.drive_session_request(async {
+            observed_rx.recv().await.expect("initial turn");
+            observed_rx.recv().await.expect("answered turn")
+        }),
+    )
+    .await
+    .expect("answered provider handoff");
+    let completed = wait_for_status(&mut app, GraphNodeStatus::Succeeded).await;
+
+    // Assert
+    assert_eq!(asked, [question_notice()]);
+    assert_eq!(
+        outcome,
+        PromptWorkflowOutcome::ShowSession {
+            session_id: "sess".into()
+        }
+    );
+    assert!(continued.prompt.text.contains("Local only"));
+    assert_eq!(completed.status, ExecutionGraphStatus::Completed);
+    assert_eq!(
+        chat_messages(&app).await,
+        [
+            question_notice(),
+            ("user_prompt".into(), "Local only".into()),
+            (
+                "workflow_notice".into(),
+                "Answer sent to `first` · continuing".into()
+            ),
+        ]
+    );
+    app.services.wait_for_cleanup_tasks(None).await;
+}
+
+/// The graph node's clarification as asked in session chat.
+fn question_notice() -> (String, String) {
+    (
+        "workflow_notice".into(),
+        "Need target\n\n`first` needs your input. Reply in chat to answer:\n1. Which target?"
+            .into(),
+    )
+}
+
+async fn chat_messages(app: &App) -> Vec<(String, String)> {
+    app.services
+        .db()
+        .sessions()
+        .load_session_messages("sess")
+        .await
+        .expect("session chat")
+        .into_iter()
+        .map(|message| (message.kind, message.content))
+        .collect()
 }
 
 #[tokio::test]

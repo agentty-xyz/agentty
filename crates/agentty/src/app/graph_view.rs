@@ -1,7 +1,7 @@
 //! Graph inspector reads and snapshot-bound mutations through shared admission.
 
 use ag_session::{
-    ContinueGraphNodeRequest, GraphControlRequest, GraphNodeContinuation, GraphQuestionAnswer,
+    ContinueGraphNodeRequest, GraphControlRequest, GraphNodeContinuation,
     ResumeExecutionGraphRequest,
 };
 use uuid::Uuid;
@@ -212,27 +212,6 @@ impl App {
                 Ok(GraphViewAction::Continue(GraphNodeContinuation::Reply {
                     attachments: Vec::new(),
                     message: text.to_string(),
-                }))
-            }
-            GraphEditKind::Answers => {
-                let node = view.node().ok_or("No node selected")?;
-                let answers = node
-                    .questions
-                    .iter()
-                    .zip(
-                        editor
-                            .answers
-                            .iter()
-                            .map(String::as_str)
-                            .chain(std::iter::once(text)),
-                    )
-                    .map(|(question, answer)| GraphQuestionAnswer {
-                        question: question.text.clone(),
-                        answer: answer.to_string(),
-                    })
-                    .collect();
-                Ok(GraphViewAction::Continue(GraphNodeContinuation::Answer {
-                    answers,
                 }))
             }
             GraphEditKind::Reply => Err("Enter a reply".into()),

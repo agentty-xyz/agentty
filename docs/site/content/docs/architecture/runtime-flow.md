@@ -216,12 +216,20 @@ read-only utility run on the Run Worker decides whether a reply approves, cancel
 revises the inspected version, and the background task admits that exact-version action
 through the gateway. One reply per proposal is decided at a time.
 
+A graph node outside a task chain asks its clarification questions in session chat:
+saving the node's response also saves them, after its answer, as one workflow notice in
+the same transaction, and the session worker mirrors that notice into live chat. While a
+node awaits answers, the next composer message is its reply; when several wait, the
+reply goes to the node whose question was saved last. The message is shown in chat and
+admitted through the gateway as a continuation of the exact execution that asked;
+storage rejects a second continuation of the same execution.
+
 The graph inspector loads an explicit session-scoped snapshot of the latest proposal
 (read-only), saved graphs, authoritative progress, and exact output bodies. Controls
-revalidate that snapshot and enter the shared command gateway; graph replies never enter
-ordinary chat. Refresh is explicit, and editing retains the execution and question set
-originally inspected. Background session questions update session state without
-replacing the inspector; returning to session chat exposes the pending questions.
+revalidate that snapshot and enter the shared command gateway; inspector replies never
+enter ordinary chat. Refresh is explicit, and editing retains the execution originally
+inspected. Background session questions update session state without replacing the
+inspector; returning to session chat exposes the pending questions.
 
 Session chat is the conversational task-chain surface. An armed `/plan` composer
 launches the chain, and the session's later messages become natural-language replies;

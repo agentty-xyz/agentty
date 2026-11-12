@@ -361,11 +361,10 @@ fn ordinary_static_review_nodes_keep_generic_lifecycle_controls() {
 }
 
 #[test]
-fn draft_reconciliation_preserves_the_original_graph_execution_and_questions() {
+fn draft_reconciliation_preserves_the_original_graph_and_execution() {
     // Arrange
     let mut original = graph_view();
     original.editor = Some(GraphEditor {
-        answers: Vec::new(),
         input: InputState::with_text("Keep this guidance".into()),
         kind: GraphEditKind::Reply,
         needs_reconciliation: true,
@@ -377,7 +376,7 @@ fn draft_reconciliation_preserves_the_original_graph_execution_and_questions() {
         "other-branch",
         "revision",
         "execution",
-        "questions",
+        "awaiting-answers",
         "accepted",
         "missing-graph",
         "no-editor",
@@ -401,9 +400,12 @@ fn draft_reconciliation_preserves_the_original_graph_execution_and_questions() {
                     operation_id: "new-operation".into(),
                     task_id: "task-first".into(),
                 }),
-            "questions" => current.progress.as_mut().expect("progress").nodes[0]
-                .questions
-                .push(QuestionItem::new("A different question?")),
+            "awaiting-answers" => {
+                // Chat replies answer questions; the draft never retargets.
+                let node = &mut current.progress.as_mut().expect("progress").nodes[0];
+                node.status = GraphNodeStatus::AwaitingAnswers;
+                node.questions.push(QuestionItem::new("A new question?"));
+            }
             "accepted" => {
                 current.progress.as_mut().expect("progress").nodes[0].results[0].state =
                     GraphResultState::Accepted;

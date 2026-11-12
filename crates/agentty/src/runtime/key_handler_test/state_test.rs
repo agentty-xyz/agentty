@@ -21,7 +21,6 @@ async fn graph_keys_preserve_rejected_drafts_and_mark_the_view_for_redraw() {
     let (mut app, _directory) = crate::test_support::new_test_app().await;
     let mut view = graph_view();
     view.editor = Some(GraphEditor {
-        answers: Vec::new(),
         input: InputState::with_text("Unsent guidance".into()),
         kind: GraphEditKind::Reply,
         needs_reconciliation: true,

@@ -98,6 +98,12 @@ captured agent instructions, objectives, access, dependencies, output gates, and
 `r` refreshes; `J` / `K` scroll; `q` returns to chat. Opening the inspector never
 regenerates or launches work.
 
+When a running node needs input, it asks in chat, after its answer. Reply in chat to
+answer; your next message goes to that node, which continues with it. If several nodes
+are waiting, your reply answers the question asked most recently. Replies may include
+images. If the graph is paused, for example after a restart, the node continues once you
+resume the graph from `w`.
+
 Approval does not accept outputs produced later. Use `w` for execution controls and
 exact output acceptance. Duplicate approval returns its receipt without launching again.
 Pending previews survive restart; reply to regenerate an interrupted generation. Graphs
@@ -116,15 +122,15 @@ metadata and answers wrap so their full text remains reachable. Press `r` to ref
 snapshot and `J` / `K` to scroll the rendered lines. Background session questions keep
 the inspector and its draft open; return to session chat to answer them.
 
-Available controls appear below the graph. Accept the displayed output with `a`, answer
-the selected node's questions with `n`, or send revision guidance with `e`. These
-replies go directly to that task conversation. Accepted outputs and outputs already
-consumed by started dependents cannot be revised. Rejected replies and clarification
-answers keep their draft and original execution/question bindings. Press `Ctrl+r` in the
-retained editor to refresh and reconcile, inspect the refreshed snapshot, then submit
-again. If that execution or its questions changed, resubmission stays blocked; `Esc`
-explicitly discards the draft. Other rejected actions refresh the view. Editor notices
-wrap below the input; use `PageUp` / `PageDown` to scroll longer reasons.
+Available controls appear below the graph. Accept the displayed output with `a` or send
+revision guidance with `e`; the guidance goes directly to that task conversation. Nodes
+awaiting answers are answered in session chat instead. Accepted outputs and outputs
+already consumed by started dependents cannot be revised. Rejected replies keep their
+draft and original execution binding. Press `Ctrl+r` in the retained editor to refresh
+and reconcile, inspect the refreshed snapshot, then submit again. If that execution
+changed, resubmission stays blocked; `Esc` explicitly discards the draft. Other rejected
+actions refresh the view. Editor notices wrap below the input; use `PageUp` / `PageDown`
+to scroll longer reasons.
 
 Use `t` to retry a failed node, `s` to resume paused dispatch, and `x` to cancel the
 whole graph. Retry and answers record intent; they do not resume a stopped driver.
