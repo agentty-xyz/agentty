@@ -41,7 +41,7 @@ impl SessionManager {
             .ok_or(SessionError::NotFound)?;
         let selection = parse_persisted_session_agent_model(Some(&row.agent), &row.model);
         let result = Self::prepare_workspace(services, &preparation, &row, |folder| {
-            ag_worker::setup_backend(selection.kind(), folder)
+            services.setup_session_backend(selection.kind(), folder)
         })
         .await;
         let error = result.as_ref().err().map(ToString::to_string);

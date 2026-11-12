@@ -11,7 +11,7 @@ use ag_store::{DbError, MockGraphProposalRepository};
 use ag_worker::MockRunClient;
 use tempfile::TempDir;
 
-use super::{ATTACHMENTS_UNSUPPORTED, DECISION_PENDING};
+use super::{ATTACHMENTS_UNSUPPORTED, DECISION_PENDING, clarification_questions};
 use crate::app::App;
 use crate::app::execution_graph::tests::seed_session;
 use crate::app::graph_proposal_decision::tests::resolved_state;
@@ -282,9 +282,34 @@ async fn reply_for_an_unloaded_session_keeps_the_composer_without_deciding() {
     );
 }
 
+#[test]
+fn only_clarification_versions_ask_questions() {
+    // Arrange
+    let mut failed = graph_proposal_state("preview", "sess");
+    failed.version.outcome = GraphProposalVersionOutcome::Failed("invalid graph".into());
+    let mut generating = graph_proposal_state("preview", "sess");
+    generating.version.outcome = GraphProposalVersionOutcome::Generating;
+    let clarification = clarification_state();
+    let resolved = resolved_state("sess");
+
+    // Act
+    let clarification_questions_asked = clarification_questions(&clarification);
+    let unanswerable = [&resolved, &failed, &generating].map(clarification_questions);
+
+    // Assert
+    assert_eq!(
+        clarification_questions_asked,
+        [QuestionItem::new("Which target?")]
+    );
+    assert!(unanswerable.iter().all(|questions| questions.is_empty()));
+}
+
 /// Seeds the shared review session with one settled proposal version and a
 /// worker that answers the reply decision with `decision`.
-async fn pending_app(outcome_state: GraphProposalState, decision: &'static str) -> (App, TempDir) {
+pub(in crate::app) async fn pending_app(
+    outcome_state: GraphProposalState,
+    decision: &'static str,
+) -> (App, TempDir) {
     let (mut app, directory) = new_test_app().await;
     seed_session(&mut app.sessions, app.services.db()).await;
     app.experimental_multi_agent = true;
@@ -325,7 +350,7 @@ async fn pending_app(outcome_state: GraphProposalState, decision: &'static str) 
     (app, directory)
 }
 
-fn clarification_state() -> GraphProposalState {
+pub(in crate::app) fn clarification_state() -> GraphProposalState {
     let mut state = graph_proposal_state("preview", "sess");
     state.version.outcome = GraphProposalVersionOutcome::Generated {
         launch: None,
@@ -348,12 +373,12 @@ fn submission(text: &str) -> PromptSubmission {
 }
 
 /// Admits the action the background decision sent through the gateway.
-async fn apply_next_command(app: &mut App) {
+pub(in crate::app) async fn apply_next_command(app: &mut App) {
     let command = app.sessions.next_command().await;
     app.apply_session_runtime_command(command).await;
 }
 
-async fn stored(app: &App) -> GraphProposalState {
+pub(in crate::app) async fn stored(app: &App) -> GraphProposalState {
     app.services
         .db()
         .graph_proposals()
@@ -376,7 +401,7 @@ async fn messages(app: &App) -> Vec<(String, String)> {
 }
 
 /// Waits for the first persisted workflow notice containing `text`.
-async fn wait_for_message(app: &App, text: &str) -> String {
+pub(in crate::app) async fn wait_for_message(app: &App, text: &str) -> String {
     tokio::time::timeout(Duration::from_secs(5), async {
         loop {
             if let Some((_, content)) = messages(app)

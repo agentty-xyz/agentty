@@ -8,10 +8,8 @@ mod antigravity;
 mod client;
 mod codex;
 mod command;
-mod gemini;
 mod stdio_transport;
 
 pub(crate) use antigravity::RealAntigravityClient;
 pub(crate) use codex::RealCodexAppServerClient;
-pub(crate) use command::{build_codex_app_server_command, build_gemini_acp_command};
-pub(crate) use gemini::RealGeminiAcpClient;
+pub(crate) use command::build_codex_app_server_command;

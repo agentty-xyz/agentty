@@ -52,8 +52,8 @@ Installed agent CLIs are also refreshed at startup. See
 
 ## Key Concepts
 
-- **Agent**: An external AI CLI backend (Antigravity, Claude, Codex, or Gemini) that
-  performs coding work. See [Agents & Models](@/docs/agents/backends.md).
+- **Agent**: An external AI CLI backend (Antigravity, Claude, or Codex) that performs
+  coding work. See [Agents & Models](@/docs/agents/backends.md).
 - **Session**: An isolated unit of work: a conversation, a worktree branch, and a
   reviewable diff. See [Workflow](@/docs/usage/workflow.md) and
   [Keybindings](@/docs/usage/keybindings.md).

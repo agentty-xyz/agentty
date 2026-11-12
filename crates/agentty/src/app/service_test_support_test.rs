@@ -1,5 +1,6 @@
 use std::collections::{HashMap, VecDeque};
 use std::io::{self, Write};
+use std::path::Path;
 use std::sync::{Arc, Mutex};
 
 use ag_contracts::{
@@ -108,9 +109,19 @@ impl SessionRunFactory for TestSessionRunFactory {
                 )
             })
     }
+
+    /// Scripted channels replace provider CLIs, so workspaces need no setup.
+    fn setup_backend(&self, _kind: AgentKind, _folder: &Path) -> Result<(), AgentError> {
+        Ok(())
+    }
 }
 
 impl AppServices {
+    /// Replaces session runtime composition, including workspace setup.
+    pub(crate) fn set_session_run_factory(&mut self, factory: Arc<dyn SessionRunFactory>) {
+        self.session_run_factory = factory;
+    }
+
     pub(crate) fn set_graph_proposal_repository(
         &mut self,
         repository: Arc<dyn ag_store::GraphProposalRepository>,

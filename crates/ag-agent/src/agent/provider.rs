@@ -158,21 +158,6 @@ fn provider_descriptor(kind: AgentKind) -> AgentProviderDescriptor {
             protocol_schema_instruction_mode: ProtocolSchemaInstructionMode::TransportSchema,
             transport: AgentTransport::AppServer,
         },
-        AgentKind::Gemini => AgentProviderDescriptor {
-            app_server_client_factory: |default_client| {
-                Some(default_client.unwrap_or_else(|| {
-                    Arc::new(super::app_server::RealGeminiAcpClient::new())
-                        as Arc<dyn AppServerClient>
-                }))
-            },
-            app_server_thought_policy: AppServerThoughtPolicy::None,
-            backend_factory: || Box::new(super::gemini::GeminiBackend),
-            parse_response: super::response_parser::parse_gemini_response_with_fallback,
-            parse_stream_output_line: super::response_parser::parse_gemini_stream_output_line,
-            prompt_transport: AgentPromptTransport::Argv,
-            protocol_schema_instruction_mode: ProtocolSchemaInstructionMode::PromptSchema,
-            transport: AgentTransport::AppServer,
-        },
         AgentKind::Claude => AgentProviderDescriptor {
             app_server_client_factory: |_default_client| None,
             app_server_thought_policy: AppServerThoughtPolicy::None,

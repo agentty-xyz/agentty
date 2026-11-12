@@ -55,11 +55,10 @@ jobs:
           cargo-machete: ${{ inputs['cargo-machete'] && 'true' || 'false' }}
           llvm-tools-preview: ${{ inputs['llvm-tools-preview'] && 'true' || 'false' }}
 
+      # With every file selected, the `clippy` hook lints all workspace targets
+      # and features plus Agentty's PTY suites, so it also type-checks them.
       - name: Default validation hooks
         run: prek run --all-files
-
-      - name: Check Rust workspace
-        run: prek run cargo-check --all-files --hook-stage manual
 
       - name: Dependency advisory audit
         if: ${{ inputs['cargo-audit'] }}

@@ -1,7 +1,31 @@
-use ag_session::QuestionItem;
+use ag_session::{QuestionAnswer, QuestionItem};
 
-use super::QuestionProgress;
+use super::{QuestionProgress, question_answer_message};
 use crate::domain::input::InputState;
+
+#[test]
+fn question_answer_message_pairs_each_question_with_its_answer() {
+    // Arrange
+    let answers = [
+        QuestionAnswer {
+            answer: "main".to_string(),
+            question: "Which target?".to_string(),
+        },
+        QuestionAnswer {
+            answer: "yes".to_string(),
+            question: "Run tests?".to_string(),
+        },
+    ];
+
+    // Act
+    let message = question_answer_message(&answers);
+
+    // Assert
+    assert_eq!(
+        message,
+        "Clarifications:\n1. Q: Which target?\n   A: main\n2. Q: Run tests?\n   A: yes"
+    );
+}
 
 #[test]
 fn test_applies_to_accepts_matching_progress() {

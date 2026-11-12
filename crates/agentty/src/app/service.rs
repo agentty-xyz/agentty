@@ -288,6 +288,18 @@ impl AppServices {
         self.session_run_factory.create(session_id, kind)
     }
 
+    /// Prepares the selected provider's resources in one session workspace.
+    ///
+    /// # Errors
+    /// Returns the runtime's normalized setup error.
+    pub(crate) fn setup_session_backend(
+        &self,
+        kind: AgentKind,
+        folder: &Path,
+    ) -> Result<(), ag_contracts::AgentError> {
+        self.session_run_factory.setup_backend(kind, folder)
+    }
+
     /// Captures task runtime composition for serialized execution.
     pub(crate) fn task_run_factory(&self) -> Arc<dyn SessionRunFactory> {
         Arc::clone(&self.session_run_factory)
@@ -725,6 +737,11 @@ pub(crate) trait SessionRunFactory: Send + Sync {
         &self,
         context: &ag_session::TaskAgentContext,
     ) -> Result<SessionRunClient, ag_contracts::AgentError>;
+
+    /// Prepares the selected provider's resources in a session workspace
+    /// before work is admitted.
+    fn setup_backend(&self, kind: AgentKind, folder: &Path)
+    -> Result<(), ag_contracts::AgentError>;
 }
 
 /// Production worker configuration for session runtime composition.
@@ -758,6 +775,14 @@ impl SessionRunFactory for RealSessionRunFactory {
         context: &ag_session::TaskAgentContext,
     ) -> Result<SessionRunClient, ag_contracts::AgentError> {
         SessionRunClient::for_task_context(context, &self.config)
+    }
+
+    fn setup_backend(
+        &self,
+        kind: AgentKind,
+        folder: &Path,
+    ) -> Result<(), ag_contracts::AgentError> {
+        ag_worker::setup_backend(kind, folder)
     }
 }
 

@@ -40,7 +40,6 @@ impl ActivityObserver {
         match kind {
             AgentKind::Codex => self.codex(payload),
             AgentKind::Claude => self.claude(payload),
-            AgentKind::Gemini => self.gemini(payload),
             AgentKind::Antigravity => self.antigravity(payload),
             AgentKind::Harness => {}
         }
@@ -161,80 +160,6 @@ impl ActivityObserver {
                 output: Some(output),
                 ..ActivityDetails::default()
             },
-        );
-    }
-
-    fn gemini(&mut self, payload: &Value) {
-        if payload.get("method").and_then(Value::as_str) != Some("session/update") {
-            return;
-        }
-        let Some(update) = payload.pointer("/params/update") else {
-            return;
-        };
-        if !matches!(
-            update.get("sessionUpdate").and_then(Value::as_str),
-            Some("tool_call" | "tool_call_update")
-        ) {
-            return;
-        }
-        let Some(id) = update.get("toolCallId").and_then(Value::as_str) else {
-            return;
-        };
-        let kind = match update.get("kind").and_then(Value::as_str) {
-            Some("execute") => ActivityKind::Command,
-            Some(_) => ActivityKind::Tool,
-            None => self
-                .calls
-                .get(id)
-                .map_or(ActivityKind::Tool, |event| event.kind),
-        };
-        let name = update
-            .get("name")
-            .and_then(Value::as_str)
-            .unwrap_or_else(|| {
-                if self.calls.contains_key(id) {
-                    "tool"
-                } else {
-                    update.get("kind").and_then(Value::as_str).unwrap_or("tool")
-                }
-            });
-        let name = if name == "execute" { "shell" } else { name };
-        let status = match update.get("status").and_then(Value::as_str) {
-            Some("completed") => ActivityStatus::Completed,
-            Some("failed") => ActivityStatus::Failed,
-            Some("cancelled" | "canceled") => ActivityStatus::Interrupted,
-            Some(_) => ActivityStatus::Running,
-            None => self
-                .calls
-                .get(id)
-                .map_or(ActivityStatus::Running, |event| event.status),
-        };
-        self.record(
-            id,
-            kind,
-            name,
-            None,
-            status,
-            ActivityDetails::new(
-                update
-                    .get("rawInput")
-                    .filter(|value| !value.is_null())
-                    .or_else(|| {
-                        self.calls
-                            .get(id)
-                            .and_then(|event| event.input.as_ref())
-                            .is_none()
-                            .then(|| update.get("title"))
-                            .flatten()
-                    }),
-                update
-                    .get("rawOutput")
-                    .filter(|value| !value.is_null())
-                    .or_else(|| update.get("content")),
-                update
-                    .pointer("/rawOutput/exitCode")
-                    .and_then(Value::as_i64),
-            ),
         );
     }
 

@@ -1,6 +1,6 @@
 use std::ffi::OsStr;
 #[cfg(unix)]
-use std::os::unix::fs::{PermissionsExt, symlink};
+use std::os::unix::fs::PermissionsExt;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -146,106 +146,10 @@ fn test_refresh_agent_cli_version_probes_version_when_update_fails() {
         .expect("failed to mark codex executable");
 
     // Act
-    let detected_version = refresh_agent_cli_version(AgentKind::Codex, &codex_path, None);
+    let detected_version = refresh_agent_cli_version(AgentKind::Codex, &codex_path);
 
     // Assert
     assert_eq!(detected_version, Some("1.2.3".to_string()));
-}
-
-#[test]
-/// Ensures npm-global Gemini installations update through npm and expose
-/// the refreshed version.
-fn test_npm_global_gemini_update_refreshes_version() {
-    // Arrange
-    let temp_directory = tempdir().expect("failed to create temp dir");
-    let bin_directory = temp_directory.path().join("bin");
-    let gemini_package_directory = temp_directory
-        .path()
-        .join("lib/node_modules/@google/gemini-cli/bundle");
-    let gemini_package_path = gemini_package_directory.join("gemini.js");
-    let gemini_path = bin_directory.join("gemini");
-    let npm_path = bin_directory.join("npm");
-    let version_path = temp_directory.path().join("gemini-version");
-    fs::create_dir_all(&bin_directory).expect("failed to create bin directory");
-    fs::create_dir_all(&gemini_package_directory)
-        .expect("failed to create Gemini package directory");
-    fs::write(
-        &gemini_package_path,
-        format!(
-            "#!/bin/sh\nif [ \"$1\" = \"update\" ]; then exit 91; fi\nif [ \"$1\" = \"--version\" \
-             ]; then if [ -f \"{}\" ]; then read version < \"{}\"; else version='1.0.0-old'; fi; \
-             printf 'gemini %s\\n' \"$version\"; exit 0; fi\nexit 1\n",
-            version_path.display(),
-            version_path.display(),
-        ),
-    )
-    .expect("failed to create Gemini executable");
-    fs::write(
-        &npm_path,
-        format!(
-            "#!/bin/sh\nif [ \"$1\" = \"install\" ] && [ \"$2\" = \"-g\" ] && [ \"$3\" = \
-             \"@google/gemini-cli@latest\" ]; then printf '9.9.9-updated\\n' > \"{}\"; exit 0; \
-             fi\nexit 1\n",
-            version_path.display(),
-        ),
-    )
-    .expect("failed to create npm executable");
-    fs::set_permissions(&gemini_package_path, fs::Permissions::from_mode(0o750))
-        .expect("failed to mark Gemini executable");
-    fs::set_permissions(&npm_path, fs::Permissions::from_mode(0o750))
-        .expect("failed to mark npm executable");
-    symlink(&gemini_package_path, &gemini_path).expect("failed to link Gemini executable");
-    let path_value = env::join_paths([&bin_directory]).expect("valid path");
-
-    // Act
-    let did_update = run_agent_cli_update_with_timeout(
-        AgentKind::Gemini,
-        &gemini_path,
-        Some(path_value.as_os_str()),
-        Duration::from_secs(10),
-    );
-    let detected_version =
-        detect_agent_cli_version_with_timeout(&gemini_path, Duration::from_secs(10));
-
-    // Assert
-    assert!(did_update);
-    assert_eq!(detected_version, Some("9.9.9-updated".to_string()));
-    assert_eq!(
-        fs::read_to_string(version_path).expect("updated Gemini version"),
-        "9.9.9-updated\n"
-    );
-}
-
-#[test]
-/// Ensures Gemini installations with an unknown owner do not launch the
-/// removed native update command.
-fn test_run_agent_cli_update_skips_unknown_gemini_installation() {
-    // Arrange
-    let temp_directory = tempdir().expect("failed to create temp dir");
-    let gemini_path = temp_directory.path().join("gemini");
-    let update_marker_path = temp_directory.path().join("gemini-update");
-    fs::write(
-        &gemini_path,
-        format!(
-            "#!/bin/sh\nif [ \"$1\" = \"update\" ]; then touch \"{}\"; exit 0; fi\nexit 1\n",
-            update_marker_path.display(),
-        ),
-    )
-    .expect("failed to create Gemini executable");
-    fs::set_permissions(&gemini_path, fs::Permissions::from_mode(0o750))
-        .expect("failed to mark Gemini executable");
-
-    // Act
-    let did_update = run_agent_cli_update_with_timeout(
-        AgentKind::Gemini,
-        &gemini_path,
-        None,
-        Duration::from_millis(100),
-    );
-
-    // Assert
-    assert!(!did_update);
-    assert!(!update_marker_path.exists());
 }
 
 #[test]
@@ -268,12 +172,7 @@ fn test_run_agent_cli_update_discards_output_without_pipe_backpressure() {
         .expect("failed to mark codex executable");
 
     // Act
-    let did_finish = run_agent_cli_update_with_timeout(
-        AgentKind::Codex,
-        &codex_path,
-        None,
-        Duration::from_secs(10),
-    );
+    let did_finish = run_agent_cli_update_with_timeout(&codex_path, Duration::from_secs(10));
 
     // Assert
     assert!(did_finish);

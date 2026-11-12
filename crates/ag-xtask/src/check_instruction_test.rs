@@ -40,10 +40,8 @@ impl Fixture {
     }
 
     fn aliases(&self, directory: &str) {
-        for name in ["CLAUDE.md", "GEMINI.md"] {
-            symlink("AGENTS.md", self.root().join(directory).join(name))
-                .expect("instruction alias");
-        }
+        symlink("AGENTS.md", self.root().join(directory).join("CLAUDE.md"))
+            .expect("instruction alias");
     }
 
     fn host(&self, documents: &[&str]) -> MockHost {
@@ -262,10 +260,6 @@ fn missing_copied_and_wrong_aliases_fail_in_their_own_directory() {
             .with(eq(Path::new("repo/skills/example/CLAUDE.md")))
             .once()
             .return_once(|_| Ok(alias_kind));
-        host.expect_inspect()
-            .with(eq(Path::new("repo/skills/example/GEMINI.md")))
-            .once()
-            .return_once(|_| Ok(Some(Entry::Symlink(PathBuf::from("AGENTS.md")))));
         let check = InstructionCheck::new(&host).expect("patterns");
         let mut errors = Vec::new();
 

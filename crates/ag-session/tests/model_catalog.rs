@@ -9,16 +9,6 @@ fn provider_catalog_preserves_wire_ids_order_and_defaults() {
     // Arrange
     let cases = [
         (
-            AgentKind::Gemini,
-            vec![
-                "gemini-4-argon",
-                "gemini-3.1-pro-preview",
-                "gemini-3.8-flash",
-                "gemini-3.5-flash-lite",
-            ],
-            "gemini-3.1-pro-preview",
-        ),
-        (
             AgentKind::Antigravity,
             vec![
                 "gemini-4-argon",

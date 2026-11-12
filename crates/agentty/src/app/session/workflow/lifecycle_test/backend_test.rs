@@ -1,15 +1,15 @@
-use std::env;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
+use ag_contracts::AgentError;
 use ag_forge::MockReviewRequestClient;
 use ag_git::{GitError, MockGitClient};
-use tokio::process::Command;
 
 use super::support::{
     database_with_session, load_persisted_session_row, session_manager_with_one_session,
     test_services_with_fs_client, test_session,
 };
+use crate::app::service::MockSessionRunFactory;
 use crate::domain::agent::{AgentKind, AgentModel, AgentSelection};
 use crate::domain::session::Status;
 use crate::infra::clock::RealClock;
@@ -17,29 +17,6 @@ use crate::infra::fs::MockFsClient;
 
 #[tokio::test]
 async fn unavailable_backend_preserves_draft_and_cleans_only_new_worktrees() {
-    // Arrange: isolate discovery without modifying the process-wide PATH.
-    const MARKER: &str = "AGENTTY_DRAFT_BACKEND_UNAVAILABLE";
-    if env::var_os(MARKER).is_none() {
-        // Act: run discovery in a child process with an empty PATH.
-        let output = Command::new(env::current_exe().expect("test executable"))
-            .args([
-                "--exact",
-                "app::session::workflow::lifecycle::tests::backend::unavailable_backend_preserves_draft_and_cleans_only_new_worktrees",
-            ])
-            .env(MARKER, "1")
-            .env("PATH", "")
-            .output()
-            .await
-            .expect("isolated backend test");
-        // Assert
-        assert!(
-            output.status.success(),
-            "{}",
-            String::from_utf8_lossy(&output.stdout)
-        );
-
-        return;
-    }
     for (existing, cleanup_fails) in [(true, false), (false, false), (false, true)] {
         // Arrange
         let mut session = test_session("staged request", Status::Draft, None, "");
@@ -48,13 +25,25 @@ async fn unavailable_backend_preserves_draft_and_cleans_only_new_worktrees() {
         let database = database_with_session(&session).await;
         let mut manager = session_manager_with_one_session(session);
         let (fs, git) = draft_workspace_boundaries(existing, cleanup_fails);
-        let services = test_services_with_fs_client(
+        let mut services = test_services_with_fs_client(
             &database,
             Arc::new(RealClock),
             Arc::new(fs),
             Arc::new(git),
             Arc::new(MockReviewRequestClient::new()),
         );
+        let mut session_run_factory = MockSessionRunFactory::new();
+        session_run_factory
+            .expect_setup_backend()
+            .once()
+            .returning(|kind, _| {
+                assert_eq!(kind, AgentKind::Antigravity);
+
+                Err(AgentError::Backend(
+                    "Antigravity CLI is unavailable".to_string(),
+                ))
+            });
+        services.set_session_run_factory(Arc::new(session_run_factory));
 
         // Act
         let result = manager

@@ -329,7 +329,7 @@ async fn successful_turn_shuts_down_runtime_when_retention_is_disabled() {
         RuntimeInspector {
             matches_request: |runtime: &TestRuntime, request| runtime.model == request.model,
             pid: |_runtime| Some(42),
-            provider_conversation_id: |_runtime| Some("gemini-session".to_string()),
+            provider_conversation_id: |_runtime| Some("provider-session".to_string()),
             retain_runtime_after_turn: false,
             restored_context: |_runtime| false,
         },
@@ -361,7 +361,7 @@ async fn successful_turn_shuts_down_runtime_when_retention_is_disabled() {
     assert_eq!(response.assistant_message, "done");
     assert_eq!(
         response.provider_conversation_id.as_deref(),
-        Some("gemini-session")
+        Some("provider-session")
     );
     assert_eq!(response.pid, None);
     assert_eq!(shutdown_count.load(Ordering::SeqCst), 1);

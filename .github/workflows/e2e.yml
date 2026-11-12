@@ -52,7 +52,9 @@ jobs:
           # container and workflow changes in the effective shared prefix.
           shared-key: agentty-e2e-${{ hashFiles('container/e2e.Containerfile', '.github/workflows/e2e.yml') }}
           cache-bin: "false"
-          cache-workspace-crates: "true"
+          # Workspace crates are left out (the action default): checkout gives
+          # sources fresh mtimes, so Cargo rebuilds them on every run anyway,
+          # and caching their artifacts only grows each saved archive.
           # PRs restore main's cache without uploading competing archives.
           save-if: ${{ github.ref == 'refs/heads/main' }}
 

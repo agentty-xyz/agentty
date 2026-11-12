@@ -130,7 +130,7 @@ fn test_parse_persisted_session_agent_model_prefers_saved_agent() {
 
 #[test]
 /// Ensures Antigravity-persisted sessions keep Antigravity ownership for
-/// raw Gemini model ids shared with the direct Gemini backend.
+/// raw Gemini model ids.
 fn test_parse_persisted_session_agent_model_preserves_antigravity_models() {
     // Arrange
 
@@ -143,8 +143,8 @@ fn test_parse_persisted_session_agent_model_preserves_antigravity_models() {
 }
 
 #[test]
-/// Ensures current and retired Gemini models preserve the saved Google
-/// provider while resolving to supported models.
+/// Ensures current and retired Gemini models resolve to supported
+/// Antigravity models, including rows saved by the retired Gemini backend.
 fn test_parse_persisted_session_agent_model_resolves_saved_google_models() {
     // Arrange
     let persisted_selections = [
@@ -163,8 +163,8 @@ fn test_parse_persisted_session_agent_model_resolves_saved_google_models() {
     assert_eq!(
         migrated_selections,
         [
-            AgentSelection::new(AgentKind::Gemini, AgentModel::Gemini35FlashLite),
-            AgentSelection::new(AgentKind::Gemini, AgentModel::Gemini35FlashLite),
+            AgentSelection::new(AgentKind::Antigravity, AgentModel::Gemini35FlashLite),
+            AgentSelection::new(AgentKind::Antigravity, AgentModel::Gemini35FlashLite),
             AgentSelection::new(AgentKind::Antigravity, AgentModel::Gemini35FlashLite),
             AgentSelection::new(AgentKind::Antigravity, AgentModel::Gemini35FlashLite),
         ]
@@ -186,8 +186,7 @@ fn test_parse_persisted_session_agent_model_supports_legacy_rows() {
 }
 
 #[test]
-/// Ensures older `gemini-*` rows without `agent` keep the post-removal
-/// Antigravity compatibility default.
+/// Ensures older `gemini-*` rows without `agent` load as Antigravity.
 fn test_parse_persisted_session_agent_model_defaults_legacy_gemini_to_antigravity() {
     // Arrange
 
@@ -247,7 +246,7 @@ fn test_legacy_missing_and_invalid_agent_values_have_deterministic_fallbacks() {
         (
             Some("unknown"),
             "unknown-model",
-            AgentKind::Gemini,
+            AgentKind::Antigravity,
             AgentModel::Gemini31Pro,
         ),
         (

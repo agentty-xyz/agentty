@@ -22,8 +22,6 @@ pub(super) struct ToolMetadata<'a> {
     pub(super) input: Option<&'a Value>,
     pub(super) name: Option<&'a str>,
     pub(super) output: Option<&'a Value>,
-    pub(super) stderr: Option<&'a Value>,
-    pub(super) stdout: Option<&'a Value>,
 }
 
 impl ToolMetadata<'_> {
@@ -39,35 +37,18 @@ impl ToolMetadata<'_> {
                 executable.to_string(),
             ));
         }
-        for (value, key, size_key, truncated_key) in [
-            (
-                self.output,
-                "gen_ai.tool.call.result",
+        if let Some(output) = self.output.filter(|value| !value.is_null()) {
+            let preview = Preview::new(output, capture);
+            attributes.push(KeyValue::new(
                 "agentty.tool.output.bytes",
-                "agentty.tool.output.truncated",
-            ),
-            (
-                self.stdout,
-                "agentty.tool.stdout",
-                "agentty.tool.stdout.bytes",
-                "agentty.tool.stdout.truncated",
-            ),
-            (
-                self.stderr,
-                "agentty.tool.stderr",
-                "agentty.tool.stderr.bytes",
-                "agentty.tool.stderr.truncated",
-            ),
-        ] {
-            if let Some(value) = value.filter(|value| !value.is_null()) {
-                let preview = Preview::new(value, capture);
-                attributes.push(KeyValue::new(
-                    size_key,
-                    i64::try_from(preview.bytes).unwrap_or(i64::MAX),
-                ));
-                if capture {
-                    preview.export(key, truncated_key, &mut attributes);
-                }
+                i64::try_from(preview.bytes).unwrap_or(i64::MAX),
+            ));
+            if capture {
+                preview.export(
+                    "gen_ai.tool.call.result",
+                    "agentty.tool.output.truncated",
+                    &mut attributes,
+                );
             }
         }
         if capture {

@@ -23,7 +23,7 @@ fn capture_frames_text_labels_every_capture() {
     report.add_capture(
         "first",
         "First view",
-        &TerminalFrame::new(20, 2, b"gemini 0.0.1"),
+        &TerminalFrame::new(20, 2, b"codex 0.0.1"),
     );
     report.add_capture(
         "second",
@@ -35,7 +35,7 @@ fn capture_frames_text_labels_every_capture() {
     let text = capture_frames_text(&report);
 
     // Assert
-    assert!(text.contains("--- capture `first` ---\ngemini 0.0.1"));
+    assert!(text.contains("--- capture `first` ---\ncodex 0.0.1"));
     assert!(text.contains("--- capture `second` ---\nversion unknown"));
 }
 

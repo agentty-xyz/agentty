@@ -42,9 +42,7 @@ impl Fixture {
             fixture.root().join(".pre-commit-config.yaml"),
             "repos:\n- repo: local\n  hooks:\n  - id: check-instructions\n",
         )?;
-        for name in ["CLAUDE.md", "GEMINI.md"] {
-            symlink("AGENTS.md", fixture.root().join(name))?;
-        }
+        symlink("AGENTS.md", fixture.root().join("CLAUDE.md"))?;
 
         Ok(fixture)
     }

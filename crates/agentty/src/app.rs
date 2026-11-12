@@ -18,6 +18,7 @@ mod graph_proposal;
 mod graph_proposal_chat;
 mod graph_proposal_decision;
 mod graph_proposal_reply;
+pub(crate) mod graph_question;
 pub(crate) mod graph_view;
 mod merge_queue;
 mod message_admission;

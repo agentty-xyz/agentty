@@ -66,7 +66,7 @@ fn declared_profiles_preserve_proactive_compaction_budgets() {
         declared(AgentModel::OpenAiCompatible(ServedModel::CONFIGURED)),
         None
     );
-    for provider in [AgentKind::Gemini, AgentKind::Antigravity, AgentKind::Claude] {
+    for provider in [AgentKind::Antigravity, AgentKind::Claude] {
         assert!(
             provider
                 .models()

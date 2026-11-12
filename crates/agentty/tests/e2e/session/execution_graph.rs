@@ -144,6 +144,15 @@ fn node_output_body(id: &str) -> String {
     body.to_string()
 }
 
+/// Closes the seeded `inspect` node's question panel, which opens with the
+/// session, so the plain chat view and its graph controls are reachable.
+fn close_graph_question() -> Journey {
+    Journey::new("graph_question_closed")
+        .step(Step::wait_for_text("Question 1/1", 5000))
+        .step(Step::press_key("Ctrl+c"))
+        .step(Step::wait_for_text("Enter: reply", 5000))
+}
+
 /// Waits for the editor to disappear as well as the controls to reappear.
 /// A partially painted frame can still contain controls from before editing.
 fn wait_for_graph_controls() -> Journey {
@@ -189,7 +198,7 @@ async fn saved_execution_graph_controls() -> E2eResult {
                     .compose(&common::wait_for_agentty_startup())
                     .wait_for_text("Graph controls", 5000)
                     .press_key("Enter")
-                    .wait_for_text("Enter: reply", 5000)
+                    .compose(&close_graph_question())
                     .press_key("w")
                     .wait_for_text("saved-branches", 5000)
                     .wait_for_text("METADATA_SUFFIX", 5000)
@@ -279,9 +288,9 @@ async fn saved_execution_graph_controls() -> E2eResult {
 }
 
 #[tokio::test]
-async fn graph_node_question_is_answered_in_chat() -> E2eResult {
+async fn graph_node_question_is_answered_in_question_panel() -> E2eResult {
     // Arrange
-    FeatureTest::new("graph_node_question_chat_answer")
+    FeatureTest::new("graph_node_question_panel_answer")
         .with_git()
         .with_terminal_size(120, 30)
         .setup(|env| Box::pin(seed_graph(env)))
@@ -292,12 +301,12 @@ async fn graph_node_question_is_answered_in_chat() -> E2eResult {
                     .compose(&common::wait_for_agentty_startup())
                     .wait_for_text("Graph controls", 5000)
                     .press_key("Enter")
-                    .wait_for_text("Enter: reply", 5000)
-                    .press_key("Enter")
-                    .write_text("Local documentation only")
+                    .wait_for_text("Question 1/1", 5000)
+                    .capture_labeled("asked", "Graph node question opens the question panel")
+                    .press_key("Down")
                     .press_key("Enter")
                     .wait_for_text("Answer sent to", 5000)
-                    .capture_labeled("answered", "Chat reply answers the waiting graph node")
+                    .capture_labeled("answered", "Panel answer reaches the waiting graph node")
                     .press_key("w")
                     .wait_for_text("saved-branches", 5000)
                     .press_key("j")
@@ -306,11 +315,17 @@ async fn graph_node_question_is_answered_in_chat() -> E2eResult {
             |frame, report| {
                 Box::pin(async move {
                     // Assert
-                    let answered = common::frame_from_capture(&report.captures[0]);
+                    let asked = common::frame_from_capture(&report.captures[0]);
+                    let asked_region = Region::full(asked.cols(), asked.rows());
+                    for expected in ["Which target?", "Local", "Remote", "Enter: send"] {
+                        assertion::assert_text_in_region(&asked, expected, &asked_region);
+                    }
+                    let answered = common::frame_from_capture(&report.captures[1]);
                     let full = Region::full(answered.cols(), answered.rows());
-                    for expected in ["Local documentation only", "inspect", "graph is paused"] {
+                    for expected in ["Clarifications:", "Remote", "inspect", "graph is paused"] {
                         assertion::assert_text_in_region(&answered, expected, &full);
                     }
+                    assertion::assert_not_visible(&answered, "Question 1/1");
                     assertion::assert_not_visible(&answered, "Graph answer:");
                     // The answered node no longer waits for input.
                     assertion::assert_not_visible(frame, "reply in chat to answer");
@@ -355,7 +370,7 @@ async fn rejected_graph_drafts_stay_visible_until_explicit_reconciliation() -> E
                     .compose(&common::wait_for_agentty_startup())
                     .wait_for_text("Graph controls", 5000)
                     .press_key("Enter")
-                    .wait_for_text("Enter: reply", 5000)
+                    .compose(&close_graph_question())
                     .press_key("w")
                     .wait_for_text("saved-branches", 5000)
                     .press_key("e")

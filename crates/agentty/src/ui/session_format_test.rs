@@ -262,7 +262,7 @@ fn test_session_header_omits_speed_for_provider_without_speed_control() {
     // Arrange
     let mut session = SessionFixtureBuilder::new().build();
     session.agent = crate::domain::agent::AgentSelection::new(
-        crate::domain::agent::AgentKind::Gemini,
+        crate::domain::agent::AgentKind::Antigravity,
         AgentModel::Gemini31Pro,
     );
     session.speed_mode = crate::domain::agent::SpeedMode::Fast;

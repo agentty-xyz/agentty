@@ -740,7 +740,7 @@ fn test_render_prompt_composer_shows_auto_edit_without_unsupported_speed_status(
     // Arrange
     let mut session = session_fixture();
     session.agent = crate::domain::agent::AgentSelection::new(
-        crate::domain::agent::AgentKind::Gemini,
+        crate::domain::agent::AgentKind::Antigravity,
         crate::domain::agent::AgentModel::Gemini31Pro,
     );
 
@@ -757,7 +757,7 @@ fn test_render_prompt_composer_shows_read_only_without_speed_status() {
     // Arrange
     let mut session = session_fixture();
     session.agent = crate::domain::agent::AgentSelection::new(
-        crate::domain::agent::AgentKind::Gemini,
+        crate::domain::agent::AgentKind::Antigravity,
         crate::domain::agent::AgentModel::Gemini31Pro,
     );
     session.permission_mode = crate::domain::permission::PermissionMode::ReadOnly;

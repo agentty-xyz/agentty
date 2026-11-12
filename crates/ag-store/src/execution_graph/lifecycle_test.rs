@@ -885,8 +885,7 @@ async fn graph_lifecycle_node_questions_join_chat_with_their_task_turn() {
         [(
             question.expect("question message"),
             "workflow_notice".to_string(),
-            "Need target\n\n`first` needs your input. Reply in chat to answer:\n1. Which target?"
-                .to_string()
+            "Need target\n\n`first` needs your input:\n1. Which target?".to_string()
         )]
     );
     assert_eq!(unlinked, None);

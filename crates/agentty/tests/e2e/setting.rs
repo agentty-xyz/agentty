@@ -1,9 +1,5 @@
 //! Settings page E2E tests: content rendering, navigation, and editing.
 
-use std::fs;
-#[cfg(unix)]
-use std::os::unix::fs::PermissionsExt;
-
 use agentty::app::Tab;
 use agentty::db::{DB_DIR, DB_FILE, Database};
 use agentty::domain::agent::ReasoningLevel;
@@ -17,20 +13,6 @@ use testty::scenario::Scenario;
 use crate::common::{BuilderEnv, FeatureTest, SettingsRow};
 use crate::test_support::{persist_active_tab_for_test, persist_project_reasoning_levels_for_test};
 use crate::{common, selection};
-
-/// Adds a Gemini CLI stub so the settings page exposes a real Gemini-owned
-/// model option.
-fn seed_gemini_settings_cli_stub(env: &BuilderEnv) -> Result<(), Box<dyn std::error::Error>> {
-    let stub_agent_path = env.stub_bin.join("gemini");
-    fs::write(&stub_agent_path, "#!/bin/sh\nexit 1\n")?;
-
-    #[cfg(unix)]
-    {
-        fs::set_permissions(&stub_agent_path, fs::Permissions::from_mode(0o750))?;
-    }
-
-    Ok(())
-}
 
 /// Seeds deterministic Claude selector values for settings feature tests.
 ///
@@ -157,13 +139,7 @@ async fn settings_tab_shows_content() {
     // Arrange, Act, Assert
     FeatureTest::new("settings_content")
         .with_git()
-        .setup(|env| {
-            Box::pin(async move {
-                seed_gemini_settings_cli_stub(env)?;
-
-                seed_settings_tab(env).await
-            })
-        })
+        .setup(|env| Box::pin(async move { seed_settings_tab(env).await }))
         .with_stub_only_path()
         .zola(
             "Settings tab",
@@ -187,7 +163,11 @@ async fn settings_tab_shows_content() {
                     assertion::assert_text_in_region(frame, "Default Smart Model", &full);
                     assertion::assert_text_in_region(frame, "Default Fast Model", &full);
                     assertion::assert_text_in_region(frame, "Default Review Model", &full);
-                    assertion::assert_text_in_region(frame, "gemini/gemini-3.1-pro-preview", &full);
+                    assertion::assert_text_in_region(
+                        frame,
+                        "antigravity/gemini-3.1-pro-preview",
+                        &full,
+                    );
                     assertion::assert_text_in_region(frame, "[high]", &full);
                     assertion::assert_text_in_region(frame, "Disabled", &full);
                     assertion::assert_text_in_region(frame, "Launch Configurations", &full);
@@ -624,7 +604,7 @@ async fn settings_model_selector_separates_model_and_reasoning() {
                     assertion::assert_text_in_region(&model_frame, "Select model", &model_full);
                     assertion::assert_match_count(
                         &model_frame,
-                        "gemini/gemini-3.1-pro-preview [max]",
+                        "antigravity/gemini-3.1-pro-preview [max]",
                         0,
                     );
                 })

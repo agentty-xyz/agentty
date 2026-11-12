@@ -884,7 +884,7 @@ impl SqliteSessionRepository {
     }
 
     /// Infers the provider from its model family, retaining Antigravity as
-    /// the fallback for Gemini and unrecognized model identifiers.
+    /// the fallback for `gemini-*` and unrecognized model identifiers.
     fn persisted_agent_for_model(model: &str) -> String {
         let agent_kind = if model.starts_with("claude-") {
             AgentKind::Claude

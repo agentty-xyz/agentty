@@ -214,10 +214,12 @@ async fn graph_proposal_clarification_and_cancel() -> E2eResult {
                     .press_key("Enter")
                     .write_text("Need clarification")
                     .press_key("Enter")
-                    .wait_for_text("Which target?", 10000)
+                    .wait_for_text("Question 1/1", 10000)
                     .wait_for_text("Needs your input", 5000)
-                    .capture_labeled("clarification", "Question in chat; status in graph sidebar")
-                    .press_key("Enter")
+                    .capture_labeled(
+                        "clarification",
+                        "Question panel in chat; status in graph sidebar",
+                    )
                     .write_text("Local")
                     .press_key("Enter")
                     .wait_for_text(
