@@ -32,18 +32,6 @@ async fn provider_tool_metadata_and_content_follow_the_host_policy() {
             ],
             Some("Bash"),
         ),
-        (
-            AgentKind::Gemini,
-            vec![
-                gemini(
-                    &json!({"sessionUpdate": "tool_call", "toolCallId": "call-1", "kind": "execute", "name": "run_shell_command", "rawInput": {"command": "cargo test"}, "title": "Private tool title"}),
-                ),
-                gemini(
-                    &json!({"sessionUpdate": "tool_call_update", "toolCallId": "call-1", "status": "failed", "rawOutput": "test failed"}),
-                ),
-            ],
-            Some("run_shell_command"),
-        ),
     ];
 
     // Act / Assert
@@ -98,7 +86,6 @@ async fn provider_tool_metadata_and_content_follow_the_host_policy() {
                     capture
                 );
             }
-            assert!(!format!("{spans:?}").contains("Private tool title"));
         }
     }
 }
@@ -144,66 +131,6 @@ async fn codex_dynamic_results_and_mcp_errors_use_the_wire_fields() {
                 }
             )));
         }
-    }
-}
-
-#[tokio::test]
-async fn gemini_content_fallback_and_separate_streams_keep_partial_update_metadata() {
-    // Arrange
-    let events = vec![
-        gemini(
-            &json!({"sessionUpdate": "tool_call", "toolCallId": "streams", "kind": "execute", "rawInput": {"command": "cargo test"}}),
-        ),
-        gemini(
-            &json!({"sessionUpdate": "tool_call_update", "toolCallId": "streams", "status": "failed", "rawOutput": {"stdout": "building", "stderr": "compilation failed"}}),
-        ),
-        gemini(
-            &json!({"sessionUpdate": "tool_call_update", "toolCallId": "fallback", "status": "completed", "rawOutput": null, "content": [{"type": "content", "content": {"type": "text", "text": "ok"}}]}),
-        ),
-    ];
-
-    // Act / Assert
-    for capture in [false, true] {
-        let spans = capture_with_policy(AgentKind::Gemini, events.clone(), capture).await;
-        let tool = spans
-            .iter()
-            .find(|span| {
-                span.attributes
-                    .contains(&KeyValue::new("gen_ai.tool.call.id", "streams"))
-            })
-            .expect("streams");
-        assert!(
-            tool.attributes
-                .contains(&KeyValue::new("agentty.provider.operation.type", "command"))
-        );
-        assert!(
-            tool.attributes
-                .contains(&KeyValue::new("agentty.tool.stderr.bytes", 18_i64))
-        );
-        assert_eq!(
-            tool.attributes
-                .contains(&KeyValue::new("agentty.tool.stderr", "compilation failed")),
-            capture
-        );
-        assert_eq!(
-            tool.attributes
-                .contains(&KeyValue::new("agentty.tool.stdout", "building")),
-            capture
-        );
-        let fallback = spans
-            .iter()
-            .find(|span| {
-                span.attributes
-                    .contains(&KeyValue::new("gen_ai.tool.call.id", "fallback"))
-            })
-            .expect("fallback");
-        assert_eq!(
-            fallback
-                .attributes
-                .iter()
-                .any(|attribute| attribute.key.as_str() == "gen_ai.tool.call.result"),
-            capture
-        );
     }
 }
 
@@ -345,45 +272,6 @@ async fn codex_operations_keep_attempt_parentage_outcomes_and_numeric_metadata()
         span.attributes
             .contains(&KeyValue::new("agentty.provider.duration_ms", 25.0))
     }));
-    assert!(!format!("{spans:?}").contains("private"));
-}
-
-#[tokio::test]
-async fn gemini_updates_retain_original_category_and_finish_partial_payloads() {
-    // Arrange
-    let mut events = Vec::new();
-    for (index, kind) in [
-        "read",
-        "edit",
-        "execute",
-        "search",
-        "fetch",
-        "private custom kind",
-    ]
-    .into_iter()
-    .enumerate()
-    {
-        events.push(gemini(&json!({"sessionUpdate": "tool_call", "toolCallId": index.to_string(), "kind": kind, "status": "pending", "title": "private title", "rawInput": "private input"})));
-        events.push(gemini(&json!({"sessionUpdate": "tool_call_update", "toolCallId": index.to_string(), "status": "in_progress"})));
-        events.push(gemini(&json!({"sessionUpdate": "tool_call_update", "toolCallId": index.to_string(), "status": "completed", "content": "private output"})));
-    }
-    for status in ["failed", "canceled", "cancelled"] {
-        events.push(gemini(
-            &json!({"sessionUpdate": "tool_call_update", "toolCallId": status, "status": status}),
-        ));
-    }
-
-    // Act
-    let spans = capture(AgentKind::Gemini, events).await;
-
-    // Assert
-    assert_children(&spans, 9);
-    for category in ["read", "file_change", "command", "search", "fetch", "tool"] {
-        assert!(spans.iter().any(|span| {
-            span.attributes
-                .contains(&KeyValue::new("agentty.provider.operation.type", category))
-        }));
-    }
     assert!(!format!("{spans:?}").contains("private"));
 }
 
@@ -566,15 +454,6 @@ async fn malformed_unknown_and_unrelated_provider_events_are_ignored() {
             ],
         ),
         (
-            AgentKind::Gemini,
-            vec![
-                json!({}),
-                json!({"method": "session/update"}),
-                gemini(&json!({"sessionUpdate": "agent_message_chunk"})),
-                gemini(&json!({"sessionUpdate": "tool_call"})),
-            ],
-        ),
-        (
             AgentKind::Antigravity,
             vec![
                 json!({}),
@@ -621,7 +500,7 @@ async fn pending_operations_close_when_the_attempt_future_is_canceled() {
     // Act
     let task = tokio::spawn(root.scope(async move {
         let mut trace = OperationTrace::new();
-        trace.observe(AgentKind::Gemini, &gemini(&json!({"sessionUpdate": "tool_call", "toolCallId": "unfinished", "kind": "execute"})));
+        trace.observe(AgentKind::Codex, &json!({"method": "item/started", "params": {"item": {"id": "unfinished", "type": "commandExecution"}}}));
         let _ = ready_tx.send(());
         future::pending::<()>().await;
     }));
@@ -850,10 +729,6 @@ fn outcomes(spans: &[SpanData]) -> Vec<&str> {
             _ => None,
         })
         .collect()
-}
-
-fn gemini(update: &Value) -> Value {
-    json!({"method": "session/update", "params": {"sessionId": "session", "update": update}})
 }
 
 fn antigravity(step: &Value) -> Value {

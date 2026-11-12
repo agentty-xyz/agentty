@@ -42,11 +42,7 @@ fn known_agent_cli_exit_guidance(
         AgentKind::Claude if is_claude_authentication_error(stdout, stderr) => {
             Some(claude_authentication_error_message(command_label))
         }
-        AgentKind::Antigravity
-        | AgentKind::Claude
-        | AgentKind::Codex
-        | AgentKind::Gemini
-        | AgentKind::Harness => None,
+        AgentKind::Antigravity | AgentKind::Claude | AgentKind::Codex | AgentKind::Harness => None,
     }
 }
 

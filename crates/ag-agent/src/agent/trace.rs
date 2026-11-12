@@ -41,7 +41,6 @@ impl OperationTrace {
 
         match kind {
             AgentKind::Codex => self.codex(payload),
-            AgentKind::Gemini => self.gemini(payload),
             AgentKind::Antigravity => self.antigravity(payload),
             AgentKind::Claude => self.claude(payload),
             AgentKind::Harness => {}
@@ -130,7 +129,6 @@ impl OperationTrace {
                         .into_iter()
                         .filter_map(|field| item.get(field))
                         .find(|value| !value.is_null()),
-                    ..ToolMetadata::default()
                 }
                 .attributes(self.capture_content()),
             );
@@ -142,57 +140,6 @@ impl OperationTrace {
             item.get("durationMs").and_then(Value::as_f64),
             attributes,
         );
-    }
-
-    fn gemini(&mut self, payload: &Value) {
-        if payload.get("method").and_then(Value::as_str) != Some("session/update") {
-            return;
-        }
-        let Some(update) = payload
-            .get("params")
-            .and_then(|params| params.get("update"))
-        else {
-            return;
-        };
-        if !matches!(
-            update.get("sessionUpdate").and_then(Value::as_str),
-            Some("tool_call" | "tool_call_update")
-        ) {
-            return;
-        }
-        let Some(id) = update.get("toolCallId").and_then(Value::as_str) else {
-            return;
-        };
-        let category = match update.get("kind").and_then(Value::as_str) {
-            Some("read") => "read",
-            Some("edit") => "file_change",
-            Some("execute") => "command",
-            Some("search") => "search",
-            Some("fetch") => "fetch",
-            _ => "tool",
-        };
-        let outcome = match update.get("status").and_then(Value::as_str) {
-            Some("completed") => Some(Outcome::Completed),
-            Some("failed") => Some(Outcome::Failed),
-            Some("canceled" | "cancelled") => Some(Outcome::Canceled),
-            _ => None,
-        };
-        let input = update.get("rawInput");
-        let output = update.get("rawOutput");
-        let attributes = ToolMetadata {
-            command: input
-                .and_then(|input| input.get("command"))
-                .and_then(Value::as_str),
-            input,
-            name: update.get("name").and_then(Value::as_str),
-            output: output
-                .filter(|value| !value.is_null())
-                .or_else(|| update.get("content")),
-            stderr: output.and_then(|output| output.get("stderr")),
-            stdout: output.and_then(|output| output.get("stdout")),
-        }
-        .attributes(self.capture_content());
-        self.record(id, category, outcome, None, attributes);
     }
 
     fn antigravity(&mut self, payload: &Value) {

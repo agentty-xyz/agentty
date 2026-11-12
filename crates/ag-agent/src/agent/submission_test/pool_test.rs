@@ -93,8 +93,8 @@ async fn leases_separate_concurrent_calls_and_release_slots_on_drop() {
     let second = pool
         .acquire(AgentKind::Codex, Some(Arc::clone(&server)))
         .expect("second");
-    let gemini = pool
-        .acquire(AgentKind::Gemini, Some(Arc::clone(&server)))
+    let antigravity = pool
+        .acquire(AgentKind::Antigravity, Some(Arc::clone(&server)))
         .expect("provider isolation");
     let first_id = first.0.session_id.clone();
     drop(first);
@@ -105,9 +105,9 @@ async fn leases_separate_concurrent_calls_and_release_slots_on_drop() {
     // Assert
     assert_eq!(reused.0.session_id, first_id);
     assert_ne!(second.0.session_id, first_id);
-    assert_ne!(gemini.0.session_id, first_id);
+    assert_ne!(antigravity.0.session_id, first_id);
     assert!(pool.acquire(AgentKind::Claude, None).is_none());
-    drop((reused, second, gemini));
+    drop((reused, second, antigravity));
     pool.close().await;
 }
 

@@ -55,7 +55,7 @@ async fn forwards_runtime_pid_and_clears_it_after_non_retained_turn() {
                 Ok(make_ok_response(r#"{"answer":"ok","questions":[]}"#))
             })
         });
-    let channel = AppServerAgentChannel::new(Arc::new(client), AgentKind::Gemini);
+    let channel = AppServerAgentChannel::new(Arc::new(client), AgentKind::Antigravity);
     let (events_tx, mut events_rx) = mpsc::unbounded_channel();
 
     // Act

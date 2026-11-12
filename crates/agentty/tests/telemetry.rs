@@ -96,17 +96,13 @@ async fn session_and_turn_lifecycle_events_report_only_bounded_metadata() -> Tes
         (SessionType::Stacked, "stacked"),
         (SessionType::Fork, "fork"),
     ];
-    let agents = [
-        AgentKind::Codex,
-        AgentKind::Claude,
-        AgentKind::Gemini,
-        AgentKind::Antigravity,
-    ]
-    .map(|kind| AgentSelection::new(kind, kind.default_model()));
+    let agents = [AgentKind::Codex, AgentKind::Claude, AgentKind::Antigravity]
+        .map(|kind| AgentSelection::new(kind, kind.default_model()));
+    let event_count = session_types.len() + agents.len() * 3;
     let listener = TcpListener::bind("127.0.0.1:0")?;
     let host = format!("http://{}", listener.local_addr()?);
     let receiver = std::thread::spawn(move || -> TestResult<Vec<Value>> {
-        (0..16).map(|_| receive_event(&listener)).collect()
+        (0..event_count).map(|_| receive_event(&listener)).collect()
     });
     let analytics = Analytics::new("token", &host, INSTALLATION_ID)
         .ok_or_else(|| io::Error::other("configured sender"))?;

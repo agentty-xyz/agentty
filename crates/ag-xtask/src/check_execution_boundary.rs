@@ -15,7 +15,7 @@ const ADAPTER_NAMING_CRATES: [&str; 5] = [
 ];
 
 /// Agent CLI executables that only `ag-agent` may launch.
-const AGENT_EXECUTABLES: [&str; 4] = ["agy", "claude", "codex", "gemini"];
+const AGENT_EXECUTABLES: [&str; 3] = ["agy", "claude", "codex"];
 
 /// Validates that model execution flows only through worker-owned crates.
 ///

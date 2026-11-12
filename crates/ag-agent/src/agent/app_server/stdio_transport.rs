@@ -1,12 +1,11 @@
 //! Shared primitives for stdio-backed app-server transports.
 //!
-//! Both Codex (`codex app-server`) and Gemini (`gemini --acp`) use the same
+//! Stdio-backed runtimes, such as Codex (`codex app-server`), share the same
 //! wire protocol framing and stdio loop logic. This module centralizes the
 //! transport lifetime helpers behind one mockable boundary.
 
 use std::future::Future;
 use std::pin::Pin;
-use std::time::Duration;
 
 use serde_json::Value;
 use tokio::io::{AsyncBufReadExt, BufReader, Lines};
@@ -34,13 +33,6 @@ pub(crate) trait AppServerRuntimeTransport: Send {
     fn wait_for_response_line(
         &mut self,
         response_id: String,
-    ) -> AppServerTransportFuture<'_, Result<String, AppServerTransportError>>;
-
-    /// Waits for one matching response using a provider-selected timeout.
-    fn wait_for_response_line_with_timeout(
-        &mut self,
-        response_id: String,
-        response_timeout: Duration,
     ) -> AppServerTransportFuture<'_, Result<String, AppServerTransportError>>;
 
     /// Reads the next raw stdout line from the runtime.
@@ -107,22 +99,6 @@ impl AppServerRuntimeTransport for AppServerStdioTransport {
     ) -> AppServerTransportFuture<'_, Result<String, AppServerTransportError>> {
         Box::pin(async move {
             app_server_transport::wait_for_response_line(&mut self.stdout_lines, &response_id).await
-        })
-    }
-
-    /// Waits for one matching response line using an explicit deadline.
-    fn wait_for_response_line_with_timeout(
-        &mut self,
-        response_id: String,
-        response_timeout: Duration,
-    ) -> AppServerTransportFuture<'_, Result<String, AppServerTransportError>> {
-        Box::pin(async move {
-            app_server_transport::wait_for_response_line_with_timeout(
-                &mut self.stdout_lines,
-                &response_id,
-                response_timeout,
-            )
-            .await
         })
     }
 

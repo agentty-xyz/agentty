@@ -298,7 +298,7 @@ async fn focused_review_repairs_trailing_text_with_direct_review_schema() {
             let prompt = crate::agent::prompt::build_cli_prompt_text(
                 request,
                 ag_protocol::ProtocolSchemaInstructionMode::PromptSchema,
-                "Gemini",
+                "Claude",
             )
             .expect("repair envelope");
             assert!(prompt.contains("\"title\": \"FocusedReview\""));

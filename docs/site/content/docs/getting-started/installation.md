@@ -70,9 +70,6 @@ authenticate one backend before launching Agentty:
 - **Antigravity** (`agy` 1.1.18 or newer): install the
   [Antigravity CLI](https://github.com/google-antigravity/antigravity-cli), then run
   `agy` and follow its sign-in flow.
-- **Gemini** (`gemini`): install the
-  [Gemini CLI](https://github.com/google-gemini/gemini-cli), then configure an API key
-  or Vertex AI authentication.
 
 See [Agents & Models](@/docs/agents/backends.md) before choosing credentials. Provider
 subscription and OAuth rules differ, and not every interactive CLI sign-in is suitable

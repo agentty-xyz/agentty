@@ -451,10 +451,10 @@ async fn session_fast_mode_toggle() -> E2eResult {
                     .press_key("Enter")
                     .wait_for_text("gemini-4-argon", 3000)
                     .press_key("Enter")
-                    .wait_for_text("gemini/gemini-4-argon [high]", 5000)
+                    .wait_for_text("antigravity/gemini-4-argon [high]", 5000)
                     .capture_labeled(
                         "incompatible_model_normalizes_speed",
-                        "Switching to Gemini drops fast mode and its speed display",
+                        "Switching to Antigravity drops fast mode and its speed display",
                     )
             },
             |frame, report| {
@@ -484,10 +484,14 @@ async fn session_fast_mode_toggle() -> E2eResult {
                     );
                     assertion::assert_not_visible(&normal_frame, "/fast");
 
-                    // Gemini keeps response style in the composer while
+                    // Antigravity keeps response style in the composer while
                     // dropping the unsupported speed status.
                     let full = Region::full(frame.cols(), frame.rows());
-                    assertion::assert_text_in_region(frame, "gemini/gemini-4-argon [high]", &full);
+                    assertion::assert_text_in_region(
+                        frame,
+                        "antigravity/gemini-4-argon [high]",
+                        &full,
+                    );
                     assertion::assert_not_visible(frame, "· Fast");
                 })
             },

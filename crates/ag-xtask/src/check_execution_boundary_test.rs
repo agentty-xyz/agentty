@@ -131,7 +131,6 @@ fn bypasses_are_reported_together() {
             "ag-agent no longer launches `agy`",
             "ag-agent no longer launches `claude`",
             "ag-agent no longer launches `codex`",
-            "ag-agent no longer launches `gemini`",
         ]
         .join("\n"))
     );

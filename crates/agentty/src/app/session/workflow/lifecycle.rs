@@ -1049,9 +1049,11 @@ impl SessionManager {
                 &persisted_session_id,
             )
             .await?;
-            ag_worker::setup_backend(session_agent.kind(), &folder).map_err(|error| {
-                SessionError::Workflow(format!("Failed to setup session backend: {error}"))
-            })?;
+            services
+                .setup_session_backend(session_agent.kind(), &folder)
+                .map_err(|error| {
+                    SessionError::Workflow(format!("Failed to setup session backend: {error}"))
+                })?;
             self.persist_stack_base_for_stacked_draft_worktree(
                 services,
                 &folder,
@@ -1076,7 +1078,7 @@ impl SessionManager {
         )
         .await?;
 
-        if let Err(error) = ag_worker::setup_backend(session_agent.kind(), &folder) {
+        if let Err(error) = services.setup_session_backend(session_agent.kind(), &folder) {
             let cleanup_errors = Self::cleanup_session_worktree_resources(
                 services.fs_client().clone(),
                 services.git_client(),

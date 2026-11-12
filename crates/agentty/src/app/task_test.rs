@@ -1111,7 +1111,7 @@ fn version_availability_event_ignores_current_version_tag() {
 }
 
 #[tokio::test]
-/// Ensures a detached Gemini review-assist task uses the focused-review
+/// Ensures a detached Antigravity review-assist task uses the focused-review
 /// route and emits the completed review through the app event channel.
 async fn spawn_review_assist_task_with_client_emits_completed_review() {
     // Arrange
@@ -1119,7 +1119,7 @@ async fn spawn_review_assist_task_with_client_emits_completed_review() {
     let (app_event_tx, mut app_event_rx) = mpsc::unbounded_channel();
     let mut run_client = ag_worker::MockRunClient::new();
     run_client.expect_submit().times(3).returning(|request| {
-        assert_eq!(request.harness, (AgentKind::Gemini).to_string());
+        assert_eq!(request.harness, (AgentKind::Antigravity).to_string());
         assert_eq!(
             request.permission_mode,
             ag_contracts::PermissionMode::ReadOnly
@@ -1151,7 +1151,7 @@ async fn spawn_review_assist_task_with_client_emits_completed_review() {
         diff_hash: 42,
         reasoning_level: ReasoningLevel::XHigh,
         review_diff: "diff --git a/src/lib.rs b/src/lib.rs".to_string(),
-        review_selection: AgentSelection::new(AgentKind::Gemini, AgentModel::Gemini31Pro),
+        review_selection: AgentSelection::new(AgentKind::Antigravity, AgentModel::Gemini31Pro),
         session_chat_history: None,
         session_folder: PathBuf::from("/tmp/review-assist"),
         session_id: SESSION_ID.into(),
@@ -1267,9 +1267,8 @@ async fn review_assist_text_with_client_returns_one_shot_error_on_submit_failure
 }
 
 #[tokio::test]
-/// Ensures review assist keeps the selected provider for shared Gemini
-/// model ids instead of resolving the model to the first available
-/// provider.
+/// Ensures review assist submits through the selected provider and model
+/// instead of re-resolving the provider from the model id.
 async fn review_assist_text_with_client_preserves_review_selection_provider() {
     // Arrange
     let session_folder = Path::new("/tmp/review-assist-provider");
@@ -1790,7 +1789,7 @@ async fn completed_review_retains_checkpoints_until_persistence() {
         diff_hash: 42,
         reasoning_level: ReasoningLevel::Low,
         review_diff: "+change".into(),
-        review_selection: AgentSelection::new(AgentKind::Gemini, AgentModel::Gemini31Pro),
+        review_selection: AgentSelection::new(AgentKind::Antigravity, AgentModel::Gemini31Pro),
         session_chat_history: None,
         session_folder: PathBuf::from("."),
         session_id: "cleanup".into(),
@@ -1853,7 +1852,7 @@ async fn review_admission_failure_emits_failure_without_submitting_provider_work
         diff_hash: 42,
         reasoning_level: ReasoningLevel::Low,
         review_diff: "+change".into(),
-        review_selection: AgentSelection::new(AgentKind::Gemini, AgentModel::Gemini31Pro),
+        review_selection: AgentSelection::new(AgentKind::Antigravity, AgentModel::Gemini31Pro),
         session_chat_history: None,
         session_folder: PathBuf::from("."),
         session_id: "admission".into(),
@@ -1903,7 +1902,7 @@ async fn invalid_project_rules_fail_before_submitting_model_work() {
             diff_hash: 42,
             reasoning_level: ReasoningLevel::Low,
             review_diff: "+change".into(),
-            review_selection: AgentSelection::new(AgentKind::Gemini, AgentModel::Gemini31Pro),
+            review_selection: AgentSelection::new(AgentKind::Antigravity, AgentModel::Gemini31Pro),
             session_chat_history: None,
             session_folder: PathBuf::from("project"),
             session_id: "invalid-rules".into(),

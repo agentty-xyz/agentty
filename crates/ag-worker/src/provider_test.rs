@@ -18,7 +18,7 @@ use crate::{
 fn subagent_limit_replaces_only_policies_that_enforce_one() {
     // Arrange
     let original = RuntimeConfig::default()
-        .with_execution_policy(AgentKind::Gemini, ExecutionPolicy::default());
+        .with_execution_policy(AgentKind::Antigravity, ExecutionPolicy::default());
     let limit = NonZeroUsize::new(8).expect("limit is non-zero");
 
     // Act
@@ -31,7 +31,7 @@ fn subagent_limit_replaces_only_policies_that_enforce_one() {
         assert_eq!(policy.tools, original.execution_policy(kind).tools);
     }
     assert_eq!(
-        changed.execution_policy(AgentKind::Gemini),
+        changed.execution_policy(AgentKind::Antigravity),
         ExecutionPolicy::default()
     );
 }
@@ -75,10 +75,6 @@ fn worker_defaults_preserve_provider_policy_and_overrides_are_isolated() {
     let codex = original.execution_policy(AgentKind::Codex);
     assert_eq!(codex.max_concurrent_subagents, NonZeroUsize::new(2));
     assert_eq!(changed.execution_policy(AgentKind::Codex), codex);
-    assert_eq!(
-        original.execution_policy(AgentKind::Gemini),
-        ExecutionPolicy::default()
-    );
     assert_eq!(
         original.execution_policy(AgentKind::Antigravity),
         ExecutionPolicy::default()

@@ -30,12 +30,3 @@ fn create_agent_channel_returns_app_server_channel_for_codex() {
     // Assert
     assert_eq!(Arc::strong_count(&channel), 1);
 }
-
-#[test]
-fn create_agent_channel_returns_app_server_channel_for_gemini() {
-    // Arrange / Act
-    let channel = create_agent_channel(AgentKind::Gemini, None, None);
-
-    // Assert
-    assert_eq!(Arc::strong_count(&channel), 1);
-}

@@ -236,7 +236,6 @@ fn review_agent_kind_labels_are_title_cased() {
     // Arrange
     let cases = [
         (AgentKind::Antigravity, "Antigravity"),
-        (AgentKind::Gemini, "Gemini"),
         (AgentKind::Claude, "Claude"),
         (AgentKind::Codex, "Codex"),
         (AgentKind::Harness, "Harness"),

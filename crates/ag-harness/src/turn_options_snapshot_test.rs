@@ -164,18 +164,17 @@ fn comparison_metadata_and_fingerprint_corruption_are_rejected() {
 #[test]
 fn version_two_fingerprints_retain_legacy_serialization() {
     // Arrange
-    let schema = serde_json::from_str::<Value>(
-        r#"{"type":"array","prefixItems":[{"type":"string","minLength":1},{"type":"integer","minimum":0}]}"#,
-    )
-    .expect("schema JSON");
-    let mut legacy = json!({
-        "comparison_base": null,
-        "max_tool_calls": 8,
-        "output_schema": schema,
-        "tool_policy": ToolPolicy::default(),
-        "version": 2,
-    });
-    let fingerprint = hex::encode(Sha256::digest(legacy.to_string()));
+    // Earlier insertion-ordered builds hashed these exact bytes. Hashing the
+    // literal, not a re-serialized `Value`, fails if `preserve_order` is lost.
+    let legacy_options = concat!(
+        r#"{"comparison_base":null,"max_tool_calls":8,"output_schema":"#,
+        r#"{"type":"array","prefixItems":[{"type":"string","minLength":1},"#,
+        r#"{"type":"integer","minimum":0}]},"#,
+        r#""tool_policy":{"read":false,"write":false},"version":2}"#,
+    );
+    let fingerprint = hex::encode(Sha256::digest(legacy_options));
+    let mut legacy = serde_json::from_str::<Value>(legacy_options).expect("legacy JSON");
+    let schema = legacy["output_schema"].clone();
     legacy["fingerprint"] = json!(fingerprint);
 
     // Act

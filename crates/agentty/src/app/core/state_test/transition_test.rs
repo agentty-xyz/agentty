@@ -624,7 +624,7 @@ async fn test_new_with_clients_fails_when_no_backend_cli_is_available() {
         result,
         Err(AppError::Workflow(message))
             if message
-                == "No supported backend CLI found on `PATH`. Install `codex`, `claude`, `gemini`, or Antigravity CLI 1.1.7 or newer. For an older `agy`, run `agy update`, then restart `agentty`."
+                == "No supported backend CLI found on `PATH`. Install `codex`, `claude`, or Antigravity CLI 1.1.7 or newer. For an older `agy`, run `agy update`, then restart `agentty`."
     ));
 }
 
@@ -691,7 +691,7 @@ async fn turn_end_telemetry_preserves_each_outcome_and_queued_selection() {
     let (analytics, receiver) = capture_events(3);
     app.set_analytics(Some(analytics));
     let agents = [
-        AgentSelection::new(AgentKind::Gemini, AgentModel::Gemini38Flash),
+        AgentSelection::new(AgentKind::Claude, AgentModel::ClaudeSonnet55),
         AgentSelection::new(AgentKind::Antigravity, AgentModel::Gemini38Flash),
         AgentSelection::new(AgentKind::Codex, AgentModel::Gpt61Sol),
     ];

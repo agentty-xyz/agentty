@@ -58,6 +58,19 @@ async fn production_graph_factory_validates_identity_and_owns_isolated_cleanup()
     client.shutdown().await.expect("isolated cleanup");
 }
 
+#[test]
+fn production_factory_delegates_workspace_setup_to_the_runtime() {
+    // Arrange
+    let factory = RealSessionRunFactory::new(RuntimeConfig::default());
+    let workspace = tempfile::tempdir().expect("workspace");
+
+    // Act
+    let result = factory.setup_backend(AgentKind::Codex, workspace.path());
+
+    // Assert
+    assert!(result.is_ok());
+}
+
 impl Drop for CleanupResource {
     fn drop(&mut self) {
         assert!(self.should_succeed, "injected cleanup failure");

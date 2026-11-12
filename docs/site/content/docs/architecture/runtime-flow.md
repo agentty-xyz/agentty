@@ -419,9 +419,8 @@ Explicit transcript replay does not require provider-native resume. Each graph a
 starts a fresh provider conversation and supplies only its node's persisted history;
 Claude graph attempts never select the latest worktree conversation with `-c`.
 
-Codex and Antigravity retain resident runtimes between turns. Gemini shuts down after
-each turn and replays stored history. Managed runtime cleanup owns provider subprocesses
-and their descendants.
+Codex and Antigravity retain resident runtimes between turns. Managed runtime cleanup
+owns provider subprocesses and their descendants.
 
 <a id="architecture-session-isolation-guards"></a> Every turn validates its worktree and
 expected branch. Main-checkout status is compared before and after work, warning on new

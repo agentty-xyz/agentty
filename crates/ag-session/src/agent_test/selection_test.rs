@@ -67,9 +67,9 @@ fn test_agent_selection_speed_compatibility() {
             true,
         ),
         (
-            AgentSelection::new(AgentKind::Gemini, AgentModel::Gemini31Pro),
+            AgentSelection::new(AgentKind::Antigravity, AgentModel::Gemini31Pro),
             SpeedMode::Fast,
-            AgentSelection::new(AgentKind::Gemini, AgentModel::Gemini31Pro),
+            AgentSelection::new(AgentKind::Antigravity, AgentModel::Gemini31Pro),
             false,
         ),
         (
@@ -117,25 +117,19 @@ fn test_selectable_models_for_agent_kinds_uses_provider_order() {
 }
 
 #[test]
-/// Ensures shared Gemini models appear once even when both Google
+/// Ensures Codex models shared with the harness appear once even when both
 /// providers are available.
 fn test_selectable_models_for_agent_kinds_deduplicates_shared_models() {
     // Arrange
-    let agent_kinds = [AgentKind::Gemini, AgentKind::Antigravity];
+    let agent_kinds = [AgentKind::Harness, AgentKind::Codex];
+    let mut expected_models = AgentKind::Harness.models().to_vec();
+    expected_models.push(AgentModel::Gpt53CodexSpark);
 
     // Act
     let selectable_models = selectable_models_for_agent_kinds(&agent_kinds);
 
     // Assert
-    assert_eq!(
-        selectable_models,
-        vec![
-            AgentModel::Gemini4Argon,
-            AgentModel::Gemini31Pro,
-            AgentModel::Gemini38Flash,
-            AgentModel::Gemini35FlashLite,
-        ]
-    );
+    assert_eq!(selectable_models, expected_models);
 }
 
 #[test]
@@ -183,17 +177,17 @@ fn test_resolve_model_for_available_agent_kinds_uses_first_available_default() {
 /// run the selected model.
 fn test_resolve_agent_selection_for_model_preserves_preferred_shared_provider() {
     // Arrange
-    let model = AgentModel::Gemini38Flash;
-    let available_agent_kinds = [AgentKind::Gemini, AgentKind::Antigravity];
+    let model = AgentModel::Gpt61Sol;
+    let available_agent_kinds = [AgentKind::Codex, AgentKind::Harness];
 
     // Act
     let resolved_selection =
-        resolve_agent_selection_for_model(model, AgentKind::Antigravity, &available_agent_kinds);
+        resolve_agent_selection_for_model(model, AgentKind::Harness, &available_agent_kinds);
 
     // Assert
     assert_eq!(
         resolved_selection,
-        AgentSelection::new(AgentKind::Antigravity, model)
+        AgentSelection::new(AgentKind::Harness, model)
     );
 }
 
@@ -202,17 +196,17 @@ fn test_resolve_agent_selection_for_model_preserves_preferred_shared_provider() 
 /// preferred provider cannot run the selected model.
 fn test_resolve_agent_selection_for_model_uses_available_provider_order() {
     // Arrange
-    let model = AgentModel::Gemini38Flash;
-    let available_agent_kinds = [AgentKind::Gemini, AgentKind::Antigravity];
+    let model = AgentModel::Gpt61Sol;
+    let available_agent_kinds = [AgentKind::Harness, AgentKind::Codex];
 
     // Act
     let resolved_selection =
-        resolve_agent_selection_for_model(model, AgentKind::Codex, &available_agent_kinds);
+        resolve_agent_selection_for_model(model, AgentKind::Antigravity, &available_agent_kinds);
 
     // Assert
     assert_eq!(
         resolved_selection,
-        AgentSelection::new(AgentKind::Gemini, model)
+        AgentSelection::new(AgentKind::Harness, model)
     );
 }
 

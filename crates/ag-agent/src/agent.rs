@@ -13,7 +13,6 @@ mod claude;
 pub(crate) mod cli;
 mod codex;
 pub(crate) mod execution_policy;
-mod gemini;
 mod harness;
 mod instruction;
 pub(crate) mod model_profile;
