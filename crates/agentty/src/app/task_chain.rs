@@ -17,7 +17,7 @@ use ag_session::{
 };
 
 use crate::app::App;
-use crate::app::session::SessionTaskService;
+use crate::app::session::{GraphRequestPrompt, SessionTaskService};
 use crate::infra::db::DbError;
 
 impl App {
@@ -68,7 +68,12 @@ impl App {
         }
         self.auto_address_review_iterations.remove(session_id);
         self.sessions
-            .initialize_task_chain_title(&self.services, session_id, &request.user_request)
+            .initialize_graph_request_title(
+                &self.services,
+                session_id,
+                &request.user_request,
+                GraphRequestPrompt::Record,
+            )
             .await;
         self.mirror_task_chain_transcript_message(
             session_id,

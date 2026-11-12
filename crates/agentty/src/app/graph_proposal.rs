@@ -16,7 +16,7 @@ use tokio_util::sync::CancellationToken;
 
 use crate::app::App;
 use crate::app::command_gateway::GraphProposalCommand;
-use crate::app::session::SessionTaskService;
+use crate::app::session::{GraphRequestPrompt, SessionTaskService};
 use crate::domain::session::Status;
 
 #[derive(Template)]
@@ -195,6 +195,14 @@ impl App {
             .map_err(proposal_error)?
         {
             self.graph_chat.invalidate();
+            self.sessions
+                .initialize_graph_request_title(
+                    &self.services,
+                    &state.input.session_id,
+                    &state.input.request.text,
+                    GraphRequestPrompt::Leave,
+                )
+                .await;
             self.spawn_graph_proposal_generation(state, folder);
         }
 
