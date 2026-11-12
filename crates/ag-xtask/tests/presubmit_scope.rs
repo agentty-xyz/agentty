@@ -4,9 +4,9 @@
 #![cfg(unix)]
 
 use std::error::Error;
-use std::fs;
-use std::os::unix::fs::PermissionsExt;
+use std::os::unix::fs::{PermissionsExt, symlink};
 use std::process::{Command, Output};
+use std::{env, fs};
 
 use serde_yaml_ng::Value;
 use tempfile::TempDir;
@@ -69,6 +69,54 @@ impl Fixture {
         let output: String = paths.iter().flat_map(|path| [*path, "\0"]).collect();
 
         fs::write(self.directory.path().join("diff-output"), output)
+    }
+
+    /// Replaces the stub with the real `git` and commits `from`, then its
+    /// rename to `to`, so `HEAD^1..HEAD` is the rename alone. Identical
+    /// content makes `git` detect the rename unless the step disables it.
+    fn commit_rename(&self, from: &str, to: &str) -> Result<(), Box<dyn Error>> {
+        let git = env::var_os("PATH")
+            .iter()
+            .flat_map(env::split_paths)
+            .map(|directory| directory.join("git"))
+            .find(|candidate| candidate.is_file())
+            .ok_or("git on PATH")?;
+        let stub = self.directory.path().join("bin/git");
+        fs::remove_file(&stub)?;
+        symlink(git, stub)?;
+        for path in [from, to] {
+            fs::create_dir_all(self.directory.path().join(path).parent().ok_or("parent")?)?;
+        }
+        fs::write(self.directory.path().join(from), "Notes\n")?;
+        self.git(&["init", "-q"])?;
+        self.git(&["add", from])?;
+        self.git(&["commit", "-qm", "base"])?;
+        self.git(&["mv", from, to])?;
+        self.git(&["commit", "-qm", "rename"])?;
+
+        Ok(())
+    }
+
+    fn git(&self, arguments: &[&str]) -> Result<(), Box<dyn Error>> {
+        let output = Command::new("git")
+            .args([
+                "-c",
+                "user.name=Fixture",
+                "-c",
+                "user.email=fixture@example.invalid",
+            ])
+            .args(arguments)
+            .env("GIT_CONFIG_GLOBAL", "/dev/null")
+            .env("GIT_CONFIG_NOSYSTEM", "1")
+            .current_dir(self.directory.path())
+            .output()?;
+        assert!(
+            output.status.success(),
+            "{}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+
+        Ok(())
     }
 
     /// Runs the step with GitHub's default `bash` options.
@@ -158,6 +206,36 @@ fn any_path_the_suite_can_read_runs_it() -> Result<(), Box<dyn Error>> {
             String::from_utf8(result.stdout)?.contains(&format!("E2E runs: {path}")),
             "{path}"
         );
+    }
+
+    Ok(())
+}
+
+#[test]
+fn rename_is_judged_by_both_its_old_and_new_paths() -> Result<(), Box<dyn Error>> {
+    for (from, to, expected) in [
+        (
+            "crates/agentty/src/template/notes.md",
+            "docs/notes.md",
+            "e2e=true\n",
+        ),
+        (
+            "docs/notes.md",
+            "crates/agentty/src/template/notes.md",
+            "e2e=true\n",
+        ),
+        ("docs/old-notes.md", "docs/notes.md", "e2e=false\n"),
+    ] {
+        // Arrange
+        let fixture = Fixture::new()?;
+        fixture.commit_rename(from, to)?;
+
+        // Act
+        let result = fixture.run("pull_request")?;
+
+        // Assert
+        assert!(result.status.success(), "{from} -> {to}: {result:?}");
+        assert_eq!(fixture.output()?, expected, "{from} -> {to}");
     }
 
     Ok(())
