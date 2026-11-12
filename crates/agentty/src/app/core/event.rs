@@ -2004,6 +2004,7 @@ impl App {
         // Keep the inspector's snapshot and any unsent graph input intact.
         // Session questions remain available when returning to session chat.
         if self.is_viewing_session(session_id) && !matches!(self.mode, AppMode::ExecutionGraph(_)) {
+            self.graph_questions.clear_active();
             self.mode = AppMode::Question {
                 at_mention_state: None,
                 selected_option_index: default_option_index(&questions, 0),

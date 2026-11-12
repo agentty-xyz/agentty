@@ -115,8 +115,7 @@ fn chat_notice_reports_each_proposal_outcome_in_one_short_message() {
                     ],
                 },
             ),
-            "The graph needs your input. Reply in chat to answer:\n1. Which target?\n2. Scope? \
-             (All / Docs)",
+            "Graph proposal v1 needs your input:\n1. Which target?\n2. Scope? (All / Docs)",
         ),
         (
             generated(None, proposal()),

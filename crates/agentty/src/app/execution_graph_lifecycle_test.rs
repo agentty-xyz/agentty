@@ -241,8 +241,7 @@ async fn graph_node_questions_are_asked_and_answered_in_session_chat() {
 fn question_notice() -> (String, String) {
     (
         "workflow_notice".into(),
-        "Need target\n\n`first` needs your input. Reply in chat to answer:\n1. Which target?"
-            .into(),
+        "Need target\n\n`first` needs your input:\n1. Which target?".into(),
     )
 }
 

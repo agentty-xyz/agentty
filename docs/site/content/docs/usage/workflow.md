@@ -98,11 +98,15 @@ captured agent instructions, objectives, access, dependencies, output gates, and
 `r` refreshes; `J` / `K` scroll; `q` returns to chat. Opening the inspector never
 regenerates or launches work.
 
-When a running node needs input, it asks in chat, after its answer. Reply in chat to
-answer; your next message goes to that node, which continues with it. If several nodes
-are waiting, your reply answers the question asked most recently. Replies may include
-images. If the graph is paused, for example after a restart, the node continues once you
-resume the graph from `w`.
+When a pending proposal or a running node needs input, it lists its questions in chat
+and opens them in the same question panel as an ordinary turn's
+[clarification questions](@/docs/usage/workflow.md#usage-clarification-loop). Your
+answers go to the exact proposal version or node that asked; if it no longer waits, the
+panel closes so newer questions can open. If several nodes are waiting, the panel shows
+the questions asked most recently. `Ctrl+C` closes the panel without answering; reopen
+the session to show it again, or type a chat reply instead. Typed node replies may
+include images. If the graph is paused, for example after a restart, the node continues
+once you resume the graph from `w`.
 
 Approval does not accept outputs produced later. Use `w` for execution controls and
 exact output acceptance. Duplicate approval returns its receipt without launching again.
@@ -559,10 +563,11 @@ sends the answers together as a follow-up turn.
 then `Enter`. Move beyond the options to type a free-text answer; a blank answer means
 `no answer`. Type `@` to insert a repository path.
 
-`Ctrl+C` from the answer input ends the turn without replying. `q` outside free-text
-input returns to the list and preserves progress. Reopening resumes the unanswered
-questions. See [Question Input](@/docs/usage/keybindings.md#question-input-free-text)
-for editing controls.
+`Ctrl+C` from the answer input ends the turn without replying; for graph questions it
+only closes the panel. `q` outside free-text input returns to the list and preserves
+progress. Reopening resumes the unanswered questions. See
+[Question Input](@/docs/usage/keybindings.md#question-input-free-text) for editing
+controls.
 
 ## Prompt Input Extras
 

@@ -22,7 +22,7 @@ fn default_option_index_selects_only_predefined_options() {
 }
 
 #[test]
-fn node_question_notice_asks_in_chat_after_the_answer_it_refers_to() {
+fn node_question_notice_lists_questions_after_the_answer_they_refer_to() {
     // Arrange
     let mut response = AgentResponse::plain("  Plan: move snippets into **Usage**.  ");
     response.questions = vec![
@@ -43,13 +43,13 @@ fn node_question_notice_asks_in_chat_after_the_answer_it_refers_to() {
     assert_eq!(
         notice.as_deref(),
         Some(
-            "Plan: move snippets into **Usage**.\n\n`plan_readme` needs your input. Reply in chat \
-             to answer:\n1. Which update? (Cleanup / Fixes)\n2. Anything else?"
+            "Plan: move snippets into **Usage**.\n\n`plan_readme` needs your input:\n1. Which \
+             update? (Cleanup / Fixes)\n2. Anything else?"
         )
     );
     assert_eq!(
         bare_notice.as_deref(),
-        Some("`plan_readme` needs your input. Reply in chat to answer:\n1. Which target?")
+        Some("`plan_readme` needs your input:\n1. Which target?")
     );
     assert_eq!(no_notice, None);
 }
