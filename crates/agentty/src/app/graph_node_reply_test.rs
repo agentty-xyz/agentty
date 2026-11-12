@@ -318,7 +318,7 @@ pub(in crate::app) async fn app_with(repository: MockGraphRepository) -> (App, T
     (app, directory)
 }
 
-fn screenshot() -> TurnPromptAttachment {
+pub(crate) fn screenshot() -> TurnPromptAttachment {
     TurnPromptAttachment {
         local_image_path: PathBuf::from("screenshot.png"),
         placeholder: "[Image #1]".into(),

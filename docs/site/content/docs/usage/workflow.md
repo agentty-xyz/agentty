@@ -29,9 +29,9 @@ each node with its status (Waiting, Working, Needs your input, Done, Failed, or
 Canceled), and `│` / `▼` connectors from its dependencies. It indicates when input is
 needed without repeating the discussion. It updates automatically and restores saved
 proposals when you reopen the session. When the graph exceeds the pane height, a compact
-summary of one row per node, without connectors, prioritizes nodes needing input, failed
-or blocked nodes, and active work. It shows the number of hidden nodes and keeps the `w`
-inspector shortcut visible.
+summary of one row per node, without connectors, prioritizes nodes needing input or
+approval, failed or blocked nodes, and active work. It shows the number of hidden nodes
+and keeps the `w` inspector shortcut visible.
 
 Generation reads the workspace through the utility worker; no proposed node executes
 yet. The sidebar restores the latest proposal after a restart.
@@ -65,11 +65,17 @@ the session to show it again, or type a chat reply instead. Typed node replies m
 include images. If the graph is paused, for example after a restart, the node continues
 once you resume the graph from `w`.
 
-Approval does not accept outputs produced later. Use `w` for execution controls and
-exact output acceptance. Duplicate approval returns its receipt without launching again.
-Pending previews survive restart; reply to regenerate an interrupted generation. Graphs
-that executed before restart cannot recreate spent provider credits and therefore cannot
-resume through proposal approval.
+Approval does not accept outputs produced later. When a node waits for another node's
+output to be accepted, the producing node shows **Awaiting your approval** and your next
+chat reply acts on that output: clear acceptance, such as "start implementing", accepts
+it and the waiting node starts; anything else goes to the producing node as revision
+guidance. When unsure, it revises, and a reply with images always revises. A node that
+has no task conversation, or whose output a started dependent already consumed, cannot
+be revised, so chat can only accept its output. Resume a paused graph from `w` first.
+Use `w` for other execution controls. Duplicate approval returns its receipt without
+launching again. Pending previews survive restart; reply to regenerate an interrupted
+generation. Graphs that executed before restart cannot recreate spent provider credits
+and therefore cannot resume through proposal approval.
 
 ## Execution Graph Inspector
 

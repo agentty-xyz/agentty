@@ -4,13 +4,16 @@ use std::num::NonZeroU64;
 use ag_protocol::{ProtocolRequestProfile, QuestionItem, TurnPrompt};
 use ag_session::{
     AgentDefinition, AgentKind, AgentModel, AgentSelection, EnvId, ExecutionGraph,
-    ExecutionGraphProgress, ExecutionGraphStatus, GraphCompletionGate, GraphContext,
-    GraphDependency, GraphExecutionProfile, GraphExecutionRef, GraphNode, GraphNodeProgress,
-    GraphNodeStatus, GraphOutput, GraphPostProcessing, GraphResult, GraphResultRef,
-    GraphResultState, GraphWorkspaceAccess,
+    ExecutionGraphProgress, ExecutionGraphStatus, GraphBlockedReason, GraphCompletionGate,
+    GraphContext, GraphDependency, GraphExecutionProfile, GraphExecutionRef, GraphNode,
+    GraphNodeProgress, GraphNodeStatus, GraphOutput, GraphPostProcessing, GraphResult,
+    GraphResultRef, GraphResultState, GraphWorkspaceAccess,
 };
 
-use super::{GraphEditKind, GraphEditor, GraphView, GraphViewOutput};
+use super::{
+    GraphEditKind, GraphEditor, GraphView, GraphViewOutput, outputs_awaiting_acceptance,
+    takes_revision_guidance,
+};
 use crate::domain::input::InputState;
 use crate::presentation::app_mode::ConfirmationViewMode;
 
@@ -103,6 +106,137 @@ pub(crate) fn graph_view() -> GraphView {
     view.outputs = vec![GraphViewOutput::new(result, "Exact output body".into())];
 
     view
+}
+
+/// [`graph_view`] whose `second` node waits for acceptance of `first`'s
+/// validated `response` output while a live driver dispatches.
+pub(crate) fn acceptance_gated_view() -> GraphView {
+    let mut view = graph_view();
+    let gate = GraphCompletionGate::ResultAccepted {
+        output_name: "response".into(),
+    };
+    view.graphs[0].nodes[1].dependencies = vec![GraphDependency {
+        gate: gate.clone(),
+        node_id: "first".into(),
+    }];
+    let progress = view.progress.as_mut().expect("progress");
+    progress.status = ExecutionGraphStatus::Blocked;
+    progress.nodes[1].blocked = vec![GraphBlockedReason::Dependency {
+        gate,
+        node_id: "first".into(),
+    }];
+
+    view
+}
+
+/// [`acceptance_gated_view`] with a `third` node that already started from
+/// `first`'s execution, so `first`'s output is final while `second` still
+/// waits for its acceptance.
+pub(crate) fn consumed_gated_view() -> GraphView {
+    let mut view = acceptance_gated_view();
+    let mut third = view.graphs[0].nodes[1].clone();
+    third.id = "third".into();
+    third.dependencies = vec![GraphDependency {
+        gate: GraphCompletionGate::ExecutionSucceeded,
+        node_id: "first".into(),
+    }];
+    view.graphs[0].nodes.push(third);
+    let progress = view.progress.as_mut().expect("progress");
+    let mut started = progress.nodes[1].clone();
+    started.blocked = Vec::new();
+    started.executions = vec![GraphExecutionRef::TaskAttempt {
+        attempt_id: "attempt-third".into(),
+        operation_id: "operation-third".into(),
+        task_id: "task-third".into(),
+    }];
+    started.node_id = "third".into();
+    started.status = GraphNodeStatus::Running;
+    progress.nodes.push(started);
+
+    view
+}
+
+#[test]
+fn revision_guidance_requires_an_unaccepted_unconsumed_task_conversation() {
+    // Arrange
+    let gated = acceptance_gated_view();
+    let consumed = consumed_gated_view();
+    let mut accepted = gated.clone();
+    accepted.progress.as_mut().expect("progress").nodes[0].results[0].state =
+        GraphResultState::Accepted;
+    let mut fresh = gated.clone();
+    fresh.graphs[0].nodes[0].execution.context = GraphContext::Fresh;
+
+    // Act
+    let takes = [&gated, &consumed, &accepted, &fresh].map(|view| {
+        takes_revision_guidance(
+            &view.graphs[0].nodes,
+            view.progress.as_ref().expect("progress"),
+            "first",
+        )
+    });
+    let consumed_awaiting =
+        outputs_awaiting_acceptance(consumed.progress.as_ref().expect("progress")).len();
+
+    // Assert
+    assert_eq!(takes, [true, false, false, false]);
+    assert_eq!(consumed_awaiting, 1);
+}
+
+#[test]
+fn outputs_awaiting_acceptance_require_a_pending_accepted_output_gate() {
+    // Arrange
+    let gated = acceptance_gated_view().progress.expect("gated progress");
+    let mut accepted = gated.clone();
+    accepted.nodes[0].results[0].state = GraphResultState::Accepted;
+    let mut other_output = gated.clone();
+    other_output.nodes[1].blocked = vec![GraphBlockedReason::Dependency {
+        gate: GraphCompletionGate::ResultAccepted {
+            output_name: "other".into(),
+        },
+        node_id: "first".into(),
+    }];
+    let mut validated_gate = gated.clone();
+    validated_gate.nodes[1].blocked = vec![GraphBlockedReason::Dependency {
+        gate: GraphCompletionGate::ResultValidated {
+            output_name: "response".into(),
+        },
+        node_id: "first".into(),
+    }];
+    let mut running = gated.clone();
+    running.nodes[0].status = GraphNodeStatus::Running;
+    let mut ungated = graph_view().progress.expect("ungated progress");
+    ungated.status = ExecutionGraphStatus::Blocked;
+    let mut paused = gated.clone();
+    paused.status = ExecutionGraphStatus::Paused;
+    let mut cancelled = gated.clone();
+    cancelled.status = ExecutionGraphStatus::Cancelled;
+    let mut failed = gated.clone();
+    failed.status = ExecutionGraphStatus::Failed;
+    let mut parallel = gated.clone();
+    parallel.status = ExecutionGraphStatus::Running;
+
+    // Act
+    let awaiting = [&gated, &parallel].map(outputs_awaiting_acceptance);
+    let others = [
+        accepted,
+        other_output,
+        validated_gate,
+        running,
+        ungated,
+        paused,
+        cancelled,
+        failed,
+    ]
+    .map(|progress| outputs_awaiting_acceptance(&progress).len());
+
+    // Assert
+    for awaiting in awaiting {
+        assert_eq!(awaiting.len(), 1);
+        assert_eq!(awaiting[0].0.node_id, "first");
+        assert_eq!(awaiting[0].1.reference.id, "result");
+    }
+    assert_eq!(others, [0; 8]);
 }
 
 #[test]

@@ -1,5 +1,5 @@
-//! Request, chat-replied clarification, approval, and cancellation, and the
-//! read-only inspector for a restored pending preview.
+//! Request, chat-replied clarification, approval, output acceptance, and
+//! cancellation, and the read-only inspector for a restored pending preview.
 
 use std::os::unix::fs::PermissionsExt;
 use std::time::Duration;
@@ -20,6 +20,13 @@ use crate::session::fixture::{CLIPBOARD_IMAGE_FILE, E2eResult, run_git};
 const SESSION: &str = "proposal-session";
 
 async fn seed(env: &BuilderEnv, node_count: usize) -> E2eResult {
+    seed_gated(env, node_count, GraphProposalGate::ExecutionSucceeded {}).await
+}
+
+/// Seeds a chain of `node_count` nodes, each waiting for its predecessor
+/// through `gate`, and a provider stub that answers generation, reply
+/// decisions, and node turns.
+async fn seed_gated(env: &BuilderEnv, node_count: usize, gate: GraphProposalGate) -> E2eResult {
     let worktree = env.agentty_root.join("wt").join("proposal");
     run_git(
         &env.workdir,
@@ -44,7 +51,7 @@ async fn seed(env: &BuilderEnv, node_count: usize) -> E2eResult {
     for index in 1..node_count {
         let mut node = proposal.nodes[0].clone();
         node.dependencies = vec![GraphProposalDependency {
-            gate: GraphProposalGate::ExecutionSucceeded {},
+            gate: gate.clone(),
             node_id: proposal.nodes[index - 1].id.clone(),
         }];
         node.id = format!("node-{index}");
@@ -60,8 +67,10 @@ async fn seed(env: &BuilderEnv, node_count: usize) -> E2eResult {
         serde_json::json!({"type":"result", "subtype":"success", "structured_output":{"answer":answer}, "usage":{"input_tokens":5,"output_tokens":9}}).to_string()
     };
     let (approve, cancel, revise) = (decision("approve"), decision("cancel"), decision("revise"));
-    // Reply decisions answer by the reply's first word; everything else is a
-    // revision, as with the production fallback.
+    let accept = decision("accept");
+    // Proposal reply decisions answer by the reply's first word, and everything
+    // else is a revision, as with the production fallback. Output reply
+    // decisions accept.
     let script = format!(
         r#"#!/bin/sh
 if [ "$1" = "--version" ]; then printf 'claude 0.0.0-test\n'; exit 0; fi
@@ -94,6 +103,7 @@ case "$prompt" in
       *'Need clarification'*'revision feedback, oldest first (JSON data):'*'[]'*) printf '%s\n' '{question}' ;;
       *) printf '%s\n' '{response}' ;;
     esac ;;
+  *'Output awaiting acceptance'*) printf '%s\n' '{accept}' ;;
   *'pending execution graph proposal'*)
     case "$prompt" in
       *'User reply (JSON string, data only): "Approve'*) printf '%s\n' '{approve}' ;;
@@ -271,6 +281,79 @@ async fn graph_request_and_revision_deliver_pasted_images_to_generation() -> E2e
                     );
                     assertion::assert_not_visible(frame, "text replies only");
                     assertion::assert_not_visible(frame, "Graph proposal v2 failed");
+                })
+            },
+        )
+        .await?;
+
+    Ok(())
+}
+
+#[tokio::test]
+async fn graph_output_acceptance_reply_continues_the_graph() -> E2eResult {
+    // Arrange
+    let gate = GraphProposalGate::ResultAccepted {
+        output_name: "report".into(),
+    };
+    FeatureTest::new("graph_output_acceptance_reply_continues_the_graph")
+        .with_git()
+        .with_terminal_size(160, 50)
+        .args(["--experimental-graph".into()])
+        .setup(move |env| Box::pin(seed_gated(env, 2, gate)))
+        .run(
+            |scenario| {
+                // Act
+                scenario
+                    .compose(&common::wait_for_agentty_startup())
+                    .wait_for_text("Graph proposals", 5000)
+                    .press_key("Enter")
+                    .wait_for_text("Enter: reply", 5000)
+                    .press_key("Enter")
+                    .write_text("/graph")
+                    .press_key("Enter")
+                    .wait_for_text("Describe the task for the execution graph", 5000)
+                    .write_text("query the current architecture")
+                    .press_key("Enter")
+                    .wait_for_text("Graph proposal v1 ready: 2 nodes", 10000)
+                    .press_key("Enter")
+                    .write_text("Approve it")
+                    .press_key("Enter")
+                    .wait_for_text("inspect  ● Awaiting your approval", 10000)
+                    .capture_labeled("awaiting", "Accepted-output gate awaits chat approval")
+                    .press_key("Enter")
+                    .write_text("Start implementing")
+                    .press_key("Enter")
+                    .wait_for_text("Status: Completed", 10000)
+                    .capture_labeled("continued", "Chat acceptance continues the graph")
+            },
+            |_, report| {
+                Box::pin(async move {
+                    // Assert
+                    let awaiting = common::frame_from_capture(&report.captures[0]);
+                    let continued = common::frame_from_capture(&report.captures[1]);
+                    let sidebar_width = awaiting.cols() * 35 / 100;
+                    let sidebar = Region::new(
+                        awaiting.cols() - sidebar_width,
+                        0,
+                        sidebar_width,
+                        awaiting.rows(),
+                    );
+                    let chat = Region::new(0, 0, awaiting.cols() - sidebar_width, awaiting.rows());
+                    assertion::assert_text_in_region(&awaiting, "Status: Blocked", &sidebar);
+                    assertion::assert_text_in_region(
+                        &awaiting,
+                        "inspect awaits your approval",
+                        &sidebar,
+                    );
+                    assertion::assert_text_in_region(&awaiting, "node-1   ○ Waiting", &sidebar);
+                    assertion::assert_text_in_region(
+                        &continued,
+                        "Accepted report from inspect · continuing",
+                        &chat,
+                    );
+                    assertion::assert_text_in_region(&continued, "node-1   ✓ Done", &sidebar);
+                    assertion::assert_text_in_region(&continued, "│ accepted report ✓", &sidebar);
+                    assertion::assert_not_visible(&continued, "Awaiting your approval");
                 })
             },
         )

@@ -1,5 +1,6 @@
 //! Compact execution graph rendering beside the regular chat composer.
 
+use std::collections::BTreeSet;
 use std::fmt::Write as _;
 
 use ag_protocol::GraphProposalOutcome;
@@ -18,6 +19,7 @@ use ratatui::widgets::{Block, Borders, Paragraph};
 use unicode_width::UnicodeWidthStr;
 
 use crate::presentation::app_mode::AppMode;
+use crate::presentation::execution_graph::{outputs_awaiting_acceptance, takes_revision_guidance};
 use crate::presentation::graph_chat::GraphChatSnapshot;
 use crate::ui::style::palette;
 
@@ -56,10 +58,11 @@ pub(crate) fn render(frame: &mut Frame, area: Rect, snapshot: Option<&GraphChatS
     let width = usize::from(inner.width);
     let text = summary(snapshot);
     let graph = snapshot.and_then(launched_nodes);
+    let awaited = graph.map_or_default(|(snapshot, _)| awaited_producers(snapshot));
     let mut lines = wrap_lines_breaking_long_words(&text, width);
     if let Some((snapshot, nodes)) = graph {
         lines.push(Line::default());
-        lines.extend(graph_lines(snapshot, nodes, width));
+        lines.extend(graph_lines(snapshot, nodes, &awaited, width));
     }
     if snapshot.is_some() {
         lines.push(Line::default());
@@ -72,7 +75,7 @@ pub(crate) fn render(frame: &mut Frame, area: Rect, snapshot: Option<&GraphChatS
     }
     let [body, footer] = Layout::vertical([Constraint::Min(0), Constraint::Length(2)]).areas(inner);
     let (lines, overflow) = if let Some((snapshot, nodes)) = graph {
-        compact_lines(snapshot, nodes, &text, body)
+        compact_lines(snapshot, nodes, &awaited, &text, body)
     } else {
         (
             lines.into_iter().take(usize::from(body.height)).collect(),
@@ -109,6 +112,21 @@ fn summary(snapshot: Option<&GraphChatSnapshot>) -> String {
     }
     if let Some(progress) = &snapshot.progress {
         let _ = write!(text, "\nStatus: {:?}", progress.status);
+        if let Some((producer, _)) = outputs_awaiting_acceptance(progress).first() {
+            let takes_revision = launched_nodes(snapshot).is_some_and(|(_, nodes)| {
+                takes_revision_guidance(nodes, progress, &producer.node_id)
+            });
+            let action = if takes_revision {
+                "reply in chat to accept or revise it"
+            } else {
+                "reply in chat to accept it"
+            };
+            let _ = write!(
+                text,
+                "\n{} awaits your approval; {action}",
+                producer.node_id
+            );
+        }
     } else if version.approval.is_some() {
         text.push_str("\nApproved; loading execution status");
     }
@@ -143,17 +161,29 @@ fn launched_nodes(snapshot: &GraphChatSnapshot) -> Option<(&GraphChatSnapshot, &
     }
 }
 
+/// Producers whose output a dependent waits to see accepted, derived once per
+/// render and shared by status and priority lookups.
+fn awaited_producers(snapshot: &GraphChatSnapshot) -> BTreeSet<&str> {
+    snapshot
+        .progress
+        .iter()
+        .flat_map(outputs_awaiting_acceptance)
+        .map(|(producer, _)| producer.node_id.as_str())
+        .collect()
+}
+
 /// Vertical node list in declaration order. Each dependency draws a `│`
 /// edge, labeled with its source when it is not the preceding node, and a
 /// `▼` into its dependent; unconnected roots are separated by a blank row.
 fn graph_lines(
     snapshot: &GraphChatSnapshot,
     nodes: &[GraphNode],
+    awaited: &BTreeSet<&str>,
     width: usize,
 ) -> Vec<Line<'static>> {
     let statuses = nodes
         .iter()
-        .map(|node| node_status(node_progress(snapshot, node)))
+        .map(|node| node_status(snapshot, node, awaited))
         .collect::<Vec<_>>();
     let name_width = nodes
         .iter()
@@ -230,6 +260,7 @@ fn graph_lines(
 fn compact_lines(
     snapshot: &GraphChatSnapshot,
     nodes: &[GraphNode],
+    awaited: &BTreeSet<&str>,
     text: &str,
     area: Rect,
 ) -> (Vec<Line<'static>>, String) {
@@ -244,15 +275,15 @@ fn compact_lines(
         .iter()
         .map(|node| (node, node_progress(snapshot, node)))
         .collect::<Vec<_>>();
-    ordered.sort_by_key(|(_, progress)| node_priority(*progress));
+    ordered.sort_by_key(|(node, progress)| node_priority(awaited, node, *progress));
     let shown = &ordered[..capacity.min(ordered.len())];
     let name_column = shown
         .iter()
         .map(|(node, _)| node.id.width())
         .max()
         .unwrap_or_default();
-    for (node, progress) in shown {
-        let status = node_status(*progress);
+    for (node, _) in shown {
+        let status = node_status(snapshot, node, awaited);
         let name_room = width.saturating_sub(status_label_width(status) + STATUS_GAP.width());
         let name = truncate_with_ellipsis(&node.id, name_room);
         let padding = name_column.min(name_room).saturating_sub(name.width());
@@ -283,14 +314,35 @@ fn node_progress<'a>(
         .and_then(|progress| progress.nodes.iter().find(|state| state.node_id == node.id))
 }
 
-/// Returns live node state; nodes of an unapproved or unloaded graph are
-/// pending.
-fn node_status(progress: Option<&GraphNodeProgress>) -> GraphNodeStatus {
-    progress.map_or(GraphNodeStatus::Pending, |node| node.status)
+/// Sidebar status of one node: its live state, or a pending acceptance of
+/// its output by the user.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum NodeStatus {
+    /// A dependent waits for the user to accept this node's output.
+    AwaitingApproval,
+    /// Live execution state reported by the graph.
+    Live(GraphNodeStatus),
+}
+
+/// Returns the sidebar status for `node`; nodes of an unapproved or unloaded
+/// graph are pending, and a node whose output a dependent waits to see
+/// accepted awaits approval.
+fn node_status(
+    snapshot: &GraphChatSnapshot,
+    node: &GraphNode,
+    awaited: &BTreeSet<&str>,
+) -> NodeStatus {
+    if awaited.contains(node.id.as_str()) {
+        return NodeStatus::AwaitingApproval;
+    }
+
+    NodeStatus::Live(
+        node_progress(snapshot, node).map_or(GraphNodeStatus::Pending, |state| state.status),
+    )
 }
 
 /// Returns the glyph and label spans for one node status.
-fn status_spans(status: GraphNodeStatus) -> [Span<'static>; 2] {
+fn status_spans(status: NodeStatus) -> [Span<'static>; 2] {
     let (glyph, color) = status_glyph(status);
     let style = Style::default().fg(color);
 
@@ -301,31 +353,35 @@ fn status_spans(status: GraphNodeStatus) -> [Span<'static>; 2] {
 }
 
 /// Returns the rendered width of one status glyph plus label.
-fn status_label_width(status: GraphNodeStatus) -> usize {
+fn status_label_width(status: NodeStatus) -> usize {
     status_glyph(status).0.width() + 1 + status_label(status).width()
 }
 
 /// Returns the user-facing label for one node status.
-fn status_label(status: GraphNodeStatus) -> &'static str {
+fn status_label(status: NodeStatus) -> &'static str {
     match status {
-        GraphNodeStatus::Pending => "Waiting",
-        GraphNodeStatus::Queued | GraphNodeStatus::Running => "Working",
-        GraphNodeStatus::AwaitingAnswers => "Needs your input",
-        GraphNodeStatus::Succeeded => "Done",
-        GraphNodeStatus::Failed => "Failed",
-        GraphNodeStatus::Cancelled => "Canceled",
+        NodeStatus::AwaitingApproval => "Awaiting your approval",
+        NodeStatus::Live(GraphNodeStatus::Pending) => "Waiting",
+        NodeStatus::Live(GraphNodeStatus::Queued | GraphNodeStatus::Running) => "Working",
+        NodeStatus::Live(GraphNodeStatus::AwaitingAnswers) => "Needs your input",
+        NodeStatus::Live(GraphNodeStatus::Succeeded) => "Done",
+        NodeStatus::Live(GraphNodeStatus::Failed) => "Failed",
+        NodeStatus::Live(GraphNodeStatus::Cancelled) => "Canceled",
     }
 }
 
 /// Returns the per-status glyph and semantic color.
-fn status_glyph(status: GraphNodeStatus) -> (&'static str, Color) {
+fn status_glyph(status: NodeStatus) -> (&'static str, Color) {
     match status {
-        GraphNodeStatus::Pending => ("○", palette::text_muted()),
-        GraphNodeStatus::Queued | GraphNodeStatus::Running => ("◐", palette::info()),
-        GraphNodeStatus::AwaitingAnswers => ("?", palette::question()),
-        GraphNodeStatus::Succeeded => ("✓", palette::success()),
-        GraphNodeStatus::Failed => ("✗", palette::danger()),
-        GraphNodeStatus::Cancelled => ("⊘", palette::text_subtle()),
+        NodeStatus::AwaitingApproval => ("●", palette::warning()),
+        NodeStatus::Live(GraphNodeStatus::Pending) => ("○", palette::text_muted()),
+        NodeStatus::Live(GraphNodeStatus::Queued | GraphNodeStatus::Running) => {
+            ("◐", palette::info())
+        }
+        NodeStatus::Live(GraphNodeStatus::AwaitingAnswers) => ("?", palette::question()),
+        NodeStatus::Live(GraphNodeStatus::Succeeded) => ("✓", palette::success()),
+        NodeStatus::Live(GraphNodeStatus::Failed) => ("✗", palette::danger()),
+        NodeStatus::Live(GraphNodeStatus::Cancelled) => ("⊘", palette::text_subtle()),
     }
 }
 
@@ -374,7 +430,15 @@ fn edge_label(dependency: &GraphDependency, previous: Option<&str>) -> String {
         .join(" · ")
 }
 
-fn node_priority(progress: Option<&GraphNodeProgress>) -> u8 {
+fn node_priority(
+    awaited: &BTreeSet<&str>,
+    node: &GraphNode,
+    progress: Option<&GraphNodeProgress>,
+) -> u8 {
+    if awaited.contains(node.id.as_str()) {
+        return 0;
+    }
+
     match progress {
         Some(node)
             if matches!(

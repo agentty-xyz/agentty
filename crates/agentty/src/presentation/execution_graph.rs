@@ -4,8 +4,9 @@ use std::collections::{BTreeMap, BTreeSet};
 
 use ag_protocol::{ProtocolRequestProfile, parse_protocol_response_strict};
 use ag_session::{
-    ExecutionGraph, ExecutionGraphProgress, ExecutionGraphStatus, GraphContext, GraphNodeProgress,
-    GraphNodeStatus, GraphProposalState, GraphResult, GraphResultState, GraphWorkspaceAccess,
+    ExecutionGraph, ExecutionGraphProgress, ExecutionGraphStatus, GraphBlockedReason,
+    GraphCompletionGate, GraphContext, GraphNode, GraphNodeProgress, GraphNodeStatus,
+    GraphProposalState, GraphResult, GraphResultState, GraphWorkspaceAccess,
 };
 
 use super::app_mode::ConfirmationViewMode;
@@ -162,29 +163,11 @@ impl GraphView {
         !self.is_focused_review()
             && progress.status != ExecutionGraphStatus::Cancelled
             && matches!(
-                node.execution.context,
-                GraphContext::TaskConversation { .. }
-            )
-            && matches!(
                 current.status,
                 GraphNodeStatus::Succeeded | GraphNodeStatus::Failed | GraphNodeStatus::Cancelled
             )
             && !current.executions.is_empty()
-            && !current
-                .results
-                .iter()
-                .any(|result| result.state == GraphResultState::Accepted)
-            && !graph
-                .nodes
-                .iter()
-                .zip(&progress.nodes)
-                .any(|(dependent, state)| {
-                    !state.executions.is_empty()
-                        && dependent
-                            .dependencies
-                            .iter()
-                            .any(|dependency| dependency.node_id == node.id)
-                })
+            && takes_revision_guidance(&graph.nodes, progress, &node.id)
     }
 
     pub(crate) fn can_retry(&self) -> bool {
@@ -295,6 +278,84 @@ impl GraphViewOutput {
     pub(crate) fn display(&self) -> &str {
         self.display.as_deref().unwrap_or(&self.body)
     }
+}
+
+/// Lists validated outputs whose acceptance a pending dependent waits for,
+/// with their succeeded producer, in producer declaration order. Only running
+/// or blocked graphs, which a live driver dispatches, list any.
+pub(crate) fn outputs_awaiting_acceptance(
+    progress: &ExecutionGraphProgress,
+) -> Vec<(&GraphNodeProgress, &GraphResult)> {
+    if !matches!(
+        progress.status,
+        ExecutionGraphStatus::Running | ExecutionGraphStatus::Blocked
+    ) {
+        return Vec::new();
+    }
+    let awaited_gates = progress
+        .nodes
+        .iter()
+        .flat_map(|dependent| &dependent.blocked)
+        .filter_map(|reason| match reason {
+            GraphBlockedReason::Dependency {
+                gate: GraphCompletionGate::ResultAccepted { output_name },
+                node_id,
+            } => Some((node_id.as_str(), output_name.as_str())),
+            _ => None,
+        })
+        .collect::<BTreeSet<_>>();
+
+    progress
+        .nodes
+        .iter()
+        .filter(|producer| producer.status == GraphNodeStatus::Succeeded)
+        .flat_map(|producer| {
+            producer
+                .results
+                .iter()
+                .filter(|result| {
+                    result.state == GraphResultState::Validated
+                        && awaited_gates.contains(&(
+                            producer.node_id.as_str(),
+                            result.reference.output_name.as_str(),
+                        ))
+                })
+                .map(move |result| (producer, result))
+        })
+        .collect()
+}
+
+/// Whether reply guidance can still revise a node's output: the node runs in
+/// a task conversation, and no output of it was accepted or reached a started
+/// dependent, which storage treats as final.
+pub(crate) fn takes_revision_guidance(
+    nodes: &[GraphNode],
+    progress: &ExecutionGraphProgress,
+    node_id: &str,
+) -> bool {
+    let state = |id: &str| progress.nodes.iter().find(|state| state.node_id == id);
+    let is_task_conversation = nodes.iter().any(|node| {
+        node.id == node_id
+            && matches!(
+                node.execution.context,
+                GraphContext::TaskConversation { .. }
+            )
+    });
+    let is_accepted = state(node_id).is_some_and(|producer| {
+        producer
+            .results
+            .iter()
+            .any(|result| result.state == GraphResultState::Accepted)
+    });
+    let is_consumed = nodes.iter().any(|dependent| {
+        dependent
+            .dependencies
+            .iter()
+            .any(|dependency| dependency.node_id == node_id)
+            && state(&dependent.id).is_some_and(|started| !started.executions.is_empty())
+    });
+
+    is_task_conversation && !is_accepted && !is_consumed
 }
 
 /// Explicit text entry separate from ordinary session chat.

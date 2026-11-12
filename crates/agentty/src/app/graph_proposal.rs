@@ -157,10 +157,9 @@ impl App {
             session.folder.clone(),
             Arc::clone(&handles.transcript),
         );
-        let definitions = self.load_enabled_agent_definitions(&folder).await?;
         let state = GraphProposalState {
             agent,
-            definitions,
+            definitions: self.enabled_agent_definitions(&folder).await?,
             limits: GraphProposalLimits::default(),
             permission,
             version: GraphProposalVersion {
@@ -321,9 +320,11 @@ impl App {
         Ok(())
     }
 
-    /// Resolves every enabled agent definition a proposal may assign to its
-    /// nodes, rejecting generation when none is available.
-    async fn load_enabled_agent_definitions(
+    /// Resolves every enabled agent definition available to `folder`.
+    ///
+    /// # Errors
+    /// Returns an error when no enabled definition resolves.
+    async fn enabled_agent_definitions(
         &self,
         folder: &Path,
     ) -> Result<Vec<AgentDefinition>, SessionError> {
