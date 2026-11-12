@@ -1,4 +1,4 @@
-use std::collections::{HashMap, VecDeque};
+use std::collections::HashMap;
 use std::io::{self, Write};
 use std::path::Path;
 use std::sync::{Arc, Mutex};
@@ -23,7 +23,6 @@ use crate::infra::fs::FsClient;
 #[derive(Default)]
 pub(crate) struct TestSessionRunFactory {
     channels: Mutex<HashMap<SessionId, SessionRunClient>>,
-    graph_tasks: Mutex<VecDeque<Arc<dyn AgentChannel>>>,
 }
 
 impl TestSessionRunFactory {
@@ -41,15 +40,6 @@ impl TestSessionRunFactory {
             .lock()
             .expect("session scripts")
             .insert(SessionId::from(session_id), run);
-    }
-
-    /// Queues the channel for the next graph task execution. Graph attempts
-    /// use fresh UUIDs, so queued channels serve executions in order.
-    pub(crate) fn register_graph_task(&self, channel: Arc<dyn AgentChannel>) {
-        self.graph_tasks
-            .lock()
-            .expect("graph task scripts poisoned")
-            .push_back(channel);
     }
 
     /// Registers the next worker channel without removing other session
@@ -72,18 +62,6 @@ impl SessionRunFactory for TestSessionRunFactory {
         _session_id: &SessionId,
         kind: AgentKind,
     ) -> Result<SessionRunClient, AgentError> {
-        let queued = self
-            .graph_tasks
-            .lock()
-            .expect("graph task scripts poisoned")
-            .pop_front();
-        if let Some(channel) = queued {
-            return Ok(SessionRunClient::from_channel(
-                context_id.to_string(),
-                channel,
-            ));
-        }
-
         Ok(self.create(&SessionId::from(context_id), kind))
     }
 

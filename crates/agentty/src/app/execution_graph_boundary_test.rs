@@ -10,8 +10,7 @@ use ag_protocol::ProtocolRequestProfile;
 use ag_session::{
     ContinueGraphNodeRequest, ExecutionGraphStatus, GraphBlockedReason, GraphContext,
     GraphControlRequest, GraphExecutionRef, GraphNode, GraphNodeContinuation, GraphNodeStatus,
-    GraphResultRef, ResumeExecutionGraphRequest, StartExecutionGraphRequest, TaskAgentRole,
-    TaskChain,
+    GraphResultRef, ResumeExecutionGraphRequest, StartExecutionGraphRequest,
 };
 use ag_worker::test_support::{AppServerTurnResponse, MockAppServerClient};
 use ag_worker::{GraphExecutor, GraphNodeRunner, GraphRunRequest};
@@ -475,34 +474,6 @@ async fn graph_lifecycle_progress_preserves_dispatchable_and_queued_work() {
         drop(environment);
         app.services.wait_for_cleanup_tasks(None).await;
     }
-}
-
-#[tokio::test]
-async fn task_chain_handoff_reports_review_suppression_failure_before_admission() {
-    // Arrange
-    let (mut app, pool, _directory) = app_with_pool().await;
-    let mut request = run_request();
-    request.dispatch.node.id = TaskAgentRole::Planner.id().into();
-    request.dispatch.node.execution.context = GraphContext::TaskConversation {
-        task_id: TaskChain::task_id("graph", TaskAgentRole::Planner),
-    };
-    pool.close().await;
-    let (admitted_tx, admitted_rx) = oneshot::channel();
-    let (reply_tx, reply_rx) = oneshot::channel();
-
-    // Act
-    app.enqueue_graph_node(request, CancellationToken::new(), admitted_tx, reply_tx)
-        .await;
-
-    // Assert
-    admitted_rx.await.expect("handoff rejection acknowledged");
-    let error = reply_rx
-        .await
-        .expect("failure reply")
-        .expect_err("suppression failure")
-        .to_string();
-    assert!(error.contains("closed"), "{error}");
-    assert!(app.role_review_suppression.contains_key("sess"));
 }
 
 #[tokio::test]

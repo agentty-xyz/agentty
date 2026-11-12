@@ -37,9 +37,8 @@ impl App {
     /// Builds prompt slash-menu state for one session.
     ///
     /// Harness sessions offer only the cached Harness models; other sessions
-    /// use the cached machine-scoped agent availability snapshot. `/plan`
-    /// needs the experimental flag and is hidden once the session shows a
-    /// task chain.
+    /// use the cached machine-scoped agent availability snapshot. `/graph`
+    /// needs the experimental flag.
     pub(crate) fn prompt_slash_state(
         &self,
         session_id: &str,
@@ -61,13 +60,11 @@ impl App {
         if is_harness_session {
             slash_state.harness_models = self.services.harness_model_options();
         }
-        slash_state.graph = if self.experimental_multi_agent {
+        slash_state.graph = if self.experimental_graph {
             PromptGraphState::Available
         } else {
             PromptGraphState::Disabled
         };
-        slash_state.allow_plan_command =
-            self.experimental_multi_agent && !self.session_shows_task_chain(session_id);
 
         slash_state
     }

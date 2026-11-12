@@ -196,8 +196,7 @@ impl App {
     /// session workflow and returns the requested navigation effect.
     ///
     /// A session's pending graph proposal receives the message as a reply
-    /// first, then a graph node awaiting answers; otherwise sessions that own
-    /// a task chain send it to their orchestrator instead of starting an
+    /// first, then a graph node awaiting answers; otherwise it starts an
     /// ordinary turn.
     pub(crate) async fn submit_prompt(
         &mut self,
@@ -234,9 +233,6 @@ impl App {
                 return outcome;
             }
             if let Some(outcome) = self.submit_graph_node_reply(&session_id, &prompt).await {
-                return outcome;
-            }
-            if let Some(outcome) = self.submit_task_chain_prompt(&session_id, &prompt).await {
                 return outcome;
             }
             match self.queue_preparation_prompt(&session_id, &prompt).await {

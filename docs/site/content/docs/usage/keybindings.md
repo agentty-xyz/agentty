@@ -311,17 +311,11 @@ navigation. Other file types keep showing diffs; unavailable files show a notice
 Use `/mode` to select `Auto Edit`, `Auto Edit + Auto Address Comments`, or `Read Only`.
 `Shift+Tab` cycles those modes in that order.
 
-With `agentty --experimental-multi-agent`, `/graph` arms the composer; `Enter` submits
-your task and `Esc` disarms it while preserving the draft. It has no subcommands. Chat
+With `agentty --experimental-graph`, `/graph` arms the composer; `Enter` submits your
+task and `Esc` disarms it while preserving the draft. It has no subcommands. Chat
 remains on the left with the live preview on the right. Reply in chat to approve,
 revise, or cancel a pending proposal; `w` shows its details. See
 [generated graph proposals](@/docs/usage/workflow.md#generated-graph-proposals).
-
-With `agentty --experimental-multi-agent`, `/plan` arms the composer for a **Plan then
-implement** request; `Enter` sends the task to the Planner and `Esc` disarms the
-composer. Afterwards, every message in that session goes to the orchestrator, and
-`Ctrl+C` in session view cancels the running role. See
-[Plan Then Implement](@/docs/usage/workflow.md#plan-then-implement).
 
 With chat focused, scroll using `j` / `k` or arrows, jump with `g` / `G`, or move half a
 page with `Ctrl+D` / `Ctrl+U`. `d` previews available changes, `Tab` returns to input,

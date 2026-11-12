@@ -1,21 +1,19 @@
 use std::path::PathBuf;
-use std::sync::Arc;
 
 use ag_session::test_support as model_fixture;
-use ag_store::{DbError, MockGraphRepository};
 use crossterm::event;
 use crossterm::event::{KeyCode, KeyEvent};
 
 use super::super::{
     PromptInputMode, apply_prompt_apply_outcome, apply_prompt_input_command,
-    apply_prompt_input_to_mode, apply_prompt_paste_to_mode, arm_inline_plan_request,
-    handle_at_mention_key, handle_at_mention_select, handle_chat_focus_key, handle_paste,
-    handle_prompt_cancel_key, handle_prompt_down_key, handle_prompt_image_paste,
-    handle_prompt_slash_submit, handle_prompt_submit_key, handle_prompt_up_key, handle_with_cache,
-    is_active_at_mention, is_prompt_image_paste_key, move_prompt_slash_selection,
-    navigate_prompt_history_down, navigate_prompt_history_up, open_chatgpt_sign_in,
-    paste_image_into_active_prompt, prompt_context, show_prompt_diff, submit_current_text_prompt,
-    take_prompt_attachment_cleanup, take_prompt_snapshot, take_submitted_turn_prompt,
+    apply_prompt_input_to_mode, apply_prompt_paste_to_mode, handle_at_mention_key,
+    handle_at_mention_select, handle_chat_focus_key, handle_paste, handle_prompt_cancel_key,
+    handle_prompt_down_key, handle_prompt_image_paste, handle_prompt_slash_submit,
+    handle_prompt_submit_key, handle_prompt_up_key, handle_with_cache, is_active_at_mention,
+    is_prompt_image_paste_key, move_prompt_slash_selection, navigate_prompt_history_down,
+    navigate_prompt_history_up, open_chatgpt_sign_in, paste_image_into_active_prompt,
+    prompt_context, show_prompt_diff, submit_current_text_prompt, take_prompt_attachment_cleanup,
+    take_prompt_snapshot, take_submitted_turn_prompt,
 };
 use super::support::{
     PromptTestAppExt, PromptTestModeExt, apply_next_prompt_image_paste, apply_next_session_diff,
@@ -23,8 +21,8 @@ use super::support::{
     new_test_draft_prompt_app, new_test_prompt_app, new_test_prompt_mode, press_prompt_key,
     prompt_focus, session_replay_text, test_terminal,
 };
+use crate::app::AppEvent;
 use crate::app::prompt_intent::{PromptApplyOutcome, PromptImagePasteUpdate};
-use crate::app::{App, AppEvent};
 use crate::domain::agent::{
     AgentKind, AgentModel, AgentSelection, ReasoningLevel, ResponseStyle, SpeedMode,
 };
@@ -32,8 +30,7 @@ use crate::domain::composer::PromptAttachment;
 use crate::domain::file_entry::FileEntry;
 use crate::domain::input::{INPUT_HISTORY_LIMIT, InputCommand, InputState};
 use crate::domain::permission::PermissionMode;
-use crate::domain::session::{SessionId, Status};
-use crate::domain::session_message::{SessionMessageKind, SessionTranscript};
+use crate::domain::session::SessionId;
 use crate::presentation::app_mode::{AppMode, ChatFocus, DiffRestoreTarget};
 use crate::presentation::prompt::{
     PendingImagePaste, PromptAtMentionState, PromptAttachmentState, PromptGraphState,
@@ -2354,7 +2351,7 @@ async fn test_handle_prompt_submit_key_routes_slash_command() {
 async fn graph_subcommands_do_not_bypass_the_mode_selector() {
     // Arrange
     let (mut app, _base_dir) = new_test_prompt_app("/graph query", None).await;
-    app.experimental_multi_agent = true;
+    app.experimental_graph = true;
     let context = prompt_context(&mut app).expect("prompt context");
 
     // Act
@@ -2369,7 +2366,7 @@ async fn graph_subcommands_do_not_bypass_the_mode_selector() {
 async fn graph_slash_command_arms_and_escape_preserves_the_draft() {
     // Arrange
     let (mut app, _root) = new_test_prompt_app("/graph", None).await;
-    app.experimental_multi_agent = true;
+    app.experimental_graph = true;
     if let AppMode::Prompt { slash_state, .. } = &mut app.mode {
         slash_state.graph = PromptGraphState::Available;
     }
@@ -2381,7 +2378,7 @@ async fn graph_slash_command_arms_and_escape_preserves_the_draft() {
     // Assert
     assert!(
         matches!(&app.mode, AppMode::Prompt { input, slash_state, .. }
-        if input.text().is_empty() && slash_state.graph.is_armed() && !slash_state.is_plan_armed)
+        if input.text().is_empty() && slash_state.graph.is_armed())
     );
 
     // Arrange
@@ -2392,7 +2389,7 @@ async fn graph_slash_command_arms_and_escape_preserves_the_draft() {
     assert!(!context.is_slash_command());
 
     // Act
-    app.experimental_multi_agent = false;
+    app.experimental_graph = false;
     handle_prompt_submit_key(&mut app, &context).await;
 
     // Assert: rejected graph requests preserve the armed draft.
@@ -2409,219 +2406,6 @@ async fn graph_slash_command_arms_and_escape_preserves_the_draft() {
         matches!(&app.mode, AppMode::Prompt { input, slash_state, .. }
         if input.text() == "/mode is part of my task" && !slash_state.graph.is_armed())
     );
-}
-
-#[tokio::test]
-async fn plan_slash_command_arms_the_composer_without_submitting_an_ordinary_turn() {
-    // Arrange
-    let (mut app, _root) = crate::test_support::new_test_app().await;
-    app.sessions.push_session(
-        crate::test_support::SessionFixtureBuilder::new()
-            .id("prompt-test-session")
-            .build(),
-    );
-    for enabled in [false, true] {
-        // Arrange
-        app.experimental_multi_agent = enabled;
-        app.mode = plan_prompt_mode(&app, "/plan");
-        let context = prompt_context(&mut app).expect("prompt context");
-
-        // Act
-        handle_prompt_slash_submit(&mut app, &context).await;
-
-        // Assert
-        let expected_text = if enabled { "" } else { "/plan" };
-        assert!(matches!(
-            &app.mode,
-            AppMode::Prompt { input, slash_state, .. }
-                if input.text() == expected_text && slash_state.is_plan_armed == enabled
-        ));
-        assert_eq!(app.sessions.sessions()[0].prompt, "");
-    }
-
-    // Arrange
-    let context = prompt_context(&mut app).expect("prompt context");
-
-    // Act
-    handle_prompt_cancel_key(&mut app, &context).await;
-
-    // Assert: `Esc` disarms the composer and keeps it open.
-    assert!(matches!(
-        &app.mode,
-        AppMode::Prompt { slash_state, .. } if !slash_state.is_plan_armed
-    ));
-}
-
-#[tokio::test]
-async fn plan_tasks_keep_leading_slashes_as_literal_text() {
-    // Arrange
-    let (mut app, _root) = crate::test_support::new_test_app().await;
-    app.sessions.push_session(
-        crate::test_support::SessionFixtureBuilder::new()
-            .id("prompt-test-session")
-            .status(Status::Review)
-            .build(),
-    );
-    app.experimental_multi_agent = true;
-    let mut tasks = MockGraphRepository::new();
-    tasks.expect_list_task_chains().times(5).returning(|_| {
-        Err(DbError::InvalidData {
-            entity: "task chain",
-            reason: "unavailable".to_string(),
-        })
-    });
-    app.services.set_graph_repository(Arc::new(tasks));
-
-    for (command, task, armed) in [
-        ("/plan   Add search  ", "Add search", false),
-        ("/plan /mode", "/mode", false),
-        (
-            "/plan /src/main.rs needs refactoring",
-            "/src/main.rs needs refactoring",
-            false,
-        ),
-        ("/mode", "/mode", true),
-        (
-            "/src/main.rs needs refactoring",
-            "/src/main.rs needs refactoring",
-            true,
-        ),
-    ] {
-        app.mode = plan_prompt_mode(&app, command);
-        if let AppMode::Prompt { slash_state, .. } = &mut app.mode {
-            slash_state.is_plan_armed = armed;
-        }
-        let context = prompt_context(&mut app).expect("prompt context");
-
-        // Act
-        handle_prompt_submit_key(&mut app, &context).await;
-
-        // Assert: failed ownership loading keeps the literal task armed.
-        assert!(matches!(
-            &app.mode,
-            AppMode::Prompt { input, slash_state, .. }
-                if input.text() == task && slash_state.is_plan_armed
-        ));
-        assert_eq!(app.sessions.sessions()[0].prompt, "");
-        let context = prompt_context(&mut app).expect("armed context");
-
-        // Act
-        handle_prompt_cancel_key(&mut app, &context).await;
-
-        // Assert: Esc disarms the task without clearing a leading slash.
-        assert!(matches!(
-            &app.mode,
-            AppMode::Prompt { input, slash_state, .. }
-                if input.text() == task && !slash_state.is_plan_armed
-        ));
-    }
-}
-
-#[test]
-fn inline_plan_ignores_unavailable_empty_and_non_prompt_input() {
-    // Arrange
-    let mut modes = [
-        AppMode::List,
-        new_test_prompt_mode("/plan Add search"),
-        new_test_prompt_mode("/plan   "),
-        new_test_prompt_mode("/planning Add search"),
-    ];
-    for mode in &mut modes[2..] {
-        if let AppMode::Prompt { slash_state, .. } = mode {
-            slash_state.allow_plan_command = true;
-        }
-    }
-
-    for mode in &mut modes {
-        let original = match mode {
-            AppMode::Prompt { input, .. } => Some(input.text().to_string()),
-            _ => None,
-        };
-
-        // Act
-        let armed = arm_inline_plan_request(mode);
-
-        // Assert
-        assert!(!armed);
-        match mode {
-            AppMode::Prompt {
-                input, slash_state, ..
-            } => {
-                assert_eq!(Some(input.text()), original.as_deref());
-                assert!(!slash_state.is_plan_armed);
-            }
-            _ => assert!(original.is_none()),
-        }
-    }
-}
-
-#[test]
-fn inline_plan_keeps_pasted_image_occurrences_aligned_with_the_task() {
-    // Arrange
-    let mut mode = new_test_prompt_mode("/plan   Design 🖼 ");
-    if let AppMode::Prompt { slash_state, .. } = &mut mode {
-        slash_state.allow_plan_command = true;
-    }
-    mode.insert_pasted_image_placeholder(PathBuf::from("reference.png"));
-
-    // Act
-    let armed = arm_inline_plan_request(&mut mode);
-    if let AppMode::Prompt {
-        input,
-        attachment_state,
-        ..
-    } = &mut mode
-    {
-        attachment_state.sync_after_history_restore(input);
-    }
-    let (prompt, _) = take_submitted_turn_prompt(&mut mode);
-
-    // Assert
-    assert!(armed);
-    assert_eq!(prompt.text, "Design 🖼 [Image #1]");
-    assert_eq!(prompt.attachments.len(), 1);
-    assert_eq!(
-        prompt.attachments[0].local_image_path,
-        PathBuf::from("reference.png")
-    );
-}
-
-#[tokio::test]
-async fn plan_command_is_hidden_once_the_session_shows_a_task_chain() {
-    // Arrange
-    let (mut app, _root) = crate::test_support::new_test_app().await;
-    let mut session = crate::test_support::SessionFixtureBuilder::new()
-        .id("prompt-test-session")
-        .build();
-    let mut transcript = SessionTranscript::default();
-    transcript.append_message(SessionMessageKind::AgentGraph, "chain");
-    session.transcript = Some(transcript);
-    app.sessions.push_session(session);
-    app.experimental_multi_agent = true;
-    app.mode = plan_prompt_mode(&app, "/plan Add search");
-    let context = prompt_context(&mut app).expect("prompt context");
-
-    // Act
-    handle_prompt_slash_submit(&mut app, &context).await;
-
-    // Assert: the inline task stays text in the unarmed composer.
-    assert!(matches!(
-        &app.mode,
-        AppMode::Prompt { input, slash_state, .. }
-            if input.text() == "/plan Add search"
-                && !slash_state.allow_plan_command
-                && !slash_state.is_plan_armed
-    ));
-}
-
-/// Builds a composer whose slash menu follows the app's `/plan` policy.
-fn plan_prompt_mode(app: &App, text: &str) -> AppMode {
-    let mut mode = new_test_prompt_mode(text);
-    if let AppMode::Prompt { slash_state, .. } = &mut mode {
-        *slash_state = app.prompt_slash_state("prompt-test-session");
-    }
-
-    mode
 }
 
 #[tokio::test]

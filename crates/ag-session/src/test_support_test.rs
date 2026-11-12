@@ -5,7 +5,7 @@
 //! only when their model is retired; tests of actual defaults and model ids
 //! should keep explicit expectations instead.
 
-use crate::{AgentDefinition, AgentKind, AgentModel, AgentSelection, PlanThenImplementAgents};
+use crate::{AgentDefinition, AgentKind, AgentModel, AgentSelection};
 
 /// Builds a minimal definition for tests unrelated to bundled prompt content.
 #[must_use]
@@ -17,15 +17,6 @@ pub fn agent_definition(id: &str) -> AgentDefinition {
         prompt: "Follow the supplied task input within session permissions.".to_string(),
         read_only: false,
     }
-}
-
-/// Supplies stable agent snapshots for workflow persistence and routing tests.
-#[must_use]
-pub fn workflow_agents() -> Box<PlanThenImplementAgents> {
-    Box::new(PlanThenImplementAgents {
-        implementer: agent_definition("implementer"),
-        planner: agent_definition("planner"),
-    })
 }
 
 /// Supported Codex model used by tests unrelated to a particular model version.

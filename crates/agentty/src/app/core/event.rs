@@ -66,11 +66,6 @@ pub(crate) enum AppRuntimeEvent {
 /// [`App::apply_app_events`].
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub(crate) enum AppEvent {
-    /// Latest task-chain graph snapshot loaded for one session update
-    /// version.
-    TaskChainGraphLoaded {
-        completion: crate::app::task_chain_graph::TaskChainGraphCompletion,
-    },
     /// User-authorized repository scan completed; cancelled results are
     /// ignored.
     ProjectDiscoveryCompleted {
@@ -458,7 +453,6 @@ pub(super) struct AppEventBatch {
     pub(super) sync_main_completion: Option<SyncMainCompletion>,
     pub(super) sync_main_conflict: Option<(ProjectSyncContext, Vec<String>)>,
     project_discovery_completions: Vec<crate::app::project_catalog::ProjectDiscoveryCompletion>,
-    task_chain_graph_completions: Vec<crate::app::task_chain_graph::TaskChainGraphCompletion>,
     pub(super) update_status: Option<UpdateStatus>,
 }
 
@@ -488,7 +482,6 @@ impl AppEventBatch {
             before_snapshot_effects.push(AppEventEffect::RecordTurnEnds(turn_ends));
         }
         let changes_observable_state = !self.project_discovery_completions.is_empty()
-            || !self.task_chain_graph_completions.is_empty()
             || self.should_reload_sessions
             || self.should_reload_projects
             || self.agent_cli_updates.is_some()
@@ -559,9 +552,6 @@ impl AppEventBatch {
     /// tick preserves cumulative usage from multiple completed turns.
     pub(super) fn collect_event(&mut self, event: AppEvent) {
         match event {
-            AppEvent::TaskChainGraphLoaded { completion } => {
-                self.task_chain_graph_completions.push(completion);
-            }
             AppEvent::ProjectDiscoveryCompleted { completion } => {
                 self.project_discovery_completions.push(completion);
             }
@@ -732,8 +722,7 @@ impl AppEventBatch {
             | AppEvent::StackedParentMergeCompleted { .. }
             | AppEvent::PublishedBranchSyncUpdated { .. }
             | AppEvent::ReviewRequestStatusUpdated { .. }) => self.collect_workflow_event(event),
-            AppEvent::TaskChainGraphLoaded { .. }
-            | AppEvent::ImplementerAttemptSucceeded { .. }
+            AppEvent::ImplementerAttemptSucceeded { .. }
             | AppEvent::ProjectDiscoveryCompleted { .. }
             | AppEvent::ReviewProgressUpdated { .. }
             | AppEvent::SessionCreationCompleted { .. }
@@ -1255,9 +1244,6 @@ impl App {
     fn complete_loaded_dialogs(&mut self, event_batch: &mut AppEventBatch) {
         for completion in std::mem::take(&mut event_batch.project_discovery_completions) {
             self.complete_project_discovery(completion);
-        }
-        for completion in std::mem::take(&mut event_batch.task_chain_graph_completions) {
-            self.complete_task_chain_graph(completion);
         }
     }
 

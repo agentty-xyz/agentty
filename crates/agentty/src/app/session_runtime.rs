@@ -7,7 +7,6 @@
 //! `Send + Sync` capability without sharing all of [`crate::app::App`] behind
 //! a mutex.
 
-use std::collections::HashMap;
 use std::future::poll_fn;
 use std::ops::{Deref, DerefMut};
 use std::sync::Arc;
@@ -24,7 +23,7 @@ use tokio_util::sync::CancellationToken;
 use crate::app::SessionManager;
 use crate::app::command_gateway::{
     CommandDelivery, CommandInitiator, GraphProposalCommand, ReviewRequestCommand, SessionCommand,
-    SessionMutation, TaskChainReplyAction, TaskChainReplyCommand,
+    SessionMutation,
 };
 
 /// Maximum number of accepted API commands waiting for foreground execution.
@@ -53,14 +52,6 @@ pub(crate) enum SessionRuntimeCommand {
     GetAgentTaskHistory {
         response_tx: oneshot::Sender<Result<Option<ag_session::TaskAgentHistory>, SessionError>>,
         task_id: String,
-    },
-    GetTaskChain {
-        chain_id: String,
-        response_tx: oneshot::Sender<Result<Option<ag_session::TaskChain>, SessionError>>,
-    },
-    ListTaskChains {
-        response_tx: oneshot::Sender<Result<Vec<ag_session::TaskChain>, SessionError>>,
-        session_id: SessionId,
     },
     ListTasks {
         response_tx: oneshot::Sender<Result<Vec<ag_session::Task>, SessionError>>,
@@ -250,110 +241,6 @@ impl SessionRuntimeHandle {
         self.request(|response_tx| SessionRuntimeCommand::GetAgentTaskHistory {
             response_tx,
             task_id: task_id.to_string(),
-        })
-        .await
-    }
-
-    /// Starts one static workflow through foreground admission.
-    pub(crate) async fn start_plan_then_implement(
-        &self,
-        session_id: &SessionId,
-        request: ag_session::StartPlanThenImplementRequest,
-    ) -> Result<(), SessionError> {
-        self.request_admission(SessionMutation::StartTaskChain {
-            request,
-            session_id: session_id.clone(),
-        })
-        .await
-    }
-
-    /// Reads one durable workflow without dispatching work.
-    pub(crate) async fn get_task_chain(
-        &self,
-        chain_id: &str,
-    ) -> Result<Option<ag_session::TaskChain>, SessionError> {
-        self.request(|response_tx| SessionRuntimeCommand::GetTaskChain {
-            chain_id: chain_id.to_string(),
-            response_tx,
-        })
-        .await
-    }
-
-    /// Lists persisted workflows for a session.
-    pub(crate) async fn list_task_chains(
-        &self,
-        session_id: &SessionId,
-    ) -> Result<Vec<ag_session::TaskChain>, SessionError> {
-        self.request(|response_tx| SessionRuntimeCommand::ListTaskChains {
-            response_tx,
-            session_id: session_id.clone(),
-        })
-        .await
-    }
-
-    /// Accepts an exact plan and admits implementation through the gateway.
-    pub(crate) async fn accept_task_chain_plan(
-        &self,
-        chain_id: &str,
-        request: ag_session::AcceptTaskChainPlanRequest,
-    ) -> Result<(), SessionError> {
-        self.request_admission(SessionMutation::AcceptTaskChainPlan {
-            chain_id: chain_id.to_string(),
-            request,
-        })
-        .await
-    }
-
-    /// Explicitly revises, clarifies, or retries the current workflow stage.
-    pub(crate) async fn continue_task_chain(
-        &self,
-        chain_id: &str,
-        request: ag_session::ContinueTaskChainRequest,
-    ) -> Result<(), SessionError> {
-        self.request_admission(SessionMutation::ContinueTaskChain {
-            chain_id: chain_id.to_string(),
-            request,
-        })
-        .await
-    }
-
-    /// Cancels only the selected workflow's current attempt.
-    pub(crate) async fn cancel_task_chain(&self, chain_id: &str) -> Result<(), SessionError> {
-        self.request_admission(SessionMutation::CancelTaskChain {
-            chain_id: chain_id.to_string(),
-        })
-        .await
-    }
-
-    /// Routes a natural-language reply; the response arrives after its
-    /// workflow action is admitted, including any background decision.
-    pub(crate) async fn reply_to_task_chain(
-        &self,
-        session_id: &SessionId,
-        request: ag_session::ReplyToTaskChainRequest,
-    ) -> Result<ag_session::TaskChainReplyOutcome, SessionError> {
-        self.request_mutation(|response_tx| CommandDelivery::TaskChainReply {
-            request: TaskChainReplyCommand::Reply {
-                request,
-                session_id: session_id.clone(),
-            },
-            response_tx,
-        })
-        .await
-    }
-
-    /// Admits an action decided in the background for a recorded reply.
-    pub(crate) async fn apply_task_chain_reply(
-        &self,
-        action: TaskChainReplyAction,
-        cancellation: Arc<CancellationToken>,
-    ) -> Result<ag_session::TaskChainReplyOutcome, SessionError> {
-        self.request_mutation(|response_tx| CommandDelivery::TaskChainReply {
-            request: TaskChainReplyCommand::Apply {
-                action,
-                cancellation,
-            },
-            response_tx,
         })
         .await
     }
@@ -644,10 +531,6 @@ impl Drop for SessionRuntimeConsumerGuard {
 
 /// Session workflow owner and foreground-driven actor mailbox.
 pub(crate) struct SessionRuntime {
-    /// Task chains whose reply decision has deferred its admission to a
-    /// background task, with its independently cancelable run scope. Further
-    /// replies are busy until that action arrives.
-    pub(crate) deciding_task_chain_ids: HashMap<String, Arc<CancellationToken>>,
     command_rx: mpsc::Receiver<SessionRuntimeCommand>,
     command_tx: mpsc::Sender<SessionRuntimeCommand>,
     consumer_state: Arc<SessionRuntimeConsumerState>,
@@ -660,7 +543,6 @@ impl SessionRuntime {
         let (command_tx, command_rx) = mpsc::channel(SESSION_RUNTIME_COMMAND_CAPACITY);
 
         Self {
-            deciding_task_chain_ids: HashMap::new(),
             command_rx,
             command_tx,
             consumer_state: Arc::new(SessionRuntimeConsumerState::new()),

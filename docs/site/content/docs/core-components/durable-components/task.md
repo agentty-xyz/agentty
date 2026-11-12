@@ -34,9 +34,9 @@ One session can own multiple distinct tasks. Their attempts execute serially thr
 that session's worker; submitting a new attempt while the session is busy is rejected,
 not added to the ordinary chat queue. Tasks in different eligible sessions can execute
 concurrently within existing capacity and workspace limits. Each task stays with its
-owning session. Generic task management is programmatic. The
-[Plan then implement workflow](@/docs/usage/workflow.md#plan-then-implement) provides a
-terminal panel for its two role tasks; arbitrary dependency scheduling is not provided.
+owning session. Task management is programmatic;
+[execution graphs](@/docs/architecture/execution-graphs.md) schedule dependent task
+conversations.
 
 ## Built-in Agent Definitions
 
@@ -94,79 +94,6 @@ not accept a plan. Implementer admission checks the ledger, session, original re
 and captured model in the same transaction as the attempt. A newer Planner attempt makes
 an older version ineligible for new handoffs, while preserving its historical acceptance
 record. Repeated acceptance of the same eligible version is idempotent.
-
-## Static Plan Then Implement Workflow
-
-A static workflow is a two-node
-[execution graph](@/docs/architecture/execution-graphs.md#plan-then-implement-graph)
-that captures one original request and provider/model selection for two isolated tasks
-sharing the session's workspace. Planning finishes before explicit plan acceptance
-releases implementation. Revision and clarification use new attempts in the current
-role's context; implementation retains the accepted plan exactly.
-
-A response with neither a nonblank answer nor clarification questions fails the stage.
-
-Launch reserves both role-task identities in the saved graph. Ordinary task creation and
-submission cannot use them, including before implementation starts. Canceling a pending
-approval prevents its queued decision from accepting the plan.
-
-Upgrading removes experimental legacy workflow records and their transcript graph
-markers without converting or replaying them. Existing sessions, conversation messages,
-and individual task histories remain. Start a new `/plan` workflow to use graph
-execution.
-
-Workflow phase is projected from its current attempt and saved response. A saved plan
-does not become acceptable until the entire attempt, including post-processing, has
-succeeded. Cancellation affects only the workflow's operations. Identical launch,
-acceptance, and continuation deliveries acknowledge their original receipts even after
-the stage changes; they never restart work or clear cancellation. An explicit new
-attempt is required to retry a canceled, failed, or interrupted stage. Reading or
-reopening a workflow never replays implementation.
-
-The session transcript shows the workflow without sharing role context. A newly admitted
-launch records the original request and an execution-graph marker, and each newly saved
-role response appends one answer attributed to its role. Repeated deliveries and saves
-never duplicate these rows, and ordinary provider replay excludes the role answers and
-marker.
-
-`SessionService` exposes this optional workflow capability through
-`start_plan_then_implement`, `get_task_chain`, `list_task_chains`,
-`accept_task_chain_plan`, `continue_task_chain`, and `cancel_task_chain`. Acceptance
-names the latest validated Planner attempt. Continuations use a new UUID and retain
-their exact source attempt. The graph executor owns admission and pinned inputs; task
-turns run through the session's serialized worker.
-
-Continuations include `expected_attempt_id`, captured from the workflow snapshot when
-guidance is authored. Admission rejects stale guidance if another action has advanced
-the workflow. The continuation receipt retains that source identity, so exact repeats
-remain safe after later progress. Changing the source or guidance under an existing
-continuation ID is rejected.
-
-### Natural-Language Replies
-
-`SessionService::reply_to_task_chain` sends a user reply to the session's latest
-workflow. The host, not the caller, decides what the reply means; no words are reserved.
-The reply is stored once as a visible user prompt before any agent answer. The host then
-routes it by the phase observed at that moment:
-
-- While a plan awaits acceptance, an orchestrator decision runs as a read-only utility
-  [run](@/docs/core-components/durable-components/run.md) with the workflow's captured
-  model. Only a clear approval with no requested changes accepts that exact plan and
-  starts the Implementer, followed by a short workflow notice. Anything else, including
-  approval with changes or a failed or unparsable decision, becomes revision guidance
-  for the Planner.
-- After a question, failure, cancellation, or success, the reply continues the current
-  role. Once implementation starts, that role is always the Implementer.
-- While an agent is working or an earlier reply is still being decided, the reply is
-  rejected with `SessionError::TaskChainBusy`. A session without a workflow returns
-  `SessionError::TaskChainNotFound`.
-
-The result is `PlanAccepted`, `PlanRevised`, or `Continued`. The first decision and any
-continuation UUID are stored against the caller's globally unique `reply_id` and exact
-source execution. Redelivery reapplies that idempotent action without deciding again or
-duplicating work, even after another workflow starts in the session. Reusing that
-identity with different text is rejected. Canceling the workflow interrupts its pending
-decision; a late decision cannot restart canceled work.
 
 ## Submission and Completion
 

@@ -14,7 +14,9 @@ use super::generate;
 use crate::app::execution_graph::tests::seed_session;
 use crate::domain::session::Status;
 use crate::infra::db::AppRepositories;
-use crate::test_support::{new_test_app, new_test_app_with_clients, test_app_clients};
+use crate::test_support::{
+    new_git_test_app_with_pool, new_test_app, new_test_app_with_clients, test_app_clients,
+};
 
 #[path = "graph_proposal_boundary_test.rs"]
 mod boundary;
@@ -212,7 +214,7 @@ async fn graph_proposal_public_api_uses_worker_then_launches_only_after_approval
     let clients = test_app_clients().with_app_server_client_override(Arc::new(proposal_provider()));
     let (mut app, _directory) = new_test_app_with_clients(clients).await;
     seed_session(&mut app.sessions, app.services.db()).await;
-    app.experimental_multi_agent = true;
+    app.experimental_graph = true;
     let service = app.session_service();
     let input = graph_proposal_state("preview", "sess").input;
     let wake = app.services.graph_wake.subscribe();
@@ -364,7 +366,7 @@ async fn graph_mode_submits_literal_requests_without_subcommands() {
         // Arrange
         let (mut app, _directory) = new_test_app().await;
         seed_session(&mut app.sessions, app.services.db()).await;
-        app.experimental_multi_agent = true;
+        app.experimental_graph = true;
         let mut client = MockRunClient::new();
         expect_title_requests(&mut client);
         client.expect_submit().times(0..=1).returning(|_| {
@@ -430,7 +432,7 @@ async fn created_proposal_refreshes_an_empty_graph_sidebar_without_a_session_upd
     // Arrange
     let (mut app, _directory) = new_test_app().await;
     seed_session(&mut app.sessions, app.services.db()).await;
-    app.experimental_multi_agent = true;
+    app.experimental_graph = true;
     let mut client = MockRunClient::new();
     expect_title_requests(&mut client);
     client
@@ -471,7 +473,7 @@ async fn admitted_proposal_titles_a_prepared_draft_that_still_accepts_its_first_
         .update_session_status_with_timing_at("sess", "Draft", 0)
         .await
         .expect("prepared draft");
-    app.experimental_multi_agent = true;
+    app.experimental_graph = true;
     let mut client = MockRunClient::new();
     client.expect_submit().returning(|request| {
         let answer = if request.request_kind == AgentRequestKind::UtilityPrompt {
@@ -532,6 +534,112 @@ async fn admitted_proposal_titles_a_prepared_draft_that_still_accepts_its_first_
 }
 
 #[tokio::test]
+async fn graph_request_title_completion_wakes_blocked_graphs() {
+    // Arrange
+    let (mut app, _directory) = new_test_app().await;
+    seed_session(&mut app.sessions, app.services.db()).await;
+    let mut client = MockRunClient::new();
+    client.expect_submit().once().returning(|_| {
+        Ok(OneShotSubmission {
+            response: AgentResponse::plain("Inspect the graph layout"),
+            stats: SessionStats::default(),
+        })
+    });
+    app.services.set_run_client(Arc::new(client));
+    let mut wake = app.services.graph_wake.subscribe();
+
+    // Act
+    app.sessions
+        .initialize_graph_request_title(&app.services, &SessionId::from("sess"), "Inspect")
+        .await;
+    let wake_result =
+        tokio::time::timeout(std::time::Duration::from_secs(10), wake.changed()).await;
+
+    // Assert
+    assert!(matches!(wake_result, Ok(Ok(()))));
+    app.services.wait_for_cleanup_tasks(None).await;
+}
+
+#[tokio::test]
+async fn graph_request_title_keeps_existing_session_title() {
+    // Arrange
+    let (mut app, _directory) = new_test_app().await;
+    seed_session(&mut app.sessions, app.services.db()).await;
+    app.services
+        .db()
+        .sessions()
+        .update_session_title("sess", "Existing title")
+        .await
+        .expect("persist title");
+    for session in app.sessions.sessions_mut() {
+        session.title = Some("Existing title".into());
+    }
+    let mut client = MockRunClient::new();
+    client.expect_submit().never();
+    app.services.set_run_client(Arc::new(client));
+
+    // Act
+    app.sessions
+        .initialize_graph_request_title(&app.services, &SessionId::from("sess"), "Inspect")
+        .await;
+    app.services.wait_for_cleanup_tasks(None).await;
+
+    // Assert
+    let row = app
+        .services
+        .db()
+        .sessions()
+        .load_session("sess")
+        .await
+        .expect("session row")
+        .expect("session exists");
+    assert_eq!(row.title.as_deref(), Some("Existing title"));
+    assert_eq!(
+        app.sessions
+            .session_for_id("sess")
+            .and_then(|session| session.title.as_deref()),
+        Some("Existing title")
+    );
+}
+
+#[tokio::test]
+async fn graph_request_title_metadata_failures_do_not_start_generation() {
+    // Arrange
+    let (mut app, _directory, pool) = new_git_test_app_with_pool().await;
+    seed_session(&mut app.sessions, app.services.db()).await;
+    sqlx::query(
+        "CREATE TRIGGER reject_title BEFORE UPDATE OF title ON session BEGIN SELECT RAISE(ABORT, \
+         'title unavailable'); END",
+    )
+    .execute(&pool)
+    .await
+    .expect("reject title writes");
+    let mut client = MockRunClient::new();
+    client.expect_submit().never();
+    app.services.set_run_client(Arc::new(client));
+
+    // Act
+    app.sessions
+        .initialize_graph_request_title(&app.services, &SessionId::from("missing"), "Request")
+        .await;
+    app.sessions
+        .initialize_graph_request_title(&app.services, &SessionId::from("sess"), "Request")
+        .await;
+
+    // Assert
+    let row = app
+        .services
+        .db()
+        .sessions()
+        .load_session("sess")
+        .await
+        .expect("session row")
+        .expect("session exists");
+    assert_eq!(row.prompt, "");
+    assert_eq!(row.title, None);
+}
+
+#[tokio::test]
 async fn graph_proposal_admission_rejects_invalid_requests_without_generation() {
     for case in [
         "feature",
@@ -544,7 +652,7 @@ async fn graph_proposal_admission_rejects_invalid_requests_without_generation() 
         // Arrange
         let (mut app, _directory) = new_test_app().await;
         seed_session(&mut app.sessions, app.services.db()).await;
-        app.experimental_multi_agent = case != "feature";
+        app.experimental_graph = case != "feature";
         let mut input = graph_proposal_state("preview", "sess").input;
         match case {
             "empty" => input.request.text.clear(),
@@ -593,7 +701,7 @@ async fn graph_proposal_answers_regeneration_and_discard_keep_the_original_captu
     // Arrange
     let (mut app, _directory) = new_test_app().await;
     seed_session(&mut app.sessions, app.services.db()).await;
-    app.experimental_multi_agent = true;
+    app.experimental_graph = true;
     let state = graph_proposal_state("preview", "sess");
     app.services
         .db()
@@ -681,7 +789,7 @@ async fn graph_proposal_cancels_while_waiting_for_workspace_access() {
     // Arrange
     let (mut app, _directory) = new_test_app().await;
     seed_session(&mut app.sessions, app.services.db()).await;
-    app.experimental_multi_agent = true;
+    app.experimental_graph = true;
     let mut client = MockRunClient::new();
     expect_title_requests(&mut client);
     client.expect_submit().never();

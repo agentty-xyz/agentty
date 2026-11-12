@@ -76,9 +76,7 @@ contracts.
   deterministic graph dispatch, shared resource leases, and worker adapters behind
   `GraphNodeRunner`. The application owns explicit graph launch, wakeups, and the
   adapter into ordered session workers. Focused review owns its graph construction and
-  phase runner; phase semantics stay in the review prompt module. `/plan` builds a fixed
-  two-node graph and translates chat actions into exact result acceptance and graph
-  continuations. Its workflow phase is a projection of graph progress.
+  phase runner; phase semantics stay in the review prompt module.
 - Environment identity and resolved location contracts belong to `ag-session`. The host
   resolves the shared local Env through existing worktree isolation checks; session
   workflows retain provisioning and cleanup ownership. Conversations and permissions
@@ -86,10 +84,6 @@ contracts.
 - Workflow role contracts belong to `ag-session`: context requirements, expected output,
   and permission limits. Markdown definitions supply instructions; workflow execution
   and runtime permission enforcement remain with their existing owners.
-- Task-chain chat routing belongs to `app/`: composer messages, `/apply` instructions,
-  and stop requests reach the orchestrator through the gateway. `presentation/` and
-  `ui/` only project the chain graph and composer labels; session chat has no separate
-  planning page.
 - Runtime converts presentation state into typed app requests and applies returned
   navigation effects. `app/` does not import runtime handlers or mutate `AppMode`.
 - `App::view_snapshot()` supplies an immutable frontend view. UI projection cannot

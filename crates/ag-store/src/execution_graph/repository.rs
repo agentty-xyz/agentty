@@ -1,16 +1,11 @@
 use std::num::NonZeroU64;
 use std::sync::Arc;
 
-use ag_protocol::TurnPrompt;
-use ag_session::{
-    ExecutionGraph, GraphExecutionRef, GraphResultRef, TaskChain, TaskChainReplyOutcome,
-};
+use ag_session::{ExecutionGraph, GraphExecutionRef, GraphResultRef};
 use async_trait::async_trait;
 use sqlx::{SqliteConnection, SqlitePool};
 
-use super::{
-    GraphEvidence, GraphExecutionRecord, GraphNodeHistory, StoredGraphResult, TaskChainReplyRecord,
-};
+use super::{GraphEvidence, GraphExecutionRecord, GraphNodeHistory, StoredGraphResult};
 use crate::{DbError, TimestampSource};
 
 /// Persistence only: no dispatch, capacity allocation, or automatic replay.
@@ -41,61 +36,6 @@ pub trait GraphRepository: Send + Sync {
         &self,
         execution: &GraphExecutionRef,
     ) -> Result<Option<GraphNodeHistory>, DbError>;
-
-    /// Requests cancellation of one queued or running task execution without
-    /// closing graph admission. Queued work settles as canceled immediately;
-    /// a running worker observes the flag. Returns whether it was active.
-    async fn cancel_execution(&self, execution: &GraphExecutionRef) -> Result<bool, DbError>;
-
-    /// Cancels the current workflow stage, including an unclaimed first turn
-    /// or pending continuation. Unclaimed work receives a canceled receipt
-    /// without taking resources or dispatching a worker.
-    async fn cancel_task_chain_stage(
-        &self,
-        chain_id: &str,
-    ) -> Result<Option<GraphExecutionRef>, DbError>;
-
-    /// Saves a new task-chain graph together with its visible launch prompt
-    /// and graph marker. Returns false for identical redelivery without
-    /// appending again. Rejects other graph shapes and occupied task IDs.
-    async fn start_task_chain(
-        &self,
-        graph: &ExecutionGraph,
-        user_prompt: &str,
-    ) -> Result<bool, DbError>;
-
-    /// Projects one task-chain graph from a single snapshot; never dispatches.
-    async fn load_task_chain(&self, chain_id: &str) -> Result<Option<TaskChain>, DbError>;
-
-    /// Lists a session's task chains in creation order.
-    async fn list_task_chains(&self, session_id: &str) -> Result<Vec<TaskChain>, DbError>;
-
-    /// Records one natural-language reply bound to the exact execution it
-    /// answers and appends it as a visible user prompt atomically. Returns
-    /// false for identical redelivery; conflicting reuse is rejected.
-    async fn record_task_chain_reply(
-        &self,
-        chain_id: &str,
-        reply_id: &str,
-        prompt: &TurnPrompt,
-        source: &GraphExecutionRef,
-    ) -> Result<bool, DbError>;
-
-    /// Loads a reply owned by this session, or `None` for a new reply.
-    async fn load_task_chain_reply(
-        &self,
-        session_id: &str,
-        reply_id: &str,
-    ) -> Result<Option<TaskChainReplyRecord>, DbError>;
-
-    /// Records the first decision for a reply and returns the stored one;
-    /// later decisions never replace it.
-    async fn decide_task_chain_reply(
-        &self,
-        reply_id: &str,
-        outcome: TaskChainReplyOutcome,
-        action_id: Option<String>,
-    ) -> Result<TaskChainReplyRecord, DbError>;
 
     /// Returns static task dispatch context UUIDs before session deletion
     /// cascades their receipts. Legacy links never allocate runtime resources.
@@ -545,72 +485,6 @@ impl GraphRepository for SqliteGraphRepository {
         evidence: &GraphEvidence,
     ) -> Result<bool, DbError> {
         self.attest(reference, evidence, "acceptance").await
-    }
-
-    async fn start_task_chain(
-        &self,
-        graph: &ExecutionGraph,
-        user_prompt: &str,
-    ) -> Result<bool, DbError> {
-        self.save_task_chain(graph, user_prompt).await
-    }
-
-    async fn load_task_chain(&self, chain_id: &str) -> Result<Option<TaskChain>, DbError> {
-        let mut transaction = self.pool.begin().await?;
-        let chain = Self::task_chain(&mut transaction, chain_id).await?;
-        transaction.commit().await?;
-
-        Ok(chain)
-    }
-
-    async fn list_task_chains(&self, session_id: &str) -> Result<Vec<TaskChain>, DbError> {
-        let mut transaction = self.pool.begin().await?;
-        let chains = Self::session_task_chains(&mut transaction, session_id).await?;
-        transaction.commit().await?;
-
-        Ok(chains)
-    }
-
-    async fn record_task_chain_reply(
-        &self,
-        chain_id: &str,
-        reply_id: &str,
-        prompt: &TurnPrompt,
-        source: &GraphExecutionRef,
-    ) -> Result<bool, DbError> {
-        self.save_task_chain_reply(chain_id, reply_id, prompt, source)
-            .await
-    }
-
-    async fn load_task_chain_reply(
-        &self,
-        session_id: &str,
-        reply_id: &str,
-    ) -> Result<Option<TaskChainReplyRecord>, DbError> {
-        let mut connection = self.pool.acquire().await?;
-
-        Self::task_chain_reply(&mut connection, session_id, reply_id).await
-    }
-
-    async fn decide_task_chain_reply(
-        &self,
-        reply_id: &str,
-        outcome: TaskChainReplyOutcome,
-        action_id: Option<String>,
-    ) -> Result<TaskChainReplyRecord, DbError> {
-        self.save_task_chain_reply_decision(reply_id, outcome, action_id)
-            .await
-    }
-
-    async fn cancel_execution(&self, execution: &GraphExecutionRef) -> Result<bool, DbError> {
-        self.cancel_one_execution(execution).await
-    }
-
-    async fn cancel_task_chain_stage(
-        &self,
-        chain_id: &str,
-    ) -> Result<Option<GraphExecutionRef>, DbError> {
-        self.cancel_chain_stage(chain_id).await
     }
 }
 

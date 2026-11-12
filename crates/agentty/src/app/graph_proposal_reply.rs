@@ -70,7 +70,7 @@ impl App {
         &self,
         session_id: &SessionId,
     ) -> Result<Option<GraphProposalState>, String> {
-        if !self.experimental_multi_agent {
+        if !self.experimental_graph {
             return Ok(None);
         }
 

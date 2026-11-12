@@ -1,13 +1,10 @@
 //! Typed mutation requests and transport-independent admission metadata.
 
-use std::sync::Arc;
-
 use ag_session::{
-    AnswerQuestionsRequest, CreateSessionRequest, DurableMessageRequest, ReplyToTaskChainRequest,
-    ReviewRequest, SessionError, SessionId, TaskChainReplyOutcome,
+    AnswerQuestionsRequest, CreateSessionRequest, DurableMessageRequest, ReviewRequest,
+    SessionError, SessionId,
 };
 use tokio::sync::oneshot;
-use tokio_util::sync::CancellationToken;
 use uuid::Uuid;
 
 use super::ReviewRequestCommand;
@@ -47,22 +44,7 @@ impl SessionCommand {
                 request: SessionMutation::SubmitAgentTask { request, .. },
                 ..
             } => Some(format!("task-attempt:{}", request.attempt_id)),
-            CommandDelivery::Admission {
-                request: SessionMutation::StartTaskChain { request, .. },
-                ..
-            } => Some(format!("execution-graph:{}", request.chain_id)),
-            CommandDelivery::Admission {
-                request: SessionMutation::AcceptTaskChainPlan { request, .. },
-                ..
-            } => Some(format!("task-attempt:{}", request.plan_attempt_id)),
-            CommandDelivery::Admission {
-                request: SessionMutation::ContinueTaskChain { request, .. },
-                ..
-            } => Some(format!("task-attempt:{}", request.attempt_id)),
             CommandDelivery::Review { request, .. } => Some(request.operation_id.clone()),
-            CommandDelivery::TaskChainReply { request, .. } => {
-                Some(format!("task-chain-reply:{}", request.reply_id()))
-            }
             _ => None,
         };
 
@@ -95,12 +77,6 @@ pub(crate) enum CommandDelivery {
         request: ReviewRequestCommand,
         response_tx: Option<oneshot::Sender<Result<ReviewRequest, SessionError>>>,
     },
-    /// A workflow reply may transfer its reply to a background decision,
-    /// which applies the decided action through this gateway again.
-    TaskChainReply {
-        request: TaskChainReplyCommand,
-        response_tx: oneshot::Sender<Result<TaskChainReplyOutcome, SessionError>>,
-    },
 }
 
 impl CommandDelivery {
@@ -110,54 +86,8 @@ impl CommandDelivery {
             Self::Create { .. } => ("create", None),
             Self::Admission { request, .. } => request.target(),
             Self::Review { request, .. } => ("create_review_request", Some(&request.session_id)),
-            Self::TaskChainReply {
-                request: TaskChainReplyCommand::Reply { session_id, .. },
-                ..
-            } => ("reply_to_task_chain", Some(session_id)),
-            Self::TaskChainReply {
-                request: TaskChainReplyCommand::Apply { action, .. },
-                ..
-            } => ("apply_task_chain_reply", Some(&action.session_id)),
         }
     }
-}
-
-/// Inputs for natural-language workflow replies.
-pub(crate) enum TaskChainReplyCommand {
-    /// Records a public reply once and decides its workflow action.
-    Reply {
-        request: ReplyToTaskChainRequest,
-        session_id: SessionId,
-    },
-    /// Admits an action decided for an already recorded reply.
-    Apply {
-        action: TaskChainReplyAction,
-        /// Identity and cancellation fence for this background decision.
-        cancellation: Arc<CancellationToken>,
-    },
-}
-
-impl TaskChainReplyCommand {
-    /// Returns the delivery identity shared by a reply and its action.
-    pub(super) fn reply_id(&self) -> &str {
-        match self {
-            Self::Reply { request, .. } => &request.reply_id,
-            Self::Apply { action, .. } => &action.reply_id,
-        }
-    }
-}
-
-/// One decided workflow action, anchored to the attempt observed when the
-/// reply was routed.
-#[derive(Clone, Debug, Eq, PartialEq)]
-pub(crate) struct TaskChainReplyAction {
-    pub(crate) attachments: Vec<ag_protocol::TurnPromptAttachment>,
-    pub(crate) chain_id: String,
-    pub(crate) expected_attempt_id: String,
-    pub(crate) message: String,
-    pub(crate) outcome: TaskChainReplyOutcome,
-    pub(crate) reply_id: String,
-    pub(crate) session_id: SessionId,
 }
 
 /// Application inputs for workflows that return an admission result.
@@ -201,25 +131,6 @@ pub(crate) enum SessionMutation {
     AcceptAgentPlan {
         request: ag_session::AcceptTaskPlanRequest,
         session_id: SessionId,
-    },
-    /// Starts a static workflow with one captured role selection.
-    StartTaskChain {
-        request: ag_session::StartPlanThenImplementRequest,
-        session_id: SessionId,
-    },
-    /// Atomically records acceptance and admits the first implementation.
-    AcceptTaskChainPlan {
-        chain_id: String,
-        request: ag_session::AcceptTaskChainPlanRequest,
-    },
-    /// Explicitly advances the current role using a new attempt identity.
-    ContinueTaskChain {
-        chain_id: String,
-        request: ag_session::ContinueTaskChainRequest,
-    },
-    /// Requests cancellation without canceling unrelated session work.
-    CancelTaskChain {
-        chain_id: String,
     },
     /// Submits the terminal's prepared prompt without losing attachment or
     /// staging intent.
@@ -288,10 +199,6 @@ impl SessionMutation {
             Self::AcceptExecutionGraphResult { .. } => ("accept_execution_graph_result", None),
             Self::SubmitAgentTask { session_id, .. } => ("submit_agent_task", Some(session_id)),
             Self::AcceptAgentPlan { session_id, .. } => ("accept_agent_plan", Some(session_id)),
-            Self::StartTaskChain { session_id, .. } => ("start_task_chain", Some(session_id)),
-            Self::AcceptTaskChainPlan { .. } => ("accept_task_chain_plan", None),
-            Self::ContinueTaskChain { .. } => ("continue_task_chain", None),
-            Self::CancelTaskChain { .. } => ("cancel_task_chain", None),
             Self::Prompt { session_id, .. } => ("prompt", Some(session_id)),
             Self::StartStaged { session_id } => ("start_staged", Some(session_id)),
             Self::SendMessage { session_id, .. } => ("send_message", Some(session_id)),

@@ -95,7 +95,7 @@ async fn graph_proposal_request_preview_approval_execution() -> E2eResult {
     FeatureTest::new("graph_proposal_request_preview_approval_execution")
         .with_git()
         .with_terminal_size(160, 50)
-        .args(["--experimental-multi-agent".into()])
+        .args(["--experimental-graph".into()])
         .setup(|env| Box::pin(seed(env, 2)))
         .run(
             |scenario| {
@@ -200,7 +200,7 @@ async fn graph_proposal_clarification_and_cancel() -> E2eResult {
     FeatureTest::new("graph_proposal_clarification_and_cancel")
         .with_git()
         .with_terminal_size(160, 50)
-        .args(["--experimental-multi-agent".into()])
+        .args(["--experimental-graph".into()])
         .setup(|env| Box::pin(seed(env, 1)))
         .run(
             |scenario| {
@@ -270,7 +270,7 @@ async fn graph_proposal_restored_pending_preview() -> E2eResult {
     FeatureTest::new("graph_proposal_restored_pending_preview")
         .with_git()
         .with_terminal_size(160, 50)
-        .args(["--experimental-multi-agent".into()])
+        .args(["--experimental-graph".into()])
         .setup(|env| {
             Box::pin(async move {
                 seed(env, 1).await?;
@@ -359,7 +359,7 @@ async fn graph_sidebar_overflow_keeps_chat_and_controls_visible() -> E2eResult {
     FeatureTest::new("graph_sidebar_overflow_keeps_chat_and_controls_visible")
         .with_git()
         .with_terminal_size(120, 16)
-        .args(["--experimental-multi-agent".into()])
+        .args(["--experimental-graph".into()])
         .setup(|env| Box::pin(seed(env, 16)))
         .run(
             |scenario| {

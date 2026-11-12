@@ -39,7 +39,8 @@ const TURN_EVENT_PROGRESS_COALESCE_BUDGET: usize = 64;
 /// Agent-facing behavior appended to ordinary read-only chat turns.
 const READ_ONLY_CHAT_PROMPT: &str = include_str!("../../template/read_only_chat_prompt.md");
 
-/// Host-owned inputs shared by ordinary turns and task-chain title generation.
+/// Host-owned inputs shared by ordinary turns and graph proposal title
+/// generation.
 pub(super) struct RequestTitleInput {
     pub(super) app_event_tx: mpsc::UnboundedSender<AppEvent>,
     pub(super) available_agent_kinds: Arc<[AgentKind]>,

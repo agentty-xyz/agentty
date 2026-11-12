@@ -1,13 +1,13 @@
 //! Initial graph generation through the scoped utility worker, before approval.
 
 use std::collections::{BTreeMap, HashMap};
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};
 
 use ag_contracts::{AgentRequestKind, OneShotRequest, PermissionMode, ProviderCallBudget};
 use ag_protocol::{GraphProposalOutcome, GraphProposalResponse};
 use ag_session::{
-    GenerateGraphProposalRequest, GraphProposalAction, GraphProposalLimits,
+    AgentDefinition, GenerateGraphProposalRequest, GraphProposalAction, GraphProposalLimits,
     GraphProposalResolution, GraphProposalState, GraphProposalVersion, GraphProposalVersionOutcome,
     SessionError, StartExecutionGraphRequest,
 };
@@ -16,7 +16,7 @@ use tokio_util::sync::CancellationToken;
 
 use crate::app::App;
 use crate::app::command_gateway::GraphProposalCommand;
-use crate::app::session::{GraphRequestPrompt, SessionTaskService};
+use crate::app::session::SessionTaskService;
 use crate::domain::session::Status;
 
 #[derive(Template)]
@@ -159,18 +159,7 @@ impl App {
             session.folder.clone(),
             Arc::clone(&handles.transcript),
         );
-        let catalog = self.services.agent_profile_catalog_client();
-        let mut definitions = Vec::new();
-        for summary in catalog.list_summaries(folder.clone()).await {
-            if let Some(definition) = catalog.resolve(folder.clone(), summary.id).await {
-                definitions.push(definition);
-            }
-        }
-        if definitions.is_empty() {
-            return Err(SessionError::Operation(
-                "No enabled agent definitions are available".into(),
-            ));
-        }
+        let definitions = self.load_enabled_agent_definitions(&folder).await?;
         let state = GraphProposalState {
             agent,
             definitions,
@@ -212,7 +201,6 @@ impl App {
                     &self.services,
                     &state.input.session_id,
                     &state.input.request.text,
-                    GraphRequestPrompt::Leave,
                 )
                 .await;
             self.spawn_graph_proposal_generation(state, folder);
@@ -325,13 +313,35 @@ impl App {
     }
 
     fn require_graph_proposal_feature(&self) -> Result<(), SessionError> {
-        if !self.experimental_multi_agent {
+        if !self.experimental_graph {
             return Err(SessionError::Operation(
-                "Graph proposals require --experimental-multi-agent".into(),
+                "Graph proposals require --experimental-graph".into(),
             ));
         }
 
         Ok(())
+    }
+
+    /// Resolves every enabled agent definition a proposal may assign to its
+    /// nodes, rejecting generation when none is available.
+    async fn load_enabled_agent_definitions(
+        &self,
+        folder: &Path,
+    ) -> Result<Vec<AgentDefinition>, SessionError> {
+        let catalog = self.services.agent_profile_catalog_client();
+        let mut definitions = Vec::new();
+        for summary in catalog.list_summaries(folder.to_path_buf()).await {
+            if let Some(definition) = catalog.resolve(folder.to_path_buf(), summary.id).await {
+                definitions.push(definition);
+            }
+        }
+        if definitions.is_empty() {
+            return Err(SessionError::Operation(
+                "No enabled agent definitions are available".into(),
+            ));
+        }
+
+        Ok(definitions)
     }
 
     fn cancel_proposal_generation(&self, id: &str) {

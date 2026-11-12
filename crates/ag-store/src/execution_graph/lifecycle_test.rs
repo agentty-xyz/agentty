@@ -1,9 +1,11 @@
 use std::num::NonZeroU64;
 use std::path::Path;
 
+use ag_protocol::TurnPromptAttachment;
 use ag_session::{
-    ContinueGraphNodeRequest, ExecutionGraphStatus, GraphBlockedReason, GraphContext,
-    GraphControlRequest, GraphNodeContinuation, GraphNodeStatus, GraphQuestionAnswer,
+    ContinueGraphNodeRequest, ExecutionGraph, ExecutionGraphStatus, GraphBlockedReason,
+    GraphCompletionGate, GraphContext, GraphControlRequest, GraphNodeContinuation, GraphNodeStatus,
+    GraphQuestionAnswer,
 };
 use ag_worker::{GraphAdmission, GraphDispatch, RunState};
 
@@ -13,7 +15,10 @@ use crate::execution_graph::support_test::{evidence, graph, produced, reader, re
 type ContinuationMutation = fn(&mut ContinueGraphNodeRequest);
 
 async fn database(task: bool) -> Database {
-    let database = crate::test_support::task_database_fixture().await;
+    saved(&snapshot(task)).await
+}
+
+fn snapshot(task: bool) -> ExecutionGraph {
     let mut snapshot = graph();
     if task {
         snapshot.nodes[0].execution.context = GraphContext::TaskConversation {
@@ -23,9 +28,15 @@ async fn database(task: bool) -> Database {
             ag_protocol::ProtocolRequestProfile::SessionTurn;
         snapshot.nodes[0].outputs[0].schema = ag_protocol::ProtocolRequestProfile::SessionTurn;
     }
+
+    snapshot
+}
+
+async fn saved(snapshot: &ExecutionGraph) -> Database {
+    let database = crate::test_support::task_database_fixture().await;
     database
         .graphs()
-        .save_graph(&snapshot, None)
+        .save_graph(snapshot, None)
         .await
         .expect("graph");
 
@@ -521,6 +532,126 @@ async fn graph_lifecycle_cancellation_closes_admission_and_rejects_late_actions(
             .nodes[0]
             .status,
         GraphNodeStatus::Cancelled
+    );
+}
+
+fn reply(dispatch: &GraphDispatch, message: &str) -> ContinueGraphNodeRequest {
+    action(
+        dispatch,
+        GraphNodeContinuation::Reply {
+            attachments: vec![TurnPromptAttachment {
+                local_image_path: "sketch.png".into(),
+                placeholder: "[Image #1]".into(),
+            }],
+            message: message.into(),
+        },
+    )
+}
+
+#[tokio::test]
+async fn graph_lifecycle_reply_revises_settled_output_with_its_attachments() {
+    // Arrange
+    let database = database(true).await;
+    let repository = database.graphs();
+    let source = claim(&database, "first").await;
+    settle(&database, &source, r#"{"answer":"Plan"}"#).await;
+
+    // Act
+    let is_authorized = repository
+        .continue_node(&reply(&source, "Include search tests"))
+        .await
+        .expect("reply");
+    let revision = claim(&database, "first").await;
+    let history = repository
+        .execution_history(&revision.record.execution)
+        .await
+        .expect("history")
+        .expect("replay");
+
+    // Assert
+    assert!(is_authorized);
+    assert!(history.text.contains("Plan"));
+    assert!(
+        history
+            .continuation_prompt
+            .as_deref()
+            .expect("current reply")
+            .contains("Include search tests")
+    );
+    assert_eq!(history.attachments.len(), 1);
+}
+
+#[tokio::test]
+async fn graph_lifecycle_replies_reject_blank_running_and_accepted_work() {
+    // Arrange
+    let database = database(true).await;
+    let repository = database.graphs();
+    let source = claim(&database, "first").await;
+    let running = repository.continue_node(&reply(&source, "Too early")).await;
+    settle(&database, &source, r#"{"answer":"Plan"}"#).await;
+    let blank = repository.continue_node(&reply(&source, " ")).await;
+    let reference = repository
+        .progress("graph")
+        .await
+        .expect("progress")
+        .expect("graph")
+        .nodes[0]
+        .results[0]
+        .reference
+        .clone();
+    repository
+        .accept_result(&reference, &evidence())
+        .await
+        .expect("accept");
+
+    // Act
+    let accepted = repository.continue_node(&reply(&source, "Change it")).await;
+
+    // Assert
+    assert!(
+        running
+            .expect_err("running source")
+            .to_string()
+            .contains("settled execution")
+    );
+    assert!(
+        blank
+            .expect_err("blank guidance")
+            .to_string()
+            .contains("requires guidance")
+    );
+    assert!(
+        accepted
+            .expect_err("accepted output is final")
+            .to_string()
+            .contains("Accepted or consumed output")
+    );
+}
+
+#[tokio::test]
+async fn graph_lifecycle_replies_cannot_revise_output_consumed_by_a_dependent() {
+    // Arrange
+    let mut graph = snapshot(true);
+    graph.nodes[1].dependencies[0].gate = GraphCompletionGate::ResultValidated {
+        output_name: "response".into(),
+    };
+    let database = saved(&graph).await;
+    let source = claim(&database, "first").await;
+    settle(&database, &source, r#"{"answer":"Plan"}"#).await;
+    claim(&database, "second").await;
+
+    // Act
+    let revised = database
+        .graphs()
+        .continue_node(&reply(&source, "Change it"))
+        .await;
+
+    // Assert
+    assert!(
+        revised
+            .expect_err("consumed output is final")
+            .to_string()
+            .contains("Accepted or consumed output")
     );
 }
 

@@ -9,7 +9,6 @@ mod harness;
 mod lifecycle;
 mod model;
 mod output;
-mod plan_workflow;
 mod prompt;
 mod provider;
 mod question;

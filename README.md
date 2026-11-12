@@ -35,14 +35,14 @@ Press `w` in session view to inspect saved execution graphs, accept exact output
 work, resume dispatch, or cancel a graph. Questions from graph nodes and proposals open
 the same question panel as an ordinary turn's questions.
 
-With `--experimental-multi-agent`, select `/graph`, then describe your task. Regular
-chat stays on the left, with the graph preview and live status in a right pane using at
-most 35% of the width. Reply in chat to approve, revise, or cancel the proposal; `w`
-shows its details. Nodes launch only after approval. `/graph` is a mode selector with no
+With `--experimental-graph`, select `/graph`, then describe your task. Regular chat
+stays on the left, with the graph preview and live status in a right pane using at most
+35% of the width. Reply in chat to approve, revise, or cancel the proposal; `w` shows
+its details. Nodes launch only after approval. `/graph` is a mode selector with no
 subcommands.
 
-The `/plan` workflow uses bundled Markdown agent definitions. Repository overrides live
-in `.agents/agents/<id>/agent.md`; see the
+Graph proposals use bundled Markdown agent definitions. Repository overrides live in
+`.agents/agents/<id>/agent.md`; see the
 [workflow guide](https://agentty.xyz/docs/usage/workflow/) for the supported format.
 
 ## Installation
@@ -171,7 +171,7 @@ agentty              # Launch with auto-update enabled (default)
 agentty --no-update  # Launch without automatic updates
 agentty --otlp-endpoint http://localhost:4318/v1/traces  # Export session traces
 agentty --experimental-harness  # Offer preview Harness sessions
-agentty --experimental-multi-agent  # Enable /plan and /graph
+agentty --experimental-graph  # Enable /graph proposals
 agentty --help       # Show supported command-line options
 agentty --version    # Show the installed Agentty version
 ```
@@ -180,8 +180,9 @@ agentty --version    # Show the installed Agentty version
   (`a`) or scan a chosen folder (`d`).
 - **Instances**: only one Agentty instance can use a given Agentty root at a time.
   Separate `AGENTTY_ROOT` directories can run independently.
-- **Multi-agent**: `--experimental-multi-agent` enables the `/plan` and `/graph`
-  [workflows](https://agentty.xyz/docs/usage/workflow/).
+- **Graphs**: `--experimental-graph` enables `/graph` proposals you can inspect, revise,
+  and approve before any node runs. See the
+  [workflow guide](https://agentty.xyz/docs/usage/workflow/).
 - **Harness**: `--experimental-harness` adds a preview session type that runs Agentty's
   built-in agent loop against local or hosted models. Its edit mode runs unsandboxed
   shell commands. See

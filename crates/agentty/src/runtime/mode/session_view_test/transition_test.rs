@@ -1,14 +1,7 @@
-use std::num::NonZeroU64;
 use std::sync::Arc;
 
-use ag_session::{
-    AgentKind, AgentModel, AgentSelection, GraphExecutionRef, StartPlanThenImplementRequest,
-    TaskAgentRole, TaskChain, TaskChainPhase,
-};
-use ag_store::MockGraphRepository;
 use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
 use mockall::predicate::eq;
-use tokio_util::sync::CancellationToken;
 
 use super::super::{
     ViewActionState, ViewContext, ViewKeyContext, ViewPendingUpdate, ViewSessionSnapshot,
@@ -754,88 +747,6 @@ async fn test_handle_ignores_key_when_mode_is_not_view() {
     // Assert
     assert!(matches!(result, EventResult::Continue));
     assert!(matches!(app.mode, AppMode::List));
-}
-
-#[tokio::test]
-async fn ending_a_running_chain_turn_cancels_the_chain_through_the_orchestrator() {
-    for status in [Status::InProgress, Status::Review] {
-        // Arrange
-        let (mut app, _base_dir, session_id) = new_test_app_with_session().await;
-        app.sessions.sessions_mut()[0].status = status;
-        app.mode = AppMode::View {
-            session_id: SessionId::from(session_id.as_str()),
-            scroll_offset: None,
-        };
-        let mut chain = running_planner_chain(&session_id);
-        if status == Status::Review {
-            chain.phase = TaskChainPhase::AwaitingPlanAcceptance;
-            app.sessions
-                .deciding_task_chain_ids
-                .insert(chain.id.clone(), Arc::new(CancellationToken::new()));
-        }
-        let mut tasks = MockGraphRepository::new();
-        let listed = chain.clone();
-        let execution = chain
-            .current_execution
-            .clone()
-            .filter(|_| status == Status::InProgress);
-        tasks
-            .expect_list_task_chains()
-            .returning(move |_| Ok(vec![listed.clone()]));
-        tasks
-            .expect_load_task_chain()
-            .returning(move |_| Ok(Some(chain.clone())));
-        tasks
-            .expect_cancel_task_chain_stage()
-            .times(1)
-            .returning(move |_| Ok(execution.clone()));
-        app.services.set_graph_repository(Arc::new(tasks));
-        let mut terminal =
-            ratatui::Terminal::new(ratatui::backend::TestBackend::new(80, 24)).expect("terminal");
-
-        // Act
-        handle(
-            &mut app,
-            &mut terminal,
-            KeyEvent::new(KeyCode::Char('c'), KeyModifiers::CONTROL),
-        )
-        .await
-        .expect("cancel key");
-
-        // Assert: the ordinary stop path, which settles the turn as review, did
-        // not run; the worker settles the canceled attempt instead.
-        assert_eq!(app.sessions.sessions()[0].status, status);
-    }
-}
-
-/// Builds a chain whose Planner attempt is running in `session_id`.
-fn running_planner_chain(session_id: &str) -> TaskChain {
-    let launch = StartPlanThenImplementRequest {
-        agents: Box::new(ag_session::PlanThenImplementAgents::bundled().expect("bundled agents")),
-        attachments: Vec::new(),
-        agent: AgentSelection::new(AgentKind::Codex, AgentModel::Gpt61Sol),
-        chain_id: "chain".to_string(),
-        user_request: "Add search".to_string(),
-    };
-
-    TaskChain {
-        agents: ag_session::PlanThenImplementAgents::bundled().expect("bundled agents"),
-        accepted_plan: None,
-        agent: launch.agent,
-        id: launch.chain_id.clone(),
-        implementer_task_id: TaskChain::task_id(&launch.chain_id, TaskAgentRole::Implementer),
-        phase: TaskChainPhase::Planning,
-        planner_task_id: TaskChain::task_id(&launch.chain_id, TaskAgentRole::Planner),
-        current_role: TaskAgentRole::Planner,
-        current_execution: Some(GraphExecutionRef::TaskAttempt {
-            attempt_id: "attempt".into(),
-            operation_id: "task-attempt:attempt".into(),
-            task_id: TaskChain::task_id(&launch.chain_id, TaskAgentRole::Planner),
-        }),
-        revision: NonZeroU64::MIN,
-        session_id: SessionId::from(session_id),
-        user_request: launch.user_request,
-    }
 }
 
 #[tokio::test]

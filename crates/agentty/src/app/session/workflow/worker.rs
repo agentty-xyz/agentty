@@ -2222,20 +2222,6 @@ impl SessionManager {
         result
     }
 
-    /// Materializes a deferred draft workspace before a graph launch, so the
-    /// graph's Env is prepared before any node is admitted.
-    pub(in crate::app) async fn prepare_graph_workspace(
-        &mut self,
-        services: &AppServices,
-        session_id: &str,
-    ) -> Result<(), SessionError> {
-        self.validate_agent_task_workspace(services, session_id)?;
-        self.ensure_session_worktree_ready(services, session_id)
-            .await?;
-
-        self.clear_session_draft_flag(services, session_id).await
-    }
-
     pub(in crate::app) fn validate_agent_task_workspace(
         &self,
         services: &AppServices,

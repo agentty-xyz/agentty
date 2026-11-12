@@ -3,9 +3,8 @@ use std::sync::Arc;
 
 use super::support::FakeBackend;
 use crate::{
-    AcceptTaskChainPlanRequest, AcceptTaskPlanRequest, AgentKind, AgentModel, AgentSelection,
-    ContinueTaskChainRequest, CreateTaskRequest, DurableMessageVisibility, ReplyToTaskChainRequest,
-    SessionError, SessionId, SessionService, StartPlanThenImplementRequest, SubmitAgentTaskRequest,
+    AcceptTaskPlanRequest, AgentKind, AgentModel, AgentSelection, CreateTaskRequest,
+    DurableMessageVisibility, SessionError, SessionId, SessionService, SubmitAgentTaskRequest,
     SubmitTaskRequest, TaskAgentAssignment, TaskAgentInput, TaskAgentRole,
 };
 
@@ -165,52 +164,12 @@ async fn existing_hosts_report_unsupported_task_capability() {
 }
 
 #[tokio::test]
-async fn existing_hosts_report_unsupported_workflow_capability() {
+async fn existing_hosts_report_unsupported_plan_acceptance() {
     // Arrange
     let service = SessionService::new(Arc::new(FakeBackend::default()));
     let session_id = SessionId::from("session");
-    let start = StartPlanThenImplementRequest {
-        agents: Box::new(crate::PlanThenImplementAgents::bundled().expect("bundled agents")),
-        attachments: Vec::new(),
-        agent: crate::test_support::codex_selection(),
-        chain_id: "chain".into(),
-        user_request: "Objective".into(),
-    };
 
     // Act
-    let started = service.start_plan_then_implement(&session_id, start).await;
-    let loaded = service.get_task_chain("chain").await;
-    let listed = service.list_task_chains(&session_id).await;
-    let accepted = service
-        .accept_task_chain_plan(
-            "chain",
-            AcceptTaskChainPlanRequest {
-                plan_attempt_id: "plan".into(),
-            },
-        )
-        .await;
-    let continued = service
-        .continue_task_chain(
-            "chain",
-            ContinueTaskChainRequest {
-                attachments: Vec::new(),
-                attempt_id: "continued".into(),
-                clarification: None,
-                expected_attempt_id: "plan".into(),
-            },
-        )
-        .await;
-    let canceled = service.cancel_task_chain("chain").await;
-    let replied = service
-        .reply_to_task_chain(
-            &session_id,
-            ReplyToTaskChainRequest {
-                attachments: Vec::new(),
-                message: "Go ahead".into(),
-                reply_id: "reply".into(),
-            },
-        )
-        .await;
     let standalone = service
         .accept_agent_plan(
             &session_id,
@@ -222,13 +181,6 @@ async fn existing_hosts_report_unsupported_workflow_capability() {
         .await;
 
     // Assert
-    let expected = SessionError::Operation("Host does not support task chains".into());
-    assert_eq!(loaded, Err(expected.clone()));
-    assert_eq!(listed, Err(expected.clone()));
-    for result in [started, accepted, continued, canceled] {
-        assert_eq!(result, Err(expected.clone()));
-    }
-    assert_eq!(replied, Err(expected));
     assert_eq!(
         standalone,
         Err(SessionError::Operation(

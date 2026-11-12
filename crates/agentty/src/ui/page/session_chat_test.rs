@@ -1,4 +1,4 @@
-use ag_session::{TaskAgentRole, test_support as model_fixture};
+use ag_session::test_support as model_fixture;
 use ratatui::layout::Rect;
 use ratatui::widgets::Paragraph;
 
@@ -19,9 +19,6 @@ use crate::presentation::help_action;
 use crate::presentation::prompt::{
     PromptAtMentionState, PromptAttachmentState, PromptGraphState, PromptHistoryState,
     PromptSlashState,
-};
-use crate::presentation::task_chain_graph::{
-    TaskChainGraph, TaskChainGraphNode, TaskChainNodeStatus,
 };
 use crate::ui::component::session_output::{SessionOutputLayoutCache, SessionOutputLineContext};
 use crate::ui::{Page, layout, markdown, prompt_format, style};
@@ -53,7 +50,6 @@ fn test_page_input<'a>(session: &'a Session, mode: &'a AppMode) -> SessionChatPa
         session_index: 0,
         session_update_version: 0,
         sessions: std::slice::from_ref(session),
-        task_chain_graph: None,
     }
 }
 
@@ -179,7 +175,7 @@ fn test_transcript_view_height_shrinks_for_open_suggestion_dropdown() {
     let slash_mode = prompt_mode("/");
     let mut armed_slash_mode = prompt_mode("/");
     if let AppMode::Prompt { slash_state, .. } = &mut armed_slash_mode {
-        slash_state.is_plan_armed = true;
+        slash_state.graph = PromptGraphState::Armed;
     }
 
     // Act
@@ -360,7 +356,6 @@ fn test_rendered_output_line_count_counts_wrapped_content() {
             active_prompt_output: None,
             active_progress: None,
             session_update_version: 0,
-            task_chain_graph: None,
         },
         &markdown_render_cache,
         &output_layout_cache,
@@ -438,7 +433,6 @@ fn test_rendered_output_line_count_includes_question_review_output() {
             active_prompt_output: None,
             active_progress: None,
             session_update_version: 0,
-            task_chain_graph: None,
         },
         &markdown_render_cache,
         &output_layout_cache,
@@ -464,7 +458,6 @@ fn test_rendered_output_line_count_includes_question_review_output() {
             active_prompt_output: None,
             active_progress: None,
             session_update_version: 0,
-            task_chain_graph: None,
         },
         &markdown_render_cache,
         &output_layout_cache,
@@ -1280,26 +1273,10 @@ fn terminal_diff_help_requires_retained_archive() {
 }
 
 #[test]
-fn composer_shows_the_armed_plan_request_and_the_orchestrator_state() {
+fn composer_shows_the_session_settings_title_while_replying_and_viewing() {
     // Arrange
     let mut session = session_fixture();
     session.status = Status::Review;
-    let graph = TaskChainGraph {
-        chain_id: "chain".into(),
-        edges: Vec::new(),
-        nodes: vec![TaskChainGraphNode {
-            agent: TaskAgentRole::Planner,
-            status: TaskChainNodeStatus::AwaitingApproval,
-        }],
-    };
-    let mut armed = prompt_mode("");
-    if let AppMode::Prompt {
-        focus, slash_state, ..
-    } = &mut armed
-    {
-        *focus = ChatFocus::Input;
-        slash_state.is_plan_armed = true;
-    }
     let mut replying = prompt_mode("");
     if let AppMode::Prompt { focus, .. } = &mut replying {
         *focus = ChatFocus::Input;
@@ -1308,21 +1285,21 @@ fn composer_shows_the_armed_plan_request_and_the_orchestrator_state() {
         session_id: session.id.clone(),
         scroll_offset: None,
     };
+    let title = format!(
+        "{}/{}",
+        session.agent.kind(),
+        session.agent.model().as_str()
+    );
 
     // Act
-    let armed_text = rendered_text(&session, &armed, None);
-    let replying_text = rendered_text(&session, &replying, Some(&graph));
-    let viewing_text = rendered_text(&session, &viewing, Some(&graph));
-    let ordinary_text = rendered_text(&session, &replying, None);
-    let slash_text = rendered_text(&session, &prompt_mode("/"), None);
+    let replying_text = rendered_text(&session, &replying);
+    let viewing_text = rendered_text(&session, &viewing);
+    let slash_text = rendered_text(&session, &prompt_mode("/"));
 
     // Assert
-    assert!(armed_text.contains("Plan · describe the task for the Planner"));
-    assert!(armed_text.contains("Describe the task for the Planner"));
-    assert!(replying_text.contains("Orchestrator · Planner · Awaiting your approval"));
-    assert!(replying_text.contains("tell the orchestrator to start implementing"));
-    assert!(viewing_text.contains("Orchestrator · Planner · Awaiting your approval"));
-    assert!(ordinary_text.contains("Type your message"));
+    assert!(replying_text.contains(&title));
+    assert!(replying_text.contains("Type your message"));
+    assert!(viewing_text.contains(&title));
     assert!(slash_text.contains("/mode"));
 }
 
@@ -1390,7 +1367,9 @@ fn slash_leading_drafts_keep_active_file_mentions_visible() {
             ..
         } = &mut mode
         {
-            slash_state.is_plan_armed = armed;
+            if armed {
+                slash_state.graph = PromptGraphState::Armed;
+            }
             *at_mention_state = Some(PromptAtMentionState::new(vec![
                 crate::domain::file_entry::FileEntry {
                     is_dir: false,
@@ -1400,7 +1379,7 @@ fn slash_leading_drafts_keep_active_file_mentions_visible() {
         }
 
         // Act
-        let text = rendered_text(&session, &mode, None);
+        let text = rendered_text(&session, &mode);
 
         // Assert
         assert_eq!(text.contains("src/session_chat.rs"), active_mention);
@@ -1424,7 +1403,7 @@ fn prompt_composer_keeps_its_border_when_only_one_row_is_available() {
     // Act
     terminal
         .draw(|frame| {
-            page.render_prompt_composer(frame, frame.area(), &panel, (&input, false), "Timer: 0s");
+            page.render_prompt_composer(frame, frame.area(), &panel, &input, "Timer: 0s");
         })
         .expect("render short composer");
     let text = buffer_text(terminal.backend().buffer());
@@ -1433,12 +1412,9 @@ fn prompt_composer_keeps_its_border_when_only_one_row_is_available() {
     assert!(text.chars().any(|glyph| matches!(glyph, '╭' | '╰' | '─')));
 }
 
-/// Renders one session page with an optional task-chain graph.
-fn rendered_text(session: &Session, mode: &AppMode, graph: Option<&TaskChainGraph>) -> String {
-    let mut page = SessionChatPage::new(SessionChatPageInput {
-        task_chain_graph: graph,
-        ..test_page_input(session, mode)
-    });
+/// Renders one session page.
+fn rendered_text(session: &Session, mode: &AppMode) -> String {
+    let mut page = test_session_chat_page(session, mode);
     let backend = ratatui::backend::TestBackend::new(100, 14);
     let mut terminal = ratatui::Terminal::new(backend).expect("failed to create terminal");
 

@@ -1,5 +1,5 @@
-use ag_protocol::{TurnPrompt, TurnPromptAttachment};
-use ag_session::{GraphExecutionRef, GraphResult, TaskChainReplyOutcome};
+use ag_protocol::TurnPromptAttachment;
+use ag_session::GraphResult;
 pub use ag_worker::GraphExecutionRecord;
 
 /// Trusted host evidence for an exact result, supplied separately from output.
@@ -46,19 +46,4 @@ pub struct GraphNodeHistory {
     pub continuation_prompt: Option<String>,
     /// Replayed explicit replies and settled responses, as text data.
     pub text: String,
-}
-
-/// One natural-language task-chain reply and its first recorded decision.
-#[derive(Clone, Debug, Eq, PartialEq)]
-pub struct TaskChainReplyRecord {
-    /// Continuation identity chosen with the decision, if it continues work.
-    pub action_id: Option<String>,
-    /// Owning task-chain graph.
-    pub chain_id: String,
-    /// Decision recorded for this reply, absent until decided.
-    pub outcome: Option<TaskChainReplyOutcome>,
-    /// Visible user prompt, including attachments.
-    pub prompt: TurnPrompt,
-    /// Exact execution the reply answered when it was recorded.
-    pub source: GraphExecutionRef,
 }

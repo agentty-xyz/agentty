@@ -1,18 +1,17 @@
 //! Natural-language chat replies to a graph node awaiting answers.
 //!
-//! A generic graph node asks its clarification questions in session chat,
-//! where the question panel answers that exact execution. While one waits,
-//! a composer message is also that node's answer; when several wait, it
-//! answers the question asked last. The reply is shown in
-//! chat and admitted through the command gateway as a reply to the exact
-//! execution that asked, so a new attempt of the same task conversation
-//! continues with it. Task-chain roles keep their own reply routing.
+//! A graph node asks its clarification questions in session chat, where the
+//! question panel answers that exact execution. While one waits, a composer
+//! message is also that node's answer; when several wait, it answers the
+//! question asked last. The reply is shown in chat and admitted through the
+//! command gateway as a reply to the exact execution that asked, so a new
+//! attempt of the same task conversation continues with it.
 
 use std::sync::Arc;
 
 use ag_session::{
     ContinueGraphNodeRequest, ExecutionGraph, ExecutionGraphStatus, GraphContext,
-    GraphExecutionRef, GraphNode, GraphNodeContinuation, GraphNodeStatus, QuestionItem, TaskChain,
+    GraphExecutionRef, GraphNode, GraphNodeContinuation, GraphNodeStatus, QuestionItem,
 };
 use uuid::Uuid;
 
@@ -178,9 +177,9 @@ impl App {
     /// reply answers the question the user most recently saw.
     ///
     /// Candidates are nodes whose latest task-conversation execution asked
-    /// questions that no reply has answered yet; task-chain graphs are
-    /// skipped. Questions without a recorded chat message rank before every
-    /// recorded one, and ties keep graph creation and declaration order.
+    /// questions that no reply has answered yet. Questions without a recorded
+    /// chat message rank before every recorded one, and ties keep graph
+    /// creation and declaration order.
     async fn awaiting_graph_node(
         &self,
         session_id: &SessionId,
@@ -226,7 +225,7 @@ impl App {
                 matches!(
                     node.execution.context,
                     GraphContext::TaskConversation { .. }
-                ) && TaskChain::role(&graph.id, node).is_none()
+                )
             };
             if !graph.nodes.iter().any(asks_in_chat) {
                 continue;
