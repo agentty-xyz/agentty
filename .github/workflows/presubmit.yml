@@ -68,7 +68,10 @@ jobs:
           # lists exactly the pull request's changes. A failed diff fails the
           # job, which leaves the required E2E check missing instead of skipped.
           changed="$RUNNER_TEMP/changed-paths"
-          git diff --name-only --no-renames -z HEAD^1 HEAD > "$changed"
+          if ! git diff --name-only --no-renames -z HEAD^1 HEAD > "$changed"; then
+            echo "::error title=Change scope::Could not list the pull request's changed paths. Re-run this job; the required E2E check stays missing until it succeeds."
+            exit 1
+          fi
           e2e=false
           while IFS= read -r -d '' path; do
             case "$path" in
