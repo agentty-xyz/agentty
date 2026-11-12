@@ -181,10 +181,17 @@ by the ordinary `ag-xtask` suites and coverage gate. The collector hook writes a
 `timing-action.lcov` for SonarCloud; the coverage job runs that hook before scanning so
 JavaScript coverage is imported alongside Rust.
 
-A new PR push cancels that PR's obsolete Presubmit and Native Harness Sandbox runs.
-Compare timings from the same final head and completed run attempt; cancelled samples
-measure superseded work, not suite speed. Merge-group, main, and manual runs remain
+A new PR push cancels that PR's obsolete Presubmit and Native Harness Sandbox runs, and
+a new `main` push cancels an obsolete Native Harness Sandbox run on `main`. Compare
+timings from the same final head and completed run attempt; cancelled samples measure
+superseded work, not suite speed. Postsubmit, merge-group, and manual runs remain
 independent. Default-setup CodeQL runs are managed separately.
+
+Native Harness Sandbox qualifies only the macOS launcher, and pull requests run it only
+when they touch `ag-harness`, its workspace dependencies, or shared build and CI
+configuration. `crates/ag-xtask/tests/harness_sandbox_filter.rs` fails when the filter's
+crate list drifts from Cargo's dependency graph. The coverage job installs Bubblewrap
+and runs every `ag-harness` sandbox suite, so it is the Linux qualification.
 
 ## Coverage
 
