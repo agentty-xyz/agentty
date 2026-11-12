@@ -80,10 +80,10 @@ through `prek`. Focused E2E and container recording commands in
   source, tests, dependencies, toolchain, configuration, and relevant environment remain
   unchanged; rerun after invalidating edits, failures, or new evidence. Record each
   command, scope, and result at handoff.
-- Pull-request CI owns `cargo-check`, fresh `coverage` (including the `test-workspace`
-  selection), and full `test-agentty-e2e`. Run these locally only to diagnose their CI
-  failure or when requested; also run `test-workspace` when impact cannot be bounded.
-  Diagnose the single failing hook.
+- Pull-request CI owns fresh `coverage` (including the `test-workspace` selection) and
+  full `test-agentty-e2e`. Run these locally only to diagnose their CI failure or when
+  requested; also run `test-workspace` when impact cannot be bounded. Diagnose the
+  single failing hook.
 - Run hooks in the inherited environment. Do not override `CARGO_HOME`, `PREK_HOME`,
   `RUSTC_WRAPPER`, `TMPDIR`, or `CARGO_TARGET_DIR`, or copy registries, toolchains, or
   caches into the worktree. Report environment failures instead of building a

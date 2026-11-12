@@ -79,14 +79,6 @@ repos:
         language: system
         types: [rust]
         pass_filenames: false
-      - id: cargo-check
-        name: cargo check
-        description: Type-check all Rust workspace targets and features without running tests.
-        entry: cargo check -q --locked --all-targets --all-features
-        language: system
-        files: (^|/)(Cargo\.toml|Cargo\.lock|.*\.rs)$
-        pass_filenames: false
-        stages: [manual]
       - id: cargo-check-ag-harness-benchmark
         name: cargo check ag-harness benchmark
         description: Compile-check the manual ag-harness live benchmark without executing it.
