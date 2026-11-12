@@ -19,9 +19,21 @@ const TRACED_STARTUP_CHILD_ENV: &str = "AGENTTY_TRACED_STARTUP_CHILD";
 const OWNED_ROOT_CHILD_ENV: &str = "AGENTTY_OWNED_ROOT_CHILD";
 const DATABASE_FAILURE_CHILD_ENV: &str = "AGENTTY_DATABASE_FAILURE_CHILD";
 const TELEMETRY_STARTUP_CHILD_ENV: &str = "AGENTTY_TELEMETRY_STARTUP_CHILD";
+const DELETED_CWD_CHILD_ENV: &str = "AGENTTY_DELETED_CWD_CHILD";
 
 async fn closed_runtime(_app: &mut App) -> std::io::Result<()> {
     Err(std::io::Error::other("terminal closed"))
+}
+
+async fn root_working_dir_runtime(app: &mut App) -> std::io::Result<()> {
+    if app.working_dir() == std::path::Path::new("/") {
+        return Ok(());
+    }
+
+    Err(std::io::Error::other(format!(
+        "unexpected working directory: {}",
+        app.working_dir().display()
+    )))
 }
 
 async fn traced_closed_runtime(app: &mut App) -> std::io::Result<()> {
@@ -413,6 +425,63 @@ async fn run_releases_instance_lock_after_database_open_failure() {
 
     // Assert
     assert!(status.success());
+}
+
+#[tokio::test]
+async fn startup_from_a_deleted_directory_falls_back_to_the_filesystem_root() {
+    if env::var_os(DELETED_CWD_CHILD_ENV).is_some() {
+        // Arrange
+        let deleted_directory = tempfile::tempdir().expect("doomed working directory");
+        env::set_current_dir(deleted_directory.path()).expect("enter doomed directory");
+        deleted_directory.close().expect("remove working directory");
+
+        // Act
+        let result = run(
+            Cli {
+                experimental: ExperimentalFeatures::default(),
+                no_update: true,
+                otlp_capture_content: false,
+                otlp_endpoint: None,
+            },
+            root_working_dir_runtime,
+        )
+        .await;
+
+        // Assert
+        result.expect("startup should use the filesystem root as its working directory");
+
+        return;
+    }
+
+    // Arrange
+    let root = tempfile::tempdir().expect("root");
+    let stub_bin = root.path().join("stub-bin");
+    fs::create_dir_all(&stub_bin).expect("stub bin directory");
+    let codex_stub = stub_bin.join("codex");
+    fs::write(&codex_stub, "#!/bin/sh\nexit 0\n").expect("codex stub");
+    fs::set_permissions(&codex_stub, fs::Permissions::from_mode(0o750))
+        .expect("executable codex stub");
+
+    // Act
+    let output = tokio::process::Command::new(env::current_exe().expect("test binary"))
+        .args([
+            "--exact",
+            "tests::startup_from_a_deleted_directory_falls_back_to_the_filesystem_root",
+        ])
+        .env(DELETED_CWD_CHILD_ENV, "1")
+        .env("AGENTTY_ROOT", root.path())
+        .env("HOME", root.path())
+        .env("PATH", format!("{}:/usr/bin:/bin", stub_bin.display()))
+        .output()
+        .await
+        .expect("startup process");
+
+    // Assert
+    assert!(
+        output.status.success(),
+        "{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
 }
 
 #[tokio::test]

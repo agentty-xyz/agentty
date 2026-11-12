@@ -523,7 +523,7 @@ impl<'a> HunkApplier<'a> {
         if start > self.source_lines.len() {
             return Err(patch_error("hunk starts beyond the end of the target"));
         }
-        let modified_index = hunk_start(hunk.new_start, hunk.lines.len(), "modified")?;
+        let modified_index = hunk_start(hunk.new_start, "modified")?;
         if modified_index != self.output.len() + (start - self.source_index) {
             return Err(patch_error(
                 "hunk modified range does not match its original range",
@@ -544,7 +544,7 @@ impl<'a> HunkApplier<'a> {
         hunk: &Hunk,
         original: &[&TextLine],
     ) -> Result<usize, WriteError> {
-        let header_index = hunk_start(hunk.old_start, original.len(), "original")?;
+        let header_index = hunk_start(hunk.old_start, "original")?;
         if header_index >= self.source_index {
             if block_matches(&self.source_lines, header_index, original, LineMatch::Exact) {
                 return Ok(header_index);
@@ -878,11 +878,11 @@ fn apply_hunks(
     applier.finish(line_ending)
 }
 
-fn hunk_start(start: usize, count: usize, side: &str) -> Result<usize, WriteError> {
-    if count == 0 {
-        return Ok(start);
-    }
-
+/// Converts the one-based start of a non-empty hunk side to a line index.
+///
+/// Both callers pass a side with at least one line: parsing rejects empty
+/// hunks, and a hunk is located by its original lines only when it has some.
+fn hunk_start(start: usize, side: &str) -> Result<usize, WriteError> {
     start
         .checked_sub(1)
         .ok_or_else(|| patch_error(format!("non-empty hunk cannot start at {side} line zero")))

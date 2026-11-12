@@ -42,9 +42,7 @@ pub fn wrap_lines(text: &str, width: usize) -> Vec<Line<'_>> {
             current_line.push_str(word);
             current_width += word_len;
         }
-        if !current_line.is_empty() {
-            wrapped.push(Line::from(current_line));
-        }
+        wrapped.push(Line::from(current_line));
     }
     wrapped
 }
@@ -249,13 +247,8 @@ pub fn wrap_styled_line(spans: Vec<Span<'static>>, width: usize) -> Vec<Line<'st
         current_spans.extend(word.spans);
     }
 
-    if !current_spans.is_empty() {
-        wrapped_lines.push(Line::from(current_spans));
-    }
-
-    if wrapped_lines.is_empty() {
-        wrapped_lines.push(Line::from(""));
-    }
+    // Every word has spans, so the final in-progress line is never empty.
+    wrapped_lines.push(Line::from(current_spans));
 
     wrapped_lines
 }

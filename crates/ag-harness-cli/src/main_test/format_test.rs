@@ -109,10 +109,14 @@ fn single_line_terminal_text_replaces_all_control_characters() {
 fn usage_format_marks_missing_counts() {
     // Arrange
     let usage = ag_harness::model::CompletionUsage::new(None, None, None, Some(4), None, None);
+    let missing_output_usage =
+        ag_harness::model::CompletionUsage::new(None, None, Some(3), None, None, Some(7));
 
     // Act
     let formatted = format_usage(&usage);
+    let missing_output_formatted = format_usage(&missing_output_usage);
 
     // Assert
     assert_eq!(formatted, "tokens ? in, 4 out, ? total");
+    assert_eq!(missing_output_formatted, "tokens 3 in, ? out, 7 total");
 }

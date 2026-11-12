@@ -1,7 +1,7 @@
 use std::sync::{Arc, Mutex};
 
 use crate::{
-    AgentAvailabilityProbe, AgentCliVersion, AgentKind, HarnessModelOption,
+    AgentAvailabilityProbe, AgentCliInfo, AgentCliVersion, AgentKind, HarnessModelOption,
     StaticAgentAvailabilityProbe,
 };
 
@@ -24,6 +24,26 @@ fn static_discovery_preserves_provider_order_without_inventing_versions() {
     assert!(
         clis.iter()
             .all(|cli| cli.version == AgentCliVersion::Unknown)
+    );
+}
+
+#[test]
+fn loading_rows_keep_provider_order_while_versions_refresh() {
+    // Arrange
+    let kinds = [AgentKind::Gemini, AgentKind::Codex];
+
+    // Act
+    let clis = AgentCliInfo::loading_from_kinds(&kinds);
+
+    // Assert
+    assert_eq!(
+        clis.iter()
+            .map(|cli| (cli.kind, cli.executable_name, cli.version.clone()))
+            .collect::<Vec<_>>(),
+        [
+            (AgentKind::Gemini, "gemini", AgentCliVersion::Loading),
+            (AgentKind::Codex, "codex", AgentCliVersion::Loading),
+        ]
     );
 }
 

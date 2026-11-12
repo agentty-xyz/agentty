@@ -1,11 +1,79 @@
 use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
 
-use super::super::submit_response;
+use super::super::{
+    CompletedQuestionResponse, NO_ANSWER, restore_completed_question_response, submit_response,
+};
 use super::support::{TEST_TERMINAL_SIZE, handle};
 use crate::domain::input::InputState;
 use crate::domain::question::QuestionItem;
 use crate::domain::session::Status;
 use crate::presentation::app_mode::{AppMode, ChatFocus};
+
+/// Builds one completed response for the two-question option fixture.
+fn completed_response(
+    questions: Vec<QuestionItem>,
+    responses: &[&str],
+) -> CompletedQuestionResponse {
+    CompletedQuestionResponse {
+        questions,
+        responses: responses.iter().map(ToString::to_string).collect(),
+        scroll_offset: Some(3),
+        session_id: "session-id".into(),
+    }
+}
+
+#[tokio::test]
+async fn restoring_a_failed_reply_reselects_options_and_skips_empty_payloads() {
+    // Arrange
+    let questions = vec![
+        QuestionItem::new("Which branch?"),
+        QuestionItem::with_options("Run tests?", vec!["Yes".to_string(), "No".to_string()]),
+    ];
+    let mut app = crate::test_support::new_test_app_without_retained_base_dir().await;
+
+    for (completed, expected_option, expected_text) in [
+        (
+            completed_response(questions.clone(), &["main", "No"]),
+            Some(1),
+            "",
+        ),
+        (
+            completed_response(questions.clone(), &["main", NO_ANSWER]),
+            None,
+            "",
+        ),
+    ] {
+        app.mode = AppMode::List;
+
+        // Act
+        restore_completed_question_response(&mut app, completed);
+
+        // Assert
+        assert!(matches!(
+            app.mode,
+            AppMode::Question {
+                current_index: 1,
+                ref input,
+                scroll_offset: Some(3),
+                selected_option_index,
+                ..
+            } if selected_option_index == expected_option && input.text() == expected_text
+        ));
+    }
+
+    for completed in [
+        completed_response(questions, &[]),
+        completed_response(Vec::new(), &["main"]),
+    ] {
+        app.mode = AppMode::List;
+
+        // Act
+        restore_completed_question_response(&mut app, completed);
+
+        // Assert
+        assert!(matches!(app.mode, AppMode::List));
+    }
+}
 
 #[tokio::test]
 async fn submit_response_advances_session_when_reply_is_enqueued() {
@@ -69,6 +137,7 @@ async fn submit_response_keeps_question_status_when_reply_is_not_enqueued() {
     // Arrange — a viewed `Question` session with no runtime handle, so the
     // reply cannot be enqueued on any worker and `App::reply` reports
     // failure.
+    crate::test_support::enable_tracing_log_fallback();
     let mut app = crate::test_support::new_test_app_without_retained_base_dir().await;
     let session_id = "session-no-handle";
     let questions = vec![

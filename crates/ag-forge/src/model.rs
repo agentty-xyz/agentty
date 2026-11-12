@@ -582,17 +582,15 @@ impl ReviewRequestError {
             forge_kind.auth_login_command(),
         );
 
+        // The trimmed detail never ends with a newline, so the fence always
+        // starts on its own line.
         if let Some(detail) = Self::non_empty_detail(detail) {
             // Infallible: writing to a String cannot fail.
             let _ = write!(
                 message,
-                "\n\nOriginal `{}` error:\n```text\n{detail}",
+                "\n\nOriginal `{}` error:\n```text\n{detail}\n```",
                 forge_kind.cli_name(),
             );
-            if !detail.ends_with('\n') {
-                message.push('\n');
-            }
-            message.push_str("```");
         }
 
         message

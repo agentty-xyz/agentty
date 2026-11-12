@@ -1,5 +1,5 @@
 use super::support::diagram_text;
-use crate::mermaid::{MAX_LABEL_WIDTH, render_mermaid};
+use crate::mermaid::{MAX_LABEL_WIDTH, is_ignorable_flow_statement, render_mermaid};
 use crate::style;
 
 #[test]
@@ -439,4 +439,124 @@ fn test_render_mermaid_renders_plain_dotted_and_thick_open_links() {
     assert!(text.contains('A'));
     assert!(text.contains('C'));
     assert!(!text.contains('▼'));
+}
+
+#[test]
+fn test_render_mermaid_rejects_malformed_flow_statements() {
+    // Arrange
+    let sources = [
+        "graph TD extra\n    A --> B",
+        "graph TD\n    @",
+        "graph TD\n    A -> B",
+    ];
+
+    for source in sources {
+        // Act
+        let diagram = render_mermaid(source);
+
+        // Assert
+        assert!(diagram.is_none(), "{source:?}");
+    }
+}
+
+#[test]
+fn test_is_ignorable_flow_statement_skips_blank_statements() {
+    // Arrange, Act, Assert
+    assert!(is_ignorable_flow_statement(""));
+    assert!(is_ignorable_flow_statement("style A fill:#fff"));
+    assert!(!is_ignorable_flow_statement("A --> B"));
+}
+
+#[test]
+fn test_render_mermaid_keeps_edge_reached_through_shared_descendant_in_layout() {
+    // Arrange
+    let source = "graph TD\n    A --> B\n    A --> C\n    B --> D\n    C --> D\n    E --> A";
+
+    // Act
+    let diagram = render_mermaid(source).expect("diamond with a new root should render");
+    let text = diagram_text(&diagram);
+
+    // Assert
+    assert!(text.contains('E'));
+    assert_eq!(text.matches('▼').count(), 4);
+    assert!(!text.contains("───▶"));
+}
+
+#[test]
+fn test_render_mermaid_parses_inline_and_open_link_edge_forms() {
+    // Arrange
+    let blank_inline_label = "graph TD\n    A[Alpha] -- \" \" -->|yes| B[Bravo]";
+    let open_link = "graph TD\n    A -- B";
+
+    // Act
+    let blank_inline_label_text =
+        diagram_text(&render_mermaid(blank_inline_label).expect("pipe label should render"));
+    let open_link_text = diagram_text(&render_mermaid(open_link).expect("open link should render"));
+
+    // Assert
+    assert!(blank_inline_label_text.contains("yes"));
+    assert!(blank_inline_label_text.contains('▼'));
+    assert!(open_link_text.contains('A'));
+    assert!(open_link_text.contains('B'));
+    assert!(!open_link_text.contains('▼'));
+}
+
+#[test]
+fn test_render_mermaid_routes_hidden_nodes_of_long_edges() {
+    // Arrange
+    let top_down = "graph TD\n    A --> B --> C\n    A ~~~ C";
+    let left_right = "graph LR\n    A --> B --> C\n    A --> C\n    A ~~~ C";
+
+    // Act
+    let top_down_text =
+        diagram_text(&render_mermaid(top_down).expect("top-down long edge should render"));
+    let left_right_text =
+        diagram_text(&render_mermaid(left_right).expect("left-right long edges should render"));
+
+    // Assert
+    assert_eq!(top_down_text.matches('▼').count(), 2);
+    assert!(left_right_text.contains('C'));
+    assert_eq!(left_right_text.matches('▶').count(), 2);
+}
+
+#[test]
+fn test_render_mermaid_draws_left_right_open_and_source_arrows() {
+    // Arrange
+    let source = "graph LR\n    A <--> B\n    A --- C";
+
+    // Act
+    let diagram = render_mermaid(source).expect("left-right arrows should render");
+    let text = diagram_text(&diagram);
+
+    // Assert
+    assert_eq!(text.matches('◀').count(), 1);
+    assert_eq!(text.matches('▶').count(), 1);
+    assert!(text.contains('C'));
+}
+
+#[test]
+fn test_render_mermaid_drops_left_right_elbow_label_wider_than_entry_run() {
+    // Arrange
+    let source = "graph LR\n    A -->|yes| B\n    A --> C";
+
+    // Act
+    let diagram = render_mermaid(source).expect("left-right fan-out should render");
+    let text = diagram_text(&diagram);
+
+    // Assert
+    assert!(!text.contains("yes"));
+    assert_eq!(text.matches('▶').count(), 2);
+}
+
+#[test]
+fn test_render_mermaid_keeps_arrow_when_open_link_shares_target_cell() {
+    // Arrange
+    let source = "graph TD\n    A --> C\n    B --- C";
+
+    // Act
+    let diagram = render_mermaid(source).expect("shared target should render");
+    let text = diagram_text(&diagram);
+
+    // Assert
+    assert_eq!(text.matches('▼').count(), 1);
 }

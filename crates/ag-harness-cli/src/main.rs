@@ -201,7 +201,9 @@ fn reasoning_effort_parser() -> impl TypedValueParser<Value = ReasoningEffort> {
                 .iter()
                 .copied()
                 .find(|candidate| candidate.as_str() == effort)
-                .ok_or_else(|| format!("unsupported reasoning effort `{effort}`"))
+                // Unreachable: the possible-values parser already rejected
+                // every value outside `ReasoningEffort::ALL`.
+                .ok_or("unsupported reasoning effort")
         },
     )
 }

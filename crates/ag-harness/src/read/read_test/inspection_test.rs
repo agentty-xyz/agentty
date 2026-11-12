@@ -225,6 +225,83 @@ async fn searches_literal_repository_text_and_accepts_no_matches() {
     assert_eq!(result["truncated"], false);
 }
 
+#[tokio::test]
+async fn inspections_reject_command_failures_and_non_utf8_git_output() {
+    // Arrange
+    let mut list_runner = MockRepositoryCommandRunner::new();
+    list_runner
+        .expect_run()
+        .times(1)
+        .returning(|_, _| Ok(command_output(0, b"\xff\0")));
+    let mut failed_list_runner = MockRepositoryCommandRunner::new();
+    failed_list_runner
+        .expect_run()
+        .times(1)
+        .returning(|_, _| Err(io::Error::other("git unavailable")));
+    let mut diff_runner = MockRepositoryCommandRunner::new();
+    diff_runner
+        .expect_run()
+        .withf(|_, arguments| {
+            arguments
+                .first()
+                .is_some_and(|command| command != "ls-files")
+        })
+        .times(1)
+        .returning(|_, _| Ok(command_output(0, Vec::new())));
+    diff_runner
+        .expect_run()
+        .withf(|_, arguments| {
+            arguments
+                .first()
+                .is_some_and(|command| command == "ls-files")
+        })
+        .times(1)
+        .returning(|_, _| Ok(command_output(0, b"\xff\0")));
+    let mut prefix_runner = MockRepositoryCommandRunner::new();
+    prefix_runner
+        .expect_run()
+        .times(1)
+        .returning(|_, _| Ok(command_output(0, b"\xff\n")));
+    let mut failed_show_runner = MockRepositoryCommandRunner::new();
+    failed_show_runner
+        .expect_run()
+        .times(1)
+        .returning(|_, _| Ok(command_output(0, Vec::new())));
+    failed_show_runner
+        .expect_run_large()
+        .times(1)
+        .returning(|_, _| Err(io::Error::other("git unavailable")));
+    let list = json!({"action": "list"});
+    let diff = json!({"action": "diff"});
+    let show = json!({"action": "show", "side": "head", "path": "src/lib.rs"});
+    let cases = [
+        (list_runner, list.clone(), false),
+        (failed_list_runner, list, true),
+        (diff_runner, diff, false),
+        (prefix_runner, show.clone(), false),
+        (failed_show_runner, show, true),
+    ];
+
+    for (runner, arguments, expects_command_error) in cases {
+        let tool = ReadTool::new(inspection_file_system(), PathBuf::from("repo"))
+            .with_command_runner(Arc::new(runner));
+        let arguments = serde_json::from_value(arguments).expect("inspection arguments");
+
+        // Act
+        let error = tool
+            .execute_inspection(&arguments, &unbounded)
+            .await
+            .expect_err("inspection should fail");
+
+        // Assert
+        if expects_command_error {
+            assert!(matches!(error, InspectionError::RepositoryCommand { .. }));
+        } else {
+            assert!(matches!(error, InspectionError::InvalidUtf8));
+        }
+    }
+}
+
 #[test]
 fn bounds_escaping_heavy_inspection_results_after_json_encoding() {
     // Arrange

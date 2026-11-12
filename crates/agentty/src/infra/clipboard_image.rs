@@ -22,6 +22,10 @@ static NEXT_CLIPBOARD_IMAGE_SEQUENCE: AtomicU64 = AtomicU64::new(1);
 /// Boxed async result used by [`ClipboardImageClient`] trait methods.
 pub(crate) type ClipboardImageFuture<T> = Pin<Box<dyn Future<Output = T> + Send>>;
 
+/// Opens one clipboard reader on the blocking capture thread.
+type ClipboardOpener =
+    Arc<dyn Fn() -> Result<Clipboard, ag_clipboard::ClipboardError> + Send + Sync>;
+
 /// Typed error returned by clipboard image capture and persistence operations.
 ///
 /// Wraps clipboard access, filesystem, image encoding, and validation failures
@@ -110,13 +114,28 @@ pub(crate) trait ClipboardImageClient: Send + Sync {
 pub(crate) struct RealClipboardImageClient {
     clock: Arc<dyn Clock>,
     fs_client: Arc<dyn FsClient>,
+    open_clipboard: ClipboardOpener,
 }
 
 impl RealClipboardImageClient {
     /// Creates a clipboard-image adapter from shared infrastructure
-    /// dependencies.
+    /// dependencies that reads the system clipboard.
     pub(crate) fn new(clock: Arc<dyn Clock>, fs_client: Arc<dyn FsClient>) -> Self {
-        Self { clock, fs_client }
+        Self::with_clipboard_opener(clock, fs_client, Arc::new(Clipboard::new))
+    }
+
+    /// Creates a clipboard-image adapter that reads clipboards produced by
+    /// `open_clipboard`.
+    fn with_clipboard_opener(
+        clock: Arc<dyn Clock>,
+        fs_client: Arc<dyn FsClient>,
+        open_clipboard: ClipboardOpener,
+    ) -> Self {
+        Self {
+            clock,
+            fs_client,
+            open_clipboard,
+        }
     }
 }
 
@@ -128,6 +147,7 @@ impl ClipboardImageClient for RealClipboardImageClient {
     ) -> ClipboardImageFuture<Result<PersistedClipboardImage, ClipboardError>> {
         let clock = Arc::clone(&self.clock);
         let fs_client = Arc::clone(&self.fs_client);
+        let open_clipboard = Arc::clone(&self.open_clipboard);
 
         Box::pin(async move {
             persist_clipboard_image(
@@ -135,6 +155,7 @@ impl ClipboardImageClient for RealClipboardImageClient {
                 attachment_number,
                 fs_client.as_ref(),
                 clock.as_ref(),
+                open_clipboard,
             )
             .await
         })
@@ -153,9 +174,10 @@ async fn persist_clipboard_image(
     attachment_number: usize,
     fs_client: &dyn FsClient,
     clock: &dyn Clock,
+    open_clipboard: ClipboardOpener,
 ) -> Result<PersistedClipboardImage, ClipboardError> {
     let image_output_path = build_clipboard_image_path(session_id, attachment_number, clock)?;
-    let clipboard_payload = read_clipboard_payload().await?;
+    let clipboard_payload = read_clipboard_payload(open_clipboard).await?;
 
     persist_clipboard_payload(fs_client, &image_output_path, clipboard_payload).await?;
 
@@ -277,9 +299,11 @@ fn is_png_path(path: &Path) -> bool {
 /// Returns an error when clipboard access fails, image encoding fails, or the
 /// clipboard does not contain a copied PNG file, image data, or a PNG file
 /// path.
-async fn read_clipboard_payload() -> Result<ClipboardPayload, ClipboardError> {
+async fn read_clipboard_payload(
+    open_clipboard: ClipboardOpener,
+) -> Result<ClipboardPayload, ClipboardError> {
     tokio::task::spawn_blocking(move || {
-        let mut clipboard = Clipboard::new().map_err(|error| ClipboardError::Unavailable {
+        let mut clipboard = open_clipboard().map_err(|error| ClipboardError::Unavailable {
             reason: error.to_string(),
         })?;
 

@@ -53,5 +53,6 @@ async fn malformed_dispatches_are_rejected_before_utility_submission() {
         // Assert
         assert_eq!(result.expect_err("invalid dispatch").to_string(), expected);
     }
+    assert!(!runner.manages_environment(&dispatch().node));
     worker.shutdown().await;
 }

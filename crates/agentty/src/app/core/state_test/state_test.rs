@@ -892,3 +892,30 @@ fn app_event_batch_consumes_deferred_activity_before_clear() {
     // Assert
     assert_eq!(batch.session_activity_updates.get("session"), Some(&None));
 }
+
+#[tokio::test]
+async fn retain_valid_session_progress_messages_keeps_only_running_sessions() {
+    // Arrange
+    let mut app = crate::test_support::new_test_app_without_retained_base_dir().await;
+    for (session_id, status) in [("running", Status::InProgress), ("review", Status::Review)] {
+        app.sessions.push_session(
+            crate::test_support::SessionFixtureBuilder::new()
+                .id(session_id)
+                .status(status)
+                .build(),
+        );
+    }
+    for session_id in ["running", "review", "deleted"] {
+        app.session_progress_messages
+            .insert(session_id.into(), format!("{session_id} progress"));
+    }
+
+    // Act
+    app.retain_valid_session_progress_messages();
+
+    // Assert
+    assert_eq!(
+        app.session_progress_messages,
+        HashMap::from([(SessionId::from("running"), "running progress".to_string())])
+    );
+}

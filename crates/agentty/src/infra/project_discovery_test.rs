@@ -69,12 +69,18 @@ fn discover_project_paths_includes_git_repos_and_excludes_session_worktrees() {
         &session_worktree_root,
         &AtomicBool::new(false),
     );
+    let selected_session_paths = discover_project_paths(
+        &session_project_path,
+        &session_worktree_root,
+        &AtomicBool::new(false),
+    );
 
     // Assert
     assert_eq!(
         discovered_project_paths,
         vec![project_a_path, project_b_path]
     );
+    assert_eq!(selected_session_paths, Vec::<std::path::PathBuf>::new());
 }
 
 /// Verifies home catalog discovery stops after the configured repository

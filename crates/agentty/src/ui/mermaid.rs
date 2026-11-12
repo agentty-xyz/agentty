@@ -7,3 +7,7 @@ use crate::ui::style;
 pub fn render_mermaid(source: &str) -> Option<MermaidDiagram> {
     ag_tui_text::mermaid::render_mermaid_with_settings(source, style::text_render_settings())
 }
+
+#[cfg(test)]
+#[path = "mermaid_test.rs"]
+mod tests;

@@ -1,7 +1,8 @@
+use std::path::PathBuf;
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
-use ag_contracts::{AgentChannel, AgentError, TurnEvent};
+use ag_contracts::{AgentChannel, AgentError, StartSessionRequest, TurnEvent};
 use ag_session::AgentKind;
 use rustix::process::{self, Pid, Signal};
 use tempfile::tempdir;
@@ -11,6 +12,27 @@ use tokio_util::sync::CancellationToken;
 use super::support::make_turn_request;
 use crate::agent::MockAgentBackend;
 use crate::channel::cli::{CliAgentChannel, CliTurnLease};
+
+#[tokio::test]
+async fn start_session_returns_reference_without_building_a_command() {
+    // Arrange
+    let mut backend = MockAgentBackend::new();
+    backend.expect_build_command().never();
+    let channel = CliAgentChannel::with_backend(Arc::new(backend), AgentKind::Claude);
+
+    // Act
+    let session = channel
+        .start_session(StartSessionRequest {
+            folder: PathBuf::from("/tmp"),
+            session_id: "session".into(),
+        })
+        .await
+        .expect("stateless CLI session start");
+
+    // Assert
+    assert_eq!(session.session_id, "session");
+    assert!(channel.active.lock().expect("registry").is_empty());
+}
 
 #[tokio::test]
 async fn shutdown_cancels_only_the_owned_turn_and_releases_session() {

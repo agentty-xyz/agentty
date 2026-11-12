@@ -292,7 +292,7 @@ repos:
         stages: [manual]
       - id: coverage
         name: coverage
-        description: Generate coverage once from the `test-workspace` selection, enforce workspace and 100% changed-line thresholds, and write the CI LCOV report.
+        description: Generate coverage once from the `test-workspace` selection, write the CI LCOV report, and list every uncovered line and function; anything uncovered fails.
         entry: >-
           bash -eu -o pipefail -c 'rm -f coverage.lcov;
           coverage_rustflags="${RUSTFLAGS:-} -C llvm-args=-runtime-counter-relocation";
@@ -307,15 +307,47 @@ repos:
           RUSTFLAGS="$coverage_rustflags"
           cargo llvm-cov nextest --timings --workspace
           --lib --bins --examples --tests
-          --locked --profile ci
-          --fail-under-lines 93 --fail-under-functions 91 --lcov
+          --locked --profile ci --lcov
           --no-default-ignore-filename-regex --ignore-filename-regex
           "(/rustc/|/(tests|benches)/|/(tests\.rs|[0-9a-zA-Z_-]+[_-]tests?\.rs)$|/target/llvm-cov-target/|/\.cargo/(registry|git)/|/\.rustup/toolchains/)"
-          --output-path coverage.lcov && test -s coverage.lcov && diff-cover coverage.lcov
-          --compare-branch="${AGENTTY_COVERAGE_BASE:-main}"
-          --fail-under=100 --include-untracked --show-uncovered'
-        language: python
-        additional_dependencies: [diff-cover==10.5.1]
+          --output-path coverage.lcov;
+          test -s coverage.lcov;
+          cargo run -q --locked -p ag-xtask -- check-coverage coverage.lcov'
+        language: system
+        always_run: true
+        pass_filenames: false
+        stages: [manual]
+      - id: coverage-focused
+        name: focused coverage
+        description: Generate coverage for AGENTTY_TEST_PACKAGES with an optional AGENTTY_TEST_FILTER and list the uncovered lines and functions under optional AGENTTY_COVERAGE_PATHS.
+        entry: >-
+          bash -eu -o pipefail -c 'report=target/coverage-focused.lcov; rm -f "$report";
+          set -f; packages=(${AGENTTY_TEST_PACKAGES:-}); coverage_paths=(${AGENTTY_COVERAGE_PATHS:-}); set +f;
+          if [[ ${#packages[@]} -eq 0 ]]; then
+          echo "Set AGENTTY_TEST_PACKAGES to whitespace-separated package names" >&2; exit 1; fi;
+          package_args=(); for package in "${packages[@]}"; do package_args+=(-p "$package"); done;
+          filter_args=(); if [[ -n "${AGENTTY_TEST_FILTER:-}" ]]; then filter_args=(-E "$AGENTTY_TEST_FILTER"); fi;
+          check_args=("$report");
+          for coverage_path in ${coverage_paths[@]+"${coverage_paths[@]}"}; do check_args+=(--path "$coverage_path"); done;
+          coverage_rustflags="${RUSTFLAGS:-} -C llvm-args=-runtime-counter-relocation";
+          case "$(uname -s)" in Darwin)
+          coverage_rustflags="$coverage_rustflags
+          -C link-arg=-Wl,-sectalign,__DATA,__llvm_prf_cnts,0x4000
+          -C link-arg=-Wl,-sectalign,__DATA,__llvm_prf_bits,0x4000
+          -C link-arg=-Wl,-sectalign,__DATA,__llvm_prf_data,0x4000";; esac;
+          env CARGO_LLVM_COV_TARGET_DIR="${CARGO_LLVM_COV_TARGET_DIR:-target/llvm-cov-target}"
+          CARGO_UNSTABLE_BUILD_DIR_NEW_LAYOUT=false
+          CARGO_UNSTABLE_FINE_GRAIN_LOCKING=false
+          RUSTFLAGS="$coverage_rustflags"
+          cargo llvm-cov nextest --timings "${package_args[@]}"
+          --bins --examples --tests
+          --locked --profile local --no-tests=fail --lcov
+          --no-default-ignore-filename-regex --ignore-filename-regex
+          "(/rustc/|/(tests|benches)/|/(tests\.rs|[0-9a-zA-Z_-]+[_-]tests?\.rs)$|/target/llvm-cov-target/|/\.cargo/(registry|git)/|/\.rustup/toolchains/)"
+          --output-path "$report" ${filter_args[@]+"${filter_args[@]}"};
+          test -s "$report";
+          cargo run -q --locked -p ag-xtask -- check-coverage "${check_args[@]}"'
+        language: system
         always_run: true
         pass_filenames: false
         stages: [manual]

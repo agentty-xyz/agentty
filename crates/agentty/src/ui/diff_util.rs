@@ -544,7 +544,7 @@ const MAX_REVIEW_SNIPPET_WIDTH: usize = 96;
 struct ReviewHighlight {
     comment: &'static str,
     file_path: String,
-    line_number: Option<u32>,
+    line_number: u32,
     order: usize,
     score: u16,
     sign: char,
@@ -703,7 +703,7 @@ struct ReviewHighlightCollection {
 impl ReviewHighlightCollection {
     /// Scores one changed line and stores it in the best matching collection.
     fn push_changed_line(&mut self, changed_line: &ChangedReviewLine<'_>, order: usize) {
-        let line_number = Some(changed_line.line_number);
+        let line_number = changed_line.line_number;
         if let Some(highlight) = review_highlight(
             &changed_line.file_path,
             line_number,
@@ -751,13 +751,13 @@ impl ReviewHighlightCollection {
 
 /// Builds one markdown list item for a review highlight.
 fn review_highlight_markdown(highlight: &ReviewHighlight) -> String {
-    let location = highlight
-        .line_number
-        .map_or_else(|| "?".to_string(), |line_number| line_number.to_string());
-
     format!(
         "- `{}`:{} {} `{}` — {}",
-        highlight.file_path, location, highlight.sign, highlight.snippet, highlight.comment
+        highlight.file_path,
+        highlight.line_number,
+        highlight.sign,
+        highlight.snippet,
+        highlight.comment
     )
 }
 
@@ -765,7 +765,7 @@ fn review_highlight_markdown(highlight: &ReviewHighlight) -> String {
 /// heuristics.
 fn review_highlight(
     file_path: &str,
-    line_number: Option<u32>,
+    line_number: u32,
     sign: char,
     content: &str,
     order: usize,
@@ -907,7 +907,7 @@ impl ReviewHighlightClassification {
 /// matches.
 fn review_fallback_highlight(
     file_path: &str,
-    line_number: Option<u32>,
+    line_number: u32,
     sign: char,
     content: &str,
     order: usize,

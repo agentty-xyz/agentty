@@ -405,7 +405,7 @@ async fn execute_cli_repair_command(
         CliExitStatus::NonZero(exit_code) => {
             return Err(format!(
                 "repair process exited with code {}",
-                exit_code.map_or_else(|| "unknown".to_string(), |code| code.to_string())
+                error::format_exit_code(exit_code)
             ));
         }
         CliExitStatus::Signaled(signal) => {

@@ -3,8 +3,8 @@ use ratatui::style::Style;
 use ratatui::widgets::Block;
 
 use super::{
-    centered_popup_area, clear_popup_area, overlay_content_width, overlay_required_height,
-    sync_popup_message,
+    OverlayDimensions, centered_popup_area, clear_popup_area, overlay_content_width,
+    overlay_required_height, sync_popup_message,
 };
 use crate::ui::style::palette;
 
@@ -77,12 +77,14 @@ fn test_centered_popup_area_centers_within_bounds() {
 
     // Act
     let popup_area = centered_popup_area(area, 40, 20, 30, 7);
+    let dimensions_popup_area = OverlayDimensions::new(40, 20, 30, 7).centered_popup_area(area);
 
     // Assert
     assert_eq!(popup_area.width, 40);
     assert_eq!(popup_area.height, 10);
     assert_eq!(popup_area.x, 30);
     assert_eq!(popup_area.y, 20);
+    assert_eq!(dimensions_popup_area, popup_area);
 }
 
 #[test]

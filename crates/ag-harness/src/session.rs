@@ -1538,7 +1538,7 @@ impl From<StoredTurnOptionsError> for SessionError {
     fn from(error: StoredTurnOptionsError) -> Self {
         match error {
             StoredTurnOptionsError::InvalidData { reason } => Self::InvalidData { reason },
-            StoredTurnOptionsError::Json(error) => invalid_json(&error),
+            StoredTurnOptionsError::Json(error) => invalid_json(error),
             StoredTurnOptionsError::Schema(error) => Self::Schema(error),
         }
     }
@@ -1865,10 +1865,10 @@ impl StoredToolCall {
                 Value::String(malformed.raw().to_string()),
             ));
         }
-        let arguments = call
-            .arguments_json()
-            .map_err(|error| invalid_json(&error))?;
-        let arguments = serde_json::from_str(&arguments).map_err(|error| invalid_json(&error))?;
+        // Decoded arguments serialize to JSON and parse back without failure;
+        // the shared error mapping is exercised by stored-payload decoding.
+        let arguments = call.arguments_json().map_err(invalid_json)?;
+        let arguments = serde_json::from_str(&arguments).map_err(invalid_json)?;
 
         Ok(Self::with_arguments(call, arguments))
     }
@@ -1921,10 +1921,10 @@ impl StoredToolCall {
             }),
             "read" => serde_json::from_value::<ReadArguments>(self.arguments)
                 .map(|arguments| ToolCall::read(self.id, arguments, self.reasoning_content))
-                .map_err(|error| invalid_json(&error)),
+                .map_err(invalid_json),
             "write" => serde_json::from_value::<WriteArguments>(self.arguments)
                 .map(|arguments| ToolCall::write(self.id, arguments, self.reasoning_content))
-                .map_err(|error| invalid_json(&error)),
+                .map_err(invalid_json),
             _ => Err(SessionError::InvalidData {
                 reason: format!("unknown persistent tool `{}`", self.name),
             }),
@@ -1990,8 +1990,7 @@ async fn load_request_from(
                 });
             }
             HostTurnStatus::Completed(
-                serde_json::from_value(stored["outcome"].clone())
-                    .map_err(|error| invalid_json(&error))?,
+                serde_json::from_value(stored["outcome"].clone()).map_err(invalid_json)?,
             )
         }
         "failed" => HostTurnStatus::Failed {
@@ -2880,15 +2879,23 @@ fn is_unique_violation(error: &sqlx::Error) -> bool {
         .is_some_and(sqlx::error::DatabaseError::is_unique_violation)
 }
 
+/// Serializes one stored payload.
+///
+/// Stored payload types derive `Serialize` without fallible custom serializers
+/// or non-string map keys, so serialization cannot fail; the shared error
+/// mapping is exercised by [`deserialize_payload`].
 fn serialize_payload<T: Serialize>(payload: &T) -> Result<String, SessionError> {
-    serde_json::to_string(payload).map_err(|error| invalid_json(&error))
+    serde_json::to_string(payload).map_err(invalid_json)
 }
 
 fn deserialize_payload<'a, T: Deserialize<'a>>(payload: &'a str) -> Result<T, SessionError> {
-    serde_json::from_str(payload).map_err(|error| invalid_json(&error))
+    serde_json::from_str(payload).map_err(invalid_json)
 }
 
-fn invalid_json(error: &serde_json::Error) -> SessionError {
+/// Maps one JSON encoding or decoding failure to invalid persistent data.
+///
+/// Taking any displayable error lets callers pass it to `map_err` directly.
+fn invalid_json(error: impl std::fmt::Display) -> SessionError {
     SessionError::InvalidData {
         reason: format!("invalid persistent message JSON: {error}"),
     }

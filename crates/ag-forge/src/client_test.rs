@@ -5,9 +5,79 @@ use mockall::Sequence;
 use crate::client::{RealReviewRequestClient, ReviewRequestClient};
 use crate::command::{ForgeCommand, ForgeCommandOutput, MockForgeCommandRunner};
 use crate::model::{
-    ForgeKind, ForgeRemote, ReviewRequestError, ReviewRequestMetadata, ReviewRequestState,
-    ReviewRequestSummary,
+    CreateReviewRequestInput, ForgeKind, ForgeRemote, ReviewRequestError, ReviewRequestMetadata,
+    ReviewRequestState, ReviewRequestSummary, UpdateReviewRequestInput,
 };
+
+#[test]
+fn detect_remote_delegates_to_remote_parser() {
+    // Arrange
+    let client = RealReviewRequestClient::default();
+
+    // Act
+    let remote = client
+        .detect_remote("https://github.com/agentty-xyz/agentty.git".to_string())
+        .expect("GitHub remote should be detected");
+
+    // Assert
+    assert_eq!(remote, github_remote());
+}
+
+#[tokio::test]
+async fn authenticated_operations_run_github_adapter_after_authentication() {
+    // Arrange
+    let remote = github_remote();
+    let mut command_runner = MockForgeCommandRunner::new();
+    command_runner
+        .expect_run()
+        .times(3)
+        .withf(|command| command.arguments[..2] == ["auth", "status"])
+        .returning(|_| Box::pin(async { Ok(success_output(String::new())) }));
+    command_runner
+        .expect_run()
+        .times(3)
+        .withf(|command| command.arguments[..2] != ["auth", "status"])
+        .returning(|_| Box::pin(async { Ok(failure_output("HTTP 500".to_string())) }));
+    let client = RealReviewRequestClient::new(Arc::new(command_runner));
+    let create_input = CreateReviewRequestInput {
+        body: None,
+        source_branch: "feature/forge".to_string(),
+        target_branch: "main".to_string(),
+        title: "Add forge boundary".to_string(),
+    };
+    let update_input = UpdateReviewRequestInput {
+        body: None,
+        title: None,
+    };
+
+    // Act
+    let create_error = client
+        .create_review_request(remote.clone(), create_input)
+        .await
+        .expect_err("create command failure should be reported");
+    let sync_error = client
+        .sync_review_request_metadata(remote.clone(), "#42".to_string(), update_input)
+        .await
+        .expect_err("metadata view failure should be reported");
+    let snapshot_error = client
+        .fetch_review_comment_snapshot(remote, "#42".to_string())
+        .await
+        .expect_err("review-thread fetch failure should be reported");
+
+    // Assert
+    assert_eq!(
+        [create_error, sync_error, snapshot_error],
+        [
+            "create pull request: HTTP 500",
+            "view pull-request metadata: HTTP 500",
+            "fetch pull-request review threads: HTTP 500",
+        ]
+        .map(|message| ReviewRequestError::OperationFailed {
+            forge_kind: ForgeKind::GitHub,
+            message: message.to_string(),
+        })
+    );
+}
 
 #[test]
 fn review_request_web_url_returns_error_when_summary_is_missing_url() {

@@ -15,7 +15,7 @@ use testty::session::PtySessionBuilder;
 use tokio::sync::mpsc;
 
 use super::{
-    DrawStamp, EventReaderTask, EventResult, FORCED_REDRAW_INTERVAL, MainLoopState,
+    DrawStamp, EventReaderTask, EventResult, FORCED_REDRAW_INTERVAL, MainLoopState, backend_err,
     forced_redraw_elapsed, render_frame, run, run_until_quit, run_with_backend,
 };
 use crate::analytics::TurnOutcome;
@@ -813,4 +813,19 @@ fn forced_redraw_elapsed_fires_after_injected_clock_advances() {
         "forced-redraw cadence should trigger once the injected clock has advanced past \
          FORCED_REDRAW_INTERVAL"
     );
+}
+
+/// Verifies backend failures surface as `io::Error` values that keep the
+/// backend message.
+#[test]
+fn backend_err_wraps_backend_failures_as_io_errors() {
+    // Arrange
+    let backend_error = io::Error::new(io::ErrorKind::BrokenPipe, "terminal closed");
+
+    // Act
+    let error = backend_err(backend_error);
+
+    // Assert
+    assert_eq!(error.kind(), io::ErrorKind::Other);
+    assert_eq!(error.to_string(), "terminal closed");
 }

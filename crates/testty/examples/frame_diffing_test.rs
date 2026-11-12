@@ -18,7 +18,7 @@ fn reports_identical_changed_and_dashboard_frames() {
     assert!(text.contains("Identical: true"));
     assert!(text.contains("Identical: false"));
     assert!(text.contains("Dashboard Refresh"));
-    assert!(text.contains(".T.T."));
+    assert!(text.contains(".TSB."));
 }
 
 #[test]

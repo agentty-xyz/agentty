@@ -153,7 +153,7 @@ pub(crate) fn build_resume_prompt(
         transcript: &transcript,
     };
 
-    render_template("resume_with_transcript_prompt.md", &template)
+    render_template(&template)
 }
 
 /// Builds the full prompt text for a CLI provider.
@@ -201,7 +201,7 @@ pub(crate) fn apply_response_style_prompt(
             instruction: response_style.prompt_instruction(),
             prompt: &prompt_text,
         };
-        prompt.text = render_template("response_style_prompt.md", &template)?;
+        prompt.text = render_template(&template)?;
     }
 
     Ok(prompt)
@@ -237,7 +237,7 @@ fn prepend_agent_profile_prompt(
         prompt,
     };
 
-    render_template("agent_profile_prompt.md", &template)
+    render_template(&template)
 }
 
 /// Explicitly withdraws removed session instructions while preserving user
@@ -263,7 +263,7 @@ fn prepend_agent_profile_update(
         prompt,
     };
 
-    render_template("agent_profile_prompt.md", &template)
+    render_template(&template)
 }
 
 /// Appends CLI prompt filesystem access roots as `--add-dir` arguments.
@@ -377,7 +377,7 @@ fn attachment_path_for_prompt(
         .to_str()
         .map(ToOwned::to_owned)
         .ok_or_else(|| {
-            AgentBackendError::CommandBuild(format!(
+            AgentBackendError::command_build(format_args!(
                 "{backend_display_name} prompt image path is not valid UTF-8"
             ))
         })
@@ -385,13 +385,14 @@ fn attachment_path_for_prompt(
 
 /// Renders one Askama markdown template and trims the trailing newline added
 /// by file-based templates.
-fn render_template(
-    template_name: &str,
-    template: &impl Template,
-) -> Result<String, AgentBackendError> {
-    let rendered = template.render().map_err(|error| {
-        AgentBackendError::CommandBuild(format!("Failed to render `{template_name}`: {error}"))
-    })?;
+///
+/// Askama's API returns a `Result`, but these templates only interpolate
+/// `&str` fields without filters into a `String`, so rendering cannot fail
+/// in practice; the error is still mapped rather than unwrapped.
+fn render_template(template: &impl Template) -> Result<String, AgentBackendError> {
+    let rendered = template
+        .render()
+        .map_err(AgentBackendError::command_build)?;
 
     Ok(rendered.trim_end().to_string())
 }

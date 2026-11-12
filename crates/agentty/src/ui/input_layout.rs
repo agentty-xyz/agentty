@@ -339,13 +339,9 @@ impl InputLayoutBuilder {
                 .push((self.current_width, self.line_index));
         }
 
-        if !self.current_line_spans.is_empty() {
-            self.display_lines.push(Line::from(self.current_line_spans));
-        }
-
-        if self.display_lines.is_empty() {
-            self.display_lines.push(Line::from(""));
-        }
+        // The current line always holds at least the prompt prefix or
+        // continuation padding, so the layout never ends without a line.
+        self.display_lines.push(Line::from(self.current_line_spans));
 
         InputLayout {
             cursor_positions: self.cursor_positions,

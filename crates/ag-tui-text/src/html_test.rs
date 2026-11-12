@@ -66,7 +66,7 @@ fn test_render_html_handles_layout_tags_comments_and_entities() {
 #[test]
 fn test_html_to_markdown_preserves_literal_and_malformed_markup() {
     // Arrange
-    let input = "Keep 2 < 3 and 5 > 4, &unknown;, <1>, <broken, and <x>tag</x>.";
+    let input = "Keep 2 < 3 and 5 > 4, &unknown;, <1>, <@x>, <>, <broken, and <x>tag</x>.";
 
     // Act
     let rendered = html_to_markdown(input);
@@ -74,7 +74,7 @@ fn test_html_to_markdown_preserves_literal_and_malformed_markup() {
     // Assert
     assert_eq!(
         rendered,
-        "Keep 2 < 3 and 5 > 4, &unknown;, <1>, <broken, and tag."
+        "Keep 2 < 3 and 5 > 4, &unknown;, <1>, <@x>, <>, <broken, and tag."
     );
 }
 

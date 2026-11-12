@@ -93,11 +93,12 @@ impl Tab {
         tabs[previous_index]
     }
 
-    /// Returns the display-order index for the tab.
+    /// Returns the tab's index in [`Tab::ALL`] display order.
     fn index(self) -> usize {
-        match Self::available_tabs().iter().position(|tab| *tab == self) {
-            Some(tab_index) => tab_index,
-            None => unreachable!("tab must exist in the display order"),
+        match self {
+            Self::Projects => 0,
+            Self::Sessions => 1,
+            Self::Settings => 2,
         }
     }
 }

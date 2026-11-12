@@ -79,6 +79,7 @@ fn style_change_detected() {
     // Assert
     assert!(!diff.is_identical());
     assert_eq!(diff.cell_change(0, 0), Some(CellChange::StyleChanged));
+    assert_eq!(diff.summary(), vec!["row 0, col 0: style changed"]);
 }
 
 #[test]

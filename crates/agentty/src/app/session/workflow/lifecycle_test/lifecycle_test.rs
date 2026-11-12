@@ -23,7 +23,7 @@ use crate::infra::clock::RealClock;
 use crate::infra::db::AppRepositories;
 use crate::infra::fs;
 use crate::test_support::telemetry::capture_events;
-use crate::test_support::{FixedClock, TestSubscriber};
+use crate::test_support::{FixedClock, TestSubscriber, enable_tracing_log_fallback};
 
 #[tokio::test]
 async fn draft_creation_uses_the_active_project_and_requires_a_git_branch() {
@@ -161,32 +161,49 @@ async fn successful_reservations_report_creation_types() {
 
 #[tokio::test]
 async fn record_session_creation_activity_uses_injected_clock() {
-    // Arrange
-    let timestamp_seconds = 123_i64;
-    let session = test_session("", Status::Draft, None, "");
-    let database = database_with_session(&session).await;
-    let clock = Arc::new(FixedClock::new(
-        Instant::now(),
-        SystemTime::UNIX_EPOCH + Duration::from_secs(123),
-    ));
-    let services = test_services_with_fs_client(
-        &database,
-        clock,
-        Arc::new(create_passthrough_mock_fs_client()),
-        Arc::new(git::MockGitClient::new()),
-        Arc::new(forge::MockReviewRequestClient::new()),
-    );
+    for activity_rejected in [false, true] {
+        // Arrange
+        let timestamp_seconds = 123_i64;
+        let session = test_session("", Status::Draft, None, "");
+        let (database, pool) = database_with_session_and_pool(&session).await;
+        if activity_rejected {
+            sqlx::query(
+                "CREATE TRIGGER reject_activity BEFORE INSERT ON session_activity BEGIN SELECT \
+                 RAISE(FAIL, 'activity rejected'); END",
+            )
+            .execute(&pool)
+            .await
+            .expect("failure trigger");
+        }
+        let clock = Arc::new(FixedClock::new(
+            Instant::now(),
+            SystemTime::UNIX_EPOCH + Duration::from_secs(123),
+        ));
+        let services = test_services_with_fs_client(
+            &database,
+            clock,
+            Arc::new(create_passthrough_mock_fs_client()),
+            Arc::new(git::MockGitClient::new()),
+            Arc::new(forge::MockReviewRequestClient::new()),
+        );
+        enable_tracing_log_fallback();
 
-    // Act
-    SessionManager::record_session_creation_activity(&services, "session-id").await;
-    let activity_timestamps = database
-        .activity()
-        .load_session_activity_timestamps()
-        .await
-        .expect("activity timestamps should load");
+        // Act
+        SessionManager::record_session_creation_activity(&services, "session-id").await;
+        let activity_timestamps = database
+            .activity()
+            .load_session_activity_timestamps()
+            .await
+            .expect("activity timestamps should load");
 
-    // Assert
-    assert_eq!(activity_timestamps, vec![timestamp_seconds]);
+        // Assert: a rejected analytics write does not fail session creation.
+        let expected_timestamps = if activity_rejected {
+            Vec::new()
+        } else {
+            vec![timestamp_seconds]
+        };
+        assert_eq!(activity_timestamps, expected_timestamps);
+    }
 }
 
 #[tokio::test]
@@ -713,4 +730,474 @@ async fn harness_directory_cleanup_tolerates_missing_history() {
     assert_eq!(removed_paths.len(), 3);
     assert!(removed_paths[0].ends_with("harness/removed"));
     assert!(removed_paths[2].ends_with("harness/denied"));
+}
+
+/// One rejected session-creation precondition.
+#[derive(Clone, Copy, Debug)]
+enum CreationFailure {
+    DraftFolderExists,
+    DraftMetadataRejected,
+    ForkFolderExists,
+    ForkWithoutProject,
+    StackedWithoutProject,
+}
+
+#[tokio::test]
+async fn creation_rejects_unowned_projects_existing_folders_and_unsaved_metadata() {
+    for (failure, expected_error) in [
+        (CreationFailure::DraftFolderExists, "already exists"),
+        (
+            CreationFailure::DraftMetadataRejected,
+            "Failed to save session metadata",
+        ),
+        (CreationFailure::ForkFolderExists, "already exists"),
+        (
+            CreationFailure::ForkWithoutProject,
+            "Source session has no project association",
+        ),
+        (
+            CreationFailure::StackedWithoutProject,
+            "Parent session has no project association",
+        ),
+    ] {
+        // Arrange
+        let source = test_session("source", Status::Review, Some("Source"), "history");
+        let (database, pool) = database_with_session_and_pool(&source).await;
+        let project_id = database
+            .sessions()
+            .load_session_project_id("session-id")
+            .await
+            .expect("project lookup")
+            .expect("source project");
+        let failure_sql = match failure {
+            CreationFailure::DraftMetadataRejected => Some(
+                "CREATE TRIGGER reject_creation BEFORE INSERT ON session BEGIN SELECT \
+                 RAISE(ABORT, 'creation rejected'); END",
+            ),
+            CreationFailure::ForkWithoutProject | CreationFailure::StackedWithoutProject => {
+                Some("UPDATE session SET project_id = NULL WHERE id = 'session-id'")
+            }
+            CreationFailure::DraftFolderExists | CreationFailure::ForkFolderExists => None,
+        };
+        if let Some(failure_sql) = failure_sql {
+            sqlx::query(failure_sql)
+                .execute(&pool)
+                .await
+                .expect("failure injection");
+        }
+        let folder_exists = matches!(
+            failure,
+            CreationFailure::DraftFolderExists | CreationFailure::ForkFolderExists
+        );
+        let mut filesystem = fs::MockFsClient::new();
+        filesystem.expect_exists().return_const(folder_exists);
+        let mut git = git::MockGitClient::new();
+        git.expect_find_git_repo_root()
+            .times(usize::from(matches!(
+                failure,
+                CreationFailure::ForkFolderExists
+            )))
+            .returning(|path| Box::pin(async move { Some(path) }));
+        git.expect_create_worktree().never();
+        let services = test_services_with_fs_client(
+            &database,
+            Arc::new(RealClock),
+            Arc::new(filesystem),
+            Arc::new(git),
+            Arc::new(forge::MockReviewRequestClient::new()),
+        );
+        let mut manager = session_manager_with_one_session(source);
+
+        // Act
+        let result = match failure {
+            CreationFailure::DraftFolderExists | CreationFailure::DraftMetadataRejected => {
+                manager
+                    .create_draft_session_for_project(&services, project_id, "main")
+                    .await
+            }
+            CreationFailure::ForkFolderExists | CreationFailure::ForkWithoutProject => {
+                manager.fork_session(&services, "session-id").await
+            }
+            CreationFailure::StackedWithoutProject => {
+                manager
+                    .create_stacked_draft_session_with_optional_settings(
+                        &services,
+                        "session-id",
+                        None,
+                    )
+                    .await
+            }
+        };
+
+        // Assert
+        let error = result.expect_err("creation must fail");
+        assert!(
+            error.to_string().contains(expected_error),
+            "{failure:?}: {error}"
+        );
+        assert_eq!(
+            database
+                .sessions()
+                .load_sessions_metadata()
+                .await
+                .expect("session count")
+                .0,
+            1,
+            "{failure:?}"
+        );
+    }
+}
+
+#[tokio::test]
+async fn stacked_draft_materialization_records_the_parent_tip() {
+    // Arrange
+    let mut session = test_session("", Status::Draft, None, "");
+    session.is_draft = true;
+    session.parent_session_id = Some("parent-id".into());
+    let database = database_with_session(&session).await;
+    let mut manager = session_manager_with_one_session(session);
+    let mut filesystem = fs::MockFsClient::new();
+    filesystem.expect_is_dir().once().return_const(false);
+    filesystem
+        .expect_create_dir_all()
+        .once()
+        .returning(|_| Box::pin(async { Ok(()) }));
+    let mut git = git::MockGitClient::new();
+    git.expect_find_git_repo_root()
+        .once()
+        .returning(|path| Box::pin(async move { Some(path) }));
+    git.expect_create_worktree()
+        .once()
+        .returning(|_, _, _, _| Box::pin(async { Ok(()) }));
+    git.expect_head_hash()
+        .once()
+        .returning(|_| Box::pin(async { Ok("parent-tip".to_string()) }));
+    let services = test_services_with_fs_client(
+        &database,
+        Arc::new(RealClock),
+        Arc::new(filesystem),
+        Arc::new(git),
+        Arc::new(forge::MockReviewRequestClient::new()),
+    );
+
+    // Act
+    let result = manager
+        .ensure_session_worktree_ready(&services, "session-id")
+        .await;
+
+    // Assert
+    assert!(result.is_ok(), "{result:?}");
+    assert_eq!(
+        database
+            .sessions()
+            .get_session_stack_base_commit_hash("session-id")
+            .await
+            .expect("stack base lookup"),
+        Some("parent-tip".to_string())
+    );
+}
+
+#[tokio::test]
+async fn draft_materialization_requires_a_project_and_repository_root() {
+    for (failure_sql, finds_repository, expected_error) in [
+        (
+            &["UPDATE session SET project_id = NULL WHERE id = 'session-id'"][..],
+            false,
+            "Session project is required to create a worktree",
+        ),
+        (
+            &[
+                "PRAGMA foreign_keys = OFF",
+                "UPDATE session SET project_id = 999 WHERE id = 'session-id'",
+            ][..],
+            false,
+            "Project with id `999` was not found",
+        ),
+        (&[][..], true, "Failed to find git repository root"),
+    ] {
+        // Arrange
+        let mut session = test_session("", Status::Draft, None, "");
+        session.is_draft = true;
+        let (database, pool) = database_with_session_and_pool(&session).await;
+        for &statement in failure_sql {
+            sqlx::query(statement)
+                .execute(&pool)
+                .await
+                .expect("failure injection");
+        }
+        let mut manager = session_manager_with_one_session(session);
+        let mut filesystem = fs::MockFsClient::new();
+        filesystem.expect_is_dir().once().return_const(false);
+        let mut git = git::MockGitClient::new();
+        git.expect_find_git_repo_root()
+            .times(usize::from(finds_repository))
+            .returning(|_| Box::pin(async { None }));
+        git.expect_create_worktree().never();
+        let services = test_services_with_fs_client(
+            &database,
+            Arc::new(RealClock),
+            Arc::new(filesystem),
+            Arc::new(git),
+            Arc::new(forge::MockReviewRequestClient::new()),
+        );
+
+        // Act
+        let result = manager
+            .ensure_session_worktree_ready(&services, "session-id")
+            .await;
+
+        // Assert
+        let error = result.expect_err("materialization must fail");
+        assert!(error.to_string().contains(expected_error), "{error}");
+    }
+}
+
+#[tokio::test]
+async fn draft_staging_requires_a_draft_session_in_draft_status_with_a_project() {
+    for (is_draft, status, failure_sql, expected_error) in [
+        (
+            false,
+            Status::Draft,
+            None,
+            "Only draft sessions can stage drafts",
+        ),
+        (
+            true,
+            Status::Review,
+            None,
+            "Only `Draft` sessions can stage drafts",
+        ),
+        (
+            true,
+            Status::Draft,
+            Some("UPDATE session SET project_id = NULL WHERE id = 'session-id'"),
+            "Session project is required to stage draft prompts",
+        ),
+    ] {
+        // Arrange
+        let mut session = test_session("", status, None, "");
+        session.is_draft = is_draft;
+        let (database, pool) = database_with_session_and_pool(&session).await;
+        if let Some(failure_sql) = failure_sql {
+            sqlx::query(failure_sql)
+                .execute(&pool)
+                .await
+                .expect("failure injection");
+        }
+        let mut manager = session_manager_with_one_session(session);
+        let services = test_services(
+            &database,
+            Arc::new(git::MockGitClient::new()),
+            Arc::new(forge::MockReviewRequestClient::new()),
+        );
+
+        // Act
+        let result = manager
+            .stage_draft_message(&services, "session-id", "Staged request")
+            .await;
+
+        // Assert
+        let error = result.expect_err("staging must fail");
+        assert!(error.to_string().contains(expected_error), "{error}");
+        assert_eq!(load_persisted_session_row(&database).await.prompt, "");
+    }
+}
+
+#[tokio::test]
+async fn draft_title_generation_runs_in_the_worktree_once_it_exists() {
+    for worktree_exists in [true, false] {
+        // Arrange
+        let mut session = test_session("", Status::Draft, None, "");
+        session.is_draft = true;
+        let agent = session.agent;
+        let database = database_with_session(&session).await;
+        let project_id = database
+            .sessions()
+            .load_session_project_id("session-id")
+            .await
+            .expect("project lookup")
+            .expect("session project");
+        let manager = session_manager_with_one_session(session);
+        let mut filesystem = fs::MockFsClient::new();
+        filesystem.expect_is_dir().return_const(worktree_exists);
+        let services = test_services_with_fs_client(
+            &database,
+            Arc::new(RealClock),
+            Arc::new(filesystem),
+            Arc::new(git::MockGitClient::new()),
+            Arc::new(forge::MockReviewRequestClient::new()),
+        );
+
+        // Act
+        let context = manager
+            .draft_title_generation_context(
+                &services,
+                project_id,
+                agent,
+                PathBuf::from("/tmp/session"),
+            )
+            .await
+            .expect("title context");
+
+        // Assert
+        let expected_folder = if worktree_exists {
+            "/tmp/session"
+        } else {
+            "/tmp/project"
+        };
+        assert_eq!(context.folder, PathBuf::from(expected_folder));
+    }
+}
+
+#[tokio::test]
+async fn staged_session_start_requires_a_startable_staged_draft() {
+    for (is_draft, status, prompt, parent_session_id, expected_error) in [
+        (
+            false,
+            Status::Draft,
+            "Staged",
+            None,
+            "Only draft sessions can be started from staged drafts",
+        ),
+        (
+            true,
+            Status::Review,
+            "Staged",
+            None,
+            "Only `Draft` sessions can be started from staged drafts",
+        ),
+        (
+            true,
+            Status::Draft,
+            "",
+            None,
+            "Stage at least one draft before starting the session",
+        ),
+        (
+            true,
+            Status::Draft,
+            "Staged",
+            Some("missing-parent"),
+            "Stacked sessions can only start",
+        ),
+    ] {
+        // Arrange
+        let mut session = test_session(prompt, status, None, "");
+        session.is_draft = is_draft;
+        session.parent_session_id = parent_session_id.map(Into::into);
+        let database = database_with_session(&session).await;
+        let mut manager = session_manager_with_one_session(session);
+        let services = test_services(
+            &database,
+            Arc::new(git::MockGitClient::new()),
+            Arc::new(forge::MockReviewRequestClient::new()),
+        );
+
+        // Act
+        let result = manager.start_staged_session(&services, "session-id").await;
+
+        // Assert
+        let error = result.expect_err("start must be rejected");
+        assert!(error.to_string().contains(expected_error), "{error}");
+    }
+}
+
+#[tokio::test]
+async fn started_draft_attachment_cleanup_tolerates_missing_sessions_and_metadata_failures() {
+    // Arrange
+    let mut session = test_session("", Status::Draft, None, "");
+    session.draft_attachments = vec![TurnPromptAttachment {
+        placeholder: "[Image #1]".to_string(),
+        local_image_path: PathBuf::from("/tmp/image-1.png"),
+    }];
+    let database = database_with_session(&session).await;
+    let mut manager = session_manager_with_one_session(session);
+    let mut filesystem = fs::MockFsClient::new();
+    filesystem
+        .expect_remove_file()
+        .once()
+        .withf(|path| path.starts_with("/tmp/agentty-tests/missing-session"))
+        .returning(|_| {
+            Box::pin(async { Err(fs::FsError::Io(std::io::Error::other("metadata busy"))) })
+        });
+    let services = test_services_with_fs_client(
+        &database,
+        Arc::new(RealClock),
+        Arc::new(filesystem),
+        Arc::new(git::MockGitClient::new()),
+        Arc::new(forge::MockReviewRequestClient::new()),
+    );
+    enable_tracing_log_fallback();
+
+    // Act
+    manager
+        .clear_started_draft_attachments(&services, "missing-session")
+        .await;
+
+    // Assert: other sessions keep their staged attachments.
+    assert_eq!(manager.sessions()[0].draft_attachments.len(), 1);
+}
+
+#[tokio::test]
+async fn creation_rollback_attempts_every_cleanup_step_after_failures() {
+    // Arrange
+    let session = test_session("", Status::Draft, None, "");
+    let (database, pool) = database_with_session_and_pool(&session).await;
+    sqlx::query(
+        "CREATE TRIGGER reject_rollback BEFORE DELETE ON session BEGIN SELECT RAISE(FAIL, 'delete \
+         rejected'); END",
+    )
+    .execute(&pool)
+    .await
+    .expect("failure trigger");
+    let mut git = git::MockGitClient::new();
+    git.expect_remove_worktree().once().returning(|_| {
+        Box::pin(async {
+            Err(git::GitError::OutputParse(
+                "worktree removal failed".to_string(),
+            ))
+        })
+    });
+    git.expect_delete_branch().once().returning(|_, _| {
+        Box::pin(async {
+            Err(git::GitError::OutputParse(
+                "branch deletion failed".to_string(),
+            ))
+        })
+    });
+    let mut filesystem = fs::MockFsClient::new();
+    filesystem
+        .expect_remove_dir_all()
+        .times(3)
+        .returning(|_| Box::pin(async { Err(fs::FsError::Io(std::io::Error::other("busy"))) }));
+    let services = test_services_with_fs_client(
+        &database,
+        Arc::new(RealClock),
+        Arc::new(filesystem),
+        Arc::new(git),
+        Arc::new(forge::MockReviewRequestClient::new()),
+    );
+    enable_tracing_log_fallback();
+
+    // Act
+    SessionManager::rollback_failed_session_creation(
+        &services,
+        Path::new("/tmp/session"),
+        Path::new("/tmp/project"),
+        "session-id",
+        "wt/session-id",
+        true,
+        true,
+    )
+    .await;
+
+    // Assert: the mocks verify every cleanup step still ran.
+    assert!(
+        database
+            .sessions()
+            .load_session("session-id")
+            .await
+            .expect("session lookup")
+            .is_some()
+    );
 }

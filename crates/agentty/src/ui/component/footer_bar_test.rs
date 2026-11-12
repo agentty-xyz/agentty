@@ -1,4 +1,7 @@
 use std::env;
+use std::path::Path;
+
+use ratatui::layout::Rect;
 
 use super::FooterBar;
 use crate::ui::{Component, style};
@@ -38,6 +41,82 @@ fn test_footer_bar_new_without_git_branch() {
     assert_eq!(footer.git_status, None);
     assert_eq!(footer.git_upstream_ref, None);
     assert!(footer.workspace_context_visible);
+}
+
+#[test]
+fn test_footer_bar_display_path_abbreviates_only_paths_under_home() {
+    // Arrange
+    let cases = [
+        (
+            "/home/user/project",
+            Some(Path::new("/home/user")),
+            "~/project",
+        ),
+        (
+            "/srv/project",
+            Some(Path::new("/home/user")),
+            "/srv/project",
+        ),
+        ("/home/user/project", None, "/home/user/project"),
+    ];
+
+    for (working_dir, home_dir, expected_display_path) in cases {
+        // Act
+        let display_path = FooterBar::display_path(working_dir, home_dir);
+
+        // Assert
+        assert_eq!(display_path, expected_display_path, "for {working_dir}");
+    }
+}
+
+#[test]
+fn test_footer_bar_render_skips_zero_width_area() {
+    // Arrange
+    let backend = ratatui::backend::TestBackend::new(10, 1);
+    let mut terminal = ratatui::Terminal::new(backend).expect("failed to create terminal");
+    let footer = FooterBar::new("/tmp/project".to_string()).git_branch(Some("main".to_string()));
+
+    // Act
+    terminal
+        .draw(|f| {
+            Component::render(&footer, f, Rect::new(0, 0, 0, 1));
+        })
+        .expect("failed to draw");
+
+    // Assert
+    let buffer = terminal.backend().buffer();
+    assert!(
+        buffer
+            .content()
+            .iter()
+            .all(|cell| cell.symbol() == " " && cell.bg == ratatui::style::Color::Reset)
+    );
+}
+
+#[test]
+fn test_footer_bar_render_omits_branch_that_does_not_fit() {
+    // Arrange
+    let backend = ratatui::backend::TestBackend::new(16, 1);
+    let mut terminal = ratatui::Terminal::new(backend).expect("failed to create terminal");
+    let footer = FooterBar::new("/tmp/project".to_string())
+        .git_branch(Some("feature/very-long-branch".to_string()));
+
+    // Act
+    terminal
+        .draw(|f| {
+            let area = f.area();
+            Component::render(&footer, f, area);
+        })
+        .expect("failed to draw");
+
+    // Assert
+    let buffer = terminal.backend().buffer();
+    let text: String = buffer
+        .content()
+        .iter()
+        .map(ratatui::buffer::Cell::symbol)
+        .collect();
+    assert_eq!(text, " /tmp/project   ");
 }
 
 #[test]

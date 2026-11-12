@@ -333,3 +333,47 @@ fn html_pads_partially_blank_region_to_full_width() {
         "expected width-12 ones-row ruler in:\n{html}"
     );
 }
+
+#[test]
+fn html_renders_excerpt_without_highlights_for_an_empty_needle() {
+    // Arrange
+    let failure = AssertionFailure {
+        message: "empty needle".to_string(),
+        expected: Expected::NotVisible {
+            needle: String::new(),
+        },
+        region: None,
+        matched_spans: Vec::new(),
+        frame_excerpt: "a<b".to_string(),
+    };
+    let report = report_with_structured_failure(&failure);
+
+    // Act
+    let html = build_html(&report).expect("should build HTML");
+
+    // Assert — the line is escaped verbatim with no highlight span.
+    assert!(html.contains("<span class=\"row-gutter\">   0 </span>a&lt;b\n"));
+    assert!(!html.contains("<span class=\"needle-hit\">"));
+}
+
+#[test]
+fn html_omits_column_ruler_for_zero_width_excerpt() {
+    // Arrange — the excerpt has one row with no cells.
+    let failure = AssertionFailure {
+        message: "blank row".to_string(),
+        expected: Expected::NotVisible {
+            needle: "Hello".to_string(),
+        },
+        region: None,
+        matched_spans: Vec::new(),
+        frame_excerpt: "\n".to_string(),
+    };
+    let report = report_with_structured_failure(&failure);
+
+    // Act
+    let html = build_html(&report).expect("should build HTML");
+
+    // Assert — the row gutter renders, but no ruler row does.
+    assert!(html.contains("<span class=\"row-gutter\">   0 </span>\n"));
+    assert!(!html.contains("<span class=\"col-ruler\">"));
+}

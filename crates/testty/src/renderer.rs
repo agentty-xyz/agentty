@@ -100,13 +100,14 @@ fn render_cell(
 
     // Underline: 1px line at the bottom edge.
     if style.underline() {
-        let underline_y = pixel_y + CELL_HEIGHT - 1;
-        for offset_x in 0..CELL_WIDTH {
-            let target_x = pixel_x + offset_x;
-            if target_x < image.width() && underline_y < image.height() {
-                image.put_pixel(target_x, underline_y, fg_rgba);
-            }
-        }
+        fill_rect(
+            image,
+            pixel_x,
+            pixel_y + CELL_HEIGHT - 1,
+            CELL_WIDTH,
+            1,
+            fg_rgba,
+        );
     }
 }
 
@@ -146,7 +147,9 @@ fn dim_component(value: u8) -> u8 {
 }
 
 /// Fill a rectangular region with a solid color.
-fn fill_rect(
+///
+/// The rectangle is clipped to the image bounds.
+pub(crate) fn fill_rect(
     image: &mut RgbaImage,
     start_x: u32,
     start_y: u32,
@@ -154,34 +157,33 @@ fn fill_rect(
     height: u32,
     color: Rgba<u8>,
 ) {
-    for offset_y in 0..height {
-        for offset_x in 0..width {
-            let target_x = start_x + offset_x;
-            let target_y = start_y + offset_y;
-            if target_x < image.width() && target_y < image.height() {
-                image.put_pixel(target_x, target_y, color);
-            }
+    let end_x = start_x.saturating_add(width).min(image.width());
+    let end_y = start_y.saturating_add(height).min(image.height());
+
+    for target_y in start_y..end_y {
+        for target_x in start_x..end_x {
+            image.put_pixel(target_x, target_y, color);
         }
     }
 }
 
 /// Draw a bitmap glyph at the given pixel position.
-fn draw_glyph(
+///
+/// Glyph pixels outside the image bounds are clipped.
+pub(crate) fn draw_glyph(
     image: &mut RgbaImage,
     pixel_x: u32,
     pixel_y: u32,
     glyph: &[u8; 16],
     color: Rgba<u8>,
 ) {
-    for (glyph_row, &byte) in glyph.iter().enumerate() {
-        let row_offset = u32::try_from(glyph_row).unwrap_or(0);
-        for bit in 0..8u32 {
+    let visible_rows = image.height().saturating_sub(pixel_y);
+    let visible_bits = image.width().saturating_sub(pixel_x).min(8);
+
+    for (row_offset, &byte) in (0..visible_rows).zip(glyph) {
+        for bit in 0..visible_bits {
             if byte & (0x80 >> bit) != 0 {
-                let target_x = pixel_x + bit;
-                let target_y = pixel_y + row_offset;
-                if target_x < image.width() && target_y < image.height() {
-                    image.put_pixel(target_x, target_y, color);
-                }
+                image.put_pixel(pixel_x + bit, pixel_y + row_offset, color);
             }
         }
     }

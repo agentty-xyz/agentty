@@ -60,7 +60,7 @@ pub(crate) fn turn_prompt_for_runtime(
         schema_instruction_mode,
         workspace_root,
     })
-    .map_err(|error| AppServerError::PromptRender(error.to_string()))?;
+    .map_err(AppServerError::prompt_render)?;
 
     Ok(TurnPrompt {
         attachments: prompt.attachments,

@@ -122,6 +122,45 @@ impl crate::infra::clock::Clock for FixedClock {
     }
 }
 
+/// Process-wide `log` sink that keeps tracing's `log` fallback enabled.
+struct LogFallbackSink;
+
+impl tracing::log::Log for LogFallbackSink {
+    fn enabled(&self, _metadata: &tracing::log::Metadata<'_>) -> bool {
+        true
+    }
+
+    fn log(&self, record: &tracing::log::Record<'_>) {
+        let _rendered = record.args().to_string();
+    }
+
+    fn flush(&self) {}
+}
+
+/// Routes tracing events without a dispatcher through a process-wide `log`
+/// sink, so warning paths evaluate their fields under source coverage.
+///
+/// Nextest runs every test in its own process, so the calling test owns the
+/// logger and no tracing dispatcher is set. Do not combine it with
+/// [`TestSubscriber`]: any dispatcher disables the `log` fallback. Under a
+/// shared-process runner the fallback may stay disabled, which changes no
+/// behavior the tests assert.
+pub(crate) fn enable_tracing_log_fallback() {
+    static SINK: LogFallbackSink = LogFallbackSink;
+    let _ = tracing::log::set_logger(&SINK);
+    tracing::log::set_max_level(tracing::log::LevelFilter::Trace);
+}
+
+/// Poisons one shared mutex by unwinding a helper thread while it holds the
+/// lock, without invoking the panic hook.
+pub(crate) fn poison_lock<Value: Send + 'static>(lock: Arc<std::sync::Mutex<Value>>) {
+    let _ = std::thread::spawn(move || {
+        let _guard = lock.lock().expect("test lock");
+        std::panic::resume_unwind(Box::new("poison test lock"));
+    })
+    .join();
+}
+
 /// Chainable builder that produces deterministic [`Session`] values for unit
 /// tests.
 pub(crate) struct SessionFixtureBuilder {

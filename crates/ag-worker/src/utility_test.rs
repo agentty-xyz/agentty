@@ -103,6 +103,56 @@ async fn recorded_submission_does_not_execute_when_the_durable_claim_is_rejected
 }
 
 #[tokio::test]
+async fn recorded_submission_executes_after_the_durable_claim_is_accepted() {
+    // Arrange
+    let mut client = ag_contracts::MockOneShotClient::new();
+    client
+        .expect_submit_cancellable()
+        .once()
+        .returning(|_, _| Ok(result()));
+    client.expect_close().once().return_const(());
+    let mut repository = MockRunRepository::new();
+    repository
+        .expect_claim_queued()
+        .once()
+        .return_const(Ok(true));
+    repository
+        .expect_transition()
+        .withf(|id, state, error| id == "claimed" && *state == RunState::Running && error.is_none())
+        .once()
+        .returning(|_, _, _| Ok(()));
+    repository
+        .expect_transition()
+        .withf(|id, state, error| {
+            id == "claimed" && *state == RunState::Completed && error.is_none()
+        })
+        .once()
+        .returning(|_, _, _| Ok(()));
+    let worker = RunWorker::with_client(
+        Arc::new(client),
+        Arc::new(repository),
+        Arc::new(HeartbeatClock),
+        NonZeroUsize::MIN,
+    );
+    let input = request();
+    let run = RunInfo {
+        folder: input.folder.clone(),
+        id: "claimed".into(),
+        parent_id: None,
+        project_id: None,
+        purpose: "test".into(),
+        session_id: None,
+    };
+
+    // Act
+    let submission = worker.submit_recorded(input, run).await;
+    worker.shutdown().await;
+
+    // Assert
+    assert_eq!(submission.expect("claimed run completes"), result());
+}
+
+#[tokio::test]
 async fn configured_utility_policy_survives_pooling_and_protocol_repair() {
     // Arrange
     let policy = ag_contracts::ExecutionPolicy {

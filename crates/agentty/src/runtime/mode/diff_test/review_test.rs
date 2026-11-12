@@ -5,6 +5,7 @@ use super::support::{
     TEST_TERMINAL_SIZE, diff_mode_fixture, handle, navigate, next_diff_preview_event,
     preview_test_app,
 };
+use crate::app::AppEvent;
 use crate::presentation::app_mode::{
     AppMode, DiffFocus, DiffLineComments, DiffPreview, DiffPreviewUnavailableReason,
     DiffReviewComments, DiffScrollCache, DiffSidebarFocus,
@@ -222,6 +223,42 @@ async fn test_handle_preview_key_loads_renders_event_and_toggles_off() {
             scroll_offset: 0,
             ..
         }
+    ));
+}
+
+#[tokio::test]
+async fn test_handle_preview_key_reports_worktree_read_failures() {
+    // Arrange
+    let mut mock_git_client = ag_git::MockGitClient::new();
+    mock_git_client
+        .expect_read_worktree_file()
+        .times(1)
+        .returning(|_, _| {
+            Box::pin(async { Err(ag_git::GitError::OutputParse("unreadable".to_string())) })
+        });
+    let (mut app, _base_dir) = preview_test_app(mock_git_client).await;
+    app.mode = diff_mode_fixture(
+        "diff --git a/README.md b/README.md\n+preview",
+        0,
+        DiffFocus::Files,
+        DiffPreview::default(),
+    );
+
+    // Act
+    handle(
+        &mut app,
+        TEST_TERMINAL_SIZE,
+        KeyEvent::new(KeyCode::Char('p'), KeyModifiers::NONE),
+    );
+    let event = next_diff_preview_event(&mut app).await;
+
+    // Assert
+    assert!(matches!(
+        event,
+        AppEvent::DiffPreviewLoaded {
+            result: Err(ref error),
+            ..
+        } if error.contains("unreadable")
     ));
 }
 

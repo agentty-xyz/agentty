@@ -116,6 +116,15 @@ fn assert_text_has_fg_color_panics_on_mismatch() {
 }
 
 #[test]
+fn assert_text_has_bg_color_passes() {
+    // Arrange — ANSI red background.
+    let frame = TerminalFrame::new(80, 24, b"\x1b[41mActive\x1b[0m");
+
+    // Act / Assert
+    assert_text_has_bg_color(&frame, "Active", &CellColor::new(128, 0, 0));
+}
+
+#[test]
 #[should_panic(expected = "background")]
 fn assert_text_has_bg_color_panics_on_mismatch() {
     // Arrange

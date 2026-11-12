@@ -178,6 +178,22 @@ fn navigation_selects_adjacent_comments_and_resets_detail_scroll() {
 }
 
 #[test]
+fn navigation_without_comments_keeps_selection_and_detail_scroll() {
+    for code in [KeyCode::Char('j'), KeyCode::Char('k')] {
+        // Arrange
+        let mut state = NavigationState::new(0, 4);
+        state.comments.comment_snapshot = None;
+
+        // Act
+        state.press(KeyEvent::new(code, KeyModifiers::NONE), CONTENT_AREA, true);
+
+        // Assert
+        assert_eq!(state.comments.selected_comment_index, 0);
+        assert_eq!(state.scroll_offset, 4);
+    }
+}
+
+#[test]
 fn navigation_focuses_files_and_clears_detail_scroll_and_cache() {
     // Arrange
     for code in [KeyCode::Char('f'), KeyCode::Esc] {

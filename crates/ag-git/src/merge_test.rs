@@ -10,7 +10,7 @@ use tempfile::tempdir;
 use crate::error::GitError;
 use crate::merge::{
     CompatibilityMergeOutput, MergeTreeAttempt, MockCompatibilityMergeRunner, SquashMergeOutcome,
-    classify_merge_tree_attempt, has_merge_conflicts,
+    classify_cached_diff, classify_merge_tree_attempt, has_merge_conflicts,
     has_merge_conflicts_via_temporary_clone_with_runner, resolve_merge_tree_attempt, squash_merge,
 };
 
@@ -496,6 +496,52 @@ async fn has_merge_conflicts_returns_error_for_missing_repository() {
 
     // Assert
     assert!(error.to_string().contains("git merge-tree"));
+}
+
+#[test]
+fn classify_cached_diff_maps_exit_status_to_staged_changes() {
+    for (exit_code, expected) in [
+        (Some(0), Ok(false)),
+        (Some(1), Ok(true)),
+        (
+            Some(128),
+            Err("git diff --cached: fatal: bad index".to_string()),
+        ),
+        (None, Err("git diff --cached: fatal: bad index".to_string())),
+    ] {
+        // Arrange
+        let stderr = b"fatal: bad index\n";
+
+        // Act
+        let result =
+            classify_cached_diff(exit_code, b"", stderr).map_err(|error| error.to_string());
+
+        // Assert
+        assert_eq!(result, expected, "exit code {exit_code:?}");
+    }
+}
+
+#[tokio::test]
+async fn squash_merge_returns_parse_error_outside_git_repository() {
+    // Arrange
+    let temp_dir = tempdir().expect("failed to create temp dir");
+
+    // Act
+    let error = squash_merge(
+        temp_dir.path().to_path_buf(),
+        "feature-branch".to_string(),
+        "main".to_string(),
+        "Merge feature".to_string(),
+    )
+    .await
+    .expect_err("non-repository should fail branch detection");
+
+    // Assert
+    assert!(
+        matches!(&error, GitError::OutputParse(detail)
+            if detail.starts_with("Failed to detect current branch in ")),
+        "unexpected error: {error:?}"
+    );
 }
 
 #[tokio::test]

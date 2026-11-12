@@ -33,6 +33,24 @@ fn test_handle_returns_reject_for_no_shortcut() {
 }
 
 #[test]
+fn unmapped_keys_continue_without_moving_the_selection() {
+    for key_code in [KeyCode::Tab, KeyCode::Char('x')] {
+        // Arrange
+        let mut selected_confirmation_index = YES_OPTION_INDEX;
+
+        // Act
+        let decision = handle(
+            &mut selected_confirmation_index,
+            KeyEvent::new(key_code, KeyModifiers::NONE),
+        );
+
+        // Assert
+        assert!(matches!(decision, ConfirmationDecision::Continue));
+        assert_eq!(selected_confirmation_index, YES_OPTION_INDEX);
+    }
+}
+
+#[test]
 fn test_handle_returns_cancel_for_escape() {
     // Arrange
     let mut selected_confirmation_index = YES_OPTION_INDEX;

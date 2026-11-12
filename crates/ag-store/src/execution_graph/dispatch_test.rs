@@ -517,6 +517,38 @@ async fn invalid_admission_and_settlement_roll_back_without_orphan_records() {
 }
 
 #[tokio::test]
+async fn admission_rejects_a_corrupt_previous_execution_reference() {
+    // Arrange
+    let database = database().await;
+    dispatched(claim(&database, "first", "original").await);
+    sqlx::query("UPDATE execution_graph_execution SET reference = ?")
+        .bind("{")
+        .execute(database.pool())
+        .await
+        .expect("inject corrupt reference");
+
+    // Act
+    let admission = database
+        .graph_dispatch()
+        .claim(
+            "graph",
+            NonZeroU64::MIN,
+            "first",
+            "repeat",
+            Path::new("workspace"),
+        )
+        .await;
+
+    // Assert
+    assert!(
+        admission
+            .expect_err("corrupt execution reference")
+            .to_string()
+            .contains("EOF")
+    );
+}
+
+#[tokio::test]
 async fn validation_gate_needs_no_input_and_produced_or_failed_results_do_not_release_it() {
     // Arrange
     let database = crate::test_support::task_database_fixture().await;

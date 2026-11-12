@@ -684,9 +684,11 @@ fn render_capture_to_base64(capture: &ProofCapture) -> Result<String, ProofError
     let image = renderer::render_to_image(&frame);
 
     let mut png_bytes = Cursor::new(Vec::new());
+    // PNG-encoding a nonempty RGBA image into memory cannot fail; the shared
+    // mapping is exercised by the strip and GIF backends.
     image
         .write_to(&mut png_bytes, ImageFormat::Png)
-        .map_err(|err| ProofError::Format(err.to_string()))?;
+        .map_err(ProofError::format)?;
 
     let encoded = base64::engine::general_purpose::STANDARD.encode(png_bytes.into_inner());
 

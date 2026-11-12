@@ -73,16 +73,11 @@ impl<'a> InfoOverlay<'a> {
     }
 
     /// Renders the body message as markdown with inline highlight styles and
-    /// explicit line breaks.
+    /// explicit line breaks; an empty message still yields one blank line.
     fn message_lines(&self, message_width: usize) -> Vec<Line<'static>> {
         let normalized_message = Self::markdown_message_with_block_headers(self.message);
-        let mut message_lines = render_markdown(&normalized_message, message_width);
 
-        if message_lines.is_empty() {
-            message_lines.push(Line::from(""));
-        }
-
-        message_lines
+        render_markdown(&normalized_message, message_width)
     }
 
     /// Adds markdown block headers for numbered sync sections and inserts blank
@@ -137,15 +132,11 @@ impl<'a> InfoOverlay<'a> {
     /// Centers the first body line when it matches the sync context header
     /// format (`Project ...` or `Main branch ...`).
     fn center_sync_context_header(message_lines: &mut [Line<'static>]) {
-        let Some(first_line) = message_lines.first_mut() else {
-            return;
-        };
-
-        if !Self::is_sync_context_header(first_line) {
-            return;
+        if let Some(first_line) = message_lines.first_mut()
+            && Self::is_sync_context_header(first_line)
+        {
+            *first_line = first_line.clone().alignment(Alignment::Center);
         }
-
-        *first_line = first_line.clone().alignment(Alignment::Center);
     }
 
     /// Returns whether a message line is the generated sync context header.

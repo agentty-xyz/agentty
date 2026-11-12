@@ -26,6 +26,20 @@ fn soft_assertions_single_failure_panics_on_drop_with_message() {
 }
 
 #[test]
+#[should_panic(expected = "unrelated failure")]
+fn soft_assertions_stay_silent_while_the_thread_is_already_unwinding() {
+    // Arrange
+    let frame = TerminalFrame::new(80, 24, b"Hello World");
+    let region = Region::new(20, 0, 60, 1);
+    let mut soft = SoftAssertions::new();
+    soft.check(match_text_in_region(&frame, "Hello", &region));
+
+    // Act / Assert — the drop during unwinding must not replace the
+    // original panic (a second panic would abort the test process).
+    assert!(soft.is_empty(), "unrelated failure");
+}
+
+#[test]
 fn soft_assertions_format_aggregated_message_lists_each_failure_in_order() {
     // Arrange — record two failing checks against an empty region
     // plus one passing check, then drain the accumulator to suppress

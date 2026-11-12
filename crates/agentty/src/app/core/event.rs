@@ -2727,7 +2727,6 @@ impl App {
         let Ok(handles) = self.sessions.session_handles_or_err(session_id) else {
             return None;
         };
-        let mut warnings = Vec::new();
 
         let folder = session.folder.clone();
         let base_branch = session.base_branch.clone();
@@ -2757,13 +2756,11 @@ impl App {
             StatusTransition::from_services(&self.services, handles, session_id);
         let status_applied = status_transition.apply(Status::Done).await;
         if !status_applied {
-            warnings.push("Could not archive the merged session".to_string());
-
-            return Some(warnings.join("\n"));
+            return Some("Could not archive the merged session".to_string());
         }
         self.spawn_externally_merged_session_cleanup(session_id, folder, source_branch, handles);
 
-        (!warnings.is_empty()).then(|| warnings.join("\n"))
+        None
     }
 
     /// Removes an externally merged session worktree without delaying terminal

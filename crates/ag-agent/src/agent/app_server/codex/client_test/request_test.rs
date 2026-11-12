@@ -74,6 +74,71 @@ fn build_thread_start_payload_uses_unrestricted_auto_edit_policy() {
 }
 
 #[test]
+/// Verifies legacy approval methods use the legacy decision vocabulary and
+/// relative patch paths stay approved only while they remain in the session.
+fn build_pre_action_approval_response_scopes_legacy_and_relative_requests() {
+    // Arrange
+    let session_folder = Path::new("/tmp/session");
+    let request_cases = [
+        (
+            "execCommandApproval",
+            serde_json::json!({}),
+            ag_contracts::PermissionMode::AutoEdit,
+            Some("approved"),
+        ),
+        (
+            "execCommandApproval",
+            serde_json::json!({}),
+            ag_contracts::PermissionMode::ReadOnly,
+            Some("denied"),
+        ),
+        (
+            "applyPatchApproval",
+            serde_json::json!({"fileChanges": [{"path": "./src/main.rs"}]}),
+            ag_contracts::PermissionMode::AutoEdit,
+            Some("approved"),
+        ),
+        (
+            "applyPatchApproval",
+            serde_json::json!({"fileChanges": [{"path": "src/../../escape.rs"}]}),
+            ag_contracts::PermissionMode::AutoEdit,
+            Some("denied"),
+        ),
+        (
+            "item/unknown/requestApproval",
+            serde_json::json!({}),
+            ag_contracts::PermissionMode::AutoEdit,
+            None,
+        ),
+    ];
+
+    for (method, params, permission_mode, expected_decision) in request_cases {
+        let response_value = serde_json::json!({
+            "id": "approval-1",
+            "method": method,
+            "params": params,
+        });
+
+        // Act
+        let response =
+            policy::build_server_request_response(&response_value, permission_mode, session_folder);
+
+        // Assert
+        let decision = response.as_ref().map(|response| {
+            response
+                .pointer("/result/decision")
+                .and_then(Value::as_str)
+                .map(ToString::to_string)
+        });
+        assert_eq!(
+            decision,
+            expected_decision.map(|decision| Some(decision.to_string())),
+            "{method} in {permission_mode:?} with {params}"
+        );
+    }
+}
+
+#[test]
 fn build_pre_action_approval_response_accepts_session_local_file_change() {
     // Arrange
     let response_value = serde_json::json!({

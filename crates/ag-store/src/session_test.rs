@@ -9,3 +9,6 @@ mod mapping;
 
 #[path = "session_test/model_test.rs"]
 mod model;
+
+#[path = "session_test/selection_test.rs"]
+mod selection;

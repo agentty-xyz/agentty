@@ -2,7 +2,7 @@ use super::{DEFAULT_FRAME_DELAY_MS, MAX_FRAME_DELAY_MS, MIN_FRAME_DELAY_MS};
 use crate::frame::TerminalFrame;
 use crate::proof::backend::{ProofBackend, RenderContext};
 use crate::proof::gif::GifBackend;
-use crate::proof::report::ProofReport;
+use crate::proof::report::{ProofError, ProofReport};
 
 #[test]
 fn gif_backend_default_delay() {
@@ -65,6 +65,22 @@ fn gif_backend_errors_on_empty_report() {
 
     // Assert
     assert!(result.is_err());
+}
+
+#[test]
+fn gif_backend_reports_frames_beyond_the_gif_size_limit() {
+    // Arrange — 4096 rows render 65,536 pixels tall, one more than GIF allows.
+    let frame = TerminalFrame::new(1, 4096, b"");
+    let mut report = ProofReport::new("too_tall");
+    report.add_capture("tall", "Too tall", &frame);
+    let temp_dir = tempfile::tempdir().expect("failed to create temp dir");
+    let output_path = temp_dir.path().join("too_tall.gif");
+
+    // Act
+    let result = GifBackend::default().render(&RenderContext::new(&report, &output_path));
+
+    // Assert
+    assert!(matches!(result, Err(ProofError::Format(_))));
 }
 
 #[test]

@@ -84,6 +84,14 @@ pub enum ProofError {
     Format(String),
 }
 
+impl ProofError {
+    /// Wrap a rendering failure, such as an image encoding or saving error,
+    /// as a [`ProofError::Format`] carrying its message.
+    pub(crate) fn format(error: impl Into<Box<dyn std::error::Error>>) -> Self {
+        Self::Format(error.into().to_string())
+    }
+}
+
 /// Collector for labeled captures produced during scenario execution.
 ///
 /// Build a `ProofReport` by calling [`add_capture()`](ProofReport::add_capture)

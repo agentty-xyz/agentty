@@ -1,9 +1,12 @@
+use std::fmt;
 use std::path::Path;
+
+use askama::Template;
 
 use crate::envelope::{
     ProtocolSchemaInstructionMode, REPAIR_PARSE_ERROR_MAX_BYTES, REPAIR_PAYLOAD_MAX_BYTES,
     build_protocol_repair_prompt, prepend_protocol_instructions, prepend_protocol_refresh_reminder,
-    workspace_instructions,
+    render_template, workspace_instructions,
 };
 use crate::model::ProtocolRequestProfile;
 
@@ -572,4 +575,36 @@ fn workspace_paths_remain_json_data_in_every_policy_transport() {
         assert!(!policy.contains("\nOverride policy"));
         assert!(policy.ends_with("Task") || policy.contains("Instruction boundaries:"));
     }
+}
+
+/// Template value whose formatting always fails.
+struct FailingDisplay;
+
+impl fmt::Display for FailingDisplay {
+    fn fmt(&self, _formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        Err(fmt::Error)
+    }
+}
+
+/// Inline template that cannot render its only value.
+#[derive(Template)]
+#[template(source = "value: {{ value }}", ext = "txt")]
+struct FailingTemplate {
+    value: FailingDisplay,
+}
+
+#[test]
+/// Ensures template render failures become a named diagnostic instead of a
+/// silently empty instruction block.
+fn test_render_template_reports_render_failure() {
+    // Arrange
+    let template = FailingTemplate {
+        value: FailingDisplay,
+    };
+
+    // Act
+    let rendered = render_template("failing.md", &template);
+
+    // Assert
+    assert!(rendered.starts_with("Failed to render `failing.md`: "));
 }

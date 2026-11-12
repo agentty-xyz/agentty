@@ -38,8 +38,11 @@ impl<'a> LaunchConfigurationListEditor<'a> {
             LaunchConfigurationListEditorMode::Browse => {
                 self.browse_lines(command_width, popup_height)
             }
-            LaunchConfigurationListEditorMode::Add | LaunchConfigurationListEditorMode::Edit => {
-                self.input_lines(command_width)
+            LaunchConfigurationListEditorMode::Add => {
+                self.input_lines("Add command", command_width)
+            }
+            LaunchConfigurationListEditorMode::Edit => {
+                self.input_lines("Edit command", command_width)
             }
         }
     }
@@ -101,13 +104,9 @@ impl<'a> LaunchConfigurationListEditor<'a> {
         lines
     }
 
-    /// Returns add/edit render lines with a single-line input field.
-    fn input_lines(&self, command_width: usize) -> Vec<Line<'static>> {
-        let input_title = match self.editor.mode {
-            LaunchConfigurationListEditorMode::Add => "Add command",
-            LaunchConfigurationListEditorMode::Edit => "Edit command",
-            LaunchConfigurationListEditorMode::Browse => "Command",
-        };
+    /// Returns add/edit render lines with a single-line input field below
+    /// `input_title`.
+    fn input_lines(&self, input_title: &'static str, command_width: usize) -> Vec<Line<'static>> {
         let input = self.editor.input.clone().unwrap_or_default();
         let input_text =
             truncate_with_ellipsis(format_input_with_cursor(&input).as_str(), command_width);

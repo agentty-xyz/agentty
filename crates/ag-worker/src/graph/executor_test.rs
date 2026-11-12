@@ -668,3 +668,77 @@ async fn admission_panic_returns_a_worker_error_and_releases_resource_leases() {
     assert_eq!(resources.capacity.available_permits(), 1);
     assert!(environment.try_write_owned().is_ok());
 }
+
+#[tokio::test]
+async fn unsupported_profiles_and_unknown_budgets_are_rejected_before_admission() {
+    // Arrange
+    let mut unknown_budget = graph();
+    unknown_budget.nodes[0].execution.shared_budget_id = Some("missing".into());
+    let cases = [
+        (
+            graph(),
+            false,
+            "Unsupported graph execution profile: reader",
+        ),
+        (
+            unknown_budget,
+            true,
+            "Unknown graph provider budget: missing",
+        ),
+    ];
+
+    for (graph, is_supported, expected_error) in cases {
+        let resources = Arc::new(GraphResources::new(NonZeroUsize::MIN, HashMap::new()));
+        let mut repository = MockGraphDispatchRepository::new();
+        repository.expect_graph().once().return_const(Ok(graph));
+        let mut runner = MockGraphNodeRunner::new();
+        runner.expect_supports().once().return_const(is_supported);
+        let executor = GraphExecutor::new(Arc::new(repository), resources, Arc::new(runner));
+
+        // Act
+        let result = executor
+            .run_ready(
+                "graph",
+                NonZeroU64::MIN,
+                Path::new("workspace"),
+                PermissionMode::ReadOnly,
+            )
+            .await;
+
+        // Assert
+        assert_eq!(
+            result.expect_err("graph must be rejected").to_string(),
+            expected_error
+        );
+    }
+}
+
+#[tokio::test]
+async fn full_capacity_defers_admission_until_a_permit_returns() {
+    // Arrange
+    let resources = Arc::new(GraphResources::new(NonZeroUsize::MIN, HashMap::new()));
+    let holder = Arc::new(Notify::new());
+    let permit = resources.try_capacity(&holder).expect("held permit");
+    let mut repository = MockGraphDispatchRepository::new();
+    repository.expect_graph().once().return_const(Ok(graph()));
+    let mut runner = MockGraphNodeRunner::new();
+    runner.expect_supports().once().return_const(true);
+    let executor = GraphExecutor::new(Arc::new(repository), resources.clone(), Arc::new(runner));
+
+    // Act
+    let receipts = executor
+        .run_ready(
+            "graph",
+            NonZeroU64::MIN,
+            Path::new("workspace"),
+            PermissionMode::ReadOnly,
+        )
+        .await
+        .expect("full capacity defers work");
+    drop(permit);
+    executor.capacity_released().await;
+
+    // Assert
+    assert_eq!(receipts.len(), 0);
+    assert_eq!(resources.capacity.available_permits(), 1);
+}

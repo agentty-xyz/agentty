@@ -70,7 +70,7 @@ async fn retry_validates_owned_checkout_and_preserves_it_on_backend_failure() {
     // Act
     let inactive = SessionManager::prepare_reserved_session(&app.services, &id).await;
     let failed = SessionManager::prepare_workspace(&app.services, &preparation, &row, |folder| {
-        backend.setup(folder).map_err(|error| error.to_string())
+        backend.setup(folder)
     })
     .await;
     app.services

@@ -771,6 +771,67 @@ fn test_render_prompt_composer_shows_read_only_without_speed_status() {
 }
 
 #[test]
+fn test_render_leaves_frame_untouched_for_missing_session_index() {
+    // Arrange
+    let session = session_fixture();
+    let mode = AppMode::View {
+        session_id: "session-id".into(),
+        scroll_offset: None,
+    };
+    let mut page = SessionChatPage::new(SessionChatPageInput {
+        session_index: 3,
+        ..test_page_input(&session, &mode)
+    });
+    let backend = ratatui::backend::TestBackend::new(40, 8);
+    let mut terminal = ratatui::Terminal::new(backend).expect("failed to create terminal");
+
+    // Act
+    terminal
+        .draw(|frame| {
+            frame.render_widget(Paragraph::new("sentinel"), frame.area());
+            let area = frame.area();
+            Page::render(&mut page, frame, area);
+        })
+        .expect("failed to draw missing session");
+
+    // Assert
+    assert_eq!(
+        buffer_text(terminal.backend().buffer()).trim_end(),
+        "sentinel"
+    );
+}
+
+#[test]
+fn test_render_in_progress_session_forwards_scroll_and_active_progress() {
+    // Arrange
+    let mut session = session_fixture();
+    session.status = Status::InProgress;
+    let mode = AppMode::View {
+        session_id: "session-id".into(),
+        scroll_offset: Some(0),
+    };
+    let mut page = SessionChatPage::new(SessionChatPageInput {
+        active_progress: Some("Compiling crates"),
+        scroll_offset: Some(0),
+        ..test_page_input(&session, &mode)
+    });
+    let backend = ratatui::backend::TestBackend::new(80, 16);
+    let mut terminal = ratatui::Terminal::new(backend).expect("failed to create terminal");
+
+    // Act
+    terminal
+        .draw(|frame| {
+            let area = frame.area();
+            Page::render(&mut page, frame, area);
+        })
+        .expect("failed to draw in-progress session");
+
+    // Assert
+    let text = buffer_text(terminal.backend().buffer());
+    assert!(text.contains("Compiling crates"));
+}
+
+#[test]
 fn test_render_question_panel_preserves_frame_without_prepared_areas() {
     // Arrange
     let backend = ratatui::backend::TestBackend::new(40, 10);

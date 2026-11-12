@@ -125,6 +125,13 @@ fn local_file_system_removes_destination_only_extended_attributes() {
     let source = std::fs::File::open(source_path).expect("source should open");
     let destination = std::fs::File::open(destination_path).expect("destination should open");
     rustix::fs::fsetxattr(
+        &source,
+        "user.ag-harness-kept",
+        b"keep",
+        rustix::fs::XattrFlags::empty(),
+    )
+    .expect("source xattr should be set");
+    rustix::fs::fsetxattr(
         &destination,
         "user.ag-harness-extra",
         b"remove",
@@ -140,7 +147,7 @@ fn local_file_system_removes_destination_only_extended_attributes() {
     assert_eq!(
         LocalFileSystem::extended_attribute_names(&destination)
             .expect("destination xattrs should list"),
-        Vec::<OsString>::new()
+        vec![OsString::from("user.ag-harness-kept")]
     );
 }
 

@@ -27,13 +27,11 @@ pub fn create_agent_channel(
 
     if let (AgentTransport::Native, Some(config)) = (transport, native_harness) {
         Arc::new(NativeAgentChannel::new(config.clone()))
-    } else if transport.uses_app_server() {
-        match agent::create_app_server_client(kind, app_server_client_override) {
-            Some(app_server_client) => {
-                Arc::new(AppServerAgentChannel::new(app_server_client, kind))
-            }
-            None => Arc::new(CliAgentChannel::with_backend(Arc::from(backend), kind)),
-        }
+    } else if transport.uses_app_server()
+        && let Some(app_server_client) =
+            agent::create_app_server_client(kind, app_server_client_override)
+    {
+        Arc::new(AppServerAgentChannel::new(app_server_client, kind))
     } else {
         Arc::new(CliAgentChannel::with_backend(Arc::from(backend), kind))
     }

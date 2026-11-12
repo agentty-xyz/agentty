@@ -226,6 +226,18 @@ fn test_session_transcript_conversation_replay_text_ignores_notice_only_transcri
 }
 
 #[test]
+fn test_session_transcript_replay_text_is_absent_without_content() {
+    // Arrange
+    let transcript = SessionTranscript::new(Vec::new());
+
+    // Act
+    let replay_text = transcript.replay_text();
+
+    // Assert
+    assert_eq!(replay_text, None);
+}
+
+#[test]
 fn test_session_transcript_append_message_preserves_constructor_ordering() {
     // Arrange
     let mut transcript = SessionTranscript::new(vec![

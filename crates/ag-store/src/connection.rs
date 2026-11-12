@@ -54,9 +54,9 @@ impl Database {
         db_path: &Path,
         timestamp_source: Arc<dyn TimestampSource>,
     ) -> Result<Self, DbError> {
-        if let Some(parent) = db_path.parent() {
-            tokio::fs::create_dir_all(parent).await?;
-        }
+        // A path without a parent creates nothing: `create_dir_all("")` is a
+        // successful no-op.
+        tokio::fs::create_dir_all(db_path.parent().unwrap_or(Path::new(""))).await?;
 
         let options = SqliteConnectOptions::new()
             .filename(db_path)

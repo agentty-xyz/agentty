@@ -5,7 +5,7 @@ use std::path::PathBuf;
 use clap::Args;
 
 use crate::cargo_environment;
-use crate::validation::Metadata;
+use crate::validation::{self, Metadata};
 
 /// Explicit package selection supplied only to a coordinated Clippy hook.
 pub(crate) const PACKAGES_ENV: &str = "AGENTTY_CLIPPY_PACKAGES";
@@ -36,7 +36,8 @@ pub(crate) fn run(options: &Options) -> Result<(), String> {
 
         Some(metadata.affected(&packages)?)
     } else {
-        let root = std::env::current_dir().map_err(|error| error.to_string())?;
+        // `cargo metadata` already succeeded from this directory.
+        let root = std::env::current_dir().map_err(validation::error_text)?;
         match metadata.owners(&options.files, &root) {
             Some(owners) => Some(metadata.affected(&owners)?),
             None => None,

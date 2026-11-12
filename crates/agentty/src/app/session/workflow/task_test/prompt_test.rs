@@ -129,8 +129,7 @@ fn test_session_commit_message_prompt_includes_continuity_and_diff() {
         current_commit_message,
         "{}",
         false,
-    )
-    .expect("prompt should render");
+    );
 
     // Assert
     assert!(prompt.contains("Keep session commit accurate"));
@@ -170,8 +169,7 @@ fn test_session_commit_message_prompt_reserves_agentty_trailer_for_application()
             None,
             user_requests,
             fallback,
-        )
-        .expect("prompt should render");
+        );
 
         // Assert
         assert!(prompt.contains("Do not emit the Agentty coauthor trailer"));
@@ -203,8 +201,7 @@ fn test_session_commit_message_prompt_escapes_triple_backtick_fence_in_diff() {
         current_commit_message,
         "{}",
         false,
-    )
-    .expect("prompt should render");
+    );
 
     // Assert
     assert!(
@@ -235,8 +232,7 @@ fn test_session_commit_message_prompt_strips_coauthor_trailer_from_continuity() 
         Some(current_commit_message.as_str()),
         "{}",
         false,
-    )
-    .expect("prompt should render");
+    );
 
     // Assert
     assert!(!prompt.contains(SESSION_COMMIT_COAUTHORED_BY_AGENTTY_TRAILER));
@@ -250,8 +246,7 @@ fn test_auto_commit_assist_prompt_includes_commit_error() {
     let commit_error = "Failed to commit: merge conflict remains";
 
     // Act
-    let prompt = SessionTaskService::auto_commit_assist_prompt(commit_error)
-        .expect("auto commit assist prompt should render");
+    let prompt = SessionTaskService::auto_commit_assist_prompt(commit_error);
 
     // Assert
     assert!(prompt.contains("Failed to commit: merge conflict remains"));
@@ -273,14 +268,13 @@ fn diagnostics_and_user_preferences_keep_json_boundaries() {
             .to_string();
 
     // Act
-    let repair = SessionTaskService::auto_commit_assist_prompt(diagnostic).expect("repair");
+    let repair = SessionTaskService::auto_commit_assist_prompt(diagnostic);
     let commit = SessionTaskService::session_commit_message_prompt(
         "diff",
         Some("Old\nmessage"),
         &preferences,
         false,
-    )
-    .expect("commit");
+    );
 
     // Assert
     assert!(repair.contains(&serde_json::json!(diagnostic).to_string()));

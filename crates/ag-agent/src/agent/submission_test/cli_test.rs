@@ -10,7 +10,8 @@ use super::support::{mock_shell_command, stdin_capture_shell_command};
 use crate::agent::MockAgentBackend;
 use crate::agent::cli::execution::{CliExecutionError, CliExecutionObserver};
 use crate::agent::submission::{
-    OneShotCliObserver, format_one_shot_execution_error, submit_one_shot_with_backend,
+    OneShotCliObserver, clear_child_pid_slot, format_one_shot_execution_error,
+    submit_one_shot_with_backend,
 };
 
 #[test]
@@ -64,6 +65,37 @@ fn test_one_shot_cli_observer_updates_child_pid_slot() {
     // Assert
     assert_eq!(active_pid, Some(42));
     assert_eq!(cleared_pid, None);
+}
+
+#[test]
+fn test_poisoned_child_pid_slot_is_left_untouched() {
+    // Arrange
+    let child_pid = Arc::new(Mutex::new(Some(7)));
+    let poisoning = std::thread::spawn({
+        let child_pid = Arc::clone(&child_pid);
+
+        move || {
+            let _guard = child_pid.lock();
+            std::panic::resume_unwind(Box::new("fixture panic while PID lock is held"));
+        }
+    });
+    let poisoning_result = poisoning.join();
+    let observer = OneShotCliObserver {
+        activity: Mutex::new(crate::agent::activity::ActivityObserver::new(|_| {})),
+        kind: AgentKind::Claude,
+        child_pid: Some(Arc::clone(&child_pid)),
+    };
+
+    // Act
+    observer.pid_updated(Some(42));
+    clear_child_pid_slot(Some(&child_pid));
+
+    // Assert
+    assert!(poisoning_result.is_err());
+    let stored_pid = *child_pid
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner);
+    assert_eq!(stored_pid, Some(7));
 }
 
 #[tokio::test]

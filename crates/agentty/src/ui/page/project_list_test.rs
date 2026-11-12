@@ -496,6 +496,45 @@ fn test_build_heatmap_lines_uses_persisted_activity_for_intensity() {
 }
 
 #[test]
+fn test_build_heatmap_lines_paints_each_activity_intensity_with_its_own_color() {
+    // Arrange
+    let activity = (1..=4_u32)
+        .map(|session_count| DailyActivity {
+            day_key: TEST_ACTIVITY_DAY_KEY - i64::from(4 - session_count),
+            session_count,
+        })
+        .collect::<Vec<_>>();
+    let mut table_state = TableState::default();
+    let page = ProjectListPage::new(
+        &[],
+        &[],
+        &activity,
+        &mut table_state,
+        42,
+        TEST_ACTIVITY_DAY_KEY,
+    );
+
+    // Act
+    let heatmap_lines = page.build_heatmap_lines(80);
+
+    // Assert
+    let painted_colors = heatmap_lines
+        .iter()
+        .flat_map(|line| line.spans.iter())
+        .filter_map(|span| span.style.bg)
+        .collect::<Vec<_>>();
+    let intensity_colors = (0..=4)
+        .map(ProjectListPage::heatmap_color)
+        .collect::<Vec<_>>();
+    for intensity_color in &intensity_colors {
+        assert!(painted_colors.contains(intensity_color));
+    }
+    for (index, intensity_color) in intensity_colors.iter().enumerate() {
+        assert!(!intensity_colors[index + 1..].contains(intensity_color));
+    }
+}
+
+#[test]
 fn test_build_heatmap_lines_trims_visible_weeks_on_narrow_width() {
     // Arrange
     let activity = vec![DailyActivity {

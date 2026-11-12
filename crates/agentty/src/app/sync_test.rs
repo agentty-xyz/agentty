@@ -10,8 +10,8 @@ use tokio::sync::{mpsc, watch};
 use super::{
     ProjectSyncContext, ProjectSyncPhase, ProjectSyncStatus, ReviewRequestPassUpdate,
     ReviewRequestSyncTarget, SessionGitStatusTarget, SyncContext, SyncHandle, SyncMainCompletion,
-    SyncMainRequest, SyncOrchestrator, review_sync_backoff_passes, session_git_statuses,
-    sync_review_request_status, sync_task_result_from_summary,
+    SyncMainRequest, SyncOrchestrator, review_request_repo_url, review_sync_backoff_passes,
+    session_git_statuses, sync_review_request_status, sync_task_result_from_summary,
 };
 use crate::app::core::SyncReviewRequestTaskResult;
 use crate::app::session_state::SessionGitStatus;
@@ -864,6 +864,328 @@ async fn sync_review_request_status_falls_back_to_linked_web_url() {
             session_head_hash: None,
         }
     );
+}
+
+#[tokio::test]
+/// Verifies refresh, discovery, and fallback failures surface as sync errors
+/// while discovered or missing review requests map to their outcomes.
+async fn sync_review_request_status_maps_refresh_and_discovery_outcomes() {
+    // Arrange
+    let gitlab_linked = crate::domain::session::ReviewRequest {
+        last_refreshed_at: 0,
+        summary: ReviewRequestSummary {
+            web_url: "https://gitlab.com/org/repo/-/merge_requests/5".to_string(),
+            ..test_review_request_summary_with_forge(
+                "!5",
+                ReviewRequestState::Open,
+                ForgeKind::GitLab,
+            )
+        },
+    };
+    let cases: [(
+        &str,
+        Option<crate::domain::session::ReviewRequest>,
+        Result<session::SyncReviewRequestOutcome, &str>,
+    ); 6] = [
+        (
+            "refresh_error",
+            Some(linked_review_request("#42", ReviewRequestState::Open)),
+            Err("GitHub review-request operation failed: refresh failed"),
+        ),
+        (
+            "unpublished",
+            None,
+            Err("Session branch has not been published yet"),
+        ),
+        (
+            "find_error",
+            None,
+            Err("GitHub review-request operation failed: lookup failed"),
+        ),
+        (
+            "found_open",
+            None,
+            Ok(session::SyncReviewRequestOutcome::Open {
+                display_id: "#42".to_string(),
+                status_summary: None,
+            }),
+        ),
+        (
+            "not_found",
+            None,
+            Ok(session::SyncReviewRequestOutcome::NoReviewRequest),
+        ),
+        (
+            "fallback_detect_error",
+            Some(gitlab_linked),
+            Err("GitLab review-request operation failed: remote rejected"),
+        ),
+    ];
+    for (case, linked, expected) in cases {
+        let (mock_git_client, mock_review_request_client) = review_status_sync_clients(case);
+        let published_upstream_ref =
+            (case != "unpublished").then(|| "origin/wt/session-id".to_string());
+
+        // Act
+        let result = sync_review_request_status(
+            PathBuf::from("/tmp/session-worktree"),
+            &mock_git_client,
+            linked,
+            published_upstream_ref,
+            &mock_review_request_client,
+        )
+        .await;
+
+        // Assert
+        match expected {
+            Ok(expected_outcome) => {
+                assert_eq!(result.expect(case).outcome, expected_outcome, "{case}");
+            }
+            Err(expected_error) => {
+                let error = result.expect_err(case);
+                assert!(error.contains(expected_error), "{case}: {error}");
+            }
+        }
+    }
+}
+
+/// Builds one forge operation failure carrying `message`.
+fn forge_failure(forge_kind: ForgeKind, message: &str) -> ag_forge::ReviewRequestError {
+    ag_forge::ReviewRequestError::OperationFailed {
+        forge_kind,
+        message: message.to_string(),
+    }
+}
+
+/// Builds Git and forge clients that drive one review-status sync `case`.
+fn review_status_sync_clients(case: &'static str) -> (MockGitClient, MockReviewRequestClient) {
+    let mut mock_git_client = MockGitClient::new();
+    mock_git_client
+        .expect_repo_url()
+        .once()
+        .returning(move |_| {
+            Box::pin(async move {
+                if case == "fallback_detect_error" {
+                    return Err(GitError::CommandFailed {
+                        command: "git remote get-url origin".to_string(),
+                        stderr: "worktree removed".to_string(),
+                    });
+                }
+
+                Ok("https://github.com/agentty-xyz/agentty.git".to_string())
+            })
+        });
+    let mut mock_review_request_client = MockReviewRequestClient::new();
+    mock_review_request_client
+        .expect_detect_remote()
+        .once()
+        .returning(move |repo_url| {
+            if case == "fallback_detect_error" {
+                assert_eq!(repo_url, "https://gitlab.com/org/repo");
+
+                return Err(forge_failure(ForgeKind::GitLab, "remote rejected"));
+            }
+
+            ag_forge::detect_remote(&repo_url)
+        });
+    mock_review_request_client
+        .expect_refresh_review_request()
+        .times(usize::from(case == "refresh_error"))
+        .returning(move |_, _| {
+            Box::pin(async move { Err(forge_failure(ForgeKind::GitHub, "refresh failed")) })
+        });
+    mock_review_request_client
+        .expect_find_by_source_branch()
+        .times(usize::from(matches!(
+            case,
+            "find_error" | "found_open" | "not_found"
+        )))
+        .withf(|_, source_branch| source_branch == "wt/session-id")
+        .returning(move |_, _| {
+            Box::pin(async move {
+                match case {
+                    "find_error" => Err(forge_failure(ForgeKind::GitHub, "lookup failed")),
+                    "found_open" => Ok(Some(test_review_request_summary(
+                        "#42",
+                        ReviewRequestState::Open,
+                    ))),
+                    _ => Ok(None),
+                }
+            })
+        });
+
+    (mock_git_client, mock_review_request_client)
+}
+
+#[test]
+/// Verifies GitLab merge-request URLs with and without the `/-/` separator
+/// resolve back to their repository URL.
+fn review_request_repo_url_supports_gitlab_merge_request_paths() {
+    // Arrange
+    let cases = [
+        (
+            "https://gitlab.com/org/repo/-/merge_requests/5/",
+            Some("https://gitlab.com/org/repo"),
+        ),
+        (
+            "https://gitlab.example.com/org/repo/merge_requests/6",
+            Some("https://gitlab.example.com/org/repo"),
+        ),
+        ("https://gitlab.example.com/org/repo", None),
+    ];
+
+    for (web_url, expected_repo_url) in cases {
+        let review_request = crate::domain::session::ReviewRequest {
+            last_refreshed_at: 0,
+            summary: ReviewRequestSummary {
+                web_url: web_url.to_string(),
+                ..test_review_request_summary_with_forge(
+                    "!5",
+                    ReviewRequestState::Open,
+                    ForgeKind::GitLab,
+                )
+            },
+        };
+
+        // Act
+        let repo_url = review_request_repo_url(&review_request);
+
+        // Assert
+        assert_eq!(repo_url.as_deref(), expected_repo_url, "{web_url}");
+    }
+}
+
+#[tokio::test]
+/// Backed-off targets are skipped, and stale contexts stop the pass before
+/// or after a target refresh without returning updates.
+async fn collect_review_request_pass_updates_skips_backed_off_and_stale_targets() {
+    // Arrange
+    let targets = vec![review_request_sync_target("session-1", None)];
+    let (context_tx, context_rx) = watch::channel(sync_context_fixture(0, targets.clone()));
+    let context_tx = Arc::new(context_tx);
+    let (app_event_tx, _app_event_rx) = mpsc::unbounded_channel();
+    let (_command_tx, command_rx) = mpsc::unbounded_channel();
+    let mut orchestrator = SyncOrchestrator {
+        app_event_tx,
+        command_rx,
+        context_rx,
+        review_pass_index: 0,
+        review_sync_failures: HashMap::new(),
+        tick_index: 0,
+    };
+    let failure: Result<SyncReviewRequestTaskResult, String> = Err("gh exploded".to_string());
+    orchestrator.record_review_sync_outcome(&targets[0], &failure, 0);
+    orchestrator.record_review_sync_outcome(&targets[0], &failure, 1);
+    let backed_off_context = sync_context_fixture(0, targets.clone());
+    let mut mock_git_client = MockGitClient::new();
+    mock_git_client.expect_repo_url().once().returning({
+        let context_tx = Arc::clone(&context_tx);
+        move |_| {
+            context_tx.send_modify(|context| context.generation = 1);
+
+            Box::pin(async {
+                Err(GitError::CommandFailed {
+                    command: "git remote get-url origin".to_string(),
+                    stderr: "not a git repository".to_string(),
+                })
+            })
+        }
+    });
+    let stale_after_refresh_context = SyncContext {
+        git_client: Arc::new(mock_git_client),
+        ..sync_context_fixture(0, targets.clone())
+    };
+    let stale_before_refresh_context = sync_context_fixture(0, targets);
+
+    // Act
+    let backed_off_updates = orchestrator
+        .collect_review_request_pass_updates(&backed_off_context, true)
+        .await;
+    orchestrator.review_sync_failures.clear();
+    let stale_after_refresh_updates = orchestrator
+        .collect_review_request_pass_updates(&stale_after_refresh_context, true)
+        .await;
+    let stale_before_refresh_updates = orchestrator
+        .collect_review_request_pass_updates(&stale_before_refresh_context, true)
+        .await;
+
+    // Assert
+    assert!(backed_off_updates.is_empty());
+    assert!(stale_after_refresh_updates.is_empty());
+    assert!(stale_before_refresh_updates.is_empty());
+    assert!(orchestrator.review_sync_failures.is_empty());
+}
+
+#[tokio::test]
+/// A git-only refresh pass emits just the git snapshot, while a
+/// review-including pass also emits one review-request update per target.
+async fn refresh_pass_emits_review_updates_only_when_requested() {
+    // Arrange
+    let mut mock_git_client = MockGitClient::new();
+    mock_git_client
+        .expect_find_git_repo_root()
+        .times(2)
+        .returning(|_| Box::pin(async { None }));
+    mock_git_client
+        .expect_fetch_remote()
+        .times(2)
+        .returning(|_| Box::pin(async { Ok(()) }));
+    mock_git_client
+        .expect_branch_tracking_statuses()
+        .times(2)
+        .returning(|_| Box::pin(async { Ok(HashMap::from([("main".to_string(), Some((1, 0)))])) }));
+    mock_git_client.expect_repo_url().once().returning(|_| {
+        Box::pin(async {
+            Err(GitError::CommandFailed {
+                command: "git remote get-url origin".to_string(),
+                stderr: "not a git repository".to_string(),
+            })
+        })
+    });
+    let context = SyncContext {
+        git_client: Arc::new(mock_git_client),
+        ..sync_context_fixture(3, vec![review_request_sync_target("session-1", None)])
+    };
+    let (app_event_tx, mut app_event_rx) = mpsc::unbounded_channel();
+    let (_context_tx, context_rx) = watch::channel(context);
+    let (_command_tx, command_rx) = mpsc::unbounded_channel();
+    let mut orchestrator = SyncOrchestrator {
+        app_event_tx,
+        command_rx,
+        context_rx,
+        review_pass_index: 0,
+        review_sync_failures: HashMap::new(),
+        tick_index: 0,
+    };
+    crate::test_support::enable_tracing_log_fallback();
+
+    // Act
+    orchestrator.run_refresh_pass(false).await;
+    let git_only_events = std::iter::from_fn(|| app_event_rx.try_recv().ok()).count();
+    orchestrator.run_refresh_pass(true).await;
+
+    // Assert
+    assert_eq!(git_only_events, 1);
+    assert!(matches!(
+        app_event_rx
+            .try_recv()
+            .expect("git status should be emitted"),
+        AppEvent::GitStatusUpdated {
+            generation: 3,
+            status: Some((1, 0)),
+            ..
+        }
+    ));
+    assert!(matches!(
+        app_event_rx.try_recv().expect("review update should be emitted"),
+        AppEvent::ReviewRequestStatusUpdated {
+            generation: 3,
+            result: Err(error),
+            session_id,
+        } if session_id.as_str() == "session-1"
+            && error.contains("Failed to resolve repository remote")
+    ));
+    assert!(app_event_rx.try_recv().is_err());
 }
 
 #[test]

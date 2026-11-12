@@ -7,7 +7,8 @@ use ratatui::style::{Modifier, Style};
 use ratatui::text::{Line, Span};
 
 use super::{
-    COMMENT_INPUT_MAX_VISIBLE_LINES, DIFF_COMMENT_CACHE_ENTRY_LIMIT, DiffChangeTotals,
+    COMMENT_INPUT_MAX_VISIBLE_LINES, DIFF_COMMENT_CACHE_ENTRY_LIMIT,
+    DIFF_CONTENT_CACHE_ENTRY_LIMIT, DIFF_LAYOUT_CACHE_ENTRY_LIMIT, DiffChangeTotals,
     DiffContentSnapshot, DiffLayoutCache, DiffPage, DiffPageInput, comment_lookup_area,
     diff_changed_line_layout, diff_line_comment_insertions, diff_view_max_scroll_offset,
     preview_path_for_selection, wrapped_comment_input,
@@ -154,6 +155,113 @@ fn test_diff_layout_cache_reuses_parsed_content_snapshot() {
         &first_content.file_list_lines,
         &second_content.file_list_lines
     ));
+}
+
+#[test]
+fn test_diff_layout_cache_bounds_content_and_layout_entries() {
+    // Arrange
+    let cache = DiffLayoutCache::default();
+    let empty_comments = DiffLineComments::default();
+
+    // Act
+    for diff_index in 0..=DIFF_CONTENT_CACHE_ENTRY_LIMIT {
+        cache.content(&format!(
+            "diff --git a/src/file_{diff_index}.rs b/src/file_{diff_index}.rs\n+line"
+        ));
+    }
+    for width_offset in 0..=DIFF_LAYOUT_CACHE_ENTRY_LIMIT {
+        let width = 60 + 10 * u16::try_from(width_offset).expect("width offset should fit");
+        diff_changed_line_layout(
+            SAMPLE_DIFF,
+            &empty_comments,
+            0,
+            Rect::new(0, 0, width, 20),
+            &cache,
+        );
+    }
+
+    // Assert
+    assert_eq!(
+        cache.content_entries.borrow().len(),
+        DIFF_CONTENT_CACHE_ENTRY_LIMIT
+    );
+    assert_eq!(
+        cache.layout_entries.borrow().len(),
+        DIFF_LAYOUT_CACHE_ENTRY_LIMIT
+    );
+}
+
+#[test]
+fn test_diff_changed_line_layout_separates_files_for_out_of_range_selection() {
+    // Arrange
+    let cache = DiffLayoutCache::default();
+    let empty_comments = DiffLineComments::default();
+
+    // Act
+    let layout = diff_changed_line_layout(
+        SAMPLE_DIFF,
+        &empty_comments,
+        99,
+        Rect::new(0, 0, 120, 30),
+        &cache,
+    );
+
+    // Assert
+    // Two headers, two additions, and one blank separator before the second
+    // file header.
+    assert_eq!(layout.line_count, 5);
+}
+
+#[test]
+fn test_diff_view_max_scroll_offset_returns_zero_without_viewport_rows() {
+    // Arrange
+    let cache = DiffLayoutCache::default();
+    let markdown_cache = markdown::MarkdownRenderCache::default();
+    let empty_comments = DiffLineComments::default();
+
+    // Act
+    let max_scroll_offset = diff_view_max_scroll_offset(
+        SAMPLE_DIFF,
+        &empty_comments,
+        1,
+        Rect::new(0, 0, 120, 3),
+        &cache,
+        &markdown_cache,
+        &DiffPreview::default(),
+    );
+
+    // Assert
+    assert_eq!(max_scroll_offset, 0);
+}
+
+#[test]
+fn test_diff_content_snapshot_selects_changed_lines_after_metadata_headers() {
+    // Arrange
+    let cache = DiffLayoutCache::default();
+    let content = cache.content(concat!(
+        "diff --git a/src/main.rs b/src/main.rs\n",
+        "index 1111111..2222222 100644\n",
+        "--- a/src/main.rs\n",
+        "+++ b/src/main.rs\n",
+        "@@ -4,1 +4,2 @@\n",
+        "-old line\n",
+        "+new line\n",
+        "+extra line\n",
+    ));
+
+    // Act
+    let selected_lines = content.selected_changed_lines(1, 1, 1);
+
+    // Assert
+    assert_eq!(
+        selected_lines,
+        vec![DiffLineCommentAnchor {
+            content: "new line".to_string(),
+            line: 4,
+            path: "src/main.rs".to_string(),
+            side: DiffLineSide::New,
+        }]
+    );
 }
 
 #[test]

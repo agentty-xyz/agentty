@@ -6,9 +6,10 @@ use ratatui::style::{Modifier, Style};
 use ratatui::widgets::Borders;
 
 use super::{
-    QuestionPanelLayout, app_frame_areas, centered_content_rect, prompt_panel_areas,
-    question_at_mention_max_visible, question_options_height, question_panel_areas,
-    question_panel_layout, question_panel_reserved_height, session_chat_areas, tab_page_areas,
+    QuestionPanelLayout, app_frame_areas, centered_content_rect, centered_horizontal_layout,
+    prompt_panel_areas, question_at_mention_max_visible, question_options_height,
+    question_panel_areas, question_panel_layout, question_panel_reserved_height,
+    session_chat_areas, tab_page_areas,
 };
 use crate::domain::agent::AgentKind;
 use crate::domain::file_entry::FileEntry;
@@ -760,6 +761,23 @@ fn test_question_option_lines_highlight_selected_row() {
 }
 
 #[test]
+fn test_question_option_lines_mute_every_row_when_dimmed() {
+    // Arrange
+    let options = vec!["Yes".to_string(), "No".to_string()];
+
+    // Act
+    let lines = question_option_lines(&options, Some(1), true);
+
+    // Assert
+    assert_eq!(lines[2].to_string(), "▸ 2. No");
+    assert!(lines.iter().all(|line| {
+        line.spans.iter().all(|span| {
+            span.style.fg == Some(style::palette::text_muted()) && span.style.bg.is_none()
+        })
+    }));
+}
+
+#[test]
 fn test_question_at_mention_max_visible_clamps_to_available_rows() {
     // Arrange
     let bottom_area = Rect::new(1, 10, 78, 20);
@@ -1155,6 +1173,21 @@ fn test_question_panel_layout_drops_spacer_before_last_question_line() {
 }
 
 #[test]
+fn test_centered_horizontal_layout_splits_gutters_around_content_column() {
+    // Arrange
+    let area = Rect::new(0, 0, 100, 10);
+
+    // Act
+    let columns = centered_horizontal_layout(area);
+
+    // Assert
+    assert_eq!(columns.len(), 3);
+    assert_eq!(columns[1], Rect::new(10, 0, 80, 10));
+    assert_eq!(columns[0].width + columns[1].width + columns[2].width, 100);
+    assert!(columns[0].width >= 2 && columns[2].width >= 2);
+}
+
+#[test]
 fn test_question_panel_reserved_height_includes_options_and_input_rows() {
     // Arrange
     let question = "Continue?";
@@ -1543,6 +1576,23 @@ fn test_move_input_cursor_down_on_wrapped_layout() {
 }
 
 #[test]
+fn test_move_input_cursor_vertical_keeps_cursor_on_outer_lines() {
+    // Arrange
+    let input = "12345678";
+    let width = 12;
+    let first_line_cursor = 1;
+    let last_line_cursor = input.chars().count();
+
+    // Act
+    let up_from_first_line = move_input_cursor_up(input, width, first_line_cursor);
+    let down_from_last_line = move_input_cursor_down(input, width, last_line_cursor);
+
+    // Assert
+    assert_eq!(up_from_first_line, first_line_cursor);
+    assert_eq!(down_from_last_line, last_line_cursor);
+}
+
+#[test]
 fn test_compute_input_layout_explicit_newline() {
     // Arrange
     let input = "ab\ncd";
@@ -1604,9 +1654,11 @@ fn test_first_table_column_width_uses_remaining_layout_space() {
 
     // Act
     let width = first_table_column_width(50, &constraints, 1, 3);
+    let empty_width = first_table_column_width(50, &[], 1, 3);
 
     // Assert
     assert_eq!(width, 21);
+    assert_eq!(empty_width, 0);
 }
 
 #[test]
@@ -1757,5 +1809,29 @@ fn test_compute_input_layout_does_not_highlight_invalid_image_like_tokens() {
 
     for span in spans.iter().take(token_end).skip(token_start) {
         assert_eq!(span.style.fg, None);
+    }
+}
+
+#[test]
+fn test_compute_input_layout_ignores_truncated_misspelled_and_unterminated_image_tokens() {
+    // Arrange
+    let inputs = [
+        "Review [Ima",
+        "Review [Imagine #1] now",
+        "Review [Image #12",
+    ];
+
+    for input in inputs {
+        // Act
+        let (lines, _, _) = compute_input_layout(input, 60, 0);
+
+        // Assert
+        assert!(
+            lines
+                .iter()
+                .flat_map(|line| line.spans.iter())
+                .all(|span| span.style.fg != Some(style::palette::warning())),
+            "no placeholder highlight for {input:?}"
+        );
     }
 }

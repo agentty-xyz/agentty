@@ -31,8 +31,8 @@ use crate::domain::session::{SessionDiffStats, SessionSize};
 use crate::domain::session_message::SessionTranscript;
 use crate::infra::db::{AppRepositories, TaskAgentTurnMetadata};
 use crate::test_support::{
-    SessionFixtureBuilder, new_git_test_app_with_pool, new_test_app, session_manager_with_handles,
-    set_session_status_for_test,
+    SessionFixtureBuilder, new_git_test_app_with_pool, new_test_app, poison_lock,
+    session_manager_with_handles, set_session_status_for_test,
 };
 
 #[tokio::test]
@@ -902,14 +902,6 @@ async fn task_host_notices_stay_in_ephemeral_projection() {
             .len(),
         0
     );
-}
-
-fn poison_lock<Value: Send + 'static>(lock: Arc<Mutex<Value>>) {
-    let _ = std::thread::spawn(move || {
-        let _guard = lock.lock().expect("test lock");
-        std::panic::resume_unwind(Box::new("poison test lock"));
-    })
-    .join();
 }
 
 #[tokio::test]

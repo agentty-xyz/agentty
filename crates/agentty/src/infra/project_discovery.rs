@@ -95,10 +95,12 @@ pub(crate) fn discover_project_paths(
         if cancelled.load(Ordering::Relaxed) {
             break;
         }
-        let Some(file_type) = directory_entry.file_type() else {
-            continue;
-        };
-        if !file_type.is_dir() {
+        // Only standard-input entries lack a file type, and walks never yield
+        // them, so `None` is treated like any other non-directory entry.
+        if !directory_entry
+            .file_type()
+            .is_some_and(|file_type| file_type.is_dir())
+        {
             continue;
         }
 

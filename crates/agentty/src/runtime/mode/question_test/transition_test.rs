@@ -1,9 +1,78 @@
 use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
 
-use super::support::{TEST_TERMINAL_SIZE, handle, question_mode_with_options};
+use super::support::{
+    TEST_TERMINAL_SIZE, free_text_question_mode, handle, question_mode_with_options,
+};
+use crate::domain::file_entry::FileEntry;
 use crate::domain::input::InputState;
 use crate::domain::question::{QuestionItem, default_option_index};
 use crate::presentation::app_mode::{AppMode, ChatFocus};
+use crate::presentation::prompt::PromptAtMentionState;
+use crate::runtime::EventResult;
+
+#[tokio::test]
+async fn question_keys_leave_other_modes_unchanged() {
+    // Arrange
+    let mut app = crate::test_support::new_test_app_without_retained_base_dir().await;
+    app.mode = AppMode::List;
+
+    for key in [
+        KeyEvent::new(KeyCode::Char('q'), KeyModifiers::NONE),
+        KeyEvent::new(KeyCode::Char('x'), KeyModifiers::NONE),
+        KeyEvent::new(KeyCode::Char('c'), KeyModifiers::CONTROL),
+    ] {
+        // Act
+        let result = handle(&mut app, TEST_TERMINAL_SIZE, key).await;
+
+        // Assert
+        assert!(matches!(result, EventResult::Continue));
+        assert!(matches!(app.mode, AppMode::List));
+    }
+}
+
+#[tokio::test]
+async fn typing_inside_an_open_question_mention_resets_its_selection() {
+    // Arrange
+    let mut app = crate::test_support::new_test_app_without_retained_base_dir().await;
+    let mut mode = free_text_question_mode("@sr", 3);
+    let AppMode::Question {
+        at_mention_state, ..
+    } = &mut mode
+    else {
+        unreachable!("free-text fixture is a question mode");
+    };
+    let mut state = PromptAtMentionState::new(vec![
+        FileEntry {
+            is_dir: false,
+            path: "src/alpha.rs".to_string(),
+        },
+        FileEntry {
+            is_dir: false,
+            path: "src/beta.rs".to_string(),
+        },
+    ]);
+    state.selected_index = 1;
+    *at_mention_state = Some(state);
+    app.mode = mode;
+
+    // Act
+    handle(
+        &mut app,
+        TEST_TERMINAL_SIZE,
+        KeyEvent::new(KeyCode::Char('c'), KeyModifiers::NONE),
+    )
+    .await;
+
+    // Assert
+    assert!(matches!(
+        app.mode,
+        AppMode::Question {
+            at_mention_state: Some(ref state),
+            ref input,
+            ..
+        } if state.selected_index == 0 && input.text() == "@src"
+    ));
+}
 
 #[tokio::test]
 async fn test_handle_q_returns_to_sessions_list_in_chat_focus() {

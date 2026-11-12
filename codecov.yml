@@ -6,3 +6,8 @@ coverage:
         only_pulls: false
         target: 100%
         threshold: 0%
+    project:
+      default:
+        informational: false
+        target: 100%
+        threshold: 0%

@@ -1,4 +1,5 @@
 use std::path::{Path, PathBuf};
+use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex};
 
 use ag_contracts::{OneShotError, PermissionMode};
@@ -67,6 +68,107 @@ async fn test_handle_auto_commit_appends_commit_error_from_mock_git_client() {
         .unwrap_or_default();
     assert!(output_text.contains("[Commit Error] commit failed"));
     assert!(matches!(outcome, AutoCommitOutcome::Failed));
+}
+
+#[tokio::test]
+/// Verifies auto-commit stops with the latest commit error once every
+/// assistance attempt is spent on distinct failures.
+async fn test_handle_auto_commit_returns_last_error_after_assist_attempts_are_exhausted() {
+    // Arrange
+    let attempt_counter = Arc::new(AtomicUsize::new(0));
+    let mut mock_git_client = MockGitClient::new();
+    mock_git_client
+        .expect_is_worktree_clean()
+        .times(11)
+        .returning({
+            let attempt_counter = Arc::clone(&attempt_counter);
+            move |_| {
+                let attempt = attempt_counter.fetch_add(1, Ordering::SeqCst) + 1;
+
+                Box::pin(
+                    async move { Err(GitError::OutputParse(format!("commit failed {attempt}"))) },
+                )
+            }
+        });
+    let mut run_client = MockRunClient::new();
+    run_client
+        .expect_submit()
+        .times(10)
+        .returning(|_| Ok(one_shot_submission("Tried another fix", 0, 0)));
+    let database = AppRepositories::in_memory().await.expect("db should open");
+    insert_review_session(&database, model_fixture::CODEX_MODEL.as_str()).await;
+    let (app_event_tx, _app_event_rx) = mpsc::unbounded_channel();
+    let transcript = Arc::new(Mutex::new(SessionTranscript::default()));
+    let context = AssistContext {
+        app_event_tx,
+        available_agent_kinds: Arc::from(AgentKind::ALL),
+        harness_models: HarnessModels::default(),
+        child_pid: Arc::new(Mutex::new(None)),
+        db: database.clone(),
+        folder: PathBuf::from("/tmp/project"),
+        git_client: Arc::new(mock_git_client),
+        id: "session-id".to_string(),
+        run_client: Arc::new(run_client),
+        session_agent: model_fixture::codex_selection(),
+        session_update_versions: Arc::default(),
+        transcript: Arc::clone(&transcript),
+    };
+
+    // Act
+    let outcome = SessionTaskService::handle_auto_commit(context).await;
+
+    // Assert
+    let output_text = transcript
+        .lock()
+        .ok()
+        .and_then(|buffer| buffer.replay_text())
+        .unwrap_or_default();
+    assert!(matches!(outcome, AutoCommitOutcome::Failed));
+    assert_eq!(attempt_counter.load(Ordering::SeqCst), 11);
+    assert!(output_text.contains("[Commit Error] commit failed 11"));
+}
+
+#[tokio::test]
+/// Verifies auto-commit reports a missing persisted base branch without
+/// touching Git.
+async fn test_handle_auto_commit_reports_missing_session_base_branch() {
+    // Arrange
+    let mut mock_git_client = MockGitClient::new();
+    mock_git_client.expect_is_worktree_clean().never();
+    let mut run_client = MockRunClient::new();
+    run_client
+        .expect_submit()
+        .times(0..)
+        .returning(|_| Ok(one_shot_submission("Nothing to repair", 0, 0)));
+    let database = AppRepositories::in_memory().await.expect("db should open");
+    let (app_event_tx, _app_event_rx) = mpsc::unbounded_channel();
+    let transcript = Arc::new(Mutex::new(SessionTranscript::default()));
+    let context = AssistContext {
+        app_event_tx,
+        available_agent_kinds: Arc::from(AgentKind::ALL),
+        harness_models: HarnessModels::default(),
+        child_pid: Arc::new(Mutex::new(None)),
+        db: database,
+        folder: PathBuf::from("/tmp/project"),
+        git_client: Arc::new(mock_git_client),
+        id: "missing-session".to_string(),
+        run_client: Arc::new(run_client),
+        session_agent: model_fixture::codex_selection(),
+        session_update_versions: Arc::default(),
+        transcript: Arc::clone(&transcript),
+    };
+
+    // Act
+    let outcome = SessionTaskService::handle_auto_commit(context).await;
+
+    // Assert
+    let output_text = transcript
+        .lock()
+        .ok()
+        .and_then(|buffer| buffer.replay_text())
+        .unwrap_or_default();
+    assert!(matches!(outcome, AutoCommitOutcome::Failed));
+    assert!(output_text.contains("Missing session base branch for auto-commit"));
 }
 
 #[tokio::test]
@@ -154,9 +256,19 @@ async fn test_handle_auto_commit_stops_on_index_lock() {
 
 #[tokio::test]
 /// Verifies a missing configured hook emits an advisory after a successful
-/// normal commit instead of turning the commit into a failure.
+/// normal commit instead of turning the commit into a failure, while other
+/// hook-inspection failures stay out of the transcript.
 async fn test_handle_auto_commit_warns_when_pre_commit_hook_is_missing() {
+    for is_hook_missing in [true, false] {
+        assert_auto_commit_pre_commit_hook_outcome(is_hook_missing).await;
+    }
+}
+
+/// Commits once with a mocked hook-readiness result and asserts whether the
+/// missing-hook advisory reached the transcript.
+async fn assert_auto_commit_pre_commit_hook_outcome(is_hook_missing: bool) {
     // Arrange
+    crate::test_support::enable_tracing_log_fallback();
     let mut mock_git_client = MockGitClient::new();
     mock_git_client
         .expect_is_worktree_clean()
@@ -185,11 +297,15 @@ async fn test_handle_auto_commit_warns_when_pre_commit_hook_is_missing() {
     mock_git_client
         .expect_check_pre_commit_hook_ready()
         .times(1)
-        .returning(|_| {
-            Box::pin(async {
-                Err(GitError::PreCommitHookMissing {
-                    config_file: ".pre-commit-config.yaml".to_string(),
-                })
+        .returning(move |_| {
+            Box::pin(async move {
+                if is_hook_missing {
+                    return Err(GitError::PreCommitHookMissing {
+                        config_file: ".pre-commit-config.yaml".to_string(),
+                    });
+                }
+
+                Err(GitError::OutputParse("hook inspection failed".to_string()))
             })
         });
     let database = AppRepositories::in_memory().await.expect("db should open");
@@ -226,11 +342,16 @@ async fn test_handle_auto_commit_warns_when_pre_commit_hook_is_missing() {
         .ok()
         .and_then(|buffer| buffer.replay_text())
         .unwrap_or_default();
+    assert!(!output_text.contains("[Commit Error]"));
+    if !is_hook_missing {
+        assert!(!output_text.contains("[Commit Warning]"));
+
+        return;
+    }
     assert!(output_text.contains("[Commit Warning]"));
     assert!(output_text.contains("prek install"));
     assert!(output_text.contains("pre-commit install"));
     assert!(output_text.contains("will become an error in a future release"));
-    assert!(!output_text.contains("[Commit Error]"));
 }
 
 #[tokio::test]
@@ -451,39 +572,49 @@ async fn test_generate_session_commit_message_with_client_rejects_submission_err
 /// Verifies blank commit-message protocol output falls back to the
 /// continuity title and keeps auto-commit progressing.
 async fn test_generate_session_commit_message_with_client_falls_back_for_blank_answer() {
-    // Arrange
-    let temp_directory = tempfile::tempdir().expect("failed to create temp dir");
-    let mut run_client = MockRunClient::new();
-    run_client.expect_submit().returning(|request| {
-        assert_eq!(request.reasoning_level, ReasoningLevel::XHigh);
-        assert_eq!(request.speed_mode, crate::domain::agent::SpeedMode::Fast);
-
-        Ok(one_shot_submission("", 0, 0))
-    });
-
-    // Act
-    let generated_message = SessionTaskService::generate_session_commit_message_with_client(
-        temp_directory.path(),
-        (
-            AgentSelection::new(AgentKind::Claude, AgentModel::ClaudeSonnet55),
-            ReasoningLevel::XHigh,
-            crate::domain::agent::SpeedMode::Fast,
-        ),
-        "diff --git a/a.rs b/a.rs",
+    let cases = [
         (
             Some("Keep session commit accurate\n\n- Preserve existing behavior"),
-            "{}",
-            &ag_contracts::ProviderCallBudget::new(COMMIT_MESSAGE_MAX_PROVIDER_CALLS),
+            "Keep session commit accurate",
         ),
-        &run_client,
-        false,
-        false,
-    )
-    .await
-    .expect("blank answer should fall back to continuity title");
+        (None, "Apply session updates"),
+    ];
 
-    // Assert
-    assert_eq!(generated_message, "Keep session commit accurate");
+    for (current_commit_message, expected_message) in cases {
+        // Arrange
+        let temp_directory = tempfile::tempdir().expect("failed to create temp dir");
+        let mut run_client = MockRunClient::new();
+        run_client.expect_submit().returning(|request| {
+            assert_eq!(request.reasoning_level, ReasoningLevel::XHigh);
+            assert_eq!(request.speed_mode, crate::domain::agent::SpeedMode::Fast);
+
+            Ok(one_shot_submission("", 0, 0))
+        });
+
+        // Act
+        let generated_message = SessionTaskService::generate_session_commit_message_with_client(
+            temp_directory.path(),
+            (
+                AgentSelection::new(AgentKind::Claude, AgentModel::ClaudeSonnet55),
+                ReasoningLevel::XHigh,
+                crate::domain::agent::SpeedMode::Fast,
+            ),
+            "diff --git a/a.rs b/a.rs",
+            (
+                current_commit_message,
+                "{}",
+                &ag_contracts::ProviderCallBudget::new(COMMIT_MESSAGE_MAX_PROVIDER_CALLS),
+            ),
+            &run_client,
+            false,
+            false,
+        )
+        .await
+        .expect("blank answer should fall back to a commit title");
+
+        // Assert
+        assert_eq!(generated_message, expected_message);
+    }
 }
 
 #[test]
@@ -515,16 +646,16 @@ fn test_compact_commit_error_for_assist_truncates_overflow_messages() {
 }
 
 #[test]
-/// Verifies non-window-overflow messages are left unchanged.
+/// Verifies non-window-overflow messages and short overflow messages are
+/// left unchanged.
 fn test_compact_commit_error_for_assist_keeps_non_overflow_messages() {
-    // Arrange
-    let commit_error = "network timeout while pushing";
+    for commit_error in ["network timeout while pushing", "contextWindowExceeded"] {
+        // Arrange and Act
+        let compacted = compact_commit_error_for_assist(commit_error);
 
-    // Act
-    let compacted = compact_commit_error_for_assist(commit_error);
-
-    // Assert
-    assert_eq!(compacted, commit_error);
+        // Assert
+        assert_eq!(compacted, commit_error);
+    }
 }
 
 /// Covers provider rejection and failed large-diff reduction, using only

@@ -184,6 +184,8 @@ async fn unresolved_proposal_cannot_bypass_launch_approval() {
         .expect("capture");
     let mut graph = crate::app::execution_graph::tests::graph();
     graph.id = "proposal:preview:1".into();
+    app.experimental_multi_agent = true;
+    let service = app.session_service();
 
     // Act
     let result = app
@@ -192,6 +194,9 @@ async fn unresolved_proposal_cannot_bypass_launch_approval() {
             provider_call_limits: BTreeMap::new(),
         })
         .await;
+    let approval = app
+        .drive_session_request(service.approve_graph_proposal("preview", 1))
+        .await;
 
     // Assert
     assert!(
@@ -199,6 +204,12 @@ async fn unresolved_proposal_cannot_bypass_launch_approval() {
             .expect_err("unresolved")
             .to_string()
             .contains("no resolved snapshot")
+    );
+    assert!(
+        approval
+            .expect_err("unresolved approval")
+            .to_string()
+            .contains("Inspect a resolved preview before approval")
     );
 }
 

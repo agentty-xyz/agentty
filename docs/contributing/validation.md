@@ -194,12 +194,36 @@ prek run coverage --all-files --hook-stage manual
 
 Pull-request CI runs this gate; run it locally to diagnose a failure. The hook runs the
 `test-workspace` selection, so CI does not run that suite separately. It generates a
-fresh `coverage.lcov` and enforces workspace ratchets and complete coverage of changed
-coverable Rust lines, including untracked files. The comparison defaults to local
-`main`; set `AGENTTY_COVERAGE_BASE` for another existing base ref. CI selects the pull
-request or merge group's remote base branch, falling back to the repository's default
-branch. A missing base or failed generation fails the gate; an old report cannot satisfy
-it.
+fresh `coverage.lcov`, then `ag-xtask check-coverage` fails unless every coverable
+production line and function is covered. Failed or empty generation fails the gate; an
+old report cannot satisfy it. CI retains `coverage.lcov` as an artifact, including after
+a failed gate, so platform-specific gaps can be checked locally.
+
+The gap report lists each file's uncovered line ranges and uncovered functions by start
+line and demangled name. The gate reads per-line `DA` records, the same line data
+SonarCloud and Codecov import, plus function records and per-file totals; a file record
+without `DA` lines or any `FNF`, `FNH`, `LF`, or `LH` total fails.
+
+To work on one package's gaps, run its tests with coverage and check only its sources:
+
+```sh
+AGENTTY_TEST_PACKAGES='ag-git' AGENTTY_COVERAGE_PATHS='crates/ag-git' \
+  prek run coverage-focused --all-files --hook-stage manual
+```
+
+`coverage-focused` requires `AGENTTY_TEST_PACKAGES`. Optional `AGENTTY_TEST_FILTER`
+narrows execution with a nextest filterset, and optional whitespace-separated
+`AGENTTY_COVERAGE_PATHS` limits the check to repository-relative files or directories;
+otherwise every reported file is checked. The hook writes a fresh
+`target/coverage-focused.lcov` with the fail-fast `local` profile. Code reached only
+through other packages' tests appears uncovered there; the `coverage` gate remains
+authoritative.
+
+A focused run rebuilds only the selected packages. Instrumented test binaries left in
+the coverage build directory by unselected dependents still contain a changed crate's
+old code, and the report can then list gaps at line numbers that no longer match the
+source. Add those dependents to `AGENTTY_TEST_PACKAGES` and keep execution narrow with
+`AGENTTY_TEST_FILTER='package(=<package>)'` to rebuild them.
 
 ## Instruction and Hook Maintenance
 
@@ -214,10 +238,13 @@ includes its CLI suites to cover dispatch and process exit paths as well as the 
 
 `crates/ag-xtask/tests/test_focused.rs` executes the cataloged focused-test command with
 a stub runner to verify build selection, literal filters, required inputs, and failure
-propagation. Coverage-hook rejection of stale reports, comparison failures, and literal
-base refs still lacks regression coverage. Configuration and instruction checks are not
-replacements. Review changes to coverage commands, compiler wrappers, and native sandbox
-setup for argument quoting, failure propagation, report freshness, and setup ordering.
+propagation. `crates/ag-xtask/tests/coverage_hook.rs` does the same for `coverage` and
+`coverage-focused`: required inputs, package, filter, and path arguments, stale-report
+removal, coverage build settings kept away from `check-coverage`, and failure
+propagation from generation and the check. `coverage-ag-harness-sandbox` still lacks
+such regression coverage. Configuration and instruction checks are not replacements.
+Review changes to coverage commands, compiler wrappers, and native sandbox setup for
+argument quoting, failure propagation, report freshness, and setup ordering.
 
 ## TUI Snapshots
 

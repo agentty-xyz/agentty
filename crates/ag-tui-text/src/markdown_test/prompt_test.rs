@@ -2,7 +2,7 @@ use ratatui::style::Style;
 use ratatui::text::Span;
 
 use crate::markdown::{
-    clarification_answer_label_style, clarification_header_style,
+    clarification_answer_label_style, clarification_content_style, clarification_header_style,
     clarification_prompt_prefix_style, clarification_question_index_style,
     clarification_question_label_style, render_markdown, user_prompt_content_style,
     user_prompt_lookup_style, user_prompt_prefix_style, wrap_verbatim_spans,
@@ -82,6 +82,49 @@ fn test_render_markdown_styles_clarification_block_differently_from_user_prompt(
     assert!(lines[3].spans.iter().any(|span| {
         span.content.as_ref() == "A: " && span.style == clarification_answer_label_style()
     }));
+}
+
+#[test]
+fn test_render_markdown_pads_clarification_blank_plain_and_closing_lines() {
+    // Arrange
+    let input = " › Clarifications:\n   \n   note\n\nafter";
+
+    // Act
+    let lines = render_markdown(input, 30);
+
+    // Assert
+    assert_eq!(lines.len(), 7);
+    for line in &lines[0..5] {
+        assert_eq!(line.width(), 30);
+    }
+    assert_eq!(lines[2].to_string().trim_end(), "");
+    assert_eq!(lines[3].to_string().trim_end(), "   note");
+    assert!(lines[3].spans.iter().any(|span| {
+        span.content.as_ref() == "note" && span.style == clarification_content_style()
+    }));
+    assert_eq!(lines[4].to_string().trim_end(), "");
+    assert!(
+        lines[4]
+            .spans
+            .iter()
+            .all(|span| span.style == clarification_content_style())
+    );
+    assert_eq!(lines[5].to_string(), "");
+    assert_eq!(lines[6].to_string(), "after");
+}
+
+#[test]
+fn test_render_markdown_keeps_prompt_unpadded_at_zero_width() {
+    // Arrange
+    let input = " › hi";
+
+    // Act
+    let lines = render_markdown(input, 0);
+    let rendered_lines = lines.iter().map(ToString::to_string).collect::<Vec<_>>();
+
+    // Assert
+    assert_eq!(rendered_lines, vec!["", " › hi", ""]);
+    assert_eq!(lines[1].spans[0].style, user_prompt_prefix_style());
 }
 
 #[test]

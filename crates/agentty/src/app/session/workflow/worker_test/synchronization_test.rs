@@ -37,6 +37,7 @@ use crate::domain::agent::{AgentKind, AgentModel, AgentSelection};
 use crate::domain::session::{PublishedBranchSyncStatus, Status};
 use crate::infra::db::AppRepositories;
 use crate::infra::fs;
+use crate::test_support::{enable_tracing_log_fallback, poison_lock};
 
 #[tokio::test]
 /// Verifies completed turns keep a linked open PR/MR title and
@@ -759,6 +760,105 @@ async fn canceled_rebase_does_not_start_another_assisted_turn() {
             .expect("cancel token")
             .is_cancelled()
     );
+}
+
+#[tokio::test]
+async fn rebase_assist_rejects_a_poisoned_operation_token() {
+    // Arrange
+    let mut channel = MockAgentChannel::new();
+    channel.expect_run_turn().never();
+    let (context, _db, _messages, _directory) =
+        queue_test_context(channel, VecDeque::new(), Status::Rebasing).await;
+    let assist = SessionWorkerRebaseAssistClient::from_context(&context, None);
+    poison_lock(Arc::clone(&context.cancel_token));
+
+    // Act
+    let result = assist.run_assist_turn("resolve conflict".to_string()).await;
+
+    // Assert
+    assert!(
+        result
+            .expect_err("poisoned token")
+            .to_string()
+            .contains("cancel token lock poisoned")
+    );
+}
+
+#[tokio::test]
+/// Verifies a CLI-backed assist turn keeps its conversation and instruction
+/// state when usage accounting fails and the answer is blank.
+async fn rebase_assist_persists_cli_conversation_despite_usage_failures() {
+    // Arrange
+    let mut channel = MockAgentChannel::new();
+    channel.expect_run_turn().once().returning(|_, _, _| {
+        Box::pin(async {
+            Ok(TurnResult {
+                input_tokens: 3,
+                output_tokens: 5,
+                provider_conversation_id: Some("assist-conversation".to_string()),
+                ..successful_turn_result("  ")
+            })
+        })
+    });
+    let (mut context, _queue_db, _messages, _directory) =
+        queue_test_context(channel, VecDeque::new(), Status::Rebasing).await;
+    let (db, pool) = AppRepositories::in_memory_with_pool()
+        .await
+        .expect("db should open");
+    let project_id = db
+        .projects()
+        .upsert_project("/tmp/project", Some("main".to_string()))
+        .await
+        .expect("project");
+    db.sessions()
+        .insert_session(
+            "sess1",
+            AgentModel::ClaudeSonnet55.as_str(),
+            "main",
+            "Rebasing",
+            project_id,
+        )
+        .await
+        .expect("session");
+    db.sessions()
+        .update_session_instruction_conversation_id("sess1", Some("instructions".to_string()))
+        .await
+        .expect("instructions");
+    for failure_sql in [
+        "CREATE TRIGGER reject_assist_stats BEFORE UPDATE OF input_tokens ON session BEGIN SELECT \
+         RAISE(FAIL, 'stats rejected'); END",
+        "DROP TABLE session_usage",
+    ] {
+        sqlx::query(failure_sql)
+            .execute(&pool)
+            .await
+            .expect("failure injection");
+    }
+    context.db = db.clone();
+    context.session_agent = AgentSelection::new(AgentKind::Claude, AgentModel::ClaudeSonnet55);
+    let assist = SessionWorkerRebaseAssistClient::from_context(&context, None);
+    enable_tracing_log_fallback();
+
+    // Act
+    let result = assist.run_assist_turn("resolve conflict".to_string()).await;
+
+    // Assert
+    assert!(result.is_ok(), "{result:?}");
+    assert_eq!(
+        db.sessions()
+            .get_session_provider_conversation_id("sess1")
+            .await
+            .expect("conversation"),
+        Some("assist-conversation".to_string())
+    );
+    assert_eq!(
+        db.sessions()
+            .get_session_instruction_conversation_id("sess1")
+            .await
+            .expect("instructions"),
+        Some("instructions".to_string())
+    );
+    assert_eq!(transcript_text(&context.transcript), "");
 }
 
 #[tokio::test]

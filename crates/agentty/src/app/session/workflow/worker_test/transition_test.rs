@@ -1346,6 +1346,59 @@ async fn test_restart_recovery_preserves_git_inspection_failure() {
 }
 
 #[tokio::test]
+/// Verifies recovery finishes an interrupted rebase operation without
+/// aborting when its worktree has no rebase in progress.
+async fn test_restart_recovery_skips_abort_without_rebase_in_progress() {
+    // Arrange
+    let base_dir = tempdir().expect("failed to create temp dir");
+    let db = AppRepositories::in_memory().await.expect("db should open");
+    seed_recovery_test_operation(&db, Status::Rebasing, REBASE_OPERATION_KIND).await;
+    let mut git_client = MockGitClient::new();
+    git_client
+        .expect_is_rebase_in_progress()
+        .once()
+        .returning(|_| Box::pin(async { Ok(false) }));
+    git_client.expect_abort_rebase().times(0);
+
+    // Act
+    let result = SessionWorkerService::fail_unfinished_operations_from_previous_run_at(
+        &db,
+        base_dir.path(),
+        Arc::new(git_client),
+        300,
+    )
+    .await;
+    let unfinished = db
+        .operations()
+        .load_unfinished_session_operations()
+        .await
+        .expect("operations should load");
+
+    // Assert
+    assert!(result.is_ok(), "{result:?}");
+    assert!(unfinished.is_empty());
+}
+
+#[tokio::test]
+/// Verifies a preparation prompt without a queued workspace handoff does not
+/// start or refresh sessions.
+async fn test_preparation_prompt_without_queued_handoff_does_not_start() {
+    // Arrange
+    let (mut context, _db, _queue, _directory) =
+        queue_test_context(MockAgentChannel::new(), VecDeque::new(), Status::Draft).await;
+    let (event_tx, mut event_rx) = mpsc::unbounded_channel();
+    context.app_event_tx = event_tx;
+
+    // Act
+    let started =
+        SessionWorkerService::begin_preparation_prompt(&context, "workspace:sess1", "prompt").await;
+
+    // Assert
+    assert!(!started.expect("query succeeds"));
+    assert!(event_rx.try_recv().is_err());
+}
+
+#[tokio::test]
 /// Verifies recovery stops before interrupting operations when session
 /// status reconciliation fails.
 async fn test_fail_unfinished_operations_from_previous_run_returns_session_reconciliation_error() {

@@ -6,17 +6,22 @@ use ratatui::layout::Rect;
 
 use super::super::{
     append_session_to_selected_stack, content_area_for_terminal,
+    current_project_switcher_selection, current_session_creation_selection,
     handle_cancel_session_confirmation, handle_confirmation_decision,
     handle_launch_configuration_selector_key, handle_merge_confirmation,
-    handle_pre_commit_hook_warning_key, handle_regenerate_review_confirmation,
-    handle_stack_append_parent_key, handle_view_info_popup_key, next_launch_configuration_index,
+    handle_pre_commit_hook_warning_key, handle_publish_branch_input_key,
+    handle_regenerate_review_confirmation, handle_stack_append_parent_key,
+    handle_view_info_popup_key, next_launch_configuration_index,
     previous_launch_configuration_index, stack_append_parent_session_ids,
+    update_project_switcher_selection, update_session_creation_selection,
     update_stack_append_parent_selection,
 };
 use super::support::appendable_stack_test_app;
 use crate::domain::session::SessionId;
 use crate::infra::tmux::MockTmuxClient;
-use crate::presentation::app_mode::{AppMode, ConfirmationIntent, ConfirmationViewMode};
+use crate::presentation::app_mode::{
+    AppMode, ConfirmationIntent, ConfirmationViewMode, HelpContext,
+};
 use crate::runtime::EventResult;
 use crate::runtime::mode::confirmation::ConfirmationDecision;
 
@@ -199,6 +204,7 @@ async fn test_handle_launch_configuration_selector_key_unknown_key_preserves_sta
 #[tokio::test]
 async fn test_cancel_session_confirmation_tolerates_a_missing_session() {
     // Arrange
+    crate::test_support::enable_tracing_log_fallback();
     let mut app = crate::test_support::new_test_app_without_retained_base_dir().await;
 
     // Act
@@ -276,12 +282,19 @@ fn test_next_launch_configuration_index_wraps_to_start() {
 fn test_previous_launch_configuration_index_wraps_to_end() {
     // Arrange
     let commands = vec!["cargo test".to_string(), "npm run dev".to_string()];
+    let no_commands: Vec<String> = Vec::new();
 
-    // Act
-    let index = previous_launch_configuration_index(0, &commands);
+    for (current_index, commands, expected_index) in [
+        (0, commands.as_slice(), 1),
+        (1, commands.as_slice(), 0),
+        (3, no_commands.as_slice(), 0),
+    ] {
+        // Act
+        let index = previous_launch_configuration_index(current_index, commands);
 
-    // Assert
-    assert_eq!(index, 1);
+        // Assert
+        assert_eq!(index, expected_index);
+    }
 }
 
 #[tokio::test]
@@ -430,6 +443,45 @@ async fn test_stack_parent_helpers_ignore_inactive_or_empty_selection() {
     // Assert
     assert!(matches!(result, Ok(EventResult::Continue)));
     assert!(matches!(app.mode, AppMode::List));
+}
+
+#[tokio::test]
+async fn overlay_helpers_leave_other_modes_unchanged() {
+    // Arrange
+    let (mut app, _base_dir) = crate::test_support::new_test_app_with_mock_tmux_client().await;
+    app.mode = AppMode::Help {
+        context: HelpContext::List {
+            keybindings: Vec::new(),
+        },
+        scroll_offset: 7,
+    };
+    let escape = KeyEvent::new(KeyCode::Esc, KeyModifiers::NONE);
+
+    // Act
+    let session_creation_selection = current_session_creation_selection(&app);
+    update_session_creation_selection(&mut app, 2);
+    let project_switcher_selection = current_project_switcher_selection(&app);
+    update_project_switcher_selection(&mut app, 3);
+    let view_info_result = handle_view_info_popup_key(&mut app, escape);
+    let publish_result = handle_publish_branch_input_key(&mut app, escape).await;
+    let launch_result = handle_launch_configuration_selector_key(&mut app, escape).await;
+    let confirm_result =
+        handle_confirmation_decision(&mut app, ConfirmationDecision::Confirm).await;
+
+    // Assert
+    assert_eq!(session_creation_selection, 0);
+    assert_eq!(project_switcher_selection, 0);
+    assert!(matches!(view_info_result, EventResult::Continue));
+    assert!(matches!(publish_result, EventResult::Continue));
+    assert!(matches!(launch_result, Ok(EventResult::Continue)));
+    assert!(matches!(confirm_result, Ok(EventResult::Continue)));
+    assert!(matches!(
+        app.mode,
+        AppMode::Help {
+            scroll_offset: 7,
+            ..
+        }
+    ));
 }
 
 #[tokio::test]

@@ -13,8 +13,8 @@ use crate::rebase::{
     FilesystemRebaseMetadataCleaner, GIT_INDEX_LOCK_RETRY_ATTEMPTS, GIT_INDEX_LOCK_RETRY_DELAY,
     InProgressGitOperation, MockGitCommandRunner, MockRebaseMetadataCleaner, RebaseMetadataCleaner,
     abort_rebase_with_dependencies, in_progress_operation_sync, is_rebase_conflict,
-    is_rebase_in_progress, is_stale_or_inactive_rebase_error, remove_stale_rebase_metadata_path,
-    run_git_command_with_index_lock_retry_with_dependencies,
+    is_rebase_in_progress, is_stale_or_inactive_rebase_error, rebase_conflict_error,
+    remove_stale_rebase_metadata_path, run_git_command_with_index_lock_retry_with_dependencies,
 };
 use crate::repo::command_output_detail;
 use crate::sleeper::MockSleeper;
@@ -275,6 +275,30 @@ fn test_is_rebase_conflict_matches_unmerged_files_message() {
 
     // Assert
     assert!(is_conflict);
+}
+
+#[test]
+fn rebase_conflict_error_appends_only_abort_failures() {
+    // Arrange
+    let abort_failure = GitError::CommandFailed {
+        command: "git rebase --abort".to_string(),
+        stderr: "Failed to abort rebase: fatal: index is locked.".to_string(),
+    };
+
+    // Act
+    let aborted = rebase_conflict_error("main", "CONFLICT (content)", Ok(()));
+    let abort_failed = rebase_conflict_error("main", "CONFLICT (content)", Err(abort_failure));
+
+    // Assert
+    assert_eq!(
+        aborted.to_string(),
+        "git rebase: Failed to rebase onto main: CONFLICT (content)."
+    );
+    assert_eq!(
+        abort_failed.to_string(),
+        "git rebase: Failed to rebase onto main: CONFLICT (content). git rebase --abort: Failed \
+         to abort rebase: fatal: index is locked."
+    );
 }
 
 #[test]
@@ -678,6 +702,47 @@ fn test_in_progress_operation_returns_none_for_clean_git_dir() {
 
     // Assert
     assert_eq!(operation, None);
+}
+
+#[test]
+fn test_in_progress_operation_rejects_missing_git_dir() {
+    // Arrange
+    let temp_dir = tempdir().expect("tempdir should be created");
+
+    // Act
+    let error = in_progress_operation_sync(temp_dir.path())
+        .expect_err("directory without git metadata should fail");
+
+    // Assert
+    assert!(matches!(
+        error,
+        GitError::OutputParse(message) if message == "Failed to resolve git directory"
+    ));
+}
+
+#[test]
+fn in_progress_operation_names_describe_each_operation() {
+    // Arrange
+    let cases = [
+        (
+            InProgressGitOperation::CherryPick,
+            "a cherry-pick",
+            "cherry-pick",
+        ),
+        (InProgressGitOperation::Merge, "a merge", "merge"),
+        (InProgressGitOperation::Rebase, "a rebase", "rebase"),
+        (InProgressGitOperation::Revert, "a revert", "revert"),
+    ];
+
+    for (operation, expected_article_name, expected_name) in cases {
+        // Act
+        let article_name = operation.article_name();
+        let name = operation.name();
+
+        // Assert
+        assert_eq!(article_name, expected_article_name);
+        assert_eq!(name, expected_name);
+    }
 }
 
 /// Returns a successful git command output.

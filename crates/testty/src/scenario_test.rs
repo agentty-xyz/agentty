@@ -1,3 +1,4 @@
+use std::fs;
 use std::path::Path;
 use std::sync::Mutex;
 use std::sync::atomic::{AtomicUsize, Ordering};
@@ -7,6 +8,8 @@ use crate::assertion::{AssertionFailure, Expected, MatchResult};
 use crate::frame::TerminalFrame;
 use crate::journey::Journey;
 use crate::scenario::{Scenario, eventually_loop};
+use crate::session::PtySessionBuilder;
+use crate::step::Step;
 
 #[test]
 fn scenario_builder_chains_steps() {
@@ -20,6 +23,89 @@ fn scenario_builder_chains_steps() {
     // Assert
     assert_eq!(scenario.name, "test");
     assert_eq!(scenario.steps.len(), 4);
+}
+
+#[test]
+fn scenario_builder_appends_duration_and_predicate_steps() {
+    // Arrange / Act
+    let scenario = Scenario::new("timed")
+        .sleep(Duration::from_millis(5))
+        .eventually(
+            Duration::from_secs(1),
+            Duration::from_millis(10),
+            |_| Ok(()),
+        )
+        .viewing_pause(Duration::from_millis(7));
+
+    // Assert
+    assert!(matches!(
+        scenario.steps.as_slice(),
+        [
+            Step::Sleep(sleep),
+            Step::Eventually { timeout, poll, .. },
+            Step::ViewingPause(pause),
+        ] if *sleep == Duration::from_millis(5)
+            && *timeout == Duration::from_secs(1)
+            && *poll == Duration::from_millis(10)
+            && *pause == Duration::from_millis(7)
+    ));
+}
+
+#[test]
+fn run_with_proof_records_only_labeled_captures_and_captures_empty_scenarios() {
+    // Arrange — the trailing wait forms an unlabeled final batch.
+    let spawn_shell =
+        || PtySessionBuilder::new("/bin/sh").args(["-c", "printf 'ready\\n'; sleep 60"]);
+    let labeled = Scenario::new("labeled")
+        .wait_for_text("ready", 3_000)
+        .capture_labeled("ready", "Shell is ready")
+        .wait_for_text("ready", 3_000);
+    let empty = Scenario::new("empty");
+
+    // Act
+    let (labeled_frame, labeled_report) = labeled
+        .run_with_proof(spawn_shell())
+        .expect("labeled scenario should run");
+    let (empty_frame, empty_report) = empty
+        .run_with_proof(spawn_shell())
+        .expect("empty scenario should run");
+
+    // Assert
+    assert!(labeled_frame.all_text().contains("ready"));
+    assert_eq!(labeled_report.captures.len(), 1);
+    assert_eq!(labeled_report.captures[0].label, "ready");
+    assert!(
+        empty_frame.all_text().contains("ready"),
+        "an empty scenario must still capture the current frame"
+    );
+    assert!(empty_report.captures.is_empty());
+}
+
+#[test]
+fn write_vhs_tape_writes_compiled_tape_or_reports_io_failure() {
+    // Arrange
+    let temp_dir = tempfile::tempdir().expect("failed to create temp dir");
+    let scenario = Scenario::new("tape").capture();
+    let binary = Path::new("/usr/bin/echo");
+    let screenshot = temp_dir.path().join("shot.png");
+    let tape_path = temp_dir.path().join("demo.tape");
+
+    // Act
+    let written = scenario.write_vhs_tape(binary, &screenshot, &[], &tape_path);
+    let failed = scenario.write_vhs_tape(
+        binary,
+        &screenshot,
+        &[],
+        &temp_dir.path().join("missing").join("demo.tape"),
+    );
+
+    // Assert
+    assert_eq!(written.expect("tape should be written"), tape_path);
+    assert_eq!(
+        fs::read_to_string(&tape_path).expect("read written tape"),
+        scenario.to_vhs_tape(binary, &screenshot, &[]).render()
+    );
+    assert!(failed.is_err(), "a missing tape directory must fail");
 }
 
 #[test]

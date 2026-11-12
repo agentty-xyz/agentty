@@ -2,6 +2,7 @@ use ag_protocol::ProtocolRequestProfile;
 
 use crate::contract::{
     AgentDefinitionPrompt, AgentDefinitionPromptUpdate, AgentRequestKind, TurnContinuation,
+    normalize_instruction_conversation_id,
 };
 
 #[test]
@@ -28,11 +29,34 @@ fn test_agent_profile_prompt_tracks_active_change_and_clear_state() {
 fn test_turn_continuation_fresh_has_no_context() {
     // Arrange / Act
     let continuation = TurnContinuation::fresh();
+    let parts = continuation.clone().into_parts();
 
     // Assert
     assert_eq!(continuation.replay_transcript(), None);
     assert_eq!(continuation.provider_conversation_id(), None);
     assert_eq!(continuation.persisted_instruction_conversation_id(), None);
+    assert!(parts.live_transcript.is_none());
+    assert_eq!(parts.persisted_instruction_conversation_id, None);
+    assert_eq!(parts.provider_conversation_id, None);
+    assert_eq!(parts.replay_transcript, None);
+}
+
+#[test]
+fn test_normalize_instruction_conversation_id_trims_and_drops_blank_ids() {
+    // Arrange
+    let cases = [
+        (None, None),
+        (Some("  "), None),
+        (Some(" thread-1 "), Some("thread-1".to_string())),
+    ];
+
+    for (provider_conversation_id, expected) in cases {
+        // Act
+        let normalized = normalize_instruction_conversation_id(provider_conversation_id);
+
+        // Assert
+        assert_eq!(normalized, expected);
+    }
 }
 
 #[test]
@@ -61,6 +85,7 @@ fn test_turn_continuation_provider_exposes_persisted_context() {
         Some("thread-1".to_string()),
         Some("prior turn".to_string()),
     );
+    let parts = continuation.clone().into_parts();
 
     // Assert
     assert_eq!(continuation.replay_transcript(), Some("prior turn"));
@@ -69,6 +94,13 @@ fn test_turn_continuation_provider_exposes_persisted_context() {
         continuation.persisted_instruction_conversation_id(),
         Some("instruction-1")
     );
+    assert!(parts.live_transcript.is_none());
+    assert_eq!(
+        parts.persisted_instruction_conversation_id.as_deref(),
+        Some("instruction-1")
+    );
+    assert_eq!(parts.provider_conversation_id.as_deref(), Some("thread-1"));
+    assert_eq!(parts.replay_transcript.as_deref(), Some("prior turn"));
 }
 
 #[test]

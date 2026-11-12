@@ -70,6 +70,7 @@ unicode-width.workspace = true
 [dev-dependencies]
 opentelemetry.workspace = true
 opentelemetry_sdk = { workspace = true, features = ["testing"] }
+ag-clipboard = { workspace = true, features = ["test-utils"] }
 ag-contracts = { workspace = true, features = ["test-utils"] }
 ag-session = { workspace = true, features = ["test-utils"] }
 ag-worker = { workspace = true, features = ["test-utils"] }

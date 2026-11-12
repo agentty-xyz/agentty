@@ -1,10 +1,22 @@
-use std::io::{self, Cursor, Read};
+use std::collections::VecDeque;
+use std::io::{self, Cursor, Read, Write};
 #[cfg(unix)]
 use std::os::unix::fs::PermissionsExt;
+#[cfg(windows)]
+use std::os::windows::io::RawHandle;
+use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicUsize, Ordering};
-use std::sync::{Arc, mpsc};
+use std::sync::{Arc, Mutex, mpsc};
 use std::time::Duration;
 
+#[cfg(unix)]
+use portable_pty::unix::RawFd;
+use portable_pty::{
+    Child, ChildKiller, CommandBuilder, ExitStatus, MasterPty, PtyPair, PtySize, PtySystem,
+    SlavePty,
+};
+
+use crate::assertion::{Expected, match_not_visible};
 use crate::frame::CellColor;
 use crate::session::{PtySession, PtySessionBuilder, PtySessionError};
 use crate::step::Step;
@@ -385,5 +397,434 @@ impl Read for CountingReader {
         self.reads.fetch_add(1, Ordering::Relaxed);
 
         self.bytes.read(buffer)
+    }
+}
+
+#[test]
+fn builder_spawns_with_size_environment_and_working_directory() {
+    // Arrange
+    let workdir = tempfile::tempdir().expect("failed to create working directory");
+    let workdir_name = workdir
+        .path()
+        .file_name()
+        .expect("temporary directory has a name")
+        .to_string_lossy()
+        .into_owned();
+    let mut session = PtySessionBuilder::new("/bin/sh")
+        .args([
+            "-c",
+            "pwd; printf 'env:%s\\n' \"$TESTTY_SESSION_VALUE\"; sleep 60",
+        ])
+        .env("TESTTY_SESSION_VALUE", "forwarded")
+        .workdir(workdir.path())
+        .size(160, 6)
+        .spawn()
+        .expect("failed to spawn configured shell");
+
+    // Act
+    let frame = session
+        .wait_for_text("env:forwarded", Duration::from_secs(5))
+        .expect("child should report the forwarded environment");
+
+    // Assert
+    assert!(
+        frame.all_text().contains(&workdir_name),
+        "child should start in the configured directory, got: '{}'",
+        frame.all_text()
+    );
+    assert_eq!(session.cols(), 160);
+    assert_eq!(session.rows(), 6);
+    assert_eq!(session.binary_path(), Path::new("/bin/sh"));
+}
+
+#[test]
+fn spawn_maps_pty_allocation_and_handle_failures() {
+    // Arrange
+    let cases = [
+        (FakePtyFailure::OpenPty, "openpty refused"),
+        (FakePtyFailure::Reader, "reader refused"),
+        (FakePtyFailure::Writer, "writer refused"),
+    ];
+
+    for (failure, expected_message) in cases {
+        // Act
+        let result = PtySession::spawn_with_pty_system(
+            &FakePtySystem { failure },
+            Path::new("fake-binary"),
+            80,
+            24,
+            &[],
+            &[],
+            None,
+        );
+
+        // Assert
+        assert!(
+            matches!(
+                &result,
+                Err(PtySessionError::PtyCreation(message)) if message == expected_message
+            ),
+            "{expected_message}: unexpected spawn result"
+        );
+    }
+}
+
+#[test]
+fn write_bytes_maps_write_and_flush_failures() {
+    // Arrange
+    let cases = [
+        (FailingOperation::Write, "write refused"),
+        (FailingOperation::Flush, "flush refused"),
+    ];
+
+    for (operation, expected_message) in cases {
+        let mut session = fake_session(
+            FakeChild::running(),
+            Box::new(FailingWriter { operation }),
+            &[],
+        );
+
+        // Act
+        let result = session.write_bytes(b"input");
+
+        // Assert
+        assert!(
+            matches!(
+                &result,
+                Err(PtySessionError::WriteFailed(message)) if message == expected_message
+            ),
+            "{expected_message}: unexpected write result {result:?}"
+        );
+    }
+}
+
+#[test]
+fn execute_steps_runs_key_sleep_pause_and_eventually_steps() {
+    // Arrange
+    let written = Arc::new(Mutex::new(Vec::new()));
+    let mut session = fake_session(
+        FakeChild::running(),
+        Box::new(RecordingWriter {
+            bytes: Arc::clone(&written),
+        }),
+        &[b"ready"],
+    );
+    let steps = [
+        Step::press_key("Enter"),
+        Step::sleep(Duration::ZERO),
+        Step::viewing_pause_ms(60_000),
+        Step::eventually(Duration::from_secs(5), Duration::from_millis(10), |frame| {
+            match_not_visible(frame, "missing")
+        }),
+    ];
+
+    // Act
+    let frame = session
+        .execute_steps(&steps)
+        .expect("step execution should succeed");
+
+    // Assert
+    assert_eq!(
+        *written.lock().expect("writer mutex must not be poisoned"),
+        b"\r".to_vec()
+    );
+    assert!(frame.all_text().contains("ready"));
+}
+
+#[test]
+fn execute_steps_surfaces_eventually_assertion_failure() {
+    // Arrange
+    let mut session = fake_session(FakeChild::running(), Box::new(io::sink()), &[b"ready"]);
+    let steps = [Step::eventually(
+        Duration::ZERO,
+        Duration::from_millis(10),
+        |frame| match_not_visible(frame, "ready"),
+    )];
+
+    // Act
+    let result = session.execute_steps(&steps);
+
+    // Assert
+    let Err(PtySessionError::Assertion(failure)) = result else {
+        unreachable!("an expired predicate must return its assertion failure");
+    };
+    assert!(matches!(
+        failure.expected,
+        Expected::NotVisible { ref needle } if needle == "ready"
+    ));
+}
+
+#[test]
+fn waits_time_out_when_output_never_satisfies_them() {
+    // Arrange
+    let mut text_session = fake_session(FakeChild::running(), Box::new(io::sink()), &[b"other"]);
+    // The disconnected fake output drains instantly, so this wait polls again
+    // after its first miss until the deadline passes.
+    let mut polling_text_session =
+        fake_session(FakeChild::running(), Box::new(io::sink()), &[b"other"]);
+    let mut stable_session = fake_session(FakeChild::running(), Box::new(io::sink()), &[b"busy"]);
+
+    // Act
+    let text_result = text_session.wait_for_text("needle", Duration::ZERO);
+    let polling_text_result =
+        polling_text_session.wait_for_text("needle", Duration::from_millis(100));
+    let stable_result =
+        stable_session.wait_for_stable_frame(Duration::from_mins(1), Duration::ZERO);
+
+    // Assert
+    assert!(
+        matches!(&text_result, Err(PtySessionError::Timeout(message))
+            if message == "Text 'needle' did not appear within 0ms"),
+        "unexpected text wait result"
+    );
+    assert!(
+        matches!(&polling_text_result, Err(PtySessionError::Timeout(message))
+            if message == "Text 'needle' did not appear within 100ms"),
+        "unexpected polling text wait result"
+    );
+    assert!(
+        matches!(&stable_result, Err(PtySessionError::Timeout(message))
+            if message == "Frame did not stabilize within timeout"),
+        "unexpected stability wait result"
+    );
+}
+
+#[test]
+fn wait_for_exit_reports_status_timeout_and_wait_errors() {
+    // Arrange
+    let cases = [
+        (
+            vec![Ok(None), Ok(Some(ExitStatus::with_exit_code(0)))],
+            Duration::from_secs(5),
+            "exit:true",
+        ),
+        (
+            vec![Ok(Some(ExitStatus::with_exit_code(3)))],
+            Duration::from_secs(5),
+            "exit:false",
+        ),
+        (
+            Vec::new(),
+            Duration::ZERO,
+            "Timeout: Process did not exit within timeout",
+        ),
+        (
+            vec![Err(io::Error::other("wait refused"))],
+            Duration::from_secs(5),
+            "Timeout: Error waiting for process exit: wait refused",
+        ),
+    ];
+
+    for (statuses, timeout, expected) in cases {
+        let mut session = fake_session(
+            FakeChild {
+                statuses: statuses.into(),
+            },
+            Box::new(io::sink()),
+            &[],
+        );
+
+        // Act
+        let outcome = match session.wait_for_exit(timeout) {
+            Ok(success) => format!("exit:{success}"),
+            Err(error) => error.to_string(),
+        };
+
+        // Assert
+        assert_eq!(outcome, expected);
+    }
+}
+
+/// Builds a session around fake process and input handles whose output
+/// stream yields `output` and then disconnects.
+fn fake_session(child: FakeChild, writer: Box<dyn Write + Send>, output: &[&[u8]]) -> PtySession {
+    let (sender, receiver) = mpsc::channel();
+    for chunk in output {
+        sender
+            .send(chunk.to_vec())
+            .expect("receiver is alive while the fixture is built");
+    }
+
+    PtySession {
+        binary_path: PathBuf::from("fake-binary"),
+        child: Box::new(child),
+        cols: 20,
+        output_buffer: Vec::new(),
+        output_receiver: receiver,
+        query_scan_offset: 0,
+        rows: 3,
+        writer,
+    }
+}
+
+/// Child process whose `try_wait` results are scripted; it keeps running
+/// once the script is exhausted.
+#[derive(Debug)]
+struct FakeChild {
+    statuses: VecDeque<io::Result<Option<ExitStatus>>>,
+}
+
+impl FakeChild {
+    fn running() -> Self {
+        Self {
+            statuses: VecDeque::new(),
+        }
+    }
+}
+
+impl Child for FakeChild {
+    fn try_wait(&mut self) -> io::Result<Option<ExitStatus>> {
+        self.statuses.pop_front().unwrap_or(Ok(None))
+    }
+
+    fn wait(&mut self) -> io::Result<ExitStatus> {
+        Ok(ExitStatus::with_exit_code(0))
+    }
+
+    fn process_id(&self) -> Option<u32> {
+        None
+    }
+
+    #[cfg(windows)]
+    fn as_raw_handle(&self) -> Option<RawHandle> {
+        None
+    }
+}
+
+impl ChildKiller for FakeChild {
+    fn kill(&mut self) -> io::Result<()> {
+        Ok(())
+    }
+
+    fn clone_killer(&self) -> Box<dyn ChildKiller + Send + Sync> {
+        Box::new(Self::running())
+    }
+}
+
+/// PTY handle whose acquisition fails in [`FakePtySystem`].
+#[derive(Clone, Copy)]
+enum FakePtyFailure {
+    OpenPty,
+    Reader,
+    Writer,
+}
+
+/// PTY system that fails at one configured acquisition step.
+struct FakePtySystem {
+    failure: FakePtyFailure,
+}
+
+impl PtySystem for FakePtySystem {
+    fn openpty(&self, _size: PtySize) -> anyhow::Result<PtyPair> {
+        if matches!(self.failure, FakePtyFailure::OpenPty) {
+            return Err(anyhow::anyhow!("openpty refused"));
+        }
+
+        Ok(PtyPair {
+            slave: Box::new(FakeSlave),
+            master: Box::new(FakeMaster {
+                failure: self.failure,
+            }),
+        })
+    }
+}
+
+/// Slave end that "spawns" a [`FakeChild`] without starting a process.
+struct FakeSlave;
+
+impl SlavePty for FakeSlave {
+    fn spawn_command(
+        &self,
+        _command: CommandBuilder,
+    ) -> anyhow::Result<Box<dyn Child + Send + Sync>> {
+        Ok(Box::new(FakeChild::running()))
+    }
+}
+
+/// Master end whose reader or writer acquisition fails as configured.
+struct FakeMaster {
+    failure: FakePtyFailure,
+}
+
+impl MasterPty for FakeMaster {
+    fn resize(&self, _size: PtySize) -> anyhow::Result<()> {
+        Ok(())
+    }
+
+    fn get_size(&self) -> anyhow::Result<PtySize> {
+        Ok(PtySize::default())
+    }
+
+    fn try_clone_reader(&self) -> anyhow::Result<Box<dyn Read + Send>> {
+        if matches!(self.failure, FakePtyFailure::Reader) {
+            return Err(anyhow::anyhow!("reader refused"));
+        }
+
+        Ok(Box::new(io::empty()))
+    }
+
+    fn take_writer(&self) -> anyhow::Result<Box<dyn Write + Send>> {
+        Err(anyhow::anyhow!("writer refused"))
+    }
+
+    #[cfg(unix)]
+    fn process_group_leader(&self) -> Option<i32> {
+        None
+    }
+
+    #[cfg(unix)]
+    fn as_raw_fd(&self) -> Option<RawFd> {
+        None
+    }
+
+    #[cfg(unix)]
+    fn tty_name(&self) -> Option<PathBuf> {
+        None
+    }
+}
+
+/// Writer operation that [`FailingWriter`] rejects.
+#[derive(Clone, Copy)]
+enum FailingOperation {
+    Flush,
+    Write,
+}
+
+/// Writer that rejects one operation with a descriptive error.
+struct FailingWriter {
+    operation: FailingOperation,
+}
+
+impl Write for FailingWriter {
+    fn write(&mut self, buffer: &[u8]) -> io::Result<usize> {
+        if matches!(self.operation, FailingOperation::Write) {
+            return Err(io::Error::other("write refused"));
+        }
+
+        Ok(buffer.len())
+    }
+
+    fn flush(&mut self) -> io::Result<()> {
+        Err(io::Error::other("flush refused"))
+    }
+}
+
+/// Writer that records every byte written to the PTY input.
+struct RecordingWriter {
+    bytes: Arc<Mutex<Vec<u8>>>,
+}
+
+impl Write for RecordingWriter {
+    fn write(&mut self, buffer: &[u8]) -> io::Result<usize> {
+        self.bytes
+            .lock()
+            .expect("writer mutex must not be poisoned")
+            .extend_from_slice(buffer);
+
+        Ok(buffer.len())
+    }
+
+    fn flush(&mut self) -> io::Result<()> {
+        Ok(())
     }
 }

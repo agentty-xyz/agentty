@@ -6,7 +6,7 @@ use crate::model::{
     ErrorClass, JsonSchemaFormat, ModelError, ModelMessage, ModelRequest, ReasoningEffort,
     ensure_unique_tool_call_ids,
 };
-use crate::schema::OutputSchema;
+use crate::schema::{OutputSchema, OutputValidationError};
 use crate::tool::{ToolCall, ToolDefinition};
 
 fn format() -> JsonSchemaFormat {
@@ -129,6 +129,30 @@ fn reasoning_efforts_have_stable_wire_names() {
 }
 
 #[test]
+fn maps_output_validation_failures_to_model_errors() {
+    // Arrange
+    let failures = [
+        OutputValidationError::InvalidJson("syntax".into()),
+        OutputValidationError::SchemaViolation {
+            path: "/name".into(),
+            reason: "type".into(),
+        },
+        OutputValidationError::TooLarge,
+    ];
+
+    // Act
+    let errors = failures.map(ModelError::from);
+
+    // Assert
+    assert!(matches!(&errors[0], ModelError::InvalidJson { reason } if reason == "syntax"));
+    assert!(matches!(
+        &errors[1],
+        ModelError::SchemaViolation { path, reason } if path == "/name" && reason == "type"
+    ));
+    assert!(matches!(&errors[2], ModelError::ResponseContentTooLarge));
+}
+
+#[test]
 fn preserves_request_sources_with_and_without_response_metadata() {
     // Arrange
     let request = ModelError::request(io::Error::other("offline"));
@@ -146,6 +170,7 @@ fn preserves_request_sources_with_and_without_response_metadata() {
     let plain_source = ModelError::InvalidResponse.into_source();
 
     // Assert
+    assert!(ModelError::InvalidResponse.metadata().is_none());
     assert_eq!(request_source.to_string(), "offline");
     assert_eq!(
         wrapped_source.to_string(),

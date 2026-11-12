@@ -448,9 +448,11 @@ fn rolling_activity_bounds_interruptions_by_transition_order_and_counts_failures
             });
         }
 
-        // Act: B, C, D settle first, then the earlier invocation A.
+        // Act: B, C, D settle first, then the earlier invocation A, which
+        // reports the signal exit code of its interrupted process.
         for index in [1, 2, 3, 0] {
             activity.observe(ActivityEvent {
+                exit_code: (index == 0).then_some(130),
                 id: index.to_string(),
                 input: Some(format!("command-{index}")),
                 status: ActivityStatus::Interrupted,
@@ -489,6 +491,7 @@ fn rolling_activity_bounds_interruptions_by_transition_order_and_counts_failures
         assert!(!live.contains("failed-command-"));
         assert!(live.contains("Status: 0 succeeded · 4 failed · 0 running · 4 interrupted"));
         assert_eq!(live.matches("! shell (interrupted)").count(), 3);
+        assert!(live.contains("! shell (interrupted) (exit 130) · command-0\n"));
         assert!(live.find("command-2") < live.find("command-3"));
         assert!(live.find("command-3") < live.find("command-0"));
         assert!(live.ends_with("+1 earlier interrupted calls\n"));

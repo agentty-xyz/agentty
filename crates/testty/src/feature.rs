@@ -563,21 +563,11 @@ fn normalized_frame_bytes_for_hash(frame_bytes: &[u8], redactions: &[Redaction])
 /// Returns temp root spellings that may appear in captured terminal frames.
 fn temp_root_strings() -> Vec<String> {
     let temp_root = std::env::temp_dir();
-    let mut roots = vec![
-        temp_root
-            .to_string_lossy()
-            .trim_end_matches('/')
-            .to_string(),
-    ];
-
-    if let Ok(canonical_temp_root) = temp_root.canonicalize() {
-        roots.push(
-            canonical_temp_root
-                .to_string_lossy()
-                .trim_end_matches('/')
-                .to_string(),
-        );
-    }
+    let canonical_temp_root = temp_root.canonicalize().ok();
+    let mut roots: Vec<String> = std::iter::once(temp_root)
+        .chain(canonical_temp_root)
+        .map(|root| root.to_string_lossy().trim_end_matches('/').to_string())
+        .collect();
 
     roots.sort();
     roots.dedup();

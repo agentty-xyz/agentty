@@ -1,11 +1,14 @@
+use std::os::unix::process::CommandExt as _;
+use std::process::Stdio;
 use std::time::Duration;
 
 use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
 
+use crate::app_server::AppServerError;
 use crate::app_server_transport::{
     AppServerRuntimeChild, AppServerTransportError, extract_json_error_message,
-    response_id_matches, shutdown_child, spawn_runtime_command, wait_for_response_line,
-    wait_for_response_line_with_timeout, write_json_line,
+    response_id_matches, shutdown_child, spawn_runtime_command, take_runtime_stdio,
+    wait_for_response_line, wait_for_response_line_with_timeout, write_json_line,
 };
 
 /// Spawns a simple echo process that mirrors stdin to stdout for transport
@@ -148,6 +151,96 @@ async fn write_json_line_writes_serialized_payload_with_newline() {
     // Assert
     assert_eq!(echoed_line, payload.to_string());
     shutdown_child(&mut child).await;
+}
+
+/// Verifies `write_json_line()` reports a broken pipe once the runtime has
+/// exited and no reader remains for its stdin.
+#[tokio::test]
+async fn write_json_line_reports_write_failure_after_runtime_exit() {
+    // Arrange
+    let (mut child, mut stdin, _stdout) =
+        spawn_runtime_command(std::process::Command::new("true"), "true")
+            .expect("failed to spawn `true`");
+    child
+        .child
+        .wait()
+        .await
+        .expect("exited runtime should be reaped");
+
+    // Act
+    let result = write_json_line(&mut stdin, &serde_json::json!({"id": "req-1"})).await;
+
+    // Assert
+    assert!(
+        matches!(
+            &result,
+            Err(AppServerTransportError::Io { context, source })
+                if context == "Failed writing to app-server stdin"
+                    && source.kind() == std::io::ErrorKind::BrokenPipe
+        ),
+        "unexpected write result: {result:?}"
+    );
+    shutdown_child(&mut child).await;
+}
+
+/// Verifies unreadable stdout surfaces as a contextual IO error instead of
+/// being skipped like an unparsable JSON line.
+#[tokio::test]
+async fn wait_for_response_line_reports_stdout_read_failure() {
+    // Arrange
+    let mut stdout_lines = BufReader::new(&b"\xff\n"[..]).lines();
+
+    // Act
+    let response_result = wait_for_response_line(&mut stdout_lines, "req-1").await;
+
+    // Assert
+    assert!(
+        matches!(
+            &response_result,
+            Err(AppServerTransportError::Io { context, source })
+                if context == "Failed reading app-server stdout"
+                    && source.kind() == std::io::ErrorKind::InvalidData
+        ),
+        "unexpected read result: {response_result:?}"
+    );
+}
+
+/// Verifies runtime adoption rejects children whose stdin or stdout pipe was
+/// not captured.
+#[tokio::test]
+async fn take_runtime_stdio_rejects_missing_pipes() {
+    for (stdin, stdout, expected_message) in [
+        (
+            Stdio::null(),
+            Stdio::piped(),
+            "fixture stdin is unavailable",
+        ),
+        (
+            Stdio::piped(),
+            Stdio::null(),
+            "fixture stdout is unavailable",
+        ),
+    ] {
+        // Arrange
+        let mut command = std::process::Command::new("cat");
+        command.process_group(0);
+        let child = tokio::process::Command::from(command)
+            .stdin(stdin)
+            .stdout(stdout)
+            .stderr(Stdio::null())
+            .kill_on_drop(true)
+            .spawn()
+            .expect("fixture should spawn");
+
+        // Act
+        let result = take_runtime_stdio(child, "fixture");
+
+        // Assert
+        assert!(
+            matches!(&result, Err(AppServerError::Provider(message)) if message == expected_message),
+            "unexpected adoption result for `{expected_message}`"
+        );
+    }
 }
 
 /// Verifies `wait_for_response_line()` skips unrelated or invalid lines

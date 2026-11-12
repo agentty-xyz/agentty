@@ -108,8 +108,14 @@ async fn complete_ignores_silent_connections_and_stale_callbacks() {
         .await
         .expect("sign-in task")
         .expect("sign-in succeeds");
+    let restarted = start(&auth_file, &server, Duration::from_secs(30)).await;
 
     // Assert
+    assert!(
+        restarted
+            .authorize_url()
+            .contains("client_id=oaiapp_issued")
+    );
     assert_eq!(garbled_response, Vec::<u8>::new());
     assert!(stray.starts_with("HTTP/1.1 404"));
     assert!(earlier_callback.starts_with("HTTP/1.1 400"));
@@ -173,6 +179,43 @@ async fn complete_times_out_when_the_user_never_approves() {
 
     // Assert
     assert!(matches!(result, Err(ChatGptSignInError::TimedOut)));
+}
+
+#[tokio::test]
+async fn start_rejects_unreadable_sign_in_and_falls_back_from_a_busy_port() {
+    // Arrange
+    let directory = tempfile::tempdir().expect("temporary directory");
+    let unreadable_file = directory.path().join("unreadable.json");
+    fs::write(&unreadable_file, "not json").expect("unreadable sign-in written");
+    let missing_file = directory.path().join("missing.json");
+    let busy_listener = tokio::net::TcpListener::bind(("127.0.0.1", 0))
+        .await
+        .expect("busy port bound");
+    let busy_port = busy_listener.local_addr().expect("busy address").port();
+    let sign_in_for = |auth_file: &Path| {
+        let auth_file = auth_file.to_string_lossy().into_owned();
+
+        ChatGptSignIn::from_environment(move |name| match name {
+            "CHATGPT_AUTH_FILE" => Ok(auth_file.clone()),
+            _ => Err(env::VarError::NotPresent),
+        })
+        .expect("auth file located")
+        .with_port(busy_port)
+    };
+    let unreadable = sign_in_for(&unreadable_file);
+    let fallback = sign_in_for(&missing_file);
+
+    // Act
+    let unreadable_auth_file = unreadable.auth_file().to_path_buf();
+    let unreadable_result = unreadable.start().await;
+    let pending = fallback.start().await.expect("sign-in falls back");
+    let (address, _) = callback_target(&pending);
+
+    // Assert
+    assert_eq!(unreadable_auth_file, unreadable_file);
+    assert!(unreadable_result.is_err());
+    assert!(address.starts_with("127.0.0.1:"));
+    assert_ne!(address, format!("127.0.0.1:{busy_port}"));
 }
 
 #[tokio::test]

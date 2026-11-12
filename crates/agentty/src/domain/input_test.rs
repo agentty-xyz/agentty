@@ -293,6 +293,46 @@ fn test_noop_edit_and_empty_undo_leave_input_unchanged() {
 }
 
 #[test]
+fn test_empty_insert_and_forward_delete_at_end_leave_input_unchanged() {
+    // Arrange
+    let mut state = InputState::with_text("hello".to_string());
+    let revision = state.revision();
+
+    // Act
+    state.insert_text("");
+    state.delete_forward();
+
+    // Assert
+    assert_eq!(state.text(), "hello");
+    assert_eq!(state.cursor, 5);
+    assert_eq!(state.revision(), revision);
+}
+
+#[test]
+fn test_vertical_movement_crosses_multiple_lines_and_clamps_at_edges() {
+    // Arrange
+    let mut state = InputState::with_text("first\nsecond\nthird".to_string());
+    state.cursor = "first\nsecond\nth".chars().count();
+
+    // Act
+    state.move_up();
+    let middle_line_cursor = state.cursor;
+    state.move_up();
+    let first_line_cursor = state.cursor;
+    state.move_down();
+    let moved_down_cursor = state.cursor;
+    state.move_down();
+    state.move_down();
+    let last_line_cursor = state.cursor;
+
+    // Assert
+    assert_eq!(middle_line_cursor, "first\nse".chars().count());
+    assert_eq!(first_line_cursor, "fi".chars().count());
+    assert_eq!(moved_down_cursor, "first\nse".chars().count());
+    assert_eq!(last_line_cursor, "first\nsecond\nthird".chars().count());
+}
+
+#[test]
 fn test_undo_and_redo_restore_text_and_cursor() {
     // Arrange
     let mut state = InputState::with_text("helo".to_string());

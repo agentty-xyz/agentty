@@ -6,9 +6,9 @@ use std::time::Duration;
 use serde_json::Value;
 
 use super::{
-    HttpTransport, MAX_PROVIDER_RETRY_DELAY, MAX_RATE_LIMIT_RETRIES, MAX_RETRY_DELAY,
-    ProviderRequest, RETRY_DELAY, SUCCESS_BODY_LIMIT_BYTES, TransportError, append_success_chunk,
-    has_context_overflow_marker, rate_limit_retry_delay,
+    ERROR_BODY_LIMIT_BYTES, HttpTransport, MAX_PROVIDER_RETRY_DELAY, MAX_RATE_LIMIT_RETRIES,
+    MAX_RETRY_DELAY, ProviderRequest, RETRY_DELAY, SUCCESS_BODY_LIMIT_BYTES, TransportError,
+    append_success_chunk, has_context_overflow_marker, rate_limit_retry_delay,
 };
 use crate::model;
 
@@ -74,10 +74,14 @@ fn normalizes_transport_error_classification() {
     // Arrange
     let transport_error = TransportError::transport(io::Error::other("offline"));
     let oversized = TransportError::ResponseBodyTooLarge;
+    let invalid = TransportError::InvalidResponse(
+        serde_json::from_str::<Value>("{").expect_err("truncated JSON should fail"),
+    );
 
     // Act
     let error = transport_error.into_model_error("Provider", &[]);
     let oversized = oversized.into_model_error("Provider", &[]);
+    let invalid = invalid.into_model_error("Provider", &[]);
 
     // Assert
     assert_eq!(error.error_class(), model::ErrorClass::Transport);
@@ -87,6 +91,79 @@ fn normalizes_transport_error_classification() {
         "model request failed: model API transport failed: offline"
     );
     assert_eq!(oversized.error_class(), model::ErrorClass::ResponseTooLarge);
+    assert_eq!(
+        invalid.error_class(),
+        model::ErrorClass::InvalidProviderResponse
+    );
+}
+
+/// Serves one raw HTTP response to the first request on a local listener.
+fn serve_once(response: Vec<u8>) -> (std::net::SocketAddr, tokio::task::JoinHandle<()>) {
+    let listener = TcpListener::bind("127.0.0.1:0").expect("listener should bind");
+    let address = listener
+        .local_addr()
+        .expect("listener should have an address");
+    let server = tokio::task::spawn_blocking(move || {
+        let (mut stream, _) = listener.accept().expect("server should accept a request");
+        let mut request = [0; 2_048];
+        assert!(
+            stream
+                .read(&mut request)
+                .expect("server should read request")
+                > 0
+        );
+        let _ = stream.write_all(&response);
+    });
+
+    (address, server)
+}
+
+#[tokio::test]
+async fn truncates_an_oversized_error_body_summary() {
+    // Arrange
+    let body = "word ".repeat(ERROR_BODY_LIMIT_BYTES);
+    let response = format!(
+        "HTTP/1.1 400 Bad Request\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}",
+        body.len()
+    );
+    let (address, server) = serve_once(response.into_bytes());
+    let client = transport(REQUEST_TIMEOUT);
+
+    // Act
+    let result = client.post_json::<Value>(&request(address)).await;
+    server.await.expect("server should finish");
+
+    // Assert
+    let error = result.expect_err("HTTP error should fail");
+    assert!(
+        matches!(
+            &error,
+            TransportError::Http { body, status, .. }
+                if *status == reqwest::StatusCode::BAD_REQUEST
+                    && body.starts_with("word word")
+                    && body.ends_with(" ...")
+                    && body.len() <= ERROR_BODY_LIMIT_BYTES + 4
+        ),
+        "{error:?}"
+    );
+}
+
+#[tokio::test]
+async fn rejects_a_success_body_whose_declared_length_exceeds_the_limit() {
+    // Arrange
+    let response = format!(
+        "HTTP/1.1 200 OK\r\nContent-Length: {}\r\nConnection: close\r\n\r\n",
+        SUCCESS_BODY_LIMIT_BYTES + 1
+    );
+    let (address, server) = serve_once(response.into_bytes());
+    let client = transport(REQUEST_TIMEOUT);
+
+    // Act
+    let result = client.post_json::<Value>(&request(address)).await;
+    server.await.expect("server should finish");
+
+    // Assert
+    assert!(matches!(result, Err(TransportError::ResponseBodyTooLarge)));
 }
 
 #[test]

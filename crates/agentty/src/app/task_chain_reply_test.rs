@@ -272,7 +272,7 @@ async fn approval_with_requested_changes_revises_the_plan_and_blocks_replies_whi
     let session_id = fixture.session_id.clone();
 
     // Act
-    let (revised, concurrent) = fixture
+    let (revised, concurrent, redelivered) = fixture
         .app
         .drive_session_request(async {
             let revised = send_reply(
@@ -288,9 +288,16 @@ async fn approval_with_requested_changes_revises_the_plan_and_blocks_replies_whi
             };
             assert_eq!(early, None, "decision must still be running");
             let concurrent = send_reply(&service, &session_id, "reply-2", "Go ahead").await;
+            let redelivered = send_reply(
+                &service,
+                &session_id,
+                "reply-1",
+                "Looks good, but add tests",
+            )
+            .await;
             decision.release.cancel();
 
-            (revised.await, concurrent)
+            (revised.await, concurrent, redelivered)
         })
         .await;
     fixture.settle(&revision).await;
@@ -304,6 +311,7 @@ async fn approval_with_requested_changes_revises_the_plan_and_blocks_replies_whi
             TaskChainPhase::AwaitingPlanAcceptance
         ))
     );
+    assert_eq!(redelivered, concurrent);
     assert_eq!(awaiting.phase, TaskChainPhase::AwaitingPlanAcceptance);
     assert_eq!(awaiting.accepted_plan, None);
     assert!(revision.prompt().contains("Looks good, but add tests"));
@@ -574,6 +582,38 @@ async fn acceptance_without_live_session_handles_leaves_the_plan_unaccepted() {
     );
     assert_eq!(chain.phase, TaskChainPhase::AwaitingPlanAcceptance);
     assert_eq!(chain.accepted_plan, None);
+}
+
+#[tokio::test]
+async fn duplicate_reply_recording_keeps_one_transcript_prompt() {
+    // Arrange
+    let mut fixture = ChainFixture::new().await;
+    awaiting_plan(&mut fixture).await;
+    let chain = fixture.snapshot().await;
+    let source = chain.current_execution.clone().expect("plan execution");
+    let prompt = TurnPrompt::from_text("Go ahead".into());
+
+    // Act
+    fixture
+        .app
+        .record_task_chain_reply(&chain, "reply-1", &prompt, &source)
+        .await
+        .expect("first recording");
+    fixture
+        .app
+        .record_task_chain_reply(&chain, "reply-1", &prompt, &source)
+        .await
+        .expect("duplicate recording");
+
+    // Assert
+    assert_eq!(
+        fixture.persisted_transcript().await,
+        [
+            launch_transcript(),
+            vec![(SessionMessageKind::UserPrompt, "Go ahead".to_string())],
+        ]
+        .concat()
+    );
 }
 
 #[tokio::test]

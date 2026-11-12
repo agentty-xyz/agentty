@@ -93,9 +93,9 @@ impl App {
         if interactive {
             self.open_created_session_composer(&session_id);
         }
-        if let Some(pending) = self.pending_session_creations.get_mut(&request_id) {
-            pending.session_id = Some(session_id.clone());
-        }
+        self.pending_session_creations
+            .entry(request_id.clone())
+            .and_modify(|pending| pending.session_id = Some(session_id.clone()));
         self.spawn_workspace_preparation(request_id, session_id);
     }
 

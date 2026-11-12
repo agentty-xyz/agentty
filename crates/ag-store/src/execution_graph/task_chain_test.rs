@@ -784,6 +784,68 @@ async fn stage_cancellation_rolls_back_a_claim_blocked_after_its_snapshot() {
 }
 
 #[tokio::test]
+async fn stage_cancellation_cancels_the_already_claimed_stage_execution() {
+    // Arrange
+    let database = started().await;
+    let planner = claim(&database, "planner").await;
+
+    // Act
+    let canceled = database
+        .graphs()
+        .cancel_task_chain_stage("chain")
+        .await
+        .expect("cancel claimed stage");
+
+    // Assert
+    assert_eq!(canceled.as_ref(), Some(&planner.record.execution));
+    assert!(
+        !database
+            .operations()
+            .is_session_operation_unfinished(operation_id(&planner))
+            .await
+            .expect("operation state")
+    );
+    assert_eq!(chain(&database).await.phase, TaskChainPhase::Canceled);
+}
+
+#[tokio::test]
+async fn accepted_plan_reads_reject_a_corrupt_result_reference() {
+    // Arrange
+    let database = started().await;
+    let planner = claim(&database, "planner").await;
+    settle(&database, &planner, r#"{"answer":"Plan"}"#).await;
+    let reference = plan_reference(&database).await;
+    database
+        .graphs()
+        .accept_result(
+            &reference,
+            &GraphEvidence {
+                actor: "user".into(),
+                reason: "approved".into(),
+            },
+        )
+        .await
+        .expect("accept plan");
+    sqlx::query("UPDATE execution_graph_result SET reference = ?")
+        .bind("{")
+        .execute(database.pool())
+        .await
+        .expect("inject corrupt reference");
+    let mut connection = database.pool().acquire().await.expect("connection");
+
+    // Act
+    let result = SqliteGraphRepository::accepted_plan(&mut connection, &chain_graph("chain")).await;
+
+    // Assert
+    assert!(
+        result
+            .expect_err("corrupt plan reference")
+            .to_string()
+            .contains("EOF")
+    );
+}
+
+#[tokio::test]
 async fn accepted_plan_reads_reject_corrupt_execution_and_response_evidence() {
     for utility_source in [false, true] {
         // Arrange

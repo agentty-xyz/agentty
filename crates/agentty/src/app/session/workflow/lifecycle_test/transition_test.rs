@@ -22,34 +22,48 @@ use crate::domain::session::{SessionId, Status};
 use crate::domain::session_order::ArchiveAction;
 use crate::infra::db::AppRepositories;
 use crate::infra::fs;
+use crate::test_support::enable_tracing_log_fallback;
 
 #[tokio::test]
 /// Ensures a title-generation claim failure completes tracking without
 /// starting a provider request.
 async fn test_spawn_session_title_generation_task_handles_claim_failure() {
-    // Arrange
-    let (database, pool) = AppRepositories::in_memory_with_pool()
-        .await
-        .expect("db should open");
-    pool.close().await;
-    let (app_event_tx, mut app_event_rx) = mpsc::unbounded_channel();
-    let run_client: Arc<dyn RunClient> = Arc::new(MockRunClient::new());
-    let mut input =
-        title_generation_task_input(app_event_tx, database, run_client, "review the project");
-    input.tracked_generation = Some(7);
+    for receiver_open in [true, false] {
+        // Arrange
+        let (database, pool) = AppRepositories::in_memory_with_pool()
+            .await
+            .expect("db should open");
+        pool.close().await;
+        let (app_event_tx, mut app_event_rx) = mpsc::unbounded_channel();
+        if !receiver_open {
+            app_event_rx.close();
+        }
+        let run_client: Arc<dyn RunClient> = Arc::new(MockRunClient::new());
+        let mut input =
+            title_generation_task_input(app_event_tx, database, run_client, "review the project");
+        input.tracked_generation = Some(7);
+        enable_tracing_log_fallback();
 
-    // Act
-    let title_generation_task = SessionManager::spawn_session_title_generation_task(input).await;
+        // Act
+        let title_generation_task =
+            SessionManager::spawn_session_title_generation_task(input).await;
 
-    // Assert
-    assert!(title_generation_task.is_none());
-    assert!(matches!(
-        app_event_rx.try_recv(),
-        Ok(AppEvent::SessionTitleGenerationFinished {
-            generation: 7,
-            session_id,
-        }) if session_id == "session-id"
-    ));
+        // Assert: a closed receiver drops the completion without a provider
+        // request.
+        assert!(title_generation_task.is_none());
+        let completion = app_event_rx.try_recv();
+        if receiver_open {
+            assert!(matches!(
+                completion,
+                Ok(AppEvent::SessionTitleGenerationFinished {
+                    generation: 7,
+                    session_id,
+                }) if session_id == "session-id"
+            ));
+        } else {
+            assert!(completion.is_err());
+        }
+    }
 }
 
 #[test]
@@ -121,30 +135,44 @@ fn test_parse_generated_session_title_accepts_protocol_answer_plain_text() {
 /// Ensures plain-text responses with extra lines keep only the first
 /// non-empty title line.
 fn test_parse_generated_session_title_uses_first_nonempty_line_for_multiline_response() {
-    // Arrange
-    let response_content = "Polish title parsing\nExtra detail that should be ignored";
+    for response_content in [
+        "Polish title parsing\nExtra detail that should be ignored",
+        r#"{"answer":"\n  \nPolish title parsing","questions":[]}"#,
+    ] {
+        // Arrange, Act
+        let parsed_title = SessionManager::parse_generated_session_title(response_content);
 
-    // Act
-    let parsed_title = SessionManager::parse_generated_session_title(response_content);
-
-    // Assert
-    assert_eq!(parsed_title, Some("Polish title parsing".to_string()));
+        // Assert
+        assert_eq!(
+            parsed_title,
+            Some("Polish title parsing".to_string()),
+            "{response_content}"
+        );
+    }
 }
 
 #[test]
-/// Ensures `Title:` prefixes are normalized before persistence.
+/// Ensures `Title:` prefixes and quotes are normalized before persistence,
+/// rejecting candidates that contain nothing else.
 fn test_parse_generated_session_title_normalizes_title_prefix() {
-    // Arrange
-    let response_content = "Title: \"Polish merge queue behavior\"";
+    for (response_content, expected_title) in [
+        (
+            "Title: \"Polish merge queue behavior\"",
+            Some("Polish merge queue behavior"),
+        ),
+        ("Title: \"\"", None),
+        ("``", None),
+    ] {
+        // Arrange, Act
+        let parsed_title = SessionManager::parse_generated_session_title(response_content);
 
-    // Act
-    let parsed_title = SessionManager::parse_generated_session_title(response_content);
-
-    // Assert
-    assert_eq!(
-        parsed_title,
-        Some("Polish merge queue behavior".to_string())
-    );
+        // Assert
+        assert_eq!(
+            parsed_title.as_deref(),
+            expected_title,
+            "{response_content}"
+        );
+    }
 }
 
 #[test]
@@ -715,6 +743,7 @@ async fn test_run_title_generation_command_returns_none_after_retry_exhaustion()
         .expect_submit()
         .times(SESSION_TITLE_GENERATION_MAX_ATTEMPTS)
         .returning(|_| Err(OneShotError::new("provider unavailable")));
+    enable_tracing_log_fallback();
 
     // Act
     let title = SessionManager::run_title_generation_command(

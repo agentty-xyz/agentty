@@ -876,3 +876,157 @@ async fn openai_compatible_decodes_ollama_tool_calls_and_replays_portable_histor
 
     Ok(())
 }
+
+fn lookup_request() -> Result<ModelRequest, Box<dyn std::error::Error>> {
+    let mut request = request("muse/muse-spark-1.3")?;
+    if let ag_router::Task::Chat(chat) = &mut request.task {
+        chat.tools.push(ToolDefinition::new(
+            "lookup",
+            "Look up a record",
+            json!({"type":"object"}),
+        ));
+    }
+
+    Ok(request)
+}
+
+fn tool_call(kind: &str, function: &Value) -> Value {
+    json!({"id": "call-1", "type": kind, "function": function})
+}
+
+/// Recognizes the expected root cause of one rejected completion.
+type ErrorPredicate = fn(&ModelError) -> bool;
+
+#[tokio::test]
+async fn rejects_terminal_incomplete_and_unsupported_tool_call_completions()
+-> Result<(), Box<dyn std::error::Error>> {
+    // Arrange
+    let lookup = json!({"name": "lookup", "arguments": "{}"});
+    let cases: [(&str, Value, ErrorPredicate); 6] = [
+        (
+            "stop",
+            json!({"content": "done", "tool_calls": [tool_call("function", &lookup)]}),
+            |error| matches!(error, ModelError::TerminalResponseWithToolCalls),
+        ),
+        ("stop", json!({"content": null}), |error| {
+            matches!(error, ModelError::InvalidResponse)
+        }),
+        (
+            "length",
+            json!({"content": "partial"}),
+            |error| matches!(error, ModelError::IncompleteResponse { reason } if reason == "length"),
+        ),
+        (
+            "tool_calls",
+            json!({"content": null, "tool_calls": [tool_call("custom", &lookup)]}),
+            |error| matches!(error, ModelError::UnsupportedToolType { kind } if kind == "custom"),
+        ),
+        (
+            "tool_calls",
+            json!({"content": null, "tool_calls": [tool_call("function", &json!(5))]}),
+            |error| matches!(error, ModelError::InvalidToolArguments { .. }),
+        ),
+        (
+            "tool_calls",
+            json!({"content": null, "tool_calls": [tool_call(
+                "function",
+                &json!({"name": "unadvertised", "arguments": "{}"}),
+            )]}),
+            |error| matches!(error, ModelError::UnsupportedToolName { name } if name == "unadvertised"),
+        ),
+    ];
+
+    for (finish_reason, message, is_expected_error) in cases {
+        let server = MockServer::start().await;
+        Mock::given(method("POST"))
+            .and(path("/v1/chat/completions"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(json!({
+                "choices": [{"finish_reason": finish_reason, "message": message}],
+                "id": "response-1",
+                "system_fingerprint": "fp-1",
+                "usage": {
+                    "completion_tokens": 4,
+                    "completion_tokens_details": {"reasoning_tokens": 2},
+                    "prompt_tokens": 3,
+                    "total_tokens": 7
+                }
+            })))
+            .expect(1)
+            .mount(&server)
+            .await;
+
+        // Act
+        let error = router(Provider::Muse, &server)?
+            .execute(lookup_request()?)
+            .await
+            .expect_err("unsupported completion must fail");
+
+        // Assert
+        let metadata = error.metadata().ok_or("failure metadata missing")?;
+        assert_eq!(metadata.system_fingerprint(), Some("fp-1"));
+        assert_eq!(
+            metadata.usage().and_then(|usage| usage.reasoning_tokens()),
+            Some(2)
+        );
+        assert!(
+            is_expected_error(error.root_cause()),
+            "{finish_reason}: {error:?}"
+        );
+    }
+
+    Ok(())
+}
+
+#[tokio::test]
+async fn replays_assistant_system_reasoning_and_single_tool_call_history()
+-> Result<(), Box<dyn std::error::Error>> {
+    // Arrange
+    let server = MockServer::start().await;
+    Mock::given(method("POST"))
+        .and(path("/v1/chat/completions"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(completion(r#"{"name":"Ada"}"#)))
+        .expect(1)
+        .mount(&server)
+        .await;
+    let call = ToolCall::from_json("call-1".to_string(), "lookup", r#"{"id":7}"#, None)?;
+    let mut request = lookup_request()?;
+    if let ag_router::Task::Chat(chat) = &mut request.task {
+        chat.messages.extend([
+            ModelMessage::System("Be brief".to_string()),
+            ModelMessage::Assistant("Earlier answer".to_string()),
+            ModelMessage::AssistantReasoning {
+                content: "Thinking aloud".to_string(),
+                reasoning_content: "hidden steps".to_string(),
+            },
+            ModelMessage::AssistantToolCall(call),
+            ModelMessage::ToolResult {
+                call_id: "call-1".to_string(),
+                content: "record 7".to_string(),
+                name: "lookup".to_string(),
+            },
+        ]);
+    }
+
+    // Act
+    router(Provider::Muse, &server)?.execute(request).await?;
+    let body = received_body(&server, 0).await?;
+    let messages = body["messages"]
+        .as_array()
+        .ok_or("messages must be an array")?;
+
+    // Assert
+    assert!(messages.contains(&json!({"content": "Be brief", "role": "system"})));
+    assert!(messages.contains(&json!({"content": "Earlier answer", "role": "assistant"})));
+    assert!(messages.contains(&json!({
+        "content": "Thinking aloud",
+        "reasoning_content": "hidden steps",
+        "role": "assistant"
+    })));
+    let replayed = messages
+        .iter()
+        .find(|message| message["tool_calls"].is_array())
+        .ok_or("replayed tool call missing")?;
+    assert_eq!(replayed["tool_calls"][0]["id"], "call-1");
+
+    Ok(())
+}

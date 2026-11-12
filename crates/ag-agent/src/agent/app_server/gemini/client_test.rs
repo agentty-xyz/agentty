@@ -2,7 +2,7 @@ use std::path::PathBuf;
 use std::sync::Arc;
 
 use ag_contracts::{
-    AgentRequestKind, OneShotClient, OneShotRequest, PermissionMode, ProviderCallBudget,
+    AgentRequestKind, McpPolicy, OneShotClient, OneShotRequest, PermissionMode, ProviderCallBudget,
     ReasoningLevel, SpeedMode,
 };
 use ag_protocol::{ProtocolRequestProfile, ProtocolSchemaInstructionMode, TurnPrompt};
@@ -13,7 +13,7 @@ use crate::agent::app_server::client::{
     ProviderRuntimeClient, RuntimeClientProvider, RuntimeClientRuntime,
 };
 use crate::agent::app_server::gemini::client::{GeminiRuntimeProvider, GeminiSessionRuntime};
-use crate::agent::app_server::gemini::lifecycle::GeminiRuntimeState;
+use crate::agent::app_server::gemini::lifecycle::{self, GeminiRuntimeState};
 use crate::agent::app_server::stdio_transport::AppServerStdioTransport;
 use crate::agent::submission::RealOneShotClient;
 use crate::app_server::{
@@ -42,11 +42,83 @@ fn build_stopped_session_runtime() -> GeminiSessionRuntime {
     );
     state.session_id = "session-1".to_string();
 
-    GeminiSessionRuntime {
-        child,
-        state,
-        transport,
-    }
+    GeminiSessionRuntime::from_parts((child, transport, state))
+}
+
+#[tokio::test]
+async fn bootstrapped_runtime_reports_its_fresh_acp_session() {
+    // Arrange
+    let folder = tempfile::tempdir().expect("fixture folder");
+    let request = request_for_folder(folder.path().to_path_buf());
+    let script = r#"while IFS= read -r request; do
+        request_id=$(printf '%s' "$request" | sed -n 's/.*"id":"\([^"]*\)".*/\1/p')
+        case "$request" in
+            *'"method":"initialize"'*)
+                printf '{"id":"%s","result":{"protocolVersion":1}}\n' "$request_id" ;;
+            *'"method":"session/new"'*)
+                printf '{"id":"%s","result":{"sessionId":"fixture-session"}}\n' "$request_id" ;;
+        esac
+    done"#;
+    let mut command = std::process::Command::new("sh");
+    command.arg("-c").arg(script);
+
+    // Act
+    let mut runtime = lifecycle::start_runtime_with_built_command(command, &request)
+        .await
+        .map(GeminiSessionRuntime::from_parts)
+        .expect("fixture bootstrap should succeed");
+
+    // Assert
+    assert!(runtime.pid().is_some());
+    assert_eq!(
+        runtime.provider_conversation_id().as_deref(),
+        Some("fixture-session")
+    );
+    assert!(!runtime.restored_context());
+    assert!(runtime.matches_request(&request));
+    runtime.shutdown_runtime().await;
+}
+
+#[tokio::test]
+async fn provider_conversation_id_is_absent_until_a_session_is_assigned() {
+    // Arrange
+    let mut runtime = build_stopped_session_runtime();
+    let assigned_conversation_id = runtime.provider_conversation_id();
+
+    // Act
+    runtime.state.session_id.clear();
+    let pending_conversation_id = runtime.provider_conversation_id();
+    runtime.shutdown_runtime().await;
+
+    // Assert
+    assert_eq!(assigned_conversation_id.as_deref(), Some("session-1"));
+    assert_eq!(pending_conversation_id, None);
+}
+
+#[tokio::test]
+async fn start_runtime_rejects_unsupported_execution_policy_without_spawning() {
+    // Arrange
+    let mut request = request_for_folder(PathBuf::from("/tmp/agentty-gemini-runtime"));
+    request.execution_policy.mcp = McpPolicy::Disabled;
+
+    // Act
+    let result = GeminiRuntimeProvider::start_runtime(request).await;
+
+    // Assert
+    assert!(matches!(
+        result,
+        Err(AppServerError::Provider(message))
+            if message.starts_with("Failed to build `gemini --acp` command")
+    ));
+}
+
+#[test]
+fn gemini_runtimes_are_not_retained_between_session_turns() {
+    // Arrange / Act
+    let retains_runtime = GeminiRuntimeProvider::retain_runtime_after_turn();
+
+    // Assert
+    assert!(!retains_runtime);
 }
 
 #[tokio::test]
@@ -90,13 +162,21 @@ async fn run_turn_ignores_speed_mode_and_surfaces_transport_failures() {
 }
 
 fn runtime_request(runtime: &GeminiSessionRuntime) -> AppServerTurnRequest {
+    let mut request = request_for_folder(runtime.state.folder.clone());
+    request.model.clone_from(&runtime.state.model);
+
+    request
+}
+
+/// Builds an auto-edit Gemini resume request for one runtime folder.
+fn request_for_folder(folder: PathBuf) -> AppServerTurnRequest {
     AppServerTurnRequest {
         execution_policy: ag_contracts::ExecutionPolicy::default(),
         provider_call_budget: None,
-        folder: runtime.state.folder.clone(),
+        folder,
         live_transcript: None,
         main_checkout_root: None,
-        model: runtime.state.model.clone(),
+        model: AgentModel::Gemini31Pro.as_str().to_string(),
         permission_mode: ag_contracts::PermissionMode::AutoEdit,
         persisted_instruction_conversation_id: None,
         agent_profile: ag_contracts::AgentDefinitionPrompt::default(),

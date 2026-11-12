@@ -14,9 +14,13 @@ use crate::domain::question::QuestionItem;
 use crate::domain::session::{
     PublishBranchAction, ReviewRequest, ReviewRequestState, SessionStats, Status,
 };
-use crate::presentation::app_mode::{AppMode, ChatFocus, ConfirmationViewMode};
+use crate::presentation::app_mode::{
+    AppMode, ChatFocus, ConfirmationViewMode, DiffFocus, DiffLineCommentAnchor,
+    DiffLineCommentTarget, DiffLineComments, DiffLineSide, DiffPreview,
+};
 use crate::presentation::execution_graph::tests::graph_view;
 use crate::presentation::execution_graph::{GraphEditKind, GraphEditor};
+use crate::presentation::prompt::PromptAtMentionState;
 use crate::test_support;
 
 #[tokio::test]
@@ -184,6 +188,69 @@ async fn prompt_entries_open_only_for_an_active_query_and_reset_selection() {
         matches!(app.mode, AppMode::Prompt { at_mention_state: Some(ref state), .. }
         if state.all_entries.is_empty() && state.selected_index == 0)
     );
+}
+
+#[tokio::test]
+async fn diff_comment_entries_refresh_only_an_open_picker_with_an_active_query() {
+    // Arrange
+    let mut app = test_support::new_test_app_without_retained_base_dir().await;
+    let stale_entries = vec![FileEntry {
+        is_dir: false,
+        path: "README.md".to_string(),
+    }];
+    let loaded_entries = vec![FileEntry {
+        is_dir: false,
+        path: "src/main.rs".to_string(),
+    }];
+    let mut line_comments = DiffLineComments::default();
+    line_comments.start_editing_target(DiffLineCommentTarget::single(DiffLineCommentAnchor {
+        content: "fn main() {}".to_string(),
+        line: 1,
+        path: "src/main.rs".to_string(),
+        side: DiffLineSide::New,
+    }));
+    line_comments
+        .editing_input_mut()
+        .expect("new comment should be editable")
+        .insert_text("no mention");
+    line_comments.at_mention_state =
+        Some(Box::new(PromptAtMentionState::new(stale_entries.clone())));
+    app.mode = AppMode::Diff {
+        diff: String::new(),
+        file_explorer_selected_index: 0,
+        focus: DiffFocus::Content,
+        line_comments,
+        preview: DiffPreview::default(),
+        review_comments: None,
+        restore: None,
+        scroll_cache: None,
+        selected_diff_line_index: 0,
+        session_id: "diff-session".into(),
+        scroll_offset: 0,
+    };
+    let diff_picker_entries = |app: &App| match &app.mode {
+        AppMode::Diff { line_comments, .. } => line_comments
+            .at_mention_state
+            .as_ref()
+            .map(|state| state.all_entries.clone()),
+        _ => None,
+    };
+
+    // Act
+    app.apply_prompt_at_mention_entries("diff-session", loaded_entries.clone());
+    let entries_without_query = diff_picker_entries(&app);
+    if let AppMode::Diff { line_comments, .. } = &mut app.mode {
+        line_comments
+            .editing_input_mut()
+            .expect("comment should remain editable")
+            .insert_text(" @src");
+    }
+    app.apply_prompt_at_mention_entries("diff-session", loaded_entries.clone());
+    let entries_with_query = diff_picker_entries(&app);
+
+    // Assert
+    assert_eq!(entries_without_query, Some(stale_entries));
+    assert_eq!(entries_with_query, Some(loaded_entries));
 }
 
 #[tokio::test]

@@ -7,9 +7,9 @@ use super::{
     PendingImagePaste, PromptAttachment, PromptAttachmentState, PromptComposerState,
     PromptGraphState, PromptHistoryState, PromptSlashStage, PromptSlashState, PromptSuggestionItem,
     PromptSuggestionList, PromptSuggestionSelection, build_prompt_slash_suggestion_list,
-    current_line_delete_range, drain_prompt_submission, insert_prompt_local_image,
-    insert_prompt_local_image_at, needs_space_after_image_placeholder, prompt_slash_option_count,
-    resolve_prompt_slash_selection,
+    command_description, current_line_delete_range, drain_prompt_submission, image_token_end_index,
+    insert_prompt_local_image, insert_prompt_local_image_at, needs_space_after_image_placeholder,
+    prompt_slash_option_count, resolve_prompt_slash_selection,
 };
 use crate::domain::agent::{
     AgentKind, AgentModel, AgentSelection, HarnessModelOption, HarnessModelStatus, ModelCost,
@@ -318,6 +318,54 @@ fn test_prompt_attachment_state_sync_restores_undone_attachment() {
 }
 
 #[test]
+fn test_prompt_attachment_state_keeps_multiple_attachments_in_number_order() {
+    // Arrange
+    let mut input = InputState::default();
+    let mut attachment_state = PromptAttachmentState::default();
+    insert_test_attachment(
+        &mut attachment_state,
+        &mut input,
+        PathBuf::from("/tmp/first-image.png"),
+    );
+    insert_test_attachment(
+        &mut attachment_state,
+        &mut input,
+        PathBuf::from("/tmp/second-image.png"),
+    );
+    attachment_state.remember_current_revision(&input);
+    let draft_revision = input.revision();
+    let attachment_numbers = |attachments: &[PromptAttachment]| {
+        attachments
+            .iter()
+            .map(|attachment| attachment.attachment_number)
+            .collect::<Vec<_>>()
+    };
+
+    // Act
+    attachment_state.archive_current();
+    let archived_numbers = attachment_numbers(&attachment_state.archived_attachments);
+    attachment_state.restore_draft_revision(draft_revision, &input);
+    let restored_numbers = attachment_numbers(&attachment_state.attachments);
+    let text_length = input.text().chars().count();
+    attachment_state.remember_current_revision(&input);
+    input.replace_range(0, text_length, "");
+    attachment_state.sync_after_edit(&input, 0, text_length, 0);
+    let deleted_numbers = attachment_numbers(&attachment_state.archived_attachments);
+    input.undo();
+    attachment_state.sync_after_history_restore(&input);
+
+    // Assert
+    assert_eq!(archived_numbers, [1, 2]);
+    assert_eq!(restored_numbers, [1, 2]);
+    assert_eq!(deleted_numbers, [1, 2]);
+    assert_eq!(attachment_numbers(&attachment_state.attachments), [1, 2]);
+    assert_eq!(
+        attachment_state.archived_attachments,
+        [] as [PromptAttachment; 0]
+    );
+}
+
+#[test]
 fn test_prompt_attachment_state_does_not_activate_manually_entered_placeholder() {
     // Arrange
     let mut input = InputState::default();
@@ -401,6 +449,73 @@ fn test_prompt_slash_state_replace_available_agent_kinds_clears_unavailable_sele
     assert_eq!(slash_state.selected_agent, None);
     assert_eq!(slash_state.selected_index, 0);
     assert_eq!(slash_state.stage, PromptSlashStage::Agent);
+}
+
+#[test]
+fn test_prompt_slash_state_replace_available_agent_kinds_keeps_valid_or_non_model_state() {
+    // Arrange
+    let mut available_selection =
+        PromptSlashState::with_available_agent_kinds(vec![AgentKind::Claude, AgentKind::Codex]);
+    available_selection.selected_agent = Some(AgentKind::Codex);
+    available_selection.selected_index = 1;
+    available_selection.stage = PromptSlashStage::Model;
+    let mut agent_stage_selection =
+        PromptSlashState::with_available_agent_kinds(vec![AgentKind::Claude, AgentKind::Codex]);
+    agent_stage_selection.selected_agent = Some(AgentKind::Claude);
+    agent_stage_selection.selected_index = 2;
+    agent_stage_selection.stage = PromptSlashStage::Agent;
+
+    // Act
+    available_selection.replace_available_agent_kinds(vec![AgentKind::Codex]);
+    agent_stage_selection.replace_available_agent_kinds(vec![AgentKind::Codex]);
+
+    // Assert
+    assert_eq!(available_selection.selected_agent, Some(AgentKind::Codex));
+    assert_eq!(available_selection.selected_index, 1);
+    assert_eq!(available_selection.stage, PromptSlashStage::Model);
+    assert_eq!(agent_stage_selection.selected_agent, None);
+    assert_eq!(agent_stage_selection.selected_index, 0);
+    assert_eq!(agent_stage_selection.stage, PromptSlashStage::Agent);
+}
+
+#[test]
+fn test_prompt_composer_default_reports_slash_input_and_empty_submission() {
+    // Arrange
+    let mut composer = PromptComposerState::default();
+    let empty_slash_state = composer.is_slash_command();
+    composer.input.insert_text("  ");
+    let whitespace_submission = composer.take_submission();
+    composer.input.insert_text("/model");
+
+    // Act
+    let slash_state = composer.is_slash_command();
+    let non_slash_suggestions =
+        build_prompt_slash_suggestion_list("model", &composer.slash_state, AgentKind::Codex, false);
+    let slash_submission = composer.take_submission();
+
+    // Assert
+    assert_eq!(
+        composer.slash_state.available_agent_kinds,
+        AgentKind::ALL.to_vec()
+    );
+    assert!(!empty_slash_state);
+    assert!(whitespace_submission.is_empty());
+    assert!(slash_state);
+    assert_eq!(non_slash_suggestions, None);
+    assert_eq!(slash_submission.text, "/model");
+    assert!(!slash_submission.is_empty());
+}
+
+#[test]
+fn test_unknown_slash_command_uses_generic_description() {
+    // Arrange
+    let command = "/unknown";
+
+    // Act
+    let description = command_description(command);
+
+    // Assert
+    assert_eq!(description, "Prompt slash command.");
 }
 
 #[test]
@@ -854,6 +969,45 @@ fn test_current_line_delete_range_returns_first_line_range() {
 
     // Assert
     assert_eq!(delete_range, Some((0, 11)));
+}
+
+#[test]
+fn test_current_line_delete_range_handles_empty_and_single_line_input() {
+    // Arrange
+    let empty_input = InputState::default();
+    let single_line_input = InputState::with_text("only line".to_string());
+    let last_line_input = InputState::with_text("first\nsecond".to_string());
+
+    // Act
+    let empty_range = current_line_delete_range(&empty_input);
+    let single_line_range = current_line_delete_range(&single_line_input);
+    let last_line_range = current_line_delete_range(&last_line_input);
+
+    // Assert
+    assert_eq!(empty_range, None);
+    assert_eq!(single_line_range, Some((0, 9)));
+    assert_eq!(last_line_range, Some((5, 12)));
+}
+
+#[test]
+fn test_image_token_end_index_rejects_malformed_placeholders() {
+    // Arrange
+    let cases = [
+        ("[Image #12]", Some(11)),
+        ("[Imagine #1]", None),
+        ("[Image #x1]", None),
+        ("[Image #12", None),
+    ];
+
+    for (text, expected_end) in cases {
+        let characters: Vec<char> = text.chars().collect();
+
+        // Act
+        let end_index = image_token_end_index(&characters, 0);
+
+        // Assert
+        assert_eq!(end_index, expected_end, "{text}");
+    }
 }
 
 #[test]

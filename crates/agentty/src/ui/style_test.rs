@@ -4,9 +4,9 @@ use ratatui::style::{Color, Modifier};
 
 use super::super::icon::Icon;
 use super::{
-    DARK_HORIZON_PALETTE, GREEN_PALETTE, border_style, forge_indicator_color, palette,
-    prepare_terminal_frame, row_selection_style, scoped_active_theme, selection_style,
-    status_color, status_icon,
+    CURRENT_PALETTE, DARK_HORIZON_PALETTE, GREEN_PALETTE, border_style, forge_indicator_color,
+    palette, prepare_terminal_frame, row_selection_style, scoped_active_theme, selection_style,
+    set_active_theme, status_color, status_icon,
 };
 use crate::domain::session::{ReviewRequestState, Status};
 use crate::domain::theme::ColorTheme;
@@ -98,6 +98,28 @@ fn green_selection_remains_visible_on_charcoal_terminal_backgrounds() {
         "selection must stand out on charcoal: {contrast}"
     );
     assert_eq!(selected.fg, None, "semantic foregrounds must be preserved");
+}
+
+#[test]
+fn set_active_theme_switches_semantic_tokens_and_restores_default_last() {
+    // Arrange
+    let theme_cases = [
+        (ColorTheme::Green, GREEN_PALETTE),
+        (ColorTheme::DarkHorizon, DARK_HORIZON_PALETTE),
+        (ColorTheme::Current, CURRENT_PALETTE),
+    ];
+
+    for (theme, expected_palette) in theme_cases {
+        // Act
+        set_active_theme(theme);
+        let clarification_surface = palette::surface_clarification();
+
+        // Assert
+        assert_eq!(
+            clarification_surface, expected_palette.surface_clarification,
+            "clarification surface for {theme:?}"
+        );
+    }
 }
 
 /// RGB is required so terminal ANSI palette remapping cannot erase contrast.
@@ -397,6 +419,35 @@ fn status_icon_returns_pending_for_new() {
 
     // Assert
     assert!(matches!(icon, Icon::Pending));
+}
+
+#[test]
+fn status_icon_returns_spinner_for_active_work() {
+    // Arrange
+    let active_statuses = [
+        Status::InProgress,
+        Status::AgentReview,
+        Status::Rebasing,
+        Status::Merging,
+    ];
+
+    // Act
+    let icons = active_statuses.map(status_icon);
+
+    // Assert
+    assert!(icons.iter().all(|icon| matches!(icon, Icon::Spinner)));
+}
+
+#[test]
+fn status_color_returns_question_color_for_question() {
+    // Arrange
+    let _theme_scope = scoped_active_theme(ColorTheme::Current);
+
+    // Act
+    let color = status_color(Status::Question);
+
+    // Assert
+    assert_eq!(color, palette::question());
 }
 
 #[test]

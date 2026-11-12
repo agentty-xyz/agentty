@@ -1,7 +1,7 @@
 use ag_protocol::QuestionItem;
 use ag_session::{
     AnswerQuestionsRequest, CreateSessionMode, CreateSessionRequest, QuestionAnswer,
-    SessionError as ApiSessionError, SessionStatus,
+    SessionError as ApiSessionError, SessionId, SessionStatus,
 };
 
 use super::super::{question_answer_message, question_restore_error, validate_question_answers};
@@ -59,6 +59,101 @@ async fn runtime_backend_restores_claimed_questions_when_resume_is_rejected() {
         ))
     );
     assert_eq!(session.questions, [QuestionItem::new("Current question?")]);
+}
+
+#[tokio::test]
+async fn question_answers_report_claim_and_restore_persistence_failures() {
+    // Arrange
+    for (trigger_sql, expected_error) in [
+        (
+            "CREATE TRIGGER reject_claim BEFORE UPDATE OF questions ON session WHEN NEW.questions \
+             = '' BEGIN SELECT RAISE(ABORT, 'claim rejected'); END",
+            "claim rejected",
+        ),
+        (
+            "CREATE TRIGGER reject_restore BEFORE UPDATE OF questions ON session WHEN \
+             NEW.questions <> '' BEGIN SELECT RAISE(ABORT, 'restore rejected'); END",
+            "failed to restore session questions",
+        ),
+    ] {
+        let (mut app, _temp_dir, pool) = crate::test_support::new_git_test_app_with_pool().await;
+        let project_id = app.active_project_id();
+        let session_id = request_session_creation(
+            &mut app,
+            CreateSessionRequest {
+                inherit_from_session_id: None,
+                mode: CreateSessionMode::Draft,
+                project_id,
+            },
+        )
+        .await
+        .expect("draft session should be created");
+        app.services
+            .db()
+            .sessions()
+            .update_session_questions(
+                &session_id,
+                r#"[{"text":"Current question?","options":[]}]"#,
+            )
+            .await
+            .expect("current questions should persist");
+        crate::test_support::set_session_status_for_test(
+            &mut app,
+            &session_id,
+            SessionStatus::Merged,
+        );
+        sqlx::query(trigger_sql)
+            .execute(&pool)
+            .await
+            .expect("trigger");
+
+        // Act
+        let answer_error = app
+            .answer_api_questions(
+                &session_id,
+                AnswerQuestionsRequest {
+                    answers: vec![QuestionAnswer {
+                        answer: "Current answer".to_string(),
+                        question: "Current question?".to_string(),
+                    }],
+                },
+            )
+            .await
+            .expect_err("question answers should fail");
+
+        // Assert
+        assert!(
+            matches!(&answer_error, ApiSessionError::Operation(message) if message.contains(expected_error)),
+            "{answer_error:?}"
+        );
+    }
+}
+
+#[tokio::test]
+async fn question_answers_report_session_read_failure() {
+    // Arrange
+    let (mut app, _temp_dir, pool) = crate::test_support::new_git_test_app_with_pool().await;
+    sqlx::query("DROP TABLE session")
+        .execute(&pool)
+        .await
+        .expect("session reads should fail");
+
+    // Act
+    let answer_error = app
+        .answer_api_questions(
+            &SessionId::from("missing-session"),
+            AnswerQuestionsRequest {
+                answers: Vec::new(),
+            },
+        )
+        .await
+        .expect_err("question answers should fail");
+
+    // Assert
+    assert!(
+        matches!(&answer_error, ApiSessionError::Operation(message) if message.contains("session")),
+        "{answer_error:?}"
+    );
 }
 
 #[test]

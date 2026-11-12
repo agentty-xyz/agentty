@@ -295,6 +295,25 @@ async fn ownership_check_rejects_expiry_before_waiting_for_the_monitor() {
 }
 
 #[tokio::test]
+async fn activating_an_active_guard_keeps_its_ownership_monitor() {
+    // Arrange
+    let (_, mut acquired) = GatedStore::fixture(PauseAt::Renewal).await;
+
+    // Act
+    let result = acquired.guard.activate();
+
+    // Assert
+    assert!(result.is_ok());
+    assert!(
+        acquired
+            .guard
+            .renewal_task
+            .as_ref()
+            .is_some_and(|task| !task.is_finished())
+    );
+}
+
+#[tokio::test]
 async fn stopped_ownership_monitor_reports_ownership_loss() {
     // Arrange
     let database = Database::open_in_memory()

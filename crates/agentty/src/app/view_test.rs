@@ -3,7 +3,7 @@ use std::time::{Duration, Instant, SystemTime};
 use super::{read_frame_time, visible_review_session_id};
 use crate::app::Tab;
 use crate::infra::clock::Clock;
-use crate::presentation::app_mode::{AppMode, DiffFocus, DiffLineComments};
+use crate::presentation::app_mode::{AppMode, ConfirmationViewMode, DiffFocus, DiffLineComments};
 
 /// Unix timestamp where the test clock's local offset switches from summer to
 /// winter time.
@@ -95,6 +95,27 @@ fn inspector_does_not_project_the_session_review_over_its_graph_snapshot() {
 
     // Act / Assert
     assert_eq!(visible_review_session_id(&mode), None);
+}
+
+#[test]
+fn visible_review_session_id_includes_view_info_popup_restore_target() {
+    // Arrange
+    let mode = AppMode::ViewInfoPopup {
+        is_loading: false,
+        loading_label: String::new(),
+        message: "Review request published".to_string(),
+        restore_view: ConfirmationViewMode {
+            scroll_offset: Some(3),
+            session_id: "popup-session".into(),
+        },
+        title: "Review request".to_string(),
+    };
+
+    // Act
+    let session_id = visible_review_session_id(&mode);
+
+    // Assert
+    assert_eq!(session_id, Some("popup-session"));
 }
 
 #[test]

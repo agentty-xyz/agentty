@@ -411,6 +411,22 @@ fn test_previous_selected_index_wraps_from_first_to_last() {
 }
 
 #[test]
+fn test_selected_index_steps_move_within_and_keep_empty_lists_unchanged() {
+    // Arrange
+    let current_index = 1;
+
+    // Act
+    let previous_index = FileExplorer::previous_selected_index(current_index, 3);
+    let empty_next_index = FileExplorer::next_selected_index(current_index, 0);
+    let empty_previous_index = FileExplorer::previous_selected_index(current_index, 0);
+
+    // Assert
+    assert_eq!(previous_index, 0);
+    assert_eq!(empty_next_index, current_index);
+    assert_eq!(empty_previous_index, current_index);
+}
+
+#[test]
 fn test_file_list_lines_with_rename() {
     // Arrange
     let parsed_lines = vec![DiffLine {
@@ -610,8 +626,10 @@ fn test_file_tree_items_nested_structure() {
 
     // Act
     let items = FileExplorer::file_tree_items(&parsed_lines);
+    let item_count = FileExplorer::count_items(&parsed_lines);
 
     // Assert
+    assert_eq!(item_count, items.len());
     assert_eq!(
         items,
         vec![

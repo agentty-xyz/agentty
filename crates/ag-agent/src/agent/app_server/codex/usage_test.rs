@@ -84,6 +84,37 @@ fn update_turn_usage_from_response_prefers_thread_token_usage_updates() {
 }
 
 #[test]
+fn legacy_turn_usage_outside_completion_updates_stream_usage_from_snake_case_fields() {
+    // Arrange
+    let response_value = serde_json::json!({
+        "method": "turn/updated",
+        "params": {
+            "turn": {
+                "id": "active-turn",
+                "usage": {
+                    "input_tokens": 4,
+                    "output_tokens": 3
+                }
+            }
+        }
+    });
+    let mut completed_turn_usage = None;
+    let mut latest_stream_usage = None;
+
+    // Act
+    update_turn_usage_from_response(
+        &response_value,
+        Some("active-turn"),
+        &mut completed_turn_usage,
+        &mut latest_stream_usage,
+    );
+
+    // Assert
+    assert_eq!(completed_turn_usage, None);
+    assert_eq!(latest_stream_usage, Some((4, 3)));
+}
+
+#[test]
 fn extract_turn_usage_for_turn_ignores_mismatched_turn_ids() {
     // Arrange
     let response_value = serde_json::json!({

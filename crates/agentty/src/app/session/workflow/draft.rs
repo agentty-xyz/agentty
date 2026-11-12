@@ -12,9 +12,12 @@ const STAGED_DRAFT_ATTACHMENT_FILE: &str = "draft_attachment.json";
 /// Returns the metadata file path storing staged draft-session attachments for
 /// one session.
 pub(super) fn staged_draft_attachment_path(base: &Path, session_id: &str) -> PathBuf {
-    base.join(session_id)
-        .join(SESSION_DATA_DIR)
-        .join(STAGED_DRAFT_ATTACHMENT_FILE)
+    session_data_dir(base, session_id).join(STAGED_DRAFT_ATTACHMENT_FILE)
+}
+
+/// Returns the dedicated `SESSION_DATA_DIR` directory for one session.
+fn session_data_dir(base: &Path, session_id: &str) -> PathBuf {
+    base.join(session_id).join(SESSION_DATA_DIR)
 }
 
 /// Loads persisted staged draft-session attachments for one session.
@@ -50,11 +53,11 @@ pub(super) async fn store_staged_draft_attachments(
     session_id: &str,
     attachments: &[TurnPromptAttachment],
 ) -> Result<(), FsError> {
-    let attachment_path = staged_draft_attachment_path(base, session_id);
+    let session_data_dir = session_data_dir(base, session_id);
+    let attachment_path = session_data_dir.join(STAGED_DRAFT_ATTACHMENT_FILE);
     if attachments.is_empty() {
         fs_client.remove_file(attachment_path).await?;
 
-        let session_data_dir = base.join(session_id).join(SESSION_DATA_DIR);
         if fs_client.is_dir(session_data_dir.clone()) {
             fs_client.remove_dir_all(session_data_dir).await?;
         }
@@ -62,12 +65,7 @@ pub(super) async fn store_staged_draft_attachments(
         return Ok(());
     }
 
-    let Some(parent_dir) = attachment_path.parent() else {
-        return Err(FsError::Io(std::io::Error::other(
-            "staged draft attachment path is missing a parent directory",
-        )));
-    };
-    fs_client.create_dir_all(parent_dir.to_path_buf()).await?;
+    fs_client.create_dir_all(session_data_dir).await?;
 
     let serialized_attachments = serde_json::to_vec(attachments)
         .map_err(|error| FsError::Io(std::io::Error::other(error)))?;

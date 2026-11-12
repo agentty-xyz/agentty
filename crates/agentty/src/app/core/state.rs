@@ -2040,23 +2040,15 @@ impl App {
     /// Opens one session by id and preserves question mode for clarification
     /// sessions.
     fn open_session(&mut self, target_session_id: &str) {
-        let Some(session_index) = self.session_index_for_id(target_session_id) else {
+        let Some(session) = self.sessions.session_for_id(target_session_id) else {
             return;
         };
-        self.open_session_by_index(target_session_id, session_index);
-    }
-
-    /// Opens one session by list index and preserves question mode for
-    /// clarification sessions.
-    fn open_session_by_index(&mut self, target_session_id: &str, session_index: usize) {
-        self.sessions.select_session_index(Some(session_index));
+        let questions = (session.status == Status::Question).then(|| session.questions.clone());
+        let session_index = self.session_index_for_id(target_session_id);
+        self.sessions.select_session_index(session_index);
         self.restore_review_output(target_session_id);
 
-        let Some(session) = self.sessions.session_at(session_index) else {
-            return;
-        };
-        if session.status == Status::Question {
-            let questions = session.questions.clone();
+        if let Some(questions) = questions {
             self.enter_question_mode(target_session_id, questions);
 
             return;

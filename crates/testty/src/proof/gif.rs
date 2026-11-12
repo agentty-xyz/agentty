@@ -76,9 +76,11 @@ impl ProofBackend for GifBackend {
 
         let file = File::create(output)?;
         let mut encoder = GifEncoder::new_with_speed(file, 10);
+        // Setting the repeat count before the first frame only stores it, so
+        // this cannot fail; the shared mapping is exercised by frame encoding.
         encoder
             .set_repeat(Repeat::Infinite)
-            .map_err(|err| ProofError::Format(err.to_string()))?;
+            .map_err(ProofError::format)?;
 
         // GIF delay is in units of 10ms.
         let delay_hundredths = self.frame_delay_ms / 10;
@@ -90,7 +92,7 @@ impl ProofBackend for GifBackend {
             let gif_frame = build_gif_frame(image, delay_hundredths);
             encoder
                 .encode_frame(gif_frame)
-                .map_err(|err| ProofError::Format(err.to_string()))?;
+                .map_err(ProofError::format)?;
         }
 
         Ok(())

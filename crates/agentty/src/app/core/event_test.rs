@@ -1,3 +1,4 @@
+use std::collections::HashMap;
 use std::panic::AssertUnwindSafe;
 use std::sync::Arc;
 
@@ -12,10 +13,13 @@ use app::review::{
 use super::super::state::App;
 use super::{AppEvent, AppEventBatch, AppEventEffect, AppEventReductionPlan};
 use crate::app;
+use crate::app::branch_publish::BranchPublishTaskFailure;
 use crate::app::session::TurnAppliedState;
+use crate::app::session_state::SessionGitStatus;
 use crate::app::sync::ProjectSyncContext;
 use crate::domain::session::{
-    ForgeKind, ReviewRequest, ReviewRequestState, ReviewRequestSummary, SessionId,
+    ForgeKind, PublishBranchAction, ReviewRequest, ReviewRequestState, ReviewRequestSummary,
+    SessionId,
 };
 use crate::domain::transient_message::TransientMessageSlot;
 use crate::infra::db::DbError;
@@ -572,6 +576,65 @@ fn test_refresh_projects_batch_sets_only_project_reload_scope() {
 }
 
 #[test]
+fn test_git_status_batch_keeps_newest_generation_when_older_arrives_later() {
+    // Arrange
+    let mut event_batch = AppEventBatch::default();
+    let newer_session_statuses = HashMap::from([(
+        SessionId::from("session-1"),
+        SessionGitStatus {
+            base_status: Some((1, 0)),
+            has_merge_conflict: Some(false),
+            remote_status: None,
+        },
+    )]);
+
+    // Act
+    event_batch.collect_event(AppEvent::GitStatusUpdated {
+        generation: 2,
+        session_statuses: newer_session_statuses.clone(),
+        status: Some((3, 4)),
+    });
+    event_batch.collect_event(AppEvent::GitStatusUpdated {
+        generation: 1,
+        session_statuses: HashMap::new(),
+        status: Some((9, 9)),
+    });
+
+    // Assert
+    let git_status_update = event_batch
+        .git_status_update
+        .as_ref()
+        .expect("newest git status should remain batched");
+    assert_eq!(git_status_update.generation, 2);
+    assert_eq!(git_status_update.status, Some((3, 4)));
+    assert_eq!(
+        event_batch.session_git_status_updates,
+        newer_session_statuses
+    );
+}
+
+#[test]
+fn test_failed_branch_publish_batch_does_not_request_git_status_refresh() {
+    // Arrange
+    let mut event_batch = AppEventBatch::default();
+    let failure = BranchPublishTaskFailure::failed(
+        PublishBranchAction::Push,
+        "Failed to publish session branch: rejected".to_string(),
+    );
+
+    // Act
+    event_batch.collect_event(AppEvent::BranchPublishActionCompleted {
+        result: Box::new(Err(failure)),
+        session_id: SessionId::from("session-1"),
+    });
+
+    // Assert
+    assert!(!event_batch.should_refresh_git_status);
+    assert_eq!(event_batch.branch_publish_action_updates.len(), 1);
+    assert!(event_batch.branch_publish_action_updates[0].result.is_err());
+}
+
+#[test]
 fn collect_runtime_event_rejects_top_level_event() {
     // Arrange
     let mut event_batch = AppEventBatch::default();
@@ -994,6 +1057,7 @@ async fn completed_focused_review_persists_for_inactive_project() {
 #[tokio::test]
 async fn failed_focused_review_persistence_retries_without_replaying_stale_state() {
     // Arrange
+    crate::test_support::enable_tracing_log_fallback();
     let (mut app, _base_dir) = crate::test_support::new_test_app().await;
     let project_id = app.projects.active_project_id();
     app.services

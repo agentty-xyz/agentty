@@ -1,8 +1,8 @@
-use image::Rgba;
+use image::{Rgba, RgbaImage};
 
 use super::{
     DEFAULT_BG, DEFAULT_FG, EMPTY_GLYPH, brighten_component, color_to_rgba, dim_component,
-    lookup_glyph,
+    draw_glyph, fill_rect, lookup_glyph,
 };
 use crate::frame::{CellColor, TerminalFrame};
 use crate::renderer::render_to_image;
@@ -92,6 +92,39 @@ fn render_inverse_swaps_colors() {
     assert_eq!(pixel.0[0], DEFAULT_FG.red);
     assert_eq!(pixel.0[1], DEFAULT_FG.green);
     assert_eq!(pixel.0[2], DEFAULT_FG.blue);
+}
+
+#[test]
+fn render_underline_draws_bottom_edge_in_foreground() {
+    // Arrange — an underlined space has no glyph pixels of its own.
+    let frame = TerminalFrame::new(1, 1, b"\x1b[4m \x1b[0m");
+
+    // Act
+    let image = render_to_image(&frame);
+
+    // Assert — only the bottom pixel row switches to the foreground.
+    for pixel_x in 0..8 {
+        assert_eq!(*image.get_pixel(pixel_x, 15), color_to_rgba(DEFAULT_FG));
+        assert_eq!(*image.get_pixel(pixel_x, 14), color_to_rgba(DEFAULT_BG));
+    }
+}
+
+#[test]
+fn fill_rect_and_draw_glyph_clip_to_the_image() {
+    // Arrange — a 6x10 image is smaller than one 8x16 cell.
+    let color = Rgba([1, 2, 3, 255]);
+    let mut filled = RgbaImage::new(6, 10);
+    let mut drawn = RgbaImage::new(6, 10);
+
+    // Act
+    fill_rect(&mut filled, 2, 4, 8, 16, color);
+    draw_glyph(&mut drawn, 0, 0, &[0xFF; 16], color);
+
+    // Assert — every in-bounds pixel of the shape is painted, and nothing
+    // outside it.
+    assert_eq!(*filled.get_pixel(5, 9), color);
+    assert_eq!(*filled.get_pixel(1, 9), Rgba([0, 0, 0, 0]));
+    assert!(drawn.pixels().all(|pixel| *pixel == color));
 }
 
 #[test]

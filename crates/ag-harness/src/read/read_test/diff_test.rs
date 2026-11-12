@@ -272,6 +272,8 @@ fn bounded_diff_helpers_preserve_utf8_and_separate_patches() {
     let mut joined = "tracked".to_string();
     let mut nearly_full = "x".repeat(MAX_READ_BYTES - 2);
     let addition = "éé";
+    let mut empty = String::new();
+    let oversized_addition = "y".repeat(MAX_READ_BYTES + 1);
 
     // Act
     let (bounded, truncated) =
@@ -279,6 +281,7 @@ fn bounded_diff_helpers_preserve_utf8_and_separate_patches() {
             .expect("UTF-8 diff should remain valid");
     let joined_truncated = ReadTool::append_bounded_diff(&mut joined, "untracked");
     let full_truncated = ReadTool::append_bounded_diff(&mut nearly_full, addition);
+    let empty_truncated = ReadTool::append_bounded_diff(&mut empty, &oversized_addition);
 
     // Assert
     assert_eq!(bounded.len(), MAX_READ_BYTES - 1);
@@ -288,4 +291,6 @@ fn bounded_diff_helpers_preserve_utf8_and_separate_patches() {
     assert_eq!(nearly_full.len(), MAX_READ_BYTES - 1);
     assert!(nearly_full.ends_with('\n'));
     assert!(full_truncated);
+    assert_eq!(empty, "y".repeat(MAX_READ_BYTES));
+    assert!(empty_truncated);
 }

@@ -10,7 +10,8 @@ use ag_protocol::ProtocolRequestProfile;
 use ag_session::{
     ContinueGraphNodeRequest, ExecutionGraphStatus, GraphBlockedReason, GraphContext,
     GraphControlRequest, GraphExecutionRef, GraphNode, GraphNodeContinuation, GraphNodeStatus,
-    GraphResultRef, ResumeExecutionGraphRequest, StartExecutionGraphRequest,
+    GraphResultRef, ResumeExecutionGraphRequest, StartExecutionGraphRequest, TaskAgentRole,
+    TaskChain,
 };
 use ag_worker::test_support::{AppServerTurnResponse, MockAppServerClient};
 use ag_worker::{GraphExecutor, GraphNodeRunner, GraphRunRequest};
@@ -474,6 +475,55 @@ async fn graph_lifecycle_progress_preserves_dispatchable_and_queued_work() {
         drop(environment);
         app.services.wait_for_cleanup_tasks(None).await;
     }
+}
+
+#[tokio::test]
+async fn task_chain_handoff_reports_review_suppression_failure_before_admission() {
+    // Arrange
+    let (mut app, pool, _directory) = app_with_pool().await;
+    let mut request = run_request();
+    request.dispatch.node.id = TaskAgentRole::Planner.id().into();
+    request.dispatch.node.execution.context = GraphContext::TaskConversation {
+        task_id: TaskChain::task_id("graph", TaskAgentRole::Planner),
+    };
+    pool.close().await;
+    let (admitted_tx, admitted_rx) = oneshot::channel();
+    let (reply_tx, reply_rx) = oneshot::channel();
+
+    // Act
+    app.enqueue_graph_node(request, CancellationToken::new(), admitted_tx, reply_tx)
+        .await;
+
+    // Assert
+    admitted_rx.await.expect("handoff rejection acknowledged");
+    let error = reply_rx
+        .await
+        .expect("failure reply")
+        .expect_err("suppression failure")
+        .to_string();
+    assert!(error.contains("closed"), "{error}");
+    assert!(app.role_review_suppression.contains_key("sess"));
+}
+
+#[tokio::test]
+async fn session_environment_write_is_exclusive_while_a_lease_is_held() {
+    // Arrange
+    let (app, _directory) = new_test_app().await;
+    let lease = app
+        .services
+        .try_environment_write("session-env")
+        .expect("first writer");
+
+    // Act
+    let busy = app.services.try_environment_write("session-env");
+    drop(lease);
+    let released = app.services.try_environment_write("session-env");
+
+    // Assert
+    assert!(
+        matches!(busy, Err(crate::app::SessionError::Workflow(ref message)) if message == "Session Env is busy")
+    );
+    assert!(released.is_ok());
 }
 
 async fn app_with_pool() -> (App, SqlitePool, tempfile::TempDir) {

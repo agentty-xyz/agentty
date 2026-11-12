@@ -81,6 +81,7 @@ fn non_artifact_files_are_ignored() {
     let temp_dir = tempfile::tempdir().expect("failed to create temp dir");
     let dir = temp_dir.path();
     std::fs::write(dir.join("notes.md"), "ignore me").expect("write md");
+    std::fs::create_dir(dir.join("nested.png")).expect("create directory");
     std::fs::write(dir.join("01_start.txt"), "content").expect("write txt");
 
     // Act
@@ -90,6 +91,7 @@ fn non_artifact_files_are_ignored() {
     // Assert
     assert!(html.contains("01_start.txt"));
     assert!(!html.contains("notes.md"), "non-artifact referenced");
+    assert!(!html.contains("nested.png"), "directory referenced");
 }
 
 #[test]

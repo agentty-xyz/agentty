@@ -1,4 +1,5 @@
 use std::path::PathBuf;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
 
 use ag_git::{GitError, MockGitClient};
@@ -6,11 +7,13 @@ use ag_session::test_support as model_fixture;
 use tokio::sync::oneshot;
 
 use super::super::SessionTaskService;
+use super::support::insert_review_session;
 use crate::db::AppRepositories;
 use crate::domain::session::{SessionDiffStats, SessionHandles, Status};
 use crate::domain::session_message::{SessionMessage, SessionMessageKind, SessionTranscript};
 use crate::infra::db::DbError;
 use crate::infra::fs;
+use crate::test_support::{enable_tracing_log_fallback, poison_lock};
 
 #[tokio::test]
 async fn refresh_diff_stats_marks_git_failures_unknown_without_erasing_totals() {
@@ -65,6 +68,47 @@ async fn refresh_diff_stats_marks_git_failures_unknown_without_erasing_totals() 
     assert_eq!(sessions[0].deleted_lines, 3);
     assert_eq!(sessions[0].has_diff, None);
     assert_eq!(sessions[0].size, "S");
+}
+
+#[tokio::test]
+async fn refresh_diff_stats_returns_none_when_persistence_fails() {
+    for is_base_branch_lookup_failure in [true, false] {
+        // Arrange
+        enable_tracing_log_fallback();
+        let (database, pool) = AppRepositories::in_memory_with_pool()
+            .await
+            .expect("db should open");
+        insert_review_session(&database, model_fixture::CODEX_MODEL_ID).await;
+        let mut fs_client = fs::MockFsClient::new();
+        let mut git_client = MockGitClient::new();
+        if is_base_branch_lookup_failure {
+            pool.close().await;
+            fs_client.expect_is_dir().never();
+            git_client.expect_diff().never();
+        } else {
+            fs_client.expect_is_dir().times(1).return_const(true);
+            git_client.expect_diff().times(1).return_once(move |_, _| {
+                Box::pin(async move {
+                    pool.close().await;
+
+                    Err(GitError::OutputParse("diff failed".to_string()))
+                })
+            });
+        }
+
+        // Act
+        let diff_stats = SessionTaskService::refresh_persisted_session_diff_stats(
+            &database,
+            &fs_client,
+            &git_client,
+            "session-id",
+            &PathBuf::from("/tmp/session"),
+        )
+        .await;
+
+        // Assert
+        assert_eq!(diff_stats, None);
+    }
 }
 
 #[tokio::test]
@@ -139,6 +183,7 @@ async fn test_workflow_notice_append_survives_hydration_during_persistence() {
 #[tokio::test]
 async fn test_workflow_notice_append_remains_live_after_persistence_error() {
     // Arrange
+    enable_tracing_log_fallback();
     let transcript = Arc::new(Mutex::new(SessionTranscript::default()));
 
     // Act
@@ -163,5 +208,43 @@ async fn test_workflow_notice_append_remains_live_after_persistence_error() {
             SessionMessageKind::WorkflowNotice,
             "\n[Sync Error] persistence failed\n"
         )]
+    );
+}
+
+#[tokio::test]
+async fn test_workflow_notice_append_still_persists_when_live_transcript_is_poisoned() {
+    // Arrange
+    enable_tracing_log_fallback();
+    let transcript = Arc::new(Mutex::new(SessionTranscript::default()));
+    poison_lock(Arc::clone(&transcript));
+    let persisted = Arc::new(AtomicBool::new(false));
+
+    // Act
+    SessionTaskService::append_live_and_persist_transcript_message(
+        &transcript,
+        "session-id",
+        SessionMessageKind::WorkflowNotice,
+        "\n[Sync] Successfully synced onto main\n",
+        {
+            let persisted = Arc::clone(&persisted);
+
+            async move {
+                persisted.store(true, Ordering::SeqCst);
+
+                Ok(())
+            }
+        },
+        "failed to persist workflow notice",
+    )
+    .await;
+
+    // Assert
+    assert!(persisted.load(Ordering::SeqCst));
+    assert_eq!(
+        transcript
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .messages(),
+        &[] as &[SessionMessage]
     );
 }

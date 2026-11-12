@@ -9,7 +9,6 @@ use ag_worker::{HeartbeatClock, RunWorker, RuntimeConfig};
 use tokio::task::JoinHandle;
 use tokio::time;
 use tokio_util::sync::CancellationToken;
-use tracing::instrument::WithSubscriber;
 
 use crate::analytics::TurnOutcome;
 use crate::app::branch_publish::BranchPublishTaskFailure;
@@ -19,11 +18,11 @@ use crate::app::service::{AppServices, RealSessionRunFactory, SessionRunFactory}
 use crate::app::session::{SyncSessionStartError, TurnAppliedState};
 use crate::app::sync::{ProjectSyncContext, SyncMainCompletion};
 use crate::app::{AppEvent, UpdateStatus};
-use crate::domain::agent::{AgentKind, AgentModel, AgentSelection};
+use crate::domain::agent::{AgentCliInfo, AgentKind, AgentModel, AgentSelection};
 use crate::domain::session::{PublishedBranchSyncStatus, SessionId, SessionStats};
 use crate::infra::clock::Clock;
 use crate::infra::db::Database;
-use crate::test_support::{FixedClock, TestSubscriber};
+use crate::test_support::{FixedClock, enable_tracing_log_fallback, poison_lock};
 
 #[path = "service_shutdown_test.rs"]
 mod shutdown;
@@ -436,6 +435,7 @@ async fn creation_completion_releases_canceled_tasks_and_tolerates_duplicates() 
     task.abort();
     app.services
         .track_session_creation_task("canceled".to_string(), task);
+    enable_tracing_log_fallback();
 
     // Act
     app.services.finish_session_creation_task("canceled").await;
@@ -645,6 +645,7 @@ async fn cleanup_task_wait_cancels_work_after_shared_deadline() {
             .expect("past deadline"),
         std::time::SystemTime::UNIX_EPOCH,
     );
+    enable_tracing_log_fallback();
 
     // Act
     time::timeout(
@@ -654,7 +655,6 @@ async fn cleanup_task_wait_cancels_work_after_shared_deadline() {
             time::Instant::from_std(clock.now_instant()) + Duration::from_secs(1),
         ),
     )
-    .with_subscriber(TestSubscriber)
     .await
     .expect("cleanup wait should honor its shared deadline");
 
@@ -678,6 +678,7 @@ async fn cleanup_wait_settles_successful_and_failed_tasks() {
     });
     let handles = Mutex::new(vec![success, failure]);
     let clock = FixedClock::unix_epoch();
+    enable_tracing_log_fallback();
 
     // Act
     AppServices::wait_for_cleanup_task_handles(
@@ -710,6 +711,7 @@ async fn cleanup_wait_observes_resource_failure_during_cancellation() {
             .expect("past deadline"),
         std::time::SystemTime::UNIX_EPOCH,
     );
+    enable_tracing_log_fallback();
 
     // Act
     AppServices::wait_for_cleanup_task_handles(
@@ -720,6 +722,53 @@ async fn cleanup_wait_observes_resource_failure_during_cancellation() {
 
     // Assert
     assert!(handles.lock().expect("cleanup handles").is_empty());
+}
+
+#[tokio::test]
+async fn app_event_emission_tolerates_a_closed_receiver() {
+    // Arrange
+    let (mut app, _directory) = crate::test_support::new_test_app().await;
+    let (event_tx, event_rx) = tokio::sync::mpsc::unbounded_channel();
+    drop(event_rx);
+    app.services.event_tx = event_tx;
+    enable_tracing_log_fallback();
+
+    // Act
+    app.services.emit_app_event(AppEvent::RefreshSessions);
+
+    // Assert
+    assert!(app.services.event_tx.is_closed());
+}
+
+#[tokio::test]
+async fn poisoned_service_registries_skip_updates() {
+    // Arrange
+    let (app, _directory) = crate::test_support::new_test_app().await;
+    let original_agent_clis = app.services.available_agent_clis();
+    poison_lock(Arc::clone(&app.services.available_agent_clis));
+    poison_lock(Arc::clone(&app.services.cleanup_task_handles));
+
+    // Act
+    app.services
+        .replace_available_agent_clis(vec![AgentCliInfo::new(AgentKind::Codex, None)]);
+    app.services.track_cleanup_task(tokio::spawn(async {}));
+
+    // Assert
+    assert_eq!(
+        *app.services
+            .available_agent_clis
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner),
+        original_agent_clis
+    );
+    assert_eq!(
+        app.services
+            .cleanup_task_handles
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .len(),
+        0
+    );
 }
 
 #[test]

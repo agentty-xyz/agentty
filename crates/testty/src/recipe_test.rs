@@ -85,6 +85,22 @@ fn expect_footer_action_panics_when_absent_from_footer() {
 }
 
 #[test]
+fn expect_footer_and_dialog_adapters_pass_when_text_is_present() {
+    // Arrange — a dialog title near the top and hints on the last row.
+    let mut data = b"Confirm Delete".to_vec();
+    for _ in 0..23 {
+        data.extend_from_slice(b"\r\n");
+    }
+    data.extend_from_slice(b"Tab: next  q: Quit");
+    let frame = TerminalFrame::new(80, 24, &data);
+
+    // Act / Assert — none of the panic adapters panic.
+    expect_keybinding_hint(&frame, "Tab");
+    expect_footer_action(&frame, "Quit");
+    expect_dialog_title(&frame, "Confirm Delete");
+}
+
+#[test]
 #[should_panic(expected = "Text 'Confirm Delete' not found in region")]
 fn expect_dialog_title_panics_when_absent() {
     // Arrange

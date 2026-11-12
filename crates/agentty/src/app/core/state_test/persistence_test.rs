@@ -197,6 +197,7 @@ async fn test_continue_terminal_session_uses_persisted_context_for_canceled_sour
 #[tokio::test]
 async fn open_session_worktree_in_tmux_stays_closed_when_persistence_fails() {
     // Arrange
+    crate::test_support::enable_tracing_log_fallback();
     let (mut app, base_dir, pool) = crate::test_support::new_git_test_app_with_pool().await;
     let session_folder = base_dir.path().join("session-persistence-failure");
     fs::create_dir_all(&session_folder).expect("failed to create session folder");

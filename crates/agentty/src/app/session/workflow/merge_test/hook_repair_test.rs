@@ -28,6 +28,40 @@ impl ExistingSessionRebaseAssistClient for RecordingAssistClient {
     }
 }
 
+/// Existing-session assistance that rejects every prompt.
+struct FailingAssistClient;
+
+impl ExistingSessionRebaseAssistClient for FailingAssistClient {
+    fn resolve_rebase_conflicts(
+        &self,
+        _prompt: String,
+    ) -> RebaseAssistFuture<Result<(), SessionError>> {
+        Box::pin(async { Err(SessionError::Workflow("session busy".into())) })
+    }
+}
+
+#[tokio::test]
+async fn existing_session_hook_repair_preserves_assistance_errors() {
+    // Arrange
+    let mut git = MockGitClient::new();
+    git.expect_run_pre_commit_hook()
+        .once()
+        .returning(|_| Box::pin(async { Err(hook_failure("lint failed")) }));
+    git.expect_stage_all().never();
+    let (_folder, mut input) = build_rebase_assist_input_for_test(Arc::new(git)).await;
+    input.assist_mode = RebaseAssistMode::ExistingSession(Arc::new(FailingAssistClient));
+    let input = RebaseAssistLoopInput::Session(Box::new(input));
+
+    // Act
+    let error = input
+        .run_pre_commit_hook()
+        .await
+        .expect_err("assistance should fail");
+
+    // Assert
+    assert_eq!(error.to_string(), "Rebase assistance failed: session busy");
+}
+
 /// The hook must pass after restaging before continuation becomes possible.
 #[tokio::test]
 async fn repairs_hook_failures_in_existing_session_and_continues() {

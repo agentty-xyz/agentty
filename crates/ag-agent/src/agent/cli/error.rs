@@ -16,10 +16,16 @@ pub(crate) fn format_agent_cli_exit_error(
         return guidance;
     }
 
-    let exit_code = exit_code.map_or_else(|| "unknown".to_string(), |code| code.to_string());
+    let exit_code = format_exit_code(exit_code);
     let output_detail = agent_cli_output_detail(stdout, stderr);
 
     format!("{command_label} failed with exit code {exit_code}.\n\n{output_detail}")
+}
+
+/// Formats one optional process exit code, using `unknown` when the platform
+/// reported none.
+pub(crate) fn format_exit_code(exit_code: Option<i32>) -> String {
+    exit_code.map_or_else(|| "unknown".to_string(), |code| code.to_string())
 }
 
 /// Returns provider-specific guidance for known CLI command failures.
@@ -174,7 +180,7 @@ fn format_json_event_summary(value: &Value) -> String {
         Some("result") => format_result_event_summary(value),
         Some("system") => format_system_event_summary(value),
         Some(event_type) => format_generic_event_summary(value, event_type),
-        None => serde_json::to_string_pretty(value).unwrap_or_else(|_| value.to_string()),
+        None => format!("{value:#}"),
     }
 }
 

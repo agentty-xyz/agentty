@@ -77,7 +77,41 @@ async fn test_reply_to_question_answers_returns_false_for_missing_session() {
     let enqueued = session_manager
         .reply_to_question_answers(&services, "missing-session", "The answer")
         .await;
+    let replied = session_manager
+        .reply(&services, "missing-session", "A follow-up")
+        .await;
 
     // Assert
     assert!(!enqueued);
+    assert!(!replied);
+}
+
+/// Ensures a rejected reply without runtime handles has no transcript to
+/// report into and still fails cleanly.
+#[tokio::test]
+async fn test_reply_to_blocked_session_without_handles_returns_false() {
+    // Arrange
+    let session = test_session("Initial prompt", Status::InProgress, Some("Title"), "");
+    let database = database_with_session(&session).await;
+    let mut session_manager = session_manager_with_one_session(session);
+    session_manager.state.handles_mut().remove("session-id");
+    let services = test_services(
+        &database,
+        Arc::new(git::MockGitClient::new()),
+        Arc::new(forge::MockReviewRequestClient::new()),
+    );
+
+    // Act
+    let replied = session_manager
+        .reply(&services, "session-id", "A follow-up")
+        .await;
+
+    // Assert
+    assert!(!replied);
+    assert!(
+        session_manager
+            .session_handles()
+            .get("session-id")
+            .is_none()
+    );
 }

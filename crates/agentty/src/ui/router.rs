@@ -25,6 +25,7 @@ use crate::presentation::frame_time::FrameTime;
 use crate::presentation::graph_chat::GraphChatSnapshot;
 use crate::presentation::setting::SettingsScreenSnapshot;
 use crate::presentation::task_chain_graph::TaskChainGraphCache;
+use crate::ui::component::confirmation_overlay::ConfirmationOverlay;
 use crate::ui::component::info_overlay::InfoOverlay;
 use crate::ui::component::project_catalog_overlay::ProjectCatalogOverlay;
 use crate::ui::{
@@ -586,17 +587,15 @@ fn render_mode_overlay(
         }
         AppMode::ProjectSwitcher {
             selected_option_index,
-        } => {
-            let mru_project_items =
-                ordered_project_items(shared.projects, shared.mru_project_order);
-            component::project_switcher_overlay::ProjectSwitcherOverlay::new(
-                &mru_project_items,
-                shared.active_project_id,
-                *selected_option_index,
-            )
-            .render(f, area);
-        }
-        AppMode::Confirmation { .. } => render_confirmation_overlay(f, area, mode),
+        } => render_project_switcher_overlay(f, area, shared, *selected_option_index),
+        AppMode::Confirmation {
+            confirmation_message,
+            confirmation_title,
+            selected_confirmation_index,
+            ..
+        } => ConfirmationOverlay::new(confirmation_title, confirmation_message)
+            .selected_first(*selected_confirmation_index == 0)
+            .render(f, area),
         AppMode::SyncBlockedPopup {
             default_branch,
             is_loading,
@@ -701,24 +700,20 @@ fn render_stack_append_parent_overlay(
     .render(f, area);
 }
 
-/// Renders the confirmation overlay after its classified base surface.
-fn render_confirmation_overlay(f: &mut Frame, area: Rect, mode: &AppMode) {
-    let AppMode::Confirmation {
-        confirmation_message,
-        confirmation_title,
-        selected_confirmation_index,
-        ..
-    } = mode
-    else {
-        return;
-    };
-
-    let overlay = component::confirmation_overlay::ConfirmationOverlay::new(
-        confirmation_title,
-        confirmation_message,
+/// Renders the project switcher with projects in most-recently-used order.
+fn render_project_switcher_overlay(
+    f: &mut Frame,
+    area: Rect,
+    shared: &RouteSharedContext<'_>,
+    selected_option_index: usize,
+) {
+    let mru_project_items = ordered_project_items(shared.projects, shared.mru_project_order);
+    component::project_switcher_overlay::ProjectSwitcherOverlay::new(
+        &mru_project_items,
+        shared.active_project_id,
+        selected_option_index,
     )
-    .selected_first(*selected_confirmation_index == 0);
-    overlay.render(f, area);
+    .render(f, area);
 }
 
 /// Renders a session surface in either interactive or restored-view mode.

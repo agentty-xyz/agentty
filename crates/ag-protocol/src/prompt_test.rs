@@ -2,7 +2,7 @@ use std::path::PathBuf;
 
 use crate::prompt::{
     TurnPrompt, TurnPromptAttachment, TurnPromptContentPart, TurnPromptTextSource,
-    split_turn_prompt_content,
+    render_prompt_text_for_agent, split_turn_prompt_content,
 };
 
 #[test]
@@ -180,4 +180,113 @@ fn test_split_turn_prompt_content_orders_placeholders_and_appends_orphans() {
             TurnPromptContentPart::OrphanAttachment(&attachments[2]),
         ]
     );
+}
+
+#[test]
+/// Ensures placeholders at the start and end of the text produce no empty
+/// text parts.
+fn test_split_turn_prompt_content_omits_empty_edge_text_parts() {
+    // Arrange
+    let attachments = vec![
+        TurnPromptAttachment {
+            local_image_path: PathBuf::from("/tmp/image-1.png"),
+            placeholder: "[Image #1]".to_string(),
+        },
+        TurnPromptAttachment {
+            local_image_path: PathBuf::from("/tmp/image-2.png"),
+            placeholder: "[Image #2]".to_string(),
+        },
+    ];
+
+    // Act
+    let content_parts = split_turn_prompt_content("[Image #1] vs [Image #2]", &attachments);
+
+    // Assert
+    assert_eq!(
+        content_parts,
+        vec![
+            TurnPromptContentPart::Attachment(&attachments[0]),
+            TurnPromptContentPart::Text(" vs "),
+            TurnPromptContentPart::Attachment(&attachments[1]),
+        ]
+    );
+}
+
+#[test]
+/// Ensures prompt accessors and conversions expose text and attachment
+/// state.
+fn test_turn_prompt_accessors_and_conversions_expose_payload() {
+    // Arrange
+    let attachment = TurnPromptAttachment {
+        local_image_path: PathBuf::from("/tmp/image-1.png"),
+        placeholder: "[Image #1]".to_string(),
+    };
+    let prompt = TurnPrompt {
+        attachments: vec![attachment.clone()],
+        text: "Explain [Image #1]".to_string(),
+        text_source: TurnPromptTextSource::UserPrompt,
+    };
+    let empty_prompt = TurnPrompt::from(String::new());
+
+    // Act
+    let copied_prompt = TurnPrompt::from(&prompt);
+    let local_image_paths = prompt.local_image_paths().collect::<Vec<_>>();
+
+    // Assert
+    assert_eq!(copied_prompt, prompt);
+    assert!(!prompt.is_empty());
+    assert!(empty_prompt.is_empty());
+    assert!(prompt.has_attachments());
+    assert!(!empty_prompt.has_attachments());
+    assert_eq!(local_image_paths, vec![&attachment.local_image_path]);
+    assert!(prompt.contains("Explain"));
+    assert!(prompt.ends_with("[Image #1]"));
+    assert!(!prompt.ends_with("Explain"));
+    assert_eq!(prompt.to_string(), "Explain [Image #1]");
+    assert_eq!(
+        prompt.content_parts(),
+        vec![
+            TurnPromptContentPart::Text("Explain "),
+            TurnPromptContentPart::Attachment(&prompt.attachments[0]),
+        ]
+    );
+}
+
+#[test]
+/// Ensures missing placeholders are appended without an extra separator
+/// after trailing whitespace or empty text.
+fn test_turn_prompt_transcript_text_reuses_trailing_whitespace_for_missing_placeholders() {
+    // Arrange
+    let attachments = vec![TurnPromptAttachment {
+        local_image_path: PathBuf::from("/tmp/image-1.png"),
+        placeholder: "[Image #1]".to_string(),
+    }];
+    let cases = [("Review ", "Review [Image #1]"), ("", "[Image #1]")];
+
+    for (text, expected_transcript_text) in cases {
+        let prompt = TurnPrompt {
+            attachments: attachments.clone(),
+            text: text.to_string(),
+            text_source: TurnPromptTextSource::UserPrompt,
+        };
+
+        // Act
+        let transcript_text = prompt.transcript_text();
+
+        // Assert
+        assert_eq!(transcript_text, expected_transcript_text);
+    }
+}
+
+#[test]
+/// Ensures an `@` followed by a non-lookup character stays unchanged.
+fn test_render_prompt_text_for_agent_keeps_at_without_lookup_query() {
+    // Arrange
+    let text = "meet @ noon and @!";
+
+    // Act
+    let agent_text = render_prompt_text_for_agent(text);
+
+    // Assert
+    assert_eq!(agent_text, text);
 }

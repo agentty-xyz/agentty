@@ -138,10 +138,7 @@ impl SessionManager {
         services: &AppServices,
         session_id: &str,
     ) -> Result<ReviewRequest, SessionError> {
-        let session_index = self.session_index_or_err(session_id)?;
-        let Some(session) = self.state.sessions.get(session_index) else {
-            return Err(SessionError::NotFound);
-        };
+        let session = self.session_or_err(session_id)?;
         let linked_review_request = session.review_request.clone().ok_or_else(|| {
             SessionError::Workflow("Session has no linked review request".to_string())
         })?;

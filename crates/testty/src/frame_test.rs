@@ -298,10 +298,72 @@ fn contents_formatted_roundtrips_colors() {
 
 #[test]
 fn ansi_index_to_rgb_standard_colors() {
-    // Arrange / Act / Assert
-    assert_eq!(ansi_index_to_rgb(0), CellColor::black());
-    assert_eq!(ansi_index_to_rgb(15), CellColor::white());
-    assert_eq!(ansi_index_to_rgb(9), CellColor::new(255, 0, 0));
+    // Arrange
+    let expected = [
+        (0, CellColor::black()),
+        (1, CellColor::new(128, 0, 0)),
+        (2, CellColor::new(0, 128, 0)),
+        (3, CellColor::new(128, 128, 0)),
+        (4, CellColor::new(0, 0, 128)),
+        (5, CellColor::new(128, 0, 128)),
+        (6, CellColor::new(0, 128, 128)),
+        (7, CellColor::new(192, 192, 192)),
+        (8, CellColor::new(128, 128, 128)),
+        (9, CellColor::new(255, 0, 0)),
+        (10, CellColor::new(0, 255, 0)),
+        (11, CellColor::new(255, 255, 0)),
+        (12, CellColor::new(0, 0, 255)),
+        (13, CellColor::new(255, 0, 255)),
+        (14, CellColor::new(0, 255, 255)),
+        (15, CellColor::white()),
+    ];
+
+    // Act
+    let actual: Vec<(u8, CellColor)> = expected
+        .iter()
+        .map(|(index, _)| (*index, ansi_index_to_rgb(*index)))
+        .collect();
+
+    // Assert
+    assert_eq!(actual, expected);
+}
+
+#[test]
+fn ansi_index_to_rgb_color_cube() {
+    // Arrange / Act
+    let cube_origin = ansi_index_to_rgb(16);
+    let pure_red = ansi_index_to_rgb(196);
+    let mixed = ansi_index_to_rgb(16 + 36 + 2 * 6 + 3);
+
+    // Assert — zero components stay 0, others map to `55 + 40 * value`.
+    assert_eq!(cube_origin, CellColor::black());
+    assert_eq!(pure_red, CellColor::new(255, 0, 0));
+    assert_eq!(mixed, CellColor::new(95, 135, 175));
+}
+
+#[test]
+fn truecolor_codes_are_parsed() {
+    // Arrange — 24-bit foreground and 256-color background.
+    let data = b"\x1b[38;2;10;20;30;48;5;21mX\x1b[0m";
+
+    // Act
+    let frame = TerminalFrame::new(10, 1, data);
+
+    // Assert
+    assert_eq!(frame.fg_color(0, 0), Some(CellColor::new(10, 20, 30)));
+    assert_eq!(frame.bg_color(0, 0), Some(CellColor::new(0, 0, 255)));
+}
+
+#[test]
+fn row_text_outside_the_screen_is_empty() {
+    // Arrange
+    let frame = TerminalFrame::new(10, 2, b"visible");
+
+    // Act
+    let text = frame.row_text(5);
+
+    // Assert
+    assert_eq!(text, "");
 }
 
 #[test]

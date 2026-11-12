@@ -5,14 +5,15 @@ use ratatui::widgets::{Paragraph, TableState};
 
 use super::{
     DiffSurfaceInput, FrameResources, RouteSharedContext, SessionSurfaceMode, Surface, SurfaceKind,
-    render_diff_surface, render_list_background, render_mode_overlay, render_session_surface,
-    render_surface, surface_for_help_context, surface_for_mode,
+    active_project_name, render_diff_surface, render_list_background, render_mode_overlay,
+    render_session_surface, render_surface, surface_for_help_context, surface_for_mode,
 };
 use crate::app::Tab;
 use crate::app::session_state::SessionGitStatus;
 use crate::domain::agent::{AgentKind, ReasoningLevel};
 use crate::domain::harness::HarnessAvailability;
 use crate::domain::input::InputState;
+use crate::domain::project::{Project, ProjectListItem};
 use crate::domain::question::QuestionItem;
 use crate::domain::session::{Session, Status};
 use crate::domain::session_message::{SessionMessage, SessionMessageKind, SessionTranscript};
@@ -80,10 +81,12 @@ fn route_shared_context_finds_appendable_parent_for_selected_review_session() {
 
     // Act
     let can_append = shared.can_append_selected_session();
+    let can_create_stacked = shared.can_create_stacked_session();
     let parent_sessions = shared.stack_append_parent_sessions("source");
 
     // Assert
     assert!(can_append);
+    assert!(can_create_stacked);
     assert_eq!(parent_sessions.len(), 1);
     assert_eq!(parent_sessions[0].id.as_str(), "parent");
 }
@@ -493,6 +496,59 @@ fn render_list_background_renders_settings_snapshot_and_overlays() {
     // Assert
     assert!(text.contains("Launch Configurations"));
     assert!(text.contains("cargo test"));
+}
+
+#[test]
+fn render_list_background_leaves_settings_tab_blank_without_snapshot() {
+    // Arrange
+    let settings_screen = None;
+
+    // Act
+    let (text, _) = render_list_tab(Tab::Settings, settings_screen);
+
+    // Assert
+    assert!(!text.contains("settings"));
+    assert!(!text.contains("Launch Configurations"));
+}
+
+#[test]
+fn active_project_name_labels_only_the_matching_project() {
+    // Arrange
+    let projects = vec![
+        project_list_item(1, Some("Agentty Docs"), "/tmp/docs"),
+        project_list_item(2, None, "/tmp/agentty"),
+    ];
+
+    // Act
+    let named_project = active_project_name(1, &projects);
+    let path_project = active_project_name(2, &projects);
+    let missing_project = active_project_name(3, &projects);
+
+    // Assert
+    assert_eq!(named_project, Some("Agentty Docs".to_string()));
+    assert_eq!(path_project, Some("agentty".to_string()));
+    assert_eq!(missing_project, None);
+}
+
+/// Builds one project list item for router project-label tests.
+fn project_list_item(id: i64, display_name: Option<&str>, path: &str) -> ProjectListItem {
+    ProjectListItem {
+        active_session_count: 0,
+        input_tokens: 0,
+        last_session_updated_at: None,
+        output_tokens: 0,
+        project: Project {
+            created_at: 0,
+            display_name: display_name.map(ToString::to_string),
+            git_branch: None,
+            id,
+            is_favorite: false,
+            last_opened_at: None,
+            path: PathBuf::from(path),
+            updated_at: 0,
+        },
+        session_count: 0,
+    }
 }
 
 #[test]

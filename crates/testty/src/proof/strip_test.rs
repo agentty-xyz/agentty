@@ -1,7 +1,7 @@
-use super::{compose_strip, render_all_frames};
+use super::{LABEL_BG, LABEL_FG, compose_strip, render_all_frames};
 use crate::frame::TerminalFrame;
 use crate::proof::backend::{ProofBackend, RenderContext};
-use crate::proof::report::ProofReport;
+use crate::proof::report::{ProofError, ProofReport};
 use crate::proof::strip::ScreenshotStripBackend;
 
 #[test]
@@ -43,6 +43,42 @@ fn strip_backend_writes_valid_png() {
     let loaded = image::open(&output_path).expect("should open as image");
     assert!(loaded.width() > 0);
     assert!(loaded.height() > 0);
+}
+
+#[test]
+fn label_skips_non_ascii_characters() {
+    // Arrange — the label text is `Step 1: [é] ...`; `é` is character 9.
+    let frame = TerminalFrame::new(20, 1, b"");
+    let mut report = ProofReport::new("label_test");
+    report.add_capture("é", "accent", &frame);
+
+    // Act
+    let rendered_frames = render_all_frames(&report);
+    let strip = compose_strip(&rendered_frames, &report);
+
+    // Assert — the `S` cell has text pixels; the `é` cell is blank label
+    // background.
+    let cell_pixels = |start_x: u32| {
+        (8..24).flat_map(move |pixel_y| (start_x..start_x + 8).map(move |x| (x, pixel_y)))
+    };
+    assert!(cell_pixels(4).any(|(x, y)| *strip.get_pixel(x, y) == LABEL_FG));
+    assert!(cell_pixels(4 + 9 * 8).all(|(x, y)| *strip.get_pixel(x, y) == LABEL_BG));
+}
+
+#[test]
+fn strip_backend_reports_unwritable_output_as_format_error() {
+    // Arrange
+    let frame = TerminalFrame::new(20, 3, b"Hello strip");
+    let mut report = ProofReport::new("png_test");
+    report.add_capture("snap", "Snapshot", &frame);
+    let temp_dir = tempfile::tempdir().expect("failed to create temp dir");
+    let output_path = temp_dir.path().join("missing").join("strip.png");
+
+    // Act
+    let result = ScreenshotStripBackend.render(&RenderContext::new(&report, &output_path));
+
+    // Assert
+    assert!(matches!(result, Err(ProofError::Format(_))));
 }
 
 #[test]

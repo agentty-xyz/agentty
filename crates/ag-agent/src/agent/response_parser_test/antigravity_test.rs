@@ -239,6 +239,37 @@ fn test_antigravity_parse_response_falls_back_to_raw_output() {
 }
 
 #[test]
+/// Ensures events without usable text are skipped and final labels are read
+/// from every supported discriminator field.
+fn test_antigravity_parse_response_reads_final_labels_and_skips_empty_events() {
+    // Arrange
+    let response_cases = [
+        (
+            concat!(
+                r#"{"result":{"status":"ok"}}"#,
+                "\n",
+                r#"{"event":"final"}"#,
+                "\n",
+                r#"{"event":"progress"}"#,
+                "\n",
+                r#"{"state":"complete","value":"State final"}"#
+            ),
+            "State final",
+        ),
+        (r#"{"type":"result","value":"Typed final"}"#, "Typed final"),
+        (r#"{"event":"progress"}"#, r#"{"event":"progress"}"#),
+    ];
+
+    for (stdout, expected_content) in response_cases {
+        // Act
+        let parsed = parse_antigravity_response_with_fallback(stdout, "");
+
+        // Assert
+        assert_eq!(parsed.content, expected_content, "stdout: {stdout}");
+    }
+}
+
+#[test]
 fn direct_utility_and_metadata_objects_survive_provider_extraction() {
     // Arrange
     let payloads = [

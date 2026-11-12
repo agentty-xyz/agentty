@@ -462,6 +462,16 @@ fn git_inventory_cannot_escape_the_workspace() {
         );
         assert_eq!(included, Vec::<Vec<u8>>::new());
     }
+    let mut included = Vec::new();
+    let invalid = ProcessHost::include_sources(b"\xff\0", target.path(), &mut |bytes| {
+        included.push(bytes.to_vec());
+    });
+    assert!(
+        invalid
+            .expect_err("non-UTF-8 source")
+            .contains("invalid utf-8")
+    );
+    assert_eq!(included, Vec::<Vec<u8>>::new());
 }
 
 #[cfg(unix)]
@@ -530,20 +540,31 @@ fn unsafe_or_unreadable_targets_and_ledgers_are_rejected() {
     symlink("cycle", &cycle).expect("cyclic target");
     fs::create_dir(root.join("agentty-validation.lock")).expect("blocked lock");
     fs::create_dir(root.join("agentty-validation.json")).expect("unreadable ledger");
+    let file_target = root.join("file-target");
+    fs::write(&file_target, "not a directory").expect("file target");
+    let pending_blocked = root.join("pending-blocked");
+    fs::create_dir_all(pending_blocked.join("agentty-validation.pending"))
+        .expect("blocked pending ledger");
     // Act
     let escaped = ProcessHost.lock(&outside);
     let cyclic = ProcessHost.lock(&cycle);
     let blocked = ProcessHost.lock(root);
+    let not_directory = ProcessHost.lock(&file_target);
     let load = ProcessHost.load(root);
     let save = ProcessHost.save(root, &Ledger::new());
+    let pending_save = ProcessHost.save(&pending_blocked, &Ledger::new());
     let fingerprint = ProcessHost.fingerprint(&[], "clippy", Path::new("/"));
+    let missing_fingerprint = ProcessHost.fingerprint(&[], "clippy", &root.join("missing"));
     // Assert
     assert!(matches!(escaped, Err(error) if error.contains("outside the workspace")));
     assert!(cyclic.is_err());
     assert!(blocked.is_err());
+    assert!(not_directory.is_err());
     assert!(load.is_err());
     assert!(save.is_err());
+    assert!(pending_save.is_err());
     assert!(fingerprint.is_err());
+    assert!(missing_fingerprint.is_err());
 }
 
 #[cfg(unix)]
@@ -557,9 +578,11 @@ fn disappearing_working_directory_rejects_locking_and_fingerprinting() {
         // Act
         let lock = ProcessHost.lock(Path::new("target"));
         let fingerprint = ProcessHost.fingerprint(&[], "clippy", Path::new(&target));
+        let catalog = ProcessHost.catalog();
         // Assert
         assert!(lock.is_err());
         assert!(fingerprint.is_err());
+        assert!(catalog.is_err());
 
         return;
     }

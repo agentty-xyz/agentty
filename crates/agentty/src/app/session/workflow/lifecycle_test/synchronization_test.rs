@@ -5,12 +5,65 @@ use ag_git as git;
 
 use super::support::{
     create_passthrough_mock_fs_client, database_with_session, database_with_session_and_pool,
-    session_manager_with_one_session, test_services_with_event_receiver,
-    test_services_with_fs_client, test_session,
+    session_manager_with_one_session, session_manager_with_sessions, session_with_id,
+    test_services, test_services_with_event_receiver, test_services_with_fs_client, test_session,
 };
 use crate::app::session::SessionError;
 use crate::domain::session::Status;
 use crate::infra::clock::RealClock;
+
+#[tokio::test]
+async fn failed_stack_append_sync_restores_the_previous_stack_membership() {
+    // Arrange
+    let child = session_with_id("child", Status::Review);
+    let parent = session_with_id("parent", Status::Review);
+    let database = database_with_session(&child).await;
+    let project_id = database
+        .sessions()
+        .load_session_project_id("child")
+        .await
+        .expect("project lookup")
+        .expect("child project");
+    database
+        .sessions()
+        .insert_session(
+            "parent",
+            parent.agent.model().as_str(),
+            "main",
+            "Review",
+            project_id,
+        )
+        .await
+        .expect("parent row");
+    let mut manager = session_manager_with_sessions(vec![child, parent]);
+    manager.state.handles_mut().remove("child");
+    let services = test_services(
+        &database,
+        Arc::new(git::MockGitClient::new()),
+        Arc::new(forge::MockReviewRequestClient::new()),
+    );
+
+    // Act: the parent has no cached branch name, so its default branch is
+    // used until the sync fails without runtime handles.
+    let result = manager
+        .append_session_to_stack(&services, "child", "parent")
+        .await;
+
+    // Assert
+    assert!(matches!(result, Err(SessionError::HandlesNotFound)));
+    let child = manager.session_for_id("child").expect("child session");
+    assert_eq!(child.parent_session_id, None);
+    assert_eq!(child.base_branch, "main");
+    assert_eq!(
+        database
+            .sessions()
+            .get_session_base_branch("child")
+            .await
+            .expect("base branch lookup")
+            .as_deref(),
+        Some("main")
+    );
+}
 
 #[tokio::test]
 async fn merged_session_rejects_chat_submission_entry_points() {

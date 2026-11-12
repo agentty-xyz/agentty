@@ -28,6 +28,7 @@ use crate::domain::session::{
 use crate::domain::session_message::SessionTranscript;
 use crate::infra::clock::RealClock;
 use crate::infra::db::AppRepositories;
+use crate::test_support::enable_tracing_log_fallback;
 
 #[test]
 fn task_publish_notices_do_not_enter_ordinary_session_replay() {
@@ -295,23 +296,79 @@ async fn metadata_sync_returns_head_lookup_and_forge_errors_with_existing_warnin
 #[tokio::test]
 async fn metadata_sync_reconciles_live_remote_metadata_without_persisted_baselines() {
     // Arrange
-    let db = linked_review_request_db().await;
-    let mut git_client = MockGitClient::new();
-    git_client.expect_repo_url().once().returning(|_| {
-        Box::pin(async { Ok("https://github.com/agentty-xyz/agentty.git".to_string()) })
-    });
-    git_client
-        .expect_fetch_remote_branch_commits()
-        .once()
-        .withf(|_, remote, base, source| {
-            remote == "origin" && base == "release" && source == "wt/session-id"
-        })
-        .returning(|_, _, _, _| Box::pin(async { Ok(("1".repeat(40), "2".repeat(40))) }));
-    git_client
-        .expect_committed_diff()
-        .once()
-        .withf(|_, target, source| target == &"1".repeat(40) && source == &"2".repeat(40))
-        .returning(|_, _, _| Box::pin(async { Ok("cumulative change".into()) }));
+    for is_sync_rejected in [false, true] {
+        let db = linked_review_request_db().await;
+        let mut git_client = MockGitClient::new();
+        git_client.expect_repo_url().once().returning(|_| {
+            Box::pin(async { Ok("https://github.com/agentty-xyz/agentty.git".to_string()) })
+        });
+        git_client
+            .expect_fetch_remote_branch_commits()
+            .once()
+            .withf(|_, remote, base, source| {
+                remote == "origin" && base == "release" && source == "wt/session-id"
+            })
+            .returning(|_, _, _, _| Box::pin(async { Ok(("1".repeat(40), "2".repeat(40))) }));
+        git_client
+            .expect_committed_diff()
+            .once()
+            .withf(|_, target, source| target == &"1".repeat(40) && source == &"2".repeat(40))
+            .returning(|_, _, _| Box::pin(async { Ok("cumulative change".into()) }));
+        let review_request_client = reconciling_review_request_client(is_sync_rejected);
+        let mut run_client = ag_worker::MockRunClient::new();
+        run_client.expect_submit().once().returning(|request| {
+            assert!(request.prompt.contains("https://example.com/issues/42"));
+
+            Ok(OneShotSubmission {
+                response: ag_protocol::AgentResponse::plain(
+                    r#"{"title":"Manual stable title","description":"Tracks #42: https://example.com/issues/42\n\nNew body.","is_title_change_significant":false}"#,
+                ),
+                stats: ag_contracts::SessionStats::default(),
+            })
+        });
+        let (input, transcript) = metadata_sync_test_input(db.clone(), git_client);
+        let metadata_sync_input = ReviewRequestMetadataSyncInput {
+            clock: Arc::new(crate::infra::clock::RealClock),
+            commit_message: Some("Generated title\n\nNew body.".to_string()),
+            evaluation: ReviewRequestMetadataEvaluationInput {
+                run_client: Arc::new(run_client),
+                session_agent: model_fixture::codex_selection(),
+            },
+            review_request_client: Arc::new(review_request_client),
+        };
+
+        // Act
+        let result =
+            sync_linked_review_request_metadata_after_push(&input, &metadata_sync_input).await;
+        let review_request = db
+            .reviews()
+            .load_session_review_request("session-id")
+            .await
+            .expect("failed to load linked review request")
+            .expect("review request should remain linked");
+
+        // Assert
+        if is_sync_rejected {
+            assert_eq!(
+                result.expect_err("rejected metadata sync").to_string(),
+                "GitHub review-request operation failed: metadata write rejected"
+            );
+            assert_eq!(review_request.title, "Review title");
+            assert!(
+                last_transcript_message(&transcript)
+                    .contains("Failed to update linked review-request metadata")
+            );
+        } else {
+            result.expect("metadata sync");
+            assert_eq!(review_request.title, "Manual stable title");
+            assert!(transcript.lock().expect("transcript lock").is_empty());
+        }
+    }
+}
+
+/// Builds a forge mock whose live metadata keeps a manual title and whose
+/// final metadata write succeeds or is rejected.
+fn reconciling_review_request_client(is_sync_rejected: bool) -> MockReviewRequestClient {
     let mut review_request_client = MockReviewRequestClient::new();
     review_request_client
         .expect_detect_remote()
@@ -352,8 +409,14 @@ async fn metadata_sync_reconciles_live_remote_metadata_without_persisted_baselin
                         && body.desired == format!("{}\n\nNew body.", body.current)
                 })
         })
-        .returning(|_, _, _| {
-            Box::pin(async {
+        .returning(move |_, _, _| {
+            Box::pin(async move {
+                if is_sync_rejected {
+                    return Err(forge::ReviewRequestError::OperationFailed {
+                        forge_kind: forge::ForgeKind::GitHub,
+                        message: "metadata write rejected".into(),
+                    });
+                }
                 let mut summary = open_review_request("#42").summary;
                 summary.target_branch = "release".into();
                 summary.title = "Manual stable title".into();
@@ -361,41 +424,8 @@ async fn metadata_sync_reconciles_live_remote_metadata_without_persisted_baselin
                 Ok(summary)
             })
         });
-    let mut run_client = ag_worker::MockRunClient::new();
-    run_client.expect_submit().once().returning(|request| {
-            assert!(request.prompt.contains("https://example.com/issues/42"));
 
-            Ok(OneShotSubmission {
-                response: ag_protocol::AgentResponse::plain(
-                    r#"{"title":"Manual stable title","description":"Tracks #42: https://example.com/issues/42\n\nNew body.","is_title_change_significant":false}"#,
-                ),
-                stats: ag_contracts::SessionStats::default(),
-            })
-        });
-    let (input, transcript) = metadata_sync_test_input(db.clone(), git_client);
-    let metadata_sync_input = ReviewRequestMetadataSyncInput {
-        clock: Arc::new(crate::infra::clock::RealClock),
-        commit_message: Some("Generated title\n\nNew body.".to_string()),
-        evaluation: ReviewRequestMetadataEvaluationInput {
-            run_client: Arc::new(run_client),
-            session_agent: model_fixture::codex_selection(),
-        },
-        review_request_client: Arc::new(review_request_client),
-    };
-
-    // Act
-    let result = sync_linked_review_request_metadata_after_push(&input, &metadata_sync_input).await;
-    let review_request = db
-        .reviews()
-        .load_session_review_request("session-id")
-        .await
-        .expect("failed to load linked review request")
-        .expect("review request should remain linked");
-
-    // Assert
-    result.expect("metadata sync");
-    assert_eq!(review_request.title, "Manual stable title");
-    assert!(transcript.lock().expect("transcript lock").is_empty());
+    review_request_client
 }
 
 #[tokio::test]
@@ -1414,11 +1444,14 @@ async fn persist_resolution_test_operations(
 }
 
 /// Builds one resolution input after its durable operations are present.
+///
+/// Enables the `log` fallback so warning fields on failure paths render.
 fn persisted_resolution_test_input(
     db: AppRepositories,
     git_client: MockGitClient,
     review_request_client: MockReviewRequestClient,
 ) -> (PublishedBranchAutoPushInput, Arc<Mutex<SessionTranscript>>) {
+    enable_tracing_log_fallback();
     let transcript = Arc::new(Mutex::new(SessionTranscript::default()));
     let input = PublishedBranchAutoPushInput {
         app_event_tx: mpsc::unbounded_channel().0,
@@ -1438,10 +1471,13 @@ fn persisted_resolution_test_input(
 }
 
 /// Builds one detached-push input for direct metadata-sync tests.
+///
+/// Enables the `log` fallback so warning fields on failure paths render.
 fn metadata_sync_test_input(
     db: AppRepositories,
     mut git_client: MockGitClient,
 ) -> (PublishedBranchAutoPushInput, Arc<Mutex<SessionTranscript>>) {
+    enable_tracing_log_fallback();
     git_client
         .expect_fetch_remote_branch_commits()
         .returning(|_, _, _, _| Box::pin(async { Ok(("1".repeat(40), "2".repeat(40))) }));

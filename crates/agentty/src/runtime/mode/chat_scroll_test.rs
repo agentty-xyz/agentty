@@ -8,8 +8,8 @@ use ratatui::layout::Rect;
 
 use super::{
     ChatFocusAction, ChatScrollBatch, ChatScrollMetrics, apply_scroll_key,
-    classify_chat_focus_action, is_scroll_key, scroll_offset_down, scroll_offset_up,
-    toggle_chat_focus,
+    apply_scroll_key_to_mode, classify_chat_focus_action, is_scroll_key, scroll_offset_down,
+    scroll_offset_up, toggle_chat_focus,
 };
 use crate::app::App;
 use crate::app::session_state::SessionGitStatus;
@@ -25,6 +25,22 @@ use crate::ui::RenderCacheStore;
 /// Builds a plain key press without modifiers.
 fn plain_key(code: KeyCode) -> KeyEvent {
     KeyEvent::new(code, KeyModifiers::NONE)
+}
+
+#[test]
+fn mode_scroll_keys_leave_pages_without_a_transcript_unchanged() {
+    // Arrange
+    let metrics = ChatScrollMetrics {
+        total_lines: 40,
+        view_height: 10,
+    };
+    let mut mode = AppMode::List;
+
+    // Act
+    apply_scroll_key_to_mode(&mut mode, metrics, plain_key(KeyCode::Char('g')));
+
+    // Assert
+    assert!(matches!(mode, AppMode::List));
 }
 
 #[test]

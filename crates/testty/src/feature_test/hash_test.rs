@@ -280,6 +280,24 @@ fn read_committed_hash_parses_trimmed_decimal() {
 }
 
 #[test]
+fn read_committed_hash_returns_invalid_for_unreadable_sidecar() {
+    // Arrange — a sidecar that is not valid UTF-8 cannot be read as text.
+    let dir = tempfile::TempDir::new().expect("failed to create temp dir");
+    let path = dir.path().join(".binary.hash");
+    std::fs::write(&path, [0xFF, 0xFE]).expect("write hash");
+
+    // Act
+    let parsed = read_committed_hash(&path);
+
+    // Assert
+    let CommittedHash::Invalid(err) = parsed else {
+        unreachable!("expected invalid hash sidecar, got {parsed:?}");
+    };
+
+    assert!(err.contains("failed to read hash sidecar"));
+}
+
+#[test]
 fn read_committed_hash_returns_invalid_for_garbage() {
     // Arrange
     let dir = tempfile::TempDir::new().expect("failed to create temp dir");

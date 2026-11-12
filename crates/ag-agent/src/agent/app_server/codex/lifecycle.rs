@@ -915,15 +915,7 @@ pub(super) fn build_turn_input_items(prompt: &TurnPrompt) -> Vec<Value> {
     let mut input_items = Vec::new();
     for content_part in prompt.content_parts() {
         match content_part {
-            TurnPromptContentPart::Text(text) => {
-                if !text.is_empty() {
-                    input_items.push(serde_json::json!({
-                        "type": "text",
-                        "text": text,
-                        "text_elements": []
-                    }));
-                }
-            }
+            TurnPromptContentPart::Text(text) => push_text_input_item(&mut input_items, text),
             TurnPromptContentPart::Attachment(attachment)
             | TurnPromptContentPart::OrphanAttachment(attachment) => {
                 input_items.push(build_local_image_input_item(&attachment.local_image_path));
@@ -932,6 +924,19 @@ pub(super) fn build_turn_input_items(prompt: &TurnPrompt) -> Vec<Value> {
     }
 
     input_items
+}
+
+/// Appends one non-empty Codex text input item.
+pub(super) fn push_text_input_item(input_items: &mut Vec<Value>, text: &str) {
+    if text.is_empty() {
+        return;
+    }
+
+    input_items.push(serde_json::json!({
+        "type": "text",
+        "text": text,
+        "text_elements": []
+    }));
 }
 
 /// Builds one Codex `localImage` input item using a plain filesystem path
@@ -1000,9 +1005,7 @@ fn stream_turn_content_from_response(
     }
 
     if let Some(agent_message) = stream_parser::extract_agent_message_delta(response_value) {
-        if let Some(phase) = agent_message.phase.as_deref() {
-            emit_phase_progress_update(stream_tx, active_phase, phase);
-        }
+        emit_phase_progress_update(stream_tx, active_phase, agent_message.phase.as_deref());
 
         let _ = stream_tx.send(AppServerStreamEvent::AssistantMessage {
             is_delta: true,
@@ -1012,9 +1015,7 @@ fn stream_turn_content_from_response(
     }
 
     if let Some(agent_message) = stream_parser::extract_agent_message(response_value) {
-        if let Some(phase) = agent_message.phase.as_deref() {
-            emit_phase_progress_update(stream_tx, active_phase, phase);
-        }
+        emit_phase_progress_update(stream_tx, active_phase, agent_message.phase.as_deref());
 
         let _ = stream_tx.send(AppServerStreamEvent::AssistantMessage {
             is_delta: false,
@@ -1026,11 +1027,16 @@ fn stream_turn_content_from_response(
 }
 
 /// Emits a phase progress event when an assistant item reports a new phase.
+///
+/// Items without a phase label leave the active phase unchanged.
 fn emit_phase_progress_update(
     stream_tx: &mpsc::UnboundedSender<AppServerStreamEvent>,
     active_phase: &mut Option<String>,
-    phase: &str,
+    phase: Option<&str>,
 ) {
+    let Some(phase) = phase else {
+        return;
+    };
     if active_phase.as_deref() == Some(phase) {
         return;
     }

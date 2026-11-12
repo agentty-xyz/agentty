@@ -129,20 +129,113 @@ fn review_comment_rejects_malformed_agentty_reply_markers() {
 }
 
 #[test]
-fn forge_kind_from_str_gitlab() {
+fn forge_kind_round_trips_and_describes_each_forge() {
     // Arrange
-    let raw_forge_kind = "GitLab";
+    let cases = [
+        (
+            "GitHub",
+            ForgeKind::GitHub,
+            ["gh", "gh auth login", "GitHub pull request", "PR"],
+        ),
+        (
+            "GitLab",
+            ForgeKind::GitLab,
+            ["glab", "glab auth login", "GitLab merge request", "MR"],
+        ),
+    ];
 
-    // Act
-    let forge_kind = raw_forge_kind
-        .parse::<ForgeKind>()
-        .expect("gitlab forge kind should parse");
+    for (raw_forge_kind, expected_kind, expected_copy) in cases {
+        // Act
+        let forge_kind = raw_forge_kind
+            .parse::<ForgeKind>()
+            .expect("known forge kind should parse");
 
-    // Assert
-    assert_eq!(forge_kind, ForgeKind::GitLab);
-    assert_eq!(forge_kind.cli_name(), "glab");
-    assert_eq!(forge_kind.review_request_name(), "merge request");
-    assert_eq!(forge_kind.review_request_short_name(), "MR");
+        // Assert
+        assert_eq!(forge_kind, expected_kind);
+        assert_eq!(forge_kind.to_string(), raw_forge_kind);
+        assert_eq!(
+            [
+                forge_kind.cli_name().to_string(),
+                forge_kind.auth_login_command().to_string(),
+                forge_kind.review_request_display_name(),
+                forge_kind.review_request_short_name().to_string(),
+            ],
+            expected_copy.map(str::to_string)
+        );
+    }
+    assert_eq!(
+        "Gitea".parse::<ForgeKind>(),
+        Err("Unknown review-request forge: Gitea".to_string())
+    );
+}
+
+#[test]
+fn review_request_state_round_trips_persisted_names() {
+    // Arrange
+    let cases = [
+        ("Open", ReviewRequestState::Open),
+        ("Merged", ReviewRequestState::Merged),
+        ("Closed", ReviewRequestState::Closed),
+    ];
+
+    for (raw_state, expected_state) in cases {
+        // Act
+        let state = raw_state
+            .parse::<ReviewRequestState>()
+            .expect("known state should parse");
+
+        // Assert
+        assert_eq!(state, expected_state);
+        assert_eq!(state.to_string(), raw_state);
+    }
+    assert_eq!(
+        "Draft".parse::<ReviewRequestState>(),
+        Err("Unknown review-request state: Draft".to_string())
+    );
+}
+
+#[test]
+fn detail_message_describes_non_authentication_failures() {
+    // Arrange
+    let cases = [
+        (
+            ReviewRequestError::CliNotInstalled {
+                forge_kind: ForgeKind::GitLab,
+            },
+            "GitLab review requests require the `glab` CLI.\nInstall `glab` and run `glab auth \
+             login`, then retry.",
+        ),
+        (
+            ReviewRequestError::HostResolutionFailed {
+                forge_kind: ForgeKind::GitHub,
+                host: "github.example.com".to_string(),
+            },
+            "GitHub review requests could not reach `github.example.com`.\nCheck the repository \
+             remote host and your network or DNS setup, then retry.",
+        ),
+        (
+            ReviewRequestError::UnsupportedRemote {
+                repo_url: "https://example.com/team/project.git".to_string(),
+            },
+            "Review requests are only supported for GitHub and GitLab remotes.\nThis repository \
+             remote is not supported: `https://example.com/team/project.git`.",
+        ),
+        (
+            ReviewRequestError::OperationFailed {
+                forge_kind: ForgeKind::GitHub,
+                message: "HTTP 500".to_string(),
+            },
+            "GitHub review-request operation failed: HTTP 500",
+        ),
+    ];
+
+    for (error, expected_message) in cases {
+        // Act
+        let message = error.detail_message();
+
+        // Assert
+        assert_eq!(message, expected_message);
+    }
 }
 
 #[test]
@@ -161,8 +254,7 @@ fn authentication_required_message_includes_original_cli_error_detail() {
     assert!(message.contains("GitHub review requests require local CLI authentication"));
     assert!(message.contains("Run `gh auth login` and retry."));
     assert!(message.contains("Original `gh` error:"));
-    assert!(message.contains("HTTP 401 Unauthorized. Run `gh auth login`."));
-    assert!(message.contains("```text"));
+    assert!(message.ends_with("```text\nHTTP 401 Unauthorized. Run `gh auth login`.\n```"));
 }
 
 #[test]

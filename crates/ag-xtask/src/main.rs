@@ -2,6 +2,7 @@
 
 mod affected_clippy;
 mod cargo_environment;
+mod check_coverage;
 mod check_execution_boundary;
 mod check_instruction;
 mod check_migration;
@@ -25,6 +26,9 @@ struct Cli {
 enum Command {
     /// Runs strict Clippy for the packages changed files can affect.
     Clippy(affected_clippy::Options),
+    /// Reports every uncovered line and function in an LCOV report.
+    #[command(name = "check-coverage")]
+    Coverage(check_coverage::Options),
     /// Validates that model execution flows only through worker-owned crates.
     #[command(name = "check-execution-boundary")]
     ExecutionBoundary,
@@ -47,6 +51,7 @@ fn main() -> ExitCode {
     let cli = Cli::parse();
     let result = match cli.command {
         Some(Command::Clippy(options)) => affected_clippy::run(&options),
+        Some(Command::Coverage(options)) => check_coverage::run(&options),
         Some(Command::ExecutionBoundary) => check_execution_boundary::run(),
         Some(Command::Instructions) => check_instruction::run(),
         None | Some(Command::Migrations) => check_migration::run(),

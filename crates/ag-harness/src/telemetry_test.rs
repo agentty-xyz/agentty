@@ -14,7 +14,7 @@ use crate::lifecycle::{
     ContextSummaryErrorType, ContextSummaryTrigger, LifecycleEmitter, ModelResponseType,
     ToolErrorType, TurnErrorType,
 };
-use crate::model::{ModelErrorType, ModelMetadata};
+use crate::model::{CompletionMetadata, CompletionUsage, ModelErrorType, ModelMetadata};
 
 fn attributes<T>(point: &HistogramDataPoint<T>) -> Vec<(&str, String)> {
     let mut attributes = point
@@ -288,6 +288,105 @@ fn assert_tool_duration(metrics: &[&Metric]) {
 
             true
         }
+    ));
+}
+
+#[test]
+fn ignores_untracked_turns_tools_and_absent_token_counts() {
+    // Arrange
+    let exporter = InMemoryMetricExporter::default();
+    let meter_provider = SdkMeterProvider::builder()
+        .with_periodic_exporter(exporter.clone())
+        .build();
+    global::set_meter_provider(meter_provider.clone());
+    let metadata = ModelMetadata::new("test_provider", "usage-unit-test")
+        .expect("fixture metadata should be valid");
+    let completion = CompletionMetadata::new(
+        "stop".to_string(),
+        None,
+        None,
+        None,
+        Some(CompletionUsage::new(None, None, None, None, None, None)),
+    );
+    let lifecycle = LifecycleEmitter::new(LifecycleMetrics::default());
+
+    // Act
+    RequestMetrics::start(&metadata).completed(Some(&completion));
+    RequestMetrics::start(&metadata).completed(None);
+    let finished_turn = lifecycle
+        .start_turn()
+        .expect("observer should start a turn");
+    let finished_turn_id = finished_turn.id();
+    finished_turn.completed();
+    lifecycle
+        .start_model_request(None, 0, Some(finished_turn_id))
+        .expect("observer should start a late model request")
+        .completed(None, ModelResponseType::Output);
+    let mut late_tool = lifecycle
+        .request_tool(
+            "late-call".to_string(),
+            "read".to_string(),
+            Some(finished_turn_id),
+        )
+        .expect("observer should request a late tool");
+    late_tool.started();
+    late_tool.completed();
+    let open_turn = lifecycle
+        .start_turn()
+        .expect("observer should start a turn");
+    let pending_tool = lifecycle
+        .request_tool(
+            "pending-call".to_string(),
+            "read".to_string(),
+            Some(open_turn.id()),
+        )
+        .expect("observer should request a pending tool");
+    open_turn.completed();
+    drop(pending_tool);
+    meter_provider.force_flush().expect("metrics should flush");
+
+    // Assert
+    let resource_metrics = exporter
+        .get_finished_metrics()
+        .expect("metrics should be exported");
+    let metrics = resource_metrics
+        .iter()
+        .flat_map(opentelemetry_sdk::metrics::data::ResourceMetrics::scope_metrics)
+        .flat_map(opentelemetry_sdk::metrics::data::ScopeMetrics::metrics)
+        .collect::<Vec<_>>();
+    let mut names = metrics
+        .iter()
+        .map(|metric| metric.name())
+        .collect::<Vec<_>>();
+    names.sort_unstable();
+    let mut expected_names = vec![
+        AGENT_DURATION_METRIC,
+        AGENT_INFERENCE_CALLS_METRIC,
+        AGENT_TOOL_CALLS_METRIC,
+        DURATION_METRIC,
+    ];
+    expected_names.sort_unstable();
+    assert_eq!(names, expected_names);
+    assert!(matches!(
+        metric(&metrics, AGENT_TOOL_CALLS_METRIC).data(),
+        AggregatedMetrics::U64(MetricData::Histogram(histogram)) if histogram
+            .data_points()
+            .map(|point| (point.count(), point.sum()))
+            .eq([(2, 1)])
+    ));
+    assert!(matches!(
+        metric(&metrics, AGENT_INFERENCE_CALLS_METRIC).data(),
+        AggregatedMetrics::U64(MetricData::Histogram(histogram)) if histogram
+            .data_points()
+            .map(|point| (point.count(), point.sum()))
+            .eq([(2, 0)])
+    ));
+    assert!(matches!(
+        metric(&metrics, DURATION_METRIC).data(),
+        AggregatedMetrics::F64(MetricData::Histogram(histogram)) if histogram
+            .data_points()
+            .map(HistogramDataPoint::count)
+            .eq([2])
     ));
 }
 

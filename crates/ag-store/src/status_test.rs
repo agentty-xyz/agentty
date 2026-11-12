@@ -3,7 +3,9 @@ use crate::status::{validate_operation, validate_session};
 #[test]
 fn codecs_accept_current_and_legacy_statuses() {
     // Arrange / Act / Assert
-    assert!(validate_operation("queued").is_ok());
+    for status in ["canceled", "done", "failed", "queued", "running"] {
+        assert!(validate_operation(status).is_ok(), "{status}");
+    }
     assert!(validate_session("Committing").is_ok());
 }
 

@@ -2,7 +2,6 @@ use ag_forge::{
     ReviewComment, ReviewCommentAnchorSide, ReviewCommentSnapshot, ReviewCommentThread,
 };
 use ag_session::test_support as model_fixture;
-use tracing::instrument::WithSubscriber;
 
 use super::{
     MAX_AUTO_ADDRESS_REVIEW_ITERATIONS, PromptApplyOutcome, PromptSessionMode, PromptSubmission,
@@ -12,13 +11,16 @@ use super::{
 use crate::app::ReviewCacheEntry;
 use crate::app::message_admission::MessageIntent;
 use crate::app::test_support::diff_content_hash;
-use crate::domain::agent::{AgentKind, AgentModel, AgentSelection, ResponseStyle, SpeedMode};
+use crate::domain::agent::{
+    AgentKind, AgentModel, AgentSelection, ReasoningLevel, ResponseStyle, SpeedMode,
+};
 use crate::domain::permission::PermissionMode;
 use crate::domain::session::{SessionId, Status};
 use crate::domain::setting::SettingName;
 use crate::domain::transient_message::TransientMessageSlot;
 use crate::domain::turn_prompt::{TurnPrompt, TurnPromptTextSource};
 use crate::presentation::app_mode::ReviewCommentSelection;
+use crate::test_support::enable_tracing_log_fallback;
 
 #[test]
 fn composer_modes_translate_to_application_message_intent() {
@@ -61,10 +63,10 @@ async fn speed_mode_stays_normal_when_compatibility_model_switch_fails() {
     .execute(&pool)
     .await
     .expect("failure trigger should be installed");
+    enable_tracing_log_fallback();
 
     // Act
     app.update_prompt_session_speed_mode(&session_id, SpeedMode::Fast)
-        .with_subscriber(crate::test_support::TestSubscriber)
         .await;
     let persisted_speed_mode = app
         .services
@@ -207,16 +209,18 @@ async fn incompatible_prompt_model_switch_keeps_model_when_disabling_fast_mode_f
     .execute(&pool)
     .await
     .expect("failure trigger should be installed");
+    enable_tracing_log_fallback();
 
     // Act
-    app.update_prompt_session_model(
-        &session_id,
-        AgentSelection::new(AgentKind::Gemini, AgentModel::Gemini31Pro),
-    )
-    .with_subscriber(crate::test_support::TestSubscriber)
-    .await;
+    let switched = app
+        .update_prompt_session_model(
+            &session_id,
+            AgentSelection::new(AgentKind::Gemini, AgentModel::Gemini31Pro),
+        )
+        .await;
 
     // Assert
+    assert!(!switched);
     assert_eq!(
         app.sessions
             .session_for_id(&session_id)
@@ -226,32 +230,29 @@ async fn incompatible_prompt_model_switch_keeps_model_when_disabling_fast_mode_f
 }
 
 #[tokio::test]
-async fn prompt_speed_mode_update_ignores_missing_session() {
+async fn prompt_setting_updates_ignore_missing_session() {
     // Arrange
     let (mut app, _base_dir) = crate::test_support::new_git_test_app().await;
     let missing_session_id = SessionId::from("missing-session");
+    enable_tracing_log_fallback();
 
     // Act
     app.update_prompt_session_speed_mode(&missing_session_id, SpeedMode::Normal)
-        .with_subscriber(crate::test_support::TestSubscriber)
         .await;
-
-    // Assert
-    assert!(app.sessions.sessions().is_empty());
-}
-
-#[tokio::test]
-async fn prompt_response_style_update_ignores_missing_session() {
-    // Arrange
-    let (mut app, _base_dir) = crate::test_support::new_git_test_app().await;
-    let missing_session_id = SessionId::from("missing-session");
-
-    // Act
     app.update_prompt_session_response_style(&missing_session_id, ResponseStyle::Concise)
-        .with_subscriber(crate::test_support::TestSubscriber)
+        .await;
+    app.update_prompt_session_reasoning_level(&missing_session_id, ReasoningLevel::High)
+        .await;
+    let switched_model = app
+        .update_prompt_session_model(&missing_session_id, model_fixture::codex_selection())
+        .await;
+    let permission_result = app
+        .update_prompt_session_permission_mode(&missing_session_id, PermissionMode::AutoEdit)
         .await;
 
     // Assert
+    assert!(!switched_model);
+    assert!(permission_result.is_err());
     assert!(app.sessions.sessions().is_empty());
 }
 
@@ -367,6 +368,31 @@ fn test_build_resolve_review_comment_prompt_selects_inline_thread() {
     assert!(prompt.text.contains("Thread ID: thread-current"));
     assert!(!prompt.text.contains("Requested action:"));
     assert_eq!(thread_ids, vec!["thread-current".to_string()]);
+}
+
+/// Ensures a thread without line anchors still renders an explicit anchor.
+#[test]
+fn test_build_resolve_review_comment_prompt_marks_missing_line_anchors() {
+    // Arrange
+    let mut thread = review_comment_thread("thread-file", "src/file.rs", false, None);
+    thread.line = None;
+    thread.start_line = None;
+    let snapshot = ReviewCommentSnapshot {
+        pr_level_comments: Vec::new(),
+        threads: vec![thread],
+    };
+    let selections = vec![review_comment_selection("thread-file")];
+
+    // Act
+    let (prompt, _) = build_resolve_review_comment_prompt(&snapshot, &selections)
+        .expect("file thread should produce a prompt");
+
+    // Assert
+    assert!(
+        prompt
+            .text
+            .contains("Anchor: New, start line: none, end line: none")
+    );
 }
 
 /// Ensures selected resolved and out-of-range rows cannot start a

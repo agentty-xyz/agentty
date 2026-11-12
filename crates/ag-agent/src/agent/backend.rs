@@ -87,6 +87,15 @@ pub enum AgentBackendError {
     CommandBuild(String),
 }
 
+impl AgentBackendError {
+    /// Wraps one command-construction failure, such as an unrepresentable
+    /// prompt image path or a prompt template rendering error, as
+    /// [`AgentBackendError::CommandBuild`].
+    pub(crate) fn command_build(error: impl fmt::Display) -> Self {
+        Self::CommandBuild(error.to_string())
+    }
+}
+
 impl fmt::Display for AgentBackendError {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {

@@ -9,12 +9,12 @@ use super::super::{
 };
 use super::support::{
     apply_pending_session_diff, attach_open_review_request, new_test_app_with_session,
-    reply_enabled_review_snapshot, session_fixture,
+    reply_enabled_review_snapshot, session_fixture, session_replay_text,
 };
 use crate::app::ReviewCacheEntry;
 use crate::app::test_support::{REVIEW_NO_DIFF_MESSAGE, diff_content_hash, review_loading_message};
 use crate::domain::agent::AgentModel;
-use crate::domain::session::{PublishBranchAction, Status};
+use crate::domain::session::{FollowUpTaskAction, PublishBranchAction, Status};
 use crate::presentation::app_mode::{
     AppMode, ConfirmationIntent, ConfirmationViewMode, DiffSidebarFocus,
 };
@@ -851,4 +851,260 @@ async fn review_comment_key_opens_diff_from_view() {
             ..
         } if session_id == &view_context.session_id
     ));
+}
+
+/// Sends one plain workflow key against a fresh review-ready view.
+async fn press_review_workflow_key(
+    app: &mut crate::app::App,
+    session_id: &str,
+    character: char,
+) -> Option<bool> {
+    app.mode = AppMode::View {
+        session_id: session_id.into(),
+        scroll_offset: Some(2),
+    };
+    let view_context = view_context(app).expect("expected view context");
+    let mut pending_update = ViewPendingUpdate::from_context(&view_context);
+
+    handle_workflow_view_key(
+        app,
+        KeyEvent::new(KeyCode::Char(character), KeyModifiers::NONE),
+        &view_context,
+        &reply_enabled_review_snapshot(),
+        &mut pending_update,
+    )
+    .await
+}
+
+#[tokio::test]
+async fn workflow_keys_confirm_fork_and_merge_and_start_rebase() {
+    // Arrange
+    let (mut app, _base_dir, session_id) = new_test_app_with_session().await;
+    crate::test_support::set_session_status_for_test(&mut app, &session_id, Status::Review);
+
+    // Act
+    let fork_result = press_review_workflow_key(&mut app, &session_id, 'F').await;
+    let fork_mode_is_confirmation = matches!(
+        app.mode,
+        AppMode::Confirmation {
+            confirmation_intent: ConfirmationIntent::ForkSession,
+            ref confirmation_title,
+            restore_view: Some(ConfirmationViewMode {
+                scroll_offset: Some(2),
+                ..
+            }),
+            ..
+        } if confirmation_title == "Confirm Fork"
+    );
+    let merge_result = press_review_workflow_key(&mut app, &session_id, 'm').await;
+    let merge_mode_is_confirmation = matches!(
+        app.mode,
+        AppMode::Confirmation {
+            confirmation_intent: ConfirmationIntent::MergeSession,
+            ..
+        }
+    );
+    let rebase_result = press_review_workflow_key(&mut app, &session_id, 'r').await;
+
+    // Assert
+    assert_eq!(fork_result, Some(false));
+    assert!(fork_mode_is_confirmation);
+    assert_eq!(merge_result, Some(true));
+    assert!(merge_mode_is_confirmation);
+    assert_eq!(rebase_result, Some(true));
+    let handle_status = *app
+        .sessions
+        .session_handles()
+        .get(session_id.as_str())
+        .expect("session handle")
+        .status
+        .lock()
+        .expect("status lock");
+    assert_eq!(handle_status, Status::Rebasing);
+}
+
+#[tokio::test]
+async fn rejected_follow_up_and_staged_start_keys_report_transcript_errors() {
+    for (character, snapshot_update, expected_notice) in [
+        (
+            'l',
+            (|snapshot: &mut ViewSessionSnapshot| {
+                snapshot.follow_up_task_action = Some(FollowUpTaskAction::Launch);
+            }) as fn(&mut ViewSessionSnapshot),
+            "[Follow-Up Task Error]",
+        ),
+        (
+            's',
+            |snapshot: &mut ViewSessionSnapshot| {
+                snapshot.start_staged_session = ViewActionState::Enabled;
+            },
+            "[Start Error]",
+        ),
+    ] {
+        // Arrange
+        let (mut app, _base_dir, session_id) = new_test_app_with_session().await;
+        crate::test_support::set_session_status_for_test(&mut app, &session_id, Status::Merged);
+        app.sessions.sessions_mut()[0].follow_up_tasks =
+            vec![crate::domain::session::SessionFollowUpTask {
+                id: 1,
+                launched_session_id: None,
+                position: 0,
+                text: "Write the follow-up.".to_string(),
+            }];
+        app.mode = AppMode::View {
+            session_id: session_id.clone().into(),
+            scroll_offset: None,
+        };
+        let view_context = view_context(&mut app).expect("expected view context");
+        let pending_update = ViewPendingUpdate::from_context(&view_context);
+        let mut view_session_snapshot = reply_enabled_review_snapshot();
+        snapshot_update(&mut view_session_snapshot);
+
+        // Act
+        let result = handle_primary_view_key(
+            &mut app,
+            KeyEvent::new(KeyCode::Char(character), KeyModifiers::NONE),
+            &view_context,
+            &view_session_snapshot,
+            &pending_update,
+        )
+        .await;
+
+        // Assert
+        assert_eq!(result, Some(false));
+        app.sessions.sync_from_handles();
+        assert!(
+            session_replay_text(&app.sessions.sessions()[0]).contains(expected_notice),
+            "missing {expected_notice}"
+        );
+    }
+}
+
+#[tokio::test]
+async fn bracket_keys_cycle_between_follow_up_tasks() {
+    // Arrange
+    let (mut app, _base_dir, session_id) = new_test_app_with_session().await;
+    app.sessions.sessions_mut()[0].follow_up_tasks = vec![
+        crate::domain::session::SessionFollowUpTask {
+            id: 1,
+            launched_session_id: None,
+            position: 0,
+            text: "First follow-up".to_string(),
+        },
+        crate::domain::session::SessionFollowUpTask {
+            id: 2,
+            launched_session_id: None,
+            position: 1,
+            text: "Second follow-up".to_string(),
+        },
+    ];
+    app.mode = AppMode::View {
+        session_id: session_id.clone().into(),
+        scroll_offset: None,
+    };
+    let view_context = view_context(&mut app).expect("expected view context");
+    let pending_update = ViewPendingUpdate::from_context(&view_context);
+    let view_session_snapshot = reply_enabled_review_snapshot();
+    let initial_task = app.sessions.selected_follow_up_task_position(&session_id);
+
+    // Act
+    let next_result = handle_primary_view_key(
+        &mut app,
+        KeyEvent::new(KeyCode::Char(']'), KeyModifiers::NONE),
+        &view_context,
+        &view_session_snapshot,
+        &pending_update,
+    )
+    .await;
+    let next_task = app.sessions.selected_follow_up_task_position(&session_id);
+    let previous_result = handle_primary_view_key(
+        &mut app,
+        KeyEvent::new(KeyCode::Char('['), KeyModifiers::NONE),
+        &view_context,
+        &view_session_snapshot,
+        &pending_update,
+    )
+    .await;
+
+    // Assert
+    assert_eq!(next_result, Some(true));
+    assert_eq!(previous_result, Some(true));
+    assert_ne!(next_task, initial_task);
+    assert_eq!(
+        app.sessions.selected_follow_up_task_position(&session_id),
+        initial_task
+    );
+}
+
+#[test]
+fn test_open_publish_branch_input_ignores_an_unloaded_session_index() {
+    // Arrange
+    let sessions = session_manager_with_sessions(Vec::new());
+    let mut mode = AppMode::List;
+    let view_context = ViewContext {
+        scroll_offset: None,
+        session_id: "missing-session".into(),
+        session_index: 0,
+    };
+
+    // Act
+    open_publish_branch_input(
+        &mut mode,
+        &sessions,
+        &view_context,
+        PublishBranchAction::PublishPullRequest,
+    );
+
+    // Assert
+    assert!(matches!(mode, AppMode::List));
+}
+
+#[tokio::test]
+async fn interrupting_an_unloaded_session_skips_missing_state() {
+    // Arrange
+    let mut app = crate::test_support::new_test_app_without_retained_base_dir().await;
+
+    // Act
+    end_in_progress_turn(&mut app, "missing-session").await;
+
+    // Assert
+    assert!(app.sessions.sessions().is_empty());
+    assert!(app.sessions.session_handles().is_empty());
+}
+
+#[tokio::test]
+async fn interrupting_a_turn_survives_persistence_and_lock_failures() {
+    // Arrange
+    crate::test_support::enable_tracing_log_fallback();
+    let (mut app, _base_dir, pool) = crate::test_support::new_git_test_app_with_pool().await;
+    let session_id = app
+        .create_session()
+        .await
+        .expect("failed to create session");
+    crate::test_support::set_session_status_for_test(&mut app, &session_id, Status::InProgress);
+    sqlx::query("DROP TABLE session_operation")
+        .execute(&pool)
+        .await
+        .expect("operation table should drop");
+    sqlx::query(
+        "CREATE TRIGGER fail_status_update BEFORE UPDATE OF status ON session BEGIN SELECT \
+         RAISE(FAIL, 'forced status failure'); END",
+    )
+    .execute(&pool)
+    .await
+    .expect("failure trigger should be installed");
+    let cancel_token = std::sync::Arc::clone(
+        &app.sessions
+            .session_handles()
+            .get(session_id.as_str())
+            .expect("session handle")
+            .cancel_token,
+    );
+    crate::test_support::poison_lock(cancel_token);
+
+    // Act
+    end_in_progress_turn(&mut app, &session_id).await;
+
+    // Assert
+    assert_eq!(app.sessions.sessions()[0].status, Status::InProgress);
 }

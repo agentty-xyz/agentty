@@ -100,22 +100,21 @@ where
         )
         .await
     };
-    if let Ok((assistant_message, input_tokens, output_tokens)) = first_attempt {
-        return complete_successful_runtime_response(
-            sessions,
-            session_id,
-            session_runtime,
-            first_replays,
-            (assistant_message, input_tokens, output_tokens),
-            &inspector,
-            &mut shutdown_runtime,
-        )
-        .await;
-    }
-
-    let first_error = first_attempt
-        .err()
-        .unwrap_or_else(|| AppServerError::Provider("App-server turn failed".to_string()));
+    let first_error = match first_attempt {
+        Ok(attempt_output) => {
+            return complete_successful_runtime_response(
+                sessions,
+                session_id,
+                session_runtime,
+                first_replays,
+                attempt_output,
+                &inspector,
+                &mut shutdown_runtime,
+            )
+            .await;
+        }
+        Err(first_error) => first_error,
+    };
     if matches!(first_error, AppServerError::InterruptedByUser(_)) {
         return Err(first_error);
     }
@@ -185,20 +184,14 @@ async fn take_compatible_session_runtime<Runtime, ShutdownRuntime>(
 where
     ShutdownRuntime: for<'scope> FnMut(&'scope mut Runtime) -> BorrowedAppServerFuture<'scope, ()>,
 {
-    let mut session_runtime = sessions.take_session(&request.session_id)?;
+    match sessions.take_session(&request.session_id)? {
+        Some(mut runtime) if !(inspector.matches_request)(&runtime, request) => {
+            shutdown_runtime(&mut runtime).await;
 
-    if session_runtime
-        .as_ref()
-        .is_some_and(|runtime| !(inspector.matches_request)(runtime, request))
-    {
-        if let Some(runtime) = session_runtime.as_mut() {
-            shutdown_runtime(runtime).await;
+            Ok(None)
         }
-
-        session_runtime = None;
+        session_runtime => Ok(session_runtime),
     }
-
-    Ok(session_runtime)
 }
 
 /// Measures each initial or restarted provider startup independently.
@@ -381,7 +374,7 @@ where
         Err(error) => {
             shutdown_runtime(runtime).await;
 
-            return Err(AppServerError::PromptRender(error.to_string()));
+            return Err(AppServerError::prompt_render(error));
         }
     };
     let instruction_delivery_mode = instruction_delivery_mode_for_runtime(

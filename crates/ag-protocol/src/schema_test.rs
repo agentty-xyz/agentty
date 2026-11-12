@@ -6,6 +6,7 @@ use crate::schema::{
     agent_response_output_schema, agent_response_output_schema_json,
     focused_review_json_schema_json, focused_review_output_schema,
     inject_additional_properties_false, inject_dynamic_schema_guidance,
+    inject_minimum_required_protocol_key, normalize_required_for_codex,
 };
 
 #[test]
@@ -55,9 +56,11 @@ fn test_inject_dynamic_schema_guidance_skips_absent_properties() {
             "answer": { "type": "string" }
         }
     });
+    let mut schema_without_properties = serde_json::json!({ "type": "object" });
 
     // Act
     inject_dynamic_schema_guidance(&mut schema);
+    inject_dynamic_schema_guidance(&mut schema_without_properties);
 
     // Assert
     assert_eq!(
@@ -68,6 +71,71 @@ fn test_inject_dynamic_schema_guidance_skips_absent_properties() {
             }
         })
     );
+    assert_eq!(
+        schema_without_properties,
+        serde_json::json!({ "type": "object" })
+    );
+}
+
+#[test]
+/// Adds `answer` to `required` once and leaves malformed schema shapes
+/// untouched.
+fn test_inject_minimum_required_protocol_key_handles_existing_and_malformed_required() {
+    // Arrange
+    let cases = [
+        (
+            serde_json::json!({ "required": ["answer"] }),
+            serde_json::json!({ "required": ["answer"] }),
+        ),
+        (
+            serde_json::json!({ "required": ["questions"] }),
+            serde_json::json!({ "required": ["questions", "answer"] }),
+        ),
+        (
+            serde_json::json!({ "required": "answer" }),
+            serde_json::json!({ "required": "answer" }),
+        ),
+        (serde_json::json!(true), serde_json::json!(true)),
+    ];
+
+    for (mut schema, expected_schema) in cases {
+        // Act
+        inject_minimum_required_protocol_key(&mut schema);
+
+        // Assert
+        assert_eq!(schema, expected_schema);
+    }
+}
+
+#[test]
+/// Lists every property in `required`, creating the array when missing and
+/// leaving empty or malformed shapes untouched.
+fn test_normalize_required_for_codex_handles_missing_empty_and_malformed_required() {
+    // Arrange
+    let cases = [
+        (
+            serde_json::json!({ "properties": { "answer": {} } }),
+            serde_json::json!({ "properties": { "answer": {} }, "required": ["answer"] }),
+        ),
+        (
+            serde_json::json!({ "properties": {} }),
+            serde_json::json!({ "properties": {} }),
+        ),
+        (
+            serde_json::json!({ "properties": { "answer": {} }, "required": "answer" }),
+            serde_json::json!({ "properties": { "answer": {} }, "required": "answer" }),
+        ),
+    ];
+
+    for (mut schema, expected_schema) in cases {
+        let object = schema.as_object_mut().expect("schema should be an object");
+
+        // Act
+        normalize_required_for_codex(object);
+
+        // Assert
+        assert_eq!(schema, expected_schema);
+    }
 }
 
 #[test]

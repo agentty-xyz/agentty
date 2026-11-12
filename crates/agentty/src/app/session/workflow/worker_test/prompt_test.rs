@@ -10,6 +10,7 @@ use super::support::{
     managed_first_prompt, resume_command,
 };
 use crate::domain::session::Status;
+use crate::test_support::enable_tracing_log_fallback;
 
 #[tokio::test]
 async fn test_preparation_marker_failure_preserves_prompt_and_never_runs_the_agent() {
@@ -158,6 +159,7 @@ async fn test_first_prompt_handoff_preserves_a_terminal_status() {
         session_id.clone().into(),
         ag_worker::test_session_worker_handle(Arc::default(), sender, Arc::default()),
     );
+    enable_tracing_log_fallback();
 
     // Act: a terminal state must not be overwritten by foreground setup.
     app.sessions
@@ -175,6 +177,42 @@ async fn test_first_prompt_handoff_preserves_a_terminal_status() {
             .expect("session")
             .status,
         Status::Done
+    );
+}
+
+#[tokio::test]
+async fn test_draft_first_prompt_handoff_survives_a_rejected_draft_flag_clear() {
+    // Arrange
+    let (mut app, _directory, pool) = crate::test_support::new_git_test_app_with_pool().await;
+    let session_id = app.create_draft_session().await.expect("draft session");
+    sqlx::query(
+        "CREATE TRIGGER reject_draft_clear BEFORE UPDATE OF is_draft ON session WHEN NEW.is_draft \
+         = 0 BEGIN SELECT RAISE(ABORT, 'draft clear rejected'); END",
+    )
+    .execute(&pool)
+    .await
+    .expect("failure trigger");
+    let (sender, mut receiver) = mpsc::unbounded_channel();
+    app.sessions.worker_service_mut().workers.insert(
+        session_id.clone().into(),
+        ag_worker::test_session_worker_handle(Arc::default(), sender, Arc::default()),
+    );
+    enable_tracing_log_fallback();
+
+    // Act
+    app.sessions
+        .start_session(&app.services, &session_id, "first prompt")
+        .await
+        .expect("handoff");
+    let command = receiver.try_recv().expect("queued command");
+    command.ready_rx.expect("gate").await.expect("released");
+
+    // Assert: the turn still starts while the session keeps its draft flag.
+    assert!(
+        app.sessions
+            .session_for_id(&session_id)
+            .expect("session")
+            .is_draft
     );
 }
 

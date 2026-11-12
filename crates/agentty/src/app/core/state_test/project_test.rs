@@ -286,6 +286,73 @@ async fn test_new_returns_error_when_startup_active_project_persistence_fails() 
 }
 
 #[tokio::test]
+async fn test_project_navigation_and_draft_creation_require_project_state() {
+    // Arrange
+    let mut app = crate::test_support::new_test_app_without_retained_base_dir().await;
+    app.projects.replace_project_items(Vec::new());
+
+    // Act
+    app.previous_project();
+    let selected_project_id = app.projects.selected_project_id();
+    let switch_result = app.switch_selected_project().await;
+    let draft_result = app.create_draft_session().await;
+
+    // Assert
+    assert_eq!(selected_project_id, None);
+    assert!(matches!(
+        switch_result,
+        Err(AppError::Workflow(message)) if message == "No project selected"
+    ));
+    assert!(matches!(
+        draft_result,
+        Err(AppError::Workflow(message)) if message == "Git branch is required to create a session"
+    ));
+}
+
+#[tokio::test]
+async fn test_continue_terminal_session_rejects_missing_or_contextless_sources() {
+    // Arrange
+    let mut app = crate::test_support::new_test_app_with_tmux_client_without_retained_base_dir(
+        Arc::new(MockTmuxClient::new()),
+    )
+    .await;
+    let project_id = app.active_project_id();
+    app.services
+        .db()
+        .sessions()
+        .insert_session(
+            "contextless-source",
+            model_fixture::CODEX_MODEL_ID,
+            "main",
+            "Done",
+            project_id,
+        )
+        .await
+        .expect("failed to insert source session row");
+    app.sessions.push_session(
+        crate::test_support::SessionFixtureBuilder::new()
+            .id("contextless-source")
+            .status(Status::Done)
+            .build(),
+    );
+
+    // Act
+    let missing_result = app.continue_terminal_session("missing-source").await;
+    let contextless_result = app.continue_terminal_session("contextless-source").await;
+
+    // Assert
+    assert!(matches!(
+        missing_result,
+        Err(AppError::Workflow(message)) if message == "Session not found"
+    ));
+    assert!(matches!(
+        contextless_result,
+        Err(AppError::Workflow(message))
+            if message == "Terminal continuation requires a merged commit hash or persisted context"
+    ));
+}
+
+#[tokio::test]
 async fn test_continue_terminal_session_reports_legacy_session_without_project() {
     // Arrange
     let mut app = crate::test_support::new_test_app_with_tmux_client_without_retained_base_dir(

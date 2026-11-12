@@ -12,6 +12,22 @@ use crate::agent::claude::ClaudeBackend;
 use crate::agent::prompt as shared_prompt;
 
 #[test]
+fn setup_creates_no_files() {
+    // Arrange
+    let temp_directory = tempdir().expect("failed to create temp dir");
+    let backend = ClaudeBackend;
+
+    // Act
+    AgentBackend::setup(&backend, temp_directory.path()).expect("setup should succeed");
+
+    // Assert
+    let entry_count = std::fs::read_dir(temp_directory.path())
+        .expect("failed to read dir")
+        .count();
+    assert_eq!(entry_count, 0);
+}
+
+#[test]
 fn transcript_replay_is_independent_of_claude_native_resume() {
     // Arrange
     for (request_kind, replay_transcript, native_resume) in [

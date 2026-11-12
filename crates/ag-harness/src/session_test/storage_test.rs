@@ -524,6 +524,10 @@ fn message_decoder_rejects_invalid_json_arguments_and_unknown_tools() {
         r#"{"arguments":"{","id":"call","name":"grep","reasoning_content":null}"#;
     let blank_bash_id =
         r#"{"arguments":{"command":"ls"},"id":" ","name":"bash","reasoning_content":null}"#;
+    let invalid_write =
+        r#"{"arguments":{"bogus":true},"id":"call","name":"write","reasoning_content":null}"#;
+    let decoded_unknown_tool =
+        r#"{"arguments":{},"id":"call","name":"grep","reasoning_content":null}"#;
 
     // Act
     let malformed = EncodedMessage::into_message("user", invalid_json);
@@ -538,7 +542,12 @@ fn message_decoder_rejects_invalid_json_arguments_and_unknown_tools() {
         Err(SessionError::InvalidData { .. })
     ));
     assert!(matches!(unknown, Err(SessionError::InvalidData { .. })));
-    for payload in [malformed_unknown_tool, blank_bash_id] {
+    for payload in [
+        malformed_unknown_tool,
+        blank_bash_id,
+        invalid_write,
+        decoded_unknown_tool,
+    ] {
         assert!(matches!(
             EncodedMessage::into_message("assistant_tool_call", payload),
             Err(SessionError::InvalidData { .. })

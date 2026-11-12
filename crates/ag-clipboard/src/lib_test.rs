@@ -114,6 +114,21 @@ fn test_new_with_backend_accepts_infallible_backend() {
 }
 
 #[test]
+fn test_from_backend_reads_through_injected_backend() {
+    // Arrange
+    let backend = Box::new(TestClipboardBackend);
+
+    // Act
+    let mut clipboard = Clipboard::from_backend(backend);
+    let text = clipboard
+        .read_text()
+        .expect("test backend should return text");
+
+    // Assert
+    assert_eq!(text, "test clipboard text");
+}
+
+#[test]
 fn test_new_with_backend_propagates_backend_error() {
     // Arrange
     let backend_factory = unavailable_backend_factory;

@@ -105,6 +105,24 @@ fn save_reports_an_unwritable_parent_directory() {
 }
 
 #[test]
+fn save_reports_a_destination_occupied_by_a_directory() {
+    // Arrange
+    let directory = tempfile::tempdir().expect("temporary directory");
+    let path = directory.path().join("chatgpt.json");
+    fs::create_dir(&path).expect("create blocking directory");
+    fs::write(path.join("keep"), "").expect("keep directory non-empty");
+
+    // Act
+    let result = credentials().save(&path);
+
+    // Assert
+    assert!(
+        matches!(result, Err(ChatGptAuthError::Io { path: ref error_path, .. }) if *error_path == path)
+    );
+    assert!(path.join("keep").is_file());
+}
+
+#[test]
 fn is_fresh_only_outside_the_refresh_margin() {
     // Arrange
     let cases = [

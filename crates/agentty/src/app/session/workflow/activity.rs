@@ -274,12 +274,12 @@ impl ActivityState {
             .len()
             .saturating_sub(LIVE_INTERRUPTED_LIMIT);
         for &index in &self.interrupted[first_interrupted..] {
-            Self::append_call(&mut text, &self.calls[index]);
+            Self::append_call(&mut text, &self.calls[index], "!");
         }
         if let Some(index) = self.last_completed
             && Self::status(&self.calls[index]) == ActivityStatus::Completed
         {
-            Self::append_call(&mut text, &self.calls[index]);
+            Self::append_call(&mut text, &self.calls[index], "✓");
         }
         let hidden_interrupted = interrupted.saturating_sub(LIVE_INTERRUPTED_LIMIT);
         if hidden_interrupted > 0 {
@@ -291,7 +291,7 @@ impl ActivityState {
             .filter(|event| event.status == ActivityStatus::Running)
             .take(LIVE_RUNNING_LIMIT)
         {
-            Self::append_call(&mut text, event);
+            Self::append_call(&mut text, event, "…");
         }
         if running > LIVE_RUNNING_LIMIT {
             let hidden = running - LIVE_RUNNING_LIMIT;
@@ -312,14 +312,10 @@ impl ActivityState {
         }
     }
 
-    fn append_call(text: &mut String, event: &ActivityEvent) {
-        let status = Self::status(event);
-        let marker = match status {
-            ActivityStatus::Running => "…",
-            ActivityStatus::Completed => "✓",
-            ActivityStatus::Failed => "✗",
-            ActivityStatus::Interrupted => "!",
-        };
+    /// Renders one call row. Callers supply the marker of the row group they
+    /// render: interrupted (`!`), last completed (`✓`), or running (`…`).
+    /// Failed calls only contribute to the status counts.
+    fn append_call(text: &mut String, event: &ActivityEvent, marker: &str) {
         let kind = if event.kind == ActivityKind::Skill {
             "skill "
         } else {

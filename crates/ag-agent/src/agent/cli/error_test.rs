@@ -285,6 +285,64 @@ fn test_format_cli_stream_output_summarizes_json_lines_with_plain_text() {
     assert_eq!(output, expected);
 }
 
+#[test]
+fn test_format_cli_stream_output_summarizes_each_json_event_shape() {
+    // Arrange
+    let event_cases = [
+        (r#"{"answer":1}"#, "{\n  \"answer\": 1\n}"),
+        (r#"{"type":"system"}"#, "system"),
+        (
+            r#"{"type":"rate_limit_event","rate_limit_info":{}}"#,
+            "rate_limit_event",
+        ),
+        (
+            concat!(
+                r#"{"type":"system","subtype":"init","cwd":"/work","session_id":"s-1"}"#,
+                "\n\nplain tail"
+            ),
+            "system | init | cwd: /work | session: s-1\n\nplain tail",
+        ),
+        (
+            r#"{"type":"assistant","message":{"content":[{"text":"first"},{"text":"second"}]}}"#,
+            "assistant: first\nsecond",
+        ),
+        (
+            r#"{"type":"assistant","content":"top-level reply"}"#,
+            "assistant: top-level reply",
+        ),
+        (
+            r#"{"type":"assistant","message":{"content":[]},"status":"empty"}"#,
+            "assistant | status: empty",
+        ),
+        (
+            r#"{"type":"assistant","content":7,"reason":"opaque"}"#,
+            "assistant | reason: opaque",
+        ),
+        (r#"{"type":"result","is_error":true}"#, "result (failed)"),
+        (
+            r#"{"type":"result","result":"","api_error_status":429,"duration_ms":5}"#,
+            "result\napi error status: 429\nduration: 5ms",
+        ),
+        (
+            concat!(
+                r#"{"type":"rate_limit_event","status":"rejected","error":true,"#,
+                r#""request_id":["ignored"],"session_id":null,"#,
+                r#""rate_limit_info":{"status":"blocked","reason":"five_hour"}}"#
+            ),
+            "rate_limit_event | status: rejected | error: true | rate_limit_status: blocked | \
+             rate_limit_reason: five_hour",
+        ),
+    ];
+
+    for (input, expected) in event_cases {
+        // Act
+        let output = format_cli_stream_output(input);
+
+        // Assert
+        assert_eq!(output, expected, "summary for {input}");
+    }
+}
+
 // --- is_claude_authentication_error ---
 
 #[test]

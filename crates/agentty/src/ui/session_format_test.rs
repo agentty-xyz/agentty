@@ -3,7 +3,8 @@ use ratatui::style::Modifier;
 
 use super::{
     prompt_session_status, session_header_lines, session_output_queued_lines,
-    session_output_status_icon, session_output_status_message, session_output_uses_tachyon_loader,
+    session_output_status_icon, session_output_status_message,
+    session_output_transient_loading_lines, session_output_uses_tachyon_loader,
     session_speed_display, session_started_label,
 };
 use crate::domain::agent::{AgentModel, ResponseStyle};
@@ -378,6 +379,50 @@ fn merged_session_output_explains_manual_sync_wait() {
     // Assert
     assert_eq!(message, "Waiting for manual local target sync...");
     assert!(matches!(icon, Icon::TachyonLoader));
+}
+
+#[test]
+fn idle_session_statuses_have_no_output_status_message() {
+    // Arrange
+    let idle_statuses = [
+        Status::Draft,
+        Status::Review,
+        Status::Question,
+        Status::Done,
+        Status::Canceled,
+    ];
+
+    // Act
+    let messages = idle_statuses
+        .map(|status| session_output_status_message(status, Some("ignored"), None, None));
+
+    // Assert
+    assert!(messages.iter().all(String::is_empty));
+}
+
+#[test]
+fn transient_loading_lines_indent_non_blank_detail_rows_under_spinner_header() {
+    // Arrange
+    let message = "\n  Preparing workspace  \n  cloning repository\n\n  installing hooks \n";
+
+    // Act
+    let lines = session_output_transient_loading_lines(message);
+
+    // Assert
+    let rendered_lines = lines.iter().map(ToString::to_string).collect::<Vec<_>>();
+    assert_eq!(
+        rendered_lines,
+        vec![
+            format!("{} Preparing workspace", Icon::Spinner),
+            "    cloning repository".to_string(),
+            "    installing hooks".to_string(),
+        ]
+    );
+    assert!(lines.iter().all(|line| {
+        line.spans
+            .iter()
+            .all(|span| span.style.fg == Some(style::palette::warning()))
+    }));
 }
 
 #[test]

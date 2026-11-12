@@ -1,3 +1,6 @@
+use std::ffi::OsStr;
+use std::os::unix::ffi::OsStrExt;
+use std::path::PathBuf;
 use std::sync::Arc;
 use std::time::Duration;
 
@@ -15,7 +18,7 @@ use crate::app::command_gateway::{
 use crate::app::prompt_intent::{PromptSessionMode, PromptSubmission, PromptWorkflowOutcome};
 use crate::app::{App, SessionManager, SessionRuntimeCommand};
 use crate::domain::session::Status;
-use crate::domain::turn_prompt::TurnPrompt;
+use crate::domain::turn_prompt::{TurnPrompt, TurnPromptAttachment};
 use crate::infra::db::SessionPreparationState;
 use crate::presentation::app_mode::AppMode;
 use crate::runtime::PresentationState;
@@ -301,6 +304,57 @@ async fn preparation_prompt_save_rejects_a_concurrent_cancellation() {
             .prompt
             .is_none()
     );
+}
+
+#[tokio::test]
+async fn preparation_prompt_save_rejects_a_prompt_that_cannot_be_serialized() {
+    // Arrange
+    let (mut app, _directory) = crate::test_support::new_git_test_app().await;
+    let id = app.create_session().await.expect("session");
+    app.services
+        .db()
+        .sessions()
+        .update_session_preparation(&id, SessionPreparationState::Preparing, None)
+        .await
+        .expect("prepare");
+    let prompt = TurnPrompt {
+        attachments: vec![TurnPromptAttachment {
+            local_image_path: PathBuf::from(OsStr::from_bytes(b"image-\xff.png")),
+            placeholder: "[Image #1]".to_string(),
+        }],
+        ..TurnPrompt::from_text("[Image #1]".to_string())
+    };
+
+    // Act
+    let result = app.queue_preparation_prompt(&id, &prompt).await;
+
+    // Assert
+    assert!(
+        result
+            .expect_err("unserializable prompt")
+            .to_string()
+            .contains("invalid UTF-8")
+    );
+}
+
+#[tokio::test]
+async fn workspace_preparation_refresh_tracks_unloaded_sessions_and_ignores_read_failures() {
+    // Arrange
+    let (mut app, _directory, pool) = crate::test_support::new_git_test_app_with_pool().await;
+
+    // Act
+    app.refresh_workspace_preparation("unloaded-session").await;
+    sqlx::query("DROP TABLE session_preparation")
+        .execute(&pool)
+        .await
+        .expect("preparation reads should fail");
+    app.refresh_workspace_preparation("unreadable-session")
+        .await;
+
+    // Assert
+    let availability = app.sessions.render_parts().session_worktree_availability;
+    assert_eq!(availability.get("unloaded-session"), Some(&false));
+    assert_eq!(availability.get("unreadable-session"), None);
 }
 
 #[tokio::test]
