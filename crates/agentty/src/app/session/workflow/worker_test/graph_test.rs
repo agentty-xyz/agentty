@@ -27,6 +27,7 @@ use crate::app::service::MockSessionRunFactory;
 use crate::app::session::workflow::graph_turn::{GraphTaskCommand, GraphTaskCompletion};
 use crate::domain::session::Status;
 use crate::domain::session_message::SessionMessage;
+use crate::infra::db::TaskAgentTurnMetadata;
 
 #[tokio::test]
 async fn selected_graph_writers_wait_for_background_reviews_before_running() {
@@ -260,6 +261,79 @@ async fn assert_only_questions_reach_chat(context: &SessionWorkerContext, scenar
         "{scenario}"
     );
     assert_eq!(live, expected_chat, "{scenario}");
+}
+
+#[tokio::test]
+async fn redelivered_graph_questions_are_not_asked_in_chat_again() {
+    // Arrange: an earlier delivery recorded this response and its question.
+    let context = graph_context("questions").await;
+    let (task, receiver) = graph_task_fixture(&context, "questions").await;
+    let mut recorded_message = successful_turn_result("task response").assistant_message;
+    recorded_message
+        .questions
+        .push(QuestionItem::new("Task question?"));
+    context
+        .db
+        .operations()
+        .mark_session_operation_running(&task.operation_id)
+        .await
+        .expect("running operation");
+    let first_delivery = context
+        .db
+        .graphs()
+        .record_task_turn(
+            &task.request.dispatch,
+            &TaskAgentTurnMetadata {
+                assistant_message: serde_json::json!(recorded_message).to_string(),
+                harness_turn_report: None,
+                instruction_conversation_id: Some("task-provider".into()),
+                input_tokens: 0,
+                output_tokens: 0,
+                provider_conversation_id: Some("task-provider".into()),
+            },
+        )
+        .await
+        .expect("first delivery");
+
+    // Act
+    let result = SessionWorkerService::process_session_command(
+        &context,
+        &(Arc::new(MockRunClient::new()) as Arc<dyn ag_worker::RunClient>),
+        SessionCommand::RunGraphTask(Box::new(task)),
+    )
+    .await
+    .expect("selected");
+    let response = receiver.await.expect("worker completion");
+
+    // Assert: storage keeps the one recorded question and chat gains none.
+    assert!(first_delivery);
+    assert!(result.is_ok(), "{result:?}");
+    assert!(response.is_ok(), "{response:?}");
+    let persisted: Vec<String> = context
+        .db
+        .sessions()
+        .load_session_messages("sess")
+        .await
+        .expect("chat")
+        .into_iter()
+        .map(|message| message.content)
+        .collect();
+    assert_eq!(
+        persisted,
+        [
+            "task response\n\n`first` needs your input. Reply in chat to answer:\n1. Task \
+             question?"
+        ]
+    );
+    assert_eq!(
+        context
+            .transcript
+            .lock()
+            .expect("transcript")
+            .messages()
+            .len(),
+        0
+    );
 }
 
 #[tokio::test]
