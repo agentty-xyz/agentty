@@ -54,34 +54,6 @@ async fn codex_protocol_compliance_e2e() {
     }
 }
 
-/// Verifies real Gemini Flash (`gemini-3.8-flash`) turn execution
-/// through the worker runtime yields a non-empty protocol `answer`.
-#[tokio::test]
-#[ignore = "requires real Gemini CLI credentials and network"]
-async fn gemini_flash_protocol_compliance_e2e() {
-    // Arrange
-    let model = AgentModel::Gemini38Flash;
-    if provider_preflight_skip_reason(AgentKind::Gemini)
-        .await
-        .is_some()
-    {
-        return;
-    }
-
-    // Act
-    let result =
-        assert_provider_protocol_compliance(AgentKind::Gemini, model, &RuntimeConfig::default())
-            .await;
-
-    // Assert
-    if let Err(error) = result {
-        if is_skippable_provider_environment_failure(&error) {
-            return;
-        }
-        assert!(error.is_empty(), "{error}");
-    }
-}
-
 /// Verifies real Antigravity CLI turn execution through
 /// the worker runtime yields a non-empty protocol `answer`.
 #[tokio::test]
@@ -171,7 +143,6 @@ async fn provider_preflight_skip_reason(kind: AgentKind) -> Option<String> {
     let (provider_name, executable_name) = match kind {
         AgentKind::Antigravity => ("Antigravity", "agy"),
         AgentKind::Codex => ("Codex", "codex"),
-        AgentKind::Gemini => ("Gemini", "gemini"),
         AgentKind::Claude => ("Claude", "claude"),
         AgentKind::Harness => return Some("The harness has no CLI to preflight.".to_string()),
     };

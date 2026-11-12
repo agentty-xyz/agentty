@@ -5,8 +5,8 @@ use ratatui::widgets::{Table, TableState};
 
 use super::{
     SettingsPage, TABLE_COLUMN_SPACING, project_section_title, render_settings_selector_dropdown,
-    section_table_state, settings_footer_line_for_mode, settings_section_height,
-    settings_selector_dropdown_area, settings_selector_dropdown_lines,
+    section_table_state, settings_footer_line_for_mode, settings_name_column_width,
+    settings_section_height, settings_selector_dropdown_area, settings_selector_dropdown_lines,
     settings_selector_option_window_start, settings_table_rows,
 };
 use crate::domain::theme::ColorTheme;
@@ -29,7 +29,7 @@ fn test_settings_selection_highlight_and_columns_across_sections_and_themes() {
                 project_rows: vec![
                     (
                         "Default Smart Model",
-                        "gemini/gemini-3.1-pro-preview [xhigh]".to_string(),
+                        "antigravity/gemini-3.1-pro-preview [xhigh]".to_string(),
                     ),
                     ("Default Fast Model", "Fast".to_string()),
                 ],
@@ -101,6 +101,24 @@ fn test_settings_selection_highlight_and_columns_across_sections_and_themes() {
             );
         }
     }
+}
+
+#[test]
+fn test_settings_name_column_fits_longest_name_within_half_width() {
+    // Arrange
+    let global_rows = [("Theme", "Agentty Default".to_string())];
+    let project_rows = [("Default Response Style", "Balanced".to_string())];
+    let long_rows = [("A setting name wider than half the table", String::new())];
+
+    // Act
+    let fitted_width = settings_name_column_width(80, &[&global_rows, &project_rows]);
+    let capped_width = settings_name_column_width(40, &[&long_rows]);
+    let empty_width = settings_name_column_width(80, &[]);
+
+    // Assert
+    assert_eq!(fitted_width, 22);
+    assert_eq!(capped_width, 18);
+    assert_eq!(empty_width, 0);
 }
 
 #[test]

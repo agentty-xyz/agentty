@@ -1,8 +1,23 @@
 //! App-local clarification input progress built on shared session models.
 
+use ag_session::QuestionAnswer;
 pub use ag_session::{QuestionItem, default_option_index};
 
 use crate::domain::input::InputState;
+
+/// Formats one answered question set as the clarification reply sent to the
+/// agent that asked, whether a session turn or graph work.
+#[must_use]
+pub fn question_answer_message(answers: &[QuestionAnswer]) -> String {
+    let mut lines = vec!["Clarifications:".to_string()];
+
+    for (question_index, answer) in answers.iter().enumerate() {
+        lines.push(format!("{}. Q: {}", question_index + 1, answer.question));
+        lines.push(format!("   A: {}", answer.answer));
+    }
+
+    lines.join("\n")
+}
 
 /// Partially answered clarification state saved when the user leaves question
 /// mode for the sessions list.

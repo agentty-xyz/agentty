@@ -17,8 +17,10 @@ pub fn default_option_index(questions: &[QuestionItem], question_index: usize) -
         .map(|_| 0)
 }
 
-/// Returns the chat message asking one graph node's clarification questions,
-/// after the answer they refer to, or `None` when every question is blank.
+/// Returns the chat message announcing one graph node's clarification
+/// questions, after the answer they refer to, or `None` when every question
+/// is blank. The numbered questions record what was asked; the frontend
+/// answers them in its question panel, as for an ordinary turn.
 ///
 /// Storage records it with the node's response so the visible question and
 /// the reply routing that depends on it commit together.
@@ -36,10 +38,7 @@ pub fn node_question_notice(node_id: &str, response: &AgentResponse) -> Option<S
     if !answer.is_empty() {
         let _ = write!(text, "{answer}\n\n");
     }
-    let _ = write!(
-        text,
-        "`{node_id}` needs your input. Reply in chat to answer:"
-    );
+    let _ = write!(text, "`{node_id}` needs your input:");
     push_numbered_questions(&mut text, &response.questions);
 
     Some(text)

@@ -15,8 +15,6 @@ fn default_metadata_excludes_content_and_project_paths() {
         input: Some(&input),
         name: Some("Bash"),
         output: Some(&output),
-        stderr: Some(&output),
-        stdout: Some(&output),
     };
 
     // Act
@@ -29,27 +27,21 @@ fn default_metadata_excludes_content_and_project_paths() {
             KeyValue::new("gen_ai.tool.name", "Bash"),
             KeyValue::new("process.executable.name", "cargo"),
             KeyValue::new("agentty.tool.output.bytes", 11_i64),
-            KeyValue::new("agentty.tool.stdout.bytes", 11_i64),
-            KeyValue::new("agentty.tool.stderr.bytes", 11_i64),
         ]
     );
     assert!(!format!("{attributes:?}").contains("private"));
 }
 
 #[test]
-fn opt_in_exports_commands_arguments_and_separate_output_previews() {
+fn opt_in_exports_commands_arguments_and_output_previews() {
     // Arrange
     let input = json!({"command": "cargo test", "count": 2, "enabled": true, "extra": null});
     let output = json!([{"text": "test failed"}]);
-    let stderr = json!("compilation failed");
-    let stdout = json!("");
     let metadata = ToolMetadata {
         command: Some("cargo test"),
         input: Some(&input),
         name: Some("shell"),
         output: Some(&output),
-        stderr: Some(&stderr),
-        stdout: Some(&stdout),
     };
 
     // Act
@@ -60,8 +52,6 @@ fn opt_in_exports_commands_arguments_and_separate_output_previews() {
         KeyValue::new("agentty.tool.command", "cargo test"),
         KeyValue::new("gen_ai.tool.call.arguments", input.to_string()),
         KeyValue::new("gen_ai.tool.call.result", output.to_string()),
-        KeyValue::new("agentty.tool.stderr", "compilation failed"),
-        KeyValue::new("agentty.tool.stdout", ""),
         KeyValue::new(
             "agentty.tool.output.bytes",
             i64::try_from(output.to_string().len()).expect("bounded fixture"),
@@ -190,8 +180,6 @@ fn oversized_structured_values_use_text_previews_instead_of_partial_json() {
         let attributes = ToolMetadata {
             input: Some(value),
             output: Some(value),
-            stdout: Some(value),
-            stderr: Some(value),
             ..ToolMetadata::default()
         }
         .attributes(true);
@@ -205,16 +193,6 @@ fn oversized_structured_values_use_text_previews_instead_of_partial_json() {
                 "gen_ai.tool.call.result",
                 "agentty.tool.output.preview",
                 "agentty.tool.output.truncated",
-            ),
-            (
-                "agentty.tool.stdout",
-                "agentty.tool.stdout.preview",
-                "agentty.tool.stdout.truncated",
-            ),
-            (
-                "agentty.tool.stderr",
-                "agentty.tool.stderr.preview",
-                "agentty.tool.stderr.truncated",
             ),
         ] {
             assert!(
@@ -277,8 +255,6 @@ fn missing_null_and_unsafe_identities_are_omitted() {
         input: Some(&null),
         name: Some("tool /private/path"),
         output: Some(&null),
-        stderr: Some(&null),
-        stdout: Some(&null),
     };
 
     // Act / Assert

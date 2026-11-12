@@ -227,10 +227,7 @@ async fn graph_task_failures_and_cancellation_stay_out_of_chat_while_questions_a
 /// `questions` scenario and nothing otherwise.
 async fn assert_only_questions_reach_chat(context: &SessionWorkerContext, scenario: &str) {
     let expected_chat: &[&str] = if scenario == "questions" {
-        &[
-            "task response\n\n`first` needs your input. Reply in chat to answer:\n1. Task \
-             question?",
-        ]
+        &["task response\n\n`first` needs your input:\n1. Task question?"]
     } else {
         &[]
     };
@@ -320,10 +317,7 @@ async fn redelivered_graph_questions_are_not_asked_in_chat_again() {
         .collect();
     assert_eq!(
         persisted,
-        [
-            "task response\n\n`first` needs your input. Reply in chat to answer:\n1. Task \
-             question?"
-        ]
+        ["task response\n\n`first` needs your input:\n1. Task question?"]
     );
     assert_eq!(
         context

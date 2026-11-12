@@ -6,7 +6,7 @@
 
 use std::future::Future;
 use std::io::Write;
-use std::os::unix::fs::{PermissionsExt, symlink};
+use std::os::unix::fs::PermissionsExt;
 use std::path::{Path, PathBuf};
 use std::pin::Pin;
 use std::sync::OnceLock;
@@ -32,7 +32,7 @@ use tokio::sync::{Mutex, MutexGuard};
 /// depend on which real CLIs a machine happens to have installed. A partial
 /// stub set would let the machine decide the default agent a new session
 /// resolves, painting different frames locally and on CI.
-const STUB_AGENT_EXECUTABLES: [&str; 4] = ["agy", "claude", "codex", "gemini"];
+const STUB_AGENT_EXECUTABLES: [&str; 3] = ["agy", "claude", "codex"];
 
 /// Isolated test environment carrying `agentty_root` and `workdir` paths.
 ///
@@ -101,10 +101,7 @@ impl BuilderEnv {
         // from it, like the default agent a new session resolves — identical
         // on developer machines and CI, so the same scenario paints the same
         // frames everywhere and GIF freshness hashes stay reproducible.
-        for executable_name in STUB_AGENT_EXECUTABLES
-            .into_iter()
-            .filter(|executable_name| *executable_name != "gemini")
-        {
+        for executable_name in STUB_AGENT_EXECUTABLES {
             let stub_agent_path = stub_bin.join(executable_name);
             let stub_version_path = stub_bin.join(format!("{executable_name}.version"));
             let initial_version = if executable_name == "agy" {
@@ -117,11 +114,20 @@ impl BuilderEnv {
             } else {
                 "0.0.1-updated"
             };
+            // `agy` serves turns through stdin, so its stub reads the turn
+            // request before failing. Exiting first would race Agentty's
+            // write, painting either a broken-pipe or a terminated-process
+            // error and making published frame hashes vary between hosts.
+            let turn_read = if executable_name == "agy" {
+                "IFS= read -r request_line\n"
+            } else {
+                ""
+            };
             let stub_script = format!(
                 "#!/bin/sh\nif [ \"$1\" = \"update\" ]; then printf '{updated_version}\\n' > \
                  \"{}\"; exit 0; fi\nif [ \"$1\" = \"--version\" ]; then if [ -f \"{}\" ]; then \
                  read version < \"{}\"; else version='{initial_version}'; fi; printf '{} %s\\n' \
-                 \"$version\"; exit 0; fi\nexit 1\n",
+                 \"$version\"; exit 0; fi\n{turn_read}exit 1\n",
                 stub_version_path.display(),
                 stub_version_path.display(),
                 stub_version_path.display(),
@@ -130,7 +136,6 @@ impl BuilderEnv {
             std::fs::write(&stub_agent_path, stub_script)?;
             std::fs::set_permissions(&stub_agent_path, std::fs::Permissions::from_mode(0o750))?;
         }
-        Self::create_gemini_cli_stub(&stub_bin)?;
         Self::warm_agent_cli_stubs(&stub_bin)?;
 
         // Keep host CPU and memory out of feature-recording hashes. Resource
@@ -168,47 +173,6 @@ impl BuilderEnv {
                 )));
             }
         }
-
-        Ok(())
-    }
-
-    /// Creates an npm-global Gemini CLI fixture whose package-manager update
-    /// changes the version reported by the linked `gemini` executable.
-    ///
-    /// Other invocations read one stdin line before failing. Exiting before
-    /// Agentty writes its first app-server request would race that write, so
-    /// the session transcript would show either a broken-pipe error or a
-    /// terminated-process error and published frame hashes would vary.
-    fn create_gemini_cli_stub(stub_bin: &Path) -> std::io::Result<()> {
-        let gemini_package_directory = stub_bin.join("lib/node_modules/@google/gemini-cli/bundle");
-        let gemini_package_path = gemini_package_directory.join("gemini.js");
-        let gemini_path = stub_bin.join("gemini");
-        let npm_path = stub_bin.join("npm");
-        let version_path = stub_bin.join("gemini.version");
-        std::fs::create_dir_all(&gemini_package_directory)?;
-        std::fs::write(
-            &gemini_package_path,
-            format!(
-                "#!/bin/sh\nif [ \"$1\" = \"update\" ]; then exit 91; fi\nif [ \"$1\" = \
-                 \"--version\" ]; then if [ -f \"{}\" ]; then read version < \"{}\"; else \
-                 version='0.0.0-test'; fi; printf 'gemini %s\\n' \"$version\"; exit 0; fi\nIFS= \
-                 read -r request_line\nexit 1\n",
-                version_path.display(),
-                version_path.display(),
-            ),
-        )?;
-        std::fs::write(
-            &npm_path,
-            format!(
-                "#!/bin/sh\nif [ \"$1\" = \"install\" ] && [ \"$2\" = \"-g\" ] && [ \"$3\" = \
-                 \"@google/gemini-cli@latest\" ]; then printf '0.0.1-updated\\n' > \"{}\"; exit \
-                 0; fi\nexit 1\n",
-                version_path.display(),
-            ),
-        )?;
-        std::fs::set_permissions(&gemini_package_path, std::fs::Permissions::from_mode(0o750))?;
-        std::fs::set_permissions(&npm_path, std::fs::Permissions::from_mode(0o750))?;
-        symlink(&gemini_package_path, &gemini_path)?;
 
         Ok(())
     }

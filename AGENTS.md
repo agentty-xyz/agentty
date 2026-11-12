@@ -80,10 +80,10 @@ through `prek`. Focused E2E and container recording commands in
   source, tests, dependencies, toolchain, configuration, and relevant environment remain
   unchanged; rerun after invalidating edits, failures, or new evidence. Record each
   command, scope, and result at handoff.
-- Pull-request CI owns `cargo-check`, fresh `coverage` (including the `test-workspace`
-  selection), and full `test-agentty-e2e`. Run these locally only to diagnose their CI
-  failure or when requested; also run `test-workspace` when impact cannot be bounded.
-  Diagnose the single failing hook.
+- Pull-request CI owns fresh `coverage` (including the `test-workspace` selection) and
+  full `test-agentty-e2e`. Run these locally only to diagnose their CI failure or when
+  requested; also run `test-workspace` when impact cannot be bounded. Diagnose the
+  single failing hook.
 - Run hooks in the inherited environment. Do not override `CARGO_HOME`, `PREK_HOME`,
   `RUSTC_WRAPPER`, `TMPDIR`, or `CARGO_TARGET_DIR`, or copy registries, toolchains, or
   caches into the worktree. Report environment failures instead of building a
@@ -131,8 +131,7 @@ Follow the nearest documentation guide for exact routing and integrity rules.
 - Do not duplicate inherited rules, implementation inventories, or facts readily
   recoverable from manifests, module routers, tests, or CLI help.
 - Do not use parent-directory-relative paths in an `AGENTS.md`.
-- When creating an `AGENTS.md`, add same-directory `CLAUDE.md` and `GEMINI.md` symlinks
-  targeting it.
+- When creating an `AGENTS.md`, add a same-directory `CLAUDE.md` symlink targeting it.
 - The `check-instructions` hook checks literal repository paths, local Markdown links,
   instruction aliases, and hook names in `prek run` examples. Keep its regression tests
   aligned when changing the instruction format.

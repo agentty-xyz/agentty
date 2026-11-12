@@ -395,7 +395,7 @@ fn turn_request() -> TurnRequest {
 async fn worker_configuration_rejects_unsupported_controls_before_provider_launch() {
     // Arrange
     let config = ag_worker::RuntimeConfig::default().with_execution_policy(
-        ag_session::AgentKind::Gemini,
+        ag_session::AgentKind::Antigravity,
         ag_contracts::ExecutionPolicy {
             max_concurrent_subagents: std::num::NonZeroUsize::new(3),
             ..ag_contracts::ExecutionPolicy::default()
@@ -403,7 +403,7 @@ async fn worker_configuration_rejects_unsupported_controls_before_provider_launc
     );
     let worker = SessionRunClient::new(
         "unsupported-policy".into(),
-        ag_session::AgentKind::Gemini,
+        ag_session::AgentKind::Antigravity,
         &config,
     );
     // Act

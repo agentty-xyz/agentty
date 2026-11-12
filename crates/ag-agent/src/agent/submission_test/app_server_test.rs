@@ -212,7 +212,7 @@ async fn one_shot_app_server_repair_preserves_permissions_and_conversation() {
             activity_tx: Some(activity_tx),
             execution_policy: ag_contracts::ExecutionPolicy::default(),
             provider_call_budget: None,
-            harness: (AgentKind::Gemini).to_string(),
+            harness: (AgentKind::Antigravity).to_string(),
             child_pid: None,
             folder: folder.path().to_owned(),
             model: AgentModel::Gemini31Pro.as_str().to_string(),

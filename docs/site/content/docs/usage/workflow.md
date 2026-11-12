@@ -98,11 +98,15 @@ captured agent instructions, objectives, access, dependencies, output gates, and
 `r` refreshes; `J` / `K` scroll; `q` returns to chat. Opening the inspector never
 regenerates or launches work.
 
-When a running node needs input, it asks in chat, after its answer. Reply in chat to
-answer; your next message goes to that node, which continues with it. If several nodes
-are waiting, your reply answers the question asked most recently. Replies may include
-images. If the graph is paused, for example after a restart, the node continues once you
-resume the graph from `w`.
+When a pending proposal or a running node needs input, it lists its questions in chat
+and opens them in the same question panel as an ordinary turn's
+[clarification questions](@/docs/usage/workflow.md#usage-clarification-loop). Your
+answers go to the exact proposal version or node that asked; if it no longer waits, the
+panel closes so newer questions can open. If several nodes are waiting, the panel shows
+the questions asked most recently. `Ctrl+C` closes the panel without answering; reopen
+the session to show it again, or type a chat reply instead. Typed node replies may
+include images. If the graph is paused, for example after a restart, the node continues
+once you resume the graph from `w`.
 
 Approval does not accept outputs produced later. Use `w` for execution controls and
 exact output acceptance. Duplicate approval returns its receipt without launching again.
@@ -559,10 +563,11 @@ sends the answers together as a follow-up turn.
 then `Enter`. Move beyond the options to type a free-text answer; a blank answer means
 `no answer`. Type `@` to insert a repository path.
 
-`Ctrl+C` from the answer input ends the turn without replying. `q` outside free-text
-input returns to the list and preserves progress. Reopening resumes the unanswered
-questions. See [Question Input](@/docs/usage/keybindings.md#question-input-free-text)
-for editing controls.
+`Ctrl+C` from the answer input ends the turn without replying; for graph questions it
+only closes the panel. `q` outside free-text input returns to the list and preserves
+progress. Reopening resumes the unanswered questions. See
+[Question Input](@/docs/usage/keybindings.md#question-input-free-text) for editing
+controls.
 
 ## Prompt Input Extras
 
@@ -589,8 +594,8 @@ succeeded, failed, running, and interrupted calls. A compact block retains the l
 successful call, up to three recent interrupted calls, and up to three running calls,
 with counts for additional calls. Failed calls contribute to totals without staying in
 the live block. Command previews and file paths replace raw argument JSON and shorten to
-fit the pane. Successful output stays hidden. Codex, Claude, Gemini, and Antigravity
-supply these details where available. Skill names require explicit provider reporting.
+fit the pane. Successful output stays hidden. Codex, Claude, and Antigravity supply
+these details where available. Skill names require explicit provider reporting.
 
 Responses from these providers, including commit and rebase recovery assistance, include
 a usage footer when tool activity was observed. `Tools` lists invocation counts with
@@ -795,7 +800,6 @@ and supported response, reasoning, compaction, checkpoint, and subagent phases:
 | ----------- | --------------------------------------------------------------- |
 | Codex       | Tools, responses, reasoning, compaction, subagents              |
 | Claude      | Tools, subagents                                                |
-| Gemini      | Tools                                                           |
 | Antigravity | Tools, responses, reasoning, compaction, checkpoints, subagents |
 | Harness     | Turns, model requests with token usage, tools                   |
 
@@ -817,26 +821,26 @@ by default.
 Add `--otlp-capture-content` alongside `--otlp-endpoint` to export tool commands,
 arguments, and results as previews of at most 4 KiB per attribute. Longer values keep
 their beginning and end around an omitted-byte count, so failure summaries at the end of
-command output stay visible. Separate stdout and stderr are included when present in
-Gemini's raw output; Codex supplies combined output. Original output sizes and
-truncation flags distinguish previews from complete results. Oversized structured
-arguments and results use the text attributes `agentty.tool.input.preview` and
-`agentty.tool.output.preview` instead of incomplete JSON in `gen_ai.tool.call.arguments`
-or `gen_ai.tool.call.result`. Complete structured values, including their redaction
-replacements, remain valid JSON. Exact output sizes still require walking the values,
-but metadata-only tracing does not serialize them. Larger payloads are not retained by
-tracing. Values containing common credential markers or URL credentials are replaced
-entirely with `[REDACTED]` before export, but arbitrary secrets and project paths may
-still appear. Enable this option only for content you intend to send to the configured
-receiver. Turn prompts, transcripts, reasoning, and subagent prompts remain excluded.
+command output stay visible. Codex supplies combined stdout and stderr. Original output
+sizes and truncation flags distinguish previews from complete results. Oversized
+structured arguments and results use the text attributes `agentty.tool.input.preview`
+and `agentty.tool.output.preview` instead of incomplete JSON in
+`gen_ai.tool.call.arguments` or `gen_ai.tool.call.result`. Complete structured values,
+including their redaction replacements, remain valid JSON. Exact output sizes still
+require walking the values, but metadata-only tracing does not serialize them. Larger
+payloads are not retained by tracing. Values containing common credential markers or URL
+credentials are replaced entirely with `[REDACTED]` before export, but arbitrary secrets
+and project paths may still appear. Enable this option only for content you intend to
+send to the configured receiver. Turn prompts, transcripts, reasoning, and subagent
+prompts remain excluded.
 
-Content previews are supported for Codex command, MCP, and dynamic-tool items, Claude
-tool messages, and Gemini ACP tool input/output. Antigravity exports tool identities;
-its input/output fields are not captured. Missing fields are omitted; tool categories
-and titles are not treated as provider-reported tool names. All observed spans are
-sampled while enabled. Export is asynchronous and best effort: a full queue or
-unavailable receiver may lose spans. Agentty reports a coalesced diagnostic summary
-after restoring the terminal and limits final export flushing to three seconds.
+Content previews are supported for Codex command, MCP, and dynamic-tool items and Claude
+tool messages. Antigravity exports tool identities; its input/output fields are not
+captured. Missing fields are omitted; tool categories and titles are not treated as
+provider-reported tool names. All observed spans are sampled while enabled. Export is
+asynchronous and best effort: a full queue or unavailable receiver may lose spans.
+Agentty reports a coalesced diagnostic summary after restoring the terminal and limits
+final export flushing to three seconds.
 
 ## Auto-Update
 

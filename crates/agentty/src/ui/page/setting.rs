@@ -72,11 +72,10 @@ impl Page for SettingsPage<'_> {
             .constraints(section_heights)
             .split(areas.main_area);
 
-        // Keep values wide enough for long model names on 80-column terminals.
-        let name_column_width = table_chunks[0]
-            .width
-            .saturating_sub(TABLE_COLUMN_SPACING + 2)
-            / 2;
+        let name_column_width = settings_name_column_width(
+            table_chunks[0].width,
+            &[&self.snapshot.global_rows, &self.snapshot.project_rows],
+        );
         let table_columns = [Constraint::Length(name_column_width), Constraint::Fill(1)];
 
         let global_table = Table::new(global_rows, table_columns)
@@ -163,6 +162,25 @@ fn section_table_state(
     }
 
     section_table_state
+}
+
+/// Returns the settings-name column width shared by every section.
+///
+/// The column fits the longest setting name but never exceeds half of the
+/// table's inner width, so long provider model values stay complete on
+/// 80-column terminals.
+fn settings_name_column_width(table_width: u16, sections: &[&[(&'static str, String)]]) -> u16 {
+    let half_width = table_width.saturating_sub(TABLE_COLUMN_SPACING + 2) / 2;
+    let longest_name_width = sections
+        .iter()
+        .flat_map(|section_rows| section_rows.iter())
+        .map(|(setting_name, _)| Span::raw(*setting_name).width())
+        .max()
+        .unwrap_or_default();
+
+    u16::try_from(longest_name_width)
+        .unwrap_or(u16::MAX)
+        .min(half_width)
 }
 
 /// Renders the open settings selector dropdown over the active settings

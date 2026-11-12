@@ -10,7 +10,9 @@ use ag_session::{
 };
 
 /// Short chat report for a settled proposal version. Clarification questions
-/// stay in chat; the graph itself is shown only in the sidebar and inspector.
+/// are listed as the record of what was asked and answered in the session
+/// question panel; the graph itself is shown only in the sidebar and
+/// inspector.
 pub(crate) fn proposal_chat_notice(state: &GraphProposalState) -> String {
     let version = state.version.number;
     if state.version.is_cancelled {
@@ -23,7 +25,7 @@ pub(crate) fn proposal_chat_notice(state: &GraphProposalState) -> String {
         }
         GraphProposalVersionOutcome::Generated { launch, response } => match &response.outcome {
             GraphProposalOutcome::Clarification { questions } => {
-                let mut text = "The graph needs your input. Reply in chat to answer:".to_string();
+                let mut text = format!("Graph proposal v{version} needs your input:");
                 push_numbered_questions(&mut text, questions);
 
                 text

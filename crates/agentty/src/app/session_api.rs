@@ -21,6 +21,7 @@ use crate::app::{
     App, AppError, AppEvent, SessionError, SessionRuntimeCommand, SessionRuntimeHandle,
 };
 use crate::domain::agent::{AgentKind, AgentSelection};
+use crate::domain::question::question_answer_message;
 use crate::domain::turn_prompt::TurnPrompt;
 use crate::infra::db::{SessionMessageRow, SessionReviewRequestRow, SessionRow};
 
@@ -1072,19 +1073,6 @@ fn validate_question_answers(
     }
 
     Ok(())
-}
-
-/// Formats validated structured answers into the existing clarification
-/// follow-up prompt.
-fn question_answer_message(answers: &[QuestionAnswer]) -> String {
-    let mut lines = vec!["Clarifications:".to_string()];
-
-    for (question_index, answer) in answers.iter().enumerate() {
-        lines.push(format!("{}. Q: {}", question_index + 1, answer.question));
-        lines.push(format!("   A: {}", answer.answer));
-    }
-
-    lines.join("\n")
 }
 
 /// Converts complete persistence rows into the public session aggregate.

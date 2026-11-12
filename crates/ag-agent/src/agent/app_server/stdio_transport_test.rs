@@ -1,5 +1,3 @@
-use std::time::Duration;
-
 use crate::agent::app_server::stdio_transport::{
     AppServerRuntimeTransport, AppServerStdioTransport,
 };
@@ -38,7 +36,7 @@ async fn next_stdout_reports_unreadable_output_with_transport_context() {
 }
 
 #[tokio::test]
-async fn explicit_response_timeout_round_trips_matching_line() {
+async fn response_wait_round_trips_matching_line() {
     // Arrange
     let command = std::process::Command::new("cat");
     let (mut child, stdin, stdout) = app_server_transport::spawn_runtime_command(command, "cat")
@@ -61,7 +59,7 @@ async fn explicit_response_timeout_round_trips_matching_line() {
 
     // Act
     let response_line = transport
-        .wait_for_response_line_with_timeout("response-1".to_string(), Duration::from_secs(1))
+        .wait_for_response_line("response-1".to_string())
         .await;
 
     // Assert

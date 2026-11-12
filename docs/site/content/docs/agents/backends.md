@@ -11,7 +11,7 @@ CLIs running in session worktrees. Install and authenticate at least one backend
 
 ## Supported Backends
 
-<a id="backends-supported-backends"></a> Agentty supports four agent backends. Each
+<a id="backends-supported-backends"></a> Agentty supports three agent backends. Each
 requires its respective CLI to be installed and available on your `PATH`.
 
 - Codex (`codex`, recommended; supports subscription usage): install the
@@ -23,9 +23,6 @@ requires its respective CLI to be installed and available on your `PATH`.
   `agy` and follow its sign-in flow. Agentty excludes older versions from provider
   selection and reports `agy update` as the recovery step if a session encounters an
   outdated executable.
-- Gemini (`gemini`): install the
-  [Gemini CLI](https://github.com/google-gemini/gemini-cli) and authenticate with an API
-  key or Vertex AI.
 
 All CLI backends accept pasted local prompt images from the Agentty composer (`Ctrl+V`,
 `Ctrl+Shift+V`, or `Alt+V` in prompt mode) and run their turns non-interactively inside
@@ -57,10 +54,10 @@ Agentty requires at least one supported backend CLI on `PATH` at startup and fai
 an install hint when none is found.
 
 Agentty uses each provider's official non-interactive CLI or app-server surface
-(`claude -p`, `agy --input-format stream-json`, `codex app-server`, or `gemini --acp`)
-after you authenticate with that provider's CLI. It does not implement OAuth flows, read
-provider OAuth tokens directly, or call private provider APIs. You are responsible for
-choosing an authentication method permitted for your account, plan, and usage pattern.
+(`claude -p`, `agy --input-format stream-json`, or `codex app-server`) after you
+authenticate with that provider's CLI. It does not implement OAuth flows, read provider
+OAuth tokens directly, or call private provider APIs. You are responsible for choosing
+an authentication method permitted for your account, plan, and usage pattern.
 
 ## Harness Sessions (Preview)
 
@@ -243,9 +240,8 @@ changing it.
 
 Codex limits concurrently open child-agent threads. Claude limits ordinary subagent
 spawning, but provider exceptions such as resumed subagents can exceed the limit.
-Enforcement depends on the installed CLI supporting its native setting. Gemini and
-Antigravity have no verified concurrency setting, so Agentty does not cap their internal
-subagents.
+Enforcement depends on the installed CLI supporting its native setting. Antigravity has
+no verified concurrency setting, so Agentty does not cap its internal subagents.
 
 These are per-session provider limits, not host-wide CPU or memory limits. Multiple
 sessions each have their own allowance, and builds or tests can consume additional
@@ -290,13 +286,12 @@ subscription access applies when third-party tools invoke headless sessions.
 
 Antigravity retains conversation context between turns and resumes it after a restart.
 
-### Gemini
-
-<a id="backends-gemini-authentication"></a> Google Account OAuth no longer works for
-Gemini CLI after Google's
-[transition from Gemini CLI to Antigravity CLI](https://developers.googleblog.com/an-important-update-transitioning-gemini-cli-to-antigravity-cli/).
-Use `GEMINI_API_KEY` or Vertex AI authentication, or choose the Antigravity backend
-instead.
+<a id="backends-gemini-cli-sessions"></a> Agentty no longer runs the Gemini CLI.
+Sessions and project defaults saved with the Gemini backend now use Antigravity with the
+same `gemini-*` models. Their next turn starts a fresh conversation. Install and
+authenticate `agy` (see
+[Prepare an Agent Backend](@/docs/getting-started/installation.md#prepare-an-agent-backend))
+to keep using them.
 
 ## Project Instruction Files
 
@@ -305,7 +300,6 @@ project-instruction discovery instead of inlining repository guidance into promp
 
 - Codex loads `AGENTS.md`.
 - Claude Code loads `CLAUDE.md`.
-- Gemini CLI loads `GEMINI.md`.
 - Antigravity CLI loads `AGENTS.md` and `GEMINI.md` from the active workspace.
 
 Keeping `CLAUDE.md` and `GEMINI.md` as symlinks to a canonical `AGENTS.md` gives all
@@ -317,9 +311,8 @@ backends the same repository guidance.
 backend, then one of its models.
 
 The **Projects** tab shows installed CLI versions and `updating...` during startup
-refresh. Antigravity, Claude, and Codex use their native updaters; Gemini updates only
-when Agentty recognizes an npm-global installation. If an Antigravity executable changes
-while Agentty is running, wait for discovery or restart before retrying a turn.
+refresh through each CLI's native updater. If an Antigravity executable changes while
+Agentty is running, wait for discovery or restart before retrying a turn.
 
 <a id="backends-persistent-defaults"></a> In **Settings**, choose a model and reasoning
 level for each project role. Claude and Codex also offer `Normal` or `Fast` response
@@ -345,9 +338,7 @@ is supported by `claude-opus-5-5`. Codex supports a distinct `max` effort.
 <a id="backends-available-models"></a> Each backend exposes one or more selectable model
 entries with different trade-offs between speed, quality, and cost.
 
-### Antigravity and Gemini Models
-
-Both providers share the same Gemini model ids:
+### Antigravity Models
 
 - `gemini-4-argon`: Gemini 4 Argon model.
 - `gemini-3.1-pro-preview` (default): Higher-quality Gemini model for deeper reasoning.
@@ -424,8 +415,8 @@ cost and may switch to a compatible model:
 | Codex Spark | `gpt-6.1-sol`        |
 
 Returning to `Normal` keeps the resulting model. Choosing an incompatible model resets
-speed to `Normal`. These changes do not alter project defaults. Gemini and Antigravity
-have no speed control. See the provider guides for
+speed to `Normal`. These changes do not alter project defaults. Antigravity has no speed
+control. See the provider guides for
 [Codex fast mode](https://learn.chatgpt.com/docs/agent-configuration/speed) and
 [Claude Code fast mode](https://code.claude.com/docs/en/fast-mode).
 

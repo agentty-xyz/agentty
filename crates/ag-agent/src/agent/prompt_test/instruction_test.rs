@@ -15,7 +15,6 @@ fn repair_bootstrap_applies_schema_once_for_each_provider_and_profile() {
     let repair = ag_protocol::build_protocol_repair_prompt("bad JSON", "original response")
         .expect("repair body");
     for kind in [
-        ag_session::AgentKind::Gemini,
         ag_session::AgentKind::Codex,
         ag_session::AgentKind::Claude,
         ag_session::AgentKind::Antigravity,

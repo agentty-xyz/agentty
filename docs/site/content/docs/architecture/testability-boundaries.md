@@ -16,10 +16,9 @@ installed harness and its supported controls.
 
 Activity tests inject provider JSON and worker events to cover lifecycle deduplication,
 retry identity, bounded input/output previews, utility forwarding, and transcript
-persistence without live providers. Transport fixtures cover Gemini and Antigravity
-activity forwarding. A `FeatureTest` PTY scenario covers live command/results and saved
-usage footers. Live backend event availability still depends on the installed CLI
-version.
+persistence without live providers. Transport fixtures cover Antigravity activity
+forwarding. A `FeatureTest` PTY scenario covers live command/results and saved usage
+footers. Live backend event availability still depends on the installed CLI version.
 
 <!-- more -->
 
@@ -241,10 +240,11 @@ without a frontend. Real process tests verify descendant cleanup and inherited p
 
 ## Session composition boundary
 
-Application tests receive scripted worker clients through `SessionRunFactory`. The
-default test factory is offline and fails unexpected model calls, including detached
-ones. Exercise model-switch scheduling and persistence failure through the production
-composition path, preserving pending work when a save fails.
+Application tests receive scripted worker clients and provider workspace setup through
+`SessionRunFactory`. The default test factory is offline, skips provider CLI setup, and
+fails unexpected model calls, including detached ones. Exercise model-switch scheduling
+and persistence failure through the production composition path, preserving pending work
+when a save fails.
 
 ## Worker submission boundary
 

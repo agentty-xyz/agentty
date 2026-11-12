@@ -14,7 +14,7 @@ use crate::channel::native::NativeAgentChannel;
 /// Creates the provider-specific channel for the given agent kind.
 ///
 /// Claude uses [`CliAgentChannel`]; persistent runtime providers
-/// (Antigravity, Gemini, Codex) use [`AppServerAgentChannel`]. The harness
+/// (Antigravity, Codex) use [`AppServerAgentChannel`]. The harness
 /// uses [`NativeAgentChannel`] when `native_harness` is configured and
 /// otherwise fails every turn before execution.
 pub fn create_agent_channel(

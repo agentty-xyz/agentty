@@ -296,7 +296,7 @@ async fn failed_lookup_or_admission_keeps_the_draft_and_reports_why() {
 
 /// One-node graph whose node asked a question, with the given aggregate
 /// status before driver overlays.
-fn awaiting_graph(
+pub(in crate::app) fn awaiting_graph(
     id: &str,
     status: ExecutionGraphStatus,
 ) -> (ExecutionGraph, ExecutionGraphProgress) {
@@ -314,7 +314,7 @@ fn awaiting_graph(
     (graph, progress)
 }
 
-async fn app_with(repository: MockGraphRepository) -> (App, TempDir) {
+pub(in crate::app) async fn app_with(repository: MockGraphRepository) -> (App, TempDir) {
     let (mut app, directory) = new_test_app().await;
     seed_session(&mut app.sessions, app.services.db()).await;
     app.services.set_graph_repository(Arc::new(repository));
@@ -336,7 +336,7 @@ fn unavailable() -> DbError {
     }
 }
 
-async fn messages(app: &App) -> Vec<(String, String)> {
+pub(in crate::app) async fn messages(app: &App) -> Vec<(String, String)> {
     app.services
         .db()
         .sessions()

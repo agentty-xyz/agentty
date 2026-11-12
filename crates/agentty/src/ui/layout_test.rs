@@ -479,10 +479,10 @@ fn test_prompt_suggestion_list_for_agent_stage_has_agent_descriptions() {
 
     // Assert
     assert_eq!(menu.items.len(), AgentKind::ALL.len());
-    assert_eq!(menu.items[0].label, "gemini");
+    assert_eq!(menu.items[0].label, "antigravity");
     assert_eq!(
         menu.items[0].detail,
-        Some("Google Gemini CLI agent.".to_string())
+        Some("Google Antigravity CLI agent.".to_string())
     );
 }
 

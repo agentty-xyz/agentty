@@ -299,7 +299,6 @@ async fn projects_page_shows_cwd() {
             |scenario| {
                 scenario
                     .compose(&common::wait_for_agentty_startup())
-                    .wait_for_text("gemini 0.0.1-updated", 10000)
                     .wait_for_text("claude 0.0.1-updated", 10000)
                     .wait_for_text("codex 0.0.1-updated", 10000)
                     .viewing_pause_ms(3000)
@@ -315,7 +314,8 @@ async fn projects_page_shows_cwd() {
                     assertion::assert_text_in_region(frame, "Agent CLIs", &full);
                     assertion::assert_text_in_region(frame, "claude", &full);
                     assertion::assert_text_in_region(frame, "0.0.1-updated", &full);
-                    assertion::assert_text_in_region(frame, "gemini 0.0.1-updated", &full);
+                    assertion::assert_text_in_region(frame, "codex 0.0.1-updated", &full);
+                    assertion::assert_not_visible(frame, "gemini 0.");
                     assertion::assert_text_in_region(frame, "Tokens In", &full);
                     assertion::assert_text_in_region(frame, "Out", &full);
                     assertion::assert_not_visible(frame, "Version");

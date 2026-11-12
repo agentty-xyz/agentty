@@ -85,6 +85,11 @@ async fn seed_merge_conflict_session_with_model(
 
 /// Seeds an assisted rebase conflict whose staged resolution is rejected by
 /// the effective pre-commit hook.
+///
+/// The `agy` stub also serves the focused review that starts once the
+/// session returns to review. It answers that review with an empty, valid
+/// result and leaves the worktree untouched. A malformed review would print a
+/// long failure that scrolls the sync outcome out of the captured frame.
 async fn seed_rebase_pre_commit_hook_session(
     env: &BuilderEnv,
     allow_repair: bool,
@@ -101,17 +106,23 @@ turn=0
 while IFS= read -r prompt_event; do
   turn=$((turn + 1))
   case "$prompt_event" in
+    *"Review the Git diff for display in a terminal UI."*)
+      structured='{"project_impact":[],"suggestions":[]}'
+      escaped='{\"project_impact\":[],\"suggestions\":[]}'
+      ;;
     *"Repair the pre-commit hook failure"*)
       printf 'validated resolution\n' > shared.txt
-      answer='Repaired the pre-commit hook failure.'
+      structured='{"answer":"Repaired the pre-commit hook failure."}'
+      escaped='{\"answer\":\"Repaired the pre-commit hook failure.\"}'
       ;;
     *)
       printf 'resolved by rebase assistance\n' > shared.txt
-      answer='Resolved the staged rebase conflict.'
+      structured='{"answer":"Resolved the staged rebase conflict."}'
+      escaped='{\"answer\":\"Resolved the staged rebase conflict.\"}'
       ;;
   esac
   printf '{"event":"step_update","step_update":{"conversation_id":"rebase-hook-test","step_index":%s,"state":"DONE","step_type":"agent_response","usage":{"input_tokens":4,"output_tokens":4}}}\n' "$turn"
-  printf '{"event":"result","result":{"conversation_id":"rebase-hook-test","status":"SUCCESS","response":"{\\"answer\\":\\"%s\\"}","structured_output":{"answer":"%s"},"error":"","duration_seconds":0.1,"num_turns":%s,"usage":{"input_tokens":4,"output_tokens":4,"thinking_tokens":0,"cache_read_tokens":0,"total_tokens":8}}}\n' "$answer" "$answer" "$turn"
+  printf '{"event":"result","result":{"conversation_id":"rebase-hook-test","status":"SUCCESS","response":"%s","structured_output":%s,"error":"","duration_seconds":0.1,"num_turns":%s,"usage":{"input_tokens":4,"output_tokens":4,"thinking_tokens":0,"cache_read_tokens":0,"total_tokens":8}}}\n' "$escaped" "$structured" "$turn"
 done
 "#;
     std::fs::write(&antigravity_path, script)?;
