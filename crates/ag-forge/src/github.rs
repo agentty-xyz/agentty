@@ -17,8 +17,8 @@ use super::{
 const PULL_REQUEST_STATUS_QUERY: &str =
     "query($owner: String!, $repo: String!, $number: Int!) { repository(owner: $owner, name: \
      $repo) { pullRequest(number: $number) { number title state url baseRefName headRefName \
-     isDraft mergeStateStatus reviewDecision mergedAt statusCheckRollup { state } \
-     viewerCanMergeAsAdmin } } }";
+     isDraft mergeable mergeStateStatus reviewDecision mergedAt statusCheckRollup { state } \
+     reviewThreads(first: 100) { totalCount nodes { isResolved } } viewerCanMergeAsAdmin } } }";
 
 /// Paginated GraphQL query used to fetch review threads for one pull request.
 const REVIEW_THREADS_QUERY: &str =
@@ -884,6 +884,7 @@ struct GitHubViewResponse {
     head_ref_name: String,
     #[serde(rename = "isDraft")]
     is_draft: bool,
+    mergeable: Option<String>,
     #[serde(rename = "mergeStateStatus")]
     merge_state_status: Option<String>,
     #[serde(rename = "mergedAt")]
@@ -891,6 +892,8 @@ struct GitHubViewResponse {
     number: u64,
     #[serde(rename = "reviewDecision")]
     review_decision: Option<String>,
+    #[serde(rename = "reviewThreads")]
+    review_threads: Option<GitHubReviewThreadStatusConnection>,
     state: String,
     #[serde(rename = "statusCheckRollup")]
     status_check_rollup: Option<GitHubStatusCheckRollup>,
@@ -944,17 +947,38 @@ impl GitHubViewResponse {
         self.is_open_non_draft() && self.merge_state_status.as_deref() == Some("CLEAN")
     }
 
-    /// Returns whether only a required approval blocks a merge the viewer may
-    /// perform by bypassing branch protections.
+    /// Returns whether the viewer may merge by bypassing branch protections
+    /// once checks pass.
+    ///
+    /// A published pull request qualifies when only a required approval
+    /// blocks it. A draft qualifies when it has no merge conflicts and no
+    /// unresolved review threads, regardless of approval or branch freshness.
     fn is_bypass_ready(&self) -> bool {
-        self.is_open_non_draft()
+        let is_unblocked = if self.is_draft {
+            self.mergeable.as_deref() == Some("MERGEABLE") && self.has_only_resolved_threads()
+        } else {
+            self.merge_state_status.as_deref() == Some("BLOCKED")
+                && self.review_decision.as_deref() == Some("REVIEW_REQUIRED")
+        };
+
+        self.state == "OPEN"
             && self.viewer_can_merge_as_admin
-            && self.merge_state_status.as_deref() == Some("BLOCKED")
-            && self.review_decision.as_deref() == Some("REVIEW_REQUIRED")
+            && is_unblocked
             && self
                 .status_check_rollup
                 .as_ref()
                 .is_some_and(|rollup| rollup.state == "SUCCESS")
+    }
+
+    /// Returns whether every review thread is known and resolved.
+    ///
+    /// A missing connection or one with more threads than the fetched page
+    /// counts as unresolved so readiness never relies on partial data.
+    fn has_only_resolved_threads(&self) -> bool {
+        self.review_threads.as_ref().is_some_and(|threads| {
+            threads.nodes.len() == threads.total_count
+                && threads.nodes.iter().all(|thread| thread.is_resolved)
+        })
     }
 
     /// Returns whether the pull request is open and published for review.
@@ -991,6 +1015,21 @@ impl GitHubViewResponse {
 #[derive(Deserialize)]
 struct GitHubStatusCheckRollup {
     state: String,
+}
+
+/// First page of review-thread resolution states for readiness checks.
+#[derive(Deserialize)]
+struct GitHubReviewThreadStatusConnection {
+    nodes: Vec<GitHubReviewThreadStatusNode>,
+    #[serde(rename = "totalCount")]
+    total_count: usize,
+}
+
+/// Resolution state of one review thread.
+#[derive(Deserialize)]
+struct GitHubReviewThreadStatusNode {
+    #[serde(rename = "isResolved")]
+    is_resolved: bool,
 }
 
 /// GitHub pull-request title/body payload returned by `gh pr view --json`.

@@ -659,6 +659,10 @@ case "$*" in
   *"auth status"*)
     exit 0
     ;;
+  # The status query also selects `reviewThreads(first:`, so match it first.
+  *"mergeStateStatus"*)
+    printf '%s\n' '{"data":{"repository":{"pullRequest":{"number":42,"title":"Review-ready session shortcuts","state":"OPEN","url":"https://github.com/agentty-xyz/agentty/pull/42","baseRefName":"main","headRefName":"wt/review-s","isDraft":false,"mergeStateStatus":"BLOCKED","reviewDecision":"REVIEW_REQUIRED","mergedAt":null}}}}'
+    ;;
   *"addPullRequestReviewThreadReply"*)
     printf '%s\n' '{"data":{"addPullRequestReviewThreadReply":{"comment":{"id":"reply-1"}}}}'
     ;;
@@ -674,9 +678,6 @@ JSON
     cat <<'JSON'
 [{"data":{"repository":{"pullRequest":{"comments":{"nodes":[{"author":{"login":"carol"},"body":"Thanks for documenting the behavior."}],"pageInfo":{"hasNextPage":false,"endCursor":null}}}}}}]
 JSON
-    ;;
-  *"mergeStateStatus"*)
-    printf '%s\n' '{"data":{"repository":{"pullRequest":{"number":42,"title":"Review-ready session shortcuts","state":"OPEN","url":"https://github.com/agentty-xyz/agentty/pull/42","baseRefName":"main","headRefName":"wt/review-s","isDraft":false,"mergeStateStatus":"BLOCKED","reviewDecision":"REVIEW_REQUIRED","mergedAt":null}}}}'
     ;;
   *)
     echo "unexpected gh invocation: $*" >&2
