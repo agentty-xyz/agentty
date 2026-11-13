@@ -20,12 +20,17 @@ flowchart TD
   R -.->|turn events and result| W
 ```
 
-- [Run Worker](@/docs/core-components/execution-components/run-worker.md): admission,
-  ordering, cancellation, recovery, and execution policy.
-- [Agent Runtime](@/docs/core-components/execution-components/agent-runtime.md): adapter
+- <a id="run-worker"></a> <a id="execution-policy"></a>
+  [Run Worker](@/docs/core-components/execution-components/run-worker.md): admission,
+  ordering, cancellation, recovery, and
+  [execution policy](@/docs/core-components/execution-components/run-worker.md#execution-policy).
+- <a id="agent-runtime"></a>
+  [Agent Runtime](@/docs/core-components/execution-components/agent-runtime.md): adapter
   composition, dispatch, and provider lifecycle.
-- [Harness](@/docs/core-components/execution-components/harness.md): the agent loop, the
-  LLM behind it, and observed activity.
+- <a id="harness"></a> <a id="llm"></a> <a id="observed-activity"></a>
+  [Harness](@/docs/core-components/execution-components/harness.md): the agent loop, the
+  [LLM](@/docs/core-components/execution-components/harness.md#llm) behind it, and
+  [observed activity](@/docs/core-components/execution-components/harness.md#observed-activity).
 
 ## Crates
 
@@ -42,9 +47,10 @@ flowchart TD
 
 ## Dependency Rule
 
-Only `ag-worker` depends on `ag-runtime`, and only `ag-runtime` depends on `ag-agent`.
-Only `ag-harness-cli` and `ag-agent` may depend on `ag-harness`. Applications configure
-worker handles and import shared types from `ag-contracts`.
+<a id="supporting-boundaries"></a> Only `ag-worker` depends on `ag-runtime`, and only
+`ag-runtime` depends on `ag-agent`. Only `ag-harness-cli` and `ag-agent` may depend on
+`ag-harness`. Applications configure worker handles and import shared types from
+`ag-contracts`.
 
 The `check-execution-boundary` hook enforces this boundary on every commit: dependency
 rules cover all workspace dependencies, including test code, and source checks keep raw

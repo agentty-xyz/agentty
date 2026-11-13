@@ -72,7 +72,8 @@ finish the session.
 
 ## Role-Aware Tasks
 
-`ag_session::TaskAgentRole` provides two built-in task roles:
+<a id="built-in-agent-definitions"></a> `ag_session::TaskAgentRole` provides two
+built-in task roles:
 
 | Role          | Required context                               | Permissions                                     | Expected answer                        |
 | ------------- | ---------------------------------------------- | ----------------------------------------------- | -------------------------------------- |

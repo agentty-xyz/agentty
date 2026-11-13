@@ -24,7 +24,8 @@ flowchart LR
 
 ## Ownership
 
-A session owns its [messages](@/docs/core-components/durable-components/message.md),
+<a id="execution-environment"></a> A session owns its
+[messages](@/docs/core-components/durable-components/message.md),
 [operations](@/docs/core-components/durable-components/operation.md),
 [tasks](@/docs/core-components/durable-components/task.md), and
 [execution graphs](@/docs/core-components/durable-components/execution-graph.md);
