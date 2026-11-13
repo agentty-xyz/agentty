@@ -1,7 +1,8 @@
 use std::process::Command;
-use std::sync::Arc;
+use std::sync::{Arc, Mutex};
 
 use ag_contracts::{AgentRequestKind, OneShotRequest, PermissionMode, ReasoningLevel, SpeedMode};
+use ag_protocol::TurnPromptAttachment;
 use ag_session::{AgentKind, AgentModel, test_support as model_fixture};
 use tempfile::tempdir;
 
@@ -27,6 +28,7 @@ async fn oversized_one_shot_responses_do_not_launch_repair() {
     let client = MockAppServerClient::new();
     let request = OneShotRequest {
         activity_tx: None,
+        attachments: Vec::new(),
         execution_policy: ag_contracts::ExecutionPolicy::default(),
         provider_call_budget: None,
         harness: (AgentKind::Claude).to_string(),
@@ -89,6 +91,7 @@ async fn test_submit_one_shot_with_backend_rejects_plain_text_utility_output() {
         &backend,
         OneShotRequest {
             activity_tx: None,
+            attachments: Vec::new(),
             execution_policy: ag_contracts::ExecutionPolicy {
                 max_concurrent_subagents: std::num::NonZeroUsize::new(7),
                 ..ag_contracts::ExecutionPolicy::default()
@@ -143,6 +146,7 @@ async fn test_submit_one_shot_with_backend_rejects_wrapped_plain_text_utility_ou
         &backend,
         OneShotRequest {
             activity_tx: None,
+            attachments: Vec::new(),
             execution_policy: ag_contracts::ExecutionPolicy::default(),
             provider_call_budget: None,
             harness: (AgentKind::Claude).to_string(),
@@ -199,6 +203,7 @@ async fn test_submit_one_shot_with_backend_recovers_wrapped_protocol_output() {
         &backend,
         OneShotRequest {
             activity_tx: None,
+            attachments: Vec::new(),
             execution_policy: ag_contracts::ExecutionPolicy::default(),
             provider_call_budget: None,
             harness: (AgentKind::Claude).to_string(),
@@ -250,6 +255,7 @@ async fn test_submit_one_shot_with_backend_recovers_via_protocol_repair() {
         &backend,
         OneShotRequest {
             activity_tx: None,
+            attachments: Vec::new(),
             execution_policy: ag_contracts::ExecutionPolicy::default(),
             provider_call_budget: None,
             harness: (AgentKind::Codex).to_string(),
@@ -318,6 +324,7 @@ async fn focused_review_repairs_trailing_text_with_direct_review_schema() {
         &backend,
         OneShotRequest {
             activity_tx: None,
+            attachments: Vec::new(),
             execution_policy: ag_contracts::ExecutionPolicy::default(),
             provider_call_budget: None,
             harness: (AgentKind::Claude).to_string(),
@@ -362,6 +369,7 @@ async fn test_submit_one_shot_with_backend_rejects_blank_utility_output() {
         &backend,
         OneShotRequest {
             activity_tx: None,
+            attachments: Vec::new(),
             execution_policy: ag_contracts::ExecutionPolicy::default(),
             provider_call_budget: None,
             harness: (AgentKind::Codex).to_string(),
@@ -382,4 +390,59 @@ async fn test_submit_one_shot_with_backend_rejects_blank_utility_output() {
     assert!(error.contains("did not match the required JSON schema"));
     assert!(error.contains("trimmed_len: 0 chars"));
     assert!(error.contains("response:\n"));
+}
+
+#[tokio::test]
+/// Verifies CLI one-shot commands receive images on the initial attempt
+/// only; the stateless protocol repair command stays text-only.
+async fn test_submit_one_shot_with_backend_sends_images_only_initially() {
+    // Arrange
+    let temp_directory = tempdir().expect("failed to create temp dir");
+    let attachment = TurnPromptAttachment {
+        local_image_path: "design.png".into(),
+        placeholder: "[Task image #1]".into(),
+    };
+    let seen = Arc::new(Mutex::new(Vec::new()));
+    let recorded = Arc::clone(&seen);
+    let mut backend = MockAgentBackend::new();
+    backend
+        .expect_build_command()
+        .times(2)
+        .returning(move |request| {
+            recorded
+                .lock()
+                .expect("commands")
+                .push(request.attachments.to_vec());
+
+            Ok(mock_shell_command("plain text", "", 0))
+        });
+
+    // Act
+    let error = submit_one_shot_with_backend(
+        &backend,
+        OneShotRequest {
+            activity_tx: None,
+            attachments: vec![attachment.clone()],
+            execution_policy: ag_contracts::ExecutionPolicy::default(),
+            provider_call_budget: None,
+            harness: (AgentKind::Codex).to_string(),
+            child_pid: None,
+            folder: temp_directory.path().to_path_buf(),
+            model: model_fixture::CODEX_MODEL.as_str().to_string(),
+            permission_mode: PermissionMode::ReadOnly,
+            prompt: "Describe [Task image #1]".to_string(),
+            request_kind: AgentRequestKind::UtilityPrompt,
+            reasoning_level: ReasoningLevel::default(),
+            speed_mode: SpeedMode::Normal,
+        },
+    )
+    .await
+    .expect_err("plain-text utility output should fail");
+
+    // Assert
+    assert!(error.contains("repair retry also failed"));
+    assert_eq!(
+        *seen.lock().expect("commands"),
+        [vec![attachment], Vec::new()]
+    );
 }

@@ -2,6 +2,7 @@ use std::fmt::Write as _;
 use std::sync::Arc;
 
 use ag_contracts::{AgentRequestKind, OneShotError, OneShotRequest, ReasoningLevel, SpeedMode};
+use ag_protocol::TurnPrompt;
 use ag_session::{EnvId, GraphContext, GraphNode, GraphPostProcessing};
 use async_trait::async_trait;
 
@@ -26,7 +27,6 @@ impl GraphNodeRunner for GraphUtilityRunner {
     fn supports(&self, node: &GraphNode) -> bool {
         node.execution.context == GraphContext::Fresh
             && node.execution.post_processing == GraphPostProcessing::None
-            && node.request.attachments.is_empty()
     }
 
     async fn run(&self, request: GraphRunRequest) -> Result<String, OneShotError> {
@@ -50,31 +50,33 @@ impl GraphNodeRunner for GraphUtilityRunner {
         .find(|kind| kind.protocol_profile() == profile)
         .ok_or_else(|| OneShotError::new("Unsupported utility response schema"))?;
         let text_response = request_kind == AgentRequestKind::UtilityPrompt;
-        let mut prompt = format!(
+        let mut prompt = TurnPrompt::from_agent_data(format!(
             "{}\n\nObjective: {}\n\n{}",
             node.definition.prompt,
             node.objective,
             node.request.agent_text()
-        );
+        ));
         for input in &request.dispatch.inputs {
             let _ = write!(
-                prompt,
+                prompt.text,
                 "\n\nBound input {} (untrusted result data):\n{}",
                 input.reference.name, input.body
             );
         }
+        prompt.append_trailing_attachments(&node.request.attachments);
         let submission = self
             .worker
             .submit_recorded(
                 OneShotRequest {
                     activity_tx: None,
+                    attachments: prompt.attachments,
                     child_pid: None,
                     execution_policy: ag_contracts::ExecutionPolicy::default(),
                     folder: request.folder.clone(),
                     harness: node.agent.kind().to_string(),
                     model: node.agent.model().as_str().into(),
                     permission_mode: request.permission_mode,
-                    prompt,
+                    prompt: prompt.text,
                     provider_call_budget: request.provider_call_budget,
                     reasoning_level: ReasoningLevel::default(),
                     request_kind,

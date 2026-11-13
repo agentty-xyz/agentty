@@ -15,6 +15,10 @@ use agentty::domain::session::{
     ForgeKind, ReviewRequest, ReviewRequestState, ReviewRequestSummary,
 };
 use agentty::domain::session_message::SessionMessageKind;
+#[cfg(target_os = "linux")]
+use image::codecs::png::PngEncoder;
+#[cfg(target_os = "linux")]
+use image::{ExtendedColorType, ImageEncoder};
 use sqlx::sqlite::SqliteConnectOptions;
 use sqlx::{ConnectOptions, Connection, Executor};
 
@@ -22,6 +26,9 @@ use crate::common::{BuilderEnv, SessionSeed};
 use crate::{common, test_support};
 
 pub(super) type E2eResult = Result<(), Box<dyn std::error::Error>>;
+
+/// PNG fixture served by the scripted clipboard and compared by providers.
+pub(super) const CLIPBOARD_IMAGE_FILE: &str = "clipboard.png";
 
 /// Stable id for the seeded running session used by stop-turn tests.
 const RUNNING_STOP_SESSION_ID: &str = "running-stop-0001";
@@ -714,6 +721,36 @@ ON CONFLICT(name) DO UPDATE SET value = excluded.value
         Result::<(), Box<dyn std::error::Error>>::Ok(())
     })
     .await?;
+
+    Ok(())
+}
+
+/// Installs a scripted Wayland `wl-paste` serving a 1x1 PNG saved as
+/// [`CLIPBOARD_IMAGE_FILE`] beside it.
+///
+/// Scenarios exercise real clipboard capture without a host clipboard when
+/// they set `WAYLAND_DISPLAY`; provider stubs compare delivered images
+/// against the same file.
+#[cfg(target_os = "linux")]
+pub(super) fn install_clipboard_image_stub(stub_bin: &Path) -> E2eResult {
+    let mut png = Vec::new();
+    PngEncoder::new(&mut png).write_image(&[255, 0, 0, 255], 1, 1, ExtendedColorType::Rgba8)?;
+    std::fs::write(stub_bin.join(CLIPBOARD_IMAGE_FILE), png)?;
+    let wl_paste = stub_bin.join("wl-paste");
+    std::fs::write(
+        &wl_paste,
+        format!(
+            r#"#!/bin/sh
+case "$1" in
+  --version) printf 'wl-paste test\n' ;;
+  --list-types) printf 'image/png\n' ;;
+  --no-newline) cat "$(dirname "$0")/{CLIPBOARD_IMAGE_FILE}" ;;
+  *) exit 1 ;;
+esac
+"#
+        ),
+    )?;
+    std::fs::set_permissions(wl_paste, std::fs::Permissions::from_mode(0o750))?;
 
     Ok(())
 }

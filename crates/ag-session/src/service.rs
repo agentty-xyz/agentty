@@ -2,6 +2,7 @@
 
 use std::sync::Arc;
 
+use ag_protocol::TurnPrompt;
 use async_trait::async_trait;
 
 use crate::error::SessionError;
@@ -383,8 +384,8 @@ impl SessionService {
             .await
     }
 
-    /// Regenerates with user feedback added to the generation history,
-    /// within the original captured generation ceiling.
+    /// Regenerates with user feedback, including its images, added to the
+    /// generation history, within the original captured generation ceiling.
     ///
     /// # Errors
     /// Returns stale-version, empty-feedback, approved-proposal, or
@@ -393,7 +394,7 @@ impl SessionService {
         &self,
         id: &str,
         version: u32,
-        feedback: String,
+        feedback: TurnPrompt,
     ) -> Result<(), SessionError> {
         self.backend
             .act_on_graph_proposal(id, version, crate::GraphProposalAction::Revise(feedback))

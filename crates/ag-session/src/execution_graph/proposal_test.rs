@@ -70,12 +70,22 @@ fn graph_proposal_resolution_captures_host_authority_and_rejects_invalid_require
             limits: &state.limits,
             permission: state.permission,
             request: &state.input.request,
+            revision_attachments: &state.version.attachments,
             session_id: &state.input.session_id,
         }
         .resolve(&proposal);
 
         // Assert
-        if ["valid", "task", "effects", "input", "accepted"].contains(&case) {
+        if [
+            "valid",
+            "task",
+            "effects",
+            "input",
+            "accepted",
+            "attachments",
+        ]
+        .contains(&case)
+        {
             let graph = result.expect(case);
             assert_eq!(graph.nodes[0].definition, state.definitions[0]);
             assert_eq!(graph.nodes[0].agent, state.agent);
@@ -99,9 +109,19 @@ fn graph_proposal_resolution_captures_host_authority_and_rejects_invalid_require
 }
 
 #[test]
-fn graph_proposal_resolution_carries_complete_clarification_history_to_every_node() {
+fn graph_proposal_resolution_carries_complete_history_and_images_to_every_node() {
     // Arrange
     let mut state = graph_proposal_state("preview", "session");
+    let request_image = TurnPromptAttachment {
+        local_image_path: "request.png".into(),
+        placeholder: "[Image #1]".into(),
+    };
+    let revision_image = TurnPromptAttachment {
+        local_image_path: "revision.png".into(),
+        placeholder: "[Image #1]".into(),
+    };
+    state.input.request.attachments.push(request_image.clone());
+    state.version.attachments.push(revision_image.clone());
     state.version.answers = vec![
         serde_json::json!({"question": "Target?", "answer": "Local  only"}).to_string(),
         serde_json::json!({"question": "Format?", "answer": "Use \"quotes\"\nand newlines"})
@@ -121,6 +141,7 @@ fn graph_proposal_resolution_carries_complete_clarification_history_to_every_nod
         limits: &state.limits,
         permission: state.permission,
         request: &state.input.request,
+        revision_attachments: &state.version.attachments,
         session_id: &state.input.session_id,
     }
     .resolve(&proposal)
@@ -135,6 +156,10 @@ fn graph_proposal_resolution_carries_complete_clarification_history_to_every_nod
             .expect("clarification context");
         assert_eq!(request, state.input.request.text);
         assert_eq!(node.request.text_source, state.input.request.text_source);
+        assert_eq!(
+            node.request.attachments,
+            [request_image.clone(), revision_image.clone()]
+        );
         assert_eq!(
             serde_json::from_str::<Vec<String>>(history).expect("history"),
             state.version.answers

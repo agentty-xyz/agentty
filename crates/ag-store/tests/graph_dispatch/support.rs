@@ -83,6 +83,7 @@ impl BusyProvider {
                 worker
                     .submit(OneShotRequest {
                         activity_tx: None,
+                        attachments: Vec::new(),
                         child_pid: None,
                         execution_policy: ExecutionPolicy::default(),
                         folder: "other-workspace".into(),

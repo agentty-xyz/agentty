@@ -5,7 +5,7 @@ use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};
 
 use ag_contracts::{AgentRequestKind, OneShotRequest, PermissionMode, ProviderCallBudget};
-use ag_protocol::{GraphProposalOutcome, GraphProposalResponse};
+use ag_protocol::{GraphProposalOutcome, GraphProposalResponse, TurnPrompt};
 use ag_session::{
     AgentDefinition, GenerateGraphProposalRequest, GraphProposalAction, GraphProposalLimits,
     GraphProposalResolution, GraphProposalState, GraphProposalVersion, GraphProposalVersionOutcome,
@@ -130,13 +130,11 @@ impl App {
             }
             return Ok(());
         }
-        if input.request.has_attachments()
-            || input.request.text.trim().is_empty()
+        if input.request.text.trim().is_empty()
             || input.request.text.len() > GraphProposalLimits::default().bytes
         {
             return Err(SessionError::Operation(
-                "Graph requests require text within host limits; attachment paths are unsupported"
-                    .into(),
+                "Graph requests require text within host limits".into(),
             ));
         }
         self.sessions.sync_session_from_handle(&input.session_id);
@@ -168,6 +166,7 @@ impl App {
             version: GraphProposalVersion {
                 answers: Vec::new(),
                 approval: None,
+                attachments: Vec::new(),
                 is_cancelled: false,
                 number: 1,
                 outcome: GraphProposalVersionOutcome::Generating,
@@ -450,23 +449,34 @@ async fn generate_inner(
         serde_json::json!({"limits": state.limits, "permission": state.permission.label()})
             .to_string();
     let answers = serde_json::json!(state.version.answers).to_string();
-    let prompt = GraphProposalPrompt {
-        answers: &answers,
-        catalog: &catalog,
-        limits: &limits,
-        request: &request,
-    }
-    .to_string();
+    let mut prompt = TurnPrompt::from_agent_data(
+        GraphProposalPrompt {
+            answers: &answers,
+            catalog: &catalog,
+            limits: &limits,
+            request: &request,
+        }
+        .to_string(),
+    );
+    prompt.append_trailing_attachments(
+        state
+            .input
+            .request
+            .attachments
+            .iter()
+            .chain(&state.version.attachments),
+    );
     let submission = client
         .submit(OneShotRequest {
             activity_tx: None,
+            attachments: prompt.attachments,
             child_pid: None,
             execution_policy: ag_contracts::ExecutionPolicy::default(),
             folder,
             harness: state.agent.kind().to_string(),
             model: state.agent.model().as_str().into(),
             permission_mode: PermissionMode::ReadOnly,
-            prompt,
+            prompt: prompt.text,
             provider_call_budget: Some(ProviderCallBudget::new(
                 state.limits.generation_provider_calls,
             )),
@@ -503,6 +513,7 @@ async fn generate_inner(
                 limits: &state.limits,
                 permission: state.permission,
                 request: &state.input.request,
+                revision_attachments: &state.version.attachments,
                 session_id: &state.input.session_id,
             }
             .resolve(proposal)?;

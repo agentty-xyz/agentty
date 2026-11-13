@@ -186,6 +186,7 @@ pub(crate) fn resolved_state(session_id: &str) -> GraphProposalState {
         limits: &state.limits,
         permission: state.permission,
         request: &state.input.request,
+        revision_attachments: &state.version.attachments,
         session_id: &state.input.session_id,
     }
     .resolve(&proposal)

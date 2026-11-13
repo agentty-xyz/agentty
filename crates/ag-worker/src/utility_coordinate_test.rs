@@ -126,6 +126,7 @@ fn run() -> RunInfo {
 fn request() -> OneShotRequest {
     OneShotRequest {
         activity_tx: None,
+        attachments: Vec::new(),
         execution_policy: ag_contracts::ExecutionPolicy::default(),
         child_pid: None,
         folder: "repository".into(),

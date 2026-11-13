@@ -77,6 +77,7 @@ fn chat_notice_reports_each_proposal_outcome_in_one_short_message() {
         limits: &state.limits,
         permission: state.permission,
         request: &state.input.request,
+        revision_attachments: &state.version.attachments,
         session_id: &state.input.session_id,
     }
     .resolve(&declaration)

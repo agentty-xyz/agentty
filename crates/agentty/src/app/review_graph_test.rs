@@ -21,6 +21,7 @@ use crate::infra::review_deadline::ReviewDeadlineClient;
 fn request() -> OneShotRequest {
     OneShotRequest {
         activity_tx: None,
+        attachments: Vec::new(),
         child_pid: None,
         execution_policy: ag_contracts::ExecutionPolicy::default(),
         folder: PathBuf::from("."),

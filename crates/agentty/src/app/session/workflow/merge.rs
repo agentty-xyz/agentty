@@ -583,6 +583,7 @@ impl RealSyncAssistClient {
             },
             run_client.submit(ag_contracts::OneShotRequest {
                 activity_tx: None,
+                attachments: Vec::new(),
                 execution_policy: ag_contracts::ExecutionPolicy::default(),
                 provider_call_budget: None,
                 harness: (session_agent.kind()).to_string(),

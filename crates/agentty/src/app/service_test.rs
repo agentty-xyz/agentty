@@ -572,6 +572,7 @@ async fn shutdown_deadline_forces_stuck_harnesses_and_all_background_tasks() {
         let client = app.services.run_client();
         let request = OneShotRequest {
             activity_tx: None,
+            attachments: Vec::new(),
             execution_policy: ag_contracts::ExecutionPolicy::default(),
             child_pid: None,
             folder: directory.path().into(),
@@ -968,6 +969,7 @@ async fn production_worker_reuses_isolated_review_runtime_and_closes_it() {
     let (app, directory) = crate::test_support::new_test_app_with_clients(clients).await;
     let request = OneShotRequest {
         activity_tx: None,
+        attachments: Vec::new(),
         execution_policy: ag_contracts::ExecutionPolicy::default(),
         child_pid: None,
         folder: directory.path().into(),

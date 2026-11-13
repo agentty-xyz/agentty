@@ -4,7 +4,8 @@
 //! message is a reply to it. The reply is shown in chat, a read-only utility
 //! run on the Run Worker decides whether it approves, cancels, or revises the
 //! exact inspected version, and the decided action is admitted through the
-//! command gateway. Only one reply per proposal is decided at a time.
+//! command gateway. Only one reply per proposal is decided at a time. Pasted
+//! images travel with a revision into every later generation.
 
 use std::path::PathBuf;
 use std::sync::{Arc, Mutex, PoisonError};
@@ -28,10 +29,6 @@ use crate::domain::turn_prompt::TurnPrompt;
 
 /// Run purpose recorded for the reply decision.
 const DECISION_RUN_PURPOSE: &str = "graph proposal reply decision";
-
-/// Rejection shown for a reply carrying attachments.
-const ATTACHMENTS_UNSUPPORTED: &str =
-    "Graph proposals accept text replies only. Remove the attachments and reply again.";
 
 /// Rejection shown while the previous reply is still being decided.
 const DECISION_PENDING: &str =
@@ -136,11 +133,6 @@ impl App {
         state: &GraphProposalState,
         prompt: &TurnPrompt,
     ) -> PromptWorkflowOutcome {
-        if prompt.has_attachments() {
-            return self
-                .reject_graph_proposal_reply(session_id, ATTACHMENTS_UNSUPPORTED)
-                .await;
-        }
         let Some((folder, transcript)) = self
             .sessions
             .session_and_handles_or_err(session_id)
@@ -169,7 +161,7 @@ impl App {
             &prompt.transcript_text(),
         )
         .await;
-        self.spawn_graph_proposal_reply_decision(state, folder, prompt.text.clone(), transcript);
+        self.spawn_graph_proposal_reply_decision(state, folder, prompt.clone(), transcript);
 
         PromptWorkflowOutcome::ShowSession {
             session_id: session_id.clone(),
@@ -190,15 +182,19 @@ impl App {
 
     /// Decides with the proposal's captured selection and session ownership,
     /// then admits the action for the exact inspected version. A version that
-    /// changed meanwhile rejects the action instead of retargeting it.
+    /// changed meanwhile rejects the action instead of retargeting it. Only a
+    /// revision keeps the reply images, so an approval of a reply with images
+    /// revises instead and lets generation consider them first. At the
+    /// generation limit, where no revision is admitted, it approves and reports
+    /// that the images were not used.
     fn spawn_graph_proposal_reply_decision(
         &self,
         state: &GraphProposalState,
         folder: PathBuf,
-        reply: String,
+        reply: TurnPrompt,
         transcript: Arc<Mutex<SessionTranscript>>,
     ) {
-        let decision = GraphProposalReplyDecision::new(state, folder, reply.clone());
+        let decision = GraphProposalReplyDecision::new(state, folder, reply.text.clone());
         let run_client = ag_worker::scoped_client(
             self.services.run_client(),
             ag_worker::RunScope {
@@ -212,17 +208,26 @@ impl App {
         let id = state.input.id.clone();
         let session_id = state.input.session_id.clone();
         let version = state.version.number;
+        let has_images = reply.has_attachments();
+        let can_revise = version < state.limits.generations;
         tokio::spawn(async move {
             let (action, success) = match decision.decide(run_client.as_ref()).await {
-                GraphProposalReply::Approve => (
+                GraphProposalReply::Approve if !has_images => (
                     GraphProposalAction::Approve,
                     format!("Graph proposal v{version} approved · execution started"),
+                ),
+                GraphProposalReply::Approve if !can_revise => (
+                    GraphProposalAction::Approve,
+                    format!(
+                        "Graph proposal v{version} approved · execution started · reply images \
+                         not used: generation limit reached"
+                    ),
                 ),
                 GraphProposalReply::Cancel => (
                     GraphProposalAction::Cancel,
                     format!("Graph proposal v{version} cancelled."),
                 ),
-                GraphProposalReply::Revise => (
+                GraphProposalReply::Approve | GraphProposalReply::Revise => (
                     GraphProposalAction::Revise(reply),
                     format!("Generating graph proposal v{}…", version + 1),
                 ),

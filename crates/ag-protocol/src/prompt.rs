@@ -1,6 +1,7 @@
 //! Transport-neutral prompt payloads shared by frontends and agent adapters.
 
 use std::fmt;
+use std::fmt::Write as _;
 use std::path::PathBuf;
 
 /// One local image attachment referenced from a prompt placeholder.
@@ -102,6 +103,33 @@ impl TurnPrompt {
     #[must_use]
     pub fn content_parts(&self) -> Vec<TurnPromptContentPart<'_>> {
         split_turn_prompt_content(&self.text, &self.attachments)
+    }
+
+    /// Appends `attachments` after the current text under fresh placeholders.
+    ///
+    /// Structured prompts embed user text as data, so the original composer
+    /// placeholders such as `[Image #1]` may appear inside that data and may
+    /// repeat across replies. Each image therefore gets a numbered reference
+    /// line whose placeholder does not occur anywhere in the existing text.
+    pub fn append_trailing_attachments<'attachment>(
+        &mut self,
+        attachments: impl IntoIterator<Item = &'attachment TurnPromptAttachment>,
+    ) {
+        for (index, attachment) in attachments.into_iter().enumerate() {
+            let number = index + 1;
+            let mut placeholder = format!("[Task image #{number}]");
+            while self.text.contains(&placeholder) {
+                placeholder.insert(1, '#');
+            }
+            let _ = write!(
+                self.text,
+                "\n\nTask input attachment {number}: {placeholder}"
+            );
+            self.attachments.push(TurnPromptAttachment {
+                local_image_path: attachment.local_image_path.clone(),
+                placeholder,
+            });
+        }
     }
 
     /// Returns the prompt text as it should be written into persisted

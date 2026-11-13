@@ -4,7 +4,9 @@
 use std::collections::BTreeMap;
 use std::error::Error;
 
-use ag_protocol::{GraphProposalOutcome, GraphProposalResponse, QuestionItem};
+use ag_protocol::{
+    GraphProposalOutcome, GraphProposalResponse, QuestionItem, TurnPrompt, TurnPromptAttachment,
+};
 use ag_session::test_support::{graph_proposal, graph_proposal_state};
 use ag_session::{
     GraphProposalAction, GraphProposalResolution, GraphProposalState, GraphProposalVersionOutcome,
@@ -32,6 +34,7 @@ fn resolved(state: &GraphProposalState) -> Result<GraphProposalVersionOutcome, S
         limits: &state.limits,
         permission: state.permission,
         request: &state.input.request,
+        revision_attachments: &state.version.attachments,
         session_id: &state.input.session_id,
     }
     .resolve(&proposal)?;
@@ -282,13 +285,15 @@ async fn graph_proposal_revision_records_feedback_with_open_questions() -> Resul
         .graph_proposals()
         .finish("preview", 2, &resolved(&answered)?)
         .await?;
+    let image = TurnPromptAttachment {
+        local_image_path: "sketch.png".into(),
+        placeholder: "[Image #1]".into(),
+    };
+    let mut feedback = TurnPrompt::from_text("Add a test node like [Image #1]".into());
+    feedback.attachments.push(image.clone());
     let revised = database
         .graph_proposals()
-        .reserve(
-            "preview",
-            2,
-            &GraphProposalAction::Revise("Add a test node".into()),
-        )
+        .reserve("preview", 2, &GraphProposalAction::Revise(feedback))
         .await?;
     let superseded = database
         .graph_proposals()
@@ -308,9 +313,19 @@ async fn graph_proposal_revision_records_feedback_with_open_questions() -> Resul
     assert_eq!(revised.version.number, 3);
     assert_eq!(
         revised.version.answers[1],
-        r#"{"feedback":"Add a test node"}"#
+        r#"{"feedback":"Add a test node like [Image #1]","images":[{"placeholder":"[Image #1]","task_input_attachment":1}]}"#
     );
+    assert_eq!(revised.version.attachments, std::slice::from_ref(&image));
     assert_eq!(superseded.version.answers[2], r#"{"feedback":"Also lint"}"#);
+    assert_eq!(superseded.version.attachments, [image]);
+    assert_eq!(
+        database
+            .graph_proposals()
+            .get("preview", Some(3))
+            .await?
+            .map(|stored| stored.version.attachments),
+        Some(revised.version.attachments)
+    );
 
     Ok(())
 }
@@ -506,6 +521,39 @@ async fn graph_proposal_latest_loads_only_the_newest_session_proposal() -> Resul
     assert!(empty.is_none());
     assert_eq!(latest, Some(second));
     assert!(other.is_none());
+
+    Ok(())
+}
+
+#[tokio::test]
+async fn graph_proposal_capture_preserves_request_images_through_resolution()
+-> Result<(), Box<dyn Error>> {
+    // Arrange
+    let database = Database::in_memory().await?;
+    seed(&database).await?;
+    let mut state = graph_proposal_state("preview", "session");
+    state.input.request.text.push_str(" [Image #1]");
+    state.input.request.attachments.push(TurnPromptAttachment {
+        local_image_path: "design.png".into(),
+        placeholder: "[Image #1]".into(),
+    });
+
+    // Act
+    let created = database.graph_proposals().create(&state).await?;
+    database
+        .graph_proposals()
+        .finish("preview", 1, &resolved(&state)?)
+        .await?;
+    let stored = database
+        .graph_proposals()
+        .get("preview", None)
+        .await?
+        .expect("proposal");
+
+    // Assert
+    assert!(created);
+    assert_eq!(stored.input, state.input);
+    assert_eq!(stored.version.outcome, resolved(&state)?);
 
     Ok(())
 }

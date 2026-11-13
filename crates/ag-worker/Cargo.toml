@@ -12,6 +12,7 @@ workspace = true
 
 [dependencies]
 ag-telemetry.workspace = true
+ag-protocol.workspace = true
 ag-runtime.workspace = true
 ag-scheduler.workspace = true
 ag-session.workspace = true
@@ -29,7 +30,6 @@ opentelemetry.workspace = true
 opentelemetry_sdk = { workspace = true, features = ["testing"] }
 tempfile.workspace = true
 ag-runtime = { workspace = true, features = ["test-utils"] }
-ag-protocol.workspace = true
 ag-contracts = { workspace = true, features = ["test-utils"] }
 mockall.workspace = true
 tokio = { workspace = true, features = ["test-util"] }

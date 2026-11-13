@@ -1232,13 +1232,12 @@ async fn unsupported_profiles_and_unknown_budgets_fail_before_admission()
         populate(&database).await?;
         let mut graph = graph();
         if unsupported {
-            graph.nodes[1]
-                .request
-                .attachments
-                .push(ag_protocol::TurnPromptAttachment {
-                    local_image_path: "image.png".into(),
-                    placeholder: "[Image #1]".into(),
-                });
+            // The utility runner cannot own a task conversation.
+            graph.nodes[1].execution.context = GraphContext::TaskConversation {
+                task_id: "task".into(),
+            };
+            graph.nodes[1].execution.response_profile = ProtocolRequestProfile::SessionTurn;
+            graph.nodes[1].outputs[0].schema = ProtocolRequestProfile::SessionTurn;
         }
         database.graphs().save_graph(&graph, None).await?;
         let worker = Arc::new(RunWorker::with_client(

@@ -115,6 +115,7 @@ async fn test_submit_one_shot_with_backend_reports_signal_interruption() {
         &backend,
         OneShotRequest {
             activity_tx: None,
+            attachments: Vec::new(),
             execution_policy: ag_contracts::ExecutionPolicy::default(),
             provider_call_budget: None,
             harness: (AgentKind::Codex).to_string(),
@@ -165,6 +166,7 @@ async fn test_submit_one_shot_with_backend_returns_protocol_response() {
             &backend,
             OneShotRequest {
                 activity_tx: collect_activity.then_some(activity_tx),
+                attachments: Vec::new(),
                 execution_policy: ag_contracts::ExecutionPolicy::default(),
                 provider_call_budget: None,
                 harness: (AgentKind::Claude).to_string(),
@@ -224,6 +226,7 @@ async fn test_submit_one_shot_with_backend_writes_large_stdin_concurrently() {
             &backend,
             OneShotRequest {
                 activity_tx: None,
+                attachments: Vec::new(),
                 execution_policy: ag_contracts::ExecutionPolicy::default(),
                 provider_call_budget: None,
                 harness: (AgentKind::Claude).to_string(),
@@ -265,6 +268,7 @@ async fn test_submit_one_shot_with_backend_writes_prompt_to_stdin() {
         &backend,
         OneShotRequest {
             activity_tx: None,
+            attachments: Vec::new(),
             execution_policy: ag_contracts::ExecutionPolicy::default(),
             provider_call_budget: None,
             harness: (AgentKind::Claude).to_string(),
@@ -311,6 +315,7 @@ async fn test_submit_one_shot_with_backend_preserves_exit_error_after_broken_pip
         &backend,
         OneShotRequest {
             activity_tx: None,
+            attachments: Vec::new(),
             execution_policy: ag_contracts::ExecutionPolicy::default(),
             provider_call_budget: None,
             harness: (AgentKind::Claude).to_string(),
@@ -356,6 +361,7 @@ async fn test_submit_one_shot_with_backend_surfaces_claude_auth_guidance() {
         &backend,
         OneShotRequest {
             activity_tx: None,
+            attachments: Vec::new(),
             execution_policy: ag_contracts::ExecutionPolicy::default(),
             provider_call_budget: None,
             harness: (AgentKind::Claude).to_string(),

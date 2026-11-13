@@ -71,6 +71,7 @@ pub fn graph_proposal_state(id: &str, session_id: &str) -> crate::GraphProposalS
         version: crate::GraphProposalVersion {
             answers: Vec::new(),
             approval: None,
+            attachments: Vec::new(),
             is_cancelled: false,
             number: 1,
             outcome: crate::GraphProposalVersionOutcome::Generating,

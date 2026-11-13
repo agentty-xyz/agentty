@@ -13,7 +13,9 @@ use testty::assertion;
 use testty::region::Region;
 
 use crate::common::{self, BuilderEnv, FeatureTest, SessionSeed};
-use crate::session::fixture::{E2eResult, run_git};
+#[cfg(target_os = "linux")]
+use crate::session::fixture::install_clipboard_image_stub;
+use crate::session::fixture::{CLIPBOARD_IMAGE_FILE, E2eResult, run_git};
 
 const SESSION: &str = "proposal-session";
 
@@ -68,6 +70,26 @@ prompt=$(cat)
 printf '%s\n' '{{"type":"system","subtype":"init"}}'
 case "$prompt" in
   *'Propose an initial execution graph'*)
+    printf '%s\n' "$prompt" | sed -n 's/^Task input attachment [0-9]*: //p' | while IFS= read -r image_path; do
+      case " $* " in
+        *" --add-dir $(dirname "$image_path") "*) cmp -s "$image_path" "$(dirname "$0")/{CLIPBOARD_IMAGE_FILE}" ;;
+        *) false ;;
+      esac || exit 1
+    done || {{ printf 'Graph request image was not delivered\n' >&2; exit 1; }}
+    case "$prompt" in
+      *'Match the screen'*)
+        case "$prompt" in
+          *'Task input attachment 1: '*) ;;
+          *) printf 'Graph request image was not delivered\n' >&2; exit 1 ;;
+        esac ;;
+    esac
+    case "$prompt" in
+      *'Use this layout'*)
+        case "$prompt" in
+          *'Task input attachment 2: '*) ;;
+          *) printf 'Revision image was not delivered\n' >&2; exit 1 ;;
+        esac ;;
+    esac
     case "$prompt" in
       *'Need clarification'*'revision feedback, oldest first (JSON data):'*'[]'*) printf '%s\n' '{question}' ;;
       *) printf '%s\n' '{response}' ;;
@@ -194,6 +216,69 @@ async fn graph_proposal_request_preview_approval_execution() -> E2eResult {
     Ok(())
 }
 
+/// A scripted Wayland clipboard exercises real capture without a host
+/// clipboard; the provider stub fails generation unless it receives every
+/// pasted PNG with read access, including the revision reply's image.
+#[cfg(target_os = "linux")]
+#[tokio::test]
+async fn graph_request_and_revision_deliver_pasted_images_to_generation() -> E2eResult {
+    // Arrange
+    FeatureTest::new("graph_request_and_revision_pasted_images")
+        .with_git()
+        .with_terminal_size(160, 50)
+        .args(["--experimental-graph".into()])
+        .env("WAYLAND_DISPLAY", "agentty-test-wayland")
+        .setup(|env| {
+            Box::pin(async move {
+                seed(env, 1).await?;
+
+                install_clipboard_image_stub(&env.stub_bin)
+            })
+        })
+        .run(
+            |scenario| {
+                // Act
+                scenario
+                    .compose(&common::wait_for_agentty_startup())
+                    .wait_for_text("Graph proposals", 5000)
+                    .press_key("Enter")
+                    .wait_for_text("Enter: reply", 5000)
+                    .press_key("Enter")
+                    .write_text("/graph")
+                    .press_key("Enter")
+                    .wait_for_text("Describe the task for the execution graph", 5000)
+                    .write_text("Match the screen ")
+                    .press_key("ctrl+v")
+                    .wait_for_text("Match the screen [Image #1]", 5000)
+                    .press_key("Enter")
+                    .wait_for_text("Graph proposal v1 ready: 1 node", 10000)
+                    .capture_labeled("preview", "Pasted image reaches graph generation")
+                    .press_key("Enter")
+                    .write_text("Use this layout ")
+                    .press_key("ctrl+v")
+                    .wait_for_text("Use this layout [Image #", 5000)
+                    .press_key("Enter")
+                    .wait_for_text("Graph proposal v2 ready: 1 node", 10000)
+                    .capture_labeled("revision", "Revision image reaches regeneration")
+            },
+            |frame, _report| {
+                Box::pin(async move {
+                    // Assert
+                    assertion::assert_text_in_region(
+                        frame,
+                        "Awaiting your approval",
+                        &Region::full(frame.cols(), frame.rows()),
+                    );
+                    assertion::assert_not_visible(frame, "text replies only");
+                    assertion::assert_not_visible(frame, "Graph proposal v2 failed");
+                })
+            },
+        )
+        .await?;
+
+    Ok(())
+}
+
 #[tokio::test]
 async fn graph_proposal_clarification_and_cancel() -> E2eResult {
     // Arrange
@@ -293,6 +378,7 @@ async fn graph_proposal_restored_pending_preview() -> E2eResult {
                     limits: &state.limits,
                     permission: state.permission,
                     request: &state.input.request,
+                    revision_attachments: &state.version.attachments,
                     session_id: &state.input.session_id,
                 }
                 .resolve(&proposal)?;

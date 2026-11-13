@@ -13,6 +13,7 @@ use crate::app_server::{AppServerTurnResponse, MockAppServerClient};
 fn request() -> OneShotRequest {
     OneShotRequest {
         activity_tx: None,
+        attachments: Vec::new(),
         execution_policy: ag_contracts::ExecutionPolicy::default(),
         child_pid: Some(Arc::new(Mutex::new(Some(42)))),
         folder: "repository".into(),

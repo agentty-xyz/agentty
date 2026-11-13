@@ -290,3 +290,52 @@ fn test_render_prompt_text_for_agent_keeps_at_without_lookup_query() {
     // Assert
     assert_eq!(agent_text, text);
 }
+
+#[test]
+/// Ensures structured prompts reference each image after their data under a
+/// placeholder absent from that data, even when composer markers repeat.
+fn test_turn_prompt_append_trailing_attachments_uses_unique_placeholders() {
+    // Arrange
+    let data = r#"{"request":"Compare [Image #1]","literal":"[Task image #1]"}"#;
+    let mut prompt = TurnPrompt::from_agent_data(data.to_string());
+    let images = [
+        TurnPromptAttachment {
+            local_image_path: PathBuf::from("first.png"),
+            placeholder: "[Image #1]".to_string(),
+        },
+        TurnPromptAttachment {
+            local_image_path: PathBuf::from("second.png"),
+            placeholder: "[Image #1]".to_string(),
+        },
+    ];
+
+    // Act
+    prompt.append_trailing_attachments(&images);
+
+    // Assert
+    assert_eq!(
+        prompt.text,
+        format!(
+            "{data}\n\nTask input attachment 1: [#Task image #1]\n\nTask input attachment 2: \
+             [Task image #2]"
+        )
+    );
+    assert_eq!(
+        prompt.content_parts(),
+        [
+            TurnPromptContentPart::Text(&format!("{data}\n\nTask input attachment 1: ")),
+            TurnPromptContentPart::Attachment(&prompt.attachments[0]),
+            TurnPromptContentPart::Text("\n\nTask input attachment 2: "),
+            TurnPromptContentPart::Attachment(&prompt.attachments[1]),
+        ]
+    );
+    assert_eq!(
+        prompt.attachments[0].local_image_path,
+        images[0].local_image_path
+    );
+    assert_eq!(
+        prompt.attachments[1].local_image_path,
+        images[1].local_image_path
+    );
+    assert_eq!(prompt.text_source, TurnPromptTextSource::AgentData);
+}

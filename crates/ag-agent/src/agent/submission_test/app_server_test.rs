@@ -5,6 +5,7 @@ use ag_contracts::{
     ActivityEvent, ActivityKind, ActivityStatus, AgentRequestKind, OneShotRequest, PermissionMode,
     ReasoningLevel, SpeedMode,
 };
+use ag_protocol::TurnPromptAttachment;
 use ag_session::{AgentKind, AgentModel, test_support as model_fixture};
 use tempfile::tempdir;
 use tokio::sync::mpsc;
@@ -67,6 +68,7 @@ async fn test_submit_one_shot_with_app_server_client_returns_protocol_response()
         Arc::new(app_server_client),
         OneShotRequest {
             activity_tx: Some(activity_tx),
+            attachments: Vec::new(),
             execution_policy: ag_contracts::ExecutionPolicy::default(),
             provider_call_budget: None,
             harness: (AgentKind::Codex).to_string(),
@@ -140,6 +142,7 @@ async fn test_submit_one_shot_with_app_server_client_clears_pid_after_turn_failu
         Arc::new(app_server_client),
         OneShotRequest {
             activity_tx: Some(activity_tx),
+            attachments: Vec::new(),
             execution_policy: ag_contracts::ExecutionPolicy::default(),
             provider_call_budget: None,
             harness: (AgentKind::Codex).to_string(),
@@ -210,6 +213,7 @@ async fn one_shot_app_server_repair_preserves_permissions_and_conversation() {
             });
         let request = OneShotRequest {
             activity_tx: Some(activity_tx),
+            attachments: Vec::new(),
             execution_policy: ag_contracts::ExecutionPolicy::default(),
             provider_call_budget: None,
             harness: (AgentKind::Antigravity).to_string(),
@@ -287,6 +291,7 @@ async fn test_submit_one_shot_with_app_server_client_rejects_plain_text_utility_
         Arc::new(app_server_client),
         OneShotRequest {
             activity_tx: None,
+            attachments: Vec::new(),
             execution_policy: ag_contracts::ExecutionPolicy::default(),
             provider_call_budget: None,
             harness: (AgentKind::Codex).to_string(),
@@ -349,6 +354,7 @@ async fn test_submit_one_shot_with_app_server_client_rejects_plain_text_non_util
         Arc::new(app_server_client),
         OneShotRequest {
             activity_tx: None,
+            attachments: Vec::new(),
             execution_policy: ag_contracts::ExecutionPolicy::default(),
             provider_call_budget: None,
             harness: (AgentKind::Codex).to_string(),
@@ -387,4 +393,75 @@ fn activity_event(status: ActivityStatus) -> ActivityEvent {
         parent_id: Some("parent".into()),
         status,
     }
+}
+
+#[tokio::test]
+/// Verifies one-shot images reach only the initial app-server turn; the
+/// protocol repair stays text-only on the same session.
+async fn test_submit_one_shot_with_app_server_client_sends_images_only_initially() {
+    // Arrange
+    let temp_directory = tempdir().expect("failed to create temp dir");
+    let attachment = TurnPromptAttachment {
+        local_image_path: "design.png".into(),
+        placeholder: "[Task image #1]".into(),
+    };
+    let seen = Arc::new(Mutex::new(Vec::new()));
+    let recorded = Arc::clone(&seen);
+    let mut app_server_client = MockAppServerClient::new();
+    app_server_client
+        .expect_run_turn()
+        .times(2)
+        .returning(move |request, _| {
+            let mut seen = recorded.lock().expect("turns");
+            seen.push(request.prompt.attachments);
+            let assistant_message = if seen.len() == 1 {
+                "plain text"
+            } else {
+                r#"{"answer":"Seen"}"#
+            }
+            .to_string();
+
+            Box::pin(async move {
+                Ok(AppServerTurnResponse {
+                    assistant_message,
+                    context_reset: false,
+                    input_tokens: 1,
+                    output_tokens: 1,
+                    pid: None,
+                    provider_conversation_id: None,
+                })
+            })
+        });
+    app_server_client
+        .expect_shutdown_session()
+        .times(1)
+        .returning(|_| Box::pin(async {}));
+
+    // Act
+    let response = submit_one_shot_with_app_server_client(
+        Arc::new(app_server_client),
+        OneShotRequest {
+            activity_tx: None,
+            attachments: vec![attachment.clone()],
+            execution_policy: ag_contracts::ExecutionPolicy::default(),
+            provider_call_budget: None,
+            harness: (AgentKind::Codex).to_string(),
+            child_pid: None,
+            folder: temp_directory.path().to_path_buf(),
+            model: model_fixture::CODEX_MODEL.as_str().to_string(),
+            permission_mode: PermissionMode::ReadOnly,
+            prompt: "Describe [Task image #1]".to_string(),
+            request_kind: AgentRequestKind::UtilityPrompt,
+            reasoning_level: ReasoningLevel::default(),
+            speed_mode: SpeedMode::Normal,
+        },
+        CancellationToken::new(),
+        CancellationToken::new(),
+    )
+    .await
+    .expect("repaired one-shot prompt should succeed");
+
+    // Assert
+    assert_eq!(response.response.answers(), vec!["Seen".to_string()]);
+    assert_eq!(*seen.lock().expect("turns"), [vec![attachment], Vec::new()]);
 }

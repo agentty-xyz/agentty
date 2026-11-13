@@ -186,6 +186,7 @@ async fn pooled_repair_falls_back_to_custom_clients_without_an_intermediate_shut
 fn review_request() -> OneShotRequest {
     OneShotRequest {
         activity_tx: None,
+        attachments: Vec::new(),
         execution_policy: ag_contracts::ExecutionPolicy::default(),
         child_pid: None,
         folder: ".".into(),

@@ -4,6 +4,7 @@ use std::time::Duration;
 use ag_contracts::{AgentRequestKind, OneShotSubmission, SessionStats};
 use ag_protocol::{
     AgentResponse, GraphProposalOutcome, GraphProposalResponse, QuestionItem, TurnPrompt,
+    TurnPromptAttachment,
 };
 use ag_session::test_support::{graph_proposal, graph_proposal_state};
 use ag_session::{GraphProposalState, GraphProposalVersionOutcome};
@@ -11,7 +12,7 @@ use ag_store::{DbError, MockGraphProposalRepository};
 use ag_worker::MockRunClient;
 use tempfile::TempDir;
 
-use super::{ATTACHMENTS_UNSUPPORTED, DECISION_PENDING, clarification_questions};
+use super::{DECISION_PENDING, clarification_questions};
 use crate::app::App;
 use crate::app::execution_graph::tests::seed_session;
 use crate::app::graph_proposal_decision::tests::resolved_state;
@@ -128,45 +129,135 @@ async fn decided_action_fails_visibly_when_the_version_changed_meanwhile() {
 }
 
 #[tokio::test]
-async fn rejected_replies_keep_the_composer_and_start_no_decision() {
-    for case in ["attachments", "pending"] {
-        // Arrange
-        let (mut app, _directory) = pending_app(clarification_state(), "cancel").await;
-        let mut prompt = TurnPrompt::from_text("Local".into());
-        if case == "attachments" {
-            prompt.attachments.push(ag_protocol::TurnPromptAttachment {
-                local_image_path: "image.png".into(),
-                placeholder: "[Image #1]".into(),
-            });
-        } else {
-            app.services
-                .proposal_reply_decisions
-                .lock()
-                .expect("decision lock")
-                .insert("preview".into());
-        }
+async fn reply_during_a_pending_decision_keeps_the_composer_and_starts_no_decision() {
+    // Arrange
+    let (mut app, _directory) = pending_app(clarification_state(), "cancel").await;
+    let prompt = TurnPrompt::from_text("Local".into());
+    app.services
+        .proposal_reply_decisions
+        .lock()
+        .expect("decision lock")
+        .insert("preview".into());
 
-        // Act
-        let outcome = app
-            .submit_graph_proposal_reply(&SessionId::from("sess"), &prompt)
-            .await;
+    // Act
+    let outcome = app
+        .submit_graph_proposal_reply(&SessionId::from("sess"), &prompt)
+        .await;
 
-        // Assert
-        assert_eq!(outcome, Some(PromptWorkflowOutcome::KeepPrompt), "{case}");
-        let expected = if case == "attachments" {
-            ATTACHMENTS_UNSUPPORTED
-        } else {
-            DECISION_PENDING
-        };
-        assert!(
-            messages(&app)
-                .await
-                .iter()
-                .any(|(_, content)| content.contains(expected)),
-            "{case}"
-        );
-        assert!(!stored(&app).await.version.is_cancelled);
+    // Assert
+    assert_eq!(outcome, Some(PromptWorkflowOutcome::KeepPrompt));
+    assert!(
+        messages(&app)
+            .await
+            .iter()
+            .any(|(_, content)| content.contains(DECISION_PENDING))
+    );
+    assert!(!stored(&app).await.version.is_cancelled);
+}
+
+#[tokio::test]
+async fn revise_reply_with_an_image_keeps_it_for_the_next_version_and_its_nodes() {
+    // Arrange
+    let (mut app, _directory) = pending_app(resolved_state("sess"), "revise").await;
+    let _consumer = app.sessions.foreground_consumer();
+    let image = TurnPromptAttachment {
+        local_image_path: "sketch.png".into(),
+        placeholder: "[Image #1]".into(),
+    };
+    let mut reply = submission("Shape it like [Image #1]");
+    reply.prompt.attachments.push(image.clone());
+
+    // Act
+    app.submit_prompt(reply).await;
+    apply_next_command(&mut app).await;
+    wait_for_message(&app, "Generating graph proposal v2…").await;
+    app.services.wait_for_cleanup_tasks(None).await;
+
+    // Assert
+    let state = stored(&app).await;
+    assert_eq!(state.version.number, 2);
+    assert_eq!(state.version.attachments, std::slice::from_ref(&image));
+    assert_eq!(
+        state.version.answers,
+        [
+            r#"{"feedback":"Shape it like [Image #1]","images":[{"placeholder":"[Image #1]","task_input_attachment":1}]}"#
+        ]
+    );
+    let launch = match state.version.outcome {
+        GraphProposalVersionOutcome::Generated { launch, .. } => launch,
+        _ => None,
     }
+    .expect("Expected a resolved revision");
+    assert!(
+        launch
+            .graph
+            .nodes
+            .iter()
+            .all(|node| node.request.attachments == [image.clone()])
+    );
+}
+
+#[tokio::test]
+async fn approve_reply_with_an_image_revises_instead_of_dropping_it() {
+    // Arrange
+    let (mut app, _directory) = pending_app(resolved_state("sess"), "approve").await;
+    let _consumer = app.sessions.foreground_consumer();
+    let image = TurnPromptAttachment {
+        local_image_path: "sketch.png".into(),
+        placeholder: "[Image #1]".into(),
+    };
+    let mut reply = submission("Looks good, also match [Image #1]");
+    reply.prompt.attachments.push(image.clone());
+
+    // Act
+    app.submit_prompt(reply).await;
+    apply_next_command(&mut app).await;
+    let notice = wait_for_message(&app, "Generating graph proposal").await;
+    app.services.wait_for_cleanup_tasks(None).await;
+
+    // Assert
+    let state = stored(&app).await;
+    assert_eq!(notice, "Generating graph proposal v2…");
+    assert_eq!(state.version.number, 2);
+    assert!(state.version.approval.is_none());
+    assert_eq!(state.version.attachments, std::slice::from_ref(&image));
+}
+
+#[tokio::test]
+async fn approve_reply_with_an_image_approves_at_the_generation_limit() {
+    // Arrange
+    let mut limited = resolved_state("sess");
+    limited.limits.generations = 1;
+    let (mut app, _directory) = pending_app(limited, "approve").await;
+    let _consumer = app.sessions.foreground_consumer();
+    let mut reply = submission("Looks good, also match [Image #1]");
+    reply.prompt.attachments.push(TurnPromptAttachment {
+        local_image_path: "sketch.png".into(),
+        placeholder: "[Image #1]".into(),
+    });
+
+    // Act
+    app.submit_prompt(reply).await;
+    apply_next_command(&mut app).await;
+    let notice = wait_for_message(&app, "Graph proposal").await;
+    app.services.wait_for_cleanup_tasks(None).await;
+
+    // Assert
+    let state = stored(&app).await;
+    assert_eq!(
+        notice,
+        "Graph proposal v1 approved · execution started · reply images not used: generation limit \
+         reached"
+    );
+    assert_eq!(state.version.number, 1);
+    assert_eq!(
+        state.version.approval.map(|approval| approval.version),
+        Some(1)
+    );
+    assert_eq!(
+        state.version.attachments,
+        Vec::<TurnPromptAttachment>::new()
+    );
 }
 
 #[tokio::test]
@@ -314,6 +405,7 @@ pub(in crate::app) async fn pending_app(
     seed_session(&mut app.sessions, app.services.db()).await;
     app.experimental_graph = true;
     let mut state = graph_proposal_state("preview", "sess");
+    state.limits = outcome_state.limits;
     app.services
         .db()
         .graph_proposals()

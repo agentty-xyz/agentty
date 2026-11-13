@@ -416,27 +416,7 @@ fn graph_prompt(
              are historical evidence; check the current workspace when addressing requested fixes."
         );
     }
-    for (index, attachment) in node
-        .request
-        .attachments
-        .iter()
-        .chain(reply_attachments)
-        .enumerate()
-    {
-        let mut placeholder = format!("[Task image #{}]", index + 1);
-        while prompt.text.contains(&placeholder) {
-            placeholder.insert(1, '#');
-        }
-        let _ = write!(
-            prompt.text,
-            "\n\nTask input attachment {}: {placeholder}",
-            index + 1
-        );
-        prompt.attachments.push(TurnPromptAttachment {
-            local_image_path: attachment.local_image_path.clone(),
-            placeholder,
-        });
-    }
+    prompt.append_trailing_attachments(node.request.attachments.iter().chain(reply_attachments));
 
     prompt
 }

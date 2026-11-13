@@ -177,6 +177,7 @@ async fn native_harness_configuration_runs_harness_work_in_process() {
     };
     let utility = OneShotRequest {
         activity_tx: None,
+        attachments: Vec::new(),
         child_pid: None,
         execution_policy: ExecutionPolicy::default(),
         folder: data_root.path().to_path_buf(),

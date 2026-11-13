@@ -70,6 +70,7 @@ impl GraphProposalReplyDecision {
         let submission = run_client
             .submit(ag_contracts::OneShotRequest {
                 activity_tx: None,
+                attachments: Vec::new(),
                 child_pid: None,
                 execution_policy: ag_contracts::ExecutionPolicy::default(),
                 folder: self.folder.clone(),

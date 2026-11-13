@@ -122,6 +122,7 @@ async fn effect_children_preserve_local_budgets_beneath_the_shared_graph_limit()
         client
             .submit(OneShotRequest {
                 activity_tx: None,
+                attachments: Vec::new(),
                 child_pid: None,
                 execution_policy: ExecutionPolicy::default(),
                 folder: "workspace".into(),

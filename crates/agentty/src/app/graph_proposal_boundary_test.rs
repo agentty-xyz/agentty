@@ -71,6 +71,7 @@ async fn duplicate_generation_and_approval_receipts_do_not_start_workers() {
                 limits: &state.limits,
                 permission: state.permission,
                 request: &state.input.request,
+                revision_attachments: &state.version.attachments,
                 session_id: &state.input.session_id,
             }
             .resolve(&proposal)
