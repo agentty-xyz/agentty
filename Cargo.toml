@@ -46,7 +46,7 @@ ignore = "0.4"
 image = { version = "0.25", default-features = false, features = ["png", "gif"] }
 jsonschema = { version = "0.60.0", default-features = false }
 libc = "0.2"
-libproc = "0.14.11"
+libproc = "0.15.0"
 mockall = "0.15"
 objc2 = "0.6"
 objc2-app-kit = { version = "0.3", default-features = false }
