@@ -12,6 +12,7 @@ use tokio::sync::watch;
 
 use super::generate;
 use crate::app::execution_graph::tests::seed_session;
+use crate::domain::session::Status;
 use crate::infra::db::AppRepositories;
 use crate::test_support::{new_test_app, new_test_app_with_clients, test_app_clients};
 
@@ -140,6 +141,21 @@ async fn graph_proposal_generation_rejects_worker_wire_and_resolution_failures()
 
 fn proposal_provider() -> MockAppServerClient {
     let mut provider = MockAppServerClient::new();
+    provider
+        .expect_run_isolated_turn()
+        .withf(|request, _| request.prompt.contains("Original request (JSON string)"))
+        .returning(|_, _| {
+            Box::pin(async {
+                Ok(AppServerTurnResponse {
+                    assistant_message: "Graph session".into(),
+                    context_reset: false,
+                    input_tokens: 1,
+                    output_tokens: 1,
+                    pid: None,
+                    provider_conversation_id: None,
+                })
+            })
+        });
     provider
         .expect_run_isolated_turn()
         .times(3)
@@ -350,6 +366,7 @@ async fn graph_mode_submits_literal_requests_without_subcommands() {
         seed_session(&mut app.sessions, app.services.db()).await;
         app.experimental_multi_agent = true;
         let mut client = MockRunClient::new();
+        expect_title_requests(&mut client);
         client.expect_submit().times(0..=1).returning(|_| {
             Ok(OneShotSubmission {
                 response: AgentResponse::plain(
@@ -399,6 +416,7 @@ async fn created_proposal_refreshes_an_empty_graph_sidebar_without_a_session_upd
     seed_session(&mut app.sessions, app.services.db()).await;
     app.experimental_multi_agent = true;
     let mut client = MockRunClient::new();
+    expect_title_requests(&mut client);
     client
         .expect_submit()
         .times(0..=1)
@@ -419,6 +437,81 @@ async fn created_proposal_refreshes_an_empty_graph_sidebar_without_a_session_upd
 
     // Assert
     assert!(app.graph_chat.needs_refresh("sess", 0, now));
+    app.services.wait_for_cleanup_tasks(None).await;
+}
+
+#[tokio::test]
+async fn admitted_proposal_titles_a_prepared_draft_that_still_accepts_its_first_reply() {
+    // Arrange
+    let (mut app, _directory) = new_test_app().await;
+    seed_session(&mut app.sessions, app.services.db()).await;
+    *app.sessions.session_handles()["sess"]
+        .status
+        .lock()
+        .expect("status") = Status::Draft;
+    app.services
+        .db()
+        .sessions()
+        .update_session_status_with_timing_at("sess", "Draft", 0)
+        .await
+        .expect("prepared draft");
+    app.experimental_multi_agent = true;
+    let mut client = MockRunClient::new();
+    client.expect_submit().returning(|request| {
+        let answer = if request.request_kind == AgentRequestKind::UtilityPrompt {
+            "Inspect the graph layout".to_string()
+        } else {
+            serde_json::json!(GraphProposalResponse {
+                outcome: GraphProposalOutcome::Proposal {
+                    proposal: graph_proposal()
+                }
+            })
+            .to_string()
+        };
+
+        Ok(OneShotSubmission {
+            response: AgentResponse::plain(answer),
+            stats: SessionStats::default(),
+        })
+    });
+    app.services.set_run_client(Arc::new(client));
+    let request = ag_session::GenerateGraphProposalRequest {
+        id: "titled-preview".into(),
+        request: ag_protocol::TurnPrompt::from_text("Inspect".into()),
+        session_id: "sess".into(),
+    };
+
+    // Act
+    app.generate_api_graph_proposal(request)
+        .await
+        .expect("generation admitted");
+    let row = tokio::time::timeout(std::time::Duration::from_secs(10), async {
+        loop {
+            let row = app
+                .services
+                .db()
+                .sessions()
+                .load_session("sess")
+                .await
+                .expect("session row")
+                .expect("session exists");
+            if row.title.as_deref() == Some("Inspect the graph layout") {
+                return row;
+            }
+            tokio::time::sleep(std::time::Duration::from_millis(10)).await;
+        }
+    })
+    .await
+    .expect("title completion guard");
+    let service = app.session_service();
+    app.drive_session_request(service.cancel_graph_proposal("titled-preview", 1))
+        .await
+        .expect("cancel");
+    let is_reply_enqueued = app.sessions.reply(&app.services, "sess", "Follow up").await;
+
+    // Assert
+    assert!(is_reply_enqueued);
+    assert_eq!(row.prompt, "");
     app.services.wait_for_cleanup_tasks(None).await;
 }
 
@@ -574,6 +667,7 @@ async fn graph_proposal_cancels_while_waiting_for_workspace_access() {
     seed_session(&mut app.sessions, app.services.db()).await;
     app.experimental_multi_agent = true;
     let mut client = MockRunClient::new();
+    expect_title_requests(&mut client);
     client.expect_submit().never();
     app.services.set_run_client(Arc::new(client));
     let lease = app
@@ -692,6 +786,15 @@ fn graph_proposal_preview_explains_outcomes_and_separates_output_acceptance() {
             ));
         }
     }
+}
+
+/// Accepts the detached title request that admission starts for an untitled
+/// session, so callers' expectations cover only proposal generation.
+fn expect_title_requests(client: &mut MockRunClient) {
+    client
+        .expect_submit()
+        .withf(|request| request.request_kind == AgentRequestKind::UtilityPrompt)
+        .returning(|_| Err(OneShotError::new("title unavailable")));
 }
 
 async fn wait_proposal(

@@ -9,6 +9,7 @@ use ag_session::{
 use ag_worker::MockRunClient;
 
 use super::test_support::{ChainFixture, launch_request};
+use crate::app::session::GraphRequestPrompt;
 
 #[tokio::test]
 async fn new_chain_titles_the_original_request_once() {
@@ -203,16 +204,22 @@ async fn chain_title_metadata_failures_do_not_start_generation() {
     fixture
         .app
         .sessions
-        .initialize_task_chain_title(
+        .initialize_graph_request_title(
             &fixture.app.services,
             &SessionId::from("missing"),
             "Request",
+            GraphRequestPrompt::Record,
         )
         .await;
     fixture
         .app
         .sessions
-        .initialize_task_chain_title(&fixture.app.services, &fixture.session_id, "Request")
+        .initialize_graph_request_title(
+            &fixture.app.services,
+            &fixture.session_id,
+            "Request",
+            GraphRequestPrompt::Record,
+        )
         .await;
 
     // Assert

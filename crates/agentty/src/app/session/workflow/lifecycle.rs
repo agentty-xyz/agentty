@@ -85,6 +85,18 @@ const GENERATED_SESSION_TITLE_PROGRESS_PREFIXES: &[&str] = &[
 const USER_PROMPT_PREFIX: &str = " › ";
 const USER_PROMPT_CONTINUATION_PREFIX: &str = "   ";
 
+/// Whether a newly admitted graph request becomes the session's original
+/// prompt.
+#[derive(Clone, Copy, Eq, PartialEq)]
+pub(crate) enum GraphRequestPrompt {
+    /// Leave the prompt unset because the request starts no session turn, so
+    /// a prepared draft still accepts its first ordinary reply.
+    Leave,
+    /// Record the request as the original prompt of a session whose turns it
+    /// starts.
+    Record,
+}
+
 /// Input bag for constructing a queued session command.
 struct BuildSessionCommandInput {
     is_first_message: bool,
@@ -2728,14 +2740,19 @@ impl SessionManager {
         ))
     }
 
-    /// Initializes a new chain's original request and refines its provisional
-    /// title through the same utility used by ordinary session turns.
-    /// Existing prompt and title metadata remain authoritative.
-    pub(crate) async fn initialize_task_chain_title(
+    /// Initializes the metadata of a newly admitted task chain or graph
+    /// proposal and refines its provisional title through the same utility
+    /// used by ordinary session turns.
+    ///
+    /// `prompt_policy` decides whether the request also becomes the session's
+    /// original prompt. Existing prompt and title metadata remain
+    /// authoritative.
+    pub(crate) async fn initialize_graph_request_title(
         &mut self,
         services: &AppServices,
         session_id: &SessionId,
         prompt: &str,
+        prompt_policy: GraphRequestPrompt,
     ) {
         let Ok(index) = self.session_index_or_err(session_id) else {
             return;
@@ -2744,15 +2761,17 @@ impl SessionManager {
         let folder = session.folder.clone();
         let session_agent = session.agent;
         if session.prompt.is_empty() {
-            services
-                .db()
-                .sessions()
-                .update_session_prompt(session_id, prompt)
-                .await
-                .unwrap_or_else(|error| {
-                    warn!(%session_id, %error, "failed to persist task-chain session prompt");
-                });
-            session.prompt = prompt.to_string();
+            if prompt_policy == GraphRequestPrompt::Record {
+                services
+                    .db()
+                    .sessions()
+                    .update_session_prompt(session_id, prompt)
+                    .await
+                    .unwrap_or_else(|error| {
+                        warn!(%session_id, %error, "failed to persist graph request prompt");
+                    });
+                session.prompt = prompt.to_string();
+            }
             if session.title.is_none() {
                 services
                     .db()
@@ -2760,7 +2779,7 @@ impl SessionManager {
                     .update_session_provisional_title(session_id, prompt)
                     .await
                     .unwrap_or_else(|error| {
-                        warn!(%session_id, %error, "failed to persist task-chain session title");
+                        warn!(%session_id, %error, "failed to persist graph request title");
                     });
                 session.title = Some(prompt.to_string());
             }
