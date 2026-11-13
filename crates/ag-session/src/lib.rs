@@ -20,7 +20,6 @@ mod review;
 mod service;
 mod setting;
 mod task;
-mod task_chain;
 mod task_execution;
 mod task_plan;
 mod task_role;
@@ -64,8 +63,8 @@ pub use harness_model::{
     default_harness_model,
 };
 pub use message::{
-    AgentAnswerContent, SessionMessage, SessionMessageKind, SessionMessageKindParseError,
-    SessionTranscript, normalized_message_content, stored_message_content,
+    SessionMessage, SessionMessageKind, SessionMessageKindParseError, SessionTranscript,
+    normalized_message_content, stored_message_content,
 };
 pub use model::{
     ForgeKind, PermissionMode, ResponseStyle, ReviewRequest, ReviewRequestState,
@@ -89,11 +88,6 @@ pub use service::{
 };
 pub use setting::SettingName;
 pub use task::{CreateTaskRequest, SubmitTaskRequest, Task, TaskAttempt, TaskAttemptStatus};
-pub use task_chain::{
-    AcceptTaskChainPlanRequest, ContinueTaskChainRequest, PlanThenImplementAgents,
-    ReplyToTaskChainRequest, StartPlanThenImplementRequest, TASK_CHAIN_PLAN_OUTPUT, TaskChain,
-    TaskChainPhase, TaskChainReplyOutcome,
-};
 pub use task_execution::{
     AcceptedTaskPlan, SubmitAgentTaskRequest, TaskAgentAssignment, TaskAgentContext,
     TaskAgentHistory, TaskAgentInput, TaskAgentTurn,

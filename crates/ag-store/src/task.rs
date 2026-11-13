@@ -9,7 +9,6 @@ use ag_session::{
 use async_trait::async_trait;
 use sqlx::{SqliteConnection, SqlitePool};
 
-use crate::execution_graph::SqliteGraphRepository;
 use crate::task_agent::{TaskAgentContextRow, TaskAgentStore};
 use crate::task_agent_turn::{TaskAgentHistoryRow, TaskAgentTurnMetadata, TaskAgentTurnStore};
 use crate::task_plan::TaskPlanStore;
@@ -278,7 +277,6 @@ impl SqliteTaskRepository {
     ) -> Result<bool, DbError> {
         let now = self.timestamp_source.now_timestamp_seconds();
         let mut transaction = self.pool.begin().await?;
-        SqliteGraphRepository::require_unreserved_task(&mut transaction, &request.task_id).await?;
         let claimed = Self::claim_attempt_in_transaction(
             &mut transaction,
             session_id,
@@ -488,7 +486,6 @@ impl TaskRepository for SqliteTaskRepository {
         }
         let now = self.timestamp_source.now_timestamp_seconds();
         let mut transaction = self.pool.begin().await?;
-        SqliteGraphRepository::require_unreserved_task(&mut transaction, &request.task_id).await?;
         sqlx::query!(
             "INSERT INTO task (id, session_id, objective, created_at) VALUES (?, ?, ?, ?) ON \
              CONFLICT(id) DO NOTHING",

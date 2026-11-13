@@ -24,7 +24,6 @@ use crate::infra::db::AppRepositories;
 use crate::infra::resource::ResourceClient;
 use crate::presentation::graph_chat::GraphChatCache;
 use crate::presentation::setting::SettingsPresentationState;
-use crate::presentation::task_chain_graph::TaskChainGraphCache;
 
 /// Environment flag that pins the version rendered by feature-test runs.
 const E2E_PIN_DISPLAY_VERSION_ENV_VAR: &str = "AGENTTY_E2E_PIN_DISPLAY_VERSION";
@@ -40,7 +39,7 @@ impl App {
     /// hourly follow-up check. When `experimental_harness` is `true`, Harness
     /// sessions run in process and keep their history under
     /// [`AGENTTY_HARNESS_DIR`](super::AGENTTY_HARNESS_DIR).
-    /// `experimental_multi_agent` enables the `/plan` orchestrated chat. The
+    /// `experimental_graph` enables `/graph` execution-graph proposals. The
     /// saved `Max Subagents` setting caps provider-native subagents for every
     /// worker this launch composes.
     ///
@@ -51,7 +50,7 @@ impl App {
     pub async fn new(
         auto_update: bool,
         experimental_harness: bool,
-        experimental_multi_agent: bool,
+        experimental_graph: bool,
         base_path: PathBuf,
         working_dir: PathBuf,
         git_branch: Option<String>,
@@ -83,7 +82,7 @@ impl App {
             clients,
         ))
         .await?;
-        app.experimental_multi_agent = experimental_multi_agent;
+        app.experimental_graph = experimental_graph;
 
         Ok(app)
     }
@@ -168,7 +167,7 @@ impl App {
             current_version_display_text,
             prompt_progress: std::collections::HashMap::new(),
             diff_comment_progress: std::collections::HashMap::new(),
-            experimental_multi_agent: false,
+            experimental_graph: false,
             auto_address_review_iterations: std::collections::HashMap::new(),
             deferred_auto_review_session_ids: std::collections::HashSet::new(),
             role_review_suppression: std::collections::HashMap::new(),
@@ -197,7 +196,6 @@ impl App {
             update_status: None,
             sync_handle,
             sync_main_runner,
-            task_chain_graphs: TaskChainGraphCache::default(),
             graph_chat: GraphChatCache::default(),
             graph_questions: GraphQuestionState::default(),
             tmux_client: clients.tmux_client,

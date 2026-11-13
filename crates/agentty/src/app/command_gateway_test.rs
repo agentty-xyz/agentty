@@ -445,8 +445,6 @@ async fn terminal_and_api_mailbox_requests_retain_their_initiators() {
             | SessionRuntimeCommand::RunGraphNode { .. }
             | SessionRuntimeCommand::GetTask { .. }
             | SessionRuntimeCommand::ListTasks { .. }
-            | SessionRuntimeCommand::GetTaskChain { .. }
-            | SessionRuntimeCommand::ListTaskChains { .. }
             | SessionRuntimeCommand::GetAgentTaskHistory { .. } => None,
         }
         .expect("cancellation must be a mutation");

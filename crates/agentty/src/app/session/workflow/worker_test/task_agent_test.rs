@@ -7,11 +7,12 @@ use ag_contracts::{AgentError, AgentRequestKind, MockAgentChannel, PermissionMod
 use ag_git::MockGitClient;
 use ag_protocol::{AgentResponse, QuestionItem};
 use ag_session::{
-    AgentKind, AgentModel, AgentSelection, DurableMessageVisibility, SessionDiffState, SessionId,
-    SessionStatus, SubmitAgentTaskRequest, TaskAgentAssignment, TaskAgentInput, TaskAgentRole,
-    TaskAttemptStatus,
+    AgentKind, AgentModel, AgentSelection, DurableMessageVisibility, SessionDiffState,
+    SessionError, SessionId, SessionStatus, SubmitAgentTaskRequest, TaskAgentAssignment,
+    TaskAgentInput, TaskAgentRole, TaskAttemptStatus,
 };
 use ag_worker::{MockRunClient, SessionRunClient};
+use mockall::predicate::eq;
 use sqlx::SqlitePool;
 use tokio::sync::{Notify, mpsc};
 use tokio_util::sync::CancellationToken;
@@ -29,6 +30,7 @@ use crate::app::test_support::TestSessionRunFactory;
 use crate::app::{App, AppEvent};
 use crate::domain::session::{SessionDiffStats, SessionSize};
 use crate::domain::session_message::SessionTranscript;
+use crate::infra::agent_profile::MockAgentCatalogClient;
 use crate::infra::db::{AppRepositories, TaskAgentTurnMetadata};
 use crate::test_support::{
     SessionFixtureBuilder, new_git_test_app_with_pool, new_test_app, poison_lock,
@@ -104,6 +106,75 @@ async fn planner_execution_uses_captured_model_own_history_and_read_only_permiss
         app.suppress_agent_task_automation(&session_id, "closed")
             .await
             .is_err()
+    );
+}
+
+/// Verifies the Task API rejects a new agent task when the session is unknown
+/// or its catalog cannot resolve the definition, and rejects accepting a plan
+/// that has no eligible Planner version.
+#[tokio::test]
+async fn task_api_rejects_unresolvable_agents_and_ineligible_plans() {
+    // Arrange
+    let (mut app, directory) = new_test_app().await;
+    let session_id = SessionId::from("owner");
+    let folder = directory.path().join("session-worktree");
+    app.sessions.push_session(
+        SessionFixtureBuilder::new()
+            .id(session_id.clone())
+            .folder(folder.clone())
+            .build(),
+    );
+    let mut catalog = MockAgentCatalogClient::new();
+    catalog
+        .expect_resolve()
+        .with(eq(folder), eq("disabled-agent".to_string()))
+        .times(1)
+        .return_once(|_, _| Box::pin(async { None }));
+    app.services
+        .set_agent_profile_catalog_client(Arc::new(catalog));
+    let service = app.session_service();
+    let mut unavailable = request("unavailable");
+    unavailable.assignment.definition.id = "disabled-agent".into();
+
+    // Act
+    let missing = app
+        .drive_session_request(
+            service.submit_agent_task(&SessionId::from("missing"), unavailable.clone()),
+        )
+        .await;
+    let rejected = app
+        .drive_session_request(service.submit_agent_task(&session_id, unavailable))
+        .await;
+    let ineligible = app
+        .drive_session_request(service.accept_agent_plan(
+            &session_id,
+            ag_session::AcceptTaskPlanRequest {
+                task_id: "planner".to_string(),
+                attempt_id: "absent".to_string(),
+            },
+        ))
+        .await;
+
+    // Assert
+    assert!(
+        matches!(ineligible, Err(SessionError::Operation(_))),
+        "{ineligible:?}"
+    );
+    assert_eq!(missing, Err(SessionError::NotFound));
+    assert_eq!(
+        rejected,
+        Err(SessionError::Operation(
+            "Agent definition `disabled-agent` is unavailable or invalid".into()
+        ))
+    );
+    assert!(
+        app.services
+            .db()
+            .tasks()
+            .load_task("planner")
+            .await
+            .expect("task lookup")
+            .is_none()
     );
 }
 
@@ -489,18 +560,20 @@ async fn assert_implementation_reserves_stack(
     service: ag_session::SessionService,
     session_id: SessionId,
 ) {
-    // Arrange: the successful Planner response is explicitly accepted.
+    // Arrange: the successful Planner response is explicitly accepted through
+    // the Task API, then read back by its idempotent acceptance.
+    let acceptance = ag_session::AcceptTaskPlanRequest {
+        task_id: "planner".to_string(),
+        attempt_id: "next".to_string(),
+    };
+    app.drive_session_request(service.accept_agent_plan(&session_id, acceptance.clone()))
+        .await
+        .expect("accepted through the Task API");
     let plan = app
         .services
         .db()
         .tasks()
-        .accept_agent_plan(
-            &session_id,
-            &ag_session::AcceptTaskPlanRequest {
-                task_id: "planner".to_string(),
-                attempt_id: "next".to_string(),
-            },
-        )
+        .accept_agent_plan(&session_id, &acceptance)
         .await
         .expect("accepted version");
     let mut implementation = request("implementation");

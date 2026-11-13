@@ -38,7 +38,7 @@ async fn graph_sidebar_loads_saved_proposals_only_for_the_visible_enabled_sessio
 
     // Act / Assert
     assert!(!app.refresh_graph_chat_if_needed().await);
-    app.experimental_multi_agent = true;
+    app.experimental_graph = true;
     assert!(app.refresh_graph_chat_if_needed().await);
     assert_eq!(
         app.graph_chat

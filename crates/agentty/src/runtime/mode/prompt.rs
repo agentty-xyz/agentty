@@ -21,7 +21,7 @@ use crate::presentation::app_mode::{
     AppMode, ChatFocus, DiffRestoreTarget, DiffSidebarFocus, PromptModeSnapshot,
 };
 use crate::presentation::prompt::{
-    PendingImagePaste, PromptAtMentionState, PromptSlashStage, PromptSlashState,
+    PendingImagePaste, PromptAtMentionState, PromptGraphState, PromptSlashStage, PromptSlashState,
     PromptSuggestionSelection, apply_prompt_delete_range as apply_prompt_delete_range_components,
     current_line_delete_range as prompt_current_line_delete_range, drain_prompt_submission,
     insert_prompt_text, needs_space_after_image_placeholder, prompt_slash_option_count,
@@ -486,9 +486,7 @@ fn prompt_context(app: &mut App) -> Option<PromptContext> {
             ..
         } => (
             is_active_at_mention(at_mention_state.as_ref(), input),
-            input.text().starts_with('/')
-                && !slash_state.is_plan_armed
-                && !slash_state.graph.is_armed(),
+            input.text().starts_with('/') && !slash_state.graph.is_armed(),
             *scroll_offset,
             session_id.clone(),
         ),
@@ -801,7 +799,8 @@ fn move_prompt_slash_selection(app: &mut App, is_next: bool) {
 /// is `InProgress` or `Rebasing`, slash command mode is already demoted to
 /// text in [`prompt_context`], so any leading `/` falls through to the queue
 /// path instead of executing a slash command against the active operation.
-/// A composer armed by `/plan` starts the Planner with the typed task instead.
+/// A composer armed by `/graph` requests a graph proposal for the typed task
+/// instead.
 ///
 /// Submission is ignored while a clipboard image capture runs, so the pasted
 /// image is never dropped from the sent turn or a cleared slash input.
@@ -827,7 +826,7 @@ async fn handle_prompt_submit_key(app: &mut App, prompt_context: &PromptContext)
         return;
     }
 
-    let (composer, is_plan_armed, is_graph_armed) = match &app.mode {
+    let (composer, is_graph_armed) = match &app.mode {
         AppMode::Prompt {
             input,
             attachment_state,
@@ -835,10 +834,9 @@ async fn handle_prompt_submit_key(app: &mut App, prompt_context: &PromptContext)
             ..
         } => (
             Some((input.clone(), attachment_state.clone())),
-            slash_state.is_plan_armed,
             slash_state.graph.is_armed(),
         ),
-        _ => (None, false, false),
+        _ => (None, false),
     };
     let (prompt, archived_attachments) = take_submitted_turn_prompt(&mut app.mode);
     let submission = PromptSubmission {
@@ -846,9 +844,7 @@ async fn handle_prompt_submit_key(app: &mut App, prompt_context: &PromptContext)
         session_id: prompt_context.session_id.clone(),
         session_mode: prompt_context.session_mode,
     };
-    let outcome = if is_plan_armed {
-        app.submit_plan_request(submission).await
-    } else if is_graph_armed {
+    let outcome = if is_graph_armed {
         app.submit_graph_request(submission).await
     } else {
         app.submit_prompt(submission).await
@@ -893,7 +889,7 @@ fn handle_prompt_image_paste(app: &mut App, prompt_context: &PromptContext) {
 
 /// Cancels the active prompt and drops any composer-owned attachment files.
 ///
-/// A composer armed by `/plan` is only disarmed, keeping its draft. Existing
+/// A composer armed by `/graph` is only disarmed, keeping its draft. Existing
 /// focused-review output is restored into session view because no new prompt
 /// was submitted.
 async fn handle_prompt_cancel_key(app: &mut App, prompt_context: &PromptContext) {
@@ -903,11 +899,8 @@ async fn handle_prompt_cancel_key(app: &mut App, prompt_context: &PromptContext)
         return;
     }
     if let AppMode::Prompt { slash_state, .. } = &mut app.mode
-        && (slash_state.is_plan_armed || slash_state.graph.is_armed())
+        && slash_state.graph.disarm()
     {
-        slash_state.is_plan_armed = false;
-        slash_state.graph.disarm();
-
         return;
     }
 
@@ -924,14 +917,7 @@ async fn handle_prompt_cancel_key(app: &mut App, prompt_context: &PromptContext)
 }
 
 /// Executes the selected slash-command action from presentation-owned state.
-///
-/// `/plan <task>` arms the composer and submits the task in one step.
 async fn handle_prompt_slash_submit(app: &mut App, prompt_context: &PromptContext) {
-    if arm_inline_plan_request(&mut app.mode) {
-        Box::pin(submit_current_text_prompt(app)).await;
-
-        return;
-    }
     let session_id = &prompt_context.session_id;
     let session_agent_kind = app
         .session_at(prompt_context.session_index)
@@ -947,8 +933,8 @@ async fn handle_prompt_slash_submit(app: &mut App, prompt_context: &PromptContex
                 session_agent_kind,
                 allow_apply_command,
             );
-            if let Some(PromptSuggestionSelection::Command(command)) = selection {
-                slash_state.arm_workflow(command);
+            if selection == Some(PromptSuggestionSelection::Command("/graph")) {
+                slash_state.graph = PromptGraphState::Armed;
             }
 
             selection
@@ -956,7 +942,7 @@ async fn handle_prompt_slash_submit(app: &mut App, prompt_context: &PromptContex
         _ => None,
     };
     match selection {
-        Some(PromptSuggestionSelection::Command("/plan" | "/graph")) => {
+        Some(PromptSuggestionSelection::Command("/graph")) => {
             clear_prompt_slash_input(app).await;
         }
         Some(PromptSuggestionSelection::Command("/apply")) => {
@@ -1025,59 +1011,6 @@ async fn handle_prompt_slash_submit(app: &mut App, prompt_context: &PromptContex
         }
         None => {}
     }
-}
-
-/// Rewrites an available `/plan <task>` to the task and arms the composer.
-///
-/// Returns whether the composer now holds an armed plan request.
-fn arm_inline_plan_request(mode: &mut AppMode) -> bool {
-    let AppMode::Prompt {
-        input,
-        slash_state,
-        attachment_state,
-        history_state,
-        ..
-    } = mode
-    else {
-        return false;
-    };
-    if !slash_state.allow_plan_command {
-        return false;
-    }
-    let Some(remainder) = input.text().strip_prefix("/plan ") else {
-        return false;
-    };
-    let task = remainder.trim();
-    if task.is_empty() {
-        return false;
-    }
-    let task_start = "/plan ".chars().count()
-        + remainder
-            .chars()
-            .take_while(|character| character.is_whitespace())
-            .count();
-    let task_end = task_start + task.chars().count();
-    let input_end = input.text().chars().count();
-    apply_prompt_delete_range_components(
-        attachment_state,
-        history_state,
-        input,
-        slash_state,
-        task_end,
-        input_end,
-    );
-    apply_prompt_delete_range_components(
-        attachment_state,
-        history_state,
-        input,
-        slash_state,
-        0,
-        task_start,
-    );
-    slash_state.reset();
-    slash_state.is_plan_armed = true;
-
-    true
 }
 
 /// Cycles and persists the permission mode without changing the composer.

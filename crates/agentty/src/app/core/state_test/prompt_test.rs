@@ -7,6 +7,7 @@ use crate::app::core::event::{AppEvent, AppEventBatch};
 use crate::domain::file_entry::FileEntry;
 use crate::domain::session::{SessionId, Status};
 use crate::domain::session_message::SessionMessageKind;
+use crate::presentation::prompt::PromptGraphState;
 
 #[tokio::test]
 async fn session_chat_history_loads_persisted_transcript_for_unloaded_session() {
@@ -55,6 +56,25 @@ async fn session_chat_history_loads_persisted_transcript_for_unloaded_session() 
         session_chat_history.as_deref(),
         Some(" › Keep the accepted tradeoff\n\nThe accepted tradeoff remains in place.\n\n")
     );
+}
+
+#[tokio::test]
+async fn prompt_slash_state_offers_graph_only_with_the_experimental_flag() {
+    // Arrange
+    let (mut app, _base_dir) = crate::test_support::new_test_app().await;
+
+    for (is_enabled, expected) in [
+        (false, PromptGraphState::Disabled),
+        (true, PromptGraphState::Available),
+    ] {
+        app.experimental_graph = is_enabled;
+
+        // Act
+        let slash_state = app.prompt_slash_state("session");
+
+        // Assert
+        assert_eq!(slash_state.graph, expected);
+    }
 }
 
 #[tokio::test]

@@ -19,7 +19,6 @@ pub(super) fn line_context() -> SessionOutputLineContext<'static> {
         active_prompt_output: None,
         active_progress: None,
         session_update_version: 0,
-        task_chain_graph: None,
     }
 }
 

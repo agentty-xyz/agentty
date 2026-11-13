@@ -12,7 +12,7 @@ async fn armed_graph_requests_preserve_literal_task_text_and_ignore_empty_input(
     // Arrange
     let (mut app, _directory) = new_test_app().await;
     seed_session(&mut app.sessions, app.services.db()).await;
-    app.experimental_multi_agent = true;
+    app.experimental_graph = true;
     let mut proposals = MockGraphProposalRepository::new();
     proposals.expect_get().times(1).returning(|_, _| Ok(None));
     proposals

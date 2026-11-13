@@ -59,12 +59,6 @@ impl App {
             } => {
                 return self.execute_review_request(request, response_tx).await;
             }
-            CommandDelivery::TaskChainReply {
-                request,
-                response_tx,
-            } => {
-                self.execute_task_chain_reply(request, response_tx).await;
-            }
         }
 
         Ok(())
@@ -191,20 +185,6 @@ impl App {
                 .await
                 .map(|_| ())
                 .map_err(|error| SessionError::Operation(error.to_string())),
-            SessionMutation::StartTaskChain {
-                request,
-                session_id,
-            } => self.start_api_task_chain(&session_id, request).await,
-            SessionMutation::AcceptTaskChainPlan { chain_id, request } => self
-                .accept_api_task_chain_plan(&chain_id, request)
-                .await
-                .map(|_| ()),
-            SessionMutation::ContinueTaskChain { chain_id, request } => {
-                self.continue_api_task_chain(&chain_id, request).await
-            }
-            SessionMutation::CancelTaskChain { chain_id } => {
-                self.cancel_api_task_chain(&chain_id).await
-            }
             SessionMutation::Prompt {
                 session_id,
                 intent,

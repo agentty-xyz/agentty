@@ -16,7 +16,6 @@ use crate::domain::session::{DailyActivity, Session, SessionId};
 use crate::presentation::app_mode::{AppMode, ConfirmationViewMode, HelpContext};
 use crate::presentation::frame_time::FrameTime;
 use crate::presentation::graph_chat::GraphChatSnapshot;
-use crate::presentation::task_chain_graph::TaskChainGraphCache;
 use crate::ui::{RenderCacheStore, component, layout, page, router};
 
 /// Focused-review display state projected from the app cache for one visible
@@ -124,8 +123,6 @@ pub struct RenderContext<'a> {
     pub(crate) project_sync_status: Option<&'a ProjectSyncStatus>,
     /// Settings-screen projection when the active tab can render it.
     pub(crate) settings_screen: Option<&'a crate::presentation::setting::SettingsScreenSnapshot>,
-    /// Latest live task-chain graphs keyed by session.
-    pub(crate) task_chain_graphs: &'a TaskChainGraphCache,
 }
 
 /// Project-scoped footer inputs used when no session-specific footer override

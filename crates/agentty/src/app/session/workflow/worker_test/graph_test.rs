@@ -4,10 +4,7 @@ use std::sync::{Arc, Mutex};
 use ag_contracts::{AgentError, MockAgentChannel, PermissionMode, ProviderCallBudget};
 use ag_git::{GitError, MockGitClient};
 use ag_protocol::QuestionItem;
-use ag_session::{
-    ExecutionGraph, GraphContext, GraphPostProcessing, GraphWorkspaceAccess, TaskAgentRole,
-    TaskAttemptStatus, TaskChain,
-};
+use ag_session::{ExecutionGraph, GraphPostProcessing, GraphWorkspaceAccess, TaskAttemptStatus};
 use ag_store::SessionMessageRow;
 use ag_worker::{GraphRunRequest, MockRunClient, ScheduledWork, SessionRunClient, WorkerHost};
 use tokio::sync::oneshot;
@@ -331,120 +328,82 @@ async fn redelivered_graph_questions_are_not_asked_in_chat_again() {
 }
 
 #[tokio::test]
-async fn workflow_roles_reject_blank_answers_without_effects_or_success_events() {
-    for role in [
-        Some(TaskAgentRole::Planner),
-        Some(TaskAgentRole::Implementer),
-        None,
+async fn graph_nodes_settle_blank_answers_without_effects_or_success_events() {
+    for scenario in [
+        "empty-answer",
+        "whitespace-answer",
+        "question-only",
+        "blank-question",
     ] {
-        for scenario in [
-            "empty-answer",
-            "whitespace-answer",
-            "question-only",
-            "blank-question",
-        ] {
-            // Arrange
-            let mut context = graph_context(scenario).await;
-            let (events_tx, mut events_rx) = tokio::sync::mpsc::unbounded_channel();
-            context.app_event_tx = events_tx;
-            let (graph, task_id) = graph_for_role(role);
-            let (task, receiver) = graph_task_command(&context, scenario, graph).await;
-            let execution = task.request.dispatch.record.execution.clone();
+        // Arrange
+        let mut context = graph_context(scenario).await;
+        let (events_tx, mut events_rx) = tokio::sync::mpsc::unbounded_channel();
+        context.app_event_tx = events_tx;
+        let graph = single_node_graph();
+        let (task, receiver) = graph_task_command(&context, scenario, graph).await;
+        let execution = task.request.dispatch.record.execution.clone();
 
-            // Act
-            let result = SessionWorkerService::process_session_command(
-                &context,
-                &(Arc::new(MockRunClient::new()) as Arc<dyn ag_worker::RunClient>),
-                SessionCommand::RunGraphTask(Box::new(task)),
-            )
+        // Act
+        let result = SessionWorkerService::process_session_command(
+            &context,
+            &(Arc::new(MockRunClient::new()) as Arc<dyn ag_worker::RunClient>),
+            SessionCommand::RunGraphTask(Box::new(task)),
+        )
+        .await
+        .expect("selected");
+        let response = receiver.await.expect("worker completion");
+        let task = context
+            .db
+            .tasks()
+            .load_task("task-first")
             .await
-            .expect("selected");
-            let response = receiver.await.expect("worker completion");
-            let task = context
-                .db
-                .tasks()
-                .load_task(&task_id)
-                .await
-                .expect("task")
-                .expect("present");
+            .expect("task")
+            .expect("present");
 
-            // Assert
-            let succeeds =
-                role.is_none() || ["question-only", "blank-question"].contains(&scenario);
-            assert_eq!(result.is_ok(), succeeds, "{role:?}: {scenario}: {result:?}");
-            assert_eq!(response.is_ok(), succeeds);
+        // Assert
+        assert!(result.is_ok(), "{scenario}: {result:?}");
+        assert!(response.is_ok());
+        assert_eq!(task.attempts[0].status, TaskAttemptStatus::Succeeded);
+        assert!(
+            context
+                .db
+                .graphs()
+                .load_task_turn(&execution)
+                .await
+                .expect("history")
+                .is_some(),
+            "observed response remains available for retries"
+        );
+        while let Ok(event) = events_rx.try_recv() {
+            assert!(!matches!(
+                event,
+                AppEvent::ImplementerAttemptSucceeded { .. }
+            ));
+        }
+        if scenario == "blank-question" {
             assert_eq!(
-                task.attempts[0].status,
-                if succeeds {
-                    TaskAttemptStatus::Succeeded
-                } else {
-                    TaskAttemptStatus::Failed
-                }
+                context.transcript.lock().expect("transcript").messages(),
+                &[] as &[SessionMessage]
             );
-            if !succeeds {
-                assert!(
-                    response
-                        .expect_err("blank role response")
-                        .to_string()
-                        .contains("Workflow role returned an empty answer")
-                );
-            }
-            assert!(
+            assert_eq!(
                 context
                     .db
-                    .graphs()
-                    .load_task_turn(&execution)
+                    .sessions()
+                    .load_session_messages("sess")
                     .await
-                    .expect("history")
-                    .is_some(),
-                "observed response remains available for retries"
+                    .expect("chat"),
+                Vec::<SessionMessageRow>::new()
             );
-            while let Ok(event) = events_rx.try_recv() {
-                assert!(!matches!(
-                    event,
-                    AppEvent::ImplementerAttemptSucceeded { .. }
-                ));
-            }
-            if scenario == "blank-question" {
-                assert_eq!(
-                    context.transcript.lock().expect("transcript").messages(),
-                    &[] as &[SessionMessage]
-                );
-                assert_eq!(
-                    context
-                        .db
-                        .sessions()
-                        .load_session_messages("sess")
-                        .await
-                        .expect("chat"),
-                    Vec::<SessionMessageRow>::new()
-                );
-            }
         }
     }
 }
 
-fn graph_for_role(role: Option<TaskAgentRole>) -> (ExecutionGraph, String) {
+/// Builds a graph holding only its first task-conversation node.
+fn single_node_graph() -> ExecutionGraph {
     let mut graph = graph();
     graph.nodes.truncate(1);
-    let task_id = role.map_or_else(
-        || "task-first".to_string(),
-        |role| TaskChain::task_id(&graph.id, role),
-    );
-    if let Some(role) = role {
-        let node = &mut graph.nodes[0];
-        node.id = role.id().into();
-        node.execution.context = GraphContext::TaskConversation {
-            task_id: task_id.clone(),
-        };
-        if role == TaskAgentRole::Implementer {
-            node.definition.read_only = false;
-            node.execution.workspace_access = GraphWorkspaceAccess::ExclusiveWrite;
-            node.execution.post_processing = GraphPostProcessing::SessionWorkflow;
-        }
-    }
 
-    (graph, task_id)
+    graph
 }
 
 async fn graph_context(scenario: &'static str) -> SessionWorkerContext {
@@ -512,7 +471,7 @@ async fn graph_task_fixture(
     GraphTaskCommand,
     oneshot::Receiver<Result<String, ag_contracts::OneShotError>>,
 ) {
-    let (mut graph, _) = graph_for_role(None);
+    let mut graph = single_node_graph();
     if ["effects", "readonly", "unbudgeted-effects", "wait-canceled"].contains(&scenario) {
         graph.nodes[0].definition.read_only = false;
         graph.nodes[0].execution.workspace_access = GraphWorkspaceAccess::ExclusiveWrite;

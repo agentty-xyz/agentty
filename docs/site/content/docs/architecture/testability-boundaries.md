@@ -97,11 +97,6 @@ operations. In-memory SQLite contract tests cover planning without execution, id
 conflicts, rollback, cancellation, and restart settlement. Scripted worker tests cover
 the task API's handoff and completion timing without live providers.
 
-Workflow replies are stored with their transcript prompt in one transaction, keyed by
-the caller's reply identity. Boundary tests cover identity conflicts and duplicate
-delivery, and an on-disk contract test keeps the receipt after reopening. Orchestrator
-decisions are tested with a mock `RunClient`.
-
 Role-aware task admission also binds immutable role/model selections and task-owned
 conversation identities in the same transaction. Cached SQLite boundary tests cover
 isolation from ordinary task delivery, immutable inputs, and rollback. A public on-disk
@@ -121,16 +116,9 @@ Plan acceptance uses a versioned ledger independent of task completion. Reposito
 prove exact plan handoff, latest-version checks, ownership and captured-selection
 validation, and transactional rejection before Implementer admission.
 
-Static workflows use graph storage, acceptance evidence, and atomic node admission.
-Their phases project operation-backed graph progress. Pure tests cover graph
-construction and phase projection; SQLite tests cover exact handoff, historical
-receipts, reply attachments, and stage cancellation. Public graph contracts cover
-reopening without replay, and scripted session workers cover revision, clarification,
-and ordered effects.
-
-Continuation receipts bind each delivery to its observed source attempt. Transactional
-tests cover stale guidance after a role change, changed anchors on repeated deliveries,
-cross-action identity reuse, and rollback when the receipt cannot be saved.
+Execution-graph continuations bind each delivery to its exact source execution. SQLite
+tests cover identity, ownership, and execution-state conflicts; a public on-disk
+contract test keeps continuation and cancellation after reopening without replay.
 
 Use `mockall` mocks at the narrowest useful boundary. Smaller command-runner traits
 isolate subprocess sequencing when a public client is too broad. Runtime rendering can

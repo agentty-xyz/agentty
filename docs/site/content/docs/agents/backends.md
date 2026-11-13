@@ -33,8 +33,8 @@ sandbox, so browser tests, local services, PTY tools, container runtimes, and to
 caches remain available. This also means commands are not confined to the session
 worktree; review the session diff and use `Read Only` for inspection-only work.
 
-Codex `Read Only` turns, including the `/plan` Planner, allow shell network requests for
-external research while keeping filesystem writes and permission escalation denied.
+Codex `Read Only` turns, including read-only graph nodes, allow shell network requests
+for external research while keeping filesystem writes and permission escalation denied.
 
 Claude turns also allow Claude Code's `WebSearch` and `WebFetch` tools, so prompts that
 need current external information can use the web without an interactive permission

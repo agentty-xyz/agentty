@@ -64,7 +64,6 @@ use crate::presentation::app_mode::{
 };
 use crate::presentation::graph_chat::GraphChatCache;
 use crate::presentation::setting::SettingsPresentationState;
-use crate::presentation::task_chain_graph::TaskChainGraphCache;
 
 /// Relative directory name used for session git worktrees within the
 /// `agentty` home directory.
@@ -220,8 +219,8 @@ pub struct App {
     /// closed. Entries are consumed when the diff reopens and cleared when a
     /// turn starts or the session is deleted.
     pub(crate) diff_comment_progress: HashMap<SessionId, DiffLineComments>,
-    /// Enables the preview `/plan` command that starts an orchestrated chat.
-    pub(crate) experimental_multi_agent: bool,
+    /// Enables the preview `/graph` command that proposes an execution graph.
+    pub(crate) experimental_graph: bool,
     /// Latest proposal and execution snapshot for the visible session.
     pub(crate) graph_chat: GraphChatCache,
     /// Graph work answered by the open question panel and pending graph
@@ -309,9 +308,6 @@ pub struct App {
     pub(crate) sync_handle: sync::SyncHandle,
     /// Runs sync-to-main workflows behind an injectable boundary.
     pub(crate) sync_main_runner: Arc<dyn SyncMainRunner>,
-    /// Latest task-chain graph snapshots for recently visible sessions,
-    /// reloaded when a session's reduced update version changes.
-    pub(crate) task_chain_graphs: TaskChainGraphCache,
     /// Interacts with tmux panes for session-specific terminal workflows.
     pub(super) tmux_client: Arc<dyn TmuxClient>,
     /// Stores the current auto-update progress state when an update is running.
@@ -1861,7 +1857,6 @@ impl App {
     /// Returns `true` when the fallback poll refreshed render-visible session
     /// state.
     pub async fn refresh_sessions_if_needed(&mut self) -> bool {
-        self.refresh_task_chain_graph_if_needed();
         let graph_refreshed = self.refresh_graph_chat_if_needed().await;
         let graph_questions_opened = self.reconcile_graph_question_mode().await;
         let resources_refreshed = self.sessions.refresh_resources().await;

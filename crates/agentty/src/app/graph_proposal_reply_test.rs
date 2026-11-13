@@ -175,7 +175,7 @@ async fn sessions_without_a_pending_proposal_keep_ordinary_routing() {
         // Arrange
         let (mut app, _directory) = new_test_app().await;
         seed_session(&mut app.sessions, app.services.db()).await;
-        app.experimental_multi_agent = case != "disabled";
+        app.experimental_graph = case != "disabled";
         let mut state = graph_proposal_state("preview", "sess");
         if case != "missing" {
             app.services
@@ -222,7 +222,7 @@ async fn failed_proposal_read_keeps_the_composer() {
     // Arrange
     let (mut app, _directory) = new_test_app().await;
     seed_session(&mut app.sessions, app.services.db()).await;
-    app.experimental_multi_agent = true;
+    app.experimental_graph = true;
     let mut proposals = MockGraphProposalRepository::new();
     proposals.expect_latest().return_once(|_| {
         Err(DbError::InvalidData {
@@ -255,7 +255,7 @@ async fn failed_proposal_read_keeps_the_composer() {
 async fn reply_for_an_unloaded_session_keeps_the_composer_without_deciding() {
     // Arrange
     let (mut app, _directory) = new_test_app().await;
-    app.experimental_multi_agent = true;
+    app.experimental_graph = true;
     let mut proposals = MockGraphProposalRepository::new();
     proposals
         .expect_latest()
@@ -312,7 +312,7 @@ pub(in crate::app) async fn pending_app(
 ) -> (App, TempDir) {
     let (mut app, directory) = new_test_app().await;
     seed_session(&mut app.sessions, app.services.db()).await;
-    app.experimental_multi_agent = true;
+    app.experimental_graph = true;
     let mut state = graph_proposal_state("preview", "sess");
     app.services
         .db()

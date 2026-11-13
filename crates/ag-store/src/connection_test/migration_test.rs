@@ -1,7 +1,7 @@
 use ag_session::{
-    AgentKind, AgentModel, AgentSelection, DurableMessageVisibility, PlanThenImplementAgents,
-    SessionMessageKind, SettingName, StartPlanThenImplementRequest, SubmitAgentTaskRequest,
-    SubmitTaskRequest, TaskAgentAssignment, TaskAgentInput, TaskAgentRole, TaskChainPhase,
+    AgentKind, AgentModel, AgentSelection, DurableMessageVisibility, SessionMessageKind,
+    SettingName, SubmitAgentTaskRequest, SubmitTaskRequest, TaskAgentAssignment, TaskAgentInput,
+    TaskAgentRole,
 };
 use sqlx::SqlitePool;
 use sqlx::migrate::Migrator;
@@ -10,6 +10,7 @@ use sqlx::sqlite::SqlitePoolOptions;
 use super::support::insert_session_fixture;
 use crate::LEGACY_SESSION_AGENT_CLEAR_MARKER;
 use crate::connection::{Database, MIGRATOR};
+use crate::session::SessionMessageRow;
 use crate::timestamp::system_timestamp_source;
 
 #[tokio::test]
@@ -28,11 +29,6 @@ async fn graph_upgrade_discards_legacy_workflows_and_preserves_session_work() {
         .run(database.pool())
         .await
         .expect("idempotent reopening");
-    let legacy = database
-        .graphs()
-        .load_task_chain("workflow")
-        .await
-        .expect("legacy lookup");
     let graphs = database
         .graphs()
         .list_graphs("session")
@@ -40,7 +36,7 @@ async fn graph_upgrade_discards_legacy_workflows_and_preserves_session_work() {
         .expect("saved graphs");
     let tables: Vec<String> = sqlx::query_scalar(
         "SELECT name FROM sqlite_master WHERE type = 'table' AND name IN ('task_chain', \
-         'task_chain_reply', 'task_chain_continuation')",
+         'task_chain_reply', 'task_chain_continuation', 'execution_graph_reply')",
     )
     .fetch_all(database.pool())
     .await
@@ -63,7 +59,6 @@ async fn graph_upgrade_discards_legacy_workflows_and_preserves_session_work() {
         .expect("other transcript");
 
     // Assert
-    assert_eq!(legacy, None);
     assert_eq!(graphs, []);
     assert_eq!(tables, [] as [String; 0]);
     assert_eq!(
@@ -79,41 +74,74 @@ async fn graph_upgrade_discards_legacy_workflows_and_preserves_session_work() {
     assert_eq!(messages[0].content, "Keep this conversation");
     assert_eq!(messages[1].kind, SessionMessageKind::UserPrompt.as_str());
     assert_eq!(messages[1].content, "workflow");
+    assert_eq!(other_messages, Vec::<SessionMessageRow>::new());
+}
+
+/// Verifies `/plan` retirement keeps role answers readable as ordinary
+/// answers, discards graph markers and malformed role answers, and drops
+/// the reply ledger.
+#[tokio::test]
+async fn plan_retirement_keeps_role_answers_and_discards_workflow_records() {
+    // Arrange: reconstruct the reply ledger from the previous schema.
+    let database = Database::open_in_memory().await.expect("database");
+    sqlx::query("CREATE TABLE execution_graph_reply (id TEXT PRIMARY KEY NOT NULL)")
+        .execute(database.pool())
+        .await
+        .expect("previous schema");
+    let project = database
+        .projects()
+        .upsert_project("project", None)
+        .await
+        .expect("project");
+    insert_session_fixture(&database, "session", "main", "Review", project).await;
+    for (position, kind, content) in [
+        (0, "user_prompt", "Add search"),
+        (1, "agent_graph", "chain"),
+        (
+            2,
+            "agent_answer",
+            r#"{"agent":"planner","text":"  Plan: index titles\n"}"#,
+        ),
+        (3, "agent_answer", r#"{"agent":"implementer","text":"   "}"#),
+        (4, "agent_answer", "not json"),
+        (5, "assistant_answer", "Keep this answer"),
+    ] {
+        insert_session_message_row(&database, "session", position, kind, content).await;
+    }
+
+    // Act
+    rerun_embedded_migration(database.pool(), 110).await;
+    let messages = database
+        .sessions()
+        .load_session_messages("session")
+        .await
+        .expect("transcript");
+    let reply_tables: Vec<String> = sqlx::query_scalar(
+        "SELECT name FROM sqlite_master WHERE type = 'table' AND name = 'execution_graph_reply'",
+    )
+    .fetch_all(database.pool())
+    .await
+    .expect("reply table");
+
+    // Assert
     assert_eq!(
-        other_messages
+        messages
             .iter()
             .map(|message| (message.kind.as_str(), message.content.as_str()))
             .collect::<Vec<_>>(),
         [
-            (SessionMessageKind::AgentGraph.as_str(), "workflow"),
-            (SessionMessageKind::AgentGraph.as_str(), "retained-graph"),
+            (SessionMessageKind::UserPrompt.as_str(), "Add search"),
+            (
+                SessionMessageKind::AssistantAnswer.as_str(),
+                "Plan: index titles"
+            ),
+            (
+                SessionMessageKind::AssistantAnswer.as_str(),
+                "Keep this answer"
+            ),
         ]
     );
-
-    // Act: a fresh graph workflow can be admitted after the legacy upgrade.
-    let graph = StartPlanThenImplementRequest {
-        agent: AgentSelection::new(AgentKind::Codex, AgentModel::Gpt61Sol),
-        agents: Box::new(PlanThenImplementAgents::bundled().expect("bundled agents")),
-        attachments: Vec::new(),
-        chain_id: "new-workflow".into(),
-        user_request: "Add search".into(),
-    }
-    .graph(&"session".into(), None);
-    database
-        .graphs()
-        .start_task_chain(&graph, "Add search")
-        .await
-        .expect("new workflow");
-    let chain = database
-        .graphs()
-        .load_task_chain("new-workflow")
-        .await
-        .expect("query graph")
-        .expect("saved workflow");
-
-    // Assert
-    assert_eq!(chain.phase, TaskChainPhase::Planning);
-    assert_eq!(chain.current_execution, None);
+    assert_eq!(reply_tables, [] as [String; 0]);
 }
 
 /// A populated database at the last schema before graph-backed workflows.
@@ -174,26 +202,14 @@ async fn legacy_plan_database() -> Database {
     .await
     .expect("legacy continuation and reply");
     let database = Database::from_pool(pool, system_timestamp_source());
-    database
-        .sessions()
-        .append_session_message(
-            "session",
-            SessionMessageKind::UserPrompt,
-            "Keep this conversation",
-        )
-        .await
-        .expect("ordinary conversation");
-    for (session_id, kind, content) in [
-        ("session", SessionMessageKind::AgentGraph, "workflow"),
-        ("session", SessionMessageKind::UserPrompt, "workflow"),
-        ("other", SessionMessageKind::AgentGraph, "workflow"),
-        ("other", SessionMessageKind::AgentGraph, "retained-graph"),
+    for (session_id, position, kind, content) in [
+        ("session", 0, "user_prompt", "Keep this conversation"),
+        ("session", 1, "agent_graph", "workflow"),
+        ("session", 2, "user_prompt", "workflow"),
+        ("other", 0, "agent_graph", "workflow"),
+        ("other", 1, "agent_graph", "retained-graph"),
     ] {
-        database
-            .sessions()
-            .append_session_message(session_id, kind, content)
-            .await
-            .expect("legacy graph marker and conversation");
+        insert_session_message_row(&database, session_id, position, kind, content).await;
     }
 
     database

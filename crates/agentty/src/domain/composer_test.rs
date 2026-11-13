@@ -842,6 +842,21 @@ fn test_prompt_composer_delete_range_removes_whole_image_token() {
 }
 
 #[test]
+fn test_prompt_composer_empty_delete_range_keeps_draft_and_slash_menu() {
+    // Arrange
+    let mut composer = PromptComposerState::new(AgentKind::ALL.to_vec());
+    composer.insert_text("/mo");
+    composer.slash_state.selected_index = 2;
+
+    // Act
+    composer.delete_range(2, 2);
+
+    // Assert
+    assert_eq!(composer.input.text(), "/mo");
+    assert_eq!(composer.slash_state.selected_index, 2);
+}
+
+#[test]
 fn test_prompt_composer_insert_char_keeps_attachment_position_synchronized() {
     // Arrange
     let mut composer = PromptComposerState::new(AgentKind::ALL.to_vec());
@@ -1056,33 +1071,6 @@ fn test_prompt_slash_command_list_omits_apply_when_disabled() {
 }
 
 #[test]
-fn plan_command_availability_keeps_rendering_selection_and_navigation_aligned() {
-    for enabled in [false, true] {
-        // Arrange
-        let mut slash_state = PromptSlashState {
-            allow_plan_command: enabled,
-            ..PromptSlashState::default()
-        };
-        slash_state.reset();
-
-        // Act
-        let menu = build_prompt_slash_suggestion_list("/", &slash_state, AgentKind::Codex, false)
-            .expect("command menu");
-        let selection =
-            resolve_prompt_slash_selection("/plan", &slash_state, AgentKind::Codex, false);
-        let count = prompt_slash_option_count("/plan", &slash_state, AgentKind::Codex, false);
-
-        // Assert
-        assert_eq!(menu.items.iter().any(|item| item.label == "/plan"), enabled);
-        assert_eq!(
-            selection,
-            enabled.then_some(PromptSuggestionSelection::Command("/plan"))
-        );
-        assert_eq!(count, usize::from(enabled));
-    }
-}
-
-#[test]
 fn graph_command_availability_keeps_menu_and_selection_aligned() {
     for enabled in [false, true] {
         // Arrange
@@ -1106,6 +1094,7 @@ fn graph_command_availability_keeps_menu_and_selection_aligned() {
             menu.items.iter().any(|item| item.label == "/graph"),
             enabled
         );
+        assert!(!menu.items.iter().any(|item| item.label == "/plan"));
         assert_eq!(
             selection,
             enabled.then_some(PromptSuggestionSelection::Command("/graph"))

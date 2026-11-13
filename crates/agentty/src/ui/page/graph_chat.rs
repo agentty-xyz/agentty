@@ -12,16 +12,14 @@ use ag_tui_text::text_util::{
 };
 use ratatui::Frame;
 use ratatui::layout::{Constraint, Layout, Rect};
-use ratatui::style::{Modifier, Style};
+use ratatui::style::{Color, Modifier, Style};
 use ratatui::text::{Line, Span};
 use ratatui::widgets::{Block, Borders, Paragraph};
 use unicode_width::UnicodeWidthStr;
 
 use crate::presentation::app_mode::AppMode;
 use crate::presentation::graph_chat::GraphChatSnapshot;
-use crate::presentation::task_chain_graph::TaskChainNodeStatus;
 use crate::ui::style::palette;
-use crate::ui::task_chain_format::{status_label_width, status_spans};
 
 /// Indent of edge rows and wrapped status rows below node names.
 const DETAIL_INDENT: &str = "  ";
@@ -46,8 +44,8 @@ pub(crate) fn areas(area: Rect, mode: &AppMode, has_graph: bool) -> (Rect, Optio
     (chat, Some(graph))
 }
 
-/// Renders the proposal status and the node graph with `/plan`-style
-/// connectors. Oversized graphs collapse to one prioritized row per node.
+/// Renders the proposal status and the node graph with vertical connectors.
+/// Oversized graphs collapse to one prioritized row per node.
 pub(crate) fn render(frame: &mut Frame, area: Rect, snapshot: Option<&GraphChatSnapshot>) {
     let block = Block::default()
         .title("Execution graph")
@@ -285,16 +283,49 @@ fn node_progress<'a>(
         .and_then(|progress| progress.nodes.iter().find(|state| state.node_id == node.id))
 }
 
-/// Maps live node state onto the `/plan` card's status vocabulary; nodes of
-/// an unapproved or unloaded graph are waiting.
-fn node_status(progress: Option<&GraphNodeProgress>) -> TaskChainNodeStatus {
-    match progress.map(|node| node.status) {
-        None | Some(GraphNodeStatus::Pending) => TaskChainNodeStatus::Waiting,
-        Some(GraphNodeStatus::Queued | GraphNodeStatus::Running) => TaskChainNodeStatus::Working,
-        Some(GraphNodeStatus::AwaitingAnswers) => TaskChainNodeStatus::NeedsInput,
-        Some(GraphNodeStatus::Succeeded) => TaskChainNodeStatus::Done,
-        Some(GraphNodeStatus::Failed) => TaskChainNodeStatus::Failed,
-        Some(GraphNodeStatus::Cancelled) => TaskChainNodeStatus::Canceled,
+/// Returns live node state; nodes of an unapproved or unloaded graph are
+/// pending.
+fn node_status(progress: Option<&GraphNodeProgress>) -> GraphNodeStatus {
+    progress.map_or(GraphNodeStatus::Pending, |node| node.status)
+}
+
+/// Returns the glyph and label spans for one node status.
+fn status_spans(status: GraphNodeStatus) -> [Span<'static>; 2] {
+    let (glyph, color) = status_glyph(status);
+    let style = Style::default().fg(color);
+
+    [
+        Span::styled(format!("{glyph} "), style),
+        Span::styled(status_label(status), style),
+    ]
+}
+
+/// Returns the rendered width of one status glyph plus label.
+fn status_label_width(status: GraphNodeStatus) -> usize {
+    status_glyph(status).0.width() + 1 + status_label(status).width()
+}
+
+/// Returns the user-facing label for one node status.
+fn status_label(status: GraphNodeStatus) -> &'static str {
+    match status {
+        GraphNodeStatus::Pending => "Waiting",
+        GraphNodeStatus::Queued | GraphNodeStatus::Running => "Working",
+        GraphNodeStatus::AwaitingAnswers => "Needs your input",
+        GraphNodeStatus::Succeeded => "Done",
+        GraphNodeStatus::Failed => "Failed",
+        GraphNodeStatus::Cancelled => "Canceled",
+    }
+}
+
+/// Returns the per-status glyph and semantic color.
+fn status_glyph(status: GraphNodeStatus) -> (&'static str, Color) {
+    match status {
+        GraphNodeStatus::Pending => ("○", palette::text_muted()),
+        GraphNodeStatus::Queued | GraphNodeStatus::Running => ("◐", palette::info()),
+        GraphNodeStatus::AwaitingAnswers => ("?", palette::question()),
+        GraphNodeStatus::Succeeded => ("✓", palette::success()),
+        GraphNodeStatus::Failed => ("✗", palette::danger()),
+        GraphNodeStatus::Cancelled => ("⊘", palette::text_subtle()),
     }
 }
 

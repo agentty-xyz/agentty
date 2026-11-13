@@ -462,18 +462,21 @@ impl PromptGraphState {
     }
 
     /// Cancels a graph request without disabling the command.
-    pub fn disarm(&mut self) {
-        if self.is_armed() {
+    ///
+    /// Returns whether a pending request was canceled.
+    pub fn disarm(&mut self) -> bool {
+        let is_armed = self.is_armed();
+        if is_armed {
             *self = Self::Available;
         }
+
+        is_armed
     }
 }
 
 /// UI state for prompt-only slash command selection.
 #[derive(Clone, PartialEq, Eq, Debug)]
 pub struct PromptSlashState {
-    /// Whether the preview `/plan` command is available for this launch.
-    pub allow_plan_command: bool,
     /// Agent kinds currently runnable on this machine for `/model`.
     pub available_agent_kinds: Vec<AgentKind>,
     /// Graph command availability and composer state.
@@ -481,8 +484,6 @@ pub struct PromptSlashState {
     /// Harness models `/model` lists for [`AgentKind::Harness`], local models
     /// first; empty lists the fixed catalog.
     pub harness_models: Vec<HarnessModelOption>,
-    /// Whether the next submission starts the Planner.
-    pub is_plan_armed: bool,
     /// Agent selected for the current slash workflow, when applicable.
     pub selected_agent: Option<AgentKind>,
     /// Highlighted option inside the active slash menu.
@@ -497,29 +498,12 @@ impl PromptSlashState {
     #[must_use]
     pub fn with_available_agent_kinds(available_agent_kinds: Vec<AgentKind>) -> Self {
         Self {
-            allow_plan_command: false,
             available_agent_kinds,
             graph: PromptGraphState::Disabled,
             harness_models: Vec::new(),
-            is_plan_armed: false,
             selected_agent: None,
             selected_index: 0,
             stage: PromptSlashStage::Command,
-        }
-    }
-
-    /// Arms one workflow while leaving other slash commands unchanged.
-    pub fn arm_workflow(&mut self, command: &str) {
-        match command {
-            "/graph" => {
-                self.graph = PromptGraphState::Armed;
-                self.is_plan_armed = false;
-            }
-            "/plan" => {
-                self.graph.disarm();
-                self.is_plan_armed = true;
-            }
-            _ => {}
         }
     }
 
@@ -1024,7 +1008,6 @@ fn build_slash_suggestion_list(
                 session_agent_kind,
                 allow_apply_command,
                 slash_state.graph.is_available(),
-                slash_state.allow_plan_command,
             )
             .into_iter()
             .map(|command| PromptSuggestionItem {
@@ -1109,7 +1092,6 @@ fn selected_slash_action(
                 session_agent_kind,
                 allow_apply_command,
                 slash_state.graph.is_available(),
-                slash_state.allow_plan_command,
             );
             let selected_command = commands
                 .get(clamp_selected_index(
@@ -1364,7 +1346,6 @@ fn command_description(command: &str) -> &'static str {
         "/apply" => "Verify focused-review suggestions, then apply the correct ones.",
         "/mode" => "Choose editing permissions and focused-review automation.",
         "/model" => "Choose an agent and model for this session.",
-        "/plan" => "Plan then implement: chat with the orchestrated Planner and Implementer.",
         "/graph" => "Discuss a task with its execution graph beside the chat.",
         "/reasoning" => "Override the reasoning level for this session.",
         "/style" => "Control how concise or detailed responses are.",
@@ -1379,7 +1360,6 @@ fn prompt_slash_commands(
     session_agent_kind: AgentKind,
     allow_apply_command: bool,
     allow_graph_command: bool,
-    allow_plan_command: bool,
 ) -> Vec<&'static str> {
     let lowered = input.to_lowercase();
     let mut commands = vec![
@@ -1387,16 +1367,12 @@ fn prompt_slash_commands(
         "/graph",
         "/mode",
         "/model",
-        "/plan",
         "/reasoning",
         "/style",
         "/fast",
     ];
     if !allow_apply_command {
         commands.retain(|command| *command != "/apply");
-    }
-    if !allow_plan_command {
-        commands.retain(|command| *command != "/plan");
     }
     if !allow_graph_command {
         commands.retain(|command| *command != "/graph");

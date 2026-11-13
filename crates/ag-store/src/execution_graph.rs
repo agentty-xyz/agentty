@@ -9,12 +9,10 @@ mod progress;
 mod proposal;
 mod repository;
 mod result;
-mod task_chain;
 mod task_turn;
 
 pub use model::{
     GraphEvidence, GraphExecutionRecord, GraphNodeHistory, StoredGraphEvidence, StoredGraphResult,
-    TaskChainReplyRecord,
 };
 pub use proposal::GraphProposalRepository;
 #[cfg(any(test, feature = "test-utils"))]

@@ -8,9 +8,8 @@ weight = 8
 persists their revisions, execution links, and exact result versions. `ag-worker`
 provides a deterministic static executor with atomic storage admission. Agentty adapts
 task conversations to its serial session workers and fresh utilities to the concurrent
-utility worker. Focused review and `/plan` both run on this executor. `TaskChain` builds
-and projects the fixed Planner-to-Implementer graph; it has no separate execution
-ledger.
+utility worker. Focused review and approved `/graph` proposals both run on this
+executor.
 
 ## Graph and Node Identity
 
@@ -233,19 +232,3 @@ remaining credits across resume calls. After process restart, explicit resume su
 new limits for that live execution period; budget counters are not durable usage
 ledgers. Recording continuation intent alone never recreates a driver or replenishes
 credits. Graph proposals and runtime expansion remain separate work.
-
-## Plan Then Implement Graph
-
-`/plan` saves two task-conversation nodes with captured definitions, model, attachments,
-and the Planner's launch-time session snapshot. The Planner is a shared reader. Its
-validated `plan` output requires explicit acceptance before the exclusive-writer
-Implementer can start with that exact result pinned as input. Planner revision and
-clarification create new attempts in the same isolated history. The Implementer retains
-the original images and the accepted Planner attempt's reply images, and settles ordered
-session effects before its execution succeeds.
-
-Workflow phase and the visible graph card project the graph's operation-backed state.
-Natural-language replies retain their exact source execution and first decision before
-applying an idempotent graph action. Canceling a stage leaves the graph open for an
-explicit retry; whole-graph cancellation remains terminal. Reading saved workflows never
-dispatches work.

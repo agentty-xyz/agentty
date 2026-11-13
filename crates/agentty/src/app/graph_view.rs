@@ -24,7 +24,7 @@ impl App {
     pub(crate) async fn load_graph_view(&self, view: &mut GraphView) -> Result<(), String> {
         let graphs = self.services.db().graphs();
         let mut selected_id = view.graph().map(|graph| graph.id.clone());
-        let proposal = if self.experimental_multi_agent {
+        let proposal = if self.experimental_graph {
             self.services
                 .db()
                 .graph_proposals()

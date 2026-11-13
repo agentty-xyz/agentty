@@ -196,8 +196,8 @@ async fn test_new_uses_production_client_bundle() {
 
         // Assert
         assert!(app.selected_session().is_none());
-        assert!(!app.experimental_multi_agent);
-        assert!(harness_app.experimental_multi_agent);
+        assert!(!app.experimental_graph);
+        assert!(harness_app.experimental_graph);
         assert_eq!(
             app.services.harness_availability(),
             HarnessAvailability::Hidden

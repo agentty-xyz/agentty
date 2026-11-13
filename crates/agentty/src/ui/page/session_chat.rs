@@ -18,7 +18,6 @@ use crate::presentation::frame_time::FrameTime;
 use crate::presentation::graph_chat::GraphChatSnapshot;
 use crate::presentation::help_action::{self, ViewActionAvailability, ViewHelpState};
 use crate::presentation::prompt::PromptAtMentionState;
-use crate::presentation::task_chain_graph::TaskChainGraph;
 use crate::ui::component::chat_input::{ChatInput, SuggestionList};
 use crate::ui::component::session_output::{
     SessionOutput, SessionOutputLayoutCache, SessionOutputLineContext,
@@ -31,7 +30,6 @@ use crate::ui::input_layout::{
 use crate::ui::page::graph_chat;
 use crate::ui::{
     Component, Page, layout, markdown, prompt_format, question_format, session_format, style,
-    task_chain_format,
 };
 
 /// Archived sessions reserve one timing row and one navigation row.
@@ -166,8 +164,6 @@ pub struct SessionChatPageInput<'a> {
     pub sessions: &'a [Session],
     /// One coherent render-time clock snapshot.
     pub(crate) frame_time: FrameTime,
-    /// Latest live graph for the session's task chain, when loaded.
-    pub(crate) task_chain_graph: Option<&'a TaskChainGraph>,
 }
 
 /// Chat page renderer for a single session.
@@ -251,7 +247,6 @@ impl<'a> SessionChatPage<'a> {
             .markdown_render_cache(self.markdown_render_cache)
             .output_layout_cache(self.output_layout_cache)
             .session_update_version(self.session_update_version)
-            .task_chain_graph(self.task_chain_graph)
             .spinner_frame(Icon::spinner_frame_from_millis(
                 self.frame_time.unix_millis(),
             ));
@@ -327,18 +322,10 @@ impl<'a> SessionChatPage<'a> {
 
         // Layout planning prepares a prompt panel for every non-archived prompt
         // mode.
-        if let AppMode::Prompt {
-            input, slash_state, ..
-        } = self.mode
+        if let AppMode::Prompt { input, .. } = self.mode
             && let Some(prepared_prompt_panel) = layout_plan.prompt_panel.as_ref()
         {
-            self.render_prompt_composer(
-                f,
-                bottom_area,
-                prepared_prompt_panel,
-                (input, slash_state.is_plan_armed),
-                timing_label,
-            );
+            self.render_prompt_composer(f, bottom_area, prepared_prompt_panel, input, timing_label);
 
             return;
         }
@@ -372,10 +359,7 @@ impl<'a> SessionChatPage<'a> {
             return;
         }
 
-        let title = self.task_chain_graph.map_or_else(
-            || session_composer_title(session),
-            task_chain_format::composer_title,
-        );
+        let title = session_composer_title(session);
         let status = session_format::prompt_session_status(session);
         let panel_areas = layout::prompt_panel_areas(bottom_area);
         ChatInput::new(&title, "", 0)
@@ -392,28 +376,28 @@ impl<'a> SessionChatPage<'a> {
 
     /// Renders the active composer, its suggestion dropdown, and its footer.
     ///
-    /// `composer` carries the edited input and whether `/plan` armed it.
+    /// An armed `/graph` composer asks for the execution-graph task.
     fn render_prompt_composer(
         &self,
         f: &mut Frame,
         bottom_area: Rect,
         prepared_prompt_panel: &PreparedPromptPanel,
-        composer: (&input::InputState, bool),
+        input: &input::InputState,
         timing_label: &str,
     ) {
-        let (input, is_plan_armed) = composer;
-        let (mut title, mut placeholder) = prompt_composer_labels(
-            is_plan_armed,
-            self.task_chain_graph,
-            &prepared_prompt_panel.title,
-        );
-        if matches!(self.mode, AppMode::Prompt { slash_state, .. } if slash_state.graph.is_armed())
-        {
-            title = "Graph".into();
-            placeholder = "Describe the task for the execution graph".into();
-        }
-        let mut chat_input = ChatInput::new(&title, input.text(), input.cursor)
-            .placeholder(&placeholder)
+        let (title, placeholder) = if matches!(
+            self.mode,
+            AppMode::Prompt { slash_state, .. } if slash_state.graph.is_armed()
+        ) {
+            ("Graph", "Describe the task for the execution graph")
+        } else {
+            (
+                prepared_prompt_panel.title.as_str(),
+                DEFAULT_COMPOSER_PLACEHOLDER,
+            )
+        };
+        let mut chat_input = ChatInput::new(title, input.text(), input.cursor)
+            .placeholder(placeholder)
             .footer(timing_label)
             .active(!prepared_prompt_panel.is_chat_focused)
             .status(&prepared_prompt_panel.status);
@@ -489,39 +473,6 @@ impl DerefMut for SessionChatPage<'_> {
     }
 }
 
-/// Returns the active composer title and placeholder.
-///
-/// An armed `/plan` asks for the Planner task; a session that owns a task
-/// chain shows the active role and its graph status; other sessions keep the
-/// session settings title.
-fn prompt_composer_labels(
-    is_plan_armed: bool,
-    task_chain_graph: Option<&TaskChainGraph>,
-    session_title: &str,
-) -> (String, String) {
-    if is_plan_armed {
-        return (
-            task_chain_format::PLAN_ARMED_COMPOSER_TITLE.to_string(),
-            task_chain_format::PLAN_ARMED_COMPOSER_PLACEHOLDER.to_string(),
-        );
-    }
-
-    task_chain_graph.map_or_else(
-        || {
-            (
-                session_title.to_string(),
-                DEFAULT_COMPOSER_PLACEHOLDER.to_string(),
-            )
-        },
-        |graph| {
-            (
-                task_chain_format::composer_title(graph),
-                task_chain_format::composer_placeholder(graph),
-            )
-        },
-    )
-}
-
 /// Returns the session settings title shared by active and inactive composers.
 fn session_composer_title(session: &Session) -> String {
     format!(
@@ -590,9 +541,8 @@ fn prepare_prompt_panel(
     // `/` as plain text instead of running a slash command, so suppress
     // the slash dropdown to avoid implying the menu is actionable. The
     // `@` mention dropdown is still useful for editing queued messages. An
-    // armed plan composer also treats its task as literal text.
-    let suppress_slash_dropdown = slash_state.is_plan_armed
-        || slash_state.graph.is_armed()
+    // armed graph composer also treats its task as literal text.
+    let suppress_slash_dropdown = slash_state.graph.is_armed()
         || session.status == crate::domain::session::Status::InProgress;
     let has_active_mention = at_mention_state.is_some() && input.at_mention_query().is_some();
     let allow_apply_command = review::has_actionable_review_suggestions(review_text);

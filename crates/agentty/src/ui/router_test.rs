@@ -28,7 +28,6 @@ use crate::presentation::setting::{
     LaunchConfigurationListEditorMode, LaunchConfigurationListEditorSnapshot,
     SettingsScreenSnapshot, SettingsSelectorDropdown, SettingsSelectorDropdownOption,
 };
-use crate::presentation::task_chain_graph::TaskChainGraphCache;
 use crate::test_support::SessionFixtureBuilder;
 use crate::ui::{component, markdown, page};
 
@@ -224,7 +223,6 @@ fn render_list_backed_mode(mode: &AppMode) -> (bool, String) {
                     session_update_versions: &session_update_versions,
                     session_worktree_availability: &session_worktree_availability,
                     frame_time: FrameTime::new(90, 90_000, -28_800),
-                    task_chain_graphs: &TaskChainGraphCache::default(),
                     graph_chat: None,
                 },
             );
@@ -245,7 +243,6 @@ fn render_list_backed_mode(mode: &AppMode) -> (bool, String) {
                     session_update_versions: &session_update_versions,
                     session_worktree_availability: &session_worktree_availability,
                     frame_time: FrameTime::new(90, 90_000, -28_800),
-                    task_chain_graphs: &TaskChainGraphCache::default(),
                     graph_chat: None,
                 },
             );
@@ -631,7 +628,6 @@ fn render_help_mode_restores_markdown_diff_preview_background() {
                 session_update_versions: &HashMap::new(),
                 session_worktree_availability: &HashMap::new(),
                 frame_time: FrameTime::new(0, 0, 0),
-                task_chain_graphs: &TaskChainGraphCache::default(),
                 graph_chat: None,
             };
             render_surface(
@@ -884,7 +880,6 @@ fn render_session_surface_renders_view_session_content() {
                         true,
                     )]),
                     frame_time: FrameTime::new(0, 0, 0),
-                    task_chain_graphs: &TaskChainGraphCache::default(),
                     graph_chat: Some(&graph_chat),
                 },
             );
@@ -940,7 +935,6 @@ fn render_session_surface_keeps_background_when_session_is_missing() {
                     session_update_versions: &session_update_versions,
                     session_worktree_availability: &HashMap::new(),
                     frame_time: FrameTime::new(0, 0, 0),
-                    task_chain_graphs: &TaskChainGraphCache::default(),
                     graph_chat: None,
                 },
             );
@@ -1000,7 +994,6 @@ fn render_diff_surface_renders_page_for_matching_session() {
                     session_update_versions: &session_update_versions,
                     session_worktree_availability: &HashMap::new(),
                     frame_time: FrameTime::new(0, 0, 0),
-                    task_chain_graphs: &TaskChainGraphCache::default(),
                     graph_chat: None,
                 },
             );
@@ -1056,7 +1049,6 @@ fn render_diff_surface_preserves_frame_for_missing_session() {
                     session_update_versions: &HashMap::new(),
                     session_worktree_availability: &HashMap::new(),
                     frame_time: FrameTime::new(0, 0, 0),
-                    task_chain_graphs: &TaskChainGraphCache::default(),
                     graph_chat: None,
                 },
             );
@@ -1117,7 +1109,6 @@ fn render_diff_surface_renders_linked_comments_for_matching_session() {
                     session_update_versions: &session_update_versions,
                     session_worktree_availability: &HashMap::new(),
                     frame_time: FrameTime::new(0, 0, 0),
-                    task_chain_graphs: &TaskChainGraphCache::default(),
                     graph_chat: None,
                 },
             );

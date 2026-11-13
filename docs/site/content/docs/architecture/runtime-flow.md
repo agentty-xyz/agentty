@@ -111,25 +111,20 @@ sessions without changing their mailbox order.
 
 Role-aware task commands share that mailbox and the session's Env while using separate
 runtime identities, captured models, and durable response histories. Task continuation
-and clarification retain that task's input and responses. A chain's Planner also
-receives the session conversation captured in its graph request as historical data on
-every attempt, including after restart; later workflow messages stay outside that
-snapshot. Ordinary session questions and provider continuation remain unchanged.
-Admission resolves definitions through the injected catalog and persists their complete
-instructions and restrictions. A plan-and-implement launch captures both definitions;
-later repository edits affect new workflows, not retained task conversations. Planner
-execution restricts permissions to `ReadOnly` and performs no commit or forge effects.
-Implementer post-processing uses an isolated transcript projection and remains ordered
-through publication. Implementer answers refresh persisted and visible diff stats before
-commit and publishing effects, with another refresh during finalization. Diff inspection
+and clarification retain that task's input and responses. Ordinary session questions and
+provider continuation remain unchanged. Admission resolves definitions through the
+injected catalog and persists their complete instructions and restrictions; later
+repository edits affect new tasks, not retained task conversations. Planner execution
+restricts permissions to `ReadOnly` and performs no commit or forge effects. Implementer
+post-processing uses an isolated transcript projection and remains ordered through
+publication. Implementer answers refresh persisted and visible diff stats before commit
+and publishing effects, with another refresh during finalization. Diff inspection
 remains available during active work. A settled task attempt refreshes its owning
 session only after operation bookkeeping finishes, so consumers observe its final
 durable status.
 
-The terminal offers `/plan` only with the launch-time `--experimental-multi-agent`
-setting; the shared task API retains its own programmatic contract. Routing does not
-depend on the flag: a session that owns a task chain sends every composer message,
-`/apply` instruction, and automatic review remediation to the orchestrator.
+The terminal offers `/graph` only with the launch-time `--experimental-graph` setting;
+the shared task and execution-graph APIs retain their own programmatic contracts.
 
 Role admission invalidates earlier ordinary review work and its durable recovery
 trigger, and the admitted attempt owns review suppression. After its effects, a
@@ -188,24 +183,23 @@ only a successful manual target sync archives it as `Done`.
 ## Session Chat Rendering
 
 <a id="architecture-runtime-flow-session-chat"></a> Durable transcript rows contain user
-prompts, final answers, workflow notices, role-attributed task-chain answers, and
-execution-graph markers. Typed transient slots hold progress, queued actions, and review
-output with explicit placement and lifetime. Chat messages and workflow actions,
-including selected review-comment batches, share one submission sequence for both
-display and execution. Review-comment commands retain their thread allowlist and replace
-the queued row with loading progress only when execution starts. Queued review batches
-wait for clarification answers, including after session restoration. A restored question
-session creates a paused worker when accepting the batch. Generated prompts enter
-durable history when the worker starts them, so canceled waiting work cannot be
-replayed.
+prompts, final answers, and workflow notices. Typed transient slots hold progress,
+queued actions, and review output with explicit placement and lifetime. Chat messages
+and workflow actions, including selected review-comment batches, share one submission
+sequence for both display and execution. Review-comment commands retain their thread
+allowlist and replace the queued row with loading progress only when execution starts.
+Queued review batches wait for clarification answers, including after session
+restoration. A restored question session creates a paused worker when accepting the
+batch. Generated prompts enter durable history when the worker starts them, so canceled
+waiting work cannot be replayed.
 
 Completion replaces matching progress with its result in one reducer update. Stale
 results cannot persist notices. Rendering reads snapshots; it does not perform workflow
 side effects. Runtime-owned caches share derived layout between scrolling and painting.
 Transcript layouts retain rendered message segments across updates, while transient rows
 are assembled separately. The bounded layout cache releases removed history and
-invalidates segments when their content, width, theme, or live graph changes. Transcript
-row positions are independent of terminal coordinate limits.
+invalidates segments when their content, width, or theme changes. Transcript row
+positions are independent of terminal coordinate limits.
 
 Graph chat keeps one snapshot for the visible session's latest proposal and execution
 progress. Session updates invalidate it; live proposals and failed reads refresh at most
@@ -216,12 +210,12 @@ read-only utility run on the Run Worker decides whether a reply approves, cancel
 revises the inspected version, and the background task admits that exact-version action
 through the gateway. One reply per proposal is decided at a time.
 
-A graph node outside a task chain asks its clarification questions in session chat:
-saving the node's response also saves a workflow notice listing them, after its answer,
-in the same transaction, and the session worker mirrors that notice into live chat.
-While a node awaits answers, the next composer message is its reply; when several wait,
-the reply goes to the node whose question was saved last. The message is shown in chat
-and admitted through the gateway as a continuation of the exact execution that asked;
+A graph node asks its clarification questions in session chat: saving the node's
+response also saves a workflow notice listing them, after its answer, in the same
+transaction, and the session worker mirrors that notice into live chat. While a node
+awaits answers, the next composer message is its reply; when several wait, the reply
+goes to the node whose question was saved last. The message is shown in chat and
+admitted through the gateway as a continuation of the exact execution that asked;
 storage rejects a second continuation of the same execution.
 
 On each foreground tick the reducer checks the viewed session for pending graph
@@ -238,38 +232,6 @@ revalidate that snapshot and enter the shared command gateway; inspector replies
 enter ordinary chat. Refresh is explicit, and editing retains the execution originally
 inspected. Background session questions update session state without replacing the
 inspector; returning to session chat exposes the pending questions.
-
-Session chat is the conversational task-chain surface. An armed `/plan` composer
-launches the chain, and the session's later messages become natural-language replies;
-both use the same command gateway as programmatic callers. Chain ownership is read from
-storage at submit time, so routing is correct before the transcript or graph snapshot
-loads after a restart. A reply waiting for an orchestrator decision is accepted at once;
-a failure of the decided action is appended as a transcript notice when it returns. Busy
-chains reject replies instead of queueing them, and the composer keeps the draft.
-Stopping a running role cancels the chain through the gateway, which records the
-cancellation before interrupting the attempt. Rendering never advances a workflow.
-
-Launch admission saves the original request and execution-graph marker in its
-transaction; saving a chain-owned response likewise saves its role-attributed answer
-atomically. The host mirrors committed messages into live chat without a second write.
-These rows stay out of ordinary provider replay, so each role keeps its isolated
-conversation. The marker preserves the exact chain identity. The reducer keeps a bounded
-latest-chain snapshot for the visible session, reloaded when its update version changes,
-and the card renders that live state. Failed reads retain the previous graph and retry
-after a short delay, even when the session stays idle.
-
-New admission initializes blank session prompt metadata and starts the shared Fast-model
-title utility from the original request through the session-scoped `RunClient`.
-Redelivered launches do not restart title generation; authoritative titles stay
-protected.
-
-Foreground gateway admission records each workflow stage and its attempt atomically;
-only a new claim reaches the session worker. Duplicate deliveries acknowledge their
-original receipt without repeating execution. Plan acceptance binds the exact producing
-version before implementation admission, and cancellation targets the selected attempt.
-Actor queries read persisted state and never dispatch or resume work. Continuation input
-retains the attempt shown when composition began; admission rejects a stale source
-before it can reach another stage or role.
 
 Resource sampling runs behind `ResourceClient` and totals the process tree rooted at
 Agentty's own PID, so it needs no per-session runtime PIDs. Samples run in the
@@ -301,27 +263,12 @@ new attempts retain ordinary durable-turn eligibility. Operation settlement and 
 recovery supply attempt status. The task remains open until a caller explicitly accepts
 its outcome, independently of session lifecycle.
 
-The static Planner-to-Implementer workflow uses the same command gateway and serial
-worker through a fixed execution graph. Accepting a specific plan version records
-evidence and wakes dispatch; the executor atomically pins that accepted version when
-admitting implementation. Duplicate requests acknowledge their saved receipt; queries
-and reopening never start work. Cancellation targets the current attempt, and retries
-require an explicit new delivery. Failed delivery remains visible in operation state.
-Image attachments are durable task inputs: continuations retain earlier images, add new
-ones, and carry them through acceptance to the Implementer. The worker submits the
-images as structured turn attachments alongside the explicit task input.
-
-Natural-language workflow replies also enter through the gateway. Foreground admission
-returns earlier receipts, rejects busy workflows, and stores the reply with its
-transcript prompt and exact source execution atomically. Its first decision is durable,
-so redelivery cannot approve a newer plan. While a plan awaits acceptance, the gateway
-transfers the caller's response channel to a background task and treats the chain as
-busy until the decided action returns. That task runs the orchestrator decision through
-the session-scoped `RunClient`, then submits the decided acceptance or revision through
-the runtime mailbox for ordinary admission. Every other settled phase continues the
-current role immediately in the foreground. An image reply awaiting plan acceptance
-revises the Planner directly, keeping visual guidance out of the text-only approval
-decision.
+Execution graphs use the same command gateway and serial worker for task-conversation
+nodes. Accepting an exact output version records evidence and wakes dispatch; the
+executor pins that version when admitting dependents. Duplicate requests acknowledge
+their saved receipt; queries and reopening never start work. Image attachments are
+durable task inputs: continuations retain earlier images and add new ones, and the
+worker submits them as structured turn attachments alongside the explicit task input.
 
 For each continued graph attempt, the worker delivers its explicit reply, clarification,
 or retry as current task input, alongside the original objective and pinned results.
@@ -582,7 +529,7 @@ The static `GraphExecutor` separately drains dependency-ready branches through i
 worker adapters. Storage admits each node once with pinned inputs and its existing
 execution authority. Shared Env leases and provider budgets constrain parallel branches;
 all prerequisite gates must hold before a join runs. Focused review launches its own
-graph from its background task; `/plan` launches its two task-conversation nodes through
+graph from its background task; an approved `/graph` proposal launches its nodes through
 the same executor. See [Execution Graphs](@/docs/architecture/execution-graphs.md).
 
 Explicit graph launches use the same foreground admission gateway. Graph task handoffs

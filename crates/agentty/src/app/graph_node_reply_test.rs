@@ -4,7 +4,7 @@ use std::sync::Arc;
 use ag_protocol::{QuestionItem, TurnPrompt, TurnPromptAttachment};
 use ag_session::{
     ExecutionGraph, ExecutionGraphProgress, ExecutionGraphStatus, GraphContext, GraphExecutionRef,
-    GraphNodeContinuation, GraphNodeStatus, TaskAgentRole, TaskChain,
+    GraphNodeContinuation, GraphNodeStatus,
 };
 use ag_store::{DbError, MockGraphRepository};
 use tempfile::TempDir;
@@ -199,12 +199,8 @@ async fn chat_reply_without_loaded_session_handles_is_admitted_without_chat_echo
 #[tokio::test]
 async fn sessions_without_an_answerable_node_keep_ordinary_routing() {
     // Arrange
-    let (mut chain, mut chain_progress) = awaiting_graph("chain", ExecutionGraphStatus::Blocked);
-    chain.nodes[0].id = TaskAgentRole::Planner.id().into();
-    chain.nodes[0].execution.context = GraphContext::TaskConversation {
-        task_id: TaskChain::task_id("chain", TaskAgentRole::Planner),
-    };
-    chain_progress.nodes[0].node_id = TaskAgentRole::Planner.id().into();
+    let (mut fresh, fresh_progress) = awaiting_graph("fresh", ExecutionGraphStatus::Blocked);
+    fresh.nodes[0].execution.context = GraphContext::Fresh;
     let (missing, _) = awaiting_graph("missing", ExecutionGraphStatus::Blocked);
     let (cancelled, cancelled_progress) =
         awaiting_graph("cancelled", ExecutionGraphStatus::Cancelled);
@@ -213,11 +209,11 @@ async fn sessions_without_an_answerable_node_keep_ordinary_routing() {
     let mut repository = MockGraphRepository::new();
     repository
         .expect_list_graphs()
-        .return_once(move |_| Ok(vec![chain, missing, cancelled, settled]));
+        .return_once(move |_| Ok(vec![fresh, missing, cancelled, settled]));
     repository
         .expect_progress()
         .returning(move |graph_id| match graph_id {
-            "chain" => Ok(Some(chain_progress.clone())),
+            "fresh" => Ok(Some(fresh_progress.clone())),
             "cancelled" => Ok(Some(cancelled_progress.clone())),
             "settled" => Ok(Some(settled_progress.clone())),
             _ => Ok(None),

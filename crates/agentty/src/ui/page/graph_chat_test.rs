@@ -10,8 +10,9 @@ use ratatui::Terminal;
 use ratatui::backend::TestBackend;
 use ratatui::buffer::Buffer;
 use ratatui::layout::Rect;
+use unicode_width::UnicodeWidthStr;
 
-use super::{areas, render, summary};
+use super::{areas, render, status_label_width, status_spans, summary};
 use crate::presentation::app_mode::AppMode;
 use crate::presentation::graph_chat::GraphChatSnapshot;
 use crate::ui::style::palette;
@@ -67,7 +68,48 @@ fn sidebar_shows_proposal_lifecycle_and_stale_status() {
 }
 
 #[test]
-fn sidebar_draws_plan_style_connectors_and_live_node_status() {
+fn every_node_status_has_a_styled_label_and_matching_width() {
+    // Arrange
+    let statuses = [
+        (GraphNodeStatus::Pending, "○ Waiting", palette::text_muted()),
+        (GraphNodeStatus::Queued, "◐ Working", palette::info()),
+        (GraphNodeStatus::Running, "◐ Working", palette::info()),
+        (
+            GraphNodeStatus::AwaitingAnswers,
+            "? Needs your input",
+            palette::question(),
+        ),
+        (GraphNodeStatus::Succeeded, "✓ Done", palette::success()),
+        (GraphNodeStatus::Failed, "✗ Failed", palette::danger()),
+        (
+            GraphNodeStatus::Cancelled,
+            "⊘ Canceled",
+            palette::text_subtle(),
+        ),
+    ];
+
+    for (status, expected_text, expected_color) in statuses {
+        // Act
+        let spans = status_spans(status);
+        let width = status_label_width(status);
+
+        // Assert
+        let text = spans
+            .iter()
+            .map(|span| span.content.as_ref())
+            .collect::<String>();
+        assert_eq!(text, expected_text);
+        assert_eq!(width, expected_text.width());
+        assert!(
+            spans
+                .iter()
+                .all(|span| span.style.fg == Some(expected_color))
+        );
+    }
+}
+
+#[test]
+fn sidebar_draws_dependency_connectors_and_live_node_status() {
     // Arrange
     let mut snapshot = dependency_snapshot();
     let progress = snapshot.progress.take();

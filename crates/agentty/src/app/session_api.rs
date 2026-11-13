@@ -115,56 +115,6 @@ impl SessionBackend for SessionRuntimeHandle {
         SessionRuntimeHandle::accept_agent_plan(self, session_id, request).await
     }
 
-    async fn start_plan_then_implement(
-        &self,
-        session_id: &SessionId,
-        request: ag_session::StartPlanThenImplementRequest,
-    ) -> Result<(), ApiSessionError> {
-        SessionRuntimeHandle::start_plan_then_implement(self, session_id, request).await
-    }
-
-    async fn get_task_chain(
-        &self,
-        chain_id: &str,
-    ) -> Result<Option<ag_session::TaskChain>, ApiSessionError> {
-        SessionRuntimeHandle::get_task_chain(self, chain_id).await
-    }
-
-    async fn list_task_chains(
-        &self,
-        session_id: &SessionId,
-    ) -> Result<Vec<ag_session::TaskChain>, ApiSessionError> {
-        SessionRuntimeHandle::list_task_chains(self, session_id).await
-    }
-
-    async fn accept_task_chain_plan(
-        &self,
-        chain_id: &str,
-        request: ag_session::AcceptTaskChainPlanRequest,
-    ) -> Result<(), ApiSessionError> {
-        SessionRuntimeHandle::accept_task_chain_plan(self, chain_id, request).await
-    }
-
-    async fn continue_task_chain(
-        &self,
-        chain_id: &str,
-        request: ag_session::ContinueTaskChainRequest,
-    ) -> Result<(), ApiSessionError> {
-        SessionRuntimeHandle::continue_task_chain(self, chain_id, request).await
-    }
-
-    async fn cancel_task_chain(&self, chain_id: &str) -> Result<(), ApiSessionError> {
-        SessionRuntimeHandle::cancel_task_chain(self, chain_id).await
-    }
-
-    async fn reply_to_task_chain(
-        &self,
-        session_id: &SessionId,
-        request: ag_session::ReplyToTaskChainRequest,
-    ) -> Result<ag_session::TaskChainReplyOutcome, ApiSessionError> {
-        SessionRuntimeHandle::reply_to_task_chain(self, session_id, request).await
-    }
-
     async fn create_task(
         &self,
         session_id: &SessionId,
@@ -342,32 +292,6 @@ impl App {
                 task_id,
             } => {
                 let _ = response_tx.send(self.load_api_task_history(&task_id).await);
-            }
-            SessionRuntimeCommand::GetTaskChain {
-                chain_id,
-                response_tx,
-            } => {
-                let result = self
-                    .services
-                    .db()
-                    .graphs()
-                    .load_task_chain(&chain_id)
-                    .await
-                    .map_err(|error| ApiSessionError::Operation(error.to_string()));
-                let _ = response_tx.send(result);
-            }
-            SessionRuntimeCommand::ListTaskChains {
-                session_id,
-                response_tx,
-            } => {
-                let result = self
-                    .services
-                    .db()
-                    .graphs()
-                    .list_task_chains(&session_id)
-                    .await
-                    .map_err(|error| ApiSessionError::Operation(error.to_string()));
-                let _ = response_tx.send(result);
             }
             SessionRuntimeCommand::ListTasks {
                 response_tx,
@@ -781,6 +705,32 @@ impl App {
         }
 
         Ok(())
+    }
+
+    /// Resolves a definition through the injected catalog before task
+    /// admission.
+    async fn resolve_task_agent_definition(
+        &self,
+        session_id: &SessionId,
+        id: &str,
+    ) -> Result<ag_session::AgentDefinition, ApiSessionError> {
+        let folder = self
+            .sessions
+            .sessions()
+            .iter()
+            .find(|session| session.id == *session_id)
+            .map(|session| session.folder.clone())
+            .ok_or(ApiSessionError::NotFound)?;
+
+        self.services
+            .agent_profile_catalog_client()
+            .resolve(folder, id.to_string())
+            .await
+            .ok_or_else(|| {
+                ApiSessionError::Operation(format!(
+                    "Agent definition `{id}` is unavailable or invalid"
+                ))
+            })
     }
 
     /// Invalidates prior ordinary review work and its durable startup trigger

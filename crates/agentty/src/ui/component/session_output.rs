@@ -1,6 +1,6 @@
 use std::cell::RefCell;
 use std::collections::{HashMap, VecDeque};
-use std::hash::{Hash, Hasher};
+use std::hash::Hasher;
 use std::rc::Rc;
 use std::sync::Arc;
 
@@ -13,7 +13,6 @@ use ratatui::widgets::Block;
 use rustc_hash::FxHasher;
 
 use crate::domain::session::{QueuedMessage, Session, SessionId, Status};
-use crate::presentation::task_chain_graph::TaskChainGraph;
 use crate::ui::component::queue_pulse::QueuePulseEffect;
 use crate::ui::component::tachyon_loader::TachyonLoaderEffect;
 use crate::ui::component::vertical_scrollbar::VerticalScrollbar;
@@ -51,7 +50,6 @@ struct SessionOutputLayoutCacheKey {
     session_update_version: u64,
     session_updated_at: i64,
     status: Status,
-    task_chain_graph: Option<u64>,
     theme_cache_version: u64,
     transcript: TranscriptFingerprint,
     transient_message_fingerprint: u64,
@@ -60,10 +58,6 @@ struct SessionOutputLayoutCacheKey {
 
 /// Cache key for the stable transcript body assembled above the dynamic
 /// session-status tail.
-///
-/// The live task-chain graph is keyed by a content fingerprint because its
-/// card renders inside the transcript body yet changes without transcript
-/// edits.
 #[derive(Clone, Debug, Eq, PartialEq)]
 struct SessionOutputBodyCacheKey {
     draft_prompt: TextFingerprint,
@@ -73,7 +67,6 @@ struct SessionOutputBodyCacheKey {
     output_width: u16,
     queued_messages: TextFingerprint,
     session_id: SessionId,
-    task_chain_graph: Option<u64>,
     theme_cache_version: u64,
     transcript: TranscriptFingerprint,
     transient_message_fingerprint: u64,
@@ -314,7 +307,6 @@ impl SessionOutputLayoutCache {
         let body_key = SessionOutput::body_cache_key(
             session,
             output_area,
-            context.task_chain_graph,
             markdown_render_cache.map_or(0, markdown::MarkdownRenderCache::version),
         );
         let body = self.cached_body(&body_key).unwrap_or_else(|| {
@@ -332,7 +324,6 @@ impl SessionOutputLayoutCache {
             let body = session_output_assembly::output_body(
                 session,
                 inner_width,
-                context.task_chain_graph,
                 markdown_render_cache,
                 message_cache,
             );
@@ -508,8 +499,6 @@ pub(crate) struct SessionOutputLineContext<'a> {
     pub(crate) active_prompt_output: Option<&'a str>,
     /// Current observable update version for this session snapshot.
     pub(crate) session_update_version: u64,
-    /// Latest live graph for the session's task chain, when loaded.
-    pub(crate) task_chain_graph: Option<&'a TaskChainGraph>,
 }
 
 /// Session chat output panel renderer.
@@ -527,7 +516,6 @@ pub struct SessionOutput<'a> {
     session: &'a Session,
     session_update_version: u64,
     spinner_frame: usize,
-    task_chain_graph: Option<&'a TaskChainGraph>,
 }
 
 impl<'a> SessionOutput<'a> {
@@ -542,15 +530,7 @@ impl<'a> SessionOutput<'a> {
             session,
             session_update_version: 0,
             spinner_frame: 0,
-            task_chain_graph: None,
         }
-    }
-
-    /// Sets the live graph rendered for task-chain transcript markers.
-    #[must_use]
-    pub(crate) fn task_chain_graph(mut self, graph: Option<&'a TaskChainGraph>) -> Self {
-        self.task_chain_graph = graph;
-        self
     }
 
     /// Sets the exact prompt transcript block for the currently active turn.
@@ -726,13 +706,8 @@ impl<'a> SessionOutput<'a> {
     ) -> SessionOutputLayout {
         let inner_width =
             panel_inner_width(output_area, session_format::session_output_panel_borders());
-        let body = session_output_assembly::output_body(
-            session,
-            inner_width,
-            context.task_chain_graph,
-            markdown_render_cache,
-            None,
-        );
+        let body =
+            session_output_assembly::output_body(session, inner_width, markdown_render_cache, None);
 
         Self::layout_from_body(session, context.active_progress, &body)
     }
@@ -807,7 +782,6 @@ impl<'a> SessionOutput<'a> {
             session_update_version: context.session_update_version,
             session_updated_at: session.updated_at,
             status: session.status,
-            task_chain_graph: Self::task_chain_graph_fingerprint(context.task_chain_graph),
             theme_cache_version: style::active_theme_cache_version(),
             transient_message_fingerprint: session.transient_messages.fingerprint(),
             transient_message_version: session.transient_messages.version(),
@@ -820,7 +794,6 @@ impl<'a> SessionOutput<'a> {
     fn body_cache_key(
         session: &Session,
         output_area: Rect,
-        task_chain_graph: Option<&TaskChainGraph>,
         markdown_render_version: u64,
     ) -> SessionOutputBodyCacheKey {
         let inner_width =
@@ -839,23 +812,11 @@ impl<'a> SessionOutput<'a> {
                     .map(QueuedMessage::transcript_text),
             ),
             session_id: session.id.clone(),
-            task_chain_graph: Self::task_chain_graph_fingerprint(task_chain_graph),
             theme_cache_version: style::active_theme_cache_version(),
             transient_message_fingerprint: session.transient_messages.fingerprint(),
             transient_message_version: session.transient_messages.version(),
             transcript: TranscriptFingerprint::from_session(session),
         }
-    }
-
-    /// Returns a compact identity for the small live graph so cache keys
-    /// never retain or clone it.
-    fn task_chain_graph_fingerprint(graph: Option<&TaskChainGraph>) -> Option<u64> {
-        graph.map(|graph| {
-            let mut hasher = FxHasher::default();
-            graph.hash(&mut hasher);
-
-            hasher.finish()
-        })
     }
 
     /// Returns the staged-draft prompt identity when the draft preview reads
@@ -961,7 +922,6 @@ impl Component for SessionOutput<'_> {
                 active_prompt_output: self.active_prompt_output,
                 active_progress: self.active_progress,
                 session_update_version: self.session_update_version,
-                task_chain_graph: self.task_chain_graph,
             },
             self.markdown_render_cache,
             self.output_layout_cache,

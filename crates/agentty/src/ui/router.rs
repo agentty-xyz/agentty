@@ -24,7 +24,6 @@ use crate::presentation::chatgpt_sign_in::{
 use crate::presentation::frame_time::FrameTime;
 use crate::presentation::graph_chat::GraphChatSnapshot;
 use crate::presentation::setting::SettingsScreenSnapshot;
-use crate::presentation::task_chain_graph::TaskChainGraphCache;
 use crate::ui::component::confirmation_overlay::ConfirmationOverlay;
 use crate::ui::component::info_overlay::InfoOverlay;
 use crate::ui::component::project_catalog_overlay::ProjectCatalogOverlay;
@@ -171,7 +170,6 @@ struct SessionChatRenderContext<'a> {
     session_update_versions: &'a HashMap<SessionId, u64>,
     session_worktree_availability: &'a HashMap<SessionId, bool>,
     sessions: &'a [Session],
-    task_chain_graphs: &'a TaskChainGraphCache,
 }
 
 /// UI-owned immutable resources shared by every surface in one frame.
@@ -192,7 +190,6 @@ struct FrameResources<'a> {
     session_progress_messages: &'a HashMap<SessionId, String>,
     session_update_versions: &'a HashMap<SessionId, u64>,
     session_worktree_availability: &'a HashMap<SessionId, bool>,
-    task_chain_graphs: &'a TaskChainGraphCache,
 }
 
 impl<'a> FrameResources<'a> {
@@ -224,7 +221,6 @@ impl<'a> FrameResources<'a> {
             sessions,
             scroll_offset,
             frame_time: self.frame_time,
-            task_chain_graphs: self.task_chain_graphs,
         }
     }
 }
@@ -268,7 +264,6 @@ pub(crate) fn route_frame(f: &mut Frame, area: Rect, context: RenderContext<'_>)
         stats_activity,
         sessions,
         table_state,
-        task_chain_graphs,
         frame_time,
         is_tmux_session,
         ..
@@ -308,7 +303,6 @@ pub(crate) fn route_frame(f: &mut Frame, area: Rect, context: RenderContext<'_>)
         session_update_versions,
         session_worktree_availability,
         frame_time,
-        task_chain_graphs,
     };
 
     render_surface(f, area, surface_for_mode(mode), &mut shared, resources);
@@ -818,7 +812,6 @@ fn render_session_chat(f: &mut Frame, area: Rect, context: SessionChatRenderCont
         sessions,
         scroll_offset,
         frame_time,
-        task_chain_graphs,
     } = context;
 
     let Some(session_index) = sessions.iter().position(|session| session.id == session_id) else {
@@ -855,7 +848,6 @@ fn render_session_chat(f: &mut Frame, area: Rect, context: SessionChatRenderCont
         session_update_version,
         sessions,
         frame_time,
-        task_chain_graph: task_chain_graphs.graph(session_id),
     };
     let can_open_worktree = is_tmux_session
         && *session_worktree_availability

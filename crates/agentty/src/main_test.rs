@@ -60,7 +60,7 @@ fn cli_defaults_to_automatic_updates() {
     assert!(!cli.no_update);
     assert!(!cli.otlp_capture_content);
     assert!(!cli.experimental.harness);
-    assert!(!cli.experimental.multi_agent);
+    assert!(!cli.experimental.graph);
 }
 
 #[test]
@@ -83,22 +83,29 @@ fn cli_parses_no_update_flag() {
 }
 
 #[test]
-fn cli_parses_experimental_multi_agent_flag() {
-    // Arrange / Act
-    for args in [
-        vec!["agentty", "--experimental-multi-agent"],
-        vec![
-            "agentty",
-            "--experimental-multi-agent",
-            "--experimental-harness",
-        ],
-    ] {
+fn cli_parses_experimental_graph_flag() {
+    // Arrange
+    let flag_sets = [
+        vec!["agentty", "--experimental-graph"],
+        vec!["agentty", "--experimental-graph", "--experimental-harness"],
+    ];
+
+    for args in flag_sets {
         // Act
         let cli = Cli::try_parse_from(args).expect("experimental flags should parse together");
 
         // Assert
-        assert!(cli.experimental.multi_agent);
+        assert!(cli.experimental.graph);
     }
+}
+
+#[test]
+fn cli_rejects_retired_experimental_multi_agent_flag() {
+    // Arrange / Act
+    let result = Cli::try_parse_from(["agentty", "--experimental-multi-agent"]);
+
+    // Assert
+    assert!(result.is_err());
 }
 
 #[test]

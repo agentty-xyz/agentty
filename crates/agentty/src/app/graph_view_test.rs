@@ -18,7 +18,7 @@ async fn proposal_inspector_admits_no_actions_for_the_displayed_proposal() {
     // Arrange
     let (mut app, _directory) = new_test_app().await;
     crate::app::execution_graph::tests::seed_session(&mut app.sessions, app.services.db()).await;
-    app.experimental_multi_agent = true;
+    app.experimental_graph = true;
     let state = ag_session::test_support::graph_proposal_state("preview", "sess");
     app.services
         .db()
@@ -54,7 +54,7 @@ async fn proposal_inspector_admits_no_actions_for_the_displayed_proposal() {
 async fn inspector_selects_the_approved_graph_and_preserves_failed_proposal_reads() {
     // Arrange
     let (mut app, _directory) = new_test_app().await;
-    app.experimental_multi_agent = true;
+    app.experimental_graph = true;
     let mut view = graph_view();
     let mut state = ag_session::test_support::graph_proposal_state("preview", "sess");
     state.version.approval = Some(ag_session::GraphProposalApproval {

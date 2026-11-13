@@ -49,11 +49,10 @@ struct ExperimentalFeatures {
     /// `DASHSCOPE_API_KEY` with `DASHSCOPE_BASE_URL` is set.
     #[arg(long = "experimental-harness")]
     harness: bool,
-    /// Enables preview multi-agent planning: `/plan` runs the Planner →
-    /// Implementer conversation; `/graph` generates a graph for inspection
-    /// and exact-version approval before execution.
-    #[arg(long = "experimental-multi-agent")]
-    multi_agent: bool,
+    /// Enables preview execution graphs: `/graph` generates a graph for
+    /// inspection and exact-version approval before execution.
+    #[arg(long = "experimental-graph")]
+    graph: bool,
 }
 
 /// Runs the `agentty` application runtime using the configured workspace and
@@ -204,7 +203,7 @@ async fn run_application(
             let mut app = App::new(
                 !cli.no_update,
                 cli.experimental.harness,
-                cli.experimental.multi_agent,
+                cli.experimental.graph,
                 base_path,
                 working_dir,
                 git_branch,

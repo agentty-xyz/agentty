@@ -6,11 +6,7 @@ use async_trait::async_trait;
 
 use crate::error::SessionError;
 use crate::model::{ReviewRequest, Session, SessionId};
-use crate::{
-    AcceptTaskChainPlanRequest, AcceptTaskPlanRequest, ContinueTaskChainRequest, CreateTaskRequest,
-    ReplyToTaskChainRequest, StartPlanThenImplementRequest, SubmitTaskRequest, Task, TaskChain,
-    TaskChainReplyOutcome,
-};
+use crate::{AcceptTaskPlanRequest, CreateTaskRequest, SubmitTaskRequest, Task};
 
 /// Creation strategy for a new session.
 #[derive(Clone, Debug, Default, Eq, PartialEq)]
@@ -230,74 +226,6 @@ pub trait SessionBackend: Send + Sync {
         ))
     }
 
-    /// Saves and starts the static Planner → Implementer execution graph.
-    async fn start_plan_then_implement(
-        &self,
-        _session_id: &SessionId,
-        _request: StartPlanThenImplementRequest,
-    ) -> Result<(), SessionError> {
-        Err(SessionError::Operation(
-            "Host does not support task chains".to_string(),
-        ))
-    }
-
-    /// Reads a workflow snapshot without recovering or replaying work.
-    async fn get_task_chain(&self, _chain_id: &str) -> Result<Option<TaskChain>, SessionError> {
-        Err(SessionError::Operation(
-            "Host does not support task chains".to_string(),
-        ))
-    }
-
-    /// Lists a session's workflows in creation order.
-    async fn list_task_chains(
-        &self,
-        _session_id: &SessionId,
-    ) -> Result<Vec<TaskChain>, SessionError> {
-        Err(SessionError::Operation(
-            "Host does not support task chains".to_string(),
-        ))
-    }
-
-    /// Explicitly accepts an exact Planner version, releasing implementation.
-    async fn accept_task_chain_plan(
-        &self,
-        _chain_id: &str,
-        _request: AcceptTaskChainPlanRequest,
-    ) -> Result<(), SessionError> {
-        Err(SessionError::Operation(
-            "Host does not support task chains".to_string(),
-        ))
-    }
-
-    /// Explicitly continues the current stage with a new execution UUID.
-    async fn continue_task_chain(
-        &self,
-        _chain_id: &str,
-        _request: ContinueTaskChainRequest,
-    ) -> Result<(), SessionError> {
-        Err(SessionError::Operation(
-            "Host does not support task chains".to_string(),
-        ))
-    }
-
-    /// Cancels only the current stage's execution; the graph stays open.
-    async fn cancel_task_chain(&self, _chain_id: &str) -> Result<(), SessionError> {
-        Err(SessionError::Operation(
-            "Host does not support task chains".to_string(),
-        ))
-    }
-
-    /// Routes a natural-language reply to the session's latest workflow.
-    async fn reply_to_task_chain(
-        &self,
-        _session_id: &SessionId,
-        _request: ReplyToTaskChainRequest,
-    ) -> Result<TaskChainReplyOutcome, SessionError> {
-        Err(SessionError::Operation(
-            "Host does not support task chains".to_string(),
-        ))
-    }
-
     /// Persists an outcome without execution. Older hosts may omit support.
     async fn create_task(
         &self,
@@ -392,7 +320,7 @@ pub struct SessionService {
     backend: Arc<dyn SessionBackend>,
 }
 
-/// Explicit static-graph launch, separate from ordinary chat and `/plan`.
+/// Explicit static-graph launch, separate from ordinary chat.
 #[derive(Clone, Debug, Eq, PartialEq, serde::Deserialize, serde::Serialize)]
 pub struct StartExecutionGraphRequest {
     /// Validated immutable snapshot to save before admitting nodes.
@@ -570,102 +498,6 @@ impl SessionService {
         request: AcceptTaskPlanRequest,
     ) -> Result<(), SessionError> {
         self.backend.accept_agent_plan(session_id, request).await
-    }
-
-    /// Saves the Planner → accepted plan → Implementer execution graph with a
-    /// captured provider/model selection and starts its driver. Matching
-    /// launch redelivery is a receipt.
-    ///
-    /// # Errors
-    /// Returns an error for identity conflicts, ineligible sessions, or failed
-    /// admission.
-    pub async fn start_plan_then_implement(
-        &self,
-        session_id: &SessionId,
-        request: StartPlanThenImplementRequest,
-    ) -> Result<(), SessionError> {
-        self.backend
-            .start_plan_then_implement(session_id, request)
-            .await
-    }
-
-    /// Reads a durable workflow snapshot without dispatching work.
-    ///
-    /// # Errors
-    /// Returns an error when the host cannot read or decode the workflow.
-    pub async fn get_task_chain(&self, chain_id: &str) -> Result<Option<TaskChain>, SessionError> {
-        self.backend.get_task_chain(chain_id).await
-    }
-
-    /// Lists workflows owned by one session.
-    ///
-    /// # Errors
-    /// Returns an error when the host cannot read workflow snapshots.
-    pub async fn list_task_chains(
-        &self,
-        session_id: &SessionId,
-    ) -> Result<Vec<TaskChain>, SessionError> {
-        self.backend.list_task_chains(session_id).await
-    }
-
-    /// Accepts the exact latest validated plan. The graph executor then
-    /// admits the isolated Implementer with that version pinned as input.
-    ///
-    /// # Errors
-    /// Returns an error for stale/ineligible plans, conflicts, or failed
-    /// admission.
-    pub async fn accept_task_chain_plan(
-        &self,
-        chain_id: &str,
-        request: AcceptTaskChainPlanRequest,
-    ) -> Result<(), SessionError> {
-        self.backend.accept_task_chain_plan(chain_id, request).await
-    }
-
-    /// Explicitly revises, clarifies, or retries the current stage through a
-    /// graph continuation. `attempt_id` must be a new UUID.
-    ///
-    /// # Errors
-    /// Returns an error for unfinished or stale attempts, accepted plans,
-    /// conflicts, or failed admission.
-    pub async fn continue_task_chain(
-        &self,
-        chain_id: &str,
-        request: ContinueTaskChainRequest,
-    ) -> Result<(), SessionError> {
-        self.backend.continue_task_chain(chain_id, request).await
-    }
-
-    /// Requests cancellation of this workflow's current execution. The graph
-    /// stays open, so a later continuation may retry the canceled stage.
-    ///
-    /// # Errors
-    /// Returns an error when the workflow is missing or cancellation cannot
-    /// persist.
-    pub async fn cancel_task_chain(&self, chain_id: &str) -> Result<(), SessionError> {
-        self.backend.cancel_task_chain(chain_id).await
-    }
-
-    /// Records a user reply once and lets the host decide what it means.
-    ///
-    /// While a plan awaits acceptance, the host decides through a model run
-    /// whether the reply clearly approves the plan. Only clear approval with
-    /// no requested changes starts the Implementer; anything else, including
-    /// a failed or uncertain decision, revises the plan. In every other
-    /// settled phase the reply continues the current role. Redelivering the
-    /// same `reply_id` returns the original outcome.
-    ///
-    /// # Errors
-    /// Returns [`SessionError::TaskChainNotFound`] when the session owns no
-    /// workflow, [`SessionError::TaskChainBusy`] while an agent is working
-    /// or an earlier reply is being decided, and other errors for invalid
-    /// input, conflicts, or failed admission.
-    pub async fn reply_to_task_chain(
-        &self,
-        session_id: &SessionId,
-        request: ReplyToTaskChainRequest,
-    ) -> Result<TaskChainReplyOutcome, SessionError> {
-        self.backend.reply_to_task_chain(session_id, request).await
     }
 
     /// Creates an owned session capability backed by a shared host handle.

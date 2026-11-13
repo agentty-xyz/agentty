@@ -16,7 +16,6 @@ use crate::presentation::app_mode::{AppMode, HelpContext};
 use crate::presentation::frame_time::FrameTime;
 use crate::presentation::graph_chat::GraphChatSnapshot;
 use crate::presentation::setting::SettingsScreenSnapshot;
-use crate::presentation::task_chain_graph::TaskChainGraphCache;
 
 /// Focused-review display state for the visible session.
 pub(crate) struct SessionReviewView<'a> {
@@ -68,8 +67,6 @@ pub(crate) struct AppViewSnapshot<'a> {
     pub(crate) settings_screen: Option<SettingsScreenSnapshot>,
     pub(crate) stats_activity: &'a [DailyActivity],
     pub(crate) status_bar_fyi_rotation_index: u64,
-    /// Latest live task-chain graphs keyed by session.
-    pub(crate) task_chain_graphs: &'a TaskChainGraphCache,
     pub(crate) theme: ColorTheme,
     pub(crate) update_status: Option<&'a UpdateStatus>,
     pub(crate) working_dir: &'a Path,
@@ -130,7 +127,6 @@ impl App {
             settings_screen,
             stats_activity: sessions.stats_activity,
             status_bar_fyi_rotation_index,
-            task_chain_graphs: &self.task_chain_graphs,
             graph_chat: visible_session_id.and_then(|id| self.graph_chat.snapshot(id)),
             theme: self.settings.theme,
             update_status: self.update_status.as_ref(),

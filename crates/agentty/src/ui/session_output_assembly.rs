@@ -20,12 +20,11 @@ use crate::domain::session_message::{SessionMessage, SessionMessageKind, Session
 use crate::domain::transient_message::{
     TransientMessage, TransientMessageAnchor, TransientMessageBody, TransientMessageSlot,
 };
-use crate::presentation::task_chain_graph::TaskChainGraph;
 use crate::ui::component::session_output;
 use crate::ui::markdown::{self, render_markdown};
 use crate::ui::prompt_block::{self, USER_PROMPT_PREFIX, USER_PROMPT_RIGHT_GUTTER_WIDTH};
 use crate::ui::session_output_line::OutputLines;
-use crate::ui::{session_format, style, task_chain_format};
+use crate::ui::{session_format, style};
 
 const DRAFT_PREVIEW_HEADER: &str = "## Draft Session";
 
@@ -82,9 +81,6 @@ impl TranscriptRenderCache {
             .markdown_render_cache
             .map_or(0, markdown::MarkdownRenderCache::version)
             .hash(&mut hasher);
-        if message.kind == SessionMessageKind::AgentGraph {
-            input.task_chain_graph.hash(&mut hasher);
-        }
         let fingerprint = hasher.finish();
         if let Some(entry) = self.entries.borrow().get(&message.position)
             && entry.fingerprint == fingerprint
@@ -122,21 +118,15 @@ pub(crate) struct SessionOutputBody {
 }
 
 /// Assembles the stable transcript body without the dynamic status tail.
-///
-/// `task_chain_graph` is the session's latest live graph; execution-graph
-/// markers for that chain render its current state, and other markers render
-/// a neutral placeholder.
 pub(crate) fn output_body(
     session: &Session,
     inner_width: usize,
-    task_chain_graph: Option<&TaskChainGraph>,
     markdown_render_cache: Option<&markdown::MarkdownRenderCache>,
     message_cache: Option<Rc<TranscriptRenderCache>>,
 ) -> SessionOutputBody {
     let message_cache = message_cache.unwrap_or_default();
     message_cache.retain_transcript(session);
     let mut assembly = output_assembly(session, inner_width, None, markdown_render_cache);
-    assembly.task_chain_graph = task_chain_graph;
     assembly.message_cache = Some(&message_cache);
 
     assembly.into_output_body(Rc::clone(&message_cache))
@@ -238,7 +228,6 @@ struct SessionOutputAssembly<'a> {
     queued_line_indices: Vec<usize>,
     session: &'a Session,
     status: Status,
-    task_chain_graph: Option<&'a TaskChainGraph>,
     trailing_notice_section: SessionOutputTranscriptSection<'a>,
     transient_loader_line_index: Option<usize>,
 }
@@ -293,7 +282,6 @@ impl<'assembly> SessionOutputAssembly<'assembly> {
             inner_width: self.inner_width,
             markdown_render_cache: self.markdown_render_cache,
             message_cache: self.message_cache,
-            task_chain_graph: self.task_chain_graph,
         }
     }
 
@@ -376,7 +364,6 @@ fn output_assembly<'assembly>(
         queued_line_indices: Vec::new(),
         session,
         status,
-        task_chain_graph: None,
         transient_loader_line_index: None,
         trailing_notice_section: transcript_sections.trailing_notice,
     }
@@ -676,7 +663,6 @@ struct TranscriptRenderInput<'a> {
     inner_width: usize,
     markdown_render_cache: Option<&'a markdown::MarkdownRenderCache>,
     message_cache: Option<&'a TranscriptRenderCache>,
-    task_chain_graph: Option<&'a TaskChainGraph>,
 }
 
 fn append_transcript_section(
@@ -726,7 +712,6 @@ fn append_transcript_message(
     let TranscriptRenderInput {
         inner_width,
         markdown_render_cache,
-        task_chain_graph,
         ..
     } = input;
     match message.kind {
@@ -741,47 +726,10 @@ fn append_transcript_message(
                 inner_width,
             ));
         }
-        SessionMessageKind::AgentAnswer => {
-            append_agent_answer(lines, message, inner_width, markdown_render_cache);
-        }
-        SessionMessageKind::AgentGraph => {
-            let graph = task_chain_graph
-                .filter(|graph| message.agent_graph_chain_id() == Some(graph.chain_id.as_str()));
-            append_block_separator(lines, SessionOutputSeparator::AfterPreviousContent);
-            lines.extend(task_chain_format::graph_card_lines(graph, inner_width));
-        }
         SessionMessageKind::AssistantAnswer | SessionMessageKind::WorkflowNotice => {
             append_markdown_lines(lines, &message.content, inner_width, markdown_render_cache);
         }
     }
-}
-
-/// Renders a role header followed by the answer as ordinary assistant
-/// Markdown. Undecodable content falls back to plain Markdown so no stored
-/// text is hidden.
-fn append_agent_answer(
-    lines: &mut OutputLines,
-    message: &SessionMessage,
-    inner_width: usize,
-    markdown_render_cache: Option<&markdown::MarkdownRenderCache>,
-) {
-    let Some(answer) = message.agent_answer() else {
-        append_markdown_lines(lines, &message.content, inner_width, markdown_render_cache);
-
-        return;
-    };
-    append_block_separator(lines, SessionOutputSeparator::AfterPreviousContent);
-    lines.push(task_chain_format::agent_answer_header_line(
-        answer.agent,
-        inner_width,
-    ));
-    let rendered_lines = rendered_markdown_lines(&answer.text, inner_width, markdown_render_cache);
-    lines.extend(
-        visible_rendered_lines(&rendered_lines)
-            .into_iter()
-            .flatten()
-            .cloned(),
-    );
 }
 
 fn append_queued_entries(

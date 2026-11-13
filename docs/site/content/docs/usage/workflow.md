@@ -14,66 +14,18 @@ Programmatic integrations can also track desired outcomes and explicit attempts 
 the [Task API](@/docs/core-components/durable-components/task.md). Tasks use existing
 session workers and do not automatically complete sessions.
 
-## Plan Then Implement
-
-Start Agentty with `--experimental-multi-agent` to enable `/plan`. Without this flag,
-`/plan` is unavailable in session chat.
-
-`/plan` turns the regular session chat into a conversation with an orchestrator that
-runs a fixed graph: a read-only **Planner**, then an **Implementer** that receives the
-accepted plan. Select `/plan` in a new **Regular** session, or in an idle session whose
-workspace is prepared, then describe the task in the composer, titled **Plan · describe
-the task for the Planner**. `/plan <task>` does the same in one line. `Esc` disarms the
-composer and keeps your text. Paste images into the initial task or any later reply with
-the [image paste shortcuts](@/docs/usage/workflow.md#usage-prompt-extras).
-
-When you enable `/plan` during a session, the Planner receives the earlier conversation
-as context, so you can refer to recommendations or decisions already discussed.
-
-Once a session owns a plan workflow, every message you send goes to the orchestrator,
-and `/plan` is no longer offered. The chat shows your messages, each answer under a
-**Planner** or **Implementer** header, and a live execution graph with each role's
-status: Waiting, Working, Needs your input, Awaiting your approval, Done, Failed, or
-Canceled. The composer title names the active role and its status, and its placeholder
-says what to send next.
-
-- **Questions**: answer the Planner in the composer.
-- **Revision**: reply with feedback; the Planner returns a new plan version.
-- **Approval**: approve in your own words, such as "looks good, start implementing". A
-  model decides whether the reply approves the plan as written. Anything that is not a
-  clear approval without changes, including a failed decision, goes back to the Planner
-  as a revision. Replies with images also revise the plan; approve it with a separate
-  text reply after the Planner has considered the images.
-- **After implementation**: follow-up messages, `/apply`, and automatic review
-  remediation go to the Implementer as its current instruction. Describe the fix in the
-  regular composer; the accepted plan and earlier implementation remain context. The
-  Planner is not used again.
-
-While a role is working or a reply is being decided, a new message is rejected rather
-than queued; Agentty keeps the draft in the composer and explains why. Press `Ctrl+C` in
-session view to cancel the running role or pending approval decision. After a
-cancellation or failure, your next message retries the current role with that message as
-guidance. An implementation retry keeps its accepted plan. Both roles share the
-session's worktree. Review and merge the resulting changes through the ordinary session
-actions.
-
-The changed-line totals refresh when the Implementer returns its answer. Press `d` to
-inspect those changes while automatic commit and publishing finish. The totals refresh
-again after post-processing completes.
-
-When the **Implementer** finishes without questions, the session starts the same
-[focused review](@/docs/usage/workflow.md#focused-review) as after an ordinary turn.
-Planner results, questions, and failed or canceled work do not start a review.
-
 ## Generated Graph Proposals
 
-With `--experimental-multi-agent`, select `/graph` in a prepared idle session, then
-describe the task and press `Enter`. `Esc` disarms the composer and keeps your draft.
-`/graph` only selects the mode; it has no subcommands. Conversation and clarification
-questions stay in the left chat pane; other proposal results appear there as one short
-line. The right pane uses at most 35% of the width for proposal status and the graph,
-drawn like the `/plan` card: each node with its status, and `│` / `▼` connectors from
-its dependencies. It indicates when input is needed without repeating the discussion. It
+Start Agentty with `--experimental-graph` to enable `/graph`. Without this flag,
+`/graph` is unavailable in session chat.
+
+Select `/graph` in a prepared idle session, then describe the task and press `Enter`.
+`Esc` disarms the composer and keeps your draft. `/graph` only selects the mode; it has
+no subcommands. Conversation and clarification questions stay in the left chat pane;
+other proposal results appear there as one short line. The right pane uses at most 35%
+of the width for proposal status and the graph: each node with its status (Waiting,
+Working, Needs your input, Done, Failed, or Canceled), and `│` / `▼` connectors from its
+dependencies. It indicates when input is needed without repeating the discussion. It
 updates automatically and restores saved proposals when you reopen the session. When the
 graph exceeds the pane height, a compact summary of one row per node, without
 connectors, prioritizes nodes needing input, failed or blocked nodes, and active work.
@@ -83,7 +35,7 @@ Generation reads the workspace through the utility worker; no proposed node exec
 yet. The sidebar restores the latest proposal after a restart.
 
 While a proposal is pending, reply in chat to act on it. The session model reads your
-reply and decides what it means, as with `/plan`:
+reply and decides what it means:
 
 - Clear approval, such as "run it", approves the displayed version and starts execution.
 - A clear request to discard, such as "cancel", cancels the proposal.
@@ -391,8 +343,7 @@ Press `F` in a root **Review** or **AgentReview** session to confirm a fork. It 
 a new worktree from the source commit and a copy of the saved conversation. Uncommitted
 changes are not copied. Publishing, review state, usage, and timing start independently.
 Change counts are recalculated from the new worktree against the source session's base
-branch as soon as workspace setup finishes, including when continuing with `/plan`.
-Stacked children cannot be forked.
+branch as soon as workspace setup finishes. Stacked children cannot be forked.
 
 ### Commit and Merge Behavior
 
@@ -654,10 +605,11 @@ selected style, including `Balanced`. On narrow terminals, the header preserves 
 totals, and the prompt keeps the style and permission indicators visible by shortening
 less important fields.
 
-The `/plan` workflow uses bundled `planner` and `implementer` definitions. To override
-their instructions, add `.agents/agents/planner/agent.md` or
-`.agents/agents/implementer/agent.md` in the repository. The catalog also loads other
-repository definitions for workflows to resolve. Global definitions are not loaded.
+Agentty bundles `planner` and `implementer` agent definitions. Generated graph proposals
+and the Task API choose agents from this catalog. To override a bundled definition, add
+`.agents/agents/planner/agent.md` or `.agents/agents/implementer/agent.md` in the
+repository. The catalog also loads other repository definitions from
+`.agents/agents/<id>/agent.md`. Global definitions are not loaded.
 
 Definitions use simple `key: value` frontmatter followed by Markdown instructions:
 
@@ -681,15 +633,12 @@ accepted). Other model overrides, tool lists, hooks, MCP configuration, and
 Claude-specific execution fields are unsupported and produce a diagnostic. Claude's YAML
 subagent format requires conversion to this supported subset.
 
-The plan-and-implement workflow resolves `planner` and `implementer` when it starts and
-retains both definitions across revisions, acceptance, and retries. Overriding their
-instructions does not remove planning's read-only restriction or implementation's
-accepted-plan requirement.
+Graph proposals capture the definitions they use, so later edits affect only new
+proposals.
 
 <a id="usage-title-refinement"></a> Agentty refines session titles from the overall goal
-using the Fast model, including `/plan` sessions from your original task message. Draft
-titles update as messages are staged; committed work uses the commit title. Failed
-refinement leaves the provisional title in place.
+using the Fast model. Draft titles update as messages are staged; committed work uses
+the commit title. Failed refinement leaves the provisional title in place.
 
 ## Settings Scope
 
@@ -867,8 +816,8 @@ installed version.
 `SessionService` can query graph progress, cancel a graph, answer a node's questions,
 retry failed work, or explicitly resume dispatch after restart. Cancellation is terminal
 for that graph. Resume does not retry previous attempts, and repeated live launches do
-not refill shared budgets. These controls are currently programmatic; `/plan` retains
-its existing workflow. See [Execution Graphs](@/docs/architecture/execution-graphs.md).
+not refill shared budgets. See
+[Execution Graphs](@/docs/architecture/execution-graphs.md).
 
 ## Data Location
 

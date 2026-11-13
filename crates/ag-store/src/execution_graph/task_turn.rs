@@ -1,7 +1,7 @@
 use ag_protocol::{AgentResponse, ProtocolRequestProfile, parse_protocol_response_strict};
 use ag_session::{
-    AgentAnswerContent, ExecutionGraph, GraphExecutionRef, SessionMessageKind, TaskChain,
-    node_question_notice, stored_message_content,
+    ExecutionGraph, GraphExecutionRef, SessionMessageKind, node_question_notice,
+    stored_message_content,
 };
 use ag_worker::GraphDispatch;
 
@@ -95,12 +95,12 @@ impl SqliteGraphRepository {
         Ok(true)
     }
 
-    /// Appends the response's visible chat message in the turn transaction.
+    /// Appends the response's chat question in the turn transaction.
     ///
-    /// Task-chain role answers and generic node questions join the session
-    /// transcript with their response receipt; other graph conversation
-    /// answers stay task-only. Returns the id of an appended node question,
-    /// which orders pending questions for chat reply routing.
+    /// Node questions join the session transcript with their response
+    /// receipt; graph conversation answers stay task-only. Returns the id of
+    /// an appended node question, which orders pending questions for chat
+    /// reply routing.
     async fn append_visible_turn_message(
         transaction: &mut sqlx::Transaction<'_, sqlx::Sqlite>,
         graph: &ExecutionGraph,
@@ -108,32 +108,19 @@ impl SqliteGraphRepository {
         response: &AgentResponse,
         now: i64,
     ) -> Result<Option<i64>, DbError> {
-        let (kind, message) = match TaskChain::role(&graph.id, &dispatch.node) {
-            Some(agent) => {
-                let text = response.to_display_text();
-                let answer =
-                    (!text.trim().is_empty()).then(|| AgentAnswerContent { agent, text }.encode());
-
-                (SessionMessageKind::AgentAnswer, answer)
-            }
-            None => (
-                SessionMessageKind::WorkflowNotice,
-                node_question_notice(&dispatch.node.id, response),
-            ),
-        };
-        let Some(message) = message else {
+        let Some(message) = node_question_notice(&dispatch.node.id, response) else {
             return Ok(None);
         };
+        let kind = SessionMessageKind::WorkflowNotice;
         let content = stored_message_content(kind, &message);
-        let message_id = SessionMessageStore::append_normalized_in_transaction(
+
+        SessionMessageStore::append_normalized_in_transaction(
             transaction,
             graph.session_id.as_str(),
             kind,
             &content,
             now,
         )
-        .await?;
-
-        Ok(message_id.filter(|_| kind == SessionMessageKind::WorkflowNotice))
+        .await
     }
 }

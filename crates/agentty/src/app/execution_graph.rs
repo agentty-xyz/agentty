@@ -356,32 +356,6 @@ impl App {
         admitted_tx: tokio::sync::oneshot::Sender<()>,
         response_tx: tokio::sync::oneshot::Sender<Result<String, OneShotError>>,
     ) {
-        if let ag_session::GraphExecutionRef::TaskAttempt { attempt_id, .. } =
-            &request.dispatch.record.execution
-            && ag_session::TaskChain::role(
-                &request.dispatch.record.graph_id,
-                &request.dispatch.node,
-            )
-            .is_some()
-        {
-            let ag_session::EnvId::SessionWorktree(session_id) = &request.dispatch.node.env_id;
-            // Chat admission already resets user-initiated cycles. A graph
-            // handoff may arrive later, after generated remediation restored
-            // its existing cycle, so retain that counter across suppression.
-            let iterations = self.auto_address_review_iterations.get(session_id).copied();
-            if let Err(error) = self
-                .suppress_agent_task_automation(session_id, attempt_id)
-                .await
-            {
-                let _ = response_tx.send(Err(OneShotError::new(error.to_string())));
-                let _ = admitted_tx.send(());
-                return;
-            }
-            if let Some(iterations) = iterations {
-                self.auto_address_review_iterations
-                    .insert(session_id.clone(), iterations);
-            }
-        }
         self.sessions
             .enqueue_claimed_graph_task(&self.services, request, cancellation, response_tx)
             .await;
@@ -425,6 +399,9 @@ impl App {
 
 impl AppServices {
     /// Wakes resource-blocked graphs after a detached utility settles.
+    ///
+    /// Active session utilities hold `agent_run` rows that block graph Env
+    /// claims, so their completion must wake drivers like a released lease.
     pub(super) fn graph_waking_run_client(
         &self,
         client: Arc<dyn ag_worker::RunClient>,

@@ -1,7 +1,6 @@
 use std::rc::Rc;
 use std::sync::Arc;
 
-use ag_session::{AgentAnswerContent, TaskAgentRole};
 use ratatui::text::Line;
 
 use super::{
@@ -17,10 +16,6 @@ use crate::domain::transient_message::{
     TransientMessageSlot,
 };
 use crate::domain::turn_prompt::TurnPrompt;
-use crate::presentation::task_chain_graph::{
-    ACCEPTED_PLAN_EDGE_LABEL, TaskChainGraph, TaskChainGraphEdge, TaskChainGraphNode,
-    TaskChainNodeStatus,
-};
 use crate::ui::session_output_line::OutputLines;
 use crate::ui::{markdown, style};
 
@@ -35,8 +30,6 @@ fn test_cached_messages_preserve_spacing_for_empty_and_visible_content() {
         SessionMessageKind::UserPrompt,
         SessionMessageKind::AgentPrompt,
         SessionMessageKind::AssistantAnswer,
-        SessionMessageKind::AgentAnswer,
-        SessionMessageKind::AgentGraph,
         SessionMessageKind::ActivitySummary,
         SessionMessageKind::WorkflowNotice,
     ] {
@@ -50,7 +43,7 @@ fn test_cached_messages_preserve_spacing_for_empty_and_visible_content() {
             // Act
             let uncached =
                 output_assembly(&session, 80, None, None).into_output_body(Rc::default());
-            let cached = output_body(&session, 80, None, None, None);
+            let cached = output_body(&session, 80, None, None);
 
             // Assert
             assert_eq!(
@@ -77,7 +70,7 @@ fn test_message_segments_survive_updates_and_prune_removed_history() {
         .collect::<Vec<_>>();
     session.transcript = Some(SessionTranscript::new(messages.clone()));
     let markdown = markdown::MarkdownRenderCache::default();
-    let first = output_body(&session, 80, None, Some(&markdown), None);
+    let first = output_body(&session, 80, Some(&markdown), None);
     let initial_lines = Arc::clone(&first.message_cache.entries.borrow()[&0].lines);
 
     // Act
@@ -90,7 +83,6 @@ fn test_message_segments_survive_updates_and_prune_removed_history() {
     let appended = output_body(
         &session,
         80,
-        None,
         Some(&markdown),
         Some(Rc::clone(&first.message_cache)),
     );
@@ -114,7 +106,6 @@ fn test_message_segments_survive_updates_and_prune_removed_history() {
     let edited = output_body(
         &session,
         80,
-        None,
         Some(&markdown),
         Some(Rc::clone(&appended.message_cache)),
     );
@@ -142,7 +133,6 @@ fn test_message_segments_survive_updates_and_prune_removed_history() {
     let invalidated = output_body(
         &session,
         80,
-        None,
         Some(&markdown),
         Some(Rc::clone(&edited.message_cache)),
     );
@@ -158,7 +148,6 @@ fn test_message_segments_survive_updates_and_prune_removed_history() {
     let resized = output_body(
         &session,
         6,
-        None,
         Some(&markdown),
         Some(Rc::clone(&invalidated.message_cache)),
     );
@@ -175,7 +164,6 @@ fn test_message_segments_survive_updates_and_prune_removed_history() {
     let cleared = output_body(
         &session,
         80,
-        None,
         Some(&markdown),
         Some(Rc::clone(&invalidated.message_cache)),
     );
@@ -497,52 +485,6 @@ fn test_output_lines_places_queued_messages_after_active_turn() {
     assert!(active_prompt_index < queued_reply_index);
 }
 
-#[test]
-fn test_task_chain_rows_render_role_headers_and_live_graph_card() {
-    // Arrange
-    let chain_id = " chain \n";
-    let mut session = crate::test_support::SessionFixtureBuilder::new()
-        .status(Status::Review)
-        .build();
-    let answer = AgentAnswerContent {
-        agent: TaskAgentRole::Planner,
-        text: "**Plan** v1".to_string(),
-    };
-    session.transcript = Some(SessionTranscript::new(vec![
-        SessionMessage::conversation(0, SessionMessageKind::UserPrompt, "Add search"),
-        SessionMessage::new(1, SessionMessageKind::AgentGraph, chain_id),
-        SessionMessage::new(2, SessionMessageKind::AgentAnswer, answer.encode()),
-        SessionMessage::new(3, SessionMessageKind::AgentAnswer, "legacy answer"),
-    ]));
-    let live_graph = task_chain_graph(chain_id);
-    let other_graph = task_chain_graph("other-chain");
-
-    // Act
-    let live = body_texts(&output_body(&session, 60, Some(&live_graph), None, None).lines);
-    let other = body_texts(&output_body(&session, 60, Some(&other_graph), None, None).lines);
-    let loading = body_texts(&output_body(&session, 60, None, None, None).lines);
-
-    // Assert
-    let graph_start = live
-        .iter()
-        .position(|line| line == "⬡ Execution graph")
-        .expect("graph card");
-    assert_eq!(
-        live[graph_start + 1],
-        "  Planner      ● Awaiting your approval"
-    );
-    assert_eq!(live[graph_start + 4], "  Implementer  ○ Waiting");
-    let header = live
-        .iter()
-        .position(|line| line == "◆ Planner")
-        .expect("role header");
-    assert_eq!(live[header - 1], "");
-    assert_eq!(live[header + 1], "Plan v1");
-    assert!(live.iter().any(|line| line == "legacy answer"));
-    assert!(other.iter().any(|line| line == "  Loading status…"));
-    assert_eq!(other, loading);
-}
-
 /// Fully assembled session-output lines plus metadata derived during assembly.
 pub(crate) struct SessionOutputLines {
     pub(crate) active_loader_line_index: Option<usize>,
@@ -575,27 +517,6 @@ pub(crate) fn transcript_section_texts(
 }
 fn body_texts(lines: &OutputLines) -> Vec<String> {
     lines.iter().map(ToString::to_string).collect()
-}
-
-/// Builds a Planner-awaiting-approval graph for one chain identity.
-pub(crate) fn task_chain_graph(chain_id: &str) -> TaskChainGraph {
-    TaskChainGraph {
-        chain_id: chain_id.to_string(),
-        edges: vec![TaskChainGraphEdge {
-            is_satisfied: false,
-            label: ACCEPTED_PLAN_EDGE_LABEL,
-        }],
-        nodes: vec![
-            TaskChainGraphNode {
-                agent: TaskAgentRole::Planner,
-                status: TaskChainNodeStatus::AwaitingApproval,
-            },
-            TaskChainGraphNode {
-                agent: TaskAgentRole::Implementer,
-                status: TaskChainNodeStatus::Waiting,
-            },
-        ],
-    }
 }
 
 fn section_display_text(section: &SessionOutputTranscriptSection<'_>) -> String {
