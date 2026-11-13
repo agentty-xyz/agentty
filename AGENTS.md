@@ -38,8 +38,10 @@ Worker → Agent Runtime → Harness → LLM**, including background and utility
 applies to every harness. Application workflows must not invoke harnesses or model APIs
 directly, including for retries or nested calls.
 
-Follow `docs/site/content/docs/core-components/execution.md` for the execution contract
-and `crates/agentty/src/app/AGENTS.md` for workflow integration rules.
+Follow
+`docs/site/content/docs/core-components/execution-components/execution-boundary.md` for
+the execution contract and `crates/agentty/src/app/AGENTS.md` for workflow integration
+rules.
 
 ## Non-Negotiable Gates
 

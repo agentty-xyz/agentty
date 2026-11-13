@@ -62,7 +62,7 @@ Blocked or existing admissions return unused reservations. If no call is availab
 node remains unclaimed until a later call supplies a fresh budget. The first provider
 attempt redeems its reservation; retries charge the shared counter. Hosts must reject
 unsupported requirements and continue submitting all model work through
-[workers and runtime](@/docs/core-components/execution.md).
+[workers and runtime](@/docs/core-components/execution-components/execution-boundary.md).
 
 ## Gates and Exact Handoffs
 

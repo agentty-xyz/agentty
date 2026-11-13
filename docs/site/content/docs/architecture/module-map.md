@@ -109,4 +109,5 @@ utilities through `RunClient`. Only `ag-worker` depends on `ag-runtime`; only
 execution contracts live in `ag-contracts`. The worker owns runtime lifecycle and
 cancellation; applications configure workers rather than construct adapters.
 
-See [Execution](@/docs/core-components/execution.md) for the execution contract.
+See [Execution](@/docs/core-components/execution-components/execution-boundary.md) for
+the execution contract.

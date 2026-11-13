@@ -9,33 +9,34 @@ A Session holds the conversation and workspace context for work within a
 includes execution preferences, lifecycle progress, and its relationship to the working
 branch and workspace.
 
-## Execution Environment
+## Connections
 
-`EnvId::SessionWorktree` identifies the local workspace owned by a session using its
-full persisted session ID. `Session::env_id()` and `Task::env_id()` expose the same
-identity for every task in that session. Existing session ownership supplies this
-binding without a separate environment record or migration.
+```mermaid
+flowchart LR
+  P[Project] -->|groups| S[Session]
+  S -->|history| M[Message]
+  S -->|workflow actions| O[Operation]
+  S -->|desired outcomes| T[Task]
+  S -->|graphs| G[Execution Graph]
+  S -->|workspace identity| E[Env]
+  S -->|one serial queue| W[Run Worker]
+```
 
-The Env is shared among the session's tasks, while remaining isolated from the main
-repository checkout. The host resolves a `ResolvedEnv` with the validated branch,
-working directory, and protected main checkout before a turn executes. Bare repositories
-have no main checkout to protect. Identity alone does not mean a workspace is ready:
-draft setup, missing-directory failures, and isolation checks retain their existing
-behavior.
+## Ownership
 
-The session owns provisioning, branch operations, and cleanup. Task completion does not
-remove the workspace; attempts remain serialized through the session worker. The
-session's existing project and base-branch metadata remain authoritative; resolution
-does not freeze a new base revision or move a branch. Env does not select an agent,
-create a separate conversation, or grant permissions. Per-task worktree provisioning and
-remote execution are not implemented.
+A session owns its [messages](@/docs/core-components/durable-components/message.md),
+[operations](@/docs/core-components/durable-components/operation.md),
+[tasks](@/docs/core-components/durable-components/task.md), and
+[execution graphs](@/docs/core-components/durable-components/execution-graph.md);
+deleting the session deletes them. It also owns the
+[Env](@/docs/core-components/durable-components/env.md) its turns execute in, including
+provisioning, branch operations, and cleanup.
 
 ## Continuity
 
-[Messages](@/docs/core-components/durable-components/message.md) preserve the session's
-history, while [operations](@/docs/core-components/durable-components/operation.md)
-track workflow execution. A session can span many turns and operations; it is not a
-single execution attempt.
+Messages preserve the session's history, while operations track workflow execution. A
+session can span many turns and operations; it is not a single execution attempt.
 
 Saved context remains available after restart. Interrupted execution is reconciled by
-the [worker](@/docs/core-components/execution.md), rather than automatically repeated.
+the [worker](@/docs/core-components/execution-components/run-worker.md), rather than
+automatically repeated.

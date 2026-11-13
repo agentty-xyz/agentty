@@ -22,7 +22,8 @@ coordination; source module documentation holds implementation details.
 ## Workspace Map
 
 See [Module Map](@/docs/architecture/module-map.md) for crate and layer ownership, and
-[Execution](@/docs/core-components/execution.md) for the model execution contract.
+[Execution](@/docs/core-components/execution-components/execution-boundary.md) for the
+model execution contract.
 
 ## Main Runtime Flow
 
@@ -50,8 +51,8 @@ operations that began executing are not automatically replayed.
 Before each turn, the host resolves the session's shared local Env after earlier branch
 effects finish. Existing isolation checks validate the worktree and protect the main
 checkout; the resolved folder and main-checkout boundary supply the worker request. The
-[session](@/docs/core-components/durable-components/session.md#execution-environment)
-owns the Env throughout setup and cleanup, including when it has multiple tasks.
+session owns the [Env](@/docs/core-components/durable-components/env.md) throughout
+setup and cleanup, including when it has multiple tasks.
 
 Question answers likewise claim the persisted question set before enqueueing a
 continuation. A rejected enqueue restores the claim. Cancellation coordinates setup and
@@ -132,8 +133,8 @@ successful Implementer attempt without questions emits `ImplementerAttemptSuccee
 The reducer releases suppression only when that attempt still owns it, then follows the
 ordinary completed-turn review path. Other task completions and stale events start no
 automatic review; explicit review and later ordinary turns retain their existing
-behavior. See [Execution](@/docs/core-components/execution.md) for context ownership and
-cleanup.
+behavior. See [Run Worker](@/docs/core-components/execution-components/run-worker.md)
+for context ownership and cleanup.
 
 Application shutdown closes every session worker's admission and waits for active
 effects, queued-work cancellation, and runtime cleanup within the shared five-second
@@ -242,9 +243,9 @@ background, so process-table I/O cannot block terminal input.
 <a id="architecture-runtime-flow-turn"></a> `ag-session::SessionService` provides the
 frontend-neutral lifecycle API. Agentty's bounded session-runtime mailbox executes its
 requests against the foreground session manager without sharing `App` behind a mutex.
-The [Command Gateway](@/docs/core-components/command-gateway.md) routes terminal and
-programmatic mutations through shared foreground admission while preserving each
-workflow's queueing and acknowledgement contract. Delivery envelopes own response
+The [Command Gateway](@/docs/core-components/control-plane/command-gateway.md) routes
+terminal and programmatic mutations through shared foreground admission while preserving
+each workflow's queueing and acknowledgement contract. Delivery envelopes own response
 channels separately from application payloads and transfer deferred replies to workspace
 preparation or the publication worker. Ordinary messages pass through a pure planner
 before effects run: terminal composer intent controls staging and first starts, while
@@ -288,8 +289,8 @@ Workers resolve that policy for session turns and utilities before runtime dispa
 adapters preserve it across retries and repairs, reject unsupported explicit controls,
 and restart retained processes when their startup policy differs. Per-turn filesystem
 permissions remain independent. See
-[Execution Policy](@/docs/core-components/execution.md#execution-policy) for controls,
-defaults, and adapter support.
+[Execution Policy](@/docs/core-components/execution-components/run-worker.md#execution-policy)
+for controls, defaults, and adapter support.
 
 ```mermaid
 flowchart TD
@@ -576,7 +577,8 @@ one shared five-second grace period, then forces remaining runtime resources to 
 Pending turn telemetry is flushed after background work settles, within the same
 deadline. Unfinished records remain available for startup recovery.
 
-See [Execution](@/docs/core-components/execution.md) for the shared contract.
+See [Execution](@/docs/core-components/execution-components/execution-boundary.md) for
+the shared contract.
 
 ## Execution Traces
 

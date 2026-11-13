@@ -162,4 +162,5 @@ Background work must capture purpose and session/project ownership with
 `ag-worker::scoped_client`. Nested utilities retain parent cancellation and run directly
 under worker supervision, without enqueueing behind the session command awaiting them.
 
-See [Execution](@/docs/core-components/execution.md) for the execution contract.
+See [Execution](@/docs/core-components/execution-components/execution-boundary.md) for
+the execution contract.

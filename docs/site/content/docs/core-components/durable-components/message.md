@@ -7,6 +7,16 @@ weight = 1
 A Message is a saved entry in a session's history. Messages preserve conversation
 context across restarts and support the transcript shown to the user.
 
+## Connections
+
+```mermaid
+flowchart LR
+  S[Session] -->|owns ordered history| M[Message]
+  WF[Session workflows] -->|append| M
+  M -->|transcript| UI[Terminal]
+  M -->|conversation replay| T[Session turn]
+```
+
 ## Content and Visibility
 
 History includes conversation content, workflow feedback, and activity summaries. Some
@@ -15,7 +25,7 @@ and activity summaries remain separate from the conversation used for replay.
 
 ## Durability and Submission
 
-The [Command Gateway](@/docs/core-components/command-gateway.md) admits requests;
-messages record history. Input waiting in memory is not yet durable. Saved history
-survives restarts, but does not automatically resume interrupted
-[execution](@/docs/core-components/execution.md).
+The [Command Gateway](@/docs/core-components/control-plane/command-gateway.md) admits
+requests; messages record history. Input waiting in memory is not yet durable. Saved
+history survives restarts, but does not automatically resume interrupted
+[execution](@/docs/core-components/execution-components/execution-boundary.md).

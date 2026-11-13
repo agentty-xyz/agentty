@@ -245,7 +245,8 @@ nested calls, caller drop, and provider panics. Review tests control deadlines a
 request generations to verify partial retry, invalidation, and stale-result rejection. A
 cached successful call is reusable only for the same evidence and profile.
 
-See [Execution](@/docs/core-components/execution.md) for the mandatory worker path.
+See [Execution](@/docs/core-components/execution-components/execution-boundary.md) for
+the mandatory worker path.
 
 Graph repositories project progress from operation/run authorities and retain explicit
 continuation intent separately. In-memory storage tests cover gate reasons, competing
