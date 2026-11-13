@@ -57,6 +57,11 @@ rendering settings. Anything volatile in a captured frame — wall-clock timers,
 status-bar messages, temp paths — makes every run look stale and re-records the GIF for
 no reason.
 
+The hash covers only what each capture shows: cell text, colors, and style flags. Render
+history that leaves no visible trace — whether a blank cell was ever painted, or where
+the hidden cursor stopped — is ignored, so asynchronous updates that land in a different
+order still produce the same hash for the same screen.
+
 Temp paths are normalized during hashing. Time is the application's job: inject a fixed
 clock and pin time-derived UI to a constant.
 

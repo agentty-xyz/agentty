@@ -106,3 +106,9 @@ items (`testty::recipe`, `testty::snapshot::DEFAULT_UPDATE_ENV_VAR`,
 
   let demo = FeatureDemo::new("session_creation").redact(Redaction::hex_after("wt/", 8, "<hash>"));
   ```
+
+- `feature::compute_frame_hash` and `feature::compute_gif_hash` now hash each capture's
+  visible cells (text, colors, and style flags) instead of its raw formatted bytes, so
+  the same screen hashes alike regardless of render history. Their signatures are
+  unchanged, but every committed `.{name}.hash` sidecar reports stale once; regenerate
+  the GIFs and sidecars after upgrading.

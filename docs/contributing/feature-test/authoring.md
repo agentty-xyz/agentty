@@ -182,6 +182,9 @@ The hash only means "the UI moved" if the same UI hashes the same way every run 
 every machine, because sidecars are committed locally and checked on Linux CI. The
 harness already neutralizes the known variance:
 
+- testty hashes only visible cells — text, colors, and style flags — so asynchronous
+  updates that repaint in a different order still hash alike when the final screen
+  matches.
 - Temp paths are normalized by testty, and `BuilderEnv` keeps every painted directory
   under the test `HOME` so paths render home-collapsed (`~/test-project`,
   `~/.agentty/wt/<hash>`) with a platform-independent length.

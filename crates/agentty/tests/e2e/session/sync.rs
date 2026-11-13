@@ -309,8 +309,12 @@ async fn test_session_merge_conflict_alert() -> E2eResult {
 #[tokio::test]
 async fn test_session_rebase_pre_commit_hook_failure() -> E2eResult {
     // Arrange, Act, Assert
+    // The three repair attempts and the follow-up focused review exceed the
+    // default terminal height, so use a taller terminal to keep the sync error
+    // visible.
     FeatureTest::new("session_rebase_pre_commit_hook_failure")
         .with_git()
+        .with_terminal_size(120, 40)
         .setup(|env| Box::pin(async move { seed_rebase_pre_commit_hook_session(env, false).await }))
         .run(
             |scenario| {

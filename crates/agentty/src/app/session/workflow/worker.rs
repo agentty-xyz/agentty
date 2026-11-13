@@ -47,6 +47,8 @@ const RESTART_FAILURE_REASON: &str = "Interrupted by app restart";
 const CANCEL_BEFORE_EXECUTION_REASON: &str = "Session canceled before execution";
 const CREATE_REVIEW_REQUEST_OPERATION_KIND: &str = "create_review_request";
 const REBASE_OPERATION_KIND: &str = "rebase";
+/// Persisted status of an operation accepted by the worker but not started.
+const QUEUED_OPERATION_STATUS: &str = "queued";
 const SKIPPED_CREATE_REVIEW_REQUEST_REASON: &str =
     "Review-request creation was canceled or already finished before execution";
 
@@ -317,6 +319,23 @@ pub(super) fn has_unfinished_branch_operation(
                 operation.kind.as_str(),
                 CREATE_REVIEW_REQUEST_OPERATION_KIND | REBASE_OPERATION_KIND
             )
+    })
+}
+
+/// Returns whether the session has accepted, not-yet-started worker work,
+/// such as a queued review-comment reply, that will run after the current
+/// item and therefore owns the next automatic publish.
+///
+/// Cancel-requested rows are ignored because the worker skips them without
+/// running their post-turn effects.
+pub(super) fn has_queued_session_operation(
+    operations: &[SessionOperationRow],
+    session_id: &str,
+) -> bool {
+    operations.iter().any(|operation| {
+        operation.session_id == session_id
+            && operation.status == QUEUED_OPERATION_STATUS
+            && !operation.cancel_requested
     })
 }
 

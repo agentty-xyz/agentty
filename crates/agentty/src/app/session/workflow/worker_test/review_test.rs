@@ -16,7 +16,8 @@ use tokio_util::sync::CancellationToken;
 use super::super::super::post_turn::status_update_after_turn_result;
 use super::super::{
     CREATE_REVIEW_REQUEST_OPERATION_KIND, SKIPPED_CREATE_REVIEW_REQUEST_REASON, SessionCommand,
-    SessionWorkerContext, SessionWorkerService, TurnMetadata, has_unfinished_branch_operation,
+    SessionWorkerContext, SessionWorkerService, TurnMetadata, has_queued_session_operation,
+    has_unfinished_branch_operation,
 };
 use super::support::{
     apply_worker_turn_result, assert_later_push_skips_review_operations,
@@ -730,6 +731,37 @@ fn test_unfinished_branch_operation_includes_review_request_creation() {
     // Assert
     assert!(has_branch_operation);
     assert!(!other_session_has_branch_operation);
+}
+
+#[test]
+fn test_queued_session_operation_ignores_running_and_canceled_work() {
+    // Arrange
+    let operation =
+        |id: &str, session_id: &str, status: &str, cancel_requested: bool| SessionOperationRow {
+            cancel_requested,
+            finished_at: None,
+            heartbeat_at: None,
+            id: id.to_string(),
+            kind: "reply".to_string(),
+            last_error: None,
+            queued_at: 0,
+            session_id: session_id.to_string(),
+            started_at: None,
+            status: status.to_string(),
+        };
+    let operations = vec![
+        operation("op-current", "sess1", "running", false),
+        operation("op-canceled", "sess1", "queued", true),
+        operation("op-queued-reply", "sess2", "queued", false),
+    ];
+
+    // Act
+    let current_session_has_queued_work = has_queued_session_operation(&operations, "sess1");
+    let other_session_has_queued_work = has_queued_session_operation(&operations, "sess2");
+
+    // Assert
+    assert!(!current_session_has_queued_work);
+    assert!(other_session_has_queued_work);
 }
 
 #[tokio::test]
