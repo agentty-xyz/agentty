@@ -16,7 +16,7 @@ use crate::domain::agent::{
 };
 use crate::domain::permission::PermissionMode;
 use crate::domain::session::{SessionId, Status};
-use crate::domain::setting::SettingName;
+use crate::domain::session_message::SessionTranscript;
 use crate::domain::transient_message::{TransientMessageBody, TransientMessageSlot};
 use crate::domain::turn_prompt::{TurnPrompt, TurnPromptTextSource};
 use crate::presentation::app_mode::ReviewCommentSelection;
@@ -41,108 +41,57 @@ fn composer_modes_translate_to_application_message_intent() {
     }
 }
 
+/// Ensures `/fast` on a model without Fast support reports an error and
+/// leaves the session's model and speed unchanged.
 #[tokio::test]
-async fn speed_mode_stays_normal_when_compatibility_model_switch_fails() {
-    // Arrange
-    let (mut app, _base_dir, pool) = crate::test_support::new_git_test_app_with_pool().await;
-    let session_id = SessionId::from(
-        app.create_session()
+async fn fast_mode_on_unsupported_model_reports_error_and_keeps_model() {
+    for selection in [
+        AgentSelection::new(AgentKind::Claude, AgentModel::ClaudeHaiku55),
+        AgentSelection::new(AgentKind::Codex, AgentModel::Gpt53CodexSpark),
+    ] {
+        // Arrange
+        let (mut app, _base_dir) = crate::test_support::new_git_test_app().await;
+        let session_id = SessionId::from(
+            app.create_session()
+                .await
+                .expect("session should be created"),
+        );
+        app.set_session_model(&session_id, selection)
             .await
-            .expect("session should be created"),
-    );
-    app.set_session_model(
-        &session_id,
-        AgentSelection::new(AgentKind::Claude, AgentModel::ClaudeFable52),
-    )
-    .await
-    .expect("initial model should update");
-    sqlx::query(
-        "CREATE TRIGGER fail_fast_model_switch BEFORE UPDATE OF model ON session BEGIN SELECT \
-         RAISE(FAIL, 'forced model failure'); END",
-    )
-    .execute(&pool)
-    .await
-    .expect("failure trigger should be installed");
-    enable_tracing_log_fallback();
+            .expect("initial model should update");
 
-    // Act
-    app.update_prompt_session_speed_mode(&session_id, SpeedMode::Fast)
-        .await;
-    let persisted_speed_mode = app
-        .services
-        .db()
-        .sessions()
-        .load_session_speed_mode(&session_id)
-        .await
-        .expect("speed mode should load");
-
-    // Assert
-    assert_eq!(persisted_speed_mode, SpeedMode::Normal);
-    assert_eq!(
-        app.sessions
-            .session_for_id(&session_id)
-            .map(|session| (session.agent, session.speed_mode)),
-        Some((
-            AgentSelection::new(AgentKind::Claude, AgentModel::ClaudeFable52),
-            SpeedMode::Normal,
-        ))
-    );
-}
-
-#[tokio::test]
-async fn compatibility_model_switch_preserves_last_used_project_default() {
-    // Arrange
-    let (mut app, _base_dir, _pool) = crate::test_support::new_git_test_app_with_pool().await;
-    let project_id = app.active_project_id();
-    app.services
-        .db()
-        .settings()
-        .upsert_project_setting(project_id, SettingName::LastUsedModelAsDefault, "true")
-        .await
-        .expect("last-used setting should update");
-    let session_id = SessionId::from(
-        app.create_session()
+        // Act
+        app.update_prompt_session_speed_mode(&session_id, SpeedMode::Fast)
+            .await;
+        app.sessions.sync_from_handles();
+        let persisted_speed_mode = app
+            .services
+            .db()
+            .sessions()
+            .load_session_speed_mode(&session_id)
             .await
-            .expect("session should be created"),
-    );
-    let selected_agent = AgentSelection::new(AgentKind::Claude, AgentModel::ClaudeFable52);
-    app.set_session_model(&session_id, selected_agent)
-        .await
-        .expect("initial model should update");
-
-    // Act
-    app.update_prompt_session_speed_mode(&session_id, SpeedMode::Fast)
-        .await;
-    let default_agent = app
-        .services
-        .db()
-        .settings()
-        .get_project_setting(project_id, SettingName::DefaultSmartAgent)
-        .await
-        .expect("default agent should load");
-    let default_model = app
-        .services
-        .db()
-        .settings()
-        .get_project_setting(project_id, SettingName::DefaultSmartModel)
-        .await
-        .expect("default model should load");
-
-    // Assert
-    assert_eq!(default_agent.as_deref(), Some("claude"));
-    assert_eq!(
-        default_model.as_deref(),
-        Some(AgentModel::ClaudeFable52.as_str())
-    );
-    assert_eq!(
-        app.sessions
+            .expect("speed mode should load");
+        let session = app
+            .sessions
             .session_for_id(&session_id)
-            .map(|session| (session.agent, session.speed_mode)),
-        Some((
-            AgentSelection::new(AgentKind::Claude, AgentModel::ClaudeOpus55),
-            SpeedMode::Fast,
-        ))
-    );
+            .expect("session should exist");
+        let transcript = session
+            .transcript
+            .as_ref()
+            .and_then(SessionTranscript::replay_text)
+            .unwrap_or_default();
+
+        // Assert
+        assert_eq!(persisted_speed_mode, SpeedMode::Normal);
+        assert_eq!(
+            (session.agent, session.speed_mode),
+            (selection, SpeedMode::Normal)
+        );
+        assert!(transcript.contains(&format!(
+            "[Error] Fast mode is not supported by `{}`.",
+            selection.model().as_str()
+        )));
+    }
 }
 
 #[tokio::test]
@@ -393,31 +342,58 @@ async fn toggling_speed_mode_twice_while_busy_cancels_the_deferred_change() {
     assert!(transcript.contains("[Settings] Keeping normal responses."));
 }
 
+/// Ensures a deferred `/fast` on a model without Fast support reports an
+/// error and keeps the session's model and speed once its worker is idle.
 #[tokio::test]
-async fn deferred_fast_mode_switches_to_a_fast_compatible_model_when_idle() {
+async fn deferred_fast_mode_on_unsupported_model_reports_error_and_keeps_model() {
     // Arrange
-    let (mut app, _base_dir, session_id) = busy_session_app(AgentSelection::new(
-        AgentKind::Claude,
-        AgentModel::ClaudeFable52,
-    ))
-    .await;
+    let selection = AgentSelection::new(AgentKind::Claude, AgentModel::ClaudeFable52);
+    let (mut app, _base_dir, session_id) = busy_session_app(selection).await;
+
+    // Act
     app.update_prompt_session_speed_mode(&session_id, SpeedMode::Fast)
         .await;
+    let has_pending_settings = app.deferred_session_settings.contains_key(&session_id);
     set_session_status(&mut app, &session_id, Status::Question);
+    app.apply_deferred_session_settings().await;
+    app.process_pending_app_events().await;
+
+    // Assert
+    assert!(!has_pending_settings);
+    assert!(handle_transcript_text(&app, &session_id).contains(&format!(
+        "[Error] Fast mode is not supported by `{}`.",
+        selection.model().as_str()
+    )));
+    assert_eq!(
+        app.sessions
+            .session_for_id(&session_id)
+            .map(|session| (session.agent, session.speed_mode)),
+        Some((selection, SpeedMode::Normal))
+    );
+}
+
+/// Ensures a deferred `/fast` on a model with Fast support keeps the model and
+/// enables fast mode once its worker is idle.
+#[tokio::test]
+async fn deferred_fast_mode_on_supported_model_applies_when_idle() {
+    // Arrange
+    let selection = model_fixture::codex_selection();
+    let (mut app, _base_dir, session_id) = busy_session_app(selection).await;
+    app.update_prompt_session_speed_mode(&session_id, SpeedMode::Fast)
+        .await;
+    set_session_status(&mut app, &session_id, Status::Review);
 
     // Act
     app.apply_deferred_session_settings().await;
     app.process_pending_app_events().await;
 
     // Assert
+    assert!(app.deferred_session_settings.is_empty());
     assert_eq!(
         app.sessions
             .session_for_id(&session_id)
             .map(|session| (session.agent, session.speed_mode)),
-        Some((
-            AgentSelection::new(AgentKind::Claude, AgentModel::ClaudeOpus55),
-            SpeedMode::Fast,
-        ))
+        Some((selection, SpeedMode::Fast))
     );
 }
 
@@ -478,6 +454,7 @@ async fn speed_toggle_starts_from_the_speed_after_a_deferred_model_switch() {
             .await
             .expect("session should be created"),
     );
+    let selected_agent = AgentSelection::new(AgentKind::Claude, AgentModel::ClaudeFable52);
     app.set_session_model(
         &session_id,
         AgentSelection::new(AgentKind::Claude, AgentModel::ClaudeOpus55),
@@ -488,36 +465,31 @@ async fn speed_toggle_starts_from_the_speed_after_a_deferred_model_switch() {
         .await;
     set_session_status(&mut app, &session_id, Status::InProgress);
     // Switching to this model disables fast mode, so the toggle starts from
-    // normal responses rather than the current fast mode.
-    app.update_prompt_session_model(
-        &session_id,
-        AgentSelection::new(AgentKind::Claude, AgentModel::ClaudeFable52),
-    )
-    .await;
+    // normal responses and requests fast mode, which the model cannot run.
+    app.update_prompt_session_model(&session_id, selected_agent)
+        .await;
 
     // Act
     app.toggle_prompt_session_speed_mode(&session_id).await;
-    let pending_speed_mode = app
+    let pending_settings = app
         .deferred_session_settings
         .get(&session_id)
-        .and_then(|settings| settings.speed_mode);
+        .map(|settings| (settings.agent, settings.speed_mode));
     set_session_status(&mut app, &session_id, Status::Review);
     app.apply_deferred_session_settings().await;
     app.process_pending_app_events().await;
 
     // Assert
-    assert_eq!(pending_speed_mode, Some(SpeedMode::Fast));
-    assert!(handle_transcript_text(&app, &session_id).contains(
-        "[Settings] Switching to fast responses after the current turn and queued messages finish."
-    ));
+    assert_eq!(pending_settings, Some((Some(selected_agent), None)));
+    assert!(handle_transcript_text(&app, &session_id).contains(&format!(
+        "[Error] Fast mode is not supported by `{}`.",
+        selected_agent.model().as_str()
+    )));
     assert_eq!(
         app.sessions
             .session_for_id(&session_id)
             .map(|session| (session.agent, session.speed_mode)),
-        Some((
-            AgentSelection::new(AgentKind::Claude, AgentModel::ClaudeOpus55),
-            SpeedMode::Fast,
-        ))
+        Some((selected_agent, SpeedMode::Normal))
     );
 }
 
@@ -542,7 +514,7 @@ async fn deferred_fast_mode_is_refused_for_a_pending_model_without_speed_control
     // Assert
     assert_eq!(pending_settings, Some((Some(selected_agent), None)));
     assert!(handle_transcript_text(&app, &session_id).contains(&format!(
-        "[Settings] Keeping normal responses because `{}` has no fast mode.",
+        "[Error] Fast mode is not supported by `{}`.",
         selected_agent.model().as_str()
     )));
     assert_eq!(

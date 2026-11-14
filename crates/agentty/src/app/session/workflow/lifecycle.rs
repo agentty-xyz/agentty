@@ -1994,8 +1994,68 @@ impl SessionManager {
         session_id: &str,
         session_agent: AgentSelection,
     ) -> Result<(), SessionError> {
-        self.set_session_model_with_default_persistence(services, session_id, session_agent, true)
-            .await
+        let session_model = session_agent.model();
+        let session_index = self.session_index_or_err(session_id)?;
+        let agent_changed = self
+            .session_at(session_index)
+            .is_some_and(|session| session.agent != session_agent);
+        let model_changed = self
+            .session_at(session_index)
+            .is_some_and(|session| session.agent.model() != session_model);
+        let paused_worker = if agent_changed {
+            self.pause_session_worker(session_id).await
+        } else {
+            None
+        };
+        // Hold scheduling across lookups as well as the write. Any failure
+        // drops the reversible hold without discarding pending user work.
+        // Harness models never become CLI defaults for Regular sessions.
+        let default_project_id = if session_agent.kind() == AgentKind::Harness {
+            None
+        } else {
+            let project_id = services
+                .db()
+                .sessions()
+                .load_session_project_id(session_id)
+                .await?;
+            if Self::should_persist_last_used_model_as_default(services, project_id).await? {
+                project_id
+            } else {
+                None
+            }
+        };
+        // Dropping the hold on any persistence error resumes the unchanged
+        // worker, retaining both queued commands and conversational messages.
+        services
+            .db()
+            .sessions()
+            .apply_session_agent_model(session_id, session_agent, agent_changed, default_project_id)
+            .await?;
+        // An explicit Harness choice becomes the model new Harness sessions
+        // start on, so an auto-detected paid provider never replaces it.
+        if session_agent.kind() == AgentKind::Harness {
+            services
+                .db()
+                .settings()
+                .upsert_setting(SettingName::DefaultHarnessModel, session_model.as_str())
+                .await?;
+            services.remember_harness_model(session_model);
+        }
+        if let Some(paused_worker) = paused_worker {
+            self.clear_session_worker(session_id);
+            paused_worker.shutdown().await;
+        }
+
+        services.emit_app_event(AppEvent::SessionModelUpdated {
+            session_id: SessionId::from(session_id),
+            session_agent,
+        });
+
+        if agent_changed || model_changed {
+            self.mark_history_replay_pending(session_id);
+        }
+
+        Ok(())
     }
 
     /// Updates and persists the reasoning level for a single session.
@@ -2100,96 +2160,6 @@ impl SessionManager {
             session_id: SessionId::from(session_id),
             speed_mode,
         });
-
-        Ok(())
-    }
-
-    /// Updates one session model for automatic speed-mode compatibility
-    /// without changing the project's default model selection.
-    ///
-    /// # Errors
-    /// Returns an error if the session is missing or persistence fails.
-    pub(crate) async fn set_session_model_for_speed_mode(
-        &mut self,
-        services: &AppServices,
-        session_id: &str,
-        session_agent: AgentSelection,
-    ) -> Result<(), SessionError> {
-        self.set_session_model_with_default_persistence(services, session_id, session_agent, false)
-            .await
-    }
-
-    /// Applies a session model update with explicit project-default
-    /// persistence behavior.
-    async fn set_session_model_with_default_persistence(
-        &mut self,
-        services: &AppServices,
-        session_id: &str,
-        session_agent: AgentSelection,
-        persist_last_used_model_as_default: bool,
-    ) -> Result<(), SessionError> {
-        let session_model = session_agent.model();
-        let session_index = self.session_index_or_err(session_id)?;
-        let agent_changed = self
-            .session_at(session_index)
-            .is_some_and(|session| session.agent != session_agent);
-        let model_changed = self
-            .session_at(session_index)
-            .is_some_and(|session| session.agent.model() != session_model);
-        let paused_worker = if agent_changed {
-            self.pause_session_worker(session_id).await
-        } else {
-            None
-        };
-        // Harness models never become CLI defaults for Regular sessions.
-        let persist_default =
-            persist_last_used_model_as_default && session_agent.kind() != AgentKind::Harness;
-        // Hold scheduling across lookups as well as the write. Any failure
-        // drops the reversible hold without discarding pending user work.
-        let default_project_id = if persist_default {
-            let project_id = services
-                .db()
-                .sessions()
-                .load_session_project_id(session_id)
-                .await?;
-            if Self::should_persist_last_used_model_as_default(services, project_id).await? {
-                project_id
-            } else {
-                None
-            }
-        } else {
-            None
-        };
-        // Dropping the hold on any persistence error resumes the unchanged
-        // worker, retaining both queued commands and conversational messages.
-        services
-            .db()
-            .sessions()
-            .apply_session_agent_model(session_id, session_agent, agent_changed, default_project_id)
-            .await?;
-        // An explicit Harness choice becomes the model new Harness sessions
-        // start on, so an auto-detected paid provider never replaces it.
-        if persist_last_used_model_as_default && session_agent.kind() == AgentKind::Harness {
-            services
-                .db()
-                .settings()
-                .upsert_setting(SettingName::DefaultHarnessModel, session_model.as_str())
-                .await?;
-            services.remember_harness_model(session_model);
-        }
-        if let Some(paused_worker) = paused_worker {
-            self.clear_session_worker(session_id);
-            paused_worker.shutdown().await;
-        }
-
-        services.emit_app_event(AppEvent::SessionModelUpdated {
-            session_id: SessionId::from(session_id),
-            session_agent,
-        });
-
-        if agent_changed || model_changed {
-            self.mark_history_replay_pending(session_id);
-        }
 
         Ok(())
     }
