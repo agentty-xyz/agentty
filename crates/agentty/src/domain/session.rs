@@ -437,12 +437,7 @@ impl Session {
     /// Returns whether selected comments must wait for clarification or join
     /// existing ordered worker work.
     pub(crate) fn queues_review_comment_reply(&self) -> bool {
-        self.status == Status::Question
-            || self.has_pending_worker_work()
-            || self.transient_messages.messages().iter().any(|message| {
-                message.slot == TransientMessageSlot::BranchPublish
-                    && message.body.is_pending_indicator()
-            })
+        self.status == Status::Question || self.has_pending_worker_work()
     }
 
     /// Returns whether chat input queues behind an active turn or rebase.
@@ -454,15 +449,21 @@ impl Session {
     }
 
     /// Returns whether the session worker still owns accepted work: an active
-    /// turn or rebase, queued chat messages, or queued worker actions.
+    /// turn or rebase, queued chat messages, queued worker actions, or a
+    /// queued or running branch publish.
+    ///
+    /// A started review-request publish replaces its queued notice with a
+    /// loading one while the session stays in `Review`, so it counts until it
+    /// finishes; pausing the worker for a model switch would otherwise block
+    /// on it.
     pub(crate) fn has_pending_worker_work(&self) -> bool {
         self.queues_chat_messages()
             || !self.queued_messages.is_empty()
-            || self
-                .transient_messages
-                .messages()
-                .iter()
-                .any(|message| matches!(message.body, TransientMessageBody::Queued(_)))
+            || self.transient_messages.messages().iter().any(|message| {
+                matches!(message.body, TransientMessageBody::Queued(_))
+                    || (message.slot == TransientMessageSlot::BranchPublish
+                        && message.body.is_pending_indicator())
+            })
     }
 
     /// Returns whether the session lifecycle permits opening its worktree.

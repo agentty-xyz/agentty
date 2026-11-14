@@ -17,7 +17,7 @@ use crate::domain::agent::{
 use crate::domain::permission::PermissionMode;
 use crate::domain::session::{SessionId, Status};
 use crate::domain::setting::SettingName;
-use crate::domain::transient_message::TransientMessageSlot;
+use crate::domain::transient_message::{TransientMessageBody, TransientMessageSlot};
 use crate::domain::turn_prompt::{TurnPrompt, TurnPromptTextSource};
 use crate::presentation::app_mode::ReviewCommentSelection;
 use crate::test_support::enable_tracing_log_fallback;
@@ -319,12 +319,24 @@ async fn busy_session_defers_model_switch_until_its_worker_is_idle() {
     let agent_while_busy = session_agent(&app, &session_id);
     let transcript_while_busy = handle_transcript_text(&app, &session_id);
     set_session_status(&mut app, &session_id, Status::Review);
+    app.sessions
+        .start_branch_publish(&session_id, "Publishing review request".to_string());
+    app.apply_deferred_session_settings().await;
+    let agent_while_publishing = session_agent(&app, &session_id);
+    app.sessions.finish_branch_publish(
+        &session_id,
+        TransientMessageBody::Markdown("Review request created.".to_string()),
+    );
     app.apply_deferred_session_settings().await;
     app.process_pending_app_events().await;
 
     // Assert
     assert_eq!(model_change, PromptModelChange::Deferred);
     assert_eq!(agent_while_busy, Some(model_fixture::codex_selection()));
+    assert_eq!(
+        agent_while_publishing,
+        Some(model_fixture::codex_selection())
+    );
     assert!(transcript_while_busy.contains(&format!(
         "[Settings] Switching to `{}` after the current turn and queued messages finish.",
         selected_agent.model().as_str()
