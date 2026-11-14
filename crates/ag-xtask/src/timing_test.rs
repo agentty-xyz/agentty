@@ -146,6 +146,8 @@ fn report_parsing_rejects_failures_invalid_numbers_and_truncation() {
         &support::JUNIT.replace("errors=\"0\"", "errors=\"1\""),
         &support::JUNIT.replace("time=\"2.5\"", "time=\"NaN\""),
         &support::JUNIT.replace("time=\"1\"", ""),
+        &support::JUNIT.replace("classname=\"fixture\" ", ""),
+        &support::JUNIT.replace("name=\"fast\" ", ""),
         &support::JUNIT.replace("tests=\"2\"", ""),
     ] {
         assert!(

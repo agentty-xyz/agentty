@@ -44,6 +44,11 @@ runs:
       shell: bash
       run: prek run coverage --all-files --hook-stage manual
 
+    # The PTY E2E suite is not checked: each scenario takes seconds by design.
+    - name: Report slow tests and reject new ones
+      shell: bash
+      run: prek run check-slow-tests --all-files --hook-stage manual
+
     # Keep the report after a failed gate so platform-specific gaps can be
     # diagnosed locally with `ag-xtask check-coverage`.
     - name: Retain coverage report

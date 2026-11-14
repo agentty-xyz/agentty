@@ -170,6 +170,14 @@ favorable runs. Warm up both revisions equally and retain raw artifacts. A perce
 alone does not establish a reliable improvement when ranges overlap. Summed process time
 is work across concurrent tests, not elapsed time.
 
+`ag-xtask slow-tests <junit.xml>` lists the slowest tests, per-binary and per-module
+totals (`--module-depth`, `--top`), and a duration histogram for one report. After the
+coverage step, CI runs it as `check-slow-tests` on `target/nextest/ci/junit.xml`: a test
+over 5 s fails unless `.config/slow-tests.yaml` lists it with a reason. Allowlisted
+tests that are now fast or gone only warn; remove their entries. The threshold leaves
+headroom above the slowest unlisted coverage-run tests (about 3.3 s on loaded runners),
+so it does not flake. The PTY E2E suite is not checked.
+
 `exact_cache_hit: false` may mean a partial restore or a miss; `null` means unknown.
 Neither proves a cold build. Hook time excludes setup and queueing; obtain those phases
 from Actions job/step timestamps. The hook interval can include scheduling between the
