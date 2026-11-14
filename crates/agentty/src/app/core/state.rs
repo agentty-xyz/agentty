@@ -37,6 +37,7 @@ use super::event::AppEvent;
 use crate::analytics::Analytics;
 use crate::app;
 use crate::app::graph_question::{GraphQuestionState, GraphQuestionTarget};
+use crate::app::prompt_intent::DeferredSessionSettings;
 use crate::app::session_diff::PendingSessionDiffRequest;
 use crate::app::{AppError, session};
 use crate::domain::agent::{AgentKind, ReasoningLevel};
@@ -211,6 +212,9 @@ pub struct App {
     /// Retains automatic focused-review triggers for completed sessions whose
     /// owning project is not currently loaded.
     pub(crate) deferred_auto_review_session_ids: HashSet<SessionId>,
+    /// Model and speed changes selected while each session's worker was
+    /// busy, applied once that worker becomes idle.
+    pub(crate) deferred_session_settings: HashMap<SessionId, DeferredSessionSettings>,
     /// Keeps role-owned review suppression, keyed to the owning role attempt
     /// identifier, until a new ordinary turn or explicit review is admitted or
     /// that Implementer attempt succeeds, regardless of stale reducer events.

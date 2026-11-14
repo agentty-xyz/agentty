@@ -169,8 +169,9 @@ impl App {
         );
     }
 
-    /// Discards every diff continuation and deferred automatic-review trigger
-    /// owned by a deleted session so detached task completions remain stale.
+    /// Discards every diff continuation, deferred automatic-review trigger,
+    /// and deferred setting change owned by a deleted session so detached
+    /// task completions remain stale.
     pub(crate) fn discard_deleted_session_diff_state(&mut self, session_id: &SessionId) {
         self.auto_address_review_iterations.remove(session_id);
         self.review_diff_hashes.remove(session_id);
@@ -178,6 +179,7 @@ impl App {
         self.pending_session_diff_requests
             .retain(|_, request| request.session_id != *session_id);
         self.deferred_auto_review_session_ids.remove(session_id);
+        self.deferred_session_settings.remove(session_id);
         self.role_review_suppression.remove(session_id);
     }
 

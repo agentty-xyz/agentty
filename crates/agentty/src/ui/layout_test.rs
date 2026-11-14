@@ -20,7 +20,10 @@ use crate::presentation::app_mode::ChatFocus;
 use crate::presentation::frame_time::FrameTime;
 use crate::presentation::help_action;
 use crate::presentation::help_action::{ViewActionAvailability, ViewHelpState};
-use crate::presentation::prompt::{PromptAtMentionState, PromptSlashStage, PromptSlashState};
+use crate::presentation::prompt::{
+    PromptAtMentionState, PromptGraphState, PromptSlashCommandSet, PromptSlashStage,
+    PromptSlashState,
+};
 use crate::ui::icon::Icon;
 use crate::ui::input_layout::{
     bottom_pinned_scroll_offset, calculate_input_height, calculate_input_viewport,
@@ -452,8 +455,14 @@ fn test_prompt_suggestion_list_for_command_stage_has_description() {
     let slash_state = PromptSlashState::default();
 
     // Act
-    let menu = prompt_suggestion_list(&input, &slash_state, None, AgentKind::Codex, true)
-        .expect("expected suggestion list");
+    let menu = prompt_suggestion_list(
+        &input,
+        &slash_state,
+        None,
+        AgentKind::Codex,
+        PromptSlashCommandSet::WithApply,
+    )
+    .expect("expected suggestion list");
 
     // Assert
     assert_eq!(menu.items.len(), 1);
@@ -474,8 +483,14 @@ fn test_prompt_suggestion_list_for_agent_stage_has_agent_descriptions() {
     };
 
     // Act
-    let menu = prompt_suggestion_list(&input, &slash_state, None, AgentKind::Codex, true)
-        .expect("expected suggestion list");
+    let menu = prompt_suggestion_list(
+        &input,
+        &slash_state,
+        None,
+        AgentKind::Codex,
+        PromptSlashCommandSet::WithApply,
+    )
+    .expect("expected suggestion list");
 
     // Assert
     assert_eq!(menu.items.len(), AgentKind::ALL.len());
@@ -494,8 +509,14 @@ fn test_prompt_suggestion_list_for_agent_stage_filters_available_agents() {
     slash_state.stage = PromptSlashStage::Agent;
 
     // Act
-    let menu = prompt_suggestion_list(&input, &slash_state, None, AgentKind::Codex, true)
-        .expect("expected suggestion list");
+    let menu = prompt_suggestion_list(
+        &input,
+        &slash_state,
+        None,
+        AgentKind::Codex,
+        PromptSlashCommandSet::WithApply,
+    )
+    .expect("expected suggestion list");
 
     // Assert
     assert_eq!(menu.items.len(), 1);
@@ -513,8 +534,14 @@ fn test_prompt_suggestion_list_for_model_stage_has_model_descriptions() {
     };
 
     // Act
-    let menu = prompt_suggestion_list(&input, &slash_state, None, AgentKind::Codex, true)
-        .expect("expected suggestion list");
+    let menu = prompt_suggestion_list(
+        &input,
+        &slash_state,
+        None,
+        AgentKind::Codex,
+        PromptSlashCommandSet::WithApply,
+    )
+    .expect("expected suggestion list");
 
     // Assert
     assert_eq!(menu.items.len(), AgentKind::Codex.models().len());
@@ -536,7 +563,7 @@ fn test_prompt_suggestion_list_for_command_stage_includes_commands() {
         &PromptSlashState::default(),
         None,
         AgentKind::Codex,
-        true,
+        PromptSlashCommandSet::WithApply,
     )
     .expect("expected suggestion list");
     let labels: Vec<&str> = menu.items.iter().map(|item| item.label.as_str()).collect();
@@ -544,6 +571,33 @@ fn test_prompt_suggestion_list_for_command_stage_includes_commands() {
     // Assert
     assert!(labels.contains(&"/model"));
     assert!(labels.contains(&"/reasoning"));
+}
+
+#[test]
+fn test_prompt_suggestion_list_for_busy_session_offers_setting_commands_only() {
+    // Arrange
+    let input = InputState::with_text("/".to_string());
+    let slash_state = PromptSlashState {
+        graph: PromptGraphState::Available,
+        ..PromptSlashState::default()
+    };
+
+    // Act
+    let menu = prompt_suggestion_list(
+        &input,
+        &slash_state,
+        None,
+        AgentKind::Codex,
+        PromptSlashCommandSet::SettingsOnly,
+    )
+    .expect("expected suggestion list");
+    let labels: Vec<&str> = menu.items.iter().map(|item| item.label.as_str()).collect();
+
+    // Assert
+    assert_eq!(
+        labels,
+        vec!["/mode", "/model", "/reasoning", "/style", "/fast"]
+    );
 }
 
 #[test]
@@ -557,7 +611,7 @@ fn test_prompt_suggestion_list_for_command_stage_omits_disabled_apply() {
         &PromptSlashState::default(),
         None,
         AgentKind::Codex,
-        false,
+        PromptSlashCommandSet::WithoutApply,
     )
     .expect("expected suggestion list");
     let labels: Vec<&str> = menu.items.iter().map(|item| item.label.as_str()).collect();

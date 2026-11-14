@@ -13,7 +13,7 @@ use super::super::{
 };
 use crate::app::App;
 use crate::app::prompt_intent::PromptSessionMode;
-use crate::domain::agent::{AgentKind, ReasoningLevel, ResponseStyle, SpeedMode};
+use crate::domain::agent::{AgentKind, ReasoningLevel, ResponseStyle};
 use crate::domain::input::InputState;
 use crate::domain::permission::PermissionMode;
 use crate::domain::session_message::SessionTranscript;
@@ -22,8 +22,8 @@ use crate::infra::db::Database;
 use crate::infra::fs;
 use crate::presentation::app_mode::{AppMode, ChatFocus};
 use crate::presentation::prompt::{
-    PromptAtMentionState, PromptAttachmentState, PromptHistoryState, PromptSlashState,
-    insert_prompt_local_image_at,
+    PromptAtMentionState, PromptAttachmentState, PromptHistoryState, PromptSlashCommandSet,
+    PromptSlashState, insert_prompt_local_image_at,
 };
 use crate::test_support::setup_test_git_repo;
 use crate::ui::RenderCacheStore;
@@ -156,10 +156,8 @@ pub(super) const TEST_INPUT_WIDTH: u16 = 118;
 /// [`new_test_prompt_mode`], as a freshly created test session reports them.
 pub(super) fn new_test_prompt_context() -> PromptContext {
     PromptContext {
-        allow_apply_command: false,
         input_mode: PromptInputMode::Text,
         permission_mode: PermissionMode::default(),
-        queues_messages: false,
         reasoning_level: ReasoningLevel::default(),
         response_style: ResponseStyle::default(),
         scroll_offset: None,
@@ -169,7 +167,7 @@ pub(super) fn new_test_prompt_context() -> PromptContext {
         session_index: 0,
         session_mode: PromptSessionMode::Existing,
         sign_in_agent: None,
-        speed_mode: SpeedMode::default(),
+        slash_command_set: PromptSlashCommandSet::WithoutApply,
     }
 }
 
@@ -186,12 +184,7 @@ pub(super) fn refresh_test_input_mode(mode: &AppMode, context: &mut PromptContex
         unreachable!("prompt fixture required");
     };
 
-    context.input_mode = prompt_input_mode(
-        at_mention_state.as_ref(),
-        input,
-        slash_state,
-        context.queues_messages,
-    );
+    context.input_mode = prompt_input_mode(at_mention_state.as_ref(), input, slash_state);
 }
 
 /// Reduces one key over `mode` with `context`, refreshing its input sub-mode

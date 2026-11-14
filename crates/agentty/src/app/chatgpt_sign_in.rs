@@ -6,6 +6,7 @@ use std::sync::Arc;
 use ag_session::ChatGptSignInOutcome;
 use tokio::task::JoinHandle;
 
+use crate::app::prompt_intent::PromptModelChange;
 use crate::app::{App, AppEvent};
 use crate::domain::agent::{AgentKind, AgentSelection, HarnessModelStatus};
 use crate::infra::browser::BrowserClient;
@@ -171,17 +172,23 @@ impl App {
                             .unwrap_or_else(|| "your ChatGPT account".to_string());
                         let model = selection.model().as_str();
                         self.mark_chatgpt_models_signed_in();
-                        let switched = self
+                        let model_change = self
                             .update_prompt_session_model(&session_id, selection)
                             .await;
                         self.refresh_harness_models();
-                        if switched {
-                            format!("Signed in as {account}. `{model}` now uses your ChatGPT plan.")
-                        } else {
-                            format!(
+                        match model_change {
+                            PromptModelChange::Switched => format!(
+                                "Signed in as {account}. `{model}` now uses your ChatGPT plan."
+                            ),
+                            PromptModelChange::Deferred => format!(
+                                "Signed in as {account}. This session switches to `{model}` on \
+                                 your ChatGPT plan after its current turn and queued messages \
+                                 finish."
+                            ),
+                            PromptModelChange::Failed => format!(
                                 "Signed in as {account}, but switching this session to `{model}` \
                                  failed. Pick it again with /model."
-                            )
+                            ),
                         }
                     }
                     Err(error) => format!("Sign-in failed: {error}"),

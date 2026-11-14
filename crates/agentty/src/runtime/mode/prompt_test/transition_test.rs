@@ -491,12 +491,12 @@ fn prompt_reducers_leave_other_modes_unchanged() {
     let image_paste_number = prompt_image_paste_number(&mode);
     update_prompt_slash_state(&mut mode, |_| slash_state_updated = true);
     mark_prompt_image_paste_pending(&mut mode, 7);
-    sync_prompt_at_mention_state(&mut mode, &prompt_context, &mut effects);
+    sync_prompt_at_mention_state(&mut mode, &mut effects);
     exit_to_list_saving_progress(&mut mode, &mut effects);
     dismiss_at_mention(&mut mode);
     move_at_mention_selection_up(&mut mode);
     move_at_mention_selection_down(&mut mode);
-    select_at_mention(&mut mode, &prompt_context, &mut effects);
+    select_at_mention(&mut mode, &mut effects);
     move_prompt_slash_selection(&mut mode, &prompt_context, true);
     reduce_prompt_vertical_key(
         &mut mode,

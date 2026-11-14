@@ -177,8 +177,9 @@ State-specific differences:
 - **InProgress**: `Enter`, `r`, and `p` queue messages, sync, and publishing. `Ctrl+C`
   retracts the newest queued message; with none left, it stops the turn. `d` opens an
   available diff while work continues.
-- **Rebasing**: `Enter` and `p` queue work; cancellation and slash commands are
-  unavailable.
+- **InProgress / Rebasing**: Slash commands offer only setting commands; see
+  [Active Turns](@/docs/usage/workflow.md#active-turns-and-the-message-queue).
+- **Rebasing**: `Enter` and `p` queue work; cancellation is unavailable.
 - **Draft**: `Enter` stages, `s` starts, and image-paste keys open the composer. Stacked
   drafts require a review-ready parent and idle stack.
 - **Question**: Answer through the question panel; `r` is hidden.

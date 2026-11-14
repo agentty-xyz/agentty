@@ -4,9 +4,9 @@ use ag_forge::{
 use ag_session::test_support as model_fixture;
 
 use super::{
-    MAX_AUTO_ADDRESS_REVIEW_ITERATIONS, PromptApplyOutcome, PromptSessionMode, PromptSubmission,
-    PromptWorkflowOutcome, ReviewCommentResolutionOutcome, build_resolve_review_comment_prompt,
-    review_comment_resolution_loading_text,
+    MAX_AUTO_ADDRESS_REVIEW_ITERATIONS, PromptApplyOutcome, PromptModelChange, PromptSessionMode,
+    PromptSubmission, PromptWorkflowOutcome, ReviewCommentResolutionOutcome,
+    build_resolve_review_comment_prompt, review_comment_resolution_loading_text,
 };
 use crate::app::ReviewCacheEntry;
 use crate::app::message_admission::MessageIntent;
@@ -220,7 +220,7 @@ async fn incompatible_prompt_model_switch_keeps_model_when_disabling_fast_mode_f
         .await;
 
     // Assert
-    assert!(!switched);
+    assert_eq!(switched, PromptModelChange::Failed);
     assert_eq!(
         app.sessions
             .session_for_id(&session_id)
@@ -251,9 +251,414 @@ async fn prompt_setting_updates_ignore_missing_session() {
         .await;
 
     // Assert
-    assert!(!switched_model);
+    assert_eq!(switched_model, PromptModelChange::Failed);
     assert!(permission_result.is_err());
     assert!(app.sessions.sessions().is_empty());
+}
+
+#[tokio::test]
+async fn toggling_speed_mode_for_missing_session_changes_nothing() {
+    // Arrange
+    let (mut app, _base_dir) = crate::test_support::new_git_test_app().await;
+
+    // Act
+    app.toggle_prompt_session_speed_mode(&SessionId::from("missing-session"))
+        .await;
+
+    // Assert
+    assert!(app.deferred_session_settings.is_empty());
+}
+
+#[tokio::test]
+async fn speed_mode_update_failure_keeps_persisted_speed() {
+    // Arrange
+    let (mut app, _base_dir, pool) = crate::test_support::new_git_test_app_with_pool().await;
+    let session_id = SessionId::from(
+        app.create_session()
+            .await
+            .expect("session should be created"),
+    );
+    app.set_session_model(&session_id, model_fixture::codex_selection())
+        .await
+        .expect("initial model should update");
+    sqlx::query(
+        "CREATE TRIGGER fail_speed_mode_update BEFORE UPDATE OF speed_mode ON session BEGIN \
+         SELECT RAISE(FAIL, 'forced speed mode failure'); END",
+    )
+    .execute(&pool)
+    .await
+    .expect("failure trigger should be installed");
+    enable_tracing_log_fallback();
+
+    // Act
+    app.update_prompt_session_speed_mode(&session_id, SpeedMode::Fast)
+        .await;
+    let persisted_speed_mode = app
+        .services
+        .db()
+        .sessions()
+        .load_session_speed_mode(&session_id)
+        .await
+        .expect("speed mode should load");
+
+    // Assert
+    assert_eq!(persisted_speed_mode, SpeedMode::Normal);
+}
+
+#[tokio::test]
+async fn busy_session_defers_model_switch_until_its_worker_is_idle() {
+    // Arrange
+    let (mut app, _base_dir, session_id) = busy_session_app(model_fixture::codex_selection()).await;
+    let selected_agent = AgentSelection::new(AgentKind::Claude, AgentModel::ClaudeFable52);
+
+    // Act
+    let model_change = app
+        .update_prompt_session_model(&session_id, selected_agent)
+        .await;
+    app.apply_deferred_session_settings().await;
+    let agent_while_busy = session_agent(&app, &session_id);
+    let transcript_while_busy = handle_transcript_text(&app, &session_id);
+    set_session_status(&mut app, &session_id, Status::Review);
+    app.apply_deferred_session_settings().await;
+    app.process_pending_app_events().await;
+
+    // Assert
+    assert_eq!(model_change, PromptModelChange::Deferred);
+    assert_eq!(agent_while_busy, Some(model_fixture::codex_selection()));
+    assert!(transcript_while_busy.contains(&format!(
+        "[Settings] Switching to `{}` after the current turn and queued messages finish.",
+        selected_agent.model().as_str()
+    )));
+    assert_eq!(session_agent(&app, &session_id), Some(selected_agent));
+    assert!(app.deferred_session_settings.is_empty());
+}
+
+#[tokio::test]
+async fn choosing_current_model_cancels_deferred_model_switch() {
+    // Arrange
+    let current_agent = model_fixture::codex_selection();
+    let (mut app, _base_dir, session_id) = busy_session_app(current_agent).await;
+    app.update_prompt_session_model(
+        &session_id,
+        AgentSelection::new(AgentKind::Claude, AgentModel::ClaudeFable52),
+    )
+    .await;
+
+    // Act
+    let model_change = app
+        .update_prompt_session_model(&session_id, current_agent)
+        .await;
+
+    // Assert
+    assert_eq!(model_change, PromptModelChange::Deferred);
+    assert!(app.deferred_session_settings.is_empty());
+    assert!(handle_transcript_text(&app, &session_id).contains(&format!(
+        "[Settings] Keeping `{}`.",
+        current_agent.model().as_str()
+    )));
+}
+
+#[tokio::test]
+async fn toggling_speed_mode_twice_while_busy_cancels_the_deferred_change() {
+    // Arrange
+    let (mut app, _base_dir, session_id) = busy_session_app(model_fixture::codex_selection()).await;
+
+    // Act
+    app.toggle_prompt_session_speed_mode(&session_id).await;
+    let pending_speed_mode = app
+        .deferred_session_settings
+        .get(&session_id)
+        .and_then(|settings| settings.speed_mode);
+    app.toggle_prompt_session_speed_mode(&session_id).await;
+    let transcript = handle_transcript_text(&app, &session_id);
+
+    // Assert
+    assert_eq!(pending_speed_mode, Some(SpeedMode::Fast));
+    assert!(app.deferred_session_settings.is_empty());
+    assert!(transcript.contains(
+        "[Settings] Switching to fast responses after the current turn and queued messages finish."
+    ));
+    assert!(transcript.contains("[Settings] Keeping normal responses."));
+}
+
+#[tokio::test]
+async fn deferred_fast_mode_switches_to_a_fast_compatible_model_when_idle() {
+    // Arrange
+    let (mut app, _base_dir, session_id) = busy_session_app(AgentSelection::new(
+        AgentKind::Claude,
+        AgentModel::ClaudeFable52,
+    ))
+    .await;
+    app.update_prompt_session_speed_mode(&session_id, SpeedMode::Fast)
+        .await;
+    set_session_status(&mut app, &session_id, Status::Question);
+
+    // Act
+    app.apply_deferred_session_settings().await;
+    app.process_pending_app_events().await;
+
+    // Assert
+    assert_eq!(
+        app.sessions
+            .session_for_id(&session_id)
+            .map(|session| (session.agent, session.speed_mode)),
+        Some((
+            AgentSelection::new(AgentKind::Claude, AgentModel::ClaudeOpus55),
+            SpeedMode::Fast,
+        ))
+    );
+}
+
+#[tokio::test]
+async fn deferred_model_and_fast_mode_apply_in_selection_order() {
+    // Arrange
+    let (mut app, _base_dir, session_id) = busy_session_app(AgentSelection::new(
+        AgentKind::Claude,
+        AgentModel::ClaudeFable52,
+    ))
+    .await;
+    app.update_prompt_session_model(&session_id, model_fixture::codex_selection())
+        .await;
+    app.update_prompt_session_speed_mode(&session_id, SpeedMode::Fast)
+        .await;
+    set_session_status(&mut app, &session_id, Status::Review);
+
+    // Act
+    app.apply_deferred_session_settings().await;
+    app.process_pending_app_events().await;
+
+    // Assert
+    assert_eq!(
+        app.sessions
+            .session_for_id(&session_id)
+            .map(|session| (session.agent, session.speed_mode)),
+        Some((model_fixture::codex_selection(), SpeedMode::Fast))
+    );
+}
+
+#[tokio::test]
+async fn deferring_a_model_without_fast_mode_drops_pending_fast_mode() {
+    // Arrange
+    let (mut app, _base_dir, session_id) = busy_session_app(model_fixture::codex_selection()).await;
+    let selected_agent = AgentSelection::new(AgentKind::Antigravity, AgentModel::Gemini31Pro);
+    app.update_prompt_session_speed_mode(&session_id, SpeedMode::Fast)
+        .await;
+
+    // Act
+    app.update_prompt_session_model(&session_id, selected_agent)
+        .await;
+
+    // Assert
+    assert_eq!(
+        app.deferred_session_settings
+            .get(&session_id)
+            .map(|settings| (settings.agent, settings.speed_mode)),
+        Some((Some(selected_agent), None))
+    );
+}
+
+#[tokio::test]
+async fn speed_toggle_starts_from_the_speed_after_a_deferred_model_switch() {
+    // Arrange
+    let (mut app, _base_dir) = crate::test_support::new_git_test_app().await;
+    let session_id = SessionId::from(
+        app.create_session()
+            .await
+            .expect("session should be created"),
+    );
+    app.set_session_model(
+        &session_id,
+        AgentSelection::new(AgentKind::Claude, AgentModel::ClaudeOpus55),
+    )
+    .await
+    .expect("initial model should update");
+    app.update_prompt_session_speed_mode(&session_id, SpeedMode::Fast)
+        .await;
+    set_session_status(&mut app, &session_id, Status::InProgress);
+    // Switching to this model disables fast mode, so the toggle starts from
+    // normal responses rather than the current fast mode.
+    app.update_prompt_session_model(
+        &session_id,
+        AgentSelection::new(AgentKind::Claude, AgentModel::ClaudeFable52),
+    )
+    .await;
+
+    // Act
+    app.toggle_prompt_session_speed_mode(&session_id).await;
+    let pending_speed_mode = app
+        .deferred_session_settings
+        .get(&session_id)
+        .and_then(|settings| settings.speed_mode);
+    set_session_status(&mut app, &session_id, Status::Review);
+    app.apply_deferred_session_settings().await;
+    app.process_pending_app_events().await;
+
+    // Assert
+    assert_eq!(pending_speed_mode, Some(SpeedMode::Fast));
+    assert!(handle_transcript_text(&app, &session_id).contains(
+        "[Settings] Switching to fast responses after the current turn and queued messages finish."
+    ));
+    assert_eq!(
+        app.sessions
+            .session_for_id(&session_id)
+            .map(|session| (session.agent, session.speed_mode)),
+        Some((
+            AgentSelection::new(AgentKind::Claude, AgentModel::ClaudeOpus55),
+            SpeedMode::Fast,
+        ))
+    );
+}
+
+#[tokio::test]
+async fn deferred_fast_mode_is_refused_for_a_pending_model_without_speed_control() {
+    // Arrange
+    let (mut app, _base_dir, session_id) = busy_session_app(model_fixture::codex_selection()).await;
+    let selected_agent = AgentSelection::new(AgentKind::Antigravity, AgentModel::Gemini31Pro);
+    app.update_prompt_session_model(&session_id, selected_agent)
+        .await;
+
+    // Act
+    app.toggle_prompt_session_speed_mode(&session_id).await;
+    let pending_settings = app
+        .deferred_session_settings
+        .get(&session_id)
+        .map(|settings| (settings.agent, settings.speed_mode));
+    set_session_status(&mut app, &session_id, Status::Review);
+    app.apply_deferred_session_settings().await;
+    app.process_pending_app_events().await;
+
+    // Assert
+    assert_eq!(pending_settings, Some((Some(selected_agent), None)));
+    assert!(handle_transcript_text(&app, &session_id).contains(&format!(
+        "[Settings] Keeping normal responses because `{}` has no fast mode.",
+        selected_agent.model().as_str()
+    )));
+    assert_eq!(
+        app.sessions
+            .session_for_id(&session_id)
+            .map(|session| (session.agent, session.speed_mode)),
+        Some((selected_agent, SpeedMode::Normal))
+    );
+}
+
+#[tokio::test]
+async fn failed_deferred_model_switch_skips_deferred_speed_change() {
+    // Arrange
+    let (mut app, _base_dir, pool) = crate::test_support::new_git_test_app_with_pool().await;
+    let session_id = SessionId::from(
+        app.create_session()
+            .await
+            .expect("session should be created"),
+    );
+    // Both models run fast mode directly, so only the skip after the failed
+    // switch keeps the deferred speed change from persisting.
+    app.set_session_model(&session_id, model_fixture::codex_selection())
+        .await
+        .expect("initial model should update");
+    set_session_status(&mut app, &session_id, Status::InProgress);
+    app.update_prompt_session_model(
+        &session_id,
+        AgentSelection::new(AgentKind::Codex, AgentModel::Gpt6Astra),
+    )
+    .await;
+    app.update_prompt_session_speed_mode(&session_id, SpeedMode::Fast)
+        .await;
+    sqlx::query(
+        "CREATE TRIGGER fail_deferred_model_switch BEFORE UPDATE OF model ON session BEGIN SELECT \
+         RAISE(FAIL, 'forced model failure'); END",
+    )
+    .execute(&pool)
+    .await
+    .expect("failure trigger should be installed");
+    enable_tracing_log_fallback();
+    set_session_status(&mut app, &session_id, Status::Review);
+
+    // Act
+    app.apply_deferred_session_settings().await;
+    let persisted_speed_mode = app
+        .services
+        .db()
+        .sessions()
+        .load_session_speed_mode(&session_id)
+        .await
+        .expect("speed mode should load");
+
+    // Assert
+    assert_eq!(persisted_speed_mode, SpeedMode::Normal);
+    assert!(app.deferred_session_settings.is_empty());
+}
+
+#[tokio::test]
+async fn finished_session_discards_deferred_model_switch() {
+    // Arrange
+    let (mut app, _base_dir, session_id) = busy_session_app(model_fixture::codex_selection()).await;
+    app.update_prompt_session_model(
+        &session_id,
+        AgentSelection::new(AgentKind::Claude, AgentModel::ClaudeFable52),
+    )
+    .await;
+    set_session_status(&mut app, &session_id, Status::Canceled);
+
+    // Act
+    app.apply_deferred_session_settings().await;
+    app.process_pending_app_events().await;
+
+    // Assert
+    assert!(app.deferred_session_settings.is_empty());
+    assert_eq!(
+        session_agent(&app, &session_id),
+        Some(model_fixture::codex_selection())
+    );
+}
+
+/// Creates one session on `session_agent` whose worker runs a turn.
+async fn busy_session_app(
+    session_agent: AgentSelection,
+) -> (crate::app::App, tempfile::TempDir, SessionId) {
+    let (mut app, base_dir) = crate::test_support::new_git_test_app().await;
+    let session_id = SessionId::from(
+        app.create_session()
+            .await
+            .expect("session should be created"),
+    );
+    app.set_session_model(&session_id, session_agent)
+        .await
+        .expect("initial model should update");
+    set_session_status(&mut app, &session_id, Status::InProgress);
+
+    (app, base_dir, session_id)
+}
+
+/// Overrides the loaded snapshot status of one session.
+fn set_session_status(app: &mut crate::app::App, session_id: &SessionId, status: Status) {
+    app.sessions
+        .sessions_mut()
+        .iter_mut()
+        .find(|session| session.id == *session_id)
+        .expect("session should be loaded")
+        .status = status;
+}
+
+/// Returns the loaded agent selection of one session.
+fn session_agent(app: &crate::app::App, session_id: &SessionId) -> Option<AgentSelection> {
+    app.sessions
+        .session_for_id(session_id)
+        .map(|session| session.agent)
+}
+
+/// Returns the live transcript text held by one session's runtime handles.
+fn handle_transcript_text(app: &crate::app::App, session_id: &SessionId) -> String {
+    app.sessions
+        .session_handles()
+        .get(session_id.as_str())
+        .and_then(|handles| {
+            handles
+                .transcript
+                .lock()
+                .ok()
+                .and_then(|transcript| transcript.replay_text())
+        })
+        .unwrap_or_default()
 }
 
 /// Ensures the all-comments prompt includes unresolved current and
