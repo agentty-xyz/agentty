@@ -1133,24 +1133,30 @@ async fn review_request_url_appears_in_session_header() -> E2eResult {
 
 /// Seeds a review-request publish whose pull request then reports one
 /// completed failing check and no review threads.
+///
+/// The check lookup waits on `hold_checks`, so the scenario observes the
+/// watch confirmation before the automatic follow-up appends its prompt and
+/// turn output, which would otherwise scroll that notice out of view.
 async fn seed_watched_review_request_publish(
     env: &BuilderEnv,
+    hold_checks: &str,
 ) -> Result<(), Box<dyn std::error::Error>> {
     seed_review_ready_session(env).await?;
     seed_review_worktree_with_diff(env)?;
     seed_successful_review_request_publish(env, ":", ":", "wt/review-s", false)?;
 
     let gh_path = env.stub_bin.join("gh");
-    let gh_script = std::fs::read_to_string(&gh_path)?.replace(
-        "  *\"mergeStateStatus\"*)",
-        r#"  *"headRefOid"*)
-    printf '%s\n' '[{"data":{"repository":{"pullRequest":{"headRefOid":"abc1234","mergeable":"MERGEABLE","statusCheckRollup":{"contexts":{"nodes":[{"__typename":"CheckRun","name":"unit-tests","status":"COMPLETED","conclusion":"FAILURE","detailsUrl":"https://github.com/agentty-xyz/agentty/actions/runs/7"}],"pageInfo":{"hasNextPage":false,"endCursor":null}}}}}}}]'
+    let check_lookup = format!(
+        "  *\"headRefOid\"*)\n    {hold_checks}\n{}",
+        r#"    printf '%s\n' '[{"data":{"repository":{"pullRequest":{"headRefOid":"abc1234","mergeable":"MERGEABLE","statusCheckRollup":{"contexts":{"nodes":[{"__typename":"CheckRun","name":"unit-tests","status":"COMPLETED","conclusion":"FAILURE","detailsUrl":"https://github.com/agentty-xyz/agentty/actions/runs/7"}],"pageInfo":{"hasNextPage":false,"endCursor":null}}}}}}}]'
     ;;
   *"isOutdated"*)
     printf '%s\n' '[{"data":{"repository":{"pullRequest":{"reviewThreads":{"nodes":[],"pageInfo":{"hasNextPage":false,"endCursor":null}}}}}}]'
     ;;
-  *"mergeStateStatus"*)"#,
+  *"mergeStateStatus"*)"#
     );
+    let gh_script =
+        std::fs::read_to_string(&gh_path)?.replace("  *\"mergeStateStatus\"*)", &check_lookup);
     std::fs::write(&gh_path, gh_script)?;
 
     Ok(())
@@ -1161,13 +1167,19 @@ async fn seed_watched_review_request_publish(
 /// automatic follow-up.
 #[tokio::test]
 async fn created_review_request_offers_watching_and_follows_up_on_failed_checks() -> E2eResult {
-    // Arrange, Act, Assert
+    // Arrange
+    let checks = ReleaseGate::new()?;
+    let hold_checks = checks.shell_wait();
+
+    // Act, Assert
     FeatureTest::new("review_request_watch")
         .with_git()
         .with_terminal_size(120, 40)
-        .setup(|env| Box::pin(async move { seed_watched_review_request_publish(env).await }))
+        .setup(move |env| {
+            Box::pin(async move { seed_watched_review_request_publish(env, &hold_checks).await })
+        })
         .run(
-            |scenario| {
+            move |scenario| {
                 scenario
                     .compose(&common::wait_for_agentty_startup())
                     .compose(&common::switch_to_tab("Sessions"))
@@ -1187,13 +1199,14 @@ async fn created_review_request_offers_watching_and_follows_up_on_failed_checks(
                         "review_request_watch_enabled",
                         "Session notice confirming the review request is watched",
                     )
+                    .compose(&checks.release())
                     .wait_for_text("[Review Watch] Fixing 1 failing check: unit-tests", 20000)
                     .capture_labeled(
                         "review_request_watch_follow_up",
                         "Automatic follow-up started for the failing check",
                     )
             },
-            |frame, report| {
+            |_frame, report| {
                 Box::pin(async move {
                     let offer_frame = common::frame_from_capture(&report.captures[0]);
                     let offer_full = Region::full(offer_frame.cols(), offer_frame.rows());
@@ -1212,12 +1225,17 @@ async fn created_review_request_offers_watching_and_follows_up_on_failed_checks(
                         &enabled_full,
                     );
                     assertion::assert_not_visible(&enabled_frame, "Watch PR #42");
+                    assertion::assert_not_visible(&enabled_frame, "Fixing 1 failing check");
 
-                    let full = Region::full(frame.cols(), frame.rows());
+                    // The follow-up turn keeps appending output, so assert
+                    // its start on the capture taken when it appeared.
+                    let follow_up_frame = common::frame_from_capture(&report.captures[2]);
+                    let follow_up_full =
+                        Region::full(follow_up_frame.cols(), follow_up_frame.rows());
                     assertion::assert_text_in_region(
-                        frame,
+                        &follow_up_frame,
                         "[Review Watch] Fixing 1 failing check: unit-tests",
-                        &full,
+                        &follow_up_full,
                     );
                 })
             },

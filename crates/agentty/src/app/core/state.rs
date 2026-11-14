@@ -2493,7 +2493,7 @@ impl App {
     /// their parent session branch while the parent link exists, preferring
     /// the parent's linked review-request source branch, then the parent's
     /// pushed upstream branch, then the child row's stored local parent branch.
-    fn review_target_branch_for_session(&self, session: &Session) -> String {
+    pub(crate) fn review_target_branch_for_session(&self, session: &Session) -> String {
         self.stacked_parent_review_target_branch(session)
             .unwrap_or_else(|| session.base_branch.clone())
     }

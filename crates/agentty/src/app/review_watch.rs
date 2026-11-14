@@ -477,15 +477,32 @@ impl App {
             } => {
                 let prompt =
                     build_fix_failed_checks_prompt(review_request, &head_commit, &failed_checks);
-                self.submit_turn_prompt(session_id.clone(), PromptSessionMode::Existing, prompt)
-                    .await;
 
-                Ok(())
+                self.submit_turn_prompt(session_id.clone(), PromptSessionMode::Existing, prompt)
+                    .await
+                    .map_err(|error| error.to_string())
             }
-            ReviewWatchAction::ResolveConflicts { .. } => self
-                .rebase_session(session_id)
-                .await
-                .map_err(|error| error.to_string()),
+            ReviewWatchAction::ResolveConflicts { .. } => {
+                // Session sync rebases onto the branch the session would
+                // publish against. A review request retargeted on the forge
+                // conflicts with another branch, so syncing cannot resolve it.
+                let target_branch = &review_request.summary.target_branch;
+                if let Some(sync_branch) = self
+                    .sessions
+                    .session_for_id(session_id)
+                    .map(|session| self.review_target_branch_for_session(session))
+                    .filter(|sync_branch| sync_branch != target_branch)
+                {
+                    return Err(format!(
+                        "the review request targets `{target_branch}`, but this session syncs \
+                         with `{sync_branch}`"
+                    ));
+                }
+
+                self.rebase_session(session_id)
+                    .await
+                    .map_err(|error| error.to_string())
+            }
         }
     }
 

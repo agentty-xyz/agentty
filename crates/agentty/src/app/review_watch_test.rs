@@ -810,6 +810,90 @@ async fn attention_retries_follow_ups_that_cannot_start_and_reports_them_once() 
 }
 
 #[tokio::test]
+async fn failed_check_follow_up_rejected_by_the_session_starts_on_the_next_report() {
+    // Arrange
+    let (mut app, _base_dir) = new_git_test_app().await;
+    let session_id = seed_review_session(&mut app, Status::Review, ReviewRequestState::Open).await;
+    app.enable_review_watch(&session_id).await;
+    let failed_checks = ReviewRequestAttention {
+        failed_checks: vec![failed_check("test", None)],
+        head_commit: "abc123".to_string(),
+        ..ReviewRequestAttention::default()
+    };
+    // A stacked session whose stack cannot accept replies rejects the turn.
+    app.sessions.sessions_mut()[0].parent_session_id = Some(SessionId::from("missing-parent"));
+
+    // Act
+    app.apply_review_request_attention(&session_id, failed_checks.clone())
+        .await;
+    let rejected_keys = app.review_watch.handled_keys.get(&session_id).cloned();
+    app.sessions.sessions_mut()[0].parent_session_id = None;
+    app.apply_review_request_attention(&session_id, failed_checks)
+        .await;
+
+    // Assert
+    assert_eq!(rejected_keys, Some(Vec::new()));
+    assert_eq!(
+        app.review_watch.handled_keys.get(&session_id),
+        Some(&vec!["checks:abc123".to_string()])
+    );
+    assert!(!app.review_watch.failed_starts.contains_key(&session_id));
+    let transcript = transcript(&app, &session_id);
+    assert!(
+        transcript.contains(
+            "[Review Watch] Could not start: the session did not accept the prompt; retrying on \
+             the next check"
+        ),
+        "{transcript}"
+    );
+    assert_eq!(
+        transcript.matches("Fixing 1 failing check").count(),
+        1,
+        "{transcript}"
+    );
+}
+
+#[tokio::test]
+async fn conflict_follow_up_waits_while_the_review_request_targets_another_branch() {
+    // Arrange
+    let (mut app, _base_dir) = new_git_test_app().await;
+    let session_id = seed_review_session(&mut app, Status::Review, ReviewRequestState::Open).await;
+    app.enable_review_watch(&session_id).await;
+    let mut retargeted_review_request = review_request(ForgeKind::GitHub, ReviewRequestState::Open);
+    retargeted_review_request.summary.target_branch = "release".to_string();
+    app.sessions
+        .apply_review_request(&session_id, retargeted_review_request);
+
+    // Act
+    app.apply_review_request_attention(&session_id, conflict_attention())
+        .await;
+    let retargeted_keys = app.review_watch.handled_keys.get(&session_id).cloned();
+    let retargeted_status = handle_status(&app, &session_id);
+    app.sessions.apply_review_request(
+        &session_id,
+        review_request(ForgeKind::GitHub, ReviewRequestState::Open),
+    );
+    app.apply_review_request_attention(&session_id, conflict_attention())
+        .await;
+
+    // Assert
+    assert_eq!(retargeted_keys, Some(Vec::new()));
+    assert_eq!(retargeted_status, Status::Watching);
+    assert_eq!(
+        app.review_watch.handled_keys.get(&session_id),
+        Some(&vec!["conflict:abc123".to_string()])
+    );
+    let transcript = transcript(&app, &session_id);
+    assert!(
+        transcript.contains(
+            "[Review Watch] Could not start: the review request targets `release`, but this \
+             session syncs with `main`; retrying on the next check"
+        ),
+        "{transcript}"
+    );
+}
+
+#[tokio::test]
 async fn conflict_follow_up_blocked_by_a_project_sync_starts_on_the_next_report() {
     // Arrange
     let (mut app, _base_dir, pool) = new_git_test_app_with_pool().await;

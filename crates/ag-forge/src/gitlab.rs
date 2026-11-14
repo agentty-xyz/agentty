@@ -240,7 +240,10 @@ impl GitLabReviewRequestAdapter {
         Ok(merge_request)
     }
 
-    /// Builds the `glab api` request for the failed jobs of one pipeline.
+    /// Builds the `glab api` request for every failed job of one pipeline.
+    ///
+    /// `--paginate` merges all pages into one JSON array, so a pipeline with
+    /// more failed jobs than one page still reports each of them.
     fn failed_pipeline_jobs_command(remote: &ForgeRemote, pipeline_id: u64) -> ForgeCommand {
         let encoded_project_path = Self::encoded_project_path(remote);
 
@@ -251,6 +254,7 @@ impl GitLabReviewRequestAdapter {
                 "api".to_string(),
                 "--hostname".to_string(),
                 remote.host.clone(),
+                "--paginate".to_string(),
                 format!(
                     "/projects/{encoded_project_path}/pipelines/{pipeline_id}/jobs?scope[]=failed&\
                      per_page=100"

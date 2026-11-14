@@ -392,6 +392,7 @@ fn attention_commands_request_encoded_project_endpoints() {
             "api",
             "--hostname",
             "gitlab.com",
+            "--paginate",
             "/projects/agentty-xyz%2Fagentty/pipelines/7/jobs?scope[]=failed&per_page=100",
         ]
     );

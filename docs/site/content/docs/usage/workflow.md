@@ -539,7 +539,9 @@ A watched session rests in **Watching** instead of **Review** and keeps every re
 action. About once a minute, Agentty checks the review request and starts at most one
 follow-up:
 
-1. **Merge conflicts**: syncs the session branch, as `r` does.
+1. **Merge conflicts**: syncs the session branch, as `r` does. Syncing waits while the
+   review request targets a different branch than the session syncs with, for example
+   after it was retargeted on the forge.
 1. **Review comments**: addresses unresolved threads where you or a trusted author await
    a response, as described in
    [Addressing Review Comments](@/docs/usage/workflow.md#addressing-review-comments).
