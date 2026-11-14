@@ -829,7 +829,7 @@ async fn focused_review_survives_rejected_sync() -> E2eResult {
                     .wait_for_text("Persisted focused review finding.", 5000)
                     .press_key("r")
                     .wait_for_text("operation admission failed", 5000)
-                    .step(common::wait_for_frame_text(&[], &["Rebasing..."]))
+                    .wait_for_stable_frame(300, 5000)
             },
             |frame, _report| {
                 Box::pin(async move {

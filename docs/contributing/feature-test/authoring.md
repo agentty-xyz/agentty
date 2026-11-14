@@ -129,11 +129,11 @@ Reuse the shared journey builders from `common.rs` instead of repeating step seq
 A stable-frame wait costs at least its full window. Before input or an assertion, wait
 for the content it depends on with `wait_for_text`, or with
 `common::wait_for_frame_text` in unpublished scenarios. Keep `wait_for_stable_frame`
-before captures that need a settled frame, for style-only changes, and where no
-deterministic content signal exists. Keys handled synchronously need no wait between
-them, except after `Esc`: wait for its effect so the next key is not read as an `Alt`
-chord. VHS replays `Step::eventually` as a sleep for its full timeout, so published
-scenarios avoid it.
+before captures that need a settled frame, for style-only changes, for checks that text
+stays absent, and where no deterministic content signal exists. Keys handled
+synchronously need no wait between them, except after `Esc`: wait for its effect so the
+next key is not read as an `Alt` chord. VHS replays `Step::eventually` as a sleep for
+its full timeout, so published scenarios avoid it.
 
 ### 3. Verify the Zola page
 

@@ -1474,7 +1474,10 @@ const AGENT_CLI_VERSION_LOADING_LABEL: &str = "updating...";
 /// Wait until every `visible` needle renders and no `hidden` needle does.
 ///
 /// Replaces a stable-frame wait in regression-only scenarios whose next
-/// capture or assertion depends on exactly this content. VHS replays
+/// capture or assertion depends on exactly this content. Pair `hidden`
+/// needles with at least one `visible` needle: a hidden-only check returns on
+/// the first frame without the text, so checks that text stays absent keep a
+/// stable-frame wait instead. VHS replays
 /// `Step::eventually` as a sleep for its full timeout, so published
 /// scenarios wait for text or a stable frame instead.
 pub(crate) fn wait_for_frame_text(

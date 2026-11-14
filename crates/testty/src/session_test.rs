@@ -7,7 +7,7 @@ use std::os::windows::io::RawHandle;
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex, mpsc};
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 #[cfg(unix)]
 use portable_pty::unix::RawFd;
@@ -603,14 +603,20 @@ fn wait_for_stable_frame_returns_after_output_stream_closes() {
     // Arrange — the fake output yields one frame and then disconnects, so
     // the wait must sleep through the window instead of spinning.
     let mut session = fake_session(FakeChild::running(), Box::new(io::sink()), &[b"ready"]);
+    let stable_window = Duration::from_millis(50);
+    let started_at = Instant::now();
 
     // Act
     let frame = session
-        .wait_for_stable_frame(Duration::from_millis(50), Duration::from_secs(5))
+        .wait_for_stable_frame(stable_window, Duration::from_secs(5))
         .expect("a closed stream keeps its last frame stable");
 
-    // Assert
+    // Assert — only a lower bound, so slow runners cannot flake the check.
     assert!(frame.all_text().contains("ready"));
+    assert!(
+        started_at.elapsed() >= stable_window,
+        "the wait must not return before the stability window elapses"
+    );
 }
 
 /// Verifies that output arriving during the stability window without
