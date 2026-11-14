@@ -5,28 +5,23 @@ use ratatui::text::{Line, Span};
 use ratatui::widgets::Paragraph;
 
 use crate::app::{ProjectSyncPhase, ProjectSyncStatus, UpdateStatus};
-use crate::ui::page::fyi;
 use crate::ui::{Component, style};
 
 /// Top status bar showing current version, update progress, and availability.
-pub struct StatusBar<'a> {
+pub struct StatusBar {
     current_version: String,
-    fyi_rotation_index: u64,
     latest_available_version: Option<String>,
-    page_fyis: Option<&'a [&'static str]>,
     project_sync_status: Option<ProjectSyncStatus>,
     update_status: Option<UpdateStatus>,
 }
 
-impl<'a> StatusBar<'a> {
+impl StatusBar {
     /// Creates a status bar with the current version.
     pub fn new(current_version: String) -> Self {
         Self {
             current_version,
             latest_available_version: None,
-            page_fyis: None,
             project_sync_status: None,
-            fyi_rotation_index: 0,
             update_status: None,
         }
     }
@@ -35,22 +30,6 @@ impl<'a> StatusBar<'a> {
     #[must_use]
     pub fn latest_available_version(mut self, version: Option<String>) -> Self {
         self.latest_available_version = version;
-        self
-    }
-
-    /// Sets the page-scoped FYI messages available for rotation in the top
-    /// status bar.
-    #[must_use]
-    pub fn page_fyis(mut self, page_fyis: Option<&'a [&'static str]>) -> Self {
-        self.page_fyis = page_fyis;
-        self
-    }
-
-    /// Sets the absolute one-minute FYI rotation slot used to select the
-    /// visible page-scoped message.
-    #[must_use]
-    pub fn fyi_rotation_index(mut self, fyi_rotation_index: u64) -> Self {
-        self.fyi_rotation_index = fyi_rotation_index;
         self
     }
 
@@ -88,13 +67,6 @@ impl<'a> StatusBar<'a> {
             )),
             Some(UpdateStatus::Failed { .. }) | None => None,
         }
-    }
-
-    /// Returns the currently visible page-scoped FYI message, when available.
-    fn page_fyi_text(&self) -> Option<&str> {
-        let page_fyis = self.page_fyis?;
-
-        fyi::rotating_message(page_fyis, self.fyi_rotation_index)
     }
 
     /// Builds the highest-priority project-sync status text and color.
@@ -144,7 +116,7 @@ impl<'a> StatusBar<'a> {
     }
 }
 
-impl Component for StatusBar<'_> {
+impl Component for StatusBar {
     fn render(&self, f: &mut Frame, area: Rect) {
         let mut version_spans = vec![Span::styled(
             format!(" Agentty {}", self.current_version),
@@ -176,12 +148,6 @@ impl Component for StatusBar<'_> {
             version_spans.push(Span::styled(
                 text,
                 Style::default().fg(color).add_modifier(Modifier::BOLD),
-            ));
-        } else if let Some(page_fyi_text) = self.page_fyi_text() {
-            version_spans.push(Span::raw(" | "));
-            version_spans.push(Span::styled(
-                format!("FYI: {page_fyi_text}"),
-                Style::default().fg(style::palette::text_muted()),
             ));
         }
 

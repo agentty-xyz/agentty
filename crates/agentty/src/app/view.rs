@@ -66,7 +66,6 @@ pub(crate) struct AppViewSnapshot<'a> {
     pub(crate) sessions: &'a [Session],
     pub(crate) settings_screen: Option<SettingsScreenSnapshot>,
     pub(crate) stats_activity: &'a [DailyActivity],
-    pub(crate) status_bar_fyi_rotation_index: u64,
     pub(crate) theme: ColorTheme,
     pub(crate) update_status: Option<&'a UpdateStatus>,
     pub(crate) working_dir: &'a Path,
@@ -77,9 +76,6 @@ impl App {
     pub(crate) fn view_snapshot(&self) -> AppViewSnapshot<'_> {
         let visible_session_id = visible_review_session_id(&self.mode);
         let frame_time = read_frame_time(self.services.clock().as_ref());
-        let wall_clock_unix_seconds = frame_time.unix_seconds();
-        let status_bar_fyi_rotation_index =
-            u64::try_from(wall_clock_unix_seconds.div_euclid(60)).unwrap_or_default();
         let session_review = visible_session_id.map(|session_id| {
             let (_, text) = self.review_view_state(session_id);
 
@@ -126,7 +122,6 @@ impl App {
             sessions: sessions.sessions,
             settings_screen,
             stats_activity: sessions.stats_activity,
-            status_bar_fyi_rotation_index,
             graph_chat: visible_session_id.and_then(|id| self.graph_chat.snapshot(id)),
             theme: self.settings.theme,
             update_status: self.update_status.as_ref(),

@@ -779,14 +779,8 @@ const NO_COLOR_ENV_VALUE: &str = "1";
 /// Wall-clock time every feature run is pinned to: `2026-07-01T00:00:00Z`.
 ///
 /// Captured frames are hashed to decide whether a GIF needs re-recording, so
-/// anything derived from the wall clock must not drift between runs. The
-/// status bar rotates its `FYI:` hint once per minute, which alone would make
-/// the same UI hash differently every minute.
-///
-/// This instant is a whole number of minutes past the epoch and its minute
-/// count divides evenly by both rotating hint-set lengths, so every page shows
-/// the first hint of its set. Any fixed value yields stable hashes; this one
-/// also keeps the recorded hint predictable.
+/// anything derived from the wall clock, such as session timers and dashboard
+/// activity, must not drift between runs.
 pub(crate) const PINNED_CLOCK_UNIX_SECONDS: i64 = 1_782_864_000;
 /// UTC offset used by every feature run so host timezones cannot alter frames.
 pub(crate) const PINNED_CLOCK_UTC_OFFSET_SECONDS: i64 = 0;
