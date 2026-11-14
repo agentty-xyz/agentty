@@ -24,6 +24,7 @@ use crate::app::error::AppError;
 use crate::app::prompt_intent::PromptImagePasteUpdate;
 use crate::app::review::FocusedReviewPersistenceRetry;
 use crate::app::review_graph::{ReviewGraphHost, ReviewGraphRequest};
+use crate::app::review_prompt::MAX_REVIEW_PROVIDER_CALLS;
 use crate::app::session_diff::DeferredAutoReviewPersistenceRetry;
 use crate::app::{AppEvent, UpdateStatus, at_mention_task};
 use crate::domain::agent::{AgentCliInfo, AgentKind, AgentSelection, ReasoningLevel};
@@ -711,6 +712,7 @@ impl TaskService {
                     deadline,
                     diff: review_diff,
                     graph_id,
+                    provider_call_limit: MAX_REVIEW_PROVIDER_CALLS,
                     request: ag_contracts::OneShotRequest {
                         activity_tx: None,
                         attachments: Vec::new(),

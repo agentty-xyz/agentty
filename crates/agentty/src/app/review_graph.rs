@@ -33,8 +33,7 @@ use tokio_util::sync::CancellationToken;
 use super::execution_graph::{EnvironmentLease, GraphDriverRegistration, GraphDrivers};
 use super::review::ReviewProgress;
 use super::review_prompt::{
-    self, BatchOutcome, BatchProgress, Fragment, MAX_REVIEW_PROVIDER_CALLS, REVIEW_CONCURRENCY,
-    ReviewOutcome, ReviewedBatches,
+    self, BatchOutcome, BatchProgress, Fragment, REVIEW_CONCURRENCY, ReviewOutcome, ReviewedBatches,
 };
 use crate::infra::review_deadline::ReviewDeadlineClient;
 
@@ -80,6 +79,8 @@ pub(super) struct ReviewGraphRequest {
     pub(super) diff: String,
     /// Unique per generation; retries create a new graph.
     pub(super) graph_id: String,
+    /// Provider calls that every phase of this generation spends together.
+    pub(super) provider_call_limit: usize,
     /// Provider, model, reasoning, and folder shared by every phase.
     pub(super) request: OneShotRequest,
     /// Session owning the graph and its Env.
@@ -113,7 +114,7 @@ impl ReviewGraphHost {
             client,
             permits: Semaphore::new(REVIEW_CONCURRENCY),
         });
-        let budget = ProviderCallBudget::new(MAX_REVIEW_PROVIDER_CALLS);
+        let budget = ProviderCallBudget::new(launch.provider_call_limit);
         let request = review_prompt::review_request(launch.request, &budget);
         let env_id = EnvId::SessionWorktree(launch.session_id.as_str().into());
         let context = {

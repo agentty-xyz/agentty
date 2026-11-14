@@ -2,7 +2,7 @@ use std::time::Duration;
 
 use ag_harness::bash::{CommandOutcome, CommandTermination};
 
-use super::fixture::{CONFORMANCE_EXECUTORS, Workspace, wait_file};
+use super::fixture::{CONFORMANCE_EXECUTORS, Selected, Workspace, wait_file};
 #[cfg(target_os = "macos")]
 use super::fixture::{Descendant, NativeFixture};
 #[tokio::test]
@@ -172,29 +172,18 @@ async fn output_flood_cannot_prevent_deadline_cleanup() {
     for selected in CONFORMANCE_EXECUTORS {
         // Arrange
         let workspace = Workspace::new();
-        // Allow instrumented launcher startup under parallel workspace load
-        // before requiring enough flood output to exercise the capture cap.
-        let options = workspace.executor_options(selected, Duration::from_secs(5), 37);
 
         // Act
-        let result = workspace
-            .harness()
-            .turn(
-                "while :; do printf 'output-flood'; printf 'stderr-flood' >&2; done",
-                options,
-            )
-            .await;
-        assert!(result.is_ok(), "{selected:?}: {result:?}");
-        let result = result.expect("successful command");
-        let result: CommandOutcome = serde_json::from_value(result.into_output()).expect("outcome");
+        let mut result =
+            flood_until_deadline(&workspace, selected, Duration::from_millis(500)).await;
+        if result.stdout_omitted_bytes == 0 || result.stderr_omitted_bytes == 0 {
+            // Instrumented launcher startup under parallel workspace load
+            // spent the short deadline before the flood overflowed both
+            // streams; allow that startup before requiring the overflow.
+            result = flood_until_deadline(&workspace, selected, Duration::from_secs(5)).await;
+        }
 
         // Assert
-        assert_eq!(
-            result.termination,
-            CommandTermination::Deadline,
-            "{selected:?}: {result:?}"
-        );
-        assert!(!result.cleanup_failed, "{selected:?}: {result:?}");
         assert!(result.truncated, "{selected:?}: {result:?}");
         assert_eq!(
             result.stdout.len()
@@ -213,4 +202,31 @@ async fn output_flood_cannot_prevent_deadline_cleanup() {
             "{selected:?}: {result:?}"
         );
     }
+}
+
+/// Floods both streams until `deadline`, which every run must reach with
+/// confirmed cleanup.
+async fn flood_until_deadline(
+    workspace: &Workspace,
+    selected: Selected,
+    deadline: Duration,
+) -> CommandOutcome {
+    let result = workspace
+        .harness()
+        .turn(
+            "while :; do printf 'output-flood'; printf 'stderr-flood' >&2; done",
+            workspace.executor_options(selected, deadline, 37),
+        )
+        .await;
+    assert!(result.is_ok(), "{selected:?}: {result:?}");
+    let result = result.expect("successful command");
+    let result: CommandOutcome = serde_json::from_value(result.into_output()).expect("outcome");
+    assert_eq!(
+        result.termination,
+        CommandTermination::Deadline,
+        "{selected:?}: {result:?}"
+    );
+    assert!(!result.cleanup_failed, "{selected:?}: {result:?}");
+
+    result
 }

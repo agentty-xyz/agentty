@@ -1461,10 +1461,13 @@ async fn reduction_render_failure_does_not_submit_a_worker_request() {
 #[tokio::test]
 async fn exhausted_shared_budget_preserves_completed_batches() {
     // Arrange
+    // One full wave spends the limit; three prompt budgets of source split
+    // into more fragments than that.
+    let provider_call_limit = REVIEW_CONCURRENCY;
     let mut client = MockRunClient::new();
     client
         .expect_submit()
-        .times(MAX_REVIEW_PROVIDER_CALLS)
+        .times(provider_call_limit)
         .returning(|request| {
             request
                 .provider_call_budget
@@ -1475,20 +1478,23 @@ async fn exhausted_shared_budget_preserves_completed_batches() {
         });
 
     // Act
-    let text = submit(
-        client,
-        request(),
-        &"x".repeat(8_000_000),
-        "",
-        |diff, context, _| Ok(render(diff, context)),
-        |_| {},
-    )
-    .await
-    .expect("partial review");
+    let text = ReviewGraphFixture::new()
+        .await
+        .with_provider_call_limit(provider_call_limit)
+        .review(
+            client,
+            request(),
+            &"x".repeat(PROMPT_BUDGET * 3),
+            "",
+            |diff, context, _| Ok(render(diff, context)),
+            |_| {},
+        )
+        .await
+        .expect("partial review");
 
     // Assert
     assert!(text.contains(&format!(
-        "Partial review: {MAX_REVIEW_PROVIDER_CALLS} batches completed"
+        "Partial review: {provider_call_limit} batches completed"
     )));
     assert!(text.contains("provider call limit reached"));
     assert!(text.contains("Preserved finding."));

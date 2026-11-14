@@ -16,6 +16,7 @@ use ag_worker::{GraphInputValue, GraphNodeRunner, GraphRunRequest, MockRunClient
 
 use super::test_support::{ReviewGraphFixture, SESSION_ID};
 use super::{ReviewNodeRunner, ReviewPhase, ReviewState};
+use crate::app::review_prompt::MAX_REVIEW_PROVIDER_CALLS;
 use crate::infra::review_deadline::ReviewDeadlineClient;
 
 fn request() -> OneShotRequest {
@@ -478,6 +479,7 @@ async fn lifecycle_cancellation_stops_running_review_calls() {
                     deadline: tokio::time::Instant::now() + Duration::from_secs(60),
                     diff: "+change\n".into(),
                     graph_id: "focused-review:canceled".into(),
+                    provider_call_limit: MAX_REVIEW_PROVIDER_CALLS,
                     request: request(),
                     session_id: SESSION_ID.into(),
                 },
