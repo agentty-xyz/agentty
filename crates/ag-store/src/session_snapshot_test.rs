@@ -1,4 +1,3 @@
-use crate::connection::open_in_memory_pool;
 use crate::session::ForkSessionSnapshot;
 use crate::session_snapshot::FORK_SESSION_SNAPSHOT;
 use crate::{AppRepositories, DbError};
@@ -6,10 +5,9 @@ use crate::{AppRepositories, DbError};
 #[tokio::test]
 async fn missing_snapshot_source_reports_semantic_operation_context() {
     // Arrange
-    let pool = open_in_memory_pool(1)
+    let repositories = AppRepositories::in_memory()
         .await
         .expect("failed to open in-memory db");
-    let repositories = AppRepositories::from_pool(pool);
 
     // Act
     let error = repositories

@@ -3,7 +3,7 @@ use crate::connection::Database;
 #[tokio::test]
 async fn test_insert_session_creation_activity_at_persists_timestamp() {
     // Arrange
-    let database = Database::open_in_memory()
+    let database = Database::in_memory()
         .await
         .expect("failed to open in-memory db");
     let project_id = database
@@ -36,7 +36,7 @@ async fn test_insert_session_creation_activity_at_persists_timestamp() {
 #[tokio::test]
 async fn test_insert_session_creation_activity_at_ignores_duplicates_per_session() {
     // Arrange
-    let database = Database::open_in_memory()
+    let database = Database::in_memory()
         .await
         .expect("failed to open in-memory db");
     let project_id = database
@@ -74,7 +74,7 @@ async fn test_insert_session_creation_activity_at_ignores_duplicates_per_session
 #[tokio::test]
 async fn test_load_session_activity_timestamps_keeps_deleted_session_history() {
     // Arrange
-    let database = Database::open_in_memory()
+    let database = Database::in_memory()
         .await
         .expect("failed to open in-memory db");
     let project_id = database
@@ -122,7 +122,7 @@ async fn test_load_session_activity_timestamps_keeps_deleted_session_history() {
 #[tokio::test]
 async fn test_load_session_activity_timestamps_preserves_event_order() {
     // Arrange
-    let database = Database::open_in_memory()
+    let database = Database::in_memory()
         .await
         .expect("failed to open in-memory db");
     let project_id = database

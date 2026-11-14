@@ -5,7 +5,7 @@ use crate::connection::Database;
 #[tokio::test]
 async fn test_insert_stacked_draft_session_persists_parent_session_id() {
     // Arrange
-    let database = Database::open_in_memory()
+    let database = Database::in_memory()
         .await
         .expect("failed to open in-memory db");
     let project_id = database
@@ -43,7 +43,7 @@ async fn test_insert_stacked_draft_session_persists_parent_session_id() {
 #[tokio::test]
 async fn test_restack_child_sessions_after_parent_merge_clears_active_children() {
     // Arrange
-    let database = Database::open_in_memory()
+    let database = Database::in_memory()
         .await
         .expect("failed to open in-memory db");
     let project_id = database
@@ -131,7 +131,7 @@ async fn test_restack_child_sessions_after_parent_merge_clears_active_children()
 #[tokio::test]
 async fn test_delete_session_retargets_children_base_branch() {
     // Arrange
-    let database = Database::open_in_memory()
+    let database = Database::in_memory()
         .await
         .expect("failed to open in-memory db");
     let project_id = database
@@ -184,7 +184,7 @@ async fn test_delete_session_retargets_children_base_branch() {
 #[tokio::test]
 async fn test_load_pending_stack_restack_session_ids_returns_only_review_ready_parentless_rows() {
     // Arrange
-    let database = Database::open_in_memory()
+    let database = Database::in_memory()
         .await
         .expect("failed to open in-memory db");
     let project_id = database
@@ -230,7 +230,7 @@ async fn test_load_pending_stack_restack_session_ids_returns_only_review_ready_p
 #[tokio::test]
 async fn test_update_session_stack_membership_updates_and_clears_linkage_atomically() {
     // Arrange
-    let database = Database::open_in_memory()
+    let database = Database::in_memory()
         .await
         .expect("failed to open in-memory db");
     let project_id = database

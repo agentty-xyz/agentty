@@ -46,7 +46,7 @@ async fn test_load_sessions_maps_joined_session_fields() {
 #[tokio::test]
 async fn test_update_session_status_with_timing_at_accumulates_repeated_intervals() {
     // Arrange
-    let database = Database::open_in_memory()
+    let database = Database::in_memory()
         .await
         .expect("failed to open in-memory db");
     let project_id = database
@@ -89,7 +89,7 @@ async fn test_update_session_status_with_timing_at_accumulates_repeated_interval
 #[tokio::test]
 async fn test_load_sessions_for_project_filters_to_project_rows() {
     // Arrange
-    let database = Database::open_in_memory()
+    let database = Database::in_memory()
         .await
         .expect("failed to open in-memory db");
     let first_project_id = database
@@ -144,7 +144,7 @@ async fn test_load_sessions_for_project_filters_to_project_rows() {
 #[tokio::test]
 async fn test_load_session_timestamps_returns_created_and_updated_values() {
     // Arrange
-    let database = Database::open_in_memory()
+    let database = Database::in_memory()
         .await
         .expect("failed to open in-memory db");
     let project_id = database
@@ -180,7 +180,7 @@ async fn test_load_session_timestamps_returns_created_and_updated_values() {
 #[tokio::test]
 async fn test_get_session_base_branch_returns_persisted_value() {
     // Arrange
-    let database = Database::open_in_memory()
+    let database = Database::in_memory()
         .await
         .expect("failed to open in-memory db");
     let project_id = database
@@ -205,7 +205,7 @@ async fn test_get_session_base_branch_returns_persisted_value() {
 #[tokio::test]
 async fn test_load_session_project_id_returns_associated_project() {
     // Arrange
-    let database = Database::open_in_memory()
+    let database = Database::in_memory()
         .await
         .expect("failed to open in-memory db");
     let project_id = database
@@ -233,7 +233,7 @@ async fn test_load_session_project_id_returns_associated_project() {
 /// Builds an in-memory database with one session covering joined fields
 /// returned by `load_sessions()`.
 async fn database_with_joined_session_fields() -> (Database, i64) {
-    let database = Database::open_in_memory()
+    let database = Database::in_memory()
         .await
         .expect("failed to open in-memory db");
     let project_id = database

@@ -13,7 +13,7 @@ use sqlx::sqlite::{SqliteOwnedBuf, SqlitePoolOptions};
 
 use crate::connection::{Database, MIGRATOR, in_memory_connect_options, open_in_memory_pool};
 use crate::repository::{AppRepositories, RepositorySet};
-use crate::timestamp::system_timestamp_source;
+use crate::timestamp::{TimestampSource, system_timestamp_source};
 
 impl Database {
     /// Opens an isolated in-memory database initialized from the shared
@@ -23,9 +23,21 @@ impl Database {
     /// Returns an error if the snapshot cannot be created, read, or loaded.
     #[doc(hidden)]
     pub async fn in_memory() -> Result<Self, crate::DbError> {
+        Self::in_memory_with_timestamp_source(system_timestamp_source()).await
+    }
+
+    /// Opens an isolated snapshot-backed in-memory database whose
+    /// repositories persist timestamps from `timestamp_source`.
+    ///
+    /// # Errors
+    /// Returns an error if the snapshot cannot be created, read, or loaded.
+    #[doc(hidden)]
+    pub async fn in_memory_with_timestamp_source(
+        timestamp_source: Arc<dyn TimestampSource>,
+    ) -> Result<Self, crate::DbError> {
         let pool = open_snapshot_pool().await?;
 
-        Ok(Self::from_pool(pool, system_timestamp_source()))
+        Ok(Self::from_pool(pool, timestamp_source))
     }
 }
 

@@ -8,7 +8,7 @@ use crate::connection::Database;
 #[tokio::test]
 async fn test_append_session_message_writes_message_rows() {
     // Arrange
-    let database = Database::open_in_memory()
+    let database = Database::in_memory()
         .await
         .expect("failed to open in-memory db");
     let project_id = database
@@ -79,7 +79,7 @@ async fn test_append_session_message_writes_message_rows() {
 #[tokio::test]
 async fn test_append_session_message_refreshes_session_updated_at() {
     // Arrange
-    let database = Database::open_in_memory()
+    let database = Database::in_memory()
         .await
         .expect("failed to open in-memory db");
     let project_id = database
@@ -122,7 +122,7 @@ async fn test_append_session_message_refreshes_session_updated_at() {
 #[tokio::test]
 async fn test_load_session_detail_reads_message_transcript() {
     // Arrange
-    let database = Database::open_in_memory()
+    let database = Database::in_memory()
         .await
         .expect("failed to open in-memory db");
     let project_id = database

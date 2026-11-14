@@ -8,7 +8,7 @@ use crate::connection::Database;
 #[tokio::test]
 async fn test_delete_session_removes_row_and_nulls_usage_foreign_key() {
     // Arrange
-    let database = Database::open_in_memory()
+    let database = Database::in_memory()
         .await
         .expect("failed to open in-memory db");
     let project_id = database
@@ -68,7 +68,7 @@ WHERE model = ?
 #[tokio::test]
 async fn test_upsert_session_usage_accumulates_counts_per_model() {
     // Arrange
-    let database = Database::open_in_memory()
+    let database = Database::in_memory()
         .await
         .expect("failed to open in-memory db");
     let project_id = database

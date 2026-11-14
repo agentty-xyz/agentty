@@ -20,7 +20,7 @@ fn request(attempt_id: &str) -> SubmitTaskRequest {
 }
 
 async fn database() -> Result<Database, DbError> {
-    let database = Database::open_in_memory_with_timestamp_source(Arc::new(|| 123)).await?;
+    let database = Database::in_memory_with_timestamp_source(Arc::new(|| 123)).await?;
     let project = database.projects().upsert_project("project", None).await?;
     for session in ["session", "other"] {
         database
@@ -36,7 +36,7 @@ async fn database() -> Result<Database, DbError> {
 async fn planned_tasks_preserve_identity_and_creation_time_when_attempted_or_completed() {
     // Arrange
     let now = Arc::new(AtomicI64::new(123));
-    let database = Database::open_in_memory_with_timestamp_source({
+    let database = Database::in_memory_with_timestamp_source({
         let now = Arc::clone(&now);
         Arc::new(move || now.load(Ordering::Relaxed))
     })

@@ -33,14 +33,14 @@ impl TimestampSource for FixedTimestampSource {
 #[tokio::test]
 async fn injected_clock_drives_all_repository_timestamps() {
     // Arrange
-    let pool = open_in_memory_pool(1)
-        .await
-        .expect("failed to open in-memory db");
     let timestamp_source = Arc::new(AdvancingTimestampSource {
         next_timestamp: AtomicI64::new(120),
     });
-    let repositories =
-        AppRepositories::from_pool_and_timestamp_source(pool.clone(), timestamp_source);
+    let database = Database::in_memory_with_timestamp_source(timestamp_source)
+        .await
+        .expect("failed to open in-memory db");
+    let pool = database.pool().clone();
+    let repositories = AppRepositories::from(database);
 
     // Act
     let project_id = repositories
@@ -105,12 +105,11 @@ INNER JOIN session_usage ON session_usage.session_id = session.id
 #[tokio::test]
 async fn fixed_clock_drives_session_metadata_status_and_usage_writes() {
     // Arrange
-    let pool = open_in_memory_pool(1)
+    let database = Database::in_memory_with_timestamp_source(Arc::new(FixedTimestampSource))
         .await
         .expect("failed to open in-memory db");
-    let timestamp_source = Arc::new(FixedTimestampSource);
-    let repositories =
-        AppRepositories::from_pool_and_timestamp_source(pool.clone(), timestamp_source);
+    let pool = database.pool().clone();
+    let repositories = AppRepositories::from(database);
     let project_id = repositories
         .projects()
         .upsert_project("/tmp/fixed-clock", Some("main".to_string()))
@@ -186,10 +185,9 @@ async fn fixed_clock_drives_session_metadata_status_and_usage_writes() {
 #[tokio::test]
 async fn repository_parts_support_focused_adapter_injection() {
     // Arrange
-    let pool = open_in_memory_pool(1)
+    let baseline = AppRepositories::in_memory()
         .await
         .expect("failed to open in-memory db");
-    let baseline = AppRepositories::from_pool(pool);
     let mut operation = MockOperationRepository::<crate::DbError>::new();
     operation
         .expect_is_cancel_requested_for_operation()

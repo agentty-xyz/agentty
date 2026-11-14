@@ -7,7 +7,7 @@ use crate::connection::Database;
 #[tokio::test]
 async fn test_setting_round_trip_supports_default_smart_fast_and_review_models() {
     // Arrange
-    let database = Database::open_in_memory()
+    let database = Database::in_memory()
         .await
         .expect("failed to open in-memory db");
 
@@ -71,7 +71,7 @@ async fn test_setting_round_trip_supports_default_smart_fast_and_review_models()
 #[tokio::test]
 async fn test_project_setting_round_trip_is_isolated_per_project() {
     // Arrange
-    let database = Database::open_in_memory()
+    let database = Database::in_memory()
         .await
         .expect("failed to open in-memory db");
     let first_project_id = database
@@ -124,7 +124,7 @@ async fn test_project_setting_round_trip_is_isolated_per_project() {
 #[tokio::test]
 async fn test_project_role_reasoning_levels_round_trip_with_typed_setting_helpers() {
     // Arrange
-    let database = Database::open_in_memory()
+    let database = Database::in_memory()
         .await
         .expect("failed to open in-memory db");
     let project_id = database
@@ -177,7 +177,7 @@ async fn test_project_role_reasoning_levels_round_trip_with_typed_setting_helper
 #[tokio::test]
 async fn test_load_project_reasoning_level_defaults_when_setting_is_missing_or_invalid() {
     // Arrange
-    let database = Database::open_in_memory()
+    let database = Database::in_memory()
         .await
         .expect("failed to open in-memory db");
     let project_id = database
@@ -215,7 +215,7 @@ async fn test_load_project_reasoning_level_defaults_when_setting_is_missing_or_i
 #[tokio::test]
 async fn test_load_project_speed_mode_round_trips_and_defaults_invalid_values() {
     // Arrange
-    let database = Database::open_in_memory()
+    let database = Database::in_memory()
         .await
         .expect("failed to open in-memory db");
     let project_id = database
@@ -264,7 +264,7 @@ async fn test_load_project_speed_mode_round_trips_and_defaults_invalid_values() 
 #[tokio::test]
 async fn test_set_and_load_active_project_id_round_trip() {
     // Arrange
-    let database = Database::open_in_memory()
+    let database = Database::in_memory()
         .await
         .expect("failed to open in-memory db");
     let project_id = database
