@@ -270,9 +270,11 @@ left, it stops the active turn and cancels queued branch actions. Rebase cannot 
 interrupted this way. Queued chat survives project switching, but not an Agentty
 restart.
 
-Changing provider or model waits for current work, saves the selection, then discards
-pending messages and actions. Resubmit them after switching. A failed save keeps the old
-selection and queue.
+While work runs, `/` offers only `/mode`, `/model`, `/reasoning`, `/style`, and `/fast`.
+`/model` and `/fast` changes wait until the active work and every queued message and
+action finish, so the queue runs on the old model. A `[Settings]` line confirms the
+wait; choosing the current value cancels it. Pending changes are not kept across an
+Agentty restart. A failed save keeps the old selection.
 
 While composing, press `Tab` to focus and scroll chat; press it again to return. From
 chat focus, `d` previews changes and `q` returns to the list, preserving the draft.

@@ -474,6 +474,32 @@ impl PromptGraphState {
     }
 }
 
+/// Slash commands the composer offers for the edited session's state.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum PromptSlashCommandSet {
+    /// Every command, including `/apply` for actionable focused reviews.
+    WithApply,
+    /// Every command except `/apply`.
+    WithoutApply,
+    /// Setting commands only, offered while the session runs a turn or
+    /// rebase; turn-starting `/apply` and `/graph` stay hidden.
+    SettingsOnly,
+}
+
+impl PromptSlashCommandSet {
+    /// Selects the command set for one session.
+    ///
+    /// `session_is_busy` hides turn-starting commands while the session
+    /// queues chat messages behind an active turn or rebase.
+    pub fn for_session(allow_apply_command: bool, session_is_busy: bool) -> Self {
+        match (session_is_busy, allow_apply_command) {
+            (true, _) => Self::SettingsOnly,
+            (false, true) => Self::WithApply,
+            (false, false) => Self::WithoutApply,
+        }
+    }
+}
+
 /// UI state for prompt-only slash command selection.
 #[derive(Clone, PartialEq, Eq, Debug)]
 pub struct PromptSlashState {
@@ -612,7 +638,7 @@ impl PromptComposerState {
             self.input.text(),
             &self.slash_state,
             session_agent_kind,
-            true,
+            PromptSlashCommandSet::WithApply,
         )
     }
 
@@ -627,7 +653,7 @@ impl PromptComposerState {
             self.input.text(),
             &self.slash_state,
             session_agent_kind,
-            true,
+            PromptSlashCommandSet::WithApply,
         )
     }
 
@@ -712,16 +738,16 @@ impl Default for PromptComposerState {
 
 /// Returns the number of selectable options in the active slash stage.
 ///
-/// `allow_apply_command` controls whether `/apply` participates in the
-/// command-stage list so navigation counts match the visible slash menu.
+/// `command_set` controls which commands participate in the command-stage
+/// list so navigation counts match the visible slash menu.
 #[must_use]
 pub fn prompt_slash_option_count(
     input: &str,
     slash_state: &PromptSlashState,
     session_agent_kind: AgentKind,
-    allow_apply_command: bool,
+    command_set: PromptSlashCommandSet,
 ) -> usize {
-    build_prompt_slash_suggestion_list(input, slash_state, session_agent_kind, allow_apply_command)
+    build_prompt_slash_suggestion_list(input, slash_state, session_agent_kind, command_set)
         .map_or(0, |suggestion_list| suggestion_list.items.len())
 }
 
@@ -961,16 +987,16 @@ pub fn drain_prompt_submission(
 /// Builds the render-ready prompt slash suggestion list for the provided
 /// input and slash state.
 ///
-/// `allow_apply_command` controls whether `/apply` participates in the
-/// command-stage list so rendered rows stay aligned with selection indexes.
+/// `command_set` controls which commands participate in the command-stage
+/// list so rendered rows stay aligned with selection indexes.
 #[must_use]
 pub fn build_prompt_slash_suggestion_list(
     input: &str,
     slash_state: &PromptSlashState,
     session_agent_kind: AgentKind,
-    allow_apply_command: bool,
+    command_set: PromptSlashCommandSet,
 ) -> Option<PromptSuggestionList> {
-    build_slash_suggestion_list(input, slash_state, session_agent_kind, allow_apply_command)
+    build_slash_suggestion_list(input, slash_state, session_agent_kind, command_set)
 }
 
 /// Resolves the semantic prompt slash action behind the current selection.
@@ -978,16 +1004,16 @@ pub fn build_prompt_slash_suggestion_list(
 /// The resolved item is clamped to the same visible selection range used by
 /// [`build_prompt_slash_suggestion_list`] so submit behavior stays aligned with
 /// the currently rendered highlight even when `selected_index` is stale.
-/// `allow_apply_command` must match the value used for rendering and
-/// navigation counts.
+/// `command_set` must match the value used for rendering and navigation
+/// counts.
 #[must_use]
 pub fn resolve_prompt_slash_selection(
     input: &str,
     slash_state: &PromptSlashState,
     session_agent_kind: AgentKind,
-    allow_apply_command: bool,
+    command_set: PromptSlashCommandSet,
 ) -> Option<PromptSuggestionSelection> {
-    selected_slash_action(input, slash_state, session_agent_kind, allow_apply_command)
+    selected_slash_action(input, slash_state, session_agent_kind, command_set)
 }
 
 /// Builds one prompt slash suggestion list for the provided input state.
@@ -995,7 +1021,7 @@ fn build_slash_suggestion_list(
     input: &str,
     slash_state: &PromptSlashState,
     session_agent_kind: AgentKind,
-    allow_apply_command: bool,
+    command_set: PromptSlashCommandSet,
 ) -> Option<PromptSuggestionList> {
     if !input.starts_with('/') {
         return None;
@@ -1006,7 +1032,7 @@ fn build_slash_suggestion_list(
             let commands = prompt_slash_commands(
                 input,
                 session_agent_kind,
-                allow_apply_command,
+                command_set,
                 slash_state.graph.is_available(),
             )
             .into_iter()
@@ -1083,14 +1109,14 @@ fn selected_slash_action(
     input: &str,
     slash_state: &PromptSlashState,
     session_agent_kind: AgentKind,
-    allow_apply_command: bool,
+    command_set: PromptSlashCommandSet,
 ) -> Option<PromptSuggestionSelection> {
     match slash_state.stage {
         PromptSlashStage::Command => {
             let commands = prompt_slash_commands(
                 input,
                 session_agent_kind,
-                allow_apply_command,
+                command_set,
                 slash_state.graph.is_available(),
             );
             let selected_command = commands
@@ -1358,7 +1384,7 @@ fn command_description(command: &str) -> &'static str {
 fn prompt_slash_commands(
     input: &str,
     session_agent_kind: AgentKind,
-    allow_apply_command: bool,
+    command_set: PromptSlashCommandSet,
     allow_graph_command: bool,
 ) -> Vec<&'static str> {
     let lowered = input.to_lowercase();
@@ -1371,10 +1397,10 @@ fn prompt_slash_commands(
         "/style",
         "/fast",
     ];
-    if !allow_apply_command {
+    if command_set != PromptSlashCommandSet::WithApply {
         commands.retain(|command| *command != "/apply");
     }
-    if !allow_graph_command {
+    if !allow_graph_command || command_set == PromptSlashCommandSet::SettingsOnly {
         commands.retain(|command| *command != "/graph");
     }
     if !session_agent_kind.supports_speed_mode() {

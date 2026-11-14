@@ -39,8 +39,8 @@ use crate::domain::transient_message::{
 };
 use crate::presentation::app_mode::{AppMode, ChatFocus, DiffRestoreTarget};
 use crate::presentation::prompt::{
-    PendingImagePaste, PromptAtMentionState, PromptGraphState, PromptSlashStage, PromptSlashState,
-    prompt_slash_option_count,
+    PendingImagePaste, PromptAtMentionState, PromptGraphState, PromptSlashCommandSet,
+    PromptSlashStage, PromptSlashState, prompt_slash_option_count,
 };
 use crate::test_support::{SessionFixtureBuilder, session_fixture};
 use crate::ui::RenderCacheStore;
@@ -175,35 +175,25 @@ fn test_q_in_input_focus_edits_prompt() {
 }
 
 #[test]
-fn test_prompt_input_mode_routes_mentions_slash_commands_and_queued_text() {
-    for (at_mention_state, input_text, slash_state, queues_messages, expected_input_mode) in [
+fn test_prompt_input_mode_routes_mentions_slash_commands_and_text() {
+    for (at_mention_state, input_text, slash_state, expected_input_mode) in [
         (
             Some(PromptAtMentionState::new(Vec::new())),
             "@read",
             PromptSlashState::default(),
-            false,
             PromptInputMode::AtMention,
         ),
         (
             Some(PromptAtMentionState::new(Vec::new())),
             "email@test",
             PromptSlashState::default(),
-            false,
             PromptInputMode::Text,
         ),
         (
             None,
             "/model",
             PromptSlashState::default(),
-            false,
             PromptInputMode::SlashCommand,
-        ),
-        (
-            None,
-            "/model",
-            PromptSlashState::default(),
-            true,
-            PromptInputMode::Text,
         ),
         (
             None,
@@ -212,7 +202,6 @@ fn test_prompt_input_mode_routes_mentions_slash_commands_and_queued_text() {
                 graph: PromptGraphState::Armed,
                 ..PromptSlashState::default()
             },
-            false,
             PromptInputMode::Text,
         ),
     ] {
@@ -220,30 +209,24 @@ fn test_prompt_input_mode_routes_mentions_slash_commands_and_queued_text() {
         let input = InputState::with_text(input_text.to_string());
 
         // Act
-        let input_mode = prompt_input_mode(
-            at_mention_state.as_ref(),
-            &input,
-            &slash_state,
-            queues_messages,
-        );
+        let input_mode = prompt_input_mode(at_mention_state.as_ref(), &input, &slash_state);
 
         // Assert
         assert_eq!(input_mode, expected_input_mode, "{input_text}");
     }
 }
 
-/// Verifies that only queueing statuses demote a leading `/` to plain text:
-/// `InProgress` and `Rebasing` queue the prompt behind the active operation,
-/// while `Review` keeps the slash submit path.
+/// Verifies that a session running a turn or rebase keeps slash-command mode
+/// but offers only setting commands, while `Review` offers every command.
 #[tokio::test]
-async fn test_prompt_context_demotes_slash_commands_only_while_session_queues_messages() {
+async fn test_prompt_context_keeps_setting_slash_commands_while_session_is_busy() {
     // Arrange
     let (mut app, _base_dir) = new_test_prompt_app("/model", None).await;
 
-    for (status, expected_input_mode) in [
-        (Status::InProgress, PromptInputMode::Text),
-        (Status::Rebasing, PromptInputMode::Text),
-        (Status::Review, PromptInputMode::SlashCommand),
+    for (status, expected_command_set) in [
+        (Status::InProgress, PromptSlashCommandSet::SettingsOnly),
+        (Status::Rebasing, PromptSlashCommandSet::SettingsOnly),
+        (Status::Review, PromptSlashCommandSet::WithoutApply),
     ] {
         app.sessions.sessions_mut()[0].status = status;
 
@@ -251,7 +234,15 @@ async fn test_prompt_context_demotes_slash_commands_only_while_session_queues_me
         let context = prompt_context(&mut app).expect("expected prompt context");
 
         // Assert
-        assert_eq!(context.input_mode, expected_input_mode, "{status:?}");
+        assert_eq!(
+            context.input_mode,
+            PromptInputMode::SlashCommand,
+            "{status:?}"
+        );
+        assert_eq!(
+            context.slash_command_set, expected_command_set,
+            "{status:?}"
+        );
     }
 }
 
@@ -378,7 +369,7 @@ fn test_prompt_slash_commands_match_model() {
         "/m",
         &PromptSlashState::default(),
         AgentKind::Codex,
-        true,
+        PromptSlashCommandSet::WithApply,
     )
     .expect("expected suggestion list");
     let commands = suggestion_list
@@ -400,7 +391,7 @@ fn test_prompt_slash_commands_lists_all_commands() {
         "/",
         &PromptSlashState::default(),
         AgentKind::Codex,
-        true,
+        PromptSlashCommandSet::WithApply,
     )
     .expect("expected suggestion list");
     let commands = suggestion_list
@@ -423,7 +414,7 @@ fn test_prompt_slash_commands_no_match() {
         "/x",
         &PromptSlashState::default(),
         AgentKind::Codex,
-        true,
+        PromptSlashCommandSet::WithApply,
     );
 
     // Assert
@@ -440,7 +431,7 @@ fn test_prompt_slash_option_count_for_agent_stage() {
             ..PromptSlashState::default()
         },
         AgentKind::Codex,
-        true,
+        PromptSlashCommandSet::WithApply,
     );
 
     // Assert
@@ -458,7 +449,7 @@ fn test_prompt_slash_option_count_for_model_stage() {
             ..PromptSlashState::default()
         },
         AgentKind::Codex,
-        true,
+        PromptSlashCommandSet::WithApply,
     );
 
     // Assert
@@ -479,7 +470,7 @@ fn test_prompt_slash_option_count_for_agent_stage_uses_available_agent_kinds() {
             ..PromptSlashState::default()
         },
         AgentKind::Codex,
-        true,
+        PromptSlashCommandSet::WithApply,
     );
 
     // Assert
@@ -605,7 +596,7 @@ fn test_handle_at_mention_select_dismisses_stale_mention_state() {
     let mut effects = Vec::new();
 
     // Act
-    select_at_mention(&mut mode, &new_test_prompt_context(), &mut effects);
+    select_at_mention(&mut mode, &mut effects);
 
     // Assert
     assert!(matches!(
@@ -626,25 +617,21 @@ fn test_handle_at_mention_key_supports_enter_tab_and_unhandled_keys() {
     let mut enter_mode = mention_mode("@src", PromptAtMentionState::new(vec![entry.clone()]));
     let mut tab_mode = mention_mode("@src", PromptAtMentionState::new(vec![entry]));
     let mut ignored_mode = mention_mode("@src", PromptAtMentionState::new(Vec::new()));
-    let prompt_context = new_test_prompt_context();
     let mut effects = Vec::new();
 
     // Act
     let enter_handled = reduce_at_mention_key(
         &mut enter_mode,
-        &prompt_context,
         KeyEvent::new(KeyCode::Enter, event::KeyModifiers::NONE),
         &mut effects,
     );
     let tab_handled = reduce_at_mention_key(
         &mut tab_mode,
-        &prompt_context,
         KeyEvent::new(KeyCode::Tab, event::KeyModifiers::NONE),
         &mut effects,
     );
     let character_handled = reduce_at_mention_key(
         &mut ignored_mode,
-        &prompt_context,
         KeyEvent::new(KeyCode::Char('x'), event::KeyModifiers::NONE),
         &mut effects,
     );
@@ -670,7 +657,7 @@ fn test_handle_at_mention_select_inserts_directory_with_trailing_slash() {
     let mut effects = Vec::new();
 
     // Act
-    select_at_mention(&mut mode, &new_test_prompt_context(), &mut effects);
+    select_at_mention(&mut mode, &mut effects);
 
     // Assert
     assert_eq!(mode_input(&mode).0, "@src/ ");
@@ -699,7 +686,7 @@ fn test_handle_at_mention_select_clamps_stale_selected_index() {
     let mut effects = Vec::new();
 
     // Act
-    select_at_mention(&mut mode, &new_test_prompt_context(), &mut effects);
+    select_at_mention(&mut mode, &mut effects);
 
     // Assert
     assert!(matches!(
@@ -715,21 +702,11 @@ fn test_prompt_undo_restores_slash_command_context() {
     let mut mode = new_test_prompt_mode("");
     let mut prompt_context = new_test_prompt_context();
     let mut effects = Vec::new();
-    reduce_prompt_input_command(
-        &mut mode,
-        &prompt_context,
-        InputCommand::Insert('/'),
-        &mut effects,
-    );
-    reduce_prompt_input_command(
-        &mut mode,
-        &prompt_context,
-        InputCommand::Insert('x'),
-        &mut effects,
-    );
+    reduce_prompt_input_command(&mut mode, InputCommand::Insert('/'), &mut effects);
+    reduce_prompt_input_command(&mut mode, InputCommand::Insert('x'), &mut effects);
 
     // Act
-    reduce_prompt_input_command(&mut mode, &prompt_context, InputCommand::Undo, &mut effects);
+    reduce_prompt_input_command(&mut mode, InputCommand::Undo, &mut effects);
 
     // Assert
     refresh_test_input_mode(&mode, &mut prompt_context);
@@ -2266,18 +2243,12 @@ fn test_handle_prompt_left_reactivates_existing_at_mention_without_cached_state(
     // Arrange
     let input_text = "@src/main.rs more";
     let mut mode = new_test_prompt_mode(input_text);
-    let prompt_context = new_test_prompt_context();
     let mut effects = Vec::new();
     let moves_back_into_mention = " more".chars().count();
 
     // Act
     for _ in 0..moves_back_into_mention {
-        reduce_prompt_input_command(
-            &mut mode,
-            &prompt_context,
-            InputCommand::MoveLeft,
-            &mut effects,
-        );
+        reduce_prompt_input_command(&mut mode, InputCommand::MoveLeft, &mut effects);
     }
 
     // Assert

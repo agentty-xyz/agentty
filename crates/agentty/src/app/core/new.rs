@@ -171,6 +171,7 @@ impl App {
             experimental_graph: false,
             auto_address_review_iterations: std::collections::HashMap::new(),
             deferred_auto_review_session_ids: std::collections::HashSet::new(),
+            deferred_session_settings: std::collections::HashMap::new(),
             role_review_suppression: std::collections::HashMap::new(),
             latest_project_sync_operation_ids: std::collections::HashMap::new(),
             pending_project_sync_completions: std::collections::HashMap::new(),

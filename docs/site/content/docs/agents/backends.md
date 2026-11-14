@@ -403,7 +403,8 @@ replacement automatically. Finished sessions preserve their historical model dat
 <a id="backends-switching-models"></a> Use `/model` to change the current session's
 backend and model, `/reasoning` to change reasoning effort, and `/style` to choose
 answer length. See [Slash Commands](@/docs/usage/workflow.md#slash-commands) for
-response styles and permission modes.
+response styles and permission modes. While a turn runs, model and speed changes wait
+for [queued work](@/docs/usage/workflow.md#active-turns-and-the-message-queue).
 
 Claude and Codex also support `/fast`. Press `Enter` on the command to toggle the
 current session between `Normal` and `Fast`. `Fast` reduces latency at higher provider

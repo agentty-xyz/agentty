@@ -1206,6 +1206,7 @@ impl App {
 
         self.sync_touched_sessions(&event_batch.session_ids);
         self.apply_session_transient_updates(&mut event_batch);
+        self.apply_deferred_session_settings().await;
         self.start_stacked_child_rebases_after_parent_merge(std::mem::take(
             &mut event_batch.stacked_parent_merge_child_rebases,
         ))

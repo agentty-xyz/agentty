@@ -11,10 +11,10 @@ use crate::app::message_admission::MessageIntent;
 use crate::app::task::{PromptImagePasteTaskInput, TaskService};
 use crate::app::{App, AppError, ReviewCacheEntry};
 use crate::domain::agent::{AgentSelection, ReasoningLevel, ResponseStyle, SpeedMode};
-use crate::domain::composer::PromptAttachment;
+use crate::domain::composer::{PromptAttachment, PromptSlashCommandSet};
 use crate::domain::permission::PermissionMode;
 use crate::domain::review;
-use crate::domain::session::{SessionId, Status};
+use crate::domain::session::{Session, SessionId, Status};
 use crate::domain::transcript_notice::TranscriptNotice;
 use crate::domain::transient_message::{
     TransientMessage, TransientMessageAnchor, TransientMessageBody, TransientMessageLifecycle,
@@ -48,6 +48,54 @@ pub(crate) struct PromptSubmission {
     pub(crate) session_id: SessionId,
     /// Session lifecycle shape used for app-layer submission routing.
     pub(crate) session_mode: PromptSessionMode,
+}
+
+/// Result of one prompt-selected model change.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) enum PromptModelChange {
+    /// The change waits until the session worker becomes idle.
+    Deferred,
+    /// The session model could not be changed.
+    Failed,
+    /// The session now uses the selected model.
+    Switched,
+}
+
+/// Model and speed changes selected while a session worker owned accepted
+/// work.
+///
+/// Changing the model replaces the session worker, so these changes apply
+/// once the active turn or rebase and every queued message have finished.
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
+pub(crate) struct DeferredSessionSettings {
+    /// Agent and model to switch to.
+    pub(crate) agent: Option<AgentSelection>,
+    /// Response speed to switch to after any model change.
+    pub(crate) speed_mode: Option<SpeedMode>,
+}
+
+impl DeferredSessionSettings {
+    /// Returns whether no setting change remains pending.
+    fn is_empty(&self) -> bool {
+        self.agent.is_none() && self.speed_mode.is_none()
+    }
+
+    /// Returns the response speed the session will use once the pending
+    /// model change applies, before any pending speed change.
+    ///
+    /// Switching to a model that cannot run fast mode disables it, matching
+    /// `App::switch_session_model`.
+    fn speed_mode_after_model_change(&self, current_speed_mode: SpeedMode) -> SpeedMode {
+        match self.agent {
+            Some(selected_agent)
+                if current_speed_mode == SpeedMode::Fast
+                    && !selected_agent.supports_fast_mode() =>
+            {
+                SpeedMode::Normal
+            }
+            _ => current_speed_mode,
+        }
+    }
 }
 
 /// Typed cancellation request emitted by the presentation boundary.
@@ -424,14 +472,22 @@ impl App {
         }
     }
 
-    /// Returns whether cached focused-review text contains actionable
-    /// suggestions for one session.
-    pub(crate) fn prompt_apply_command_is_available_for_session(&self, session_id: &str) -> bool {
-        let Some(ReviewCacheEntry::Ready { text, .. }) = self.review_cache.get(session_id) else {
-            return false;
-        };
+    /// Returns the slash commands offered for one session.
+    ///
+    /// `/apply` requires actionable cached focused-review suggestions, and a
+    /// session that queues chat messages offers setting commands only.
+    pub(crate) fn prompt_slash_command_set(&self, session_id: &str) -> PromptSlashCommandSet {
+        let allow_apply_command = matches!(
+            self.review_cache.get(session_id),
+            Some(ReviewCacheEntry::Ready { text, .. })
+                if review::has_actionable_review_suggestions(Some(text))
+        );
+        let session_is_busy = self
+            .sessions
+            .session_for_id(session_id)
+            .is_some_and(Session::queues_chat_messages);
 
-        review::has_actionable_review_suggestions(Some(text))
+        PromptSlashCommandSet::for_session(allow_apply_command, session_is_busy)
     }
 
     /// Lists the harness models again in the background, so a server started
@@ -441,24 +497,228 @@ impl App {
         self.services.refresh_harness_models();
     }
 
-    /// Persists one slash-selected model change, logs any failure with session
-    /// context, and returns whether the session now uses `selected_agent`.
+    /// Applies one slash-selected model change and logs any failure with
+    /// session context.
+    ///
+    /// A session whose worker still owns accepted work keeps its model until
+    /// that work finishes, because replacing the worker would block on the
+    /// active turn and drop queued messages.
     pub(crate) async fn update_prompt_session_model(
         &mut self,
         session_id: &SessionId,
         selected_agent: AgentSelection,
-    ) -> bool {
-        let should_disable_fast_mode = self
+    ) -> PromptModelChange {
+        if let Some(busy_session) = self.busy_session(session_id) {
+            let current_agent = busy_session.agent;
+            self.defer_prompt_session_model(session_id, current_agent, selected_agent)
+                .await;
+
+            return PromptModelChange::Deferred;
+        }
+
+        let switched = self.switch_session_model(session_id, selected_agent).await;
+        self.process_pending_app_events().await;
+
+        if switched {
+            PromptModelChange::Switched
+        } else {
+            PromptModelChange::Failed
+        }
+    }
+
+    /// Toggles the slash-selected response speed, starting from a change
+    /// still waiting for the session worker.
+    pub(crate) async fn toggle_prompt_session_speed_mode(&mut self, session_id: &SessionId) {
+        let Some(current_speed_mode) = self
             .sessions
-            .sessions()
-            .iter()
-            .find(|session| session.id == *session_id)
-            .is_some_and(|session| {
-                session.speed_mode == SpeedMode::Fast && !selected_agent.supports_fast_mode()
-            });
+            .session_for_id(session_id)
+            .map(|session| session.speed_mode)
+        else {
+            return;
+        };
+        let effective_speed_mode =
+            self.deferred_session_settings
+                .get(session_id)
+                .map_or(current_speed_mode, |settings| {
+                    settings.speed_mode.unwrap_or_else(|| {
+                        settings.speed_mode_after_model_change(current_speed_mode)
+                    })
+                });
+        let speed_mode = match effective_speed_mode {
+            SpeedMode::Normal => SpeedMode::Fast,
+            SpeedMode::Fast => SpeedMode::Normal,
+        };
+
+        self.update_prompt_session_speed_mode(session_id, speed_mode)
+            .await;
+    }
+
+    /// Applies deferred model and speed changes for loaded sessions whose
+    /// workers became idle, and discards them for finished sessions.
+    ///
+    /// Reducer batches call this after synchronizing session snapshots, so
+    /// emitted model and speed events are reduced by the next batch.
+    pub(crate) async fn apply_deferred_session_settings(&mut self) {
+        let settled_sessions = self
+            .deferred_session_settings
+            .keys()
+            .filter_map(|session_id| self.sessions.session_for_id(session_id))
+            .filter(|session| {
+                matches!(
+                    session.status,
+                    Status::Review | Status::Question | Status::Done | Status::Canceled
+                ) && !session.has_pending_worker_work()
+            })
+            .map(|session| (session.id.clone(), session.status, session.agent))
+            .collect::<Vec<_>>();
+        for (session_id, status, mut session_agent) in settled_sessions {
+            let settings = self
+                .deferred_session_settings
+                .remove(&session_id)
+                .unwrap_or_default();
+            if matches!(status, Status::Done | Status::Canceled) {
+                continue;
+            }
+
+            if let Some(selected_agent) = settings.agent {
+                if !self.switch_session_model(&session_id, selected_agent).await {
+                    continue;
+                }
+                session_agent = selected_agent;
+            }
+            if let Some(speed_mode) = settings.speed_mode {
+                self.switch_session_speed_mode(&session_id, session_agent, speed_mode)
+                    .await;
+            }
+        }
+    }
+
+    /// Returns the loaded session when its worker still owns accepted work.
+    fn busy_session(&self, session_id: &str) -> Option<&Session> {
+        self.sessions
+            .session_for_id(session_id)
+            .filter(|session| session.has_pending_worker_work())
+    }
+
+    /// Records a model change for when the session worker becomes idle and
+    /// reports it in the session transcript.
+    ///
+    /// Choosing the current model cancels a pending switch. A pending fast
+    /// mode is dropped when the chosen model cannot run it, so the later
+    /// choice wins.
+    async fn defer_prompt_session_model(
+        &mut self,
+        session_id: &SessionId,
+        current_agent: AgentSelection,
+        selected_agent: AgentSelection,
+    ) {
+        let settings = self
+            .deferred_session_settings
+            .entry(session_id.clone())
+            .or_default();
+        settings.agent = (selected_agent != current_agent).then_some(selected_agent);
+        if settings.speed_mode == Some(SpeedMode::Fast) && !selected_agent.supports_fast_mode() {
+            settings.speed_mode = None;
+        }
+        let notice = if settings.agent.is_some() {
+            format!(
+                "Switching to `{}` after the current turn and queued messages finish.",
+                selected_agent.model().as_str()
+            )
+        } else {
+            format!("Keeping `{}`.", current_agent.model().as_str())
+        };
+        self.discard_empty_deferred_session_settings(session_id);
+
+        self.append_prompt_status_line(session_id, TranscriptNotice::Settings, &notice)
+            .await;
+    }
+
+    /// Records a response-speed change for when the session worker becomes
+    /// idle and reports it in the session transcript.
+    ///
+    /// Choosing the speed the session will have after any pending model
+    /// change cancels a pending speed change. Enabling fast
+    /// mode later switches to the fast-compatible variant of the pending or
+    /// current model, matching an immediate change. Fast mode is refused
+    /// when the pending or current provider has no speed control.
+    async fn defer_prompt_session_speed_mode(
+        &mut self,
+        session_id: &SessionId,
+        current_agent: AgentSelection,
+        current_speed_mode: SpeedMode,
+        speed_mode: SpeedMode,
+    ) {
+        let settings = self
+            .deferred_session_settings
+            .entry(session_id.clone())
+            .or_default();
+        let effective_agent = settings.agent.unwrap_or(current_agent);
+        if speed_mode == SpeedMode::Fast && !effective_agent.kind().supports_speed_mode() {
+            let notice = format!(
+                "Keeping normal responses because `{}` has no fast mode.",
+                effective_agent.model().as_str()
+            );
+            self.discard_empty_deferred_session_settings(session_id);
+
+            self.append_prompt_status_line(session_id, TranscriptNotice::Settings, &notice)
+                .await;
+
+            return;
+        }
+
+        let baseline_speed_mode = settings.speed_mode_after_model_change(current_speed_mode);
+        settings.speed_mode = (speed_mode != baseline_speed_mode).then_some(speed_mode);
+        let speed_label = match speed_mode {
+            SpeedMode::Normal => "normal",
+            SpeedMode::Fast => "fast",
+        };
+        let notice = if settings.speed_mode.is_some() {
+            format!(
+                "Switching to {speed_label} responses after the current turn and queued messages \
+                 finish."
+            )
+        } else {
+            format!("Keeping {speed_label} responses.")
+        };
+        self.discard_empty_deferred_session_settings(session_id);
+
+        self.append_prompt_status_line(session_id, TranscriptNotice::Settings, &notice)
+            .await;
+    }
+
+    /// Removes a deferred-settings entry that no longer changes anything.
+    fn discard_empty_deferred_session_settings(&mut self, session_id: &SessionId) {
+        if self
+            .deferred_session_settings
+            .get(session_id)
+            .is_some_and(DeferredSessionSettings::is_empty)
+        {
+            self.deferred_session_settings.remove(session_id);
+        }
+    }
+
+    /// Persists one model change, first disabling fast mode when the model
+    /// cannot run it, and returns whether the session now uses
+    /// `selected_agent`.
+    ///
+    /// Emitted events are left for the caller to reduce, so reducer batches
+    /// can apply deferred changes without re-entering event processing.
+    async fn switch_session_model(
+        &mut self,
+        session_id: &SessionId,
+        selected_agent: AgentSelection,
+    ) -> bool {
+        let should_disable_fast_mode =
+            self.sessions
+                .session_for_id(session_id)
+                .is_some_and(|session| {
+                    session.speed_mode == SpeedMode::Fast && !selected_agent.supports_fast_mode()
+                });
         if should_disable_fast_mode
             && let Err(error) = self
-                .set_session_speed_mode(session_id, SpeedMode::Normal)
+                .sessions
+                .set_session_speed_mode(&self.services, session_id, SpeedMode::Normal)
                 .await
         {
             let agent_kind = selected_agent.kind();
@@ -474,7 +734,11 @@ impl App {
             return false;
         }
 
-        if let Err(error) = self.set_session_model(session_id, selected_agent).await {
+        if let Err(error) = self
+            .sessions
+            .set_session_model(&self.services, session_id, selected_agent)
+            .await
+        {
             warn!(
                 session_id = %session_id,
                 agent = %selected_agent.kind(),
@@ -603,53 +867,79 @@ impl App {
         }
     }
 
-    /// Persists one slash-selected response-speed preference and logs any
+    /// Applies one slash-selected response-speed preference and logs any
     /// failure with session context.
+    ///
+    /// Like model changes, speed changes wait while the session worker still
+    /// owns accepted work, because enabling fast mode may switch the model.
     pub(crate) async fn update_prompt_session_speed_mode(
         &mut self,
         session_id: &SessionId,
         speed_mode: SpeedMode,
     ) {
-        if speed_mode == SpeedMode::Fast {
-            let fast_agent = self
+        if let Some(busy_session) = self.busy_session(session_id) {
+            let current_agent = busy_session.agent;
+            let current_speed_mode = busy_session.speed_mode;
+            self.defer_prompt_session_speed_mode(
+                session_id,
+                current_agent,
+                current_speed_mode,
+                speed_mode,
+            )
+            .await;
+
+            return;
+        }
+        let Some(session_agent) = self
+            .sessions
+            .session_for_id(session_id)
+            .map(|session| session.agent)
+        else {
+            return;
+        };
+
+        self.switch_session_speed_mode(session_id, session_agent, speed_mode)
+            .await;
+        self.process_pending_app_events().await;
+    }
+
+    /// Persists one response-speed preference for a session running
+    /// `session_agent`, first switching to its fast-compatible model when
+    /// enabling fast mode requires one.
+    ///
+    /// Emitted events are left for the caller to reduce.
+    async fn switch_session_speed_mode(
+        &mut self,
+        session_id: &SessionId,
+        session_agent: AgentSelection,
+        speed_mode: SpeedMode,
+    ) {
+        let fast_agent = session_agent.compatible_with_speed_mode(SpeedMode::Fast);
+        if speed_mode == SpeedMode::Fast
+            && fast_agent != session_agent
+            && let Err(error) = self
                 .sessions
-                .sessions()
-                .iter()
-                .find(|session| session.id == *session_id)
-                .and_then(|session| {
-                    let fast_agent = session.agent.compatible_with_speed_mode(SpeedMode::Fast);
+                .set_session_model_for_speed_mode(&self.services, session_id.as_str(), fast_agent)
+                .await
+        {
+            let agent_kind = fast_agent.kind();
+            let agent_model = fast_agent.model().as_str();
+            warn!(
+                session_id = %session_id,
+                agent = %agent_kind,
+                model = %agent_model,
+                error = %error,
+                "failed to switch session model before enabling fast mode"
+            );
 
-                    (fast_agent != session.agent).then_some(fast_agent)
-                });
-
-            if let Some(fast_agent) = fast_agent {
-                if let Err(error) = self
-                    .sessions
-                    .set_session_model_for_speed_mode(
-                        &self.services,
-                        session_id.as_str(),
-                        fast_agent,
-                    )
-                    .await
-                {
-                    let agent_kind = fast_agent.kind();
-                    let agent_model = fast_agent.model().as_str();
-                    warn!(
-                        session_id = %session_id,
-                        agent = %agent_kind,
-                        model = %agent_model,
-                        error = %error,
-                        "failed to switch session model before enabling fast mode"
-                    );
-
-                    return;
-                }
-
-                self.process_pending_app_events().await;
-            }
+            return;
         }
 
-        if let Err(error) = self.set_session_speed_mode(session_id, speed_mode).await {
+        if let Err(error) = self
+            .sessions
+            .set_session_speed_mode(&self.services, session_id, speed_mode)
+            .await
+        {
             warn!(
                 session_id = %session_id,
                 speed_mode = ?speed_mode,
