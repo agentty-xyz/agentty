@@ -940,7 +940,7 @@ SET focused_review_status = 'Pending',
     focused_review_text = NULL,
     updated_at = ?
 WHERE id = ?
-  AND status IN ('InProgress', 'Review', 'AgentReview')
+  AND status IN ('InProgress', 'Review', 'AgentReview', 'Watching')
 "#,
             now,
             id
@@ -1643,7 +1643,7 @@ FROM session
 WHERE project_id = ?
   AND parent_session_id IS NULL
   AND stack_base_commit_hash IS NOT NULL
-  AND status IN ('Review', 'AgentReview')
+  AND status IN ('Review', 'AgentReview', 'Watching')
 ORDER BY updated_at ASC, id ASC
 ",
             project_id
@@ -1664,7 +1664,7 @@ SELECT id
 FROM session
 WHERE project_id = ?
   AND focused_review_status = 'Pending'
-  AND status IN ('Review', 'AgentReview')
+  AND status IN ('Review', 'AgentReview', 'Watching')
 ORDER BY updated_at DESC, id
 "#,
             project_id

@@ -108,6 +108,10 @@ struct TerminalContinuationDraft {
 /// persistence alongside the UI outcome.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub(crate) struct SyncReviewRequestTaskResult {
+    /// Forge facts that may need automatic follow-up, or why they could not
+    /// be loaded, reported only for an open review request of a session
+    /// resting in `Watching`.
+    pub(crate) attention: Option<Result<ag_forge::ReviewRequestAttention, String>>,
     pub(crate) outcome: session::SyncReviewRequestOutcome,
     /// Normalized summary to persist when a review request was found or
     /// refreshed.
@@ -293,6 +297,9 @@ pub struct App {
     /// switches independently of visible output. Lazily recovered after
     /// restart and removed when the session is deleted.
     pub(crate) review_diff_hashes: HashMap<SessionId, u64>,
+    /// Tracks watched review requests, their attempted automatic follow-ups,
+    /// and pending watch offers for newly created review requests.
+    pub(crate) review_watch: crate::app::review_watch::ReviewWatchState,
     /// Shares application-wide services and external clients across workflows.
     pub(crate) services: AppServices,
     /// Tracks per-session thinking text rendered while background work is
@@ -1901,7 +1908,7 @@ impl App {
     /// Publishes the current project/session sync context and requests an
     /// immediate orchestrator refresh when the active project has a git
     /// branch.
-    pub(super) fn restart_git_status_task(&mut self) {
+    pub(in crate::app) fn restart_git_status_task(&mut self) {
         self.publish_sync_context_for_refresh();
         if self.projects.has_git_branch() {
             self.sync_handle.request_refresh();
@@ -1910,7 +1917,7 @@ impl App {
 
     /// Publishes a fresh sync context after reducer-applied session changes
     /// that may affect polling targets.
-    pub(super) fn publish_sync_context(&self) {
+    pub(in crate::app) fn publish_sync_context(&self) {
         self.sync_handle.publish_context(Self::sync_context_for(
             &self.projects,
             &self.services,
@@ -1920,7 +1927,7 @@ impl App {
 
     /// Publishes a fresh sync context and forces a new generation so in-flight
     /// status completions computed before the requested refresh are ignored.
-    pub(super) fn publish_sync_context_for_refresh(&self) {
+    pub(in crate::app) fn publish_sync_context_for_refresh(&self) {
         self.sync_handle
             .publish_refresh_context(Self::sync_context_for(
                 &self.projects,
@@ -1997,6 +2004,7 @@ impl App {
             .filter(|session| session.can_sync_review_request())
             .map(|session| sync::ReviewRequestSyncTarget {
                 folder: session.folder.clone(),
+                is_watched: session.status == Status::Watching,
                 linked_review_request: session.review_request.clone(),
                 published_upstream_ref: session.published_upstream_ref.clone(),
                 session_id: session.id.clone(),
@@ -2278,6 +2286,7 @@ impl App {
                 | Status::InProgress
                 | Status::Review
                 | Status::AgentReview
+                | Status::Watching
                 | Status::Rebasing
         ) {
             if matches!(

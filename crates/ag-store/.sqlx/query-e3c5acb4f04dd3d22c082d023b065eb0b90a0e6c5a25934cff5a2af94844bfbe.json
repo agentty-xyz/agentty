@@ -1,0 +1,38 @@
+{
+  "db_name": "SQLite",
+  "query": "\nSELECT session_id,\n       handled_keys\nFROM session_review_watch\nORDER BY session_id\n",
+  "describe": {
+    "columns": [
+      {
+        "name": "session_id",
+        "ordinal": 0,
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "session_review_watch",
+            "name": "session_id"
+          }
+        }
+      },
+      {
+        "name": "handled_keys",
+        "ordinal": 1,
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "session_review_watch",
+            "name": "handled_keys"
+          }
+        }
+      }
+    ],
+    "parameters": {
+      "Right": 0
+    },
+    "nullable": [
+      false,
+      false
+    ]
+  },
+  "hash": "e3c5acb4f04dd3d22c082d023b065eb0b90a0e6c5a25934cff5a2af94844bfbe"
+}

@@ -671,7 +671,7 @@ impl App {
             return PromptApplyOutcome::KeepComposer;
         };
 
-        if session_status != Status::Review {
+        if !matches!(session_status, Status::Review | Status::Watching) {
             self.append_prompt_status_line(
                 session_id,
                 TranscriptNotice::Apply,
@@ -729,7 +729,7 @@ impl App {
     }
 
     /// Sends prepared terminal intent through shared command admission.
-    async fn submit_turn_prompt(
+    pub(in crate::app) async fn submit_turn_prompt(
         &mut self,
         session_id: SessionId,
         session_mode: PromptSessionMode,

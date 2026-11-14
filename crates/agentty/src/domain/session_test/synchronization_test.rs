@@ -246,7 +246,12 @@ fn test_can_rebase_session_branch_in_stack_blocks_concurrent_stack_member() {
 #[test]
 fn test_status_allows_rebase_action_for_review_ready_and_in_progress_states() {
     // Arrange
-    let expected_statuses = [Status::InProgress, Status::Review, Status::AgentReview];
+    let expected_statuses = [
+        Status::InProgress,
+        Status::Review,
+        Status::AgentReview,
+        Status::Watching,
+    ];
 
     // Act
     let allowed_statuses: Vec<Status> = Status::ALL

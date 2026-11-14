@@ -91,7 +91,9 @@ async fn manual_review_request_refresh_reconciles_both_forges_and_propagates_fai
 
         // Assert
         if matches!(outcome, "linked" | "discovered") {
-            assert_eq!(result.expect("refresh").summary.title, "Stable title");
+            let (review_request, is_created) = result.expect("refresh");
+            assert_eq!(review_request.summary.title, "Stable title");
+            assert!(!is_created, "{outcome}");
         } else {
             assert!(result.is_err(), "{outcome}");
             assert!(
@@ -748,6 +750,7 @@ async fn publish_pull_request_returns_pushed_upstream_and_persists_review_reques
         result,
         BranchPublishTaskSuccess::PullRequestPublished {
             branch_name: "review/topic".to_string(),
+            is_created: true,
             review_request: expected_review_request.clone(),
             upstream_reference: "origin/review/topic".to_string(),
         }

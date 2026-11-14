@@ -602,7 +602,7 @@ async fn review_request_publish_recreates_deleted_remote_branch() -> E2eResult {
                     .wait_for_text("Publish Review Request", 5000)
                     .write_text("review/deleted")
                     .press_key("Enter")
-                    .wait_for_text("[Review Request] Created PR", 15000)
+                    .compose(&common::decline_watch_offer_for_created_review_request())
                     .capture_labeled(
                         "deleted_remote_branch_recreated",
                         "Review request published after its former remote branch was deleted",
@@ -617,6 +617,7 @@ async fn review_request_publish_recreates_deleted_remote_branch() -> E2eResult {
                     &full,
                 );
                     assertion::assert_not_visible(frame, "already exists");
+                    assertion::assert_not_visible(frame, "Auto-resolve checks");
                 })
             },
         )
@@ -678,7 +679,8 @@ async fn review_request_publish_runs_in_background() -> E2eResult {
                         "Review-request publish progress remains until its URL is ready",
                     )
                     .compose(&create.release())
-                    .wait_for_text("[Review Request] Created PR", 20000)
+                    .wait_for_text("Auto-resolve checks", 20000)
+                    .compose(&common::decline_watch_offer_for_created_review_request())
                     .capture_labeled(
                         "background_publish_finished",
                         "Review-request link recorded in session transcript history",
@@ -720,6 +722,7 @@ async fn review_request_publish_runs_in_background() -> E2eResult {
                     &full,
                 );
                     assertion::assert_text_in_region(frame, "q: back", &full);
+                    assertion::assert_not_visible(frame, "Auto-resolve checks");
                 })
             },
         )
@@ -1120,6 +1123,102 @@ async fn review_request_url_appears_in_session_header() -> E2eResult {
                         .expect("review URL should be visible");
                     assert_eq!(title.rect.row, url.rect.row);
                     assert!(title.rect.col < url.rect.col);
+                })
+            },
+        )
+        .await?;
+
+    Ok(())
+}
+
+/// Seeds a review-request publish whose pull request then reports one
+/// completed failing check and no review threads.
+async fn seed_watched_review_request_publish(
+    env: &BuilderEnv,
+) -> Result<(), Box<dyn std::error::Error>> {
+    seed_review_ready_session(env).await?;
+    seed_review_worktree_with_diff(env)?;
+    seed_successful_review_request_publish(env, ":", ":", "wt/review-s", false)?;
+
+    let gh_path = env.stub_bin.join("gh");
+    let gh_script = std::fs::read_to_string(&gh_path)?.replace(
+        "  *\"mergeStateStatus\"*)",
+        r#"  *"headRefOid"*)
+    printf '%s\n' '[{"data":{"repository":{"pullRequest":{"headRefOid":"abc1234","mergeable":"MERGEABLE","statusCheckRollup":{"contexts":{"nodes":[{"__typename":"CheckRun","name":"unit-tests","status":"COMPLETED","conclusion":"FAILURE","detailsUrl":"https://github.com/agentty-xyz/agentty/actions/runs/7"}],"pageInfo":{"hasNextPage":false,"endCursor":null}}}}}}}]'
+    ;;
+  *"isOutdated"*)
+    printf '%s\n' '[{"data":{"repository":{"pullRequest":{"reviewThreads":{"nodes":[],"pageInfo":{"hasNextPage":false,"endCursor":null}}}}}}]'
+    ;;
+  *"mergeStateStatus"*)"#,
+    );
+    std::fs::write(&gh_path, gh_script)?;
+
+    Ok(())
+}
+
+/// Verify that creating a review request offers to watch it, that accepting
+/// moves the session to `Watching`, and that a failing check then starts an
+/// automatic follow-up.
+#[tokio::test]
+async fn created_review_request_offers_watching_and_follows_up_on_failed_checks() -> E2eResult {
+    // Arrange, Act, Assert
+    FeatureTest::new("review_request_watch")
+        .with_git()
+        .with_terminal_size(120, 40)
+        .setup(|env| Box::pin(async move { seed_watched_review_request_publish(env).await }))
+        .run(
+            |scenario| {
+                scenario
+                    .compose(&common::wait_for_agentty_startup())
+                    .compose(&common::switch_to_tab("Sessions"))
+                    .compose(&common::open_selected_session_view())
+                    .press_key("p")
+                    .wait_for_text("Publish Review Request", 5000)
+                    .press_key("Enter")
+                    .wait_for_text("Watch PR #42", 20000)
+                    .wait_for_stable_frame(300, 5000)
+                    .capture_labeled(
+                        "review_request_watch_offer",
+                        "Watch offer shown after the review request is created",
+                    )
+                    .press_key("y")
+                    .wait_for_text("[Review Watch] Watching pull request #42", 10000)
+                    .capture_labeled(
+                        "review_request_watch_enabled",
+                        "Session notice confirming the review request is watched",
+                    )
+                    .wait_for_text("[Review Watch] Fixing 1 failing check: unit-tests", 20000)
+                    .capture_labeled(
+                        "review_request_watch_follow_up",
+                        "Automatic follow-up started for the failing check",
+                    )
+            },
+            |frame, report| {
+                Box::pin(async move {
+                    let offer_frame = common::frame_from_capture(&report.captures[0]);
+                    let offer_full = Region::full(offer_frame.cols(), offer_frame.rows());
+                    assertion::assert_text_in_region(&offer_frame, "Watch PR #42", &offer_full);
+                    assertion::assert_text_in_region(
+                        &offer_frame,
+                        "Auto-resolve checks, comments, conflicts?",
+                        &offer_full,
+                    );
+
+                    let enabled_frame = common::frame_from_capture(&report.captures[1]);
+                    let enabled_full = Region::full(enabled_frame.cols(), enabled_frame.rows());
+                    assertion::assert_text_in_region(
+                        &enabled_frame,
+                        "[Review Watch] Watching pull request #42",
+                        &enabled_full,
+                    );
+                    assertion::assert_not_visible(&enabled_frame, "Watch PR #42");
+
+                    let full = Region::full(frame.cols(), frame.rows());
+                    assertion::assert_text_in_region(
+                        frame,
+                        "[Review Watch] Fixing 1 failing check: unit-tests",
+                        &full,
+                    );
                 })
             },
         )

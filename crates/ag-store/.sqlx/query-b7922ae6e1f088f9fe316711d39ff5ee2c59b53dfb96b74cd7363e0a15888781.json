@@ -1,6 +1,6 @@
 {
   "db_name": "SQLite",
-  "query": "\nSELECT id\nFROM session\nWHERE project_id = ?\n  AND focused_review_status = 'Pending'\n  AND status IN ('Review', 'AgentReview')\nORDER BY updated_at DESC, id\n",
+  "query": "\nSELECT id\nFROM session\nWHERE project_id = ?\n  AND focused_review_status = 'Pending'\n  AND status IN ('Review', 'AgentReview', 'Watching')\nORDER BY updated_at DESC, id\n",
   "describe": {
     "columns": [
       {
@@ -22,5 +22,5 @@
       false
     ]
   },
-  "hash": "a523ab36e7eba1a5de1951500bd830bc1db66c9b2d4d1e39c879f25547623d32"
+  "hash": "b7922ae6e1f088f9fe316711d39ff5ee2c59b53dfb96b74cd7363e0a15888781"
 }

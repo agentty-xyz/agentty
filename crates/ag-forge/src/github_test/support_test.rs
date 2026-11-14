@@ -108,7 +108,7 @@ pub(super) fn github_thread_comment_pages_json() -> String {
     .to_string()
 }
 
-fn review_threads_page(nodes: Vec<serde_json::Value>) -> serde_json::Value {
+pub(super) fn review_threads_page(nodes: Vec<serde_json::Value>) -> serde_json::Value {
     let nodes = serde_json::Value::Array(nodes);
 
     serde_json::json!({
@@ -137,7 +137,7 @@ pub(super) struct ReviewThreadFixture<'a> {
 }
 
 impl ReviewThreadFixture<'_> {
-    fn into_node(self) -> serde_json::Value {
+    pub(super) fn into_node(self) -> serde_json::Value {
         let comments = serde_json::Value::Array(self.comments);
 
         serde_json::json!({
@@ -181,7 +181,7 @@ fn pull_request_comments_page(nodes: Vec<serde_json::Value>) -> serde_json::Valu
     })
 }
 
-fn thread_comments_page(nodes: Vec<serde_json::Value>) -> serde_json::Value {
+pub(super) fn thread_comments_page(nodes: Vec<serde_json::Value>) -> serde_json::Value {
     let nodes = serde_json::Value::Array(nodes);
 
     serde_json::json!({
@@ -196,7 +196,7 @@ fn thread_comments_page(nodes: Vec<serde_json::Value>) -> serde_json::Value {
     })
 }
 
-fn review_comment_node(author: Option<&str>, body: &str) -> serde_json::Value {
+pub(super) fn review_comment_node(author: Option<&str>, body: &str) -> serde_json::Value {
     serde_json::json!({
         "author": author.map(|login| serde_json::json!({"login": login})),
         "body": body,
@@ -204,7 +204,21 @@ fn review_comment_node(author: Option<&str>, body: &str) -> serde_json::Value {
     })
 }
 
-fn current_user_review_comment_node(body: &str) -> serde_json::Value {
+/// Builds one reviewer comment node carrying a GitHub author association.
+pub(super) fn associated_review_comment_node(
+    author: &str,
+    association: &str,
+    body: &str,
+) -> serde_json::Value {
+    serde_json::json!({
+        "author": {"login": author},
+        "authorAssociation": association,
+        "body": body,
+        "viewerDidAuthor": false
+    })
+}
+
+pub(super) fn current_user_review_comment_node(body: &str) -> serde_json::Value {
     serde_json::json!({
         "author": {"login": "agentty"},
         "body": body,

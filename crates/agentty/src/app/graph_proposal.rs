@@ -118,7 +118,7 @@ impl App {
             .map_err(|_| SessionError::NotFound)?;
         if !matches!(
             session.status,
-            Status::Draft | Status::Review | Status::AgentReview
+            Status::Draft | Status::Review | Status::AgentReview | Status::Watching
         ) || session.is_draft_session()
         {
             return Err(SessionError::Operation(
@@ -230,7 +230,7 @@ impl App {
                     || stored.permission_mode != state.permission.to_string()
                     || !matches!(
                         session.status,
-                        Status::Draft | Status::Review | Status::AgentReview
+                        Status::Draft | Status::Review | Status::AgentReview | Status::Watching
                     )
                 {
                     return Err(SessionError::Operation(

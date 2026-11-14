@@ -37,7 +37,7 @@ pub use project::{ProjectListRow, ProjectRepository, ProjectRow};
 pub use repository::AppRepositories;
 pub use review::{
     NewSessionReviewCommentResolution, ReviewRepository, SessionReviewCommentResolutionRow,
-    SessionReviewRequestRow,
+    SessionReviewRequestRow, SessionReviewWatchRow,
 };
 pub use session::{
     ForkSessionSnapshot, LEGACY_SESSION_AGENT_CLEAR_MARKER, PersistedSessionCreation,

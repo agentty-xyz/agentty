@@ -5,8 +5,8 @@ use mockall::Sequence;
 use crate::client::{RealReviewRequestClient, ReviewRequestClient};
 use crate::command::{ForgeCommand, ForgeCommandOutput, MockForgeCommandRunner};
 use crate::model::{
-    CreateReviewRequestInput, ForgeKind, ForgeRemote, ReviewRequestError, ReviewRequestMetadata,
-    ReviewRequestState, ReviewRequestSummary, UpdateReviewRequestInput,
+    CreateReviewRequestInput, ForgeKind, ForgeRemote, ReviewRequestAttention, ReviewRequestError,
+    ReviewRequestMetadata, ReviewRequestState, ReviewRequestSummary, UpdateReviewRequestInput,
 };
 
 #[test]
@@ -378,6 +378,80 @@ async fn review_thread_mutations_authenticate_and_route_to_github_adapter() {
     // Assert
     assert_eq!(reply_result, Ok(()));
     assert_eq!(resolution_result, Ok(()));
+}
+
+#[tokio::test]
+async fn fetch_review_request_attention_authenticates_and_routes_to_github_adapter() {
+    // Arrange
+    let remote = github_remote();
+    let mut sequence = Sequence::new();
+    let mut command_runner = MockForgeCommandRunner::new();
+    command_runner
+        .expect_run()
+        .once()
+        .in_sequence(&mut sequence)
+        .withf(|command| {
+            command_arguments_are(
+                command,
+                "gh",
+                &["auth", "status", "--hostname", "github.com"],
+            )
+        })
+        .returning(|_| Box::pin(async { Ok(success_output(String::new())) }));
+    command_runner
+        .expect_run()
+        .once()
+        .in_sequence(&mut sequence)
+        .withf(|command| {
+            command.executable == "gh"
+                && command
+                    .arguments
+                    .iter()
+                    .any(|argument| argument.contains("headRefOid mergeable"))
+        })
+        .returning(|_| {
+            Box::pin(async {
+                Ok(success_output(
+                    r#"[{"data":{"repository":{"pullRequest":{"headRefOid":"abc123","mergeable":"CONFLICTING","statusCheckRollup":null}}}}]"#
+                        .to_string(),
+                ))
+            })
+        });
+    command_runner
+        .expect_run()
+        .once()
+        .in_sequence(&mut sequence)
+        .withf(|command| {
+            command.executable == "gh"
+                && command
+                    .arguments
+                    .iter()
+                    .any(|argument| argument.contains("reviewThreads(first: 100"))
+        })
+        .returning(|_| {
+            Box::pin(async {
+                Ok(success_output(
+                    r#"[{"data":{"repository":{"pullRequest":{"reviewThreads":{"nodes":[]}}}}}]"#
+                        .to_string(),
+                ))
+            })
+        });
+    let client = RealReviewRequestClient::new(Arc::new(command_runner));
+
+    // Act
+    let attention = client
+        .fetch_review_request_attention(remote, "#42".to_string())
+        .await;
+
+    // Assert
+    assert_eq!(
+        attention,
+        Ok(ReviewRequestAttention {
+            has_merge_conflict: true,
+            head_commit: "abc123".to_string(),
+            ..ReviewRequestAttention::default()
+        })
+    );
 }
 
 #[tokio::test]

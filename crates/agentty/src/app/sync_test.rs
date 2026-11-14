@@ -64,6 +64,7 @@ fn review_request_sync_target(
 ) -> ReviewRequestSyncTarget {
     ReviewRequestSyncTarget {
         folder: PathBuf::from("/tmp/session-worktree"),
+        is_watched: false,
         linked_review_request: linked,
         published_upstream_ref: Some("origin/wt/session-id".to_string()),
         session_id: session_id.into(),
@@ -287,6 +288,7 @@ fn emit_review_request_pass_updates_preserves_batch_routing() {
     let updates = vec![
         ReviewRequestPassUpdate {
             result: Ok(SyncReviewRequestTaskResult {
+                attention: None,
                 outcome: session::SyncReviewRequestOutcome::NoReviewRequest,
                 summary: None,
             }),
@@ -307,6 +309,7 @@ fn emit_review_request_pass_updates_preserves_batch_routing() {
         AppEvent::ReviewRequestStatusUpdated {
             generation: 7,
             result: Ok(SyncReviewRequestTaskResult {
+                attention: None,
                 outcome: session::SyncReviewRequestOutcome::NoReviewRequest,
                 summary: None,
             }),
@@ -481,6 +484,7 @@ async fn record_review_sync_outcome_success_resets_backoff() {
     let target = review_request_sync_target("session-1", None);
     let failure: Result<SyncReviewRequestTaskResult, String> = Err("gh exploded".to_string());
     let success = Ok(SyncReviewRequestTaskResult {
+        attention: None,
         outcome: session::SyncReviewRequestOutcome::NoReviewRequest,
         summary: None,
     });
@@ -752,10 +756,8 @@ async fn sync_review_request_status_attaches_worktree_to_detected_remote() {
 
     // Act
     let result = sync_review_request_status(
-        folder,
+        &review_sync_target(folder, Some(linked), None, false),
         &mock_git_client,
-        Some(linked),
-        None,
         &mock_review_request_client,
     )
     .await
@@ -847,10 +849,8 @@ async fn sync_review_request_status_falls_back_to_linked_web_url() {
 
     // Act
     let result = sync_review_request_status(
-        folder,
+        &review_sync_target(folder, Some(linked), None, false),
         &mock_git_client,
-        Some(linked),
-        None,
         &mock_review_request_client,
     )
     .await
@@ -928,10 +928,13 @@ async fn sync_review_request_status_maps_refresh_and_discovery_outcomes() {
 
         // Act
         let result = sync_review_request_status(
-            PathBuf::from("/tmp/session-worktree"),
+            &review_sync_target(
+                PathBuf::from("/tmp/session-worktree"),
+                linked,
+                published_upstream_ref,
+                false,
+            ),
             &mock_git_client,
-            linked,
-            published_upstream_ref,
             &mock_review_request_client,
         )
         .await;
@@ -1226,4 +1229,157 @@ fn sync_task_result_from_closed_summary_maps_closed_outcome() {
         }
     );
     assert!(result.summary.is_some());
+}
+
+/// Builds one review-status sync target with explicit polling inputs.
+fn review_sync_target(
+    folder: PathBuf,
+    linked: Option<crate::domain::session::ReviewRequest>,
+    published_upstream_ref: Option<String>,
+    is_watched: bool,
+) -> ReviewRequestSyncTarget {
+    ReviewRequestSyncTarget {
+        folder,
+        is_watched,
+        linked_review_request: linked,
+        published_upstream_ref,
+        session_id: "session-1".into(),
+    }
+}
+
+/// Builds mock clients whose linked review request refreshes into `state`.
+fn watched_review_status_sync_clients(
+    state: ReviewRequestState,
+) -> (MockGitClient, MockReviewRequestClient) {
+    let mut mock_git_client = MockGitClient::new();
+    mock_git_client.expect_repo_url().returning(|_| {
+        Box::pin(async { Ok("https://github.com/agentty-xyz/agentty.git".to_string()) })
+    });
+    mock_git_client
+        .expect_head_hash()
+        .returning(|_| Box::pin(async { Ok("abc1234def5678".to_string()) }));
+    let mut mock_review_request_client = MockReviewRequestClient::new();
+    mock_review_request_client
+        .expect_detect_remote()
+        .returning(|repo_url| ag_forge::detect_remote(&repo_url));
+    mock_review_request_client
+        .expect_refresh_review_request()
+        .returning(move |_, _| {
+            Box::pin(async move { Ok(test_review_request_summary("#42", state)) })
+        });
+
+    (mock_git_client, mock_review_request_client)
+}
+
+#[tokio::test]
+/// A watched open review request also reports the forge facts that may need
+/// automatic follow-up; unwatched and merged targets never fetch them.
+async fn sync_review_request_status_reports_attention_only_for_watched_open_requests() {
+    // Arrange
+    let attention = ag_forge::ReviewRequestAttention {
+        has_merge_conflict: true,
+        head_commit: "abc1234".to_string(),
+        ..ag_forge::ReviewRequestAttention::default()
+    };
+    let cases = [
+        ("watched_open", true, ReviewRequestState::Open, true),
+        ("unwatched_open", false, ReviewRequestState::Open, false),
+        ("watched_merged", true, ReviewRequestState::Merged, false),
+    ];
+    for (case, is_watched, state, expects_attention) in cases {
+        let (mock_git_client, mut mock_review_request_client) =
+            watched_review_status_sync_clients(state);
+        if expects_attention {
+            let attention = attention.clone();
+            mock_review_request_client
+                .expect_fetch_review_request_attention()
+                .once()
+                .withf(|_, display_id| display_id == "#42")
+                .returning(move |_, _| {
+                    let attention = attention.clone();
+
+                    Box::pin(async move { Ok(attention) })
+                });
+        }
+        let target = review_sync_target(
+            PathBuf::from("/tmp/session-worktree"),
+            Some(linked_review_request("#42", ReviewRequestState::Open)),
+            None,
+            is_watched,
+        );
+
+        // Act
+        let result =
+            sync_review_request_status(&target, &mock_git_client, &mock_review_request_client)
+                .await
+                .expect(case);
+
+        // Assert
+        assert_eq!(
+            result.attention,
+            expects_attention.then(|| Ok(attention.clone())),
+            "{case}"
+        );
+    }
+}
+
+#[tokio::test]
+/// A failed follow-up lookup is reported next to the refreshed summary, so
+/// watching never costs a session its ordinary review-request refresh.
+async fn sync_review_request_status_keeps_summary_when_attention_lookup_fails() {
+    // Arrange
+    let (mock_git_client, mut mock_review_request_client) =
+        watched_review_status_sync_clients(ReviewRequestState::Open);
+    mock_review_request_client
+        .expect_fetch_review_request_attention()
+        .once()
+        .returning(|_, _| {
+            Box::pin(async { Err(forge_failure(ForgeKind::GitHub, "checks unavailable")) })
+        });
+    let target = review_sync_target(
+        PathBuf::from("/tmp/session-worktree"),
+        Some(linked_review_request("#42", ReviewRequestState::Open)),
+        None,
+        true,
+    );
+
+    // Act
+    let result = sync_review_request_status(&target, &mock_git_client, &mock_review_request_client)
+        .await
+        .expect("attention failure should not fail the sync");
+
+    // Assert
+    assert_eq!(
+        result.summary,
+        Some(test_review_request_summary("#42", ReviewRequestState::Open))
+    );
+    let error = result
+        .attention
+        .expect("attention lookup should be reported")
+        .expect_err("attention lookup should fail");
+    assert!(error.contains("checks unavailable"), "{error}");
+}
+
+#[test]
+/// Starting or stopping a watch changes what each pass fetches, so it must
+/// register as a polling-input change.
+fn same_polling_inputs_detects_watch_change() {
+    // Arrange
+    let linked = linked_review_request("#42", ReviewRequestState::Open);
+    let unwatched_context = sync_context_fixture(
+        0,
+        vec![review_request_sync_target(
+            "session-1",
+            Some(linked.clone()),
+        )],
+    );
+    let mut watched_target = review_request_sync_target("session-1", Some(linked));
+    watched_target.is_watched = true;
+    let watched_context = sync_context_fixture(0, vec![watched_target]);
+
+    // Act
+    let same_inputs = unwatched_context.same_polling_inputs(&watched_context);
+
+    // Assert
+    assert!(!same_inputs);
 }

@@ -397,7 +397,7 @@ impl App {
             self.sessions
                 .start_session(&self.services, session_id, prompt)
                 .await?;
-        } else if session.status == Status::Review {
+        } else if matches!(session.status, Status::Review | Status::Watching) {
             if !self
                 .sessions
                 .reply_to_durable_message(

@@ -164,6 +164,7 @@ The full set in **Review** state, subject to session and forge availability:
 | `w`                 | Inspect saved execution graphs                      |
 | `f`                 | Show, generate, or regenerate focused review        |
 | `F`                 | Fork session with copied transcript history         |
+| `W`                 | Watch an open review request, or stop watching      |
 | `m`                 | Add to merge queue after confirmation               |
 | `r`                 | Sync session branch                                 |
 | `j` / `k`           | Scroll output                                       |
@@ -174,6 +175,8 @@ The full set in **Review** state, subject to session and forge availability:
 State-specific differences:
 
 - **AgentReview**: `r` cancels the pending review and starts sync.
+- **Watching**: Same actions as **Review**; `W` stops watching. See
+  [Watching a Review Request](@/docs/usage/workflow.md#usage-review-request-watch).
 - **InProgress**: `Enter`, `r`, and `p` queue messages, sync, and publishing. `Ctrl+C`
   retracts the newest queued message; with none left, it stops the turn. `d` opens an
   available diff while work continues.

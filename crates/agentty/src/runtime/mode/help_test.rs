@@ -41,6 +41,7 @@ fn test_handle_quit_key_restores_view_mode() {
             can_start_staged_session: false,
             can_view_review_comments: false,
             publish_pull_request_action: None,
+            review_watch_toggle: None,
             session_id: "s1".into(),
             session_state: ViewSessionState::Interactive,
             scroll_offset: Some(5),

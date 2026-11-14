@@ -327,7 +327,8 @@ fn surface_for_mode(mode: &AppMode) -> Surface<'_> {
                 ConfirmationIntent::ContinueSession
                 | ConfirmationIntent::ForkSession
                 | ConfirmationIntent::MergeSession
-                | ConfirmationIntent::RegenerateReview,
+                | ConfirmationIntent::RegenerateReview
+                | ConfirmationIntent::WatchReviewRequest,
             restore_view: Some(restore_view),
             ..
         }

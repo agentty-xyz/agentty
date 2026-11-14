@@ -24,6 +24,8 @@ pub enum Icon {
     GitBranch,
     /// A pending status symbol (·).
     Pending,
+    /// A watched review-request symbol (◉).
+    Watch,
     /// A queued-action symbol (≡).
     QueuedAction,
     /// A compact loader symbol animated by Tachyonfx after render.
@@ -54,6 +56,7 @@ impl Icon {
             Icon::Cross => "✗",
             Icon::GitBranch => "●",
             Icon::Pending => "·",
+            Icon::Watch => "◉",
             Icon::QueuedAction => QUEUED_ACTION_GLYPH,
             Icon::TachyonLoader | Icon::Spinner => TACHYON_LOADER_GLYPH,
             Icon::Warn => "!",

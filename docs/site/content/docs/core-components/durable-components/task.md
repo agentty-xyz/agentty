@@ -55,7 +55,7 @@ one storage snapshot in creation order; a missing session returns an empty list.
 `SessionService::submit_task` takes a stable `task_id`, an immutable `objective`, a
 globally unique `attempt_id`, a `message` instructing that attempt, and a `visibility`
 for its transcript presentation. New attempts require a loaded session in `Review`,
-`AgentReview`, or `Question`. Submission creates the task if needed.
+`AgentReview`, `Watching`, or `Question`. Submission creates the task if needed.
 
 Admission atomically saves the task, attempt, and queued operation before worker
 delivery, and acknowledges admission, not execution. Redelivering identical inputs with
@@ -97,8 +97,8 @@ session-context history cannot acquire one.
   and finish permitted commit and publication effects before the next turn; a failed
   effect settles the attempt as failed. A successful attempt without questions starts
   the ordinary automatic review.
-- Other role attempts require `Review` or `AgentReview`. Unmaterialized deferred
-  workspaces are rejected before model execution.
+- Other role attempts require `Review`, `AgentReview`, or `Watching`. Unmaterialized
+  deferred workspaces are rejected before model execution.
 - Role admission invalidates prior ordinary review generations. Planner, question,
   failed, canceled, and superseded attempts start no automatic review; explicit review
   remains available.

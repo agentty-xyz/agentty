@@ -9,7 +9,9 @@ use tracing::warn;
 use crate::app::session::{SessionTaskService, remote_branch_name_from_upstream_ref};
 use crate::app::{self, App, AppEvent, ReviewCacheEntry, SessionManager};
 use crate::domain::input::InputState;
-use crate::domain::session::{FollowUpTaskAction, PublishBranchAction, SessionId, Status};
+use crate::domain::session::{
+    FollowUpTaskAction, PublishBranchAction, ReviewWatchToggle, SessionId, Status,
+};
 use crate::domain::session_message::SessionMessageKind;
 use crate::domain::transcript_notice::TranscriptNotice;
 use crate::domain::transient_message::TransientMessageSlot;
@@ -114,6 +116,7 @@ struct ViewSessionSnapshot {
     rebase_session_branch: ViewActionState,
     reply_to_session: ViewActionState,
     review_comments: ViewActionState,
+    review_watch_toggle: Option<ReviewWatchToggle>,
     session_state: ViewSessionState,
     session_status: Status,
     start_staged_session: ViewActionState,
@@ -160,6 +163,7 @@ impl ViewSessionSnapshot {
             review_comments: ViewActionState::from_bool(
                 session.has_review_request() && session.allows_review_comment_reply(),
             ),
+            review_watch_toggle: session.review_watch_toggle(),
             session_state: help_action::session_view_state(session),
             session_status,
             start_staged_session: ViewActionState::from_bool(
@@ -522,6 +526,13 @@ async fn handle_workflow_view_key(
 
             return Some(false);
         }
+        KeyCode::Char('W') if !key.modifiers.contains(event::KeyModifiers::CONTROL) => {
+            // Without a watch action `W` has no session-view meaning.
+            let review_watch_toggle = view_session_snapshot.review_watch_toggle?;
+            toggle_review_watch(app, view_context, review_watch_toggle).await;
+
+            return Some(false);
+        }
         KeyCode::Char('F')
             if !key.modifiers.contains(event::KeyModifiers::CONTROL)
                 && view_session_snapshot.can_fork_session() =>
@@ -558,6 +569,23 @@ async fn handle_workflow_view_key(
     }
 
     Some(true)
+}
+
+/// Offers to watch the viewed session's review request, or stops watching it.
+async fn toggle_review_watch(
+    app: &mut App,
+    view_context: &ViewContext,
+    review_watch_toggle: ReviewWatchToggle,
+) {
+    match review_watch_toggle {
+        ReviewWatchToggle::Start => {
+            app.open_review_watch_confirmation(
+                &view_context.session_id,
+                Some(confirmation_view_mode(view_context)),
+            );
+        }
+        ReviewWatchToggle::Stop => app.disable_review_watch(&view_context.session_id).await,
+    }
 }
 
 /// Opens a fork confirmation overlay for the active view session.
@@ -943,6 +971,7 @@ fn open_view_help_overlay(
             can_start_staged_session: view_session_snapshot.can_start_staged_session(),
             can_view_review_comments: view_session_snapshot.can_open_review_comments(),
             publish_pull_request_action: view_session_snapshot.publish_pull_request_action,
+            review_watch_toggle: view_session_snapshot.review_watch_toggle,
             session_id: view_context.session_id.clone(),
             session_state: view_session_snapshot.session_state,
             scroll_offset: view_context.scroll_offset,

@@ -456,6 +456,39 @@ pub struct ReviewCommentSnapshot {
     pub threads: Vec<ReviewCommentThread>,
 }
 
+/// One failed check or commit status reported for a review-request head.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct ReviewCheckFailure {
+    /// Forge-reported check, job, or status-context name.
+    pub name: String,
+    /// Normalized failure label such as `Failure` or `Timed out`.
+    pub outcome: String,
+    /// Browser-openable details URL, when the forge reports one.
+    pub web_url: Option<String>,
+}
+
+/// Conditions on one open review request that may need follow-up work.
+///
+/// Adapters report normalized forge facts only; hosts decide whether and when
+/// to act on them.
+#[derive(Clone, Debug, Default, Eq, PartialEq)]
+pub struct ReviewRequestAttention {
+    /// Completed checks that failed for `head_commit`.
+    pub failed_checks: Vec<ReviewCheckFailure>,
+    /// Whether the forge reports conflicts with the target branch.
+    pub has_merge_conflict: bool,
+    /// Whether any check for `head_commit` is still queued or running.
+    pub has_pending_checks: bool,
+    /// Commit at the head of the source branch as seen by the forge.
+    pub head_commit: String,
+    /// Unresolved threads whose latest trusted comment awaits a response.
+    /// Trusted authors are the authenticated user and anyone the forge
+    /// reports with write-level project membership. Comments from other
+    /// authors are omitted and never decide whether a thread needs a
+    /// response.
+    pub review_threads: Vec<ReviewCommentThread>,
+}
+
 /// Input required to create a review request on one forge.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct CreateReviewRequestInput {

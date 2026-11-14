@@ -496,6 +496,15 @@ worktree changes to fit a prompt.
   reconciliation. Best-effort concurrent-edit checks precede metadata updates.
 - **Remote merge** marks `Merged`. Successful manual target sync persists archival and
   child-restack intent before cleanup; failed persistence leaves work retryable.
+- **Review-request watching** is opt-in per session and persisted. For sessions resting
+  in `Watching`, the sync orchestrator's forge refresh also reports head commit,
+  conflicts, check results, and trusted unresolved threads. A failed lookup of these
+  facts is reported without failing the refresh. The foreground reducer picks at most
+  one follow-up per report and starts it through the ordinary session sync,
+  review-comment, or reply workflow, so model work still runs on the session worker.
+  Started follow-ups are persisted to avoid repeating them for unchanged forge state;
+  one that cannot start is retried on the next report. The reducer moves idle sessions
+  between `Review` and `Watching`.
 
 Review-comment targets persist before execution and are scoped to the linked open review
 request. Clarification answers and subsequent turns restore unfinished targets and

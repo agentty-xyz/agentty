@@ -362,7 +362,11 @@ fn hydrate_session_review_transient(
 ) {
     if !matches!(
         session.status,
-        Status::Review | Status::Question | Status::AgentReview | Status::Rebasing
+        Status::Review
+            | Status::Question
+            | Status::AgentReview
+            | Status::Watching
+            | Status::Rebasing
     ) {
         session
             .transient_messages
@@ -509,13 +513,18 @@ pub(crate) fn normalize_review_agent(review_agent: ReviewAgent) -> ReviewAgent {
 
 /// Marks one review-ready session as transient `AgentReview` while focused
 /// review generation is running.
+///
+/// A `Watching` session pauses watching for the review; it returns to
+/// `Review` afterwards and the review-watch reducer resumes watching.
 pub(crate) fn mark_session_agent_review(session_state: &mut SessionState, session_id: &str) {
-    update_transient_review_status(
-        session_state,
-        session_id,
-        Status::Review,
-        Status::AgentReview,
-    );
+    for review_ready_status in [Status::Review, Status::Watching] {
+        update_transient_review_status(
+            session_state,
+            session_id,
+            review_ready_status,
+            Status::AgentReview,
+        );
+    }
 }
 
 /// Applies review assist updates for all sessions in one reducer batch.

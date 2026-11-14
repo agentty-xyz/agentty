@@ -45,6 +45,7 @@ async fn test_handle_view_key_ignores_diff_for_non_review_status() {
         open_worktree: ViewActionState::Disabled,
         reply_to_session: ViewActionState::Enabled,
         review_comments: ViewActionState::Disabled,
+        review_watch_toggle: None,
         start_staged_session: ViewActionState::Disabled,
         follow_up_task_action: None,
         publish_pull_request_action: None,
@@ -99,6 +100,7 @@ async fn test_handle_view_key_uppercase_f_does_not_start_review_when_fork_unavai
         open_worktree: ViewActionState::Enabled,
         reply_to_session: ViewActionState::Enabled,
         review_comments: ViewActionState::Disabled,
+        review_watch_toggle: None,
         start_staged_session: ViewActionState::Disabled,
         follow_up_task_action: None,
         publish_pull_request_action: None,
@@ -151,6 +153,7 @@ async fn test_handle_view_key_p_opens_review_request_publish_input() {
         open_worktree: ViewActionState::Enabled,
         reply_to_session: ViewActionState::Enabled,
         review_comments: ViewActionState::Disabled,
+        review_watch_toggle: None,
         start_staged_session: ViewActionState::Disabled,
         follow_up_task_action: None,
         publish_pull_request_action: Some(PublishBranchAction::PublishPullRequest),
@@ -203,6 +206,7 @@ async fn test_handle_view_key_shift_p_opens_review_request_publish_input() {
         open_worktree: ViewActionState::Enabled,
         reply_to_session: ViewActionState::Enabled,
         review_comments: ViewActionState::Disabled,
+        review_watch_toggle: None,
         start_staged_session: ViewActionState::Disabled,
         follow_up_task_action: None,
         publish_pull_request_action: Some(PublishBranchAction::PublishPullRequest),
@@ -1106,4 +1110,62 @@ async fn interrupting_a_turn_survives_persistence_and_lock_failures() {
 
     // Assert
     assert_eq!(app.sessions.sessions()[0].status, Status::InProgress);
+}
+
+/// Presses `W` in the open view of `session_id` using its live snapshot.
+async fn press_watch_key(app: &mut crate::app::App, session_id: &str) {
+    app.mode = AppMode::View {
+        session_id: session_id.into(),
+        scroll_offset: Some(2),
+    };
+    let view_context = view_context(app).expect("expected view context");
+    let mut pending_update = ViewPendingUpdate::from_context(&view_context);
+    let view_session_snapshot =
+        view_session_snapshot(app, &view_context).expect("expected session snapshot");
+    let view_key_context = ViewKeyContext {
+        context: &view_context,
+        session_snapshot: &view_session_snapshot,
+    };
+
+    handle_view_key(
+        app,
+        KeyEvent::new(KeyCode::Char('W'), KeyModifiers::SHIFT),
+        view_key_context,
+        &mut pending_update,
+    )
+    .await;
+}
+
+#[tokio::test]
+async fn watch_key_offers_watching_then_stops_it() {
+    // Arrange
+    let (mut app, _base_dir, session_id) = new_test_app_with_session().await;
+    crate::test_support::set_session_status_for_test(&mut app, &session_id, Status::Review);
+
+    // Act
+    press_watch_key(&mut app, &session_id).await;
+    let ignored_without_review_request = matches!(app.mode, AppMode::View { .. });
+    attach_open_review_request(&mut app.sessions.sessions_mut()[0]);
+    press_watch_key(&mut app, &session_id).await;
+    let offered_mode = std::mem::replace(&mut app.mode, AppMode::List);
+    app.enable_review_watch(&session_id.clone().into()).await;
+    let watching_status = app.sessions.sessions()[0].status;
+    press_watch_key(&mut app, &session_id).await;
+
+    // Assert
+    assert!(ignored_without_review_request);
+    assert!(matches!(
+        offered_mode,
+        AppMode::Confirmation {
+            confirmation_intent: ConfirmationIntent::WatchReviewRequest,
+            restore_view: Some(ConfirmationViewMode {
+                scroll_offset: Some(2),
+                ..
+            }),
+            ..
+        }
+    ));
+    assert_eq!(watching_status, Status::Watching);
+    assert_eq!(app.sessions.sessions()[0].status, Status::Review);
+    assert!(matches!(app.mode, AppMode::View { .. }));
 }

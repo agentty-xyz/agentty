@@ -600,10 +600,7 @@ impl App {
             .session_for_id(session_id)
             .ok_or(ApiSessionError::NotFound)?;
         let status = session.status;
-        if !matches!(
-            status,
-            SessionStatus::Review | SessionStatus::AgentReview | SessionStatus::Question
-        ) {
+        if !(status.allows_review_actions() || status == SessionStatus::Question) {
             return Err(ApiSessionError::Operation(format!(
                 "Session `{session_id}` cannot accept a durable message in status `{status}`"
             )));
@@ -777,10 +774,7 @@ impl App {
             .sessions
             .session_for_id(session_id)
             .ok_or(ApiSessionError::NotFound)?;
-        if !matches!(
-            session.status,
-            SessionStatus::Review | SessionStatus::AgentReview | SessionStatus::Question
-        ) {
+        if !(session.status.allows_review_actions() || session.status == SessionStatus::Question) {
             return Err(ApiSessionError::Operation(format!(
                 "Session `{session_id}` cannot accept a task attempt in status `{}`",
                 session.status

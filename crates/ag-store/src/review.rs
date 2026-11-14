@@ -65,6 +65,25 @@ pub struct SessionReviewRequestRow {
     pub web_url: String,
 }
 
+/// Persisted review-request watch state for one session.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct SessionReviewWatchRow {
+    /// Attention keys Agentty already acted on, in insertion order.
+    pub handled_keys: Vec<String>,
+    /// Session whose linked review request is watched.
+    pub session_id: String,
+}
+
+impl SessionReviewWatchRow {
+    /// Builds one row from the newline-separated persisted key list.
+    fn from_persisted(session_id: String, handled_keys: &str) -> Self {
+        Self {
+            handled_keys: handled_keys.lines().map(str::to_string).collect(),
+            session_id,
+        }
+    }
+}
+
 /// Review-request persistence boundary used by app orchestration and tests.
 #[cfg_attr(test, mockall::automock)]
 #[async_trait]
@@ -139,6 +158,27 @@ pub trait ReviewRepository: Send + Sync {
         &self,
         id: &str,
         reply_token: &str,
+    ) -> Result<(), DbError>;
+
+    /// Enables review-request watching for a session, keeping the existing
+    /// handled keys when watching is already enabled.
+    async fn enable_session_review_watch(&self, id: &str) -> Result<(), DbError>;
+
+    /// Disables review-request watching for a session and forgets its handled
+    /// keys. Does nothing when watching is not enabled.
+    async fn disable_session_review_watch(&self, id: &str) -> Result<(), DbError>;
+
+    /// Loads every watched session ordered by session identifier.
+    async fn load_session_review_watches(&self) -> Result<Vec<SessionReviewWatchRow>, DbError>;
+
+    /// Replaces the handled attention keys of a watched session. Does nothing
+    /// when watching is not enabled.
+    ///
+    /// Keys are opaque single-line values persisted in the supplied order.
+    async fn update_session_review_watch_handled_keys(
+        &self,
+        id: &str,
+        handled_keys: Vec<String>,
     ) -> Result<(), DbError>;
 }
 
@@ -514,6 +554,74 @@ WHERE session_id = ?
             });
         }
         transaction.commit().await?;
+
+        Ok(())
+    }
+
+    async fn enable_session_review_watch(&self, id: &str) -> Result<(), DbError> {
+        sqlx::query!(
+            r"
+INSERT INTO session_review_watch (session_id)
+VALUES (?)
+ON CONFLICT(session_id) DO NOTHING
+",
+            id
+        )
+        .execute(&self.0)
+        .await?;
+
+        Ok(())
+    }
+
+    async fn disable_session_review_watch(&self, id: &str) -> Result<(), DbError> {
+        sqlx::query!(
+            r"
+DELETE FROM session_review_watch
+WHERE session_id = ?
+",
+            id
+        )
+        .execute(&self.0)
+        .await?;
+
+        Ok(())
+    }
+
+    async fn load_session_review_watches(&self) -> Result<Vec<SessionReviewWatchRow>, DbError> {
+        let watches = sqlx::query!(
+            r"
+SELECT session_id,
+       handled_keys
+FROM session_review_watch
+ORDER BY session_id
+"
+        )
+        .fetch_all(&self.0)
+        .await?
+        .into_iter()
+        .map(|row| SessionReviewWatchRow::from_persisted(row.session_id, &row.handled_keys))
+        .collect();
+
+        Ok(watches)
+    }
+
+    async fn update_session_review_watch_handled_keys(
+        &self,
+        id: &str,
+        handled_keys: Vec<String>,
+    ) -> Result<(), DbError> {
+        let handled_keys = handled_keys.join("\n");
+        sqlx::query!(
+            r"
+UPDATE session_review_watch
+SET handled_keys = ?
+WHERE session_id = ?
+",
+            handled_keys,
+            id
+        )
+        .execute(&self.0)
+        .await?;
 
         Ok(())
     }

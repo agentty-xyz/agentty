@@ -679,6 +679,7 @@ fn mode_session_id_uses_view_help_context() {
             can_start_staged_session: false,
             can_view_review_comments: false,
             publish_pull_request_action: None,
+            review_watch_toggle: None,
             scroll_offset: Some(2),
             session_id: "help-session".into(),
             session_state: ViewSessionState::Review,

@@ -1,4 +1,4 @@
-use crate::review::NewSessionReviewCommentResolution;
+use crate::review::{NewSessionReviewCommentResolution, SessionReviewWatchRow};
 use crate::{AppRepositories, DbError};
 
 #[tokio::test]
@@ -232,5 +232,192 @@ fn review_comment_resolution(reply: &str, reply_token: &str) -> NewSessionReview
         resolution: "fixed".to_string(),
         review_request_display_id: "#42".to_string(),
         thread_id: "thread-1".to_string(),
+    }
+}
+
+#[tokio::test]
+async fn review_watch_enable_is_idempotent_and_preserves_handled_keys() {
+    // Arrange
+    let repositories = review_watch_repositories(&["session-id"]).await;
+    let reviews = repositories.reviews();
+    reviews
+        .enable_session_review_watch("session-id")
+        .await
+        .expect("failed to enable watch");
+    let enabled = reviews
+        .load_session_review_watches()
+        .await
+        .expect("failed to load enabled watch");
+    reviews
+        .update_session_review_watch_handled_keys(
+            "session-id",
+            vec!["checks:abc".to_string(), "thread:t1:2".to_string()],
+        )
+        .await
+        .expect("failed to store handled keys");
+
+    // Act
+    reviews
+        .enable_session_review_watch("session-id")
+        .await
+        .expect("failed to enable watch again");
+    let reenabled = reviews
+        .load_session_review_watches()
+        .await
+        .expect("failed to load re-enabled watch");
+
+    // Assert
+    assert_eq!(enabled, vec![review_watch_row("session-id", &[])]);
+    assert_eq!(
+        reenabled,
+        vec![review_watch_row(
+            "session-id",
+            &["checks:abc", "thread:t1:2"]
+        )]
+    );
+}
+
+#[tokio::test]
+async fn review_watch_update_replaces_keys_and_ignores_unwatched_sessions() {
+    // Arrange
+    let repositories = review_watch_repositories(&["session-b", "session-a"]).await;
+    let reviews = repositories.reviews();
+    for session_id in ["session-b", "session-a"] {
+        reviews
+            .enable_session_review_watch(session_id)
+            .await
+            .expect("failed to enable watch");
+    }
+    reviews
+        .update_session_review_watch_handled_keys("session-a", vec!["conflict:abc".to_string()])
+        .await
+        .expect("failed to store first handled key");
+
+    // Act
+    reviews
+        .update_session_review_watch_handled_keys("session-a", vec!["checks:def".to_string()])
+        .await
+        .expect("failed to replace handled keys");
+    reviews
+        .update_session_review_watch_handled_keys("session-b", Vec::new())
+        .await
+        .expect("failed to store empty handled keys");
+    reviews
+        .update_session_review_watch_handled_keys("unwatched", vec!["checks:abc".to_string()])
+        .await
+        .expect("unwatched update should be harmless");
+    let watches = reviews
+        .load_session_review_watches()
+        .await
+        .expect("failed to load watches");
+
+    // Assert
+    assert_eq!(
+        watches,
+        vec![
+            review_watch_row("session-a", &["checks:def"]),
+            review_watch_row("session-b", &[]),
+        ]
+    );
+}
+
+#[tokio::test]
+async fn review_watch_disable_forgets_handled_keys() {
+    // Arrange
+    let repositories = review_watch_repositories(&["session-id"]).await;
+    let reviews = repositories.reviews();
+    reviews
+        .enable_session_review_watch("session-id")
+        .await
+        .expect("failed to enable watch");
+    reviews
+        .update_session_review_watch_handled_keys("session-id", vec!["checks:abc".to_string()])
+        .await
+        .expect("failed to store handled keys");
+
+    // Act
+    reviews
+        .disable_session_review_watch("session-id")
+        .await
+        .expect("failed to disable watch");
+    reviews
+        .disable_session_review_watch("session-id")
+        .await
+        .expect("repeated disable should be harmless");
+    let disabled = reviews
+        .load_session_review_watches()
+        .await
+        .expect("failed to load disabled watches");
+    reviews
+        .enable_session_review_watch("session-id")
+        .await
+        .expect("failed to enable watch after disabling");
+    let reenabled = reviews
+        .load_session_review_watches()
+        .await
+        .expect("failed to load re-enabled watch");
+
+    // Assert
+    assert_eq!(disabled, Vec::new());
+    assert_eq!(reenabled, vec![review_watch_row("session-id", &[])]);
+}
+
+#[tokio::test]
+async fn review_watch_is_deleted_with_its_session() {
+    // Arrange
+    let repositories = review_watch_repositories(&["kept", "deleted"]).await;
+    let reviews = repositories.reviews();
+    for session_id in ["kept", "deleted"] {
+        reviews
+            .enable_session_review_watch(session_id)
+            .await
+            .expect("failed to enable watch");
+    }
+    let missing_session_error = reviews
+        .enable_session_review_watch("missing-session")
+        .await
+        .expect_err("watch should require an existing session");
+
+    // Act
+    repositories
+        .sessions()
+        .delete_session("deleted")
+        .await
+        .expect("failed to delete session");
+    let watches = reviews
+        .load_session_review_watches()
+        .await
+        .expect("failed to load remaining watches");
+
+    // Assert
+    assert!(matches!(missing_session_error, DbError::Query(_)));
+    assert_eq!(watches, vec![review_watch_row("kept", &[])]);
+}
+
+/// Opens repositories with one review-ready session per identifier.
+async fn review_watch_repositories(session_ids: &[&str]) -> AppRepositories {
+    let repositories = AppRepositories::in_memory()
+        .await
+        .expect("failed to open in-memory repositories");
+    let project_id = repositories
+        .projects()
+        .upsert_project("/tmp/project", Some("main".to_string()))
+        .await
+        .expect("failed to insert project");
+    for session_id in session_ids {
+        repositories
+            .sessions()
+            .insert_session(session_id, "codex", "main", "Watching", project_id)
+            .await
+            .expect("failed to insert session");
+    }
+
+    repositories
+}
+
+fn review_watch_row(session_id: &str, handled_keys: &[&str]) -> SessionReviewWatchRow {
+    SessionReviewWatchRow {
+        handled_keys: handled_keys.iter().map(ToString::to_string).collect(),
+        session_id: session_id.to_string(),
     }
 }

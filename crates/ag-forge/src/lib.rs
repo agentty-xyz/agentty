@@ -24,8 +24,8 @@ pub(crate) use github::GitHubReviewRequestAdapter;
 pub(crate) use gitlab::GitLabReviewRequestAdapter;
 pub use model::{
     AGENTTY_REVIEW_REPLY_MARKER_PREFIX, CreateReviewRequestInput, ForgeFuture, ForgeKind,
-    ForgeRemote, ReviewComment, ReviewCommentAnchorSide, ReviewCommentSnapshot,
-    ReviewCommentThread, ReviewRequestError, ReviewRequestMetadata,
+    ForgeRemote, ReviewCheckFailure, ReviewComment, ReviewCommentAnchorSide, ReviewCommentSnapshot,
+    ReviewCommentThread, ReviewRequestAttention, ReviewRequestError, ReviewRequestMetadata,
     ReviewRequestMetadataFieldUpdate, ReviewRequestState, ReviewRequestSummary,
     UpdateReviewRequestInput, is_gitlab_host,
 };

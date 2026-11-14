@@ -404,6 +404,20 @@ fn status_icon_returns_check_for_merged_and_done() {
 }
 
 #[test]
+fn watching_status_uses_review_color_and_watch_icon() {
+    // Arrange
+    let _theme_scope = scoped_active_theme(ColorTheme::Current);
+
+    // Act
+    let color = status_color(Status::Watching);
+    let icon = status_icon(Status::Watching);
+
+    // Assert
+    assert_eq!(color, palette::info());
+    assert!(matches!(icon, Icon::Watch));
+}
+
+#[test]
 fn status_icon_returns_cross_for_canceled() {
     // Arrange / Act
     let icon = status_icon(Status::Canceled);

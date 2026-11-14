@@ -1,0 +1,12 @@
+{
+  "db_name": "SQLite",
+  "query": "\nUPDATE session_review_watch\nSET handled_keys = ?\nWHERE session_id = ?\n",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Right": 2
+    },
+    "nullable": []
+  },
+  "hash": "9239b068fb253180e2d596adb8f96113082f40864ca8148da680e71bc954c8aa"
+}

@@ -220,6 +220,7 @@ failed refresh keeps the last known label until the next successful update.
 | **InProgress**  | Agent is working.                                        |
 | **Review**      | Changes are ready to inspect.                            |
 | **AgentReview** | Focused review is running.                               |
+| **Watching**    | Review-ready; linked review request is watched.          |
 | **Question**    | Agent is waiting for clarification.                      |
 | **Queued**      | Waiting to merge.                                        |
 | **Rebasing**    | Session branch is syncing.                               |
@@ -246,6 +247,10 @@ flowchart TD
   InProgress --> Review
   Review --> AgentReview
   AgentReview --> Review
+  Review --> Watching
+  Watching --> Review
+  Watching --> InProgress
+  Watching --> Rebasing
   Review --> Rebasing
   Rebasing --> Review
   Review --> Queued
@@ -521,6 +526,37 @@ child restacking fails.
 
 If parent and child requests have both merged, syncing the parent's local target also
 completes the child. Closing an unmerged request cancels its editable session.
+
+### Watching a Review Request
+
+<a id="usage-review-request-watch"></a> When Agentty creates a review request, it asks
+whether to watch it. Answer `y` to enable watching, or `n` to decline. Press `W` in
+session view to ask again later for an open review request, or to stop watching. The
+offer appears on the **Sessions** list or a session view, never over another dialog or
+the composer.
+
+A watched session rests in **Watching** instead of **Review** and keeps every review
+action. About once a minute, Agentty checks the review request and starts at most one
+follow-up:
+
+1. **Merge conflicts**: syncs the session branch, as `r` does.
+1. **Review comments**: addresses unresolved threads where you or a trusted author await
+   a response, as described in
+   [Addressing Review Comments](@/docs/usage/workflow.md#addressing-review-comments).
+   Comments from other authors are ignored.
+1. **Failing checks**: after all checks finish, starts a turn to fix the failed ones.
+
+Trusted authors are GitHub owners, members, and collaborators, or GitLab project members
+with at least the Developer role. Each `[Review Watch]` notice records what was started.
+The session returns to **Watching** when the follow-up finishes.
+
+Agentty tries each conflict or failed check once per pushed commit, and each thread once
+per new reviewer comment, so an unsuccessful attempt is not repeated until the review
+request changes. If Agentty cannot check the review request or start a follow-up, for
+example while a project sync is running, it writes one `[Review Watch]` notice and tries
+again on the next check. Watching pauses during turns, sync, and focused review. It ends
+when you press `W`, or when the review request is merged or closed. Watching runs only
+while Agentty is open with the session's project active.
 
 ## Clarification Interaction Loop
 

@@ -3,9 +3,9 @@ use super::{
     PROMPT_IMAGE_PASTE_SHORTCUT_LABEL, ViewActionAvailability, ViewHelpState, ViewSessionState,
     diff_actions, diff_footer_actions, project_list_actions, session_list_actions,
     session_list_footer_actions, session_view_state, settings_actions, view_actions,
-    view_actions_with_review_comments, view_footer_actions,
+    view_actions_with_review_request, view_footer_actions,
 };
-use crate::domain::session::{PublishBranchAction, Status};
+use crate::domain::session::{PublishBranchAction, ReviewWatchToggle, Status};
 use crate::presentation::app_mode::{DiffFocus, DiffSidebarFocus};
 use crate::test_support::SessionFixtureBuilder;
 
@@ -953,7 +953,7 @@ fn test_view_actions_terminal_sessions_hide_linked_review_comments() {
         };
 
         // Act
-        let full_actions = view_actions_with_review_comments(state, true);
+        let full_actions = view_actions_with_review_request(state, true, None);
 
         // Assert
         assert_eq!(
@@ -991,8 +991,8 @@ fn test_view_actions_non_terminal_review_comments_follow_availability() {
     };
 
     // Act
-    let available_actions = view_actions_with_review_comments(state, true);
-    let unavailable_actions = view_actions_with_review_comments(state, false);
+    let available_actions = view_actions_with_review_request(state, true, None);
+    let unavailable_actions = view_actions_with_review_request(state, false, None);
 
     // Assert
     assert!(
@@ -1297,4 +1297,62 @@ fn test_review_comment_actions_include_selection_and_submit_keys() {
         comment_keys,
         ["q", "s", "j/k", "Space", "Enter", "f/Esc", "Up/Down", "?"]
     );
+}
+
+#[test]
+fn review_watch_action_follows_toggle_before_trailing_help_actions() {
+    // Arrange
+    let state = ViewHelpState {
+        can_fork_session: ViewActionAvailability::Enabled,
+        can_merge_session_branch: ViewActionAvailability::Disabled,
+        can_mutate_session_branch: ViewActionAvailability::Enabled,
+        can_rebase_session_branch: ViewActionAvailability::Enabled,
+        can_show_diff: ViewActionAvailability::Enabled,
+        can_open_worktree: ViewActionAvailability::Disabled,
+        reply_to_session: ViewActionAvailability::Enabled,
+        can_start_staged_session: ViewActionAvailability::Disabled,
+        publish_pull_request_action: Some(PublishBranchAction::PublishPullRequest),
+        session_state: ViewSessionState::Review,
+    };
+
+    // Act
+    let start_actions =
+        view_actions_with_review_request(state, false, Some(ReviewWatchToggle::Start));
+    let stop_actions =
+        view_actions_with_review_request(state, false, Some(ReviewWatchToggle::Stop));
+    let hidden_actions = view_actions_with_review_request(state, false, None);
+
+    // Assert
+    let start_index = start_actions
+        .iter()
+        .position(|action| action.key == "W")
+        .expect("watch action");
+    assert_eq!(
+        start_actions[start_index].popup_label,
+        "Watch review request and resolve checks, comments, and conflicts"
+    );
+    assert_eq!(start_actions[start_index - 1].key, "r");
+    assert_eq!(start_actions.last().map(|action| action.key), Some("?"));
+    assert!(
+        stop_actions
+            .iter()
+            .any(|action| action.key == "W"
+                && action.popup_label == "Stop watching review request")
+    );
+    assert!(hidden_actions.iter().all(|action| action.key != "W"));
+    assert_eq!(start_actions.len(), hidden_actions.len() + 1);
+}
+
+#[test]
+fn watching_sessions_share_review_view_actions() {
+    // Arrange
+    let session = SessionFixtureBuilder::new()
+        .status(Status::Watching)
+        .build();
+
+    // Act
+    let session_state = session_view_state(&session);
+
+    // Assert
+    assert_eq!(session_state, ViewSessionState::Review);
 }

@@ -2042,6 +2042,7 @@ impl SessionManager {
                 Status::Draft
                     | Status::Review
                     | Status::AgentReview
+                    | Status::Watching
                     | Status::InProgress
                     | Status::Question
             ) || request.folder != session.folder
@@ -2160,7 +2161,7 @@ impl SessionManager {
             definition == ag_session::TaskAgentRole::Planner && status == Status::Draft;
         let needs_workspace = planner_start && session.is_draft_session();
         let parent = session.parent_session_id.clone();
-        if !matches!(status, Status::Review | Status::AgentReview) && !planner_start {
+        if !status.allows_review_actions() && !planner_start {
             return Err(SessionError::Workflow(format!(
                 "Session cannot accept isolated task in status `{status}`"
             )));

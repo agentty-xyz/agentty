@@ -5,6 +5,9 @@ use super::super::{
     handle_publish_branch_input_key, handle_session_creation_key,
 };
 use crate::app::ReviewCacheEntry;
+use crate::domain::session::{
+    ForgeKind, ReviewRequest, ReviewRequestState, ReviewRequestSummary, SessionId, Status,
+};
 use crate::presentation::app_mode::{
     AppMode, ConfirmationIntent, ConfirmationViewMode, DiffFocus, DiffLineComments, DiffPreview,
     DiffReviewComments, DiffSidebarFocus,
@@ -521,4 +524,100 @@ async fn test_handle_confirmation_decision_confirm_regenerates_review() {
         app.review_cache.get(session_id.as_str()),
         Some(ReviewCacheEntry::Loading { .. })
     ));
+}
+
+/// Opens the watch confirmation for a review session with an open pull
+/// request and returns that session's identifier.
+async fn open_watch_confirmation(app: &mut crate::app::App) -> SessionId {
+    let session_id = SessionId::from(app.create_session().await.expect("session"));
+    crate::test_support::set_session_status_for_test(app, &session_id, Status::Review);
+    app.sessions.apply_review_request(
+        &session_id,
+        ReviewRequest {
+            last_refreshed_at: 0,
+            summary: ReviewRequestSummary {
+                display_id: "#42".to_string(),
+                forge_kind: ForgeKind::GitHub,
+                source_branch: "wt/session".to_string(),
+                state: ReviewRequestState::Open,
+                status_summary: None,
+                target_branch: "main".to_string(),
+                title: "Add watch".to_string(),
+                web_url: "https://github.com/agentty-xyz/agentty/pull/42".to_string(),
+            },
+        },
+    );
+    let opened = app.open_review_watch_confirmation(
+        &session_id,
+        Some(ConfirmationViewMode {
+            scroll_offset: Some(4),
+            session_id: session_id.clone(),
+        }),
+    );
+    assert!(opened, "watch confirmation should open");
+
+    session_id
+}
+
+#[tokio::test]
+async fn watch_confirmation_confirm_starts_watching_and_restores_view() {
+    // Arrange
+    let (mut app, _base_dir) = crate::test_support::new_git_test_app_with_mock_tmux_client().await;
+    let session_id = open_watch_confirmation(&mut app).await;
+
+    // Act
+    let event_result = handle_confirmation_decision(&mut app, ConfirmationDecision::Confirm).await;
+
+    // Assert
+    assert!(matches!(event_result, Ok(EventResult::Continue)));
+    assert!(matches!(
+        app.mode,
+        AppMode::View {
+            session_id: ref session_id_in_mode,
+            scroll_offset: Some(4),
+        } if *session_id_in_mode == session_id
+    ));
+    assert_eq!(app.sessions.sessions()[0].status, Status::Watching);
+}
+
+#[tokio::test]
+async fn watch_confirmation_cancel_restores_view_without_watching() {
+    // Arrange
+    let (mut app, _base_dir) = crate::test_support::new_git_test_app_with_mock_tmux_client().await;
+    let session_id = open_watch_confirmation(&mut app).await;
+
+    // Act
+    let event_result = handle_confirmation_decision(&mut app, ConfirmationDecision::Reject).await;
+
+    // Assert
+    assert!(matches!(event_result, Ok(EventResult::Continue)));
+    assert!(matches!(
+        app.mode,
+        AppMode::View {
+            session_id: ref session_id_in_mode,
+            scroll_offset: Some(4),
+        } if *session_id_in_mode == session_id
+    ));
+    assert_eq!(app.sessions.sessions()[0].status, Status::Review);
+}
+
+#[tokio::test]
+async fn watch_confirmation_without_a_session_returns_to_the_list() {
+    // Arrange
+    let (mut app, _base_dir) = crate::test_support::new_git_test_app_with_mock_tmux_client().await;
+    app.mode = AppMode::Confirmation {
+        confirmation_intent: ConfirmationIntent::WatchReviewRequest,
+        confirmation_message: "Auto-resolve checks, comments, conflicts?".to_string(),
+        confirmation_title: "Watch PR #42".to_string(),
+        restore_view: None,
+        session_id: None,
+        selected_confirmation_index: 0,
+    };
+
+    // Act
+    let event_result = handle_confirmation_decision(&mut app, ConfirmationDecision::Confirm).await;
+
+    // Assert
+    assert!(matches!(event_result, Ok(EventResult::Continue)));
+    assert!(matches!(app.mode, AppMode::List));
 }

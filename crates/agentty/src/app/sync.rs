@@ -357,6 +357,9 @@ pub(crate) struct ReviewRequestSyncTarget {
     /// Session worktree directory used to resolve the repository remote and
     /// forge command working directory.
     pub(crate) folder: PathBuf,
+    /// Whether the session rests in `Watching`, so each pass also reports the
+    /// forge facts that may need automatic follow-up.
+    pub(crate) is_watched: bool,
     /// Previously linked review request, when Agentty already knows the forge
     /// display id.
     pub(crate) linked_review_request: Option<crate::domain::session::ReviewRequest>,
@@ -376,6 +379,7 @@ impl ReviewRequestSyncTarget {
         (
             self.folder.as_path(),
             self.session_id.as_str(),
+            self.is_watched,
             self.published_upstream_ref.as_deref(),
             self.linked_review_request
                 .as_ref()
@@ -388,6 +392,7 @@ impl ReviewRequestSyncTarget {
 type ReviewTargetPollingKey<'a> = (
     &'a Path,
     &'a str,
+    bool,
     Option<&'a str>,
     Option<(&'a str, ReviewRequestState)>,
 );
@@ -576,10 +581,8 @@ impl SyncOrchestrator {
             }
 
             let result = sync_review_request_status(
-                review_request_sync_target.folder.clone(),
+                review_request_sync_target,
                 context.git_client.as_ref(),
-                review_request_sync_target.linked_review_request.clone(),
-                review_request_sync_target.published_upstream_ref.clone(),
                 context.review_request_client.as_ref(),
             )
             .await;
@@ -840,37 +843,52 @@ async fn session_git_statuses(
 ///
 /// When the session has a linked review request, this refreshes it by display
 /// id. Otherwise, when the branch was published, this searches for an
-/// externally created review request by source branch name.
+/// externally created review request by source branch name. An open linked
+/// review request of a watched target also reports the forge facts that may
+/// need automatic follow-up. A failed lookup of those facts is reported next
+/// to the refreshed summary instead of failing the refresh.
 async fn sync_review_request_status(
-    folder: PathBuf,
+    target: &ReviewRequestSyncTarget,
     git_client: &dyn GitClient,
-    linked_review_request: Option<crate::domain::session::ReviewRequest>,
-    published_upstream_ref: Option<String>,
     review_request_client: &dyn ReviewRequestClient,
 ) -> Result<SyncReviewRequestTaskResult, String> {
+    let folder = target.folder.clone();
     let remote = review_request_remote(
         folder.clone(),
         git_client,
-        linked_review_request.as_ref(),
+        target.linked_review_request.as_ref(),
         review_request_client,
     )
     .await?;
 
-    if let Some(review_request) = linked_review_request {
+    if let Some(review_request) = &target.linked_review_request {
+        let display_id = review_request.summary.display_id.clone();
         let refreshed_summary = review_request_client
-            .refresh_review_request(remote, review_request.summary.display_id)
+            .refresh_review_request(remote.clone(), display_id.clone())
             .await
             .map_err(|error| error.detail_message())?;
         let session_head_hash =
             session_head_hash_for_summary(git_client, &folder, &refreshed_summary).await;
+        let attention = if target.is_watched && refreshed_summary.state == ReviewRequestState::Open
+        {
+            Some(
+                review_request_client
+                    .fetch_review_request_attention(remote, display_id)
+                    .await
+                    .map_err(|error| error.detail_message()),
+            )
+        } else {
+            None
+        };
+        let mut task_result = sync_task_result_from_summary(refreshed_summary, session_head_hash);
+        task_result.attention = attention;
 
-        return Ok(sync_task_result_from_summary(
-            refreshed_summary,
-            session_head_hash,
-        ));
+        return Ok(task_result);
     }
 
-    let upstream_ref = published_upstream_ref
+    let upstream_ref = target
+        .published_upstream_ref
+        .clone()
         .ok_or_else(|| "Session branch has not been published yet".to_string())?;
     let source_branch = session::remote_branch_name_from_upstream_ref(&upstream_ref);
     let found_summary = review_request_client
@@ -885,6 +903,7 @@ async fn sync_review_request_status(
             Ok(sync_task_result_from_summary(summary, session_head_hash))
         }
         None => Ok(SyncReviewRequestTaskResult {
+            attention: None,
             outcome: session::SyncReviewRequestOutcome::NoReviewRequest,
             summary: None,
         }),
@@ -978,6 +997,7 @@ fn sync_task_result_from_summary(
     };
 
     SyncReviewRequestTaskResult {
+        attention: None,
         outcome,
         summary: Some(summary),
     }

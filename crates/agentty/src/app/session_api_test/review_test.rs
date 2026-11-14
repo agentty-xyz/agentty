@@ -160,6 +160,7 @@ fn api_review_request_result_requires_a_published_review_request() {
     .expect("review-request fixture should parse");
     let published_result = Ok(BranchPublishTaskSuccess::PullRequestPublished {
         branch_name: "wt/session-1".to_string(),
+        is_created: false,
         review_request: review_request.clone(),
         upstream_reference: "origin/wt/session-1".to_string(),
     });
