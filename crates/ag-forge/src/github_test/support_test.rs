@@ -1,5 +1,8 @@
 use crate::command::ForgeCommandOutput;
-use crate::model::{ForgeKind, ForgeRemote, ReviewRequestMetadataFieldUpdate};
+use crate::github::{GitHubReviewRequestAdapter, GitHubViewResponse};
+use crate::model::{
+    ForgeKind, ForgeRemote, ReviewRequestMetadataFieldUpdate, ReviewRequestSummary,
+};
 
 pub(super) fn github_remote() -> ForgeRemote {
     ForgeRemote {
@@ -225,6 +228,12 @@ pub(super) fn github_view_json() -> String {
         }}}
     }"#
     .to_string()
+}
+
+/// Parses one compact status response into its normalized summary.
+pub(super) fn parse_view_summary(stdout: &str) -> Result<ReviewRequestSummary, String> {
+    GitHubReviewRequestAdapter::parse_view_pull_request(stdout)
+        .map(GitHubViewResponse::into_summary)
 }
 
 pub(super) fn github_metadata_json() -> String {

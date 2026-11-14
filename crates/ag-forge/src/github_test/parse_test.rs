@@ -28,7 +28,7 @@ fn request_parsers_preserve_invalid_json_context() {
     // Act
     let errors = [
         GitHubReviewRequestAdapter::parse_lookup_display_id(invalid_json).err(),
-        GitHubReviewRequestAdapter::parse_view_response(invalid_json).err(),
+        GitHubReviewRequestAdapter::parse_view_pull_request(invalid_json).err(),
         GitHubReviewRequestAdapter::parse_metadata_response(invalid_json).err(),
     ];
 

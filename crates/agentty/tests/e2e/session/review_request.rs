@@ -290,15 +290,17 @@ async fn seed_ready_pr_status(env: &BuilderEnv) -> Result<(), Box<dyn std::error
     Ok(())
 }
 
-/// Seeds one linked PR whose passing checks leave only a required approval
-/// the viewer may bypass.
+/// Seeds one linked PR whose passing checks, including every base-branch
+/// required check, leave only a required approval the viewer may bypass.
 async fn seed_bypass_ready_pr_status(env: &BuilderEnv) -> Result<(), Box<dyn std::error::Error>> {
     seed_review_ready_session_with_review_request(env).await?;
     let gh_path = env.stub_bin.join("gh");
     let gh_script = std::fs::read_to_string(&gh_path)?.replace(
         "\"mergedAt\":null",
-        "\"mergedAt\":null,\"statusCheckRollup\":{\"state\":\"SUCCESS\"},\"viewerCanMergeAsAdmin\"\
-         :true",
+        "\"mergedAt\":null,\"statusCheckRollup\":{\"state\":\"SUCCESS\",\"contexts\":{\"nodes\":\
+         [{\"name\":\"ci\"}]}},\"baseRef\":{\"refUpdateRule\":null,\"rules\":{\"totalCount\":1,\"\
+         nodes\":[{\"parameters\":{\"requiredStatusChecks\":[{\"context\":\"ci\"}]}}]}},\"\
+         viewerCanMergeAsAdmin\":true",
     );
     std::fs::write(&gh_path, gh_script)?;
 

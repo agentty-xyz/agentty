@@ -14,11 +14,29 @@ use super::{
 };
 
 /// One compact status query replaces `gh pr view` during each review refresh.
+///
+/// The rollup check names and the base branch's required status checks let
+/// bypass readiness wait for required checks that have not reported yet.
 const PULL_REQUEST_STATUS_QUERY: &str =
     "query($owner: String!, $repo: String!, $number: Int!) { repository(owner: $owner, name: \
      $repo) { pullRequest(number: $number) { number title state url baseRefName headRefName \
-     isDraft mergeable mergeStateStatus reviewDecision mergedAt statusCheckRollup { state } \
-     reviewThreads(first: 100) { totalCount nodes { isResolved } } viewerCanMergeAsAdmin } } }";
+     isDraft mergeable mergeStateStatus reviewDecision mergedAt statusCheckRollup { state \
+     contexts(first: 100) { nodes { ... on CheckRun { name } ... on StatusContext { context } } \
+     pageInfo { hasNextPage } } } reviewThreads(first: 100) { totalCount nodes { isResolved } } \
+     baseRef { refUpdateRule { requiredStatusCheckContexts } rules(first: 100) { totalCount nodes \
+     { parameters { ... on RequiredStatusChecksParameters { requiredStatusChecks { context } } } \
+     } } } viewerCanMergeAsAdmin } } }";
+
+/// Paginated GraphQL query used when a required check may be reported beyond
+/// the first page of rollup contexts.
+///
+/// Each page carries the current rollup state so readiness never pairs newly
+/// fetched check names with an earlier success.
+const STATUS_CONTEXTS_QUERY: &str =
+    "query($owner: String!, $repo: String!, $number: Int!, $endCursor: String) { \
+     repository(owner: $owner, name: $repo) { pullRequest(number: $number) { statusCheckRollup { \
+     state contexts(first: 100, after: $endCursor) { nodes { ... on CheckRun { name } ... on \
+     StatusContext { context } } pageInfo { hasNextPage endCursor } } } } } }";
 
 /// Paginated GraphQL query used to fetch review threads for one pull request.
 const REVIEW_THREADS_QUERY: &str =
@@ -192,29 +210,73 @@ impl GitHubReviewRequestAdapter {
         )
     }
 
-    /// Parses one pull-request summary from the compact GraphQL response.
-    fn parse_view_response(stdout: &str) -> Result<ReviewRequestSummary, String> {
+    /// Parses one pull-request status payload from the compact GraphQL
+    /// response.
+    fn parse_view_pull_request(stdout: &str) -> Result<GitHubViewResponse, String> {
         let response: GitHubViewEnvelope = serde_json::from_str(stdout)
             .map_err(|error| format!("invalid GitHub pull-request view response: {error}"))?;
-        let pull_request = response
+
+        response
             .data
             .and_then(|data| data.repository)
             .and_then(|repository| repository.pull_request)
             .ok_or_else(|| {
                 "GitHub pull-request view response is missing a pull request".to_string()
-            })?;
-        let state = pull_request.review_request_state();
-        let status_summary = pull_request.status_summary();
+            })
+    }
 
-        Ok(ReviewRequestSummary {
-            display_id: format!("#{}", pull_request.number),
-            forge_kind: ForgeKind::GitHub,
-            source_branch: pull_request.head_ref_name,
+    /// Builds one paginated GraphQL command for every rollup check run and
+    /// commit status.
+    fn status_contexts_command(remote: &ForgeRemote, pull_request_number: &str) -> ForgeCommand {
+        Self::paginated_graphql_command(
+            remote,
+            STATUS_CONTEXTS_QUERY,
+            vec![
+                format!("owner={}", remote.namespace),
+                format!("repo={}", remote.project),
+                format!("number={pull_request_number}"),
+            ],
+        )
+    }
+
+    /// Parses and combines all `--slurp` pages of rollup contexts into one
+    /// rollup.
+    ///
+    /// The combined state is `SUCCESS` only when every page reported
+    /// `SUCCESS`; otherwise it keeps the first non-passing page state, so a
+    /// check that started or failed during pagination withholds readiness.
+    fn parse_status_check_rollup_pages(stdout: &str) -> Result<GitHubStatusCheckRollup, String> {
+        let responses: Vec<GitHubStatusContextsEnvelope> = serde_json::from_str(stdout)
+            .map_err(|error| format!("invalid GitHub status-check contexts response: {error}"))?;
+        let mut contexts = Vec::new();
+        let mut state: Option<String> = None;
+        for response in responses {
+            let Some(rollup) = response
+                .data
+                .and_then(|data| data.repository)
+                .and_then(|repository| repository.pull_request)
+                .and_then(|pull_request| pull_request.status_check_rollup)
+            else {
+                return Err(
+                    "GitHub status-check contexts response is missing a status check rollup"
+                        .to_string(),
+                );
+            };
+
+            if state.as_deref().is_none_or(|state| state == "SUCCESS") {
+                state = Some(rollup.state);
+            }
+            contexts.extend(rollup.contexts.nodes);
+        }
+        let state = state
+            .ok_or_else(|| "GitHub status-check contexts response contains no pages".to_string())?;
+
+        Ok(GitHubStatusCheckRollup {
+            contexts: Some(GitHubStatusContextConnection {
+                nodes: contexts,
+                page_info: None,
+            }),
             state,
-            status_summary,
-            target_branch: pull_request.base_ref_name,
-            title: pull_request.title,
-            web_url: pull_request.url,
         })
     }
 
@@ -566,19 +628,47 @@ impl ReviewRequestAdapter for GitHubReviewRequestAdapter {
     }
 
     /// Refreshes one existing pull request by display id.
+    ///
+    /// Fetches every rollup context page only when a required check is
+    /// missing from the first page, so bypass readiness never depends on a
+    /// truncated check list.
     fn refresh_authenticated_review_request(
         &self,
         remote: ForgeRemote,
         display_id: String,
     ) -> ForgeFuture<Result<ReviewRequestSummary, ReviewRequestError>> {
-        self.operations.refresh_review_request_future(
-            remote,
-            display_id,
-            Self::parse_display_id,
-            Self::view_command,
-            "refresh pull request",
-            Self::parse_view_response,
-        )
+        let operations = self.operations.clone();
+
+        Box::pin(async move {
+            let pull_request_number = Self::parse_display_id(&display_id)?;
+            let output = operations
+                .run_review_command(
+                    &remote,
+                    Self::view_command(&remote, &pull_request_number),
+                    "refresh pull request",
+                )
+                .await?;
+            let mut pull_request = map_parse_error(
+                ForgeKind::GitHub,
+                Self::parse_view_pull_request(&output.stdout),
+            )?;
+            if pull_request.has_unfetched_required_checks() {
+                let contexts_output = operations
+                    .run_review_command(
+                        &remote,
+                        Self::status_contexts_command(&remote, &pull_request_number),
+                        "fetch pull-request status checks",
+                    )
+                    .await?;
+                let status_check_rollup = map_parse_error(
+                    ForgeKind::GitHub,
+                    Self::parse_status_check_rollup_pages(&contexts_output.stdout),
+                )?;
+                pull_request.status_check_rollup = Some(status_check_rollup);
+            }
+
+            Ok(pull_request.into_summary())
+        })
     }
 
     /// Loads current pull-request title/body metadata.
@@ -878,6 +968,8 @@ struct GitHubViewRepository {
 /// GitHub pull-request status payload returned by the compact GraphQL query.
 #[derive(Deserialize)]
 struct GitHubViewResponse {
+    #[serde(rename = "baseRef")]
+    base_ref: Option<GitHubBaseRefStatus>,
     #[serde(rename = "baseRefName")]
     base_ref_name: String,
     #[serde(rename = "headRefName")]
@@ -904,6 +996,34 @@ struct GitHubViewResponse {
 }
 
 impl GitHubViewResponse {
+    /// Returns whether a passing rollup lacks a required check that a later
+    /// contexts page may still report.
+    fn has_unfetched_required_checks(&self) -> bool {
+        self.unreported_required_check_count()
+            .is_some_and(|count| count > 0)
+            && self
+                .status_check_rollup
+                .as_ref()
+                .is_some_and(GitHubStatusCheckRollup::has_next_contexts_page)
+    }
+
+    /// Converts the status payload into the normalized summary.
+    fn into_summary(self) -> ReviewRequestSummary {
+        let state = self.review_request_state();
+        let status_summary = self.status_summary();
+
+        ReviewRequestSummary {
+            display_id: format!("#{}", self.number),
+            forge_kind: ForgeKind::GitHub,
+            source_branch: self.head_ref_name,
+            state,
+            status_summary,
+            target_branch: self.base_ref_name,
+            title: self.title,
+            web_url: self.url,
+        }
+    }
+
     /// Maps GitHub state fields into the normalized review-request state.
     fn review_request_state(&self) -> ReviewRequestState {
         if self.merged_at.is_some() || self.state == "MERGED" {
@@ -964,10 +1084,40 @@ impl GitHubViewResponse {
         self.state == "OPEN"
             && self.viewer_can_merge_as_admin
             && is_unblocked
-            && self
-                .status_check_rollup
-                .as_ref()
-                .is_some_and(|rollup| rollup.state == "SUCCESS")
+            && self.has_passing_required_checks()
+    }
+
+    /// Returns whether every reported check passed and every required status
+    /// check of the base branch has reported.
+    ///
+    /// GitHub's rollup aggregates only reported checks, so it stays `SUCCESS`
+    /// while a required check is still expected. Missing or partial rule data
+    /// counts as an unreported required check.
+    fn has_passing_required_checks(&self) -> bool {
+        self.unreported_required_check_count() == Some(0)
+    }
+
+    /// Counts required checks missing from a passing rollup.
+    ///
+    /// Returns `None` when the rollup did not pass or the base branch's
+    /// required checks are unknown.
+    fn unreported_required_check_count(&self) -> Option<usize> {
+        let rollup = self
+            .status_check_rollup
+            .as_ref()
+            .filter(|rollup| rollup.state == "SUCCESS")?;
+        let required_contexts = self
+            .base_ref
+            .as_ref()
+            .and_then(GitHubBaseRefStatus::required_status_check_contexts)?;
+        let reported_contexts = rollup.reported_contexts();
+
+        Some(
+            required_contexts
+                .iter()
+                .filter(|required_context| !reported_contexts.contains(required_context))
+                .count(),
+        )
     }
 
     /// Returns whether every review thread is known and resolved.
@@ -1014,7 +1164,153 @@ impl GitHubViewResponse {
 /// Aggregate check and commit-status state for the pull-request head.
 #[derive(Deserialize)]
 struct GitHubStatusCheckRollup {
+    contexts: Option<GitHubStatusContextConnection>,
     state: String,
+}
+
+impl GitHubStatusCheckRollup {
+    /// Returns whether GitHub reported more contexts than the fetched page.
+    fn has_next_contexts_page(&self) -> bool {
+        self.contexts
+            .as_ref()
+            .and_then(|contexts| contexts.page_info.as_ref())
+            .is_some_and(|page_info| page_info.has_next_page)
+    }
+
+    /// Returns the names of check runs and commit statuses reported so far.
+    fn reported_contexts(&self) -> Vec<&str> {
+        self.contexts
+            .iter()
+            .flat_map(|contexts| &contexts.nodes)
+            .filter_map(GitHubStatusContextNode::label)
+            .collect()
+    }
+}
+
+/// Check runs and commit statuses fetched from the rollup.
+#[derive(Deserialize)]
+struct GitHubStatusContextConnection {
+    nodes: Vec<GitHubStatusContextNode>,
+    #[serde(rename = "pageInfo")]
+    page_info: Option<GitHubPageInfo>,
+}
+
+/// GraphQL response envelope for paginated rollup contexts.
+#[derive(Deserialize)]
+struct GitHubStatusContextsEnvelope {
+    data: Option<GitHubStatusContextsData>,
+}
+
+/// GraphQL `data` payload for paginated rollup contexts.
+#[derive(Deserialize)]
+struct GitHubStatusContextsData {
+    repository: Option<GitHubStatusContextsRepository>,
+}
+
+/// GraphQL repository node carrying one pull request's rollup contexts.
+#[derive(Deserialize)]
+struct GitHubStatusContextsRepository {
+    #[serde(rename = "pullRequest")]
+    pull_request: Option<GitHubStatusContextsPullRequest>,
+}
+
+/// GraphQL pull-request node carrying its status-check rollup.
+#[derive(Deserialize)]
+struct GitHubStatusContextsPullRequest {
+    #[serde(rename = "statusCheckRollup")]
+    status_check_rollup: Option<GitHubStatusContextsRollup>,
+}
+
+/// GraphQL rollup node carrying one page of contexts and the rollup state
+/// at the time that page was fetched.
+#[derive(Deserialize)]
+struct GitHubStatusContextsRollup {
+    contexts: GitHubStatusContextConnection,
+    state: String,
+}
+
+/// One check run (`name`) or commit status (`context`) in the rollup.
+#[derive(Deserialize)]
+struct GitHubStatusContextNode {
+    context: Option<String>,
+    name: Option<String>,
+}
+
+impl GitHubStatusContextNode {
+    /// Returns the name branch rules use to require this check.
+    fn label(&self) -> Option<&str> {
+        self.name.as_deref().or(self.context.as_deref())
+    }
+}
+
+/// Required status checks configured for the pull-request base branch.
+#[derive(Deserialize)]
+struct GitHubBaseRefStatus {
+    #[serde(rename = "refUpdateRule")]
+    ref_update_rule: Option<GitHubRefUpdateRuleStatus>,
+    rules: Option<GitHubRepositoryRuleConnection>,
+}
+
+impl GitHubBaseRefStatus {
+    /// Returns required check names from branch protection and rulesets.
+    ///
+    /// Returns `None` when ruleset data is missing or spans more than the
+    /// fetched page, so callers never rely on a partial requirement list.
+    fn required_status_check_contexts(&self) -> Option<Vec<&str>> {
+        let rules = self.rules.as_ref()?;
+        if rules.nodes.len() != rules.total_count {
+            return None;
+        }
+
+        let ruleset_contexts = rules
+            .nodes
+            .iter()
+            .filter_map(|rule| rule.parameters.as_ref())
+            .flat_map(|parameters| &parameters.required_status_checks)
+            .map(|check| check.context.as_str());
+        let protection_contexts = self
+            .ref_update_rule
+            .iter()
+            .flat_map(|rule| rule.required_status_check_contexts.iter().flatten())
+            .flatten()
+            .map(String::as_str);
+
+        Some(ruleset_contexts.chain(protection_contexts).collect())
+    }
+}
+
+/// Classic branch-protection requirements visible to the viewer.
+#[derive(Deserialize)]
+struct GitHubRefUpdateRuleStatus {
+    #[serde(rename = "requiredStatusCheckContexts")]
+    required_status_check_contexts: Option<Vec<Option<String>>>,
+}
+
+/// Ruleset rules that apply to the pull-request base branch.
+#[derive(Deserialize)]
+struct GitHubRepositoryRuleConnection {
+    nodes: Vec<GitHubRepositoryRuleNode>,
+    #[serde(rename = "totalCount")]
+    total_count: usize,
+}
+
+/// One ruleset rule; only required-status-check parameters are selected.
+#[derive(Deserialize)]
+struct GitHubRepositoryRuleNode {
+    parameters: Option<GitHubRepositoryRuleParameters>,
+}
+
+/// Selected ruleset rule parameters.
+#[derive(Deserialize)]
+struct GitHubRepositoryRuleParameters {
+    #[serde(default, rename = "requiredStatusChecks")]
+    required_status_checks: Vec<GitHubRequiredStatusCheck>,
+}
+
+/// One status check a ruleset requires before merging.
+#[derive(Deserialize)]
+struct GitHubRequiredStatusCheck {
+    context: String,
 }
 
 /// First page of review-thread resolution states for readiness checks.
