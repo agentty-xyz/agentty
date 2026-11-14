@@ -5,7 +5,7 @@ use mockall::Sequence;
 
 use super::support_test::{
     failure_output, github_empty_pull_request_comments_json, github_remote, github_view_json,
-    success_output,
+    parse_view_summary, success_output,
 };
 use crate::client::ReviewRequestAdapter;
 use crate::command::MockForgeCommandRunner;
@@ -102,8 +102,14 @@ fn status_command_requests_compact_readiness_fields() {
     assert!(!query.contains("comments"));
     assert!(query.contains("reviewThreads(first: 100) { totalCount nodes { isResolved } }"));
     assert!(!query.contains("reviews("));
-    assert!(query.contains("statusCheckRollup { state }"));
-    assert!(!query.contains("contexts"));
+    assert!(query.contains(
+        "statusCheckRollup { state contexts(first: 100) { nodes { ... on CheckRun { name } ... on \
+         StatusContext { context } } pageInfo { hasNextPage } } }"
+    ));
+    assert!(
+        query.contains("baseRef { refUpdateRule { requiredStatusCheckContexts } rules(first: 100)")
+    );
+    assert!(query.contains("RequiredStatusChecksParameters { requiredStatusChecks { context } }"));
     assert!(query.contains("viewerCanMergeAsAdmin"));
     assert!(command.arguments.contains(&"number=42".to_string()));
     assert!(!command.arguments.contains(&"--paginate".to_string()));
@@ -142,16 +148,15 @@ fn github_status_marks_only_open_clean_pr_ready() {
     ];
 
     // Act
-    let ready_summary = GitHubReviewRequestAdapter::parse_view_response(&ready.to_string())
-        .expect("ready response should parse");
+    let ready_summary =
+        parse_view_summary(&ready.to_string()).expect("ready response should parse");
     let unready_summaries = unready_cases.map(|(path, value)| {
         let mut response = ready.clone();
         *response
             .pointer_mut(path)
             .expect("fixture path should exist") = value;
 
-        GitHubReviewRequestAdapter::parse_view_response(&response.to_string())
-            .expect("unready response should parse")
+        parse_view_summary(&response.to_string()).expect("unready response should parse")
     });
 
     // Assert
@@ -175,8 +180,7 @@ fn github_clean_status_without_required_review_is_ready() {
     response["data"]["repository"]["pullRequest"]["reviewDecision"] = serde_json::Value::Null;
 
     // Act
-    let summary = GitHubReviewRequestAdapter::parse_view_response(&response.to_string())
-        .expect("clean response should parse");
+    let summary = parse_view_summary(&response.to_string()).expect("clean response should parse");
 
     // Assert
     assert!(summary.is_github_pr_ready());
@@ -194,7 +198,7 @@ fn github_status_marks_bypass_ready_only_when_admin_approval_is_missing() {
     let pull_request = &mut bypass_ready["data"]["repository"]["pullRequest"];
     pull_request["mergeStateStatus"] = serde_json::json!("BLOCKED");
     pull_request["reviewDecision"] = serde_json::json!("REVIEW_REQUIRED");
-    pull_request["statusCheckRollup"] = serde_json::json!({"state": "SUCCESS"});
+    set_passing_required_checks(pull_request);
     pull_request["viewerCanMergeAsAdmin"] = serde_json::json!(true);
     let unready_cases = [
         (
@@ -224,16 +228,15 @@ fn github_status_marks_bypass_ready_only_when_admin_approval_is_missing() {
     ];
 
     // Act
-    let bypass_summary = GitHubReviewRequestAdapter::parse_view_response(&bypass_ready.to_string())
-        .expect("bypass-ready response should parse");
+    let bypass_summary =
+        parse_view_summary(&bypass_ready.to_string()).expect("bypass-ready response should parse");
     let unready_summaries = unready_cases.map(|(path, value)| {
         let mut response = bypass_ready.clone();
         *response
             .pointer_mut(path)
             .expect("fixture path should exist") = value;
 
-        GitHubReviewRequestAdapter::parse_view_response(&response.to_string())
-            .expect("unready response should parse")
+        parse_view_summary(&response.to_string()).expect("unready response should parse")
     });
 
     // Assert
@@ -264,7 +267,7 @@ fn github_status_marks_conflict_free_draft_without_open_threads_bypass_ready() {
         "totalCount": 1,
         "nodes": [{"isResolved": true}]
     });
-    pull_request["statusCheckRollup"] = serde_json::json!({"state": "SUCCESS"});
+    set_passing_required_checks(pull_request);
     pull_request["viewerCanMergeAsAdmin"] = serde_json::json!(true);
     let ready_cases = [
         (
@@ -316,7 +319,7 @@ fn github_status_marks_conflict_free_draft_without_open_threads_bypass_ready() {
     ];
 
     // Act
-    let bypass_summary = GitHubReviewRequestAdapter::parse_view_response(&bypass_ready.to_string())
+    let bypass_summary = parse_view_summary(&bypass_ready.to_string())
         .expect("draft bypass-ready response should parse");
     let parse_variant = |(path, value): (&str, serde_json::Value)| {
         let mut response = bypass_ready.clone();
@@ -324,8 +327,7 @@ fn github_status_marks_conflict_free_draft_without_open_threads_bypass_ready() {
             .pointer_mut(path)
             .expect("fixture path should exist") = value;
 
-        GitHubReviewRequestAdapter::parse_view_response(&response.to_string())
-            .expect("draft response variant should parse")
+        parse_view_summary(&response.to_string()).expect("draft response variant should parse")
     };
     let ready_summaries = ready_cases.map(parse_variant);
     let unready_summaries = unready_cases.map(parse_variant);
@@ -350,13 +352,246 @@ fn github_status_marks_conflict_free_draft_without_open_threads_bypass_ready() {
 }
 
 #[test]
+fn github_status_withholds_bypass_ready_until_required_checks_report() {
+    // Arrange
+    let bypass_ready = bypass_ready_view();
+    let ready_cases = [(
+        "/data/repository/pullRequest/baseRef",
+        serde_json::json!({"refUpdateRule": null, "rules": {"totalCount": 0, "nodes": []}}),
+    )];
+    let unready_cases = [
+        (
+            "/data/repository/pullRequest/statusCheckRollup/contexts/nodes",
+            serde_json::json!([{"name": "Workspace validation"}]),
+        ),
+        (
+            "/data/repository/pullRequest/statusCheckRollup/contexts",
+            serde_json::Value::Null,
+        ),
+        (
+            "/data/repository/pullRequest/baseRef/refUpdateRule/requiredStatusCheckContexts",
+            serde_json::json!(["codecov/patch", "SonarCloud Code Analysis"]),
+        ),
+        (
+            "/data/repository/pullRequest/baseRef/rules/totalCount",
+            serde_json::json!(101),
+        ),
+        (
+            "/data/repository/pullRequest/baseRef/rules",
+            serde_json::Value::Null,
+        ),
+        (
+            "/data/repository/pullRequest/baseRef",
+            serde_json::Value::Null,
+        ),
+    ];
+
+    // Act
+    let bypass_summary =
+        parse_view_summary(&bypass_ready.to_string()).expect("bypass-ready response should parse");
+    let parse_variant = |(path, value): (&str, serde_json::Value)| {
+        let mut response = bypass_ready.clone();
+        *response
+            .pointer_mut(path)
+            .expect("fixture path should exist") = value;
+
+        parse_view_summary(&response.to_string()).expect("required-check variant should parse")
+    };
+    let ready_summaries = ready_cases.map(parse_variant);
+    let unready_summaries = unready_cases.map(parse_variant);
+
+    // Assert
+    assert!(bypass_summary.is_github_pr_bypass_ready());
+    assert!(
+        ready_summaries
+            .iter()
+            .all(ReviewRequestSummary::is_github_pr_bypass_ready)
+    );
+    assert!(
+        unready_summaries
+            .iter()
+            .all(|summary| !summary.is_github_pr_bypass_ready())
+    );
+}
+
+#[tokio::test]
+async fn refresh_fetches_remaining_status_contexts_for_unseen_required_checks() {
+    // Arrange
+    let context_pages = serde_json::json!([
+        status_contexts_page(
+            "SUCCESS",
+            &serde_json::json!([{"name": "Workspace validation"}])
+        ),
+        status_contexts_page(
+            "SUCCESS",
+            &serde_json::json!([{"context": "codecov/patch"}])
+        ),
+    ]);
+
+    // Act
+    let summary = refresh_with_status_context_pages(context_pages).await;
+
+    // Assert
+    assert!(summary.is_github_pr_bypass_ready());
+}
+
+#[tokio::test]
+async fn refresh_withholds_bypass_when_rollup_stops_passing_during_pagination() {
+    // Arrange
+    let context_pages = serde_json::json!([
+        status_contexts_page(
+            "SUCCESS",
+            &serde_json::json!([{"name": "Workspace validation"}])
+        ),
+        status_contexts_page(
+            "PENDING",
+            &serde_json::json!([{"context": "codecov/patch"}])
+        ),
+        status_contexts_page("SUCCESS", &serde_json::json!([])),
+    ]);
+
+    // Act
+    let summary = refresh_with_status_context_pages(context_pages).await;
+
+    // Assert
+    assert!(!summary.is_github_pr_bypass_ready());
+}
+
+#[test]
+fn status_contexts_command_requests_rollup_state_with_each_page() {
+    // Arrange
+    let remote = github_remote();
+
+    // Act
+    let command = GitHubReviewRequestAdapter::status_contexts_command(&remote, "42");
+
+    // Assert
+    assert!(command.arguments.iter().any(|argument| {
+        argument.contains("statusCheckRollup { state contexts(first: 100, after: $endCursor)")
+    }));
+}
+
+#[test]
+fn status_context_pages_reject_missing_rollup_or_pages() {
+    // Arrange
+    let missing_rollup = r#"[{"data":{"repository":{"pullRequest":{"statusCheckRollup":null}}}}]"#;
+
+    // Act
+    let missing_rollup_error =
+        GitHubReviewRequestAdapter::parse_status_check_rollup_pages(missing_rollup)
+            .err()
+            .expect("missing rollup should fail");
+    let empty_error = GitHubReviewRequestAdapter::parse_status_check_rollup_pages("[]")
+        .err()
+        .expect("empty pages should fail");
+
+    // Assert
+    assert!(missing_rollup_error.contains("missing a status check rollup"));
+    assert!(empty_error.contains("contains no pages"));
+}
+
+/// Refreshes a bypass-ready pull request whose first contexts page lacks a
+/// required check, returning `context_pages` from the paginated follow-up.
+async fn refresh_with_status_context_pages(
+    context_pages: serde_json::Value,
+) -> ReviewRequestSummary {
+    let remote = github_remote();
+    let mut first_page = bypass_ready_view();
+    first_page["data"]["repository"]["pullRequest"]["statusCheckRollup"]["contexts"] = serde_json::json!({
+        "nodes": [{"name": "Workspace validation"}],
+        "pageInfo": {"hasNextPage": true}
+    });
+    let mut sequence = Sequence::new();
+    let mut command_runner = MockForgeCommandRunner::new();
+    command_runner
+        .expect_run()
+        .once()
+        .in_sequence(&mut sequence)
+        .withf({
+            let remote = remote.clone();
+
+            move |command| command == &GitHubReviewRequestAdapter::view_command(&remote, "42")
+        })
+        .returning(move |_| {
+            let stdout = first_page.to_string();
+
+            Box::pin(async move { Ok(success_output(stdout)) })
+        });
+    command_runner
+        .expect_run()
+        .once()
+        .in_sequence(&mut sequence)
+        .withf({
+            let remote = remote.clone();
+
+            move |command| {
+                command == &GitHubReviewRequestAdapter::status_contexts_command(&remote, "42")
+            }
+        })
+        .returning(move |_| {
+            let stdout = context_pages.to_string();
+
+            Box::pin(async move { Ok(success_output(stdout)) })
+        });
+    let adapter = GitHubReviewRequestAdapter::new(Arc::new(command_runner));
+
+    adapter
+        .refresh_authenticated_review_request(remote, "#42".to_string())
+        .await
+        .expect("refresh should fetch the remaining status contexts")
+}
+
+/// Builds a status response that is bypass-ready because only a required
+/// approval blocks it and every required check passed.
+fn bypass_ready_view() -> serde_json::Value {
+    let mut bypass_ready: serde_json::Value =
+        serde_json::from_str(&github_view_json()).expect("fixture should be valid JSON");
+    let pull_request = &mut bypass_ready["data"]["repository"]["pullRequest"];
+    pull_request["mergeStateStatus"] = serde_json::json!("BLOCKED");
+    pull_request["reviewDecision"] = serde_json::json!("REVIEW_REQUIRED");
+    pull_request["viewerCanMergeAsAdmin"] = serde_json::json!(true);
+    set_passing_required_checks(pull_request);
+
+    bypass_ready
+}
+
+/// Builds one slurped page of the paginated rollup-contexts query with the
+/// rollup `state` observed when that page was fetched.
+fn status_contexts_page(state: &str, nodes: &serde_json::Value) -> serde_json::Value {
+    serde_json::json!({"data": {"repository": {"pullRequest": {"statusCheckRollup": {
+        "state": state,
+        "contexts": {"nodes": nodes, "pageInfo": {"hasNextPage": false, "endCursor": null}}
+    }}}}})
+}
+
+/// Marks every reported check as passing and every base-branch required
+/// check, from both a ruleset and classic branch protection, as reported.
+fn set_passing_required_checks(pull_request: &mut serde_json::Value) {
+    pull_request["statusCheckRollup"] = serde_json::json!({
+        "state": "SUCCESS",
+        "contexts": {"nodes": [
+            {"name": "Workspace validation"},
+            {"context": "codecov/patch"},
+            {}
+        ]}
+    });
+    pull_request["baseRef"] = serde_json::json!({
+        "refUpdateRule": {"requiredStatusCheckContexts": ["codecov/patch"]},
+        "rules": {"totalCount": 3, "nodes": [
+            {"parameters": {"requiredStatusChecks": [{"context": "Workspace validation"}]}},
+            {"parameters": {}},
+            {"parameters": null}
+        ]}
+    });
+}
+
+#[test]
 fn github_status_rejects_missing_pull_request() {
     // Arrange
     let response = r#"{"data":{"repository":{"pullRequest":null}}}"#;
 
     // Act
-    let error = GitHubReviewRequestAdapter::parse_view_response(response)
-        .expect_err("missing pull request should fail");
+    let error = parse_view_summary(response).expect_err("missing pull request should fail");
 
     // Assert
     assert!(error.contains("missing a pull request"));
@@ -577,8 +812,13 @@ fn paginated_snapshot_parsers_preserve_invalid_json_context() {
     let thread_comment_error = GitHubReviewRequestAdapter::parse_thread_comment_pages(invalid_json)
         .err()
         .expect("invalid thread-comment JSON should fail");
+    let status_context_error =
+        GitHubReviewRequestAdapter::parse_status_check_rollup_pages(invalid_json)
+            .err()
+            .expect("invalid status-context JSON should fail");
 
     // Assert
+    assert!(status_context_error.contains("invalid GitHub status-check contexts response"));
     assert!(thread_error.contains("invalid GitHub review-threads response"));
     assert!(pull_request_error.contains("invalid GitHub pull-request comments response"));
     assert!(thread_comment_error.contains("invalid GitHub review-thread comments response"));
@@ -592,6 +832,7 @@ fn snapshot_graphql_commands_request_pagination_and_slurped_pages() {
         GitHubReviewRequestAdapter::review_threads_command(&remote, "42"),
         GitHubReviewRequestAdapter::pull_request_comments_command(&remote, "42"),
         GitHubReviewRequestAdapter::thread_comments_command(&remote, "thread-1"),
+        GitHubReviewRequestAdapter::status_contexts_command(&remote, "42"),
     ];
 
     // Act
