@@ -27,24 +27,6 @@ one focused terminal workflow.
 
 ______________________________________________________________________
 
-Codex, Claude, and Antigravity sessions show compact tool status and command previews,
-with output previews for failed calls. Explicit Claude skill invocations appear
-alongside them, and answers retain saved usage counts.
-
-Press `w` in session view to inspect saved execution graphs, accept exact outputs, retry
-work, resume dispatch, or cancel a graph. Questions from graph nodes and proposals open
-the same question panel as an ordinary turn's questions.
-
-With `--experimental-graph`, select `/graph`, then describe your task. Regular chat
-stays on the left, with the graph preview and live status in a right pane using at most
-35% of the width. Reply in chat to approve, revise, or cancel the proposal; `w` shows
-its details. Nodes launch only after approval. `/graph` is a mode selector with no
-subcommands.
-
-Graph proposals use bundled Markdown agent definitions. Repository overrides live in
-`.agents/agents/<id>/agent.md`; see the
-[workflow guide](https://agentty.xyz/docs/usage/workflow/) for the supported format.
-
 ## Installation
 
 ### npm (recommended)
