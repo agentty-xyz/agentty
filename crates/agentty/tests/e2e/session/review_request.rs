@@ -508,7 +508,7 @@ async fn test_pr_bypass_ready_label() -> E2eResult {
                 scenario
                     .compose(&common::wait_for_agentty_startup())
                     .compose(&common::switch_to_tab("Sessions"))
-                    .wait_for_text("[ready [bypass]]", 10_000)
+                    .wait_for_text("[ready (bypass)]", 10_000)
                     .capture_labeled(
                         "pr_bypass_ready_label",
                         "Linked pull request ready with bypass in Sessions",
@@ -517,7 +517,7 @@ async fn test_pr_bypass_ready_label() -> E2eResult {
             |frame, _report| {
                 Box::pin(async move {
                     let full = Region::full(frame.cols(), frame.rows());
-                    assertion::assert_text_in_region(frame, "[ready [bypass]]", &full);
+                    assertion::assert_text_in_region(frame, "[ready (bypass)]", &full);
                 })
             },
         )
