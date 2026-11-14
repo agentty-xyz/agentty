@@ -613,6 +613,27 @@ fn wait_for_stable_frame_returns_after_output_stream_closes() {
     assert!(frame.all_text().contains("ready"));
 }
 
+/// Verifies that output arriving during the stability window without
+/// changing the frame keeps the visible frame stable.
+#[test]
+fn wait_for_stable_frame_accepts_identical_repaints() {
+    // Arrange — repaint the same text at the same position while the wait
+    // is still inside its stability window.
+    let script = "printf 'ready'; sleep 0.2; printf '\\033[1;1Hready'; sleep 60";
+    let mut session = PtySessionBuilder::new("/bin/sh")
+        .args(["-c", script])
+        .spawn()
+        .expect("failed to spawn repainting shell script");
+
+    // Act
+    let frame = session
+        .wait_for_stable_frame(Duration::from_millis(600), Duration::from_secs(5))
+        .expect("identical repaints should stabilize");
+
+    // Assert
+    assert_eq!(frame.all_text().trim(), "ready");
+}
+
 #[test]
 fn wait_for_exit_reports_status_timeout_and_wait_errors() {
     // Arrange
