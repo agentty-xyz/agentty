@@ -46,6 +46,10 @@ async fn task_publication_awaits_success_and_propagates_blocked_failed_and_panic
             )
             .await
             .expect("session");
+        db.operations()
+            .insert_session_operation("queued-reply", "session-id", "reply")
+            .await
+            .expect("queued ordinary action");
         let mut git = MockGitClient::new();
         if scenario == "blocked" {
             db.operations()
@@ -459,11 +463,11 @@ async fn test_unfinished_rebase_check_fails_closed_when_operation_query_fails() 
     enable_tracing_log_fallback();
 
     // Act
-    let should_skip_auto_push = context.has_unfinished_branch_operation().await;
+    let pending_work = context.load_pending_publish_work().await;
 
     // Assert
     assert!(
-        should_skip_auto_push,
+        pending_work.has_branch_operation && pending_work.has_queued_operation,
         "operation-query failures must suppress post-turn auto-push"
     );
 }
@@ -499,7 +503,7 @@ async fn stacked_child_lookup_fails_closed_when_project_or_sessions_cannot_load(
 
 #[tokio::test]
 async fn test_auto_push_rechecks_queued_work_after_waiting_for_branch_lock() {
-    for queued_chat in [false, true] {
+    for queued_work in ["chat", "sync", "review-comment-reply"] {
         // Arrange
         let db = AppRepositories::in_memory().await.expect("db should open");
         let project_id = db
@@ -562,20 +566,25 @@ async fn test_auto_push_rechecks_queued_work_after_waiting_for_branch_lock() {
             () = std::future::ready(()) => true,
         };
         assert!(waiting, "publishing must wait for the branch lock");
-        if queued_chat {
-            context
+        match queued_work {
+            "chat" => context
                 .queued_messages
                 .lock()
                 .expect("queue")
                 .push_back(QueuedMessage::new(
                     1,
                     TurnPrompt::from_text("Finish this before pushing".to_string()),
-                ));
-        } else {
-            db.operations()
+                )),
+            "sync" => db
+                .operations()
                 .insert_session_operation("queued-sync", "session-id", "rebase")
                 .await
-                .expect("failed to insert queued sync");
+                .expect("failed to insert queued sync"),
+            _ => db
+                .operations()
+                .insert_session_operation("queued-reply", "session-id", "reply")
+                .await
+                .expect("failed to insert queued review-comment reply"),
         }
 
         // Act
@@ -587,7 +596,7 @@ async fn test_auto_push_rechecks_queued_work_after_waiting_for_branch_lock() {
         // Assert
         assert!(
             app_event_rx.try_recv().is_err(),
-            "queued work should retain publish ownership"
+            "{queued_work}: queued work should retain publish ownership"
         );
     }
 }

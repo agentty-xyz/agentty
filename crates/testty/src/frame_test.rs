@@ -399,3 +399,50 @@ fn cell_style_preserves_all_terminal_flags() {
     assert!(!plain.underline());
     assert!(!plain.inverse());
 }
+
+#[test]
+fn visible_contents_ignores_painted_blanks_and_cursor_position() {
+    // Arrange — the second frame painted longer text, erased it with spaces,
+    // and left the hidden cursor elsewhere; both show the same screen.
+    let untouched = TerminalFrame::new(6, 2, b"He");
+    let repainted = TerminalFrame::new(6, 2, b"Hello!\x1b[1;3H    \x1b[2;5H");
+
+    // Act
+    let untouched_contents = untouched.visible_contents();
+    let repainted_contents = repainted.visible_contents();
+
+    // Assert
+    assert_eq!(untouched_contents, "He    \n      ");
+    assert_eq!(repainted_contents, untouched_contents);
+    assert_ne!(
+        untouched.contents_formatted(),
+        repainted.contents_formatted()
+    );
+}
+
+#[test]
+fn visible_contents_marks_every_color_and_style_change() {
+    // Arrange — indexed, RGB, and default colors plus a bold flag.
+    let frame = TerminalFrame::new(4, 1, b"\x1b[31;1mA\x1b[0;48;2;1;2;3mB\x1b[0mC");
+
+    // Act
+    let contents = frame.visible_contents();
+
+    // Assert
+    assert_eq!(
+        contents,
+        "\u{1b}[i1;d;1mA\u{1b}[d;r1,2,3;0mB\u{1b}[d;d;0mC "
+    );
+}
+
+#[test]
+fn visible_contents_skips_wide_character_continuation_cells() {
+    // Arrange
+    let frame = TerminalFrame::new(4, 1, "界a".as_bytes());
+
+    // Act
+    let contents = frame.visible_contents();
+
+    // Assert
+    assert_eq!(contents, "界a ");
+}

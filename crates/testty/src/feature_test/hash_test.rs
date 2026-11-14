@@ -45,6 +45,47 @@ fn compute_frame_hash_differs_for_different_content() {
 }
 
 #[test]
+fn compute_frame_hash_ignores_render_history() {
+    // Arrange — the second capture painted and erased extra text and left
+    // the cursor elsewhere, but both captures show the same screen.
+    let untouched = TerminalFrame::new(20, 2, b"Review");
+    let repainted = TerminalFrame::new(20, 2, b"Reviewing changes\x1b[1;7H           \x1b[2;9H");
+
+    let mut untouched_report = ProofReport::new("untouched");
+    untouched_report.add_capture("snap", "Untouched", &untouched);
+
+    let mut repainted_report = ProofReport::new("repainted");
+    repainted_report.add_capture("snap", "Repainted", &repainted);
+
+    // Act
+    let untouched_hash = compute_frame_hash(&untouched_report, &[]);
+    let repainted_hash = compute_frame_hash(&repainted_report, &[]);
+
+    // Assert
+    assert_eq!(untouched_hash, repainted_hash);
+}
+
+#[test]
+fn compute_frame_hash_differs_for_different_styles() {
+    // Arrange
+    let plain = TerminalFrame::new(20, 2, b"Review");
+    let bold = TerminalFrame::new(20, 2, b"\x1b[1mReview");
+
+    let mut plain_report = ProofReport::new("plain");
+    plain_report.add_capture("snap", "Plain", &plain);
+
+    let mut bold_report = ProofReport::new("bold");
+    bold_report.add_capture("snap", "Bold", &bold);
+
+    // Act
+    let plain_hash = compute_frame_hash(&plain_report, &[]);
+    let bold_hash = compute_frame_hash(&bold_report, &[]);
+
+    // Assert
+    assert_ne!(plain_hash, bold_hash);
+}
+
+#[test]
 fn compute_frame_hash_empty_report() {
     // Arrange
     let report = ProofReport::new("empty");
@@ -217,8 +258,8 @@ fn normalized_frame_bytes_for_hash_removes_tempfile_directory_names() {
     let second_frame = format!("{temp_root}/.tmpBeta456/test-project");
 
     // Act
-    let first_normalized = normalized_frame_bytes_for_hash(first_frame.as_bytes(), &[]);
-    let second_normalized = normalized_frame_bytes_for_hash(second_frame.as_bytes(), &[]);
+    let first_normalized = normalized_frame_bytes_for_hash(&first_frame, &[]);
+    let second_normalized = normalized_frame_bytes_for_hash(&second_frame, &[]);
 
     // Assert
     assert_eq!(first_normalized, second_normalized);

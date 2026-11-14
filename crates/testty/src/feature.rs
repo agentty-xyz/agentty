@@ -465,21 +465,25 @@ impl FeatureDemo {
     }
 }
 
-/// Compute a content hash from all proof capture frame bytes.
+/// Compute a content hash from what every proof capture shows on screen.
 ///
-/// Uses a fixed FNV-1a `u64` hash over the concatenated frame bytes of every
-/// capture in the report, after applying the built-in temp-root normalization
-/// and the caller's `redactions`. This is the frame-only component of the GIF
-/// freshness hash; use [`compute_gif_hash`] to reproduce the value written to
-/// an on-disk sidecar.
+/// Uses a fixed FNV-1a `u64` hash over each capture's visible cells — text,
+/// colors, and style flags — after applying the built-in temp-root
+/// normalization and the caller's `redactions`. Render history that leaves no
+/// visible trace, such as whether a blank cell was ever painted or where the
+/// hidden cursor stopped, does not affect the hash, so the same screen hashes
+/// the same way however asynchronous updates were interleaved. This is the
+/// frame-only component of the GIF freshness hash; use [`compute_gif_hash`]
+/// to reproduce the value written to an on-disk sidecar.
 pub fn compute_frame_hash(report: &ProofReport, redactions: &[Redaction]) -> u64 {
     const FNV_OFFSET_BASIS: u64 = 0xcbf2_9ce4_8422_2325;
 
     let mut hash = FNV_OFFSET_BASIS;
     for capture in &report.captures {
+        let frame = TerminalFrame::new(capture.cols, capture.rows, &capture.frame_bytes);
         update_fnv_hash(
             &mut hash,
-            &normalized_frame_bytes_for_hash(&capture.frame_bytes, redactions),
+            &normalized_frame_bytes_for_hash(&frame.visible_contents(), redactions),
         );
     }
 
@@ -537,15 +541,15 @@ fn update_fnv_hash(hash: &mut u64, bytes: &[u8]) {
     }
 }
 
-/// Returns frame bytes with volatile text normalized for hashing.
+/// Returns visible frame contents with volatile text normalized for hashing.
 ///
 /// Feature tests often run inside fresh `tempfile::TempDir` directories,
 /// while the captured TUI footer may display the absolute working directory.
 /// Normalizing those paths keeps freshness sidecars tied to visible UI state
 /// instead of one random temp directory name. Generated tokens the application
 /// itself paints are the caller's to declare, through `redactions`.
-fn normalized_frame_bytes_for_hash(frame_bytes: &[u8], redactions: &[Redaction]) -> Vec<u8> {
-    let mut frame_text = String::from_utf8_lossy(frame_bytes).into_owned();
+fn normalized_frame_bytes_for_hash(frame_contents: &str, redactions: &[Redaction]) -> Vec<u8> {
+    let mut frame_text = frame_contents.to_string();
 
     for temp_root in temp_root_strings() {
         frame_text = frame_text.replace(&temp_root, "<tmp>");

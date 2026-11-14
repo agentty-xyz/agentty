@@ -316,6 +316,46 @@ impl TerminalFrame {
         Some(CellStyle::from_cell(cell))
     }
 
+    /// Serialize the visible grid as cell text plus style markers.
+    ///
+    /// Unlike [`Self::contents_formatted`], the result depends only on what
+    /// each cell shows: a blank cell that was painted with a default-styled
+    /// space and one that was never written serialize alike, and the cursor
+    /// position is omitted. Both of those depend on the order in which an
+    /// application repainted the screen, so excluding them keeps equal
+    /// screens equal regardless of render history. Rows are joined by
+    /// newlines, wide-character continuation cells are skipped, and a style
+    /// marker is emitted whenever a cell's colors or flags differ from the
+    /// previous cell's.
+    pub(crate) fn visible_contents(&self) -> String {
+        let screen = self.parser.screen();
+        let cols = self.cols();
+        let mut contents = String::new();
+        let mut current_style = VisibleCellStyle::default();
+
+        for row in 0..self.rows() {
+            if row > 0 {
+                contents.push('\n');
+            }
+
+            let visible_cells = (0..cols)
+                .filter_map(|col| screen.cell(row, col))
+                .filter(|cell| !cell.is_wide_continuation());
+            for cell in visible_cells {
+                let cell_style = VisibleCellStyle::from_cell(cell);
+                if cell_style != current_style {
+                    cell_style.push_marker(&mut contents);
+                    current_style = cell_style;
+                }
+
+                let text = cell.contents();
+                contents.push_str(if text.is_empty() { " " } else { text });
+            }
+        }
+
+        contents
+    }
+
     /// Build row text with a parallel byte-offset-to-column mapping.
     ///
     /// Returns `(text, byte_to_col)` where `byte_to_col[i]` is the terminal
@@ -416,6 +456,58 @@ impl TerminalFrame {
             foreground,
             background,
             style,
+        }
+    }
+}
+
+/// Colors and style flags that decide how one cell looks.
+///
+/// Keeps raw `vt100` colors so indexed and RGB colors stay distinct in
+/// [`TerminalFrame::visible_contents`].
+#[derive(Clone, Copy, Default, PartialEq, Eq)]
+struct VisibleCellStyle {
+    background: vt100::Color,
+    foreground: vt100::Color,
+    style: CellStyle,
+}
+
+impl VisibleCellStyle {
+    /// Reads the visible colors and style flags of `cell`.
+    fn from_cell(cell: &vt100::Cell) -> Self {
+        Self {
+            background: cell.bgcolor(),
+            foreground: cell.fgcolor(),
+            style: CellStyle::from_cell(cell),
+        }
+    }
+
+    /// Appends a marker that identifies this style to `contents`.
+    fn push_marker(self, contents: &mut String) {
+        contents.push_str("\u{1b}[");
+        Self::push_color(self.foreground, contents);
+        contents.push(';');
+        Self::push_color(self.background, contents);
+        contents.push(';');
+        contents.push_str(&self.style.flags.to_string());
+        contents.push('m');
+    }
+
+    /// Appends one color in a compact, unambiguous form to `contents`.
+    fn push_color(color: vt100::Color, contents: &mut String) {
+        match color {
+            vt100::Color::Default => contents.push('d'),
+            vt100::Color::Idx(index) => {
+                contents.push('i');
+                contents.push_str(&index.to_string());
+            }
+            vt100::Color::Rgb(red, green, blue) => {
+                contents.push('r');
+                contents.push_str(
+                    &[red, green, blue]
+                        .map(|channel| channel.to_string())
+                        .join(","),
+                );
+            }
         }
     }
 }

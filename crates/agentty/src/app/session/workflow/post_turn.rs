@@ -17,7 +17,10 @@ use tracing::warn;
 use uuid::Uuid;
 
 use super::task::{AutoCommitOutcome, SessionTranscriptMessageAppend};
-use super::worker::{SessionWorkerContext, TurnMetadata, has_unfinished_branch_operation};
+use super::worker::{
+    SessionWorkerContext, TurnMetadata, has_queued_session_operation,
+    has_unfinished_branch_operation,
+};
 use super::{SessionTaskService, StatusTransition, published_branch};
 use crate::app::AppEvent;
 use crate::app::assist::AssistContext;
@@ -117,9 +120,9 @@ impl PostTurnContext {
             .map_or(true, |guard| !guard.is_empty())
     }
 
-    /// Returns whether session sync is already queued or running on this
-    /// worker, failing closed when persisted operation state cannot be read.
-    async fn has_unfinished_branch_operation(&self) -> bool {
+    /// Returns persisted session work that must run before automatic
+    /// publishing, failing closed when operation state cannot be read.
+    async fn load_pending_publish_work(&self) -> PendingPublishWork {
         let unfinished_operations = match self
             .db
             .operations()
@@ -134,12 +137,31 @@ impl PostTurnContext {
                     "Skipping post-turn auto-push because unfinished session operations could not be loaded"
                 );
 
-                return true;
+                return PendingPublishWork {
+                    has_branch_operation: true,
+                    has_queued_operation: true,
+                };
             }
         };
+        let session_id = self.session_id.as_str();
 
-        has_unfinished_branch_operation(&unfinished_operations, self.session_id.as_str())
+        PendingPublishWork {
+            has_branch_operation: has_unfinished_branch_operation(
+                &unfinished_operations,
+                session_id,
+            ),
+            has_queued_operation: has_queued_session_operation(&unfinished_operations, session_id),
+        }
     }
+}
+
+/// Persisted session work observed before automatic post-turn publishing.
+struct PendingPublishWork {
+    /// Whether session sync or review-request publishing is queued or running.
+    has_branch_operation: bool,
+    /// Whether any accepted worker action, such as a review-comment reply,
+    /// is still waiting to run after the current item.
+    has_queued_operation: bool,
 }
 
 /// Narrow dependency set used after a turn result to refresh status and diff
@@ -864,7 +886,8 @@ async fn start_published_branch_auto_push(
         )),
         guard = Arc::clone(&context.branch_operation_lock).lock_owned() => guard,
     };
-    if context.has_unfinished_branch_operation().await {
+    let pending_work = context.load_pending_publish_work().await;
+    if pending_work.has_branch_operation {
         if task_owned {
             return Err(SessionError::Workflow(
                 "Task publication is blocked by another branch operation".to_string(),
@@ -872,9 +895,9 @@ async fn start_published_branch_auto_push(
         }
         return Ok(());
     }
-    // Messages can arrive while waiting for branch ownership or operation
-    // state.
-    if context.has_queued_messages() && !task_owned {
+    // Queued worker actions publish after they run. Messages can arrive while
+    // waiting for branch ownership or operation state.
+    if !task_owned && (pending_work.has_queued_operation || context.has_queued_messages()) {
         return Ok(());
     }
 
