@@ -1344,53 +1344,59 @@ async fn one_deadline_allows_every_phase_within_it_but_caps_their_total() {
     // Scaled from the production budget: 3 x 6 of 30 minutes completes, while
     // 3 x 11 stops consolidation at the shared deadline. Persistence runs on
     // the real clock, so the scale keeps margins well above storage latency.
-    for (delay, partial) in [(200, false), (450, true)] {
-        // Arrange
-        let fixture = ReviewGraphFixture::new().await;
-        let client = DelayedReviewClient {
-            delay: Duration::from_millis(delay),
-        };
-        let deadline = Duration::from_millis(1_000);
-        let started = Instant::now();
+    // Each case owns its fixture, so both cases wait out their phases at once.
+    // Arrange
+    let deadline = Duration::from_millis(1_000);
+    let complete_delay = Duration::from_millis(200);
 
-        // Act
-        let text = TaskService::review_assist_text_with_client(
-            &fixture.host,
-            ReviewAssistLaunch {
-                deadline,
-                graph_id: "focused-review:deadline".into(),
-                review_agent: (
-                    AgentSelection::new(AgentKind::Claude, AgentModel::ClaudeSonnet55),
-                    ReasoningLevel::Medium,
-                    crate::domain::agent::SpeedMode::Normal,
-                ),
-                review_diff: "diff --git a/src/lib.rs b/src/lib.rs\n@@ -1 +1 @@\n-old\n+new\n"
-                    .into(),
-                session_chat_history: None,
-                session_folder: PathBuf::from("project"),
-                session_id: SESSION_ID.into(),
-            },
-            ReviewRules::default(),
-            Arc::new(client),
-            |_| {},
-        )
-        .await
-        .expect("review output");
+    // Act
+    let ((complete_elapsed, complete), (partial_elapsed, partial)) = tokio::join!(
+        review_with_phase_delay(complete_delay, deadline),
+        review_with_phase_delay(Duration::from_millis(450), deadline),
+    );
 
-        // Assert
-        let elapsed = started.elapsed();
-        if partial {
-            assert!(elapsed >= deadline, "{elapsed:?}");
-        } else {
-            assert!(elapsed >= Duration::from_millis(delay * 3), "{elapsed:?}");
-            assert!(elapsed < deadline, "{elapsed:?}");
-        }
-        assert_eq!(text.contains("Partial review:"), partial);
-        assert_eq!(text.contains("deadline exceeded"), partial);
-        if partial {
-            assert!(text.contains("final consolidation failed"));
-        }
-    }
+    // Assert
+    assert!(
+        complete_elapsed >= complete_delay * 3,
+        "{complete_elapsed:?}"
+    );
+    assert!(complete_elapsed < deadline, "{complete_elapsed:?}");
+    assert!(!complete.contains("Partial review:"), "{complete}");
+    assert!(!complete.contains("deadline exceeded"), "{complete}");
+    assert!(partial_elapsed >= deadline, "{partial_elapsed:?}");
+    assert!(partial.contains("Partial review:"), "{partial}");
+    assert!(partial.contains("deadline exceeded"), "{partial}");
+    assert!(partial.contains("final consolidation failed"), "{partial}");
+}
+
+/// Reviews a one-file diff whose every provider call takes `delay`, returning
+/// the elapsed time and review text.
+async fn review_with_phase_delay(delay: Duration, deadline: Duration) -> (Duration, String) {
+    let fixture = ReviewGraphFixture::new().await;
+    let started = Instant::now();
+    let text = TaskService::review_assist_text_with_client(
+        &fixture.host,
+        ReviewAssistLaunch {
+            deadline,
+            graph_id: "focused-review:deadline".into(),
+            review_agent: (
+                AgentSelection::new(AgentKind::Claude, AgentModel::ClaudeSonnet55),
+                ReasoningLevel::Medium,
+                crate::domain::agent::SpeedMode::Normal,
+            ),
+            review_diff: "diff --git a/src/lib.rs b/src/lib.rs\n@@ -1 +1 @@\n-old\n+new\n".into(),
+            session_chat_history: None,
+            session_folder: PathBuf::from("project"),
+            session_id: SESSION_ID.into(),
+        },
+        ReviewRules::default(),
+        Arc::new(DelayedReviewClient { delay }),
+        |_| {},
+    )
+    .await
+    .expect("review output");
+
+    (started.elapsed(), text)
 }
 
 #[test]

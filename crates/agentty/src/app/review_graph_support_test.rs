@@ -16,6 +16,7 @@ use tokio::time::Instant;
 
 use super::{ReviewGraphHost, ReviewGraphRequest};
 use crate::app::review::ReviewProgress;
+use crate::app::review_prompt::MAX_REVIEW_PROVIDER_CALLS;
 
 /// Session owning every fixture review graph.
 pub(in crate::app) const SESSION_ID: &str = "session";
@@ -25,6 +26,7 @@ pub(in crate::app) struct ReviewGraphFixture {
     pub(in crate::app) database: Database,
     pub(in crate::app) host: ReviewGraphHost,
     deadline: Duration,
+    provider_call_limit: usize,
 }
 
 impl ReviewGraphFixture {
@@ -67,12 +69,21 @@ impl ReviewGraphFixture {
             database,
             deadline: Duration::from_hours(1),
             host,
+            provider_call_limit: MAX_REVIEW_PROVIDER_CALLS,
         }
     }
 
     /// Shortens the review deadline measured from each review's start.
     pub(in crate::app) fn with_deadline(mut self, deadline: Duration) -> Self {
         self.deadline = deadline;
+
+        self
+    }
+
+    /// Replaces the production provider-call limit shared by each review's
+    /// phases, so exhaustion needs only a few fragments.
+    pub(in crate::app) fn with_provider_call_limit(mut self, limit: usize) -> Self {
+        self.provider_call_limit = limit;
 
         self
     }
@@ -106,6 +117,7 @@ impl ReviewGraphFixture {
                     deadline: Instant::now() + self.deadline,
                     diff: diff.to_string(),
                     graph_id: format!("focused-review:{}", uuid::Uuid::new_v4()),
+                    provider_call_limit: self.provider_call_limit,
                     request,
                     session_id: SESSION_ID.to_string(),
                 },

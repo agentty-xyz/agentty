@@ -45,10 +45,13 @@ async fn clarification_app() -> (
             channel
                 .expect_run_turn()
                 .once()
-                .returning(move |_, request, _| {
+                .returning(move |_, mut request, _| {
+                    // Observe the request without its budget: a retained
+                    // clone keeps the graph's spending writer open, so
+                    // cleanup would wait out its shutdown deadline.
                     request
                         .provider_call_budget
-                        .as_ref()
+                        .take()
                         .expect("budget")
                         .consume()
                         .expect("credit");
