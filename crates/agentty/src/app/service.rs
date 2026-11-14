@@ -36,6 +36,8 @@ pub struct AppServices {
     pub(super) graph_drivers: crate::app::execution_graph::GraphDrivers,
     pub(super) graph_resources: Arc<ag_worker::GraphResources>,
     pub(super) graph_wake: tokio::sync::watch::Sender<u64>,
+    /// Graph outputs whose chat reply is waiting for its background decision.
+    pub(super) output_reply_decisions: Arc<Mutex<HashSet<String>>>,
     pub(super) proposal_generations:
         Arc<Mutex<HashMap<String, super::graph_proposal::ProposalGeneration>>>,
     /// Proposals whose chat reply is waiting for its background decision.
@@ -109,6 +111,7 @@ impl AppServices {
             )),
             graph_wake: tokio::sync::watch::channel(0).0,
             graph_drivers: Arc::default(),
+            output_reply_decisions: Arc::default(),
             proposal_generations: Arc::default(),
             proposal_reply_decisions: Arc::default(),
             analytics: None,

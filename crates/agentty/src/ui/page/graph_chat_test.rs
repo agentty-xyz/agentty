@@ -1,10 +1,14 @@
 use std::collections::BTreeMap;
+use std::num::NonZeroU64;
 
-use ag_protocol::{GraphProposalOutcome, GraphProposalResponse, QuestionItem};
+use ag_protocol::{
+    GraphProposalOutcome, GraphProposalResponse, ProtocolRequestProfile, QuestionItem,
+};
 use ag_session::{
     ExecutionGraphProgress, ExecutionGraphStatus, GraphBlockedReason, GraphCompletionGate,
-    GraphDependency, GraphNodeProgress, GraphNodeStatus, GraphProposalApproval,
-    GraphProposalResolution, GraphProposalVersionOutcome, StartExecutionGraphRequest, test_support,
+    GraphContext, GraphDependency, GraphExecutionRef, GraphNodeProgress, GraphNodeStatus,
+    GraphProposalApproval, GraphProposalResolution, GraphProposalVersionOutcome, GraphResult,
+    GraphResultRef, GraphResultState, StartExecutionGraphRequest, test_support,
 };
 use ratatui::Terminal;
 use ratatui::backend::TestBackend;
@@ -12,7 +16,7 @@ use ratatui::buffer::Buffer;
 use ratatui::layout::Rect;
 use unicode_width::UnicodeWidthStr;
 
-use super::{areas, render, status_label_width, status_spans, summary};
+use super::{NodeStatus, areas, render, status_label_width, status_spans, summary};
 use crate::presentation::app_mode::AppMode;
 use crate::presentation::graph_chat::GraphChatSnapshot;
 use crate::ui::style::palette;
@@ -71,18 +75,43 @@ fn sidebar_shows_proposal_lifecycle_and_stale_status() {
 fn every_node_status_has_a_styled_label_and_matching_width() {
     // Arrange
     let statuses = [
-        (GraphNodeStatus::Pending, "○ Waiting", palette::text_muted()),
-        (GraphNodeStatus::Queued, "◐ Working", palette::info()),
-        (GraphNodeStatus::Running, "◐ Working", palette::info()),
         (
-            GraphNodeStatus::AwaitingAnswers,
+            NodeStatus::Live(GraphNodeStatus::Pending),
+            "○ Waiting",
+            palette::text_muted(),
+        ),
+        (
+            NodeStatus::Live(GraphNodeStatus::Queued),
+            "◐ Working",
+            palette::info(),
+        ),
+        (
+            NodeStatus::Live(GraphNodeStatus::Running),
+            "◐ Working",
+            palette::info(),
+        ),
+        (
+            NodeStatus::Live(GraphNodeStatus::AwaitingAnswers),
             "? Needs your input",
             palette::question(),
         ),
-        (GraphNodeStatus::Succeeded, "✓ Done", palette::success()),
-        (GraphNodeStatus::Failed, "✗ Failed", palette::danger()),
         (
-            GraphNodeStatus::Cancelled,
+            NodeStatus::AwaitingApproval,
+            "● Awaiting your approval",
+            palette::warning(),
+        ),
+        (
+            NodeStatus::Live(GraphNodeStatus::Succeeded),
+            "✓ Done",
+            palette::success(),
+        ),
+        (
+            NodeStatus::Live(GraphNodeStatus::Failed),
+            "✗ Failed",
+            palette::danger(),
+        ),
+        (
+            NodeStatus::Live(GraphNodeStatus::Cancelled),
             "⊘ Canceled",
             palette::text_subtle(),
         ),
@@ -210,6 +239,123 @@ fn overflowing_sidebar_prioritizes_intervention_and_reserves_controls() {
             "w: details and actions",
         ]
     );
+}
+
+#[test]
+fn awaited_output_shows_approval_on_its_producer_and_prioritizes_it() {
+    // Arrange
+    let mut snapshot = awaiting_snapshot();
+    if let GraphProposalVersionOutcome::Generated {
+        launch: Some(launch),
+        ..
+    } = &mut snapshot.proposal.version.outcome
+    {
+        launch.graph.nodes[0].execution.context = GraphContext::TaskConversation {
+            task_id: "task".into(),
+        };
+    }
+
+    // Act
+    let full = inner_rows(Some(&snapshot), 72, 22);
+    let compact = inner_rows(Some(&snapshot), 72, 8);
+
+    // Assert
+    assert_eq!(
+        full[..5],
+        [
+            "Proposal v1",
+            "Status: Blocked",
+            "inspect awaits your approval; reply in chat to accept or revise it",
+            "",
+            "inspect   ● Awaiting your approval",
+        ]
+    );
+    assert_eq!(compact[2], "inspect  ● Awaiting your approval");
+}
+
+#[test]
+fn awaited_output_without_a_task_conversation_offers_only_acceptance() {
+    // Arrange
+    let snapshot = awaiting_snapshot();
+
+    // Act
+    let text = summary(Some(&snapshot));
+
+    // Assert
+    assert!(
+        text.ends_with("\ninspect awaits your approval; reply in chat to accept it"),
+        "{text}"
+    );
+}
+
+#[test]
+fn awaited_output_a_started_dependent_consumed_offers_only_acceptance() {
+    // Arrange
+    let mut snapshot = awaiting_snapshot();
+    if let GraphProposalVersionOutcome::Generated {
+        launch: Some(launch),
+        ..
+    } = &mut snapshot.proposal.version.outcome
+    {
+        launch.graph.nodes[0].execution.context = GraphContext::TaskConversation {
+            task_id: "task".into(),
+        };
+    }
+    snapshot.progress.as_mut().expect("progress").nodes[1].executions =
+        vec![GraphExecutionRef::TaskAttempt {
+            attempt_id: "followup-attempt".into(),
+            operation_id: "operation".into(),
+            task_id: "followup-task".into(),
+        }];
+
+    // Act
+    let text = summary(Some(&snapshot));
+
+    // Assert
+    assert!(
+        text.ends_with("\ninspect awaits your approval; reply in chat to accept it"),
+        "{text}"
+    );
+}
+
+/// Blocked dependency graph whose `report` node waits for acceptance of the
+/// fresh `inspect` node's validated `summary` output.
+fn awaiting_snapshot() -> GraphChatSnapshot {
+    let mut snapshot = dependency_snapshot();
+    snapshot.proposal.version.approval = Some(GraphProposalApproval {
+        graph_id: "graph".into(),
+        limits: snapshot.proposal.limits.clone(),
+        version: 1,
+    });
+    let progress = snapshot.progress.as_mut().expect("progress");
+    progress.status = ExecutionGraphStatus::Blocked;
+    progress.nodes[0].results = vec![GraphResult {
+        reference: GraphResultRef {
+            execution: GraphExecutionRef::TaskAttempt {
+                attempt_id: "attempt".into(),
+                operation_id: "operation".into(),
+                task_id: "task".into(),
+            },
+            graph_id: "graph".into(),
+            graph_revision: NonZeroU64::MIN,
+            id: "result".into(),
+            node_id: "inspect".into(),
+            output_name: "summary".into(),
+            schema: ProtocolRequestProfile::SessionTurn,
+            version: NonZeroU64::MIN,
+        },
+        state: GraphResultState::Validated,
+    }];
+    progress.nodes[2]
+        .blocked
+        .push(GraphBlockedReason::Dependency {
+            gate: GraphCompletionGate::ResultAccepted {
+                output_name: "summary".into(),
+            },
+            node_id: "inspect".into(),
+        });
+
+    snapshot
 }
 
 #[test]

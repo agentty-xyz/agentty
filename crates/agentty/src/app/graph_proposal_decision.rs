@@ -7,9 +7,8 @@ use ag_protocol::GraphProposalOutcome;
 use ag_session::{AgentSelection, GraphProposalState, GraphProposalVersionOutcome};
 use ag_worker::RunClient;
 use askama::Template;
-use tracing::warn;
 
-use crate::domain::agent::{ReasoningLevel, SpeedMode};
+use crate::app::graph_reply_decision;
 
 /// Askama view model whose inputs are already JSON-encoded strings.
 #[derive(Template)]
@@ -67,37 +66,16 @@ impl GraphProposalReplyDecision {
     /// without a resolved preview revise the proposal, so a graph never runs
     /// or disappears on an uncertain decision.
     pub(crate) async fn decide(&self, run_client: &dyn RunClient) -> GraphProposalReply {
-        let submission = run_client
-            .submit(ag_contracts::OneShotRequest {
-                activity_tx: None,
-                attachments: Vec::new(),
-                child_pid: None,
-                execution_policy: ag_contracts::ExecutionPolicy::default(),
-                folder: self.folder.clone(),
-                harness: self.agent.kind().to_string(),
-                model: self.agent.model().as_str().to_string(),
-                permission_mode: ag_contracts::PermissionMode::ReadOnly,
-                prompt: self.prompt(),
-                provider_call_budget: None,
-                reasoning_level: ReasoningLevel::default(),
-                request_kind: ag_contracts::AgentRequestKind::UtilityPrompt,
-                speed_mode: SpeedMode::Normal,
-            })
-            .await;
-        let answer = match submission {
-            Ok(submission) => submission.response.to_answer_display_text(),
-            Err(error) => {
-                warn!(error = %error, "graph proposal reply decision failed; revising");
-
-                return GraphProposalReply::Revise;
-            }
-        };
-        let reply = Self::parse(&answer).unwrap_or_else(|| {
-            let answer_bytes = answer.len();
-            warn!(answer_bytes, "unknown graph proposal decision; revising");
-
-            GraphProposalReply::Revise
-        });
+        let reply = graph_reply_decision::decide(
+            run_client,
+            self.agent,
+            &self.folder,
+            self.prompt(),
+            "graph proposal",
+            Self::parse,
+        )
+        .await
+        .unwrap_or(GraphProposalReply::Revise);
 
         if reply == GraphProposalReply::Approve && !self.can_approve {
             return GraphProposalReply::Revise;
@@ -120,15 +98,9 @@ impl GraphProposalReplyDecision {
         template.render().unwrap_or_default()
     }
 
-    /// Accepts only the three contract words, tolerating surrounding quotes,
-    /// code ticks, a trailing period, and letter case.
+    /// Accepts only the three contract words.
     fn parse(answer: &str) -> Option<GraphProposalReply> {
-        match answer
-            .trim()
-            .trim_matches(['`', '"', '\'', '.'])
-            .to_ascii_lowercase()
-            .as_str()
-        {
+        match graph_reply_decision::contract_word(answer).as_str() {
             "approve" => Some(GraphProposalReply::Approve),
             "cancel" => Some(GraphProposalReply::Cancel),
             "revise" => Some(GraphProposalReply::Revise),

@@ -218,6 +218,15 @@ goes to the node whose question was saved last. The message is shown in chat and
 admitted through the gateway as a continuation of the exact execution that asked;
 storage rejects a second continuation of the same execution.
 
+Otherwise, while a pending node of a live graph waits for a predecessor's output to be
+accepted, the next composer message is a reply to that output in the latest such graph.
+A read-only utility run on the Run Worker decides whether it accepts the exact output
+version or revises it, and the background task admits either acceptance or a
+continuation of the producer's latest execution through the gateway. One reply per
+output is decided at a time. A reply with attachments revises without a decision run,
+because acceptance cannot carry images; for a producer without a task conversation, such
+a reply is rejected before it is echoed.
+
 On each foreground tick the reducer checks the viewed session for pending graph
 questions, following the same precedence as chat routing: a pending proposal's
 clarification first, then the waiting node. It opens the ordinary question panel for
