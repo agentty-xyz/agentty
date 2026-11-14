@@ -22,7 +22,7 @@ Reusable persistence contracts, SQLite adapters, and embedded migrations.
   directory and keyed by every migration checksum; keep migration and constructor tests
   on `Database::open_in_memory`, which replays migrations.
 - Consult `crates/ag-store/src/connection.rs` for initialization and
-  `crates/ag-store/tests/repository.rs` for consumer examples.
+  `crates/ag-store/tests/contract/repository.rs` for consumer examples.
 
 ## SQLite Invariants
 
