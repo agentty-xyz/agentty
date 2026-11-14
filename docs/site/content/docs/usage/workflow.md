@@ -205,7 +205,7 @@ For a linked GitHub pull request, the **Sessions** list adds a green `[ready]` l
 when GitHub reports the open, non-draft request has a clean merge state. Repository
 rules determine which checks and conversations block merging; resolved comments do not
 hide the label. When GitHub lets you bypass branch protections and all checks pass, the
-label reads `[ready [bypass]]` instead if only a required approval is missing, or if a
+label reads `[ready (bypass)]` instead if only a required approval is missing, or if a
 draft has no merge conflicts and no unresolved review comments. The background forge
 refresh updates it every minute. A failed refresh keeps the last known label until the
 next successful update.

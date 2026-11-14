@@ -333,7 +333,7 @@ fn test_pr_ready_label_distinguishes_clean_and_bypass_readiness() {
 
     // Assert
     assert_eq!(clean_label, Some(" [ready]"));
-    assert_eq!(bypass_label, Some(" [ready [bypass]]"));
+    assert_eq!(bypass_label, Some(" [ready (bypass)]"));
     assert_eq!(blocked_label, None);
 }
 
