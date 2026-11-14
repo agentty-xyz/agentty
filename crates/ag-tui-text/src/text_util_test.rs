@@ -7,9 +7,9 @@ use ratatui::text::{Line, Span};
 use ratatui::widgets::{Paragraph, Widget};
 
 use crate::text_util::{
-    borrowed_paint_lines, format_duration_compact, format_token_count, inline_text, paint_line,
-    span_display_width, split_line_at_width, truncate_spans_with_ellipsis, truncate_with_ellipsis,
-    wrap_lines, wrap_lines_breaking_long_words, wrap_styled_line,
+    borrowed_paint_lines, format_duration_coarse, format_duration_compact, format_token_count,
+    inline_text, paint_line, span_display_width, split_line_at_width, truncate_spans_with_ellipsis,
+    truncate_with_ellipsis, wrap_lines, wrap_lines_breaking_long_words, wrap_styled_line,
 };
 
 #[test]
@@ -403,6 +403,23 @@ fn test_format_duration_compact() {
     assert_eq!(one_hour, "1h 0s");
     assert_eq!(one_hour_one_minute_one_second, "1h 1m 1s");
     assert_eq!(one_day_one_hour_one_minute_one_second, "25h 1m 1s");
+}
+
+#[test]
+fn test_format_duration_coarse_drops_seconds_from_one_hour() {
+    // Arrange & Act
+    let zero = format_duration_coarse(0);
+    let just_under_one_hour = format_duration_coarse(3_599);
+    let one_hour = format_duration_coarse(3_600);
+    let one_hour_five_minutes = format_duration_coarse(3_931);
+    let one_day_one_hour_one_minute = format_duration_coarse(90_061);
+
+    // Assert
+    assert_eq!(zero, "0s");
+    assert_eq!(just_under_one_hour, "59m 59s");
+    assert_eq!(one_hour, "1h 0m");
+    assert_eq!(one_hour_five_minutes, "1h 5m");
+    assert_eq!(one_day_one_hour_one_minute, "25h 1m");
 }
 
 #[test]

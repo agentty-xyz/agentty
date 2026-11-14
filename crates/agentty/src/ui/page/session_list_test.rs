@@ -1,15 +1,17 @@
 use std::collections::HashMap;
 
 use ag_session::test_support as model_fixture;
-use ratatui::layout::Constraint;
-use ratatui::style::Modifier;
+use ratatui::buffer::Buffer;
+use ratatui::layout::{Constraint, Rect};
+use ratatui::style::{Color, Modifier};
 use ratatui::widgets::TableState;
 
 use super::{
-    EMPTY_SESSIONS_HINT, SessionListPage, TABLE_COLUMN_SPACING, column_width, model_column_width,
-    pr_ready_label, prepare_grouped_table_state, prepared_session_rows, reasoning_level_color,
-    selected_render_row, selected_session_id, session_list_help_line, size_color,
-    status_column_width, timer_column_width, tree_position_label,
+    EMPTY_SESSIONS_HINT, SessionListPage, TABLE_COLUMN_SPACING, column_width,
+    extend_row_backgrounds_to_page_edges, model_column_width, pr_ready_label,
+    prepare_grouped_table_state, prepared_session_rows, reasoning_level_color, selected_render_row,
+    selected_session_id, session_list_help_line, size_color, status_column_width,
+    timer_column_width, tree_position_label,
 };
 use crate::app::session_state::SessionGitStatus;
 use crate::domain::agent::{AgentModel, ReasoningLevel};
@@ -22,7 +24,7 @@ use crate::ui::render::Page;
 use crate::ui::style;
 
 /// Flattens a rendered test buffer into a plain string for assertions.
-fn buffer_text(buffer: &ratatui::buffer::Buffer) -> String {
+fn buffer_text(buffer: &Buffer) -> String {
     buffer
         .content()
         .iter()
@@ -31,7 +33,7 @@ fn buffer_text(buffer: &ratatui::buffer::Buffer) -> String {
 }
 
 /// Splits a rendered test buffer into terminal rows.
-fn buffer_lines(buffer: &ratatui::buffer::Buffer) -> Vec<String> {
+fn buffer_lines(buffer: &Buffer) -> Vec<String> {
     let width = usize::from(buffer.area.width.max(1));
 
     buffer
@@ -42,10 +44,7 @@ fn buffer_lines(buffer: &ratatui::buffer::Buffer) -> Vec<String> {
 }
 
 /// Returns the first rendered cell that starts the requested text.
-fn find_text_start_cell<'a>(
-    buffer: &'a ratatui::buffer::Buffer,
-    needle: &str,
-) -> Option<&'a ratatui::buffer::Cell> {
+fn find_text_start_cell<'a>(buffer: &'a Buffer, needle: &str) -> Option<&'a ratatui::buffer::Cell> {
     let width = usize::from(buffer.area.width.max(1));
     let needle_symbols = needle.chars().map(|character| character.to_string());
     let needle_symbols = needle_symbols.collect::<Vec<_>>();
@@ -70,16 +69,6 @@ fn find_text_start_cell<'a>(
     None
 }
 
-/// Counts cells matching a rendered symbol and the active palette border
-/// color.
-fn foreground_symbol_cell_count(buffer: &ratatui::buffer::Buffer, symbol: &str) -> usize {
-    buffer
-        .content()
-        .iter()
-        .filter(|cell| cell.symbol() == symbol && cell.fg == style::palette::border())
-        .count()
-}
-
 #[test]
 fn test_table_column_spacing_is_wider_for_readability() {
     // Arrange
@@ -93,9 +82,8 @@ fn test_table_column_spacing_is_wider_for_readability() {
 }
 
 #[test]
-fn test_render_uses_palette_border_for_sessions_table() {
+fn test_render_sessions_table_starts_with_header_and_ends_with_divider() {
     // Arrange
-    let _theme_scope = style::scoped_active_theme(ColorTheme::Current);
     let backend = ratatui::backend::TestBackend::new(100, 12);
     let mut terminal = ratatui::Terminal::new(backend).expect("failed to create terminal");
     let mut table_state = TableState::default();
@@ -114,8 +102,80 @@ fn test_render_uses_palette_border_for_sessions_table() {
         .expect("failed to draw");
 
     // Assert
-    let border_cell_count = foreground_symbol_cell_count(terminal.backend().buffer(), "┌");
-    assert_eq!(border_cell_count, 1);
+    let lines = buffer_lines(terminal.backend().buffer());
+    let text = lines.concat();
+    let divider_line = &lines[lines.len() - 2];
+    assert!(lines[0].starts_with(" Session"));
+    assert!(!text.contains('┌'));
+    assert!(!text.contains('│'));
+    assert!(divider_line.chars().all(|character| character == '─'));
+    assert!(lines[lines.len() - 1].contains("quit"));
+}
+
+#[test]
+fn test_render_header_and_selected_row_backgrounds_span_page_margins() {
+    // Arrange
+    let _theme_scope = style::scoped_active_theme(ColorTheme::Current);
+    let backend = ratatui::backend::TestBackend::new(100, 12);
+    let mut terminal = ratatui::Terminal::new(backend).expect("failed to create terminal");
+    let mut table_state = TableState::default();
+    table_state.select(Some(0));
+    let mut selected_session =
+        crate::test_support::titled_session_fixture("selected-1", Status::Review);
+    selected_session.title = Some("Selected session".to_string());
+    let mut other_session = crate::test_support::titled_session_fixture("other-1", Status::Review);
+    other_session.title = Some("Other session".to_string());
+    let sessions = vec![selected_session, other_session];
+
+    // Act
+    terminal
+        .draw(|frame| {
+            SessionListPage::new(&sessions, &mut table_state, ReasoningLevel::default(), 0)
+                .render(frame, frame.area());
+        })
+        .expect("failed to draw");
+
+    // Assert
+    let buffer = terminal.backend().buffer();
+    let lines = buffer_lines(buffer);
+    let row_y = |title: &str| {
+        lines
+            .iter()
+            .position(|line| line.contains(title))
+            .and_then(|index| u16::try_from(index).ok())
+            .expect("row should be visible")
+    };
+    let selected_y = row_y("Selected session");
+    let other_y = row_y("Other session");
+    let right_x = buffer.area.width - 1;
+    assert!(lines[0].starts_with(" Session"));
+    assert_eq!(buffer[(0, 0)].bg, style::palette::surface());
+    assert_eq!(buffer[(right_x, 0)].bg, style::palette::surface());
+    assert_eq!(
+        buffer[(0, selected_y)].bg,
+        style::palette::surface_selection()
+    );
+    assert_eq!(
+        buffer[(right_x, selected_y)].bg,
+        style::palette::surface_selection()
+    );
+    assert_eq!(buffer[(0, other_y)].bg, Color::Reset);
+    assert_eq!(buffer[(right_x, other_y)].bg, Color::Reset);
+}
+
+#[test]
+fn test_extend_row_backgrounds_to_page_edges_skips_empty_table_area() {
+    // Arrange
+    let page_area = Rect::new(0, 0, 2, 1);
+    let mut buffer = Buffer::empty(page_area);
+    buffer[(0, 0)].set_bg(Color::Blue);
+
+    // Act
+    extend_row_backgrounds_to_page_edges(&mut buffer, page_area, Rect::new(1, 0, 0, 1));
+
+    // Assert
+    assert_eq!(buffer[(0, 0)].bg, Color::Blue);
+    assert_eq!(buffer[(1, 0)].bg, Color::Reset);
 }
 
 #[test]
@@ -329,8 +389,8 @@ fn test_render_archive_rows_use_muted_text_across_columns() {
         .expect("archived title should be visible");
     let archived_size_cell =
         find_text_start_cell(buffer, "[XXL]").expect("archived size should be visible");
-    let archived_model_cell = find_text_start_cell(buffer, "claude-sonnet-5-5")
-        .expect("archived model should be visible");
+    let archived_model_cell =
+        find_text_start_cell(buffer, "sonnet-5.5").expect("archived model should be visible");
     let archived_reasoning_cell =
         find_text_start_cell(buffer, "high").expect("archived reasoning should be visible");
     let archived_status_cell =
@@ -446,8 +506,12 @@ fn test_text_column_width_uses_longest_project_value() {
 #[test]
 fn test_model_column_width_uses_longest_model_value() {
     // Arrange
-    let expected_width =
-        u16::try_from("claude-sonnet-5-5 [low]".chars().count()).unwrap_or(u16::MAX);
+    let expected_width = u16::try_from(
+        format!("{} [medium]", model_fixture::CODEX_MODEL_ID)
+            .chars()
+            .count(),
+    )
+    .unwrap_or(u16::MAX);
     let mut default_session =
         crate::test_support::titled_session_fixture("active-1", Status::Review);
     default_session.agent = crate::domain::agent::AgentSelection::new(
@@ -484,6 +548,38 @@ fn test_reasoning_level_color_matches_schema() {
     for (reasoning_level, expected_color) in expected_colors {
         assert_eq!(reasoning_level_color(reasoning_level), expected_color);
     }
+}
+
+#[test]
+fn test_render_session_row_shows_short_model_name_with_colored_reasoning_level() {
+    // Arrange
+    let _theme_scope = style::scoped_active_theme(ColorTheme::Current);
+    let backend = ratatui::backend::TestBackend::new(100, 12);
+    let mut terminal = ratatui::Terminal::new(backend).expect("failed to create terminal");
+    let mut table_state = TableState::default();
+    let mut session = crate::test_support::titled_session_fixture("session-1", Status::Review);
+    session.agent = crate::domain::agent::AgentSelection::new(
+        crate::domain::agent::AgentKind::Claude,
+        AgentModel::ClaudeOpus55,
+    );
+    session.reasoning_level_override = Some(ReasoningLevel::High);
+    let sessions = vec![session];
+
+    // Act
+    terminal
+        .draw(|frame| {
+            SessionListPage::new(&sessions, &mut table_state, ReasoningLevel::High, 0)
+                .render(frame, frame.area());
+        })
+        .expect("failed to draw");
+
+    // Assert
+    let buffer = terminal.backend().buffer();
+    let text = buffer_text(buffer);
+    let reasoning_cell = find_text_start_cell(buffer, "high").expect("level should be visible");
+    assert!(text.contains("opus-5.5 [high]"));
+    assert!(!text.contains("claude-opus-5-5"));
+    assert_eq!(reasoning_cell.fg, style::palette::warning_soft());
 }
 
 #[test]
@@ -600,7 +696,7 @@ fn test_render_session_row_connects_stacked_child_to_parent() {
     // Assert
     let text = buffer_text(terminal.backend().buffer());
     assert!(text.contains("Parent session"));
-    assert!(text.contains("└ [XS] Child session"));
+    assert!(text.contains("└ [XS]  Child session"));
     let buffer = terminal.backend().buffer();
     let fallback_cell = &buffer.content()[0];
     let tree_cell = find_text_start_cell(buffer, "└").unwrap_or(fallback_cell);
@@ -661,11 +757,11 @@ fn test_render_session_rows_indent_to_stack_depth_five() {
     // Assert
     let text = buffer_text(terminal.backend().buffer());
     assert!(text.contains("Stack root"));
-    assert!(text.contains("└ [XS] Stack level 1"));
-    assert!(text.contains("  └ [XS] Stack level 2"));
-    assert!(text.contains("    └ [XS] Stack level 3"));
-    assert!(text.contains("      └ [XS] Stack level 4"));
-    assert!(text.contains("        └ [XS] Stack level 5"));
+    assert!(text.contains("└ [XS]  Stack level 1"));
+    assert!(text.contains("  └ [XS]  Stack level 2"));
+    assert!(text.contains("    └ [XS]  Stack level 3"));
+    assert!(text.contains("      └ [XS]  Stack level 4"));
+    assert!(text.contains("        └ [XS]  Stack level 5"));
 }
 
 #[test]
@@ -713,9 +809,9 @@ fn test_timer_column_width_uses_longest_rendered_timer_label() {
     active_session.in_progress_started_at = Some(100);
     active_session.in_progress_total_seconds = 60;
     let mut archived_session = crate::test_support::titled_session_fixture("done-1", Status::Done);
-    archived_session.in_progress_total_seconds = 3_661;
+    archived_session.in_progress_total_seconds = 36_061;
     let sessions = vec![active_session, archived_session];
-    let expected_width = u16::try_from("1h 1m 1s".chars().count()).unwrap_or(u16::MAX);
+    let expected_width = u16::try_from("10h 1m".chars().count()).unwrap_or(u16::MAX);
     let rows = prepared_session_rows(&sessions, ReasoningLevel::default(), None, 160);
 
     // Act
@@ -723,6 +819,90 @@ fn test_timer_column_width_uses_longest_rendered_timer_label() {
 
     // Assert
     assert_eq!(width, Constraint::Length(expected_width));
+}
+
+#[test]
+fn test_render_timer_labels_align_to_right_edge() {
+    // Arrange
+    let backend = ratatui::backend::TestBackend::new(100, 12);
+    let mut terminal = ratatui::Terminal::new(backend).expect("failed to create terminal");
+    let mut table_state = TableState::default();
+    let mut short_session = crate::test_support::titled_session_fixture("short-1", Status::Review);
+    short_session.in_progress_total_seconds = 37;
+    let mut long_session = crate::test_support::titled_session_fixture("long-1", Status::Review);
+    long_session.in_progress_total_seconds = 6_331;
+    let sessions = vec![short_session, long_session];
+
+    // Act
+    terminal
+        .draw(|frame| {
+            SessionListPage::new(&sessions, &mut table_state, ReasoningLevel::default(), 0)
+                .render(frame, frame.area());
+        })
+        .expect("failed to draw");
+
+    // Assert
+    let lines = buffer_lines(terminal.backend().buffer());
+    let short_line = lines
+        .iter()
+        .find(|line| line.contains("short-1"))
+        .expect("short timer row");
+    let long_line = lines
+        .iter()
+        .find(|line| line.contains("long-1"))
+        .expect("long timer row");
+    assert!(lines[0].trim_end().ends_with("Timer"));
+    assert!(short_line.trim_end().ends_with(" 37s"));
+    assert!(long_line.trim_end().ends_with(" 1h 45m"));
+    assert_eq!(
+        short_line.trim_end().chars().count(),
+        long_line.trim_end().chars().count()
+    );
+}
+
+#[test]
+fn test_render_size_badges_share_one_title_column() {
+    // Arrange
+    let backend = ratatui::backend::TestBackend::new(100, 12);
+    let mut terminal = ratatui::Terminal::new(backend).expect("failed to create terminal");
+    let mut table_state = TableState::default();
+    let sessions = SessionSize::ALL
+        .iter()
+        .map(|size| {
+            let mut session = crate::test_support::titled_session_fixture(
+                &format!("size-{size}"),
+                Status::Review,
+            );
+            session.size = *size;
+            session.title = Some(format!("Title {size}"));
+
+            session
+        })
+        .collect::<Vec<_>>();
+
+    // Act
+    terminal
+        .draw(|frame| {
+            SessionListPage::new(&sessions, &mut table_state, ReasoningLevel::default(), 0)
+                .render(frame, frame.area());
+        })
+        .expect("failed to draw");
+
+    // Assert
+    let lines = buffer_lines(terminal.backend().buffer());
+    let title_columns = SessionSize::ALL
+        .iter()
+        .map(|size| {
+            lines
+                .iter()
+                .find_map(|line| line.find(&format!("Title {size}")))
+                .expect("title should be visible")
+        })
+        .collect::<Vec<_>>();
+    assert!(
+        title_columns.windows(2).all(|pair| pair[0] == pair[1]),
+        "titles start at {title_columns:?}"
+    );
 }
 
 #[test]

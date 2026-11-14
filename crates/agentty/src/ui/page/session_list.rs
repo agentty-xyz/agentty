@@ -2,9 +2,10 @@ use std::borrow::Cow;
 use std::collections::HashMap;
 use std::ops::Range;
 
-use ag_tui_text::text_util::{format_duration_compact, inline_text, truncate_spans_with_ellipsis};
+use ag_tui_text::text_util::{format_duration_coarse, inline_text, truncate_spans_with_ellipsis};
 use ratatui::Frame;
-use ratatui::layout::{Constraint, Rect};
+use ratatui::buffer::Buffer;
+use ratatui::layout::{Alignment, Constraint, Rect};
 use ratatui::style::{Color, Modifier, Style};
 use ratatui::text::{Line, Span};
 use ratatui::widgets::{Block, Borders, Cell, Paragraph, Row, Table, TableState};
@@ -33,6 +34,10 @@ const PR_READY_LABEL: &str = " [ready]";
 /// Success suffix appended to titles whose linked pull request can merge only
 /// by bypassing branch protections.
 const PR_BYPASS_READY_LABEL: &str = " [ready (bypass)]";
+
+/// Display width of the widest size badge, `[XXL]`, so titles share one
+/// left edge regardless of size.
+const SIZE_BADGE_WIDTH: usize = 5;
 
 /// Tree branch prefix for child rows that have siblings after them.
 const TREE_BRANCH_MIDDLE: &str = "├ ";
@@ -129,13 +134,16 @@ struct PreparedSessionCells {
 
 impl PreparedSessionCells {
     /// Builds the model, status, and timer values shared by layout and paint.
+    ///
+    /// The model cell uses the model's short display name so the column stays
+    /// narrow, and always colors the session's reasoning level.
     fn new(
         session: &Session,
         _default_reasoning_level: ReasoningLevel,
         wall_clock_unix_seconds: i64,
     ) -> Self {
         let reasoning_level = session.effective_reasoning_level();
-        let model_name = session.agent.model().as_str();
+        let model_name = session.agent.model().short_name();
         let model_width = model_name
             .chars()
             .count()
@@ -185,7 +193,7 @@ impl PreparedSessionCells {
         };
 
         let timer_label = if session.has_in_progress_timer() {
-            format_duration_compact(session.in_progress_duration_seconds(wall_clock_unix_seconds))
+            format_duration_coarse(session.in_progress_duration_seconds(wall_clock_unix_seconds))
         } else {
             String::new()
         };
@@ -266,22 +274,27 @@ impl<'a> PreparedSessionRow<'a> {
 impl Page for SessionListPage<'_> {
     /// Renders the grouped session table directly below the tab header plus
     /// the list footer.
+    ///
+    /// The table has no side or top frame because the active `Sessions` tab
+    /// already names the page; a full-width bottom divider separates it from
+    /// the help line. The header bar and selected row span the full page
+    /// width while column text keeps the page inset.
     fn render(&mut self, f: &mut Frame, area: Rect) {
         let areas = layout::tab_page_areas(area);
+        let table_area = render_bottom_divider(f, area, areas.main_area);
 
         let selected_style = style::row_selection_style();
         let header_style = Style::default()
             .bg(style::palette::surface())
             .fg(style::palette::text_muted())
             .add_modifier(Modifier::BOLD);
-        let header_cells = ["Session", "Model", "Status", "Timer"]
-            .iter()
-            .map(|h| Cell::from(*h));
+        let header_cells = [
+            Cell::from("Session"),
+            Cell::from("Model"),
+            Cell::from("Status"),
+            Cell::from(Line::from("Timer").alignment(Alignment::Right)),
+        ];
         let header = Row::new(header_cells).style(header_style).height(1);
-        let block = Block::default()
-            .borders(Borders::ALL)
-            .title("Sessions")
-            .border_style(style::border_style());
         let mut table_rows = prepared_session_rows(
             self.sessions,
             self.default_reasoning_level,
@@ -308,7 +321,7 @@ impl Page for SessionListPage<'_> {
             timer_column_width(&table_rows),
         ];
         let title_column_width = first_table_column_width(
-            block.inner(areas.main_area).width,
+            table_area.width,
             &column_constraints,
             TABLE_COLUMN_SPACING,
             0,
@@ -323,7 +336,7 @@ impl Page for SessionListPage<'_> {
             Some(action_position) => Some(first_action_row + action_position),
             None => selected_render_row(&table_rows, selected_session_id),
         };
-        let row_window = visible_row_window(selected_row, usize::from(areas.main_area.height));
+        let row_window = visible_row_window(selected_row, usize::from(table_area.height));
         let is_empty = table_rows.is_empty();
         let rows = table_rows
             .into_iter()
@@ -339,12 +352,12 @@ impl Page for SessionListPage<'_> {
         let table = Table::new(rows, column_constraints)
             .column_spacing(TABLE_COLUMN_SPACING)
             .header(header)
-            .block(block)
             .row_highlight_style(selected_style);
 
         let previous_selection = self.table_state.selected();
         prepare_grouped_table_state(self.table_state, selected_row);
-        f.render_stateful_widget(table, areas.main_area, self.table_state);
+        f.render_stateful_widget(table, table_area, self.table_state);
+        extend_row_backgrounds_to_page_edges(f.buffer_mut(), area, table_area);
         self.table_state.select(previous_selection);
 
         let selected_session = self
@@ -364,6 +377,57 @@ impl Page for SessionListPage<'_> {
         };
         let help_message = Paragraph::new(help_line);
         f.render_widget(help_message, areas.footer_area);
+    }
+}
+
+/// Draws the full-width divider on the last row of `main_area` and returns
+/// the inset area left above it for the table.
+fn render_bottom_divider(f: &mut Frame, page_area: Rect, main_area: Rect) -> Rect {
+    let divider = Block::default()
+        .borders(Borders::BOTTOM)
+        .border_style(style::border_style());
+    let table_area = divider.inner(main_area);
+    f.render_widget(
+        divider,
+        Rect {
+            width: page_area.width,
+            x: page_area.x,
+            ..main_area
+        },
+    );
+
+    table_area
+}
+
+/// Extends painted table-row backgrounds, such as the header bar and the
+/// selected row, across the page's side margins.
+///
+/// The table keeps its inset so column text stays aligned; only the margin
+/// cells beside a row whose edge cell carries a background are repainted.
+fn extend_row_backgrounds_to_page_edges(buffer: &mut Buffer, page_area: Rect, table_area: Rect) {
+    let page_area = page_area.intersection(buffer.area);
+    let table_area = table_area.intersection(page_area);
+    if table_area.is_empty() {
+        return;
+    }
+
+    let left_margin = page_area.left()..table_area.left();
+    let right_margin = table_area.right()..page_area.right();
+    for row_y in table_area.top()..table_area.bottom() {
+        let left_background = buffer[(table_area.left(), row_y)].bg;
+        let right_background = buffer[(table_area.right() - 1, row_y)].bg;
+        for (margin, background) in [
+            (left_margin.clone(), left_background),
+            (right_margin.clone(), right_background),
+        ] {
+            if background == Color::Reset {
+                continue;
+            }
+
+            for column_x in margin {
+                buffer[(column_x, row_y)].set_bg(background);
+            }
+        }
     }
 }
 
@@ -633,7 +697,7 @@ fn render_session_row(
         Cell::from(Line::from(title_line_spans)),
         Cell::from(cells.model_cell),
         cells.status_cell,
-        Cell::from(cells.timer_label),
+        Cell::from(Line::from(cells.timer_label).alignment(Alignment::Right)),
     ];
 
     Row::new(cells)
@@ -724,8 +788,9 @@ fn timer_column_width(rows: &[PreparedSessionRow<'_>]) -> Constraint {
 
 /// Builds display-only title spans with a colored size marker prefix.
 ///
-/// The prefix is derived from the row's current session size at render time
-/// and is not written into the persisted session title.
+/// The prefix is derived from the row's current session size at render time,
+/// padded to [`SIZE_BADGE_WIDTH`], and is not written into the persisted
+/// session title.
 fn render_session_title(
     session: &Session,
     title_column_width: usize,
@@ -738,10 +803,11 @@ fn render_session_title(
     }
     let mut title_spans =
         markdown::parse_inline_spans(&inline_text(session.display_title()), title_style);
+    let size_badge = format!("[{}]", session.size);
     title_spans.insert(
         0,
         Span::styled(
-            format!("[{}] ", session.size),
+            format!("{size_badge:<SIZE_BADGE_WIDTH$} "),
             Style::default().fg(session_detail_color(session, size_color(session.size))),
         ),
     );

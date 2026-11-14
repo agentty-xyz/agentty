@@ -450,6 +450,22 @@ pub fn format_duration_compact(duration_seconds: i64) -> String {
     label
 }
 
+/// Formats elapsed seconds like [`format_duration_compact`], dropping seconds
+/// once the duration reaches one hour.
+///
+/// Long durations render as `1h 0m` so table columns stay short and
+/// comparable; shorter durations keep second-level visibility.
+pub fn format_duration_coarse(duration_seconds: i64) -> String {
+    if duration_seconds < 3_600 {
+        return format_duration_compact(duration_seconds);
+    }
+
+    let hour_count = duration_seconds / 3_600;
+    let minute_count = (duration_seconds % 3_600) / 60;
+
+    format!("{hour_count}h {minute_count}m")
+}
+
 fn format_scaled_token_count(count: u64, divisor: u64, suffix: &str) -> String {
     let scaled_tenths =
         ((u128::from(count) * 10) + (u128::from(divisor) / 2)) / u128::from(divisor);
