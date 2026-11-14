@@ -441,7 +441,7 @@ async fn stacked_child_cancel_confirmation_archives_child() -> E2eResult {
                     );
                     assertion::assert_text_in_region(
                         &list_frame,
-                        "└ [XS] Stacked child",
+                        "└ [XS]  Stacked child",
                         &list_full,
                     );
 
@@ -462,7 +462,7 @@ async fn stacked_child_cancel_confirmation_archives_child() -> E2eResult {
                         "Stacked child cancel archive",
                         &final_full,
                     );
-                    assertion::assert_not_visible(frame, "└ [XS] Stacked child");
+                    assertion::assert_not_visible(frame, "└ [XS]  Stacked child");
                 })
             },
         )

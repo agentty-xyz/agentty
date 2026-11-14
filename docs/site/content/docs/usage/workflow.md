@@ -121,7 +121,8 @@ node replies, retry, and resume are unavailable for these graphs.
 
 - **Projects**: Choose a repository; view activity, usage, and installed agent CLIs.
 - **Sessions**: Create and manage work in merge-queue, active, and archive groups. Press
-  `p` to switch projects without leaving this tab.
+  `p` to switch projects without leaving this tab. Each row shows a short model name,
+  such as `opus-5.5`, with its reasoning level.
 - **Settings**: Configure appearance, model defaults, and launch commands.
 
 Selected rows, options, and tabs use contrasting background colors. Selected session

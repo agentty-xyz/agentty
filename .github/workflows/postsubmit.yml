@@ -13,8 +13,10 @@ env:
 
 concurrency:
   group: ${{ github.workflow }}-${{ github.ref }}
-  # Keep the active postsubmit run alive when newer pushes arrive.
+  # Run every push in order: newer pushes neither cancel the active run nor
+  # replace pending ones (up to GitHub's 100-run queue limit).
   cancel-in-progress: false
+  queue: max
 
 jobs:
   # One job runs the cataloged source hooks in turn. Each hook still builds

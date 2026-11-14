@@ -18,14 +18,25 @@ pub enum AgentKind {
     Harness,
 }
 
+// Resolve a catalog entry's short display name, defaulting to its id.
+macro_rules! model_short_name {
+    ($id:literal) => {
+        $id
+    };
+    ($id:literal, $short_name:literal) => {
+        $short_name
+    };
+}
+
 // Generate typed identities, exhaustive metadata, and ordered provider lists
 // from the same declaration so adding a model cannot omit one of those
-// surfaces.
+// surfaces. A model without an explicit `short_name` displays its id.
 macro_rules! define_model_catalog {
     ($($provider:ident { $(
         $(#[$attribute:meta])*
         $model:ident = $discriminant:literal => {
             id: $id:literal,
+            $(short_name: $short_name:literal,)?
             description: $description:literal,
             fast: $fast:literal,
         },
@@ -70,12 +81,14 @@ macro_rules! define_model_catalog {
                     $($(Self::$model => ModelDescriptor {
                         description: $description,
                         id: $id,
+                        short_name: model_short_name!($id $(, $short_name)?),
                         supports_fast_mode: $fast,
                     },)*)*
                     Self::OpenAiCompatible(served) => ModelDescriptor {
                         description: "Model served by a local or self-hosted \
                                       OpenAI-compatible server, such as Ollama.",
                         id: served.id(),
+                        short_name: served.id(),
                         supports_fast_mode: false,
                     },
                 }
@@ -132,24 +145,28 @@ define_model_catalog! {
         /// Claude Fable model backed by `claude-fable-5-2`.
         ClaudeFable52 = 10 => {
             id: "claude-fable-5-2",
+            short_name: "fable-5.2",
             description: "Claude Fable model for creative, narrative-heavy tasks.",
             fast: false,
         },
         /// Claude Opus model backed by `claude-opus-5-5`.
         ClaudeOpus55 = 8 => {
             id: "claude-opus-5-5",
+            short_name: "opus-5.5",
             description: "Latest Claude Opus model for complex agentic tasks.",
             fast: true,
         },
         /// Claude Sonnet model backed by `claude-sonnet-5-5`.
         ClaudeSonnet55 = 9 => {
             id: "claude-sonnet-5-5",
+            short_name: "sonnet-5.5",
             description: "Balanced Claude model for quality and latency.",
             fast: false,
         },
         /// Claude Haiku model backed by `claude-haiku-5-5`.
         ClaudeHaiku55 = 11 => {
             id: "claude-haiku-5-5",
+            short_name: "haiku-5.5",
             description: "Fast Claude model for lighter tasks.",
             fast: false,
         },
@@ -345,6 +362,7 @@ const OPENAI_COMPATIBLE_ID: &str = "openai-compatible";
 struct ModelDescriptor {
     description: &'static str,
     id: &'static str,
+    short_name: &'static str,
     supports_fast_mode: bool,
 }
 
@@ -492,6 +510,19 @@ impl AgentModel {
     /// invocations.
     pub const fn as_str(self) -> &'static str {
         self.descriptor().id
+    }
+
+    /// Returns the compact name shown in dense views such as the session
+    /// list, such as `opus-5.5` for `claude-opus-5-5`.
+    ///
+    /// Models without a shorter catalog name, including
+    /// [`AgentModel::OpenAiCompatible`] models, display their menu name.
+    #[must_use]
+    pub fn short_name(self) -> &'static str {
+        match self {
+            Self::OpenAiCompatible(_) => self.name(),
+            _ => self.descriptor().short_name,
+        }
     }
 
     /// Returns the model identifier passed to provider transports.

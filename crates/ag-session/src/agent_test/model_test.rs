@@ -438,6 +438,33 @@ fn test_served_model_ids_parse_for_harness_only() {
 }
 
 #[test]
+/// Ensures short names compact verbose ids and default to the menu name.
+fn test_short_name_compacts_verbose_ids_and_defaults_to_menu_name() {
+    // Arrange
+    let served = ServedModel::new("qwen3:latest").expect("nonblank served name");
+    let expected_short_names = [
+        (AgentModel::ClaudeOpus55, "opus-5.5"),
+        (AgentModel::ClaudeSonnet55, "sonnet-5.5"),
+        (AgentModel::ClaudeHaiku55, "haiku-5.5"),
+        (AgentModel::ClaudeFable52, "fable-5.2"),
+        (AgentModel::Gemini4Argon, "gemini-4-argon"),
+        (AgentModel::Gpt61Sol, "gpt-6.1-sol"),
+        (AgentModel::OpenAiCompatible(served), "qwen3:latest"),
+        (
+            AgentModel::OpenAiCompatible(ServedModel::CONFIGURED),
+            "openai-compatible",
+        ),
+    ];
+
+    // Act
+    let short_names = expected_short_names.map(|(model, _)| (model, model.short_name()));
+
+    // Assert
+    assert_eq!(short_names, expected_short_names);
+    assert_eq!(AgentModel::ClaudeOpus55.as_str(), "claude-opus-5-5");
+}
+
+#[test]
 /// Ensures blank or foreign served model ids are rejected.
 fn test_served_model_rejects_blank_and_foreign_ids() {
     // Arrange, Act, Assert
