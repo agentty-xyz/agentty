@@ -39,5 +39,5 @@ presentation-state refreshes.
   `docs/site/content/docs/usage/keybindings.md` for visible actions.
 - Update `docs/site/content/docs/architecture/runtime-flow.md` when orchestration,
   reducer, worker, or channel flow changes.
-- Keep `docs/site/content/docs/core-components/execution.md` aligned with changes to
-  model execution ownership.
+- Keep `docs/site/content/docs/core-components/execution-components/` aligned with
+  changes to model execution ownership.

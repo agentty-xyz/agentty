@@ -1,13 +1,15 @@
 +++
 title = "Durable Components"
 description = "Persisted project, conversation, and execution records."
-weight = 4
+weight = 3
 sort_by = "weight"
 +++
 
 Durable components describe saved data that remains available across application
 restarts. Workflows write these records through persistence repositories; workers retain
-responsibility for execution ordering and recovery.
+responsibility for execution ordering and recovery. See the
+[Component Map](@/docs/core-components/component-map.md#durable-components) for how they
+relate.
 
 - [Message](@/docs/core-components/durable-components/message.md): typed, ordered
   session history used for transcript display and conversation replay.
@@ -21,3 +23,9 @@ responsibility for execution ordering and recovery.
   execution and its outcome.
 - [Task](@/docs/core-components/durable-components/task.md): desired outcome and
   explicit attempts to advance it within a session.
+- [Execution Graph](@/docs/core-components/durable-components/execution-graph.md):
+  validated node snapshots, their executions, and exact results.
+- [Agent Definition](@/docs/core-components/durable-components/agent-definition.md):
+  reusable instructions and restrictions captured by tasks and graph nodes.
+- [Env](@/docs/core-components/durable-components/env.md): the session-owned workspace
+  where turns execute.

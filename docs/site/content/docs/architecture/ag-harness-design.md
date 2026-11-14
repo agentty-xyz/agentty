@@ -10,8 +10,8 @@ weight = 6
 app-facing, and lightweight: an agent loop, three policy-checked tools, durable
 sessions, and content-free lifecycle events. Product decisions stay in the application.
 Agentty runs it as the preview `AgentKind::Harness` backend behind
-`--experimental-harness`, following the [Execution](@/docs/core-components/execution.md)
-boundary.
+`--experimental-harness`, following the
+[Execution](@/docs/core-components/execution-components/execution-boundary.md) boundary.
 
 ```mermaid
 flowchart LR

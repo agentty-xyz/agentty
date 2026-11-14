@@ -13,6 +13,6 @@ Shared execution requests, events, settings, errors, and adapter interfaces.
 
 ## Documentation
 
-Keep `docs/site/content/docs/core-components/execution.md` and
+Keep `docs/site/content/docs/core-components/execution-components/` and
 `docs/site/content/docs/architecture/testability-boundaries.md` aligned with contract
 changes.

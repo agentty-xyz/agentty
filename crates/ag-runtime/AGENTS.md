@@ -15,7 +15,7 @@ Runtime composition, harness dispatch, and provider lifecycle.
 
 ## Documentation
 
-Keep `docs/site/content/docs/core-components/execution.md`,
+Keep `docs/site/content/docs/core-components/execution-components/`,
 `docs/site/content/docs/architecture/runtime-flow.md`, and
 `docs/site/content/docs/architecture/testability-boundaries.md` aligned with runtime
 ownership.

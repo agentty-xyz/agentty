@@ -5,135 +5,131 @@ weight = 6
 +++
 
 A Task records a desired outcome in one
-[session](@/docs/core-components/durable-components/session.md). The session owns its
-workspace and scheduling. Ordinary tasks use session conversation context; role-aware
-tasks retain their own conversation. Each attempt runs one turn and its ordered
-post-processing through a unique
-[operation](@/docs/core-components/durable-components/operation.md).
+[session](@/docs/core-components/durable-components/session.md). Each attempt runs one
+turn and its ordered post-processing through a unique
+[operation](@/docs/core-components/durable-components/operation.md). Ordinary tasks use
+session conversation context; role-aware tasks retain their own conversation.
 
-`Task::env_id()` identifies the session-owned
-[execution environment](@/docs/core-components/durable-components/session.md#execution-environment)
-shared by all its attempts. Task completion does not release that workspace.
+## Connections
+
+```mermaid
+flowchart LR
+  S[Session] -->|owns| T[Task]
+  T -->|has| A[Attempt]
+  A -->|executes through| O[Operation]
+  O -->|ordered by| W[Session worker]
+  T -->|runs in| E[Env]
+  T -->|role-aware task captures| D[Agent Definition]
+  G[Execution Graph] -->|task-conversation node| T
+```
+
+## Ownership and Concurrency
+
+One session can own multiple tasks. Each task stays with its owning session and shares
+that session's [Env](@/docs/core-components/durable-components/env.md); task completion
+does not release the workspace.
+
+Attempts execute serially through the session's worker. Submitting an attempt while the
+session is busy is rejected, not added to the ordinary chat queue, and only one attempt
+per task may be unfinished. Tasks in different eligible sessions can execute
+concurrently within existing capacity and workspace limits.
+
+Task management is programmatic.
+[Execution graphs](@/docs/core-components/durable-components/execution-graph.md)
+schedule dependent task conversations; tasks alone provide no dependency scheduling or
+automatic retries.
 
 ## Planning and Querying
 
-Use `SessionService::create_task` with a `CreateTaskRequest` to save a nonempty
-`task_id` and `objective` before execution. The owning session must exist in storage,
-but may be draft, busy, or terminal. Creation adds no attempt, operation, message, or
-worker work and does not change the session. Repeating the same request preserves the
-task, including its creation time and completion; changing its session or objective is
-rejected.
+`SessionService::create_task` saves a nonempty `task_id` and `objective` before
+execution. The owning session must exist in storage, but may be draft, busy, or
+terminal. Creation adds no attempt, operation, message, or worker work. Repeating the
+same request preserves the task; changing its session or objective is rejected.
 
-Use `SessionService::list_tasks` to read all tasks belonging to one session, including
-unattempted and completed tasks with their attempt histories. Results form one storage
-snapshot in creation order, with insertion order breaking timestamp ties. A missing
-session or a session without tasks returns an empty list. Use `SessionService::get_task`
-to retrieve one task by ID.
+`SessionService::list_tasks` returns one session's tasks with their attempt histories as
+one storage snapshot in creation order; a missing session returns an empty list.
+`SessionService::get_task` retrieves one task by ID.
 
-One session can own multiple distinct tasks. Their attempts execute serially through
-that session's worker; submitting a new attempt while the session is busy is rejected,
-not added to the ordinary chat queue. Tasks in different eligible sessions can execute
-concurrently within existing capacity and workspace limits. Each task stays with its
-owning session. Task management is programmatic;
-[execution graphs](@/docs/architecture/execution-graphs.md) schedule dependent task
-conversations.
+## Submission and Completion
 
-## Built-in Agent Definitions
+`SessionService::submit_task` takes a stable `task_id`, an immutable `objective`, a
+globally unique `attempt_id`, a `message` instructing that attempt, and a `visibility`
+for its transcript presentation. New attempts require a loaded session in `Review`,
+`AgentReview`, or `Question`. Submission creates the task if needed.
 
-`ag_session::TaskAgentRole` provides two built-in task roles:
+Admission atomically saves the task, attempt, and queued operation before worker
+delivery, and acknowledges admission, not execution. Redelivering identical inputs with
+the same attempt ID acknowledges the existing attempt, including after it settles;
+changed inputs under an existing identity are rejected. An enqueue failure can leave a
+failed attempt; inspect it before retrying.
+
+Attempts project queued, running, succeeded, failed, or canceled state from their
+operations; running includes ordered post-processing. A successful turn does not
+establish that the objective is satisfied: only `SessionService::complete_task` records
+the caller's explicit acceptance. Completion requires every attempt to have settled,
+prevents new attempts, and is allowed with zero attempts. It does not merge, publish, or
+finish the session.
+
+## Role-Aware Tasks
+
+<a id="built-in-agent-definitions"></a> `ag_session::TaskAgentRole` provides two
+built-in task roles:
 
 | Role          | Required context                               | Permissions                                     | Expected answer                        |
 | ------------- | ---------------------------------------------- | ----------------------------------------------- | -------------------------------------- |
 | `Planner`     | User request and clarification                 | Read only                                       | Proposed plan and validation steps     |
 | `Implementer` | User request, accepted plan, and clarification | Session permissions, including read-only limits | Observed changes, checks, and blockers |
 
-These roles describe host workflow contracts. A separate `AgentDefinition` supplies
-instructions and optional read-only restrictions; bundled and repository agents share
-the same format and execution path. A workflow can supply the same session Smart
-`AgentSelection` to both. Questions use the existing response protocol, and neither
-output automatically completes a task.
+Roles are host workflow contracts. A separate
+[Agent Definition](@/docs/core-components/durable-components/agent-definition.md)
+supplies instructions and optional read-only restrictions. Neither role's output
+automatically completes a task.
 
-`SubmitAgentTaskRequest` describes an isolated role-aware attempt separately from
-ordinary `SubmitTaskRequest` execution. It carries a captured provider/model selection,
-role, resolved definition snapshot, original request, and explicit clarification.
-Implementer input also identifies the exact plan body and producing task/attempt; input
-validation does not establish acceptance. Hosts must verify acceptance before dispatch.
-Assignment and original inputs remain fixed across attempts, while new clarification may
-be supplied.
+`SessionService::submit_agent_task` admits a role-aware attempt through the session's
+serial worker. Its `SubmitAgentTaskRequest` captures the model selection, role,
+definition snapshot, original request, and explicit clarification. The assignment and
+original inputs stay fixed across attempts and survive restart; a task with ordinary
+session-context history cannot acquire one.
 
-Use `SessionService::submit_agent_task` to admit the request through the session's
-serial worker. Execution uses the prepared session-owned Env and enforces role
-permissions. Planner turns are read-only and skip mutating host effects. Implementer
-turns retain session permissions and finish permitted commit and publication effects
-before the next turn; failures settle the attempt as failed. A fresh regular `Draft` can
-start with a Planner without an ordinary chat turn. Other role attempts require `Review`
-or `AgentReview`; unmaterialized deferred workspaces are rejected before model
-execution. Role admission also invalidates prior ordinary review generations. A
-successful Implementer attempt without questions starts the ordinary automatic review
-after its effects, as an ordinary turn would. Planner, question, failed, canceled, and
-superseded attempts start no automatic review; explicit review remains available.
+- **Planner** turns are read-only and skip mutating host effects. A fresh regular
+  `Draft` can start with a Planner without an ordinary chat turn.
+- **Implementer** turns require a verified accepted plan, retain session permissions,
+  and finish permitted commit and publication effects before the next turn; a failed
+  effect settles the attempt as failed. A successful attempt without questions starts
+  the ordinary automatic review.
+- Other role attempts require `Review` or `AgentReview`. Unmaterialized deferred
+  workspaces are rejected before model execution.
+- Role admission invalidates prior ordinary review generations. Planner, question,
+  failed, canceled, and superseded attempts start no automatic review; explicit review
+  remains available.
 
-`TaskRepository` can atomically bind that assignment and a host-allocated conversation
-identity when admitting a role-aware attempt. The binding and original inputs survive
-restart; clarification belongs to each attempt. Tasks with ordinary session-context
-history cannot acquire an isolated assignment, and assigned tasks require role-aware
-delivery.
+`SessionService::accept_agent_plan` explicitly accepts one persisted Planner attempt:
+only the latest successful, uncanceled response with a nonempty plan and no questions is
+eligible. Generic task completion does not accept a plan. Implementer admission verifies
+the acceptance, session, original request, and captured model together with the attempt.
+A newer Planner attempt makes an older version ineligible for new handoffs, while its
+acceptance record is preserved. Repeated acceptance of the same eligible version is
+idempotent.
 
-Task-owned history stores each observed response with its producing attempt and keeps
-provider continuation separate from ordinary session chat. Saving a response accounts
-usage once under the task's captured model; repeated saves cannot overwrite output or
-rewind a newer conversation. A response can be available while post-processing is still
-running, so callers must inspect the attempt status before accepting it. History alone
-does not complete a task. Use `SessionService::get_agent_task_history` to retrieve its
-assignment, explicit inputs, responses, and usage without reading ordinary chat.
-
-`TaskRepository::accept_agent_plan` explicitly accepts one persisted Planner attempt.
-Only the latest successful, uncanceled response with a nonempty plan and no questions is
-eligible. The acceptance ledger retains its exact answer; generic task completion does
-not accept a plan. Implementer admission checks the ledger, session, original request,
-and captured model in the same transaction as the attempt. A newer Planner attempt makes
-an older version ineligible for new handoffs, while preserving its historical acceptance
-record. Repeated acceptance of the same eligible version is idempotent.
-
-## Submission and Completion
-
-Programmatic callers use `SessionService::submit_task` with a `SubmitTaskRequest`.
-Choose a stable `task_id`, an immutable `objective`, and a globally unique `attempt_id`.
-The `message` instructs that attempt; `visibility` controls its transcript presentation.
-New attempts require a loaded session in `Review`, `AgentReview`, or `Question`, even
-when the task was planned earlier. Session creation and ordinary chat keep their
-existing behavior.
-
-Submission creates the task if needed, preserving existing `submit_task` behavior.
-Admission atomically saves the task, attempt, and queued operation before worker
-delivery; a pre-created task retains its identity and creation time. A successful
-submission acknowledges admission, not execution. Redelivering identical inputs with the
-same attempt ID acknowledges the existing attempt, including after completion or
-failure. Changed inputs under an existing identity are rejected. An enqueue failure can
-leave a failed attempt; inspect it before retrying.
-
-Attempts project queued, running, succeeded, failed, or canceled state from their
-operations. Running includes ordered post-processing. A successful turn does not
-establish that the objective is satisfied: only `SessionService::complete_task` records
-the caller's explicit acceptance. Completion requires all attempts to have settled and
-prevents new attempts. A task with zero attempts can also be explicitly accepted.
-Completion does not merge, publish, or finish the session.
+Task-owned history keeps each response with its producing attempt, separate from
+ordinary session chat. A response can be available while post-processing is still
+running, so inspect the attempt status before accepting it.
+`SessionService::get_agent_task_history` returns the assignment, explicit inputs,
+responses, and usage.
 
 ## Clarification, Retries, and Recovery
 
 For ordinary tasks, a clarification response finishes its attempt and leaves the task
-open and the session waiting for input. Read the session's questions and submit a new
-attempt with the answers in its message to continue task accounting. Ordinary question
-answers retain their existing session behavior and are not automatically attached to a
-task.
+open and the session waiting for input. Submit a new attempt with the answers in its
+message to continue task accounting; ordinary question answers are not automatically
+attached to a task.
 
 Role-aware clarification stays in that task's response history and does not replace the
-ordinary session's pending questions. Submit a new role-aware attempt with explicit
+session's pending questions. Submit a new role-aware attempt with explicit
 `TaskAgentInput::clarification` to continue the task's own conversation.
 
 Use a new attempt ID for an explicit retry or continuation. Provider retries remain
-inside the current attempt. Only one attempt per task may be unfinished; dependency
-scheduling and automatic retries are not provided.
+inside the current attempt.
 
 Session cancellation settles its attempts through ordinary operation cancellation and
 leaves the desired outcome open. Restart recovery marks unfinished operations and their

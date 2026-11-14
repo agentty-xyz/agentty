@@ -1,7 +1,8 @@
 +++
 title = "Command Gateway"
 description = "Shared admission for terminal and programmatic session commands."
-weight = 3
+weight = 1
+aliases = [ "/docs/core-components/command-gateway/"]
 +++
 
 The Command Gateway gives terminal and programmatic callers a shared entry point for
@@ -11,13 +12,27 @@ state. The gateway applies that plan through existing workflow handlers, which r
 their validation, persistence, and execution responsibilities. Other commands dispatch
 directly to their existing handlers.
 
+## Connections
+
+```mermaid
+flowchart LR
+  T[Terminal] -->|direct call or mailbox| G[Command Gateway]
+  A[Session API] -->|mailbox| G
+  G -->|applies command| WF[Session workflows]
+  WF -->|save| D[(Durable components)]
+  WF -->|queue work| W[Run Worker]
+```
+
 ## Commands and Identity
 
 The gateway accepts session creation, prepared terminal prompts, ordinary and durable
 messages, question answers, cancellation, staged starts, merge, and review publication.
 It also accepts [task](@/docs/core-components/durable-components/task.md) creation,
-attempt submission, and explicit completion. Session and task reads remain separate
-queries.
+ordinary and role-aware attempt submission, plan acceptance, and explicit completion.
+For [execution graphs](@/docs/core-components/durable-components/execution-graph.md), it
+accepts proposal generation, actions on an exact proposal version, explicit start,
+cancellation, resume, node continuation, and acceptance of an exact result. Session,
+task, and graph reads remain separate queries.
 
 Each request carries a fresh command ID and an initiator: terminal or session API.
 Durable messages, task attempts, and review publication also carry an operation
@@ -53,7 +68,7 @@ and visibility.
 ## Execution Boundary
 
 Command admission routes requested actions; the
-[Scheduler](@/docs/core-components/scheduler.md) grants capacity to eligible model
-turns. Workers retain per-session ordering through post-processing, cancellation, and
-recovery. Model work follows
-[Run Worker → Agent Runtime → Harness → LLM](@/docs/core-components/execution.md).
+[Scheduler](@/docs/core-components/control-plane/scheduler.md) grants capacity to
+eligible model turns. Workers retain per-session ordering through post-processing,
+cancellation, and recovery. Model work follows
+[Run Worker → Agent Runtime → Harness → LLM](@/docs/core-components/execution-components/execution-boundary.md).
