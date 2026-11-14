@@ -307,7 +307,6 @@ fn inspector_renders_blocks_exact_output_and_supported_controls() {
         None,
         Some(GraphEditKind::Reply),
         Some(GraphEditKind::Cancel),
-        Some(GraphEditKind::Resume),
     ] {
         let mut terminal = Terminal::new(TestBackend::new(120, 40)).expect("terminal");
         view.editor = kind.map(|kind| GraphEditor {

@@ -9,8 +9,8 @@ use ag_protocol::{
 };
 use ag_session::test_support::{graph_proposal, graph_proposal_state};
 use ag_session::{
-    GraphProposalAction, GraphProposalResolution, GraphProposalState, GraphProposalVersionOutcome,
-    StartExecutionGraphRequest,
+    GraphProposalAction, GraphProposalReplyOutcome, GraphProposalResolution, GraphProposalState,
+    GraphProposalVersionOutcome, StartExecutionGraphRequest,
 };
 use ag_store::Database;
 
@@ -110,6 +110,16 @@ async fn graph_proposal_approval_publishes_once_and_survives_restart_without_exe
     assert!(!reopened.graph_proposals().approve("preview", 1).await?);
     assert!(!reopened.graph_proposals().create(&state).await?);
     assert_eq!(reopened.graphs().list_graphs("session").await?.len(), 1);
+    assert_eq!(
+        reopened
+            .graphs()
+            .budget_limits("proposal:preview:1")
+            .await?,
+        BTreeMap::from([(
+            "proposal:preview:1:calls".to_string(),
+            state.limits.provider_calls
+        )])
+    );
     assert_eq!(
         reopened
             .graphs()
@@ -554,6 +564,127 @@ async fn graph_proposal_capture_preserves_request_images_through_resolution()
     assert!(created);
     assert_eq!(stored.input, state.input);
     assert_eq!(stored.version.outcome, resolved(&state)?);
+
+    Ok(())
+}
+
+#[tokio::test]
+async fn proposal_replies_keep_their_first_decision_and_recover_until_settled()
+-> Result<(), Box<dyn Error>> {
+    // Arrange
+    let directory = tempfile::Builder::new()
+        .prefix("proposal-reply-")
+        .tempdir_in(".")?;
+    let path = directory.path().join("reply.sqlite");
+    let database = Database::open(&path).await?;
+    seed(&database).await?;
+    let state = graph_proposal_state("preview", "session");
+    database.graph_proposals().create(&state).await?;
+    let proposals = database.graph_proposals();
+
+    // Act
+    let recorded = proposals
+        .record_reply("reply", "preview", 1, "Ship it")
+        .await?;
+    let redelivered = proposals
+        .record_reply("reply", "preview", 1, "Ship it")
+        .await?;
+    let conflicting = proposals.record_reply("reply", "preview", 1, "Other").await;
+    let blank = proposals.record_reply(" ", "preview", 1, "Ship it").await;
+    let outdated = proposals.record_reply("stale", "preview", 2, "Later").await;
+    database.pool().close().await;
+    drop(database);
+    let reopened = Database::open(&path).await?;
+    let proposals = reopened.graph_proposals();
+    let pending = proposals.unsettled_replies("session").await?;
+    let decided = proposals
+        .decide_reply("reply", GraphProposalReplyOutcome::Approve)
+        .await?;
+    let redecided = proposals
+        .decide_reply("reply", GraphProposalReplyOutcome::Cancel)
+        .await?;
+    let missing_decision = proposals
+        .decide_reply("missing", GraphProposalReplyOutcome::Revise)
+        .await;
+    proposals.settle_reply("reply").await?;
+    let missing_settlement = proposals.settle_reply("missing").await;
+    let settled = proposals.unsettled_replies("session").await?;
+    proposals
+        .record_reply("revise", "preview", 1, "Again")
+        .await?;
+    proposals
+        .decide_reply("revise", GraphProposalReplyOutcome::Revise)
+        .await?;
+    proposals
+        .reserve("preview", 1, &GraphProposalAction::Revise("Again".into()))
+        .await?;
+    let superseded = proposals.unsettled_replies("session").await?;
+    proposals
+        .record_reply("cancel", "preview", 2, "Drop it")
+        .await?;
+    let cancel = proposals
+        .decide_reply("cancel", GraphProposalReplyOutcome::Cancel)
+        .await?;
+    proposals.cancel("preview", 2).await?;
+    let after_cancel = proposals.unsettled_replies("session").await?;
+    let messages = reopened.sessions().load_session_messages("session").await?;
+
+    // Assert
+    assert!(recorded);
+    assert!(!redelivered);
+    assert!(conflicting.is_err());
+    assert!(blank.is_err());
+    assert!(outdated.is_err());
+    assert_eq!(pending.len(), 1);
+    assert_eq!(pending[0].message, "Ship it");
+    assert_eq!(pending[0].session_id, "session");
+    assert_eq!(pending[0].outcome, None);
+    assert!(!pending[0].is_settled);
+    assert_eq!(decided.outcome, Some(GraphProposalReplyOutcome::Approve));
+    assert_eq!(redecided.outcome, Some(GraphProposalReplyOutcome::Approve));
+    assert!(missing_decision.is_err());
+    assert!(missing_settlement.is_err());
+    assert_eq!(settled, []);
+    assert_eq!(superseded, []);
+    assert_eq!(cancel.outcome, Some(GraphProposalReplyOutcome::Cancel));
+    assert_eq!(after_cancel, []);
+    assert_eq!(
+        messages
+            .iter()
+            .map(|message| message.content.as_str())
+            .collect::<Vec<_>>(),
+        ["Ship it", "Again", "Drop it"]
+    );
+
+    Ok(())
+}
+
+#[tokio::test]
+async fn approved_proposals_reject_new_replies() -> Result<(), Box<dyn Error>> {
+    // Arrange
+    let database = Database::in_memory().await?;
+    seed(&database).await?;
+    let state = graph_proposal_state("preview", "session");
+    database.graph_proposals().create(&state).await?;
+    database
+        .graph_proposals()
+        .finish("preview", 1, &resolved(&state)?)
+        .await?;
+    database.graph_proposals().approve("preview", 1).await?;
+
+    // Act
+    let reply = database
+        .graph_proposals()
+        .record_reply("late", "preview", 1, "Ship it")
+        .await;
+
+    // Assert
+    assert!(
+        reply
+            .expect_err("approved")
+            .to_string()
+            .contains("Approved proposals")
+    );
 
     Ok(())
 }

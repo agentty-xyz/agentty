@@ -1,6 +1,6 @@
 //! Snapshot-bound state for the generic graph inspector.
 
-use std::collections::{BTreeMap, BTreeSet};
+use std::collections::BTreeSet;
 
 use ag_protocol::{ProtocolRequestProfile, parse_protocol_response_strict};
 use ag_session::{
@@ -32,9 +32,6 @@ pub struct GraphView {
     pub(crate) progress: Option<ExecutionGraphProgress>,
     /// Latest retained proposal, shown read-only; chat replies act on it.
     pub(crate) proposal: Option<GraphProposalState>,
-    /// Original live limits, or empty after restart; refresh replaces this
-    /// hint.
-    pub(crate) resume_limits: String,
     /// Session view restored on exit.
     pub(crate) restore: ConfirmationViewMode,
     /// Vertical offset in node details and output.
@@ -58,7 +55,6 @@ impl GraphView {
             outputs: Vec::new(),
             progress: None,
             proposal: None,
-            resume_limits: String::new(),
             restore,
             scroll: 0,
             selected_graph: 0,
@@ -112,7 +108,6 @@ impl GraphView {
                         })
             }
             GraphEditKind::Cancel => refreshed.can_cancel(),
-            GraphEditKind::Resume => refreshed.can_resume(),
         }
     }
 
@@ -195,51 +190,6 @@ impl GraphView {
                 .outputs
                 .get(self.selected_output)
                 .is_some_and(|output| output.result.state == GraphResultState::Validated)
-    }
-
-    /// Budget names are host-captured. Resume cannot introduce additional
-    /// names.
-    pub(crate) fn budget_names(&self) -> BTreeSet<String> {
-        self.graph()
-            .into_iter()
-            .flat_map(|graph| &graph.nodes)
-            .filter_map(|node| node.execution.shared_budget_id.clone())
-            .collect()
-    }
-
-    pub(crate) fn parse_budgets(&self, text: &str) -> Result<BTreeMap<String, usize>, String> {
-        if text.trim_start().starts_with('{') {
-            let budgets: BTreeMap<String, usize> = serde_json::from_str(text)
-                .map_err(|_| "Enter a JSON object of budget names and positive limits")?;
-            if budgets.values().any(|limit| *limit == 0)
-                || budgets.keys().cloned().collect::<BTreeSet<_>>() != self.budget_names()
-            {
-                return Err(
-                    "Supply exactly the displayed budget names with positive limits".into(),
-                );
-            }
-
-            return Ok(budgets);
-        }
-        let mut budgets = BTreeMap::new();
-        for entry in text.split_whitespace() {
-            let (name, value) = entry
-                .split_once('=')
-                .ok_or("Use budget=positive_number for each budget")?;
-            let limit = value
-                .parse::<usize>()
-                .ok()
-                .filter(|limit| *limit > 0)
-                .ok_or("Budget limits must be positive integers")?;
-            if budgets.insert(name.to_string(), limit).is_some() {
-                return Err("Duplicate budget name".into());
-            }
-        }
-        if budgets.keys().cloned().collect::<BTreeSet<_>>() != self.budget_names() {
-            return Err("Supply exactly the displayed budget names".into());
-        }
-
-        Ok(budgets)
     }
 }
 
@@ -372,7 +322,6 @@ pub(crate) struct GraphEditor {
 pub(crate) enum GraphEditKind {
     Cancel,
     Reply,
-    Resume,
 }
 
 #[cfg(test)]

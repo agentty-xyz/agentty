@@ -29,7 +29,7 @@ restart behavior.
 | `a`                              | Accept the displayed output version              |
 | `e`                              | Reply to or revise the selected task             |
 | `t`                              | Retry selected failed node                       |
-| `s`                              | Enter limits and resume paused graph dispatch    |
+| `s`                              | Resume paused graph dispatch                     |
 | `x`                              | Confirm cancellation of the whole graph          |
 | `Enter`                          | Submit graph input                               |
 | `Ctrl+r`                         | Refresh and reconcile a rejected draft           |

@@ -1,10 +1,28 @@
 //! Shared accounting for provider turns, including transport and protocol
 //! retries.
 
+use std::fmt;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 
 use crate::OneShotError;
+
+/// Observes every change to one shared provider-call pool, so a host can
+/// persist spending across process restarts.
+///
+/// A charge is reported after a call leaves the pool, including the initial
+/// call held by a reservation. A refund is reported before an unused
+/// reservation returns its call, so a returned call is never charged again
+/// ahead of its refund. Charges minus refunds therefore never exceed the
+/// calls spent, and equal them once accounting is idle.
+/// Implementations must not block; they run inside budget accounting.
+pub trait ProviderCallLedger: Send + Sync {
+    /// One call left the shared pool.
+    fn charged(&self);
+
+    /// One unused reserved call returned to the shared pool.
+    fn refunded(&self);
+}
 
 /// A shared limit on underlying provider turns across cloned requests.
 ///
@@ -13,25 +31,35 @@ use crate::OneShotError;
 #[derive(Clone, Debug)]
 pub struct ProviderCallBudget {
     ceiling: Option<Box<ProviderCallBudget>>,
-    remaining: Arc<AtomicUsize>,
+    pool: Arc<SharedPool>,
     reservation: Option<Arc<ReservedCall>>,
 }
 
 impl ProviderCallBudget {
     /// Creates a budget shared by all clones.
     pub fn new(limit: usize) -> Self {
-        Self {
-            ceiling: None,
-            remaining: Arc::new(AtomicUsize::new(limit)),
-            reservation: None,
-        }
+        Self::from_pool(SharedPool {
+            calls: AtomicUsize::new(limit),
+            ledger: None,
+        })
+    }
+
+    /// Creates a budget whose shared pool reports each charge and refund to
+    /// `ledger`. `remaining` is the credit still available, for example after
+    /// restoring spending recorded before a restart.
+    pub fn with_ledger(remaining: usize, ledger: Arc<dyn ProviderCallLedger>) -> Self {
+        Self::from_pool(SharedPool {
+            calls: AtomicUsize::new(remaining),
+            ledger: Some(ledger),
+        })
     }
 
     /// Returns available shared calls plus this budget's reserved initial call.
     /// Calls reserved by other budgets are unavailable to this budget.
     pub fn remaining(&self) -> usize {
         let remaining = self
-            .remaining
+            .pool
+            .calls
             .load(Ordering::Relaxed)
             .saturating_add(usize::from(
                 self.reservation
@@ -72,7 +100,7 @@ impl ProviderCallBudget {
 
         let mut reserved = Self {
             ceiling: None,
-            remaining: self.remaining.clone(),
+            pool: self.pool.clone(),
             reservation: Some(Arc::new(ReservedCall {
                 available: AtomicBool::new(true),
                 source,
@@ -118,12 +146,20 @@ impl ProviderCallBudget {
         Ok(())
     }
 
+    fn from_pool(pool: SharedPool) -> Self {
+        Self {
+            ceiling: None,
+            pool: Arc::new(pool),
+            reservation: None,
+        }
+    }
+
     /// Incoming chains are flattened before merging so overlapping tails cannot
     /// charge a counter twice. Retain available reserved credit when present.
     fn merge_counter(&mut self, counter: Self) {
         let mut current = self;
         loop {
-            if Arc::ptr_eq(&current.remaining, &counter.remaining) {
+            if Arc::ptr_eq(&current.pool, &counter.pool) {
                 if let Some(reservation) = counter.reservation
                     && reservation.available.load(Ordering::Relaxed)
                     && !current
@@ -153,12 +189,9 @@ impl ProviderCallBudget {
             return Ok(CallSource::Reserved(call.clone()));
         }
 
-        self.remaining
-            .try_update(Ordering::Relaxed, Ordering::Relaxed, |remaining| {
-                remaining.checked_sub(1)
-            })
-            .map(|_| CallSource::Shared(self.remaining.clone()))
-            .map_err(|_| Self::exhausted())
+        self.pool.take()?;
+
+        Ok(CallSource::Shared(self.pool.clone()))
     }
 
     /// Keep exhaustion terminal for commit assistance as well as transport
@@ -168,6 +201,48 @@ impl ProviderCallBudget {
             "Input exceeds the maximum length reduction budget: provider call limit reached; \
              changes are preserved",
         )
+    }
+}
+
+/// One counter shared by every clone, reservation, and ceiling merge.
+struct SharedPool {
+    calls: AtomicUsize,
+    ledger: Option<Arc<dyn ProviderCallLedger>>,
+}
+
+impl SharedPool {
+    /// Debits one call and reports it only after the debit succeeded.
+    fn take(&self) -> Result<(), OneShotError> {
+        self.calls
+            .try_update(Ordering::Relaxed, Ordering::Relaxed, |calls| {
+                calls.checked_sub(1)
+            })
+            .map_err(|_| ProviderCallBudget::exhausted())?;
+        if let Some(ledger) = &self.ledger {
+            ledger.charged();
+        }
+
+        Ok(())
+    }
+
+    /// Reports the refund before the call returns. Crediting first would let
+    /// another owner charge the returned call ahead of its refund, and a
+    /// ledger capped at the limit would then drop that charge.
+    fn refund(&self) {
+        if let Some(ledger) = &self.ledger {
+            ledger.refunded();
+        }
+        self.calls.fetch_add(1, Ordering::Relaxed);
+    }
+}
+
+impl fmt::Debug for SharedPool {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter
+            .debug_struct("SharedPool")
+            .field("calls", &self.calls)
+            .field("has_ledger", &self.ledger.is_some())
+            .finish()
     }
 }
 
@@ -183,9 +258,7 @@ impl Drop for ReservedCall {
         if self.available.load(Ordering::Relaxed) {
             match &self.source {
                 CallSource::Reserved(parent) => parent.available.store(true, Ordering::Relaxed),
-                CallSource::Shared(remaining) => {
-                    remaining.fetch_add(1, Ordering::Relaxed);
-                }
+                CallSource::Shared(pool) => pool.refund(),
             }
         }
     }
@@ -195,7 +268,7 @@ impl Drop for ReservedCall {
 #[derive(Debug)]
 enum CallSource {
     Reserved(Arc<ReservedCall>),
-    Shared(Arc<AtomicUsize>),
+    Shared(Arc<SharedPool>),
 }
 
 #[cfg(test)]

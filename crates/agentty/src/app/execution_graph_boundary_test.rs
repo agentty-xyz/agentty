@@ -21,7 +21,7 @@ use tokio_util::sync::CancellationToken;
 
 use super::{graph, run_request, seed_session, wait_result};
 use crate::app::App;
-use crate::infra::db::Database;
+use crate::infra::db::{Database, DbError, MockGraphRepository};
 use crate::test_support::{new_test_app, new_test_app_with_clients, test_app_clients};
 
 #[tokio::test]
@@ -213,6 +213,25 @@ async fn fresh_graph_utilities_use_the_worker_and_keep_task_history_empty() {
         1
     );
     app.services.wait_for_cleanup_tasks(None).await;
+    // The provider charge outlives the driver, so a relaunch after restart
+    // finds the budget spent instead of replenished.
+    let saved = app
+        .services
+        .db()
+        .graphs()
+        .load_graph("graph", None)
+        .await
+        .expect("graph")
+        .expect("saved graph");
+    assert_eq!(
+        app.services
+            .db()
+            .graphs()
+            .launch_graph(&saved, &BTreeMap::from([("calls".into(), 1)]))
+            .await
+            .expect("relaunch"),
+        BTreeMap::from([("calls".into(), 0)])
+    );
 }
 
 #[tokio::test]
@@ -310,11 +329,8 @@ async fn graph_lifecycle_storage_errors_do_not_signal_or_admit_work() {
     let results = [
         app.execution_graph_progress("graph").await.map(|_| ()),
         app.cancel_api_execution_graph(control.clone()).await,
-        app.resume_api_execution_graph(ResumeExecutionGraphRequest {
-            graph: control,
-            provider_call_limits: BTreeMap::new(),
-        })
-        .await,
+        app.resume_api_execution_graph(ResumeExecutionGraphRequest { graph: control })
+            .await,
         app.continue_api_execution_graph_node(continuation).await,
         app.services
             .validate_graph_session_permissions("sess")
@@ -530,4 +546,40 @@ impl GraphNodeRunner for UnsupportedRunner {
     async fn run(&self, _request: GraphRunRequest) -> Result<String, OneShotError> {
         Err(OneShotError::new("unsupported runner cannot execute"))
     }
+}
+
+#[tokio::test]
+async fn resume_reports_an_unreadable_provider_call_ledger() {
+    // Arrange
+    let (mut app, _directory) = new_test_app().await;
+    let mut repository = MockGraphRepository::new();
+    repository
+        .expect_load_graph()
+        .once()
+        .return_once(|_, _| Ok(Some(graph())));
+    repository.expect_budget_limits().once().return_once(|_| {
+        Err(DbError::InvalidData {
+            entity: "execution graph",
+            reason: "ledger unavailable".into(),
+        })
+    });
+    app.services.set_graph_repository(Arc::new(repository));
+
+    // Act
+    let result = app
+        .resume_api_execution_graph(ResumeExecutionGraphRequest {
+            graph: GraphControlRequest {
+                graph_id: "graph".into(),
+                revision: NonZeroU64::MIN,
+            },
+        })
+        .await;
+
+    // Assert
+    assert!(
+        result
+            .expect_err("ledger read failure")
+            .to_string()
+            .contains("ledger unavailable")
+    );
 }

@@ -52,8 +52,9 @@ flowchart LR
 - Restart restores snapshots and results without dispatching work; resume is explicit.
 - Cancellation is terminal for that graph. Deleting the owning session removes its graph
   records.
-- Revisions are rejected once executions are linked, and provider-call budgets are not
-  durable.
+- Revisions are rejected once executions are linked.
+- Provider-call limits are fixed at first launch and spending is recorded, so a restart
+  never replenishes spent calls.
 
 See [Execution Graphs](@/docs/architecture/execution-graphs.md) for the full contract
 and [the proposal workflow](@/docs/usage/workflow.md#generated-graph-proposals) for

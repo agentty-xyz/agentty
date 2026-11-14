@@ -16,6 +16,7 @@ use ag_worker::{GraphExecutor, GraphNodeRunner, GraphRunRequest, GraphUtilityRun
 use async_trait::async_trait;
 use tokio_util::sync::CancellationToken;
 
+use crate::app::graph_budget::GraphBudgetLedger;
 use crate::app::review_graph::ReviewGraphHost;
 use crate::app::session::SessionTaskService;
 use crate::app::{App, AppServices, SessionRuntimeHandle};
@@ -93,19 +94,6 @@ impl Drop for GraphDriverRegistration {
 }
 
 impl App {
-    /// Prefills retained live limits without replenishing the executor's
-    /// credits.
-    pub(super) fn execution_graph_resume_limits(&self, graph_id: &str) -> String {
-        self.services
-            .graph_drivers
-            .lock()
-            .unwrap_or_else(std::sync::PoisonError::into_inner)
-            .get(graph_id)
-            .map_or_else(String::new, |driver| {
-                serde_json::to_string(&driver.request.provider_call_limits).unwrap_or_default()
-            })
-    }
-
     /// Whether a live driver dispatches the graph's admitted continuations;
     /// otherwise they wait for an explicit resume.
     pub(super) fn has_live_graph_driver(&self, graph_id: &str) -> bool {
@@ -221,9 +209,30 @@ impl App {
             .map_err(|error| ag_session::SessionError::Operation(error.to_string()))?
             .filter(|graph| graph.revision == request.graph.revision)
             .ok_or_else(|| ag_session::SessionError::Operation("Missing or stale graph".into()))?;
+        // Limits were fixed at first launch; the executor resumes from the
+        // credit left after recorded spending.
+        let provider_call_limits = self
+            .services
+            .db()
+            .graphs()
+            .budget_limits(&graph.id)
+            .await
+            .map_err(|error| ag_session::SessionError::Operation(error.to_string()))?;
+        if provider_call_limits.is_empty()
+            && graph
+                .nodes
+                .iter()
+                .any(|node| node.execution.shared_budget_id.is_some())
+        {
+            return Err(ag_session::SessionError::Operation(
+                "This graph ran before provider-call spending was recorded; cancel it and start a \
+                 new one"
+                    .into(),
+            ));
+        }
         self.start_api_execution_graph(StartExecutionGraphRequest {
             graph,
-            provider_call_limits: request.provider_call_limits,
+            provider_call_limits,
         })
         .await
     }
@@ -326,17 +335,7 @@ impl App {
 
             return Ok(());
         }
-        self.services
-            .db()
-            .graphs()
-            .save_graph(&request.graph, None)
-            .await
-            .map_err(|error| invalid(error.to_string()))?;
-        let budgets: HashMap<_, _> = request
-            .provider_call_limits
-            .iter()
-            .map(|(id, limit)| (id.clone(), ProviderCallBudget::new(*limit)))
-            .collect();
+        let budgets = self.services.launch_graph_budgets(&request).await?;
         let executor = GraphExecutor::new(
             self.services.db().graph_dispatch(),
             Arc::new(self.services.graph_resources.with_budgets(budgets)),
@@ -430,6 +429,42 @@ impl AppServices {
             .map_err(|error| invalid(format!("Invalid session permissions: {error}")))?;
 
         Ok(())
+    }
+
+    /// Saves the launch and opens its ledgered budgets from the credit the
+    /// store has left.
+    ///
+    /// # Errors
+    /// Rejects the launch when it cannot be saved, and while a stopped driver
+    /// of the same graph still holds spending the store has not recorded,
+    /// because the stored credit would hand those calls back.
+    async fn launch_graph_budgets(
+        &self,
+        request: &StartExecutionGraphRequest,
+    ) -> Result<HashMap<String, ProviderCallBudget>, ag_session::SessionError> {
+        let graph_id = &request.graph.id;
+        if self.graph_budget_writers.has_unrecorded_spending(graph_id) {
+            return Err(ag_session::SessionError::Operation(
+                "Earlier provider-call spending for this graph is not recorded yet; resume it \
+                 again shortly"
+                    .into(),
+            ));
+        }
+        let remaining = self
+            .db()
+            .graphs()
+            .launch_graph(&request.graph, &request.provider_call_limits)
+            .await
+            .map_err(|error| ag_session::SessionError::Operation(error.to_string()))?;
+
+        Ok(remaining
+            .into_iter()
+            .map(|(id, calls)| {
+                let budget = GraphBudgetLedger::budget(self, graph_id, &id, calls);
+
+                (id, budget)
+            })
+            .collect())
     }
 
     /// Retains a launch's executor and budgets across dispatch exits. Only an

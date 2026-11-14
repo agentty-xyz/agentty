@@ -88,9 +88,6 @@ impl App {
         view.graphs = definitions;
         view.is_proposal_selected = is_proposal_selected;
         view.proposal = proposal;
-        view.resume_limits = view.graph().map_or_else(String::new, |graph| {
-            self.execution_graph_resume_limits(&graph.id)
-        });
         view.progress = progress;
         view.outputs = outputs;
 
@@ -158,14 +155,9 @@ impl App {
             GraphViewAction::Cancel if view.can_cancel() => {
                 SessionMutation::CancelExecutionGraph { request: control }
             }
-            GraphViewAction::Resume(text) if view.can_resume() => {
-                SessionMutation::ResumeExecutionGraph {
-                    request: ResumeExecutionGraphRequest {
-                        graph: control,
-                        provider_call_limits: view.parse_budgets(&text)?,
-                    },
-                }
-            }
+            GraphViewAction::Resume if view.can_resume() => SessionMutation::ResumeExecutionGraph {
+                request: ResumeExecutionGraphRequest { graph: control },
+            },
             GraphViewAction::Continue(kind)
                 if match &kind {
                     GraphNodeContinuation::Retry => view.can_retry(),
@@ -207,7 +199,6 @@ impl App {
         match editor.kind {
             GraphEditKind::Cancel if text == "cancel" => Ok(GraphViewAction::Cancel),
             GraphEditKind::Cancel => Err("Type cancel to confirm graph cancellation".into()),
-            GraphEditKind::Resume => Ok(GraphViewAction::Resume(text.to_string())),
             GraphEditKind::Reply if !text.is_empty() => {
                 Ok(GraphViewAction::Continue(GraphNodeContinuation::Reply {
                     attachments: Vec::new(),
@@ -223,7 +214,7 @@ pub(crate) enum GraphViewAction {
     Accept,
     Cancel,
     Continue(GraphNodeContinuation),
-    Resume(String),
+    Resume,
 }
 
 #[cfg(test)]

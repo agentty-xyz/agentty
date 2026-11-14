@@ -7,9 +7,9 @@ use ag_contracts::{AgentRequestKind, MockAgentChannel, TurnResult};
 use ag_git::MockGitClient;
 use ag_protocol::{AgentResponse, QuestionItem, TurnPrompt};
 use ag_session::{
-    ContinueGraphNodeRequest, ExecutionGraphProgress, ExecutionGraphStatus, GraphBlockedReason,
-    GraphControlRequest, GraphNodeContinuation, GraphNodeStatus, GraphQuestionAnswer,
-    ResumeExecutionGraphRequest, StartExecutionGraphRequest,
+    ContinueGraphNodeRequest, ExecutionGraph, ExecutionGraphProgress, ExecutionGraphStatus,
+    GraphBlockedReason, GraphControlRequest, GraphNodeContinuation, GraphNodeStatus,
+    GraphQuestionAnswer, ResumeExecutionGraphRequest, StartExecutionGraphRequest,
 };
 use ag_worker::SessionRunClient;
 use tokio::sync::{mpsc, watch};
@@ -122,7 +122,15 @@ async fn graph_lifecycle_api_routes_clarification_into_an_isolated_new_attempt()
     .await
     .expect("initial provider handoff");
     assert_eq!(first.request_kind, AgentRequestKind::SessionStart);
-    assert_eq!(app.execution_graph_resume_limits("graph"), r#"{"calls":2}"#);
+    assert_eq!(
+        app.services
+            .db()
+            .graphs()
+            .budget_limits("graph")
+            .await
+            .expect("limits"),
+        BTreeMap::from([("calls".to_string(), 2)])
+    );
     assert!(first.continuation.replay_transcript().is_none());
     let question = wait_for_status(&mut app, GraphNodeStatus::AwaitingAnswers).await;
     let action = ContinueGraphNodeRequest {
@@ -265,10 +273,11 @@ async fn graph_lifecycle_resume_is_explicit_and_cancellation_is_terminal() {
     let _consumer = app.sessions.foreground_consumer();
     let mut snapshot = graph();
     snapshot.nodes.truncate(1);
+    // A restored graph whose recorded spending exhausted its fixed limit.
     app.services
         .db()
         .graphs()
-        .save_graph(&snapshot, None)
+        .launch_graph(&snapshot, &BTreeMap::from([("calls".into(), 0)]))
         .await
         .expect("durable unstarted graph");
     let control = GraphControlRequest {
@@ -304,7 +313,6 @@ async fn graph_lifecycle_resume_is_explicit_and_cancellation_is_terminal() {
     );
     let resume = ResumeExecutionGraphRequest {
         graph: control.clone(),
-        provider_call_limits: BTreeMap::from([("calls".into(), 0)]),
     };
     app.drive_session_request(service.resume_execution_graph(resume.clone()))
         .await
@@ -323,13 +331,7 @@ async fn graph_lifecycle_resume_is_explicit_and_cancellation_is_terminal() {
             .blocked
             .contains(&GraphBlockedReason::BudgetExhausted("calls".into()))
     );
-    let mut refilled = resume.clone();
-    refilled.provider_call_limits.insert("calls".into(), 2);
-    assert!(
-        app.drive_session_request(service.resume_execution_graph(refilled))
-            .await
-            .is_err()
-    );
+    assert_graph_without_ledger_cannot_resume(&mut app, &snapshot).await;
     let mut stale = resume.clone();
     stale.graph.revision = NonZeroU64::new(2).expect("revision");
     assert!(
@@ -388,4 +390,32 @@ async fn wait_progress(
         }
         wake.changed().await.expect("settlement wake");
     }
+}
+
+/// A graph saved before durable budgets has no recorded limits to resume.
+async fn assert_graph_without_ledger_cannot_resume(app: &mut App, snapshot: &ExecutionGraph) {
+    let mut legacy = snapshot.clone();
+    legacy.id = "legacy".into();
+    app.services
+        .db()
+        .graphs()
+        .save_graph(&legacy, None)
+        .await
+        .expect("graph saved before durable budgets");
+    let service = app.session_service();
+    let resumed = app
+        .drive_session_request(service.resume_execution_graph(ResumeExecutionGraphRequest {
+            graph: GraphControlRequest {
+                graph_id: "legacy".into(),
+                revision: snapshot.revision,
+            },
+        }))
+        .await;
+
+    assert!(
+        resumed
+            .expect_err("no recorded limits")
+            .to_string()
+            .contains("before provider-call spending was recorded")
+    );
 }

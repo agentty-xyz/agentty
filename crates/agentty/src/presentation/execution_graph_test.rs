@@ -1,4 +1,3 @@
-use std::collections::BTreeMap;
 use std::num::NonZeroU64;
 
 use ag_protocol::{ProtocolRequestProfile, QuestionItem, TurnPrompt};
@@ -444,42 +443,6 @@ fn change_view(changed: &mut GraphView, scenario: &str) {
 }
 
 #[test]
-fn resume_budgets_require_exact_names_and_positive_limits() {
-    // Arrange
-    let view = graph_view();
-
-    // Act / Assert
-    assert_eq!(
-        view.parse_budgets(r#"{"calls":3}"#),
-        view.parse_budgets("calls=3")
-    );
-    for text in ["{", r#"{"calls":0}"#, r#"{"extra":2}"#] {
-        assert!(view.parse_budgets(text).is_err());
-    }
-    assert_eq!(
-        view.parse_budgets("calls=3"),
-        Ok(BTreeMap::from([("calls".into(), 3)]))
-    );
-    for text in [
-        "calls",
-        "calls=0",
-        "calls=-1",
-        "calls=no",
-        "calls=1 calls=2",
-        "other=2",
-        "",
-        "calls=2 extra=3",
-    ] {
-        assert!(view.parse_budgets(text).is_err(), "{text}");
-    }
-    let mut no_budgets = view;
-    for node in &mut no_budgets.graphs[0].nodes {
-        node.execution.shared_budget_id = None;
-    }
-    assert_eq!(no_budgets.parse_budgets(""), Ok(BTreeMap::new()));
-}
-
-#[test]
 fn ordinary_static_review_nodes_keep_generic_lifecycle_controls() {
     // Arrange
     let mut view = graph_view();
@@ -515,9 +478,7 @@ fn draft_reconciliation_preserves_the_original_graph_and_execution() {
         "missing-graph",
         "no-editor",
         "cancel",
-        "resume",
         "cancelled",
-        "running-resume",
     ] {
         let mut source = original.clone();
         let mut current = original.clone();
@@ -553,18 +514,11 @@ fn draft_reconciliation_preserves_the_original_graph_and_execution() {
                         ExecutionGraphStatus::Cancelled;
                 }
             }
-            "resume" | "running-resume" => {
-                source.editor.as_mut().expect("editor").kind = GraphEditKind::Resume;
-                if scenario == "running-resume" {
-                    current.progress.as_mut().expect("progress").status =
-                        ExecutionGraphStatus::Running;
-                }
-            }
             _ => {}
         }
         assert_eq!(
             source.can_reconcile_editor(&current),
-            matches!(scenario, "same" | "other-branch" | "cancel" | "resume"),
+            matches!(scenario, "same" | "other-branch" | "cancel"),
             "{scenario}"
         );
     }

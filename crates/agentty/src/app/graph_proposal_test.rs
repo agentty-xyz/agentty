@@ -304,14 +304,46 @@ async fn graph_proposal_public_api_uses_worker_then_launches_only_after_approval
             .await
             .is_err()
     );
+    assert_restored_graph_resumes(&mut app, &state, graph_id).await;
+}
+
+/// A restart drops the live driver; the approval's fixed limits and the
+/// recorded spending let the executed graph resume without new credit.
+async fn assert_restored_graph_resumes(
+    app: &mut crate::app::App,
+    state: &GraphProposalState,
+    graph_id: &str,
+) {
     app.services.stop_graph_drivers(None);
-    if let GraphProposalVersionOutcome::Generated {
-        launch: Some(launch),
-        ..
-    } = &state.version.outcome
-    {
-        assert!(app.validate_proposal_launch(launch).await.is_err());
+    let launch = match &state.version.outcome {
+        GraphProposalVersionOutcome::Generated { launch, .. } => launch.clone(),
+        _ => None,
     }
+    .expect("resolved preview");
+    app.validate_proposal_launch(&launch)
+        .await
+        .expect("restored approval");
+    app.services.wait_for_cleanup_tasks(None).await;
+    let remaining = app
+        .services
+        .db()
+        .graphs()
+        .launch_graph(&launch.graph, &launch.provider_call_limits)
+        .await
+        .expect("recorded spending");
+    // The scripted provider never charges, so every reserved call returned.
+    assert_eq!(remaining, launch.provider_call_limits);
+    let service = app.session_service();
+    app.drive_session_request(service.resume_execution_graph(
+        ag_session::ResumeExecutionGraphRequest {
+            graph: ag_session::GraphControlRequest {
+                graph_id: graph_id.into(),
+                revision: std::num::NonZeroU64::MIN,
+            },
+        },
+    ))
+    .await
+    .expect("resume after restart");
     app.services.wait_for_cleanup_tasks(None).await;
 }
 

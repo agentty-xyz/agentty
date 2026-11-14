@@ -12,6 +12,7 @@ mod core;
 mod diff_prompt;
 mod error;
 mod execution_graph;
+mod graph_budget;
 mod graph_chat;
 mod graph_node_reply;
 mod graph_output_decision;

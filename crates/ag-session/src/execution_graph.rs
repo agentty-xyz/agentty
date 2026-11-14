@@ -26,8 +26,9 @@ pub use node::{
 };
 pub use proposal::{GraphProposalLimits, GraphProposalResolution};
 pub use proposal_state::{
-    GenerateGraphProposalRequest, GraphProposalAction, GraphProposalApproval, GraphProposalState,
-    GraphProposalVersion, GraphProposalVersionOutcome,
+    GenerateGraphProposalRequest, GraphProposalAction, GraphProposalApproval,
+    GraphProposalReplyOutcome, GraphProposalState, GraphProposalVersion,
+    GraphProposalVersionOutcome,
 };
 pub use result::{
     GraphExecutionRef, GraphResolvedInput, GraphResult, GraphResultRef, GraphResultState,

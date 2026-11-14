@@ -96,6 +96,17 @@ pub enum GraphProposalVersionOutcome {
     Failed(String),
 }
 
+/// First decision recorded for a chat reply to one proposal version.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum GraphProposalReplyOutcome {
+    /// Approve the exact replied-to version and start execution.
+    Approve,
+    /// Discard the proposal permanently.
+    Cancel,
+    /// Regenerate with the reply as answers or feedback.
+    Revise,
+}
+
 /// Receipt for one exact-version approval, separate from output acceptance.
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
 pub struct GraphProposalApproval {

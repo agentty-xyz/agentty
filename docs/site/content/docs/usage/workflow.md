@@ -72,10 +72,15 @@ it and the waiting node starts; anything else goes to the producing node as revi
 guidance. When unsure, it revises, and a reply with images always revises. A node that
 has no task conversation, or whose output a started dependent already consumed, cannot
 be revised, so chat can only accept its output. Resume a paused graph from `w` first.
-Use `w` for other execution controls. Duplicate approval returns its receipt without
-launching again. Pending previews survive restart; reply to regenerate an interrupted
-generation. Graphs that executed before restart cannot recreate spent provider credits
-and therefore cannot resume through proposal approval.
+Use `w` for other execution controls.
+
+Duplicate approval returns its receipt without launching again. Pending previews survive
+restart; reply to regenerate an interrupted generation. Each chat reply to a pending
+proposal is saved with its first decision, so a reply interrupted by a restart or a
+project switch is decided or applied when the session loads again; stopping the session
+abandons an undecided reply instead. Only the reply text is saved, so a reply recovered
+this way acts without its images. Approved graphs keep the limits fixed at approval and
+resume after restart from the provider calls they have left.
 
 ## Execution Graph Inspector
 
@@ -101,10 +106,10 @@ to scroll longer reasons.
 
 Use `t` to retry a failed node, `s` to resume paused dispatch, and `x` to cancel the
 whole graph. Retry and answers record intent; they do not resume a stopped driver.
-Resuming after restart requires explicit provider-call limits for the displayed budget
-names (`calls=10` or `{"calls":10}`, for example). A retained live driver prefills its
-original limits and keeps its remaining credits. Cancellation requires typing `cancel`
-and permanently closes that graph. Nothing automatically replays on restart.
+Provider-call limits are fixed when a graph first launches, and every call it spends is
+recorded. Resuming, including after a restart, continues from the calls that remain; a
+node whose budget is spent stays blocked. Cancellation requires typing `cancel` and
+permanently closes that graph. Nothing automatically replays on restart.
 
 Focused-review graphs can be inspected and canceled here. Use the session's existing
 regenerate-review action to start a new review generation with its checkpoints; generic

@@ -4,11 +4,18 @@ use std::fmt::Write as _;
 use std::path::PathBuf;
 
 use ag_protocol::GraphProposalOutcome;
-use ag_session::{AgentSelection, GraphProposalState, GraphProposalVersionOutcome};
+use ag_session::{
+    AgentSelection, GraphProposalReplyOutcome, GraphProposalState, GraphProposalVersionOutcome,
+};
 use ag_worker::RunClient;
 use askama::Template;
+use tracing::warn;
 
 use crate::app::graph_reply_decision;
+use crate::domain::agent::{ReasoningLevel, SpeedMode};
+
+/// Provider calls one decision may spend, including transport retries.
+const DECISION_PROVIDER_CALLS: usize = 3;
 
 /// Askama view model whose inputs are already JSON-encoded strings.
 #[derive(Template)]
@@ -16,17 +23,6 @@ use crate::app::graph_reply_decision;
 struct GraphProposalReplyDecisionPromptTemplate<'a> {
     proposal: &'a str,
     reply: &'a str,
-}
-
-/// Proposal action a chat reply resolves to.
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub(crate) enum GraphProposalReply {
-    /// Approve the exact inspected version and start execution.
-    Approve,
-    /// Discard the proposal permanently.
-    Cancel,
-    /// Regenerate with the reply as answers or feedback.
-    Revise,
 }
 
 /// Inputs for deciding what a reply means for one inspected proposal.
@@ -65,20 +61,43 @@ impl GraphProposalReplyDecision {
     /// failures, unparsable output, unknown words, and approval of a version
     /// without a resolved preview revise the proposal, so a graph never runs
     /// or disappears on an uncertain decision.
-    pub(crate) async fn decide(&self, run_client: &dyn RunClient) -> GraphProposalReply {
-        let reply = graph_reply_decision::decide(
-            run_client,
-            self.agent,
-            &self.folder,
-            self.prompt(),
-            "graph proposal",
-            Self::parse,
-        )
-        .await
-        .unwrap_or(GraphProposalReply::Revise);
+    pub(crate) async fn decide(&self, run_client: &dyn RunClient) -> GraphProposalReplyOutcome {
+        let submission = run_client
+            .submit(ag_contracts::OneShotRequest {
+                activity_tx: None,
+                attachments: Vec::new(),
+                child_pid: None,
+                execution_policy: ag_contracts::ExecutionPolicy::default(),
+                folder: self.folder.clone(),
+                harness: self.agent.kind().to_string(),
+                model: self.agent.model().as_str().to_string(),
+                permission_mode: ag_contracts::PermissionMode::ReadOnly,
+                prompt: self.prompt(),
+                provider_call_budget: Some(ag_contracts::ProviderCallBudget::new(
+                    DECISION_PROVIDER_CALLS,
+                )),
+                reasoning_level: ReasoningLevel::default(),
+                request_kind: ag_contracts::AgentRequestKind::UtilityPrompt,
+                speed_mode: SpeedMode::Normal,
+            })
+            .await;
+        let answer = match submission {
+            Ok(submission) => submission.response.to_answer_display_text(),
+            Err(error) => {
+                warn!(error = %error, "graph proposal reply decision failed; revising");
 
-        if reply == GraphProposalReply::Approve && !self.can_approve {
-            return GraphProposalReply::Revise;
+                return GraphProposalReplyOutcome::Revise;
+            }
+        };
+        let reply = Self::parse(&answer).unwrap_or_else(|| {
+            let answer_bytes = answer.len();
+            warn!(answer_bytes, "unknown graph proposal decision; revising");
+
+            GraphProposalReplyOutcome::Revise
+        });
+
+        if reply == GraphProposalReplyOutcome::Approve && !self.can_approve {
+            return GraphProposalReplyOutcome::Revise;
         }
 
         reply
@@ -99,11 +118,11 @@ impl GraphProposalReplyDecision {
     }
 
     /// Accepts only the three contract words.
-    fn parse(answer: &str) -> Option<GraphProposalReply> {
+    fn parse(answer: &str) -> Option<GraphProposalReplyOutcome> {
         match graph_reply_decision::contract_word(answer).as_str() {
-            "approve" => Some(GraphProposalReply::Approve),
-            "cancel" => Some(GraphProposalReply::Cancel),
-            "revise" => Some(GraphProposalReply::Revise),
+            "approve" => Some(GraphProposalReplyOutcome::Approve),
+            "cancel" => Some(GraphProposalReplyOutcome::Cancel),
+            "revise" => Some(GraphProposalReplyOutcome::Revise),
             _ => None,
         }
     }

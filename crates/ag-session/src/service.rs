@@ -167,7 +167,8 @@ pub trait SessionBackend: Send + Sync {
     }
 
     /// Saves and starts a static graph. Existing admitted nodes are never
-    /// replayed. Named budgets are shared within this graph's live driver.
+    /// replayed. Named budgets are fixed at first launch and their spending is
+    /// recorded durably, so relaunching never replenishes them.
     async fn start_execution_graph(
         &self,
         request: StartExecutionGraphRequest,
@@ -446,7 +447,8 @@ impl SessionService {
     /// Resumes dispatch explicitly; failed nodes still require a new action.
     ///
     /// # Errors
-    /// Rejects canceled/stale graphs, invalid limits, or ineligible sessions.
+    /// Rejects canceled/stale graphs, graphs without recorded launch limits,
+    /// or ineligible sessions.
     pub async fn resume_execution_graph(
         &self,
         request: crate::ResumeExecutionGraphRequest,
