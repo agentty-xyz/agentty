@@ -160,14 +160,34 @@ fn parse_graph_proposal_response(raw: &str) -> Result<AgentResponse, String> {
 }
 
 /// Retains utility wrapper recovery while enforcing the narrow wire fields.
+///
+/// Some models serialize a whole wire object into `answer`, producing
+/// `{"answer":"{\"answer\":\"...\"}"}`. Such self-wrapped answers are
+/// unwrapped so callers receive only the requested result text.
 fn parse_utility_response(raw: &str) -> Result<UtilityResponse, serde_json::Error> {
     let candidate = strip_markdown_code_fence(raw)
         .or_else(|| find_embedded_code_fence_content(raw))
         .unwrap_or(raw);
     let value = serde_json::from_str::<Value>(candidate)
         .or_else(|error| find_last_embedded_json_value(candidate).ok_or(error))?;
+    let mut response = serde_json::from_value::<UtilityResponse>(value)?;
+    while let Some(nested_response) = parse_self_wrapped_utility_answer(&response.answer) {
+        response = nested_response;
+    }
 
-    serde_json::from_value(value)
+    Ok(response)
+}
+
+/// Parses one utility `answer` as a nested wire object, if it is one.
+///
+/// Only JSON objects qualify, so JSON-looking answers such as one-element
+/// arrays keep their original text instead of being read as the one-field
+/// wire struct.
+fn parse_self_wrapped_utility_answer(answer: &str) -> Option<UtilityResponse> {
+    serde_json::from_str::<Value>(answer.trim())
+        .ok()
+        .filter(Value::is_object)
+        .and_then(|value| serde_json::from_value(value).ok())
 }
 
 /// Builds one multi-line debug report for a protocol parsing failure.

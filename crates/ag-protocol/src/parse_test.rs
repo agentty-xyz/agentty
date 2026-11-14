@@ -638,6 +638,37 @@ fn utility_profiles_validate_direct_wire_objects_before_normalizing() {
 }
 
 #[test]
+/// Utility answers that serialize another wire object are unwrapped to the
+/// innermost result text, while other JSON-looking answers, including
+/// one-element arrays, stay verbatim.
+fn utility_profile_unwraps_self_wrapped_answers() {
+    // Arrange
+    let inner = r#"{"answer":"Remove FYI page\n\n- Delete the module"}"#;
+    let single_wrapped = serde_json::json!({ "answer": inner }).to_string();
+    let double_wrapped = serde_json::json!({ "answer": format!(" {single_wrapped} ") }).to_string();
+    let other_json = serde_json::json!({ "answer": r#"{"answer":"x","extra":1}"# }).to_string();
+    let array_json = serde_json::json!({ "answer": r#"["hello"]"# }).to_string();
+
+    // Act
+    let single =
+        parse_protocol_response_strict(&single_wrapped, ProtocolRequestProfile::UtilityPrompt)
+            .expect("single-wrapped utility answer");
+    let double =
+        parse_protocol_response_strict(&double_wrapped, ProtocolRequestProfile::UtilityPrompt)
+            .expect("double-wrapped utility answer");
+    let other = parse_protocol_response_strict(&other_json, ProtocolRequestProfile::UtilityPrompt)
+        .expect("JSON-looking utility answer");
+    let array = parse_protocol_response_strict(&array_json, ProtocolRequestProfile::UtilityPrompt)
+        .expect("JSON array utility answer");
+
+    // Assert
+    assert_eq!(single.answer, "Remove FYI page\n\n- Delete the module");
+    assert_eq!(double.answer, "Remove FYI page\n\n- Delete the module");
+    assert_eq!(other.answer, r#"{"answer":"x","extra":1}"#);
+    assert_eq!(array.answer, r#"["hello"]"#);
+}
+
+#[test]
 fn utility_wrapper_recovery_still_rejects_unexpected_fields() {
     // Arrange
     let payload = r#"{"answer":"Done"}"#;
