@@ -494,7 +494,7 @@ async fn test_project_sync_non_modal() {
                     ))
                     .capture_labeled(
                         "sync_status_expired",
-                        "The status bar returns to its normal page hint",
+                        "The status bar clears the sync status",
                     )
             },
             |frame, report| {
@@ -556,9 +556,8 @@ fn assert_project_sync_non_modal(
     frame: &testty::frame::TerminalFrame,
     report: &testty::proof::report::ProofReport,
 ) -> Result<(), &'static str> {
-    let full = Region::full(frame.cols(), frame.rows());
     assertion::assert_not_visible(frame, "Synced zeta-project/main");
-    assertion::assert_text_in_region(frame, "FYI:", &full);
+    assertion::assert_not_visible(frame, "Syncing zeta-project/main");
     assertion::assert_not_visible(frame, "Sync complete");
 
     let complete_capture = report

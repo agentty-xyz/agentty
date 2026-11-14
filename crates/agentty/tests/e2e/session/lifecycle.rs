@@ -1327,6 +1327,9 @@ async fn session_open_and_return_to_list() -> E2eResult {
                     .compose(&common::create_session_and_return_to_list())
                     .viewing_pause_ms(1500)
                     .compose(&common::open_selected_session_view())
+                    // The stub agent's failed turn settles asynchronously;
+                    // wait for the review footer so captures never race it.
+                    .wait_for_text("Enter: reply", 10000)
                     .viewing_pause_ms(2000)
                     .capture_labeled("session_view", "Session view after Enter")
                     .compose(&common::return_to_session_list())
@@ -1342,6 +1345,7 @@ async fn session_open_and_return_to_list() -> E2eResult {
 
                     let full = Region::full(frame.cols(), frame.rows());
                     assertion::assert_text_in_region(frame, "test", &full);
+                    assertion::assert_text_in_region(frame, "Review", &full);
                 })
             },
         )

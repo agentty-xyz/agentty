@@ -81,54 +81,6 @@ fn foreground_symbol_cell_count(buffer: &ratatui::buffer::Buffer, symbol: &str) 
 }
 
 #[test]
-fn test_status_bar_fyi_rotates_between_session_list_messages() {
-    // Arrange
-
-    // Act
-    let first_message =
-        crate::ui::page::fyi::rotating_message(crate::ui::page::fyi::session_list_messages(), 0);
-    let second_message =
-        crate::ui::page::fyi::rotating_message(crate::ui::page::fyi::session_list_messages(), 1);
-    let third_message =
-        crate::ui::page::fyi::rotating_message(crate::ui::page::fyi::session_list_messages(), 2);
-    let fourth_message =
-        crate::ui::page::fyi::rotating_message(crate::ui::page::fyi::session_list_messages(), 3);
-    let fifth_message =
-        crate::ui::page::fyi::rotating_message(crate::ui::page::fyi::session_list_messages(), 4);
-    let wrapped_message =
-        crate::ui::page::fyi::rotating_message(crate::ui::page::fyi::session_list_messages(), 5);
-
-    // Assert
-    assert_eq!(
-        first_message,
-        Some("Use list sync before starting work when you need the newest base branch.")
-    );
-    assert_eq!(
-        second_message,
-        Some("Sessions are grouped as merge queue, active work, then archive."),
-    );
-    assert_eq!(
-        third_message,
-        Some("Session timers count active agent work and freeze between turns.")
-    );
-    assert_eq!(
-        fourth_message,
-        Some("Forge badges show whether review requests are open, merged, or closed.")
-    );
-    assert_eq!(
-        fifth_message,
-        Some(
-            "Session launch configurations run through tmux and use the configured Settings \
-             entries."
-        )
-    );
-    assert_eq!(
-        wrapped_message,
-        Some("Use list sync before starting work when you need the newest base branch.")
-    );
-}
-
-#[test]
 fn test_table_column_spacing_is_wider_for_readability() {
     // Arrange
     let expected_spacing = 2;

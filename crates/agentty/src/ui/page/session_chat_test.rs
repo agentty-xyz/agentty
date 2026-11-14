@@ -309,25 +309,6 @@ fn test_render_in_progress_session_shows_sync_and_stop_footer_actions() {
 }
 
 #[test]
-fn test_status_bar_fyi_rotates_between_session_chat_messages() {
-    // Arrange
-    let actual_messages = crate::ui::page::fyi::session_chat_messages();
-
-    // Act
-    let wrapped_message = crate::ui::page::fyi::rotating_message(
-        actual_messages,
-        u64::try_from(actual_messages.len()).unwrap_or_default(),
-    );
-
-    // Assert
-    assert_eq!(actual_messages.len(), 9);
-    assert_eq!(
-        wrapped_message,
-        Some("Queued replies run one by one after the active turn finishes.")
-    );
-}
-
-#[test]
 fn test_rendered_output_line_count_counts_wrapped_content() {
     // Arrange
     let mut session = session_fixture();

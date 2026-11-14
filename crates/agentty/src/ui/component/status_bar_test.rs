@@ -1,6 +1,6 @@
 use super::StatusBar;
 use crate::app::{ProjectSyncPhase, ProjectSyncStatus, UpdateStatus};
-use crate::ui::{Component, page};
+use crate::ui::Component;
 
 fn project_sync_status(phase: ProjectSyncPhase) -> ProjectSyncStatus {
     ProjectSyncStatus {
@@ -65,34 +65,11 @@ fn test_status_bar_render_shows_current_version_without_update() {
 }
 
 #[test]
-fn test_status_bar_render_shows_rotating_page_fyi_prefix() {
+fn test_status_bar_render_shows_running_project_sync() {
     // Arrange
     let backend = ratatui::backend::TestBackend::new(120, 1);
     let mut terminal = ratatui::Terminal::new(backend).expect("failed to create terminal");
     let status_bar = StatusBar::new("v0.1.12".to_string())
-        .page_fyis(Some(page::fyi::session_list_messages()))
-        .fyi_rotation_index(1);
-
-    // Act
-    terminal
-        .draw(|frame| {
-            let area = frame.area();
-            Component::render(&status_bar, frame, area);
-        })
-        .expect("failed to draw");
-
-    // Assert
-    let text = buffer_text(&terminal);
-    assert!(text.contains("FYI: Sessions are grouped as merge queue, active work, then archive."));
-}
-
-#[test]
-fn test_status_bar_render_prioritizes_running_project_sync_over_page_fyi() {
-    // Arrange
-    let backend = ratatui::backend::TestBackend::new(120, 1);
-    let mut terminal = ratatui::Terminal::new(backend).expect("failed to create terminal");
-    let status_bar = StatusBar::new("v0.1.12".to_string())
-        .page_fyis(Some(page::fyi::session_list_messages()))
         .project_sync_status(Some(project_sync_status(ProjectSyncPhase::Running)));
 
     // Act
@@ -105,8 +82,7 @@ fn test_status_bar_render_prioritizes_running_project_sync_over_page_fyi() {
 
     // Assert
     let text = buffer_text(&terminal);
-    assert!(text.contains("Syncing agentty/main..."));
-    assert!(!text.contains("FYI:"));
+    assert!(text.contains("Agentty v0.1.12 | Syncing agentty/main..."));
 }
 
 #[test]
@@ -241,32 +217,6 @@ fn test_status_bar_render_shows_update_complete() {
     let text = buffer_text(&terminal);
     assert!(text.contains("Updated to v0.1.13"));
     assert!(text.contains("restart to use new version"));
-}
-
-#[test]
-fn test_status_bar_render_keeps_update_state_visible_with_page_fyi() {
-    // Arrange
-    let backend = ratatui::backend::TestBackend::new(180, 1);
-    let mut terminal = ratatui::Terminal::new(backend).expect("failed to create terminal");
-    let status_bar = StatusBar::new("v0.1.12".to_string())
-        .page_fyis(Some(page::fyi::session_chat_messages()))
-        .fyi_rotation_index(0)
-        .update_status(Some(UpdateStatus::Complete {
-            version: "v0.1.13".to_string(),
-        }));
-
-    // Act
-    terminal
-        .draw(|frame| {
-            let area = frame.area();
-            Component::render(&status_bar, frame, area);
-        })
-        .expect("failed to draw");
-
-    // Assert
-    let text = buffer_text(&terminal);
-    assert!(text.contains("Updated to v0.1.13"));
-    assert!(text.contains("FYI: Queued replies run one by one after the active turn finishes."));
 }
 
 #[test]

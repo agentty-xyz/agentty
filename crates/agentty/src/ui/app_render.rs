@@ -64,7 +64,6 @@ pub(crate) fn render_app(
             settings_screen: snapshot.settings_screen.as_ref(),
             stats_activity: snapshot.stats_activity,
             sessions: snapshot.sessions,
-            status_bar_fyi_rotation_index: snapshot.status_bar_fyi_rotation_index,
             table_state: session_table_state,
             graph_chat: snapshot.graph_chat,
             working_dir: snapshot.working_dir,

@@ -16,7 +16,7 @@ use crate::domain::session::{DailyActivity, Session, SessionId};
 use crate::presentation::app_mode::{AppMode, ConfirmationViewMode, HelpContext};
 use crate::presentation::frame_time::FrameTime;
 use crate::presentation::graph_chat::GraphChatSnapshot;
-use crate::ui::{RenderCacheStore, component, layout, page, router};
+use crate::ui::{RenderCacheStore, component, layout, router};
 
 /// Focused-review display state projected from the app cache for one visible
 /// session.
@@ -105,8 +105,6 @@ pub struct RenderContext<'a> {
     pub sessions: &'a [Session],
     /// Daily session activity series used by dashboard activity summaries.
     pub stats_activity: &'a [DailyActivity],
-    /// Absolute one-minute rotation slot used for page-scoped status-bar FYIs.
-    pub status_bar_fyi_rotation_index: u64,
     /// Table selection state for the session list.
     pub table_state: &'a mut TableState,
     /// Background auto-update progress state for the status bar.
@@ -173,11 +171,6 @@ pub fn render(f: &mut Frame, context: RenderContext<'_>) {
                 .latest_available_version
                 .map(std::string::ToString::to_string),
         )
-        .page_fyis(page::fyi::current_page_messages(
-            context.current_tab,
-            context.mode,
-        ))
-        .fyi_rotation_index(context.status_bar_fyi_rotation_index)
         .project_sync_status(context.project_sync_status.cloned())
         .update_status(context.update_status.cloned())
         .render(f, status_bar_area);
