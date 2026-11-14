@@ -10,7 +10,7 @@ use crate::domain::agent::{
     AgentKind, AgentModel, AgentSelection, HarnessModelOption, HarnessModelStatus,
 };
 use crate::domain::harness::HarnessModelCatalog;
-use crate::domain::session::SessionId;
+use crate::domain::session::{SessionId, Status};
 use crate::infra::browser::MockBrowserClient;
 use crate::presentation::app_mode::AppMode;
 use crate::presentation::chatgpt_sign_in::ChatGptSignInPhase;
@@ -192,6 +192,55 @@ async fn successful_sign_in_reports_a_model_switch_that_failed() {
                       `chatgpt/gpt-6-sol` failed. Pick it again with /model."
                 .to_string(),
         }
+    );
+}
+
+#[tokio::test]
+async fn successful_sign_in_defers_the_model_switch_while_the_session_runs() {
+    // Arrange
+    let outcome = ChatGptSignInOutcome {
+        email: Some("ada@example.com".to_string()),
+    };
+    let (mut app, _base_dir, session_id) =
+        sign_in_app(ScriptedSignIn::Finish(Ok(outcome)), 1).await;
+    let initial_agent = app
+        .sessions
+        .session_for_id(&session_id)
+        .map(|session| session.agent);
+    *app.sessions
+        .session_handles()
+        .get(session_id.as_str())
+        .expect("session handles")
+        .status
+        .lock()
+        .expect("status lock") = Status::InProgress;
+    app.sessions.sync_session_from_handle(&session_id);
+    open_popup(&mut app, &session_id, "draft");
+
+    // Act
+    app.start_chatgpt_sign_in();
+    reduce_until_finished(&mut app).await;
+
+    // Assert
+    assert_eq!(
+        phase(&app),
+        ChatGptSignInPhase::Finished {
+            message: "Signed in as ada@example.com. This session switches to `chatgpt/gpt-6-sol` \
+                      on your ChatGPT plan after its current turn and queued messages finish."
+                .to_string(),
+        }
+    );
+    assert_eq!(
+        app.sessions
+            .session_for_id(&session_id)
+            .map(|session| session.agent),
+        initial_agent
+    );
+    assert_eq!(
+        app.deferred_session_settings
+            .get(&session_id)
+            .and_then(|settings| settings.agent),
+        Some(chatgpt_selection())
     );
 }
 

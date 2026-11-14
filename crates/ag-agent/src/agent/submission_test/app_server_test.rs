@@ -219,7 +219,7 @@ async fn one_shot_app_server_repair_preserves_permissions_and_conversation() {
             harness: (AgentKind::Antigravity).to_string(),
             child_pid: None,
             folder: folder.path().to_owned(),
-            model: AgentModel::Gemini31Pro.as_str().to_string(),
+            model: AgentModel::Gemini4Argon.as_str().to_string(),
             permission_mode,
             prompt: "Generate title".into(),
             request_kind: AgentRequestKind::UtilityPrompt,

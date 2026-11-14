@@ -263,7 +263,7 @@ fn test_session_header_omits_speed_for_provider_without_speed_control() {
     let mut session = SessionFixtureBuilder::new().build();
     session.agent = crate::domain::agent::AgentSelection::new(
         crate::domain::agent::AgentKind::Antigravity,
-        AgentModel::Gemini31Pro,
+        AgentModel::Gemini4Argon,
     );
     session.speed_mode = crate::domain::agent::SpeedMode::Fast;
 
@@ -327,7 +327,7 @@ fn test_session_speed_display_reports_speed_only_for_supported_provider() {
     let mut antigravity_session = SessionFixtureBuilder::new().build();
     antigravity_session.agent = crate::domain::agent::AgentSelection::new(
         crate::domain::agent::AgentKind::Antigravity,
-        AgentModel::Gemini31Pro,
+        AgentModel::Gemini4Argon,
     );
 
     // Act

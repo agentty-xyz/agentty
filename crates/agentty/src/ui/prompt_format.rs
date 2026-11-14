@@ -8,7 +8,7 @@ use crate::domain::file_entry::filter_entries;
 use crate::presentation::app_mode::ChatFocus;
 use crate::presentation::help_action;
 use crate::presentation::prompt::{
-    PromptAtMentionState, PromptSlashState, PromptSuggestionList,
+    PromptAtMentionState, PromptSlashCommandSet, PromptSlashState, PromptSuggestionList,
     build_prompt_slash_suggestion_list,
 };
 use crate::ui::component::chat_input::{SuggestionItem, SuggestionList};
@@ -112,14 +112,14 @@ pub fn prompt_footer_line(
 /// An active `@` mention query takes priority, matching runtime key routing.
 /// Otherwise slash-command input renders the command/model suggestion set. The
 /// returned dropdown is already windowed so the highlighted row stays visible.
-/// `allow_apply_command` must match runtime slash selection so the visible
-/// rows and submitted command indexes stay synchronized.
+/// `command_set` must match runtime slash selection so the visible rows and
+/// submitted command indexes stay synchronized.
 pub(crate) fn prompt_suggestion_list(
     input: &crate::domain::input::InputState,
     slash_state: &PromptSlashState,
     at_mention_state: Option<&PromptAtMentionState>,
     agent_kind: AgentKind,
-    allow_apply_command: bool,
+    command_set: PromptSlashCommandSet,
 ) -> Option<SuggestionList> {
     let input_text = input.text();
     let cursor = input.cursor;
@@ -140,7 +140,7 @@ pub(crate) fn prompt_suggestion_list(
             input_text,
             slash_state,
             agent_kind,
-            allow_apply_command,
+            command_set,
         )
         .map(render_prompt_suggestion_list);
     }

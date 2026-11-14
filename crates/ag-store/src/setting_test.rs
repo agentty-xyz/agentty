@@ -83,7 +83,7 @@ END;
             vec![
                 (
                     SettingName::DefaultFastModel,
-                    AgentModel::Gemini31Pro.as_str().to_string(),
+                    AgentModel::Gemini4Argon.as_str().to_string(),
                 ),
                 (SettingName::DefaultFastAgent, "antigravity".to_string()),
             ],

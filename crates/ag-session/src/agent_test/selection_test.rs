@@ -67,9 +67,9 @@ fn test_agent_selection_speed_compatibility() {
             true,
         ),
         (
-            AgentSelection::new(AgentKind::Antigravity, AgentModel::Gemini31Pro),
+            AgentSelection::new(AgentKind::Antigravity, AgentModel::Gemini4Argon),
             SpeedMode::Fast,
-            AgentSelection::new(AgentKind::Antigravity, AgentModel::Gemini31Pro),
+            AgentSelection::new(AgentKind::Antigravity, AgentModel::Gemini4Argon),
             false,
         ),
         (
@@ -109,9 +109,12 @@ fn test_selectable_models_for_agent_kinds_uses_provider_order() {
             AgentModel::Gpt56Terra,
             AgentModel::Gpt53CodexSpark,
             AgentModel::Gemini4Argon,
-            AgentModel::Gemini31Pro,
+            AgentModel::Gemini4Hydrogen,
+            AgentModel::GeminiProOrchestrator,
             AgentModel::Gemini38Flash,
-            AgentModel::Gemini35FlashLite,
+            AgentModel::ClaudeOpus55,
+            AgentModel::ClaudeSonnet55,
+            AgentModel::GptOss120b,
         ]
     );
 }
@@ -137,7 +140,7 @@ fn test_selectable_models_for_agent_kinds_deduplicates_shared_models() {
 /// when possible.
 fn test_resolve_model_for_available_agent_kinds_prefers_available_fallback() {
     // Arrange
-    let unavailable_model = AgentModel::ClaudeOpus55;
+    let unavailable_model = AgentModel::ClaudeFable52;
     let available_agent_kinds = [AgentKind::Codex, AgentKind::Antigravity];
     let fallback_model = AgentModel::Gpt56Terra;
 
@@ -157,9 +160,9 @@ fn test_resolve_model_for_available_agent_kinds_prefers_available_fallback() {
 /// default when the preferred fallback is also unavailable.
 fn test_resolve_model_for_available_agent_kinds_uses_first_available_default() {
     // Arrange
-    let unavailable_model = AgentModel::ClaudeOpus55;
+    let unavailable_model = AgentModel::ClaudeFable52;
     let available_agent_kinds = [AgentKind::Codex, AgentKind::Antigravity];
-    let unavailable_fallback_model = AgentModel::ClaudeSonnet55;
+    let unavailable_fallback_model = AgentModel::ClaudeHaiku55;
 
     // Act
     let resolved_model = resolve_model_for_available_agent_kinds(
@@ -192,21 +195,49 @@ fn test_resolve_agent_selection_for_model_preserves_preferred_shared_provider() 
 }
 
 #[test]
-/// Ensures model-only settings use available provider order when the
-/// preferred provider cannot run the selected model.
+/// Ensures model-only settings move to the model's owning provider when the
+/// preferred provider cannot run it, regardless of available provider order.
+fn test_resolve_agent_selection_for_model_prefers_available_owner() {
+    // Arrange
+    let shared_models = [AgentModel::Gpt61Sol, AgentModel::ClaudeOpus55];
+    let available_agent_kinds = [
+        AgentKind::Antigravity,
+        AgentKind::Harness,
+        AgentKind::Claude,
+        AgentKind::Codex,
+    ];
+
+    // Act
+    let resolved_selections = shared_models.map(|model| {
+        resolve_agent_selection_for_model(model, AgentKind::Codex, &available_agent_kinds)
+    });
+
+    // Assert
+    assert_eq!(
+        resolved_selections,
+        [
+            AgentSelection::new(AgentKind::Codex, AgentModel::Gpt61Sol),
+            AgentSelection::new(AgentKind::Claude, AgentModel::ClaudeOpus55),
+        ]
+    );
+}
+
+#[test]
+/// Ensures model-only settings use available provider order when neither
+/// the preferred nor the owning provider can run the selected model.
 fn test_resolve_agent_selection_for_model_uses_available_provider_order() {
     // Arrange
-    let model = AgentModel::Gpt61Sol;
-    let available_agent_kinds = [AgentKind::Harness, AgentKind::Codex];
+    let model = AgentModel::ClaudeSonnet55;
+    let available_agent_kinds = [AgentKind::Codex, AgentKind::Antigravity];
 
     // Act
     let resolved_selection =
-        resolve_agent_selection_for_model(model, AgentKind::Antigravity, &available_agent_kinds);
+        resolve_agent_selection_for_model(model, AgentKind::Codex, &available_agent_kinds);
 
     // Assert
     assert_eq!(
         resolved_selection,
-        AgentSelection::new(AgentKind::Harness, model)
+        AgentSelection::new(AgentKind::Antigravity, model)
     );
 }
 

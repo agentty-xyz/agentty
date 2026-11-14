@@ -569,6 +569,55 @@ async fn session_queue_chat_messages_during_in_progress_turn() -> E2eResult {
     Ok(())
 }
 
+/// Verify a `Rebasing` session offers setting slash commands and defers a
+/// `/fast` toggle until the active sync finishes instead of queueing text.
+#[tokio::test]
+async fn session_slash_setting_deferred_during_rebase() -> E2eResult {
+    // Arrange, Act, Assert
+    FeatureTest::new("session_slash_setting_deferred_during_rebase")
+        .with_git()
+        .setup(|env| Box::pin(async move { seed_rebasing_queue_session(env).await }))
+        .run(
+            |scenario| {
+                scenario
+                    .compose(&common::wait_for_agentty_startup())
+                    .compose(&common::switch_to_tab("Sessions"))
+                    .press_key("Enter")
+                    .wait_for_text("Rebasing...", 5000)
+                    .press_key("Enter")
+                    .wait_for_text("Type your message", 5000)
+                    .write_text("/")
+                    .wait_for_text("Slash Command", 5000)
+                    .wait_for_text("/reasoning", 3000)
+                    .write_text("fast")
+                    .wait_for_text("Toggle between normal and fast", 3000)
+                    .press_key("Enter")
+                    .wait_for_text("[Settings] Switching to fast responses", 5000)
+                    .viewing_pause_ms(500)
+                    .capture_labeled(
+                        "fast_toggle_deferred_during_rebase",
+                        "Fast mode waits for the active sync instead of queueing slash text",
+                    )
+            },
+            |frame, _report| {
+                Box::pin(async move {
+                    let full = Region::full(frame.cols(), frame.rows());
+                    assertion::assert_text_in_region(frame, "Rebasing...", &full);
+                    assertion::assert_text_in_region(
+                        frame,
+                        "[Settings] Switching to fast responses after the current turn",
+                        &full,
+                    );
+                    assertion::assert_not_visible(frame, "≡ queued ›");
+                    assertion::assert_not_visible(frame, "Slash Command");
+                })
+            },
+        )
+        .await?;
+
+    Ok(())
+}
+
 /// Verify a `Rebasing` session exposes review-request publishing and still
 /// queues submitted follow-up messages behind the active sync.
 #[tokio::test]

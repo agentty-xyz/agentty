@@ -17,7 +17,7 @@ use crate::presentation::app_mode::{AppMode, ChatFocus};
 use crate::presentation::frame_time::FrameTime;
 use crate::presentation::graph_chat::GraphChatSnapshot;
 use crate::presentation::help_action::{self, ViewActionAvailability, ViewHelpState};
-use crate::presentation::prompt::PromptAtMentionState;
+use crate::presentation::prompt::{PromptAtMentionState, PromptSlashCommandSet};
 use crate::ui::component::chat_input::{ChatInput, SuggestionList};
 use crate::ui::component::session_output::{
     SessionOutput, SessionOutputLayoutCache, SessionOutputLineContext,
@@ -537,15 +537,14 @@ fn prepare_prompt_panel(
         return None;
     };
 
-    // While the session is `InProgress` the composer queues a leading
-    // `/` as plain text instead of running a slash command, so suppress
-    // the slash dropdown to avoid implying the menu is actionable. The
-    // `@` mention dropdown is still useful for editing queued messages. An
-    // armed graph composer also treats its task as literal text.
-    let suppress_slash_dropdown = slash_state.graph.is_armed()
-        || session.status == crate::domain::session::Status::InProgress;
+    // An armed graph composer treats its task as literal text. A session
+    // that queues chat messages offers only setting commands.
+    let suppress_slash_dropdown = slash_state.graph.is_armed();
     let has_active_mention = at_mention_state.is_some() && input.at_mention_query().is_some();
-    let allow_apply_command = review::has_actionable_review_suggestions(review_text);
+    let command_set = PromptSlashCommandSet::for_session(
+        review::has_actionable_review_suggestions(review_text),
+        session.queues_chat_messages(),
+    );
     let suggestion_list =
         if suppress_slash_dropdown && input.text().starts_with('/') && !has_active_mention {
             None
@@ -555,7 +554,7 @@ fn prepare_prompt_panel(
                 slash_state,
                 at_mention_state.as_ref(),
                 session.agent.kind(),
-                allow_apply_command,
+                command_set,
             )
         };
     let dropdown_row_count =

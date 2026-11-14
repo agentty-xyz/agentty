@@ -545,14 +545,19 @@ fn test_review_comments_reject_duplicate_queued_batch() {
 }
 
 #[test]
-fn review_comment_batches_wait_for_publish_and_queued_actions_in_review() {
+fn review_comment_batches_and_worker_idleness_wait_for_publish_and_queued_actions_in_review() {
     // Arrange
     let mut session = SessionFixtureBuilder::new().status(Status::Review).build();
     let idle_is_queued = session.queues_review_comment_reply();
+    let idle_has_pending_work = session.has_pending_worker_work();
     let messages = [
         (
             TransientMessageSlot::BranchPublish,
             TransientMessageBody::Loading("Publishing".to_string()),
+        ),
+        (
+            TransientMessageSlot::BranchPublish,
+            TransientMessageBody::Queued(QueuedAction::new(1, "publish".to_string())),
         ),
         (
             TransientMessageSlot::SyncQueue,
@@ -562,6 +567,7 @@ fn review_comment_batches_wait_for_publish_and_queued_actions_in_review() {
 
     // Act, Assert
     assert!(!idle_is_queued);
+    assert!(!idle_has_pending_work);
     for (slot, body) in messages {
         session.transient_messages.upsert(TransientMessage {
             anchor: TransientMessageAnchor::Tail,
@@ -571,6 +577,7 @@ fn review_comment_batches_wait_for_publish_and_queued_actions_in_review() {
             turn_position: None,
         });
         assert!(session.queues_review_comment_reply());
+        assert!(session.has_pending_worker_work());
         session.transient_messages.retract(slot);
     }
 }

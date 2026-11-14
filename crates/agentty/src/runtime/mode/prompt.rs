@@ -10,7 +10,7 @@ use crate::app::prompt_intent::{
     PromptApplyOutcome, PromptCancellation, PromptImagePaste, PromptSessionMode, PromptSubmission,
     PromptWorkflowOutcome,
 };
-use crate::domain::agent::{AgentKind, AgentSelection, ReasoningLevel, ResponseStyle, SpeedMode};
+use crate::domain::agent::{AgentKind, AgentSelection, ReasoningLevel, ResponseStyle};
 use crate::domain::composer::PromptAttachment;
 use crate::domain::input::{InputCommand, InputEffect, InputState};
 use crate::domain::permission::PermissionMode;
@@ -23,7 +23,7 @@ use crate::presentation::app_mode::{
 };
 use crate::presentation::prompt::{
     PendingImagePaste, PromptAtMentionState, PromptAttachmentState, PromptGraphState,
-    PromptSlashStage, PromptSlashState, PromptSuggestionSelection,
+    PromptSlashCommandSet, PromptSlashStage, PromptSlashState, PromptSuggestionSelection,
     apply_prompt_delete_range as apply_prompt_delete_range_components,
     current_line_delete_range as prompt_current_line_delete_range, drain_prompt_submission,
     insert_prompt_text, needs_space_after_image_placeholder, prompt_slash_option_count,
@@ -44,14 +44,10 @@ use crate::ui::input_layout::{move_input_cursor_down, move_input_cursor_up};
 /// After the first turn starts, follow-up submissions must route through the
 /// normal reply path even though the session still records draft origin.
 struct PromptContext {
-    /// Whether cached focused-review text makes `/apply` available.
-    allow_apply_command: bool,
     input_mode: PromptInputMode,
     /// Session permission mode cycled by `Shift+Tab` and preselected by
     /// `/mode`.
     permission_mode: PermissionMode,
-    /// Whether the session queues chat messages behind an active operation.
-    queues_messages: bool,
     /// Effective session reasoning level preselected by `/reasoning`.
     reasoning_level: ReasoningLevel,
     /// Session response style preselected by `/style`.
@@ -68,8 +64,9 @@ struct PromptContext {
     session_mode: PromptSessionMode,
     /// Harness model that needs a `ChatGPT` sign-in before a turn can run.
     sign_in_agent: Option<AgentSelection>,
-    /// Session speed mode toggled by `/fast`.
-    speed_mode: SpeedMode,
+    /// Slash commands offered for the prompt session, which depend on cached
+    /// focused-review output and whether the session is busy.
+    slash_command_set: PromptSlashCommandSet,
 }
 
 impl PromptContext {
@@ -133,14 +130,14 @@ enum PromptEffect {
     StartImagePaste { attachment_number: usize },
     /// Submits one drained composer turn.
     SubmitPrompt(PromptTurnSubmission),
-    /// Persists one slash-selected model.
+    /// Toggles the session speed mode, deferred while the session is busy.
+    ToggleSpeedMode,
+    /// Applies one slash-selected model, deferred while the session is busy.
     UpdateModel(AgentSelection),
     /// Persists one slash-selected reasoning level.
     UpdateReasoningLevel(ReasoningLevel),
     /// Persists one slash-selected response style.
     UpdateResponseStyle(ResponseStyle),
-    /// Persists one toggled speed mode.
-    UpdateSpeedMode(SpeedMode),
 }
 
 /// One drained composer turn plus the composer to restore when the workflow
@@ -217,7 +214,7 @@ pub(crate) async fn handle_paste(app: &mut App, pasted_text: &str) {
         return;
     };
     let mut effects = Vec::new();
-    sync_prompt_at_mention_state(&mut app.mode, &prompt_context, &mut effects);
+    sync_prompt_at_mention_state(&mut app.mode, &mut effects);
     apply_prompt_effects(app, &prompt_context, effects).await;
 }
 
@@ -286,20 +283,11 @@ fn prompt_context(app: &mut App) -> Option<PromptContext> {
 
     let session = app.session_at(session_index);
     let session_mode = session.map_or(PromptSessionMode::Existing, prompt_session_mode);
-    let queues_messages = session
-        .is_some_and(|session| matches!(session.status, Status::InProgress | Status::Rebasing));
 
     Some(PromptContext {
-        allow_apply_command: app.prompt_apply_command_is_available_for_session(session_id),
-        input_mode: prompt_input_mode(
-            at_mention_state.as_ref(),
-            input,
-            slash_state,
-            queues_messages,
-        ),
+        input_mode: prompt_input_mode(at_mention_state.as_ref(), input, slash_state),
         permission_mode: session
             .map_or_else(PermissionMode::default, |session| session.permission_mode),
-        queues_messages,
         reasoning_level: session.map_or(
             app.settings.default_smart_reasoning_level,
             Session::effective_reasoning_level,
@@ -315,7 +303,7 @@ fn prompt_context(app: &mut App) -> Option<PromptContext> {
         session_index,
         session_mode,
         sign_in_agent: app.chatgpt_sign_in_required(session_index),
-        speed_mode: session.map_or_else(SpeedMode::default, |session| session.speed_mode),
+        slash_command_set: app.prompt_slash_command_set(session_id),
     })
 }
 
@@ -344,22 +332,19 @@ fn prompt_session_mode(session: &Session) -> PromptSessionMode {
 
 /// Derives the key-routing sub-mode from the current composer.
 ///
-/// While the session is `InProgress` or `Rebasing` the composer queues the
-/// next chat message instead of dispatching it. A leading `/` is then plain
-/// text so slash commands cannot run while the active operation is still in
-/// flight and so arrow-key navigation behaves as text editing rather than
-/// slash-menu selection.
+/// A leading `/` keeps slash-command routing even while the session is
+/// `InProgress` or `Rebasing`; [`PromptContext::slash_command_set`] then
+/// limits the menu to setting commands.
 fn prompt_input_mode(
     at_mention_state: Option<&PromptAtMentionState>,
     input: &InputState,
     slash_state: &PromptSlashState,
-    queues_messages: bool,
 ) -> PromptInputMode {
     if is_active_at_mention(at_mention_state, input) {
         return PromptInputMode::AtMention;
     }
 
-    if input.text().starts_with('/') && !slash_state.graph.is_armed() && !queues_messages {
+    if input.text().starts_with('/') && !slash_state.graph.is_armed() {
         return PromptInputMode::SlashCommand;
     }
 
@@ -435,6 +420,7 @@ async fn apply_prompt_effect(app: &mut App, prompt_context: &PromptContext, effe
             start_prompt_image_paste(app, session_id, attachment_number);
         }
         PromptEffect::SubmitPrompt(turn) => submit_prompt_turn(app, turn).await,
+        PromptEffect::ToggleSpeedMode => app.toggle_prompt_session_speed_mode(session_id).await,
         PromptEffect::UpdateModel(selected_agent) => {
             app.update_prompt_session_model(session_id, selected_agent)
                 .await;
@@ -445,10 +431,6 @@ async fn apply_prompt_effect(app: &mut App, prompt_context: &PromptContext, effe
         }
         PromptEffect::UpdateResponseStyle(response_style) => {
             app.update_prompt_session_response_style(session_id, response_style)
-                .await;
-        }
-        PromptEffect::UpdateSpeedMode(speed_mode) => {
-            app.update_prompt_session_speed_mode(session_id, speed_mode)
                 .await;
         }
     }
@@ -643,9 +625,7 @@ fn reduce_prompt_key(
     }
 
     let mut effects = Vec::new();
-    if prompt_context.is_at_mention()
-        && reduce_at_mention_key(mode, prompt_context, key, &mut effects)
-    {
+    if prompt_context.is_at_mention() && reduce_at_mention_key(mode, key, &mut effects) {
         return PromptKeyStep::Effects(effects);
     }
 
@@ -669,16 +649,15 @@ fn reduce_prompt_key(
 /// Returns `true` if the key was consumed by at-mention logic.
 fn reduce_at_mention_key(
     mode: &mut AppMode,
-    prompt_context: &PromptContext,
     key: KeyEvent,
     effects: &mut Vec<PromptEffect>,
 ) -> bool {
     match key.code {
         KeyCode::Esc => dismiss_at_mention(mode),
         KeyCode::Enter if !input_key::should_insert_newline(key) => {
-            select_at_mention(mode, prompt_context, effects);
+            select_at_mention(mode, effects);
         }
-        KeyCode::Tab => select_at_mention(mode, prompt_context, effects),
+        KeyCode::Tab => select_at_mention(mode, effects),
         KeyCode::Up => move_at_mention_selection_up(mode),
         KeyCode::Down => move_at_mention_selection_down(mode),
         _ => return false,
@@ -698,11 +677,7 @@ fn dismiss_at_mention(mode: &mut AppMode) {
 }
 
 /// Selects the currently highlighted file and inserts it into the input.
-fn select_at_mention(
-    mode: &mut AppMode,
-    prompt_context: &PromptContext,
-    effects: &mut Vec<PromptEffect>,
-) {
+fn select_at_mention(mode: &mut AppMode, effects: &mut Vec<PromptEffect>) {
     let replacement = match mode {
         AppMode::Prompt {
             at_mention_state: Some(state),
@@ -715,7 +690,6 @@ fn select_at_mention(
     if let Some(selection) = replacement {
         reduce_prompt_input_command(
             mode,
-            prompt_context,
             InputCommand::ReplaceRange {
                 start: selection.at_start,
                 end: selection.at_end,
@@ -755,14 +729,13 @@ fn move_at_mention_selection_down(mode: &mut AppMode) {
 /// attachment, history, slash-command, and `@`-mention behavior.
 fn reduce_prompt_input_command(
     mode: &mut AppMode,
-    prompt_context: &PromptContext,
     command: InputCommand,
     effects: &mut Vec<PromptEffect>,
 ) {
     let unreachable_attachments = apply_prompt_input_to_mode(mode, command);
 
     push_attachment_cleanup(effects, unreachable_attachments);
-    sync_prompt_at_mention_state(mode, prompt_context, effects);
+    sync_prompt_at_mention_state(mode, effects);
 }
 
 /// Reduces one editing command and returns attachments that require file
@@ -908,11 +881,7 @@ fn push_attachment_cleanup(effects: &mut Vec<PromptEffect>, attachments: Vec<Pro
 /// more text elsewhere and later moves the cursor back into the mention. A
 /// reopened dropdown requests its entries through
 /// [`PromptEffect::LoadAtMentionEntries`].
-fn sync_prompt_at_mention_state(
-    mode: &mut AppMode,
-    prompt_context: &PromptContext,
-    effects: &mut Vec<PromptEffect>,
-) {
+fn sync_prompt_at_mention_state(mode: &mut AppMode, effects: &mut Vec<PromptEffect>) {
     let AppMode::Prompt {
         at_mention_state,
         input,
@@ -922,12 +891,7 @@ fn sync_prompt_at_mention_state(
     else {
         return;
     };
-    let input_mode = prompt_input_mode(
-        at_mention_state.as_ref(),
-        input,
-        slash_state,
-        prompt_context.queues_messages,
-    );
+    let input_mode = prompt_input_mode(at_mention_state.as_ref(), input, slash_state);
 
     match at_mention::sync_action(input, at_mention_state.as_ref()) {
         at_mention::AtMentionSyncAction::Activate
@@ -1090,7 +1054,7 @@ fn reduce_editing_key(
             if let Some(command) =
                 input_key::command_for_key(key, input_key::InputCapabilities::MULTILINE)
             {
-                reduce_prompt_input_command(mode, prompt_context, command, effects);
+                reduce_prompt_input_command(mode, command, effects);
             }
         }
     }
@@ -1099,11 +1063,10 @@ fn reduce_editing_key(
 /// Drains the active prompt into a turn submission when it passes
 /// prompt-mode validation.
 ///
-/// While the session is `InProgress` or `Rebasing`, slash command mode is
-/// already demoted to text in [`prompt_input_mode`], so any leading `/` falls
-/// through to the queue path instead of executing a slash command against the
-/// active operation. A composer armed by `/graph` requests a graph proposal
-/// for the typed task instead. A submitted prompt clears any cached
+/// While the session is `InProgress` or `Rebasing`, slash input selects
+/// setting commands only; model and speed changes wait for the active work,
+/// and other text is queued. A composer armed by `/graph` requests a graph
+/// proposal for the typed task instead. A submitted prompt clears any cached
 /// focused-review output for the session so the next turn starts from the raw
 /// transcript again.
 ///
@@ -1173,7 +1136,7 @@ fn reduce_prompt_slash_submit(
                 input.text(),
                 slash_state,
                 prompt_context.session_agent_kind,
-                prompt_context.allow_apply_command,
+                prompt_context.slash_command_set,
             );
             if selection == Some(PromptSuggestionSelection::Command("/graph")) {
                 slash_state.graph = PromptGraphState::Armed;
@@ -1207,13 +1170,8 @@ fn reduce_prompt_slash_submit(
             open_prompt_slash_stage(mode, PromptSlashStage::Reasoning, selected_index);
         }
         Some(PromptSuggestionSelection::Command("/fast")) => {
-            let speed_mode = match prompt_context.speed_mode {
-                SpeedMode::Normal => SpeedMode::Fast,
-                SpeedMode::Fast => SpeedMode::Normal,
-            };
-
             push_attachment_cleanup(effects, clear_prompt_slash_input(mode));
-            effects.push(PromptEffect::UpdateSpeedMode(speed_mode));
+            effects.push(PromptEffect::ToggleSpeedMode);
         }
         Some(PromptSuggestionSelection::Command("/style")) => {
             let selected_index = ResponseStyle::ALL
@@ -1384,7 +1342,7 @@ fn reduce_prompt_vertical_key(
         }
     }
 
-    sync_prompt_at_mention_state(mode, prompt_context, effects);
+    sync_prompt_at_mention_state(mode, effects);
 }
 
 fn move_prompt_slash_selection(mode: &mut AppMode, prompt_context: &PromptContext, is_next: bool) {
@@ -1398,7 +1356,7 @@ fn move_prompt_slash_selection(mode: &mut AppMode, prompt_context: &PromptContex
         input.text(),
         slash_state,
         prompt_context.selected_session_agent_kind,
-        prompt_context.allow_apply_command,
+        prompt_context.slash_command_set,
     );
     if option_count == 0 {
         return;

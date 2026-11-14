@@ -24,7 +24,7 @@ use crate::test_support::enable_tracing_log_fallback;
 fn speed_defaults_normalize_provider_support_and_fast_model_compatibility() {
     // Arrange
     let codex_spark = AgentSelection::new(AgentKind::Codex, AgentModel::Gpt53CodexSpark);
-    let antigravity = AgentSelection::new(AgentKind::Antigravity, AgentModel::Gemini31Pro);
+    let antigravity = AgentSelection::new(AgentKind::Antigravity, AgentModel::Gemini4Argon);
 
     // Act
     let fast_codex = normalized_speed_default(codex_spark, SpeedMode::Fast);
@@ -120,13 +120,13 @@ fn settings_rows_show_default_smart_model_with_agent_prefix() {
     // Arrange
     let mut manager = new_settings_manager();
     manager.fixture_view_mut().default_smart_selection =
-        AgentSelection::new(AgentKind::Antigravity, AgentModel::Gemini31Pro);
+        AgentSelection::new(AgentKind::Antigravity, AgentModel::Gemini4Argon);
 
     // Act
     let rows = manager.settings_rows();
 
     // Assert
-    assert_eq!(rows[2].1, "antigravity/gemini-3.1-pro-preview [high]");
+    assert_eq!(rows[2].1, "antigravity/gemini-4-argon [high]");
 }
 
 #[test]
@@ -204,7 +204,7 @@ async fn settings_manager_new_persists_replacements_for_retired_model_defaults()
     // Assert
     assert_eq!(
         settings.default_smart_selection,
-        AgentSelection::new(AgentKind::Antigravity, AgentModel::Gemini31Pro)
+        AgentSelection::new(AgentKind::Antigravity, AgentModel::Gemini4Argon)
     );
     assert_eq!(
         settings.default_fast_selection,
@@ -218,7 +218,7 @@ async fn settings_manager_new_persists_replacements_for_retired_model_defaults()
     let expected_persisted_settings = [
         (
             SettingName::DefaultSmartModel,
-            AgentModel::Gemini31Pro.as_str(),
+            AgentModel::Gemini4Argon.as_str(),
         ),
         (
             SettingName::DefaultSmartAgent,
@@ -1000,7 +1000,7 @@ async fn load_default_smart_model_setting_falls_back_to_available_backend() {
         .upsert_project_setting(
             project_id,
             SettingName::DefaultSmartModel,
-            AgentModel::Gemini31Pro.as_str(),
+            AgentModel::Gemini4Argon.as_str(),
         )
         .await
         .expect("failed to persist unavailable smart model");

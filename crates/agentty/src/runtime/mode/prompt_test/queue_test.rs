@@ -2,12 +2,11 @@ use super::super::prompt_context;
 use super::support::{new_test_prompt_app, run_prompt_submit};
 
 #[tokio::test]
-/// Verifies that submitting a `/`-prefixed prompt while the session is
-/// `InProgress` queues the raw text via [`App::enqueue_message`] instead
-/// of invoking the slash command path.
-async fn test_handle_prompt_submit_key_queues_slash_text_when_session_is_in_progress() {
+/// Verifies that submitting `/model` while the session is `InProgress`
+/// opens the model picker instead of queueing the command text.
+async fn test_handle_prompt_submit_key_opens_model_picker_when_session_is_in_progress() {
     // Arrange
-    let (mut app, _base_dir) = new_test_prompt_app("/model gpt-5", None).await;
+    let (mut app, _base_dir) = new_test_prompt_app("/model", None).await;
     let session_id = app.sessions.sessions()[0].id.clone();
     app.sessions.session_handles_mut().insert(
         session_id.clone(),
@@ -29,16 +28,12 @@ async fn test_handle_prompt_submit_key_queues_slash_text_when_session_is_in_prog
         .lock()
         .expect("queue lock")
         .len();
-    assert_eq!(
-        queued_len, 1,
-        "slash-prefixed input must be queued as plain text while turn runs"
-    );
-    assert_eq!(app.sessions.sessions()[0].queued_messages.len(), 1);
-    assert_eq!(
-        app.sessions.sessions()[0].queued_messages[0].transcript_text(),
-        "/model gpt-5",
-        "queued message preserves the original slash-prefixed text"
-    );
+    assert_eq!(queued_len, 0);
+    assert!(matches!(
+        &app.mode,
+        crate::presentation::app_mode::AppMode::Prompt { slash_state, .. }
+            if slash_state.stage != crate::presentation::prompt::PromptSlashStage::Command
+    ));
 }
 
 #[tokio::test]

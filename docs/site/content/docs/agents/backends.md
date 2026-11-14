@@ -330,8 +330,10 @@ Session overrides take precedence. Changing defaults does not alter existing ses
 `Default Response Style` initializes new sessions as `Concise`, `Balanced`, or
 `Detailed`.
 
-Antigravity maps `xhigh` and `max` reasoning to `high`. Claude maps both to `max`, which
-is supported by `claude-opus-5-5`. Codex supports a distinct `max` effort.
+Antigravity maps `xhigh` and `max` reasoning to `high`, except `gemini-4-hydrogen`,
+which uses `xhigh`. `gpt-oss-120b` always uses `medium`, and the orchestrator ignores
+the reasoning level. Claude maps both to `max`, which is supported by `claude-opus-5-5`.
+Codex supports a distinct `max` effort.
 
 ## Available Models
 
@@ -340,10 +342,16 @@ entries with different trade-offs between speed, quality, and cost.
 
 ### Antigravity Models
 
-- `gemini-4-argon`: Gemini 4 Argon model.
-- `gemini-3.1-pro-preview` (default): Higher-quality Gemini model for deeper reasoning.
+- `gemini-4-argon` (default): Gemini 4 Argon model.
+- `gemini-4-hydrogen`: Gemini 4 Hydrogen model with extra-high reasoning effort.
+- `gemini-pro-orchestrator-g1-pro`: Orchestrator (Argon) model that coordinates
+  subagents.
 - `gemini-3.8-flash`: Fast Gemini model for agentic and multimodal tasks.
-- `gemini-3.5-flash-lite`: Lightweight Gemini model for fast, cost-conscious workloads.
+- `claude-opus-5-5` and `claude-sonnet-5-5`: Claude models served through Antigravity.
+- `gpt-oss-120b`: Open-weight GPT-OSS 120B model served through Antigravity.
+
+Saved `gemini-3.1-pro-preview` selections load as `gemini-4-argon`, and
+`gemini-3.5-flash-lite` selections load as `gemini-3.8-flash`.
 
 ### Claude Models
 
@@ -403,7 +411,8 @@ replacement automatically. Finished sessions preserve their historical model dat
 <a id="backends-switching-models"></a> Use `/model` to change the current session's
 backend and model, `/reasoning` to change reasoning effort, and `/style` to choose
 answer length. See [Slash Commands](@/docs/usage/workflow.md#slash-commands) for
-response styles and permission modes.
+response styles and permission modes. While a turn runs, model and speed changes wait
+for [queued work](@/docs/usage/workflow.md#active-turns-and-the-message-queue).
 
 Claude and Codex also support `/fast`. Press `Enter` on the command to toggle the
 current session between `Normal` and `Fast`. `Fast` reduces latency at higher provider

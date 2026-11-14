@@ -85,9 +85,11 @@ impl AgentBackend for AntigravityBackend {
             .arg("--print-timeout")
             .arg(ANTIGRAVITY_PRINT_TIMEOUT)
             .arg("--model")
-            .arg(model)
-            .arg("--effort")
-            .arg(reasoning::antigravity(reasoning_level))
+            .arg(model);
+        if let Some(effort) = reasoning::antigravity(model, reasoning_level) {
+            command.arg("--effort").arg(effort);
+        }
+        command
             .arg("--input-format")
             .arg("stream-json")
             .arg("--output-format")

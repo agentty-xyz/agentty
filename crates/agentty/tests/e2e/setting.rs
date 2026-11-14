@@ -163,11 +163,7 @@ async fn settings_tab_shows_content() {
                     assertion::assert_text_in_region(frame, "Default Smart Model", &full);
                     assertion::assert_text_in_region(frame, "Default Fast Model", &full);
                     assertion::assert_text_in_region(frame, "Default Review Model", &full);
-                    assertion::assert_text_in_region(
-                        frame,
-                        "antigravity/gemini-3.1-pro-preview",
-                        &full,
-                    );
+                    assertion::assert_text_in_region(frame, "antigravity/gemini-4-argon", &full);
                     assertion::assert_text_in_region(frame, "[high]", &full);
                     assertion::assert_text_in_region(frame, "Disabled", &full);
                     assertion::assert_text_in_region(frame, "Launch Configurations", &full);
@@ -597,7 +593,7 @@ async fn settings_model_selector_separates_model_and_reasoning() {
                     assertion::assert_text_in_region(&model_frame, "Select model", &model_full);
                     assertion::assert_match_count(
                         &model_frame,
-                        "antigravity/gemini-3.1-pro-preview [max]",
+                        "antigravity/gemini-4-argon [max]",
                         0,
                     );
                 })

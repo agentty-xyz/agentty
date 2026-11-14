@@ -152,9 +152,6 @@ impl App {
         let sync_context = Self::sync_context_for(&projects, &services, &sessions);
         let sync_handle = sync::SyncHandle::spawn(event_tx.clone(), sync_context);
         Self::spawn_startup_background_tasks(auto_update, &event_tx, &services, &clients);
-        let sync_main_runner = clients
-            .sync_main_runner
-            .unwrap_or_else(|| sync_handle.sync_main_runner());
         let app = Self {
             mode: crate::presentation::app_mode::AppMode::List,
             project_catalog: Box::new(crate::app::project_catalog::ProjectCatalog::new(
@@ -172,6 +169,7 @@ impl App {
             experimental_graph: false,
             auto_address_review_iterations: std::collections::HashMap::new(),
             deferred_auto_review_session_ids: std::collections::HashSet::new(),
+            deferred_session_settings: std::collections::HashMap::new(),
             role_review_suppression: std::collections::HashMap::new(),
             latest_project_sync_operation_ids: std::collections::HashMap::new(),
             pending_project_sync_completions: std::collections::HashMap::new(),
@@ -197,8 +195,11 @@ impl App {
             project_sync_status_expires_at: None,
             session_progress_messages: std::collections::HashMap::new(),
             update_status: None,
+            // Build the runner before `sync_handle` moves into the struct.
+            sync_main_runner: clients
+                .sync_main_runner
+                .unwrap_or_else(|| sync_handle.sync_main_runner()),
             sync_handle,
-            sync_main_runner,
             graph_chat: GraphChatCache::default(),
             graph_questions: GraphQuestionState::default(),
             tmux_client: clients.tmux_client,

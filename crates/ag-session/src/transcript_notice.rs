@@ -58,6 +58,8 @@ pub enum TranscriptNotice {
     ReviewRequestSyncWarning,
     /// Review-request watch enablement and automatic follow-up.
     ReviewWatch,
+    /// Session setting change deferred until running work finishes.
+    Settings,
     /// Draft session start failure.
     StartError,
     /// Completed-turn metadata persistence failure.
@@ -93,6 +95,7 @@ impl TranscriptNotice {
             Self::ReviewCommentsWarning => "[Review Comments Warning]",
             Self::ReviewRequestSyncWarning => "[Review Request Sync Warning]",
             Self::ReviewWatch => "[Review Watch]",
+            Self::Settings => "[Settings]",
             Self::StartError => "[Start Error]",
             Self::TurnMetadataError => "[Turn Metadata Error]",
         }

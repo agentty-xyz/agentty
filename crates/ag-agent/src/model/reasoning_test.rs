@@ -1,4 +1,5 @@
 use ag_contracts::ReasoningLevel;
+use ag_session::AgentModel;
 
 use crate::model::reasoning;
 
@@ -15,15 +16,53 @@ fn test_reasoning_level_claude_maps_all_levels() {
 }
 
 #[test]
-/// Ensures Antigravity reasoning values stay within the CLI's accepted
-/// `low`, `medium`, and `high` effort levels.
-fn test_reasoning_level_antigravity_maps_all_levels() {
-    // Arrange / Act / Assert
-    assert_eq!(reasoning::antigravity(ReasoningLevel::Low), "low");
-    assert_eq!(reasoning::antigravity(ReasoningLevel::Medium), "medium");
-    assert_eq!(reasoning::antigravity(ReasoningLevel::High), "high");
-    assert_eq!(reasoning::antigravity(ReasoningLevel::XHigh), "high");
-    assert_eq!(reasoning::antigravity(ReasoningLevel::Max), "high");
+/// Ensures Antigravity reasoning values stay within each model's accepted
+/// effort levels, as `agy` 1.5.8 validates them.
+fn test_reasoning_level_antigravity_maps_all_levels_per_model() {
+    // Arrange
+    let cases = [
+        (
+            AgentModel::Gemini4Argon,
+            [
+                Some("low"),
+                Some("medium"),
+                Some("high"),
+                Some("high"),
+                Some("high"),
+            ],
+        ),
+        (
+            AgentModel::ClaudeOpus55,
+            [
+                Some("low"),
+                Some("medium"),
+                Some("high"),
+                Some("high"),
+                Some("high"),
+            ],
+        ),
+        (
+            AgentModel::Gemini4Hydrogen,
+            [
+                Some("low"),
+                Some("medium"),
+                Some("high"),
+                Some("xhigh"),
+                Some("xhigh"),
+            ],
+        ),
+        (AgentModel::GptOss120b, [Some("medium"); 5]),
+        (AgentModel::GeminiProOrchestrator, [None; 5]),
+    ];
+
+    for (model, expected_efforts) in cases {
+        // Act
+        let efforts =
+            ReasoningLevel::ALL.map(|level| reasoning::antigravity(model.as_str(), level));
+
+        // Assert
+        assert_eq!(efforts, expected_efforts, "{}", model.as_str());
+    }
 }
 
 #[test]

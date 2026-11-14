@@ -21,7 +21,7 @@ fn request(folder: PathBuf) -> AppServerTurnRequest {
         folder,
         live_transcript: None,
         main_checkout_root: None,
-        model: AgentModel::Gemini31Pro.as_str().to_string(),
+        model: AgentModel::Gemini4Argon.as_str().to_string(),
         permission_mode: PermissionMode::AutoEdit,
         persisted_instruction_conversation_id: None,
         agent_profile: ag_contracts::AgentDefinitionPrompt::default(),

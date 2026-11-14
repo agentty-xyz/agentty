@@ -433,7 +433,7 @@ async fn seed_pre_existing_sessions(
         (
             "aaaa1111-aaaa-1111-aaaa-111111111111",
             "Refactor request handlers",
-            "gemini-3.1-pro-preview",
+            "gemini-4-argon",
             "Review",
             "main",
             89,

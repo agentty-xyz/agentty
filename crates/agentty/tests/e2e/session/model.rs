@@ -124,7 +124,7 @@ async fn claude_model_picker_lists_current_models() -> E2eResult {
 }
 
 /// Seeds one still-active review session whose persisted model id has been
-/// retired in favor of `gemini-3.5-flash-lite`.
+/// retired in favor of `gemini-3.8-flash`.
 async fn seed_active_session_with_retired_model(
     env: &BuilderEnv,
 ) -> Result<(), Box<dyn std::error::Error>> {
@@ -153,7 +153,7 @@ async fn retired_model_session_switches_to_replacement() -> E2eResult {
                 scenario
                     .compose(&common::wait_for_agentty_startup())
                     .compose(&common::switch_to_tab("Sessions"))
-                    .wait_for_text("gemini-3.5-flash-lite", 5000)
+                    .wait_for_text("gemini-3.8-flash", 5000)
                     .capture_labeled(
                         "retired_model_replacement",
                         "Active session switched to the replacement model",
@@ -163,7 +163,7 @@ async fn retired_model_session_switches_to_replacement() -> E2eResult {
                 Box::pin(async move {
                     let full = Region::full(frame.cols(), frame.rows());
                     assertion::assert_text_in_region(frame, "Retired model", &full);
-                    assertion::assert_text_in_region(frame, "gemini-3.5-flash-lite", &full);
+                    assertion::assert_text_in_region(frame, "gemini-3.8-flash", &full);
                     assertion::assert_match_count(frame, "gemini-3.5-flash [medium]", 0);
                 })
             },
@@ -239,8 +239,9 @@ async fn codex_model_picker_lists_current_models() -> E2eResult {
     Ok(())
 }
 
-/// Verify that the prompt `/model` picker exposes the current Gemini models
-/// for Antigravity when `agy` is locally available.
+/// Verify that the prompt `/model` picker exposes every current Antigravity
+/// model, including the Claude models it shares, when `agy` is locally
+/// available.
 #[tokio::test]
 async fn antigravity_model_picker_includes_gemini_models() -> E2eResult {
     // Arrange, Act, Assert
@@ -253,7 +254,7 @@ async fn antigravity_model_picker_includes_gemini_models() -> E2eResult {
                     env,
                     &[
                         ("DefaultSmartAgent", "antigravity"),
-                        ("DefaultSmartModel", "gemini-3.1-pro-preview"),
+                        ("DefaultSmartModel", "gemini-4-argon"),
                     ],
                 )
                 .await
@@ -284,16 +285,23 @@ async fn antigravity_model_picker_includes_gemini_models() -> E2eResult {
                 Box::pin(async move {
                     let full = Region::full(frame.cols(), frame.rows());
                     assertion::assert_text_in_region(frame, "gemini-4-argon", &full);
+                    assertion::assert_match_count(frame, "gemini-3.1-pro-preview", 0);
+                    assertion::assert_match_count(frame, "gemini-3.5-flash-lite", 0);
                     let text = frame.all_text();
+                    let positions = [
+                        "gemini-4-hydrogen",
+                        "gemini-pro-orchestrator-g1-pro",
+                        "gemini-3.8-flash",
+                        "claude-opus-5-5",
+                        "claude-sonnet-5-5",
+                        "gpt-oss-120b",
+                    ]
+                    .map(|model| text.find(model));
                     assert!(
-                        text.rfind("gemini-4-argon").expect("Argon is visible")
-                            < text
-                                .rfind("gemini-3.1-pro-preview")
-                                .expect("Pro is visible")
+                        positions.iter().all(Option::is_some),
+                        "every listed model is visible: {positions:?}"
                     );
-                    assertion::assert_text_in_region(frame, "gemini-3.1-pro-preview", &full);
-                    assertion::assert_text_in_region(frame, "gemini-3.8-flash", &full);
-                    assertion::assert_text_in_region(frame, "gemini-3.5-flash-lite", &full);
+                    assert!(positions.is_sorted(), "picker keeps `agy models` order");
                 })
             },
         )

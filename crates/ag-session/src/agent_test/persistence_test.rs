@@ -6,16 +6,15 @@ use crate::agent::{AgentKind, AgentModel, AgentSelection, parse_persisted_sessio
 fn test_retired_replacement_maps_only_retired_ids() {
     // Arrange
     let retired_ids = [
-        ("gemini-3-pro-preview", AgentModel::Gemini31Pro),
-        ("gemini-3.1-pro", AgentModel::Gemini31Pro),
+        ("gemini-3-pro-preview", AgentModel::Gemini4Argon),
+        ("gemini-3.1-pro", AgentModel::Gemini4Argon),
+        ("gemini-3.1-pro-preview", AgentModel::Gemini4Argon),
         ("gemini-3-flash-preview", AgentModel::Gemini38Flash),
         ("gemini-3.7-flash", AgentModel::Gemini38Flash),
         ("gemini-3.6-flash", AgentModel::Gemini38Flash),
-        ("gemini-3.5-flash", AgentModel::Gemini35FlashLite),
-        (
-            "gemini-3.1-flash-lite-preview",
-            AgentModel::Gemini35FlashLite,
-        ),
+        ("gemini-3.5-flash", AgentModel::Gemini38Flash),
+        ("gemini-3.5-flash-lite", AgentModel::Gemini38Flash),
+        ("gemini-3.1-flash-lite-preview", AgentModel::Gemini38Flash),
         ("claude-fable-5", AgentModel::ClaudeFable52),
         ("claude-fable-5-1", AgentModel::ClaudeFable52),
         ("claude-opus-5", AgentModel::ClaudeOpus55),
@@ -41,9 +40,8 @@ fn test_retired_replacement_maps_only_retired_ids() {
     let persisted_parses = retired_ids.map(|(id, _)| AgentModel::parse_persisted(id));
     let selectable_parses = retired_ids.map(|(retired_id, _)| retired_id.parse::<AgentModel>());
     let current_replacements = [
-        "gemini-3.1-pro-preview",
+        "gemini-4-argon",
         "gemini-3.8-flash",
-        "gemini-3.5-flash-lite",
         "claude-fable-5-2",
         "claude-opus-5-5",
         "claude-sonnet-5-5",
@@ -60,7 +58,7 @@ fn test_retired_replacement_maps_only_retired_ids() {
     );
     assert_eq!(persisted_parses, retired_ids.map(|(_, model)| Ok(model)));
     assert!(selectable_parses.iter().all(Result::is_err));
-    assert_eq!(current_replacements, [None; 8]);
+    assert_eq!(current_replacements, [None; 7]);
     assert_eq!(unknown_replacement, None);
 }
 
@@ -100,17 +98,14 @@ fn test_parse_persisted_handles_supported_and_retired_models() {
     assert_eq!(parsed_gemini_38_flash, Ok(AgentModel::Gemini38Flash));
     assert_eq!(parsed_gemini_37_flash, Ok(AgentModel::Gemini38Flash));
     assert_eq!(parsed_gemini_36_flash, Ok(AgentModel::Gemini38Flash));
-    assert_eq!(parsed_gemini_35_flash, Ok(AgentModel::Gemini35FlashLite));
+    assert_eq!(parsed_gemini_35_flash, Ok(AgentModel::Gemini38Flash));
     assert_eq!(parsed_gemini_3_flash_preview, Ok(AgentModel::Gemini38Flash));
-    assert_eq!(
-        parsed_gemini_35_flash_lite,
-        Ok(AgentModel::Gemini35FlashLite)
-    );
-    assert_eq!(parsed_gemini_31_pro, Ok(AgentModel::Gemini31Pro));
-    assert_eq!(parsed_gemini_31_pro_preview, Ok(AgentModel::Gemini31Pro));
+    assert_eq!(parsed_gemini_35_flash_lite, Ok(AgentModel::Gemini38Flash));
+    assert_eq!(parsed_gemini_31_pro, Ok(AgentModel::Gemini4Argon));
+    assert_eq!(parsed_gemini_31_pro_preview, Ok(AgentModel::Gemini4Argon));
     assert_eq!(
         parsed_gemini_31_flash_lite_preview,
-        Ok(AgentModel::Gemini35FlashLite)
+        Ok(AgentModel::Gemini38Flash)
     );
 }
 
@@ -143,7 +138,7 @@ fn test_parse_persisted_session_agent_model_preserves_antigravity_models() {
 }
 
 #[test]
-/// Ensures current and retired Gemini models resolve to supported
+/// Ensures retired Gemini models resolve to supported
 /// Antigravity models, including rows saved by the retired Gemini backend.
 fn test_parse_persisted_session_agent_model_resolves_saved_google_models() {
     // Arrange
@@ -163,10 +158,10 @@ fn test_parse_persisted_session_agent_model_resolves_saved_google_models() {
     assert_eq!(
         migrated_selections,
         [
-            AgentSelection::new(AgentKind::Antigravity, AgentModel::Gemini35FlashLite),
-            AgentSelection::new(AgentKind::Antigravity, AgentModel::Gemini35FlashLite),
-            AgentSelection::new(AgentKind::Antigravity, AgentModel::Gemini35FlashLite),
-            AgentSelection::new(AgentKind::Antigravity, AgentModel::Gemini35FlashLite),
+            AgentSelection::new(AgentKind::Antigravity, AgentModel::Gemini38Flash),
+            AgentSelection::new(AgentKind::Antigravity, AgentModel::Gemini38Flash),
+            AgentSelection::new(AgentKind::Antigravity, AgentModel::Gemini38Flash),
+            AgentSelection::new(AgentKind::Antigravity, AgentModel::Gemini38Flash),
         ]
     );
 }
@@ -199,23 +194,23 @@ fn test_parse_persisted_session_agent_model_defaults_legacy_gemini_to_antigravit
 }
 
 #[test]
-/// Ensures current and retired Gemini models in rows without a saved
+/// Ensures retired Gemini models in rows without a saved
 /// provider resolve through the legacy Antigravity compatibility path.
 fn test_parse_persisted_session_agent_model_resolves_legacy_gemini_rows() {
     // Arrange
 
     // Act
     let migrated_flash = parse_persisted_session_agent_model(None, "gemini-3.5-flash");
-    let loaded_flash_lite = parse_persisted_session_agent_model(None, "gemini-3.5-flash-lite");
+    let migrated_flash_lite = parse_persisted_session_agent_model(None, "gemini-3.5-flash-lite");
 
     // Assert
     assert_eq!(
         migrated_flash,
-        AgentSelection::new(AgentKind::Antigravity, AgentModel::Gemini35FlashLite)
+        AgentSelection::new(AgentKind::Antigravity, AgentModel::Gemini38Flash)
     );
     assert_eq!(
-        loaded_flash_lite,
-        AgentSelection::new(AgentKind::Antigravity, AgentModel::Gemini35FlashLite)
+        migrated_flash_lite,
+        AgentSelection::new(AgentKind::Antigravity, AgentModel::Gemini38Flash)
     );
 }
 
@@ -225,6 +220,24 @@ fn test_legacy_missing_and_invalid_agent_values_have_deterministic_fallbacks() {
     let cases = [
         (None, "gpt-5.5", AgentKind::Codex, AgentModel::Gpt61Sol),
         (None, "qwen-plus", AgentKind::Harness, AgentModel::QwenPlus),
+        (
+            None,
+            "gpt-oss-120b",
+            AgentKind::Antigravity,
+            AgentModel::GptOss120b,
+        ),
+        (
+            None,
+            "claude-opus-5-5",
+            AgentKind::Claude,
+            AgentModel::ClaudeOpus55,
+        ),
+        (
+            Some("antigravity"),
+            "claude-opus-5-5",
+            AgentKind::Antigravity,
+            AgentModel::ClaudeOpus55,
+        ),
         (
             None,
             "chatgpt/gpt-6.1-sol",
@@ -247,7 +260,7 @@ fn test_legacy_missing_and_invalid_agent_values_have_deterministic_fallbacks() {
             Some("unknown"),
             "unknown-model",
             AgentKind::Antigravity,
-            AgentModel::Gemini31Pro,
+            AgentModel::Gemini4Argon,
         ),
         (
             Some(" "),

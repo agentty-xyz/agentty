@@ -5,11 +5,12 @@ use ag_session::test_support as model_fixture;
 
 use super::{
     PendingImagePaste, PromptAttachment, PromptAttachmentState, PromptComposerState,
-    PromptGraphState, PromptHistoryState, PromptSlashStage, PromptSlashState, PromptSuggestionItem,
-    PromptSuggestionList, PromptSuggestionSelection, build_prompt_slash_suggestion_list,
-    command_description, current_line_delete_range, drain_prompt_submission, image_token_end_index,
-    insert_prompt_local_image, insert_prompt_local_image_at, needs_space_after_image_placeholder,
-    prompt_slash_option_count, resolve_prompt_slash_selection,
+    PromptGraphState, PromptHistoryState, PromptSlashCommandSet, PromptSlashStage,
+    PromptSlashState, PromptSuggestionItem, PromptSuggestionList, PromptSuggestionSelection,
+    build_prompt_slash_suggestion_list, command_description, current_line_delete_range,
+    drain_prompt_submission, image_token_end_index, insert_prompt_local_image,
+    insert_prompt_local_image_at, needs_space_after_image_placeholder, prompt_slash_option_count,
+    resolve_prompt_slash_selection,
 };
 use crate::domain::agent::{
     AgentKind, AgentModel, AgentSelection, HarnessModelOption, HarnessModelStatus, ModelCost,
@@ -489,8 +490,12 @@ fn test_prompt_composer_default_reports_slash_input_and_empty_submission() {
 
     // Act
     let slash_state = composer.is_slash_command();
-    let non_slash_suggestions =
-        build_prompt_slash_suggestion_list("model", &composer.slash_state, AgentKind::Codex, false);
+    let non_slash_suggestions = build_prompt_slash_suggestion_list(
+        "model",
+        &composer.slash_state,
+        AgentKind::Codex,
+        PromptSlashCommandSet::WithoutApply,
+    );
     let slash_submission = composer.take_submission();
 
     // Assert
@@ -577,10 +582,19 @@ fn test_mode_is_selected_for_m_shortcut() {
     let slash_state = PromptSlashState::default();
 
     // Act
-    let suggestion_list =
-        build_prompt_slash_suggestion_list("/m", &slash_state, AgentKind::Codex, false)
-            .expect("expected suggestion list");
-    let selection = resolve_prompt_slash_selection("/m", &slash_state, AgentKind::Codex, false);
+    let suggestion_list = build_prompt_slash_suggestion_list(
+        "/m",
+        &slash_state,
+        AgentKind::Codex,
+        PromptSlashCommandSet::WithoutApply,
+    )
+    .expect("expected suggestion list");
+    let selection = resolve_prompt_slash_selection(
+        "/m",
+        &slash_state,
+        AgentKind::Codex,
+        PromptSlashCommandSet::WithoutApply,
+    );
 
     // Assert
     assert_eq!(
@@ -667,10 +681,19 @@ fn test_mode_stage_lists_modes_and_returns_selected_mode() {
     };
 
     // Act
-    let suggestion_list =
-        build_prompt_slash_suggestion_list("/mode", &slash_state, AgentKind::Codex, false)
-            .expect("mode suggestions should render");
-    let selection = resolve_prompt_slash_selection("/mode", &slash_state, AgentKind::Codex, false);
+    let suggestion_list = build_prompt_slash_suggestion_list(
+        "/mode",
+        &slash_state,
+        AgentKind::Codex,
+        PromptSlashCommandSet::WithoutApply,
+    )
+    .expect("mode suggestions should render");
+    let selection = resolve_prompt_slash_selection(
+        "/mode",
+        &slash_state,
+        AgentKind::Codex,
+        PromptSlashCommandSet::WithoutApply,
+    );
 
     // Assert
     assert_eq!(suggestion_list.title, "/mode (j/k move, Enter select)");
@@ -722,9 +745,18 @@ fn test_fast_command_is_available_only_for_supported_agents() {
         let slash_state = PromptSlashState::default();
 
         // Act
-        let suggestion_list =
-            build_prompt_slash_suggestion_list("/fast", &slash_state, agent_kind, false);
-        let selection = resolve_prompt_slash_selection("/fast", &slash_state, agent_kind, false);
+        let suggestion_list = build_prompt_slash_suggestion_list(
+            "/fast",
+            &slash_state,
+            agent_kind,
+            PromptSlashCommandSet::WithoutApply,
+        );
+        let selection = resolve_prompt_slash_selection(
+            "/fast",
+            &slash_state,
+            agent_kind,
+            PromptSlashCommandSet::WithoutApply,
+        );
 
         // Assert
         if matches!(agent_kind, AgentKind::Claude | AgentKind::Codex) {
@@ -1053,9 +1085,13 @@ fn test_prompt_slash_command_list_omits_apply_when_disabled() {
     let slash_state = PromptSlashState::default();
 
     // Act
-    let suggestion_list =
-        build_prompt_slash_suggestion_list("/", &slash_state, AgentKind::Codex, false)
-            .expect("expected suggestion list");
+    let suggestion_list = build_prompt_slash_suggestion_list(
+        "/",
+        &slash_state,
+        AgentKind::Codex,
+        PromptSlashCommandSet::WithoutApply,
+    )
+    .expect("expected suggestion list");
     let labels = suggestion_list
         .items
         .iter()
@@ -1084,10 +1120,19 @@ fn graph_command_availability_keeps_menu_and_selection_aligned() {
         };
 
         // Act
-        let menu = build_prompt_slash_suggestion_list("/", &slash_state, AgentKind::Codex, false)
-            .expect("slash menu");
-        let selection =
-            resolve_prompt_slash_selection("/graph", &slash_state, AgentKind::Codex, false);
+        let menu = build_prompt_slash_suggestion_list(
+            "/",
+            &slash_state,
+            AgentKind::Codex,
+            PromptSlashCommandSet::WithoutApply,
+        )
+        .expect("slash menu");
+        let selection = resolve_prompt_slash_selection(
+            "/graph",
+            &slash_state,
+            AgentKind::Codex,
+            PromptSlashCommandSet::WithoutApply,
+        );
 
         // Assert
         assert_eq!(
@@ -1100,7 +1145,12 @@ fn graph_command_availability_keeps_menu_and_selection_aligned() {
             enabled.then_some(PromptSuggestionSelection::Command("/graph"))
         );
         assert_eq!(
-            prompt_slash_option_count("/graph", &slash_state, AgentKind::Codex, false),
+            prompt_slash_option_count(
+                "/graph",
+                &slash_state,
+                AgentKind::Codex,
+                PromptSlashCommandSet::WithoutApply
+            ),
             usize::from(enabled)
         );
     }
@@ -1112,9 +1162,13 @@ fn test_prompt_slash_command_list_omits_fast_for_unsupported_agent() {
     let slash_state = PromptSlashState::default();
 
     // Act
-    let suggestion_list =
-        build_prompt_slash_suggestion_list("/", &slash_state, AgentKind::Antigravity, false)
-            .expect("expected suggestion list");
+    let suggestion_list = build_prompt_slash_suggestion_list(
+        "/",
+        &slash_state,
+        AgentKind::Antigravity,
+        PromptSlashCommandSet::WithoutApply,
+    )
+    .expect("expected suggestion list");
 
     // Assert
     assert_eq!(
@@ -1136,7 +1190,12 @@ fn test_prompt_slash_selection_uses_filtered_command_indexes() {
     };
 
     // Act
-    let selection = resolve_prompt_slash_selection("/", &slash_state, AgentKind::Codex, false);
+    let selection = resolve_prompt_slash_selection(
+        "/",
+        &slash_state,
+        AgentKind::Codex,
+        PromptSlashCommandSet::WithoutApply,
+    );
 
     // Assert
     assert_eq!(selection, Some(PromptSuggestionSelection::Command("/mode")));
@@ -1152,10 +1211,19 @@ fn test_style_stage_lists_descriptions_and_returns_selected_style() {
     };
 
     // Act
-    let suggestion_list =
-        build_prompt_slash_suggestion_list("/style", &slash_state, AgentKind::Codex, false)
-            .expect("expected style suggestions");
-    let selection = resolve_prompt_slash_selection("/style", &slash_state, AgentKind::Codex, false);
+    let suggestion_list = build_prompt_slash_suggestion_list(
+        "/style",
+        &slash_state,
+        AgentKind::Codex,
+        PromptSlashCommandSet::WithoutApply,
+    )
+    .expect("expected style suggestions");
+    let selection = resolve_prompt_slash_selection(
+        "/style",
+        &slash_state,
+        AgentKind::Codex,
+        PromptSlashCommandSet::WithoutApply,
+    );
 
     // Assert
     assert_eq!(
@@ -1309,9 +1377,13 @@ fn harness_model_stage_labels_free_local_models_and_paid_price_classes() {
     let slash_state = harness_model_stage(labeled_harness_models(), 0);
 
     // Act
-    let suggestion_list =
-        build_prompt_slash_suggestion_list("/model", &slash_state, AgentKind::Harness, true)
-            .expect("harness models should render");
+    let suggestion_list = build_prompt_slash_suggestion_list(
+        "/model",
+        &slash_state,
+        AgentKind::Harness,
+        PromptSlashCommandSet::WithApply,
+    )
+    .expect("harness models should render");
 
     // Assert
     assert_eq!(
@@ -1401,13 +1473,13 @@ fn harness_model_stage_selects_only_models_that_can_run() {
         "/model",
         &harness_model_stage(harness_models.clone(), 0),
         AgentKind::Harness,
-        true,
+        PromptSlashCommandSet::WithApply,
     );
     let missing_key = resolve_prompt_slash_selection(
         "/model",
         &harness_model_stage(harness_models, 1),
         AgentKind::Harness,
-        true,
+        PromptSlashCommandSet::WithApply,
     );
 
     // Assert
@@ -1450,13 +1522,13 @@ fn harness_model_stage_offers_sign_in_for_models_that_need_it() {
         "/model",
         &harness_model_stage(harness_models.clone(), 1),
         AgentKind::Harness,
-        true,
+        PromptSlashCommandSet::WithApply,
     );
     let no_tools = resolve_prompt_slash_selection(
         "/model",
         &harness_model_stage(harness_models, 2),
         AgentKind::Harness,
-        true,
+        PromptSlashCommandSet::WithApply,
     );
 
     // Assert
@@ -1484,11 +1556,19 @@ fn harness_model_stage_explains_how_to_add_local_models() {
     );
 
     // Act
-    let suggestion_list =
-        build_prompt_slash_suggestion_list("/model", &slash_state, AgentKind::Harness, true)
-            .expect("harness models should render");
-    let hint_selection =
-        resolve_prompt_slash_selection("/model", &slash_state, AgentKind::Harness, true);
+    let suggestion_list = build_prompt_slash_suggestion_list(
+        "/model",
+        &slash_state,
+        AgentKind::Harness,
+        PromptSlashCommandSet::WithApply,
+    )
+    .expect("harness models should render");
+    let hint_selection = resolve_prompt_slash_selection(
+        "/model",
+        &slash_state,
+        AgentKind::Harness,
+        PromptSlashCommandSet::WithApply,
+    );
 
     // Assert
     assert_eq!(suggestion_list.items[0].label.trim_end(), "no local models");
@@ -1506,11 +1586,19 @@ fn harness_model_stage_lists_the_paid_catalog_before_discovery() {
     let slash_state = harness_model_stage(Vec::new(), 1);
 
     // Act
-    let suggestion_list =
-        build_prompt_slash_suggestion_list("/model", &slash_state, AgentKind::Harness, true)
-            .expect("harness catalog should render");
-    let selection =
-        resolve_prompt_slash_selection("/model", &slash_state, AgentKind::Harness, true);
+    let suggestion_list = build_prompt_slash_suggestion_list(
+        "/model",
+        &slash_state,
+        AgentKind::Harness,
+        PromptSlashCommandSet::WithApply,
+    )
+    .expect("harness catalog should render");
+    let selection = resolve_prompt_slash_selection(
+        "/model",
+        &slash_state,
+        AgentKind::Harness,
+        PromptSlashCommandSet::WithApply,
+    );
 
     // Assert
     assert_eq!(
@@ -1530,4 +1618,23 @@ fn harness_model_stage_lists_the_paid_catalog_before_discovery() {
             AgentModel::MuseSpark13Contributor,
         )))
     );
+}
+
+#[test]
+fn slash_command_set_offers_setting_commands_only_for_busy_sessions() {
+    // Arrange
+    let cases = [
+        (true, true, PromptSlashCommandSet::SettingsOnly),
+        (false, true, PromptSlashCommandSet::SettingsOnly),
+        (true, false, PromptSlashCommandSet::WithApply),
+        (false, false, PromptSlashCommandSet::WithoutApply),
+    ];
+
+    for (allow_apply_command, session_is_busy, expected) in cases {
+        // Act
+        let command_set = PromptSlashCommandSet::for_session(allow_apply_command, session_is_busy);
+
+        // Assert
+        assert_eq!(command_set, expected);
+    }
 }

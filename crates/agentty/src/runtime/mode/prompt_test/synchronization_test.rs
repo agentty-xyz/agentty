@@ -1,7 +1,7 @@
 use std::path::PathBuf;
 
 use super::super::{PromptEffect, reduce_prompt_input_command, select_at_mention};
-use super::support::{PromptTestModeExt, new_test_prompt_context, new_test_prompt_mode};
+use super::support::{PromptTestModeExt, new_test_prompt_mode};
 use crate::domain::file_entry::FileEntry;
 use crate::domain::input::InputCommand;
 use crate::presentation::app_mode::AppMode;
@@ -11,16 +11,10 @@ use crate::presentation::prompt::PromptAtMentionState;
 fn test_prompt_input_edit_and_undo_resync_at_mention_state() {
     // Arrange
     let mut mode = new_test_prompt_mode("");
-    let prompt_context = new_test_prompt_context();
     let mut effects = Vec::new();
 
     // Act
-    reduce_prompt_input_command(
-        &mut mode,
-        &prompt_context,
-        InputCommand::Insert('@'),
-        &mut effects,
-    );
+    reduce_prompt_input_command(&mut mode, InputCommand::Insert('@'), &mut effects);
 
     // Assert
     assert!(matches!(
@@ -33,12 +27,7 @@ fn test_prompt_input_edit_and_undo_resync_at_mention_state() {
     ));
 
     // Act
-    reduce_prompt_input_command(
-        &mut mode,
-        &prompt_context,
-        InputCommand::Insert(' '),
-        &mut effects,
-    );
+    reduce_prompt_input_command(&mut mode, InputCommand::Insert(' '), &mut effects);
 
     // Assert
     assert!(matches!(
@@ -47,7 +36,7 @@ fn test_prompt_input_edit_and_undo_resync_at_mention_state() {
     ));
 
     // Act
-    reduce_prompt_input_command(&mut mode, &prompt_context, InputCommand::Undo, &mut effects);
+    reduce_prompt_input_command(&mut mode, InputCommand::Undo, &mut effects);
 
     // Assert
     assert!(matches!(
@@ -66,7 +55,6 @@ fn test_at_mention_completion_keeps_following_image_occurrence_synchronized() {
         path: selected_path.to_string(),
     }]);
     let mut mode = new_test_prompt_mode("@v");
-    let prompt_context = new_test_prompt_context();
     let mut effects = Vec::new();
     mode.insert_pasted_image_placeholder(PathBuf::from("/tmp/image-1.png"));
     if let AppMode::Prompt {
@@ -80,17 +68,12 @@ fn test_at_mention_completion_keeps_following_image_occurrence_synchronized() {
     }
 
     // Act
-    select_at_mention(&mut mode, &prompt_context, &mut effects);
+    select_at_mention(&mut mode, &mut effects);
     let completed_mention = format!("@{selected_path} ");
     if let AppMode::Prompt { input, .. } = &mut mode {
         input.cursor = completed_mention.chars().count();
     }
-    reduce_prompt_input_command(
-        &mut mode,
-        &prompt_context,
-        InputCommand::DeleteForward,
-        &mut effects,
-    );
+    reduce_prompt_input_command(&mut mode, InputCommand::DeleteForward, &mut effects);
     let prompt = mode.take_submitted_turn_prompt();
 
     // Assert

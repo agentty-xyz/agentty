@@ -83,7 +83,7 @@ async fn test_load_auto_commit_agent_setting_falls_back_through_defaults() {
         .upsert_project_setting(
             project_id,
             SettingName::DefaultSmartModel,
-            AgentModel::Gemini31Pro.as_str(),
+            AgentModel::Gemini4Argon.as_str(),
         )
         .await
         .expect("failed to persist default smart model");
@@ -110,7 +110,7 @@ async fn test_load_auto_commit_agent_setting_falls_back_through_defaults() {
     // Assert
     assert_eq!(
         smart_fallback_agent,
-        AgentSelection::new(AgentKind::Antigravity, AgentModel::Gemini31Pro)
+        AgentSelection::new(AgentKind::Antigravity, AgentModel::Gemini4Argon)
     );
 
     // Arrange
