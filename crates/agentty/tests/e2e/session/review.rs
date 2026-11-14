@@ -916,7 +916,10 @@ async fn persisted_focused_review_survives_reload() -> E2eResult {
                     .compose(&common::wait_for_agentty_startup())
                     .compose(&common::switch_to_tab("Sessions"))
                     .press_key("Enter")
-                    .wait_for_stable_frame(300, 5000)
+                    .step(common::wait_for_frame_text(
+                        &["Persisted focused review finding.", "- None."],
+                        &[],
+                    ))
                     .viewing_pause_ms(1500)
                     .capture_labeled(
                         "persisted_focused_review",
@@ -1139,7 +1142,10 @@ async fn focused_review_ignores_blank_completed_fallback() -> E2eResult {
                     .press_key("Enter")
                     .press_key("f")
                     .wait_for_text("Final focused review result.", 30000)
-                    .wait_for_stable_frame(300, 5000)
+                    .step(common::wait_for_frame_text(
+                        &["Suggestions"],
+                        &["Reviewing changes with"],
+                    ))
                     .capture_labeled(
                         "final_review",
                         "Focused review preserves the nonblank final answer",
@@ -1179,7 +1185,7 @@ async fn agent_review_session_shows_sync_shortcut() -> E2eResult {
                     .compose(&common::wait_for_agentty_startup())
                     .compose(&common::switch_to_tab("Sessions"))
                     .press_key("Enter")
-                    .wait_for_stable_frame(300, 5000)
+                    .step(common::wait_for_frame_text(&["q: back", "r: sync"], &[]))
                     .viewing_pause_ms(1500)
                     .capture_labeled(
                         "agent_review_sync_shortcut",
@@ -1240,7 +1246,7 @@ async fn focused_review_progress_survives_sync() -> E2eResult {
                     .wait_for_text("0/1 batches complete", 10000)
                     .press_key("r")
                     .wait_for_text("Successfully synced", 15000)
-                    .wait_for_stable_frame(300, 5000)
+                    .step(common::wait_for_frame_text(&["0/1 batches complete"], &[]))
                     .capture_labeled(
                         "after_sync",
                         "Running focused review remains visible after sync",
@@ -1358,7 +1364,6 @@ async fn apply_slash_command_unavailable_without_review_cache() -> E2eResult {
                     )
                     .write_text("apply")
                     .wait_for_text("/apply", 3000)
-                    .wait_for_stable_frame(300, 3000)
                     .press_key("Enter")
                     .wait_for_stable_frame(300, 5000)
                     .viewing_pause_ms(1500)

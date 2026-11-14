@@ -203,6 +203,12 @@ impl PtySession {
     /// binary has not produced output while allowing textless states such as
     /// styled blank cells or cursor changes to stabilize.
     ///
+    /// The stability window is measured from the arrival of the last output
+    /// that changed the frame, or from the call when the current frame is
+    /// already visible. The wait blocks on new output until that window
+    /// closes instead of polling at a fixed interval, so it returns as soon
+    /// as the frame has been unchanged for `stable_duration`.
+    ///
     /// # Errors
     ///
     /// Returns an error if the frame does not stabilize within the timeout.
@@ -212,37 +218,37 @@ impl PtySession {
         timeout: Duration,
     ) -> Result<TerminalFrame, PtySessionError> {
         let deadline = Instant::now() + timeout;
-        let mut previous_frame = Vec::new();
+        self.drain_output(Duration::ZERO);
         let mut stable_since = Instant::now();
-        let mut seen_change = false;
+        let mut frame = TerminalFrame::new(self.cols, self.rows, &self.output_buffer);
+        let mut previous_frame =
+            (!self.output_buffer.is_empty()).then(|| frame.contents_formatted());
 
         loop {
-            self.drain_output(Duration::from_millis(100));
-            let frame = TerminalFrame::new(self.cols, self.rows, &self.output_buffer);
-            if self.output_buffer.is_empty() {
-                if Instant::now() >= deadline {
-                    return Err(PtySessionError::Timeout(
-                        "Frame did not stabilize within timeout".to_string(),
-                    ));
-                }
-
-                continue;
-            }
-            let current_frame = frame.contents_formatted();
-
-            if current_frame != previous_frame {
-                previous_frame = current_frame;
-                stable_since = Instant::now();
-                seen_change = true;
-            } else if seen_change && Instant::now().duration_since(stable_since) >= stable_duration
-            {
+            let stable_deadline = stable_since + stable_duration;
+            if previous_frame.is_some() && Instant::now() >= stable_deadline {
                 return Ok(frame);
             }
-
             if Instant::now() >= deadline {
                 return Err(PtySessionError::Timeout(
                     "Frame did not stabilize within timeout".to_string(),
                 ));
+            }
+
+            let wait_until = if previous_frame.is_some() {
+                stable_deadline.min(deadline)
+            } else {
+                deadline
+            };
+            if !self.receive_output_until(wait_until) {
+                continue;
+            }
+
+            frame = TerminalFrame::new(self.cols, self.rows, &self.output_buffer);
+            let current_frame = Some(frame.contents_formatted());
+            if current_frame != previous_frame {
+                previous_frame = current_frame;
+                stable_since = Instant::now();
             }
         }
     }
@@ -492,6 +498,33 @@ impl PtySession {
             position += 1;
         }
         self.query_scan_offset = position;
+    }
+
+    /// Block until new PTY output arrives or `deadline` passes.
+    ///
+    /// Appends the first chunk plus every chunk already queued behind it,
+    /// answering terminal queries as [`Self::drain_output`] does, and returns
+    /// `true`. Returns `false` when no output arrived before `deadline`. A
+    /// closed output stream sleeps until `deadline` so callers keep their
+    /// timing instead of spinning on a disconnected channel.
+    fn receive_output_until(&mut self, deadline: Instant) -> bool {
+        let timeout = deadline.saturating_duration_since(Instant::now());
+
+        match self.output_receiver.recv_timeout(timeout) {
+            Ok(chunk) => {
+                self.output_buffer.extend_from_slice(&chunk);
+                self.answer_terminal_queries();
+                self.drain_output(Duration::ZERO);
+
+                true
+            }
+            Err(mpsc::RecvTimeoutError::Timeout) => false,
+            Err(mpsc::RecvTimeoutError::Disconnected) => {
+                thread::sleep(timeout);
+
+                false
+            }
+        }
     }
 
     /// Background thread function that reads PTY output and sends chunks

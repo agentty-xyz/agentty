@@ -1429,16 +1429,26 @@ impl ReleaseGate {
 // Agentty-specific Journey builders
 // ---------------------------------------------------------------------------
 
-/// Wait for agentty to start up and render a stable initial frame.
+/// Wait for agentty to start up and render its initial frame.
 ///
-/// Waits for the initial TUI frame to appear and then settle briefly before
-/// the scenario starts interacting with the app.
+/// Returns once the header is visible and background agent CLI version
+/// checks have finished, so the scenario can start interacting with the app.
+/// Later steps wait for the content they depend on; use
+/// [`wait_for_settled_agentty_startup`] when the next step captures the
+/// startup frame itself.
 pub(crate) fn wait_for_agentty_startup() -> Journey {
     Journey::new("agentty_startup")
         .with_description("Wait for agentty startup and initial render")
         .step(Step::wait_for_text("Agentty", 30000))
         .step(wait_for_agent_cli_versions())
-        .step(Step::wait_for_stable_frame(300, 5000))
+}
+
+/// Wait for agentty to start up and render a stable initial frame.
+///
+/// Extends [`wait_for_agentty_startup`] with a stable-frame wait for
+/// scenarios that capture the startup frame before any other wait.
+pub(crate) fn wait_for_settled_agentty_startup() -> Journey {
+    wait_for_agentty_startup().step(Step::wait_for_stable_frame(300, 5000))
 }
 
 /// Wait until background agent CLI version checks stop showing their
@@ -1454,6 +1464,36 @@ fn wait_for_agent_cli_versions() -> Step {
 
 /// Label the project page shows while an agent CLI version check runs.
 const AGENT_CLI_VERSION_LOADING_LABEL: &str = "updating...";
+
+/// Wait until every `visible` needle renders and no `hidden` needle does.
+///
+/// Replaces a stable-frame wait in regression-only scenarios whose next
+/// capture or assertion depends on exactly this content. Pair `hidden`
+/// needles with at least one `visible` needle: a hidden-only check returns on
+/// the first frame without the text, so checks that text stays absent keep a
+/// stable-frame wait instead. VHS replays
+/// `Step::eventually` as a sleep for its full timeout, so published
+/// scenarios wait for text or a stable frame instead.
+pub(crate) fn wait_for_frame_text(
+    visible: &'static [&'static str],
+    hidden: &'static [&'static str],
+) -> Step {
+    Step::eventually(
+        SESSION_TRANSITION_TIMEOUT,
+        SESSION_TRANSITION_POLL,
+        move |frame| {
+            let full = Region::full(frame.cols(), frame.rows());
+            for needle in visible {
+                assertion::match_text_in_region(frame, needle, &full)?;
+            }
+            for needle in hidden {
+                assertion::match_not_visible(frame, needle)?;
+            }
+
+            Ok(())
+        },
+    )
+}
 
 /// Switch to a tab by pressing `Tab` and waiting for page-specific content.
 ///
@@ -1653,6 +1693,27 @@ pub(crate) fn return_to_session_list() -> Journey {
         .step(wait_for_session_list_footer())
 }
 
+/// Footer help prefix rendered while a prompt composer is focused and
+/// accepting input.
+const PROMPT_COMPOSER_FOOTER_MARKER: &str = "Tab: focus | Enter: send";
+
+/// Press `a`, accept the regular-session default, and wait for the prompt
+/// composer.
+///
+/// Requires the Sessions tab to be active.
+pub(crate) fn open_new_session_prompt() -> Journey {
+    Journey::new("open_new_session_prompt")
+        .with_description("Press a, accept the regular session, and wait for the composer")
+        .step(Step::press_key("a"))
+        .step(Step::press_key("Enter"))
+        .step(wait_for_prompt_composer())
+}
+
+/// Wait until a prompt composer is focused and accepts input.
+pub(crate) fn wait_for_prompt_composer() -> Step {
+    Step::wait_for_text(PROMPT_COMPOSER_FOOTER_MARKER, 5000)
+}
+
 /// Create a session with a prompt, submit it, and return to the Sessions
 /// list.
 ///
@@ -1685,7 +1746,7 @@ pub(crate) fn create_session_with_prompt_and_return_to_list(prompt: &str) -> Jou
         ))
         .step(Step::press_key("a"))
         .step(Step::press_key("Enter"))
-        .step(Step::wait_for_stable_frame(300, 5000))
+        .step(wait_for_prompt_composer())
         .step(Step::write_text(prompt))
         .step(Step::wait_for_text(prompt, 3000))
         .step(Step::press_key("Enter"))

@@ -112,9 +112,7 @@ async fn bare_repo_worktree_layout_supports_session_turn() -> E2eResult {
                 scenario
                     .compose(&common::wait_for_agentty_startup())
                     .compose(&common::switch_to_tab("Sessions"))
-                    .press_key("a")
-                    .press_key("Enter")
-                    .wait_for_stable_frame(300, 5000)
+                    .compose(&common::open_new_session_prompt())
                     .write_text("Summarize the bare worktree layout")
                     .wait_for_text("Summarize the bare worktree layout", 3000)
                     .press_key("Enter")

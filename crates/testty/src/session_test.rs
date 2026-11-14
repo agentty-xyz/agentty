@@ -7,7 +7,7 @@ use std::os::windows::io::RawHandle;
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex, mpsc};
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 #[cfg(unix)]
 use portable_pty::unix::RawFd;
@@ -596,6 +596,48 @@ fn waits_time_out_when_output_never_satisfies_them() {
             if message == "Frame did not stabilize within timeout"),
         "unexpected stability wait result"
     );
+}
+
+#[test]
+fn wait_for_stable_frame_returns_after_output_stream_closes() {
+    // Arrange — the fake output yields one frame and then disconnects, so
+    // the wait must sleep through the window instead of spinning.
+    let mut session = fake_session(FakeChild::running(), Box::new(io::sink()), &[b"ready"]);
+    let stable_window = Duration::from_millis(50);
+    let started_at = Instant::now();
+
+    // Act
+    let frame = session
+        .wait_for_stable_frame(stable_window, Duration::from_secs(5))
+        .expect("a closed stream keeps its last frame stable");
+
+    // Assert — only a lower bound, so slow runners cannot flake the check.
+    assert!(frame.all_text().contains("ready"));
+    assert!(
+        started_at.elapsed() >= stable_window,
+        "the wait must not return before the stability window elapses"
+    );
+}
+
+/// Verifies that output arriving during the stability window without
+/// changing the frame keeps the visible frame stable.
+#[test]
+fn wait_for_stable_frame_accepts_identical_repaints() {
+    // Arrange — repaint the same text at the same position while the wait
+    // is still inside its stability window.
+    let script = "printf 'ready'; sleep 0.2; printf '\\033[1;1Hready'; sleep 60";
+    let mut session = PtySessionBuilder::new("/bin/sh")
+        .args(["-c", script])
+        .spawn()
+        .expect("failed to spawn repainting shell script");
+
+    // Act
+    let frame = session
+        .wait_for_stable_frame(Duration::from_millis(600), Duration::from_secs(5))
+        .expect("identical repaints should stabilize");
+
+    // Assert
+    assert_eq!(frame.all_text().trim(), "ready");
 }
 
 #[test]

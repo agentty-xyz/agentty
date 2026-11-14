@@ -363,7 +363,6 @@ async fn test_project_switcher() {
                     .viewing_pause_ms(1500)
                     .capture_labeled("switcher", "MRU project switcher popup")
                     .press_key("j")
-                    .wait_for_stable_frame(300, 3000)
                     .viewing_pause_ms(1000)
                     .press_key("Enter")
                     .wait_for_text("Project: zeta-project", 5000)

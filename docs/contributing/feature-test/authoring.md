@@ -112,13 +112,28 @@ scenario's isolated fixture state.
 Reuse the shared journey builders from `common.rs` instead of repeating step sequences:
 
 - `wait_for_agentty_startup()` — wait for the initial TUI frame.
-- `switch_to_tab(name)` — press `Tab` and wait for stability.
+- `wait_for_settled_agentty_startup()` — also wait for a stable frame, for scenarios
+  that capture the startup frame next.
+- `switch_to_tab(name)` — press `Tab` and wait for the destination page.
 - `switch_to_tab_reverse(name)` — press `BackTab` and wait.
 - `open_quit_dialog()` — press `q` and wait.
 - `open_help_overlay()` — press `?` and wait.
+- `open_new_session_prompt()` — press `a`, accept a regular session, and wait for the
+  composer.
 - `create_session_and_return_to_list()` — full session creation flow.
 - `create_session_with_prompt_and_return_to_list(prompt)` — session creation with a
   custom prompt.
+
+#### Waits
+
+A stable-frame wait costs at least its full window. Before input or an assertion, wait
+for the content it depends on with `wait_for_text`, or with
+`common::wait_for_frame_text` in unpublished scenarios. Keep `wait_for_stable_frame`
+before captures that need a settled frame, for style-only changes, for checks that text
+stays absent, and where no deterministic content signal exists. Keys handled
+synchronously need no wait between them, except after `Esc`: wait for its effect so the
+next key is not read as an `Alt` chord. VHS replays `Step::eventually` as a sleep for
+its full timeout, so published scenarios avoid it.
 
 ### 3. Verify the Zola page
 

@@ -168,7 +168,7 @@ async fn model_slash_command_contains_match_is_visible() -> E2eResult {
                     .press_key("a")
                     .wait_for_text("Regular", 5000)
                     .press_key("Enter")
-                    .wait_for_stable_frame(300, 5000)
+                    .step(common::wait_for_prompt_composer())
                     .press_key("/")
                     .write_text("o")
                     .wait_for_text("/model", 3000)
