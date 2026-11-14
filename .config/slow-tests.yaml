@@ -1,0 +1,21 @@
+# Known tests allowed to exceed the `check-slow-tests` threshold in the CI
+# coverage run. Each entry names the nextest binary and test, and why it is
+# slow. Remove an entry once its test is fast; stale entries only warn.
+- binary: agentty
+  test: app::review_prompt::tests::exhausted_shared_budget_preserves_completed_batches
+  reason: Splits an 8 MB diff into review batches until the shared provider-call budget runs out.
+- binary: ag-harness::sandbox
+  test: lifecycle::output_flood_cannot_prevent_deadline_cleanup
+  reason: Runs a flooding command to its 5 s deadline once per conformance executor.
+- binary: agentty
+  test: app::execution_graph::tests::task_graph_preserves_context_and_waits_for_acceptance_and_ordered_effects
+  reason: Grew from about 0.1 s to 5.1 s with durable graph budgets (PR 1041), likely waiting out a 5 s timeout.
+- binary: agentty
+  test: app::execution_graph::tests::lifecycle::graph_lifecycle_api_routes_clarification_into_an_isolated_new_attempt
+  reason: Grew from about 0.1 s to 5.1 s with durable graph budgets (PR 1041), likely waiting out a 5 s timeout.
+- binary: agentty
+  test: app::execution_graph::tests::lifecycle::graph_node_questions_are_asked_and_answered_in_session_chat
+  reason: Grew from about 0.1 s to 5.1 s with durable graph budgets (PR 1041), likely waiting out a 5 s timeout.
+- binary: agentty
+  test: app::graph_output_reply::tests::start_implementing_in_chat_accepts_the_awaited_output_and_continues_the_graph
+  reason: Grew from about 0.1 s to 5.1 s with durable graph budgets (PR 1041), likely waiting out a 5 s timeout.

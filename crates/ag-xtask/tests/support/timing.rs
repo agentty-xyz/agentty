@@ -6,7 +6,7 @@ use std::path::PathBuf;
 use serde_json::json;
 use sha2::{Digest, Sha256};
 
-pub(super) const JUNIT: &str = r#"<testsuites tests="2" failures="0" errors="0" time="2.5"><testsuite><testcase time="1"/><testcase time="2"/></testsuite></testsuites>"#;
+pub(super) const JUNIT: &str = r#"<testsuites tests="2" failures="0" errors="0" time="2.5"><testsuite><testcase name="fast" classname="fixture" time="1"/><testcase name="slow" classname="fixture" time="2"/></testsuite></testsuites>"#;
 pub(super) const CARGO: &str = "<td>Total time:</td><td>4.0s</td><td>Fresh \
                                 units:</td><td>12</td><td>Dirty units:</td><td>0</td>";
 

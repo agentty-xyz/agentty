@@ -1,4 +1,5 @@
-//! Comparable repeated measurements from fresh CI artifacts.
+//! Comparable repeated measurements from fresh CI artifacts, and the nextest
+//! `JUnit` parser shared with slow-test reports.
 
 use std::collections::{BTreeMap, HashSet};
 use std::io::{self, Write};
@@ -25,6 +26,86 @@ pub(crate) fn run(options: &Options) -> Result<(), String> {
     write_report(&report, &mut io::stdout().lock())
 }
 
+/// Run totals and per-test durations from a nextest `JUnit` report.
+pub(crate) struct Junit {
+    pub(crate) cases: Vec<TestCase>,
+    pub(crate) errors: f64,
+    pub(crate) failures: f64,
+    pub(crate) seconds: f64,
+    pub(crate) tests: f64,
+}
+
+/// One reported test, identified by its nextest binary and test name.
+pub(crate) struct TestCase {
+    pub(crate) binary: String,
+    pub(crate) name: String,
+    pub(crate) seconds: f64,
+}
+
+/// Reads timing inputs so report handling can be tested without files.
+#[cfg_attr(test, mockall::automock)]
+pub(crate) trait Reader {
+    /// Returns the file's contents, naming the path in any error.
+    fn read(&self, path: &Path) -> Result<String, String>;
+}
+
+/// Reads timing inputs from the filesystem.
+pub(crate) struct FileReader;
+
+impl Reader for FileReader {
+    fn read(&self, path: &Path) -> Result<String, String> {
+        std::fs::read_to_string(path).map_err(|error| format!("{}: {error}", path.display()))
+    }
+}
+
+/// Parses a nextest `JUnit` report's run totals and per-test durations.
+pub(crate) fn parse_junit(junit: &str) -> Result<Junit, String> {
+    let document =
+        roxmltree::Document::parse(junit).map_err(|error| format!("Invalid JUnit: {error}"))?;
+    let root = document.root_element();
+    if !root.has_tag_name("testsuites") {
+        return Err("Expected nextest testsuites root".into());
+    }
+    let attribute = |name| number(root.attribute(name).unwrap_or(""));
+    let cases = root
+        .descendants()
+        .filter(|node| node.has_tag_name("testcase"))
+        .map(|node| {
+            Ok(TestCase {
+                binary: node
+                    .attribute("classname")
+                    .ok_or("JUnit test case has no classname")?
+                    .to_string(),
+                name: node
+                    .attribute("name")
+                    .ok_or("JUnit test case has no name")?
+                    .to_string(),
+                seconds: number(node.attribute("time").unwrap_or(""))?,
+            })
+        })
+        .collect::<Result<_, String>>()?;
+
+    Ok(Junit {
+        cases,
+        errors: attribute("errors")?,
+        failures: attribute("failures")?,
+        seconds: attribute("time")?,
+        tests: attribute("tests")?,
+    })
+}
+
+/// Parses a finite, nonnegative timing value.
+pub(crate) fn number(value: &str) -> Result<f64, String> {
+    let value: f64 = value
+        .parse()
+        .map_err(|error| format!("Invalid numeric metric: {error}"))?;
+    if !value.is_finite() || value < 0.0 {
+        return Err("Timing metrics must be finite and nonnegative".into());
+    }
+
+    Ok(value)
+}
+
 #[derive(Deserialize)]
 struct Metadata {
     environment: Value,
@@ -48,19 +129,6 @@ struct Identity {
 struct Sample {
     metadata: Metadata,
     metrics: BTreeMap<&'static str, f64>,
-}
-
-#[cfg_attr(test, mockall::automock)]
-trait Reader {
-    fn read(&self, path: &Path) -> Result<String, String>;
-}
-
-struct FileReader;
-
-impl Reader for FileReader {
-    fn read(&self, path: &Path) -> Result<String, String> {
-        std::fs::read_to_string(path).map_err(|error| format!("{}: {error}", path.display()))
-    }
 }
 
 fn compare(options: &Options, reader: &impl Reader) -> Result<Value, String> {
@@ -199,26 +267,14 @@ fn load(paths: &[PathBuf], reader: &impl Reader) -> Result<Vec<Sample>, String> 
 }
 
 fn parse_reports(junit: &str, cargo: &str) -> Result<BTreeMap<&'static str, f64>, String> {
-    let document =
-        roxmltree::Document::parse(junit).map_err(|error| format!("Invalid JUnit: {error}"))?;
-    let root = document.root_element();
-    if !root.has_tag_name("testsuites") {
-        return Err("Expected nextest testsuites root".into());
-    }
-    let attribute = |name| number(root.attribute(name).unwrap_or(""));
-    if attribute("failures")? != 0.0 || attribute("errors")? != 0.0 {
+    let junit = parse_junit(junit)?;
+    if junit.failures != 0.0 || junit.errors != 0.0 {
         return Err("JUnit contains failed or errored tests".into());
     }
-    let process_seconds = root
-        .descendants()
-        .filter(|node| node.has_tag_name("testcase"))
-        .map(|node| number(node.attribute("time").unwrap_or("")))
-        .collect::<Result<Vec<_>, _>>()?
-        .iter()
-        .sum();
+    let process_seconds = junit.cases.iter().map(|case| case.seconds).sum();
     let mut metrics = BTreeMap::from([
-        ("execution_seconds", attribute("time")?),
-        ("tests", attribute("tests")?),
+        ("execution_seconds", junit.seconds),
+        ("tests", junit.tests),
         ("summed_test_process_seconds", process_seconds),
     ]);
     for (name, label) in [
@@ -241,17 +297,6 @@ fn parse_reports(junit: &str, cargo: &str) -> Result<BTreeMap<&'static str, f64>
     }
 
     Ok(metrics)
-}
-
-fn number(value: &str) -> Result<f64, String> {
-    let value: f64 = value
-        .parse()
-        .map_err(|error| format!("Invalid numeric metric: {error}"))?;
-    if !value.is_finite() || value < 0.0 {
-        return Err("Timing metrics must be finite and nonnegative".into());
-    }
-
-    Ok(value)
 }
 
 fn statistics(samples: &[Sample], name: &str) -> BTreeMap<&'static str, f64> {

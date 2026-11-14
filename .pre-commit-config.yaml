@@ -364,6 +364,15 @@ repos:
         always_run: true
         pass_filenames: false
         stages: [manual]
+      - id: check-slow-tests
+        name: slow-test ratchet
+        description: Report the slowest tests in the CI nextest JUnit report and fail on any test over 5 s that `.config/slow-tests.yaml` does not list.
+        entry: cargo run -q --locked -p ag-xtask -- slow-tests target/nextest/ci/junit.xml --max-seconds 5 --allowlist .config/slow-tests.yaml
+        language: system
+        always_run: true
+        pass_filenames: false
+        stages: [manual]
+        verbose: true
       - id: cargo-machete
         name: cargo machete
         description: Check workspace manifests for unused dependencies.

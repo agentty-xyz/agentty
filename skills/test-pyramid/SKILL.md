@@ -124,9 +124,16 @@ rule against skipping or deleting a failing test during repair.
 ## Finding Slow Tests
 
 `test-focused` writes per-test durations to `target/nextest/local/junit.xml`; CI hooks
-use `target/nextest/ci/junit.xml`. Sort tests by time, group them by module, and treat
-any level-1 or level-2 test over 0.5 s as a fixture problem first. CI keeps the same
-report as an artifact for workspace, coverage, and E2E jobs.
+use `target/nextest/ci/junit.xml`, and CI keeps that report as an artifact. Rank tests,
+binaries, and modules and see the duration histogram with:
+
+```sh
+cargo run --locked -q -p ag-xtask -- slow-tests target/nextest/local/junit.xml
+```
+
+Treat any level-1 or level-2 test over 0.5 s as a fixture problem first. The coverage
+job's `check-slow-tests` ratchet fails on a new test over its threshold; fix the test
+rather than adding it to `.config/slow-tests.yaml`.
 
 ## Review Checklist
 
