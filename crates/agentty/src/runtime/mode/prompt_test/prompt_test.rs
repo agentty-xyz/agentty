@@ -5,24 +5,26 @@ use crossterm::event;
 use crossterm::event::{KeyCode, KeyEvent};
 
 use super::super::{
-    PromptInputMode, apply_prompt_apply_outcome, apply_prompt_input_command,
-    apply_prompt_input_to_mode, apply_prompt_paste_to_mode, handle_at_mention_key,
-    handle_at_mention_select, handle_chat_focus_key, handle_paste, handle_prompt_cancel_key,
-    handle_prompt_down_key, handle_prompt_image_paste, handle_prompt_slash_submit,
-    handle_prompt_submit_key, handle_prompt_up_key, handle_with_cache, is_active_at_mention,
-    is_prompt_image_paste_key, move_prompt_slash_selection, navigate_prompt_history_down,
-    navigate_prompt_history_up, open_chatgpt_sign_in, paste_image_into_active_prompt,
-    prompt_context, show_prompt_diff, submit_current_text_prompt, take_prompt_attachment_cleanup,
-    take_prompt_snapshot, take_submitted_turn_prompt,
+    PromptEffect, PromptInputMode, apply_prompt_apply_outcome, apply_prompt_effects,
+    apply_prompt_input_to_mode, apply_prompt_paste_to_mode, handle_paste, handle_with_cache,
+    is_active_at_mention, is_prompt_image_paste_key, mark_prompt_image_paste_pending,
+    move_prompt_slash_selection, navigate_prompt_history_down, navigate_prompt_history_up,
+    paste_image_into_active_prompt, prompt_context, prompt_input_mode, prompt_session_mode,
+    reduce_at_mention_key, reduce_chat_focus_key, reduce_prompt_input_command,
+    reduce_prompt_slash_submit, select_at_mention, submit_current_text_prompt,
+    take_prompt_attachment_cleanup, take_prompt_snapshot, take_submitted_turn_prompt,
 };
 use super::support::{
     PromptTestAppExt, PromptTestModeExt, apply_next_prompt_image_paste, apply_next_session_diff,
-    install_mock_clipboard_image_client, install_mock_fs_client, install_mock_git_client,
-    new_test_draft_prompt_app, new_test_prompt_app, new_test_prompt_mode, press_prompt_key,
-    prompt_focus, session_replay_text, test_terminal,
+    expect_prompt_effects, install_mock_clipboard_image_client, install_mock_fs_client,
+    install_mock_git_client, mode_focus, mode_input, new_test_draft_prompt_app,
+    new_test_prompt_app, new_test_prompt_context, new_test_prompt_mode, press_prompt_key,
+    prompt_focus, reduce_prompt_code, reduce_prompt_event, reduce_test_prompt_key,
+    refresh_test_input_mode, run_prompt_cancel, run_prompt_slash_submit, run_prompt_submit,
+    session_replay_text, test_terminal,
 };
 use crate::app::AppEvent;
-use crate::app::prompt_intent::{PromptApplyOutcome, PromptImagePasteUpdate};
+use crate::app::prompt_intent::{PromptApplyOutcome, PromptImagePasteUpdate, PromptSessionMode};
 use crate::domain::agent::{
     AgentKind, AgentModel, AgentSelection, ReasoningLevel, ResponseStyle, SpeedMode,
 };
@@ -30,12 +32,17 @@ use crate::domain::composer::PromptAttachment;
 use crate::domain::file_entry::FileEntry;
 use crate::domain::input::{INPUT_HISTORY_LIMIT, InputCommand, InputState};
 use crate::domain::permission::PermissionMode;
-use crate::domain::session::SessionId;
+use crate::domain::session::{SessionId, Status};
+use crate::domain::transient_message::{
+    TransientMessage, TransientMessageAnchor, TransientMessageBody, TransientMessageLifecycle,
+    TransientMessageSlot,
+};
 use crate::presentation::app_mode::{AppMode, ChatFocus, DiffRestoreTarget};
 use crate::presentation::prompt::{
-    PendingImagePaste, PromptAtMentionState, PromptAttachmentState, PromptGraphState,
-    PromptHistoryState, PromptSlashStage, PromptSlashState, prompt_slash_option_count,
+    PendingImagePaste, PromptAtMentionState, PromptGraphState, PromptSlashStage, PromptSlashState,
+    prompt_slash_option_count,
 };
+use crate::test_support::{SessionFixtureBuilder, session_fixture};
 use crate::ui::RenderCacheStore;
 
 #[test]
@@ -154,142 +161,184 @@ async fn test_q_in_chat_focus_saves_prompt_for_restore() {
     assert!(app.prompt_progress.is_empty());
 }
 
-#[tokio::test]
-async fn test_q_in_input_focus_edits_prompt() {
+#[test]
+fn test_q_in_input_focus_edits_prompt() {
     // Arrange
-    let (mut app, _base_dir) = new_test_prompt_app("draft", None).await;
+    let mut mode = new_test_prompt_mode("draft");
 
     // Act
-    press_prompt_key(&mut app, KeyCode::Char('q')).await;
+    let effects = reduce_prompt_code(&mut mode, KeyCode::Char('q'));
 
     // Assert
-    assert!(matches!(
-        &app.mode,
-        AppMode::Prompt { input, .. } if input.text() == "draftq"
-    ));
-    assert!(app.prompt_progress.is_empty());
+    assert_eq!(mode_input(&mode).0, "draftq");
+    assert!(effects.is_empty());
 }
 
-#[tokio::test]
-async fn test_prompt_context_marks_email_pattern_as_inactive_mention() {
-    // Arrange
-    let state = PromptAtMentionState::new(Vec::new());
-    let (mut app, _base_dir) = new_test_prompt_app("email@test", Some(state)).await;
+#[test]
+fn test_prompt_input_mode_routes_mentions_slash_commands_and_queued_text() {
+    for (at_mention_state, input_text, slash_state, queues_messages, expected_input_mode) in [
+        (
+            Some(PromptAtMentionState::new(Vec::new())),
+            "@read",
+            PromptSlashState::default(),
+            false,
+            PromptInputMode::AtMention,
+        ),
+        (
+            Some(PromptAtMentionState::new(Vec::new())),
+            "email@test",
+            PromptSlashState::default(),
+            false,
+            PromptInputMode::Text,
+        ),
+        (
+            None,
+            "/model",
+            PromptSlashState::default(),
+            false,
+            PromptInputMode::SlashCommand,
+        ),
+        (
+            None,
+            "/model",
+            PromptSlashState::default(),
+            true,
+            PromptInputMode::Text,
+        ),
+        (
+            None,
+            "/mode is part of my task",
+            PromptSlashState {
+                graph: PromptGraphState::Armed,
+                ..PromptSlashState::default()
+            },
+            false,
+            PromptInputMode::Text,
+        ),
+    ] {
+        // Arrange
+        let input = InputState::with_text(input_text.to_string());
 
-    // Act
-    let context = prompt_context(&mut app).expect("expected prompt context");
+        // Act
+        let input_mode = prompt_input_mode(
+            at_mention_state.as_ref(),
+            &input,
+            &slash_state,
+            queues_messages,
+        );
 
-    // Assert
-    assert!(!context.is_at_mention());
+        // Assert
+        assert_eq!(input_mode, expected_input_mode, "{input_text}");
+    }
 }
 
+/// Verifies that only queueing statuses demote a leading `/` to plain text:
+/// `InProgress` and `Rebasing` queue the prompt behind the active operation,
+/// while `Review` keeps the slash submit path.
 #[tokio::test]
-async fn test_prompt_context_falls_back_to_list_when_session_is_missing() {
-    // Arrange
-    let (mut app, _base_dir) = new_test_prompt_app("follow up", None).await;
-    app.mode = AppMode::Prompt {
-        at_mention_state: None,
-        attachment_state: PromptAttachmentState::default(),
-        focus: ChatFocus::Input,
-        history_state: PromptHistoryState::new(Vec::new()),
-        input: InputState::with_text("follow up".to_string()),
-        session_id: "missing-session".into(),
-        slash_state: PromptSlashState::default(),
-        scroll_offset: Some(2),
-    };
-
-    // Act
-    let context = prompt_context(&mut app);
-
-    // Assert
-    assert!(context.is_none());
-    assert!(matches!(app.mode, AppMode::List));
-}
-
-#[tokio::test]
-/// Verifies that when the active session is `InProgress`, a leading `/`
-/// is demoted from slash-command mode to plain text so submission
-/// queues the prompt instead of executing a slash command against the
-/// running turn.
-async fn test_prompt_context_demotes_slash_command_to_text_when_session_is_in_progress() {
+async fn test_prompt_context_demotes_slash_commands_only_while_session_queues_messages() {
     // Arrange
     let (mut app, _base_dir) = new_test_prompt_app("/model", None).await;
-    app.sessions.sessions_mut()[0].status = crate::domain::session::Status::InProgress;
 
-    // Act
-    let context = prompt_context(&mut app).expect("expected prompt context");
+    for (status, expected_input_mode) in [
+        (Status::InProgress, PromptInputMode::Text),
+        (Status::Rebasing, PromptInputMode::Text),
+        (Status::Review, PromptInputMode::SlashCommand),
+    ] {
+        app.sessions.sessions_mut()[0].status = status;
 
-    // Assert
-    assert!(
-        !context.is_slash_command(),
-        "slash command mode must be demoted while session is InProgress"
-    );
-    assert_eq!(context.input_mode, PromptInputMode::Text);
+        // Act
+        let context = prompt_context(&mut app).expect("expected prompt context");
+
+        // Assert
+        assert_eq!(context.input_mode, expected_input_mode, "{status:?}");
+    }
 }
 
-#[tokio::test]
-/// Verifies that when the active session is `Rebasing`, a leading `/`
-/// is demoted from slash-command mode to plain text so submission queues
-/// the prompt behind the rebase.
-async fn test_prompt_context_demotes_slash_command_to_text_when_session_is_rebasing() {
+#[test]
+fn test_prompt_session_mode_routes_new_draft_regular_and_existing_sessions() {
     // Arrange
-    let (mut app, _base_dir) = new_test_prompt_app("/model", None).await;
-    app.sessions.sessions_mut()[0].status = crate::domain::session::Status::Rebasing;
+    let mut preparing_session = session_fixture("preparing", Status::Draft);
+    preparing_session
+        .transient_messages
+        .upsert(TransientMessage {
+            anchor: TransientMessageAnchor::Tail,
+            body: TransientMessageBody::Plain(String::new()),
+            lifecycle: TransientMessageLifecycle::UntilResolved,
+            slot: TransientMessageSlot::WorkspacePreparation,
+            turn_position: None,
+        });
+    let cases = [
+        (
+            SessionFixtureBuilder::new()
+                .status(Status::Draft)
+                .draft(true)
+                .build(),
+            PromptSessionMode::NewDraft,
+        ),
+        (preparing_session, PromptSessionMode::NewRegular),
+        (
+            session_fixture("blank", Status::Draft),
+            PromptSessionMode::NewDeletable,
+        ),
+        (
+            session_fixture("started", Status::Review),
+            PromptSessionMode::Existing,
+        ),
+    ];
 
-    // Act
-    let context = prompt_context(&mut app).expect("expected prompt context");
+    for (session, expected_session_mode) in cases {
+        // Act
+        let session_mode = prompt_session_mode(&session);
 
-    // Assert
-    assert!(
-        !context.is_slash_command(),
-        "slash command mode must be demoted while session is Rebasing"
-    );
-    assert_eq!(context.input_mode, PromptInputMode::Text);
+        // Assert
+        assert_eq!(session_mode, expected_session_mode);
+    }
 }
 
-#[tokio::test]
-async fn test_ctrl_c_keeps_chat_focus_without_canceling_prompt() {
-    // Arrange
-    let (mut app, _base_dir) = new_test_prompt_app("draft text", None).await;
-    press_prompt_key(&mut app, KeyCode::Tab).await;
-
-    // Act
-    let mut terminal = test_terminal();
-    handle_with_cache(
-        &mut app,
-        &RenderCacheStore::default(),
-        &mut terminal,
+#[test]
+fn test_cancel_keys_in_chat_focus_keep_the_prompt() {
+    for key in [
         KeyEvent::new(KeyCode::Char('c'), event::KeyModifiers::CONTROL),
-    )
-    .await
-    .expect("prompt key handling failed");
+        KeyEvent::new(KeyCode::Esc, event::KeyModifiers::NONE),
+    ] {
+        // Arrange
+        let mut mode = new_test_prompt_mode("draft text");
+        reduce_prompt_code(&mut mode, KeyCode::Tab);
 
-    // Assert
-    assert_eq!(prompt_focus(&app), ChatFocus::Chat);
-    let AppMode::Prompt { input, .. } = &app.mode else {
-        unreachable!("expected AppMode::Prompt");
-    };
-    assert_eq!(input.text(), "draft text");
+        // Act
+        let effects = reduce_prompt_event(&mut mode, key);
+
+        // Assert
+        assert_eq!(mode_focus(&mode), ChatFocus::Chat);
+        assert_eq!(mode_input(&mode).0, "draft text");
+        assert!(effects.is_empty());
+    }
 }
 
-#[tokio::test]
-async fn test_canceling_slash_input_discards_pasted_attachment() {
+#[test]
+fn test_canceling_slash_input_discards_pasted_attachment() {
     // Arrange
-    let (mut app, _base_dir) = new_test_prompt_app("/model", None).await;
-    app.insert_pasted_image_placeholder(PathBuf::from("/tmp/nonexistent-test-attachment.png"));
-    let prompt_context = prompt_context(&mut app).expect("expected prompt context");
+    let image_path = PathBuf::from("/tmp/nonexistent-test-attachment.png");
+    let mut mode = new_test_prompt_mode("/model");
+    mode.insert_pasted_image_placeholder(image_path.clone());
 
     // Act
-    handle_prompt_cancel_key(&mut app, &prompt_context).await;
+    let effects = reduce_prompt_code(&mut mode, KeyCode::Esc);
 
     // Assert
     assert!(matches!(
-        &app.mode,
+        &mode,
         AppMode::Prompt {
             attachment_state,
             input,
             ..
         } if input.is_empty() && attachment_state.attachments.is_empty()
+    ));
+    assert!(matches!(
+        effects.as_slice(),
+        [PromptEffect::CleanupAttachments(attachments)]
+            if attachments.len() == 1 && attachments[0].local_image_path == image_path
     ));
 }
 
@@ -439,35 +488,22 @@ fn test_prompt_slash_option_count_for_agent_stage_uses_available_agent_kinds() {
 
 /// Verifies slash navigation leaves selection unchanged when the current
 /// command text matches no slash-command options.
-#[tokio::test]
-async fn test_move_prompt_slash_selection_ignores_empty_command_matches() {
+#[test]
+fn test_move_prompt_slash_selection_ignores_empty_command_matches() {
     // Arrange
-    let (mut app, _base_dir) = new_test_prompt_app("/x", None).await;
-    if let AppMode::Prompt { slash_state, .. } = &mut app.mode {
+    let mut mode = new_test_prompt_mode("/x");
+    if let AppMode::Prompt { slash_state, .. } = &mut mode {
         slash_state.selected_index = 2;
     }
 
     // Act
-    move_prompt_slash_selection(&mut app, true);
+    move_prompt_slash_selection(&mut mode, &new_test_prompt_context(), true);
 
     // Assert
-    if let AppMode::Prompt { slash_state, .. } = &app.mode {
-        assert_eq!(slash_state.selected_index, 2);
-    }
-}
-
-#[tokio::test]
-async fn stale_prompt_submission_keeps_the_current_navigation() {
-    // Arrange
-    let (mut app, _directory) = new_test_prompt_app("draft", None).await;
-    let context = prompt_context(&mut app).expect("context");
-    app.mode = AppMode::List;
-
-    // Act
-    handle_prompt_submit_key(&mut app, &context).await;
-
-    // Assert
-    assert!(matches!(app.mode, AppMode::List));
+    assert!(matches!(
+        &mode,
+        AppMode::Prompt { slash_state, .. } if slash_state.selected_index == 2
+    ));
 }
 
 #[test]
@@ -483,33 +519,25 @@ fn test_take_prompt_snapshot_keeps_non_prompt_mode_untouched() {
     assert!(matches!(mode, AppMode::List));
 }
 
-#[tokio::test]
-async fn test_d_key_in_chat_focus_opens_diff_with_prompt_snapshot() {
-    // Arrange — prompt mode with chat focused over a worktree that has a
-    // non-empty diff against its base branch.
-    let (mut app, _base_dir) = new_test_prompt_app("draft text", None).await;
-    let session_folder = app.sessions.sessions()[0].folder.clone();
-    std::fs::write(session_folder.join("README.md"), "updated content")
-        .expect("failed to write diff fixture");
-    press_prompt_key(&mut app, KeyCode::Tab).await;
+#[test]
+fn test_d_key_in_chat_focus_opens_diff_with_prompt_snapshot() {
+    // Arrange
+    let mut mode = new_test_prompt_mode("draft text");
+    reduce_prompt_code(&mut mode, KeyCode::Tab);
 
     // Act
-    press_prompt_key(&mut app, KeyCode::Char('d')).await;
+    let effects = reduce_prompt_code(&mut mode, KeyCode::Char('d'));
 
-    // Assert — transitioned to diff loading carrying a prompt snapshot that
-    // captured the composer draft.
+    // Assert — the composer moved into the diff request's restore snapshot.
+    assert!(matches!(mode, AppMode::List));
     assert!(
         matches!(
-            &app.mode,
-            AppMode::DiffLoading {
-                restore: Some(restore_target),
-                ..
-            } if matches!(
-                restore_target.as_ref(),
-                DiffRestoreTarget::Prompt(snapshot) if snapshot.input.text() == "draft text"
-            )
+            effects.as_slice(),
+            [PromptEffect::OpenDiff {
+                restore: Some(DiffRestoreTarget::Prompt(snapshot)),
+            }] if snapshot.input.text() == "draft text"
         ),
-        "expected diff loading carrying a prompt restore snapshot of the draft"
+        "expected a diff request carrying a prompt restore snapshot of the draft"
     );
 }
 
@@ -536,113 +564,122 @@ async fn test_d_key_in_chat_focus_keeps_prompt_when_diff_empty() {
     assert_eq!(snapshot.input.text(), "draft text");
 }
 
-#[tokio::test]
-async fn test_d_key_in_input_focus_inserts_character() {
+#[test]
+fn test_d_key_in_input_focus_inserts_character() {
     // Arrange — composer focused, so `d` is ordinary draft text.
-    let (mut app, _base_dir) = new_test_prompt_app("draft", None).await;
+    let mut mode = new_test_prompt_mode("draft");
 
     // Act
-    press_prompt_key(&mut app, KeyCode::Char('d')).await;
+    let effects = reduce_prompt_code(&mut mode, KeyCode::Char('d'));
 
     // Assert — the character was inserted and the composer kept prompt
     // mode.
-    let snapshot = take_prompt_snapshot(&mut app.mode).expect("expected AppMode::Prompt");
-    assert_eq!(snapshot.input.text(), "draftd");
+    assert_eq!(mode_input(&mode).0, "draftd");
+    assert!(effects.is_empty());
 }
 
-#[tokio::test]
-async fn test_handle_at_mention_select_dismisses_stale_mention_state() {
+/// Builds a prompt with `input_text` and an open mention dropdown.
+fn mention_mode(input_text: &str, at_mention_state: PromptAtMentionState) -> AppMode {
+    let mut mode = new_test_prompt_mode(input_text);
+    if let AppMode::Prompt {
+        at_mention_state: state,
+        ..
+    } = &mut mode
+    {
+        *state = Some(at_mention_state);
+    }
+
+    mode
+}
+
+#[test]
+fn test_handle_at_mention_select_dismisses_stale_mention_state() {
     // Arrange
-    let state = PromptAtMentionState::new(vec![FileEntry {
-        is_dir: false,
-        path: "src/main.rs".to_string(),
-    }]);
-    let (mut app, _base_dir) = new_test_prompt_app("email@test", Some(state)).await;
+    let mut mode = mention_mode(
+        "email@test",
+        PromptAtMentionState::new(vec![FileEntry {
+            is_dir: false,
+            path: "src/main.rs".to_string(),
+        }]),
+    );
+    let mut effects = Vec::new();
 
     // Act
-    handle_at_mention_select(&mut app).await;
+    select_at_mention(&mut mode, &new_test_prompt_context(), &mut effects);
 
     // Assert
-    assert!(matches!(app.mode, AppMode::Prompt { .. }));
-    if let AppMode::Prompt {
-        at_mention_state,
-        input,
-        ..
-    } = &app.mode
-    {
-        assert!(at_mention_state.is_none());
-        assert_eq!(input.text(), "email@test");
-    }
+    assert!(matches!(
+        &mode,
+        AppMode::Prompt { at_mention_state, input, .. }
+            if at_mention_state.is_none() && input.text() == "email@test"
+    ));
+    assert!(effects.is_empty());
 }
 
-#[tokio::test]
-async fn test_handle_at_mention_key_supports_enter_tab_and_unhandled_keys() {
+#[test]
+fn test_handle_at_mention_key_supports_enter_tab_and_unhandled_keys() {
     // Arrange
     let entry = FileEntry {
         is_dir: false,
         path: "src/main.rs".to_string(),
     };
-    let (mut enter_app, _enter_base_dir) =
-        new_test_prompt_app("@src", Some(PromptAtMentionState::new(vec![entry.clone()]))).await;
-    let (mut tab_app, _tab_base_dir) =
-        new_test_prompt_app("@src", Some(PromptAtMentionState::new(vec![entry]))).await;
-    let (mut ignored_app, _ignored_base_dir) =
-        new_test_prompt_app("@src", Some(PromptAtMentionState::new(Vec::new()))).await;
+    let mut enter_mode = mention_mode("@src", PromptAtMentionState::new(vec![entry.clone()]));
+    let mut tab_mode = mention_mode("@src", PromptAtMentionState::new(vec![entry]));
+    let mut ignored_mode = mention_mode("@src", PromptAtMentionState::new(Vec::new()));
+    let prompt_context = new_test_prompt_context();
+    let mut effects = Vec::new();
 
     // Act
-    let enter_handled = handle_at_mention_key(
-        &mut enter_app,
+    let enter_handled = reduce_at_mention_key(
+        &mut enter_mode,
+        &prompt_context,
         KeyEvent::new(KeyCode::Enter, event::KeyModifiers::NONE),
-    )
-    .await;
-    let tab_handled = handle_at_mention_key(
-        &mut tab_app,
+        &mut effects,
+    );
+    let tab_handled = reduce_at_mention_key(
+        &mut tab_mode,
+        &prompt_context,
         KeyEvent::new(KeyCode::Tab, event::KeyModifiers::NONE),
-    )
-    .await;
-    let character_handled = handle_at_mention_key(
-        &mut ignored_app,
+        &mut effects,
+    );
+    let character_handled = reduce_at_mention_key(
+        &mut ignored_mode,
+        &prompt_context,
         KeyEvent::new(KeyCode::Char('x'), event::KeyModifiers::NONE),
-    )
-    .await;
+        &mut effects,
+    );
 
     // Assert
     assert!(enter_handled);
     assert!(tab_handled);
     assert!(!character_handled);
-    assert!(matches!(
-        &enter_app.mode,
-        AppMode::Prompt { input, .. } if input.text() == "@src/main.rs "
-    ));
-    assert!(matches!(
-        &tab_app.mode,
-        AppMode::Prompt { input, .. } if input.text() == "@src/main.rs "
-    ));
+    assert_eq!(mode_input(&enter_mode).0, "@src/main.rs ");
+    assert_eq!(mode_input(&tab_mode).0, "@src/main.rs ");
 }
 
-#[tokio::test]
-async fn test_handle_at_mention_select_inserts_directory_with_trailing_slash() {
+#[test]
+fn test_handle_at_mention_select_inserts_directory_with_trailing_slash() {
     // Arrange
-    let state = PromptAtMentionState::new(vec![FileEntry {
-        is_dir: true,
-        path: "src".to_string(),
-    }]);
-    let (mut app, _base_dir) = new_test_prompt_app("@src", Some(state)).await;
+    let mut mode = mention_mode(
+        "@src",
+        PromptAtMentionState::new(vec![FileEntry {
+            is_dir: true,
+            path: "src".to_string(),
+        }]),
+    );
+    let mut effects = Vec::new();
 
     // Act
-    handle_at_mention_select(&mut app).await;
+    select_at_mention(&mut mode, &new_test_prompt_context(), &mut effects);
 
     // Assert
-    assert!(matches!(app.mode, AppMode::Prompt { .. }));
-    if let AppMode::Prompt { input, .. } = &app.mode {
-        assert_eq!(input.text(), "@src/ ");
-    }
+    assert_eq!(mode_input(&mode).0, "@src/ ");
 }
 
 /// Verifies stale at-mention selections are clamped to the filtered entry
 /// list before insertion.
-#[tokio::test]
-async fn test_handle_at_mention_select_clamps_stale_selected_index() {
+#[test]
+fn test_handle_at_mention_select_clamps_stale_selected_index() {
     // Arrange
     let mut state = PromptAtMentionState::new(vec![
         FileEntry {
@@ -655,104 +692,98 @@ async fn test_handle_at_mention_select_clamps_stale_selected_index() {
         },
     ]);
     state.selected_index = 9;
-    let (mut app, _base_dir) = new_test_prompt_app("@src/main", Some(state)).await;
-    if let AppMode::Prompt { input, .. } = &mut app.mode {
+    let mut mode = mention_mode("@src/main", state);
+    if let AppMode::Prompt { input, .. } = &mut mode {
         input.cursor = "@src/ma".chars().count();
     }
+    let mut effects = Vec::new();
 
     // Act
-    handle_at_mention_select(&mut app).await;
+    select_at_mention(&mut mode, &new_test_prompt_context(), &mut effects);
 
     // Assert
-    if let AppMode::Prompt {
-        at_mention_state,
-        input,
-        ..
-    } = &app.mode
-    {
-        assert!(at_mention_state.is_none());
-        assert_eq!(input.text(), "@src/main.rs ");
-    }
-}
-
-#[tokio::test]
-async fn test_prompt_undo_restores_slash_command_context() {
-    // Arrange
-    let (mut app, _base_dir) = new_test_prompt_app("", None).await;
-    apply_prompt_input_command(&mut app, InputCommand::Insert('/')).await;
-    apply_prompt_input_command(&mut app, InputCommand::Insert('x')).await;
-
-    // Act
-    apply_prompt_input_command(&mut app, InputCommand::Undo).await;
-
-    // Assert
-    let context = prompt_context(&mut app).expect("prompt context should remain available");
-    assert!(context.is_slash_command());
     assert!(matches!(
-        &app.mode,
-        AppMode::Prompt { input, .. } if input.text() == "/"
+        &mode,
+        AppMode::Prompt { at_mention_state, input, .. }
+            if at_mention_state.is_none() && input.text() == "@src/main.rs "
     ));
 }
 
-#[tokio::test]
-async fn test_chat_focus_key_ignores_non_prompt_mode() {
+#[test]
+fn test_prompt_undo_restores_slash_command_context() {
     // Arrange
-    let (mut app, _base_dir) = new_test_prompt_app("draft text", None).await;
-    let prompt_context = prompt_context(&mut app).expect("prompt context should be available");
-    app.mode = AppMode::List;
-    let terminal = test_terminal();
+    let mut mode = new_test_prompt_mode("");
+    let mut prompt_context = new_test_prompt_context();
+    let mut effects = Vec::new();
+    reduce_prompt_input_command(
+        &mut mode,
+        &prompt_context,
+        InputCommand::Insert('/'),
+        &mut effects,
+    );
+    reduce_prompt_input_command(
+        &mut mode,
+        &prompt_context,
+        InputCommand::Insert('x'),
+        &mut effects,
+    );
 
     // Act
-    let is_consumed = handle_chat_focus_key(
-        &mut app,
-        &RenderCacheStore::default(),
-        &terminal,
-        &prompt_context,
+    reduce_prompt_input_command(&mut mode, &prompt_context, InputCommand::Undo, &mut effects);
+
+    // Assert
+    refresh_test_input_mode(&mode, &mut prompt_context);
+    assert!(prompt_context.is_slash_command());
+    assert_eq!(mode_input(&mode).0, "/");
+}
+
+#[test]
+fn test_chat_focus_key_ignores_non_prompt_mode() {
+    // Arrange
+    let mut mode = AppMode::List;
+
+    // Act
+    let step = reduce_chat_focus_key(
+        &mut mode,
         KeyEvent::new(KeyCode::Tab, event::KeyModifiers::NONE),
-    )
-    .expect("chat focus handling should not fail");
+    );
 
     // Assert
-    assert!(!is_consumed);
-    assert!(matches!(app.mode, AppMode::List));
+    assert!(step.is_none());
+    assert!(matches!(mode, AppMode::List));
 }
 
-#[tokio::test]
-async fn test_chat_focus_key_leaves_input_panel_keys_unclaimed() {
+#[test]
+fn test_chat_focus_key_leaves_input_panel_keys_unclaimed() {
     // Arrange
-    let (mut app, _base_dir) = new_test_prompt_app("draft text", None).await;
-    let prompt_context = prompt_context(&mut app).expect("prompt context should be available");
-    let terminal = test_terminal();
+    let mut mode = new_test_prompt_mode("draft text");
 
     // Act
-    let is_consumed = handle_chat_focus_key(
-        &mut app,
-        &RenderCacheStore::default(),
-        &terminal,
-        &prompt_context,
+    let step = reduce_chat_focus_key(
+        &mut mode,
         KeyEvent::new(KeyCode::Char('q'), event::KeyModifiers::NONE),
-    )
-    .expect("chat focus handling should not fail");
+    );
 
     // Assert
-    assert!(!is_consumed);
-    assert_eq!(prompt_focus(&app), ChatFocus::Input);
+    assert!(step.is_none());
+    assert_eq!(mode_focus(&mode), ChatFocus::Input);
 }
 
 #[tokio::test]
-async fn test_handle_paste_is_ignored_while_chat_is_focused() {
+async fn test_handle_paste_is_ignored_while_chat_is_focused_or_outside_prompt() {
     // Arrange
     let (mut app, _base_dir) = new_test_prompt_app("draft text", None).await;
     press_prompt_key(&mut app, KeyCode::Tab).await;
 
     // Act
     handle_paste(&mut app, "pasted").await;
+    let chat_focused_text = mode_input(&app.mode).0;
+    app.mode = AppMode::List;
+    handle_paste(&mut app, "pasted").await;
 
     // Assert
-    let AppMode::Prompt { input, .. } = &app.mode else {
-        unreachable!("expected AppMode::Prompt");
-    };
-    assert_eq!(input.text(), "draft text");
+    assert_eq!(chat_focused_text, "draft text");
+    assert!(matches!(app.mode, AppMode::List));
 }
 
 #[test]
@@ -788,7 +819,7 @@ async fn test_model_command_in_harness_session_opens_refreshed_harness_models() 
     let prompt_context = prompt_context(&mut app).expect("expected prompt context");
 
     // Act
-    handle_prompt_slash_submit(&mut app, &prompt_context).await;
+    run_prompt_slash_submit(&mut app, &prompt_context).await;
     tokio::time::timeout(std::time::Duration::from_secs(5), async {
         loop {
             let event = app.next_app_event().await.expect("refresh event");
@@ -816,13 +847,13 @@ async fn test_model_command_in_harness_session_opens_refreshed_harness_models() 
     );
 }
 
-#[tokio::test]
-async fn test_model_slash_submit_on_sign_in_row_opens_the_sign_in_popup() {
+#[test]
+fn test_model_slash_submit_on_sign_in_row_opens_the_sign_in_popup() {
     // Arrange
     let chatgpt_option =
         crate::test_support::sign_in_required_harness_model(AgentModel::ChatGptGpt6Sol);
-    let (mut app, _base_dir) = new_test_prompt_app("/model", None).await;
-    if let AppMode::Prompt { slash_state, .. } = &mut app.mode {
+    let mut mode = new_test_prompt_mode("/model");
+    if let AppMode::Prompt { slash_state, .. } = &mut mode {
         *slash_state = PromptSlashState {
             harness_models: vec![chatgpt_option],
             selected_agent: Some(AgentKind::Harness),
@@ -831,23 +862,28 @@ async fn test_model_slash_submit_on_sign_in_row_opens_the_sign_in_popup() {
             ..PromptSlashState::with_available_agent_kinds(vec![AgentKind::Harness])
         };
     }
-    let original_agent = app.sessions.sessions()[0].agent;
-    let prompt_context = prompt_context(&mut app).expect("expected prompt context");
 
     // Act
-    handle_prompt_slash_submit(&mut app, &prompt_context).await;
+    let effects = reduce_prompt_code(&mut mode, KeyCode::Enter);
 
-    // Assert
-    let AppMode::ChatGptSignIn { dialog } = &app.mode else {
-        unreachable!("expected the sign-in popup");
+    // Assert — the cleared composer waits behind the popup and no model
+    // change is persisted.
+    assert!(matches!(mode, AppMode::List));
+    let [
+        PromptEffect::OpenChatGptSignIn {
+            restore,
+            selected_agent,
+        },
+    ] = effects.as_slice()
+    else {
+        unreachable!("expected only the sign-in popup request");
     };
     assert_eq!(
-        dialog.selection,
+        *selected_agent,
         AgentSelection::new(AgentKind::Harness, AgentModel::ChatGptGpt6Sol)
     );
-    assert!(dialog.restore.input.is_empty());
-    assert_eq!(dialog.restore.slash_state.stage, PromptSlashStage::Command);
-    assert_eq!(app.sessions.sessions()[0].agent, original_agent);
+    assert!(restore.input.is_empty());
+    assert_eq!(restore.slash_state.stage, PromptSlashStage::Command);
 }
 
 #[tokio::test]
@@ -862,7 +898,7 @@ async fn test_prompt_submit_on_signed_out_chatgpt_model_opens_sign_in_and_keeps_
     let prompt_context = prompt_context(&mut app).expect("expected prompt context");
 
     // Act
-    handle_prompt_submit_key(&mut app, &prompt_context).await;
+    run_prompt_submit(&mut app, &prompt_context).await;
 
     // Assert
     let AppMode::ChatGptSignIn { dialog } = &app.mode else {
@@ -872,21 +908,28 @@ async fn test_prompt_submit_on_signed_out_chatgpt_model_opens_sign_in_and_keeps_
     assert_eq!(dialog.restore.input.text(), "explain the bug");
 }
 
-#[tokio::test]
-async fn test_model_command_in_cli_session_opens_the_agent_list() {
+/// Verifies `Enter` on `/model` in a CLI session opens the agent list
+/// without refreshing harness models or editing the command text.
+#[test]
+fn test_model_command_submit_opens_the_agent_list() {
     // Arrange
-    let (mut app, _base_dir) = new_test_prompt_app("/model", None).await;
-    let prompt_context = prompt_context(&mut app).expect("expected prompt context");
+    let mut mode = new_test_prompt_mode("/model");
 
     // Act
-    handle_prompt_slash_submit(&mut app, &prompt_context).await;
+    let effects = reduce_prompt_code(&mut mode, KeyCode::Enter);
 
     // Assert
-    let AppMode::Prompt { slash_state, .. } = &app.mode else {
+    let AppMode::Prompt {
+        input, slash_state, ..
+    } = &mode
+    else {
         unreachable!("expected AppMode::Prompt");
     };
+    assert_eq!(input.text(), "/model");
     assert_eq!(slash_state.stage, PromptSlashStage::Agent);
     assert_eq!(slash_state.selected_agent, None);
+    assert_eq!(slash_state.selected_index, 0);
+    assert!(effects.is_empty());
 }
 
 #[tokio::test]
@@ -900,7 +943,7 @@ async fn test_reasoning_slash_submit_sets_level_and_resets_input() {
     let prompt_context = prompt_context(&mut app).expect("expected prompt context");
 
     // Act
-    handle_prompt_slash_submit(&mut app, &prompt_context).await;
+    run_prompt_slash_submit(&mut app, &prompt_context).await;
     app.process_pending_app_events().await;
 
     // Assert
@@ -915,42 +958,30 @@ async fn test_reasoning_slash_submit_sets_level_and_resets_input() {
     );
 }
 
-#[tokio::test]
-async fn test_esc_keeps_chat_focus_without_canceling_prompt() {
-    // Arrange
-    let (mut app, _base_dir) = new_test_prompt_app("draft text", None).await;
-    press_prompt_key(&mut app, KeyCode::Tab).await;
+#[test]
+fn test_vertical_slash_selection_wraps_around_the_agent_list() {
+    let last_index = AgentKind::ALL.len().saturating_sub(1);
 
-    // Act
-    press_prompt_key(&mut app, KeyCode::Esc).await;
+    for (code, initial_index, expected_index) in
+        [(KeyCode::Down, last_index, 0), (KeyCode::Up, 0, last_index)]
+    {
+        // Arrange
+        let mut mode = new_test_prompt_mode("/model");
+        if let AppMode::Prompt { slash_state, .. } = &mut mode {
+            slash_state.stage = PromptSlashStage::Agent;
+            slash_state.selected_index = initial_index;
+        }
 
-    // Assert
-    assert_eq!(prompt_focus(&app), ChatFocus::Chat);
-    let AppMode::Prompt { input, .. } = &app.mode else {
-        unreachable!("expected AppMode::Prompt");
-    };
-    assert_eq!(input.text(), "draft text");
-}
+        // Act
+        reduce_prompt_code(&mut mode, code);
 
-#[tokio::test]
-async fn test_next_prompt_slash_selection_wraps_to_first_agent() {
-    // Arrange
-    let (mut app, _base_dir) = new_test_prompt_app("/model", None).await;
-    if let AppMode::Prompt { slash_state, .. } = &mut app.mode {
-        slash_state.stage = PromptSlashStage::Agent;
-        slash_state.selected_index = AgentKind::ALL.len().saturating_sub(1);
-    }
-    let terminal = test_terminal();
-    let prompt_context = prompt_context(&mut app).expect("expected prompt context");
-
-    // Act
-    handle_prompt_down_key(&mut app, &terminal, &prompt_context)
-        .expect("slash selection should move down");
-
-    // Assert
-    if let AppMode::Prompt { slash_state, .. } = &app.mode {
-        assert_eq!(slash_state.stage, PromptSlashStage::Agent);
-        assert_eq!(slash_state.selected_index, 0);
+        // Assert
+        assert!(matches!(
+            &mode,
+            AppMode::Prompt { slash_state, .. }
+                if slash_state.stage == PromptSlashStage::Agent
+                    && slash_state.selected_index == expected_index
+        ));
     }
 }
 
@@ -1008,54 +1039,39 @@ fn test_prompt_input_command_ignores_non_prompt_mode() {
     assert!(matches!(mode, AppMode::List));
 }
 
-#[tokio::test]
-async fn test_previous_prompt_slash_selection_wraps_to_last_agent() {
-    // Arrange
-    let (mut app, _base_dir) = new_test_prompt_app("/model", None).await;
-    if let AppMode::Prompt { slash_state, .. } = &mut app.mode {
-        slash_state.stage = PromptSlashStage::Agent;
-        slash_state.selected_index = 0;
+#[test]
+fn test_backtab_cycles_permission_modes_and_preserves_input() {
+    for (current_permission_mode, expected_permission_mode) in [
+        (
+            PermissionMode::AutoEdit,
+            PermissionMode::AutoEditAddressComments,
+        ),
+        (
+            PermissionMode::AutoEditAddressComments,
+            PermissionMode::ReadOnly,
+        ),
+        (PermissionMode::ReadOnly, PermissionMode::AutoEdit),
+    ] {
+        // Arrange
+        let mut mode = new_test_prompt_mode("draft text");
+        let mut prompt_context = new_test_prompt_context();
+        prompt_context.permission_mode = current_permission_mode;
+
+        // Act
+        let effects = expect_prompt_effects(reduce_test_prompt_key(
+            &mut mode,
+            &mut prompt_context,
+            KeyEvent::new(KeyCode::BackTab, event::KeyModifiers::NONE),
+        ));
+
+        // Assert
+        assert_eq!(mode_input(&mode).0, "draft text");
+        assert!(matches!(
+            effects.as_slice(),
+            [PromptEffect::PersistPermissionMode(permission_mode)]
+                if *permission_mode == expected_permission_mode
+        ));
     }
-    let terminal = test_terminal();
-    let prompt_context = prompt_context(&mut app).expect("expected prompt context");
-
-    // Act
-    handle_prompt_up_key(&mut app, &terminal, &prompt_context)
-        .expect("slash selection should move up");
-
-    // Assert
-    if let AppMode::Prompt { slash_state, .. } = &app.mode {
-        assert_eq!(slash_state.stage, PromptSlashStage::Agent);
-        assert_eq!(
-            slash_state.selected_index,
-            AgentKind::ALL.len().saturating_sub(1)
-        );
-    }
-}
-
-#[tokio::test]
-async fn test_backtab_cycles_permission_modes_and_preserves_input() {
-    // Arrange
-    let (mut app, _base_dir) = new_test_prompt_app("draft text", None).await;
-
-    // Act
-    press_prompt_key(&mut app, KeyCode::BackTab).await;
-    let auto_address_mode = app.sessions.sessions()[0].permission_mode;
-    press_prompt_key(&mut app, KeyCode::BackTab).await;
-    let read_only_mode = app.sessions.sessions()[0].permission_mode;
-    press_prompt_key(&mut app, KeyCode::BackTab).await;
-
-    // Assert
-    assert!(matches!(
-        &app.mode,
-        AppMode::Prompt { input, .. } if input.text() == "draft text"
-    ));
-    assert_eq!(auto_address_mode, PermissionMode::AutoEditAddressComments);
-    assert_eq!(read_only_mode, PermissionMode::ReadOnly);
-    assert_eq!(
-        app.sessions.sessions()[0].permission_mode,
-        PermissionMode::AutoEdit
-    );
 }
 
 #[test]
@@ -1147,18 +1163,7 @@ async fn test_submit_current_text_prompt_ignores_missing_context_and_demotes_sla
 
     // Assert
     assert!(matches!(app.mode, AppMode::View { .. }));
-}
-
-#[tokio::test]
-async fn test_submit_current_text_prompt_submits_normal_prompt() {
-    // Arrange
-    let (mut app, _base_dir) = new_test_prompt_app("follow up", None).await;
-
-    // Act
-    submit_current_text_prompt(&mut app).await;
-
-    // Assert
-    assert!(matches!(app.mode, AppMode::View { .. }));
+    assert_eq!(app.sessions.sessions()[0].prompt, "/model");
 }
 
 #[tokio::test]
@@ -1172,7 +1177,7 @@ async fn test_style_slash_submit_sets_preference_and_resets_input() {
     let prompt_context = prompt_context(&mut app).expect("expected prompt context");
 
     // Act
-    handle_prompt_slash_submit(&mut app, &prompt_context).await;
+    run_prompt_slash_submit(&mut app, &prompt_context).await;
     app.process_pending_app_events().await;
 
     // Assert
@@ -1194,9 +1199,9 @@ async fn test_mode_slash_command_selects_auto_address_mode() {
     let prompt_context = prompt_context(&mut app).expect("expected prompt context");
 
     // Act
-    handle_prompt_submit_key(&mut app, &prompt_context).await;
+    run_prompt_submit(&mut app, &prompt_context).await;
     press_prompt_key(&mut app, KeyCode::Down).await;
-    handle_prompt_submit_key(&mut app, &prompt_context).await;
+    run_prompt_submit(&mut app, &prompt_context).await;
 
     // Assert
     assert!(matches!(
@@ -1211,35 +1216,44 @@ async fn test_mode_slash_command_selects_auto_address_mode() {
     );
 }
 
-#[tokio::test]
-async fn test_apply_prompt_apply_outcome_keeps_composer_for_retry() {
+#[test]
+fn test_apply_prompt_apply_outcome_keeps_composer_for_retry() {
     // Arrange
-    let (mut app, _base_dir) = new_test_prompt_app("/apply", None).await;
-    if let AppMode::Prompt { slash_state, .. } = &mut app.mode {
+    let mut mode = new_test_prompt_mode("/apply");
+    if let AppMode::Prompt { slash_state, .. } = &mut mode {
         slash_state.stage = PromptSlashStage::Model;
         slash_state.selected_agent = Some(AgentKind::Codex);
         slash_state.selected_index = 2;
     }
 
     // Act
-    apply_prompt_apply_outcome(&mut app, PromptApplyOutcome::KeepComposer).await;
+    let attachments = apply_prompt_apply_outcome(&mut mode, PromptApplyOutcome::KeepComposer);
 
     // Assert
     assert!(matches!(
-        &app.mode,
+        &mode,
         AppMode::Prompt {
             input, slash_state, ..
         } if input.text() == "/apply" && *slash_state == PromptSlashState::default()
     ));
+    assert_eq!(attachments, [] as [PromptAttachment; 0]);
 }
 
 #[tokio::test]
-async fn test_show_prompt_diff_restores_composer_when_session_is_missing() {
+async fn test_open_diff_effect_restores_composer_when_session_is_missing() {
     // Arrange
     let (mut app, _base_dir) = new_test_prompt_app("draft text", None).await;
+    let mut prompt_context = prompt_context(&mut app).expect("expected prompt context");
+    prompt_context.session_id = "missing-session".into();
+    let restore = take_prompt_snapshot(&mut app.mode).map(DiffRestoreTarget::Prompt);
 
     // Act
-    show_prompt_diff(&mut app, "missing-session");
+    apply_prompt_effects(
+        &mut app,
+        &prompt_context,
+        vec![PromptEffect::OpenDiff { restore }],
+    )
+    .await;
 
     // Assert
     assert!(matches!(
@@ -1248,24 +1262,25 @@ async fn test_show_prompt_diff_restores_composer_when_session_is_missing() {
     ));
 }
 
-#[tokio::test]
-async fn test_model_slash_submit_discards_pasted_image_before_normal_submission() {
+#[test]
+fn test_model_slash_submit_discards_pasted_image_before_normal_submission() {
     // Arrange
-    let (mut app, _base_dir) = new_test_prompt_app("/model", None).await;
-    app.insert_pasted_image_placeholder(PathBuf::from("/tmp/nonexistent-test-attachment.png"));
-    if let AppMode::Prompt { slash_state, .. } = &mut app.mode {
+    let image_path = PathBuf::from("/tmp/nonexistent-test-attachment.png");
+    let mut mode = new_test_prompt_mode("/model");
+    mode.insert_pasted_image_placeholder(image_path.clone());
+    if let AppMode::Prompt { slash_state, .. } = &mut mode {
         slash_state.stage = PromptSlashStage::Model;
         slash_state.selected_agent = Some(AgentKind::Claude);
         slash_state.selected_index = 0;
     }
-    let prompt_context = prompt_context(&mut app).expect("expected prompt context");
+    let mut effects = Vec::new();
 
     // Act
-    handle_prompt_slash_submit(&mut app, &prompt_context).await;
-    if let AppMode::Prompt { input, .. } = &mut app.mode {
+    reduce_prompt_slash_submit(&mut mode, &new_test_prompt_context(), &mut effects);
+    if let AppMode::Prompt { input, .. } = &mut mode {
         input.reset_text("normal prompt".to_string());
     }
-    let prompt = app.take_submitted_turn_prompt();
+    let prompt = mode.take_submitted_turn_prompt();
 
     // Assert
     assert_eq!(prompt.text, "normal prompt");
@@ -1273,6 +1288,15 @@ async fn test_model_slash_submit_discards_pasted_image_before_normal_submission(
         prompt.attachments,
         [] as [ag_protocol::TurnPromptAttachment; 0]
     );
+    assert!(matches!(
+        effects.as_slice(),
+        [
+            PromptEffect::CleanupAttachments(attachments),
+            PromptEffect::UpdateModel(selected_agent),
+        ] if attachments.len() == 1
+            && attachments[0].local_image_path == image_path
+            && selected_agent.kind() == AgentKind::Claude
+    ));
 }
 
 #[tokio::test]
@@ -1394,7 +1418,7 @@ async fn test_handle_prompt_image_paste_reports_injected_clipboard_image_errors(
     install_mock_clipboard_image_client(&mut app, clipboard_image_client);
 
     // Act
-    handle_prompt_image_paste(&mut app, &prompt_context);
+    paste_image_into_active_prompt(&mut app, &prompt_context.session_id);
     apply_next_prompt_image_paste(&mut app).await;
 
     // Assert
@@ -1438,7 +1462,7 @@ async fn test_handle_prompt_image_paste_reports_unavailable_clipboard_backend() 
     install_mock_clipboard_image_client(&mut app, clipboard_image_client);
 
     // Act
-    handle_prompt_image_paste(&mut app, &prompt_context);
+    paste_image_into_active_prompt(&mut app, &prompt_context.session_id);
     apply_next_prompt_image_paste(&mut app).await;
 
     // Assert
@@ -1460,41 +1484,27 @@ async fn test_handle_prompt_image_paste_reports_unavailable_clipboard_backend() 
     }
 }
 
-/// Verifies repeated paste shortcuts do not start a second clipboard capture
-/// while the first one is still running.
-#[tokio::test]
-async fn test_handle_prompt_image_paste_ignores_repeat_while_capture_runs() {
+/// Verifies repeated paste shortcuts do not request a second clipboard
+/// capture while the first one is still running.
+#[test]
+fn test_handle_prompt_image_paste_ignores_repeat_while_capture_runs() {
     // Arrange
-    let (mut app, _base_dir) = new_test_prompt_app("Review ", None).await;
-    let prompt_context = prompt_context(&mut app).expect("expected prompt context");
-    let mut clipboard_image_client = crate::infra::clipboard_image::MockClipboardImageClient::new();
-    clipboard_image_client
-        .expect_persist_clipboard_image()
-        .once()
-        .returning(|_, _| {
-            Box::pin(async {
-                Ok(crate::infra::clipboard_image::PersistedClipboardImage {
-                    local_image_path: PathBuf::from("/tmp/pasted.png"),
-                })
-            })
-        });
-    install_mock_clipboard_image_client(&mut app, clipboard_image_client);
-    handle_prompt_image_paste(&mut app, &prompt_context);
+    let mut mode = new_test_prompt_mode("Review ");
+    let paste_key = KeyEvent::new(KeyCode::Char('v'), event::KeyModifiers::CONTROL);
 
     // Act
-    handle_prompt_image_paste(&mut app, &prompt_context);
-    apply_next_prompt_image_paste(&mut app).await;
+    let first_effects = reduce_prompt_event(&mut mode, paste_key);
+    mark_prompt_image_paste_pending(&mut mode, 1);
+    let repeated_effects = reduce_prompt_event(&mut mode, paste_key);
 
     // Assert
-    if let AppMode::Prompt {
-        attachment_state,
-        input,
-        ..
-    } = &app.mode
-    {
-        assert_eq!(input.text(), "Review [Image #1]");
-        assert_eq!(attachment_state.attachments.len(), 1);
-    }
+    assert!(matches!(
+        first_effects.as_slice(),
+        [PromptEffect::StartImagePaste {
+            attachment_number: 1
+        }]
+    ));
+    assert!(repeated_effects.is_empty());
 }
 
 /// Verifies a capture completing after the user kept editing inserts its
@@ -1505,19 +1515,8 @@ async fn test_prompt_image_paste_completion_lands_at_paste_position() {
     // Arrange
     let (mut app, _base_dir) = new_test_prompt_app("Review ", None).await;
     let prompt_context = prompt_context(&mut app).expect("expected prompt context");
-    let mut clipboard_image_client = crate::infra::clipboard_image::MockClipboardImageClient::new();
-    clipboard_image_client
-        .expect_persist_clipboard_image()
-        .once()
-        .returning(|_, _| {
-            Box::pin(async {
-                Ok(crate::infra::clipboard_image::PersistedClipboardImage {
-                    local_image_path: PathBuf::from("/tmp/pasted.png"),
-                })
-            })
-        });
-    install_mock_clipboard_image_client(&mut app, clipboard_image_client);
-    handle_prompt_image_paste(&mut app, &prompt_context);
+    install_pasted_image_clipboard(&mut app);
+    paste_image_into_active_prompt(&mut app, &prompt_context.session_id);
     press_prompt_key(&mut app, KeyCode::Char('!')).await;
     press_prompt_key(&mut app, KeyCode::Home).await;
     press_prompt_key(&mut app, KeyCode::Char('>')).await;
@@ -1537,22 +1536,19 @@ async fn test_prompt_image_paste_completion_lands_at_paste_position() {
 
 /// Verifies typing right after a pasted image placeholder separates the new
 /// word from the placeholder with one automatic space.
-#[tokio::test]
-async fn test_prompt_typing_after_image_placeholder_inserts_space() {
+#[test]
+fn test_prompt_typing_after_image_placeholder_inserts_space() {
     // Arrange
-    let (mut app, _base_dir) = new_test_prompt_app("Review ", None).await;
-    let prompt_context = prompt_context(&mut app).expect("expected prompt context");
-    install_pasted_image_clipboard(&mut app);
-    handle_prompt_image_paste(&mut app, &prompt_context);
-    apply_next_prompt_image_paste(&mut app).await;
+    let mut mode = new_test_prompt_mode("Review ");
+    mode.insert_pasted_image_placeholder(PathBuf::from("/tmp/pasted.png"));
 
     // Act
-    press_prompt_key(&mut app, KeyCode::Char('w')).await;
-    press_prompt_key(&mut app, KeyCode::Char('h')).await;
+    reduce_prompt_code(&mut mode, KeyCode::Char('w'));
+    reduce_prompt_code(&mut mode, KeyCode::Char('h'));
 
     // Assert
     assert!(matches!(
-        &app.mode,
+        &mode,
         AppMode::Prompt { attachment_state, input, .. }
             if input.text() == "Review [Image #1] wh"
                 && input.cursor == 20
@@ -1568,7 +1564,7 @@ async fn test_prompt_image_paste_completion_separates_text_typed_meanwhile() {
     let (mut app, _base_dir) = new_test_prompt_app("Review ", None).await;
     let prompt_context = prompt_context(&mut app).expect("expected prompt context");
     install_pasted_image_clipboard(&mut app);
-    handle_prompt_image_paste(&mut app, &prompt_context);
+    paste_image_into_active_prompt(&mut app, &prompt_context.session_id);
     press_prompt_key(&mut app, KeyCode::Char('w')).await;
     press_prompt_key(&mut app, KeyCode::Char('h')).await;
 
@@ -1585,58 +1581,51 @@ async fn test_prompt_image_paste_completion_separates_text_typed_meanwhile() {
     ));
 }
 
+/// Builds a prompt whose clipboard-image capture is still running.
+fn pasting_image_mode(input_text: &str) -> AppMode {
+    let mut mode = new_test_prompt_mode(input_text);
+    mark_prompt_image_paste_pending(&mut mode, 1);
+
+    mode
+}
+
 /// Verifies `Enter` is ignored while a capture runs, so the pasted image is
 /// not dropped from the submitted turn.
-#[tokio::test]
-async fn test_prompt_submit_is_ignored_while_image_paste_runs() {
+#[test]
+fn test_prompt_submit_is_ignored_while_image_paste_runs() {
     // Arrange
-    let (mut app, _base_dir) = new_test_prompt_app("Review ", None).await;
-    let prompt_context = prompt_context(&mut app).expect("expected prompt context");
-    install_pasted_image_clipboard(&mut app);
-    handle_prompt_image_paste(&mut app, &prompt_context);
+    let mut mode = pasting_image_mode("Review ");
 
     // Act
-    press_prompt_key(&mut app, KeyCode::Enter).await;
-    let is_waiting_for_image = matches!(
-        &app.mode,
-        AppMode::Prompt { attachment_state, input, .. }
-            if attachment_state.is_pasting_image() && input.text() == "Review "
-    );
-    apply_next_prompt_image_paste(&mut app).await;
+    let effects = reduce_prompt_code(&mut mode, KeyCode::Enter);
 
     // Assert
-    assert!(is_waiting_for_image);
     assert!(matches!(
-        &app.mode,
+        &mode,
         AppMode::Prompt { attachment_state, input, .. }
-            if input.text() == "Review [Image #1]" && attachment_state.attachments.len() == 1
+            if attachment_state.is_pasting_image() && input.text() == "Review "
     ));
+    assert!(effects.is_empty());
 }
 
 /// Verifies prompt-history navigation pauses while a capture runs, so the
 /// image lands in the draft instead of replacing it inside a history entry.
-#[tokio::test]
-async fn test_prompt_history_navigation_is_ignored_while_image_paste_runs() {
+#[test]
+fn test_prompt_history_navigation_is_ignored_while_image_paste_runs() {
     // Arrange
-    let (mut app, _base_dir) = new_test_prompt_app("Review ", None).await;
-    let prompt_context = prompt_context(&mut app).expect("expected prompt context");
-    if let AppMode::Prompt { history_state, .. } = &mut app.mode {
+    let mut mode = pasting_image_mode("Review ");
+    if let AppMode::Prompt { history_state, .. } = &mut mode {
         history_state.entries = vec!["earlier prompt".to_string()];
     }
-    install_pasted_image_clipboard(&mut app);
-    handle_prompt_image_paste(&mut app, &prompt_context);
 
     // Act
-    press_prompt_key(&mut app, KeyCode::Up).await;
-    apply_next_prompt_image_paste(&mut app).await;
+    reduce_prompt_code(&mut mode, KeyCode::Up);
 
     // Assert
     assert!(matches!(
-        &app.mode,
-        AppMode::Prompt { attachment_state, history_state, input, .. }
-            if input.text() == "Review [Image #1]"
-                && history_state.selected_index.is_none()
-                && attachment_state.attachments.len() == 1
+        &mode,
+        AppMode::Prompt { history_state, input, .. }
+            if input.text() == "Review " && history_state.selected_index.is_none()
     ));
 }
 
@@ -1728,7 +1717,7 @@ async fn test_shutdown_removes_unapplied_prompt_image_paste() {
         .withf(move |path| path == &expected_image_directory)
         .returning(|_| Box::pin(async { Ok(()) }));
     install_mock_fs_client(&mut app, mock_fs_client);
-    handle_prompt_image_paste(&mut app, &prompt_context);
+    paste_image_into_active_prompt(&mut app, &prompt_context.session_id);
 
     // Act
     app.wait_for_background_cleanup_tasks().await;
@@ -1782,7 +1771,7 @@ async fn test_prompt_image_paste_completion_after_reset_removes_orphaned_image()
         .withf(move |path| path == &expected_image_directory)
         .returning(|_| Box::pin(async { Ok(()) }));
     install_mock_fs_client(&mut app, mock_fs_client);
-    handle_prompt_image_paste(&mut app, &prompt_context);
+    paste_image_into_active_prompt(&mut app, &prompt_context.session_id);
     if let AppMode::Prompt {
         attachment_state, ..
     } = &mut app.mode
@@ -1820,7 +1809,7 @@ async fn test_prompt_image_paste_failure_after_leaving_prompt_reports_error() {
             Box::pin(async { Err(crate::infra::clipboard_image::ClipboardError::NoImage) })
         });
     install_mock_clipboard_image_client(&mut app, clipboard_image_client);
-    handle_prompt_image_paste(&mut app, &prompt_context);
+    paste_image_into_active_prompt(&mut app, &prompt_context.session_id);
     app.mode = AppMode::List;
 
     // Act
@@ -1890,7 +1879,7 @@ async fn test_prompt_snapshot_abandons_running_image_paste() {
             })
         });
     install_mock_clipboard_image_client(&mut app, clipboard_image_client);
-    handle_prompt_image_paste(&mut app, &prompt_context);
+    paste_image_into_active_prompt(&mut app, &prompt_context.session_id);
 
     // Act
     let snapshot = take_prompt_snapshot(&mut app.mode).expect("expected AppMode::Prompt");
@@ -1905,7 +1894,7 @@ async fn test_prompt_snapshot_abandons_running_image_paste() {
         } if !attachment_state.is_pasting_image() => Some(input.text().to_string()),
         _ => None,
     };
-    handle_prompt_image_paste(&mut app, &prompt_context);
+    paste_image_into_active_prompt(&mut app, &prompt_context.session_id);
     apply_next_prompt_image_paste(&mut app).await;
 
     // Assert
@@ -1937,7 +1926,7 @@ async fn test_saved_prompt_progress_abandons_running_image_paste() {
             })
         });
     install_mock_clipboard_image_client(&mut app, clipboard_image_client);
-    handle_prompt_image_paste(&mut app, &prompt_context);
+    paste_image_into_active_prompt(&mut app, &prompt_context.session_id);
     press_prompt_key(&mut app, KeyCode::Tab).await;
     press_prompt_key(&mut app, KeyCode::Char('q')).await;
 
@@ -1950,7 +1939,7 @@ async fn test_saved_prompt_progress_abandons_running_image_paste() {
         &app.mode,
         AppMode::Prompt { attachment_state, .. } if attachment_state.is_pasting_image()
     );
-    handle_prompt_image_paste(&mut app, &prompt_context);
+    paste_image_into_active_prompt(&mut app, &prompt_context.session_id);
     apply_next_prompt_image_paste(&mut app).await;
 
     // Assert
@@ -1963,81 +1952,66 @@ async fn test_saved_prompt_progress_abandons_running_image_paste() {
     ));
 }
 
-#[tokio::test]
-async fn test_handle_prompt_slash_submit_advances_model_command_to_agent_stage() {
+#[test]
+fn test_handle_prompt_slash_submit_ignores_non_prompt_mode() {
     // Arrange
-    let (mut app, _base_dir) = new_test_prompt_app("/model", None).await;
-    let prompt_context = prompt_context(&mut app).expect("expected prompt context");
+    let mut mode = AppMode::List;
+    let mut effects = Vec::new();
 
     // Act
-    handle_prompt_slash_submit(&mut app, &prompt_context).await;
+    reduce_prompt_slash_submit(&mut mode, &new_test_prompt_context(), &mut effects);
 
     // Assert
-    if let AppMode::Prompt {
-        input, slash_state, ..
-    } = &app.mode
-    {
-        assert_eq!(input.text(), "/model");
-        assert_eq!(slash_state.stage, PromptSlashStage::Agent);
-        assert_eq!(slash_state.selected_agent, None);
-        assert_eq!(slash_state.selected_index, 0);
-    }
+    assert!(matches!(mode, AppMode::List));
+    assert!(effects.is_empty());
 }
 
-#[tokio::test]
-async fn test_handle_prompt_slash_submit_ignores_non_prompt_mode() {
+#[test]
+fn test_handle_prompt_slash_submit_maps_filtered_first_command_to_mode() {
     // Arrange
-    let (mut app, _base_dir) = new_test_prompt_app("/model", None).await;
-    let prompt_context = prompt_context(&mut app).expect("expected prompt context");
-    app.mode = AppMode::List;
+    let mut mode = new_test_prompt_mode("/");
+    let mut effects = Vec::new();
 
     // Act
-    handle_prompt_slash_submit(&mut app, &prompt_context).await;
+    reduce_prompt_slash_submit(&mut mode, &new_test_prompt_context(), &mut effects);
 
     // Assert
-    assert!(matches!(app.mode, AppMode::List));
+    assert!(matches!(
+        &mode,
+        AppMode::Prompt { slash_state, .. }
+            if slash_state.stage == PromptSlashStage::Mode
+                && slash_state.selected_agent.is_none()
+                && slash_state.selected_index == 0
+    ));
+    assert!(effects.is_empty());
 }
 
-#[tokio::test]
-async fn test_handle_prompt_slash_submit_maps_filtered_first_command_to_mode() {
+#[test]
+fn test_handle_prompt_slash_submit_selects_agent_and_advances_to_model_stage() {
     // Arrange
-    let (mut app, _base_dir) = new_test_prompt_app("/", None).await;
-    let prompt_context = prompt_context(&mut app).expect("expected prompt context");
-
-    // Act
-    handle_prompt_slash_submit(&mut app, &prompt_context).await;
-
-    // Assert
-    if let AppMode::Prompt { slash_state, .. } = &app.mode {
-        assert_eq!(slash_state.stage, PromptSlashStage::Mode);
-        assert_eq!(slash_state.selected_agent, None);
-        assert_eq!(slash_state.selected_index, 0);
-    }
-}
-
-#[tokio::test]
-async fn test_handle_prompt_slash_submit_selects_agent_and_advances_to_model_stage() {
-    // Arrange
-    let (mut app, _base_dir) = new_test_prompt_app("/model", None).await;
+    let mut mode = new_test_prompt_mode("/model");
     let selected_index = AgentKind::ALL
         .iter()
         .position(|agent_kind| *agent_kind == AgentKind::Claude)
         .expect("expected Claude agent");
-    if let AppMode::Prompt { slash_state, .. } = &mut app.mode {
+    if let AppMode::Prompt { slash_state, .. } = &mut mode {
         slash_state.stage = PromptSlashStage::Agent;
         slash_state.selected_index = selected_index;
     }
-    let prompt_context = prompt_context(&mut app).expect("expected prompt context");
+    let mut effects = Vec::new();
 
     // Act
-    handle_prompt_slash_submit(&mut app, &prompt_context).await;
+    reduce_prompt_slash_submit(&mut mode, &new_test_prompt_context(), &mut effects);
 
     // Assert
-    if let AppMode::Prompt { slash_state, .. } = &app.mode {
-        assert_eq!(slash_state.stage, PromptSlashStage::Model);
-        assert_eq!(slash_state.selected_agent, Some(AgentKind::Claude));
-        assert_eq!(slash_state.selected_index, 0);
-    }
+    assert!(matches!(
+        &mode,
+        AppMode::Prompt { slash_state, .. }
+            if slash_state.stage == PromptSlashStage::Model
+                && slash_state.selected_agent == Some(AgentKind::Claude)
+                && slash_state.selected_index == 0
+    ));
+    assert!(effects.is_empty());
 }
 
 #[tokio::test]
@@ -2053,7 +2027,7 @@ async fn test_handle_prompt_slash_submit_sets_selected_model_and_resets_input() 
     let prompt_context = prompt_context(&mut app).expect("expected prompt context");
 
     // Act
-    handle_prompt_slash_submit(&mut app, &prompt_context).await;
+    run_prompt_slash_submit(&mut app, &prompt_context).await;
     app.process_pending_app_events().await;
 
     // Assert
@@ -2067,100 +2041,97 @@ async fn test_handle_prompt_slash_submit_sets_selected_model_and_resets_input() 
     assert_eq!(app.sessions.sessions()[0].agent.model(), expected_model);
 }
 
-#[tokio::test]
-async fn test_handle_prompt_slash_submit_prefills_reasoning_selection_from_session_value() {
-    // Arrange
-    let (mut app, _base_dir) = new_test_prompt_app("/reasoning", None).await;
-    app.settings.default_smart_reasoning_level = ReasoningLevel::Medium;
-    app.sessions.sessions_mut()[0].reasoning_level_override = Some(ReasoningLevel::Low);
-    let prompt_context = prompt_context(&mut app).expect("expected prompt context");
+/// Verifies `/reasoning` and `/style` preselect the session's current value,
+/// and that a stale command highlight is clamped before resolving.
+#[test]
+fn test_handle_prompt_slash_submit_prefills_stage_selection_from_session_values() {
+    for (
+        input_text,
+        stale_index,
+        reasoning_level,
+        response_style,
+        expected_stage,
+        expected_index,
+    ) in [
+        (
+            "/reasoning",
+            0,
+            ReasoningLevel::Low,
+            ResponseStyle::default(),
+            PromptSlashStage::Reasoning,
+            0,
+        ),
+        (
+            "/reasoning",
+            0,
+            ReasoningLevel::High,
+            ResponseStyle::default(),
+            PromptSlashStage::Reasoning,
+            2,
+        ),
+        (
+            "/reasoning",
+            99,
+            ReasoningLevel::default(),
+            ResponseStyle::default(),
+            PromptSlashStage::Reasoning,
+            2,
+        ),
+        (
+            "/style",
+            0,
+            ReasoningLevel::default(),
+            ResponseStyle::Detailed,
+            PromptSlashStage::Style,
+            2,
+        ),
+    ] {
+        // Arrange
+        let mut mode = new_test_prompt_mode(input_text);
+        if let AppMode::Prompt { slash_state, .. } = &mut mode {
+            slash_state.selected_index = stale_index;
+        }
+        let mut prompt_context = new_test_prompt_context();
+        prompt_context.reasoning_level = reasoning_level;
+        prompt_context.response_style = response_style;
+        let mut effects = Vec::new();
 
-    // Act
-    handle_prompt_slash_submit(&mut app, &prompt_context).await;
+        // Act
+        reduce_prompt_slash_submit(&mut mode, &prompt_context, &mut effects);
 
-    // Assert
-    if let AppMode::Prompt { slash_state, .. } = &app.mode {
-        assert_eq!(slash_state.stage, PromptSlashStage::Reasoning);
-        assert_eq!(slash_state.selected_agent, None);
-        assert_eq!(slash_state.selected_index, 0);
-    }
-}
-
-#[tokio::test]
-async fn test_handle_prompt_slash_submit_prefills_reasoning_selection_from_session_override() {
-    // Arrange
-    let (mut app, _base_dir) = new_test_prompt_app("/reasoning", None).await;
-    app.sessions.sessions_mut()[0].reasoning_level_override = Some(ReasoningLevel::High);
-    let prompt_context = prompt_context(&mut app).expect("expected prompt context");
-
-    // Act
-    handle_prompt_slash_submit(&mut app, &prompt_context).await;
-
-    // Assert
-    if let AppMode::Prompt { slash_state, .. } = &app.mode {
-        assert_eq!(slash_state.stage, PromptSlashStage::Reasoning);
-        assert_eq!(slash_state.selected_agent, None);
-        assert_eq!(slash_state.selected_index, 2);
-    }
-}
-
-#[tokio::test]
-async fn test_handle_prompt_slash_submit_prefills_response_style_selection() {
-    // Arrange
-    let (mut app, _base_dir) = new_test_prompt_app("/style", None).await;
-    app.sessions.sessions_mut()[0].response_style = ResponseStyle::Detailed;
-    let prompt_context = prompt_context(&mut app).expect("expected prompt context");
-
-    // Act
-    handle_prompt_slash_submit(&mut app, &prompt_context).await;
-
-    // Assert
-    if let AppMode::Prompt { slash_state, .. } = &app.mode {
-        assert_eq!(slash_state.stage, PromptSlashStage::Style);
-        assert_eq!(slash_state.selected_agent, None);
-        assert_eq!(slash_state.selected_index, 2);
-    }
-}
-
-#[tokio::test]
-async fn test_handle_prompt_slash_submit_clamps_stale_command_selection() {
-    // Arrange
-    let (mut app, _base_dir) = new_test_prompt_app("/reasoning", None).await;
-    if let AppMode::Prompt { slash_state, .. } = &mut app.mode {
-        slash_state.selected_index = 99;
-    }
-    let prompt_context = prompt_context(&mut app).expect("expected prompt context");
-
-    // Act
-    handle_prompt_slash_submit(&mut app, &prompt_context).await;
-
-    // Assert
-    if let AppMode::Prompt { slash_state, .. } = &app.mode {
-        assert_eq!(slash_state.stage, PromptSlashStage::Reasoning);
-        assert_eq!(slash_state.selected_agent, None);
-        assert_eq!(slash_state.selected_index, 2);
+        // Assert
+        assert!(
+            matches!(
+                &mode,
+                AppMode::Prompt { slash_state, .. }
+                    if slash_state.stage == expected_stage
+                        && slash_state.selected_agent.is_none()
+                        && slash_state.selected_index == expected_index
+            ),
+            "{input_text} with {reasoning_level:?} and {response_style:?}"
+        );
+        assert!(effects.is_empty());
     }
 }
 
 /// Verifies slash submit ignores unmatched commands and preserves the
 /// prompt state.
-#[tokio::test]
-async fn test_handle_prompt_slash_submit_ignores_unknown_command() {
+#[test]
+fn test_handle_prompt_slash_submit_ignores_unknown_command() {
     // Arrange
-    let (mut app, _base_dir) = new_test_prompt_app("/x", None).await;
-    let prompt_context = prompt_context(&mut app).expect("expected prompt context");
+    let mut mode = new_test_prompt_mode("/x");
+    let mut effects = Vec::new();
 
     // Act
-    handle_prompt_slash_submit(&mut app, &prompt_context).await;
+    reduce_prompt_slash_submit(&mut mode, &new_test_prompt_context(), &mut effects);
 
     // Assert
-    if let AppMode::Prompt {
-        input, slash_state, ..
-    } = &app.mode
-    {
-        assert_eq!(input.text(), "/x");
-        assert_eq!(*slash_state, PromptSlashState::default());
-    }
+    assert!(matches!(
+        &mode,
+        AppMode::Prompt { input, slash_state, .. }
+            if input.text() == "/x" && *slash_state == PromptSlashState::default()
+    ));
+    assert!(effects.is_empty());
 }
 
 #[test]
@@ -2290,28 +2261,35 @@ fn test_handle_prompt_backspace_on_empty_input_is_noop() {
     }
 }
 
-#[tokio::test]
-async fn test_handle_prompt_left_reactivates_existing_at_mention_without_cached_state() {
+#[test]
+fn test_handle_prompt_left_reactivates_existing_at_mention_without_cached_state() {
     // Arrange
     let input_text = "@src/main.rs more";
-    let (mut app, _base_dir) = new_test_prompt_app(input_text, None).await;
+    let mut mode = new_test_prompt_mode(input_text);
+    let prompt_context = new_test_prompt_context();
+    let mut effects = Vec::new();
     let moves_back_into_mention = " more".chars().count();
 
     // Act
     for _ in 0..moves_back_into_mention {
-        apply_prompt_input_command(&mut app, InputCommand::MoveLeft).await;
+        reduce_prompt_input_command(
+            &mut mode,
+            &prompt_context,
+            InputCommand::MoveLeft,
+            &mut effects,
+        );
     }
 
     // Assert
-    if let AppMode::Prompt {
-        at_mention_state,
-        input,
-        ..
-    } = &app.mode
-    {
-        assert_eq!(input.cursor, "@src/main.rs".chars().count());
-        assert!(at_mention_state.is_some());
-    }
+    assert!(matches!(
+        &mode,
+        AppMode::Prompt { at_mention_state, input, .. }
+            if input.cursor == "@src/main.rs".chars().count() && at_mention_state.is_some()
+    ));
+    assert!(matches!(
+        effects.as_slice(),
+        [PromptEffect::LoadAtMentionEntries]
+    ));
 }
 
 #[tokio::test]
@@ -2321,7 +2299,7 @@ async fn test_handle_prompt_submit_key_ignores_empty_prompt() {
     let prompt_context = prompt_context(&mut app).expect("expected prompt context");
 
     // Act
-    handle_prompt_submit_key(&mut app, &prompt_context).await;
+    run_prompt_submit(&mut app, &prompt_context).await;
 
     // Assert
     assert!(matches!(app.mode, AppMode::Prompt { .. }));
@@ -2329,37 +2307,21 @@ async fn test_handle_prompt_submit_key_ignores_empty_prompt() {
     assert_eq!(app.sessions.sessions()[0].prompt, "");
 }
 
-#[tokio::test]
-async fn test_handle_prompt_submit_key_routes_slash_command() {
+#[test]
+fn graph_subcommands_do_not_bypass_the_mode_selector() {
     // Arrange
-    let (mut app, _base_dir) = new_test_prompt_app("/model", None).await;
-    let prompt_context = prompt_context(&mut app).expect("expected prompt context");
+    let mut mode = new_test_prompt_mode("/graph query");
 
     // Act
-    handle_prompt_submit_key(&mut app, &prompt_context).await;
+    let effects = reduce_prompt_code(&mut mode, KeyCode::Enter);
 
     // Assert
-    assert!(matches!(
-        &app.mode,
-        AppMode::Prompt {
-            input, slash_state, ..
-        } if input.text() == "/model" && slash_state.stage == PromptSlashStage::Agent
-    ));
-}
-
-#[tokio::test]
-async fn graph_subcommands_do_not_bypass_the_mode_selector() {
-    // Arrange
-    let (mut app, _base_dir) = new_test_prompt_app("/graph query", None).await;
-    app.experimental_graph = true;
-    let context = prompt_context(&mut app).expect("prompt context");
-
-    // Act
-    handle_prompt_submit_key(&mut app, &context).await;
-
-    // Assert
-    assert!(matches!(app.mode, AppMode::Prompt { .. }));
-    assert_eq!(app.sessions.sessions()[0].prompt, "");
+    assert!(matches!(mode, AppMode::Prompt { .. }));
+    assert!(
+        !effects
+            .iter()
+            .any(|effect| matches!(effect, PromptEffect::SubmitPrompt(_)))
+    );
 }
 
 #[tokio::test]
@@ -2373,7 +2335,7 @@ async fn graph_slash_command_arms_and_escape_preserves_the_draft() {
     let context = prompt_context(&mut app).expect("context");
 
     // Act
-    handle_prompt_submit_key(&mut app, &context).await;
+    run_prompt_submit(&mut app, &context).await;
 
     // Assert
     assert!(
@@ -2390,7 +2352,7 @@ async fn graph_slash_command_arms_and_escape_preserves_the_draft() {
 
     // Act
     app.experimental_graph = false;
-    handle_prompt_submit_key(&mut app, &context).await;
+    run_prompt_submit(&mut app, &context).await;
 
     // Assert: rejected graph requests preserve the armed draft.
     assert!(
@@ -2399,7 +2361,7 @@ async fn graph_slash_command_arms_and_escape_preserves_the_draft() {
     );
 
     // Act
-    handle_prompt_cancel_key(&mut app, &context).await;
+    run_prompt_cancel(&mut app, &context).await;
 
     // Assert
     assert!(
@@ -2418,7 +2380,7 @@ async fn test_handle_prompt_submit_key_drains_supported_image_turn() {
     let prompt_context = prompt_context(&mut app).expect("expected prompt context");
 
     // Act
-    handle_prompt_submit_key(&mut app, &prompt_context).await;
+    run_prompt_submit(&mut app, &prompt_context).await;
 
     // Assert
     assert!(matches!(app.mode, AppMode::View { .. }));
@@ -2444,7 +2406,7 @@ async fn test_handle_prompt_submit_key_starts_regular_session_with_image_turn() 
     let prompt_context = prompt_context(&mut app).expect("expected prompt context");
 
     // Act
-    handle_prompt_submit_key(&mut app, &prompt_context).await;
+    run_prompt_submit(&mut app, &prompt_context).await;
 
     // Assert
     assert!(matches!(app.mode, AppMode::View { .. }));
@@ -2475,7 +2437,7 @@ async fn test_handle_prompt_slash_submit_preserves_attachments_when_apply_bails_
     let prompt_context = prompt_context(&mut app).expect("expected prompt context");
 
     // Act
-    handle_prompt_slash_submit(&mut app, &prompt_context).await;
+    run_prompt_slash_submit(&mut app, &prompt_context).await;
 
     // Assert
     let AppMode::Prompt {
@@ -2508,7 +2470,7 @@ async fn test_handle_prompt_slash_submit_ignores_apply_when_suggestions_are_empt
     let prompt_context = prompt_context(&mut app).expect("expected prompt context");
 
     // Act
-    handle_prompt_slash_submit(&mut app, &prompt_context).await;
+    run_prompt_slash_submit(&mut app, &prompt_context).await;
 
     // Assert
     let AppMode::Prompt {
@@ -2646,7 +2608,7 @@ async fn test_prompt_attachment_helpers_ignore_non_prompt_mode() {
     let inserted_attachments =
         app.insert_prompt_image_placeholder(PathBuf::from("/tmp/image-1.png"), None);
     let (prompt, archived_attachments) = take_submitted_turn_prompt(&mut app.mode);
-    let cleanup_attachments = take_prompt_attachment_cleanup(&mut app);
+    let cleanup_attachments = take_prompt_attachment_cleanup(&mut app.mode);
 
     // Assert
     assert!(matches!(app.mode, AppMode::List));
@@ -2663,20 +2625,4 @@ async fn test_prompt_attachment_helpers_ignore_non_prompt_mode() {
         cleanup_attachments,
         [] as [crate::domain::composer::PromptAttachment; 0]
     );
-}
-
-#[tokio::test]
-async fn test_open_chatgpt_sign_in_outside_the_composer_leaves_the_mode_unchanged() {
-    // Arrange
-    let (mut app, _base_dir) = new_test_prompt_app("draft text", None).await;
-    app.mode = AppMode::List;
-
-    // Act
-    open_chatgpt_sign_in(
-        &mut app,
-        AgentSelection::new(AgentKind::Harness, AgentModel::ChatGptGpt6Sol),
-    );
-
-    // Assert
-    assert!(matches!(app.mode, AppMode::List));
 }

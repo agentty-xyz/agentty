@@ -1,84 +1,97 @@
 use std::path::PathBuf;
 
-use super::super::{apply_prompt_input_command, handle_at_mention_select};
-use super::support::{PromptTestAppExt, new_test_prompt_app};
+use super::super::{PromptEffect, reduce_prompt_input_command, select_at_mention};
+use super::support::{PromptTestModeExt, new_test_prompt_context, new_test_prompt_mode};
 use crate::domain::file_entry::FileEntry;
 use crate::domain::input::InputCommand;
 use crate::presentation::app_mode::AppMode;
 use crate::presentation::prompt::PromptAtMentionState;
 
-#[tokio::test]
-async fn test_prompt_input_edit_and_undo_resync_at_mention_state() {
+#[test]
+fn test_prompt_input_edit_and_undo_resync_at_mention_state() {
     // Arrange
-    let (mut app, _base_dir) = new_test_prompt_app("", None).await;
+    let mut mode = new_test_prompt_mode("");
+    let prompt_context = new_test_prompt_context();
+    let mut effects = Vec::new();
 
     // Act
-    apply_prompt_input_command(&mut app, InputCommand::Insert('@')).await;
+    reduce_prompt_input_command(
+        &mut mode,
+        &prompt_context,
+        InputCommand::Insert('@'),
+        &mut effects,
+    );
 
     // Assert
-    assert!(matches!(app.mode, AppMode::Prompt { .. }));
-    if let AppMode::Prompt {
-        at_mention_state, ..
-    } = &app.mode
-    {
-        assert!(at_mention_state.is_some());
-    }
+    assert!(matches!(
+        &mode,
+        AppMode::Prompt { at_mention_state, .. } if at_mention_state.is_some()
+    ));
+    assert!(matches!(
+        effects.as_slice(),
+        [PromptEffect::LoadAtMentionEntries]
+    ));
 
     // Act
-    apply_prompt_input_command(&mut app, InputCommand::Insert(' ')).await;
+    reduce_prompt_input_command(
+        &mut mode,
+        &prompt_context,
+        InputCommand::Insert(' '),
+        &mut effects,
+    );
 
     // Assert
-    assert!(matches!(app.mode, AppMode::Prompt { .. }));
-    if let AppMode::Prompt {
-        at_mention_state, ..
-    } = &app.mode
-    {
-        assert!(at_mention_state.is_none());
-    }
+    assert!(matches!(
+        &mode,
+        AppMode::Prompt { at_mention_state, .. } if at_mention_state.is_none()
+    ));
 
     // Act
-    apply_prompt_input_command(&mut app, InputCommand::Undo).await;
+    reduce_prompt_input_command(&mut mode, &prompt_context, InputCommand::Undo, &mut effects);
 
     // Assert
-    if let AppMode::Prompt {
-        at_mention_state,
-        input,
-        ..
-    } = &app.mode
-    {
-        assert_eq!(input.text(), "@");
-        assert!(at_mention_state.is_some());
-    }
+    assert!(matches!(
+        &mode,
+        AppMode::Prompt { at_mention_state, input, .. }
+            if input.text() == "@" && at_mention_state.is_some()
+    ));
 }
 
-#[tokio::test]
-async fn test_at_mention_completion_keeps_following_image_occurrence_synchronized() {
+#[test]
+fn test_at_mention_completion_keeps_following_image_occurrence_synchronized() {
     // Arrange
     let selected_path = "very/long/path/to/main.rs";
     let at_mention_state = PromptAtMentionState::new(vec![FileEntry {
         is_dir: false,
         path: selected_path.to_string(),
     }]);
-    let (mut app, _base_dir) = new_test_prompt_app("@v", None).await;
-    app.insert_pasted_image_placeholder(PathBuf::from("/tmp/image-1.png"));
+    let mut mode = new_test_prompt_mode("@v");
+    let prompt_context = new_test_prompt_context();
+    let mut effects = Vec::new();
+    mode.insert_pasted_image_placeholder(PathBuf::from("/tmp/image-1.png"));
     if let AppMode::Prompt {
         at_mention_state: state,
         input,
         ..
-    } = &mut app.mode
+    } = &mut mode
     {
         *state = Some(at_mention_state);
         input.cursor = "@v".chars().count();
     }
 
     // Act
-    handle_at_mention_select(&mut app).await;
+    select_at_mention(&mut mode, &prompt_context, &mut effects);
     let completed_mention = format!("@{selected_path} ");
-    if let AppMode::Prompt { input, .. } = &mut app.mode {
+    if let AppMode::Prompt { input, .. } = &mut mode {
         input.cursor = completed_mention.chars().count();
     }
-    apply_prompt_input_command(&mut app, InputCommand::DeleteForward).await;
-    let prompt = app.take_submitted_turn_prompt();
+    reduce_prompt_input_command(
+        &mut mode,
+        &prompt_context,
+        InputCommand::DeleteForward,
+        &mut effects,
+    );
+    let prompt = mode.take_submitted_turn_prompt();
 
     // Assert
     assert_eq!(prompt.text, completed_mention);
