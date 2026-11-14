@@ -1,16 +1,14 @@
 use ag_session::SessionMessageKind;
 
-use crate::connection::open_in_memory_pool;
 use crate::session_message::APPEND_SESSION_MESSAGE;
 use crate::{AppRepositories, DbError};
 
 #[tokio::test]
 async fn blank_message_returns_without_persistence() {
     // Arrange
-    let pool = open_in_memory_pool(1)
+    let repositories = AppRepositories::in_memory()
         .await
         .expect("failed to open in-memory db");
-    let repositories = AppRepositories::from_pool(pool);
 
     // Act
     let result = repositories
@@ -50,10 +48,9 @@ async fn append_after_session_deletion_does_not_create_orphan_messages() {
 #[tokio::test]
 async fn append_failure_reports_semantic_operation_context() {
     // Arrange
-    let pool = open_in_memory_pool(1)
+    let (repositories, pool) = AppRepositories::in_memory_with_pool()
         .await
         .expect("failed to open in-memory db");
-    let repositories = AppRepositories::from_pool(pool.clone());
     let project_id = repositories
         .projects()
         .upsert_project("/tmp/message-context", Some("main".to_string()))

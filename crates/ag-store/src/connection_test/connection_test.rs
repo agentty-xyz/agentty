@@ -26,7 +26,7 @@ async fn test_open_creates_missing_parent_directory() {
 #[tokio::test]
 async fn query_on_dropped_table_returns_db_error_query() {
     // Arrange
-    let database = Database::open_in_memory()
+    let database = Database::in_memory()
         .await
         .expect("failed to open database");
     sqlx::query!("DROP TABLE session")
@@ -47,7 +47,7 @@ async fn query_on_dropped_table_returns_db_error_query() {
 #[tokio::test]
 async fn db_error_display_includes_underlying_message() {
     // Arrange
-    let database = Database::open_in_memory()
+    let database = Database::in_memory()
         .await
         .expect("failed to open database");
     sqlx::query!("DROP TABLE session")

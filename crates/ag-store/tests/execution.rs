@@ -24,7 +24,7 @@ impl OneShotClient for Runtime {
 #[tokio::test]
 async fn public_worker_composition_records_project_utility_failure() {
     // Arrange
-    let db = Database::open_in_memory().await.expect("database");
+    let db = Database::in_memory().await.expect("database");
     let worker = Arc::new(RunWorker::with_client(
         Arc::new(Runtime),
         db.runs(),

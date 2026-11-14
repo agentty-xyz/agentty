@@ -11,7 +11,7 @@ use crate::{NewSessionReviewCommentResolution, SessionOperationRow, SessionTurnM
 #[tokio::test]
 async fn test_load_unfinished_session_operations_returns_only_queued_and_running_rows() {
     // Arrange
-    let database = Database::open_in_memory()
+    let database = Database::in_memory()
         .await
         .expect("failed to open in-memory db");
     let project_id = database
@@ -72,7 +72,7 @@ async fn test_load_unfinished_session_operations_returns_only_queued_and_running
 #[tokio::test]
 async fn test_request_cancel_for_session_operations_marks_only_unfinished_rows() {
     // Arrange
-    let database = Database::open_in_memory()
+    let database = Database::in_memory()
         .await
         .expect("failed to open in-memory db");
     let project_id = database
@@ -122,7 +122,7 @@ async fn test_request_cancel_for_session_operations_marks_only_unfinished_rows()
 #[tokio::test]
 async fn test_is_session_operation_unfinished_returns_false_for_done_operation() {
     // Arrange
-    let database = Database::open_in_memory()
+    let database = Database::in_memory()
         .await
         .expect("failed to open in-memory db");
     let project_id = database
@@ -164,7 +164,7 @@ async fn test_is_session_operation_unfinished_returns_false_for_done_operation()
 #[tokio::test]
 async fn test_is_cancel_requested_for_operation_scoped_to_single_operation() {
     // Arrange
-    let database = Database::open_in_memory()
+    let database = Database::in_memory()
         .await
         .expect("failed to open in-memory db");
     let project_id = database
@@ -223,7 +223,7 @@ async fn test_is_cancel_requested_for_operation_scoped_to_single_operation() {
 #[tokio::test]
 async fn test_mark_session_operation_running_sets_started_at_and_heartbeat() {
     // Arrange
-    let database = Database::open_in_memory()
+    let database = Database::in_memory()
         .await
         .expect("failed to open in-memory db");
     let project_id = database
@@ -259,7 +259,7 @@ async fn test_mark_session_operation_running_sets_started_at_and_heartbeat() {
 #[tokio::test]
 async fn test_mark_session_operation_done_sets_finished_state() {
     // Arrange
-    let database = Database::open_in_memory()
+    let database = Database::in_memory()
         .await
         .expect("failed to open in-memory db");
     let project_id = database

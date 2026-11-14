@@ -6,7 +6,7 @@ use crate::connection::Database;
 #[tokio::test]
 async fn test_session_title_candidate_order_preserves_usable_results() {
     // Arrange
-    let database = Database::open_in_memory()
+    let database = Database::in_memory()
         .await
         .expect("failed to open in-memory db");
     let project_id = database
@@ -63,7 +63,7 @@ async fn test_session_title_candidate_order_preserves_usable_results() {
 #[tokio::test]
 async fn test_session_title_authority_invalidates_outstanding_candidates() {
     // Arrange
-    let database = Database::open_in_memory()
+    let database = Database::in_memory()
         .await
         .expect("failed to open in-memory db");
     let project_id = database

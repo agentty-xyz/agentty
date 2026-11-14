@@ -66,7 +66,7 @@ async fn utility_lifecycle_is_durable_and_terminal_states_are_not_resurrected() 
     // Arrange
     let now = Arc::new(AtomicI64::new(1));
     let timestamp = now.clone();
-    let db = Database::open_in_memory_with_timestamp_source(Arc::new(move || {
+    let db = Database::in_memory_with_timestamp_source(Arc::new(move || {
         timestamp.load(Ordering::SeqCst)
     }))
     .await
@@ -127,7 +127,7 @@ async fn utility_lifecycle_is_durable_and_terminal_states_are_not_resurrected() 
 #[tokio::test]
 async fn recovery_fails_abandoned_runs_and_preserves_cancellation() {
     // Arrange
-    let db = Database::open_in_memory().await.expect("database");
+    let db = Database::in_memory().await.expect("database");
     let repository = db.runs();
     for id in ["queued", "running", "canceled"] {
         repository
@@ -179,7 +179,7 @@ async fn recovery_fails_abandoned_runs_and_preserves_cancellation() {
 #[tokio::test]
 async fn closed_session_admission_survives_deletion_and_keeps_other_work_open() {
     // Arrange
-    let db = Database::open_in_memory().await.expect("database");
+    let db = Database::in_memory().await.expect("database");
     let project = db
         .projects()
         .upsert_project("repository", None)

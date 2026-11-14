@@ -1,4 +1,5 @@
-//! Public repository contracts remain available without `test-utils`.
+//! Public repository contracts as consumers use them: file databases through
+//! `Database::open` and in-memory fixtures through the `test-utils` snapshot.
 
 use std::collections::HashMap;
 use std::sync::Arc;
@@ -11,7 +12,7 @@ use tempfile::tempdir;
 #[tokio::test]
 async fn project_setting_values_load_selected_key_for_all_projects() {
     // Arrange
-    let database = Database::open_in_memory().await.expect("database");
+    let database = Database::in_memory().await.expect("database");
     let first = database
         .projects()
         .upsert_project("first", None)
@@ -62,7 +63,7 @@ async fn project_setting_values_load_selected_key_for_all_projects() {
 #[tokio::test]
 async fn worker_settlement_preserves_in_flight_cancellation_for_workflow_commands() {
     // Arrange
-    let database = Database::open_in_memory_with_timestamp_source(Arc::new(|| 123))
+    let database = Database::in_memory_with_timestamp_source(Arc::new(|| 123))
         .await
         .expect("database");
     let project = database
@@ -148,7 +149,7 @@ async fn worker_settlement_preserves_in_flight_cancellation_for_workflow_command
 #[tokio::test]
 async fn maintenance_operations_use_the_same_public_repository_contract() {
     // Arrange
-    let database = Database::open_in_memory_with_timestamp_source(Arc::new(|| 123))
+    let database = Database::in_memory_with_timestamp_source(Arc::new(|| 123))
         .await
         .expect("database should open");
     let project_id = database
@@ -417,7 +418,7 @@ async fn completed_review_and_checkpoint_cleanup_commit_together() {
 
 /// Creates a pending review for checkpoint lifecycle regression tests.
 async fn pending_review_database() -> Result<(Database, i64), ag_store::DbError> {
-    let database = Database::open_in_memory().await?;
+    let database = Database::in_memory().await?;
     let project = database
         .projects()
         .upsert_project("checkpoint-project", None)
@@ -919,7 +920,7 @@ async fn assert_audit_replacement_failure_is_atomic(
 #[tokio::test]
 async fn explicit_review_invalidation_fences_reactivated_identical_generations() {
     // Arrange
-    let database = Database::open_in_memory().await.expect("database");
+    let database = Database::in_memory().await.expect("database");
     let project = database
         .projects()
         .upsert_project("project", None)
@@ -1126,7 +1127,7 @@ async fn model_switch_commits_optional_conversation_reset_and_project_defaults()
 
 /// Persistent session state shared by model-switch transaction regressions.
 async fn model_switch_database() -> Result<(Database, i64), ag_store::DbError> {
-    let database = Database::open_in_memory_with_timestamp_source(Arc::new(|| 123)).await?;
+    let database = Database::in_memory_with_timestamp_source(Arc::new(|| 123)).await?;
     let project = database
         .projects()
         .upsert_project("model-switch", None)
@@ -1196,7 +1197,7 @@ async fn session_archive_continuation_counts_only_omitted_rows() {
     for limit in [0, 10] {
         for has_omitted_archive in [false, true] {
             // Arrange
-            let database = Database::open_in_memory_with_timestamp_source(Arc::new(|| 123))
+            let database = Database::in_memory_with_timestamp_source(Arc::new(|| 123))
                 .await
                 .expect("database");
             let project = database
@@ -1239,7 +1240,7 @@ async fn session_archive_continuation_counts_only_omitted_rows() {
 #[tokio::test]
 async fn session_archive_pages_bound_rows_and_preserve_project_and_detail_scope() {
     // Arrange
-    let database = Database::open_in_memory_with_timestamp_source(Arc::new(|| 123))
+    let database = Database::in_memory_with_timestamp_source(Arc::new(|| 123))
         .await
         .expect("database");
     let project = database
@@ -1349,7 +1350,7 @@ async fn session_archive_pages_bound_rows_and_preserve_project_and_detail_scope(
 #[tokio::test]
 async fn archived_session_count_includes_all_pages_and_tracks_project_status_changes() {
     // Arrange
-    let database = Database::open_in_memory_with_timestamp_source(Arc::new(|| 123))
+    let database = Database::in_memory_with_timestamp_source(Arc::new(|| 123))
         .await
         .expect("database");
     let project = database
@@ -1423,7 +1424,7 @@ async fn archived_session_count_includes_all_pages_and_tracks_project_status_cha
 #[tokio::test]
 async fn archived_session_count_uses_covering_project_status_index() {
     // Arrange
-    let database = Database::open_in_memory().await.expect("database");
+    let database = Database::in_memory().await.expect("database");
 
     // Act
     let plan = sqlx::query_as::<_, (i64, i64, i64, String)>(
@@ -1562,7 +1563,7 @@ async fn review_targets_survive_restart_and_finish_only_with_their_forge_operati
 #[tokio::test]
 async fn review_targets_are_scoped_to_the_open_link_and_include_legacy_operations() {
     // Arrange
-    let database = Database::open_in_memory().await.expect("database");
+    let database = Database::in_memory().await.expect("database");
     let project_id = database
         .projects()
         .upsert_project("review", None)
@@ -1663,7 +1664,7 @@ async fn review_targets_are_scoped_to_the_open_link_and_include_legacy_operation
 #[tokio::test]
 async fn commit_failure_preserves_posting_tokens_without_authorizing_a_push() {
     // Arrange
-    let database = Database::open_in_memory().await.expect("database");
+    let database = Database::in_memory().await.expect("database");
     let project_id = database
         .projects()
         .upsert_project("review", None)

@@ -6,7 +6,7 @@ use crate::{AppRepositories, SessionTurnMetadata};
 #[tokio::test]
 async fn test_load_projects_with_stats_returns_session_counts_tokens_and_last_update() {
     // Arrange
-    let database = Database::open_in_memory()
+    let database = Database::in_memory()
         .await
         .expect("failed to open in-memory db");
     let project_id = database
@@ -87,7 +87,7 @@ async fn test_load_projects_with_stats_returns_session_counts_tokens_and_last_up
 #[tokio::test]
 async fn test_get_project_loads_persisted_favorite_state() {
     // Arrange
-    let database = Database::open_in_memory()
+    let database = Database::in_memory()
         .await
         .expect("failed to open in-memory db");
     let project_id = database

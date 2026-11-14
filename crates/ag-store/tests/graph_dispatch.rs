@@ -131,7 +131,7 @@ struct TaskHistoryFixture {
 }
 
 async fn task_history_fixture() -> Result<TaskHistoryFixture, Box<dyn Error>> {
-    let database = Database::open_in_memory().await?;
+    let database = Database::in_memory().await?;
     populate(&database).await?;
     let mut graph = graph();
     graph.nodes.truncate(1);
@@ -277,7 +277,7 @@ async fn assert_task_turn_admission(
 async fn queued_readers_reserve_calls_before_admission_and_resume_with_a_fresh_budget()
 -> Result<(), Box<dyn Error>> {
     // Arrange
-    let database = Database::open_in_memory().await?;
+    let database = Database::in_memory().await?;
     populate(&database).await?;
     let project = database.projects().upsert_project("project", None).await?;
     database
@@ -394,7 +394,7 @@ async fn exhausted_budgets_leave_nodes_unclaimed_for_a_fresh_budget() -> Result<
 {
     for (limit, capacity) in [(0, 1), (1, 1), (2, 3)] {
         // Arrange
-        let database = Database::open_in_memory().await?;
+        let database = Database::in_memory().await?;
         populate(&database).await?;
         let graph = graph();
         database.graphs().save_graph(&graph, None).await?;
@@ -481,7 +481,7 @@ async fn runner_panic_fails_the_authority_and_unblocks_conflicting_env_work()
 -> Result<(), Box<dyn Error>> {
     for (task, running) in [(false, false), (false, true), (true, false), (true, true)] {
         // Arrange
-        let database = Database::open_in_memory().await?;
+        let database = Database::in_memory().await?;
         populate(&database).await?;
         let mut workflow = graph();
         workflow.nodes.truncate(1);
@@ -591,7 +591,7 @@ async fn runner_panic_fails_the_authority_and_unblocks_conflicting_env_work()
 async fn admission_failure_reaches_the_driver_without_executing_work() -> Result<(), Box<dyn Error>>
 {
     // Arrange
-    let database = Database::open_in_memory().await?;
+    let database = Database::in_memory().await?;
     populate(&database).await?;
     let mut graph = graph();
     graph.nodes.reverse();
@@ -646,7 +646,7 @@ async fn admission_failure_reaches_the_driver_without_executing_work() -> Result
 #[tokio::test]
 async fn serial_dispatch_scans_past_blocked_and_existing_nodes() -> Result<(), Box<dyn Error>> {
     // Arrange
-    let database = Database::open_in_memory().await?;
+    let database = Database::in_memory().await?;
     populate(&database).await?;
     let mut graph = graph();
     graph.nodes.reverse();
@@ -695,7 +695,7 @@ async fn serial_dispatch_scans_past_blocked_and_existing_nodes() -> Result<(), B
 async fn dropped_driver_during_committed_admission_keeps_an_owner_until_settlement()
 -> Result<(), Box<dyn Error>> {
     // Arrange
-    let database = Database::open_in_memory().await?;
+    let database = Database::in_memory().await?;
     populate(&database).await?;
     let mut graph = graph();
     graph.nodes.truncate(1);
@@ -800,7 +800,7 @@ async fn utility_profiles_keep_their_wire_schema_and_worker_default_budget()
         ag_protocol::ProtocolRequestProfile::FocusedReview,
         ag_protocol::ProtocolRequestProfile::ReviewMetadata,
     ] {
-        let database = Database::open_in_memory().await?;
+        let database = Database::in_memory().await?;
         populate(&database).await?;
         let mut graph = graph();
         graph.nodes.truncate(1);
@@ -857,7 +857,7 @@ use tokio_util::sync::CancellationToken;
 async fn dropped_driver_retains_env_until_inherited_cancellation_cleanup_settles()
 -> Result<(), Box<dyn Error>> {
     // Arrange
-    let database = Database::open_in_memory().await?;
+    let database = Database::in_memory().await?;
     populate(&database).await?;
     let mut graph = graph();
     graph.nodes.truncate(1);
@@ -927,7 +927,7 @@ async fn dropped_driver_retains_env_until_inherited_cancellation_cleanup_settles
 async fn failed_branch_settles_peers_and_blocks_join_without_retrying() -> Result<(), Box<dyn Error>>
 {
     // Arrange
-    let database = Database::open_in_memory().await?;
+    let database = Database::in_memory().await?;
     populate(&database).await?;
     let graph = graph();
     database.graphs().save_graph(&graph, None).await?;
@@ -1002,7 +1002,7 @@ async fn failed_branch_settles_peers_and_blocks_join_without_retrying() -> Resul
 async fn parallel_branches_join_through_workers_and_keep_exact_inputs_without_replay()
 -> Result<(), Box<dyn Error>> {
     // Arrange
-    let database = Database::open_in_memory().await?;
+    let database = Database::in_memory().await?;
     populate(&database).await?;
     let graph = graph();
     database.graphs().save_graph(&graph, None).await?;
@@ -1158,7 +1158,7 @@ async fn competing_admission_has_one_winner_and_reopening_does_not_replay()
 async fn explicit_acceptance_releases_a_blocked_join_on_the_next_call() -> Result<(), Box<dyn Error>>
 {
     // Arrange
-    let database = Database::open_in_memory().await?;
+    let database = Database::in_memory().await?;
     populate(&database).await?;
     let mut graph = graph();
     graph.nodes[2].dependencies[0].gate = ag_session::GraphCompletionGate::ResultAccepted {
@@ -1228,7 +1228,7 @@ async fn unsupported_profiles_and_unknown_budgets_fail_before_admission()
 -> Result<(), Box<dyn Error>> {
     // Arrange
     for unsupported in [false, true] {
-        let database = Database::open_in_memory().await?;
+        let database = Database::in_memory().await?;
         populate(&database).await?;
         let mut graph = graph();
         if unsupported {
@@ -1286,7 +1286,7 @@ async fn unsupported_profiles_and_unknown_budgets_fail_before_admission()
 async fn external_env_lease_defers_dispatch_until_the_host_releases_it()
 -> Result<(), Box<dyn Error>> {
     // Arrange
-    let database = Database::open_in_memory().await?;
+    let database = Database::in_memory().await?;
     populate(&database).await?;
     let mut graph = graph();
     graph.nodes.truncate(1);

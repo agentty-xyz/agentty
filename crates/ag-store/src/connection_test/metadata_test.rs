@@ -10,7 +10,7 @@ use crate::error::DbError;
 #[tokio::test]
 async fn test_load_sessions_metadata_returns_count_and_latest_timestamp() {
     // Arrange
-    let database = Database::open_in_memory()
+    let database = Database::in_memory()
         .await
         .expect("failed to open in-memory db");
     let project_id = database
@@ -46,7 +46,7 @@ async fn test_load_sessions_metadata_returns_count_and_latest_timestamp() {
 #[tokio::test]
 async fn test_session_provider_conversation_id_round_trip_and_clear() {
     // Arrange
-    let database = Database::open_in_memory()
+    let database = Database::in_memory()
         .await
         .expect("failed to open in-memory db");
     let project_id = database
@@ -90,7 +90,7 @@ async fn test_session_provider_conversation_id_round_trip_and_clear() {
 #[tokio::test]
 async fn test_session_instruction_conversation_id_round_trip_and_clear() {
     // Arrange
-    let database = Database::open_in_memory()
+    let database = Database::in_memory()
         .await
         .expect("failed to open in-memory db");
     let project_id = database
@@ -138,7 +138,7 @@ async fn test_session_instruction_conversation_id_round_trip_and_clear() {
 #[tokio::test]
 async fn test_session_published_upstream_ref_round_trip_and_clear() {
     // Arrange
-    let database = Database::open_in_memory()
+    let database = Database::in_memory()
         .await
         .expect("failed to open in-memory db");
     let project_id = database
@@ -191,7 +191,7 @@ async fn test_session_published_upstream_ref_round_trip_and_clear() {
 #[tokio::test]
 async fn test_load_session_published_upstream_ref_returns_stored_value() {
     // Arrange
-    let database = Database::open_in_memory()
+    let database = Database::in_memory()
         .await
         .expect("failed to open in-memory db");
     let project_id = database
@@ -227,7 +227,7 @@ async fn test_load_session_published_upstream_ref_returns_stored_value() {
 #[tokio::test]
 async fn test_load_session_published_upstream_ref_returns_none_when_unset() {
     // Arrange
-    let database = Database::open_in_memory()
+    let database = Database::in_memory()
         .await
         .expect("failed to open in-memory db");
     let project_id = database
@@ -255,7 +255,7 @@ async fn test_load_session_published_upstream_ref_returns_none_when_unset() {
 #[tokio::test]
 async fn test_load_session_published_upstream_ref_returns_none_for_missing_session() {
     // Arrange
-    let database = Database::open_in_memory()
+    let database = Database::in_memory()
         .await
         .expect("failed to open in-memory db");
 
@@ -273,7 +273,7 @@ async fn test_load_session_published_upstream_ref_returns_none_for_missing_sessi
 #[tokio::test]
 async fn test_session_merged_commit_hash_round_trip_and_clear() {
     // Arrange
-    let database = Database::open_in_memory()
+    let database = Database::in_memory()
         .await
         .expect("failed to open in-memory db");
     let project_id = database
@@ -319,7 +319,7 @@ async fn test_session_merged_commit_hash_round_trip_and_clear() {
 /// writes when any statement in the transaction fails.
 async fn test_persist_session_turn_metadata_rolls_back_on_failure() {
     // Arrange
-    let database = Database::open_in_memory()
+    let database = Database::in_memory()
         .await
         .expect("failed to open in-memory db");
     let project_id = database
@@ -386,7 +386,7 @@ async fn test_persist_session_turn_metadata_rolls_back_on_failure() {
 #[tokio::test]
 async fn test_persist_session_turn_metadata_keeps_harness_turn_report_after_session_deletion() {
     // Arrange
-    let database = Database::open_in_memory()
+    let database = Database::in_memory()
         .await
         .expect("failed to open in-memory db");
     let project_id = database

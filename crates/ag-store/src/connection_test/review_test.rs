@@ -9,7 +9,7 @@ use crate::{PersistedSessionCreation, SessionFocusedReviewRow, SessionReviewAudi
 #[tokio::test]
 async fn session_archived_diff_round_trips_empty_and_nonempty_values() {
     // Arrange
-    let database = Database::open_in_memory()
+    let database = Database::in_memory()
         .await
         .expect("failed to open in-memory db");
     let project_id = database
@@ -53,7 +53,7 @@ async fn session_archived_diff_round_trips_empty_and_nonempty_values() {
 #[tokio::test]
 async fn test_session_review_request_round_trip_and_clear() {
     // Arrange
-    let database = Database::open_in_memory()
+    let database = Database::in_memory()
         .await
         .expect("failed to open in-memory db");
     let project_id = database
@@ -104,7 +104,7 @@ async fn test_session_review_request_round_trip_and_clear() {
 #[tokio::test]
 async fn test_load_session_focused_reviews_for_project_returns_persisted_review() {
     // Arrange
-    let database = Database::open_in_memory()
+    let database = Database::in_memory()
         .await
         .expect("failed to open in-memory db");
     let project_id = database
@@ -233,9 +233,7 @@ async fn review_diff_baseline_survives_output_clear_and_database_reopen() {
 #[tokio::test]
 async fn review_diff_claim_failure_rolls_back_baseline() {
     // Arrange
-    let database = Database::open_in_memory()
-        .await
-        .expect("database should open");
+    let database = Database::in_memory().await.expect("database should open");
     let project_id = database
         .projects()
         .upsert_project("review-project", None)
@@ -284,7 +282,7 @@ async fn review_diff_claim_failure_rolls_back_baseline() {
 #[tokio::test]
 async fn test_update_session_focused_review_clears_persisted_review() {
     // Arrange
-    let database = Database::open_in_memory()
+    let database = Database::in_memory()
         .await
         .expect("failed to open in-memory db");
     let project_id = database
@@ -327,7 +325,7 @@ async fn test_update_session_focused_review_clears_persisted_review() {
 #[tokio::test]
 async fn test_defer_session_focused_review_requires_eligible_existing_session() {
     // Arrange
-    let database = Database::open_in_memory()
+    let database = Database::in_memory()
         .await
         .expect("failed to open in-memory db");
     let project_id = database
@@ -662,7 +660,7 @@ async fn failed_generation_pruning_keeps_the_previous_generation_writable() {
 
 /// Creates a pending review for checkpoint lifecycle regression tests.
 async fn pending_review_database() -> Result<(Database, i64), crate::DbError> {
-    let database = Database::open_in_memory().await?;
+    let database = Database::in_memory().await?;
     let project = database
         .projects()
         .upsert_project("checkpoint-project", None)
