@@ -1,32 +1,12 @@
 use ag_session::build_apply_review_prompt;
 
-use super::super::{
-    PromptInputMode, handle_prompt_cancel_key, handle_prompt_slash_submit,
-    handle_prompt_submit_key, prompt_context,
+use super::super::prompt_context;
+use super::support::{
+    new_test_draft_prompt_app, new_test_prompt_app, run_prompt_cancel, run_prompt_slash_submit,
+    run_prompt_submit, session_replay_text,
 };
-use super::support::{new_test_draft_prompt_app, new_test_prompt_app, session_replay_text};
 use crate::app::prompt_intent::PromptSessionMode;
 use crate::presentation::app_mode::AppMode;
-
-#[tokio::test]
-/// Verifies that the slash-command gate only fires for queueing statuses:
-/// when status is `Review`, a leading `/` is still recognized as a slash
-/// command so the existing slash submit path keeps working.
-async fn test_prompt_context_keeps_slash_command_when_session_is_review() {
-    // Arrange
-    let (mut app, _base_dir) = new_test_prompt_app("/model", None).await;
-    app.sessions.sessions_mut()[0].status = crate::domain::session::Status::Review;
-
-    // Act
-    let context = prompt_context(&mut app).expect("expected prompt context");
-
-    // Assert
-    assert!(
-        context.is_slash_command(),
-        "slash command mode must remain active when the session is not queueing messages"
-    );
-    assert_eq!(context.input_mode, PromptInputMode::SlashCommand);
-}
 
 #[tokio::test]
 async fn test_handle_apply_command_rejects_when_session_not_in_review_status() {
@@ -44,7 +24,7 @@ async fn test_handle_apply_command_rejects_when_session_not_in_review_status() {
     let prompt_context = prompt_context(&mut app).expect("expected prompt context");
 
     // Act
-    handle_prompt_slash_submit(&mut app, &prompt_context).await;
+    run_prompt_slash_submit(&mut app, &prompt_context).await;
 
     // Assert
     assert!(matches!(app.mode, AppMode::Prompt { .. }));
@@ -59,7 +39,7 @@ async fn test_handle_apply_command_rejects_without_cached_review() {
     let prompt_context = prompt_context(&mut app).expect("expected prompt context");
 
     // Act
-    handle_prompt_slash_submit(&mut app, &prompt_context).await;
+    run_prompt_slash_submit(&mut app, &prompt_context).await;
 
     // Assert
     assert!(matches!(app.mode, AppMode::Prompt { .. }));
@@ -81,7 +61,7 @@ async fn test_handle_prompt_submit_key_clears_cached_review_output() {
     let prompt_context = prompt_context(&mut app).expect("expected prompt context");
 
     // Act
-    handle_prompt_submit_key(&mut app, &prompt_context).await;
+    run_prompt_submit(&mut app, &prompt_context).await;
 
     // Assert
     assert!(matches!(app.mode, AppMode::View { .. }));
@@ -96,7 +76,7 @@ async fn test_handle_prompt_submit_key_replies_after_started_draft_session_reach
     let prompt_context = prompt_context(&mut app).expect("expected prompt context");
 
     // Act
-    handle_prompt_submit_key(&mut app, &prompt_context).await;
+    run_prompt_submit(&mut app, &prompt_context).await;
 
     // Assert
     assert_ne!(prompt_context.session_mode, PromptSessionMode::NewDraft);
@@ -115,7 +95,7 @@ async fn test_handle_prompt_cancel_key_restores_review_output() {
     let prompt_context = prompt_context(&mut app).expect("expected prompt context");
 
     // Act
-    handle_prompt_cancel_key(&mut app, &prompt_context).await;
+    run_prompt_cancel(&mut app, &prompt_context).await;
 
     // Assert
     assert!(matches!(app.mode, AppMode::View { .. }));

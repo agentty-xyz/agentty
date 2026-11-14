@@ -1,13 +1,15 @@
 use std::path::PathBuf;
 
+use crossterm::event::KeyCode;
+
 use super::super::{
-    apply_prompt_input_command, apply_prompt_input_to_mode, apply_prompt_paste_to_mode,
-    handle_prompt_cancel_key, handle_prompt_submit_key, navigate_prompt_history_down,
+    apply_prompt_input_to_mode, apply_prompt_paste_to_mode, navigate_prompt_history_down,
     navigate_prompt_history_up, prompt_context, take_submitted_turn_prompt,
 };
 use super::support::{
     PromptTestAppExt, PromptTestModeExt, new_test_draft_prompt_app, new_test_prompt_app,
-    new_test_prompt_mode, wait_for_at_mention_entries_event,
+    new_test_prompt_mode, press_prompt_key, run_prompt_cancel, run_prompt_submit,
+    wait_for_at_mention_entries_event,
 };
 use crate::app::prompt_intent::PromptSessionMode;
 use crate::domain::composer::PromptAttachment;
@@ -416,7 +418,7 @@ async fn test_handle_prompt_char_loads_at_mention_entries_from_project_root_for_
     assert!(!app.sessions.sessions()[0].folder.exists());
 
     // Act
-    apply_prompt_input_command(&mut app, InputCommand::Insert('@')).await;
+    press_prompt_key(&mut app, KeyCode::Char('@')).await;
     let next_event = wait_for_at_mention_entries_event(&mut app).await;
 
     // Assert
@@ -454,7 +456,7 @@ async fn test_handle_prompt_char_loads_parent_worktree_entries_for_stacked_draft
     );
 
     // Act
-    apply_prompt_input_command(&mut app, InputCommand::Insert('@')).await;
+    press_prompt_key(&mut app, KeyCode::Char('@')).await;
     let next_event = wait_for_at_mention_entries_event(&mut app).await;
 
     // Assert
@@ -478,7 +480,7 @@ async fn test_handle_prompt_cancel_key_deletes_blank_session() {
     assert_eq!(app.sessions.sessions().len(), 1);
 
     // Act
-    handle_prompt_cancel_key(&mut app, &prompt_context).await;
+    run_prompt_cancel(&mut app, &prompt_context).await;
 
     // Assert
     assert!(matches!(app.mode, AppMode::List));
@@ -495,7 +497,7 @@ async fn test_handle_prompt_cancel_key_keeps_empty_draft_session() {
     assert_eq!(app.sessions.sessions().len(), 1);
 
     // Act
-    handle_prompt_cancel_key(&mut app, &prompt_context).await;
+    run_prompt_cancel(&mut app, &prompt_context).await;
 
     // Assert
     assert!(matches!(app.mode, AppMode::View { .. }));
@@ -512,11 +514,11 @@ async fn test_handle_prompt_submit_key_cleans_archived_attachment() {
     // Arrange
     let (mut app, _base_dir) = new_test_draft_prompt_app("Review ", None).await;
     app.insert_pasted_image_placeholder(PathBuf::from("/tmp/nonexistent-test-attachment.png"));
-    apply_prompt_input_command(&mut app, InputCommand::DeleteBackward).await;
+    press_prompt_key(&mut app, KeyCode::Backspace).await;
     let prompt_context = prompt_context(&mut app).expect("expected prompt context");
 
     // Act
-    handle_prompt_submit_key(&mut app, &prompt_context).await;
+    run_prompt_submit(&mut app, &prompt_context).await;
 
     // Assert
     assert!(matches!(app.mode, AppMode::View { .. }));
@@ -535,7 +537,7 @@ async fn test_handle_prompt_cancel_key_keeps_new_session_with_staged_drafts() {
     let prompt_context = prompt_context(&mut app).expect("expected prompt context");
 
     // Act
-    handle_prompt_cancel_key(&mut app, &prompt_context).await;
+    run_prompt_cancel(&mut app, &prompt_context).await;
 
     // Assert
     assert!(matches!(app.mode, AppMode::View { .. }));
@@ -556,7 +558,7 @@ async fn test_handle_prompt_cancel_key_resets_existing_session_draft_attachments
     let prompt_context = prompt_context(&mut app).expect("expected prompt context");
 
     // Act
-    handle_prompt_cancel_key(&mut app, &prompt_context).await;
+    run_prompt_cancel(&mut app, &prompt_context).await;
 
     // Assert
     assert!(matches!(app.mode, AppMode::View { .. }));

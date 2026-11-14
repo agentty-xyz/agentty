@@ -1,5 +1,5 @@
-use super::super::{handle_prompt_submit_key, prompt_context};
-use super::support::new_test_prompt_app;
+use super::super::prompt_context;
+use super::support::{new_test_prompt_app, run_prompt_submit};
 
 #[tokio::test]
 /// Verifies that submitting a `/`-prefixed prompt while the session is
@@ -17,7 +17,7 @@ async fn test_handle_prompt_submit_key_queues_slash_text_when_session_is_in_prog
     let prompt_context = prompt_context(&mut app).expect("expected prompt context");
 
     // Act
-    handle_prompt_submit_key(&mut app, &prompt_context).await;
+    run_prompt_submit(&mut app, &prompt_context).await;
 
     // Assert
     let queued_len = app
@@ -57,7 +57,7 @@ async fn test_handle_prompt_submit_key_queues_text_when_session_is_rebasing() {
     let prompt_context = prompt_context(&mut app).expect("expected prompt context");
 
     // Act
-    handle_prompt_submit_key(&mut app, &prompt_context).await;
+    run_prompt_submit(&mut app, &prompt_context).await;
 
     // Assert
     let queued_messages = app

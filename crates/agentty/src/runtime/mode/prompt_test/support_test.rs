@@ -6,9 +6,16 @@ use crossterm::event::{KeyCode, KeyEvent};
 use ratatui::Terminal;
 use tempfile::tempdir;
 
-use super::super::{handle_with_cache, take_submitted_turn_prompt};
+use super::super::{
+    PromptContext, PromptEffect, PromptInputMode, PromptKeyStep, apply_prompt_effects,
+    handle_with_cache, prompt_input_mode, reduce_prompt_cancel, reduce_prompt_key,
+    reduce_prompt_slash_submit, reduce_prompt_submit, take_submitted_turn_prompt,
+};
 use crate::app::App;
+use crate::app::prompt_intent::PromptSessionMode;
+use crate::domain::agent::{AgentKind, ReasoningLevel, ResponseStyle, SpeedMode};
 use crate::domain::input::InputState;
+use crate::domain::permission::PermissionMode;
 use crate::domain::session_message::SessionTranscript;
 use crate::domain::turn_prompt::TurnPrompt;
 use crate::infra::db::Database;
@@ -21,20 +28,14 @@ use crate::presentation::prompt::{
 use crate::test_support::setup_test_git_repo;
 use crate::ui::RenderCacheStore;
 
+/// Arranges attachments through the app-layer composer insertion.
 pub(super) trait PromptTestAppExt {
     fn insert_pasted_image_placeholder(&mut self, local_image_path: PathBuf);
-    fn take_submitted_turn_prompt(&mut self) -> TurnPrompt;
 }
 
 impl PromptTestAppExt for App {
     fn insert_pasted_image_placeholder(&mut self, local_image_path: PathBuf) {
         let _ = self.insert_prompt_image_placeholder(local_image_path, None);
-    }
-
-    fn take_submitted_turn_prompt(&mut self) -> TurnPrompt {
-        let (prompt, _) = take_submitted_turn_prompt(&mut self.mode);
-
-        prompt
     }
 }
 
@@ -148,6 +149,131 @@ pub(super) fn new_test_prompt_mode(input_text: &str) -> AppMode {
     }
 }
 
+/// Composer text width the prompt handler derives from [`test_terminal`].
+pub(super) const TEST_INPUT_WIDTH: u16 = 118;
+
+/// Builds session facts for an idle existing session matching
+/// [`new_test_prompt_mode`], as a freshly created test session reports them.
+pub(super) fn new_test_prompt_context() -> PromptContext {
+    PromptContext {
+        allow_apply_command: false,
+        input_mode: PromptInputMode::Text,
+        permission_mode: PermissionMode::default(),
+        queues_messages: false,
+        reasoning_level: ReasoningLevel::default(),
+        response_style: ResponseStyle::default(),
+        scroll_offset: None,
+        selected_session_agent_kind: AgentKind::Codex,
+        session_agent_kind: AgentKind::Codex,
+        session_id: "prompt-test-session".into(),
+        session_index: 0,
+        session_mode: PromptSessionMode::Existing,
+        sign_in_agent: None,
+        speed_mode: SpeedMode::default(),
+    }
+}
+
+/// Re-derives the input sub-mode from `mode`, as the handler does before
+/// each key.
+pub(super) fn refresh_test_input_mode(mode: &AppMode, context: &mut PromptContext) {
+    let AppMode::Prompt {
+        at_mention_state,
+        input,
+        slash_state,
+        ..
+    } = mode
+    else {
+        unreachable!("prompt fixture required");
+    };
+
+    context.input_mode = prompt_input_mode(
+        at_mention_state.as_ref(),
+        input,
+        slash_state,
+        context.queues_messages,
+    );
+}
+
+/// Reduces one key over `mode` with `context`, refreshing its input sub-mode
+/// first.
+pub(super) fn reduce_test_prompt_key(
+    mode: &mut AppMode,
+    context: &mut PromptContext,
+    key: KeyEvent,
+) -> PromptKeyStep {
+    refresh_test_input_mode(mode, context);
+
+    reduce_prompt_key(mode, context, TEST_INPUT_WIDTH, key)
+}
+
+/// Reduces one key event over `mode` for an idle existing session and
+/// returns its app effects.
+pub(super) fn reduce_prompt_event(mode: &mut AppMode, key: KeyEvent) -> Vec<PromptEffect> {
+    expect_prompt_effects(reduce_test_prompt_key(
+        mode,
+        &mut new_test_prompt_context(),
+        key,
+    ))
+}
+
+/// Reduces one unmodified key over `mode` for an idle existing session and
+/// returns its app effects.
+pub(super) fn reduce_prompt_code(mode: &mut AppMode, code: KeyCode) -> Vec<PromptEffect> {
+    reduce_prompt_event(mode, KeyEvent::new(code, event::KeyModifiers::NONE))
+}
+
+/// Returns the app effects of one reduction, panicking on a transcript
+/// scroll.
+pub(super) fn expect_prompt_effects(step: PromptKeyStep) -> Vec<PromptEffect> {
+    let PromptKeyStep::Effects(effects) = step else {
+        unreachable!("expected app effects");
+    };
+
+    effects
+}
+
+/// Reduces one prompt submission and applies its app effects.
+pub(super) async fn run_prompt_submit(app: &mut App, prompt_context: &PromptContext) {
+    let mut effects = Vec::new();
+    reduce_prompt_submit(&mut app.mode, prompt_context, &mut effects);
+
+    apply_prompt_effects(app, prompt_context, effects).await;
+}
+
+/// Reduces one slash-menu submission and applies its app effects.
+pub(super) async fn run_prompt_slash_submit(app: &mut App, prompt_context: &PromptContext) {
+    let mut effects = Vec::new();
+    reduce_prompt_slash_submit(&mut app.mode, prompt_context, &mut effects);
+
+    apply_prompt_effects(app, prompt_context, effects).await;
+}
+
+/// Reduces one prompt cancellation and applies its app effects.
+pub(super) async fn run_prompt_cancel(app: &mut App, prompt_context: &PromptContext) {
+    let mut effects = Vec::new();
+    reduce_prompt_cancel(&mut app.mode, prompt_context, &mut effects);
+
+    apply_prompt_effects(app, prompt_context, effects).await;
+}
+
+/// Returns the composer text and cursor, panicking outside prompt mode.
+pub(super) fn mode_input(mode: &AppMode) -> (String, usize) {
+    let AppMode::Prompt { input, .. } = mode else {
+        unreachable!("expected AppMode::Prompt");
+    };
+
+    (input.text().to_string(), input.cursor)
+}
+
+/// Returns the composer focus, panicking outside prompt mode.
+pub(super) fn mode_focus(mode: &AppMode) -> ChatFocus {
+    let AppMode::Prompt { focus, .. } = mode else {
+        unreachable!("expected AppMode::Prompt");
+    };
+
+    *focus
+}
+
 pub(super) async fn new_test_prompt_app(
     input_text: &str,
     at_mention_state: Option<PromptAtMentionState>,
@@ -248,11 +374,7 @@ pub(super) fn test_terminal() -> Terminal<ratatui::backend::TestBackend> {
 
 /// Returns the current composer focus, panicking outside prompt mode.
 pub(super) fn prompt_focus(app: &App) -> ChatFocus {
-    let AppMode::Prompt { focus, .. } = &app.mode else {
-        unreachable!("expected AppMode::Prompt");
-    };
-
-    *focus
+    mode_focus(&app.mode)
 }
 
 /// Sends one plain key press through the prompt-mode handler.

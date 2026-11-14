@@ -101,6 +101,9 @@ with SQLite and worker dispatch through the public API.
    `crates/agentty/src/runtime/mode/input_key.rs`.
 1. Let prompt, question, branch-publish, and settings input modes intercept only their
    context-specific actions before falling back to the shared input command mapping.
+1. For prompt mode, change composer state in the pure `reduce_prompt_key` step of
+   `crates/agentty/src/runtime/mode/prompt.rs` and request app work as a `PromptEffect`,
+   so unit tests prove state changes without starting an `App`.
 1. For other interactions, update the handler in `crates/agentty/src/runtime/mode/`, or
    in `crates/agentty/src/runtime/key_handler.rs` when the interaction is a cross-mode
    overlay dispatch.
