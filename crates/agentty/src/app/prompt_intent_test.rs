@@ -452,7 +452,7 @@ async fn deferred_model_and_fast_mode_apply_in_selection_order() {
 async fn deferring_a_model_without_fast_mode_drops_pending_fast_mode() {
     // Arrange
     let (mut app, _base_dir, session_id) = busy_session_app(model_fixture::codex_selection()).await;
-    let selected_agent = AgentSelection::new(AgentKind::Antigravity, AgentModel::Gemini31Pro);
+    let selected_agent = AgentSelection::new(AgentKind::Antigravity, AgentModel::Gemini4Argon);
     app.update_prompt_session_speed_mode(&session_id, SpeedMode::Fast)
         .await;
 
@@ -525,7 +525,7 @@ async fn speed_toggle_starts_from_the_speed_after_a_deferred_model_switch() {
 async fn deferred_fast_mode_is_refused_for_a_pending_model_without_speed_control() {
     // Arrange
     let (mut app, _base_dir, session_id) = busy_session_app(model_fixture::codex_selection()).await;
-    let selected_agent = AgentSelection::new(AgentKind::Antigravity, AgentModel::Gemini31Pro);
+    let selected_agent = AgentSelection::new(AgentKind::Antigravity, AgentModel::Gemini4Argon);
     app.update_prompt_session_model(&session_id, selected_agent)
         .await;
 
