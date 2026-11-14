@@ -434,7 +434,7 @@ pub fn status_color(status: Status) -> Color {
     match status {
         Status::Draft => palette::text_muted(),
         Status::InProgress => palette::warning(),
-        Status::Review | Status::AgentReview => palette::info(),
+        Status::Review | Status::AgentReview | Status::Watching => palette::info(),
         Status::Question => palette::question(),
         Status::Queued => palette::accent_soft(),
         Status::Rebasing | Status::Merging => palette::accent(),
@@ -448,6 +448,7 @@ pub fn status_color(status: Status) -> Color {
 pub fn status_icon(status: Status) -> Icon {
     match status {
         Status::Draft | Status::Review | Status::Question | Status::Queued => Icon::Pending,
+        Status::Watching => Icon::Watch,
         Status::InProgress | Status::AgentReview | Status::Rebasing | Status::Merging => {
             Icon::current_spinner()
         }

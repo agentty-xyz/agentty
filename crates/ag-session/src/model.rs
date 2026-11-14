@@ -150,6 +150,9 @@ pub enum SessionStatus {
     Review,
     /// The session is generating focused-review output.
     AgentReview,
+    /// The review-ready session watches its linked review request and
+    /// resolves failing checks, review comments, and merge conflicts.
+    Watching,
     /// The session is waiting for model clarification responses.
     Question,
     /// The session is waiting in the merge queue.
@@ -168,11 +171,12 @@ pub enum SessionStatus {
 
 impl SessionStatus {
     /// Ordered list of all session statuses.
-    pub const ALL: [SessionStatus; 11] = [
+    pub const ALL: [SessionStatus; 12] = [
         SessionStatus::Draft,
         SessionStatus::InProgress,
         SessionStatus::Review,
         SessionStatus::AgentReview,
+        SessionStatus::Watching,
         SessionStatus::Question,
         SessionStatus::Queued,
         SessionStatus::Rebasing,
@@ -208,8 +212,14 @@ impl SessionStatus {
     }
 
     /// Returns whether this status keeps review actions enabled.
+    ///
+    /// `Watching` is a review-ready state: it adds automatic review-request
+    /// follow-up without removing any manual review action.
     pub fn allows_review_actions(self) -> bool {
-        matches!(self, SessionStatus::Review | SessionStatus::AgentReview)
+        matches!(
+            self,
+            SessionStatus::Review | SessionStatus::AgentReview | SessionStatus::Watching
+        )
     }
 
     /// Returns whether this status can seed a follow-on continuation session.
@@ -264,14 +274,22 @@ impl SessionStatus {
                     | SessionStatus::Rebasing
                     | SessionStatus::Merging,
                 SessionStatus::Canceled
-            ) | (SessionStatus::Review, SessionStatus::AgentReview)
-                | (SessionStatus::AgentReview, SessionStatus::Review)
+            ) | (
+                SessionStatus::Review,
+                SessionStatus::AgentReview | SessionStatus::Watching
+            ) | (
+                SessionStatus::AgentReview | SessionStatus::Watching,
+                SessionStatus::Review
+            ) | (SessionStatus::Watching, SessionStatus::AgentReview)
                 | (
-                    SessionStatus::Review | SessionStatus::AgentReview,
+                    SessionStatus::Review | SessionStatus::AgentReview | SessionStatus::Watching,
                     SessionStatus::Merged | SessionStatus::Done
                 )
                 | (
-                    SessionStatus::Review | SessionStatus::AgentReview | SessionStatus::Question,
+                    SessionStatus::Review
+                        | SessionStatus::AgentReview
+                        | SessionStatus::Watching
+                        | SessionStatus::Question,
                     SessionStatus::InProgress
                         | SessionStatus::Queued
                         | SessionStatus::Rebasing
@@ -301,6 +319,7 @@ impl fmt::Display for SessionStatus {
             SessionStatus::InProgress => "InProgress",
             SessionStatus::Review => "Review",
             SessionStatus::AgentReview => "AgentReview",
+            SessionStatus::Watching => "Watching",
             SessionStatus::Question => "Question",
             SessionStatus::Queued => "Queued",
             SessionStatus::Rebasing => "Rebasing",
@@ -323,6 +342,7 @@ impl FromStr for SessionStatus {
             "InProgress" | "Committing" => Ok(SessionStatus::InProgress),
             "Review" => Ok(SessionStatus::Review),
             "AgentReview" => Ok(SessionStatus::AgentReview),
+            "Watching" => Ok(SessionStatus::Watching),
             "Question" => Ok(SessionStatus::Question),
             "Queued" => Ok(SessionStatus::Queued),
             "Rebasing" => Ok(SessionStatus::Rebasing),

@@ -725,3 +725,37 @@ async fn assert_completion_failure_is_atomic(
 
     Ok(())
 }
+
+#[tokio::test]
+async fn watching_session_accepts_and_lists_deferred_focused_review() {
+    // Arrange
+    let database = Database::open_in_memory()
+        .await
+        .expect("failed to open in-memory db");
+    let project_id = database
+        .projects()
+        .upsert_project("/tmp/project", Some("main".to_string()))
+        .await
+        .expect("failed to insert project");
+    database
+        .sessions()
+        .insert_session("watching", "gpt-5.6-sol", "main", "Watching", project_id)
+        .await
+        .expect("failed to insert watching session");
+
+    // Act
+    let deferred = database
+        .sessions()
+        .defer_session_focused_review("watching")
+        .await
+        .expect("failed to defer focused review");
+    let pending_session_ids = database
+        .sessions()
+        .load_pending_focused_review_session_ids(project_id)
+        .await
+        .expect("failed to load pending focused reviews");
+
+    // Assert
+    assert!(deferred);
+    assert_eq!(pending_session_ids, ["watching"]);
+}

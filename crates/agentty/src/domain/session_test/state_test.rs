@@ -26,6 +26,7 @@ fn test_status_allows_session_actions_for_idle_interactive_states() {
         Status::Draft,
         Status::Review,
         Status::AgentReview,
+        Status::Watching,
         Status::Question,
     ];
 
@@ -70,6 +71,7 @@ fn test_status_all_lists_every_supported_status_in_display_order() {
         Status::InProgress,
         Status::Review,
         Status::AgentReview,
+        Status::Watching,
         Status::Question,
         Status::Queued,
         Status::Rebasing,

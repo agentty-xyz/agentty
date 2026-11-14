@@ -82,6 +82,7 @@ fn session_status_capabilities_follow_lifecycle_state() {
                 SessionStatus::InProgress,
                 SessionStatus::Review,
                 SessionStatus::AgentReview,
+                SessionStatus::Watching,
                 SessionStatus::Question,
                 SessionStatus::Rebasing,
             ],
@@ -92,6 +93,7 @@ fn session_status_capabilities_follow_lifecycle_state() {
                 SessionStatus::Draft,
                 SessionStatus::Review,
                 SessionStatus::AgentReview,
+                SessionStatus::Watching,
                 SessionStatus::Question,
             ],
         ),
@@ -101,6 +103,7 @@ fn session_status_capabilities_follow_lifecycle_state() {
                 SessionStatus::InProgress,
                 SessionStatus::Review,
                 SessionStatus::AgentReview,
+                SessionStatus::Watching,
                 SessionStatus::Merged,
                 SessionStatus::Done,
                 SessionStatus::Canceled,
@@ -112,16 +115,25 @@ fn session_status_capabilities_follow_lifecycle_state() {
                 SessionStatus::InProgress,
                 SessionStatus::Review,
                 SessionStatus::AgentReview,
+                SessionStatus::Watching,
             ],
         ),
         (
             SessionStatus::allows_review_actions,
-            vec![SessionStatus::Review, SessionStatus::AgentReview],
+            vec![
+                SessionStatus::Review,
+                SessionStatus::AgentReview,
+                SessionStatus::Watching,
+            ],
         ),
         (SessionStatus::is_read_only, vec![SessionStatus::Merged]),
         (
             SessionStatus::allows_stacked_child_start,
-            vec![SessionStatus::Review, SessionStatus::AgentReview],
+            vec![
+                SessionStatus::Review,
+                SessionStatus::AgentReview,
+                SessionStatus::Watching,
+            ],
         ),
         (
             SessionStatus::is_stack_branch_mutating,
@@ -181,6 +193,36 @@ fn merged_status_only_transitions_to_done() {
     assert!(status.can_transition_to(SessionStatus::Merged));
     assert!(status.can_transition_to(SessionStatus::Done));
     assert!(!status.can_transition_to(SessionStatus::Review));
+}
+
+#[test]
+fn watching_status_is_entered_from_review_and_leaves_like_review() {
+    // Arrange
+    let entering_statuses = [
+        SessionStatus::Review,
+        SessionStatus::AgentReview,
+        SessionStatus::InProgress,
+        SessionStatus::Rebasing,
+    ];
+    let leaving_statuses = [
+        SessionStatus::Review,
+        SessionStatus::AgentReview,
+        SessionStatus::InProgress,
+        SessionStatus::Rebasing,
+        SessionStatus::Merged,
+        SessionStatus::Canceled,
+        SessionStatus::Draft,
+    ];
+
+    // Act
+    let can_enter =
+        entering_statuses.map(|status| status.can_transition_to(SessionStatus::Watching));
+    let can_leave =
+        leaving_statuses.map(|status| SessionStatus::Watching.can_transition_to(status));
+
+    // Assert
+    assert_eq!(can_enter, [true, false, false, false]);
+    assert_eq!(can_leave, [true, true, true, true, true, true, false]);
 }
 
 #[test]

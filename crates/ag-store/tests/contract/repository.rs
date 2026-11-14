@@ -5,7 +5,7 @@ use std::collections::HashMap;
 use std::sync::Arc;
 
 use ag_session::{AgentSelectionMetadata, SettingName};
-use ag_store::{Database, NewSessionReviewCommentResolution};
+use ag_store::{Database, NewSessionReviewCommentResolution, SessionReviewWatchRow};
 use ag_worker::RunInfo;
 use tempfile::tempdir;
 
@@ -1716,4 +1716,92 @@ async fn commit_failure_preserves_posting_tokens_without_authorizing_a_push() {
     assert_eq!(retained[1].reply_token, "unrelated");
     assert_eq!(retained[1].commit_hash.as_deref(), Some("previous-tip"));
     assert!(!retained[1].is_posting);
+}
+
+#[tokio::test]
+async fn review_watch_survives_restart_and_ends_with_disable_or_session_deletion() {
+    // Arrange
+    let directory = tempdir().expect("directory");
+    let path = directory.path().join("watch.sqlite");
+    let database = Database::open(&path).await.expect("database");
+    let project_id = database
+        .projects()
+        .upsert_project("watch", None)
+        .await
+        .expect("project");
+    for session_id in ["watched-b", "watched-a", "unwatched"] {
+        database
+            .sessions()
+            .insert_session(session_id, "codex", "main", "Watching", project_id)
+            .await
+            .expect("session");
+    }
+    for session_id in ["watched-b", "watched-a"] {
+        database
+            .reviews()
+            .enable_session_review_watch(session_id)
+            .await
+            .expect("enable");
+    }
+    database
+        .reviews()
+        .update_session_review_watch_handled_keys(
+            "watched-a",
+            vec!["checks:abc".to_string(), "thread:t1:2".to_string()],
+        )
+        .await
+        .expect("handled keys");
+    database
+        .reviews()
+        .update_session_review_watch_handled_keys("unwatched", vec!["checks:abc".to_string()])
+        .await
+        .expect("unwatched update");
+
+    // Act
+    database.pool().close().await;
+    drop(database);
+    let database = Database::open(&path).await.expect("reopened database");
+    let restored = database
+        .reviews()
+        .load_session_review_watches()
+        .await
+        .expect("restored watches");
+    database
+        .reviews()
+        .disable_session_review_watch("watched-b")
+        .await
+        .expect("disable");
+    let after_disable = database
+        .reviews()
+        .load_session_review_watches()
+        .await
+        .expect("watches after disable");
+    database
+        .sessions()
+        .delete_session("watched-a")
+        .await
+        .expect("delete session");
+    let after_delete = database
+        .reviews()
+        .load_session_review_watches()
+        .await
+        .expect("watches after deletion");
+
+    // Assert
+    let watched_a = SessionReviewWatchRow {
+        handled_keys: vec!["checks:abc".to_string(), "thread:t1:2".to_string()],
+        session_id: "watched-a".to_string(),
+    };
+    assert_eq!(
+        restored,
+        vec![
+            watched_a.clone(),
+            SessionReviewWatchRow {
+                handled_keys: Vec::new(),
+                session_id: "watched-b".to_string(),
+            },
+        ]
+    );
+    assert_eq!(after_disable, vec![watched_a]);
+    assert_eq!(after_delete, Vec::new());
 }

@@ -284,7 +284,11 @@ impl App {
             .map_err(|error| invalid(error.to_string()))?;
         if !matches!(
             session.status,
-            Status::Draft | Status::Review | Status::AgentReview | Status::InProgress
+            Status::Draft
+                | Status::Review
+                | Status::AgentReview
+                | Status::Watching
+                | Status::InProgress
         ) || session.is_draft_session()
         {
             return Err(invalid(
@@ -625,7 +629,7 @@ impl AppServices {
             Ok(Some(session))
                 if matches!(
                     session.status.as_str(),
-                    "Draft" | "Review" | "AgentReview" | "InProgress"
+                    "Draft" | "Review" | "AgentReview" | "Watching" | "InProgress"
                 ) =>
             {
                 session.permission_mode.parse().ok()

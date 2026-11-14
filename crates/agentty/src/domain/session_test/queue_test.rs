@@ -111,6 +111,7 @@ fn test_status_allows_chat_composer_during_idle_and_queueable_states() {
         Status::InProgress,
         Status::Review,
         Status::AgentReview,
+        Status::Watching,
         Status::Question,
         Status::Rebasing,
     ];

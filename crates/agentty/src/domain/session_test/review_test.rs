@@ -8,7 +8,7 @@ use ag_session::{
 
 use super::super::super::agent::AgentSelection;
 use super::super::{
-    PublishBranchAction, Session, SessionSize, can_append_session_to_stack,
+    PublishBranchAction, ReviewWatchToggle, Session, SessionSize, can_append_session_to_stack,
     can_reply_to_session_in_stack, can_start_staged_session_in_stack,
 };
 use super::support::test_session;
@@ -429,6 +429,7 @@ fn test_status_allows_diff_view_for_working_review_ready_and_read_only_states() 
         Status::InProgress,
         Status::Review,
         Status::AgentReview,
+        Status::Watching,
         Status::Merged,
         Status::Done,
         Status::Canceled,
@@ -595,4 +596,52 @@ fn review_comment_batches_queue_while_question_without_earlier_work() {
     assert!(queues_review);
     assert!(session.allows_review_comment_reply());
     assert_eq!(session.queued_messages.len(), 0);
+}
+
+#[test]
+fn review_watch_toggle_starts_from_open_review_and_stops_from_watching() {
+    // Arrange
+    let linked = |state| {
+        Some(ReviewRequest {
+            last_refreshed_at: 0,
+            summary: ReviewRequestSummary {
+                display_id: "#42".to_string(),
+                forge_kind: ForgeKind::GitHub,
+                source_branch: "wt/session".to_string(),
+                state,
+                status_summary: None,
+                target_branch: "main".to_string(),
+                title: "Add watch".to_string(),
+                web_url: "https://github.com/agentty-xyz/agentty/pull/42".to_string(),
+            },
+        })
+    };
+    let cases = [
+        (
+            Status::Review,
+            linked(ReviewRequestState::Open),
+            Some(ReviewWatchToggle::Start),
+        ),
+        (Status::Review, linked(ReviewRequestState::Merged), None),
+        (Status::Review, None, None),
+        (
+            Status::Watching,
+            linked(ReviewRequestState::Open),
+            Some(ReviewWatchToggle::Stop),
+        ),
+        (Status::InProgress, linked(ReviewRequestState::Open), None),
+    ];
+
+    for (status, review_request, expected) in cases {
+        let session = SessionFixtureBuilder::new()
+            .status(status)
+            .review_request(review_request)
+            .build();
+
+        // Act
+        let toggle = session.review_watch_toggle();
+
+        // Assert
+        assert_eq!(toggle, expected, "{status}");
+    }
 }

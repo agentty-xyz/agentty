@@ -94,6 +94,7 @@ async fn help_and_info_overlays_follow_their_background_tick_driven_ui() {
                     can_start_staged_session: false,
                     can_view_review_comments: false,
                     publish_pull_request_action: None,
+                    review_watch_toggle: None,
                     session_id: "session-id".into(),
                     session_state: ViewSessionState::InProgress,
                     scroll_offset: None,

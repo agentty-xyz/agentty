@@ -19,6 +19,9 @@ const REVIEW_PROJECT_IMPACT_HEADER: &str = "### Project Impact";
 const REVIEW_SUGGESTIONS_HEADER: &str = "### Suggestions";
 const REVIEW_SUGGESTIONS_HEADER_WITH_HINT: &str =
     "### Suggestions (type \"/apply\" to verify and apply)";
+/// Status row shown while a session watches its linked review request.
+const WATCHING_STATUS_MESSAGE: &str =
+    "Watching review request for failing checks, comments, and conflicts...";
 
 /// Formats active-work duration alongside the session age, omitting the age
 /// when the combined label exceeds the available footer width.
@@ -264,6 +267,7 @@ pub fn session_output_status_lines(
         status,
         Status::InProgress
             | Status::AgentReview
+            | Status::Watching
             | Status::Queued
             | Status::Rebasing
             | Status::Merging
@@ -384,6 +388,7 @@ fn session_output_status_message(
         Status::Rebasing => "Rebasing...".to_string(),
         Status::Merging => "Merging...".to_string(),
         Status::Merged => "Waiting for manual local target sync...".to_string(),
+        Status::Watching => WATCHING_STATUS_MESSAGE.to_string(),
         Status::Draft | Status::Review | Status::Question | Status::Done | Status::Canceled => {
             String::new()
         }
@@ -404,6 +409,7 @@ fn session_output_status_icon(status: Status) -> Icon {
         | Status::Question
         | Status::Done
         | Status::Canceled => Icon::Pending,
+        Status::Watching => Icon::Watch,
     }
 }
 

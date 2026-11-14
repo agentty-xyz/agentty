@@ -3,7 +3,7 @@ use ratatui::style::Modifier;
 
 use super::{
     prompt_session_status, session_header_lines, session_output_queued_lines,
-    session_output_status_icon, session_output_status_message,
+    session_output_status_icon, session_output_status_lines, session_output_status_message,
     session_output_transient_loading_lines, session_output_uses_tachyon_loader,
     session_speed_display, session_started_label,
 };
@@ -352,6 +352,7 @@ fn test_session_output_uses_tachyon_loader_for_animated_statuses() {
     let static_statuses = [
         Status::Draft,
         Status::Review,
+        Status::Watching,
         Status::Question,
         Status::Queued,
         Status::Done,
@@ -379,6 +380,24 @@ fn merged_session_output_explains_manual_sync_wait() {
     // Assert
     assert_eq!(message, "Waiting for manual local target sync...");
     assert!(matches!(icon, Icon::TachyonLoader));
+}
+
+#[test]
+fn watching_session_output_explains_what_is_watched() {
+    // Arrange
+    let status = Status::Watching;
+
+    // Act
+    let lines = session_output_status_lines(status, None, None, None);
+    let icon = session_output_status_icon(status);
+
+    // Assert
+    assert_eq!(lines.len(), 1);
+    assert_eq!(
+        lines[0].to_string(),
+        "◉ Watching review request for failing checks, comments, and conflicts..."
+    );
+    assert!(matches!(icon, Icon::Watch));
 }
 
 #[test]

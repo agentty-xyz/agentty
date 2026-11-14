@@ -291,3 +291,35 @@ async fn test_update_session_stack_membership_updates_and_clears_linkage_atomica
     assert_eq!(detached.base_branch, "main");
     assert_eq!(detached_stack_base, None);
 }
+
+#[tokio::test]
+async fn watching_session_is_listed_for_pending_stack_restack() {
+    // Arrange
+    let database = Database::open_in_memory()
+        .await
+        .expect("failed to open in-memory db");
+    let project_id = database
+        .projects()
+        .upsert_project("/tmp/project", Some("main".to_string()))
+        .await
+        .expect("failed to insert project");
+    insert_session_fixture(&database, "watching-child", "main", "Watching", project_id).await;
+    insert_session_fixture(&database, "merged-child", "main", "Merged", project_id).await;
+    for session_id in ["watching-child", "merged-child"] {
+        database
+            .sessions()
+            .update_session_stack_base_commit_hash(session_id, Some("parent-tip".to_string()))
+            .await
+            .expect("failed to set stack base hash");
+    }
+
+    // Act
+    let pending_session_ids = database
+        .sessions()
+        .load_pending_stack_restack_session_ids(project_id)
+        .await
+        .expect("failed to load pending restacks");
+
+    // Assert
+    assert_eq!(pending_session_ids, vec!["watching-child".to_string()]);
+}

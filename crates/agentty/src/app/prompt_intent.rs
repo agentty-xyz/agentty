@@ -2,6 +2,7 @@ use std::fmt::Write as _;
 use std::path::PathBuf;
 
 use ag_forge::{ReviewCommentSnapshot, ReviewCommentThread};
+use ag_session::SessionError;
 use tracing::warn;
 
 use crate::app::command_gateway::{
@@ -300,7 +301,10 @@ impl App {
             }
         }
         self.auto_address_review_iterations.remove(&session_id);
-        self.submit_turn_prompt(session_id.clone(), session_mode, prompt)
+        // The composer clears either way; plan failures already wrote their
+        // transcript notice.
+        let _ = self
+            .submit_turn_prompt(session_id.clone(), session_mode, prompt)
             .await;
 
         PromptWorkflowOutcome::ShowSession { session_id }
@@ -961,7 +965,7 @@ impl App {
             return PromptApplyOutcome::KeepComposer;
         };
 
-        if session_status != Status::Review {
+        if !matches!(session_status, Status::Review | Status::Watching) {
             self.append_prompt_status_line(
                 session_id,
                 TranscriptNotice::Apply,
@@ -1019,12 +1023,17 @@ impl App {
     }
 
     /// Sends prepared terminal intent through shared command admission.
-    async fn submit_turn_prompt(
+    ///
+    /// # Errors
+    /// Returns the admission error when the prompt could not be started,
+    /// queued, or accepted as a reply. Plan failures have already written a
+    /// transcript notice.
+    pub(in crate::app) async fn submit_turn_prompt(
         &mut self,
         session_id: SessionId,
         session_mode: PromptSessionMode,
         prompt: TurnPrompt,
-    ) {
+    ) -> Result<(), SessionError> {
         let command = SessionCommand::new(
             CommandInitiator::SessionView,
             CommandDelivery::Admission {
@@ -1036,7 +1045,8 @@ impl App {
                 response_tx: None,
             },
         );
-        let _ = self.admit_session_command(command).await;
+
+        self.admit_session_command(command).await
     }
 
     /// Appends one prompt-workflow status line to the target session

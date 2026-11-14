@@ -11,7 +11,8 @@ use super::prompt::{
 use crate::domain::input::InputState;
 use crate::domain::question::QuestionItem;
 use crate::domain::session::{
-    PublishBranchAction, Session, SessionId, Status, can_reply_to_session_in_stack,
+    PublishBranchAction, ReviewWatchToggle, Session, SessionId, Status,
+    can_reply_to_session_in_stack,
 };
 
 /// Side of a unified diff that owns one selected changed line.
@@ -440,6 +441,9 @@ pub enum ConfirmationIntent {
     MergeSession,
     /// Confirms regenerating the focused review for the active view session.
     RegenerateReview,
+    /// Confirms watching a session's linked review request for automatic
+    /// follow-up.
+    WatchReviewRequest,
 }
 
 /// Stored view-mode values used to restore session view after session-scoped
@@ -976,6 +980,8 @@ pub enum HelpContext {
         can_view_review_comments: bool,
         /// Pull-request publication action currently available.
         publish_pull_request_action: Option<PublishBranchAction>,
+        /// Review-request watch action currently available.
+        review_watch_toggle: Option<ReviewWatchToggle>,
         /// Session whose view opened help.
         session_id: SessionId,
         /// Session lifecycle projection used to derive help actions.
@@ -1027,9 +1033,10 @@ impl HelpContext {
                 can_start_staged_session,
                 can_view_review_comments,
                 publish_pull_request_action,
+                review_watch_toggle,
                 session_state,
                 ..
-            } => help_action::view_actions_with_review_comments(
+            } => help_action::view_actions_with_review_request(
                 ViewHelpState {
                     can_fork_session: ViewActionAvailability::from_bool(*can_fork_session),
                     can_merge_session_branch: ViewActionAvailability::from_bool(
@@ -1051,6 +1058,7 @@ impl HelpContext {
                     session_state: *session_state,
                 },
                 *can_view_review_comments,
+                *review_watch_toggle,
             ),
             HelpContext::List { keybindings } => keybindings.clone(),
             HelpContext::Diff { can_comment, .. } => help_action::diff_actions(*can_comment),

@@ -9,6 +9,7 @@ fn test_as_str() {
     assert_eq!(Icon::Cross.as_str(), "✗");
     assert_eq!(Icon::GitBranch.as_str(), "●");
     assert_eq!(Icon::Pending.as_str(), "·");
+    assert_eq!(Icon::Watch.as_str(), "◉");
     assert_eq!(Icon::QueuedAction.as_str(), QUEUED_ACTION_GLYPH);
     assert_eq!(Icon::TachyonLoader.as_str(), TACHYON_LOADER_GLYPH);
     assert_eq!(Icon::Warn.as_str(), "!");
@@ -48,6 +49,7 @@ fn test_display_matches_as_str() {
         Icon::Cross,
         Icon::GitBranch,
         Icon::Pending,
+        Icon::Watch,
         Icon::QueuedAction,
         Icon::TachyonLoader,
         Icon::Spinner,

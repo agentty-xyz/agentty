@@ -180,6 +180,7 @@ fn test_open_view_help_overlay_preserves_view_context() {
         open_worktree: ViewActionState::Enabled,
         reply_to_session: ViewActionState::Enabled,
         review_comments: ViewActionState::Disabled,
+        review_watch_toggle: None,
         start_staged_session: ViewActionState::Disabled,
         follow_up_task_action: None,
         publish_pull_request_action: Some(PublishBranchAction::PublishPullRequest),

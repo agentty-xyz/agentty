@@ -174,6 +174,15 @@ pub enum PublishBranchAction {
     PublishPullRequest,
 }
 
+/// Session-view action currently available for review-request watching.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum ReviewWatchToggle {
+    /// Asks to watch the open linked review request.
+    Start,
+    /// Stops watching and returns the session to `Review`.
+    Stop,
+}
+
 /// Launch action currently available for one persisted follow-up task.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum FollowUpTaskAction {
@@ -583,7 +592,7 @@ impl Session {
     pub fn can_sync_review_request(&self) -> bool {
         let has_forge_context = self.published_upstream_ref.is_some() || self.has_review_request();
 
-        has_forge_context && matches!(self.status, Status::Review | Status::AgentReview)
+        has_forge_context && self.status.allows_review_actions()
     }
 
     /// Returns the review-request publish action currently available in session
@@ -598,6 +607,25 @@ impl Session {
             || matches!(self.status, Status::InProgress | Status::Rebasing))
             && !is_publish_active)
             .then_some(PublishBranchAction::PublishPullRequest)
+    }
+
+    /// Returns the review-request watch action currently available in session
+    /// view.
+    ///
+    /// Watching starts from idle `Review` with an open linked review request
+    /// and stops from `Watching`.
+    pub fn review_watch_toggle(&self) -> Option<ReviewWatchToggle> {
+        match self.status {
+            Status::Watching => Some(ReviewWatchToggle::Stop),
+            Status::Review => self
+                .review_request
+                .as_ref()
+                .is_some_and(|review_request| {
+                    review_request.summary.state == ReviewRequestState::Open
+                })
+                .then_some(ReviewWatchToggle::Start),
+            _ => None,
+        }
     }
 
     /// Returns the follow-up task at `position`, when present.

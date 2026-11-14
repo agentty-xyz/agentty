@@ -1233,6 +1233,7 @@ impl App {
 
         self.handle_merge_queue_progress(&event_batch.session_ids, &previous_session_states)
             .await;
+        self.reconcile_review_watch_statuses().await;
         self.retain_valid_session_progress_messages();
         self.sessions.retain_active_prompt_outputs();
 
@@ -2433,6 +2434,7 @@ impl App {
                 }
             }
             Ok(BranchPublishTaskSuccess::PullRequestPublished {
+                is_created,
                 review_request,
                 upstream_reference,
                 ..
@@ -2441,6 +2443,9 @@ impl App {
                     .apply_published_upstream_ref(&session_id, upstream_reference);
                 self.sessions
                     .apply_review_request(&session_id, review_request.clone());
+                if is_created {
+                    self.offer_review_watch(session_id.clone());
+                }
 
                 let persistent_notice = Self::review_request_created_notice(&review_request);
                 if self
@@ -2501,6 +2506,7 @@ impl App {
             crate::app::session::SyncReviewRequestOutcome::Merged {
                 session_head_hash, ..
             } => {
+                self.forget_review_watch(&session_id).await;
                 if let Some(warning) = self
                     .record_externally_merged_session(&session_id, session_head_hash)
                     .await
@@ -2513,10 +2519,23 @@ impl App {
                 }
             }
             crate::app::session::SyncReviewRequestOutcome::Closed { .. } => {
+                self.forget_review_watch(&session_id).await;
                 self.cancel_externally_closed_session(&session_id).await;
             }
-            crate::app::session::SyncReviewRequestOutcome::Open { .. }
-            | crate::app::session::SyncReviewRequestOutcome::NoReviewRequest => {}
+            crate::app::session::SyncReviewRequestOutcome::Open { .. } => {
+                match task_result.attention {
+                    Some(Ok(attention)) => {
+                        self.apply_review_request_attention(&session_id, attention)
+                            .await;
+                    }
+                    Some(Err(error)) => {
+                        self.report_review_request_attention_failure(&session_id, &error)
+                            .await;
+                    }
+                    None => {}
+                }
+            }
+            crate::app::session::SyncReviewRequestOutcome::NoReviewRequest => {}
         }
     }
 

@@ -10,6 +10,7 @@ use super::event::AppEvent;
 use super::state::{App, AppClients};
 use crate::app::chatgpt_sign_in::ChatGptSignIn;
 use crate::app::graph_question::GraphQuestionState;
+use crate::app::review_watch::ReviewWatchState;
 use crate::app::service::{AppServiceDeps, AppServices};
 use crate::app::session::{SessionManager, migrate_active_sessions_off_retired_models};
 use crate::app::setting::{SettingsManager, load_max_concurrent_subagents_setting};
@@ -139,7 +140,7 @@ impl App {
         );
         let settings =
             Self::load_settings(&repositories, &services, startup.active_project_id).await;
-        let (sessions, review_cache, recoverable_review_sessions) =
+        let (sessions, review_cache, recoverable_review_sessions, review_watch) =
             Self::load_startup_sessions_and_reviews(
                 &services,
                 Arc::clone(&clients.resource_client),
@@ -151,9 +152,6 @@ impl App {
         let sync_context = Self::sync_context_for(&projects, &services, &sessions);
         let sync_handle = sync::SyncHandle::spawn(event_tx.clone(), sync_context);
         Self::spawn_startup_background_tasks(auto_update, &event_tx, &services, &clients);
-        let sync_main_runner = clients
-            .sync_main_runner
-            .unwrap_or_else(|| sync_handle.sync_main_runner());
         let app = Self {
             mode: crate::presentation::app_mode::AppMode::List,
             project_catalog: Box::new(crate::app::project_catalog::ProjectCatalog::new(
@@ -188,6 +186,7 @@ impl App {
             is_tmux_session: clients.is_tmux_session,
             review_cache,
             review_diff_hashes: std::collections::HashMap::new(),
+            review_watch,
             latest_available_version: None,
             last_seen_session_update_versions: std::collections::HashMap::new(),
             merge_queue: crate::app::merge_queue::MergeQueue::default(),
@@ -196,8 +195,11 @@ impl App {
             project_sync_status_expires_at: None,
             session_progress_messages: std::collections::HashMap::new(),
             update_status: None,
+            // Build the runner before `sync_handle` moves into the struct.
+            sync_main_runner: clients
+                .sync_main_runner
+                .unwrap_or_else(|| sync_handle.sync_main_runner()),
             sync_handle,
-            sync_main_runner,
             graph_chat: GraphChatCache::default(),
             graph_questions: GraphQuestionState::default(),
             tmux_client: clients.tmux_client,
@@ -205,16 +207,22 @@ impl App {
         Ok(app.complete_startup(recoverable_review_sessions).await)
     }
 
-    /// Starts recovered reviews and project discovery once all state exists.
+    /// Starts recovered reviews, resumes review-request watches, and suggests
+    /// project discovery once all state exists.
     async fn complete_startup(mut self, recoverable_review_sessions: Vec<String>) -> Self {
         self.recover_startup_focused_reviews(recoverable_review_sessions);
+        self.reconcile_review_watch_statuses().await;
         self.suggest_project_discovery().await;
 
         self
     }
 
-    /// Loads sessions and focused-review recovery state for the launch project,
-    /// sampling tab-bar resource stats through `resource_client`.
+    /// Loads sessions, focused-review recovery state, and review-request
+    /// watches for the launch project, sampling tab-bar resource stats through
+    /// `resource_client`.
+    ///
+    /// Everything is read before startup background tasks spawn, so no task
+    /// can emit an event while the app is still being assembled.
     async fn load_startup_sessions_and_reviews(
         services: &AppServices,
         resource_client: Arc<dyn ResourceClient>,
@@ -225,6 +233,7 @@ impl App {
             SessionManager,
             std::collections::HashMap<crate::domain::session::SessionId, review::ReviewCacheEntry>,
             Vec<String>,
+            ReviewWatchState,
         ),
         AppError,
     > {
@@ -238,8 +247,14 @@ impl App {
             Self::load_recoverable_focused_review_session_ids(repositories, active_project_id)
                 .await?;
         review::hydrate_review_transients(&review_cache, sessions.state_mut());
+        let review_watch = ReviewWatchState::load(repositories).await;
 
-        Ok((sessions, review_cache, recoverable_session_ids))
+        Ok((
+            sessions,
+            review_cache,
+            recoverable_session_ids,
+            review_watch,
+        ))
     }
 
     /// Restarts focused review for durable triggers whose persistence was

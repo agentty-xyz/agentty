@@ -5,8 +5,8 @@ use std::sync::Arc;
 use super::{
     CreateReviewRequestInput, ForgeCommandRunner, ForgeFuture, ForgeKind, ForgeRemote,
     GitHubReviewRequestAdapter, GitLabReviewRequestAdapter, RealForgeCommandRunner,
-    ReviewCommentSnapshot, ReviewRequestError, ReviewRequestMetadata, ReviewRequestSummary,
-    UpdateReviewRequestInput, detect_remote,
+    ReviewCommentSnapshot, ReviewRequestAttention, ReviewRequestError, ReviewRequestMetadata,
+    ReviewRequestSummary, UpdateReviewRequestInput, detect_remote,
 };
 
 /// Async boundary used by app orchestration for forge review requests.
@@ -104,6 +104,21 @@ pub trait ReviewRequestClient: Send + Sync {
         remote: ForgeRemote,
         display_id: String,
     ) -> ForgeFuture<Result<ReviewCommentSnapshot, ReviewRequestError>>;
+
+    /// Fetches the conditions on one open review request that may need
+    /// follow-up work: failed and pending checks for its head commit, merge
+    /// conflicts with its target branch, and unresolved review threads
+    /// awaiting a response from trusted authors.
+    ///
+    /// # Errors
+    /// Returns a provider-specific review-request error when any forge lookup
+    /// cannot be completed, including the author-trust lookups, so callers
+    /// never act on partial facts.
+    fn fetch_review_request_attention(
+        &self,
+        remote: ForgeRemote,
+        display_id: String,
+    ) -> ForgeFuture<Result<ReviewRequestAttention, ReviewRequestError>>;
 
     /// Adds one reply to an existing review thread.
     ///
@@ -264,6 +279,16 @@ impl ReviewRequestClient for RealReviewRequestClient {
         })
     }
 
+    fn fetch_review_request_attention(
+        &self,
+        remote: ForgeRemote,
+        display_id: String,
+    ) -> ForgeFuture<Result<ReviewRequestAttention, ReviewRequestError>> {
+        self.call_with_authenticated_adapter(remote, move |adapter, remote| {
+            adapter.fetch_authenticated_review_request_attention(remote, display_id)
+        })
+    }
+
     fn reply_to_thread(
         &self,
         remote: ForgeRemote,
@@ -348,6 +373,13 @@ pub(crate) trait ReviewRequestAdapter: Send + Sync {
         remote: ForgeRemote,
         display_id: String,
     ) -> ForgeFuture<Result<ReviewCommentSnapshot, ReviewRequestError>>;
+
+    /// Fetches review-request attention facts after authentication.
+    fn fetch_authenticated_review_request_attention(
+        &self,
+        remote: ForgeRemote,
+        display_id: String,
+    ) -> ForgeFuture<Result<ReviewRequestAttention, ReviewRequestError>>;
 
     /// Adds one reply after authentication.
     fn reply_to_authenticated_thread(

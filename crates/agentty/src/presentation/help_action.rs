@@ -1,4 +1,4 @@
-use crate::domain::session::{PublishBranchAction, Session, Status};
+use crate::domain::session::{PublishBranchAction, ReviewWatchToggle, Session, Status};
 use crate::domain::session_order::ArchiveAction;
 use crate::presentation::app_mode::{DiffFocus, DiffSidebarFocus};
 
@@ -243,7 +243,7 @@ pub(crate) fn session_view_state(session: &Session) -> ViewSessionState {
         Status::Rebasing => ViewSessionState::Rebasing,
         Status::Merging | Status::Queued => ViewSessionState::MergeQueue,
         Status::Merged => ViewSessionState::Merged,
-        Status::Review => ViewSessionState::Review,
+        Status::Review | Status::Watching => ViewSessionState::Review,
         Status::AgentReview => ViewSessionState::AgentReview,
     }
 }
@@ -434,13 +434,16 @@ pub(crate) fn view_actions(state: ViewHelpState) -> Vec<HelpAction> {
     actions
 }
 
-/// Returns full session-view help actions with linked review comments when
-/// available outside sessions that support terminal continuation.
-pub(crate) fn view_actions_with_review_comments(
+/// Returns full session-view help actions with linked review-request actions:
+/// review comments when available outside sessions that support terminal
+/// continuation, and the review-request watch toggle.
+pub(crate) fn view_actions_with_review_request(
     state: ViewHelpState,
     can_view_review_comments: bool,
+    review_watch_toggle: Option<ReviewWatchToggle>,
 ) -> Vec<HelpAction> {
     let mut actions = view_actions(state);
+    append_review_watch_action(&mut actions, review_watch_toggle);
     append_review_comment_action(
         &mut actions,
         can_append_review_comments(state.session_state, can_view_review_comments),
@@ -485,6 +488,28 @@ fn can_append_review_comments(
         ViewSessionState::Done | ViewSessionState::Canceled => false,
         _ => can_view_review_comments,
     }
+}
+
+/// Adds the review-request watch toggle after the publish action, before the
+/// trailing scroll and help actions.
+fn append_review_watch_action(
+    actions: &mut Vec<HelpAction>,
+    review_watch_toggle: Option<ReviewWatchToggle>,
+) {
+    let action = match review_watch_toggle {
+        Some(ReviewWatchToggle::Start) => HelpAction::new(
+            "watch",
+            "W",
+            "Watch review request and resolve checks, comments, and conflicts",
+        ),
+        Some(ReviewWatchToggle::Stop) => {
+            HelpAction::new("stop watching", "W", "Stop watching review request")
+        }
+        None => return,
+    };
+    let trailing_action_count = VIEW_OUTPUT_SCROLL_ACTIONS.len() + 1;
+    let insertion_index = actions.len().saturating_sub(trailing_action_count);
+    actions.insert(insertion_index, action);
 }
 
 /// Adds the comments shortcut before trailing navigation actions.

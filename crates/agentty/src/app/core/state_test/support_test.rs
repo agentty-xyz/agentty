@@ -544,6 +544,7 @@ pub(in crate::app::core) fn merged_review_request_status_update(
     ReviewRequestStatusUpdate {
         generation: 0,
         result: Ok(SyncReviewRequestTaskResult {
+            attention: None,
             outcome: session::SyncReviewRequestOutcome::Merged {
                 display_id: display_id.to_string(),
                 session_head_hash: Some(session_head_hash.to_string()),

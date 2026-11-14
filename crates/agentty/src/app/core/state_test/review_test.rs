@@ -770,6 +770,7 @@ async fn test_apply_review_request_status_update_persists_summary() {
 
     let summary = test_review_request_summary("#5", ReviewRequestState::Open);
     let task_result = SyncReviewRequestTaskResult {
+        attention: None,
         outcome: session::SyncReviewRequestOutcome::Open {
             display_id: "#5".to_string(),
             status_summary: None,
@@ -830,6 +831,7 @@ async fn test_apply_review_request_status_update_closed_cancels_session() {
     app.mode = draft.into_prompt_mode();
 
     let task_result = SyncReviewRequestTaskResult {
+        attention: None,
         outcome: session::SyncReviewRequestOutcome::Closed {
             display_id: "#7".to_string(),
         },
@@ -907,6 +909,7 @@ async fn test_apply_review_request_status_update_closed_cancels_stacked_child() 
     app.refresh_sessions_now().await;
 
     let task_result = SyncReviewRequestTaskResult {
+        attention: None,
         outcome: session::SyncReviewRequestOutcome::Closed {
             display_id: "#7".to_string(),
         },
@@ -1671,6 +1674,7 @@ async fn apply_branch_publish_action_update_persists_pull_request_notice() {
     app.apply_branch_publish_action_update(BranchPublishActionUpdate {
         result: Ok(BranchPublishTaskSuccess::PullRequestPublished {
             branch_name: "wt/session-1".to_string(),
+            is_created: false,
             review_request: review_request.clone(),
             upstream_reference: "origin/wt/session-1".to_string(),
         }),
@@ -1773,6 +1777,7 @@ async fn apply_branch_publish_action_persists_review_request_for_unloaded_projec
     app.apply_branch_publish_action_update(BranchPublishActionUpdate {
         result: Ok(BranchPublishTaskSuccess::PullRequestPublished {
             branch_name: "wt/session-1".to_string(),
+            is_created: false,
             review_request,
             upstream_reference: "origin/wt/session-1".to_string(),
         }),
@@ -2175,6 +2180,7 @@ async fn apply_app_events_review_request_status_updated_ignores_stale_generation
     app.apply_app_events(AppEvent::ReviewRequestStatusUpdated {
         generation: stale_generation,
         result: Ok(SyncReviewRequestTaskResult {
+            attention: None,
             outcome: session::SyncReviewRequestOutcome::Closed {
                 display_id: "#42".to_string(),
             },
@@ -2230,6 +2236,7 @@ async fn apply_app_events_review_request_status_transition_updates_session() {
     app.apply_app_events(AppEvent::ReviewRequestStatusUpdated {
         generation,
         result: Ok(SyncReviewRequestTaskResult {
+            attention: None,
             outcome: session::SyncReviewRequestOutcome::Closed {
                 display_id: "#42".to_string(),
             },

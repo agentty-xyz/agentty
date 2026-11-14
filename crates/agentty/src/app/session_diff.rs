@@ -409,7 +409,7 @@ impl App {
 
                 continue;
             }
-            if !matches!(current_status, Status::Review | Status::AgentReview)
+            if !current_status.allows_review_actions()
                 || matches!(
                     self.review_cache.get(session_id),
                     Some(ReviewCacheEntry::Loading { .. })
@@ -451,7 +451,7 @@ impl App {
             return false;
         };
         let status = row.status.parse::<Status>().ok();
-        if !matches!(status, Some(Status::Review | Status::AgentReview)) {
+        if !status.is_some_and(Status::allows_review_actions) {
             return false;
         }
         let Some(project_id) = row.project_id else {
@@ -567,7 +567,7 @@ impl App {
         let review_generation_is_current = self
             .sessions
             .session_for_id(session_id)
-            .is_some_and(|session| session.status == Status::Review);
+            .is_some_and(|session| matches!(session.status, Status::Review | Status::Watching));
         if !review_generation_is_current {
             return;
         }
@@ -910,7 +910,7 @@ impl App {
                 .flatten()
                 .and_then(|row| row.status.parse::<Status>().ok())
         };
-        if !matches!(status, Some(Status::Review | Status::AgentReview)) {
+        if !status.is_some_and(Status::allows_review_actions) {
             if cached_diff_hash.is_none() {
                 self.clear_review_output(&session_id);
             }

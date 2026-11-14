@@ -1,3 +1,5 @@
+#[path = "gitlab_test/attention_test.rs"]
+mod attention_test;
 #[path = "gitlab_test/comment_test.rs"]
 mod comment_test;
 #[path = "gitlab_test/metadata_test.rs"]

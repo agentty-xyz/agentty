@@ -801,7 +801,8 @@ fn confirmation_cancel_mode(mode: &AppMode) -> AppMode {
             ConfirmationIntent::ContinueSession
             | ConfirmationIntent::ForkSession
             | ConfirmationIntent::MergeSession
-            | ConfirmationIntent::RegenerateReview,
+            | ConfirmationIntent::RegenerateReview
+            | ConfirmationIntent::WatchReviewRequest,
         restore_view: Some(restore_view),
         ..
     } = mode
@@ -852,6 +853,10 @@ async fn handle_confirmation_confirm(app: &mut App) -> io::Result<EventResult> {
             confirmation_session_id,
             restore_view,
         )),
+        ConfirmationIntent::WatchReviewRequest => {
+            handle_watch_review_request_confirmation(app, confirmation_session_id, restore_view)
+                .await
+        }
     }
 }
 
@@ -939,6 +944,22 @@ async fn handle_merge_confirmation(
     if let Err(error) = app.drive_session_request(request).await {
         app.append_output_for_session(&session_id, &TranscriptNotice::MergeError.format(error))
             .await;
+    }
+
+    Ok(EventResult::Continue)
+}
+
+/// Restores the previous view and starts watching the confirmed session's
+/// linked review request.
+async fn handle_watch_review_request_confirmation(
+    app: &mut App,
+    confirmation_session_id: Option<SessionId>,
+    restore_view: Option<ConfirmationViewMode>,
+) -> io::Result<EventResult> {
+    app.mode = restore_view.map_or(AppMode::List, ConfirmationViewMode::into_view_mode);
+
+    if let Some(session_id) = confirmation_session_id {
+        app.enable_review_watch(&session_id).await;
     }
 
     Ok(EventResult::Continue)

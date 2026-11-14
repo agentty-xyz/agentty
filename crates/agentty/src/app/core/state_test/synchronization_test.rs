@@ -142,6 +142,7 @@ async fn superseded_project_sync_completions_do_not_reconcile_session_state() {
     let mut stale_completion = successful_manual_sync_completion(project_id, "main", 1);
     stale_completion.review_request_updates = vec![sync::SyncMainReviewUpdate {
         result: Ok(SyncReviewRequestTaskResult {
+            attention: None,
             outcome: session::SyncReviewRequestOutcome::Closed {
                 display_id: "#42".to_string(),
             },
@@ -578,6 +579,7 @@ async fn project_sync_completion_applies_captured_review_updates() {
     let mut completion = successful_manual_sync_completion(project_id, "main", 2);
     completion.review_request_updates = vec![sync::SyncMainReviewUpdate {
         result: Ok(SyncReviewRequestTaskResult {
+            attention: None,
             outcome: session::SyncReviewRequestOutcome::NoReviewRequest,
             summary: None,
         }),
@@ -1499,6 +1501,7 @@ async fn apply_branch_publish_action_update_persists_gitlab_merge_request_notice
     app.apply_branch_publish_action_update(BranchPublishActionUpdate {
         result: Ok(BranchPublishTaskSuccess::PullRequestPublished {
             branch_name: "wt/session-1".to_string(),
+            is_created: false,
             review_request,
             upstream_reference: "origin/wt/session-1".to_string(),
         }),
@@ -1916,6 +1919,7 @@ async fn apply_app_events_review_request_status_survives_same_batch_sync_refresh
     app.apply_app_events(AppEvent::ReviewRequestStatusUpdated {
         generation,
         result: Ok(SyncReviewRequestTaskResult {
+            attention: None,
             outcome: session::SyncReviewRequestOutcome::Closed {
                 display_id: "#42".to_string(),
             },

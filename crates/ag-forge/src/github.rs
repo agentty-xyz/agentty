@@ -6,11 +6,12 @@ use serde::Deserialize;
 
 use super::{
     CreateReviewRequestInput, ForgeCommand, ForgeCommandRunner, ForgeFuture, ForgeKind,
-    ForgeRemote, ReviewComment, ReviewCommentAnchorSide, ReviewCommentSnapshot,
-    ReviewCommentThread, ReviewRequestAdapter, ReviewRequestError, ReviewRequestMetadata,
-    ReviewRequestMetadataEdit, ReviewRequestOperations, ReviewRequestState, ReviewRequestSummary,
-    SyncReviewRequestMetadataConfig, UpdateReviewRequestInput, map_parse_error,
-    normalize_provider_label, operation_failed, parse_remote_url, status_summary_parts, strip_port,
+    ForgeRemote, ReviewCheckFailure, ReviewComment, ReviewCommentAnchorSide, ReviewCommentSnapshot,
+    ReviewCommentThread, ReviewRequestAdapter, ReviewRequestAttention, ReviewRequestError,
+    ReviewRequestMetadata, ReviewRequestMetadataEdit, ReviewRequestOperations, ReviewRequestState,
+    ReviewRequestSummary, SyncReviewRequestMetadataConfig, UpdateReviewRequestInput,
+    map_parse_error, normalize_provider_label, operation_failed, parse_remote_url,
+    status_summary_parts, strip_port,
 };
 
 /// One compact status query replaces `gh pr view` during each review refresh.
@@ -38,13 +39,26 @@ const STATUS_CONTEXTS_QUERY: &str =
      state contexts(first: 100, after: $endCursor) { nodes { ... on CheckRun { name } ... on \
      StatusContext { context } } pageInfo { hasNextPage endCursor } } } } } }";
 
+/// Paginated query for the head commit, mergeability, and check outcomes that
+/// may need follow-up work.
+///
+/// Each page carries the head commit so check outcomes are never combined
+/// across a push that landed during pagination.
+const PULL_REQUEST_ATTENTION_QUERY: &str =
+    "query($owner: String!, $repo: String!, $number: Int!, $endCursor: String) { \
+     repository(owner: $owner, name: $repo) { pullRequest(number: $number) { headRefOid mergeable \
+     statusCheckRollup { contexts(first: 100, after: $endCursor) { nodes { __typename ... on \
+     CheckRun { name status conclusion detailsUrl } ... on StatusContext { context state \
+     targetUrl } } pageInfo { hasNextPage endCursor } } } } } }";
+
 /// Paginated GraphQL query used to fetch review threads for one pull request.
 const REVIEW_THREADS_QUERY: &str =
     "query($owner: String!, $repo: String!, $number: Int!, $endCursor: String) { \
      repository(owner: $owner, name: $repo) { pullRequest(number: $number) { reviewThreads(first: \
      100, after: $endCursor) { nodes { id diffSide isOutdated isResolved line path startLine \
-     subjectType comments(first: 100) { nodes { author { login } body viewerDidAuthor } pageInfo \
-     { hasNextPage endCursor } } } pageInfo { hasNextPage endCursor } } } } }";
+     subjectType comments(first: 100) { nodes { author { login } authorAssociation body \
+     viewerDidAuthor } pageInfo { hasNextPage endCursor } } } pageInfo { hasNextPage endCursor } \
+     } } } }";
 /// Paginated GraphQL query used to fetch pull-request conversation comments.
 const PULL_REQUEST_COMMENTS_QUERY: &str =
     "query($owner: String!, $repo: String!, $number: Int!, $endCursor: String) { \
@@ -55,7 +69,7 @@ const PULL_REQUEST_COMMENTS_QUERY: &str =
 const THREAD_COMMENTS_QUERY: &str =
     "query($threadId: ID!, $endCursor: String) { node(id: $threadId) { ... on \
      PullRequestReviewThread { comments(first: 100, after: $endCursor) { nodes { author { login } \
-     body viewerDidAuthor } pageInfo { hasNextPage endCursor } } } } }";
+     authorAssociation body viewerDidAuthor } pageInfo { hasNextPage endCursor } } } } }";
 /// GraphQL mutation used to add one reply to a pull-request review thread.
 const REPLY_TO_THREAD_MUTATION: &str =
     "mutation($threadId: ID!, $body: String!) { addPullRequestReviewThreadReply(input: { \
@@ -191,6 +205,16 @@ impl GitHubReviewRequestAdapter {
 
     /// Builds one small GraphQL status request for a pull request.
     fn view_command(remote: &ForgeRemote, pull_request_number: &str) -> ForgeCommand {
+        Self::pull_request_graphql_command(remote, PULL_REQUEST_STATUS_QUERY, pull_request_number)
+    }
+
+    /// Builds one single-page `gh api graphql` request scoped to a pull
+    /// request.
+    fn pull_request_graphql_command(
+        remote: &ForgeRemote,
+        query: &str,
+        pull_request_number: &str,
+    ) -> ForgeCommand {
         Self::github_command(
             remote,
             vec![
@@ -199,7 +223,7 @@ impl GitHubReviewRequestAdapter {
                 remote.host.clone(),
                 "graphql".to_string(),
                 "-f".to_string(),
-                format!("query={PULL_REQUEST_STATUS_QUERY}"),
+                format!("query={query}"),
                 "-F".to_string(),
                 format!("owner={}", remote.namespace),
                 "-F".to_string(),
@@ -278,6 +302,67 @@ impl GitHubReviewRequestAdapter {
             }),
             state,
         })
+    }
+
+    /// Builds one paginated GraphQL command for head-commit, mergeability,
+    /// and every check fact of one pull request.
+    fn attention_command(remote: &ForgeRemote, pull_request_number: &str) -> ForgeCommand {
+        Self::paginated_graphql_command(
+            remote,
+            PULL_REQUEST_ATTENTION_QUERY,
+            vec![
+                format!("owner={}", remote.namespace),
+                format!("repo={}", remote.project),
+                format!("number={pull_request_number}"),
+            ],
+        )
+    }
+
+    /// Parses and combines all `--slurp` pages of head-commit, mergeability,
+    /// and check facts from the attention query. Review threads are loaded
+    /// separately.
+    ///
+    /// Every page must report the same head commit; otherwise the checks
+    /// belong to different commits and the lookup fails instead of reporting
+    /// mixed facts.
+    fn parse_attention_pages(stdout: &str) -> Result<ReviewRequestAttention, String> {
+        let responses: Vec<GitHubAttentionEnvelope> = serde_json::from_str(stdout)
+            .map_err(|error| format!("invalid GitHub pull-request attention response: {error}"))?;
+        let mut combined: Option<ReviewRequestAttention> = None;
+        for response in responses {
+            let pull_request = response
+                .data
+                .and_then(|data| data.repository)
+                .and_then(|repository| repository.pull_request)
+                .ok_or_else(|| {
+                    "GitHub pull-request attention response is missing a pull request".to_string()
+                })?;
+            let attention = combined.get_or_insert_with(|| ReviewRequestAttention {
+                head_commit: pull_request.head_ref_oid.clone(),
+                ..ReviewRequestAttention::default()
+            });
+            if attention.head_commit != pull_request.head_ref_oid {
+                return Err(
+                    "GitHub pull-request head commit changed while its checks were loading"
+                        .to_string(),
+                );
+            }
+
+            attention.has_merge_conflict |=
+                pull_request.mergeable.as_deref() == Some("CONFLICTING");
+            let check_contexts = pull_request
+                .status_check_rollup
+                .into_iter()
+                .flat_map(|rollup| rollup.contexts.nodes)
+                .flatten();
+            for check_context in check_contexts {
+                attention.failed_checks.extend(check_context.failure());
+                attention.has_pending_checks |= check_context.is_pending();
+            }
+        }
+
+        combined
+            .ok_or_else(|| "GitHub pull-request attention response contains no pages".to_string())
     }
 
     /// Builds GitHub-specific metadata view and edit configuration.
@@ -520,6 +605,82 @@ impl GitHubReviewRequestAdapter {
         }
     }
 
+    /// Converts one thread awaiting a response from a trusted author, keeping
+    /// only comments written by trusted authors.
+    ///
+    /// Untrusted comments are dropped before the thread is evaluated, so they
+    /// can neither request work nor hide a trusted request. Returns `None`
+    /// for resolved threads, threads without a trusted comment, and threads
+    /// whose latest trusted comment is an Agentty reply.
+    fn trusted_review_thread_from_node(
+        node: GitHubReviewThreadNode,
+    ) -> Option<ReviewCommentThread> {
+        let trusted_comments = node
+            .comments
+            .nodes
+            .iter()
+            .map(GitHubReviewCommentNode::is_trusted_author)
+            .collect::<Vec<_>>();
+        let mut thread = Self::review_comment_thread_from_node(node);
+        thread.comments = std::mem::take(&mut thread.comments)
+            .into_iter()
+            .zip(trusted_comments)
+            .filter_map(|(comment, is_trusted)| is_trusted.then_some(comment))
+            .collect();
+
+        (!thread.comments.is_empty() && thread.is_actionable()).then_some(thread)
+    }
+
+    /// Loads one pull request's review threads with every comment page.
+    async fn fetch_review_thread_nodes(
+        operations: &ReviewRequestOperations,
+        remote: &ForgeRemote,
+        pull_request_number: &str,
+    ) -> Result<Vec<GitHubReviewThreadNode>, ReviewRequestError> {
+        let threads_output = operations
+            .run_review_command(
+                remote,
+                Self::review_threads_command(remote, pull_request_number),
+                "fetch pull-request review threads",
+            )
+            .await?;
+        let mut thread_nodes = map_parse_error(
+            ForgeKind::GitHub,
+            Self::parse_review_thread_pages(&threads_output.stdout),
+        )?;
+        Self::load_oversized_thread_comments(operations, remote, &mut thread_nodes).await?;
+
+        Ok(thread_nodes)
+    }
+
+    /// Replaces the first comment page of each oversized thread with its
+    /// complete comment list.
+    async fn load_oversized_thread_comments(
+        operations: &ReviewRequestOperations,
+        remote: &ForgeRemote,
+        thread_nodes: &mut [GitHubReviewThreadNode],
+    ) -> Result<(), ReviewRequestError> {
+        for thread_node in thread_nodes {
+            if !thread_node.comments.page_info.has_next_page {
+                continue;
+            }
+
+            let comments_output = operations
+                .run_review_command(
+                    remote,
+                    Self::thread_comments_command(remote, &thread_node.id),
+                    "fetch review-thread comments",
+                )
+                .await?;
+            thread_node.comments.nodes = map_parse_error(
+                ForgeKind::GitHub,
+                Self::parse_thread_comment_pages(&comments_output.stdout),
+            )?;
+        }
+
+        Ok(())
+    }
+
     /// Converts GitHub's diff-side labels into Agentty's normalized anchor
     /// side.
     fn github_anchor_side(node: &GitHubReviewThreadNode) -> ReviewCommentAnchorSide {
@@ -743,23 +904,7 @@ impl ReviewRequestAdapter for GitHubReviewRequestAdapter {
                 Self::parse_pull_request_comment_pages(&comments_output.stdout),
             )?;
 
-            for thread_node in &mut thread_nodes {
-                if !thread_node.comments.page_info.has_next_page {
-                    continue;
-                }
-
-                let comments_output = operations
-                    .run_review_command(
-                        &remote,
-                        Self::thread_comments_command(&remote, &thread_node.id),
-                        "fetch review-thread comments",
-                    )
-                    .await?;
-                thread_node.comments.nodes = map_parse_error(
-                    ForgeKind::GitHub,
-                    Self::parse_thread_comment_pages(&comments_output.stdout),
-                )?;
-            }
+            Self::load_oversized_thread_comments(&operations, &remote, &mut thread_nodes).await?;
 
             Ok(ReviewCommentSnapshot {
                 pr_level_comments,
@@ -768,6 +913,40 @@ impl ReviewRequestAdapter for GitHubReviewRequestAdapter {
                     .map(Self::review_comment_thread_from_node)
                     .collect(),
             })
+        })
+    }
+
+    /// Fetches head-commit, mergeability, and every page of check facts
+    /// through one paginated GraphQL query, then the review threads awaiting a
+    /// response from trusted authors.
+    fn fetch_authenticated_review_request_attention(
+        &self,
+        remote: ForgeRemote,
+        display_id: String,
+    ) -> ForgeFuture<Result<ReviewRequestAttention, ReviewRequestError>> {
+        let operations = self.operations.clone();
+
+        Box::pin(async move {
+            let pull_request_number = Self::parse_display_id(&display_id)?;
+            let attention_output = operations
+                .run_review_command(
+                    &remote,
+                    Self::attention_command(&remote, &pull_request_number),
+                    "fetch pull-request attention",
+                )
+                .await?;
+            let mut attention = map_parse_error(
+                ForgeKind::GitHub,
+                Self::parse_attention_pages(&attention_output.stdout),
+            )?;
+            attention.review_threads =
+                Self::fetch_review_thread_nodes(&operations, &remote, &pull_request_number)
+                    .await?
+                    .into_iter()
+                    .filter_map(Self::trusted_review_thread_from_node)
+                    .collect();
+
+            Ok(attention)
         })
     }
 
@@ -936,9 +1115,27 @@ struct GitHubThreadCommentsNode {
 #[derive(Deserialize)]
 struct GitHubReviewCommentNode {
     author: Option<GitHubReviewCommentAuthor>,
+    #[serde(default, rename = "authorAssociation")]
+    author_association: Option<String>,
     body: String,
     #[serde(default, rename = "viewerDidAuthor")]
     viewer_did_author: bool,
+}
+
+impl GitHubReviewCommentNode {
+    /// Returns whether the authenticated user wrote this comment or GitHub
+    /// reports its author as a repository owner, organization member, or
+    /// collaborator.
+    ///
+    /// Previous contributors stay untrusted: GitHub reports that association
+    /// for anyone with a merged commit, with or without write access.
+    fn is_trusted_author(&self) -> bool {
+        self.viewer_did_author
+            || matches!(
+                self.author_association.as_deref(),
+                Some("OWNER" | "MEMBER" | "COLLABORATOR")
+            )
+    }
 }
 
 /// GraphQL author node for a review comment. The `ghost` author is the only
@@ -946,6 +1143,109 @@ struct GitHubReviewCommentNode {
 #[derive(Deserialize)]
 struct GitHubReviewCommentAuthor {
     login: String,
+}
+
+/// Outer GraphQL attention response returned by `gh api graphql`.
+#[derive(Deserialize)]
+struct GitHubAttentionEnvelope {
+    data: Option<GitHubAttentionData>,
+}
+
+/// GraphQL `data` payload for the attention query.
+#[derive(Deserialize)]
+struct GitHubAttentionData {
+    repository: Option<GitHubAttentionRepository>,
+}
+
+/// GraphQL repository node carrying the attention pull-request field.
+#[derive(Deserialize)]
+struct GitHubAttentionRepository {
+    #[serde(rename = "pullRequest")]
+    pull_request: Option<GitHubAttentionPullRequest>,
+}
+
+/// GitHub pull-request facts returned by the attention query.
+#[derive(Deserialize)]
+struct GitHubAttentionPullRequest {
+    #[serde(rename = "headRefOid")]
+    head_ref_oid: String,
+    mergeable: Option<String>,
+    #[serde(rename = "statusCheckRollup")]
+    status_check_rollup: Option<GitHubCheckRollup>,
+}
+
+/// Check and commit-status rollup for the pull-request head.
+#[derive(Deserialize)]
+struct GitHubCheckRollup {
+    contexts: GitHubCheckContextConnection,
+}
+
+/// One page of check runs and commit statuses in a rollup.
+#[derive(Deserialize)]
+struct GitHubCheckContextConnection {
+    nodes: Vec<Option<GitHubCheckContextNode>>,
+}
+
+/// One check run or commit status. Check runs carry `name`, `status`,
+/// `conclusion`, and `detailsUrl`; status contexts carry `context`, `state`,
+/// and `targetUrl`.
+#[derive(Deserialize)]
+struct GitHubCheckContextNode {
+    conclusion: Option<String>,
+    context: Option<String>,
+    #[serde(rename = "detailsUrl")]
+    details_url: Option<String>,
+    name: Option<String>,
+    state: Option<String>,
+    status: Option<String>,
+    #[serde(rename = "targetUrl")]
+    target_url: Option<String>,
+    #[serde(rename = "__typename")]
+    typename: String,
+}
+
+impl GitHubCheckContextNode {
+    /// Returns the normalized failure when this completed check failed.
+    ///
+    /// Cancelled, skipped, neutral, stale, and action-required check runs and
+    /// expected commit statuses are not failures.
+    fn failure(&self) -> Option<ReviewCheckFailure> {
+        let (name, outcome, web_url) = match self.typename.as_str() {
+            "CheckRun" if self.status.as_deref() == Some("COMPLETED") => (
+                self.name.as_deref(),
+                self.conclusion.as_deref().filter(|conclusion| {
+                    matches!(*conclusion, "FAILURE" | "TIMED_OUT" | "STARTUP_FAILURE")
+                })?,
+                self.details_url.as_deref(),
+            ),
+            "StatusContext" => (
+                self.context.as_deref(),
+                self.state
+                    .as_deref()
+                    .filter(|state| matches!(*state, "FAILURE" | "ERROR"))?,
+                self.target_url.as_deref(),
+            ),
+            _ => return None,
+        };
+
+        Some(ReviewCheckFailure {
+            name: name.unwrap_or_default().to_string(),
+            outcome: normalize_provider_label(outcome),
+            web_url: web_url
+                .filter(|web_url| !web_url.is_empty())
+                .map(str::to_string),
+        })
+    }
+
+    /// Returns whether this check is still queued, running, or, for a
+    /// required commit status, expected but not reported yet.
+    fn is_pending(&self) -> bool {
+        match self.typename.as_str() {
+            "CheckRun" => self.status.as_deref() != Some("COMPLETED"),
+            "StatusContext" => matches!(self.state.as_deref(), Some("PENDING" | "EXPECTED")),
+            _ => false,
+        }
+    }
 }
 
 /// Outer GraphQL status response returned by `gh api graphql`.

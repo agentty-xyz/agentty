@@ -191,9 +191,7 @@ impl App {
                 prompt,
             } => {
                 self.execute_prompt_command(session_id, intent, prompt)
-                    .await;
-
-                Ok(())
+                    .await
             }
             SessionMutation::StartStaged { session_id } => self
                 .start_staged_session(&session_id)
@@ -239,26 +237,40 @@ impl App {
 
     /// Routes one prepared turn prompt through the lifecycle path for the
     /// active prompt session.
+    ///
+    /// # Errors
+    /// Returns [`SessionError::Operation`] when the plan fails, after writing
+    /// its transcript notice, or when the session declines the reply, so
+    /// automatic callers can retry instead of assuming the turn started.
     async fn execute_prompt_command(
         &mut self,
         session_id: SessionId,
         intent: MessageIntent,
         prompt: TurnPrompt,
-    ) {
+    ) -> Result<(), SessionError> {
         let status = self
             .sessions
             .session_for_id(&session_id)
             .map(|session| session.status);
         let plan = MessagePlan::for_prompt(intent, status);
 
-        if let Err(error) = self.execute_message_plan(&session_id, prompt, plan).await {
-            let notice = if plan == MessagePlan::Queue {
-                TranscriptNotice::QueueError
-            } else {
-                TranscriptNotice::Error
-            };
-            self.append_output_for_session(&session_id, &notice.format(error))
-                .await;
+        match self.execute_message_plan(&session_id, prompt, plan).await {
+            Ok(true) => Ok(()),
+            Ok(false) => Err(SessionError::Operation(
+                "the session did not accept the prompt".to_string(),
+            )),
+            Err(error) => {
+                let notice = if plan == MessagePlan::Queue {
+                    TranscriptNotice::QueueError
+                } else {
+                    TranscriptNotice::Error
+                };
+                let message = error.to_string();
+                self.append_output_for_session(&session_id, &notice.format(&message))
+                    .await;
+
+                Err(SessionError::Operation(message))
+            }
         }
     }
 }
