@@ -294,7 +294,7 @@ done
         env,
         &[
             ("DefaultSmartAgent", "antigravity"),
-            ("DefaultSmartModel", "gemini-3.1-pro-preview"),
+            ("DefaultSmartModel", "gemini-4-argon"),
         ],
     )
     .await?;
@@ -312,7 +312,7 @@ async fn seed_antigravity_large_replay_project(
         env,
         SessionSeed::regular(
             ANTIGRAVITY_LARGE_REPLAY_SESSION_ID,
-            "gemini-3.1-pro-preview",
+            "gemini-4-argon",
             "main",
             "Review",
         )

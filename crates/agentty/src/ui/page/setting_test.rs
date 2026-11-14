@@ -29,7 +29,7 @@ fn test_settings_selection_highlight_and_columns_across_sections_and_themes() {
                 project_rows: vec![
                     (
                         "Default Smart Model",
-                        "antigravity/gemini-3.1-pro-preview [xhigh]".to_string(),
+                        "antigravity/gemini-4-argon [xhigh]".to_string(),
                     ),
                     ("Default Fast Model", "Fast".to_string()),
                 ],

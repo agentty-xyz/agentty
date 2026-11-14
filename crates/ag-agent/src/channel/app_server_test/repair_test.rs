@@ -177,7 +177,7 @@ async fn test_run_turn_returns_error_for_invalid_structured_output() {
 async fn repair_preserves_permissions_for_the_next_session_turn() {
     for (kind, model) in [
         (AgentKind::Codex, model_fixture::CODEX_MODEL),
-        (AgentKind::Antigravity, AgentModel::Gemini31Pro),
+        (AgentKind::Antigravity, AgentModel::Gemini4Argon),
     ] {
         for permission_mode in ag_contracts::PermissionMode::ALL {
             // Arrange

@@ -48,10 +48,10 @@ async fn runtime_backend_migrates_retired_model_for_inactive_project_lookup() {
     assert_eq!(loaded_session.settings.project_id, inactive_project_id);
     assert_eq!(
         loaded_session.settings.agent,
-        ag_session::AgentSelection::new(AgentKind::Antigravity, AgentModel::Gemini35FlashLite)
+        ag_session::AgentSelection::new(AgentKind::Antigravity, AgentModel::Gemini38Flash)
     );
     assert_eq!(persisted_row.agent, "antigravity");
-    assert_eq!(persisted_row.model, "gemini-3.5-flash-lite");
+    assert_eq!(persisted_row.model, "gemini-3.8-flash");
 }
 
 #[tokio::test]

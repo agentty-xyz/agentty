@@ -138,9 +138,10 @@ pub(crate) const fn declared(model: AgentModel) -> Option<ModelProfile> {
         | AgentModel::ChatGptGpt56Terra
         | AgentModel::ChatGptGpt56Luna
         | AgentModel::Gemini4Argon
-        | AgentModel::Gemini31Pro
+        | AgentModel::Gemini4Hydrogen
+        | AgentModel::GeminiProOrchestrator
         | AgentModel::Gemini38Flash
-        | AgentModel::Gemini35FlashLite
+        | AgentModel::GptOss120b
         | AgentModel::ClaudeFable52
         | AgentModel::ClaudeOpus55
         | AgentModel::ClaudeSonnet55

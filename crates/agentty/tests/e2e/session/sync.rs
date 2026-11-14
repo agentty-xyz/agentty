@@ -94,7 +94,7 @@ async fn seed_rebase_pre_commit_hook_session(
     env: &BuilderEnv,
     allow_repair: bool,
 ) -> Result<(), Box<dyn std::error::Error>> {
-    seed_merge_conflict_session_with_model(env, "gemini-3.1-pro-preview").await?;
+    seed_merge_conflict_session_with_model(env, "gemini-4-argon").await?;
 
     let antigravity_path = env.stub_bin.join("agy");
     let script = r#"#!/bin/sh

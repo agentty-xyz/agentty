@@ -12,11 +12,14 @@ fn provider_catalog_preserves_wire_ids_order_and_defaults() {
             AgentKind::Antigravity,
             vec![
                 "gemini-4-argon",
-                "gemini-3.1-pro-preview",
+                "gemini-4-hydrogen",
+                "gemini-pro-orchestrator-g1-pro",
                 "gemini-3.8-flash",
-                "gemini-3.5-flash-lite",
+                "claude-opus-5-5",
+                "claude-sonnet-5-5",
+                "gpt-oss-120b",
             ],
-            "gemini-3.1-pro-preview",
+            "gemini-4-argon",
         ),
         (
             AgentKind::Claude,
@@ -134,5 +137,15 @@ fn every_catalog_model_has_unique_roundtrippable_metadata() {
     assert_eq!(
         AgentModel::parse_persisted("claude-haiku-4-5-20251001"),
         Ok(AgentModel::ClaudeHaiku55)
+    );
+    assert!("gemini-3.1-pro-preview".parse::<AgentModel>().is_err());
+    assert_eq!(
+        AgentModel::parse_persisted("gemini-3.1-pro-preview"),
+        Ok(AgentModel::Gemini4Argon)
+    );
+    assert!("gemini-3.5-flash-lite".parse::<AgentModel>().is_err());
+    assert_eq!(
+        AgentModel::parse_persisted("gemini-3.5-flash-lite"),
+        Ok(AgentModel::Gemini38Flash)
     );
 }

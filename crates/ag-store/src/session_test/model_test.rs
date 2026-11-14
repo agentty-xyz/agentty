@@ -12,7 +12,7 @@ fn model_inference_preserves_current_retired_and_unknown_family_routing() {
         ("gpt-5.6-sol", "codex"),
         ("gpt-5.4", "codex"),
         ("gpt-unlisted", "codex"),
-        ("gemini-3.1-pro-preview", "antigravity"),
+        ("gemini-4-argon", "antigravity"),
         ("gemini-3-pro-preview", "antigravity"),
         ("gemini-unlisted", "antigravity"),
         ("muse-spark-1.3", "harness"),

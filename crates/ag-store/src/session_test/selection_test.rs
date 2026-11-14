@@ -78,7 +78,7 @@ async fn test_session_agent_model_updates_respect_active_status() {
         .expect("model update should persist");
     for session_id in ["session-active", "session-done"] {
         sessions
-            .update_active_session_agent_model(session_id, "antigravity", "gemini-3.1-pro-preview")
+            .update_active_session_agent_model(session_id, "antigravity", "gemini-4-argon")
             .await
             .expect("active model update should run");
     }
@@ -103,12 +103,7 @@ async fn test_session_agent_model_updates_respect_active_status() {
                 row.status.as_str()
             ))
             .collect::<Vec<_>>(),
-        [(
-            "session-active",
-            "antigravity",
-            "gemini-3.1-pro-preview",
-            "Draft"
-        )]
+        [("session-active", "antigravity", "gemini-4-argon", "Draft")]
     );
     assert_eq!(
         (done_session.agent.as_str(), done_session.model.as_str()),

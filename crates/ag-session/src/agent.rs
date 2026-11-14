@@ -52,6 +52,19 @@ macro_rules! define_model_catalog {
             /// runtime and never listed here.
             pub const ALL: &[Self] = &[$($(Self::$model,)*)*];
 
+            /// Returns the provider whose catalog declares this model.
+            ///
+            /// Shared ids, such as the Claude models Antigravity also serves,
+            /// keep this provider as their owner, so provider resolution
+            /// prefers it whenever it is available.
+            #[must_use]
+            pub const fn owner_kind(self) -> AgentKind {
+                match self {
+                    $($(Self::$model => AgentKind::$provider,)*)*
+                    Self::OpenAiCompatible(_) => AgentKind::Harness,
+                }
+            }
+
             const fn descriptor(self) -> ModelDescriptor {
                 match self {
                     $($(Self::$model => ModelDescriptor {
@@ -89,10 +102,17 @@ define_model_catalog! {
             description: "Gemini 4 Argon model.",
             fast: false,
         },
-        /// Higher-quality Gemini preview model backed by `gemini-3.1-pro-preview`.
-        Gemini31Pro = 6 => {
-            id: "gemini-3.1-pro-preview",
-            description: "Higher-quality Gemini model for deeper reasoning.",
+        /// Gemini Hydrogen model backed by `gemini-4-hydrogen`.
+        Gemini4Hydrogen = 30 => {
+            id: "gemini-4-hydrogen",
+            description: "Gemini 4 Hydrogen model with extra-high reasoning effort.",
+            fast: false,
+        },
+        /// Antigravity orchestrator backed by `gemini-pro-orchestrator-g1-pro`,
+        /// which Antigravity labels Orchestrator (Argon).
+        GeminiProOrchestrator = 31 => {
+            id: "gemini-pro-orchestrator-g1-pro",
+            description: "Orchestrator (Argon) model that coordinates subagents.",
             fast: false,
         },
         /// Fast Gemini model backed by `gemini-3.8-flash`.
@@ -101,10 +121,10 @@ define_model_catalog! {
             description: "Fast Gemini model for agentic and multimodal tasks.",
             fast: false,
         },
-        /// Lightweight Gemini model backed by `gemini-3.5-flash-lite`.
-        Gemini35FlashLite = 5 => {
-            id: "gemini-3.5-flash-lite",
-            description: "Lightweight Gemini model for fast, cost-conscious workloads.",
+        /// Open-weight `OpenAI` model backed by `gpt-oss-120b`.
+        GptOss120b = 32 => {
+            id: "gpt-oss-120b",
+            description: "Open-weight GPT-OSS 120B model served through Antigravity.",
             fast: false,
         },
     }
@@ -266,6 +286,19 @@ define_model_catalog! {
         },
     }
 }
+
+/// Models the Antigravity CLI serves, in its `agy models` display order: its
+/// own catalog models with the Claude models it shares with
+/// [`AgentKind::Claude`] placed before GPT-OSS.
+const ANTIGRAVITY_MODELS: &[AgentModel] = &[
+    AgentModel::Gemini4Argon,
+    AgentModel::Gemini4Hydrogen,
+    AgentModel::GeminiProOrchestrator,
+    AgentModel::Gemini38Flash,
+    AgentModel::ClaudeOpus55,
+    AgentModel::ClaudeSonnet55,
+    AgentModel::GptOss120b,
+];
 
 /// Hosted models the native harness serves, in display order: its own
 /// catalog models, then the Codex models `OpenAI`'s Responses API also
@@ -499,16 +532,15 @@ impl AgentModel {
     #[must_use]
     pub fn retired_replacement(value: &str) -> Option<Self> {
         const RETIRED_MODEL_REPLACEMENTS: &[(&str, AgentModel)] = &[
-            ("gemini-3-pro-preview", AgentModel::Gemini31Pro),
-            ("gemini-3.1-pro", AgentModel::Gemini31Pro),
+            ("gemini-3-pro-preview", AgentModel::Gemini4Argon),
+            ("gemini-3.1-pro", AgentModel::Gemini4Argon),
+            ("gemini-3.1-pro-preview", AgentModel::Gemini4Argon),
             ("gemini-3-flash-preview", AgentModel::Gemini38Flash),
             ("gemini-3.7-flash", AgentModel::Gemini38Flash),
             ("gemini-3.6-flash", AgentModel::Gemini38Flash),
-            ("gemini-3.5-flash", AgentModel::Gemini35FlashLite),
-            (
-                "gemini-3.1-flash-lite-preview",
-                AgentModel::Gemini35FlashLite,
-            ),
+            ("gemini-3.5-flash", AgentModel::Gemini38Flash),
+            ("gemini-3.5-flash-lite", AgentModel::Gemini38Flash),
+            ("gemini-3.1-flash-lite-preview", AgentModel::Gemini38Flash),
             ("claude-fable-5", AgentModel::ClaudeFable52),
             ("claude-fable-5-1", AgentModel::ClaudeFable52),
             ("claude-opus-5", AgentModel::ClaudeOpus55),
@@ -579,7 +611,14 @@ fn parse_model_for_persisted_agent(agent_kind: AgentKind, model_value: &str) -> 
 
 /// Returns the provider used for legacy rows that predate explicit session
 /// agent persistence.
+///
+/// Current ids belong to their owning provider; retired and unknown ids fall
+/// back to the provider their id prefix names.
 fn legacy_agent_kind_for_model_value(model_value: &str, model: AgentModel) -> AgentKind {
+    if model.as_str() == model_value {
+        return model.owner_kind();
+    }
+
     if model_value.starts_with("claude-") {
         return AgentKind::Claude;
     }
@@ -592,12 +631,7 @@ fn legacy_agent_kind_for_model_value(model_value: &str, model: AgentModel) -> Ag
         return AgentKind::Antigravity;
     }
 
-    AgentKind::ALL
-        .iter()
-        .copied()
-        .chain([AgentKind::Harness])
-        .find(|agent_kind| agent_kind.supports_model(model))
-        .unwrap_or(AgentKind::Antigravity)
+    model.owner_kind()
 }
 
 /// Returns all selectable models owned by the provided agent kinds in stable
@@ -654,15 +688,21 @@ pub fn resolve_model_for_available_agent_kinds(
 /// list.
 ///
 /// Shared model ids, such as the Codex models the harness also serves, can be
-/// run by several providers. This helper uses the order of `agent_kinds` as the
-/// tie-breaker and returns `fallback_agent_kind` when no available provider
-/// supports `model`.
+/// run by several providers. This helper prefers the model's
+/// [`AgentModel::owner_kind`] when it is available, then uses the order of
+/// `agent_kinds` as the tie-breaker, and returns `fallback_agent_kind` when no
+/// available provider supports `model`.
 #[must_use]
 pub fn resolve_agent_kind_for_model(
     model: AgentModel,
     agent_kinds: &[AgentKind],
     fallback_agent_kind: AgentKind,
 ) -> AgentKind {
+    let owner_kind = model.owner_kind();
+    if agent_kinds.contains(&owner_kind) {
+        return owner_kind;
+    }
+
     agent_kinds
         .iter()
         .copied()
@@ -756,19 +796,21 @@ impl AgentKind {
 
     /// Returns this provider's models in their catalog display order.
     ///
-    /// The harness serves the Codex models available through `OpenAI`'s
-    /// Responses API beside its own.
+    /// Antigravity also serves Claude Opus and Sonnet, and the harness serves
+    /// the Codex models available through `OpenAI`'s Responses API, beside
+    /// their own.
     pub fn models(self) -> &'static [AgentModel] {
         match self {
+            Self::Antigravity => ANTIGRAVITY_MODELS,
             Self::Harness => HARNESS_MODELS,
-            Self::Antigravity | Self::Claude | Self::Codex => self.declared_models(),
+            Self::Claude | Self::Codex => self.declared_models(),
         }
     }
 
     /// Returns the default model for this agent kind.
     pub fn default_model(self) -> AgentModel {
         match self {
-            Self::Antigravity => AgentModel::Gemini31Pro,
+            Self::Antigravity => AgentModel::Gemini4Argon,
             Self::Claude => AgentModel::ClaudeFable52,
             Self::Codex => AgentModel::Gpt61Sol,
             Self::Harness => AgentModel::MuseSpark13,
