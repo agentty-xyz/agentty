@@ -599,6 +599,21 @@ fn waits_time_out_when_output_never_satisfies_them() {
 }
 
 #[test]
+fn wait_for_stable_frame_returns_after_output_stream_closes() {
+    // Arrange — the fake output yields one frame and then disconnects, so
+    // the wait must sleep through the window instead of spinning.
+    let mut session = fake_session(FakeChild::running(), Box::new(io::sink()), &[b"ready"]);
+
+    // Act
+    let frame = session
+        .wait_for_stable_frame(Duration::from_millis(50), Duration::from_secs(5))
+        .expect("a closed stream keeps its last frame stable");
+
+    // Assert
+    assert!(frame.all_text().contains("ready"));
+}
+
+#[test]
 fn wait_for_exit_reports_status_timeout_and_wait_errors() {
     // Arrange
     let cases = [

@@ -63,7 +63,7 @@ async fn selection_visibility_across_tabs_and_dialogs() -> E2eResult {
 fn selection_scenario(scenario: Scenario, theme_navigation: &str) -> Scenario {
     // Act
     let scenario = scenario
-        .compose(&common::wait_for_agentty_startup())
+        .compose(&common::wait_for_settled_agentty_startup())
         .capture_labeled("projects", "Selected project")
         .press_key("j")
         .wait_for_stable_frame(200, 3000)

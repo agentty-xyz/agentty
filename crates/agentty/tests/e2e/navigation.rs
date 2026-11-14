@@ -112,7 +112,7 @@ async fn startup_shows_sessions_tab_for_active_project() -> E2eResult {
         .run(
             |scenario| {
                 scenario
-                    .compose(&common::wait_for_agentty_startup())
+                    .compose(&common::wait_for_settled_agentty_startup())
                     .viewing_pause_ms(3000)
                     .capture_labeled("startup", "Initial render with Sessions tab")
             },
@@ -148,7 +148,7 @@ async fn tab_key_switches_tabs() -> E2eResult {
         .run(
             |scenario| {
                 scenario
-                    .compose(&common::wait_for_agentty_startup())
+                    .compose(&common::wait_for_settled_agentty_startup())
                     .viewing_pause_ms(2000)
                     .capture_labeled("before", "Projects tab selected")
                     .compose(&common::switch_to_tab("Sessions"))
@@ -263,7 +263,7 @@ async fn quit_shows_confirmation_dialog() -> E2eResult {
         .run(
             |scenario| {
                 scenario
-                    .compose(&common::wait_for_agentty_startup())
+                    .compose(&common::wait_for_settled_agentty_startup())
                     .viewing_pause_ms(2000)
                     .capture_labeled("before", "App running before quit")
                     .compose(&common::open_quit_dialog())
@@ -298,7 +298,7 @@ async fn startup_shows_footer_hints() -> E2eResult {
         .run(
             |scenario| {
                 scenario
-                    .compose(&common::wait_for_agentty_startup())
+                    .compose(&common::wait_for_settled_agentty_startup())
                     .viewing_pause_ms(3000)
                     .capture_labeled("startup", "Footer with keybinding hints")
             },
@@ -395,7 +395,7 @@ async fn help_overlay_toggle() -> E2eResult {
         .run(
             |scenario| {
                 scenario
-                    .compose(&common::wait_for_agentty_startup())
+                    .compose(&common::wait_for_settled_agentty_startup())
                     .viewing_pause_ms(2000)
                     .capture_labeled("before", "Normal view before help")
                     .compose(&common::open_help_overlay())

@@ -198,7 +198,6 @@ async fn test_session_review_comments() -> E2eResult {
                     // comment, avoiding a timing-dependent loading frame.
                     .wait_for_text("println!(\"review\")", 5000)
                     .wait_for_text("Unresolved", 5000)
-                    .wait_for_stable_frame(300, 5000)
                     .press_key("c")
                     .wait_for_text("Please explain why this review output is needed.", 5000)
                     .wait_for_text("Use stdout context.", 5000)
@@ -299,8 +298,10 @@ async fn test_review_comments_escape_focuses_files() -> E2eResult {
                     .wait_for_text("q: back", 5000)
                     .wait_for_text("f/Esc: files", 5000)
                     .press_key("Esc")
-                    .wait_for_text("c: comments", 5000)
-                    .wait_for_stable_frame(300, 5000)
+                    .step(common::wait_for_frame_text(
+                        &["Files", "c: comments"],
+                        &["Space: select"],
+                    ))
             },
             |frame, _report| {
                 Box::pin(async move {
@@ -345,8 +346,10 @@ async fn test_review_comment_addressed_guard() -> E2eResult {
                     .press_key("j")
                     .wait_for_text("Space: select", 5000)
                     .press_key("Space")
-                    .wait_for_text("[x]", 5000)
-                    .wait_for_stable_frame(300, 5000)
+                    .step(common::wait_for_frame_text(
+                        &["Still needs work.", "[x]", "Selected 1", "Enter: submit"],
+                        &[],
+                    ))
             },
             |frame, report| {
                 Box::pin(async move {

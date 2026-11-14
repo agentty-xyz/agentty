@@ -513,7 +513,7 @@ async fn quit_exports_active_and_queued_turn_outcomes() -> Result<(), Box<dyn st
                     .press_key("Enter")
                     .wait_for_text("Ctrl+c: stop", 10000)
                     .press_key("Enter")
-                    .wait_for_stable_frame(300, 5000)
+                    .step(common::wait_for_prompt_composer())
                     .write_text("Queued exit prompt")
                     .press_key("Enter")
                     .wait_for_text("≡ queued ›", 5000)

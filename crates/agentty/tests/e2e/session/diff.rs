@@ -549,8 +549,14 @@ async fn test_deep_diff_tree_connectors() -> E2eResult {
                     .compose(&common::switch_to_tab("Sessions"))
                     .compose(&common::open_selected_session_view())
                     .press_key("d")
-                    .wait_for_text("first.rs", 5000)
-                    .wait_for_stable_frame(300, 5000)
+                    .step(common::wait_for_frame_text(
+                        &[
+                            "A │ │ │ │ ├ first.rs",
+                            "A │ │ │ │ └ last.rs",
+                            "A │ │ │ └ peer.rs",
+                        ],
+                        &[],
+                    ))
             },
             |frame, _report| {
                 Box::pin(async move {
@@ -736,7 +742,7 @@ async fn test_diff_changed_line_navigation() -> E2eResult {
                         .press_key("d")
                         .wait_for_text("main.rs", 5000)
                         .press_key("j")
-                        .wait_for_stable_frame(200, 3000);
+                        .wait_for_text("changed line 00", 5000);
                     let scenario = (0..70).fold(scenario, |scenario, _| scenario.press_key("Down"));
                     scenario
                         .wait_for_text("changed line 70", 5000)
@@ -915,14 +921,13 @@ fn diff_line_comments_scenario(scenario: Scenario) -> Scenario {
         .wait_for_text("j/k: select file", 5000)
         .wait_for_text("main.rs", 5000)
         .press_key("j")
-        .wait_for_stable_frame(200, 3000)
         .wait_for_text("Enter/l: open", 5000)
         .wait_for_text("println!(\"review\")", 5000)
         .write_text("C")
         .wait_for_text("File comment", 5000);
 
     let scenario = enter_multiline_diff_file_comment(scenario)
-        .wait_for_stable_frame(300, 3000)
+        .wait_for_text("Add regression coverage.", 3000)
         .press_key("Esc")
         .wait_for_text("Add regression coverage.", 3000)
         .wait_for_text("Enter: comment", 5000)
@@ -1137,7 +1142,7 @@ async fn test_diff_row_selection_comments() -> E2eResult {
                     .press_key("d")
                     .wait_for_text("main.rs", 5000)
                     .press_key("j")
-                    .wait_for_stable_frame(200, 3000)
+                    .wait_for_text("Enter/l: open", 5000)
                     .press_key(ENTER_KEY)
                     .wait_for_text("Enter: comment", 5000)
                     .write_text("V")

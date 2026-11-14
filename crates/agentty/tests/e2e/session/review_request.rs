@@ -656,7 +656,7 @@ async fn review_request_publish_runs_in_background() -> E2eResult {
                     .compose(&common::switch_to_tab("Sessions"))
                     .compose(&common::open_selected_session_view())
                     .press_key("p")
-                    .wait_for_stable_frame(300, 5000)
+                    .wait_for_text("Publish Review Request", 5000)
                     .press_key("Enter")
                     .wait_for_text("Publishing review request...", 3000)
                     .capture_labeled(

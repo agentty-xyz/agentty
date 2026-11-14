@@ -634,15 +634,13 @@ async fn session_view_theme_switch_repaints_cached_messages() -> E2eResult {
                     .wait_for_text("User markdown prompt", 5000)
                     .compose(&common::switch_to_tab("Settings"))
                     .press_key("Enter")
-                    .wait_for_stable_frame(200, 3000)
+                    .wait_for_text("Select setting value", 3000)
                     .press_key("j")
-                    .wait_for_stable_frame(200, 3000)
                     .press_key("Enter")
                     .wait_for_text("Agentty Green", 5000)
                     .press_key("Enter")
-                    .wait_for_stable_frame(200, 3000)
+                    .wait_for_text("Select setting value", 3000)
                     .press_key("j")
-                    .wait_for_stable_frame(200, 3000)
                     .press_key("Enter")
                     .wait_for_text("Dark Horizon", 5000)
                     .compose(&common::switch_to_tab("Projects"))
@@ -923,7 +921,7 @@ async fn session_output_scrollbar_is_visible() -> E2eResult {
                     .compose(&common::wait_for_agentty_startup())
                     .compose(&common::switch_to_tab("Sessions"))
                     .press_key("Enter")
-                    .wait_for_stable_frame(300, 5000)
+                    .wait_for_text("q: back", 5000)
                     .press_key("g")
                     .wait_for_stable_frame(300, 5000)
                     .viewing_pause_ms(1500)
@@ -1094,8 +1092,7 @@ async fn session_view_compact_mermaid_output() -> E2eResult {
                 scenario
                     .compose(&common::wait_for_agentty_startup())
                     .compose(&common::switch_to_tab("Sessions"))
-                    .press_key("Enter")
-                    .wait_for_stable_frame(300, 5000)
+                    .compose(&common::open_selected_session_view())
                     .write_text("g")
                     .wait_for_text("Qwen complete", 5000)
                     .capture_labeled(
@@ -1115,7 +1112,7 @@ async fn session_view_compact_mermaid_output() -> E2eResult {
                         "Bottom of compacted over-wide Mermaid flow",
                     )
                     .write_text("q")
-                    .wait_for_stable_frame(300, 5000)
+                    .step(common::wait_for_session_list_footer())
             },
             |frame, report| {
                 Box::pin(async move {
@@ -1200,8 +1197,16 @@ async fn test_session_activity_footers() -> E2eResult {
                     .compose(&common::wait_for_agentty_startup())
                     .compose(&common::switch_to_tab("Sessions"))
                     .press_key("Enter")
-                    .wait_for_text("Tools: Bash", 5000)
-                    .wait_for_stable_frame(300, 5000)
+                    .step(common::wait_for_frame_text(
+                        &[
+                            "First answer",
+                            "Tools: Read ×2",
+                            "Skills: review ×1",
+                            "[Error] Agent assistance failed.",
+                            "Tools: Bash ×1 (1 failed)",
+                        ],
+                        &[],
+                    ))
             },
             |frame, _report| {
                 Box::pin(async move {
