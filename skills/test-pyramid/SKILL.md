@@ -59,9 +59,12 @@ with the PTY suite. Their hooks are defined in `.pre-commit-config.yaml`.
 
 Test code compiles with its crate. Most of `crates/agentty/src/` (≈150k of ≈230k lines)
 is test code in one lib-test unit that dominates the CI coverage build, and any test
-edit there rebuilds it. Put logic and its tests in the smallest owning crate. Each file
-in a crate's `tests/` is a separate binary with its own link; extend an existing
-integration binary instead of adding a file.
+edit there rebuilds it. Put logic and its tests in the smallest owning crate. Each
+top-level `tests/*.rs` file or `tests/<name>/main.rs` is a separate binary, and a
+library edit rebuilds every binary linking that library; merging ten `ag-store` binaries
+into one more than halved the CPU of rebuilding its tests. Add a module to the crate's
+existing binary, such as `crates/ag-store/tests/contract/main.rs`, instead of a new
+top-level file.
 
 ## Before Adding a Test
 
