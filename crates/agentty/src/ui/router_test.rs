@@ -1,3 +1,4 @@
+use std::cell::Cell;
 use std::collections::HashMap;
 use std::path::PathBuf;
 
@@ -29,7 +30,7 @@ use crate::presentation::setting::{
     SettingsScreenSnapshot, SettingsSelectorDropdown, SettingsSelectorDropdownOption,
 };
 use crate::test_support::SessionFixtureBuilder;
-use crate::ui::{component, markdown, page};
+use crate::ui::{component, markdown, page, style};
 
 /// Builds one deterministic session fixture for router render tests.
 fn session_fixture(session_id: &str) -> Session {
@@ -213,7 +214,9 @@ fn render_list_backed_mode(mode: &AppMode) -> (bool, String) {
                 &mut shared,
                 FrameResources {
                     active_prompt_outputs: &active_prompt_outputs,
+                    color_support: style::ColorSupport::Enabled,
                     diff_layout_cache: &diff_layout_cache,
+                    greeting_animated: &Cell::new(false),
                     is_tmux_session: true,
                     markdown_render_cache: &markdown_render_cache,
                     output_layout_cache: &output_layout_cache,
@@ -233,7 +236,9 @@ fn render_list_backed_mode(mode: &AppMode) -> (bool, String) {
                 &shared,
                 FrameResources {
                     active_prompt_outputs: &active_prompt_outputs,
+                    color_support: style::ColorSupport::Enabled,
                     diff_layout_cache: &diff_layout_cache,
+                    greeting_animated: &Cell::new(false),
                     is_tmux_session: true,
                     markdown_render_cache: &markdown_render_cache,
                     output_layout_cache: &output_layout_cache,
@@ -619,7 +624,9 @@ fn render_help_mode_restores_markdown_diff_preview_background() {
         .draw(|frame| {
             let resources = FrameResources {
                 active_prompt_outputs: &HashMap::new(),
+                color_support: style::ColorSupport::Enabled,
                 diff_layout_cache: &diff_layout_cache,
+                greeting_animated: &Cell::new(false),
                 is_tmux_session: true,
                 markdown_render_cache: &markdown_render_cache,
                 output_layout_cache: &output_layout_cache,
@@ -869,7 +876,9 @@ fn render_session_surface_renders_view_session_content() {
                 &sessions,
                 FrameResources {
                     active_prompt_outputs: &HashMap::new(),
+                    color_support: style::ColorSupport::Enabled,
                     diff_layout_cache: &diff_layout_cache,
+                    greeting_animated: &Cell::new(false),
                     is_tmux_session: false,
                     markdown_render_cache: &cache,
                     output_layout_cache: &output_layout_cache,
@@ -927,7 +936,9 @@ fn render_session_surface_keeps_background_when_session_is_missing() {
                 &sessions,
                 FrameResources {
                     active_prompt_outputs: &HashMap::new(),
+                    color_support: style::ColorSupport::Enabled,
                     diff_layout_cache: &diff_layout_cache,
+                    greeting_animated: &Cell::new(false),
                     is_tmux_session: true,
                     markdown_render_cache: &cache,
                     output_layout_cache: &output_layout_cache,
@@ -986,7 +997,9 @@ fn render_diff_surface_renders_page_for_matching_session() {
                 &sessions,
                 FrameResources {
                     active_prompt_outputs: &HashMap::new(),
+                    color_support: style::ColorSupport::Enabled,
                     diff_layout_cache: &diff_layout_cache,
+                    greeting_animated: &Cell::new(false),
                     is_tmux_session: true,
                     markdown_render_cache: &cache,
                     output_layout_cache: &output_layout_cache,
@@ -1041,7 +1054,9 @@ fn render_diff_surface_preserves_frame_for_missing_session() {
                 &[],
                 FrameResources {
                     active_prompt_outputs: &HashMap::new(),
+                    color_support: style::ColorSupport::Enabled,
                     diff_layout_cache: &diff_layout_cache,
+                    greeting_animated: &Cell::new(false),
                     is_tmux_session: true,
                     markdown_render_cache: &markdown_render_cache,
                     output_layout_cache: &output_layout_cache,
@@ -1101,7 +1116,9 @@ fn render_diff_surface_renders_linked_comments_for_matching_session() {
                 &sessions,
                 FrameResources {
                     active_prompt_outputs: &HashMap::new(),
+                    color_support: style::ColorSupport::Enabled,
                     diff_layout_cache: &diff_layout_cache,
+                    greeting_animated: &Cell::new(false),
                     is_tmux_session: true,
                     markdown_render_cache: &cache,
                     output_layout_cache: &output_layout_cache,

@@ -1,7 +1,10 @@
 use std::path::PathBuf;
 use std::sync::Arc;
 
-use super::support::{session_creation_resources, test_turn_applied_state, test_view_app_mode};
+use super::support::{
+    session_creation_resources, test_prompt_mode_snapshot, test_turn_applied_state,
+    test_view_app_mode,
+};
 use crate::app::core::event::AppEvent;
 use crate::app::{AppError, Tab};
 use crate::domain::session::{QueuedMessage, SessionFollowUpTask, SessionStats, Status};
@@ -58,6 +61,44 @@ async fn queued_session_work_has_tick_driven_ui() {
     // Assert
     assert!(queued_action_has_tick_driven_ui);
     assert!(queued_message_has_tick_driven_ui);
+}
+
+#[tokio::test]
+async fn nerpa_greeting_animates_only_in_session_view_until_first_message() {
+    // Arrange
+    let mut app = crate::test_support::new_test_app_without_retained_base_dir().await;
+    app.sessions.push_session(
+        crate::test_support::SessionFixtureBuilder::new()
+            .id("session-id")
+            .status(Status::Draft)
+            .build(),
+    );
+
+    // Act
+    app.mode = AppMode::List;
+    let list_has_tick_driven_ui = app.has_visible_tick_driven_ui();
+    let list_has_frame_animation = app.has_visible_frame_animation();
+    app.mode = test_prompt_mode_snapshot("session-id".into()).into_prompt_mode();
+    let prompt_has_frame_animation = app.has_visible_frame_animation();
+    app.mode = test_view_app_mode("session-id");
+    let greeting_has_tick_driven_ui = app.has_visible_tick_driven_ui();
+    let view_has_frame_animation = app.has_visible_frame_animation();
+    app.sessions
+        .sessions_mut()
+        .first_mut()
+        .expect("draft session should remain available")
+        .prompt = "Ship it".to_string();
+    let started_has_tick_driven_ui = app.has_visible_tick_driven_ui();
+    let started_has_frame_animation = app.has_visible_frame_animation();
+
+    // Assert
+    assert!(!list_has_tick_driven_ui);
+    assert!(!list_has_frame_animation);
+    assert!(prompt_has_frame_animation);
+    assert!(greeting_has_tick_driven_ui);
+    assert!(view_has_frame_animation);
+    assert!(!started_has_tick_driven_ui);
+    assert!(!started_has_frame_animation);
 }
 
 #[tokio::test]

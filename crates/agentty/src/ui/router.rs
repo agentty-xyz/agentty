@@ -1,3 +1,4 @@
+use std::cell::Cell;
 use std::collections::HashMap;
 
 use ratatui::Frame;
@@ -29,6 +30,7 @@ use crate::ui::component::info_overlay::InfoOverlay;
 use crate::ui::component::project_catalog_overlay::ProjectCatalogOverlay;
 use crate::ui::{
     Component, Page, RenderContext, SessionReviewSnapshot, component, markdown, overlay, page,
+    style,
 };
 
 /// Shared mutable routing data reused across app modes in `route_frame`.
@@ -156,8 +158,10 @@ enum SessionSurfaceMode<'a> {
 #[derive(Clone, Copy)]
 struct SessionChatRenderContext<'a> {
     active_prompt_outputs: &'a HashMap<SessionId, String>,
+    color_support: style::ColorSupport,
     frame_time: FrameTime,
     graph_chat: Option<&'a GraphChatSnapshot>,
+    greeting_animated: &'a Cell<bool>,
     is_tmux_session: bool,
     markdown_render_cache: &'a markdown::MarkdownRenderCache,
     mode: &'a AppMode,
@@ -179,9 +183,14 @@ struct SessionChatRenderContext<'a> {
 #[derive(Clone, Copy)]
 struct FrameResources<'a> {
     active_prompt_outputs: &'a HashMap<SessionId, String>,
+    /// Whether the terminal renders colors.
+    color_support: style::ColorSupport,
     diff_layout_cache: &'a page::diff::DiffLayoutCache,
     frame_time: FrameTime,
     graph_chat: Option<&'a GraphChatSnapshot>,
+    /// Records whether the drawn session chat painted an animating nerpa
+    /// greeting.
+    greeting_animated: &'a Cell<bool>,
     is_tmux_session: bool,
     markdown_render_cache: &'a markdown::MarkdownRenderCache,
     output_layout_cache: &'a component::session_output::SessionOutputLayoutCache,
@@ -207,7 +216,9 @@ impl<'a> FrameResources<'a> {
     {
         SessionChatRenderContext {
             graph_chat: self.graph_chat,
+            greeting_animated: self.greeting_animated,
             active_prompt_outputs: self.active_prompt_outputs,
+            color_support: self.color_support,
             is_tmux_session: self.is_tmux_session,
             markdown_render_cache: self.markdown_render_cache,
             mode,
@@ -246,6 +257,7 @@ pub(crate) fn route_frame(f: &mut Frame, area: Rect, context: RenderContext<'_>)
         active_prompt_outputs,
         available_agent_clis,
         available_agent_kinds,
+        color_support,
         current_tab,
         default_reasoning_level,
         harness_availability,
@@ -293,7 +305,9 @@ pub(crate) fn route_frame(f: &mut Frame, area: Rect, context: RenderContext<'_>)
     let resources = FrameResources {
         graph_chat,
         active_prompt_outputs,
+        color_support,
         diff_layout_cache: render_cache_store.diff_layout_cache(),
+        greeting_animated: render_cache_store.greeting_animated(),
         is_tmux_session,
         markdown_render_cache: render_cache_store.markdown_render_cache(),
         output_layout_cache: render_cache_store.session_output_layout_cache(),
@@ -800,7 +814,9 @@ fn render_diff_surface(
 fn render_session_chat(f: &mut Frame, area: Rect, context: SessionChatRenderContext<'_>) {
     let SessionChatRenderContext {
         graph_chat,
+        greeting_animated,
         active_prompt_outputs,
+        color_support,
         is_tmux_session,
         markdown_render_cache,
         mode,
@@ -838,6 +854,8 @@ fn render_session_chat(f: &mut Frame, area: Rect, context: SessionChatRenderCont
     let page_input = page::session_chat::SessionChatPageInput {
         active_prompt_output,
         active_progress,
+        color_support,
+        greeting_animated,
         has_merge_conflict,
         markdown_render_cache,
         mode,

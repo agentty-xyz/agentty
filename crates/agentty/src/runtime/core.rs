@@ -16,11 +16,21 @@ use tokio::sync::mpsc;
 use crate::app::App;
 use crate::infra::clock::{self, Clock};
 use crate::runtime::{FRAME_INTERVAL, PresentationState, event, terminal};
+use crate::ui::component::nerpa_greeting::NerpaGreeting;
 use crate::ui::style;
 
 /// Fallback redraw cadence for visible spinner and timer UI when no new
 /// events arrive.
 const FORCED_REDRAW_INTERVAL: Duration = Duration::from_millis(200);
+/// Fallback redraw cadence for visible smooth animations, such as the nerpa
+/// greeting.
+///
+/// Half of [`FRAME_INTERVAL`], so every frame tick qualifies despite timer
+/// jitter while bursts of other loop wake-ups stay bounded.
+const ANIMATION_REDRAW_INTERVAL: Duration = match FRAME_INTERVAL.checked_div(2) {
+    Some(interval) => interval,
+    None => FRAME_INTERVAL,
+};
 const SECONDS_PER_MINUTE: i64 = 60;
 /// Concrete terminal type used by the production runtime entry point.
 pub(crate) type TuiTerminal = Terminal<CrosstermBackend<io::Stdout>>;
@@ -175,15 +185,17 @@ where
 #[derive(Clone, Copy)]
 struct DrawStamp {
     instant: Instant,
+    unix_millis: u128,
     wall_clock_minute: i64,
 }
 
 impl DrawStamp {
-    /// Captures the injected clock's current monotonic instant and wall-clock
-    /// minute.
+    /// Captures the injected clock's current monotonic instant, wall-clock
+    /// milliseconds, and wall-clock minute.
     fn now(clock: &dyn Clock) -> Self {
         Self {
             instant: clock.now_instant(),
+            unix_millis: clock::unix_timestamp_millis(clock.now_system_time()),
             wall_clock_minute: wall_clock_minute(clock::unix_timestamp_seconds(clock)),
         }
     }
@@ -257,7 +269,8 @@ where
 /// Renders one frame of the TUI application into the terminal buffer.
 ///
 /// Idle redraws are skipped unless the app explicitly requested a fresh frame,
-/// one visible spinner/timer has reached the forced redraw cadence, or the
+/// one visible spinner, timer, or animation has reached its forced redraw
+/// cadence, or the
 /// wall-clock minute changed so minute-granular labels such as session ages
 /// stay current. Elapsed-time comparisons and the `last_draw` stamp read
 /// through the injected `Clock` so test runs can virtualize the
@@ -272,8 +285,18 @@ fn render_frame<B: Backend>(
 where
     B::Error: std::error::Error + Send + Sync + 'static,
 {
-    let forced_redraw_due =
-        app.has_visible_tick_driven_ui() && forced_redraw_elapsed(clock, last_draw.instant);
+    let current_unix_millis = clock::unix_timestamp_millis(clock.now_system_time());
+    let forced_redraw_due = app.has_visible_tick_driven_ui()
+        && forced_redraw_elapsed(
+            clock,
+            last_draw.instant,
+            forced_redraw_interval(
+                app,
+                presentation.greeting_animated(),
+                current_unix_millis,
+                last_draw.unix_millis,
+            ),
+        );
     let current_wall_clock_minute = wall_clock_minute(clock::unix_timestamp_seconds(clock));
     let wall_clock_minute_changed = current_wall_clock_minute != last_draw.wall_clock_minute;
     if !app.needs_redraw() && !forced_redraw_due && !wall_clock_minute_changed {
@@ -284,20 +307,19 @@ where
     if presentation.terminal_clear_needed(&snapshot) {
         clear_terminal_for_surface_change(terminal)?;
     }
+    let color_support =
+        style::ColorSupport::from_colors_disabled(Colored::ansi_color_disabled_memoized());
     terminal
         .draw(|frame| {
-            presentation.render(&snapshot, frame);
-            style::prepare_terminal_frame(
-                frame.buffer_mut(),
-                snapshot.theme,
-                Colored::ansi_color_disabled_memoized(),
-            );
+            presentation.render(&snapshot, frame, color_support);
+            style::prepare_terminal_frame(frame.buffer_mut(), snapshot.theme, color_support);
         })
         .map_err(backend_err)?;
     presentation.record_rendered_surface(&snapshot);
     app.clear_redraw();
     *last_draw = DrawStamp {
         instant: clock.now_instant(),
+        unix_millis: current_unix_millis,
         wall_clock_minute: current_wall_clock_minute,
     };
 
@@ -324,10 +346,33 @@ where
     Ok(())
 }
 
+/// Returns the forced redraw cadence for the visible UI: every frame tick
+/// while a smooth animation is moving, otherwise the spinner/timer fallback.
+///
+/// The nerpa greeting only changes while its sheen sweeps, and only when the
+/// last draw painted it with colors, as `greeting_animated` reports. Hidden
+/// or colorless art keeps the fallback cadence. The fast cadence also covers
+/// the first draw after a sweep ends, when `last_draw_unix_millis` still
+/// falls inside the sweep, so the final lit cells clear promptly.
+fn forced_redraw_interval(
+    app: &App,
+    greeting_animated: bool,
+    current_unix_millis: u128,
+    last_draw_unix_millis: u128,
+) -> Duration {
+    let greeting_moving = NerpaGreeting::is_sweeping(current_unix_millis)
+        || NerpaGreeting::is_sweeping(last_draw_unix_millis);
+    if greeting_animated && greeting_moving && app.has_visible_frame_animation() {
+        ANIMATION_REDRAW_INTERVAL
+    } else {
+        FORCED_REDRAW_INTERVAL
+    }
+}
+
 /// Returns whether the injected clock has advanced past `last_draw_at` by at
-/// least `FORCED_REDRAW_INTERVAL`.
-fn forced_redraw_elapsed(clock: &dyn Clock, last_draw_at: Instant) -> bool {
-    clock.now_instant().saturating_duration_since(last_draw_at) >= FORCED_REDRAW_INTERVAL
+/// least `interval`.
+fn forced_redraw_elapsed(clock: &dyn Clock, last_draw_at: Instant, interval: Duration) -> bool {
+    clock.now_instant().saturating_duration_since(last_draw_at) >= interval
 }
 
 /// Returns the whole wall-clock minute containing one Unix timestamp.

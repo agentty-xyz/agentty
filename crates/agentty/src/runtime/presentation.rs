@@ -4,6 +4,7 @@ use ratatui::Frame;
 use ratatui::widgets::TableState;
 
 use crate::app::AppViewSnapshot;
+use crate::ui::style::ColorSupport;
 use crate::ui::{self, RenderCacheStore};
 
 /// Runtime-owned state used to measure and render the terminal presentation.
@@ -41,17 +42,33 @@ impl PresentationState {
 
     /// Renders one immutable application snapshot through the single runtime
     /// presentation boundary.
-    pub(crate) fn render(&self, snapshot: &AppViewSnapshot<'_>, frame: &mut Frame) {
+    ///
+    /// `color_support` tells the UI whether the terminal renders colors, so
+    /// art that relies on a second tone can adapt its glyphs.
+    pub(crate) fn render(
+        &self,
+        snapshot: &AppViewSnapshot<'_>,
+        frame: &mut Frame,
+        color_support: ColorSupport,
+    ) {
         let mut project_table_state = self.project_table_state.borrow_mut();
         let mut session_table_state = self.session_table_state.borrow_mut();
+        self.render_cache_store.greeting_animated().set(false);
 
         ui::render_app(
             snapshot,
             frame,
+            color_support,
             &mut project_table_state,
             &self.render_cache_store,
             &mut session_table_state,
         );
+    }
+
+    /// Returns whether the last successful draw painted a nerpa greeting that
+    /// can animate, meaning it fit a blank transcript and colors are enabled.
+    pub(crate) fn greeting_animated(&self) -> bool {
+        self.render_cache_store.greeting_animated().get()
     }
 
     /// Returns the UI cache collection shared by input metrics and rendering.

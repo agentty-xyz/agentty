@@ -1,13 +1,20 @@
+use std::cell::Cell;
+
 use crate::ui::{component, markdown, page};
 
 /// UI-owned cache store shared by render and scroll-metric paths.
 ///
 /// The store keeps the concrete markdown, session-output, and diff cache
 /// lifetimes together inside the UI boundary so app orchestration only needs
-/// to retain one render-cache handle instead of knowing each cache type.
+/// to retain one render-cache handle instead of knowing each cache type. It
+/// also carries per-frame render feedback that the runtime reads after a
+/// draw.
 #[derive(Default)]
 pub struct RenderCacheStore {
     diff_layout: page::diff::DiffLayoutCache,
+    /// Whether the last draw painted a nerpa greeting that can animate.
+    /// Each draw resets it before painting.
+    greeting_animated: Cell<bool>,
     markdown_render: markdown::MarkdownRenderCache,
     session_output_layout: component::session_output::SessionOutputLayoutCache,
 }
@@ -16,6 +23,12 @@ impl RenderCacheStore {
     /// Returns the cache for parsed diff content and rendered diff layouts.
     pub(crate) fn diff_layout_cache(&self) -> &page::diff::DiffLayoutCache {
         &self.diff_layout
+    }
+
+    /// Returns the flag recording whether the current draw painted a nerpa
+    /// greeting that can animate.
+    pub(crate) fn greeting_animated(&self) -> &Cell<bool> {
+        &self.greeting_animated
     }
 
     /// Returns the cache for styled markdown lines.

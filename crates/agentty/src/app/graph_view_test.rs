@@ -10,6 +10,7 @@ use crate::presentation::app_mode::AppMode;
 use crate::presentation::execution_graph::tests::graph_view;
 use crate::runtime::mode::execution_graph;
 use crate::test_support::new_test_app;
+use crate::ui::style::ColorSupport;
 
 #[path = "graph_view_draft_test.rs"]
 mod draft;
@@ -296,6 +297,7 @@ async fn session_graph_shortcut_opens_and_renders_a_session_scoped_snapshot() {
             crate::ui::render_app(
                 &app.view_snapshot(),
                 frame,
+                ColorSupport::Enabled,
                 &mut project_table,
                 &cache,
                 &mut session_table,

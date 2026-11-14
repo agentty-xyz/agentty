@@ -1,3 +1,5 @@
+use std::cell::Cell;
+
 use ag_session::test_support as model_fixture;
 use ratatui::layout::Rect;
 use ratatui::widgets::Paragraph;
@@ -40,7 +42,9 @@ fn test_page_input<'a>(session: &'a Session, mode: &'a AppMode) -> SessionChatPa
     SessionChatPageInput {
         active_prompt_output: None,
         active_progress: None,
+        color_support: style::ColorSupport::Enabled,
         frame_time: FrameTime::new(0, 0, 0),
+        greeting_animated: test_greeting_animated(),
         has_merge_conflict: false,
         markdown_render_cache: test_markdown_render_cache(),
         mode,
@@ -201,6 +205,12 @@ fn test_markdown_render_cache() -> &'static markdown::MarkdownRenderCache {
 /// stable borrow across the page lifetime.
 fn test_output_layout_cache() -> &'static SessionOutputLayoutCache {
     Box::leak(Box::new(SessionOutputLayoutCache::default()))
+}
+
+/// Returns a leaked greeting-animation flag for test page builders that need
+/// a stable borrow across the page lifetime.
+fn test_greeting_animated() -> &'static Cell<bool> {
+    Box::leak(Box::new(Cell::new(false)))
 }
 
 fn buffer_text(buffer: &ratatui::buffer::Buffer) -> String {
@@ -1407,4 +1417,120 @@ fn rendered_text(session: &Session, mode: &AppMode) -> String {
         .expect("failed to draw session page");
 
     buffer_text(terminal.backend().buffer())
+}
+
+/// Renders prompt mode for one session in a terminal tall enough for the
+/// nerpa greeting and returns the painted text.
+fn rendered_tall_prompt_mode_text(session: &Session) -> String {
+    rendered_tall_prompt_mode_text_with_colors(session, style::ColorSupport::Enabled)
+}
+
+/// Renders the tall prompt-mode page for a terminal that does or does not
+/// render colors and returns the painted text.
+fn rendered_tall_prompt_mode_text_with_colors(
+    session: &Session,
+    color_support: style::ColorSupport,
+) -> String {
+    let mode = prompt_mode("");
+    let mut page = SessionChatPage::new(SessionChatPageInput {
+        color_support,
+        ..test_page_input(session, &mode)
+    });
+    let backend = ratatui::backend::TestBackend::new(80, 24);
+    let mut terminal = ratatui::Terminal::new(backend).expect("failed to create terminal");
+
+    terminal
+        .draw(|frame| {
+            let area = frame.area();
+            Page::render(&mut page, frame, area);
+        })
+        .expect("failed to draw prompt mode");
+
+    buffer_text(terminal.backend().buffer())
+}
+
+#[test]
+fn test_render_shows_nerpa_greeting_until_first_message() {
+    // Arrange
+    let fresh_session = session_fixture();
+    let mut started_session = session_fixture();
+    started_session.prompt = "Ship it".to_string();
+
+    // Act
+    let fresh_text = rendered_tall_prompt_mode_text(&fresh_session);
+    let started_text = rendered_tall_prompt_mode_text(&started_session);
+
+    // Assert
+    assert!(fresh_text.contains("▄████████████▄"));
+    assert!(!started_text.contains("▄████████████▄"));
+}
+
+#[test]
+fn test_render_hides_right_nerpa_whiskers_without_colors() {
+    // Arrange
+    let session = session_fixture();
+    let colored_muzzle_row = format!("▀▀▀{}▀▀▀{}▀██▄", "█".repeat(12), "█".repeat(9));
+    let colorless_muzzle_row = format!("▀▀▀{}▀██▄", "█".repeat(24));
+
+    // Act
+    let colored_text =
+        rendered_tall_prompt_mode_text_with_colors(&session, style::ColorSupport::Enabled);
+    let colorless_text =
+        rendered_tall_prompt_mode_text_with_colors(&session, style::ColorSupport::Disabled);
+
+    // Assert
+    assert!(colored_text.contains(&colored_muzzle_row));
+    assert!(!colored_text.contains(&colorless_muzzle_row));
+    assert!(colorless_text.contains(&colorless_muzzle_row));
+}
+
+#[test]
+fn test_render_reports_greeting_animation_only_for_visible_colored_art() {
+    // Arrange
+    let fresh_session = session_fixture();
+    let mut started_session = session_fixture();
+    started_session.prompt = "Ship it".to_string();
+
+    // Act
+    let colored_animated =
+        rendered_prompt_mode_greeting_animated(&fresh_session, style::ColorSupport::Enabled, 24);
+    let colorless_animated =
+        rendered_prompt_mode_greeting_animated(&fresh_session, style::ColorSupport::Disabled, 24);
+    let cramped_animated =
+        rendered_prompt_mode_greeting_animated(&fresh_session, style::ColorSupport::Enabled, 12);
+    let started_animated =
+        rendered_prompt_mode_greeting_animated(&started_session, style::ColorSupport::Enabled, 24);
+
+    // Assert
+    assert!(colored_animated);
+    assert!(!colorless_animated);
+    assert!(!cramped_animated);
+    assert!(!started_animated);
+}
+
+/// Renders prompt mode in an 80-column terminal `height` rows tall and
+/// returns whether the page reported an animating nerpa greeting.
+fn rendered_prompt_mode_greeting_animated(
+    session: &Session,
+    color_support: style::ColorSupport,
+    height: u16,
+) -> bool {
+    let mode = prompt_mode("");
+    let greeting_animated = Cell::new(false);
+    let mut page = SessionChatPage::new(SessionChatPageInput {
+        color_support,
+        greeting_animated: &greeting_animated,
+        ..test_page_input(session, &mode)
+    });
+    let backend = ratatui::backend::TestBackend::new(80, height);
+    let mut terminal = ratatui::Terminal::new(backend).expect("failed to create terminal");
+
+    terminal
+        .draw(|frame| {
+            let area = frame.area();
+            Page::render(&mut page, frame, area);
+        })
+        .expect("failed to draw prompt mode");
+
+    greeting_animated.get()
 }

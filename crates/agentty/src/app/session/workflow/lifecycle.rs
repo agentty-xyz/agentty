@@ -2734,7 +2734,7 @@ impl SessionManager {
 
         let session = &mut self.state.sessions[session_index];
 
-        let is_first_message = session.status == Status::Draft && session.prompt.is_empty();
+        let is_first_message = session.awaits_first_message();
         if !reply_eligibility.allows(session.status, is_first_message) {
             return Err(SessionError::Workflow(
                 "Session must be in review status".to_string(),

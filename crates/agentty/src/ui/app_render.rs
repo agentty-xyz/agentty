@@ -7,9 +7,12 @@ use crate::app::AppViewSnapshot;
 use crate::ui::{RenderCacheStore, RenderContext, SessionReviewSnapshot, style};
 
 /// Projects application data into one terminal frame.
+///
+/// `color_support` reports whether the terminal renders colors.
 pub(crate) fn render_app(
     snapshot: &AppViewSnapshot<'_>,
     frame: &mut Frame,
+    color_support: style::ColorSupport,
     project_table_state: &mut TableState,
     render_cache_store: &RenderCacheStore,
     session_table_state: &mut TableState,
@@ -32,6 +35,7 @@ pub(crate) fn render_app(
             active_project_id: snapshot.active_project_id,
             available_agent_clis: &snapshot.available_agent_clis,
             available_agent_kinds: &snapshot.available_agent_kinds,
+            color_support,
             current_tab: snapshot.current_tab,
             current_version_display_text: snapshot.current_version_display_text,
             default_reasoning_level: snapshot.default_reasoning_level,

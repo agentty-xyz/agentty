@@ -130,6 +130,23 @@ impl App {
         }
     }
 
+    /// Returns whether the visible UI holds a smooth animation, such as the
+    /// nerpa greeting, that should redraw on every frame tick rather than at
+    /// the slower spinner cadence.
+    ///
+    /// Only the full session chat in view or prompt mode qualifies; overlays
+    /// keep the spinner cadence because they cover most of the greeting.
+    pub(crate) fn has_visible_frame_animation(&self) -> bool {
+        match &self.mode {
+            AppMode::Prompt { session_id, .. } | AppMode::View { session_id, .. } => self
+                .sessions
+                .state()
+                .session_for_id(session_id)
+                .is_some_and(Session::awaits_first_message),
+            _ => false,
+        }
+    }
+
     /// Returns whether the currently visible list background contains any
     /// spinner or timer-driven session rows.
     fn list_background_has_tick_driven_ui(&self) -> bool {
@@ -152,12 +169,14 @@ impl App {
     }
 
     /// Returns whether the visible session view for `session_id` contains any
-    /// spinner or elapsed-timer state.
+    /// spinner, elapsed-timer, or animated nerpa-greeting state.
     fn session_has_tick_driven_ui(&self, session_id: &str) -> bool {
         self.sessions
             .state()
             .session_for_id(session_id)
-            .is_some_and(Self::session_tick_driven_ui_active)
+            .is_some_and(|session| {
+                session.awaits_first_message() || Self::session_tick_driven_ui_active(session)
+            })
     }
 
     /// Returns whether one session snapshot currently renders any time-driven

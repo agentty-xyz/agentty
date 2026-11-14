@@ -1837,6 +1837,13 @@ async fn test_prompt_image_paste_completion_behind_unrelated_event_reports_error
 async fn test_prompt_snapshot_abandons_running_image_paste() {
     // Arrange
     let (mut app, _base_dir) = new_test_prompt_app("Review ", None).await;
+    // A sent first message hides the animated nerpa greeting, so only the
+    // paste capture could keep the composer ticking.
+    app.sessions
+        .sessions_mut()
+        .first_mut()
+        .expect("expected prompt session")
+        .prompt = "Earlier turn".to_string();
     let prompt_context = prompt_context(&mut app).expect("expected prompt context");
     let mut clipboard_image_client = crate::infra::clipboard_image::MockClipboardImageClient::new();
     clipboard_image_client

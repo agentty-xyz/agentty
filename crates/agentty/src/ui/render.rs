@@ -16,7 +16,7 @@ use crate::domain::session::{DailyActivity, Session, SessionId};
 use crate::presentation::app_mode::{AppMode, ConfirmationViewMode, HelpContext};
 use crate::presentation::frame_time::FrameTime;
 use crate::presentation::graph_chat::GraphChatSnapshot;
-use crate::ui::{RenderCacheStore, component, layout, router};
+use crate::ui::{RenderCacheStore, component, layout, router, style};
 
 /// Focused-review display state projected from the app cache for one visible
 /// session.
@@ -51,6 +51,8 @@ pub struct RenderContext<'a> {
     pub available_agent_clis: &'a [AgentCliInfo],
     /// Startup-validated agent CLIs that can run new sessions.
     pub available_agent_kinds: &'a [AgentKind],
+    /// Whether the terminal renders colors.
+    pub color_support: style::ColorSupport,
     /// Active top-level tab selection.
     pub current_tab: Tab,
     /// Version label rendered in the status bar.
