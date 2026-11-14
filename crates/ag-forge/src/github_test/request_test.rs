@@ -81,7 +81,7 @@ fn lookup_command_limits_lookup_to_open_pull_requests() {
 }
 
 #[test]
-fn status_command_requests_only_merge_state_for_readiness() {
+fn status_command_requests_compact_readiness_fields() {
     // Arrange
     let remote = github_remote();
 
@@ -98,9 +98,9 @@ fn status_command_requests_only_merge_state_for_readiness() {
         &command.arguments[..4],
         ["api", "--hostname", "github.com", "graphql"]
     );
-    assert!(query.contains("mergeStateStatus"));
+    assert!(query.contains("mergeable mergeStateStatus"));
     assert!(!query.contains("comments"));
-    assert!(!query.contains("reviewThreads"));
+    assert!(query.contains("reviewThreads(first: 100) { totalCount nodes { isResolved } }"));
     assert!(!query.contains("reviews("));
     assert!(query.contains("statusCheckRollup { state }"));
     assert!(!query.contains("contexts"));
@@ -242,6 +242,105 @@ fn github_status_marks_bypass_ready_only_when_admin_approval_is_missing() {
     assert_eq!(
         bypass_summary.status_summary.as_deref(),
         Some("Review required, Blocked, PR ready with bypass")
+    );
+    assert!(
+        unready_summaries
+            .iter()
+            .all(|summary| !summary.is_github_pr_bypass_ready() && !summary.is_github_pr_ready())
+    );
+}
+
+#[test]
+fn github_status_marks_conflict_free_draft_without_open_threads_bypass_ready() {
+    // Arrange
+    let mut bypass_ready: serde_json::Value =
+        serde_json::from_str(&github_view_json()).expect("fixture should be valid JSON");
+    let pull_request = &mut bypass_ready["data"]["repository"]["pullRequest"];
+    pull_request["isDraft"] = serde_json::json!(true);
+    pull_request["mergeable"] = serde_json::json!("MERGEABLE");
+    pull_request["mergeStateStatus"] = serde_json::json!("BEHIND");
+    pull_request["reviewDecision"] = serde_json::json!("REVIEW_REQUIRED");
+    pull_request["reviewThreads"] = serde_json::json!({
+        "totalCount": 1,
+        "nodes": [{"isResolved": true}]
+    });
+    pull_request["statusCheckRollup"] = serde_json::json!({"state": "SUCCESS"});
+    pull_request["viewerCanMergeAsAdmin"] = serde_json::json!(true);
+    let ready_cases = [
+        (
+            "/data/repository/pullRequest/reviewThreads",
+            serde_json::json!({"totalCount": 0, "nodes": []}),
+        ),
+        (
+            "/data/repository/pullRequest/reviewDecision",
+            serde_json::json!("CHANGES_REQUESTED"),
+        ),
+        (
+            "/data/repository/pullRequest/reviewDecision",
+            serde_json::Value::Null,
+        ),
+    ];
+    let unready_cases = [
+        (
+            "/data/repository/pullRequest/mergeable",
+            serde_json::json!("CONFLICTING"),
+        ),
+        (
+            "/data/repository/pullRequest/mergeable",
+            serde_json::json!("UNKNOWN"),
+        ),
+        (
+            "/data/repository/pullRequest/reviewThreads/nodes/0/isResolved",
+            serde_json::json!(false),
+        ),
+        (
+            "/data/repository/pullRequest/reviewThreads/totalCount",
+            serde_json::json!(101),
+        ),
+        (
+            "/data/repository/pullRequest/reviewThreads",
+            serde_json::Value::Null,
+        ),
+        (
+            "/data/repository/pullRequest/statusCheckRollup",
+            serde_json::json!({"state": "FAILURE"}),
+        ),
+        (
+            "/data/repository/pullRequest/viewerCanMergeAsAdmin",
+            serde_json::json!(false),
+        ),
+        (
+            "/data/repository/pullRequest/state",
+            serde_json::json!("CLOSED"),
+        ),
+    ];
+
+    // Act
+    let bypass_summary = GitHubReviewRequestAdapter::parse_view_response(&bypass_ready.to_string())
+        .expect("draft bypass-ready response should parse");
+    let parse_variant = |(path, value): (&str, serde_json::Value)| {
+        let mut response = bypass_ready.clone();
+        *response
+            .pointer_mut(path)
+            .expect("fixture path should exist") = value;
+
+        GitHubReviewRequestAdapter::parse_view_response(&response.to_string())
+            .expect("draft response variant should parse")
+    };
+    let ready_summaries = ready_cases.map(parse_variant);
+    let unready_summaries = unready_cases.map(parse_variant);
+
+    // Assert
+    assert!(bypass_summary.is_github_pr_bypass_ready());
+    assert!(!bypass_summary.is_github_pr_ready());
+    assert_eq!(
+        bypass_summary.status_summary.as_deref(),
+        Some("Draft, Review required, Behind, PR ready with bypass")
+    );
+    assert!(
+        ready_summaries
+            .iter()
+            .all(|summary| summary.is_github_pr_bypass_ready() && !summary.is_github_pr_ready())
     );
     assert!(
         unready_summaries

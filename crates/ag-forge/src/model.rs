@@ -173,7 +173,9 @@ pub struct ReviewRequestSummary {
 
 impl ReviewRequestSummary {
     /// Status-summary component persisted for a GitHub PR whose checks pass
-    /// and whose only missing requirement is an approval the viewer may bypass.
+    /// and that the viewer may merge by bypassing branch protections: either
+    /// only an approval is missing, or a conflict-free draft has no unresolved
+    /// review threads.
     pub const GITHUB_BYPASS_READY_STATUS_COMPONENT: &str = "PR ready with bypass";
     /// Status-summary component persisted for a GitHub PR with a clean merge
     /// state at the latest forge refresh.
@@ -185,7 +187,7 @@ impl ReviewRequestSummary {
     }
 
     /// Returns whether the latest GitHub refresh marked this open PR ready to
-    /// merge by bypassing its missing required approval.
+    /// merge by bypassing branch protections.
     pub fn is_github_pr_bypass_ready(&self) -> bool {
         self.has_open_github_status_component(Self::GITHUB_BYPASS_READY_STATUS_COMPONENT)
     }

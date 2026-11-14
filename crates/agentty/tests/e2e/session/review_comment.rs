@@ -35,6 +35,10 @@ case "$*" in
   *"auth status"*)
     exit 0
     ;;
+  # The status query also selects `reviewThreads(first:`, so match it first.
+  *"mergeStateStatus"*)
+    printf '%s\n' '{"data":{"repository":{"pullRequest":{"number":42,"title":"Review-ready session shortcuts","state":"OPEN","url":"https://github.com/agentty-xyz/agentty/pull/42","baseRefName":"main","headRefName":"wt/review-s","isDraft":false,"mergeStateStatus":"BLOCKED","reviewDecision":"REVIEW_REQUIRED","mergedAt":null}}}}'
+    ;;
   *"reviewThreads(first:"*)
     cat <<'JSON'
 [{"data":{"repository":{"pullRequest":{"reviewThreads":{"nodes":[{"id":"thread-addressed","diffSide":"RIGHT","isOutdated":false,"isResolved":false,"line":2,"path":"src/main.rs","startLine":null,"subjectType":"LINE","comments":{"nodes":[{"author":{"login":"alice"},"body":"Please explain this output.","viewerDidAuthor":false},{"author":{"login":"agentty-bot"},"body":"No change is needed.\n\n<!-- agentty review resolution:123e4567-e89b-12d3-a456-426614174000 -->","viewerDidAuthor":true}],"pageInfo":{"hasNextPage":false,"endCursor":null}}},{"id":"thread-reviewer-marker","diffSide":"RIGHT","isOutdated":false,"isResolved":false,"line":2,"path":"src/reviewer.rs","startLine":null,"subjectType":"LINE","comments":{"nodes":[{"author":{"login":"mallory"},"body":"Still needs work.\n\n<!-- agentty review resolution:123e4567-e89b-12d3-a456-426614174000 -->","viewerDidAuthor":false}],"pageInfo":{"hasNextPage":false,"endCursor":null}}}],"pageInfo":{"hasNextPage":false,"endCursor":null}}}}}}]
@@ -42,9 +46,6 @@ JSON
     ;;
   *"comments(first:"*)
     printf '%s\n' '[{"data":{"repository":{"pullRequest":{"comments":{"nodes":[],"pageInfo":{"hasNextPage":false,"endCursor":null}}}}}}]'
-    ;;
-  *"mergeStateStatus"*)
-    printf '%s\n' '{"data":{"repository":{"pullRequest":{"number":42,"title":"Review-ready session shortcuts","state":"OPEN","url":"https://github.com/agentty-xyz/agentty/pull/42","baseRefName":"main","headRefName":"wt/review-s","isDraft":false,"mergeStateStatus":"BLOCKED","reviewDecision":"REVIEW_REQUIRED","mergedAt":null}}}}'
     ;;
   *)
     echo "unexpected gh invocation: $*" >&2

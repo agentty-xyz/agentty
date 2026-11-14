@@ -31,7 +31,7 @@ const MERGE_CONFLICT_LABEL: &str = " [merge conflict]";
 const PR_READY_LABEL: &str = " [ready]";
 
 /// Success suffix appended to titles whose linked pull request can merge only
-/// by bypassing a missing required approval.
+/// by bypassing branch protections.
 const PR_BYPASS_READY_LABEL: &str = " [ready [bypass]]";
 
 /// Tree branch prefix for child rows that have siblings after them.
