@@ -24,7 +24,7 @@ async fn test_load_auto_commit_agent_setting_prefers_project_fast_selection() {
         .upsert_project_setting(
             project_id,
             SettingName::DefaultFastModel,
-            AgentModel::Gemini31Pro.as_str(),
+            AgentModel::Gemini4Argon.as_str(),
         )
         .await
         .expect("failed to persist default fast model");
@@ -42,7 +42,7 @@ async fn test_load_auto_commit_agent_setting_prefers_project_fast_selection() {
         .upsert_project_setting(
             project_id,
             SettingName::DefaultSmartModel,
-            AgentModel::Gemini31Pro.as_str(),
+            AgentModel::Gemini4Argon.as_str(),
         )
         .await
         .expect("failed to persist default smart model");
@@ -60,7 +60,7 @@ async fn test_load_auto_commit_agent_setting_prefers_project_fast_selection() {
     // Assert
     assert_eq!(
         auto_commit_agent,
-        AgentSelection::new(AgentKind::Antigravity, AgentModel::Gemini31Pro)
+        AgentSelection::new(AgentKind::Antigravity, AgentModel::Gemini4Argon)
     );
 }
 

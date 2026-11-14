@@ -94,7 +94,7 @@ const SHOWCASE_SESSIONS: [ShowcaseSessionSeed; 7] = [
     ShowcaseSessionSeed {
         id: "a1b2c3d4-0003",
         input_tokens: 15_600,
-        model: "gemini-3.1-pro-preview",
+        model: "gemini-4-argon",
         output_tokens: 5_700,
         size: "S",
         status: "Review",

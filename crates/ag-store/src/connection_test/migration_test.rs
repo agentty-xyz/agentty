@@ -1222,7 +1222,7 @@ async fn seed_gemini_retirement_conversations(database: &Database, project_id: i
         sqlx::query(
             "INSERT INTO task_agent_context (task_id, role, agent, model, input, \
              provider_conversation_id, instruction_conversation_id) VALUES (?, 'planner', ?, \
-             'gemini-3.1-pro-preview', 'Plan', ?, ?)",
+             'gemini-4-argon', 'Plan', ?, ?)",
         )
         .bind(task_id)
         .bind(agent)

@@ -77,7 +77,9 @@ fn test_antigravity_build_command_uses_stream_input_mode_with_sandbox() {
             "--model".to_string(),
             requested_model.to_string(),
             "--effort".to_string(),
-            reasoning::antigravity(ReasoningLevel::default()).to_string(),
+            reasoning::antigravity(requested_model, ReasoningLevel::default())
+                .expect("Argon accepts effort")
+                .to_string(),
             "--input-format".to_string(),
             "stream-json".to_string(),
             "--output-format".to_string(),
@@ -111,7 +113,7 @@ fn test_antigravity_read_only_mode_uses_sandboxed_plan_mode() {
             folder: temp_directory.path(),
             main_checkout_root: None,
             replay_transcript: None,
-            model: AgentModel::Gemini31Pro.provider_model_str(),
+            model: AgentModel::Gemini4Argon.provider_model_str(),
             permission_mode: ag_contracts::PermissionMode::ReadOnly,
             agent_profile_prompt: None,
             agent_profile_update: &ag_contracts::AgentDefinitionPromptUpdate::Unchanged,
@@ -156,7 +158,7 @@ fn test_antigravity_build_command_passes_supported_effort() {
                 folder: temp_directory.path(),
                 main_checkout_root: None,
                 replay_transcript: None,
-                model: AgentModel::Gemini31Pro.provider_model_str(),
+                model: AgentModel::Gemini4Argon.provider_model_str(),
                 permission_mode: ag_contracts::PermissionMode::AutoEdit,
                 agent_profile_prompt: None,
                 agent_profile_update: &ag_contracts::AgentDefinitionPromptUpdate::Unchanged,
@@ -178,10 +180,51 @@ fn test_antigravity_build_command_passes_supported_effort() {
 
         // Assert
         assert_eq!(
-            args[effort_position + 1],
-            reasoning::antigravity(reasoning_level)
+            Some(args[effort_position + 1].as_str()),
+            reasoning::antigravity(AgentModel::Gemini4Argon.as_str(), reasoning_level)
         );
     }
+}
+
+#[test]
+/// Verifies the Antigravity orchestrator, which rejects `--effort`, starts
+/// without the flag.
+fn test_antigravity_build_command_omits_effort_for_orchestrator() {
+    // Arrange
+    let temp_directory = visible_tempdir();
+    let backend = supported_backend();
+
+    // Act
+    let command = AgentBackend::build_command(
+        &backend,
+        BuildCommandRequest {
+            execution_policy: &ag_contracts::ExecutionPolicy::default(),
+            attachments: &[],
+            folder: temp_directory.path(),
+            main_checkout_root: None,
+            replay_transcript: None,
+            model: AgentModel::GeminiProOrchestrator.provider_model_str(),
+            permission_mode: ag_contracts::PermissionMode::AutoEdit,
+            agent_profile_prompt: None,
+            agent_profile_update: &ag_contracts::AgentDefinitionPromptUpdate::Unchanged,
+            prompt: "Write tests",
+            reasoning_level: ReasoningLevel::Max,
+            request_kind: &session_start_request_kind(),
+            speed_mode: ag_contracts::SpeedMode::default(),
+        },
+    )
+    .expect("command should build");
+    let args = command
+        .get_args()
+        .map(|arg| arg.to_string_lossy().into_owned())
+        .collect::<Vec<_>>();
+
+    // Assert
+    assert!(
+        args.windows(2)
+            .any(|pair| pair == ["--model", "gemini-pro-orchestrator-g1-pro"])
+    );
+    assert!(!args.iter().any(|arg| arg == "--effort"));
 }
 
 #[test]
@@ -197,7 +240,7 @@ fn test_antigravity_build_command_uses_hidden_session_folder_directly() {
         .join("00cbfefe");
     std::fs::create_dir_all(&session_folder).expect("failed to create hidden session folder");
     let backend = supported_backend();
-    let requested_model = AgentModel::Gemini31Pro.provider_model_str();
+    let requested_model = AgentModel::Gemini4Argon.provider_model_str();
 
     // Act
     let command = AgentBackend::build_command(
@@ -286,7 +329,7 @@ fn test_antigravity_build_command_rejects_cached_cli_error() {
             folder: temp_directory.path(),
             main_checkout_root: None,
             replay_transcript: None,
-            model: AgentModel::Gemini31Pro.provider_model_str(),
+            model: AgentModel::Gemini4Argon.provider_model_str(),
             permission_mode: ag_contracts::PermissionMode::AutoEdit,
             agent_profile_prompt: None,
             agent_profile_update: &ag_contracts::AgentDefinitionPromptUpdate::Unchanged,

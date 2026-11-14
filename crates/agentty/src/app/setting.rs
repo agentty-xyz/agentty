@@ -1002,16 +1002,11 @@ async fn load_agent_setting(
 }
 
 /// Returns a compatible provider for model-only legacy settings.
+///
+/// Models owned by a CLI provider stay with it, so shared Claude ids do not
+/// move to Antigravity. Harness-owned models keep `fallback_agent_kind`.
 fn fallback_agent_kind_for_model(model: AgentModel, fallback_agent_kind: AgentKind) -> AgentKind {
-    if fallback_agent_kind.supports_model(model) {
-        return fallback_agent_kind;
-    }
-
-    AgentKind::ALL
-        .iter()
-        .copied()
-        .find(|agent_kind| agent_kind.supports_model(model))
-        .unwrap_or(fallback_agent_kind)
+    ag_session::resolve_agent_kind_for_model(model, AgentKind::ALL, fallback_agent_kind)
 }
 
 /// Returns a coherent fallback selection for one model-only caller using

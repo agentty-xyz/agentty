@@ -46,20 +46,23 @@ fn test_parse_model_parses_current_codex_models() {
 }
 
 #[test]
-/// Ensures Antigravity parses raw Gemini model ids as its model selections.
+/// Ensures Antigravity parses current raw Gemini model ids as its model
+/// selections and rejects retired ones.
 fn test_parse_model_parses_antigravity() {
     // Arrange
     let antigravity_kind = AgentKind::Antigravity;
 
     // Act
-    let parsed_pro = antigravity_kind.parse_model("gemini-3.1-pro-preview");
+    let parsed_argon = antigravity_kind.parse_model("gemini-4-argon");
     let parsed_flash_38 = antigravity_kind.parse_model("gemini-3.8-flash");
-    let parsed_flash_35_lite = antigravity_kind.parse_model("gemini-3.5-flash-lite");
+    let parsed_retired_pro = antigravity_kind.parse_model("gemini-3.1-pro-preview");
+    let parsed_retired_flash_lite = antigravity_kind.parse_model("gemini-3.5-flash-lite");
 
     // Assert
-    assert_eq!(parsed_pro, Some(AgentModel::Gemini31Pro));
+    assert_eq!(parsed_argon, Some(AgentModel::Gemini4Argon));
     assert_eq!(parsed_flash_38, Some(AgentModel::Gemini38Flash));
-    assert_eq!(parsed_flash_35_lite, Some(AgentModel::Gemini35FlashLite));
+    assert_eq!(parsed_retired_pro, None);
+    assert_eq!(parsed_retired_flash_lite, None);
 }
 
 #[test]
@@ -101,9 +104,9 @@ fn test_current_gemini_models_have_current_descriptions() {
     // Arrange
     let models = [
         AgentModel::Gemini4Argon,
-        AgentModel::Gemini31Pro,
+        AgentModel::Gemini4Hydrogen,
+        AgentModel::GeminiProOrchestrator,
         AgentModel::Gemini38Flash,
-        AgentModel::Gemini35FlashLite,
     ];
 
     // Act
@@ -114,9 +117,9 @@ fn test_current_gemini_models_have_current_descriptions() {
         descriptions,
         [
             "Gemini 4 Argon model.",
-            "Higher-quality Gemini model for deeper reasoning.",
+            "Gemini 4 Hydrogen model with extra-high reasoning effort.",
+            "Orchestrator (Argon) model that coordinates subagents.",
             "Fast Gemini model for agentic and multimodal tasks.",
-            "Lightweight Gemini model for fast, cost-conscious workloads.",
         ]
     );
 }
@@ -207,7 +210,8 @@ fn test_codex_models_are_supported_by_codex() {
 }
 
 #[test]
-/// Ensures Claude models are supported by Claude only.
+/// Ensures Claude models are owned by Claude and only Opus and Sonnet are
+/// shared with Antigravity.
 fn test_claude_models_are_supported_by_claude() {
     // Arrange
     let models = [
@@ -219,34 +223,41 @@ fn test_claude_models_are_supported_by_claude() {
 
     // Act
     let supported = models.map(|model| AgentKind::Claude.supports_model(model));
-    let unsupported = models.map(|model| AgentKind::Codex.supports_model(model));
+    let owners = models.map(AgentModel::owner_kind);
+    let codex_supported = models.map(|model| AgentKind::Codex.supports_model(model));
+    let antigravity_supported = models.map(|model| AgentKind::Antigravity.supports_model(model));
 
     // Assert
     assert_eq!(supported, [true; 4]);
-    assert_eq!(unsupported, [false; 4]);
+    assert_eq!(owners, [AgentKind::Claude; 4]);
+    assert_eq!(codex_supported, [false; 4]);
+    assert_eq!(antigravity_supported, [true, true, false, false]);
 }
 
 #[test]
-/// Ensures Gemini models are supported by Antigravity only.
+/// Ensures Antigravity-owned models are supported by Antigravity only.
 fn test_gemini_models_are_supported_by_antigravity() {
     // Arrange
     let models = [
         AgentModel::Gemini4Argon,
-        AgentModel::Gemini31Pro,
+        AgentModel::Gemini4Hydrogen,
+        AgentModel::GeminiProOrchestrator,
         AgentModel::Gemini38Flash,
-        AgentModel::Gemini35FlashLite,
+        AgentModel::GptOss120b,
     ];
 
     // Act
     let antigravity_supported = models.map(|model| AgentKind::Antigravity.supports_model(model));
+    let owners = models.map(AgentModel::owner_kind);
     let codex_supported = models.map(|model| AgentKind::Codex.supports_model(model));
     let harness_supported = models.map(|model| AgentKind::Harness.supports_model(model));
 
     // Assert
-    assert_eq!(AgentKind::Antigravity.models(), models);
-    assert_eq!(antigravity_supported, [true; 4]);
-    assert_eq!(codex_supported, [false; 4]);
-    assert_eq!(harness_supported, [false; 4]);
+    assert_eq!(AgentKind::Antigravity.declared_models(), models);
+    assert_eq!(antigravity_supported, [true; 5]);
+    assert_eq!(owners, [AgentKind::Antigravity; 5]);
+    assert_eq!(codex_supported, [false; 5]);
+    assert_eq!(harness_supported, [false; 5]);
 }
 
 #[test]
@@ -267,15 +278,15 @@ fn test_supports_speed_mode_covers_claude_and_codex_only() {
 /// transports.
 fn test_antigravity_provider_model_str_returns_raw_gemini_model() {
     // Arrange
-    let model = AgentModel::Gemini35FlashLite;
+    let model = AgentModel::Gemini38Flash;
 
     // Act
     let persisted_model = model.as_str();
     let provider_model = model.provider_model_str();
 
     // Assert
-    assert_eq!(persisted_model, "gemini-3.5-flash-lite");
-    assert_eq!(provider_model, "gemini-3.5-flash-lite");
+    assert_eq!(persisted_model, "gemini-3.8-flash");
+    assert_eq!(provider_model, "gemini-3.8-flash");
 }
 
 #[test]
@@ -385,8 +396,8 @@ fn test_harness_models_include_its_own_and_shared_codex_models() {
     assert!(AgentKind::Harness.supports_model(AgentModel::ChatGptGpt61Sol));
     assert!(!AgentKind::Codex.supports_model(AgentModel::ChatGptGpt61Sol));
     assert_eq!(
-        AgentKind::Antigravity.declared_models(),
-        AgentKind::Antigravity.models()
+        AgentModel::OpenAiCompatible(ServedModel::CONFIGURED).owner_kind(),
+        AgentKind::Harness
     );
 }
 
@@ -436,7 +447,7 @@ fn test_short_name_compacts_verbose_ids_and_defaults_to_menu_name() {
         (AgentModel::ClaudeSonnet55, "sonnet-5.5"),
         (AgentModel::ClaudeHaiku55, "haiku-5.5"),
         (AgentModel::ClaudeFable52, "fable-5.2"),
-        (AgentModel::Gemini31Pro, "gemini-3.1-pro"),
+        (AgentModel::Gemini4Argon, "gemini-4-argon"),
         (AgentModel::Gpt61Sol, "gpt-6.1-sol"),
         (AgentModel::OpenAiCompatible(served), "qwen3:latest"),
         (

@@ -3,8 +3,9 @@
 use std::sync::Arc;
 
 use ag_session::{
-    AgentKind, AgentSelection, AgentSelectionMetadata, FocusedReviewStatus, PermissionMode,
-    ReasoningLevel, ResponseStyle, SessionMessageKind, SessionStats, SettingName, SpeedMode,
+    AgentKind, AgentModel, AgentSelection, AgentSelectionMetadata, FocusedReviewStatus,
+    PermissionMode, ReasoningLevel, ResponseStyle, SessionMessageKind, SessionStats, SettingName,
+    SpeedMode,
 };
 use async_trait::async_trait;
 use sqlx::{SqliteConnection, SqlitePool};
@@ -883,15 +884,20 @@ impl SqliteSessionRepository {
         Ok(())
     }
 
-    /// Infers the provider from its model family, retaining Antigravity as
-    /// the fallback for `gemini-*` and unrecognized model identifiers.
+    /// Infers the provider for a model-only write.
+    ///
+    /// Catalog models resolve to their [`AgentModel::owner_kind`], so ids
+    /// whose prefix names another provider family, such as Antigravity's
+    /// `gpt-oss-120b`, still load back unchanged. Retired and unknown ids
+    /// fall back to the provider their family prefix names, retaining
+    /// Antigravity for `gemini-*` and unrecognized identifiers.
     fn persisted_agent_for_model(model: &str) -> String {
-        let agent_kind = if model.starts_with("claude-") {
+        let agent_kind = if let Ok(catalog_model) = model.parse::<AgentModel>() {
+            catalog_model.owner_kind()
+        } else if model.starts_with("claude-") {
             AgentKind::Claude
         } else if model.starts_with("gpt-") {
             AgentKind::Codex
-        } else if AgentKind::Harness.parse_model(model).is_some() {
-            AgentKind::Harness
         } else {
             AgentKind::Antigravity
         };

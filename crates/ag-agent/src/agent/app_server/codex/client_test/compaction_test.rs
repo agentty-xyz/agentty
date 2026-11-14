@@ -64,7 +64,7 @@ fn undeclared_and_foreign_models_use_conservative_compaction_budget() {
     let models = [
         "unknown-model",
         "claude-opus-5-5",
-        "gemini-3.1-pro-preview",
+        "gemini-4-argon",
         "gpt-6-sol",
     ];
 

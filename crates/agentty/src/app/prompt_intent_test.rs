@@ -163,7 +163,7 @@ async fn incompatible_prompt_model_switch_disables_fast_mode() {
     // Act
     app.update_prompt_session_model(
         &session_id,
-        AgentSelection::new(AgentKind::Antigravity, AgentModel::Gemini31Pro),
+        AgentSelection::new(AgentKind::Antigravity, AgentModel::Gemini4Argon),
     )
     .await;
     let persisted_speed_mode = app
@@ -181,7 +181,7 @@ async fn incompatible_prompt_model_switch_disables_fast_mode() {
             .session_for_id(&session_id)
             .map(|session| (session.agent, session.speed_mode)),
         Some((
-            AgentSelection::new(AgentKind::Antigravity, AgentModel::Gemini31Pro),
+            AgentSelection::new(AgentKind::Antigravity, AgentModel::Gemini4Argon),
             SpeedMode::Normal,
         ))
     );
@@ -215,7 +215,7 @@ async fn incompatible_prompt_model_switch_keeps_model_when_disabling_fast_mode_f
     let switched = app
         .update_prompt_session_model(
             &session_id,
-            AgentSelection::new(AgentKind::Antigravity, AgentModel::Gemini31Pro),
+            AgentSelection::new(AgentKind::Antigravity, AgentModel::Gemini4Argon),
         )
         .await;
 

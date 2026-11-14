@@ -192,7 +192,7 @@ fn app_event_batch_collect_event_keeps_latest_same_session_updates() {
     });
     event_batch.collect_event(AppEvent::SessionModelUpdated {
         session_id: "session-a".into(),
-        session_agent: AgentSelection::new(AgentKind::Antigravity, AgentModel::Gemini31Pro),
+        session_agent: AgentSelection::new(AgentKind::Antigravity, AgentModel::Gemini4Argon),
     });
     event_batch.collect_event(AppEvent::SessionProgressUpdated {
         progress_message: Some("first".to_string()),
@@ -248,7 +248,7 @@ fn app_event_batch_collect_event_keeps_latest_same_session_updates() {
         event_batch.session_model_updates.get("session-a"),
         Some(&AgentSelection::new(
             AgentKind::Antigravity,
-            AgentModel::Gemini31Pro
+            AgentModel::Gemini4Argon
         ))
     );
     assert_eq!(
