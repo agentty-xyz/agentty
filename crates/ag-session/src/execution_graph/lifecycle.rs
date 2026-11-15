@@ -1,3 +1,5 @@
+//! Execution graph control requests and read-only progress projections.
+
 use std::num::NonZeroU64;
 
 use ag_protocol::TurnPromptAttachment;

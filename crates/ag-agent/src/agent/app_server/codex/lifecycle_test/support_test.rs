@@ -1,3 +1,5 @@
+//! JSON-RPC request id capture helper shared by Codex lifecycle tests.
+
 use std::sync::{Arc, Mutex};
 
 use serde_json::Value;

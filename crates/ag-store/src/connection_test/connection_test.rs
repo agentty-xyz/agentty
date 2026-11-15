@@ -1,3 +1,5 @@
+//! Database open, connection configuration, and error reporting tests.
+
 use std::path::Path;
 
 use tempfile::tempdir;

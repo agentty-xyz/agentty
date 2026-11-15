@@ -1,3 +1,5 @@
+//! Unit tests for the integration-test database settings helpers.
+
 use ag_session::SettingName;
 use agentty::app;
 use agentty::db::Database;

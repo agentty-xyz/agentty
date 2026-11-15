@@ -1,3 +1,6 @@
+//! Nerpa greeting pixel art, sheen animation, colorless fallback, and
+//! placement unit tests.
+
 use ratatui::Terminal;
 use ratatui::backend::TestBackend;
 use ratatui::buffer::Buffer;

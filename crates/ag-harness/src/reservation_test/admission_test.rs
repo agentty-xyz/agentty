@@ -1,3 +1,6 @@
+//! Admission decorator tests: forwarding the session store contract, host
+//! recovery, and command ownership.
+
 use std::sync::{Arc, Mutex};
 
 use crate::TurnInput;

@@ -1,3 +1,5 @@
+//! Execution policy validation and Claude tool policy unit tests.
+
 use std::num::NonZeroUsize;
 use std::process::Command;
 

@@ -1,3 +1,6 @@
+//! Graph revision storage tests: migration, atomic immutable revisions, and
+//! rollback of invalid writes.
+
 use std::num::NonZeroU64;
 
 use ag_protocol::TurnPromptAttachment;

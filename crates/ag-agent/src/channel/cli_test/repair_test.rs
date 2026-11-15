@@ -1,3 +1,6 @@
+//! CLI channel protocol-repair tests covering call budgets, repair-turn
+//! failures, and recovery of structured output.
+
 use std::sync::Arc;
 use std::time::Duration;
 

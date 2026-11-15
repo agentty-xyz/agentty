@@ -1,3 +1,6 @@
+//! Key handling for list mode across the projects, sessions, and settings
+//! tabs.
+
 use std::io;
 
 use ag_tui_text::text_util::inline_text;

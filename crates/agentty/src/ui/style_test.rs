@@ -1,3 +1,6 @@
+//! Theme palette, selection contrast, status color, and status icon unit
+//! tests.
+
 use ratatui::buffer::Buffer;
 use ratatui::layout::Rect;
 use ratatui::style::{Color, Modifier};

@@ -1,3 +1,6 @@
+//! X11 backend tests against a scripted fake server, covering connection
+//! setup, selection reads, `INCR` transfers, timeouts, and payload limits.
+
 use std::io::{Read, Write};
 use std::os::unix::net::UnixStream;
 use std::panic::{self, AssertUnwindSafe};

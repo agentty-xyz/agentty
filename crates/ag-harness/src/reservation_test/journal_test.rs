@@ -1,3 +1,6 @@
+//! Reservation journal handle tests for retaining the temporary database and
+//! turn ownership.
+
 use std::path::Path;
 use std::sync::Arc;
 

@@ -1,3 +1,6 @@
+//! Qwen provider tests for advertising, decoding, and replaying tool calls,
+//! including malformed and unsupported calls.
+
 use serde_json::json;
 use wiremock::matchers::{method, path};
 use wiremock::{Mock, MockServer, ResponseTemplate};

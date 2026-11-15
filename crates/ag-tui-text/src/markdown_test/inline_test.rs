@@ -1,3 +1,5 @@
+//! Markdown inline style, math, and code span rendering tests.
+
 use ratatui::style::Modifier;
 
 use crate::markdown::{code_block_style, inline_code_style, render_markdown};

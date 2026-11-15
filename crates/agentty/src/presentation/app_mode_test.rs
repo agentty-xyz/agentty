@@ -1,3 +1,6 @@
+//! App mode tests for diff comments, help keybinding contexts, and view
+//! restoration.
+
 use super::super::help_action::{HelpAction, ViewSessionState};
 use super::{
     AppMode, ChatFocus, ConfirmationViewMode, DiffCommentTarget, DiffFocus, DiffLineCommentAnchor,

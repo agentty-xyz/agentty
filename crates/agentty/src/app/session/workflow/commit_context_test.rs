@@ -1,3 +1,6 @@
+//! Commit context tests covering bounded evidence, disclosure of omitted
+//! inventory, and fallback history.
+
 use std::fmt::Write as _;
 
 use crate::app::session::workflow::commit_context::{diff, excerpt, fallback};

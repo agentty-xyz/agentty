@@ -1,3 +1,6 @@
+//! Session output assembly unit tests covering transcript sections, queued
+//! messages, user prompts, and loaders.
+
 use std::rc::Rc;
 use std::sync::Arc;
 

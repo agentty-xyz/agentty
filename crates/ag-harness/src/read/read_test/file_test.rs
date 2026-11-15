@@ -1,3 +1,6 @@
+//! `read` tool file tests: line paging, byte and scan limits, UTF-8 decoding,
+//! path resolution, and I/O failures.
+
 use std::io;
 use std::path::PathBuf;
 use std::sync::Arc;

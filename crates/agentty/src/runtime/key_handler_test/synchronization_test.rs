@@ -1,3 +1,5 @@
+//! Merge confirmation and stack-sync key-handler tests.
+
 use std::sync::Arc;
 
 use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};

@@ -1,3 +1,6 @@
+//! Lifecycle synchronization tests covering stack append rollback, merged
+//! session chat rejection, and fork checkout failure cleanup.
+
 use std::sync::Arc;
 
 use ag_forge as forge;

@@ -1,3 +1,6 @@
+//! Review comment page showing a selectable list of review comments and the
+//! selected comment's detail with surrounding diff context.
+
 use std::slice;
 
 use ag_forge::{

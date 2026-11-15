@@ -1,3 +1,5 @@
+//! Clipboard image RGBA decoding and PNG header validation tests.
+
 use image::codecs::png::PngEncoder;
 use image::{ExtendedColorType, ImageEncoder, ImageFormat};
 

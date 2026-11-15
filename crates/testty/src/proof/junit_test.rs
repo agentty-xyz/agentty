@@ -1,3 +1,5 @@
+//! `JUnit` XML proof report structure and escaping unit tests.
+
 use super::{build_junit, escape_xml_attr, escape_xml_text};
 use crate::assertion::{AssertionFailure, Expected};
 use crate::frame::TerminalFrame;

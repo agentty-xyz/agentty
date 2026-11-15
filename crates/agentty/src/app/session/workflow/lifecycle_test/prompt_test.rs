@@ -1,3 +1,6 @@
+//! Reply prompt workflow tests covering reply context, attachment cleanup,
+//! prompt formatting, and title generation context budgets.
+
 use std::path::PathBuf;
 use std::sync::Arc;
 

@@ -1,3 +1,5 @@
+//! Session and operation status codec tests.
+
 use crate::status::{validate_operation, validate_session};
 
 #[test]

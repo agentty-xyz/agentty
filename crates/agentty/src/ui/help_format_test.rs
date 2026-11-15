@@ -1,3 +1,5 @@
+//! Help footer key, label, and separator styling unit tests.
+
 use ratatui::style::{Modifier, Style};
 
 use super::{footer_line, footer_muted_span, footer_separator_span};

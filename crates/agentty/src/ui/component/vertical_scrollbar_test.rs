@@ -1,3 +1,5 @@
+//! Vertical scrollbar visibility and thumb geometry unit tests.
+
 use ratatui::Terminal;
 use ratatui::backend::TestBackend;
 

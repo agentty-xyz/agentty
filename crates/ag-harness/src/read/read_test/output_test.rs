@@ -1,3 +1,6 @@
+//! `read` tool output tests: paging results by whole lines, continuation
+//! hints, and refitting recorded results.
+
 use serde_json::{Value, json};
 
 use crate::context::deferred_read_result;

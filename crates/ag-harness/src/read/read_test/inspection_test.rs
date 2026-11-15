@@ -1,3 +1,6 @@
+//! `read` tool inspection tests: bounded listing and literal search, path
+//! validation, command failures, and error mapping.
+
 use std::io;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;

@@ -1,3 +1,6 @@
+//! Renders Mermaid flowchart, ER, and sequence diagrams as Unicode
+//! box-drawing terminal lines.
+
 use std::cell::RefCell;
 use std::collections::{HashMap, VecDeque};
 use std::sync::Arc;

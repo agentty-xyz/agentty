@@ -1,3 +1,5 @@
+//! Agent CLI executable discovery and availability probe unit tests.
+
 #[cfg(unix)]
 use std::os::unix::fs::PermissionsExt;
 use std::process::Command;

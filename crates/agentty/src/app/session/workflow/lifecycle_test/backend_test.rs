@@ -1,3 +1,6 @@
+//! Lifecycle test that an unavailable backend preserves drafts and cleans
+//! only new worktrees.
+
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 

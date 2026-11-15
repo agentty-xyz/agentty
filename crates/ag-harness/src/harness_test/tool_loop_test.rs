@@ -1,3 +1,6 @@
+//! Harness tool loop unit tests for repeated and superseded reads, result
+//! shares, malformed calls, repetition limits, and overflow recovery.
+
 use std::collections::{HashMap, HashSet};
 use std::io::Cursor;
 use std::num::NonZeroU64;

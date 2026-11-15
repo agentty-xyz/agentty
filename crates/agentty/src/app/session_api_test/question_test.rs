@@ -1,3 +1,6 @@
+//! Session API question-answer tests covering claim restoration, persistence
+//! failures, and answer validation.
+
 use ag_protocol::QuestionItem;
 use ag_session::{
     AnswerQuestionsRequest, CreateSessionMode, CreateSessionRequest, QuestionAnswer,

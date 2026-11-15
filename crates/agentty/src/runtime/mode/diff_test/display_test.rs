@@ -1,3 +1,5 @@
+//! Diff mode scrolling, scroll-limit caching, and comment-layout tests.
+
 use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
 use ratatui::layout::Rect;
 

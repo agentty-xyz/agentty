@@ -1,3 +1,6 @@
+//! Launch-configuration selector layout, highlighting, and hint rendering
+//! unit tests.
+
 use ratatui::layout::{Alignment, Rect};
 
 use super::{LaunchConfigurationOverlay, OVERLAY_DIMENSIONS};

@@ -1,3 +1,6 @@
+//! Antigravity stream event extraction unit tests for results, steps, and
+//! conversation ids.
+
 use crate::agent::app_server::antigravity::stream_parser::{
     conversation_id, result, result_error, result_response, result_succeeded, step_update,
     stream_event,

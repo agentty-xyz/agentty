@@ -1,3 +1,6 @@
+//! Project switcher popup sizing, row alignment, highlighting, and
+//! session-count rendering unit tests.
+
 use std::path::PathBuf;
 
 use ratatui::layout::Alignment;

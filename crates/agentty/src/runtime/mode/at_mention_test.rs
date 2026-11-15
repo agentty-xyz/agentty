@@ -1,3 +1,5 @@
+//! `@`-mention sync, selection, replacement, and entry-loading unit tests.
+
 use std::collections::HashMap;
 use std::path::PathBuf;
 use std::sync::Arc;

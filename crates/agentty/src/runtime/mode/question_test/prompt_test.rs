@@ -1,3 +1,5 @@
+//! Question paste handling and blank custom-answer tests.
+
 use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
 
 use super::super::{NO_ANSWER, handle_paste};

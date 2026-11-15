@@ -1,3 +1,5 @@
+//! Speed-mode mapping tests for provider session settings.
+
 use ag_contracts::SpeedMode;
 
 use crate::model::session;

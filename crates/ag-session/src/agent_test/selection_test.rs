@@ -1,3 +1,6 @@
+//! Agent selection tests for speed compatibility, selectable models, and
+//! resolution against available providers.
+
 use ag_contracts::SpeedMode;
 
 use crate::agent::{

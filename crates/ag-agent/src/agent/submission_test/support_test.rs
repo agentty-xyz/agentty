@@ -1,3 +1,5 @@
+//! Mock shell commands shared by one-shot submission tests.
+
 use std::path::Path;
 use std::process::Command;
 

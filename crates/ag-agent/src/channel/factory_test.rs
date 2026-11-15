@@ -1,3 +1,5 @@
+//! Agent channel factory tests for each provider kind.
+
 use std::sync::Arc;
 
 use ag_session::AgentKind;

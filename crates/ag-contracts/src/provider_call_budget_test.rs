@@ -1,3 +1,6 @@
+//! Provider call budget tests covering ceilings, reservations, refunds,
+//! concurrent charging, and ledger reporting.
+
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::{Arc, Barrier, Mutex};
 

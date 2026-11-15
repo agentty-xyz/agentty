@@ -1,3 +1,6 @@
+//! Sessions tab page rendering grouped sessions as a table with stack-tree,
+//! model, status, and timer columns.
+
 use std::borrow::Cow;
 use std::collections::HashMap;
 use std::ops::Range;

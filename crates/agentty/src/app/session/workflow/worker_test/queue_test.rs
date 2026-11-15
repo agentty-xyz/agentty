@@ -1,3 +1,6 @@
+//! Queued message scheduling, clearing, and turn telemetry tests for the
+//! session worker.
+
 use std::collections::VecDeque;
 use std::sync::{Arc, Mutex};
 use std::time::Duration;

@@ -1,3 +1,5 @@
+//! Graph proposal generation, approval, and failure boundary unit tests.
+
 use std::collections::{BTreeMap, HashMap};
 use std::sync::{Arc, Mutex};
 

@@ -1,3 +1,5 @@
+//! Queued-action pulse brightness and period-wrap unit tests.
+
 use ratatui::buffer::Buffer;
 use ratatui::layout::Rect;
 

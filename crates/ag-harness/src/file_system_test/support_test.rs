@@ -1,3 +1,5 @@
+//! Shared filesystem test fixtures: a reader that always fails.
+
 use std::io;
 
 pub(super) struct FailingReader;

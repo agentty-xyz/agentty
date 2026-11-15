@@ -1,3 +1,6 @@
+//! Provider configuration, policy selection, credential, and request
+//! validation tests.
+
 use std::error::Error;
 use std::sync::Arc;
 

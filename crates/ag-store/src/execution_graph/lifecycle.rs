@@ -1,3 +1,6 @@
+//! Graph lifecycle control: cancellation, node continuation (retry, answer,
+//! reply), and node history.
+
 use std::fmt::Write as _;
 
 use ag_protocol::parse_protocol_response_strict;

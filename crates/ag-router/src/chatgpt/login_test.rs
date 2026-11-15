@@ -1,3 +1,6 @@
+//! `ChatGPT` browser sign-in tests for client registration, callback
+//! matching, and code exchange.
+
 use std::collections::HashMap;
 
 use base64::Engine as _;

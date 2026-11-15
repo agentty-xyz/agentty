@@ -1,3 +1,6 @@
+//! Graph, node, execution, and evidence fixtures shared by the execution
+//! graph tests.
+
 use std::num::NonZeroU64;
 
 use ag_protocol::{ProtocolRequestProfile, TurnPrompt};

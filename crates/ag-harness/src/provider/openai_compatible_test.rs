@@ -1,3 +1,6 @@
+//! OpenAI-compatible provider tests: declared and running context profiles,
+//! local server configuration, and client capabilities.
+
 use std::env;
 
 use serde_json::{Value, json};

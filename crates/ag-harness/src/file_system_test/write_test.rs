@@ -1,3 +1,6 @@
+//! Local filesystem write unit tests for atomic creation, stale targets,
+//! update locks, directory creation, and path rejection.
+
 use std::ffi::OsStr;
 use std::io;
 use std::os::unix::fs::{PermissionsExt as _, symlink};

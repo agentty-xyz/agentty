@@ -1,3 +1,6 @@
+//! Graph dispatch invariant tests for input readiness, execution gates, Env
+//! admission, and settlement rollback.
+
 use ag_protocol::ProtocolRequestProfile;
 use ag_session::{GraphCompletionGate, GraphExecutionRef};
 use ag_worker::{GraphDispatch, RunState};

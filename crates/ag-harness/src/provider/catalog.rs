@@ -1,3 +1,6 @@
+//! Built-in model provider catalog: known models, cost tiers, profiles, and
+//! client configuration from the environment.
+
 use std::path::PathBuf;
 use std::str::FromStr;
 use std::{env, fmt};

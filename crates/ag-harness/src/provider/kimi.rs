@@ -1,3 +1,6 @@
+//! Kimi model identifiers and configuration for Moonshot AI's
+//! OpenAI-compatible API.
+
 pub(crate) const KIMI_API_KEY_ENV: &str = "KIMI_API_KEY";
 pub(crate) const KIMI_BASE_URL_ENV: &str = "KIMI_BASE_URL";
 

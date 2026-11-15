@@ -1,3 +1,6 @@
+//! `read` tool repository command tests: output truncation, failure
+//! diagnostics, untrusted process configuration, and root verification.
+
 use std::io;
 use std::io::Cursor;
 #[cfg(unix)]

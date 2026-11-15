@@ -1,3 +1,6 @@
+//! Check that workspace dependencies, adapter use, and agent CLI launches
+//! respect the model execution boundary.
+
 use std::ffi::OsString;
 use std::path::{Path, PathBuf};
 use std::process::Command;

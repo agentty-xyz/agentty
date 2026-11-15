@@ -1,3 +1,5 @@
+//! `ReasoningLevel` parsing, persisted value, and description tests.
+
 use crate::ReasoningLevel;
 
 #[test]

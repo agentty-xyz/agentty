@@ -1,3 +1,6 @@
+//! Task agent assignment tests for role contexts, definition snapshots, and
+//! fail-closed validation.
+
 use ag_session::{
     AcceptedTaskPlan, AgentKind, AgentModel, AgentSelection, DurableMessageVisibility,
     SubmitAgentTaskRequest, SubmitTaskRequest, Task, TaskAgentInput, TaskAgentRole,

@@ -1,3 +1,6 @@
+//! Lifecycle observability unit tests for event ordering, observer panic
+//! isolation, reentrant delivery, and stable telemetry names.
+
 use std::sync::atomic::{AtomicUsize, Ordering as AtomicOrdering};
 use std::sync::{Arc, Barrier, Condvar, Mutex, PoisonError, mpsc};
 use std::thread;

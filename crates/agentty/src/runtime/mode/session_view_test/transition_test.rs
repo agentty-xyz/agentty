@@ -1,3 +1,6 @@
+//! Session-view mode transition, action-snapshot, diff, worktree, and
+//! continuation unit tests.
+
 use std::sync::Arc;
 
 use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};

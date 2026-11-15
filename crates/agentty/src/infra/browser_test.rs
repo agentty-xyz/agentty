@@ -1,3 +1,5 @@
+//! `RealBrowserClient` URL handler command and launch-failure tests.
+
 use std::ffi::{OsStr, OsString};
 
 use super::{BrowserClient, RealBrowserClient};

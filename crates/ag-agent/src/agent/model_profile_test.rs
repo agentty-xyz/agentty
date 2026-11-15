@@ -1,3 +1,5 @@
+//! Declared model context profile and context estimator unit tests.
+
 use ag_harness::OutputSchema;
 use ag_harness::model::{ContextEstimator, HeuristicContextEstimator};
 use ag_session::{AgentKind, AgentModel, ServedModel};

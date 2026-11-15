@@ -1,3 +1,5 @@
+//! Unit tests for the `GitHub` review-request adapter, split by behavior.
+
 #[path = "github_test/attention_test.rs"]
 mod attention_test;
 #[path = "github_test/comment_test.rs"]

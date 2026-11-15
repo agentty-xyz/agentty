@@ -1,3 +1,5 @@
+//! User prompt and clarification block rendering and wrapping tests.
+
 use ratatui::style::Style;
 use ratatui::text::Span;
 

@@ -1,3 +1,5 @@
+//! Session output `Tachyonfx` loader emphasis unit test.
+
 use ratatui::buffer::Buffer;
 use ratatui::layout::Rect;
 

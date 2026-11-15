@@ -1,3 +1,6 @@
+//! Session manager test that refresh loads question detail for a session
+//! that is not selected.
+
 use std::path::PathBuf;
 
 use ag_protocol::QuestionItem;

@@ -1,3 +1,5 @@
+//! Proof report fixtures with structured failures, shared by proof unit tests.
+
 use crate::assertion::AssertionFailure;
 use crate::frame::TerminalFrame;
 use crate::proof::report::ProofReport;

@@ -1,3 +1,6 @@
+//! Machine-scoped provider discovery and session workspace setup and cleanup
+//! through the concrete adapter registry.
+
 use std::path::Path;
 
 use ag_contracts::AgentError;

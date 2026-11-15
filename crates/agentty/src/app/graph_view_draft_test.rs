@@ -1,3 +1,5 @@
+//! Graph inspector draft reconciliation and blocking unit tests.
+
 use std::sync::Arc;
 use std::sync::atomic::{AtomicUsize, Ordering};
 

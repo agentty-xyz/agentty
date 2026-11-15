@@ -1,3 +1,5 @@
+//! Themed Mermaid diagram rendering unit tests.
+
 use super::render_mermaid;
 use crate::domain::theme::ColorTheme;
 use crate::ui::style;

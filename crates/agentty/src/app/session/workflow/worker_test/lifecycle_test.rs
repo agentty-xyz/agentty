@@ -1,3 +1,5 @@
+//! Session preparation and fork-retry lifecycle tests for the session worker.
+
 use std::collections::VecDeque;
 
 use ag_contracts::{AgentRequestKind, MockAgentChannel};

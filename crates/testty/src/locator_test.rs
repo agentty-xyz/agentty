@@ -1,3 +1,5 @@
+//! `MatchedSpan` color and highlight detection unit tests.
+
 use crate::frame::{CellColor, CellStyle};
 use crate::locator::MatchedSpan;
 use crate::region::Region;

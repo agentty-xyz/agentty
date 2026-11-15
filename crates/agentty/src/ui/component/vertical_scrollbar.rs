@@ -1,3 +1,5 @@
+//! Slim vertical scrollbar rendered within a caller-provided track area.
+
 use ratatui::Frame;
 use ratatui::layout::Rect;
 use ratatui::style::Style;

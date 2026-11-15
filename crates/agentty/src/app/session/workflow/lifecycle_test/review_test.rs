@@ -1,3 +1,6 @@
+//! Review workflow tests covering review request URLs and replies to review
+//! comments or generated prompts for missing sessions.
+
 use std::sync::Arc;
 
 use ag_forge as forge;

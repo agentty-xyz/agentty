@@ -1,3 +1,5 @@
+//! Unit tests for the per-frame `FrameTime` wall-clock snapshot.
+
 use super::FrameTime;
 
 #[test]

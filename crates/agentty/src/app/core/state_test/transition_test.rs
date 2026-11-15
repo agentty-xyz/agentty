@@ -1,3 +1,6 @@
+//! `App` unit tests for branch push guidance, turn telemetry, `tmux` worktree
+//! launch, and backend startup selection.
+
 use std::fs;
 use std::path::PathBuf;
 use std::sync::Arc;

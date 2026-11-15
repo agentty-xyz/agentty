@@ -1,3 +1,5 @@
+//! Task-context session client validation and cancellation unit tests.
+
 use std::sync::Arc;
 
 use ag_contracts::{AgentError, MockAgentChannel};

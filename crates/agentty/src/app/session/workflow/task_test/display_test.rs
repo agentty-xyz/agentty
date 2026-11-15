@@ -1,3 +1,6 @@
+//! Agent assist task tests covering activity display and rejection of
+//! plain-text output.
+
 use std::sync::{Arc, Mutex};
 
 use ag_contracts::{ActivityEvent, ActivityKind, ActivityStatus, OneShotError};

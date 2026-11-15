@@ -1,3 +1,6 @@
+//! Application view projection tests for frame time, visible review
+//! sessions, and the settings snapshot.
+
 use std::time::{Duration, Instant, SystemTime};
 
 use super::{read_frame_time, visible_review_session_id};

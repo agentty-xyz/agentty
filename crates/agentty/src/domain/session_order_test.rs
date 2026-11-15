@@ -1,3 +1,6 @@
+//! Grouped session-list ordering, selection navigation, and archive action
+//! tests.
+
 use super::{
     ArchiveAction, GroupedSessionRow, SessionTreePosition, archive_actions, grouped_session_rows,
     next_selectable_index, preferred_initial_session_index, previous_selectable_index,

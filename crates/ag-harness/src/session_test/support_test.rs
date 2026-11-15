@@ -1,3 +1,6 @@
+//! Shared session test fixtures: schemas, mock models, tool calls, database
+//! helpers, legacy databases, and reservation commit control.
+
 use std::path::Path;
 use std::sync::Arc;
 use std::time::Duration;

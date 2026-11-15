@@ -1,3 +1,5 @@
+//! `GitLab` display-id, created-URL, and request-response parsing tests.
+
 use crate::gitlab::GitLabReviewRequestAdapter;
 use crate::model::{ForgeKind, ReviewRequestError};
 

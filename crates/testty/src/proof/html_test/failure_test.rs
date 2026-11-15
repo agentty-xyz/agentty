@@ -1,3 +1,5 @@
+//! HTML proof structured-failure and matched-span rendering unit tests.
+
 use super::super::build_html;
 use crate::assertion::{AssertionFailure, Expected};
 use crate::frame::{CellColor, CellStyle, TerminalFrame};

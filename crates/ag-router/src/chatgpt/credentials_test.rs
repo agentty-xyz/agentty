@@ -1,3 +1,6 @@
+//! `ChatGPT` credential storage, freshness, grant merging, and redaction unit
+//! tests.
+
 use std::fs;
 #[cfg(unix)]
 use std::os::unix::fs::PermissionsExt as _;

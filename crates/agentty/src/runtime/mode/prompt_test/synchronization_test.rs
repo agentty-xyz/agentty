@@ -1,3 +1,5 @@
+//! Prompt `@`-mention state resynchronization tests.
+
 use std::path::PathBuf;
 
 use super::super::{PromptEffect, reduce_prompt_input_command, select_at_mention};

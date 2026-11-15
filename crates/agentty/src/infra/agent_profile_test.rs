@@ -1,3 +1,6 @@
+//! Workspace agent profile catalog discovery, resolution, and containment
+//! tests.
+
 use std::io;
 use std::os::unix::fs::symlink;
 use std::path::{Path, PathBuf};

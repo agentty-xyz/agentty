@@ -1,3 +1,6 @@
+//! Inherited run ownership scopes for child model calls and scoped run
+//! clients.
+
 use std::future::{Future, poll_fn};
 use std::sync::Arc;
 use std::task::Poll;

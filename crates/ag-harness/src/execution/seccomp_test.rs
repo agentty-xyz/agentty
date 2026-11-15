@@ -1,3 +1,6 @@
+//! Seccomp filter unit tests for denied syscalls, alternate ABIs, and
+//! unsupported architectures.
+
 use super::filter;
 
 fn evaluate(program: &[u8], syscall: u32, arch: u32, flags: u32) -> u32 {

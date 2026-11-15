@@ -1,3 +1,5 @@
+//! Shared prompt-mode test fixtures, mock installers, and key reducers.
+
 use std::path::PathBuf;
 use std::sync::Arc;
 

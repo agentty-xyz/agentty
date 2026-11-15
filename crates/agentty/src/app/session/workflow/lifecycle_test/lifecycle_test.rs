@@ -1,3 +1,6 @@
+//! Session lifecycle workflow tests covering creation, rollback, draft
+//! staging and materialization, and title generation.
+
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::time::{Duration, Instant, SystemTime};

@@ -1,3 +1,6 @@
+//! Worker command skipping, channel turn execution, cancellation, and restart
+//! recovery tests.
+
 use std::collections::VecDeque;
 use std::future::pending;
 use std::path::PathBuf;

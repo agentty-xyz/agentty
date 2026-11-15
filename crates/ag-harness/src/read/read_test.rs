@@ -1,3 +1,5 @@
+//! Unit tests for the `read` tool, split by behavior.
+
 #[path = "read_test/command_test.rs"]
 mod command;
 #[path = "read_test/diff_test.rs"]

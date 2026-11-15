@@ -1,3 +1,6 @@
+//! Benchmark result summary: pass-count failure reporting and redaction of
+//! HTTP response bodies from case details.
+
 use std::error::Error;
 use std::fmt;
 

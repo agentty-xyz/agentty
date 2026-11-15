@@ -1,3 +1,6 @@
+//! Post-turn workflow tests covering task publication, review comment
+//! outcomes, auto-push rechecks, and error notice truncation.
+
 use std::collections::VecDeque;
 use std::path::PathBuf;
 use std::sync::{Arc, Mutex};

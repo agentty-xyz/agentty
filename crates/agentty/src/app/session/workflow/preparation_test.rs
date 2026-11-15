@@ -1,3 +1,6 @@
+//! Workspace preparation retry tests covering checkout removal on
+//! cancellation and preservation on backend failure.
+
 use ag_worker::test_support::{self as agent, AgentBackend};
 
 use super::super::{session_branch, session_folder};

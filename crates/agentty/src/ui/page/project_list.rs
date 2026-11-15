@@ -1,3 +1,6 @@
+//! Projects tab page rendering saved repositories, an activity heatmap, work
+//! stats, and available agent CLIs.
+
 use std::env;
 use std::path::Path;
 

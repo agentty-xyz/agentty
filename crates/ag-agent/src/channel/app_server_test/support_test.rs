@@ -1,3 +1,6 @@
+//! Turn-request, response, and PID-event fixtures shared by the app-server
+//! channel tests.
+
 use std::path::PathBuf;
 
 use ag_contracts::{AgentRequestKind, ReasoningLevel, TurnEvent, TurnRequest};

@@ -1,3 +1,5 @@
+//! User prompt block styling and markdown-line padding unit tests.
+
 use ratatui::style::Color;
 use ratatui::text::Span;
 

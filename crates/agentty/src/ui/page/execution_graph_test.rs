@@ -1,3 +1,6 @@
+//! Execution graph inspector rendering, scrolling, and action-control unit
+//! tests.
+
 use ag_protocol::{ProtocolRequestProfile, QuestionItem};
 use ag_session::{
     ExecutionGraphStatus, GraphBlockedReason, GraphCompletionGate, GraphDependency,

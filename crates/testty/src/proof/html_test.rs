@@ -1,3 +1,5 @@
+//! Unit tests for the HTML proof backend, split by behavior.
+
 #[path = "html_test/render_test.rs"]
 mod render;
 

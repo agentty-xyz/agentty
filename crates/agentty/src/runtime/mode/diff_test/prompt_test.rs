@@ -1,3 +1,5 @@
+//! Diff line-comment prompt, paste, and composer-restore tests.
+
 use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
 
 use super::super::{

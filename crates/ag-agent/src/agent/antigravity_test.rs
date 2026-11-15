@@ -1,3 +1,5 @@
+//! Antigravity backend command construction and CLI validation unit tests.
+
 use ag_contracts::{AgentRequestKind, ReasoningLevel};
 use ag_protocol::TurnPromptAttachment;
 use ag_session::AgentModel;

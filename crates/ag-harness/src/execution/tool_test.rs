@@ -1,3 +1,6 @@
+//! Bash tool unit tests for construction, executor failures and panics, and
+//! command outcome reporting.
+
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 

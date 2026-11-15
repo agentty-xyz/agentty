@@ -1,3 +1,5 @@
+//! Key handling for the help overlay.
+
 use crossterm::event::{KeyCode, KeyEvent};
 
 use crate::presentation::app_mode::AppMode;

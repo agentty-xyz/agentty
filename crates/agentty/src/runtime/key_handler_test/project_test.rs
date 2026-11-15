@@ -1,3 +1,5 @@
+//! Project switcher and project catalog key-handler tests.
+
 use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
 
 use super::super::handle_project_switcher_key;

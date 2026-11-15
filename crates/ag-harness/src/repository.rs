@@ -1,3 +1,5 @@
+//! Validated host repository configuration for repository-scoped tools.
+
 use std::fs;
 use std::path::{Path, PathBuf};
 

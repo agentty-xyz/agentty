@@ -1,3 +1,6 @@
+//! `read` tool outputs and errors, and their rendering into bounded tool
+//! results.
+
 use std::fmt::Write as _;
 use std::{fmt, io};
 

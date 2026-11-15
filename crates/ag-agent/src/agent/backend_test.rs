@@ -1,3 +1,5 @@
+//! Agent transport classification and backend error unit tests.
+
 use std::error::Error;
 
 use crate::agent::backend::{AgentBackendError, AgentTransport};

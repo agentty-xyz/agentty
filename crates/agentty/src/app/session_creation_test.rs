@@ -1,3 +1,6 @@
+//! Pending session creation tests covering saved prompts, workspace
+//! preparation, retries, cancellation, and fork handoffs.
+
 use std::ffi::OsStr;
 use std::os::unix::ffi::OsStrExt;
 use std::path::PathBuf;

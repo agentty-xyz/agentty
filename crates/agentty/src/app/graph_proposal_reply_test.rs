@@ -1,3 +1,6 @@
+//! Chat reply unit tests for cancelling, revising, and approving pending graph
+//! proposals, including restart recovery.
+
 use std::fs;
 use std::sync::Arc;
 use std::time::Duration;

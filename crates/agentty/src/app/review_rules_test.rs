@@ -1,3 +1,6 @@
+//! Review rules loading and selection unit tests covering size limits, path
+//! and language matching, validation, and criteria budgets.
+
 use std::fmt::Write as _;
 use std::io;
 use std::path::Path;

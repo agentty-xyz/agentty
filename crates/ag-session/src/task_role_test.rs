@@ -1,3 +1,5 @@
+//! Task agent role identity and permission unit tests.
+
 use crate::{PermissionMode, TaskAgentRole};
 
 #[test]

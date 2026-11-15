@@ -1,3 +1,5 @@
+//! Session creation activity persistence and timestamp loading tests.
+
 use crate::connection::Database;
 
 #[tokio::test]

@@ -1,3 +1,6 @@
+//! `ReadTool`, the bounded built-in repository inspector, and its read
+//! limits.
+
 use std::path::PathBuf;
 use std::sync::Arc;
 

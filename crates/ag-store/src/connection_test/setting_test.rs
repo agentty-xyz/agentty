@@ -1,3 +1,6 @@
+//! Global and per-project setting persistence tests, including typed
+//! reasoning-level and speed-mode helpers.
+
 use ag_session::{
     AgentModel, ReasoningLevel, SettingName, SpeedMode, test_support as model_fixture,
 };

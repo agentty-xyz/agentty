@@ -1,3 +1,5 @@
+//! Review comment operation retry and review watch persistence tests.
+
 use crate::review::{NewSessionReviewCommentResolution, SessionReviewWatchRow};
 use crate::{AppRepositories, DbError};
 

@@ -1,3 +1,6 @@
+//! Test support for `AppServices`: the scripted `TestSessionRunFactory`,
+//! dependency setters, and an offline channel that aborts on model calls.
+
 use std::collections::HashMap;
 use std::io::{self, Write};
 use std::path::Path;

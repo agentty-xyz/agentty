@@ -1,3 +1,5 @@
+//! Graph execution profile validation and permission-ceiling unit tests.
+
 use ag_protocol::ProtocolRequestProfile;
 
 use crate::execution_graph::test_support::reader;

@@ -1,3 +1,6 @@
+//! Agent CLI subprocess execution unit tests covering output capture,
+//! failures, timeouts, tracing, and process-group cleanup.
+
 use std::ffi::OsString;
 use std::io;
 #[cfg(unix)]

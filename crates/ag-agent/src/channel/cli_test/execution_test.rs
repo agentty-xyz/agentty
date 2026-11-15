@@ -1,3 +1,6 @@
+//! CLI channel turn execution tests covering spawning, stdin delivery, exit
+//! and signal handling, error mapping, and progress forwarding.
+
 use std::path::PathBuf;
 use std::sync::Arc;
 use std::time::Duration;

@@ -1,3 +1,5 @@
+//! Unit tests for the local filesystem boundary, split by behavior.
+
 #[path = "file_system_test/exchange_test.rs"]
 mod exchange;
 #[path = "file_system_test/metadata_test.rs"]

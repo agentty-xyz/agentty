@@ -1,3 +1,5 @@
+//! Model request, reasoning-effort, and error-classification unit tests.
+
 use std::io;
 
 use serde_json::json;

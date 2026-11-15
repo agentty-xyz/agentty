@@ -1,3 +1,5 @@
+//! Tool policy default-deny, allow, and revoke unit tests.
+
 use crate::policy::ToolPolicy;
 use crate::tool::Tool;
 

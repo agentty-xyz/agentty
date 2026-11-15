@@ -1,3 +1,5 @@
+//! Graph sidebar loading unit tests for the visible session.
+
 use std::sync::Arc;
 
 use ag_session::{GraphProposalApproval, test_support};

@@ -1,3 +1,5 @@
+//! Task agent input validation unit tests.
+
 use crate::{AcceptedTaskPlan, TaskAgentInput, TaskAgentRole};
 
 #[test]

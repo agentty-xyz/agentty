@@ -1,3 +1,5 @@
+//! `ProofBackend` trait and `RenderContext` unit tests.
+
 use std::path::Path;
 
 use crate::proof::backend::{ProofBackend, RenderContext};

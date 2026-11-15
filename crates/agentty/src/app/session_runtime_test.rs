@@ -1,3 +1,6 @@
+//! Session runtime handle tests covering availability after drops, graph
+//! handoffs, and request cancellation when the consumer stops.
+
 use std::time::Duration;
 
 use ag_session::{SessionError, SessionId};

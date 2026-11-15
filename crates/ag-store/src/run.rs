@@ -1,3 +1,5 @@
+//! SQLite-backed `RunRepository` for durable agent run state.
+
 use std::sync::Arc;
 
 use ag_contracts::OneShotError;

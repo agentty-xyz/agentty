@@ -1,3 +1,6 @@
+//! Session output cache eviction, transcript fingerprint, indicator area, and
+//! viewport row selection unit tests.
+
 use std::sync::Arc;
 
 use ratatui::layout::Rect;

@@ -1,3 +1,5 @@
+//! `ClipboardError` failures returned by clipboard backends.
+
 use std::fmt;
 
 /// Error returned by platform clipboard backends.

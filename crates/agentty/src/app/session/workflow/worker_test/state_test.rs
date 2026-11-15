@@ -1,3 +1,6 @@
+//! Turn event consumption, progress and activity publication, and status
+//! update tests for the session worker.
+
 use std::collections::VecDeque;
 use std::sync::{Arc, Mutex};
 

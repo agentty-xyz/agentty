@@ -1,3 +1,5 @@
+//! Centered popup for choosing the parent of an existing review session.
+
 use ag_tui_text::text_util::truncate_with_ellipsis;
 use ratatui::Frame;
 use ratatui::layout::{Alignment, Rect};

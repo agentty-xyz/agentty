@@ -1,3 +1,5 @@
+//! Session reasoning-level override and fallback tests.
+
 use super::super::super::agent::ReasoningLevel;
 use super::support::test_session;
 

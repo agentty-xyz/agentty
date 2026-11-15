@@ -1,3 +1,6 @@
+//! App service unit tests covering event labels, telemetry and creation task
+//! tracking, shutdown deadlines, and production worker factories.
+
 use std::collections::HashMap;
 use std::future;
 use std::sync::{Arc, Mutex};

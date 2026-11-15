@@ -1,3 +1,5 @@
+//! Project setting tests for response-style defaults and batch rollback.
+
 use ag_session::{AgentModel, ResponseStyle, SettingName};
 
 use crate::AppRepositories;

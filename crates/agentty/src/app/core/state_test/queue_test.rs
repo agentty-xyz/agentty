@@ -1,3 +1,6 @@
+//! `App` unit tests for tick-driven UI, follow-up task navigation and launch,
+//! and stored release versions.
+
 use std::path::PathBuf;
 use std::sync::Arc;
 

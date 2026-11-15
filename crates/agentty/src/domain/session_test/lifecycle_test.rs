@@ -1,3 +1,6 @@
+//! Session lifecycle tests for drafts, stacked children, cancel and fork
+//! actions, size buckets, and continuation prompts.
+
 use ag_session::{SessionId, SessionStatus as Status};
 
 use super::super::{

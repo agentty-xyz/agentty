@@ -1,3 +1,6 @@
+//! Test runtime, live-transcript, and request-kind fixtures shared by the
+//! app-server retry tests.
+
 use std::sync::Arc;
 
 use ag_contracts::{AgentRequestKind, LiveTranscript};

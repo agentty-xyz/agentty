@@ -1,3 +1,6 @@
+//! OTLP trace export unit tests for chat turn spans, rejected exports, and
+//! invalid endpoints.
+
 use ag_telemetry::otlp::OtlpError;
 use opentelemetry_proto::tonic::collector::trace::v1::ExportTraceServiceRequest;
 use prost::Message as _;

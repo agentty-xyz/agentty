@@ -1,3 +1,5 @@
+//! Mermaid flowchart feedback-cycle rendering and layering tests.
+
 use super::support::diagram_text;
 use crate::mermaid::{
     Canvas, MermaidEdge, draw_feedback_edge_label, layout_layers, parse_graph, render_mermaid,

@@ -1,3 +1,6 @@
+//! Top-level key routing to the active mode handler, plus overlay handlers for
+//! session creation, project switching, publishing, and confirmations.
+
 use std::io;
 
 use ag_session::{CreateSessionMode, CreateSessionRequest};

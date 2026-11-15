@@ -1,3 +1,5 @@
+//! Session view diff-opening test.
+
 use super::super::{ViewContext, show_diff_for_view_session};
 use super::support::{apply_pending_session_diff, new_test_app_with_session};
 use crate::presentation::app_mode::AppMode;

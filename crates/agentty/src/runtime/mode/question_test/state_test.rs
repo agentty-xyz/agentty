@@ -1,3 +1,5 @@
+//! Question mode state helper tests.
+
 use super::super::{
     activate_question_at_mention, dismiss_question_at_mention, exit_to_list_saving_progress,
     handle_paste, handle_question_at_mention_down, handle_question_at_mention_select,

@@ -1,3 +1,5 @@
+//! Diff prompt chunking, summary reduction, and summary repair unit tests.
+
 use std::path::PathBuf;
 use std::sync::{Arc, Mutex};
 

@@ -1,3 +1,5 @@
+//! Graph inspector read, action, and navigation unit tests.
+
 use std::collections::BTreeMap;
 use std::sync::Arc;
 

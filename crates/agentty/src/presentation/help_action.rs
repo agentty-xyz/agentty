@@ -1,3 +1,6 @@
+//! Footer and help-popup shortcut entries, with the action sets available in
+//! list, settings, session view, and diff contexts.
+
 use crate::domain::session::{PublishBranchAction, ReviewWatchToggle, Session, Status};
 use crate::domain::session_order::ArchiveAction;
 

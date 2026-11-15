@@ -1,3 +1,6 @@
+//! `ChatGPT` plan provider: model identifiers, context profiles, and sign-in
+//! credential file lookup.
+
 use std::env;
 use std::path::{Path, PathBuf};
 

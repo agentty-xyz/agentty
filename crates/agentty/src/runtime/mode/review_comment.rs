@@ -1,3 +1,5 @@
+//! Key handling for the review-comments section of the diff workspace.
+
 use ag_forge::ReviewCommentSnapshot;
 use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
 use ratatui::layout::Rect;

@@ -1,3 +1,5 @@
+//! Conversion of `file://` URLs and URI lists into local filesystem paths.
+
 use std::ffi::OsString;
 #[cfg(unix)]
 use std::os::unix::ffi::OsStringExt;

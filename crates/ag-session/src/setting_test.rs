@@ -1,3 +1,5 @@
+//! Setting name persisted-key and display unit tests.
+
 use crate::setting::SettingName;
 
 /// Ensures every setting key keeps its persisted wire value.

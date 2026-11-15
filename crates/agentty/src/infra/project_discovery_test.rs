@@ -1,3 +1,6 @@
+//! Project discovery scan tests for repository detection, limits, symlinks,
+//! and cancellation.
+
 use std::fs;
 use std::sync::Arc;
 use std::sync::atomic::AtomicBool;

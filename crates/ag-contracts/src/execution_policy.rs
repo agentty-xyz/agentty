@@ -1,3 +1,6 @@
+//! Worker-selected harness execution controls for subagent concurrency, MCP
+//! loading, and built-in tools.
+
 use std::num::NonZeroUsize;
 
 /// Worker-selected harness controls, retained across retries and repairs.

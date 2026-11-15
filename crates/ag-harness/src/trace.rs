@@ -1,3 +1,5 @@
+//! Projection of harness lifecycle events to OpenTelemetry `GenAI` spans.
+
 use std::collections::HashMap;
 use std::sync::{Mutex, PoisonError};
 

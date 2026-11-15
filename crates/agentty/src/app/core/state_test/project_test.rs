@@ -1,3 +1,5 @@
+//! `App` project switching, startup project state, and project row unit tests.
+
 use std::fs;
 use std::path::Path;
 use std::sync::Arc;

@@ -1,3 +1,6 @@
+//! Published branch tests covering task pushes, review request metadata
+//! sync, and review comment reply and resolution.
+
 use std::path::PathBuf;
 use std::sync::{Arc, Mutex};
 

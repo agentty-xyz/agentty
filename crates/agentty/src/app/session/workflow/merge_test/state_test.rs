@@ -1,3 +1,6 @@
+//! Merge state tests covering session titles from commit messages and
+//! stacked parent merge notifications.
+
 use tokio::sync::mpsc;
 
 use crate::app::{AppEvent, SessionManager};

@@ -1,3 +1,6 @@
+//! App-server session registry storage, cancellation, and lock-poisoning unit
+//! tests.
+
 use std::sync::{Arc, Mutex};
 
 use crate::app_server::AppServerError;

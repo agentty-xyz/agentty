@@ -1,3 +1,5 @@
+//! `PermissionMode` parsing, default, and label tests.
+
 use std::str::FromStr;
 
 use crate::permission::PermissionMode;

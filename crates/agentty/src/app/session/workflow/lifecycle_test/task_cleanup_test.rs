@@ -1,3 +1,6 @@
+//! Session deletion and cancellation tests for task history ownership and
+//! graph runtime cleanup.
+
 use std::path::PathBuf;
 use std::sync::{Arc, Mutex};
 

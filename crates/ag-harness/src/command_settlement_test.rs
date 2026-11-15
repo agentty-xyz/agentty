@@ -1,3 +1,6 @@
+//! Command settlement unit tests for retained controls, admission release,
+//! cleanup retries, and per-owner reconciliation.
+
 use std::path::Path;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};

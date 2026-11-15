@@ -1,3 +1,6 @@
+//! Graph executor tests for capacity, Env leases, budgets, waves, and panic
+//! cleanup.
+
 use std::collections::HashMap;
 use std::future::Future;
 use std::num::{NonZeroU64, NonZeroUsize};

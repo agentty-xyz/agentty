@@ -1,3 +1,6 @@
+//! Harness context summary unit tests for summary requests, corrections,
+//! fallbacks, cancellation, and session history.
+
 use std::collections::VecDeque;
 use std::io::Cursor;
 use std::num::NonZeroU64;

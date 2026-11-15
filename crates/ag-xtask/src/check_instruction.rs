@@ -1,3 +1,6 @@
+//! Check that instruction files reference existing paths, local links, and
+//! hooks, and that each `AGENTS.md` has a `CLAUDE.md` symlink alias.
+
 use std::collections::BTreeSet;
 use std::io;
 use std::path::{Path, PathBuf};

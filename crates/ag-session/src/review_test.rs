@@ -1,3 +1,6 @@
+//! Review tests for apply-review prompts, suggestion extraction, status
+//! persistence, and coverage status.
+
 use ag_protocol::{TurnPromptAttachment, TurnPromptTextSource};
 
 use crate::review::{

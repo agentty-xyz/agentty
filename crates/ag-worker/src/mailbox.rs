@@ -1,3 +1,5 @@
+//! Session worker mailbox: command submission, pause guards, and shutdown.
+
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, Mutex as AdmissionMutex};
 

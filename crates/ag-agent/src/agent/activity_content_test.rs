@@ -1,3 +1,5 @@
+//! Tool-content preview extraction, bounding, and sanitization unit tests.
+
 use serde_json::json;
 
 use super::{ActivityDetails, PREVIEW_LIMIT, TRUNCATED, append_output, bounded, preview};

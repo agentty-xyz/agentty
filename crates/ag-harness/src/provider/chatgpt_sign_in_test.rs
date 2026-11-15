@@ -1,3 +1,6 @@
+//! `ChatGPT` loopback sign-in unit tests for callbacks, credential save
+//! failures, timeouts, port fallback, and issuer selection.
+
 use std::path::Path;
 use std::time::Duration;
 use std::{env, fs};

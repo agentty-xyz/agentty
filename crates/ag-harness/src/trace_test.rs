@@ -1,3 +1,6 @@
+//! Lifecycle trace tests: span projection for every outcome, context
+//! propagation, repeated tool call events, and bounded attributes.
+
 use std::collections::BTreeMap;
 use std::io::{self, Cursor};
 use std::path::{Path, PathBuf};

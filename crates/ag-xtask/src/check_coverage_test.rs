@@ -1,3 +1,5 @@
+//! Coverage report gap detection, path filtering, and failure unit tests.
+
 use std::io::{self, Write};
 use std::path::{Path, PathBuf};
 

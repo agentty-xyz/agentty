@@ -1,3 +1,5 @@
+//! `SoftAssertions` failure aggregation, drop-panic, and report unit tests.
+
 use crate::assertion::{SoftAssertions, match_not_visible, match_text_in_region};
 use crate::frame::TerminalFrame;
 use crate::proof::report::ProofReport;

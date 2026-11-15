@@ -1,3 +1,6 @@
+//! OpenTelemetry `GenAI` metrics for model requests, agent turns, and tool
+//! calls, recorded from harness lifecycle events.
+
 use std::collections::HashMap;
 use std::sync::{Mutex, PoisonError};
 use std::time::{Duration, Instant};

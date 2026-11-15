@@ -1,3 +1,5 @@
+//! Test helper that counts session-output lines with a fresh render cache.
+
 use super::rendered_output_line_count_with_cache;
 use crate::app::App;
 use crate::ui::RenderCacheStore;

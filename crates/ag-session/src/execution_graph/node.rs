@@ -1,3 +1,6 @@
+//! Execution graph nodes with their execution profiles, dependencies,
+//! outputs, and input bindings.
+
 use ag_protocol::{ProtocolRequestProfile, TurnPrompt};
 use serde::{Deserialize, Serialize};
 

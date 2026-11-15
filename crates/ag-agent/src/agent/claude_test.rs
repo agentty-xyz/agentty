@@ -1,3 +1,5 @@
+//! Unit tests for the Claude CLI backend, split by behavior.
+
 #[path = "claude_test/command_test.rs"]
 mod command;
 #[path = "claude_test/permission_test.rs"]

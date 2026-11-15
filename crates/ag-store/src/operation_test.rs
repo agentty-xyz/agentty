@@ -1,3 +1,6 @@
+//! Session operation tests for terminal updates, cancellation, recovery, and
+//! heartbeats.
+
 use crate::{AppRepositories, DbError};
 
 #[tokio::test]

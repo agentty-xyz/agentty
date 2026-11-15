@@ -1,3 +1,5 @@
+//! Session message append and transcript loading persistence tests.
+
 use ag_session::SessionMessageKind;
 
 use super::support::insert_session_fixture;

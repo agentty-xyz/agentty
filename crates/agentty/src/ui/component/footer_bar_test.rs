@@ -1,3 +1,6 @@
+//! Footer bar path abbreviation, git branch, and git status rendering unit
+//! tests.
+
 use std::env;
 use std::path::Path;
 

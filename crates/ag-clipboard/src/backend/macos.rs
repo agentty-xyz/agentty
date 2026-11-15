@@ -1,3 +1,6 @@
+//! macOS clipboard backend that reads text, file URLs, and images from
+//! `NSPasteboard`.
+
 use std::path::PathBuf;
 
 use image::ImageFormat;

@@ -1,3 +1,5 @@
+//! Stub VHS contexts and tape executions shared by the feature unit tests.
+
 use std::path::{Path, PathBuf};
 
 use super::super::VhsContext;

@@ -1,3 +1,5 @@
+//! Graph proposal generation, admission, titling, and approval unit tests.
+
 use std::sync::{Arc, Mutex};
 
 use ag_contracts::{

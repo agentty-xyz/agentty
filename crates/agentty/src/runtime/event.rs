@@ -1,3 +1,6 @@
+//! Terminal event reading and dispatch of terminal, app, and tick events into
+//! runtime processing cycles.
+
 use std::future::Future;
 use std::io;
 use std::pin::Pin;

@@ -1,3 +1,6 @@
+//! Task agent response persistence tests for idempotency, conflicts, usage,
+//! and per-task history.
+
 use ag_session::{SubmitAgentTaskRequest, SubmitTaskRequest, TaskAttemptStatus};
 
 use crate::test_support::{agent_task_request, task_database_fixture};

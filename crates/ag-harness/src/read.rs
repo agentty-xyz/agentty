@@ -1,3 +1,6 @@
+//! Bounded built-in `read` tool for repository files, listings, searches,
+//! diffs, and revisions.
+
 pub(crate) mod command;
 mod file;
 mod inspection;

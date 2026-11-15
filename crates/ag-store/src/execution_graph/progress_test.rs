@@ -1,3 +1,6 @@
+//! Graph progress tests for rejecting corrupt execution references and
+//! settled responses.
+
 use ag_session::GraphExecutionRef;
 
 use crate::DbError;

@@ -1,3 +1,6 @@
+//! Background sync tests for review-request status polling, backoff, and
+//! session git status collection.
+
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;

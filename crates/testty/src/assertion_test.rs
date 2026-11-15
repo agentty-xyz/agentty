@@ -1,3 +1,5 @@
+//! Unit tests for frame assertions, split by behavior.
+
 #[path = "assertion_test/text_test.rs"]
 mod text;
 

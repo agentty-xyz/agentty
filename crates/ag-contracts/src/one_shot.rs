@@ -1,3 +1,5 @@
+//! Provider-neutral contract for isolated one-shot structured agent prompts.
+
 use std::path::PathBuf;
 use std::sync::{Arc, Mutex};
 

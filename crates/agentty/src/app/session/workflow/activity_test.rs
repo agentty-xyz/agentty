@@ -1,3 +1,6 @@
+//! Turn activity tracking tests covering summaries, live and rolling rows,
+//! bounded snapshots, and readable command previews.
+
 use std::time::SystemTime;
 
 use ag_contracts::{ActivityEvent, ActivityKind, ActivityStatus};

@@ -1,3 +1,5 @@
+//! Diff mode help overlay and question-snapshot restore tests.
+
 use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
 
 use super::super::open_line_comment_prompt;

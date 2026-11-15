@@ -1,3 +1,5 @@
+//! `GitLab` merge request metadata load, sync, and update-command tests.
+
 use std::sync::Arc;
 
 use mockall::Sequence;

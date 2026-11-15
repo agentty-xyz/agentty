@@ -1,3 +1,6 @@
+//! Key-handler mode transition tests for launch-configuration selectors,
+//! confirmations, info popups, and stack-parent selection.
+
 use std::sync::Arc;
 
 use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};

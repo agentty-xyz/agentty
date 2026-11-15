@@ -1,3 +1,6 @@
+//! Repository listing, literal search, diff, and revision `show` actions for
+//! the `read` tool, with bounded results.
+
 use std::io::Cursor;
 use std::path::{Path, PathBuf};
 

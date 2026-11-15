@@ -1,3 +1,6 @@
+//! Session-view merge-queue state, merge confirmation, rebase output, and
+//! queued-message resync unit tests.
+
 use super::super::{
     end_in_progress_turn, open_merge_confirmation, rebase_view_session, view_context,
 };

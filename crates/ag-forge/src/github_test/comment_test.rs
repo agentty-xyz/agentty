@@ -1,3 +1,6 @@
+//! `GitHub` review comment tests covering `GraphQL` snapshot parsing,
+//! pagination, parse failures, and thread reply and resolution mutations.
+
 use std::sync::Arc;
 
 use mockall::Sequence;

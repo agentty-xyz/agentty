@@ -1,3 +1,6 @@
+//! Unsandboxed executor unit tests for output capture, exit statuses, and
+//! process group cleanup and reaping.
+
 use std::collections::VecDeque;
 use std::os::unix::process::ExitStatusExt;
 use std::path::PathBuf;

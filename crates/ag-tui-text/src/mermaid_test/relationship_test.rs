@@ -1,3 +1,5 @@
+//! Mermaid entity-relationship diagram rendering tests.
+
 use std::fmt::Write;
 
 use super::support::diagram_text;

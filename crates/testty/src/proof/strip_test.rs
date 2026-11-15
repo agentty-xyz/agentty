@@ -1,3 +1,5 @@
+//! Frame-strip PNG backend composition, labeling, and error unit tests.
+
 use super::{LABEL_BG, LABEL_FG, compose_strip, render_all_frames};
 use crate::frame::TerminalFrame;
 use crate::proof::backend::{ProofBackend, RenderContext};

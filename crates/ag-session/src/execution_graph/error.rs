@@ -1,3 +1,5 @@
+//! Execution graph contract violations.
+
 /// A structural graph or exact-result binding violation.
 #[derive(Clone, Debug, Eq, PartialEq, thiserror::Error)]
 pub enum GraphContractError {

@@ -1,3 +1,6 @@
+//! `GitLab` review comment tests covering discussion snapshots, anchors,
+//! pagination, and thread reply and resolution requests.
+
 use std::sync::Arc;
 
 use mockall::Sequence;

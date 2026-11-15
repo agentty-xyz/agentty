@@ -1,3 +1,5 @@
+//! Task plan acceptance and implementation handoff tests.
+
 use ag_session::{
     AcceptTaskPlanRequest, AgentKind, AgentModel, AgentSelection, SubmitAgentTaskRequest,
     TaskAgentRole,

@@ -1,3 +1,5 @@
+//! Session worker handle constructor for host mailbox tests.
+
 use std::sync::Arc;
 use std::sync::atomic::AtomicU64;
 

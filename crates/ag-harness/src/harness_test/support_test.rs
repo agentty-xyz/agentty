@@ -1,3 +1,6 @@
+//! Shared harness test fixtures: mock models and filesystems, harness and
+//! tool call builders, stored turn state helpers, and lifecycle assertions.
+
 use std::io;
 use std::io::Cursor;
 use std::path::{Path, PathBuf};

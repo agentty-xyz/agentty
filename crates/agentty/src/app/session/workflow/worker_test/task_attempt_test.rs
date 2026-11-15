@@ -1,3 +1,6 @@
+//! Task API attempt tests for worker execution and rejection of unavailable
+//! sessions.
+
 use std::sync::Arc;
 use std::time::Duration;
 

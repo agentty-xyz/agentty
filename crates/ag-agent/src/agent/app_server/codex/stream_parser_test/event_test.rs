@@ -1,3 +1,5 @@
+//! Codex stream event, turn id, and message delta extraction unit tests.
+
 use crate::agent::app_server::codex::stream_parser::{
     ExtractedAgentMessage, camel_to_snake, extract_agent_message, extract_agent_message_delta,
     extract_item_started_progress, extract_turn_id_from_turn_start_response,

@@ -1,3 +1,5 @@
+//! Prompt apply-review command and review-output restore tests.
+
 use ag_session::build_apply_review_prompt;
 
 use super::super::prompt_context;

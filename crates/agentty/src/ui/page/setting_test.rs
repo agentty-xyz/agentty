@@ -1,3 +1,6 @@
+//! Settings page table layout, section selection, and selector-dropdown unit
+//! tests.
+
 use ag_session::test_support as model_fixture;
 use ratatui::layout::{Constraint, Rect};
 use ratatui::text::Line;

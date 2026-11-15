@@ -1,3 +1,5 @@
+//! Session view review-regeneration test while a review is still loading.
+
 use super::super::{ViewContext, ViewPendingUpdate, open_or_regenerate_review};
 use super::support::new_test_app_with_session;
 use crate::app::ReviewCacheEntry;

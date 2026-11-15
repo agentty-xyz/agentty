@@ -1,3 +1,6 @@
+//! Page area, session header, help action, prompt footer, suggestion list,
+//! question panel, and input layout unit tests.
+
 use std::path::PathBuf;
 
 use ag_session::test_support as model_fixture;

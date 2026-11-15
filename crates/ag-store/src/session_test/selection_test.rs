@@ -1,3 +1,6 @@
+//! Session selection update tests for reasoning level, speed mode, agent
+//! model, and backfills.
+
 use ag_session::{ReasoningLevel, SpeedMode};
 use sqlx::SqlitePool;
 

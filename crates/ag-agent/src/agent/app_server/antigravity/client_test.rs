@@ -1,3 +1,5 @@
+//! Antigravity app-server client and provider runtime unit tests.
+
 use std::path::PathBuf;
 
 use ag_contracts::{PermissionMode, ReasoningLevel, SpeedMode};

@@ -1,3 +1,6 @@
+//! Filesystem boundary for harness tools and its local implementation, with
+//! contained opens and stale-safe atomic file replacement.
+
 use std::ffi::{OsStr, OsString};
 use std::io::{self, Write as _};
 #[cfg(target_vendor = "apple")]

@@ -1,3 +1,6 @@
+//! Static execution graph revisions, their structural validation, and exact
+//! input binding.
+
 use std::collections::{HashMap, HashSet};
 use std::num::NonZeroU64;
 

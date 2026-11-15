@@ -1,3 +1,6 @@
+//! Codex runtime builders and mock transport turn expectations shared by
+//! client tests.
+
 use std::sync::{Arc, Mutex};
 
 use ag_session::test_support as model_fixture;

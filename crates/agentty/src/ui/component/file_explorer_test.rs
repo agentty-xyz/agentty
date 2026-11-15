@@ -1,3 +1,6 @@
+//! Diff file explorer tree building, truncation, selection, and rendering
+//! unit tests.
+
 use std::sync::Arc;
 
 use ratatui::layout::Rect;

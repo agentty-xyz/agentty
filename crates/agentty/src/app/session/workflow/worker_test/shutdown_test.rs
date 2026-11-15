@@ -1,3 +1,6 @@
+//! Session worker shutdown tests covering active turns, paused queues, and
+//! queued message traces.
+
 use std::collections::{HashMap, VecDeque};
 use std::sync::{Arc, Mutex};
 

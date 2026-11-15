@@ -1,3 +1,5 @@
+//! Default text palette unit tests.
+
 use ratatui::style::Color;
 
 use crate::style::TextPalette;

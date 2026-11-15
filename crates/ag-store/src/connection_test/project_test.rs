@@ -1,3 +1,6 @@
+//! Project persistence tests for session stats, favorites, and last-opened
+//! timestamps.
+
 use ag_session::{SessionDiffState, SessionStats, test_support as model_fixture};
 
 use crate::connection::Database;

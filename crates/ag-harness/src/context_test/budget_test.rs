@@ -1,3 +1,6 @@
+//! Context budget, weight heuristic, mandatory admission, and stopped-turn
+//! replay unit tests.
+
 use serde_json::json;
 
 use super::support::{FixedEstimator, budget, read_call, result};

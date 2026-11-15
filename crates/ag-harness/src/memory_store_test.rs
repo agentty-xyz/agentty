@@ -1,3 +1,6 @@
+//! In-memory session store unit tests for state sharing, owner checks,
+//! journals, projection, expiry, and parity with `SQLite`.
+
 use std::os::unix::ffi::OsStringExt as _;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;

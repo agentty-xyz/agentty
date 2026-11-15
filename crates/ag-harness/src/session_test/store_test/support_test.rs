@@ -1,3 +1,6 @@
+//! Store test fixtures: acquisition and commit gates that pause turn
+//! acquisition at chosen points.
+
 use async_trait::async_trait;
 use tokio::sync::Notify;
 

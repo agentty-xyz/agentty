@@ -1,3 +1,5 @@
+//! Retry-path turn prompt and replay transcript selection unit tests.
+
 use std::path::PathBuf;
 
 use ag_contracts::{AgentRequestKind, ReasoningLevel};

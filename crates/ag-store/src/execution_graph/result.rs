@@ -1,3 +1,5 @@
+//! Graph result production, loading, and once-only evidence attestation.
+
 use ag_protocol::parse_protocol_response_strict;
 use ag_session::{GraphResult, GraphResultRef, GraphResultState};
 use sqlx::SqliteConnection;

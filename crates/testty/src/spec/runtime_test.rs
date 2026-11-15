@@ -1,3 +1,5 @@
+//! YAML scenario loading, step lowering, and expectation evaluation tests.
+
 #[cfg(unix)]
 use std::os::unix::fs::PermissionsExt;
 use std::time::Duration;

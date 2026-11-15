@@ -1,3 +1,5 @@
+//! File-entry fuzzy scoring and filtering tests.
+
 use super::{FileEntry, basename_match_bonus, filter_entries, fuzzy_score};
 
 #[test]

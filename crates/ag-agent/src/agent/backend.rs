@@ -1,3 +1,6 @@
+//! Agent backend trait for provider setup and command construction, with its
+//! request, error, and transport types.
+
 use std::error::Error;
 use std::fmt;
 use std::path::Path;

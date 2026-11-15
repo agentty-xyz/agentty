@@ -1,3 +1,6 @@
+//! Harness read tool unit tests for round trips, repository inspection,
+//! rejections, lifecycle events, and budget-bounded read loops.
+
 use std::io;
 use std::io::Cursor;
 use std::path::PathBuf;

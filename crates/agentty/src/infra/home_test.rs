@@ -1,3 +1,5 @@
+//! Agentty data-directory resolution tests.
+
 use std::path::PathBuf;
 
 use super::resolve_agentty_home;

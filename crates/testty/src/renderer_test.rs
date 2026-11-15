@@ -1,3 +1,5 @@
+//! Terminal frame image rendering, glyph lookup, and color unit tests.
+
 use image::{Rgba, RgbaImage};
 
 use super::{

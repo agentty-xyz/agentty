@@ -1,3 +1,5 @@
+//! Popup editor for the project-scoped `Launch Configurations` command list.
+
 use ag_tui_text::text_util::truncate_with_ellipsis;
 use ratatui::Frame;
 use ratatui::layout::{Alignment, Rect};

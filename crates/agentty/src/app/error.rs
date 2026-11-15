@@ -1,3 +1,5 @@
+//! Top-level `AppError` type for app orchestration failures.
+
 use crate::app::session::SessionError;
 
 /// Typed error returned by top-level app orchestration operations.

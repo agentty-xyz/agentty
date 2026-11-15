@@ -1,3 +1,5 @@
+//! Review thread header and comment-body formatting unit tests.
+
 use ag_forge::{ReviewComment, ReviewCommentAnchorSide, ReviewCommentThread};
 use ratatui::style::Style;
 use ratatui::text::Line;

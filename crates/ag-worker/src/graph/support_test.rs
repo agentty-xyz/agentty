@@ -1,3 +1,5 @@
+//! Graph and dispatch fixtures shared by the graph worker tests.
+
 use std::num::NonZeroU64;
 
 use ag_protocol::{ProtocolRequestProfile, TurnPrompt};

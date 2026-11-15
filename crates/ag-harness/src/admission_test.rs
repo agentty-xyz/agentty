@@ -1,3 +1,6 @@
+//! Turn admission and model-switch rule unit tests for request
+//! classification, generation checks, and idle-session requirements.
+
 use serde_json::json;
 
 use super::{AdmissionState, ModelSwitch, NewTurn, TurnAdmission};

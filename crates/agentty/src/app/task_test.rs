@@ -1,3 +1,6 @@
+//! App background task tests for review assist, session diffs, `@`-mention
+//! indexing, review-comment snapshots, version checks, and agent CLI probes.
+
 use std::fmt::Write as _;
 use std::io;
 use std::os::unix::fs::PermissionsExt;

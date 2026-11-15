@@ -1,3 +1,6 @@
+//! Check that SQL migration files in each migration directory have unique
+//! prefixes.
+
 use std::collections::BTreeMap;
 use std::io;
 use std::path::{Path, PathBuf};

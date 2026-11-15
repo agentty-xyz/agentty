@@ -1,3 +1,6 @@
+//! `SessionState` unit tests covering handle synchronization, session
+//! indexing, archive selection, git statuses, and follow-up tasks.
+
 use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
 use std::time::{Duration, Instant, SystemTime};

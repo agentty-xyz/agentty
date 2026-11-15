@@ -1,3 +1,5 @@
+//! Prompt submit tests for in-progress and rebasing sessions.
+
 use super::super::prompt_context;
 use super::support::{new_test_prompt_app, run_prompt_submit};
 

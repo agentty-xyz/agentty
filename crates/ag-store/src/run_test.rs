@@ -1,3 +1,6 @@
+//! Agent run persistence tests for claims, lifecycle transitions, recovery,
+//! and closed-session admission.
+
 use std::sync::Arc;
 use std::sync::atomic::{AtomicI64, Ordering};
 

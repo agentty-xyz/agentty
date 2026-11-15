@@ -1,3 +1,6 @@
+//! Turn engine unit tests for reasoning effort, output correction feedback,
+//! repeated-read shortcuts, and per-tool round shares.
+
 use std::num::NonZeroU64;
 use std::sync::{Arc, Mutex};
 

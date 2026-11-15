@@ -1,3 +1,6 @@
+//! Qwen provider tests for replaying assistant text, reasoning, and tool
+//! results in continuation requests.
+
 use serde_json::json;
 use wiremock::matchers::{bearer_token, body_json, method, path};
 use wiremock::{Mock, MockServer, ResponseTemplate};

@@ -1,3 +1,5 @@
+//! Launch-configuration deletion tests for the settings screen.
+
 use super::support::{select_row, settings_manager_with_launch_configuration, test_services};
 use crate::domain::setting::SettingName;
 

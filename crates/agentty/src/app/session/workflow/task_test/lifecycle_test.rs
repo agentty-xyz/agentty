@@ -1,3 +1,5 @@
+//! Test for stripping the Agentty co-author trailer from commit messages.
+
 use super::super::{SESSION_COMMIT_COAUTHORED_BY_AGENTTY_TRAILER, strip_agentty_coauthor_trailer};
 
 #[test]

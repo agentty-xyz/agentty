@@ -1,3 +1,6 @@
+//! Shared fixtures for merge workflow tests: mock clients, rebase and merge
+//! inputs, and published review request data.
+
 use std::path::PathBuf;
 use std::sync::{Arc, Mutex};
 

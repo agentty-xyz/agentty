@@ -1,3 +1,6 @@
+//! Codex runtime lifecycle unit tests covering bootstrap, turn tracking,
+//! usage billing, and event loop termination.
+
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};
 use std::time::Duration;

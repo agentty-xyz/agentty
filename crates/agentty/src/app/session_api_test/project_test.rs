@@ -1,3 +1,6 @@
+//! Session API project tests covering retired-model migration and rejection
+//! of cross-project inheritance.
+
 use ag_session::{
     AgentKind, AgentModel, CreateSessionMode, CreateSessionRequest,
     SessionError as ApiSessionError, SessionId, test_support as model_fixture,

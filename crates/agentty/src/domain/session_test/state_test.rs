@@ -1,3 +1,5 @@
+//! Session status action gate and transcript snapshot tests.
+
 use std::sync::{Arc, Mutex};
 
 use ag_session::SessionStatus as Status;

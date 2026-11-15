@@ -1,3 +1,6 @@
+//! Top-level frame rendering of the status bar, routed content, and footer
+//! bar, plus the `Page` and `Component` render traits.
+
 use std::collections::HashMap;
 use std::path::Path;
 

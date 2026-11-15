@@ -1,3 +1,5 @@
+//! Clipboard image decoding to RGBA pixels and PNG header validation.
+
 use std::io::Cursor;
 
 use image::ImageFormat;

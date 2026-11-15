@@ -1,3 +1,6 @@
+//! Session manager lifecycle tests covering creation, deletion, default model
+//! settings, stacked drafts, and staged session starts.
+
 use std::collections::HashMap;
 use std::path::PathBuf;
 use std::sync::Arc;

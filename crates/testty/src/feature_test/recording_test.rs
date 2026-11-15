@@ -1,3 +1,5 @@
+//! GIF recording, cache reuse, and artifact preservation unit tests.
+
 use super::super::{GifContext, finalize_gif_recording, generate_gif};
 use super::support::{
     GENERATED_GIF_BYTES, empty_tape_execution, failed_tape_execution, successful_tape_execution,

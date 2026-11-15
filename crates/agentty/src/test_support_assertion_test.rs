@@ -1,3 +1,6 @@
+//! Git repository fixture, test subscriber, and rendered-text lookup helper
+//! unit tests.
+
 use std::path::Path;
 use std::process::Command;
 

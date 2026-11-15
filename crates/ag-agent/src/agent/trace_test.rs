@@ -1,3 +1,6 @@
+//! Provider operation tracing unit tests for span metadata, content policy,
+//! intervals, and capacity limits.
+
 use std::collections::HashSet;
 use std::future;
 use std::time::{Duration, SystemTime};

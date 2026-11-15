@@ -1,3 +1,6 @@
+//! Session status transition, transcript append, and assist-task outcome
+//! tests.
+
 use std::path::PathBuf;
 use std::sync::{Arc, Mutex, PoisonError};
 use std::time::{Duration, SystemTime};

@@ -1,3 +1,5 @@
+//! Clippy argument selection unit tests for affected packages and PTY targets.
+
 use super::clippy_arguments;
 
 #[test]

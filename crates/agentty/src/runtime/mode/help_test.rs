@@ -1,3 +1,5 @@
+//! Help overlay dismissal and scrolling key tests.
+
 use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
 
 use super::handle;

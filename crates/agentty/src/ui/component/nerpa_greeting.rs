@@ -1,3 +1,6 @@
+//! Animated pixel-art Baikal seal greeting that decorates an empty session
+//! transcript.
+
 use ratatui::Frame;
 use ratatui::buffer::Buffer;
 use ratatui::layout::Rect;

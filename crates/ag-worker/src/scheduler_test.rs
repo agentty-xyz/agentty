@@ -1,3 +1,5 @@
+//! Scheduler ordering, pause, cancellation, and mailbox-drain unit tests.
+
 use std::collections::VecDeque;
 use std::future::{Future, poll_fn};
 use std::sync::atomic::{AtomicBool, Ordering};

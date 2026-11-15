@@ -1,3 +1,6 @@
+//! Bash tool configuration unit tests for argument validation, grant limits,
+//! policy serialization and snapshots, and executor identity.
+
 use std::sync::Arc;
 use std::time::Duration;
 

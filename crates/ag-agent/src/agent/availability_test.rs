@@ -1,3 +1,5 @@
+//! Unit tests for agent executable discovery, split by behavior.
+
 #[path = "availability_test/compatibility_test.rs"]
 mod compatibility;
 #[path = "availability_test/discovery_test.rs"]

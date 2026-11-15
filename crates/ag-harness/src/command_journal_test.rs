@@ -1,3 +1,6 @@
+//! Command journal unit tests for outcome decoding, unknown-command blocking,
+//! owner reconciliation, and duplicate request classification.
+
 use std::path::Path;
 use std::sync::Arc;
 

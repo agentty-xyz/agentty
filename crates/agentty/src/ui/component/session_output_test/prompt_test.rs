@@ -1,3 +1,5 @@
+//! Session output user-prompt placement and Markdown rendering unit tests.
+
 use ratatui::layout::Rect;
 
 use super::super::SessionOutputLineContext;

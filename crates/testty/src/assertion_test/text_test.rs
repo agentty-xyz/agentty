@@ -1,3 +1,5 @@
+//! Text presence, absence, and match-count assertion unit tests.
+
 use crate::assertion::{
     Expected, assert_match_count, assert_not_visible, assert_text_in_region, match_match_count,
     match_not_visible, match_text_in_region,

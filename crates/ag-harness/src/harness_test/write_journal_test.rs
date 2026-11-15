@@ -1,3 +1,6 @@
+//! Session write journal unit tests for write inspection, storage failures,
+//! and one-shot writes.
+
 use std::num::NonZeroUsize;
 
 use mockall::Sequence;

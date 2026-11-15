@@ -1,3 +1,6 @@
+//! Session API test that builds sessions with complete settings and
+//! messages.
+
 use ag_contracts::{PermissionMode, ReasoningLevel, SpeedMode};
 use ag_forge::ForgeKind;
 use ag_session::test_support as model_fixture;

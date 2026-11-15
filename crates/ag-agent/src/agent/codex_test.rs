@@ -1,3 +1,5 @@
+//! Codex backend setup and app-server command construction unit tests.
+
 use ag_contracts::AgentRequestKind;
 use ag_session::test_support as model_fixture;
 use tempfile::tempdir;

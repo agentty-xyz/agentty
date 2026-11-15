@@ -1,3 +1,5 @@
+//! Codex token usage extraction and cumulative billing unit tests.
+
 use crate::agent::app_server::codex::usage::{
     extract_thread_token_usage_for_turn, extract_turn_usage_for_turn,
     update_turn_usage_from_response,

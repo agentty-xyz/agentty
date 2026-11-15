@@ -1,3 +1,6 @@
+//! Rebase, review-request metadata sync, and rebase-assist tests for the
+//! session worker.
+
 use std::collections::VecDeque;
 use std::path::PathBuf;
 use std::sync::{Arc, Mutex};

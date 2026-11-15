@@ -1,3 +1,5 @@
+//! Session-view status-gated key handling and view-state mapping unit tests.
+
 use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
 
 use super::super::{

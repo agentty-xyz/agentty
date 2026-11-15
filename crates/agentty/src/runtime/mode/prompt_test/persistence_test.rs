@@ -1,3 +1,5 @@
+//! Prompt permission-mode persistence failure test.
+
 use crossterm::event::KeyCode;
 
 use super::support::{

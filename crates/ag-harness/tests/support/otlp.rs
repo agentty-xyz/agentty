@@ -1,3 +1,6 @@
+//! Mock OTLP collector that captures and decodes metrics and trace export
+//! requests.
+
 use opentelemetry_proto::tonic::collector::metrics::v1::ExportMetricsServiceRequest;
 use opentelemetry_proto::tonic::collector::trace::v1::ExportTraceServiceRequest;
 use prost::Message;

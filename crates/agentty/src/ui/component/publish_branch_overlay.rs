@@ -1,3 +1,6 @@
+//! Popup that collects an optional remote branch name before publishing or
+//! refreshing the linked review request.
+
 use ratatui::Frame;
 use ratatui::layout::{Alignment, Constraint, Layout, Rect};
 use ratatui::style::{Modifier, Style};

@@ -1,3 +1,5 @@
+//! Clarification question default-option and node question notice tests.
+
 use ag_protocol::{AgentResponse, QuestionItem};
 
 use crate::question::{default_option_index, node_question_notice};

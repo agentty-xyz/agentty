@@ -1,3 +1,6 @@
+//! Turn prompt tests for attachment placeholders, content splitting, and
+//! agent-bound `@` lookup rewriting.
+
 use std::path::PathBuf;
 
 use crate::prompt::{

@@ -1,3 +1,6 @@
+//! Chat reply unit tests for accepting or revising graph outputs awaiting
+//! acceptance.
+
 use std::collections::BTreeMap;
 use std::sync::{Arc, Mutex};
 use std::time::Duration;

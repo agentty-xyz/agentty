@@ -1,3 +1,5 @@
+//! VHS installation probe and tape execution outcome unit tests.
+
 use std::os::unix::fs::PermissionsExt;
 use std::path::{Path, PathBuf};
 use std::process::Command;

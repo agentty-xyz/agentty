@@ -1,3 +1,6 @@
+//! Remote sync unit tests for branch lookups, fetch, pull-rebase, push, and
+//! ahead/behind tracking.
+
 use std::fs;
 use std::path::{Path, PathBuf};
 use std::time::Duration;

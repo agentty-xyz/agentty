@@ -1,3 +1,6 @@
+//! Isolated task turn tests for JSON-encoded replay and image attachment
+//! markers.
+
 use ag_contracts::LiveTranscript;
 use ag_protocol::{AgentResponse, TurnPromptAttachment, TurnPromptContentPart};
 use ag_session::{

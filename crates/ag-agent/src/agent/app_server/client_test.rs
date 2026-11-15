@@ -1,3 +1,6 @@
+//! Runtime-backed app-server client unit tests for runtime retention,
+//! replacement, and isolated context resets.
+
 use std::path::PathBuf;
 use std::sync::atomic::{AtomicUsize, Ordering};
 

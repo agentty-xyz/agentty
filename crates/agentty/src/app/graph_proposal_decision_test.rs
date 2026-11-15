@@ -1,3 +1,5 @@
+//! Graph proposal reply decision prompt, summary, and outcome unit tests.
+
 use std::collections::BTreeMap;
 use std::path::PathBuf;
 

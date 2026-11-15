@@ -1,3 +1,6 @@
+//! Markdown block rendering tests for headings, code, lists, quotes, rules,
+//! and tables.
+
 use crate::markdown::{
     STATS_LABEL_WIDTH, code_block_style, heading_style, horizontal_rule_style, list_prefix_style,
     markdown_block_preservation_mask, render_markdown, stats_metric_style, stats_section_style,

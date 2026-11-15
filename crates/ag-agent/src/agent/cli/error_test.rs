@@ -1,3 +1,5 @@
+//! Agent CLI exit error formatting and authentication guidance unit tests.
+
 use ag_session::AgentKind;
 
 use crate::agent::cli::error::{

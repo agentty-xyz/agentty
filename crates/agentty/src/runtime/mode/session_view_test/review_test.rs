@@ -1,3 +1,5 @@
+//! Session view review output, publishing, workflow, and interrupt key tests.
+
 use ag_session::test_support as model_fixture;
 use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
 

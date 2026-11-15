@@ -1,3 +1,5 @@
+//! Antigravity response and stream-line parsing unit tests.
+
 use ag_contracts::{SessionDiffState, SessionStats};
 
 use crate::agent::response_parser::{

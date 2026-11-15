@@ -1,3 +1,6 @@
+//! Auto-commit agent, reasoning level, and speed mode tests that use the
+//! project's fast settings.
+
 use ag_session::{AgentSelectionMetadata, test_support as model_fixture};
 
 use super::super::SessionTaskService;

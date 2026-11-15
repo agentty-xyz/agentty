@@ -1,3 +1,5 @@
+//! Diff line-comment append test that preserves the composer draft.
+
 use super::super::append_line_comments;
 use super::support::{RESTORE_DRAFT_TEXT, non_default_prompt_snapshot};
 use crate::presentation::app_mode::{

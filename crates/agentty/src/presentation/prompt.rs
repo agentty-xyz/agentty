@@ -1,3 +1,6 @@
+//! Prompt composer presentation state: re-exported composer types and the
+//! `@`-mention dropdown with its file-description cache.
+
 use std::collections::HashMap;
 
 pub use crate::domain::composer::{

@@ -1,3 +1,6 @@
+//! Fixed, pinned, and real clock tests covering wall-clock time, monotonic
+//! time, and UTC offsets.
+
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
 use super::{

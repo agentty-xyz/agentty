@@ -1,3 +1,5 @@
+//! Instruction reference, alias, inventory, and catalog check unit tests.
+
 use std::collections::BTreeSet;
 #[cfg(unix)]
 use std::os::unix::fs::{PermissionsExt, symlink};

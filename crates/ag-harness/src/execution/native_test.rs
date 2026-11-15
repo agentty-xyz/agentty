@@ -1,3 +1,6 @@
+//! Native executor unit tests for identity, launcher encoding, notice
+//! channels, and executable and filesystem inspection that fails closed.
+
 use std::ffi::OsString;
 use std::fs::Metadata;
 use std::io;

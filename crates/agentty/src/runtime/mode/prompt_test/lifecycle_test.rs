@@ -1,3 +1,5 @@
+//! Prompt editing, history, image attachment, and draft-cancellation tests.
+
 use std::path::PathBuf;
 
 use crossterm::event::KeyCode;

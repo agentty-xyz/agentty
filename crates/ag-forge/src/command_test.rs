@@ -1,3 +1,6 @@
+//! Forge command builder, output, and real runner tests covering
+//! environment, working directory, timeouts, and spawn failures.
+
 use std::path::PathBuf;
 use std::time::Duration;
 

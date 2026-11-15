@@ -1,3 +1,6 @@
+//! Scripted fake session backend and session and review request fixtures
+//! for session service tests.
+
 use std::collections::VecDeque;
 use std::sync::Mutex;
 

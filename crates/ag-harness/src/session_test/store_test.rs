@@ -1,3 +1,6 @@
+//! Unit tests for the session store's turn acquisition and ownership, split
+//! by behavior.
+
 #[path = "store_test/acquisition_test.rs"]
 mod acquisition;
 #[path = "store_test/binding_test.rs"]

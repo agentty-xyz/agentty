@@ -1,3 +1,6 @@
+//! Assistant question extraction and question-pause resumption tests for the
+//! session worker.
+
 use std::collections::VecDeque;
 use std::sync::Arc;
 use std::sync::atomic::AtomicU64;

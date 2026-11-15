@@ -1,3 +1,5 @@
+//! Settings-screen harness and in-memory service fixtures for settings tests.
+
 use std::path::PathBuf;
 use std::sync::Arc;
 

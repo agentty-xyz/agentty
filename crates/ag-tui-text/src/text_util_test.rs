@@ -1,3 +1,5 @@
+//! Text wrapping, truncation, painting, and formatting unit tests.
+
 use std::borrow::Cow;
 
 use ratatui::buffer::Buffer;

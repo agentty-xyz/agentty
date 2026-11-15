@@ -1,3 +1,5 @@
+//! Session worker composition tests for channel reuse and model switches.
+
 use std::collections::VecDeque;
 use std::future::{Future, poll_fn};
 use std::sync::{Arc, Mutex};

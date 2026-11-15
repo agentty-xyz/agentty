@@ -1,3 +1,5 @@
+//! `mockall` mock of `RunRepository` for worker unit tests.
+
 use ag_contracts::OneShotError;
 use async_trait::async_trait;
 

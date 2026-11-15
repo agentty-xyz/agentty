@@ -1,3 +1,6 @@
+//! `ChatGPT` sign-in popup state, model application, and update handling unit
+//! tests.
+
 use std::sync::Arc;
 use std::time::Duration;
 

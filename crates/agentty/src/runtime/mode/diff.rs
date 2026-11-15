@@ -1,3 +1,6 @@
+//! Key handling for the unified diff workspace: file and line navigation,
+//! inline comments, markdown previews, and exit restoration.
+
 use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
 use ratatui::layout::Rect;
 

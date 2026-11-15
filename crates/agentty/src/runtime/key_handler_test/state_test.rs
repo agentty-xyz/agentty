@@ -1,3 +1,6 @@
+//! Key-handler dispatch tests for overlays, selectors, popups, prompt
+//! history, and redraw requests.
+
 use std::collections::HashMap;
 
 use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};

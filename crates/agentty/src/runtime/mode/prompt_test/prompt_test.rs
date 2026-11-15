@@ -1,3 +1,5 @@
+//! Prompt focus, slash-command, `@`-mention, and snapshot behavior tests.
+
 use std::path::PathBuf;
 
 use ag_session::test_support as model_fixture;

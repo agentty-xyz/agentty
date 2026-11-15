@@ -1,3 +1,6 @@
+//! Output event unit tests for bounded stream draining, read failures, and
+//! cancellation safety.
+
 use std::io;
 use std::pin::Pin;
 use std::task::{Context, Poll};

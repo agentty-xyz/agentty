@@ -1,3 +1,6 @@
+//! Session setting tests for response styles, speed modes, line-change
+//! counts, and diff visibility.
+
 use crate::session::{ResponseStyle, SessionDiffState, SessionStats, SpeedMode};
 
 #[test]

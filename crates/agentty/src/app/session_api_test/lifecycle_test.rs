@@ -1,3 +1,6 @@
+//! Session API lifecycle tests covering creation, loading, launch-setting
+//! inheritance, draft messages, and creation failure handling.
+
 use std::sync::Arc;
 
 use ag_contracts::{PermissionMode, ReasoningLevel, SpeedMode};

@@ -1,3 +1,5 @@
+//! Transient session-output message store, fingerprint, and label tests.
+
 use super::{
     GeneratedTurnLabels, QueuedAction, TransientMessage, TransientMessageAnchor,
     TransientMessageBody, TransientMessageLifecycle, TransientMessageSlot, TransientMessageStore,

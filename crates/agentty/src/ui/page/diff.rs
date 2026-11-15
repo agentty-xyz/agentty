@@ -1,3 +1,6 @@
+//! Scrollable diff page for the current session, with a file tree, inline
+//! comments, Markdown preview, and bounded layout caches.
+
 use std::cell::RefCell;
 use std::collections::{HashMap, VecDeque};
 use std::hash::Hasher;

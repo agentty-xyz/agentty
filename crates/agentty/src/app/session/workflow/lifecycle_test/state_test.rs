@@ -1,3 +1,6 @@
+//! Session state workflow tests covering cancellation, initial reply
+//! metadata, reply eligibility, and per-session setting updates.
+
 use std::sync::Arc;
 
 use ag_forge as forge;

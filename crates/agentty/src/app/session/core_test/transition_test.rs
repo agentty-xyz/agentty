@@ -1,3 +1,6 @@
+//! Session manager transition tests covering turn auto-commits, cancellation
+//! cascades, navigation, and title generation tasks.
+
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};

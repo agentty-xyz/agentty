@@ -1,3 +1,5 @@
+//! Session output layout-cache keying for staged draft prompts.
+
 use std::sync::Arc;
 
 use ratatui::layout::Rect;

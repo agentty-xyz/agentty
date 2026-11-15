@@ -1,3 +1,5 @@
+//! `ChatGPT` sign-in popup key-handling tests.
+
 use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
 
 use super::handle;

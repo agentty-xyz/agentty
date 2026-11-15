@@ -1,3 +1,5 @@
+//! File URL and URI-list parsing tests.
+
 use std::path::PathBuf;
 
 use crate::uri::{path_from_file_url_text, paths_from_uri_list};

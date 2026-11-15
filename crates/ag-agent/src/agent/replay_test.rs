@@ -1,3 +1,5 @@
+//! Replay history archive creation, ownership, and cleanup unit tests.
+
 use std::io;
 #[cfg(unix)]
 use std::os::unix::fs::MetadataExt as _;

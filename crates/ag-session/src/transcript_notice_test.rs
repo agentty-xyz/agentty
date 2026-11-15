@@ -1,3 +1,5 @@
+//! Transcript notice label and formatting unit tests.
+
 use crate::transcript_notice::TranscriptNotice;
 
 #[test]

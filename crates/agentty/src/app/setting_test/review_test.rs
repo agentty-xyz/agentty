@@ -1,3 +1,5 @@
+//! Default review model and review agent setting tests.
+
 use ag_session::{AgentSelectionMetadata, test_support as model_fixture};
 
 use super::super::load_default_review_agent_setting;

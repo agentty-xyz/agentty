@@ -1,3 +1,5 @@
+//! Comparison base resolution and commit identity validation unit tests.
+
 use std::io;
 
 use mockall::Sequence;

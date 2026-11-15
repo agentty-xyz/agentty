@@ -1,3 +1,5 @@
+//! Default harness model selection and model cost labeling unit tests.
+
 use crate::agent::{AgentModel, ServedModel};
 use crate::harness_model::{
     HarnessModelOption, HarnessModelStatus, ModelCost, default_harness_model,

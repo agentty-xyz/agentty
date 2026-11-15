@@ -1,3 +1,6 @@
+//! `ag-harness login chatgpt` unit tests for credential storage, app
+//! registration reuse, denial, and callback port fallback.
+
 use std::env;
 use std::io::{Read as _, Write as _};
 use std::net::TcpStream;

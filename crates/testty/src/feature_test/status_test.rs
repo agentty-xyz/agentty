@@ -1,3 +1,5 @@
+//! `GifStatus` accessor and missing-VHS status unit tests.
+
 use std::path::{Path, PathBuf};
 
 use super::super::vhs_missing_status;

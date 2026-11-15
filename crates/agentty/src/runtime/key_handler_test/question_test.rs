@@ -1,3 +1,5 @@
+//! Key-handler routing test for question input within terminal bounds.
+
 use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
 
 use super::super::handle_key_event;

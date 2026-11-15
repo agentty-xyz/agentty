@@ -1,3 +1,6 @@
+//! Launcher unit tests for instruction and notice channels, child
+//! observation, and Seatbelt profile generation.
+
 #[cfg(target_os = "macos")]
 use std::collections::BTreeMap;
 #[cfg(target_os = "macos")]

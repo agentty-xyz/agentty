@@ -1,3 +1,5 @@
+//! Graph output reply decision prompt and outcome unit tests.
+
 use std::path::PathBuf;
 
 use ag_contracts::{

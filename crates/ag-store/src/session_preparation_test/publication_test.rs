@@ -1,3 +1,6 @@
+//! Session preparation publication tests for draft staging, execution
+//! markers, and prompt transfer.
+
 use ag_session::SessionMessageKind;
 
 use super::support::prepare_saved_operation;

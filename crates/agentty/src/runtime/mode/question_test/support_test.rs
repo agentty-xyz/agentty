@@ -1,3 +1,5 @@
+//! Shared question-mode test fixtures and key-handling helper.
+
 use crossterm::event::KeyEvent;
 use ratatui::layout::Rect;
 

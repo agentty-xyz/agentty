@@ -1,3 +1,5 @@
+//! `MarkdownRenderCache` reuse, eviction, and invalidation tests.
+
 use std::cell::Cell;
 use std::sync::Arc;
 

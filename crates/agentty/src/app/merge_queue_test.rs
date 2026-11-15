@@ -1,3 +1,5 @@
+//! `MergeQueue` ordering, work tracking, and progress unit tests.
+
 use std::collections::{HashMap, HashSet};
 
 use super::{MergeQueue, MergeQueueProgress};

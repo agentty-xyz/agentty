@@ -1,3 +1,5 @@
+//! Antigravity CLI version compatibility and cache validation unit tests.
+
 #[cfg(unix)]
 use std::os::unix::fs::PermissionsExt;
 use std::path::PathBuf;

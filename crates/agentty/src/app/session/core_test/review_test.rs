@@ -1,3 +1,6 @@
+//! Session manager review tests covering review request publishing, review
+//! comment batches, history replay, and generated follow-ups.
+
 use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
 use std::sync::Arc;

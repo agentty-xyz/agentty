@@ -1,3 +1,6 @@
+//! Reservation lease tests: renewal deadlines, terminal acknowledgement,
+//! finalization, and ownership monitoring.
+
 use std::sync::Arc;
 use std::sync::atomic::Ordering;
 use std::time::Duration;

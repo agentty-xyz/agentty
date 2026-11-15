@@ -1,3 +1,6 @@
+//! Shared structured-output backend and provider policy for
+//! `OpenAI`-compatible Chat Completions APIs.
+
 use std::sync::Arc;
 use std::time::Duration;
 

@@ -1,3 +1,5 @@
+//! Session creation, continuation, and fork key-handler tests.
+
 use std::sync::Arc;
 
 use ag_session::{CreateSessionMode, CreateSessionRequest};

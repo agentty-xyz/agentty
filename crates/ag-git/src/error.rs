@@ -1,3 +1,5 @@
+//! `GitError` categories returned by git infrastructure operations.
+
 use std::time::Duration;
 
 use crate::rebase;

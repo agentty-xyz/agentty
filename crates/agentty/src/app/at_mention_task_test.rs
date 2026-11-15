@@ -1,3 +1,5 @@
+//! Pending at-mention load tracking unit tests.
+
 use super::{PENDING_AT_MENTION_LOADS, finish_pending_load, track_pending_load};
 use crate::domain::session::SessionId;
 

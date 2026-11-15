@@ -1,3 +1,5 @@
+//! `GitHub` pull request metadata load, sync, and edit-command tests.
+
 use std::sync::Arc;
 
 use mockall::Sequence;

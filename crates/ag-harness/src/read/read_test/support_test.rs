@@ -1,3 +1,6 @@
+//! Shared `read` tool test fixtures: failing readers, mock file systems,
+//! command outputs, and argument builders.
+
 use std::io;
 use std::io::Cursor;
 use std::path::{Path, PathBuf};

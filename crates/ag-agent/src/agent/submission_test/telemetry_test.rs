@@ -1,3 +1,5 @@
+//! One-shot submission trace parentage unit tests through repair and cleanup.
+
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
 

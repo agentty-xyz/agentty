@@ -1,3 +1,6 @@
+//! Tests that acquired turns dispatch journal and cleanup through, and retain,
+//! the store decorator.
+
 use std::sync::Arc;
 use std::sync::atomic::Ordering;
 use std::time::Duration;

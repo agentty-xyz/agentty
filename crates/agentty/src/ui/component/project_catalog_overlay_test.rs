@@ -1,3 +1,6 @@
+//! Project catalog dialog and startup-suggestion rendering and sizing unit
+//! tests.
+
 use std::path::PathBuf;
 
 use ratatui::Terminal;

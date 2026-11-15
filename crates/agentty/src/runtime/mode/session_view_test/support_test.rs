@@ -1,3 +1,6 @@
+//! Shared fixtures for session-view tests: test apps, session snapshots,
+//! mocked clipboard and tmux boundaries, and event-settling helpers.
+
 use std::io;
 use std::sync::Arc;
 

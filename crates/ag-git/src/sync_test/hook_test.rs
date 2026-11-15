@@ -1,3 +1,5 @@
+//! Pre-commit hook readiness, execution, and commit-validation unit tests.
+
 use std::fs;
 #[cfg(unix)]
 use std::os::unix::fs::PermissionsExt;

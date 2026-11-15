@@ -1,3 +1,6 @@
+//! Review-request client tests covering authentication ordering and routing
+//! of operations to the `GitHub` and `GitLab` adapters.
+
 use std::sync::Arc;
 
 use mockall::Sequence;

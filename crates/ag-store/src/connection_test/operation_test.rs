@@ -1,3 +1,6 @@
+//! Session operation persistence tests for unfinished rows, cancellation, and
+//! state transitions.
+
 use ag_session::{SessionStats, test_support as model_fixture};
 use tempfile::tempdir;
 

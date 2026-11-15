@@ -1,3 +1,6 @@
+//! Clipboard image path, payload reading, persistence, and error mapping
+//! tests.
+
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::sync::atomic::{AtomicUsize, Ordering};

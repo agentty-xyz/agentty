@@ -1,3 +1,6 @@
+//! Staged draft attachment storage tests covering round trips, metadata
+//! directory handling, and rejection of non-UTF-8 paths.
+
 #[cfg(unix)]
 use std::ffi::OsStr;
 #[cfg(unix)]

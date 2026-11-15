@@ -1,3 +1,6 @@
+//! CLI channel session ownership and cancellation tests, including shutdown,
+//! poisoned ownership, and termination of tool descendants.
+
 use std::path::PathBuf;
 use std::sync::{Arc, Mutex};
 use std::time::Duration;

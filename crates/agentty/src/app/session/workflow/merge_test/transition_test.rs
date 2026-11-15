@@ -1,3 +1,6 @@
+//! Merge helper tests covering commit-message titles, uncommitted-change
+//! details, and conflicted file fingerprints.
+
 use super::super::SyncSessionStartError;
 use super::support::create_passthrough_mock_fs_client;
 use crate::app::SessionManager;

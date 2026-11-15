@@ -1,3 +1,6 @@
+//! Model switch tests for revalidating history completed concurrently with
+//! validation.
+
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
 

@@ -1,3 +1,5 @@
+//! `RunState` storage name unit tests.
+
 use crate::run::RunState;
 
 #[test]

@@ -1,3 +1,6 @@
+//! Prompt submission, deferred model and speed changes, and review-comment
+//! prompt unit tests.
+
 use ag_forge::{
     ReviewComment, ReviewCommentAnchorSide, ReviewCommentSnapshot, ReviewCommentThread,
 };

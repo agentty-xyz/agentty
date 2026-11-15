@@ -1,3 +1,6 @@
+//! Activity heatmap grid, month-label row, intensity, and recent-stats unit
+//! tests.
+
 use super::{
     build_activity_heatmap_grid, build_heatmap_month_row, build_recent_activity_stats,
     build_visible_heatmap_month_row, heatmap_intensity_level, heatmap_max_count,

@@ -1,3 +1,6 @@
+//! Shared forge adapter helper tests covering metadata plans, failure
+//! classification, spawn-error mapping, and command normalization.
+
 use std::sync::Arc;
 use std::time::Duration;
 

@@ -1,3 +1,6 @@
+//! Session output layout caching, scrollbar, loader, and output-line ordering
+//! unit tests.
+
 use std::sync::Arc;
 
 use ratatui::buffer::Buffer;

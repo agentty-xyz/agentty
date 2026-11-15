@@ -1,3 +1,5 @@
+//! Session row loading, status timing, and lookup persistence tests.
+
 use ag_session::{ReviewRequest, SessionDiffState, SessionStats};
 
 use super::support::{assert_review_request_row, insert_session_fixture, load_session_row};

@@ -1,3 +1,6 @@
+//! `App` prompt unit tests for chat history, slash options, at-mentions, and
+//! saved prompt progress.
+
 use std::fs;
 use std::time::Duration;
 

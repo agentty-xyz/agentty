@@ -1,3 +1,5 @@
+//! Mermaid diagram rendering and code fallback tests for Markdown fences.
+
 use std::fmt::Write;
 
 use ratatui::style::Color;

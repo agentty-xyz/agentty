@@ -1,3 +1,6 @@
+//! Agent profile definition and summary parsing tests, including frontmatter
+//! validation and prompt truncation.
+
 use super::AGENT_PROFILE_PROMPT_TRUNCATION_MARKER;
 use crate::agent_profile::{
     AGENT_PROFILE_PROMPT_MAX_BYTES, AgentDefinition, AgentDefinitionParseError,

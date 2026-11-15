@@ -1,3 +1,5 @@
+//! Unit tests for feature demos and GIF generation, split by behavior.
+
 #[path = "feature_test/builder_test.rs"]
 mod builder;
 

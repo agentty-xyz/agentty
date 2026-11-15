@@ -1,3 +1,6 @@
+//! Unified diff inspection tests covering file boundaries, quoted paths,
+//! and hunk anchors.
+
 use crate::diff::{DiffFile, decode_path, hunk_starts};
 
 #[test]

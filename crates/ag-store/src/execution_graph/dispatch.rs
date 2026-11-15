@@ -1,3 +1,6 @@
+//! SQLite graph dispatch: atomic node admission, input pinning, Env
+//! exclusion, and execution settlement.
+
 use std::num::NonZeroU64;
 use std::path::Path;
 

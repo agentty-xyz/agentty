@@ -1,3 +1,6 @@
+//! Shared key-handler test fixtures, including a backend whose size queries
+//! can fail on demand.
+
 use std::convert::Infallible;
 use std::io;
 use std::sync::atomic::{AtomicBool, Ordering};

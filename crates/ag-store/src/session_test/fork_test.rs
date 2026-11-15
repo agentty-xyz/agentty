@@ -1,3 +1,5 @@
+//! Fork session snapshot tests that verify source-specific state is reset.
+
 use ag_session as agent;
 use ag_session::{FocusedReviewStatus, PermissionMode, ResponseStyle, SessionStats};
 use sqlx::SqlitePool;

@@ -1,3 +1,5 @@
+//! Terminal event reader, paste routing, and event-batch processing tests.
+
 use std::collections::HashMap;
 use std::future::Future;
 use std::io;

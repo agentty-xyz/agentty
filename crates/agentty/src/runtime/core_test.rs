@@ -1,3 +1,5 @@
+//! Runtime event loop, event-reader task, and frame-rendering unit tests.
+
 use std::collections::VecDeque;
 use std::convert::Infallible;
 use std::io;

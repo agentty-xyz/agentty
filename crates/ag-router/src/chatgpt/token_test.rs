@@ -1,3 +1,5 @@
+//! `ChatGPT` token endpoint request, decoding, and failure-mapping tests.
+
 use std::net::TcpListener;
 use std::time::Duration;
 

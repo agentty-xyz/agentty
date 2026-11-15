@@ -1,3 +1,6 @@
+//! `GitLab` merge request attention tests covering pipelines, failed jobs,
+//! conflicts, trusted discussion threads, and response validation.
+
 use std::sync::Arc;
 
 use mockall::Sequence;

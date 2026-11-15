@@ -1,3 +1,5 @@
+//! Database instance-lock and environment timestamp source tests.
+
 use std::io;
 
 use super::{DB_DIR, acquire_instance_lock, timestamp_source_from_environment};

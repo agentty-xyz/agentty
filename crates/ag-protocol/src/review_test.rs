@@ -1,3 +1,6 @@
+//! Focused review tests for decisions, Markdown formatting, evidence
+//! citations, and candidate consolidation.
+
 use crate::review::{
     FocusedReview, FocusedReviewDecision, FocusedReviewEvidence, FocusedReviewSeverity,
     FocusedReviewSide, FocusedReviewSuggestion,

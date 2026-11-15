@@ -1,3 +1,6 @@
+//! Session refresh tests covering review request remotes and refresh,
+//! refresh deadlines, and mode session resolution.
+
 use std::collections::HashMap;
 use std::path::PathBuf;
 use std::sync::{Arc, Mutex};

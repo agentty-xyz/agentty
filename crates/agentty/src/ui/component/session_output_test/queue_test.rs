@@ -1,3 +1,6 @@
+//! Session output queued-message placement, caching, and indicator unit
+//! tests.
+
 use std::sync::Arc;
 
 use ratatui::layout::Rect;

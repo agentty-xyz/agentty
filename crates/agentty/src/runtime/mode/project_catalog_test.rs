@@ -1,3 +1,5 @@
+//! Project catalog dialog key-routing tests.
+
 use std::path::PathBuf;
 
 use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};

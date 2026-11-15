@@ -1,3 +1,6 @@
+//! Agent provider kinds, models, and selections, with persisted-value parsing
+//! and model resolution against available providers.
+
 use std::fmt;
 use std::str::FromStr;
 use std::sync::{Mutex, OnceLock, PoisonError};

@@ -1,3 +1,6 @@
+//! History turn form unit tests for full, elided, and brief replay and byte
+//! fitting.
+
 use serde_json::json;
 
 use super::support::{read_call, reasoned_read_call, result_json, tool_result, write_call};

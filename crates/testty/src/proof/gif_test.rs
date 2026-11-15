@@ -1,3 +1,5 @@
+//! `GifBackend` frame delay, encoding, and error unit tests.
+
 use super::{DEFAULT_FRAME_DELAY_MS, MAX_FRAME_DELAY_MS, MIN_FRAME_DELAY_MS};
 use crate::frame::TerminalFrame;
 use crate::proof::backend::{ProofBackend, RenderContext};

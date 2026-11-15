@@ -1,3 +1,5 @@
+//! Frame routing, surface classification, and overlay rendering unit tests.
+
 use std::cell::Cell;
 use std::collections::HashMap;
 use std::path::PathBuf;

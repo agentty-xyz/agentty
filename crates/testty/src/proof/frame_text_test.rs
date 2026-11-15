@@ -1,3 +1,5 @@
+//! `FrameTextBackend` annotated-text output unit tests.
+
 use crate::frame::TerminalFrame;
 use crate::proof::backend::{ProofBackend, RenderContext};
 use crate::proof::frame_text::FrameTextBackend;

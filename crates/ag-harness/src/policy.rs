@@ -1,3 +1,5 @@
+//! Default-deny tool permissions for built-in harness tools.
+
 use serde::{Deserialize, Serialize};
 
 use crate::tool::Tool;

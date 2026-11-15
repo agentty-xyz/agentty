@@ -1,3 +1,6 @@
+//! App-server channel protocol-repair tests covering PID forwarding,
+//! transport failures, permission retention, and invalid structured output.
+
 use std::sync::Arc;
 
 use ag_contracts::{AgentChannel, AgentRequestKind, TurnEvent};

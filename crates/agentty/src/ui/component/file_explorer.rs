@@ -1,3 +1,5 @@
+//! Diff file explorer panel that renders changed files as a folder tree.
+
 use std::collections::BTreeMap;
 use std::sync::Arc;
 

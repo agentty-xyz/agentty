@@ -1,3 +1,5 @@
+//! Execution boundary dependency, adapter, and launch check unit tests.
+
 use std::ffi::OsString;
 use std::fs;
 use std::path::{Path, PathBuf};

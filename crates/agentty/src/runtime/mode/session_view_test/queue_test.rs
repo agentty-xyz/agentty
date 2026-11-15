@@ -1,3 +1,5 @@
+//! Session view queued-message, follow-up task, and turn-interrupt tests.
+
 use std::collections::HashSet;
 
 use ag_telemetry::KeyValue;

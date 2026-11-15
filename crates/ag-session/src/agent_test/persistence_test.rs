@@ -1,3 +1,5 @@
+//! Persisted agent model parsing tests, including retired and legacy values.
+
 use crate::agent::{AgentKind, AgentModel, AgentSelection, parse_persisted_session_agent_model};
 
 #[test]

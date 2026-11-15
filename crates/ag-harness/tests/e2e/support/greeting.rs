@@ -1,3 +1,5 @@
+//! Validated greeting request shared by live provider checks.
+
 use std::io::{self, Write};
 
 use ag_harness::OutputSchema;

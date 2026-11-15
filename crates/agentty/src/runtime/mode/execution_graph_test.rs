@@ -1,3 +1,5 @@
+//! Graph inspector key routing, navigation, and editor tests.
+
 use ag_protocol::QuestionItem;
 use ag_session::{
     ExecutionGraphStatus, GraphNodeContinuation, GraphNodeStatus, GraphProposalVersionOutcome,

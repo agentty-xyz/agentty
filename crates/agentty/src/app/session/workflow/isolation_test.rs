@@ -1,3 +1,6 @@
+//! Session worktree validation tests covering linked and bare repositories,
+//! branch mismatches, and resolution failures.
+
 use std::path::PathBuf;
 
 use ag_git as git;

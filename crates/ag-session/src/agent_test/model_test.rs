@@ -1,3 +1,5 @@
+//! Agent model parsing, provider support, metadata, and served-model tests.
+
 use crate::agent::{AgentKind, AgentModel, AgentSelection, AgentSelectionMetadata, ServedModel};
 
 #[test]

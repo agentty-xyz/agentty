@@ -1,3 +1,6 @@
+//! `json_prefix` unit test for UTF-8-safe prefixes within JSON-encoded
+//! budgets.
+
 use super::json_prefix;
 
 #[test]

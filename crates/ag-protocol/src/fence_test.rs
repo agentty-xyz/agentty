@@ -1,3 +1,5 @@
+//! Markdown code-fence delimiter sizing unit tests.
+
 use crate::fence::diff_fence;
 
 #[test]

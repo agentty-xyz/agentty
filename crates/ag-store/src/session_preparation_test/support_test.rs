@@ -1,3 +1,5 @@
+//! Saved-operation and reservation fixtures for session preparation tests.
+
 use ag_session::{PermissionMode, ReasoningLevel, ResponseStyle, SpeedMode};
 
 use crate::AppRepositories;

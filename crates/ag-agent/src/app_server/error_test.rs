@@ -1,3 +1,5 @@
+//! App-server error display and conversion unit tests.
+
 use crate::app_server::error::AppServerError;
 use crate::app_server_transport::AppServerTransportError;
 

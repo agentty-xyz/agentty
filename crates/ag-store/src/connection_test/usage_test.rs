@@ -1,3 +1,5 @@
+//! Session usage tests: per-model accumulation and cleanup on session delete.
+
 use ag_session::{SessionDiffState, SessionStats};
 
 use super::support::insert_session_fixture;

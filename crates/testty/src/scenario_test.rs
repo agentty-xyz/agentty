@@ -1,3 +1,6 @@
+//! `Scenario` building, proof recording, VHS tape compilation, and eventually
+//! polling unit tests.
+
 use std::fs;
 use std::path::Path;
 use std::sync::Mutex;

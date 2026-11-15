@@ -1,3 +1,6 @@
+//! Provider catalog unit tests for known models, profiles, cost tiers, and
+//! environment-based configuration.
+
 use std::env;
 
 use ag_router::chatgpt::{ChatGptAuthError, ChatGptCredentials};

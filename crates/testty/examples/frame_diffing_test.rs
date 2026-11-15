@@ -1,3 +1,6 @@
+//! Tests for the `frame_diffing` example's showcase output and write-failure
+//! propagation.
+
 #[path = "support_test.rs"]
 mod support;
 

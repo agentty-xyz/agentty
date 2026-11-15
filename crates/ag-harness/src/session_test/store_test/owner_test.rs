@@ -1,3 +1,6 @@
+//! Turn owner tests: expired and wrong owners cannot mutate, and failed drop
+//! cleanup stays registered for recovery.
+
 use std::path::Path;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicI64, Ordering};

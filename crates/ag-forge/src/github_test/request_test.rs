@@ -1,3 +1,6 @@
+//! `GitHub` pull request lookup, creation, refresh, and readiness-status
+//! tests, including status-context pagination and command construction.
+
 use std::path::PathBuf;
 use std::sync::Arc;
 

@@ -1,3 +1,5 @@
+//! Test-only `RunWorker` constructor that injects a scripted runtime.
+
 use std::num::NonZeroUsize;
 use std::sync::Arc;
 

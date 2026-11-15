@@ -1,3 +1,6 @@
+//! Session manager project tests covering resource totals, the active
+//! project, and roadmap tab navigation.
+
 use std::sync::Arc;
 use std::time::Duration;
 

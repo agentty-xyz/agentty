@@ -1,3 +1,6 @@
+//! Review session replay tracking tests covering startup collection,
+//! marking, and clearing.
+
 use super::super::SessionManager;
 use crate::domain::session::Status;
 use crate::test_support;

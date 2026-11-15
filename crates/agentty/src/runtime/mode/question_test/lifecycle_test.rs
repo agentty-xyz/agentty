@@ -1,3 +1,5 @@
+//! Question escape, lookup dismissal, and forward-delete tests.
+
 use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
 
 use super::support::{

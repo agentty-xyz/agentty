@@ -1,3 +1,5 @@
+//! One-shot submission unit tests through the app-server client.
+
 use std::sync::{Arc, Mutex};
 use std::time::SystemTime;
 

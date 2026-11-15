@@ -1,3 +1,6 @@
+//! Prompt submission, cancellation, and per-session prompt settings for the
+//! `App`, including review-comment and focused-review prompts.
+
 use std::fmt::Write as _;
 use std::path::PathBuf;
 

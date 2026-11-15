@@ -1,3 +1,6 @@
+//! Text input editing, cursor movement, undo history, and `@`-mention query
+//! tests.
+
 use super::{InputCommand, InputEffect, InputState, extract_at_mention_query};
 
 #[test]

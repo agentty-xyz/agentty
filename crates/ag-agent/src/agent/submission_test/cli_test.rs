@@ -1,3 +1,5 @@
+//! One-shot submission unit tests through CLI backends.
+
 use std::process::Command;
 use std::sync::{Arc, Mutex};
 use std::time::Duration;

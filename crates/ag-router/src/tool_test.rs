@@ -1,3 +1,5 @@
+//! Tool definition, function-call validation, and replay unit tests.
+
 use serde_json::json;
 
 use crate::model::ModelError;

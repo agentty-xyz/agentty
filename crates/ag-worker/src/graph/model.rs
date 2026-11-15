@@ -1,3 +1,6 @@
+//! Graph dispatch records, admission outcomes, and the repository and node
+//! runner traits.
+
 use std::num::NonZeroU64;
 use std::path::PathBuf;
 

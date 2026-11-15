@@ -1,3 +1,5 @@
+//! Shared diff-mode test fixtures, sample diffs, and key-handling helpers.
+
 use std::collections::HashMap;
 use std::sync::Arc;
 

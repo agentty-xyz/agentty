@@ -1,3 +1,5 @@
+//! Claude CLI permission mode and allowed-tool unit tests.
+
 use std::ffi::OsStr;
 use std::path::Path;
 

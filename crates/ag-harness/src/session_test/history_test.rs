@@ -1,3 +1,6 @@
+//! Session history tests: budgeted turn loading, turn-size pagination,
+//! projections, and atomic, serialized turn appends.
+
 use std::sync::Arc;
 use std::sync::atomic::{AtomicI64, Ordering};
 

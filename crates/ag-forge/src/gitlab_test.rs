@@ -1,3 +1,5 @@
+//! Unit tests for the `GitLab` review-request adapter, split by behavior.
+
 #[path = "gitlab_test/attention_test.rs"]
 mod attention_test;
 #[path = "gitlab_test/comment_test.rs"]

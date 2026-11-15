@@ -1,3 +1,5 @@
+//! Errors for `ChatGPT` sign-in and credential maintenance.
+
 use std::io;
 use std::path::PathBuf;
 

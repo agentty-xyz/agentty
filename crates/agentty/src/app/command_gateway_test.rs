@@ -1,3 +1,6 @@
+//! Command gateway admission, mailbox ordering, and message planning unit tests
+//! for terminal and API requests.
+
 use std::sync::{Arc, Mutex};
 
 use ag_session::{

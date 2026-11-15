@@ -1,3 +1,5 @@
+//! `ProofReport` capture collection, assertion targeting, and diff unit tests.
+
 use crate::frame::TerminalFrame;
 use crate::proof::report::ProofReport;
 

@@ -1,3 +1,6 @@
+//! Abandoned-owner recovery tests for turn reservations across session
+//! stores.
+
 use std::sync::Arc;
 
 use crate::effect::Effects;

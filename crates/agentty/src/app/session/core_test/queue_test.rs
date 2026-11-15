@@ -1,3 +1,6 @@
+//! Session manager queue tests covering queued actions, message enqueueing
+//! under graph leases, refresh survival, and empty payloads.
+
 use std::path::Path;
 use std::sync::Arc;
 use std::time::Duration;

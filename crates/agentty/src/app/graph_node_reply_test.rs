@@ -1,3 +1,5 @@
+//! Chat reply routing unit tests for graph nodes awaiting answers.
+
 use std::path::PathBuf;
 use std::sync::Arc;
 

@@ -1,3 +1,6 @@
+//! Session branch push, push guards, auth guidance, and review request
+//! publication unit tests.
+
 use std::path::PathBuf;
 use std::sync::{Arc, Mutex};
 

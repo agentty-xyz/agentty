@@ -1,3 +1,5 @@
+//! Fork session snapshot error-context tests.
+
 use crate::session::ForkSessionSnapshot;
 use crate::session_snapshot::FORK_SESSION_SNAPSHOT;
 use crate::{AppRepositories, DbError};

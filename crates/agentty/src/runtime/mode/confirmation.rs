@@ -1,3 +1,5 @@
+//! Shared yes/no confirmation selector key handling and option indexes.
+
 use crossterm::event::{KeyCode, KeyEvent};
 
 /// Index of the `Yes` action in confirmation option navigation.

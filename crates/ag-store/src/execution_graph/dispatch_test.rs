@@ -1,3 +1,6 @@
+//! Graph node admission and settlement tests covering gates, pinned inputs,
+//! Env exclusion, and rollback.
+
 use std::num::NonZeroU64;
 use std::path::Path;
 

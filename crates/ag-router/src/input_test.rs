@@ -1,3 +1,5 @@
+//! Turn input image validation, size bounds, and data-URL serialization tests.
+
 use crate::input::{ImageContent, ImageMediaType, InputBlock, InputError, TurnInput};
 
 fn png_image(extra_bytes: usize) -> ImageContent {

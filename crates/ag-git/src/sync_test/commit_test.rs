@@ -1,3 +1,6 @@
+//! Commit workflow tests covering hook retries and rejections, amend
+//! messages, staging, and output parsing.
+
 use std::fs;
 #[cfg(unix)]
 use std::path::{Path, PathBuf};

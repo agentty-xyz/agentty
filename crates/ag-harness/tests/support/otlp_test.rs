@@ -1,3 +1,5 @@
+//! OTLP collector fixture tests for its metrics and traces endpoints.
+
 use super::{METRICS_PATH, OtlpCollector, TRACES_PATH};
 
 #[tokio::test]

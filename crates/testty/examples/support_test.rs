@@ -1,3 +1,6 @@
+//! Shared example-test support for checking that output write failures
+//! propagate.
+
 use std::fmt::Debug;
 use std::io::{self, Write};
 

@@ -1,3 +1,6 @@
+//! Repository-level git command execution and metadata lookups, such as the
+//! remote URL, main repository root, and main checkout working tree.
+
 use std::fs;
 use std::future::Future;
 use std::path::{Path, PathBuf};

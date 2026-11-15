@@ -1,3 +1,6 @@
+//! Branch and review-request publishing, review regeneration, and review
+//! watch key-handler tests.
+
 use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
 
 use super::super::{

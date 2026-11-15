@@ -1,3 +1,5 @@
+//! `Step` constructor and `Debug` rendering unit tests.
+
 use std::time::Duration;
 
 use crate::frame::TerminalFrame;

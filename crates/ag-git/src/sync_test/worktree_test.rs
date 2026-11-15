@@ -1,3 +1,5 @@
+//! Worktree file reading and index-synchronized git command unit tests.
+
 use std::fs;
 use std::path::Path;
 

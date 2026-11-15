@@ -1,3 +1,5 @@
+//! Centered informational popup for non-destructive workflow guidance.
+
 use ratatui::Frame;
 use ratatui::layout::{Alignment, Rect};
 use ratatui::style::{Color, Modifier, Style};

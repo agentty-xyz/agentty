@@ -1,3 +1,6 @@
+//! Lifecycle metric tests for model request, agent turn, and tool call
+//! measurements.
+
 use opentelemetry::global;
 use opentelemetry_sdk::metrics::data::{AggregatedMetrics, HistogramDataPoint, Metric, MetricData};
 use opentelemetry_sdk::metrics::{InMemoryMetricExporter, SdkMeterProvider};

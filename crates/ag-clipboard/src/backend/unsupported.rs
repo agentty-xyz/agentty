@@ -1,3 +1,6 @@
+//! Fallback backend constructor that reports clipboard access as unavailable
+//! on unsupported operating systems.
+
 use super::ClipboardBackend;
 use crate::ClipboardError;
 

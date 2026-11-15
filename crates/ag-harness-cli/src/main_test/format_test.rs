@@ -1,3 +1,6 @@
+//! Terminal output formatting unit tests for exit reporting, text sanitizing,
+//! durations, and usage counts.
+
 use std::process::ExitCode;
 
 use crate::{

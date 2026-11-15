@@ -1,3 +1,6 @@
+//! Application settings manager and loaders for persisted defaults such as
+//! role models, speed mode, theme, and launch configurations.
+
 use tracing::warn;
 
 use crate::app::AppServices;

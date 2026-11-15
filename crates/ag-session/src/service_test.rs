@@ -1,3 +1,5 @@
+//! Unit tests for the session service, split by behavior.
+
 #[path = "service_test/delegation_test.rs"]
 mod delegation;
 

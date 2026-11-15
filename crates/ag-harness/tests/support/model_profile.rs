@@ -1,3 +1,5 @@
+//! Unbounded model profile fixture for integration tests.
+
 use ag_harness::model::ModelProfile;
 
 /// Returns a profile no fixture fills, so projection keeps every loaded turn

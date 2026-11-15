@@ -1,3 +1,5 @@
+//! Unit tests for durable sessions, split by behavior.
+
 #[path = "session_test/chat_test.rs"]
 mod chat;
 #[path = "session_test/history_test.rs"]

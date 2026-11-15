@@ -1,3 +1,6 @@
+//! Review request generation unit tests covering attribution footers,
+//! published-target evidence, and commit-message parsing.
+
 use std::path::Path;
 use std::sync::{Arc, Mutex};
 

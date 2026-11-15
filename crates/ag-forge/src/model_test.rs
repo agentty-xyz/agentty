@@ -1,3 +1,6 @@
+//! Forge model tests covering ready markers, actionable review threads,
+//! forge and state names, error messages, and creation URLs.
+
 use crate::model::{
     AGENTTY_REVIEW_REPLY_MARKER_PREFIX, ForgeKind, ForgeRemote, ReviewComment,
     ReviewCommentAnchorSide, ReviewCommentThread, ReviewRequestError, ReviewRequestState,

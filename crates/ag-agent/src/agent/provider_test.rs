@@ -1,3 +1,5 @@
+//! Provider transport, prompt, schema, and parsing policy unit tests.
+
 use ag_protocol::{ProtocolRequestProfile, ProtocolSchemaInstructionMode};
 use ag_session::AgentKind;
 

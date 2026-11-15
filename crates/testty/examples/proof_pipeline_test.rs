@@ -1,3 +1,6 @@
+//! Tests for the `proof_pipeline` example's proof artifacts, file previews, and
+//! failure propagation.
+
 #[path = "support_test.rs"]
 mod support;
 

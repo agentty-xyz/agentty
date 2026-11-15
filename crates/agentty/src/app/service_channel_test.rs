@@ -1,3 +1,6 @@
+//! Session run factory unit tests covering runtime composition, scripted
+//! sessions, and the offline session channel.
+
 use std::env;
 use std::path::PathBuf;
 use std::sync::Arc;

@@ -1,3 +1,6 @@
+//! Graph lifecycle tests for clarification, retry, reply, cancellation, and
+//! node history.
+
 use std::num::NonZeroU64;
 use std::path::Path;
 

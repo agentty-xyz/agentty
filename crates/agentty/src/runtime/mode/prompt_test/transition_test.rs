@@ -1,3 +1,5 @@
+//! Prompt key transition tests for focus, menus, mentions, and apply.
+
 use std::path::PathBuf;
 
 use crossterm::event;

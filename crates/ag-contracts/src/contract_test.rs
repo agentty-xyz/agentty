@@ -1,3 +1,6 @@
+//! Agent contract tests covering profile prompts, turn continuations,
+//! conversation-id normalization, and request-kind protocol profiles.
+
 use ag_protocol::ProtocolRequestProfile;
 
 use crate::contract::{

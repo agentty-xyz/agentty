@@ -1,3 +1,6 @@
+//! Session creation popup sizing, option availability, and rendering unit
+//! tests.
+
 use ratatui::layout::{Alignment, Rect};
 use ratatui::style::{Color, Modifier};
 

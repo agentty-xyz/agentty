@@ -1,3 +1,5 @@
+//! Clipboard image payload types: encoded PNG bytes or decoded RGBA pixels.
+
 /// Image payload read from the system clipboard in one backend request.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub enum ClipboardImage {

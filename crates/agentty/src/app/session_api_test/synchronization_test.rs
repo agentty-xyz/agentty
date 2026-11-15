@@ -1,3 +1,5 @@
+//! Session API test that rejects session creation during project sync.
+
 use ag_session::{CreateSessionMode, CreateSessionRequest, SessionError as ApiSessionError};
 
 use super::support::request_session_creation;

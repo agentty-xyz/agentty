@@ -1,3 +1,5 @@
+//! `ReasoningLevel` effort values for task execution.
+
 use std::str::FromStr;
 
 /// Supported reasoning-effort levels for task execution.

@@ -1,3 +1,5 @@
+//! Session row mapping tests for list, detail, and review-request columns.
+
 use crate::review::SessionReviewRequestRow;
 use crate::session::{SessionJoinRow, SessionListRow};
 

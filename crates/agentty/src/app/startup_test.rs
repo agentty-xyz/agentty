@@ -1,3 +1,5 @@
+//! App startup project-context, startup tab, and project-catalog tests.
+
 use std::path::Path;
 use std::sync::Arc;
 

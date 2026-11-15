@@ -1,3 +1,6 @@
+//! Tool call decoding, `read` and `write` definitions, and argument
+//! validation tests.
+
 use jsonschema::Validator;
 use serde_json::{Value, json};
 

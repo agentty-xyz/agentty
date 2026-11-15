@@ -1,3 +1,5 @@
+//! Mermaid diagram rendering using Agentty's active UI theme.
+
 pub use ag_tui_text::mermaid::MermaidDiagram;
 
 use crate::ui::style;

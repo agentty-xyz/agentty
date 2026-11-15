@@ -1,3 +1,5 @@
+//! Queued status transition and queued-action snapshot tests for sessions.
+
 use std::sync::Arc;
 
 use ag_session::SessionStatus as Status;

@@ -1,3 +1,5 @@
+//! Unit tests for the Kimi provider, split by behavior.
+
 #[path = "kimi_test/failure_test.rs"]
 mod failure;
 #[path = "kimi_test/reasoning_test.rs"]

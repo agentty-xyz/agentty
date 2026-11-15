@@ -1,3 +1,6 @@
+//! Strict protocol response parsing, payload recovery, and parse-debug
+//! diagnostic unit tests.
+
 use std::io::{self, Read};
 
 use crate::model::{

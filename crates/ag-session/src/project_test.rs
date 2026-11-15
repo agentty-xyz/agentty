@@ -1,3 +1,5 @@
+//! Project display label and most-recently-used ordering unit tests.
+
 use std::path::PathBuf;
 
 use crate::project::{Project, ProjectListItem, mru_project_order, ordered_project_items};

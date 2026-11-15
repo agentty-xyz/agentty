@@ -1,3 +1,6 @@
+//! Review persistence tests for review requests, focused reviews, diff
+//! baselines, and checkpoints.
+
 use ag_session::{ReasoningLevel, SpeedMode};
 use tempfile::tempdir;
 

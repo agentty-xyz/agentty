@@ -1,3 +1,5 @@
+//! Harness recovery fingerprint and image input gating unit tests.
+
 use std::num::NonZeroU64;
 use std::sync::Arc;
 

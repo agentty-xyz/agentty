@@ -1,3 +1,5 @@
+//! `FrameDiff` cell change detection, region merging, and summary unit tests.
+
 use crate::diff::{CellChange, FrameDiff};
 use crate::frame::TerminalFrame;
 

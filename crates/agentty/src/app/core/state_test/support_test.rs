@@ -1,3 +1,6 @@
+//! Shared `App` fixtures, seeding helpers, and mock clients for state unit
+//! tests.
+
 use std::fs;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;

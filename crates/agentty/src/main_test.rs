@@ -1,3 +1,6 @@
+//! CLI argument parsing, telemetry setup, and startup failure tests for the
+//! entry point.
+
 use std::net::TcpListener;
 use std::os::unix::fs::PermissionsExt;
 use std::time::Duration;

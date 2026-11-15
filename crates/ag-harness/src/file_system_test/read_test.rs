@@ -1,3 +1,6 @@
+//! Local filesystem read unit tests for canonicalization, missing and
+//! invalid paths, and symlink traversal.
+
 use std::io;
 use std::io::Write as _;
 use std::os::unix::fs::symlink;

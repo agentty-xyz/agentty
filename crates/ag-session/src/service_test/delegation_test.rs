@@ -1,3 +1,5 @@
+//! Session service delegation tests for backend reads and mutating operations.
+
 use std::collections::VecDeque;
 use std::sync::Arc;
 

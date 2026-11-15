@@ -1,3 +1,6 @@
+//! Markdown rendering into styled, word-wrapped terminal lines, with a
+//! bounded render cache.
+
 use std::cell::{Cell, RefCell};
 use std::collections::VecDeque;
 use std::hash::Hasher;

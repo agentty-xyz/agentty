@@ -1,3 +1,6 @@
+//! Turn outcome and activity report tests, including legacy report defaults
+//! and error classification.
+
 use std::time::Duration;
 
 use serde_json::json;

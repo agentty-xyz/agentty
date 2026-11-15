@@ -1,3 +1,5 @@
+//! Pooled one-shot submission runtime lease and fallback unit tests.
+
 use std::path::PathBuf;
 use std::sync::{Arc, Mutex};
 

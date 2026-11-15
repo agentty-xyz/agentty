@@ -1,3 +1,5 @@
+//! Typed `SessionError` for session-layer workflow operations.
+
 /// Typed error returned by session-layer workflow operations.
 ///
 /// Wraps infrastructure errors from git, database, and forge

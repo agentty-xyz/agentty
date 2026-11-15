@@ -1,3 +1,5 @@
+//! Centered popup for selecting one configured launch configuration.
+
 use ag_tui_text::text_util::truncate_with_ellipsis;
 use ratatui::Frame;
 use ratatui::layout::{Alignment, Rect};

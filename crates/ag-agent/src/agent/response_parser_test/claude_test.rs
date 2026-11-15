@@ -1,3 +1,5 @@
+//! Claude response and stream-line parsing unit tests.
+
 use crate::agent::response_parser::{
     parse_claude_response_with_fallback, parse_claude_stream_output_line,
 };

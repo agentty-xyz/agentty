@@ -1,3 +1,6 @@
+//! Execution graph launch validation, handoff, and task graph unit tests, with
+//! shared graph fixtures.
+
 use std::collections::{BTreeMap, HashMap};
 use std::num::NonZeroU64;
 use std::path::PathBuf;
