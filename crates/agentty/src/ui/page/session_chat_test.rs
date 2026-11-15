@@ -7,7 +7,7 @@ use ratatui::widgets::Paragraph;
 use super::{
     CHAT_INPUT_MAX_PANEL_HEIGHT, QuestionPanelState, SessionChatLayoutInput, SessionChatLayoutPlan,
     SessionChatPage, SessionChatPageInput, non_prompt_bottom_height, render_question_panel,
-    transcript_view_height,
+    session_composer_title, transcript_view_height,
 };
 use crate::domain::agent::ReasoningLevel;
 use crate::domain::input::InputState;
@@ -22,7 +22,7 @@ use crate::presentation::prompt::{
     PromptSlashState,
 };
 use crate::ui::component::session_output::{SessionOutputLayoutCache, SessionOutputLineContext};
-use crate::ui::{Page, layout, markdown, prompt_format, style};
+use crate::ui::{Page, layout, markdown, prompt_format, session_format, style};
 
 fn session_fixture() -> Session {
     crate::test_support::SessionFixtureBuilder::new()
@@ -1223,7 +1223,12 @@ fn graph_chat_renders_beside_the_armed_and_regular_composer() {
         let text = buffer_text(terminal.backend().buffer());
 
         // Assert
+        let model_title = session_composer_title(&session);
+        let graph_title = format!("Graph · {model_title}");
         assert!(text.contains("Execution graph"));
+        assert!(text.contains(&model_title));
+        assert!(text.contains(&session_format::prompt_session_status(&session)));
+        assert_eq!(text.contains(&graph_title), armed);
         assert!(text.contains(if armed {
             "Describe the task for the execution graph"
         } else {

@@ -35,6 +35,9 @@ const ARCHIVED_FOOTER_HEIGHT: u16 = 1;
 /// Placeholder of an ordinary session composer.
 const DEFAULT_COMPOSER_PLACEHOLDER: &str = "Type your message";
 
+/// Placeholder of an armed `/graph` composer.
+const GRAPH_COMPOSER_PLACEHOLDER: &str = "Describe the task for the execution graph";
+
 /// Maximum rendered height of the prompt input panel, including borders.
 const CHAT_INPUT_MAX_PANEL_HEIGHT: u16 = 10;
 
@@ -57,8 +60,13 @@ struct PreparedPromptPanel {
     is_chat_focused: bool,
     /// Whether the footer carries the clipboard image-capture loader.
     is_pasting_image: bool,
+    /// Composer placeholder, which asks for the graph task while `/graph` is
+    /// armed.
+    placeholder: &'static str,
     status: String,
     suggestion_list: Option<SuggestionList>,
+    /// Composer title with the session agent, model, and reasoning level,
+    /// prefixed with `Graph` while `/graph` is armed.
     title: String,
     total_height: u16,
 }
@@ -363,7 +371,8 @@ impl<'a> SessionChatPage<'a> {
 
     /// Renders the active composer, its suggestion dropdown, and its footer.
     ///
-    /// An armed `/graph` composer asks for the execution-graph task.
+    /// The prepared panel supplies the title and placeholder, including the
+    /// armed `/graph` variants.
     fn render_prompt_composer(
         &self,
         f: &mut Frame,
@@ -372,22 +381,12 @@ impl<'a> SessionChatPage<'a> {
         input: &input::InputState,
         timing_label: &str,
     ) {
-        let (title, placeholder) = if matches!(
-            self.mode,
-            AppMode::Prompt { slash_state, .. } if slash_state.graph.is_armed()
-        ) {
-            ("Graph", "Describe the task for the execution graph")
-        } else {
-            (
-                prepared_prompt_panel.title.as_str(),
-                DEFAULT_COMPOSER_PLACEHOLDER,
-            )
-        };
-        let mut chat_input = ChatInput::new(title, input.text(), input.cursor)
-            .placeholder(placeholder)
-            .footer(timing_label)
-            .active(!prepared_prompt_panel.is_chat_focused)
-            .status(&prepared_prompt_panel.status);
+        let mut chat_input =
+            ChatInput::new(&prepared_prompt_panel.title, input.text(), input.cursor)
+                .placeholder(prepared_prompt_panel.placeholder)
+                .footer(timing_label)
+                .active(!prepared_prompt_panel.is_chat_focused)
+                .status(&prepared_prompt_panel.status);
 
         if let Some(suggestion_list) = &prepared_prompt_panel.suggestion_list {
             chat_input = chat_input.suggestion_list(suggestion_list);
@@ -522,6 +521,17 @@ fn prepare_prompt_panel(
         .saturating_add(u16::try_from(dropdown_row_count).unwrap_or(u16::MAX))
         .saturating_add(1);
     let max_bottom_height = area.height.saturating_sub(1);
+    let (placeholder, title) = if slash_state.graph.is_armed() {
+        (
+            GRAPH_COMPOSER_PLACEHOLDER,
+            format!("Graph · {}", session_composer_title(session)),
+        )
+    } else {
+        (
+            DEFAULT_COMPOSER_PLACEHOLDER,
+            session_composer_title(session),
+        )
+    };
 
     Some(PreparedPromptPanel {
         footer_text: prompt_format::prompt_footer_line(
@@ -532,9 +542,10 @@ fn prepare_prompt_panel(
         ),
         is_chat_focused: *focus == ChatFocus::Chat,
         is_pasting_image: attachment_state.is_pasting_image(),
+        placeholder,
         status: session_format::prompt_session_status(session),
         suggestion_list,
-        title: session_composer_title(session),
+        title,
         total_height: desired_bottom_height.min(max_bottom_height),
     })
 }

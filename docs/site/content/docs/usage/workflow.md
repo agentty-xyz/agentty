@@ -21,7 +21,8 @@ Start Agentty with `--experimental-graph` to enable `/graph`. Without this flag,
 
 Select `/graph` in a prepared idle session, then describe the task and press `Enter`.
 `Esc` disarms the composer and keeps your draft. `/graph` only selects the mode; it has
-no subcommands. The composer works as in regular chat, including pasted images;
+no subcommands. The composer title shows `Graph` before the session's agent, model, and
+reasoning level. The composer works as in regular chat, including pasted images;
 generation and every proposed node receive them. Conversation and clarification
 questions stay in the left chat pane; other proposal results appear there as one short
 line. The right pane uses at most 35% of the width for proposal status and the graph:
