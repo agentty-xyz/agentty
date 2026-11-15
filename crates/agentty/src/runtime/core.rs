@@ -352,19 +352,19 @@ where
 /// Returns the forced redraw cadence for the visible UI: every frame tick
 /// while a smooth animation is moving, otherwise the spinner/timer fallback.
 ///
-/// The nerpa greeting only changes while its sheen sweeps, and only when the
-/// last draw painted it with colors, as `greeting_animated` reports. Hidden
-/// or colorless art keeps the fallback cadence. The fast cadence also covers
-/// the first draw after a sweep ends, when `last_draw_unix_millis` still
-/// falls inside the sweep, so the final lit cells clear promptly.
+/// The nerpa greeting only changes while its tail wags, and only when the
+/// last draw painted it, as `greeting_animated` reports. Hidden art keeps the
+/// fallback cadence. The fast cadence also covers the first draw after a wag
+/// ends, when `last_draw_unix_millis` still falls inside the wag, so the
+/// flippers settle back into their resting pose promptly.
 fn forced_redraw_interval(
     app: &App,
     greeting_animated: bool,
     current_unix_millis: u128,
     last_draw_unix_millis: u128,
 ) -> Duration {
-    let greeting_moving = NerpaGreeting::is_sweeping(current_unix_millis)
-        || NerpaGreeting::is_sweeping(last_draw_unix_millis);
+    let greeting_moving = NerpaGreeting::is_wagging(current_unix_millis)
+        || NerpaGreeting::is_wagging(last_draw_unix_millis);
     if greeting_animated && greeting_moving && app.has_visible_frame_animation() {
         ANIMATION_REDRAW_INTERVAL
     } else {
