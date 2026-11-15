@@ -11,8 +11,19 @@ use tokio::time;
 
 use super::error::GitError;
 
-/// Maximum time one asynchronous git subprocess may run.
+/// Maximum time one local asynchronous git subprocess may run.
 const GIT_COMMAND_TIMEOUT: Duration = Duration::from_secs(30);
+
+/// Maximum time one remote-transfer git subprocess may run.
+///
+/// Pushes, fetches, pulls, and remote lookups depend on network speed,
+/// transfer size, credential helpers, and remote hooks, so they need a wider
+/// bound than local commands.
+const NETWORK_GIT_COMMAND_TIMEOUT: Duration = Duration::from_mins(5);
+
+/// Git subcommands that talk to a remote and use
+/// [`NETWORK_GIT_COMMAND_TIMEOUT`].
+const NETWORK_GIT_SUBCOMMANDS: [&str; 4] = ["fetch", "ls-remote", "pull", "push"];
 
 /// One asynchronous git invocation with owned process inputs.
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -40,6 +51,40 @@ impl AsyncGitCommand {
         self.environment = environment;
 
         self
+    }
+
+    /// Returns the runtime bound for this command: remote-transfer
+    /// subcommands get [`NETWORK_GIT_COMMAND_TIMEOUT`], and every other
+    /// command gets [`GIT_COMMAND_TIMEOUT`].
+    fn timeout(&self) -> Duration {
+        let is_network_command = self
+            .subcommand()
+            .is_some_and(|subcommand| NETWORK_GIT_SUBCOMMANDS.contains(&subcommand));
+
+        if is_network_command {
+            NETWORK_GIT_COMMAND_TIMEOUT
+        } else {
+            GIT_COMMAND_TIMEOUT
+        }
+    }
+
+    /// Returns the git subcommand, skipping leading `-c <name>=<value>`
+    /// configuration overrides and other global options.
+    fn subcommand(&self) -> Option<&str> {
+        let mut arguments = self.arguments.iter();
+        while let Some(argument) = arguments.next() {
+            if argument == "-c" {
+                arguments.next();
+
+                continue;
+            }
+
+            if !argument.starts_with('-') {
+                return Some(argument);
+            }
+        }
+
+        None
     }
 }
 
@@ -79,7 +124,11 @@ impl AsyncGitCommandRunner for ProcessAsyncGitCommandRunner {
         &self,
         command: AsyncGitCommand,
     ) -> Pin<Box<dyn Future<Output = Result<AsyncGitCommandOutput, GitError>> + Send>> {
-        Box::pin(async move { run_git_command_with_timeout(command, GIT_COMMAND_TIMEOUT).await })
+        Box::pin(async move {
+            let timeout = command.timeout();
+
+            run_git_command_with_timeout(command, timeout).await
+        })
     }
 }
 
