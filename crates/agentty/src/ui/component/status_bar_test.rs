@@ -1,4 +1,6 @@
-use super::StatusBar;
+use ratatui::style::Modifier;
+
+use super::{StatusBar, centered_label_area};
 use crate::app::{ProjectSyncPhase, ProjectSyncStatus, UpdateStatus};
 use crate::domain::theme::ColorTheme;
 use crate::ui::{Component, style};
@@ -270,4 +272,130 @@ fn test_status_bar_render_shows_manual_hint_on_update_failure() {
     let text = buffer_text(&terminal);
     assert!(text.contains("rerun your original install command"));
     assert!(!text.contains("Updating to"));
+}
+
+/// Renders `status_bar` into a one-row terminal of `width` columns and
+/// returns the terminal for buffer inspection.
+fn rendered_status_bar(
+    status_bar: &StatusBar,
+    width: u16,
+) -> ratatui::Terminal<ratatui::backend::TestBackend> {
+    let backend = ratatui::backend::TestBackend::new(width, 1);
+    let mut terminal = ratatui::Terminal::new(backend).expect("failed to create terminal");
+    terminal
+        .draw(|frame| Component::render(status_bar, frame, frame.area()))
+        .expect("failed to draw");
+
+    terminal
+}
+
+#[test]
+fn test_status_bar_render_centers_project_name_between_version_and_help_hint() {
+    // Arrange
+    let _theme_scope = style::scoped_active_theme(ColorTheme::Current);
+    let status_bar =
+        StatusBar::new("v0.1.12".to_string()).project_name(Some("agentty".to_string()));
+
+    // Act
+    let terminal = rendered_status_bar(&status_bar, 60);
+
+    // Assert
+    let text = buffer_text(&terminal);
+    let buffer = terminal.backend().buffer();
+    assert!(text.starts_with(" Agentty v0.1.12 "));
+    assert!(text.ends_with("?: help "));
+    assert_eq!(text.find("agentty"), Some(26));
+    assert_eq!(buffer[(26, 0)].fg, style::palette::accent_soft());
+    assert_eq!(buffer[(26, 0)].bg, style::palette::surface());
+    assert!(buffer[(26, 0)].modifier.contains(Modifier::BOLD));
+}
+
+#[test]
+fn test_status_bar_render_shortens_then_omits_project_name_before_help_hint() {
+    // Arrange
+    let status_bar = StatusBar::new("v0.1.12".to_string())
+        .project_name(Some("my-long-project-name".to_string()));
+
+    // Act
+    let shortened = buffer_text(&rendered_status_bar(&status_bar, 40));
+    let omitted = buffer_text(&rendered_status_bar(&status_bar, 28));
+
+    // Assert
+    assert_eq!(shortened, " Agentty v0.1.12 my-long-pro... ?: help ");
+    assert_eq!(omitted, " Agentty v0.1.12    ?: help ");
+}
+
+#[test]
+fn test_status_bar_render_keeps_project_name_when_help_hint_does_not_fit() {
+    // Arrange
+    let status_bar = StatusBar::new("v0.1.12".to_string()).project_name(Some("ab".to_string()));
+
+    // Act
+    let text = buffer_text(&rendered_status_bar(&status_bar, 20));
+
+    // Assert
+    assert_eq!(text, " Agentty v0.1.12 ab ");
+}
+
+#[test]
+fn test_status_bar_render_keeps_joined_emoji_project_name_that_fits() {
+    // Arrange
+    let status_bar = StatusBar::new("v0.1.12".to_string()).project_name(Some("👩‍💻".to_string()));
+
+    // Act
+    let text = buffer_text(&rendered_status_bar(&status_bar, 40));
+
+    // Assert
+    assert!(text.contains("👩‍💻"), "status bar was {text:?}");
+    assert!(!text.contains(".."), "status bar was {text:?}");
+}
+
+#[test]
+fn test_centered_label_area_centers_label_across_full_width() {
+    // Arrange
+    let (area_width, left_width, right_width, label_width) = (60, 16, 8, 7);
+
+    // Act
+    let label_area = centered_label_area(area_width, left_width, right_width, label_width);
+
+    // Assert
+    assert_eq!(label_area, Some((26, 7)));
+}
+
+#[test]
+fn test_centered_label_area_moves_label_into_free_gap_near_long_left_text() {
+    // Arrange
+    let (area_width, left_width, right_width, label_width) = (60, 30, 8, 10);
+
+    // Act
+    let label_area = centered_label_area(area_width, left_width, right_width, label_width);
+
+    // Assert
+    assert_eq!(label_area, Some((36, 10)));
+}
+
+#[test]
+fn test_centered_label_area_shortens_label_to_free_gap() {
+    // Arrange, Act
+    let shortened = centered_label_area(40, 16, 8, 20);
+    let minimum = centered_label_area(30, 16, 8, 10);
+    let whole_short_label = centered_label_area(29, 16, 8, 2);
+
+    // Assert
+    assert_eq!(shortened, Some((17, 14)));
+    assert_eq!(minimum, Some((17, 4)));
+    assert_eq!(whole_short_label, Some((17, 2)));
+}
+
+#[test]
+fn test_centered_label_area_omits_label_without_room() {
+    // Arrange, Act
+    let below_minimum = centered_label_area(29, 16, 8, 10);
+    let no_gap = centered_label_area(10, 16, 0, 5);
+    let empty_label = centered_label_area(60, 16, 8, 0);
+
+    // Assert
+    assert_eq!(below_minimum, None);
+    assert_eq!(no_gap, None);
+    assert_eq!(empty_label, None);
 }

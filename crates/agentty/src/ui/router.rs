@@ -318,8 +318,8 @@ pub(crate) fn surface_kind_for_mode(mode: &AppMode) -> SurfaceKind {
     surface_for_mode(mode).kind()
 }
 
-/// Returns the active project's display label for the footer bar and scoped
-/// page titles.
+/// Returns the active project's display label for the top status bar and
+/// scoped page titles.
 pub(crate) fn active_project_name(
     active_project_id: i64,
     projects: &[ProjectListItem],
