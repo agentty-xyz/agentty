@@ -4,9 +4,9 @@ use ratatui::style::{Color, Modifier};
 
 use super::super::icon::Icon;
 use super::{
-    CURRENT_PALETTE, DARK_HORIZON_PALETTE, GREEN_PALETTE, border_style, forge_indicator_color,
-    palette, prepare_terminal_frame, row_selection_style, scoped_active_theme, selection_style,
-    set_active_theme, size_color, status_color, status_icon,
+    CURRENT_PALETTE, ColorSupport, DARK_HORIZON_PALETTE, GREEN_PALETTE, border_style,
+    forge_indicator_color, palette, prepare_terminal_frame, row_selection_style,
+    scoped_active_theme, selection_style, set_active_theme, size_color, status_color, status_icon,
 };
 use crate::domain::session::{ReviewRequestState, SessionSize, Status};
 use crate::domain::theme::ColorTheme;
@@ -31,8 +31,12 @@ fn terminal_frames_preserve_selections_and_attributes_with_and_without_colors() 
         let mut colored_buffer = buffer.clone();
 
         // Act
-        prepare_terminal_frame(&mut buffer, theme, true);
-        prepare_terminal_frame(&mut colored_buffer, theme, false);
+        prepare_terminal_frame(&mut buffer, theme, ColorSupport::from_colors_disabled(true));
+        prepare_terminal_frame(
+            &mut colored_buffer,
+            theme,
+            ColorSupport::from_colors_disabled(false),
+        );
 
         // Assert
         assert_eq!(colored_buffer, original_buffer);

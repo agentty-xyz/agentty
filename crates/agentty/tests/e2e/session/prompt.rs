@@ -5,12 +5,22 @@ use testty::assertion;
 use testty::region::Region;
 use testty::scenario::Scenario;
 
-use super::fixture::{E2eResult, seed_review_ready_session, seed_sessions_startup_tab};
+use super::fixture::{
+    CLAUDE_STRUCTURED_RESPONSE_TEXT, E2eResult, seed_claude_structured_output_project,
+    seed_review_ready_session, seed_sessions_startup_tab,
+};
 use crate::common;
 use crate::common::{BuilderEnv, FeatureTest, SessionSeed};
 
 /// Draft text typed into the composer by the chat-focus toggle test.
 const PROMPT_FOCUS_DRAFT_TEXT: &str = "Draft kept while reading chat";
+
+/// Crown of the pixel-art nerpa greeting painted above a fresh composer.
+const NERPA_GREETING_HEAD: &str = "▄████████████▄";
+
+/// Muzzle row of the nerpa greeting on a terminal without colors: left
+/// whiskers, then a solid body whose right whiskers merged into it.
+const NERPA_GREETING_COLORLESS_MUZZLE: &str = "▀▀▀████████████████████████▀██▄";
 
 /// Seeds one draft-session lookup target file into the temporary project.
 fn seed_draft_at_lookup_project(env: &BuilderEnv) -> Result<(), Box<dyn std::error::Error>> {
@@ -725,4 +735,53 @@ fn assert_session_prompt_chat_focus_toggle(
         "the footer must paint the worktree path home-collapsed so frames hash identically on \
          every platform, got:\n{redacted}",
     );
+}
+
+/// Verify the nerpa greeting sits above a fresh composer, drops its right
+/// whiskers on this colorless terminal, and disappears once the first message
+/// is sent.
+#[tokio::test]
+async fn nerpa_greeting_hides_after_first_message() -> E2eResult {
+    // Arrange
+    FeatureTest::new("session_nerpa_greeting")
+        .with_git()
+        .setup(|env| Box::pin(async move { seed_claude_structured_output_project(env).await }))
+        .run(
+            |scenario| {
+                // Act
+                scenario
+                    .compose(&common::wait_for_agentty_startup())
+                    .compose(&common::switch_to_tab("Sessions"))
+                    .press_key("a")
+                    .press_key("Enter")
+                    .wait_for_text(NERPA_GREETING_HEAD, 5000)
+                    .capture_labeled("greeting", "Nerpa greets a fresh session")
+                    .write_text("Say hello")
+                    .wait_for_text("Say hello", 3000)
+                    .press_key("Enter")
+                    .wait_for_text(CLAUDE_STRUCTURED_RESPONSE_TEXT, 30000)
+                    .capture_labeled("first_reply", "Nerpa hides after the first message")
+            },
+            |frame, report| {
+                Box::pin(async move {
+                    // Assert
+                    let greeting = common::frame_from_capture(&report.captures[0]);
+                    let greeting_full = Region::full(greeting.cols(), greeting.rows());
+                    assertion::assert_text_in_region(
+                        &greeting,
+                        NERPA_GREETING_HEAD,
+                        &greeting_full,
+                    );
+                    assertion::assert_text_in_region(
+                        &greeting,
+                        NERPA_GREETING_COLORLESS_MUZZLE,
+                        &greeting_full,
+                    );
+                    assertion::assert_not_visible(frame, NERPA_GREETING_HEAD);
+                })
+            },
+        )
+        .await?;
+
+    Ok(())
 }

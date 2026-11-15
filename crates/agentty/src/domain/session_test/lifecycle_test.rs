@@ -20,6 +20,29 @@ fn test_status_transition_draft_to_canceled() {
 }
 
 #[test]
+fn test_awaits_first_message_only_for_draft_without_prompt() {
+    // Arrange
+    let fresh_session = SessionFixtureBuilder::new().status(Status::Draft).build();
+    let staged_session = SessionFixtureBuilder::new()
+        .status(Status::Draft)
+        .prompt("Ship it")
+        .build();
+    let started_session = SessionFixtureBuilder::new()
+        .status(Status::InProgress)
+        .build();
+
+    // Act
+    let fresh_awaits = fresh_session.awaits_first_message();
+    let staged_awaits = staged_session.awaits_first_message();
+    let started_awaits = started_session.awaits_first_message();
+
+    // Assert
+    assert!(fresh_awaits);
+    assert!(!staged_awaits);
+    assert!(!started_awaits);
+}
+
+#[test]
 fn test_allows_fork_action_rejects_drafts_children_active_and_terminal_sessions() {
     // Arrange
     let draft_review_session = SessionFixtureBuilder::new()

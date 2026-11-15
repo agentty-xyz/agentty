@@ -367,6 +367,11 @@ impl Session {
         self.title.as_deref().unwrap_or("No title")
     }
 
+    /// Returns whether the session has not received its first user message.
+    pub fn awaits_first_message(&self) -> bool {
+        self.status == Status::Draft && self.prompt.is_empty()
+    }
+
     /// Returns whether the session should use staged-draft behavior before
     /// its first live turn starts.
     pub fn is_draft_session(&self) -> bool {

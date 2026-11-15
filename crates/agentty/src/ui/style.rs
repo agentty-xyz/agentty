@@ -14,6 +14,31 @@ use crate::domain::theme::ColorTheme;
 static ACTIVE_THEME: AtomicU8 = AtomicU8::new(theme_index(ColorTheme::Current));
 static ACTIVE_THEME_SCOPE_LOCK: Mutex<()> = Mutex::new(());
 
+/// Whether the terminal renders the colors a frame asks for.
+///
+/// Art that tells two tones apart only by color reads this to pick glyphs
+/// that still work in a single tone.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum ColorSupport {
+    /// Colors are suppressed, for example by the `NO_COLOR` environment
+    /// variable.
+    Disabled,
+    /// Colors reach the terminal.
+    Enabled,
+}
+
+impl ColorSupport {
+    /// Maps the backend's "colors disabled" switch onto a color support.
+    #[must_use]
+    pub fn from_colors_disabled(colors_disabled: bool) -> Self {
+        if colors_disabled {
+            Self::Disabled
+        } else {
+            Self::Enabled
+        }
+    }
+}
+
 /// Scoped guard that keeps tests and temporary render checks serialized while
 /// they override the process-wide active color theme.
 pub(crate) struct ActiveThemeScope {
@@ -381,9 +406,9 @@ pub fn selection_style() -> Style {
 pub(crate) fn prepare_terminal_frame(
     buffer: &mut Buffer,
     theme: ColorTheme,
-    colors_disabled: bool,
+    color_support: ColorSupport,
 ) {
-    if !colors_disabled {
+    if color_support == ColorSupport::Enabled {
         return;
     }
 

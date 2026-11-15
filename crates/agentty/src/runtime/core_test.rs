@@ -19,7 +19,7 @@ use super::{
     forced_redraw_elapsed, render_frame, run, run_until_quit, run_with_backend,
 };
 use crate::analytics::TurnOutcome;
-use crate::app::AppEvent;
+use crate::app::{App, AppEvent};
 use crate::domain::agent::{AgentKind, AgentSelection, AgentSelectionMetadata};
 use crate::domain::session::{SessionHandles, Status};
 use crate::domain::session_message::{SessionMessage, SessionMessageKind, SessionTranscript};
@@ -443,6 +443,191 @@ async fn render_frame_redraws_idle_ui_when_wall_clock_minute_changes() {
     assert_eq!(next_minute_draw_count, initial_draw_count + 1);
 }
 
+/// Wall time, in milliseconds after the Unix epoch, inside the nerpa
+/// greeting's sheen sweep.
+const GREETING_SWEEP_UNIX_MILLIS: u64 = 4_000;
+
+/// Wall time, in milliseconds after the Unix epoch, just before the nerpa
+/// greeting's sheen sweep ends and the next cycle's rest begins.
+const GREETING_SWEEP_END_UNIX_MILLIS: u64 = 4_990;
+
+/// Verifies a visible nerpa greeting redraws on every frame tick while its
+/// sheen sweeps, while a spinner-only session keeps the slower forced redraw
+/// cadence.
+#[tokio::test]
+async fn render_frame_redraws_frame_animation_on_every_frame_tick() {
+    // Arrange
+    let (mut app, _base_dir) = new_draft_greeting_app().await;
+    let (backend, _clear_count, draw_count) = CountingBackend::new(80, 24);
+    let mut terminal = Terminal::new(backend).expect("failed to create test terminal");
+    let clock_at_frame = greeting_clock_at_frame(GREETING_SWEEP_UNIX_MILLIS);
+    let mut last_draw = DrawStamp::now(&clock_at_frame(0));
+    let presentation = PresentationState::default();
+    app.mark_dirty();
+    render_frame(
+        &mut app,
+        &mut terminal,
+        &clock_at_frame(0),
+        &mut last_draw,
+        &presentation,
+    )
+    .expect("initial frame should render");
+    let initial_draw_count = draw_count.load(Ordering::Relaxed);
+
+    // Act
+    render_frame(
+        &mut app,
+        &mut terminal,
+        &clock_at_frame(1),
+        &mut last_draw,
+        &presentation,
+    )
+    .expect("greeting frame should render");
+    let greeting_draw_count = draw_count.load(Ordering::Relaxed);
+    let session = app
+        .sessions
+        .sessions_mut()
+        .first_mut()
+        .expect("session should remain available");
+    session.prompt = "Ship it".to_string();
+    session.status = Status::InProgress;
+    render_frame(
+        &mut app,
+        &mut terminal,
+        &clock_at_frame(2),
+        &mut last_draw,
+        &presentation,
+    )
+    .expect("spinner frame should be skipped");
+    let spinner_draw_count = draw_count.load(Ordering::Relaxed);
+
+    // Assert
+    assert!(!app.has_visible_frame_animation());
+    assert!(app.has_visible_tick_driven_ui());
+    assert_eq!(greeting_draw_count, initial_draw_count + 1);
+    assert_eq!(spinner_draw_count, greeting_draw_count);
+}
+
+/// Verifies a visible nerpa greeting draws once more after its sheen sweep
+/// ends, then keeps the slower forced redraw cadence while the art rests.
+#[tokio::test]
+async fn render_frame_skips_frame_ticks_while_greeting_rests() {
+    // Arrange
+    let (mut app, _base_dir) = new_draft_greeting_app().await;
+    let (backend, _clear_count, draw_count) = CountingBackend::new(80, 24);
+    let mut terminal = Terminal::new(backend).expect("failed to create test terminal");
+    let clock_at_frame = greeting_clock_at_frame(GREETING_SWEEP_END_UNIX_MILLIS);
+    let mut last_draw = DrawStamp::now(&clock_at_frame(0));
+    let presentation = PresentationState::default();
+    app.mark_dirty();
+    render_frame(
+        &mut app,
+        &mut terminal,
+        &clock_at_frame(0),
+        &mut last_draw,
+        &presentation,
+    )
+    .expect("last sweep frame should render");
+    let sweep_draw_count = draw_count.load(Ordering::Relaxed);
+
+    // Act
+    render_frame(
+        &mut app,
+        &mut terminal,
+        &clock_at_frame(1),
+        &mut last_draw,
+        &presentation,
+    )
+    .expect("first rest frame should render");
+    let first_rest_draw_count = draw_count.load(Ordering::Relaxed);
+    render_frame(
+        &mut app,
+        &mut terminal,
+        &clock_at_frame(2),
+        &mut last_draw,
+        &presentation,
+    )
+    .expect("second rest frame should be skipped");
+    let second_rest_draw_count = draw_count.load(Ordering::Relaxed);
+
+    // Assert
+    assert!(app.has_visible_frame_animation());
+    assert_eq!(first_rest_draw_count, sweep_draw_count + 1);
+    assert_eq!(second_rest_draw_count, first_rest_draw_count);
+}
+
+/// Verifies a draft session whose terminal is too small for the nerpa
+/// greeting keeps the slower forced redraw cadence during a sheen sweep,
+/// because no painted art can animate.
+#[tokio::test]
+async fn render_frame_skips_frame_ticks_when_greeting_is_hidden() {
+    // Arrange
+    let (mut app, _base_dir) = new_draft_greeting_app().await;
+    let (backend, _clear_count, draw_count) = CountingBackend::new(80, 12);
+    let mut terminal = Terminal::new(backend).expect("failed to create test terminal");
+    let clock_at_frame = greeting_clock_at_frame(GREETING_SWEEP_UNIX_MILLIS);
+    let mut last_draw = DrawStamp::now(&clock_at_frame(0));
+    let presentation = PresentationState::default();
+    app.mark_dirty();
+    render_frame(
+        &mut app,
+        &mut terminal,
+        &clock_at_frame(0),
+        &mut last_draw,
+        &presentation,
+    )
+    .expect("initial frame should render");
+    let initial_draw_count = draw_count.load(Ordering::Relaxed);
+
+    // Act
+    render_frame(
+        &mut app,
+        &mut terminal,
+        &clock_at_frame(1),
+        &mut last_draw,
+        &presentation,
+    )
+    .expect("hidden greeting frame should be skipped");
+    let hidden_draw_count = draw_count.load(Ordering::Relaxed);
+
+    // Assert
+    assert!(app.has_visible_frame_animation());
+    assert!(!presentation.greeting_animated());
+    assert_eq!(hidden_draw_count, initial_draw_count);
+}
+
+/// Builds a test app viewing one draft session that shows the nerpa
+/// greeting.
+async fn new_draft_greeting_app() -> (App, tempfile::TempDir) {
+    let (mut app, base_dir) = crate::test_support::new_test_app().await;
+    app.sessions.push_session(
+        SessionFixtureBuilder::new()
+            .id("session-id")
+            .status(Status::Draft)
+            .build(),
+    );
+    app.mode = AppMode::View {
+        session_id: "session-id".into(),
+        scroll_offset: None,
+    };
+
+    (app, base_dir)
+}
+
+/// Returns a clock factory whose monotonic and wall times both advance by
+/// one [`FRAME_INTERVAL`] per frame, starting at `start_unix_millis`.
+fn greeting_clock_at_frame(start_unix_millis: u64) -> impl Fn(u32) -> FixedClock {
+    let started_at = std::time::Instant::now();
+    let start_system_time = SystemTime::UNIX_EPOCH + Duration::from_millis(start_unix_millis);
+
+    move |frame: u32| {
+        FixedClock::new(
+            started_at + FRAME_INTERVAL * frame,
+            start_system_time + FRAME_INTERVAL * frame,
+        )
+    }
+}
+
 /// Verifies that `run_with_backend` drives the main loop with a
 /// `TestBackend` and exits cleanly when quit key events are injected.
 #[tokio::test]
@@ -783,7 +968,7 @@ fn forced_redraw_elapsed_uses_injected_clock_not_host_time() {
     let frozen = FrozenInstantClock { instant: anchor };
 
     // Act
-    let elapsed = forced_redraw_elapsed(&frozen, anchor);
+    let elapsed = forced_redraw_elapsed(&frozen, anchor, FORCED_REDRAW_INTERVAL);
 
     // Assert
     assert!(
@@ -805,7 +990,7 @@ fn forced_redraw_elapsed_fires_after_injected_clock_advances() {
     let frozen = FrozenInstantClock { instant: now };
 
     // Act
-    let elapsed = forced_redraw_elapsed(&frozen, last_draw_at);
+    let elapsed = forced_redraw_elapsed(&frozen, last_draw_at, FORCED_REDRAW_INTERVAL);
 
     // Assert
     assert!(

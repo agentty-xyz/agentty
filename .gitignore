@@ -7,6 +7,9 @@ docs/site/public/
 # Claude Code session worktrees
 .claude/worktrees/
 
+# macOS Finder metadata
+.DS_Store
+
 # Python bytecode caches
 __pycache__/
 *.py[cod]

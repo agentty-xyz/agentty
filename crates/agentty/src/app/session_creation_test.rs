@@ -22,6 +22,7 @@ use crate::domain::turn_prompt::{TurnPrompt, TurnPromptAttachment};
 use crate::infra::db::SessionPreparationState;
 use crate::presentation::app_mode::AppMode;
 use crate::runtime::PresentationState;
+use crate::ui::style::ColorSupport;
 
 /// Pauses worktree setup at its injected Git boundary until released.
 async fn delayed_creation_app(repo_lookups: usize) -> (App, tempfile::TempDir, Arc<Notify>) {
@@ -754,7 +755,7 @@ async fn delayed_creation_allows_input_and_rendering_without_stealing_navigation
     .await
     .expect("help input");
     terminal
-        .draw(|frame| presentation.render(&app.view_snapshot(), frame))
+        .draw(|frame| presentation.render(&app.view_snapshot(), frame, ColorSupport::Enabled))
         .expect("draw help");
 
     // Assert

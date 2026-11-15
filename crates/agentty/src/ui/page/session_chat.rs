@@ -1,10 +1,11 @@
+use std::cell::Cell;
 use std::ops::{Deref, DerefMut};
 
 use ratatui::Frame;
 use ratatui::layout::{Constraint, Layout, Rect};
 use ratatui::style::Style;
 use ratatui::text::Line;
-use ratatui::widgets::Paragraph;
+use ratatui::widgets::{Block, Paragraph};
 
 use crate::domain::question::QuestionItem;
 use crate::domain::session::{
@@ -19,6 +20,7 @@ use crate::presentation::graph_chat::GraphChatSnapshot;
 use crate::presentation::help_action::{self, ViewActionAvailability, ViewHelpState};
 use crate::presentation::prompt::{PromptAtMentionState, PromptSlashCommandSet};
 use crate::ui::component::chat_input::{ChatInput, SuggestionList};
+use crate::ui::component::nerpa_greeting::NerpaGreeting;
 use crate::ui::component::session_output::{
     SessionOutput, SessionOutputLayoutCache, SessionOutputLineContext,
 };
@@ -144,6 +146,12 @@ pub struct SessionChatPageInput<'a> {
     /// Exact prompt transcript block for the currently active turn, when one
     /// has been submitted in this app process.
     pub active_prompt_output: Option<&'a str>,
+    /// Whether the terminal renders colors, which decides how art that
+    /// relies on a second tone is painted.
+    pub color_support: style::ColorSupport,
+    /// Set when this render paints a nerpa greeting that can animate, so the
+    /// runtime only redraws at frame rate for visible sheen motion.
+    pub greeting_animated: &'a Cell<bool>,
     /// Whether the session branch currently conflicts with its base branch.
     pub has_merge_conflict: bool,
     /// Shared render cache for session transcript markdown.
@@ -258,6 +266,15 @@ impl<'a> SessionChatPage<'a> {
             output = output.active_progress(active_progress);
         }
         output.render(f, layout_plan.areas.output_area);
+        if session.awaits_first_message() {
+            let transcript_area = Block::default()
+                .borders(session_format::session_output_panel_borders())
+                .inner(layout_plan.areas.output_area);
+            let greeting_animated = NerpaGreeting::new(self.frame_time.unix_millis())
+                .color_support(self.color_support)
+                .render_animated(f, transcript_area);
+            self.greeting_animated.set(greeting_animated);
+        }
         let timing_padding = if matches!(session.status, Status::Done | Status::Canceled) {
             0
         } else {

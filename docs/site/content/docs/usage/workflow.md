@@ -230,10 +230,11 @@ failed refresh keeps the last known label until the next successful update.
 | **Done**        | Completed; worktree removed.                             |
 | **Canceled**    | Canceled; worktree removed.                              |
 
-New sessions open the composer while their workspace is prepared. Submit immediately;
-the prompt waits for setup. If setup fails, press `s` from session view to retry.
-Prompts and images whose turns never began survive restart. Review the transcript before
-retrying a turn interrupted during dispatch.
+New sessions open the composer while their workspace is prepared; a small pixel-art
+nerpa, with a light sheen passing over it every few seconds, rests above it until you
+send the first message. Submit immediately; the prompt waits for setup. If setup fails,
+press `s` from session view to retry. Prompts and images whose turns never began survive
+restart. Review the transcript before retrying a turn interrupted during dispatch.
 
 Startup restores interrupted rebases to **Review**. Storage or Git cleanup failures must
 be resolved before startup can finish; a missing worktree alone does not block recovery.
