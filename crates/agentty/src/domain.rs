@@ -3,6 +3,8 @@
 /// Workspace agent definitions and frontmatter parsing.
 pub mod agent_profile;
 pub mod composer;
+/// Short file descriptions read from leading source documentation.
+pub mod file_description;
 pub mod file_entry;
 /// Harness models this launch offers and availability of Harness sessions.
 pub mod harness;

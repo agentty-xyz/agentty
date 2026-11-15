@@ -566,6 +566,7 @@ impl AppServices {
             AppEvent::ProjectDiscoveryCompleted { .. } => "ProjectDiscoveryCompleted",
             AppEvent::SessionCreationCompleted { .. } => "SessionCreationCompleted",
             AppEvent::AtMentionEntriesLoaded { .. } => "AtMentionEntriesLoaded",
+            AppEvent::AtMentionDescriptionsLoaded { .. } => "AtMentionDescriptionsLoaded",
             AppEvent::PromptImagePasted { .. } => "PromptImagePasted",
             AppEvent::DiffPreviewLoaded { .. } => "DiffPreviewLoaded",
             AppEvent::SessionDiffLoaded { .. } => "SessionDiffLoaded",

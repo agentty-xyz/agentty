@@ -598,9 +598,11 @@ finishes. Unsupported clipboard backends show an inline error; Wayland image rea
 Use `Ctrl+Z` to undo and `Ctrl+Y` or `Ctrl+Shift+Z` to redo. On macOS, use `Ctrl+Z`;
 your terminal may consume `Cmd+Z`. Prompt-history navigation preserves attached images.
 
-Type `@` to look up repository files. Unstarted stacked drafts use the nearest available
-ancestor worktree. See [Prompt Input](@/docs/usage/keybindings.md#prompt-input) for
-completion and multiline editing.
+Type `@` to look up repository files. Rust and Python files show the summary of their
+leading module documentation beside the path. Unstarted stacked drafts use the nearest
+available ancestor worktree. See
+[Prompt Input](@/docs/usage/keybindings.md#prompt-input) for completion and multiline
+editing.
 
 Provider failures show a short error and captured output where available.
 

@@ -12,7 +12,7 @@ use crate::domain::session::{
     can_rebase_session_branch_in_stack, can_reply_to_session_in_stack,
     can_start_staged_session_in_stack,
 };
-use crate::domain::{input, review};
+use crate::domain::{file_entry, input, review};
 use crate::presentation::app_mode::{AppMode, ChatFocus};
 use crate::presentation::frame_time::FrameTime;
 use crate::presentation::graph_chat::GraphChatSnapshot;
@@ -718,8 +718,11 @@ fn render_question_panel(
         ("", 0)
     };
     let input_placeholder = "Type answer";
-    let at_mention_max_visible =
-        layout::question_at_mention_max_visible(bottom_area, panel_areas.input_area, 10);
+    let at_mention_max_visible = layout::question_at_mention_max_visible(
+        bottom_area,
+        panel_areas.input_area,
+        file_entry::AT_MENTION_MAX_VISIBLE_ENTRIES,
+    );
     let at_mention_menu = if is_free_text_mode && at_mention_max_visible > 0 {
         at_mention_state.and_then(|state| {
             prompt_format::file_lookup_suggestion_list(

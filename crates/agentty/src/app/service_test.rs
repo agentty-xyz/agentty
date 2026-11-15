@@ -802,6 +802,10 @@ fn background_event_labels_preserve_variant_identity() {
             entries: Vec::new(),
             session_id: session_id.clone(),
         },
+        AppEvent::AtMentionDescriptionsLoaded {
+            descriptions: Vec::new(),
+            session_id: session_id.clone(),
+        },
         AppEvent::GitStatusUpdated {
             generation: 1,
             session_statuses: HashMap::default(),

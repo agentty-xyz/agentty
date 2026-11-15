@@ -954,6 +954,57 @@ pub enum AppMode {
     },
 }
 
+impl AppMode {
+    /// Returns the open `@`-mention lookup of the prompt composer, question
+    /// answer, or diff comment currently being edited.
+    pub(crate) fn active_at_mention_mut(&mut self) -> Option<ActiveAtMention<'_>> {
+        match self {
+            Self::Prompt {
+                at_mention_state: Some(state),
+                input,
+                session_id,
+                ..
+            }
+            | Self::Question {
+                at_mention_state: Some(state),
+                input,
+                session_id,
+                ..
+            } => Some(ActiveAtMention {
+                input,
+                session_id,
+                state,
+            }),
+            Self::Diff {
+                line_comments:
+                    DiffLineComments {
+                        at_mention_state: Some(state),
+                        comments,
+                        editing_index: Some(editing_index),
+                        ..
+                    },
+                session_id,
+                ..
+            } => Some(ActiveAtMention {
+                input: &comments.get(*editing_index)?.input,
+                session_id,
+                state,
+            }),
+            _ => None,
+        }
+    }
+}
+
+/// Mutable view of one open `@`-mention lookup and the input that owns it.
+pub(crate) struct ActiveAtMention<'a> {
+    /// Input whose `@` token drives the lookup query.
+    pub(crate) input: &'a InputState,
+    /// Session whose worktree backs the lookup.
+    pub(crate) session_id: &'a SessionId,
+    /// Lookup entries, selection, and description cache.
+    pub(crate) state: &'a mut PromptAtMentionState,
+}
+
 /// Captures which page opened the help overlay so it can be restored on close.
 pub enum HelpContext {
     /// Generic list-mode help context with precomputed keybindings.

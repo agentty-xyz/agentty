@@ -1,10 +1,12 @@
 use super::super::help_action::{HelpAction, ViewSessionState};
 use super::{
-    AppMode, ConfirmationViewMode, DiffCommentTarget, DiffFocus, DiffLineCommentAnchor,
+    AppMode, ChatFocus, ConfirmationViewMode, DiffCommentTarget, DiffFocus, DiffLineCommentAnchor,
     DiffLineCommentTarget, DiffLineComments, DiffLineSide, DiffPreview,
     DiffPreviewUnavailableReason, DiffReviewComments, HelpContext,
 };
+use crate::domain::input::InputState;
 use crate::domain::session::PublishBranchAction;
+use crate::presentation::prompt::PromptAtMentionState;
 
 #[test]
 fn test_diff_line_comments_edit_and_build_compact_prompt() {
@@ -450,4 +452,80 @@ fn test_diff_preview_tracks_enabled_state_and_request_generation() {
     );
     assert_eq!(next_request_id, 5);
     assert_eq!(disabled, DiffPreview::Off { request_id: 4 });
+}
+
+#[test]
+fn test_active_at_mention_mut_returns_question_and_editing_diff_lookups() {
+    // Arrange
+    let mut question_mode = AppMode::Question {
+        at_mention_state: Some(PromptAtMentionState::new(Vec::new())),
+        current_index: 0,
+        focus: ChatFocus::Input,
+        input: InputState::with_text("@answer".to_string()),
+        questions: Vec::new(),
+        responses: Vec::new(),
+        scroll_offset: None,
+        selected_option_index: None,
+        session_id: "question-session".into(),
+    };
+    let mut editing_comments = DiffLineComments::default();
+    editing_comments.start_editing_target(DiffLineCommentTarget::single(DiffLineCommentAnchor {
+        content: "fn main() {}".to_string(),
+        line: 1,
+        path: "src/main.rs".to_string(),
+        side: DiffLineSide::New,
+    }));
+    editing_comments
+        .editing_input_mut()
+        .expect("new comment should be editable")
+        .insert_text("@comment");
+    editing_comments.at_mention_state = Some(Box::new(PromptAtMentionState::new(Vec::new())));
+    let mut finished_comments = editing_comments.clone();
+    finished_comments.editing_index = None;
+    let mut editing_diff_mode = diff_mode_with_line_comments(editing_comments);
+    let mut finished_diff_mode = diff_mode_with_line_comments(finished_comments);
+    let mut view_mode = AppMode::View {
+        scroll_offset: None,
+        session_id: "view-session".into(),
+    };
+
+    // Act
+    let question_lookup = question_mode
+        .active_at_mention_mut()
+        .map(|active| (active.input.text().to_string(), active.session_id.clone()));
+    let diff_lookup = editing_diff_mode
+        .active_at_mention_mut()
+        .map(|active| (active.input.text().to_string(), active.session_id.clone()));
+    let finished_diff_has_lookup = finished_diff_mode.active_at_mention_mut().is_some();
+    let view_has_lookup = view_mode.active_at_mention_mut().is_some();
+
+    // Assert
+    assert_eq!(
+        question_lookup,
+        Some(("@answer".to_string(), "question-session".into()))
+    );
+    assert_eq!(
+        diff_lookup,
+        Some(("@comment".to_string(), "diff-session".into()))
+    );
+    assert!(!finished_diff_has_lookup);
+    assert!(!view_has_lookup);
+}
+
+/// Restores diff mode for `diff-session` with the supplied comment state.
+fn diff_mode_with_line_comments(line_comments: DiffLineComments) -> AppMode {
+    HelpContext::Diff {
+        can_comment: true,
+        diff: String::new(),
+        file_explorer_selected_index: 0,
+        focus: DiffFocus::Content,
+        line_comments,
+        preview: DiffPreview::Off { request_id: 0 },
+        review_comments: None,
+        restore: None,
+        session_id: "diff-session".into(),
+        scroll_offset: 0,
+        selected_diff_line_index: 0,
+    }
+    .restore_mode()
 }
