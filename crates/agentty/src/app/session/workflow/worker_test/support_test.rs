@@ -176,6 +176,7 @@ pub(super) fn resume_command(operation_id: &str) -> SessionCommand {
         prompt: "Continue".into(),
         turn_metadata: TurnMetadata {
             published_upstream_ref: None,
+            generated_turn: None,
             review_comment_thread_ids: Vec::new(),
             session_agent: AgentSelection::new(
                 crate::domain::agent::AgentKind::Claude,
@@ -745,6 +746,7 @@ pub(super) async fn assert_first_prompt_was_accepted(
 pub(super) fn default_turn_metadata() -> TurnMetadata {
     TurnMetadata {
         published_upstream_ref: None,
+        generated_turn: None,
         review_comment_thread_ids: Vec::new(),
         session_agent: AgentSelection::new(
             crate::domain::agent::AgentKind::Antigravity,

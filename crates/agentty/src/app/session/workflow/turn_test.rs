@@ -53,6 +53,7 @@ async fn resumed_upgrade_clears_legacy_instructions_until_successful_persistence
         .expect("upgrade marker");
     let metadata = TurnMetadata {
         published_upstream_ref: None,
+        generated_turn: None,
         review_comment_thread_ids: Vec::new(),
         session_agent: context.session_agent,
     };
@@ -128,6 +129,7 @@ async fn prepared_turn_preserves_default_settings() {
     let (context, _) = persisted_turn_test_context().await;
     let metadata = TurnMetadata {
         published_upstream_ref: None,
+        generated_turn: None,
         review_comment_thread_ids: Vec::new(),
         session_agent: context.session_agent,
     };
@@ -166,6 +168,7 @@ async fn prepared_turn_resolves_current_settings_but_keeps_the_queued_model() {
     let (context, project_id) = persisted_turn_test_context().await;
     let metadata = TurnMetadata {
         published_upstream_ref: None,
+        generated_turn: None,
         review_comment_thread_ids: Vec::new(),
         session_agent: context.session_agent,
     };
@@ -318,6 +321,7 @@ async fn permission_mode_load_propagates_query_errors() {
     let context = turn_test_context(repositories);
     let metadata = TurnMetadata {
         published_upstream_ref: None,
+        generated_turn: None,
         review_comment_thread_ids: Vec::new(),
         session_agent: context.session_agent,
     };

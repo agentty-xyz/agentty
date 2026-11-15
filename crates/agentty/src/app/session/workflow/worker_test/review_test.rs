@@ -35,6 +35,7 @@ use crate::app::session::SessionError;
 use crate::domain::agent::{AgentKind, AgentModel, AgentSelection};
 use crate::domain::question::QuestionItem;
 use crate::domain::session::{PublishedBranchSyncStatus, Status};
+use crate::domain::transient_message::{GeneratedTurnLabels, GeneratedTurnUpdate};
 use crate::domain::turn_prompt::TurnPrompt;
 use crate::infra::db::{
     AppRepositories, NewSessionReviewCommentResolution, SessionMessageRow, SessionOperationRow,
@@ -207,10 +208,7 @@ async fn test_apply_turn_result_starts_background_push_for_published_branch() {
 
             session_update_versions: Arc::default(),
             session_id: "sess1".into(),
-            session_agent: AgentSelection::new(
-                crate::domain::agent::AgentKind::Antigravity,
-                AgentModel::Gemini38Flash,
-            ),
+            session_agent,
             status: Arc::new(Mutex::new(Status::InProgress)),
         };
         let turn_result = Ok(successful_turn_result("Implemented the change."));
@@ -218,6 +216,7 @@ async fn test_apply_turn_result_starts_background_push_for_published_branch() {
         // Act
         let turn_metadata = TurnMetadata {
             published_upstream_ref: Some("origin/wt/session-id".to_string()),
+            generated_turn: None,
             review_comment_thread_ids: Vec::new(),
             session_agent,
         };
@@ -318,6 +317,7 @@ async fn test_apply_turn_result_resolves_fixed_review_threads_after_push() {
             &context,
             TurnMetadata {
                 published_upstream_ref: Some("origin/wt/session-id".to_string()),
+                generated_turn: Some(GeneratedTurnLabels::review_comments(1)),
                 review_comment_thread_ids: vec!["thread-42".to_string()],
                 session_agent,
             },
@@ -406,6 +406,7 @@ async fn apply_review_result_with_queued_follow_up(
         context,
         TurnMetadata {
             published_upstream_ref: Some("origin/wt/session-id".to_string()),
+            generated_turn: Some(GeneratedTurnLabels::review_comments(1)),
             review_comment_thread_ids: vec!["thread-42".to_string()],
             session_agent: context.session_agent,
         },
@@ -433,6 +434,7 @@ async fn apply_review_result_with_queued_follow_up(
     let mut prompt = message.into_prompt();
     let mut metadata = TurnMetadata {
         published_upstream_ref: None,
+        generated_turn: None,
         review_comment_thread_ids: Vec::new(),
         session_agent: context.session_agent,
     };
@@ -506,6 +508,7 @@ async fn test_apply_turn_result_rejects_incomplete_review_comment_outcome_batch(
         &context,
         TurnMetadata {
             published_upstream_ref: None,
+            generated_turn: Some(GeneratedTurnLabels::review_comments(2)),
             review_comment_thread_ids: vec!["thread-1".to_string(), "thread-2".to_string()],
             session_agent,
         },
@@ -572,6 +575,7 @@ async fn test_failed_push_retains_but_does_not_resolve_review_fix_undone_by_desc
         &context,
         TurnMetadata {
             published_upstream_ref: Some("origin/wt/session-id".to_string()),
+            generated_turn: Some(GeneratedTurnLabels::review_comments(1)),
             review_comment_thread_ids: vec!["thread-42".to_string()],
             session_agent,
         },
@@ -883,6 +887,7 @@ async fn test_commit_failure_discards_review_operations_before_later_push() {
         &context,
         TurnMetadata {
             published_upstream_ref: Some("origin/wt/session-id".to_string()),
+            generated_turn: Some(GeneratedTurnLabels::review_comments(1)),
             review_comment_thread_ids: vec!["thread-42".to_string()],
             session_agent,
         },
@@ -971,6 +976,7 @@ async fn test_commit_binding_failure_retains_review_operation_for_fresh_retry() 
         &context,
         TurnMetadata {
             published_upstream_ref: Some("origin/wt/session-id".to_string()),
+            generated_turn: Some(GeneratedTurnLabels::review_comments(1)),
             review_comment_thread_ids: vec!["thread-42".to_string()],
             session_agent,
         },
@@ -1061,6 +1067,7 @@ async fn skipped_review_comment_command_resolves_its_waiting_row() {
     let mut command = resume_command("skipped-review-comments");
     if let SessionCommand::Run { turn_metadata, .. } = &mut command {
         turn_metadata.review_comment_thread_ids = vec!["thread-42".to_string()];
+        turn_metadata.generated_turn = Some(GeneratedTurnLabels::review_comments(1));
     }
     let (event_tx, mut event_rx) = mpsc::unbounded_channel();
     let context = SessionWorkerContext {
@@ -1101,12 +1108,82 @@ async fn skipped_review_comment_command_resolves_its_waiting_row() {
     );
     assert_eq!(
         event_rx.try_recv().expect("resolution event"),
-        AppEvent::SessionReviewCommentResolutionUpdated {
-            comment_count: Some(0),
-            session_id: context.session_id
+        AppEvent::SessionGeneratedTurnUpdated {
+            session_id: context.session_id,
+            update: GeneratedTurnUpdate::Skipped,
         }
     );
     assert!(event_rx.try_recv().is_err());
+}
+
+#[tokio::test]
+async fn skipped_generated_turn_without_review_threads_retracts_its_progress() {
+    // Arrange
+    let (context, database, _queue, _directory) =
+        queue_test_context(MockAgentChannel::new(), VecDeque::new(), Status::Watching).await;
+    let mut command = resume_command("skipped-failing-checks");
+    if let SessionCommand::Run { turn_metadata, .. } = &mut command {
+        turn_metadata.generated_turn = Some(GeneratedTurnLabels {
+            active: "Addressing 1 failing check: lint...".to_string(),
+            queued: "fix 1 failing check: lint".to_string(),
+        });
+    }
+    let (event_tx, mut event_rx) = mpsc::unbounded_channel();
+    let context = SessionWorkerContext {
+        app_event_tx: event_tx,
+        ..context
+    };
+    database
+        .operations()
+        .insert_session_operation("skipped-failing-checks", &context.session_id, "reply")
+        .await
+        .expect("queued generated operation");
+    database
+        .operations()
+        .request_cancel_for_session_operations(&context.session_id)
+        .await
+        .expect("cancel waiting generated operation");
+
+    // Act
+    let result =
+        SessionWorkerService::process_session_command(&context, &auto_commit_run_client(), command)
+            .await;
+
+    // Assert
+    assert!(result.is_none());
+    assert_eq!(
+        event_rx.try_recv().expect("generated-turn event"),
+        AppEvent::SessionGeneratedTurnUpdated {
+            session_id: context.session_id,
+            update: GeneratedTurnUpdate::Skipped,
+        }
+    );
+    assert!(event_rx.try_recv().is_err());
+}
+
+#[test]
+fn generated_turn_labels_come_only_from_run_commands() {
+    // Arrange
+    let labels = GeneratedTurnLabels {
+        active: "Addressing 1 failing check: lint...".to_string(),
+        queued: "fix 1 failing check: lint".to_string(),
+    };
+    let mut run_command = resume_command("generated-run");
+    if let SessionCommand::Run { turn_metadata, .. } = &mut run_command {
+        turn_metadata.generated_turn = Some(labels.clone());
+    }
+    let rebase_command = SessionCommand::Rebase {
+        base_branch: "main".to_string(),
+        operation_id: "rebase".to_string(),
+    };
+
+    // Act
+    let run_labels = run_command.generated_turn();
+    let rebase_labels = rebase_command.generated_turn();
+
+    // Assert
+    assert_eq!(run_labels, Some(&labels));
+    assert_eq!(rebase_labels, None);
 }
 
 #[tokio::test]
@@ -1120,6 +1197,7 @@ async fn review_targets_survive_clarification_and_restore_the_follow_up_allowlis
         .expect("link review");
     let mut metadata = TurnMetadata {
         published_upstream_ref: Some("origin/wt/session-id".to_string()),
+        generated_turn: Some(GeneratedTurnLabels::review_comments(1)),
         review_comment_thread_ids: vec!["thread-42".to_string()],
         session_agent: context.session_agent,
     };
@@ -1136,6 +1214,7 @@ async fn review_targets_survive_clarification_and_restore_the_follow_up_allowlis
         .expect("question turn");
     let mut follow_up = TurnMetadata {
         published_upstream_ref: None,
+        generated_turn: None,
         review_comment_thread_ids: Vec::new(),
         session_agent: context.session_agent,
     };
@@ -1173,6 +1252,7 @@ async fn review_continuation_merges_targets_without_duplicates_and_rejects_missi
         queue_test_context(MockAgentChannel::new(), VecDeque::new(), Status::Review).await;
     let mut metadata = TurnMetadata {
         published_upstream_ref: None,
+        generated_turn: Some(GeneratedTurnLabels::review_comments(1)),
         review_comment_thread_ids: vec!["thread-42".to_string()],
         session_agent: context.session_agent,
     };
@@ -1270,6 +1350,7 @@ async fn posted_reply_survives_revalidation_commit_failure_and_successful_retry(
     let session_agent = context.session_agent;
     let metadata = || TurnMetadata {
         published_upstream_ref: Some("origin/wt/session-id".to_string()),
+        generated_turn: Some(GeneratedTurnLabels::review_comments(targets.len())),
         review_comment_thread_ids: targets.clone(),
         session_agent,
     };
@@ -1531,6 +1612,7 @@ async fn assert_stopped_review_call_retains_operation(block_reply: bool) {
     context.app_event_tx = app_event_tx;
     let metadata = TurnMetadata {
         published_upstream_ref: Some("origin/wt/session-id".to_string()),
+        generated_turn: Some(GeneratedTurnLabels::review_comments(1)),
         review_comment_thread_ids: vec!["thread-42".to_string()],
         session_agent: context.session_agent,
     };

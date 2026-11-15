@@ -13,10 +13,12 @@ pub(crate) enum TransientMessageSlot {
     WorkspacePreparation,
     /// Focused review loading, result, or failure output.
     Review,
-    /// Selected forge review comments waiting in the shared worker queue.
-    ReviewCommentQueue,
-    /// Active agent turn resolving selected forge review comments.
-    ReviewCommentResolution,
+    /// Agentty-generated turn, such as selected forge review comments or a
+    /// watched review-request follow-up, waiting in the shared worker queue.
+    GeneratedTurnQueue,
+    /// Active Agentty-generated turn whose label replaces the working
+    /// indicator.
+    GeneratedTurnProgress,
     /// Short-lived workflow feedback produced while finalizing a turn.
     WorkflowNotice,
     /// Manual branch or review-request publish progress and result.
@@ -100,6 +102,42 @@ impl QueuedAction {
     pub(crate) fn new(order: u64, text: String) -> Self {
         Self { order, text }
     }
+}
+
+/// Labels shown for one Agentty-generated turn whose prompt stays hidden.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub(crate) struct GeneratedTurnLabels {
+    /// Loading label that replaces the working indicator while the turn runs.
+    pub(crate) active: String,
+    /// Calm waiting label shown while the turn waits in the worker queue.
+    pub(crate) queued: String,
+}
+
+impl GeneratedTurnLabels {
+    /// Builds the labels for resolving `comment_count` forge review comments.
+    pub(crate) fn review_comments(comment_count: usize) -> Self {
+        let noun = if comment_count == 1 {
+            "review comment"
+        } else {
+            "review comments"
+        };
+
+        Self {
+            active: format!("Resolving {comment_count} {noun}..."),
+            queued: format!("resolve {comment_count} {noun}"),
+        }
+    }
+}
+
+/// Worker-owned lifecycle transition for one Agentty-generated turn.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub(crate) enum GeneratedTurnUpdate {
+    /// The turn began executing and shows this loading label.
+    Started(String),
+    /// The turn finished executing, successfully or not.
+    Finished,
+    /// The turn was canceled or settled before it began executing.
+    Skipped,
 }
 
 /// One replaceable session-output message with explicit placement and lifetime.

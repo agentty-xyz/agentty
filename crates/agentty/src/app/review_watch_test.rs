@@ -19,7 +19,8 @@ use crate::domain::session::{
     ForgeKind, PublishBranchAction, ReviewRequest, ReviewRequestState, ReviewRequestSummary,
     SessionId, Status,
 };
-use crate::domain::session_message::SessionTranscript;
+use crate::domain::session_message::{SessionMessageKind, SessionTranscript};
+use crate::domain::transient_message::{TransientMessageBody, TransientMessageSlot};
 use crate::domain::turn_prompt::TurnPromptTextSource;
 use crate::infra::db::SessionReviewWatchRow;
 use crate::presentation::app_mode::{AppMode, ConfirmationIntent, ConfirmationViewMode};
@@ -756,6 +757,52 @@ async fn attention_starts_one_follow_up_and_remembers_it() {
             .count(),
         1,
         "{transcript}"
+    );
+}
+
+#[tokio::test]
+async fn failed_check_follow_up_hides_its_prompt_behind_a_progress_label() {
+    // Arrange
+    let (mut app, _base_dir) = new_git_test_app().await;
+    let session_id = seed_review_session(&mut app, Status::Review, ReviewRequestState::Open).await;
+    app.enable_review_watch(&session_id).await;
+    let failed_checks = ReviewRequestAttention {
+        failed_checks: vec![failed_check("test", None), failed_check("lint", None)],
+        head_commit: "abc123".to_string(),
+        ..ReviewRequestAttention::default()
+    };
+
+    // Act
+    app.apply_review_request_attention(&session_id, failed_checks)
+        .await;
+
+    // Assert
+    let user_prompt_count = app
+        .sessions
+        .session_handles_or_err(&session_id)
+        .expect("handles")
+        .transcript
+        .lock()
+        .expect("transcript lock")
+        .messages()
+        .iter()
+        .filter(|message| message.kind == SessionMessageKind::UserPrompt)
+        .count();
+    assert_eq!(user_prompt_count, 0);
+    let progress = app
+        .sessions
+        .session_for_id(&session_id)
+        .and_then(|session| {
+            session
+                .transient_messages
+                .get(TransientMessageSlot::GeneratedTurnProgress)
+        })
+        .map(|message| message.body.clone());
+    assert_eq!(
+        progress,
+        Some(TransientMessageBody::Loading(
+            "Addressing 2 failing checks: test, lint...".to_string()
+        ))
     );
 }
 

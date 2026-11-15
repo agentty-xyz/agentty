@@ -16,10 +16,11 @@ use ag_forge::{
 use tracing::warn;
 
 use crate::app::App;
-use crate::app::prompt_intent::{PromptSessionMode, ReviewCommentResolutionOutcome};
+use crate::app::prompt_intent::ReviewCommentResolutionOutcome;
 use crate::app::session::{SessionTaskService, StatusTransition};
 use crate::domain::session::{ReviewRequest, ReviewRequestState, SessionId, Status};
 use crate::domain::transcript_notice::TranscriptNotice;
+use crate::domain::transient_message::GeneratedTurnLabels;
 use crate::domain::turn_prompt::TurnPrompt;
 use crate::infra::db::{AppRepositories, SessionReviewWatchRow};
 use crate::presentation::app_mode::{
@@ -174,15 +175,9 @@ impl ReviewWatchAction {
             Self::AddressComments { threads } => {
                 format!("Addressing {}", counted(threads.len(), "review comment"))
             }
-            Self::FixChecks { failed_checks, .. } => format!(
-                "Fixing {}: {}",
-                counted(failed_checks.len(), "failing check"),
-                failed_checks
-                    .iter()
-                    .map(|check| check.name.as_str())
-                    .collect::<Vec<_>>()
-                    .join(", ")
-            ),
+            Self::FixChecks { failed_checks, .. } => {
+                format!("Fixing {}", failed_checks_summary(failed_checks))
+            }
             Self::ResolveConflicts { .. } => format!(
                 "Resolving merge conflicts with `{}`",
                 review_request.summary.target_branch
@@ -511,12 +506,22 @@ impl App {
                 failed_checks,
                 head_commit,
             } => {
+                let summary = failed_checks_summary(&failed_checks);
+                let labels = GeneratedTurnLabels {
+                    active: format!("Addressing {summary}..."),
+                    queued: format!("fix {summary}"),
+                };
                 let prompt =
                     build_fix_failed_checks_prompt(review_request, &head_commit, &failed_checks);
 
-                self.submit_turn_prompt(session_id.clone(), PromptSessionMode::Existing, prompt)
+                if self
+                    .reply_with_generated_prompt(session_id, prompt, labels)
                     .await
-                    .map_err(|error| error.to_string())
+                {
+                    Ok(())
+                } else {
+                    Err("the session did not accept the prompt".to_string())
+                }
             }
             ReviewWatchAction::ResolveConflicts { .. } => {
                 // Session sync rebases onto the branch the session would
@@ -677,6 +682,20 @@ fn review_request_label(review_request: &ReviewRequest) -> String {
         "{} {}",
         review_request.summary.forge_kind.review_request_name(),
         review_request.summary.display_id
+    )
+}
+
+/// Summarizes failed checks for notices and progress, such as
+/// `1 failing check: lint`.
+fn failed_checks_summary(failed_checks: &[ReviewCheckFailure]) -> String {
+    format!(
+        "{}: {}",
+        counted(failed_checks.len(), "failing check"),
+        failed_checks
+            .iter()
+            .map(|check| check.name.as_str())
+            .collect::<Vec<_>>()
+            .join(", ")
     )
 }
 

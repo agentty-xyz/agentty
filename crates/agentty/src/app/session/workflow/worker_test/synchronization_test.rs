@@ -88,6 +88,7 @@ async fn test_apply_turn_result_syncs_linked_review_request_metadata_after_commi
         &context,
         TurnMetadata {
             published_upstream_ref: Some("origin/wt/session-id".to_string()),
+            generated_turn: None,
             review_comment_thread_ids: Vec::new(),
             session_agent: AgentSelection::new(
                 crate::domain::agent::AgentKind::Antigravity,
@@ -172,6 +173,7 @@ async fn test_apply_turn_result_skips_review_request_metadata_sync_when_auto_pus
         &context,
         TurnMetadata {
             published_upstream_ref: Some("origin/wt/session-id".to_string()),
+            generated_turn: None,
             review_comment_thread_ids: Vec::new(),
             session_agent: AgentSelection::new(
                 crate::domain::agent::AgentKind::Antigravity,
@@ -293,6 +295,7 @@ async fn test_apply_turn_result_skips_background_push_while_sync_is_queued() {
     // Act
     let turn_metadata = TurnMetadata {
         published_upstream_ref: Some("origin/wt/session-id".to_string()),
+        generated_turn: None,
         review_comment_thread_ids: Vec::new(),
         session_agent,
     };

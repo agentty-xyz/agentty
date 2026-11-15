@@ -99,6 +99,7 @@ async fn test_apply_turn_result_refreshes_when_turn_metadata_persistence_fails()
     // Act
     let turn_metadata = TurnMetadata {
         published_upstream_ref: None,
+        generated_turn: None,
         review_comment_thread_ids: Vec::new(),
         session_agent: AgentSelection::new(
             crate::domain::agent::AgentKind::Antigravity,
@@ -205,6 +206,7 @@ async fn test_apply_turn_result_persists_only_assistant_answer() {
     // Act
     let turn_metadata = TurnMetadata {
         published_upstream_ref: None,
+        generated_turn: None,
         review_comment_thread_ids: Vec::new(),
         session_agent: AgentSelection::new(
             crate::domain::agent::AgentKind::Antigravity,
@@ -375,6 +377,7 @@ async fn test_apply_turn_result_persists_instruction_conversation_id_for_app_ser
     // Act
     let turn_metadata = TurnMetadata {
         published_upstream_ref: None,
+        generated_turn: None,
         review_comment_thread_ids: Vec::new(),
         session_agent: model_fixture::codex_selection(),
     };

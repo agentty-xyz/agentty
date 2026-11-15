@@ -487,8 +487,8 @@ comments are read-only; outdated unresolved threads remain actionable without cu
 line context. While the session is working, syncing, or publishing, the batch joins the
 same queue as chat messages, sync, and review-request creation. Its waiting row becomes
 a resolving indicator when the turn starts. If clarification is pending, the batch waits
-for your answers even when no other work is queued. Only one review-comment batch can
-wait at a time.
+for your answers even when no other work is queued. Only one review-comment batch or
+watched follow-up can wait at a time.
 
 Review targets survive clarification and restart. After a successful commit and push,
 Agentty replies to each selected thread and resolves only those reported as fixed.
@@ -551,7 +551,11 @@ follow-up:
    a response, as described in
    [Addressing Review Comments](@/docs/usage/workflow.md#addressing-review-comments).
    Comments from other authors are ignored.
-1. **Failing checks**: after all checks finish, starts a turn to fix the failed ones.
+1. **Failing checks**: after all checks finish, starts a turn to fix the failed ones. As
+   with review comments, the generated prompt stays out of the transcript. If other work
+   is still running, such as a push, the fix waits in the queue as
+   `fix N failing checks: <names>`. While the turn runs, the status line shows
+   `Addressing N failing checks: <names>...`.
 
 Trusted authors are GitHub owners, members, and collaborators, or GitLab project members
 with at least the Developer role. Each `[Review Watch]` notice records what was started.

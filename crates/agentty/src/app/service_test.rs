@@ -20,6 +20,7 @@ use crate::app::sync::{ProjectSyncContext, SyncMainCompletion};
 use crate::app::{AppEvent, UpdateStatus};
 use crate::domain::agent::{AgentCliInfo, AgentKind, AgentModel, AgentSelection};
 use crate::domain::session::{PublishedBranchSyncStatus, SessionId, SessionStats};
+use crate::domain::transient_message::GeneratedTurnUpdate;
 use crate::infra::clock::Clock;
 use crate::infra::db::Database;
 use crate::test_support::{FixedClock, enable_tracing_log_fallback, poison_lock};
@@ -1018,18 +1019,18 @@ fn app_event_label_names_turn_ends() {
 }
 
 #[test]
-fn app_event_label_names_review_comment_resolution_updates() {
+fn app_event_label_names_generated_turn_updates() {
     // Arrange
-    let event = AppEvent::SessionReviewCommentResolutionUpdated {
-        comment_count: Some(2),
+    let event = AppEvent::SessionGeneratedTurnUpdated {
         session_id: "session-id".into(),
+        update: GeneratedTurnUpdate::Finished,
     };
 
     // Act
     let label = AppServices::app_event_label(&event);
 
     // Assert
-    assert_eq!(label, "SessionReviewCommentResolutionUpdated");
+    assert_eq!(label, "SessionGeneratedTurnUpdated");
 }
 
 #[test]

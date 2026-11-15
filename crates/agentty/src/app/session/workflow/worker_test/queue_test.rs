@@ -205,6 +205,7 @@ async fn test_apply_turn_result_skips_background_push_while_messages_are_queued(
     // Act
     let turn_metadata = TurnMetadata {
         published_upstream_ref: Some("origin/wt/session-id".to_string()),
+        generated_turn: None,
         review_comment_thread_ids: Vec::new(),
         session_agent,
     };
@@ -636,6 +637,7 @@ async fn worker_turn_telemetry_tracks_success_and_interruption_but_excludes_fail
             prompt: "private prompt".into(),
             turn_metadata: TurnMetadata {
                 published_upstream_ref: None,
+                generated_turn: None,
                 review_comment_thread_ids: Vec::new(),
                 session_agent: expected_agent,
             },

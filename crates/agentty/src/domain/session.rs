@@ -346,7 +346,7 @@ impl Session {
     pub(crate) fn reconcile_status_transition(&mut self, previous_status: Status) {
         if previous_status == Status::InProgress && self.status != Status::InProgress {
             self.transient_messages
-                .retract(TransientMessageSlot::ReviewCommentResolution);
+                .retract(TransientMessageSlot::GeneratedTurnProgress);
         }
 
         self.reconcile_transient_messages();
@@ -437,10 +437,15 @@ impl Session {
                 self.status,
                 Status::Question | Status::InProgress | Status::Rebasing
             ))
-            && self
-                .transient_messages
-                .get(TransientMessageSlot::ReviewCommentQueue)
-                .is_none()
+            && !self.has_queued_generated_turn()
+    }
+
+    /// Returns whether one Agentty-generated turn already waits in the shared
+    /// worker queue, which holds at most one such turn per session.
+    pub(crate) fn has_queued_generated_turn(&self) -> bool {
+        self.transient_messages
+            .get(TransientMessageSlot::GeneratedTurnQueue)
+            .is_some()
     }
 
     /// Returns whether selected comments must wait for clarification or join

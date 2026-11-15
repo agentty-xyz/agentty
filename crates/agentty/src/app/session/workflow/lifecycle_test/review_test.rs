@@ -8,6 +8,7 @@ use super::support::{
     test_session,
 };
 use crate::domain::session::{ReviewRequest, Status};
+use crate::domain::transient_message::GeneratedTurnLabels;
 
 #[tokio::test]
 async fn test_review_request_web_url_returns_linked_review_request_url() {
@@ -123,4 +124,40 @@ async fn test_reply_to_review_comments_returns_false_for_missing_session() {
 
     // Assert
     assert!(!enqueued);
+}
+
+/// Ensures the generated-prompt reply entry point rejects stale session
+/// identifiers before attempting to enqueue worker commands.
+#[tokio::test]
+async fn test_reply_with_generated_prompt_returns_false_for_missing_session() {
+    // Arrange
+    let session = test_session("Initial prompt", Status::Review, Some("Title"), "");
+    let database = database_with_session(&session).await;
+    let mut session_manager = session_manager_with_one_session(session);
+    let services = test_services(
+        &database,
+        Arc::new(git::MockGitClient::new()),
+        Arc::new(forge::MockReviewRequestClient::new()),
+    );
+
+    // Act
+    let enqueued = session_manager
+        .reply_with_generated_prompt(
+            &services,
+            "missing-session",
+            "Fix the failing checks",
+            failing_check_labels(),
+        )
+        .await;
+
+    // Assert
+    assert!(!enqueued);
+}
+
+/// Builds the labels of one failing-check follow-up.
+fn failing_check_labels() -> GeneratedTurnLabels {
+    GeneratedTurnLabels {
+        active: "Addressing 1 failing check: lint...".to_string(),
+        queued: "fix 1 failing check: lint".to_string(),
+    }
 }

@@ -164,7 +164,7 @@ fn sync_from_handles_clears_review_resolution_loader_after_failed_turn() {
         anchor: TransientMessageAnchor::Tail,
         body: TransientMessageBody::Loading("Resolving 2 review comments...".to_string()),
         lifecycle: TransientMessageLifecycle::UntilResolved,
-        slot: TransientMessageSlot::ReviewCommentResolution,
+        slot: TransientMessageSlot::GeneratedTurnProgress,
         turn_position: None,
     });
     let handles = HashMap::from([(session_id, SessionHandles::new(Status::Review))]);
@@ -185,7 +185,7 @@ fn sync_from_handles_clears_review_resolution_loader_after_failed_turn() {
     assert!(
         state.sessions[0]
             .transient_messages
-            .get(TransientMessageSlot::ReviewCommentResolution)
+            .get(TransientMessageSlot::GeneratedTurnProgress)
             .is_none()
     );
 }

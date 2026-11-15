@@ -6,7 +6,7 @@ use ag_session::test_support as model_fixture;
 use super::{
     MAX_AUTO_ADDRESS_REVIEW_ITERATIONS, PromptApplyOutcome, PromptModelChange, PromptSessionMode,
     PromptSubmission, PromptWorkflowOutcome, ReviewCommentResolutionOutcome,
-    build_resolve_review_comment_prompt, review_comment_resolution_loading_text,
+    build_resolve_review_comment_prompt,
 };
 use crate::app::ReviewCacheEntry;
 use crate::app::message_admission::MessageIntent;
@@ -1009,23 +1009,6 @@ async fn auto_address_focused_reviews_starts_apply_turns_and_stops_at_limit() {
     assert!(app.pending_session_diff_requests.is_empty());
 }
 
-#[test]
-fn test_review_comment_resolution_loading_text_pluralizes_comment_count() {
-    // Arrange
-    let cases = [
-        (1, "Resolving 1 review comment..."),
-        (2, "Resolving 2 review comments..."),
-    ];
-
-    // Act, Assert
-    for (comment_count, expected) in cases {
-        assert_eq!(
-            review_comment_resolution_loading_text(comment_count),
-            expected
-        );
-    }
-}
-
 #[tokio::test]
 async fn test_resolve_session_review_comments_keeps_page_when_enqueue_fails() {
     // Arrange
@@ -1167,7 +1150,7 @@ async fn busy_review_comment_submission_requires_the_existing_worker() {
     assert!(
         app.sessions.sessions()[0]
             .transient_messages
-            .get(TransientMessageSlot::ReviewCommentQueue)
+            .get(TransientMessageSlot::GeneratedTurnQueue)
             .is_none()
     );
 }

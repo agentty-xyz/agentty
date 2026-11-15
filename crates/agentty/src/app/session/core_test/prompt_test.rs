@@ -41,7 +41,7 @@ async fn test_apply_turn_applied_state_clears_active_prompt_and_resolution_loade
             anchor: TransientMessageAnchor::Tail,
             body: TransientMessageBody::Loading("Resolving 1 review comment...".to_string()),
             lifecycle: TransientMessageLifecycle::UntilResolved,
-            slot: TransientMessageSlot::ReviewCommentResolution,
+            slot: TransientMessageSlot::GeneratedTurnProgress,
             turn_position: None,
         });
 
@@ -64,7 +64,7 @@ async fn test_apply_turn_applied_state_clears_active_prompt_and_resolution_loade
     assert!(
         app.sessions.sessions()[0]
             .transient_messages
-            .get(TransientMessageSlot::ReviewCommentResolution)
+            .get(TransientMessageSlot::GeneratedTurnProgress)
             .is_none()
     );
 }

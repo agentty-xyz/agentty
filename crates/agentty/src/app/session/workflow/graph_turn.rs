@@ -311,6 +311,7 @@ async fn apply_effects(
         &post,
         TurnMetadata {
             published_upstream_ref: context.load_published_upstream_ref().await,
+            generated_turn: None,
             review_comment_thread_ids: Vec::new(),
             session_agent: dispatch.node.agent,
         },

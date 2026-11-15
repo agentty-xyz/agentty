@@ -31,8 +31,8 @@ use crate::domain::session_message::SessionMessageKind;
 use crate::domain::session_order::{self, ArchiveAction};
 use crate::domain::transcript_notice::TranscriptNotice;
 use crate::domain::transient_message::{
-    QueuedAction, TransientMessage, TransientMessageAnchor, TransientMessageBody,
-    TransientMessageLifecycle, TransientMessageSlot,
+    GeneratedTurnUpdate, QueuedAction, TransientMessage, TransientMessageAnchor,
+    TransientMessageBody, TransientMessageLifecycle, TransientMessageSlot,
 };
 use crate::infra::resource::ResourceClient;
 
@@ -617,41 +617,49 @@ impl SessionManager {
         );
     }
 
-    /// Shows a selected review-comment batch at its shared submission order.
-    pub(crate) fn queue_review_comment_resolution(
-        &mut self,
-        session_id: &str,
-        order: u64,
-        comment_count: usize,
-    ) {
+    /// Shows one Agentty-generated turn at its shared submission order.
+    pub(crate) fn queue_generated_turn(&mut self, session_id: &str, order: u64, label: String) {
         self.state.upsert_queued_action(
             session_id,
             TransientMessage {
                 anchor: TransientMessageAnchor::Tail,
-                body: TransientMessageBody::Queued(QueuedAction::new(
-                    order,
-                    format!(
-                        "resolve {comment_count} review comment{}",
-                        if comment_count == 1 { "" } else { "s" }
-                    ),
-                )),
+                body: TransientMessageBody::Queued(QueuedAction::new(order, label)),
                 lifecycle: TransientMessageLifecycle::UntilResolved,
-                slot: TransientMessageSlot::ReviewCommentQueue,
+                slot: TransientMessageSlot::GeneratedTurnQueue,
                 turn_position: None,
             },
         );
     }
 
-    /// Applies worker-owned review-comment queue and loading transitions.
-    pub(crate) fn update_review_comment_resolution(
-        &mut self,
-        session_id: &str,
-        comment_count: Option<usize>,
-    ) {
-        if comment_count.is_some() {
+    /// Applies worker-owned generated-turn queue and loading transitions.
+    ///
+    /// A start or skip resolves the queued row; finishing leaves it because
+    /// a row present then belongs to a later generated turn.
+    pub(crate) fn update_generated_turn(&mut self, session_id: &str, update: GeneratedTurnUpdate) {
+        if matches!(
+            update,
+            GeneratedTurnUpdate::Started(_) | GeneratedTurnUpdate::Skipped
+        ) {
             self.state
-                .resolve_queued_action(session_id, TransientMessageSlot::ReviewCommentQueue);
+                .resolve_queued_action(session_id, TransientMessageSlot::GeneratedTurnQueue);
         }
+        if let GeneratedTurnUpdate::Started(label) = update {
+            self.show_generated_turn_progress(session_id, label);
+        } else if let Some(session) = self
+            .state
+            .sessions
+            .iter_mut()
+            .find(|session| session.id == session_id)
+        {
+            session
+                .transient_messages
+                .retract(TransientMessageSlot::GeneratedTurnProgress);
+        }
+    }
+
+    /// Shows `label` in place of the working indicator while a generated
+    /// turn runs; the turn result or leaving `InProgress` retracts it.
+    pub(crate) fn show_generated_turn_progress(&mut self, session_id: &str, label: String) {
         let Some(session) = self
             .state
             .sessions
@@ -660,23 +668,14 @@ impl SessionManager {
         else {
             return;
         };
-        if let Some(comment_count) = comment_count.filter(|count| *count > 0) {
-            session.transient_messages.upsert(TransientMessage {
-                anchor: TransientMessageAnchor::Tail,
-                body: TransientMessageBody::Loading(
-                    crate::app::prompt_intent::review_comment_resolution_loading_text(
-                        comment_count,
-                    ),
-                ),
-                lifecycle: TransientMessageLifecycle::UntilResolved,
-                slot: TransientMessageSlot::ReviewCommentResolution,
-                turn_position: None,
-            });
-        } else {
-            session
-                .transient_messages
-                .retract(TransientMessageSlot::ReviewCommentResolution);
-        }
+
+        session.transient_messages.upsert(TransientMessage {
+            anchor: TransientMessageAnchor::Tail,
+            body: TransientMessageBody::Loading(label),
+            lifecycle: TransientMessageLifecycle::UntilResolved,
+            slot: TransientMessageSlot::GeneratedTurnProgress,
+            turn_position: None,
+        });
     }
 
     /// Removes a queued-sync row after its worker command resolves or starts.
@@ -944,7 +943,7 @@ impl SessionManager {
         session.questions.clone_from(&turn_applied_state.questions);
         session
             .transient_messages
-            .retract(TransientMessageSlot::ReviewCommentResolution);
+            .retract(TransientMessageSlot::GeneratedTurnProgress);
         session.stats.input_tokens = session
             .stats
             .input_tokens
