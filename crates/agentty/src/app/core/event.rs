@@ -204,11 +204,17 @@ pub(crate) enum AppEvent {
     },
     /// Indicates completion of a session-view branch-publish action.
     BranchPublishActionCompleted {
+        /// Worker operation of a review-request publication; `None` for a
+        /// plain branch push.
+        operation_id: Option<String>,
         result: Box<BranchPublishTaskResult>,
         session_id: SessionId,
     },
     /// Indicates a queued review-request action resolved without starting.
-    BranchPublishActionResolved { session_id: SessionId },
+    BranchPublishActionResolved {
+        operation_id: String,
+        session_id: SessionId,
+    },
     /// Indicates a queued review-request action has begun executing on its
     /// session worker.
     BranchPublishActionStarted { session_id: SessionId },
@@ -396,6 +402,7 @@ pub(super) struct AppEventBatch {
     pub(super) applied_turns: HashMap<SessionId, TurnAppliedState>,
     pub(super) at_mention_entries_updates: HashMap<SessionId, Vec<FileEntry>>,
     pub(super) branch_publish_action_updates: Vec<BranchPublishActionUpdate>,
+    pub(super) branch_publish_resolved_operation_ids: HashSet<String>,
     pub(super) branch_publish_resolved_session_ids: HashSet<SessionId>,
     pub(super) branch_publish_started_session_ids: HashSet<SessionId>,
     pub(super) deferred_auto_review_persistence_retries:
@@ -810,10 +817,19 @@ impl AppEventBatch {
     /// Collects workflow completion and follow-up events into the batch.
     fn collect_workflow_event(&mut self, event: AppEvent) {
         match event {
-            AppEvent::BranchPublishActionCompleted { result, session_id } => {
-                self.collect_branch_publish_action_completed(*result, session_id);
+            AppEvent::BranchPublishActionCompleted {
+                operation_id,
+                result,
+                session_id,
+            } => {
+                self.collect_branch_publish_action_completed(operation_id, *result, session_id);
             }
-            AppEvent::BranchPublishActionResolved { session_id } => {
+            AppEvent::BranchPublishActionResolved {
+                operation_id,
+                session_id,
+            } => {
+                self.branch_publish_resolved_operation_ids
+                    .insert(operation_id);
                 self.branch_publish_resolved_session_ids.insert(session_id);
             }
             AppEvent::BranchPublishActionStarted { session_id } => {
@@ -948,6 +964,7 @@ impl AppEventBatch {
     /// Stores one branch-publish action result for this reducer batch.
     fn collect_branch_publish_action_completed(
         &mut self,
+        operation_id: Option<String>,
         result: BranchPublishTaskResult,
         session_id: SessionId,
     ) {
@@ -956,7 +973,11 @@ impl AppEventBatch {
         }
 
         self.branch_publish_action_updates
-            .push(BranchPublishActionUpdate { result, session_id });
+            .push(BranchPublishActionUpdate {
+                operation_id,
+                result,
+                session_id,
+            });
     }
 
     /// Stores a successful focused-review preparation result.
@@ -1322,9 +1343,10 @@ impl App {
         self.apply_branch_publish_starts(std::mem::take(
             &mut event_batch.branch_publish_started_session_ids,
         ));
-        self.apply_branch_publish_resolutions(std::mem::take(
-            &mut event_batch.branch_publish_resolved_session_ids,
-        ));
+        self.apply_branch_publish_resolutions(
+            std::mem::take(&mut event_batch.branch_publish_resolved_session_ids),
+            std::mem::take(&mut event_batch.branch_publish_resolved_operation_ids),
+        );
         self.apply_session_queued_sync_resolutions(std::mem::take(
             &mut event_batch.session_queued_sync_resolved_ids,
         ));
@@ -1341,10 +1363,19 @@ impl App {
         }
     }
 
-    /// Removes queued review-request labels that resolved without starting.
-    fn apply_branch_publish_resolutions(&mut self, session_ids: HashSet<SessionId>) {
+    /// Removes queued review-request labels that resolved without starting,
+    /// and forgets any watch request held for that publication.
+    fn apply_branch_publish_resolutions(
+        &mut self,
+        session_ids: HashSet<SessionId>,
+        operation_ids: HashSet<String>,
+    ) {
         for session_id in session_ids {
             self.sessions.resolve_queued_branch_publish(&session_id);
+        }
+
+        for operation_id in operation_ids {
+            self.take_review_watch_on_publish(&operation_id);
         }
     }
 
@@ -2402,7 +2433,13 @@ impl App {
         &mut self,
         branch_publish_action_update: BranchPublishActionUpdate,
     ) {
-        let BranchPublishActionUpdate { result, session_id } = branch_publish_action_update;
+        let BranchPublishActionUpdate {
+            operation_id,
+            result,
+            session_id,
+        } = branch_publish_action_update;
+        let should_watch = operation_id
+            .is_some_and(|operation_id| self.take_review_watch_on_publish(&operation_id));
 
         match result {
             Ok(BranchPublishTaskSuccess::Pushed {
@@ -2434,7 +2471,6 @@ impl App {
                 }
             }
             Ok(BranchPublishTaskSuccess::PullRequestPublished {
-                is_created,
                 review_request,
                 upstream_reference,
                 ..
@@ -2443,9 +2479,6 @@ impl App {
                     .apply_published_upstream_ref(&session_id, upstream_reference);
                 self.sessions
                     .apply_review_request(&session_id, review_request.clone());
-                if is_created {
-                    self.offer_review_watch(session_id.clone());
-                }
 
                 let persistent_notice = Self::review_request_created_notice(&review_request);
                 if self
@@ -2458,6 +2491,10 @@ impl App {
                         &persistent_notice,
                     )
                     .await;
+                }
+                if should_watch {
+                    self.enable_published_review_watch(&session_id, &review_request)
+                        .await;
                 }
             }
             Err(failure) => {

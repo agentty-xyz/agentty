@@ -441,6 +441,9 @@ pub enum ConfirmationIntent {
     MergeSession,
     /// Confirms regenerating the focused review for the active view session.
     RegenerateReview,
+    /// Asks, before pushing, whether to watch the review request a publish
+    /// creates. `No` still publishes; cancel publishes nothing.
+    WatchPublishedReviewRequest,
     /// Confirms watching a session's linked review request for automatic
     /// follow-up.
     WatchReviewRequest,

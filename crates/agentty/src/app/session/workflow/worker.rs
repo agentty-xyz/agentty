@@ -1641,10 +1641,11 @@ impl SessionWorkerService {
             Self::emit_review_comment_resolution_update(context, Some(0));
         }
 
-        if matches!(command, SessionCommand::CreateReviewRequest { .. }) {
+        if let SessionCommand::CreateReviewRequest { operation_id, .. } = command {
             let _ = context
                 .app_event_tx
                 .send(AppEvent::BranchPublishActionResolved {
+                    operation_id: operation_id.clone(),
                     session_id: context.session_id.clone(),
                 });
         }
@@ -1752,14 +1753,15 @@ impl SessionWorkerService {
             }
             SessionCommand::CreateReviewRequest {
                 branch_publish_session,
+                operation_id,
                 remote_branch_name,
                 response,
-                ..
             } => {
                 Self::run_create_review_request_command(
                     context,
                     Arc::clone(run_client),
                     branch_publish_session,
+                    operation_id,
                     remote_branch_name,
                     response,
                 )
@@ -1839,6 +1841,7 @@ impl SessionWorkerService {
         context: &SessionWorkerContext,
         run_client: Arc<dyn RunClient>,
         mut branch_publish_session: BranchPublishTaskSession,
+        operation_id: String,
         remote_branch_name: Option<String>,
         response: Option<ReviewRequestResponse>,
     ) -> Result<(), SessionError> {
@@ -1874,6 +1877,7 @@ impl SessionWorkerService {
         let _ = context
             .app_event_tx
             .send(AppEvent::BranchPublishActionCompleted {
+                operation_id: Some(operation_id),
                 result: Box::new(result),
                 session_id: context.session_id.clone(),
             });

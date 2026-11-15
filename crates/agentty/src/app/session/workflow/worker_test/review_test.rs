@@ -820,7 +820,8 @@ async fn test_skipped_review_request_command_answers_programmatic_caller() {
     );
     assert!(matches!(
         app_event,
-        AppEvent::BranchPublishActionResolved { session_id } if session_id == "sess1"
+        AppEvent::BranchPublishActionResolved { operation_id, session_id }
+            if operation_id == "op-review-request" && session_id == "sess1"
     ));
     assert!(app_event_rx.try_recv().is_err());
 }
@@ -1045,8 +1046,10 @@ async fn test_create_review_request_command_waits_for_live_review_status() {
     ));
     assert!(matches!(
         completed_event,
-        AppEvent::BranchPublishActionCompleted { result, session_id }
-            if result.is_err() && session_id == "sess1"
+        AppEvent::BranchPublishActionCompleted { operation_id, result, session_id }
+            if operation_id.as_deref() == Some("op-review-request")
+                && result.is_err()
+                && session_id == "sess1"
     ));
 }
 

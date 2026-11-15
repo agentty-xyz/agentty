@@ -1685,14 +1685,13 @@ pub(crate) fn open_selected_session_view() -> Journey {
         .step(wait_for_session_view_footer())
 }
 
-/// Wait for the watch offer shown after a review request is created, decline
-/// it, and wait for the created-request notice the popup may have covered.
-pub(crate) fn decline_watch_offer_for_created_review_request() -> Journey {
-    Journey::new("decline_watch_offer_for_created_review_request")
-        .with_description("Decline the review-request watch offer and wait for its notice")
-        .step(Step::wait_for_text("Auto-resolve checks", 15000))
+/// Decline the watch question asked after confirming the review-request branch
+/// name, which publishes the review request without watching it.
+pub(crate) fn decline_review_watch_before_publish() -> Journey {
+    Journey::new("decline_review_watch_before_publish")
+        .with_description("Decline watching the review request before it is published")
+        .step(Step::wait_for_text("Auto-resolve checks", 5000))
         .step(Step::press_key("n"))
-        .step(Step::wait_for_text("[Review Request] Created PR", 15000))
 }
 
 /// Press `q` and wait for the Sessions list to render.

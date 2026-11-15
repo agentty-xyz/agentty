@@ -76,6 +76,9 @@ pub(crate) struct BranchPublishTaskContext {
 /// Final reducer payload for a completed branch-publish background action.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub(crate) struct BranchPublishActionUpdate {
+    /// Worker operation of a review-request publication; `None` for a plain
+    /// branch push.
+    pub(crate) operation_id: Option<String>,
     /// Branch-publish task result routed through the reducer.
     pub(crate) result: BranchPublishTaskResult,
     /// Session id targeted by the completed action.
@@ -142,9 +145,6 @@ pub(crate) enum BranchPublishTaskSuccess {
     PullRequestPublished {
         /// Remote branch name that was pushed successfully.
         branch_name: String,
-        /// Whether this action created the review request rather than
-        /// refreshing an existing one.
-        is_created: bool,
         /// Persisted review-request summary refreshed or created by the action.
         review_request: ReviewRequest,
         /// Persisted upstream ref recorded after the successful push.
@@ -476,7 +476,7 @@ async fn publish_pull_request(
         review_request_client.as_ref(),
     )
     .await?;
-    let (review_request, is_created) = create_or_refresh_review_request(
+    let review_request = create_or_refresh_review_request(
         branch_publish_session,
         &clock,
         review_request_client,
@@ -488,7 +488,6 @@ async fn publish_pull_request(
 
     Ok(BranchPublishTaskSuccess::PullRequestPublished {
         branch_name,
-        is_created,
         review_request,
         upstream_reference: push_outcome.upstream_reference,
     })
@@ -694,8 +693,7 @@ async fn review_request_remote(
 }
 
 /// Creates or refreshes one review request for the published session branch and
-/// persists the normalized summary. Returns the linked review request and
-/// whether this call created it.
+/// persists the normalized summary.
 async fn create_or_refresh_review_request(
     branch_publish_session: &BranchPublishTaskSession,
     clock: &Arc<dyn Clock>,
@@ -703,7 +701,7 @@ async fn create_or_refresh_review_request(
     generator: &review_request::ReviewRequestGenerator<'_>,
     remote: forge::ForgeRemote,
     source_branch: String,
-) -> Result<(ReviewRequest, bool), BranchPublishTaskFailure> {
+) -> Result<ReviewRequest, BranchPublishTaskFailure> {
     let mut refresh_metadata = true;
     let review_request_summary =
         if let Some(review_request) = &branch_publish_session.review_request {
@@ -784,7 +782,7 @@ async fn create_or_refresh_review_request(
             )
         })?;
 
-    Ok((review_request, !refresh_metadata))
+    Ok(review_request)
 }
 
 /// Generates a PR/MR description for initial publication.

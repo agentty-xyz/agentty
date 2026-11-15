@@ -1,13 +1,13 @@
-//! Review-request watching: the opt-in offer, `Watching` lifecycle
-//! reconciliation, and automatic follow-up for merge conflicts, review
-//! comments, and failing checks.
+//! Review-request watching: the opt-in question asked before publishing,
+//! `Watching` lifecycle reconciliation, and automatic follow-up for merge
+//! conflicts, review comments, and failing checks.
 //!
 //! The background sync orchestrator reports forge facts for sessions resting
 //! in `Watching`. The foreground reducer selects at most one follow-up per
 //! report and starts it through the ordinary session workflows, so every
 //! model turn still runs on the session worker.
 
-use std::collections::{HashMap, HashSet, VecDeque};
+use std::collections::{HashMap, HashSet};
 use std::fmt::Write as _;
 
 use ag_forge::{
@@ -15,9 +15,9 @@ use ag_forge::{
 };
 use tracing::warn;
 
+use crate::app::App;
 use crate::app::prompt_intent::{PromptSessionMode, ReviewCommentResolutionOutcome};
-use crate::app::session::StatusTransition;
-use crate::app::{App, Tab};
+use crate::app::session::{SessionTaskService, StatusTransition};
 use crate::domain::session::{ReviewRequest, ReviewRequestState, SessionId, Status};
 use crate::domain::transcript_notice::TranscriptNotice;
 use crate::domain::turn_prompt::TurnPrompt;
@@ -32,6 +32,9 @@ const FIX_FAILED_CHECKS_PROMPT_TEMPLATE: &str =
 /// Body of the confirmation that offers or enables watching. The overlay
 /// shows one truncated line, so the question stays short.
 const WATCH_CONFIRMATION_MESSAGE: &str = "Auto-resolve checks, comments, conflicts?";
+/// Title of the watch question asked before publishing, while the review
+/// request has no forge identifier yet.
+const PUBLISH_WATCH_CONFIRMATION_TITLE: &str = "Watch Review Request";
 /// Index of the `No` option, selected when the watch confirmation opens.
 const WATCH_CONFIRMATION_DEFAULT_INDEX: usize = 1;
 
@@ -46,8 +49,11 @@ pub(crate) struct ReviewWatchState {
     /// Follow-up keys already acted on that still describe the latest forge
     /// report, per watched session.
     handled_keys: HashMap<SessionId, Vec<String>>,
-    /// Sessions whose newly created review request awaits the watch offer.
-    pending_offers: VecDeque<SessionId>,
+    /// Review-request publication held while its watch question is open.
+    pending_publish: Option<PendingReviewRequestPublish>,
+    /// Worker operation ids of admitted review-request publications that
+    /// start watching their session once the review request is linked.
+    watch_on_publish: HashSet<String>,
 }
 
 impl ReviewWatchState {
@@ -60,7 +66,8 @@ impl ReviewWatchState {
                 .into_iter()
                 .map(|row| (SessionId::from(row.session_id), row.handled_keys))
                 .collect(),
-            pending_offers: VecDeque::new(),
+            pending_publish: None,
+            watch_on_publish: HashSet::new(),
         }
     }
 
@@ -81,6 +88,15 @@ impl ReviewWatchState {
     pub(crate) fn is_watched(&self, session_id: &str) -> bool {
         self.handled_keys.contains_key(session_id)
     }
+}
+
+/// Publish-popup submission waiting for the watch answer before pushing.
+#[derive(Debug)]
+struct PendingReviewRequestPublish {
+    /// Remote branch name entered in the publish popup.
+    remote_branch_name: Option<String>,
+    /// Session view restored once publication starts.
+    restore_view: ConfirmationViewMode,
 }
 
 /// One automatic follow-up selected from a watched review request.
@@ -176,36 +192,67 @@ impl ReviewWatchAction {
 }
 
 impl App {
-    /// Queues the watch offer for a session whose review request was just
-    /// created.
-    pub(crate) fn offer_review_watch(&mut self, session_id: SessionId) {
-        if !self.review_watch.pending_offers.contains(&session_id) {
-            self.review_watch.pending_offers.push_back(session_id);
+    /// Submits review-request publication from the publish popup.
+    ///
+    /// A branch without an upstream first asks whether to watch the review
+    /// request, before anything is pushed. An already pushed branch, or an
+    /// already watched session, publishes right away without asking.
+    pub(crate) async fn submit_review_request_publish(
+        &mut self,
+        restore_view: ConfirmationViewMode,
+        remote_branch_name: Option<String>,
+        is_branch_pushed: bool,
+    ) {
+        let session_id = restore_view.session_id.clone();
+        if is_branch_pushed || self.review_watch.is_watched(&session_id) {
+            self.start_review_request_publish(restore_view, &session_id, remote_branch_name)
+                .await;
+
+            return;
+        }
+
+        self.mode = AppMode::Confirmation {
+            confirmation_intent: ConfirmationIntent::WatchPublishedReviewRequest,
+            confirmation_message: WATCH_CONFIRMATION_MESSAGE.to_string(),
+            confirmation_title: PUBLISH_WATCH_CONFIRMATION_TITLE.to_string(),
+            restore_view: Some(restore_view.clone()),
+            session_id: Some(session_id),
+            selected_confirmation_index: WATCH_CONFIRMATION_DEFAULT_INDEX,
+        };
+        self.review_watch.pending_publish = Some(PendingReviewRequestPublish {
+            remote_branch_name,
+            restore_view,
+        });
+    }
+
+    /// Starts the publication held by the pre-publish watch question.
+    ///
+    /// When `should_watch` is set and the publication is admitted, watching
+    /// starts once that publication links the review request. The request is
+    /// keyed by the admitted operation, so a rejected publication keeps none,
+    /// and other publications for the same session neither consume nor
+    /// discard it.
+    pub(crate) async fn answer_review_watch_before_publish(&mut self, should_watch: bool) {
+        let Some(PendingReviewRequestPublish {
+            remote_branch_name,
+            restore_view,
+        }) = self.review_watch.pending_publish.take()
+        else {
+            return;
+        };
+        let session_id = restore_view.session_id.clone();
+        let operation_id = self
+            .start_review_request_publish(restore_view, &session_id, remote_branch_name)
+            .await;
+        if should_watch && let Some(operation_id) = operation_id {
+            self.review_watch.watch_on_publish.insert(operation_id);
         }
     }
 
-    /// Opens the next pending watch offer while the session list or a session
-    /// view is showing, so the popup never interrupts another dialog, editor,
-    /// or composer.
-    pub(crate) fn present_review_watch_offer(&mut self) {
-        let restore_view = match &self.mode {
-            AppMode::List if self.tabs.current() == Tab::Sessions => None,
-            AppMode::View {
-                scroll_offset,
-                session_id,
-            } => Some(ConfirmationViewMode {
-                scroll_offset: *scroll_offset,
-                session_id: session_id.clone(),
-            }),
-            _ => return,
-        };
-        while let Some(session_id) = self.review_watch.pending_offers.pop_front() {
-            if self.open_review_watch_confirmation(&session_id, restore_view.clone()) {
-                self.mark_dirty();
-
-                return;
-            }
-        }
+    /// Returns whether the finished publication `operation_id` should start
+    /// watching, and forgets the request.
+    pub(crate) fn take_review_watch_on_publish(&mut self, operation_id: &str) -> bool {
+        self.review_watch.watch_on_publish.remove(operation_id)
     }
 
     /// Opens the watch confirmation for one session with an open review
@@ -245,36 +292,25 @@ impl App {
         let Some(review_request) = self.open_review_request(session_id) else {
             return;
         };
-        if let Err(error) = self
-            .services
-            .db()
-            .reviews()
-            .enable_session_review_watch(session_id)
-            .await
-        {
-            self.append_review_watch_notice(
-                session_id,
-                format!("Could not start watching: {error}"),
-            )
-            .await;
 
+        self.start_review_watch(session_id, &review_request).await;
+    }
+
+    /// Enables watching for the open review request one publication just
+    /// linked.
+    ///
+    /// Watching starts from `review_request` itself because the user may have
+    /// switched projects while the publication ran, which unloads the session.
+    pub(crate) async fn enable_published_review_watch(
+        &mut self,
+        session_id: &SessionId,
+        review_request: &ReviewRequest,
+    ) {
+        if review_request.summary.state != ReviewRequestState::Open {
             return;
         }
 
-        self.review_watch
-            .handled_keys
-            .entry(session_id.clone())
-            .or_default();
-        self.append_review_watch_notice(
-            session_id,
-            format!(
-                "Watching {} for failing checks, review comments, and merge conflicts",
-                review_request_label(&review_request)
-            ),
-        )
-        .await;
-        self.reconcile_review_watch_statuses().await;
-        self.restart_git_status_task();
+        self.start_review_watch(session_id, review_request).await;
     }
 
     /// Disables watching for one session and returns it to `Review`.
@@ -537,10 +573,59 @@ impl App {
             .filter(|review_request| review_request.summary.state == ReviewRequestState::Open)
     }
 
-    /// Appends one durable `[Review Watch]` transcript notice.
-    async fn append_review_watch_notice(&self, session_id: &str, detail: impl std::fmt::Display) {
-        self.append_output_for_session(session_id, &TranscriptNotice::ReviewWatch.format(detail))
+    /// Persists watching for one session, records its notice, and requests an
+    /// immediate forge refresh.
+    async fn start_review_watch(&mut self, session_id: &SessionId, review_request: &ReviewRequest) {
+        if let Err(error) = self
+            .services
+            .db()
+            .reviews()
+            .enable_session_review_watch(session_id)
+            .await
+        {
+            self.append_review_watch_notice(
+                session_id,
+                format!("Could not start watching: {error}"),
+            )
             .await;
+
+            return;
+        }
+
+        self.review_watch
+            .handled_keys
+            .entry(session_id.clone())
+            .or_default();
+        self.append_review_watch_notice(
+            session_id,
+            format!(
+                "Watching {} for failing checks, review comments, and merge conflicts",
+                review_request_label(review_request)
+            ),
+        )
+        .await;
+        self.reconcile_review_watch_statuses().await;
+        self.restart_git_status_task();
+    }
+
+    /// Appends one durable `[Review Watch]` transcript notice.
+    ///
+    /// The notice goes through the session's runtime handles, so it is also
+    /// recorded for a session whose project is not loaded.
+    async fn append_review_watch_notice(&self, session_id: &str, detail: impl std::fmt::Display) {
+        let Ok(handles) = self.sessions.session_handles_or_err(session_id) else {
+            return;
+        };
+
+        SessionTaskService::append_workflow_notice(
+            &handles.transcript,
+            self.services.db(),
+            &self.services.event_sender(),
+            &self.services.session_update_versions(),
+            session_id,
+            &TranscriptNotice::ReviewWatch.format(detail),
+        )
+        .await;
     }
 }
 
