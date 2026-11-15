@@ -36,8 +36,9 @@ const WATCH_CONFIRMATION_MESSAGE: &str = "Auto-resolve checks, comments, conflic
 /// Title of the watch question asked before publishing, while the review
 /// request has no forge identifier yet.
 const PUBLISH_WATCH_CONFIRMATION_TITLE: &str = "Watch Review Request";
-/// Index of the `No` option, selected when the watch confirmation opens.
-const WATCH_CONFIRMATION_DEFAULT_INDEX: usize = 1;
+/// Index of the `Yes` option, selected when the watch confirmation opens so
+/// `Enter` accepts watching.
+const WATCH_CONFIRMATION_DEFAULT_INDEX: usize = 0;
 
 /// Review-watch state owned by the foreground reducer.
 #[derive(Debug, Default)]

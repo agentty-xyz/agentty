@@ -374,7 +374,7 @@ async fn publishing_an_unpushed_branch_asks_to_watch_before_pushing() {
             confirmation_title,
             restore_view: Some(confirmation_restore_view),
             session_id: Some(confirmation_session_id),
-            selected_confirmation_index: 1,
+            selected_confirmation_index: 0,
         } if confirmation_title == "Watch Review Request"
             && confirmation_message == "Auto-resolve checks, comments, conflicts?"
             && *confirmation_restore_view == restore_view
@@ -535,7 +535,7 @@ async fn watch_confirmation_opens_only_for_an_open_unwatched_review_request() {
             confirmation_intent: ConfirmationIntent::WatchReviewRequest,
             confirmation_title,
             restore_view: Some(confirmation_restore_view),
-            selected_confirmation_index: 1,
+            selected_confirmation_index: 0,
             ..
         } if confirmation_title == "Watch PR #42" && *confirmation_restore_view == restore_view
     ));

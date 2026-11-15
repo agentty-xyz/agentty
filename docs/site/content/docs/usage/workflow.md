@@ -540,10 +540,10 @@ completes the child. Closing an unmerged request cancels its editable session.
 
 <a id="usage-review-request-watch"></a> When you publish a review request for a branch
 that is not pushed yet, Agentty asks whether to watch it right after you confirm the
-remote branch name, before pushing. Answer `y` to watch the review request once it is
-created, `n` to publish without watching, or `Esc` to cancel publishing. Branches that
-are already pushed publish without asking. Press `W` in session view to watch an open
-review request later, or to stop watching.
+remote branch name, before pushing. `Yes` is preselected: press `Enter` or `y` to watch
+the review request once it is created, `n` to publish without watching, or `Esc` to
+cancel publishing. Branches that are already pushed publish without asking. Press `W` in
+session view to watch an open review request later, or to stop watching.
 
 A watched session rests in **Watching** instead of **Review** and keeps every review
 action. About once a minute, Agentty checks the review request and starts at most one
