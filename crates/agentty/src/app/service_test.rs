@@ -931,8 +931,9 @@ fn session_event_labels_preserve_variant_identity() {
         AppEvent::ReviewRequestStatusUpdated {
             generation: 1,
             result: Err("offline".to_string()),
-            session_id,
+            session_id: session_id.clone(),
         },
+        AppEvent::ReviewWatchRerunFinished { session_id },
     ];
     // Act / Assert
     assert_event_labels(events);

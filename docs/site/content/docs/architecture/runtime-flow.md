@@ -513,9 +513,16 @@ worktree changes to fit a prompt.
   reducer picks at most one follow-up per report and starts it through the ordinary
   session sync, review-comment, or reply workflow, so model work still runs on the
   session worker. Failed checks that are ready join a review-comment turn, so one turn
-  reports an outcome for every thread it fixes. Started follow-ups are persisted to
-  avoid repeating them for unchanged forge state; one that cannot start is retried on
-  the next report. The reducer moves idle sessions between `Review` and `Watching`.
+  reports an outcome for every thread it fixes. Checks still failing at the same head
+  after that turn are rerun once through the forge client in a background task, then
+  left to the user. The reducer acts on them only when no auto-push is running and the
+  reported head matches the session worktree's `HEAD`, so a report fetched before the
+  fix commit was pushed is ignored. Rerun checks are left to the user only after a
+  report shows them running again, or after a second report of finished failures, since
+  the first may predate the rerun and a fast rerun can finish between reports. Started
+  follow-ups are persisted to avoid repeating them for unchanged forge state; one that
+  cannot start is retried on the next report. The reducer moves idle sessions between
+  `Review` and `Watching`.
 
 Review-comment targets persist before execution and are scoped to the linked open review
 request. Clarification answers and subsequent turns restore unfinished targets and

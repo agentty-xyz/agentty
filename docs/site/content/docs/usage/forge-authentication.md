@@ -26,6 +26,9 @@ is on GitHub.
    credential helper for branch pushes.
 1. Verify the setup with `gh auth status`.
 
+Review watch's automatic check rerun needs a token with Actions write access. Without
+it, review watch still sees failing checks and reports that it could not rerun them.
+
 ## GitLab
 
 <a id="usage-forge-authentication-gitlab"></a> Use this setup when the repository remote

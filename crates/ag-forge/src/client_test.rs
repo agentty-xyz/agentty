@@ -458,6 +458,50 @@ async fn fetch_review_request_attention_authenticates_and_routes_to_github_adapt
 }
 
 #[tokio::test]
+async fn rerun_failed_checks_authenticates_and_reruns_each_distinct_workflow_run_once() {
+    // Arrange
+    let remote = github_remote();
+    let mut sequence = Sequence::new();
+    let mut command_runner = MockForgeCommandRunner::new();
+    command_runner
+        .expect_run()
+        .once()
+        .in_sequence(&mut sequence)
+        .withf(|command| {
+            command_arguments_are(
+                command,
+                "gh",
+                &["auth", "status", "--hostname", "github.com"],
+            )
+        })
+        .returning(|_| Box::pin(async { Ok(success_output(String::new())) }));
+    for workflow_run_id in ["101", "202"] {
+        let expected_endpoint =
+            format!("repos/agentty-xyz/agentty/actions/runs/{workflow_run_id}/rerun-failed-jobs");
+        command_runner
+            .expect_run()
+            .once()
+            .in_sequence(&mut sequence)
+            .withf(move |command| {
+                command.executable == "gh" && command.arguments.last() == Some(&expected_endpoint)
+            })
+            .returning(|_| Box::pin(async { Ok(success_output(String::new())) }));
+    }
+    let client = RealReviewRequestClient::new(Arc::new(command_runner));
+
+    // Act
+    let result = client
+        .rerun_failed_checks(
+            remote,
+            vec!["101".to_string(), "202".to_string(), "101".to_string()],
+        )
+        .await;
+
+    // Assert
+    assert_eq!(result, Ok(()));
+}
+
+#[tokio::test]
 async fn refresh_review_request_authenticates_before_gitlab_refresh() {
     // Arrange
     let remote = gitlab_remote();

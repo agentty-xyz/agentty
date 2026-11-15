@@ -586,11 +586,17 @@ session returns to **Watching** when the follow-up finishes.
 
 Agentty tries each conflict or failed check once per pushed commit, and each thread once
 per new reviewer comment, so an unsuccessful attempt is not repeated until the review
-request changes. If Agentty cannot check the review request or start a follow-up, for
-example while a project sync is running, it writes one `[Review Watch]` notice and tries
-again on the next check. Watching pauses during turns, sync, and focused review. It ends
-when you press `W`, or when the review request is merged or closed. Watching runs only
-while Agentty is open with the session's project active.
+request changes. When a fix turn pushes no new commit, for example because the failure
+is flaky or unrelated to the branch, Agentty reruns the failed GitHub Actions workflow
+jobs or GitLab pipeline jobs once. Checks that still fail once the rerun has run, or
+that the forge cannot rerun, get one `Leaving N failing checks to you` notice and no
+further attempts. If the forge rejects the rerun, Agentty writes one notice and later
+leaves the checks to you the same way. If Agentty cannot check the review request or
+start a follow-up, for example while a project sync is running, it writes one
+`[Review Watch]` notice and tries again on the next check. Watching pauses during turns,
+sync, and focused review. It ends when you press `W`, or when the review request is
+merged or closed. Watching runs only while Agentty is open with the session's project
+active.
 
 ## Clarification Interaction Loop
 

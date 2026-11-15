@@ -179,6 +179,41 @@ impl ReviewRequestOperations {
         })
     }
 
+    /// Reruns the failed jobs of each workflow run or pipeline in
+    /// `rerun_ids`, in order, in an owned future for adapter trait
+    /// implementations.
+    ///
+    /// Every id is validated as a decimal forge id before any command runs,
+    /// so a malformed id never reaches a forge API path.
+    pub(crate) fn rerun_failed_checks_future(
+        &self,
+        remote: ForgeRemote,
+        rerun_ids: Vec<String>,
+        rerun_command: fn(&ForgeRemote, &str) -> ForgeCommand,
+        operation: &'static str,
+    ) -> ForgeFuture<Result<(), ReviewRequestError>> {
+        let operations = self.clone();
+
+        Box::pin(async move {
+            if let Some(rerun_id) = rerun_ids.iter().find(|rerun_id| {
+                rerun_id.is_empty() || !rerun_id.chars().all(|character| character.is_ascii_digit())
+            }) {
+                return Err(operation_failed(
+                    remote.forge_kind,
+                    format!("{operation}: invalid rerun id `{rerun_id}`"),
+                ));
+            }
+
+            for rerun_id in &rerun_ids {
+                operations
+                    .run_review_command(&remote, rerun_command(&remote, rerun_id), operation)
+                    .await?;
+            }
+
+            Ok(())
+        })
+    }
+
     /// Fetches current review-request metadata in an owned future for adapter
     /// trait implementations.
     pub(crate) fn review_request_metadata_future(

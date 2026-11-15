@@ -269,10 +269,11 @@ impl GitLabReviewRequestAdapter {
         form_urlencoded::byte_serialize(remote.project_path().as_bytes()).collect()
     }
 
-    /// Parses the failed jobs that block one pipeline. Jobs allowed to fail
-    /// are omitted.
+    /// Parses the failed jobs that block pipeline `pipeline_id`. Jobs allowed
+    /// to fail are omitted. Each job is rerun by retrying its pipeline.
     fn parse_failed_pipeline_jobs_response(
         stdout: &str,
+        pipeline_id: u64,
     ) -> Result<Vec<ReviewCheckFailure>, String> {
         let jobs: Vec<GitLabPipelineJob> = serde_json::from_str(stdout)
             .map_err(|error| format!("invalid GitLab pipeline jobs response: {error}"))?;
@@ -283,6 +284,7 @@ impl GitLabReviewRequestAdapter {
             .map(|job| ReviewCheckFailure {
                 name: job.name,
                 outcome: FAILED_CHECK_OUTCOME.to_string(),
+                rerun_id: Some(pipeline_id.to_string()),
                 web_url: job.web_url,
             })
             .collect())
@@ -411,12 +413,13 @@ impl GitLabReviewRequestAdapter {
             .await?;
         let mut failed_checks = map_parse_error(
             ForgeKind::GitLab,
-            Self::parse_failed_pipeline_jobs_response(&jobs_output.stdout),
+            Self::parse_failed_pipeline_jobs_response(&jobs_output.stdout, pipeline.id),
         )?;
         if failed_checks.is_empty() {
             failed_checks.push(ReviewCheckFailure {
                 name: format!("pipeline #{}", pipeline.id),
                 outcome: FAILED_CHECK_OUTCOME.to_string(),
+                rerun_id: Some(pipeline.id.to_string()),
                 web_url: pipeline.web_url.clone(),
             });
         }
@@ -759,6 +762,25 @@ impl GitLabReviewRequestAdapter {
             ],
         )
     }
+
+    /// Builds one `glab api` request that retries the failed and canceled
+    /// jobs of one pipeline.
+    fn retry_pipeline_command(remote: &ForgeRemote, pipeline_id: &str) -> ForgeCommand {
+        let encoded_project_path = Self::encoded_project_path(remote);
+
+        Self::gitlab_command(
+            remote,
+            "glab",
+            vec![
+                "api".to_string(),
+                "--hostname".to_string(),
+                remote.host.clone(),
+                "--method".to_string(),
+                "POST".to_string(),
+                format!("/projects/{encoded_project_path}/pipelines/{pipeline_id}/retry"),
+            ],
+        )
+    }
 }
 
 impl ReviewRequestAdapter for GitLabReviewRequestAdapter {
@@ -943,6 +965,20 @@ impl ReviewRequestAdapter for GitLabReviewRequestAdapter {
                 review_threads,
             })
         })
+    }
+
+    /// Retries the failed jobs of each pipeline.
+    fn rerun_authenticated_failed_checks(
+        &self,
+        remote: ForgeRemote,
+        rerun_ids: Vec<String>,
+    ) -> ForgeFuture<Result<(), ReviewRequestError>> {
+        self.operations.rerun_failed_checks_future(
+            remote,
+            rerun_ids,
+            Self::retry_pipeline_command,
+            "retry failed pipeline jobs",
+        )
     }
 
     fn reply_to_authenticated_thread(

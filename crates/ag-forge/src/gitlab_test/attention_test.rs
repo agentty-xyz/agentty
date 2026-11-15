@@ -93,11 +93,13 @@ async fn fetch_authenticated_review_request_attention_reports_failed_jobs_and_tr
             ReviewCheckFailure {
                 name: "test".to_string(),
                 outcome: "Failed".to_string(),
+                rerun_id: Some("7".to_string()),
                 web_url: Some("https://gitlab.com/agentty-xyz/agentty/-/jobs/11".to_string()),
             },
             ReviewCheckFailure {
                 name: "build".to_string(),
                 outcome: "Failed".to_string(),
+                rerun_id: Some("7".to_string()),
                 web_url: None,
             },
         ]
@@ -175,6 +177,7 @@ async fn fetch_authenticated_review_request_attention_reports_pipeline_without_b
             failed_checks: vec![ReviewCheckFailure {
                 name: "pipeline #7".to_string(),
                 outcome: "Failed".to_string(),
+                rerun_id: Some("7".to_string()),
                 web_url: Some("https://gitlab.com/agentty-xyz/agentty/-/pipelines/7".to_string()),
             }],
             has_merge_conflict: false,
@@ -335,7 +338,7 @@ fn attention_parsers_reject_invalid_responses() {
         GitLabReviewRequestAdapter::parse_attention_response(&missing_head_commit)
             .err()
             .expect("missing head commit should fail"),
-        GitLabReviewRequestAdapter::parse_failed_pipeline_jobs_response("not-json")
+        GitLabReviewRequestAdapter::parse_failed_pipeline_jobs_response("not-json", 7)
             .expect_err("invalid jobs should fail"),
         GitLabReviewRequestAdapter::parse_project_member_response("not-json", 1)
             .expect_err("invalid members should fail"),
@@ -404,6 +407,7 @@ fn attention_commands_request_encoded_project_endpoints() {
     // Act
     let jobs_command = GitLabReviewRequestAdapter::failed_pipeline_jobs_command(&remote, 7);
     let member_command = GitLabReviewRequestAdapter::project_member_command(&remote, 7);
+    let retry_command = GitLabReviewRequestAdapter::retry_pipeline_command(&remote, "7");
 
     // Assert
     assert_eq!(
@@ -424,6 +428,64 @@ fn attention_commands_request_encoded_project_endpoints() {
             "gitlab.com",
             "/projects/agentty-xyz%2Fagentty/members/all?user_ids[]=7",
         ]
+    );
+    assert_eq!(
+        retry_command.arguments,
+        [
+            "api",
+            "--hostname",
+            "gitlab.com",
+            "--method",
+            "POST",
+            "/projects/agentty-xyz%2Fagentty/pipelines/7/retry",
+        ]
+    );
+}
+
+#[tokio::test]
+async fn rerun_authenticated_failed_checks_retries_each_pipeline() {
+    // Arrange
+    let remote = gitlab_remote();
+    let mut sequence = Sequence::new();
+    let mut command_runner = MockForgeCommandRunner::new();
+    for pipeline_id in ["7", "8"] {
+        expect_command(
+            &mut command_runner,
+            &mut sequence,
+            GitLabReviewRequestAdapter::retry_pipeline_command(&remote, pipeline_id),
+            "{}".to_string(),
+        );
+    }
+    let adapter = GitLabReviewRequestAdapter::new(Arc::new(command_runner));
+
+    // Act
+    let result = adapter
+        .rerun_authenticated_failed_checks(remote, vec!["7".to_string(), "8".to_string()])
+        .await;
+
+    // Assert
+    assert_eq!(result, Ok(()));
+}
+
+#[tokio::test]
+async fn rerun_authenticated_failed_checks_rejects_an_empty_pipeline_id() {
+    // Arrange
+    let mut command_runner = MockForgeCommandRunner::new();
+    command_runner.expect_run().never();
+    let adapter = GitLabReviewRequestAdapter::new(Arc::new(command_runner));
+
+    // Act
+    let result = adapter
+        .rerun_authenticated_failed_checks(gitlab_remote(), vec![String::new()])
+        .await;
+
+    // Assert
+    assert_eq!(
+        result,
+        Err(ReviewRequestError::OperationFailed {
+            forge_kind: ForgeKind::GitLab,
+            message: "retry failed pipeline jobs: invalid rerun id ``".to_string(),
+        })
     );
 }
 

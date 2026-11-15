@@ -51,6 +51,13 @@ const PULL_REQUEST_ATTENTION_QUERY: &str =
      CheckRun { name status conclusion detailsUrl checkSuite { app { slug } } } ... on \
      StatusContext { context state targetUrl } } pageInfo { hasNextPage endCursor } } } } } }";
 
+/// Slug of the GitHub App that reports GitHub Actions check runs.
+const GITHUB_ACTIONS_APP_SLUG: &str = "github-actions";
+
+/// Path segment that precedes the workflow run id in a GitHub Actions check
+/// run's details URL, such as `.../actions/runs/{id}/job/{job_id}`.
+const WORKFLOW_RUN_URL_SEGMENT: &str = "/actions/runs/";
+
 /// Paginated GraphQL query used to fetch review threads for one pull request.
 const REVIEW_THREADS_QUERY: &str =
     "query($owner: String!, $repo: String!, $number: Int!, $endCursor: String) { \
@@ -738,6 +745,25 @@ impl GitHubReviewRequestAdapter {
             ],
         )
     }
+
+    /// Builds one `gh api` request that reruns the failed jobs, and the jobs
+    /// that depend on them, of one GitHub Actions workflow run.
+    fn rerun_failed_jobs_command(remote: &ForgeRemote, workflow_run_id: &str) -> ForgeCommand {
+        Self::github_command(
+            remote,
+            vec![
+                "api".to_string(),
+                "--hostname".to_string(),
+                remote.host.clone(),
+                "--method".to_string(),
+                "POST".to_string(),
+                format!(
+                    "repos/{}/{}/actions/runs/{workflow_run_id}/rerun-failed-jobs",
+                    remote.namespace, remote.project
+                ),
+            ],
+        )
+    }
 }
 
 impl ReviewRequestAdapter for GitHubReviewRequestAdapter {
@@ -958,6 +984,20 @@ impl ReviewRequestAdapter for GitHubReviewRequestAdapter {
 
             Ok(attention)
         })
+    }
+
+    /// Reruns the failed jobs of each GitHub Actions workflow run.
+    fn rerun_authenticated_failed_checks(
+        &self,
+        remote: ForgeRemote,
+        rerun_ids: Vec<String>,
+    ) -> ForgeFuture<Result<(), ReviewRequestError>> {
+        self.operations.rerun_failed_checks_future(
+            remote,
+            rerun_ids,
+            Self::rerun_failed_jobs_command,
+            "rerun failed workflow-run jobs",
+        )
     }
 
     fn reply_to_authenticated_thread(
@@ -1238,7 +1278,10 @@ impl GitHubCheckContextNode {
     ///
     /// Cancelled, skipped, neutral, stale, and action-required check runs and
     /// expected commit statuses are not failures.
+    /// Only a GitHub Actions check run carries a rerun id: the id of its
+    /// workflow run.
     fn failure(&self) -> Option<ReviewCheckFailure> {
+        let rerun_id = self.workflow_run_id();
         let (name, outcome, web_url) = match self.typename.as_str() {
             "CheckRun" if self.status.as_deref() == Some("COMPLETED") => (
                 self.name.as_deref(),
@@ -1260,10 +1303,32 @@ impl GitHubCheckContextNode {
         Some(ReviewCheckFailure {
             name: name.unwrap_or_default().to_string(),
             outcome: normalize_provider_label(outcome),
+            rerun_id,
             web_url: web_url
                 .filter(|web_url| !web_url.is_empty())
                 .map(str::to_string),
         })
+    }
+
+    /// Returns the workflow run id of a GitHub Actions check run, read from
+    /// its details URL.
+    ///
+    /// The id comes from the URL rather than the GraphQL `workflowRun` field
+    /// so the attention query needs no Actions read permission. Check runs
+    /// from other apps, and URLs without a numeric run id, have none.
+    fn workflow_run_id(&self) -> Option<String> {
+        if !self.is_reported_by(&[GITHUB_ACTIONS_APP_SLUG.to_string()]) {
+            return None;
+        }
+        let (_, run_path) = self
+            .details_url
+            .as_deref()?
+            .split_once(WORKFLOW_RUN_URL_SEGMENT)?;
+        let workflow_run_id = run_path.split(['/', '?', '#']).next().filter(|run_id| {
+            !run_id.is_empty() && run_id.bytes().all(|byte| byte.is_ascii_digit())
+        })?;
+
+        Some(workflow_run_id.to_string())
     }
 
     /// Returns whether this check is still queued, running, or, for a

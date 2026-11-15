@@ -1,7 +1,8 @@
 //! Review request publication, status, and cleanup.
 
 use std::os::unix::fs::PermissionsExt;
-use std::path::Path;
+use std::path::{Path, PathBuf};
+use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
 #[cfg(unix)]
@@ -15,9 +16,10 @@ use testty::region::Region;
 use testty::scenario::Scenario;
 
 use super::fixture::{
-    E2eResult, RESOLVED_DECISION_REVIEW_TEXT, run_git, seed_review_description_provider,
-    seed_review_ready_session, seed_review_ready_session_with_review_request,
-    seed_review_with_resolved_decision, seed_review_worktree_with_diff, seed_sessions_tab,
+    E2eResult, RESOLVED_DECISION_REVIEW_TEXT, run_git, run_git_stdout,
+    seed_review_description_provider, seed_review_ready_session,
+    seed_review_ready_session_with_review_request, seed_review_with_resolved_decision,
+    seed_review_worktree_with_diff, seed_sessions_tab,
 };
 use crate::common;
 use crate::common::{
@@ -1366,6 +1368,185 @@ async fn review_request_publish_asks_to_watch_and_follows_up_on_failed_checks() 
                         "[Review Watch] Fixing 1 failing check: unit-tests",
                         &follow_up_full,
                     );
+                })
+            },
+        )
+        .await?;
+
+    Ok(())
+}
+
+/// Seeds a watched linked pull request whose GitHub Actions check keeps
+/// failing at the session worktree's head commit, with the follow-ups whose
+/// handled-key kinds are named by `handled_key_kinds` already attempted at
+/// that commit.
+async fn seed_watched_review_request_with_unfixed_check(
+    env: &BuilderEnv,
+    handled_key_kinds: &[&str],
+) -> Result<(), Box<dyn std::error::Error>> {
+    seed_review_ready_session_with_review_request(env).await?;
+
+    let session_head = run_git_stdout(
+        &env.agentty_root.join("wt").join("review-s"),
+        &["rev-parse", "HEAD"],
+    )?;
+    let database = common::open_database(env).await?;
+    database
+        .reviews()
+        .enable_session_review_watch("review-shortcut-0001")
+        .await?;
+    database
+        .reviews()
+        .update_session_review_watch_handled_keys(
+            "review-shortcut-0001",
+            handled_key_kinds
+                .iter()
+                .map(|kind| format!("{kind}:{session_head}"))
+                .collect(),
+        )
+        .await?;
+
+    let gh_path = env.stub_bin.join("gh");
+    let check_lookup = r#"  *"repos/agentty-xyz/agentty/actions/runs/7/rerun-failed-jobs"*)
+    touch "${0}.rerun-requested"
+    printf '%s\n' '{}'
+    ;;
+  *"headRefOid"*)
+    printf '%s\n' '[{"data":{"repository":{"pullRequest":{"headRefOid":"abc1234","mergeable":"MERGEABLE","statusCheckRollup":{"contexts":{"nodes":[{"__typename":"CheckRun","name":"unit-tests","status":"COMPLETED","conclusion":"FAILURE","detailsUrl":"https://github.com/agentty-xyz/agentty/actions/runs/7","checkSuite":{"app":{"slug":"github-actions"}}}],"pageInfo":{"hasNextPage":false,"endCursor":null}}}}}}}]'
+    ;;
+  *"isOutdated"*)
+    printf '%s\n' '[{"data":{"repository":{"pullRequest":{"reviewThreads":{"nodes":[],"pageInfo":{"hasNextPage":false,"endCursor":null}}}}}}]'
+    ;;
+  *"mergeStateStatus"*)"#
+        .replace("abc1234", &session_head);
+    let gh_script =
+        std::fs::read_to_string(&gh_path)?.replace("  *\"mergeStateStatus\"*)", &check_lookup);
+    std::fs::write(&gh_path, gh_script)?;
+
+    Ok(())
+}
+
+/// Verify that a watched check still failing at the head commit its fix turn
+/// left unchanged is rerun through the forge instead of starting another fix
+/// turn.
+#[tokio::test]
+async fn review_watch_reruns_a_check_its_fix_turn_left_failing() -> E2eResult {
+    // Arrange
+    let rerun_requested_marker = Arc::new(Mutex::new(None::<PathBuf>));
+    let setup_rerun_requested_marker = Arc::clone(&rerun_requested_marker);
+
+    FeatureTest::new("review_watch_unfixed_check_rerun")
+        .with_git()
+        .with_terminal_size(120, 40)
+        .setup(move |env| {
+            Box::pin(async move {
+                setup_rerun_requested_marker
+                    .lock()
+                    .expect("rerun marker capture should remain available")
+                    .replace(env.stub_bin.join("gh.rerun-requested"));
+
+                seed_watched_review_request_with_unfixed_check(env, &["checks"]).await
+            })
+        })
+        .run(
+            move |scenario| {
+                // Act
+                let rerun_requested_marker = rerun_requested_marker
+                    .lock()
+                    .expect("rerun marker capture should remain available")
+                    .clone()
+                    .expect("setup should capture the rerun marker path");
+
+                scenario
+                    .compose(&common::wait_for_agentty_startup())
+                    .compose(&common::switch_to_tab("Sessions"))
+                    .compose(&common::open_selected_session_view())
+                    .wait_for_text(
+                        "[Review Watch] Rerunning 1 failing check: unit-tests",
+                        20000,
+                    )
+                    .eventually(
+                        Duration::from_secs(10),
+                        Duration::from_millis(100),
+                        move |frame| {
+                            if rerun_requested_marker.is_file() {
+                                return Ok(());
+                            }
+
+                            let full = Region::full(frame.cols(), frame.rows());
+                            assertion::match_text_in_region(
+                                frame,
+                                "forge rerun requested through the gh stub",
+                                &full,
+                            )
+                        },
+                    )
+                    .wait_for_stable_frame(500, 5000)
+                    .capture_labeled(
+                        "review_watch_unfixed_check_rerun",
+                        "Check left failing by its fix turn rerun through the forge",
+                    )
+            },
+            |frame, _report| {
+                // Assert
+                Box::pin(async move {
+                    let full = Region::full(frame.cols(), frame.rows());
+                    assertion::assert_text_in_region(
+                        frame,
+                        "[Review Watch] Rerunning 1 failing check: unit-tests",
+                        &full,
+                    );
+                    assertion::assert_not_visible(frame, "Could not rerun");
+                    assertion::assert_not_visible(frame, "Fixing 1 failing check");
+                    assertion::assert_not_visible(frame, "Leaving 1 failing check");
+                })
+            },
+        )
+        .await?;
+
+    Ok(())
+}
+
+/// Verify that a watched check still failing after its fix turn and its
+/// rerun is left to the user with one notice instead of another attempt.
+#[tokio::test]
+async fn review_watch_leaves_a_check_failing_after_its_rerun_to_the_user() -> E2eResult {
+    // Arrange, Act, Assert
+    FeatureTest::new("review_watch_unfixed_check_left")
+        .with_git()
+        .with_terminal_size(120, 40)
+        .setup(|env| {
+            Box::pin(async move {
+                seed_watched_review_request_with_unfixed_check(
+                    env,
+                    &["checks", "rerun", "rerun-started"],
+                )
+                .await
+            })
+        })
+        .run(
+            |scenario| {
+                scenario
+                    .compose(&common::wait_for_agentty_startup())
+                    .compose(&common::switch_to_tab("Sessions"))
+                    .compose(&common::open_selected_session_view())
+                    .wait_for_text("[Review Watch] Leaving 1 failing check to you", 20000)
+                    .capture_labeled(
+                        "review_watch_unfixed_check_left",
+                        "Check still failing after its rerun left to the user",
+                    )
+            },
+            |frame, _report| {
+                Box::pin(async move {
+                    let full = Region::full(frame.cols(), frame.rows());
+                    assertion::assert_text_in_region(
+                        frame,
+                        "[Review Watch] Leaving 1 failing check to you after automatic attempts: \
+                         unit-tests",
+                        &full,
+                    );
+                    assertion::assert_not_visible(frame, "Rerunning");
+                    assertion::assert_not_visible(frame, "Fixing 1 failing check");
                 })
             },
         )

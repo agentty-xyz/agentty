@@ -624,6 +624,7 @@ impl AppServices {
             AppEvent::SessionWorkflowNoticeUpdated { .. } => "SessionWorkflowNoticeUpdated",
             AppEvent::PublishedBranchSyncUpdated { .. } => "PublishedBranchSyncUpdated",
             AppEvent::ReviewRequestStatusUpdated { .. } => "ReviewRequestStatusUpdated",
+            AppEvent::ReviewWatchRerunFinished { .. } => "ReviewWatchRerunFinished",
         }
     }
 
