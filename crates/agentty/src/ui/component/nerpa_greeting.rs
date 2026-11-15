@@ -5,11 +5,15 @@ use ratatui::style::Color;
 
 use crate::ui::{Component, style};
 
-/// Pixel map of a Baikal seal resting on an ice floe, facing left.
+/// Pixel map of a Baikal seal resting on an ice floe, facing left, without
+/// its hind flippers.
 ///
 /// Each entry is one terminal row holding an upper and a lower row of square
 /// pixels. `.` is empty, `B` the body, `H` the muzzle, whiskers, and eye
 /// catchlights, and `I` the ice. The eyes and nose are empty pixels.
+///
+/// The rows covered by [`TAIL_POSES`] stay empty from [`TAIL_COLUMN`] on, so
+/// the current tail pose alone draws the hind flippers there.
 ///
 /// Lit pixels sharing a cell share one tone, so the cell needs a foreground
 /// color only. The right whiskers are the exception: they lie over the body,
@@ -23,22 +27,22 @@ const NERPA_PIXELS: [[&str; 2]; 7] = [
     ],
     [
         "....BBBBBBBBBBBB................",
-        "...BBBBBBBBBBBBBB............BB.",
+        "...BBBBBBBBBBBBBB...............",
     ],
     [
-        "..BBB.HBBBBB.HBBBBBBBB......BBB.",
-        "..BBB..BBBBB..BBBBBBBBBBB..BBB..",
+        "..BBB.HBBBBB.HBBBBBBBB..........",
+        "..BBB..BBBBB..BBBBBBBBBBB.......",
     ],
     [
-        "..BBBHHHHHHHHBBBBBBBBBBBBBBBB...",
-        "..BBBHHH..HHHBBBBBBBBBBBBBBBB...",
+        "..BBBHHHHHHHHBBBBBBBBBBBBB......",
+        "..BBBHHH..HHHBBBBBBBBBBBBB......",
     ],
     [
-        "HHHBHHHHHHHHHHBHHHBBBBBBBBBBBB..",
-        "...BHHHHHHHHHHBBBBBBBBBBBBB.BBB.",
+        "HHHBHHHHHHHHHHBHHHBBBBBBBB......",
+        "...BHHHHHHHHHHBBBBBBBBBBBB......",
     ],
     [
-        "HHH.BBBBBBBBBBBHHHBBBBBBBB...BB.",
+        "HHH.BBBBBBBBBBBHHHBBBBBBBB......",
         "....BBBBBBBBBBBBBBBBBBBBB.......",
     ],
     [
@@ -46,6 +50,77 @@ const NERPA_PIXELS: [[&str; 2]; 7] = [
         "...IIIIIII....IIIIIIII...IIIII..",
     ],
 ];
+
+/// Width of the art in terminal columns.
+const ART_WIDTH: usize = NERPA_PIXELS[0][0].len();
+
+/// First art column drawn by [`TAIL_POSES`].
+const TAIL_COLUMN: usize = 26;
+
+/// Hind-flipper poses, in the [`NERPA_PIXELS`] pixel format, covering the
+/// art columns from [`TAIL_COLUMN`] in its top rows.
+///
+/// Each line of a pose is one terminal row: its upper and then its lower
+/// pixel row, separated by whitespace.
+///
+/// Like the seal on the documentation site, the poses turn the flippers
+/// about the tail joint: at rest, tip slightly up, tip further up, and tip
+/// slightly down.
+const TAIL_POSES: [&str; 4] = [
+    "
+    ...... ......
+    ...... ...BB.
+    ..BBB. .BBB..
+    BBB... BBB...
+    BBBB.. B.BBB.
+    ...BB. ......
+    ",
+    "
+    ...... ......
+    ...BB. ...BB.
+    ..BB.. .BB...
+    BBB... BBBB..
+    BBBBB. B.BBB.
+    ...... ......
+    ",
+    "
+    ...... ...BB.
+    ...BB. ..BB..
+    ..BB.. .BB...
+    BBBB.. BBBBB.
+    BBBBB. B.....
+    ...... ......
+    ",
+    "
+    ...... ......
+    ...... ......
+    ..BBB. .BBBB.
+    BBBB.. BBB...
+    BBB... B.BB..
+    ...BB. ...BB.
+    ",
+];
+
+/// Index of the resting pose in [`TAIL_POSES`].
+const TAIL_REST_POSE: usize = 0;
+
+/// [`TAIL_POSES`] indices one wag plays in order, matching the seal on the
+/// documentation site.
+const TAIL_WAG: [usize; 10] = [1, 2, 1, 0, 3, 0, 1, 2, 1, 0];
+
+/// Time each [`TAIL_WAG`] pose stays on screen.
+const TAIL_STEP_MS: u128 = 120;
+
+/// Full tail cycle: the art rests, then the hind flippers wag once.
+const TAIL_PERIOD_MS: u128 = 6_000;
+
+/// Portion of [`TAIL_PERIOD_MS`], from the cycle start, before the wag.
+///
+/// The wag fills the rest of the cycle, one [`TAIL_STEP_MS`] per
+/// [`TAIL_WAG`] pose. Starting each cycle at rest keeps captures taken at
+/// whole-period timestamps, such as pinned-clock feature recordings, on the
+/// resting art.
+const TAIL_REST_MS: u128 = 4_800;
 
 /// Glyph for a cell whose upper and lower pixels are both lit.
 const FULL_BLOCK: char = '█';
@@ -59,36 +134,12 @@ const LOWER_HALF_BLOCK: char = '▄';
 /// Columns kept free between the art and the right edge of its area.
 const RIGHT_PADDING: u16 = 1;
 
-/// Full sheen cycle: the art rests, then one light band sweeps across it.
-const SHEEN_PERIOD_MS: u128 = 5_000;
-
-/// Portion of [`SHEEN_PERIOD_MS`], from the cycle start, with no sheen.
-///
-/// Starting each cycle at rest keeps captures taken at whole-period
-/// timestamps, such as pinned-clock feature recordings, on the plain art.
-const SHEEN_REST_MS: u128 = 3_500;
-
-/// Half-width, in diagonal cells, of the sweeping light band.
-const SHEEN_RADIUS: usize = 2;
-
-/// Each terminal row shifts the band this many columns, which makes it
-/// travel at about 45 degrees because cells are twice as tall as wide.
-const SHEEN_ROW_SLANT: usize = 2;
-
-/// Diagonal distance, in cells, the band center travels during one sweep.
-///
-/// Diagonals are offset by [`SHEEN_RADIUS`], so the band starts just before
-/// the first cell and leaves the last one as the sweep ends.
-const SHEEN_TRAVEL: usize =
-    (NERPA_PIXELS[0][0].len() - 1) + (NERPA_PIXELS.len() - 1) * SHEEN_ROW_SLANT + 2 * SHEEN_RADIUS;
-
 /// Pixel-art nerpa that greets a session before its first message.
 ///
 /// Half-block glyphs give every terminal cell two square pixels, each filled
-/// with a flat theme tone. Every few seconds a diagonal sheen sweeps across
-/// the seal and brightens the cells it passes by one tone. The frame derives
-/// only from `unix_millis`, so equal timestamps always paint identical
-/// frames, and the sheen changes colors only, never glyphs.
+/// with a flat theme tone. Every few seconds the seal wags its hind flippers
+/// through a short sequence of poses. The frame derives only from
+/// `unix_millis`, so equal timestamps always paint identical frames.
 ///
 /// A terminal without colors gets the same silhouette minus the right
 /// whiskers, which only a second tone can draw over the body.
@@ -122,23 +173,23 @@ impl NerpaGreeting {
         self
     }
 
-    /// Returns whether the sheen is sweeping at `unix_millis`.
+    /// Returns whether the tail wags at `unix_millis`.
     ///
-    /// Frames only change while the sheen sweeps, so callers can redraw at
-    /// frame rate during the sweep and fall back to a slower cadence while
-    /// the art rests.
-    pub fn is_sweeping(unix_millis: u128) -> bool {
-        Self::sheen_center(unix_millis).is_some()
+    /// Frames only change while the tail wags, so callers can redraw at frame
+    /// rate during the wag and fall back to a slower cadence while the art
+    /// rests.
+    pub fn is_wagging(unix_millis: u128) -> bool {
+        Self::wag_pose(unix_millis).is_some()
     }
 
     /// Renders the nerpa like [`Component::render`] and returns whether the
     /// painted art can animate.
     ///
-    /// The sheen changes colors only, so the art animates only when it fits a
-    /// blank `area` and the terminal renders colors. Callers use the result
-    /// to skip frame-rate redraws while the art is hidden or colorless.
+    /// The wag changes glyphs, so the art animates whenever it fits a blank
+    /// `area`, with or without colors. Callers use the result to skip
+    /// frame-rate redraws while the art is hidden.
     pub fn render_animated(&self, f: &mut Frame, area: Rect) -> bool {
-        self.paint(f.buffer_mut(), area) && self.color_support == style::ColorSupport::Enabled
+        self.paint(f.buffer_mut(), area)
     }
 
     /// Paints the nerpa into `buffer` when it fits inside a blank `area`,
@@ -151,26 +202,26 @@ impl NerpaGreeting {
             return false;
         }
 
-        let sheen_center = Self::sheen_center(self.unix_millis);
+        let tail_pose = TAIL_POSES[Self::wag_pose(self.unix_millis).unwrap_or(TAIL_REST_POSE)];
         for ((row, [upper_pixels, lower_pixels]), row_y) in
             NERPA_PIXELS.iter().enumerate().zip(art_area.y..)
         {
-            let pixel_pairs = upper_pixels.bytes().zip(lower_pixels.bytes());
-            for ((column, (upper_pixel, lower_pixel)), column_x) in
-                pixel_pairs.enumerate().zip(art_area.x..)
-            {
+            let tail_row = Self::tail_row(tail_pose, row);
+            for (column, column_x) in (0..ART_WIDTH).zip(art_area.x..) {
+                let upper_pixel =
+                    Self::pixel(upper_pixels, tail_row.map(|(upper, _)| upper), column);
+                let lower_pixel =
+                    Self::pixel(lower_pixels, tail_row.map(|(_, lower)| lower), column);
                 let Some((glyph, foreground, background)) =
                     Self::cell_art(upper_pixel, lower_pixel, self.color_support)
                 else {
                     continue;
                 };
 
-                let diagonal = column + row * SHEEN_ROW_SLANT + SHEEN_RADIUS;
                 let cell = &mut buffer[(column_x, row_y)];
-                cell.set_char(glyph)
-                    .set_fg(Self::lit_tone(foreground, diagonal, sheen_center).color());
+                cell.set_char(glyph).set_fg(foreground.color());
                 if let Some(background) = background {
-                    cell.set_bg(Self::lit_tone(background, diagonal, sheen_center).color());
+                    cell.set_bg(background.color());
                 }
             }
         }
@@ -181,7 +232,7 @@ impl NerpaGreeting {
     /// Returns the bottom-right rectangle occupied by the art, or `None` when
     /// it does not fit inside `area`.
     fn art_area(area: Rect) -> Option<Rect> {
-        let width = u16::try_from(NERPA_PIXELS[0][0].len()).ok()?;
+        let width = u16::try_from(ART_WIDTH).ok()?;
         let height = u16::try_from(NERPA_PIXELS.len()).ok()?;
         let required_width = width.checked_add(RIGHT_PADDING)?;
         if area.width < required_width || area.height < height {
@@ -202,17 +253,30 @@ impl NerpaGreeting {
             .all(|position| buffer[position].symbol() == " ")
     }
 
-    /// Returns the diagonal position of the sheen band at `unix_millis`, or
-    /// `None` while the cycle rests.
-    ///
-    /// During the sweep the center moves linearly from `0` to
-    /// [`SHEEN_TRAVEL`] diagonal cells.
-    fn sheen_center(unix_millis: u128) -> Option<usize> {
-        let sweep_elapsed_ms = (unix_millis % SHEEN_PERIOD_MS).checked_sub(SHEEN_REST_MS)?;
-        let sweep_ms = SHEEN_PERIOD_MS - SHEEN_REST_MS;
-        let travel = u128::try_from(SHEEN_TRAVEL).ok()?;
+    /// Returns the [`TAIL_POSES`] index shown at `unix_millis`, or `None`
+    /// while the cycle rests.
+    fn wag_pose(unix_millis: u128) -> Option<usize> {
+        let wag_elapsed_ms = (unix_millis % TAIL_PERIOD_MS).checked_sub(TAIL_REST_MS)?;
+        let wag_step = usize::try_from(wag_elapsed_ms / TAIL_STEP_MS).ok()?;
 
-        usize::try_from(sweep_elapsed_ms * travel / sweep_ms).ok()
+        TAIL_WAG.get(wag_step).copied()
+    }
+
+    /// Returns the upper and lower pixel rows of terminal `row` in one
+    /// [`TAIL_POSES`] entry, or `None` below the rows the pose covers.
+    fn tail_row(tail_pose: &str, row: usize) -> Option<(&str, &str)> {
+        let mut pixel_rows = tail_pose.split_whitespace().skip(row * 2);
+
+        Some((pixel_rows.next()?, pixel_rows.next()?))
+    }
+
+    /// Returns the pixel at `column` of one art pixel row, read from
+    /// `tail_pixels` for the columns the tail pose covers.
+    fn pixel(body_pixels: &str, tail_pixels: Option<&str>, column: usize) -> u8 {
+        match (tail_pixels, column.checked_sub(TAIL_COLUMN)) {
+            (Some(tail_pixels), Some(tail_column)) => tail_pixels.as_bytes()[tail_column],
+            _ => body_pixels.as_bytes()[column],
+        }
     }
 
     /// Returns the glyph, foreground tone, and optional background tone of
@@ -244,15 +308,6 @@ impl NerpaGreeting {
             (None, Some(tone)) => Some((LOWER_HALF_BLOCK, tone, None)),
         }
     }
-
-    /// Returns `tone` brightened by one step when the sheen band covers a
-    /// cell on `diagonal`.
-    fn lit_tone(tone: Tone, diagonal: usize, sheen_center: Option<usize>) -> Tone {
-        match sheen_center {
-            Some(sheen_center) if diagonal.abs_diff(sheen_center) < SHEEN_RADIUS => tone.lit(),
-            _ => tone,
-        }
-    }
 }
 
 impl Component for NerpaGreeting {
@@ -273,22 +328,14 @@ enum Tone {
 }
 
 impl Tone {
-    /// Parses one [`NERPA_PIXELS`] character, returning `None` for an empty
-    /// pixel.
+    /// Parses one [`NERPA_PIXELS`] or [`TAIL_POSES`] character, returning
+    /// `None` for an empty pixel.
     fn from_pixel(pixel: u8) -> Option<Self> {
         match pixel {
             b'B' => Some(Self::Body),
             b'H' => Some(Self::Highlight),
             b'I' => Some(Self::Ice),
             _ => None,
-        }
-    }
-
-    /// Returns the next brighter tone, used for cells under the sheen band.
-    fn lit(self) -> Self {
-        match self {
-            Self::Ice => Self::Body,
-            Self::Body | Self::Highlight => Self::Highlight,
         }
     }
 

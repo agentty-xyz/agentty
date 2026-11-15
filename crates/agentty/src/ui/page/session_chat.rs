@@ -153,7 +153,7 @@ pub struct SessionChatPageInput<'a> {
     /// relies on a second tone is painted.
     pub color_support: style::ColorSupport,
     /// Set when this render paints a nerpa greeting that can animate, so the
-    /// runtime only redraws at frame rate for visible sheen motion.
+    /// runtime only redraws at frame rate for visible tail motion.
     pub greeting_animated: &'a Cell<bool>,
     /// Whether the session branch currently conflicts with its base branch.
     pub has_merge_conflict: bool,

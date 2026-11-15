@@ -1385,7 +1385,7 @@ fn test_render_hides_right_nerpa_whiskers_without_colors() {
 }
 
 #[test]
-fn test_render_reports_greeting_animation_only_for_visible_colored_art() {
+fn test_render_reports_greeting_animation_only_for_visible_art() {
     // Arrange
     let fresh_session = session_fixture();
     let mut started_session = session_fixture();
@@ -1403,7 +1403,7 @@ fn test_render_reports_greeting_animation_only_for_visible_colored_art() {
 
     // Assert
     assert!(colored_animated);
-    assert!(!colorless_animated);
+    assert!(colorless_animated);
     assert!(!cramped_animated);
     assert!(!started_animated);
 }

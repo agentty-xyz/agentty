@@ -444,15 +444,15 @@ async fn render_frame_redraws_idle_ui_when_wall_clock_minute_changes() {
 }
 
 /// Wall time, in milliseconds after the Unix epoch, inside the nerpa
-/// greeting's sheen sweep.
-const GREETING_SWEEP_UNIX_MILLIS: u64 = 4_000;
+/// greeting's tail wag.
+const GREETING_WAG_UNIX_MILLIS: u64 = 5_000;
 
 /// Wall time, in milliseconds after the Unix epoch, just before the nerpa
-/// greeting's sheen sweep ends and the next cycle's rest begins.
-const GREETING_SWEEP_END_UNIX_MILLIS: u64 = 4_990;
+/// greeting's tail wag ends and the next cycle's rest begins.
+const GREETING_WAG_END_UNIX_MILLIS: u64 = 5_990;
 
 /// Verifies a visible nerpa greeting redraws on every frame tick while its
-/// sheen sweeps, while a spinner-only session keeps the slower forced redraw
+/// tail wags, while a spinner-only session keeps the slower forced redraw
 /// cadence.
 #[tokio::test]
 async fn render_frame_redraws_frame_animation_on_every_frame_tick() {
@@ -460,7 +460,7 @@ async fn render_frame_redraws_frame_animation_on_every_frame_tick() {
     let (mut app, _base_dir) = new_draft_greeting_app().await;
     let (backend, _clear_count, draw_count) = CountingBackend::new(80, 24);
     let mut terminal = Terminal::new(backend).expect("failed to create test terminal");
-    let clock_at_frame = greeting_clock_at_frame(GREETING_SWEEP_UNIX_MILLIS);
+    let clock_at_frame = greeting_clock_at_frame(GREETING_WAG_UNIX_MILLIS);
     let mut last_draw = DrawStamp::now(&clock_at_frame(0));
     let presentation = PresentationState::default();
     app.mark_dirty();
@@ -508,7 +508,7 @@ async fn render_frame_redraws_frame_animation_on_every_frame_tick() {
     assert_eq!(spinner_draw_count, greeting_draw_count);
 }
 
-/// Verifies a visible nerpa greeting draws once more after its sheen sweep
+/// Verifies a visible nerpa greeting draws once more after its tail wag
 /// ends, then keeps the slower forced redraw cadence while the art rests.
 #[tokio::test]
 async fn render_frame_skips_frame_ticks_while_greeting_rests() {
@@ -516,7 +516,7 @@ async fn render_frame_skips_frame_ticks_while_greeting_rests() {
     let (mut app, _base_dir) = new_draft_greeting_app().await;
     let (backend, _clear_count, draw_count) = CountingBackend::new(80, 24);
     let mut terminal = Terminal::new(backend).expect("failed to create test terminal");
-    let clock_at_frame = greeting_clock_at_frame(GREETING_SWEEP_END_UNIX_MILLIS);
+    let clock_at_frame = greeting_clock_at_frame(GREETING_WAG_END_UNIX_MILLIS);
     let mut last_draw = DrawStamp::now(&clock_at_frame(0));
     let presentation = PresentationState::default();
     app.mark_dirty();
@@ -527,8 +527,8 @@ async fn render_frame_skips_frame_ticks_while_greeting_rests() {
         &mut last_draw,
         &presentation,
     )
-    .expect("last sweep frame should render");
-    let sweep_draw_count = draw_count.load(Ordering::Relaxed);
+    .expect("last wag frame should render");
+    let wag_draw_count = draw_count.load(Ordering::Relaxed);
 
     // Act
     render_frame(
@@ -552,12 +552,12 @@ async fn render_frame_skips_frame_ticks_while_greeting_rests() {
 
     // Assert
     assert!(app.has_visible_frame_animation());
-    assert_eq!(first_rest_draw_count, sweep_draw_count + 1);
+    assert_eq!(first_rest_draw_count, wag_draw_count + 1);
     assert_eq!(second_rest_draw_count, first_rest_draw_count);
 }
 
 /// Verifies a draft session whose terminal is too small for the nerpa
-/// greeting keeps the slower forced redraw cadence during a sheen sweep,
+/// greeting keeps the slower forced redraw cadence during a tail wag,
 /// because no painted art can animate.
 #[tokio::test]
 async fn render_frame_skips_frame_ticks_when_greeting_is_hidden() {
@@ -565,7 +565,7 @@ async fn render_frame_skips_frame_ticks_when_greeting_is_hidden() {
     let (mut app, _base_dir) = new_draft_greeting_app().await;
     let (backend, _clear_count, draw_count) = CountingBackend::new(80, 12);
     let mut terminal = Terminal::new(backend).expect("failed to create test terminal");
-    let clock_at_frame = greeting_clock_at_frame(GREETING_SWEEP_UNIX_MILLIS);
+    let clock_at_frame = greeting_clock_at_frame(GREETING_WAG_UNIX_MILLIS);
     let mut last_draw = DrawStamp::now(&clock_at_frame(0));
     let presentation = PresentationState::default();
     app.mark_dirty();
