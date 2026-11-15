@@ -1,6 +1,6 @@
 use std::path::PathBuf;
 
-use crate::{ClipboardError, RgbaImageData};
+use crate::{ClipboardError, ClipboardImage};
 
 /// Declares [`ClipboardBackend`] with `$visibility`, so one definition is
 /// crate-private by default and public under the `test-utils` feature.
@@ -26,12 +26,17 @@ macro_rules! declare_clipboard_backend {
             /// payload or cannot complete the read.
             fn read_file_list(&mut self) -> Result<Vec<PathBuf>, ClipboardError>;
 
-            /// Reads image data as RGBA pixels.
+            /// Reads one image payload, querying each image source at most
+            /// once.
+            ///
+            /// Returns PNG payloads as their original encoded bytes without
+            /// decoding pixel data; other formats are decoded to RGBA.
             ///
             /// # Errors
             /// Returns a [`ClipboardError`] when the source has no image
-            /// payload, image decoding fails, or the read cannot complete.
-            fn read_image_rgba(&mut self) -> Result<RgbaImageData, ClipboardError>;
+            /// payload, a PNG header is invalid, decoding fails, or the read
+            /// cannot complete.
+            fn read_image(&mut self) -> Result<ClipboardImage, ClipboardError>;
         }
     };
 }

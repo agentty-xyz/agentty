@@ -17,6 +17,7 @@ use crate::backend::linux::{
     ClipboardBackendFactory, LinuxClipboardEnvironment, new_backend_with_factories,
 };
 use crate::error::ClipboardError;
+use crate::image_data::ClipboardImage;
 
 struct TestClipboardBackend;
 
@@ -103,12 +104,8 @@ impl ClipboardBackend for TestClipboardBackend {
         Ok(Vec::new())
     }
 
-    fn read_image_rgba(&mut self) -> Result<crate::RgbaImageData, ClipboardError> {
-        Ok(crate::RgbaImageData {
-            height: 0,
-            rgba_bytes: Vec::new(),
-            width: 0,
-        })
+    fn read_image(&mut self) -> Result<ClipboardImage, ClipboardError> {
+        Ok(ClipboardImage::Png(Vec::new()))
     }
 }
 
@@ -120,7 +117,7 @@ fn test_clipboard_backend_returns_empty_fixture_content() {
     // Act
     let text = backend.read_text();
     let files = backend.read_file_list();
-    let image = backend.read_image_rgba();
+    let image = backend.read_image();
 
     // Assert
     assert_eq!(text.expect("fixture text should load"), "");
@@ -130,11 +127,7 @@ fn test_clipboard_backend_returns_empty_fixture_content() {
     );
     assert_eq!(
         image.expect("fixture image should load"),
-        crate::RgbaImageData {
-            height: 0,
-            rgba_bytes: Vec::new(),
-            width: 0,
-        }
+        ClipboardImage::Png(Vec::new())
     );
 }
 

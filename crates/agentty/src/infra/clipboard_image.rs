@@ -7,7 +7,7 @@ use std::sync::Arc;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::UNIX_EPOCH;
 
-use ag_clipboard::Clipboard;
+use ag_clipboard::{Clipboard, ClipboardImage};
 use image::codecs::png::PngEncoder;
 use image::{ExtendedColorType, ImageEncoder};
 
@@ -295,6 +295,11 @@ fn is_png_path(path: &Path) -> bool {
 
 /// Reads one clipboard image payload on a blocking thread.
 ///
+/// Sources are tried in order: a copied PNG file, one clipboard image read,
+/// and finally a PNG path in clipboard text. An encoded PNG image is kept
+/// byte-for-byte, avoiding a decode and re-encode of large screenshots; other
+/// image data is re-encoded as PNG.
+///
 /// # Errors
 /// Returns an error when clipboard access fails, image encoding fails, or the
 /// clipboard does not contain a copied PNG file, image data, or a PNG file
@@ -309,12 +314,15 @@ async fn read_clipboard_payload(
 
         if let Ok(source_image_path) = clipboard_png_path_from_file_list(&mut clipboard) {
             Ok(ClipboardPayload::ExistingPngPath(source_image_path))
-        } else if let Ok(image_data) = clipboard.read_image_rgba() {
-            let encoded_png = encode_clipboard_image_to_png(
-                &image_data.rgba_bytes,
-                image_data.width,
-                image_data.height,
-            )?;
+        } else if let Ok(clipboard_image) = clipboard.read_image() {
+            let encoded_png = match clipboard_image {
+                ClipboardImage::Png(png_bytes) => png_bytes,
+                ClipboardImage::Rgba(image_data) => encode_clipboard_image_to_png(
+                    &image_data.rgba_bytes,
+                    image_data.width,
+                    image_data.height,
+                )?,
+            };
 
             Ok(ClipboardPayload::EncodedPng(encoded_png))
         } else {
@@ -345,7 +353,8 @@ async fn canonicalize_persisted_image_path(
 
 /// Clipboard image payload extracted on the blocking clipboard thread.
 enum ClipboardPayload {
-    /// Raw image bytes already encoded into PNG format.
+    /// Image bytes encoded as PNG, either copied from the clipboard or
+    /// re-encoded from decoded pixels.
     EncodedPng(Vec<u8>),
     /// Existing PNG file path referenced by clipboard text.
     ExistingPngPath(PathBuf),

@@ -1,13 +1,29 @@
 use std::path::PathBuf;
 use std::process::Command;
 
+use image::codecs::png::PngEncoder;
+use image::{ExtendedColorType, ImageEncoder};
+
 use crate::error::ClipboardError;
-use crate::image_data::RgbaImageData;
+use crate::image_data::{ClipboardImage, RgbaImageData};
 use crate::{Clipboard, DISABLE_CLIPBOARD_ENV, backend};
 
 const DISABLED_CONSTRUCTOR_CHILD_ENV: &str = "AGENTTY_TEST_DISABLED_CONSTRUCTOR_CHILD";
+const RED_PIXEL_RGBA: [u8; 4] = [255, 0, 0, 255];
 
-struct TestClipboardBackend;
+/// In-memory backend that serves fixed text, files, and one image payload.
+struct TestClipboardBackend {
+    image: ClipboardImage,
+}
+
+impl TestClipboardBackend {
+    /// Returns a backend whose image payload is a 1x1 red PNG.
+    fn with_png() -> Self {
+        Self {
+            image: ClipboardImage::Png(red_pixel_png_bytes()),
+        }
+    }
+}
 
 impl backend::ClipboardBackend for TestClipboardBackend {
     fn read_text(&mut self) -> Result<String, ClipboardError> {
@@ -18,12 +34,8 @@ impl backend::ClipboardBackend for TestClipboardBackend {
         Ok(vec![PathBuf::from("/tmp/test.txt")])
     }
 
-    fn read_image_rgba(&mut self) -> Result<RgbaImageData, ClipboardError> {
-        Ok(RgbaImageData {
-            height: 1,
-            rgba_bytes: vec![0, 0, 0, 255],
-            width: 1,
-        })
+    fn read_image(&mut self) -> Result<ClipboardImage, ClipboardError> {
+        Ok(self.image.clone())
     }
 }
 
@@ -90,7 +102,8 @@ fn test_new_with_backend_respects_disabled_error() {
 #[test]
 fn test_new_with_backend_accepts_infallible_backend() {
     // Arrange
-    let backend_factory = || Box::new(TestClipboardBackend) as Box<dyn backend::ClipboardBackend>;
+    let backend_factory =
+        || Box::new(TestClipboardBackend::with_png()) as Box<dyn backend::ClipboardBackend>;
 
     // Act
     let mut clipboard = Clipboard::new_with_backend(None, backend_factory)
@@ -102,21 +115,49 @@ fn test_new_with_backend_accepts_infallible_backend() {
         .read_file_list()
         .expect("test backend should return a file list");
     let image = clipboard
-        .read_image_rgba()
-        .expect("test backend should return image data");
+        .read_image()
+        .expect("test backend should return an image");
 
     // Assert
     assert_eq!(text, "test clipboard text");
     assert_eq!(paths, vec![PathBuf::from("/tmp/test.txt")]);
-    assert_eq!(image.width, 1);
-    assert_eq!(image.height, 1);
-    assert_eq!(image.rgba_bytes, vec![0, 0, 0, 255]);
+    assert_eq!(image, ClipboardImage::Png(red_pixel_png_bytes()));
+}
+
+#[test]
+fn test_read_image_rgba_decodes_png_payload() {
+    // Arrange
+    let mut clipboard = Clipboard::from_backend(Box::new(TestClipboardBackend::with_png()));
+
+    // Act
+    let image_data = clipboard
+        .read_image_rgba()
+        .expect("PNG payload should decode");
+
+    // Assert
+    assert_eq!(image_data, red_pixel_image_data());
+}
+
+#[test]
+fn test_read_image_rgba_returns_decoded_payload_unchanged() {
+    // Arrange
+    let mut clipboard = Clipboard::from_backend(Box::new(TestClipboardBackend {
+        image: ClipboardImage::Rgba(red_pixel_image_data()),
+    }));
+
+    // Act
+    let image_data = clipboard
+        .read_image_rgba()
+        .expect("RGBA payload should be returned");
+
+    // Assert
+    assert_eq!(image_data, red_pixel_image_data());
 }
 
 #[test]
 fn test_from_backend_reads_through_injected_backend() {
     // Arrange
-    let backend = Box::new(TestClipboardBackend);
+    let backend = Box::new(TestClipboardBackend::with_png());
 
     // Act
     let mut clipboard = Clipboard::from_backend(backend);
@@ -148,4 +189,21 @@ fn unavailable_backend_factory() -> Result<Box<dyn backend::ClipboardBackend>, C
     Err(ClipboardError::Unavailable {
         reason: "test backend is unavailable".to_string(),
     })
+}
+
+fn red_pixel_png_bytes() -> Vec<u8> {
+    let mut png_bytes = Vec::new();
+    PngEncoder::new(&mut png_bytes)
+        .write_image(&RED_PIXEL_RGBA, 1, 1, ExtendedColorType::Rgba8)
+        .expect("test PNG should encode");
+
+    png_bytes
+}
+
+fn red_pixel_image_data() -> RgbaImageData {
+    RgbaImageData {
+        height: 1,
+        rgba_bytes: RED_PIXEL_RGBA.to_vec(),
+        width: 1,
+    }
 }

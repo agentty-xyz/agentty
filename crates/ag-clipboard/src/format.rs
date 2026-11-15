@@ -1,4 +1,7 @@
+use std::io::Cursor;
+
 use image::ImageFormat;
+use image::codecs::png::PngDecoder;
 
 use crate::{ClipboardError, RgbaImageData};
 
@@ -18,6 +21,15 @@ pub(crate) fn decode_image_rgba(
         rgba_bytes: decoded_image.into_raw(),
         width,
     })
+}
+
+/// Returns `png_bytes` unchanged after checking the PNG signature and
+/// header chunks, without decoding pixel data.
+pub(crate) fn validate_png(png_bytes: Vec<u8>) -> Result<Vec<u8>, ClipboardError> {
+    PngDecoder::new(Cursor::new(png_bytes.as_slice()))
+        .map_err(|error| ClipboardError::image_conversion("invalid clipboard PNG header", error))?;
+
+    Ok(png_bytes)
 }
 
 #[cfg(test)]
