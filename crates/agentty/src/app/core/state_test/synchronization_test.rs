@@ -1499,9 +1499,9 @@ async fn apply_branch_publish_action_update_persists_gitlab_merge_request_notice
 
     // Act
     app.apply_branch_publish_action_update(BranchPublishActionUpdate {
+        operation_id: None,
         result: Ok(BranchPublishTaskSuccess::PullRequestPublished {
             branch_name: "wt/session-1".to_string(),
-            is_created: false,
             review_request,
             upstream_reference: "origin/wt/session-1".to_string(),
         }),

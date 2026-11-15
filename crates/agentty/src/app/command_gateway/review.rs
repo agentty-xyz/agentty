@@ -28,6 +28,12 @@ impl ReviewRequestCommand {
             remote_branch_name,
         }
     }
+
+    /// Returns the worker operation identity reported by this publication's
+    /// completion or resolution event.
+    pub(crate) fn operation_id(&self) -> &str {
+        &self.operation_id
+    }
 }
 
 impl App {

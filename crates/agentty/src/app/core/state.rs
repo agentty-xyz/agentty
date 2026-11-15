@@ -1476,31 +1476,22 @@ impl App {
     }
 
     /// Starts the session-view branch-publish action flow for one session.
+    ///
+    /// Returns whether the action was admitted, so it reports exactly one
+    /// `BranchPublishActionCompleted` or, for a queued publication that never
+    /// runs, `BranchPublishActionResolved`.
     pub(crate) async fn start_publish_branch_action(
         &mut self,
         restore_view: ConfirmationViewMode,
         session_id: &str,
         publish_branch_action: PublishBranchAction,
         remote_branch_name: Option<String>,
-    ) {
+    ) -> bool {
         if publish_branch_action == PublishBranchAction::PublishPullRequest {
-            let command = ReviewRequestCommand::new(session_id.into(), remote_branch_name);
-            if matches!(
-                self.admit_review_request(command, None).await,
-                Err(ag_session::SessionError::NotFound)
-            ) {
-                self.mode = Self::view_info_popup_mode(
-                    "Branch push failed".to_string(),
-                    "Session is no longer available.".to_string(),
-                    false,
-                    String::new(),
-                    restore_view,
-                );
-            } else {
-                self.mode = restore_view.into_view_mode();
-            }
-
-            return;
+            return self
+                .start_review_request_publish(restore_view, session_id, remote_branch_name)
+                .await
+                .is_some();
         }
 
         let Some(branch_publish_context) = self.branch_publish_task_context(session_id) else {
@@ -1512,7 +1503,7 @@ impl App {
                 restore_view,
             );
 
-            return;
+            return false;
         };
 
         let loading_label = Self::branch_publish_loading_label(publish_branch_action);
@@ -1540,10 +1531,43 @@ impl App {
             .await;
             // Fire-and-forget: receiver may be dropped during shutdown.
             let _ = event_sender.send(AppEvent::BranchPublishActionCompleted {
+                operation_id: None,
                 result: Box::new(result),
                 session_id: event_session_id,
             });
         });
+
+        true
+    }
+
+    /// Admits one review-request publication for `session_id` from session
+    /// view.
+    ///
+    /// Returns the admitted worker operation id, which its single
+    /// `BranchPublishActionCompleted` or `BranchPublishActionResolved` event
+    /// reports.
+    pub(crate) async fn start_review_request_publish(
+        &mut self,
+        restore_view: ConfirmationViewMode,
+        session_id: &str,
+        remote_branch_name: Option<String>,
+    ) -> Option<String> {
+        let command = ReviewRequestCommand::new(session_id.into(), remote_branch_name);
+        let operation_id = command.operation_id().to_string();
+        let admission = self.admit_review_request(command, None).await;
+        if matches!(admission, Err(ag_session::SessionError::NotFound)) {
+            self.mode = Self::view_info_popup_mode(
+                "Branch push failed".to_string(),
+                "Session is no longer available.".to_string(),
+                false,
+                String::new(),
+                restore_view,
+            );
+        } else {
+            self.mode = restore_view.into_view_mode();
+        }
+
+        admission.is_ok().then_some(operation_id)
     }
 
     /// Returns all configured launch configurations in user-defined order.

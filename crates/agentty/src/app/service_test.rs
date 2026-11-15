@@ -235,6 +235,7 @@ fn app_event_label_names_branch_publish_starts() {
 fn app_event_label_names_branch_publish_resolutions() {
     // Arrange
     let event = AppEvent::BranchPublishActionResolved {
+        operation_id: "operation-id".to_string(),
         session_id: "session-id".into(),
     };
 
@@ -859,6 +860,7 @@ fn session_event_labels_preserve_variant_identity() {
             session_id: session_id.clone(),
         },
         AppEvent::BranchPublishActionCompleted {
+            operation_id: None,
             result: Box::new(Err(BranchPublishTaskFailure {
                 is_blocked: false,
                 message: "offline".to_string(),

@@ -1204,6 +1204,7 @@ async fn push_action_still_dispatches_through_background_publish_path() {
     assert!(matches!(
         completion_event,
         AppEvent::BranchPublishActionCompleted {
+            operation_id: None,
             result,
             session_id: completed_session_id,
         } if completed_session_id == session_id
@@ -1575,6 +1576,7 @@ async fn apply_branch_publish_action_persists_result_for_unloaded_project() {
 
     // Act
     app.apply_branch_publish_action_update(BranchPublishActionUpdate {
+        operation_id: None,
         result: Ok(BranchPublishTaskSuccess::Pushed {
             branch_name: "wt/session-1".to_string(),
             review_request_creation: None,
@@ -1623,6 +1625,7 @@ async fn apply_branch_publish_action_persists_result_for_unloaded_project() {
 
     // Act
     app.apply_branch_publish_action_update(BranchPublishActionUpdate {
+        operation_id: None,
         result: Err(BranchPublishTaskFailure::failed(
             PublishBranchAction::PublishPullRequest,
             "remote rejected".to_string(),
@@ -1672,9 +1675,9 @@ async fn apply_branch_publish_action_update_persists_pull_request_notice() {
 
     // Act
     app.apply_branch_publish_action_update(BranchPublishActionUpdate {
+        operation_id: None,
         result: Ok(BranchPublishTaskSuccess::PullRequestPublished {
             branch_name: "wt/session-1".to_string(),
-            is_created: false,
             review_request: review_request.clone(),
             upstream_reference: "origin/wt/session-1".to_string(),
         }),
@@ -1775,9 +1778,9 @@ async fn apply_branch_publish_action_persists_review_request_for_unloaded_projec
 
     // Act
     app.apply_branch_publish_action_update(BranchPublishActionUpdate {
+        operation_id: None,
         result: Ok(BranchPublishTaskSuccess::PullRequestPublished {
             branch_name: "wt/session-1".to_string(),
-            is_created: false,
             review_request,
             upstream_reference: "origin/wt/session-1".to_string(),
         }),
@@ -1850,6 +1853,7 @@ async fn apply_branch_publish_resolved_retracts_waiting_row() {
 
     // Act
     app.apply_app_events(AppEvent::BranchPublishActionResolved {
+        operation_id: "operation-1".to_string(),
         session_id: "session-1".into(),
     })
     .await;
@@ -1877,6 +1881,7 @@ async fn apply_branch_publish_action_update_keeps_active_mode_on_failure() {
 
     // Act
     app.apply_branch_publish_action_update(BranchPublishActionUpdate {
+        operation_id: None,
         result: Err(BranchPublishTaskFailure::failed(
             PublishBranchAction::PublishPullRequest,
             "remote rejected".to_string(),
@@ -2028,10 +2033,12 @@ fn app_event_batch_collect_event_preserves_reviews_for_request_validation() {
         request_id: uuid::Uuid::nil(),
     });
     event_batch.collect_event(AppEvent::BranchPublishActionCompleted {
+        operation_id: Some("operation-a".to_string()),
         result: Box::new(Ok(test_pushed_branch_result("feature/first"))),
         session_id: "session-a".into(),
     });
     event_batch.collect_event(AppEvent::BranchPublishActionCompleted {
+        operation_id: None,
         result: Box::new(Ok(test_pushed_branch_result("feature/final"))),
         session_id: "session-b".into(),
     });
@@ -2039,6 +2046,7 @@ fn app_event_batch_collect_event_preserves_reviews_for_request_validation() {
         session_id: "session-a".into(),
     });
     event_batch.collect_event(AppEvent::BranchPublishActionResolved {
+        operation_id: "operation-b".to_string(),
         session_id: "session-b".into(),
     });
     event_batch.collect_event(AppEvent::SessionQueuedSyncResolved {
@@ -2079,10 +2087,12 @@ fn app_event_batch_collect_event_preserves_reviews_for_request_validation() {
         event_batch.branch_publish_action_updates,
         vec![
             BranchPublishActionUpdate {
+                operation_id: Some("operation-a".to_string()),
                 result: Ok(test_pushed_branch_result("feature/first")),
                 session_id: "session-a".into(),
             },
             BranchPublishActionUpdate {
+                operation_id: None,
                 result: Ok(test_pushed_branch_result("feature/final")),
                 session_id: "session-b".into(),
             },
@@ -2120,6 +2130,7 @@ async fn apply_app_events_branch_publish_action_sets_inline_success() {
 
     // Act
     app.apply_app_events(AppEvent::BranchPublishActionCompleted {
+        operation_id: None,
         result: Box::new(Ok(BranchPublishTaskSuccess::Pushed {
             branch_name: "wt/session-1".to_string(),
             review_request_creation: Some(crate::app::branch_publish::ReviewRequestCreationInfo {

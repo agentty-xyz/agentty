@@ -1,5 +1,7 @@
 //! Review-request watch tests.
 
+use std::sync::Arc;
+
 use ag_forge::{
     ReviewCheckFailure, ReviewComment, ReviewCommentAnchorSide, ReviewCommentThread,
     ReviewRequestAttention,
@@ -8,13 +10,14 @@ use ag_forge::{
 use super::{
     ReviewWatchAction, ReviewWatchState, build_fix_failed_checks_prompt, retain_current_keys,
 };
-use crate::app::branch_publish::BranchPublishTaskSuccess;
+use crate::app::branch_publish::{BranchPublishTaskFailure, BranchPublishTaskSuccess};
 use crate::app::core::SyncReviewRequestTaskResult;
 use crate::app::session::SyncReviewRequestOutcome;
 use crate::app::sync::{ProjectSyncContext, ProjectSyncPhase, ProjectSyncStatus};
-use crate::app::{App, AppEvent, Tab};
+use crate::app::{App, AppEvent};
 use crate::domain::session::{
-    ForgeKind, ReviewRequest, ReviewRequestState, ReviewRequestSummary, SessionId, Status,
+    ForgeKind, PublishBranchAction, ReviewRequest, ReviewRequestState, ReviewRequestSummary,
+    SessionId, Status,
 };
 use crate::domain::session_message::SessionTranscript;
 use crate::domain::turn_prompt::TurnPromptTextSource;
@@ -329,92 +332,212 @@ async fn watch_state_loads_persisted_rows_and_tolerates_storage_failure() {
     assert!(!failed.is_watched(&session_id));
 }
 
+/// Builds the session view restored by publication for `session_id`.
+fn publish_restore_view(session_id: &str) -> ConfirmationViewMode {
+    ConfirmationViewMode {
+        scroll_offset: Some(3),
+        session_id: SessionId::from(session_id),
+    }
+}
+
+/// Returns whether publication was attempted for a session that no longer
+/// exists, which reports the missing session instead of pushing.
+fn reported_missing_session_publish(app: &App) -> bool {
+    matches!(
+        &app.mode,
+        AppMode::ViewInfoPopup { message, title, .. }
+            if title == "Branch push failed" && message == "Session is no longer available."
+    )
+}
+
 #[tokio::test]
-async fn watch_offer_opens_once_for_an_open_unwatched_review_request() {
+async fn publishing_an_unpushed_branch_asks_to_watch_before_pushing() {
     // Arrange
     let (mut app, _base_dir) = new_git_test_app().await;
-    let session_id = seed_review_session(&mut app, Status::Review, ReviewRequestState::Open).await;
-    app.tabs = crate::app::TabManager::new(Tab::Sessions);
-    app.mode = AppMode::List;
+    let restore_view = publish_restore_view("missing-session");
 
     // Act
-    app.offer_review_watch(session_id.clone());
-    app.offer_review_watch(session_id.clone());
-    app.present_review_watch_offer();
-    let offered_mode = std::mem::replace(&mut app.mode, AppMode::List);
-    app.present_review_watch_offer();
+    app.submit_review_request_publish(
+        restore_view.clone(),
+        Some("review/topic".to_string()),
+        false,
+    )
+    .await;
 
     // Assert
     assert!(matches!(
-        &offered_mode,
+        &app.mode,
         AppMode::Confirmation {
-            confirmation_intent: ConfirmationIntent::WatchReviewRequest,
+            confirmation_intent: ConfirmationIntent::WatchPublishedReviewRequest,
             confirmation_message,
             confirmation_title,
-            restore_view: None,
-            session_id: Some(offered_session_id),
+            restore_view: Some(confirmation_restore_view),
+            session_id: Some(confirmation_session_id),
             selected_confirmation_index: 1,
-        } if confirmation_title == "Watch PR #42"
+        } if confirmation_title == "Watch Review Request"
             && confirmation_message == "Auto-resolve checks, comments, conflicts?"
-            && *offered_session_id == session_id
+            && *confirmation_restore_view == restore_view
+            && confirmation_session_id == "missing-session"
     ));
+    let pending_publish = app
+        .review_watch
+        .pending_publish
+        .as_ref()
+        .expect("held publication");
+    assert_eq!(
+        pending_publish.remote_branch_name.as_deref(),
+        Some("review/topic")
+    );
+    assert_eq!(pending_publish.restore_view, restore_view);
+}
+
+#[tokio::test]
+async fn answering_the_watch_question_publishes_without_keeping_rejected_watches() {
+    // Arrange
+    let (mut app, _base_dir) = new_git_test_app().await;
+    let session_id = SessionId::from("missing-session");
+
+    // Act
+    app.submit_review_request_publish(publish_restore_view(&session_id), None, false)
+        .await;
+    app.answer_review_watch_before_publish(true).await;
+    let accepted_publishes = reported_missing_session_publish(&app);
+    let rejected_keeps_watch = !app.review_watch.watch_on_publish.is_empty();
+    app.submit_review_request_publish(publish_restore_view(&session_id), None, false)
+        .await;
+    app.answer_review_watch_before_publish(false).await;
+    let declined_publishes = reported_missing_session_publish(&app);
+    app.mode = AppMode::List;
+    app.answer_review_watch_before_publish(true).await;
+
+    // Assert
+    assert!(accepted_publishes);
+    assert!(!rejected_keeps_watch);
+    assert!(declined_publishes);
+    assert!(app.review_watch.watch_on_publish.is_empty());
+    assert!(app.review_watch.pending_publish.is_none());
     assert!(matches!(app.mode, AppMode::List));
 }
 
 #[tokio::test]
-async fn watch_offer_waits_for_an_idle_page_and_restores_the_viewed_session() {
+async fn admitted_watch_answer_is_kept_until_its_own_publication_resolves() {
     // Arrange
     let (mut app, _base_dir) = new_git_test_app().await;
-    let session_id = seed_review_session(&mut app, Status::Review, ReviewRequestState::Open).await;
-    let view = ConfirmationViewMode {
-        scroll_offset: Some(3),
-        session_id: session_id.clone(),
-    };
-    app.offer_review_watch(session_id);
+    let session_id = SessionId::from(app.create_session().await.expect("session"));
+    let branch_operation_lock = Arc::clone(
+        &app.sessions
+            .session_handles_or_err(&session_id)
+            .expect("handles")
+            .branch_operation_lock,
+    );
+    let _running_publish_guard = branch_operation_lock.lock_owned().await;
 
     // Act
-    app.tabs = crate::app::TabManager::new(Tab::Settings);
-    app.mode = AppMode::List;
-    app.present_review_watch_offer();
-    let stays_on_settings = matches!(app.mode, AppMode::List);
-    app.mode = view.clone().into_view_mode();
-    app.present_review_watch_offer();
+    app.submit_review_request_publish(publish_restore_view(&session_id), None, false)
+        .await;
+    app.answer_review_watch_before_publish(true).await;
+    let watched_operation_ids = app.review_watch.watch_on_publish.clone();
+    app.apply_app_events(AppEvent::BranchPublishActionResolved {
+        operation_id: "other-publish".to_string(),
+        session_id: session_id.clone(),
+    })
+    .await;
+    let other_resolution_keeps_watch = app.review_watch.watch_on_publish == watched_operation_ids;
+    let operation_id = watched_operation_ids
+        .iter()
+        .next()
+        .expect("admitted publication watch")
+        .clone();
+    app.apply_app_events(AppEvent::BranchPublishActionResolved {
+        operation_id,
+        session_id: session_id.clone(),
+    })
+    .await;
 
     // Assert
-    assert!(stays_on_settings);
-    assert!(matches!(
-        &app.mode,
-        AppMode::Confirmation {
-            restore_view: Some(restore_view),
-            ..
-        } if *restore_view == view
-    ));
+    assert_eq!(watched_operation_ids.len(), 1);
+    assert!(other_resolution_keeps_watch);
+    assert!(app.review_watch.watch_on_publish.is_empty());
 }
 
 #[tokio::test]
-async fn watch_offer_skips_sessions_that_can_no_longer_be_watched() {
+async fn other_publication_of_the_session_does_not_consume_the_watch_answer() {
+    // Arrange
+    let (mut app, _base_dir) = new_git_test_app().await;
+    let session_id = SessionId::from("session-1");
+    app.review_watch
+        .watch_on_publish
+        .insert("approved-publish".to_string());
+
+    // Act
+    app.apply_app_events(publish_completed_event(&session_id, "other-publish", false))
+        .await;
+
+    // Assert
+    assert!(
+        app.review_watch
+            .watch_on_publish
+            .contains("approved-publish")
+    );
+    assert!(!app.review_watch.is_watched(&session_id));
+}
+
+#[tokio::test]
+async fn pushed_or_watched_sessions_publish_without_asking() {
+    // Arrange
+    let (mut app, _base_dir) = new_git_test_app().await;
+    let pushed_session_id = SessionId::from("pushed-session");
+    let watched_session_id = SessionId::from("watched-session");
+    app.review_watch
+        .handled_keys
+        .insert(watched_session_id.clone(), Vec::new());
+
+    // Act
+    app.submit_review_request_publish(publish_restore_view(&pushed_session_id), None, true)
+        .await;
+    let pushed_publishes = reported_missing_session_publish(&app);
+    app.submit_review_request_publish(publish_restore_view(&watched_session_id), None, false)
+        .await;
+
+    // Assert
+    assert!(pushed_publishes);
+    assert!(reported_missing_session_publish(&app));
+    assert!(app.review_watch.watch_on_publish.is_empty());
+    assert!(app.review_watch.pending_publish.is_none());
+}
+
+#[tokio::test]
+async fn watch_confirmation_opens_only_for_an_open_unwatched_review_request() {
     // Arrange
     let (mut app, _base_dir) = new_git_test_app().await;
     let session_id =
         seed_review_session(&mut app, Status::Review, ReviewRequestState::Merged).await;
-    app.tabs = crate::app::TabManager::new(Tab::Sessions);
-    app.mode = AppMode::List;
-    app.offer_review_watch(SessionId::from("missing-session"));
-    app.offer_review_watch(session_id.clone());
+    let restore_view = publish_restore_view(&session_id);
 
     // Act
-    app.present_review_watch_offer();
-    let merged_stays_closed = matches!(app.mode, AppMode::List);
+    let merged_opens = app.open_review_watch_confirmation(&session_id, None);
     app.sessions.apply_review_request(
         &session_id,
         review_request(ForgeKind::GitHub, ReviewRequestState::Open),
     );
+    let open_opens = app.open_review_watch_confirmation(&session_id, Some(restore_view.clone()));
+    let offered_mode = std::mem::replace(&mut app.mode, AppMode::List);
     app.enable_review_watch(&session_id).await;
     let watched_opens = app.open_review_watch_confirmation(&session_id, None);
 
     // Assert
-    assert!(merged_stays_closed);
-    assert!(app.review_watch.pending_offers.is_empty());
+    assert!(!merged_opens);
+    assert!(open_opens);
+    assert!(matches!(
+        &offered_mode,
+        AppMode::Confirmation {
+            confirmation_intent: ConfirmationIntent::WatchReviewRequest,
+            confirmation_title,
+            restore_view: Some(confirmation_restore_view),
+            selected_confirmation_index: 1,
+            ..
+        } if confirmation_title == "Watch PR #42" && *confirmation_restore_view == restore_view
+    ));
     assert!(!watched_opens);
 }
 
@@ -945,15 +1068,29 @@ async fn conflict_follow_up_blocked_by_a_project_sync_starts_on_the_next_report(
     );
 }
 
-/// Builds one completed review-request publish event for `session_id`.
-fn publish_completed_event(session_id: &SessionId, is_created: bool) -> AppEvent {
-    AppEvent::BranchPublishActionCompleted {
-        result: Box::new(Ok(BranchPublishTaskSuccess::PullRequestPublished {
+/// Builds one completed review-request publish event for `session_id` and its
+/// worker `operation_id`.
+fn publish_completed_event(
+    session_id: &SessionId,
+    operation_id: &str,
+    is_published: bool,
+) -> AppEvent {
+    let result = if is_published {
+        Ok(BranchPublishTaskSuccess::PullRequestPublished {
             branch_name: "wt/session".to_string(),
-            is_created,
             review_request: review_request(ForgeKind::GitHub, ReviewRequestState::Open),
             upstream_reference: "origin/wt/session".to_string(),
-        })),
+        })
+    } else {
+        Err(BranchPublishTaskFailure::failed(
+            PublishBranchAction::PublishPullRequest,
+            "push rejected".to_string(),
+        ))
+    };
+
+    AppEvent::BranchPublishActionCompleted {
+        operation_id: Some(operation_id.to_string()),
+        result: Box::new(result),
         session_id: session_id.clone(),
     }
 }
@@ -991,24 +1128,149 @@ fn status_updated_event(
 }
 
 #[tokio::test]
-async fn only_a_newly_created_review_request_offers_watching() {
+async fn finished_publication_starts_watching_only_when_requested() {
     // Arrange
     let (mut app, _base_dir) = new_git_test_app().await;
     let session_id = seed_review_session(&mut app, Status::Review, ReviewRequestState::Open).await;
 
     // Act
-    app.apply_app_events(publish_completed_event(&session_id, false))
+    app.apply_app_events(publish_completed_event(&session_id, "unrequested", true))
         .await;
-    let refreshed_offers = app.review_watch.pending_offers.len();
-    app.apply_app_events(publish_completed_event(&session_id, true))
+    let unrequested_is_watched = app.review_watch.is_watched(&session_id);
+    app.review_watch
+        .watch_on_publish
+        .insert("failed".to_string());
+    app.apply_app_events(publish_completed_event(&session_id, "failed", false))
+        .await;
+    let failed_is_watched = app.review_watch.is_watched(&session_id);
+    let failed_keeps_request = !app.review_watch.watch_on_publish.is_empty();
+    app.review_watch
+        .watch_on_publish
+        .insert("published".to_string());
+    app.apply_app_events(publish_completed_event(&session_id, "published", true))
         .await;
 
     // Assert
-    assert_eq!(refreshed_offers, 0);
+    assert!(!unrequested_is_watched);
+    assert!(!failed_is_watched);
+    assert!(!failed_keeps_request);
+    assert!(app.review_watch.is_watched(&session_id));
+    assert!(app.review_watch.watch_on_publish.is_empty());
+    assert_eq!(handle_status(&app, &session_id), Status::Watching);
+    let transcript = transcript(&app, &session_id);
+    let created_notice = transcript
+        .find("[Review Request] Created PR")
+        .expect("created notice");
+    let watching_notice = transcript
+        .find("[Review Watch] Watching pull request #42")
+        .expect("watching notice");
+    assert!(created_notice < watching_notice, "{transcript}");
+}
+
+#[tokio::test]
+async fn finished_publication_starts_watching_after_its_project_is_unloaded() {
+    // Arrange
+    let (mut app, _base_dir) = new_git_test_app().await;
+    let session_id = SessionId::from(app.create_session().await.expect("session"));
+    app.sessions.state_mut().replace_sessions(Vec::new());
+    app.review_watch
+        .watch_on_publish
+        .insert("published".to_string());
+
+    // Act
+    app.apply_app_events(publish_completed_event(&session_id, "published", true))
+        .await;
+
+    // Assert
+    assert!(app.review_watch.is_watched(&session_id));
+    assert!(app.review_watch.watch_on_publish.is_empty());
+    let persisted_rows = app
+        .services
+        .db()
+        .reviews()
+        .load_session_review_watches()
+        .await
+        .expect("watch rows");
     assert_eq!(
-        app.review_watch.pending_offers,
-        std::collections::VecDeque::from([session_id])
+        persisted_rows,
+        vec![SessionReviewWatchRow {
+            handled_keys: Vec::new(),
+            session_id: session_id.to_string(),
+        }]
     );
+    let persisted_messages = app
+        .services
+        .db()
+        .sessions()
+        .load_session_messages(&session_id)
+        .await
+        .expect("session messages");
+    assert!(
+        persisted_messages.iter().any(|message| message
+            .content
+            .contains("[Review Watch] Watching pull request #42")),
+        "{persisted_messages:?}"
+    );
+    assert!(transcript(&app, &session_id).contains("[Review Watch] Watching pull request #42"));
+}
+
+#[tokio::test]
+async fn finished_publication_watches_a_session_without_runtime_handles() {
+    // Arrange
+    let (mut app, _base_dir) = new_git_test_app().await;
+    let session_id = SessionId::from(app.create_session().await.expect("session"));
+    app.sessions.state_mut().replace_sessions(Vec::new());
+    app.sessions.session_handles_mut().remove(&session_id);
+    app.review_watch
+        .watch_on_publish
+        .insert("published".to_string());
+
+    // Act
+    app.apply_app_events(publish_completed_event(&session_id, "published", true))
+        .await;
+
+    // Assert
+    assert!(app.review_watch.is_watched(&session_id));
+    let persisted_messages = app
+        .services
+        .db()
+        .sessions()
+        .load_session_messages(&session_id)
+        .await
+        .expect("session messages");
+    assert!(
+        !persisted_messages
+            .iter()
+            .any(|message| message.content.contains("[Review Watch]")),
+        "{persisted_messages:?}"
+    );
+}
+
+#[tokio::test]
+async fn finished_publication_does_not_watch_a_review_request_that_is_not_open() {
+    // Arrange
+    let (mut app, _base_dir) = new_git_test_app().await;
+    let session_id = seed_review_session(&mut app, Status::Review, ReviewRequestState::Open).await;
+    app.review_watch
+        .watch_on_publish
+        .insert("published".to_string());
+
+    // Act
+    app.apply_app_events(AppEvent::BranchPublishActionCompleted {
+        operation_id: Some("published".to_string()),
+        result: Box::new(Ok(BranchPublishTaskSuccess::PullRequestPublished {
+            branch_name: "wt/session".to_string(),
+            review_request: review_request(ForgeKind::GitHub, ReviewRequestState::Merged),
+            upstream_reference: "origin/wt/session".to_string(),
+        })),
+        session_id: session_id.clone(),
+    })
+    .await;
+
+    // Assert
+    assert!(!app.review_watch.is_watched(&session_id));
+    assert!(app.review_watch.watch_on_publish.is_empty());
+    assert!(!transcript(&app, &session_id).contains("[Review Watch]"));
 }
 
 #[tokio::test]

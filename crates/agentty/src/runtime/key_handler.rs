@@ -8,7 +8,7 @@ use ratatui::layout::{Constraint, Layout, Rect};
 use tracing::warn;
 
 use crate::app::App;
-use crate::domain::session::{SessionId, can_append_session_to_stack};
+use crate::domain::session::{PublishBranchAction, SessionId, can_append_session_to_stack};
 use crate::domain::transcript_notice::TranscriptNotice;
 use crate::presentation::app_mode::{
     AppMode, ConfirmationIntent, ConfirmationViewMode, DiffSidebarFocus,
@@ -604,15 +604,25 @@ async fn handle_publish_branch_input_key(app: &mut App, key: KeyEvent) -> EventR
                 (!publish_branch_input.input.text().trim().is_empty())
                     .then(|| publish_branch_input.input.text().trim().to_string())
             };
-            let session_id = publish_branch_input.restore_view.session_id.clone();
+            if publish_branch_input.publish_branch_action == PublishBranchAction::PublishPullRequest
+            {
+                app.submit_review_request_publish(
+                    publish_branch_input.restore_view,
+                    remote_branch_name,
+                    input_locked,
+                )
+                .await;
+            } else {
+                let session_id = publish_branch_input.restore_view.session_id.clone();
 
-            app.start_publish_branch_action(
-                publish_branch_input.restore_view,
-                &session_id,
-                publish_branch_input.publish_branch_action,
-                remote_branch_name,
-            )
-            .await;
+                app.start_publish_branch_action(
+                    publish_branch_input.restore_view,
+                    &session_id,
+                    publish_branch_input.publish_branch_action,
+                    remote_branch_name,
+                )
+                .await;
+            }
         }
         _ if !input_locked => {
             app.mode = if let Some(command) = mode::input_key::command_for_key(
@@ -640,7 +650,7 @@ struct PublishBranchInputModeState {
     default_branch_name: String,
     input: crate::domain::input::InputState,
     locked_upstream_ref: Option<String>,
-    publish_branch_action: crate::domain::session::PublishBranchAction,
+    publish_branch_action: PublishBranchAction,
     restore_view: ConfirmationViewMode,
 }
 
@@ -785,6 +795,20 @@ async fn handle_confirmation_decision(
 ) -> io::Result<EventResult> {
     match decision {
         ConfirmationDecision::Confirm => handle_confirmation_confirm(app).await,
+        // Declining the pre-publish watch question still publishes.
+        ConfirmationDecision::Reject
+            if matches!(
+                app.mode,
+                AppMode::Confirmation {
+                    confirmation_intent: ConfirmationIntent::WatchPublishedReviewRequest,
+                    ..
+                }
+            ) =>
+        {
+            app.answer_review_watch_before_publish(false).await;
+
+            Ok(EventResult::Continue)
+        }
         ConfirmationDecision::Reject | ConfirmationDecision::Cancel => {
             app.mode = confirmation_cancel_mode(&app.mode);
 
@@ -802,6 +826,7 @@ fn confirmation_cancel_mode(mode: &AppMode) -> AppMode {
             | ConfirmationIntent::ForkSession
             | ConfirmationIntent::MergeSession
             | ConfirmationIntent::RegenerateReview
+            | ConfirmationIntent::WatchPublishedReviewRequest
             | ConfirmationIntent::WatchReviewRequest,
         restore_view: Some(restore_view),
         ..
@@ -853,6 +878,11 @@ async fn handle_confirmation_confirm(app: &mut App) -> io::Result<EventResult> {
             confirmation_session_id,
             restore_view,
         )),
+        ConfirmationIntent::WatchPublishedReviewRequest => {
+            app.answer_review_watch_before_publish(true).await;
+
+            Ok(EventResult::Continue)
+        }
         ConfirmationIntent::WatchReviewRequest => {
             handle_watch_review_request_confirmation(app, confirmation_session_id, restore_view)
                 .await

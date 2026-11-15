@@ -602,7 +602,8 @@ async fn review_request_publish_recreates_deleted_remote_branch() -> E2eResult {
                     .wait_for_text("Publish Review Request", 5000)
                     .write_text("review/deleted")
                     .press_key("Enter")
-                    .compose(&common::decline_watch_offer_for_created_review_request())
+                    .compose(&common::decline_review_watch_before_publish())
+                    .wait_for_text("[Review Request] Created PR", 15000)
                     .capture_labeled(
                         "deleted_remote_branch_recreated",
                         "Review request published after its former remote branch was deleted",
@@ -659,6 +660,7 @@ async fn review_request_publish_runs_in_background() -> E2eResult {
                     .press_key("p")
                     .wait_for_text("Publish Review Request", 5000)
                     .press_key("Enter")
+                    .compose(&common::decline_review_watch_before_publish())
                     .wait_for_text("Publishing review request...", 3000)
                     .capture_labeled(
                         "background_publish_started",
@@ -679,8 +681,7 @@ async fn review_request_publish_runs_in_background() -> E2eResult {
                         "Review-request publish progress remains until its URL is ready",
                     )
                     .compose(&create.release())
-                    .wait_for_text("Auto-resolve checks", 20000)
-                    .compose(&common::decline_watch_offer_for_created_review_request())
+                    .wait_for_text("[Review Request] Created PR", 20000)
                     .capture_labeled(
                         "background_publish_finished",
                         "Review-request link recorded in session transcript history",
@@ -751,6 +752,7 @@ async fn review_request_notice_follows_completed_review() -> E2eResult {
                     .press_key("p")
                     .wait_for_text("Publish Review Request", 3000)
                     .press_key("Enter")
+                    .compose(&common::decline_review_watch_before_publish())
                     .wait_for_text(REVIEW_REQUEST_TIMELINE_NOTICE_TEXT, 10000)
                     .wait_for_stable_frame(300, 5000)
                     .capture_labeled(
@@ -1162,11 +1164,73 @@ async fn seed_watched_review_request_publish(
     Ok(())
 }
 
-/// Verify that creating a review request offers to watch it, that accepting
-/// moves the session to `Watching`, and that a failing check then starts an
-/// automatic follow-up.
+/// Seeds a review-request publish for a session whose branch already has a
+/// published upstream, so the publish popup locks the branch field.
+async fn seed_pushed_branch_review_request_publish(
+    env: &BuilderEnv,
+) -> Result<(), Box<dyn std::error::Error>> {
+    seed_review_ready_session(env).await?;
+    seed_review_worktree_with_diff(env)?;
+    seed_successful_review_request_publish(env, ":", ":", "wt/review-s", false)?;
+
+    let database = common::open_database(env).await?;
+    database
+        .sessions()
+        .update_session_published_upstream_ref(
+            "review-shortcut-0001",
+            Some("origin/wt/review-s".to_string()),
+        )
+        .await?;
+
+    Ok(())
+}
+
+/// Verify that publishing a review request for an already pushed branch
+/// creates it right away without asking whether to watch it.
 #[tokio::test]
-async fn created_review_request_offers_watching_and_follows_up_on_failed_checks() -> E2eResult {
+async fn review_request_publish_skips_watch_question_for_pushed_branch() -> E2eResult {
+    // Arrange, Act, Assert
+    FeatureTest::new("review_request_pushed_branch_without_watch_question")
+        .with_git()
+        .setup(|env| Box::pin(async move { seed_pushed_branch_review_request_publish(env).await }))
+        .run(
+            |scenario| {
+                scenario
+                    .compose(&common::wait_for_agentty_startup())
+                    .compose(&common::switch_to_tab("Sessions"))
+                    .compose(&common::open_selected_session_view())
+                    .press_key("p")
+                    .wait_for_text("Publish Review Request", 5000)
+                    .press_key("Enter")
+                    .wait_for_text("[Review Request] Created PR", 15000)
+                    .capture_labeled(
+                        "pushed_branch_review_request_created",
+                        "Review request created for a pushed branch without a watch question",
+                    )
+            },
+            |frame, _report| {
+                Box::pin(async move {
+                    let full = Region::full(frame.cols(), frame.rows());
+                    assertion::assert_text_in_region(
+                        frame,
+                        "[Review Request] Created PR https://github.com/agentty-xyz/agentty/pull/42",
+                        &full,
+                    );
+                    assertion::assert_not_visible(frame, "Watch Review Request");
+                    assertion::assert_not_visible(frame, "Auto-resolve checks");
+                })
+            },
+        )
+        .await?;
+
+    Ok(())
+}
+
+/// Verify that confirming the branch name asks whether to watch the review
+/// request before pushing, that accepting moves the published session to
+/// `Watching`, and that a failing check then starts an automatic follow-up.
+#[tokio::test]
+async fn review_request_publish_asks_to_watch_and_follows_up_on_failed_checks() -> E2eResult {
     // Arrange
     let checks = ReleaseGate::new()?;
     let hold_checks = checks.shell_wait();
@@ -1187,14 +1251,14 @@ async fn created_review_request_offers_watching_and_follows_up_on_failed_checks(
                     .press_key("p")
                     .wait_for_text("Publish Review Request", 5000)
                     .press_key("Enter")
-                    .wait_for_text("Watch PR #42", 20000)
+                    .wait_for_text("Watch Review Request", 5000)
                     .wait_for_stable_frame(300, 5000)
                     .capture_labeled(
                         "review_request_watch_offer",
-                        "Watch offer shown after the review request is created",
+                        "Watch question shown before the branch is pushed",
                     )
                     .press_key("y")
-                    .wait_for_text("[Review Watch] Watching pull request #42", 10000)
+                    .wait_for_text("[Review Watch] Watching pull request #42", 20000)
                     .capture_labeled(
                         "review_request_watch_enabled",
                         "Session notice confirming the review request is watched",
@@ -1210,7 +1274,13 @@ async fn created_review_request_offers_watching_and_follows_up_on_failed_checks(
                 Box::pin(async move {
                     let offer_frame = common::frame_from_capture(&report.captures[0]);
                     let offer_full = Region::full(offer_frame.cols(), offer_frame.rows());
-                    assertion::assert_text_in_region(&offer_frame, "Watch PR #42", &offer_full);
+                    assertion::assert_text_in_region(
+                        &offer_frame,
+                        "Watch Review Request",
+                        &offer_full,
+                    );
+                    assertion::assert_not_visible(&offer_frame, "Publishing review request...");
+                    assertion::assert_not_visible(&offer_frame, "[Review Request] Created PR");
                     assertion::assert_text_in_region(
                         &offer_frame,
                         "Auto-resolve checks, comments, conflicts?",
@@ -1224,7 +1294,12 @@ async fn created_review_request_offers_watching_and_follows_up_on_failed_checks(
                         "[Review Watch] Watching pull request #42",
                         &enabled_full,
                     );
-                    assertion::assert_not_visible(&enabled_frame, "Watch PR #42");
+                    assertion::assert_text_in_region(
+                        &enabled_frame,
+                        "[Review Request] Created PR",
+                        &enabled_full,
+                    );
+                    assertion::assert_not_visible(&enabled_frame, "Watch Review Request");
                     assertion::assert_not_visible(&enabled_frame, "Fixing 1 failing check");
 
                     // The follow-up turn keeps appending output, so assert

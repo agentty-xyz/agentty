@@ -724,6 +724,7 @@ async fn review_request_creation_queues_during_rebase() -> E2eResult {
                     .press_key("p")
                     .wait_for_text("Publish Review Request", 5000)
                     .press_key("Enter")
+                    .compose(&common::decline_review_watch_before_publish())
                     .wait_for_text("≡ review request — publish after this turn", 5000)
                     .capture_labeled(
                         "review_request_queued_during_rebase",
@@ -736,7 +737,7 @@ async fn review_request_creation_queues_during_rebase() -> E2eResult {
                         "review_request_started_after_rebase",
                         "Review-request creation starts after session sync completes",
                     )
-                    .compose(&common::decline_watch_offer_for_created_review_request())
+                    .wait_for_text("[Review Request] Created PR", 15000)
             },
             |frame, report| {
                 Box::pin(async move {
@@ -1281,6 +1282,7 @@ async fn review_request_creation_queues_during_running_turn() -> E2eResult {
                     .press_key("p")
                     .wait_for_text("Publish Review Request", 5000)
                     .press_key("Enter")
+                    .compose(&common::decline_review_watch_before_publish())
                     .wait_for_text("≡ review request — publish after this turn", 5000)
                     .viewing_pause_ms(1200)
                     .capture_labeled(
@@ -1293,7 +1295,7 @@ async fn review_request_creation_queues_during_running_turn() -> E2eResult {
                         "review_request_started",
                         "Queued review-request creation starts after the turn completes",
                     )
-                    .compose(&common::decline_watch_offer_for_created_review_request())
+                    .wait_for_text("[Review Request] Created PR", 15000)
                     .capture_labeled(
                         "review_request_created",
                         "Created review-request link recorded after the completed turn",
@@ -1369,6 +1371,7 @@ async fn review_request_queued_creation_clears_when_turn_is_cancelled() -> E2eRe
                     .press_key("p")
                     .wait_for_text("Publish Review Request", 5000)
                     .press_key("Enter")
+                    .compose(&common::decline_review_watch_before_publish())
                     .wait_for_text("≡ review request — publish after this turn", 5000)
                     .capture_labeled(
                         "queued_review_request_before_turn_cancel",
@@ -1453,6 +1456,7 @@ async fn session_queued_work_uses_fifo_display_and_execution_order() -> E2eResul
                     .press_key("p")
                     .wait_for_text("Publish Review Request", 5000)
                     .press_key("Enter")
+                    .compose(&common::decline_review_watch_before_publish())
                     .wait_for_text("≡ review request — publish after this turn", 5000)
                     .capture_labeled(
                         "mixed_queue_submission_order",
@@ -1465,7 +1469,7 @@ async fn session_queued_work_uses_fifo_display_and_execution_order() -> E2eResul
                         "mixed_queue_chat_execution_order",
                         "Active chat completes before the queued chat message",
                     )
-                    .compose(&common::decline_watch_offer_for_created_review_request())
+                    .wait_for_text("[Review Request] Created PR", 15000)
                     .capture_labeled(
                         "mixed_queue_execution_order",
                         "Queued chat completes before the later review-request action",

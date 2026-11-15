@@ -624,6 +624,7 @@ fn test_failed_branch_publish_batch_does_not_request_git_status_refresh() {
 
     // Act
     event_batch.collect_event(AppEvent::BranchPublishActionCompleted {
+        operation_id: None,
         result: Box::new(Err(failure)),
         session_id: SessionId::from("session-1"),
     });

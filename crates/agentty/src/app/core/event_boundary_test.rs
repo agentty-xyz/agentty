@@ -349,9 +349,9 @@ async fn review_results_for_a_removed_session_leave_loaded_sessions_unchanged() 
     app.cancel_externally_closed_session("removed-session")
         .await;
     app.apply_branch_publish_action_update(BranchPublishActionUpdate {
+        operation_id: None,
         result: Ok(BranchPublishTaskSuccess::PullRequestPublished {
             branch_name: "topic".to_string(),
-            is_created: false,
             review_request,
             upstream_reference: "origin/topic".to_string(),
         }),
