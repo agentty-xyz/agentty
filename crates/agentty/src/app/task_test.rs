@@ -1,4 +1,5 @@
 use std::fmt::Write as _;
+use std::io;
 use std::os::unix::fs::PermissionsExt;
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};
@@ -28,8 +29,9 @@ use crate::app::review_graph::test_support::{ReviewGraphFixture, SESSION_ID};
 use crate::app::review_rules::ReviewRules;
 use crate::app::{AppEvent, UpdateStatus};
 use crate::domain::agent::{AgentCliInfo, AgentKind, AgentModel, AgentSelection, ReasoningLevel};
+use crate::domain::file_description::FILE_DESCRIPTION_PREFIX_BYTES;
 use crate::domain::file_entry::FileEntry;
-use crate::infra::fs::MockFsClient;
+use crate::infra::fs::{FsError, MockFsClient};
 use crate::test_support::enable_tracing_log_fallback;
 
 /// Generates review text through the production graph with a fresh session.
@@ -522,6 +524,57 @@ fn publish_at_mention_entries_tolerates_closed_event_receiver() {
 
     // Assert
     assert!(app_event_tx.is_closed());
+}
+
+#[tokio::test]
+async fn spawn_at_mention_descriptions_task_publishes_read_descriptions() {
+    // Arrange
+    let mut fs = MockFsClient::new();
+    fs.expect_read_file_prefix()
+        .times(3)
+        .returning(|path, max_bytes| {
+            assert_eq!(max_bytes, FILE_DESCRIPTION_PREFIX_BYTES);
+            let contents: &[u8] = if path == Path::new("root/src/lib.rs") {
+                b"//! Library root.\n"
+            } else if path == Path::new("root/tool.py") {
+                b"\"\"\"Tool entry point.\"\"\"\n"
+            } else {
+                return Box::pin(async {
+                    Err(FsError::Io(io::Error::from(io::ErrorKind::NotFound)))
+                });
+            };
+
+            Box::pin(async move { Ok(contents.to_vec()) })
+        });
+    let (app_event_tx, mut app_event_rx) = mpsc::unbounded_channel();
+    let paths = ["src/lib.rs", "tool.py", "gone.rs", "notes.md"].map(str::to_string);
+
+    // Act
+    TaskService::spawn_at_mention_descriptions_task(
+        app_event_tx,
+        Arc::new(fs),
+        PathBuf::from("root"),
+        "session-id".into(),
+        paths.to_vec(),
+    )
+    .await
+    .expect("description task should finish");
+
+    // Assert
+    assert_eq!(
+        app_event_rx
+            .try_recv()
+            .expect("expected descriptions event"),
+        AppEvent::AtMentionDescriptionsLoaded {
+            descriptions: vec![
+                ("src/lib.rs".to_string(), Some("Library root.".to_string())),
+                ("tool.py".to_string(), Some("Tool entry point.".to_string())),
+                ("gone.rs".to_string(), None),
+                ("notes.md".to_string(), None),
+            ],
+            session_id: "session-id".into(),
+        }
+    );
 }
 
 #[tokio::test]

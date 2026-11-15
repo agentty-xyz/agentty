@@ -35,7 +35,9 @@ use crate::app::sync::{
 };
 use crate::app::{self, SessionRuntimeCommand};
 use crate::domain::agent::{AgentCliInfo, AgentSelection, HarnessModelOption};
-use crate::domain::file_entry::{FileEntry, at_mention_lookup_root};
+use crate::domain::file_entry::{
+    AT_MENTION_MAX_VISIBLE_ENTRIES, FileEntry, at_mention_lookup_root,
+};
 use crate::domain::input::InputState;
 use crate::domain::question::default_option_index;
 use crate::domain::session::{
@@ -80,6 +82,12 @@ pub(crate) enum AppEvent {
     /// Indicates background-loaded prompt at-mention entries for one session.
     AtMentionEntriesLoaded {
         entries: Vec<FileEntry>,
+        session_id: SessionId,
+    },
+    /// Indicates background-read descriptions for visible `@`-mention files,
+    /// keyed by entry path; `None` means the file has no description.
+    AtMentionDescriptionsLoaded {
+        descriptions: Vec<(String, Option<String>)>,
         session_id: SessionId,
     },
     /// Indicates completion of one background clipboard-image capture for a
@@ -400,6 +408,7 @@ pub(super) struct AppEventBatch {
     /// completion.
     pub(super) chatgpt_sign_in_updates: Vec<ChatGptSignInUpdate>,
     pub(super) applied_turns: HashMap<SessionId, TurnAppliedState>,
+    pub(super) at_mention_description_updates: HashMap<SessionId, Vec<(String, Option<String>)>>,
     pub(super) at_mention_entries_updates: HashMap<SessionId, Vec<FileEntry>>,
     pub(super) branch_publish_action_updates: Vec<BranchPublishActionUpdate>,
     pub(super) branch_publish_resolved_operation_ids: HashSet<String>,
@@ -499,6 +508,7 @@ impl AppEventBatch {
             || self.update_status.is_some()
             || !self.applied_turns.is_empty()
             || !self.implementer_attempt_successes.is_empty()
+            || !self.at_mention_description_updates.is_empty()
             || !self.at_mention_entries_updates.is_empty()
             || !self.branch_publish_action_updates.is_empty()
             || !self.branch_publish_resolved_session_ids.is_empty()
@@ -644,6 +654,10 @@ impl AppEventBatch {
             AppEvent::RefreshSessions => self.should_reload_sessions = true,
             AppEvent::RefreshProjects => self.should_reload_projects = true,
             AppEvent::RefreshGitStatus => self.should_refresh_git_status = true,
+            AppEvent::AtMentionDescriptionsLoaded {
+                descriptions,
+                session_id,
+            } => self.collect_at_mention_descriptions_loaded(descriptions, session_id),
             event => self.collect_runtime_event(event),
         }
     }
@@ -742,6 +756,7 @@ impl AppEventBatch {
             | AppEvent::SessionSpeedModeUpdated { .. }
             | AppEvent::SessionRebaseReviewInvalidated { .. }
             | AppEvent::PromptImagePasted { .. }
+            | AppEvent::AtMentionDescriptionsLoaded { .. }
             | AppEvent::RefreshSessions
             | AppEvent::RefreshProjects
             | AppEvent::RefreshGitStatus
@@ -794,6 +809,18 @@ impl AppEventBatch {
         session_id: SessionId,
     ) {
         self.at_mention_entries_updates.insert(session_id, entries);
+    }
+
+    /// Accumulates background `@`-mention file descriptions for one session.
+    fn collect_at_mention_descriptions_loaded(
+        &mut self,
+        descriptions: Vec<(String, Option<String>)>,
+        session_id: SessionId,
+    ) {
+        self.at_mention_description_updates
+            .entry(session_id)
+            .or_default()
+            .extend(descriptions);
     }
 
     /// Collects one background full-diff completion for foreground reduction.
@@ -1969,6 +1996,16 @@ impl App {
 
             self.apply_prompt_at_mention_entries(&session_id, entries);
         }
+
+        for (session_id, descriptions) in
+            std::mem::take(&mut event_batch.at_mention_description_updates)
+        {
+            if let Some(active) = self.mode.active_at_mention_mut()
+                && *active.session_id == session_id
+            {
+                active.state.apply_file_descriptions(descriptions);
+            }
+        }
     }
 
     /// Applies active progress message updates from one reducer batch.
@@ -2131,6 +2168,37 @@ impl App {
                 }
             }
         }
+    }
+
+    /// Starts loading descriptions for visible files in the open `@`-mention
+    /// lookup.
+    ///
+    /// The runtime calls this once per cycle before drawing. A cycle with an
+    /// unchanged query, selection, and index spawns nothing, and each file is
+    /// read at most once while the lookup stays open.
+    pub(crate) fn request_visible_at_mention_descriptions(&mut self) {
+        let Some(active) = self.mode.active_at_mention_mut() else {
+            return;
+        };
+        let Some((_, query)) = active.input.at_mention_query() else {
+            return;
+        };
+        let paths = active
+            .state
+            .take_description_requests(&query, AT_MENTION_MAX_VISIBLE_ENTRIES);
+        if paths.is_empty() {
+            return;
+        }
+
+        let session_id = active.session_id.clone();
+        let lookup_root = self.at_mention_lookup_root(&session_id);
+        app::task::TaskService::spawn_at_mention_descriptions_task(
+            self.services.event_sender(),
+            self.services.fs_client(),
+            lookup_root,
+            session_id,
+            paths,
+        );
     }
 
     /// Returns the lookup root for one session's at-mention entries.

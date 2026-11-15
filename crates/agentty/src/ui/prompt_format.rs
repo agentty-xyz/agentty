@@ -4,7 +4,9 @@ use ratatui::style::{Modifier, Style};
 use ratatui::text::{Line, Span};
 
 use crate::domain::agent::AgentKind;
-use crate::domain::file_entry::filter_entries;
+use crate::domain::file_entry::{
+    AT_MENTION_MAX_VISIBLE_ENTRIES, filter_entries, visible_entry_window,
+};
 use crate::presentation::app_mode::ChatFocus;
 use crate::presentation::help_action;
 use crate::presentation::prompt::{
@@ -15,7 +17,6 @@ use crate::ui::component::chat_input::{SuggestionItem, SuggestionList};
 use crate::ui::icon::Icon;
 use crate::ui::style;
 
-const AT_MENTION_DEFAULT_MAX_VISIBLE: usize = 10;
 /// Footer label shown beside the loader while a clipboard image is captured.
 const PASTING_IMAGE_LABEL: &str = "Pasting image...";
 const NEW_SESSION_PROMPT_FOOTER_ACTIONS: [help_action::HelpAction; 4] = [
@@ -131,7 +132,7 @@ pub(crate) fn prompt_suggestion_list(
             input_text,
             cursor,
             state,
-            AT_MENTION_DEFAULT_MAX_VISIBLE,
+            AT_MENTION_MAX_VISIBLE_ENTRIES,
         );
     }
 
@@ -185,24 +186,26 @@ pub(crate) fn file_lookup_suggestion_list(
         return None;
     }
 
-    let window_start = at_mention_state
-        .selected_index
-        .saturating_sub(max_visible / 2);
-    let window_end = filtered.len().min(window_start + max_visible);
-    let window_start = window_end.saturating_sub(max_visible);
+    let window = visible_entry_window(at_mention_state.selected_index, filtered.len(), max_visible);
+    let window_start = window.start;
 
-    let items = filtered[window_start..window_end]
+    let items = filtered[window]
         .iter()
         .map(|entry| {
-            let label = if entry.is_dir {
-                format!("{}/", entry.path)
+            let (label, detail) = if entry.is_dir {
+                (format!("{}/", entry.path), Some("folder".to_string()))
             } else {
-                entry.path.clone()
+                (
+                    entry.path.clone(),
+                    at_mention_state
+                        .file_description(&entry.path)
+                        .map(str::to_string),
+                )
             };
 
             SuggestionItem {
                 badge: None,
-                detail: entry.is_dir.then(|| "folder".to_string()),
+                detail,
                 label,
                 metadata: None,
             }

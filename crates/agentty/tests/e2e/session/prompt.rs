@@ -32,6 +32,20 @@ fn seed_draft_at_lookup_project(env: &BuilderEnv) -> Result<(), Box<dyn std::err
     Ok(())
 }
 
+/// Seeds documented Rust and Python lookup targets into the temporary project.
+fn seed_described_at_lookup_project(env: &BuilderEnv) -> Result<(), Box<dyn std::error::Error>> {
+    std::fs::write(
+        env.workdir.join("described_lookup.rs"),
+        "//! Rust lookup summary.\n\nfn main() {}\n",
+    )?;
+    std::fs::write(
+        env.workdir.join("described_lookup.py"),
+        "\"\"\"Python lookup summary.\"\"\"\n",
+    )?;
+
+    Ok(())
+}
+
 /// Seeds two unmaterialized stacked drafts whose nearest materialized ancestor
 /// contains a new file that is absent from the project checkout.
 async fn seed_nested_stacked_at_lookup_session(
@@ -381,6 +395,43 @@ async fn draft_session_at_lookup() -> E2eResult {
                     let full = Region::full(frame.cols(), frame.rows());
                     assertion::assert_text_in_region(frame, "draft_lookup_target.txt", &full);
                     assertion::assert_text_in_region(frame, "Enter: stage draft", &full);
+                })
+            },
+        )
+        .await?;
+
+    Ok(())
+}
+
+/// Verify that `@` lookup rows show Rust and Python file descriptions read
+/// from their leading documentation.
+#[tokio::test]
+async fn at_lookup_shows_file_descriptions() -> E2eResult {
+    // Arrange, Act, Assert
+    FeatureTest::new("at_lookup_shows_file_descriptions")
+        .with_git()
+        .setup(|env| Box::pin(async move { seed_described_at_lookup_project(env) }))
+        .run(
+            |scenario| {
+                scenario
+                    .compose(&common::wait_for_agentty_startup())
+                    .compose(&common::switch_to_tab("Sessions"))
+                    .press_key("a")
+                    .wait_for_text("Regular", 5000)
+                    .press_key("Down")
+                    .press_key("Enter")
+                    .wait_for_text("Enter: stage draft", 3000)
+                    .write_text("@described_lookup")
+                    .wait_for_text("Rust lookup summary.", 5000)
+                    .wait_for_text("Python lookup summary.", 5000)
+            },
+            |frame, _report| {
+                Box::pin(async move {
+                    let full = Region::full(frame.cols(), frame.rows());
+                    assertion::assert_text_in_region(frame, "described_lookup.rs", &full);
+                    assertion::assert_text_in_region(frame, "Rust lookup summary.", &full);
+                    assertion::assert_text_in_region(frame, "described_lookup.py", &full);
+                    assertion::assert_text_in_region(frame, "Python lookup summary.", &full);
                 })
             },
         )

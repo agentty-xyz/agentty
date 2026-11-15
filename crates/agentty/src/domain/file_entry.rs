@@ -1,6 +1,10 @@
 //! File-entry model shared by file indexing, prompt state, and UI layout.
 
+use std::ops::Range;
 use std::path::PathBuf;
+
+/// Largest number of `@`-mention rows any lookup dropdown shows at once.
+pub const AT_MENTION_MAX_VISIBLE_ENTRIES: usize = 10;
 
 /// Selects the directory backing an active `@`-mention lookup.
 #[must_use]
@@ -58,6 +62,22 @@ pub fn filter_entries<'a>(entries: &'a [FileEntry], query: &str) -> Vec<&'a File
     prioritize_directories_for_trailing_slash(&mut filtered, query);
 
     filtered
+}
+
+/// Returns the filtered-entry range shown by a dropdown of `max_visible` rows.
+///
+/// The window roughly centers `selected_index` and shifts inward at either end
+/// so it stays full whenever enough entries exist.
+#[must_use]
+pub fn visible_entry_window(
+    selected_index: usize,
+    filtered_count: usize,
+    max_visible: usize,
+) -> Range<usize> {
+    let window_start = selected_index.saturating_sub(max_visible / 2);
+    let window_end = filtered_count.min(window_start + max_visible);
+
+    window_end.saturating_sub(max_visible)..window_end
 }
 
 /// Cached fuzzy-match metadata used when ordering file mention results.

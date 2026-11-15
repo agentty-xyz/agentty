@@ -5,7 +5,7 @@
 //! orchestrator (`app/sync.rs`); this module keeps the remaining background
 //! tasks.
 
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::Duration;
@@ -28,9 +28,11 @@ use crate::app::review_prompt::MAX_REVIEW_PROVIDER_CALLS;
 use crate::app::session_diff::DeferredAutoReviewPersistenceRetry;
 use crate::app::{AppEvent, UpdateStatus, at_mention_task};
 use crate::domain::agent::{AgentCliInfo, AgentKind, AgentSelection, ReasoningLevel};
+use crate::domain::file_description::{FILE_DESCRIPTION_PREFIX_BYTES, FileDescriptionSyntax};
 use crate::domain::file_entry::FileEntry;
 use crate::domain::session::SessionId;
 use crate::infra::clipboard_image::{self, ClipboardImageClient};
+use crate::infra::fs::FsClient;
 use crate::infra::review_deadline::ReviewDeadlineClient;
 use crate::infra::{file_index, version};
 
@@ -143,7 +145,7 @@ pub(super) struct ReviewAssistTaskInput {
     /// Hash of the diff that triggered this review, threaded back in the
     /// completion event so the reducer can store it without re-reading cache.
     pub(super) diff_hash: u64,
-    pub(super) fs_client: Arc<dyn crate::infra::fs::FsClient>,
+    pub(super) fs_client: Arc<dyn FsClient>,
     /// Graph persistence, Env gates, and recorded runs shared with the app.
     pub(super) graph_host: ReviewGraphHost,
     pub(super) reasoning_level: ReasoningLevel,
@@ -332,6 +334,50 @@ impl TaskService {
                 "failed to publish at-mention entries because the app event receiver is closed"
             );
         }
+    }
+
+    /// Reads descriptions for visible `@`-mention files and publishes them for
+    /// the open lookup.
+    ///
+    /// Each file contributes at most [`FILE_DESCRIPTION_PREFIX_BYTES`];
+    /// unreadable or undocumented files publish `None`.
+    pub(crate) fn spawn_at_mention_descriptions_task(
+        app_event_tx: mpsc::UnboundedSender<AppEvent>,
+        fs_client: Arc<dyn FsClient>,
+        lookup_root: PathBuf,
+        session_id: SessionId,
+        paths: Vec<String>,
+    ) -> JoinHandle<()> {
+        tokio::spawn(async move {
+            let mut descriptions = Vec::with_capacity(paths.len());
+            for path in paths {
+                let description =
+                    Self::read_file_description(fs_client.as_ref(), &lookup_root, &path).await;
+                descriptions.push((path, description));
+            }
+
+            // A closed receiver means the app is exiting; descriptions are
+            // optional decoration, so nothing needs reporting.
+            let _ = app_event_tx.send(AppEvent::AtMentionDescriptionsLoaded {
+                descriptions,
+                session_id,
+            });
+        })
+    }
+
+    /// Reads the leading bytes of one file and extracts its description.
+    async fn read_file_description(
+        fs_client: &dyn FsClient,
+        lookup_root: &Path,
+        path: &str,
+    ) -> Option<String> {
+        let syntax = FileDescriptionSyntax::from_path(path)?;
+        let prefix = fs_client
+            .read_file_prefix(lookup_root.join(path), FILE_DESCRIPTION_PREFIX_BYTES)
+            .await
+            .ok()?;
+
+        syntax.describe(&String::from_utf8_lossy(&prefix))
     }
 
     /// Loads one fresh machine-scoped snapshot of locally runnable agent

@@ -133,11 +133,11 @@ pub(super) fn non_default_prompt_snapshot() -> crate::presentation::app_mode::Pr
     slash_state.stage = PromptSlashStage::Model;
     slash_state.selected_index = 2;
 
+    let mut at_mention_state = PromptAtMentionState::new(vec![prompt_mention_entry()]);
+    at_mention_state.selected_index = 1;
+
     PromptModeSnapshot {
-        at_mention_state: Some(PromptAtMentionState {
-            all_entries: vec![prompt_mention_entry()],
-            selected_index: 1,
-        }),
+        at_mention_state: Some(at_mention_state),
         attachment_state,
         history_state,
         input: InputState::with_text(RESTORE_DRAFT_TEXT.to_string()),

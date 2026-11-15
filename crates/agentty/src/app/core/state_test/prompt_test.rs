@@ -1,13 +1,18 @@
 use std::fs;
+use std::time::Duration;
 
 use ag_session::test_support as model_fixture;
+use tokio::time::{Instant, timeout_at};
 
 use super::support::{test_app_viewing_reconcile_session, test_prompt_mode_snapshot};
+use crate::app::App;
 use crate::app::core::event::{AppEvent, AppEventBatch};
 use crate::domain::file_entry::FileEntry;
+use crate::domain::input::InputState;
 use crate::domain::session::{SessionId, Status};
 use crate::domain::session_message::SessionMessageKind;
-use crate::presentation::prompt::PromptGraphState;
+use crate::presentation::app_mode::AppMode;
+use crate::presentation::prompt::{PromptAtMentionState, PromptGraphState};
 
 #[tokio::test]
 async fn session_chat_history_loads_persisted_transcript_for_unloaded_session() {
@@ -193,6 +198,104 @@ async fn app_event_applies_at_mention_entries_to_session_runtime() {
         app.sessions.at_mention_index_for_root(&lookup_root),
         Some(entries)
     );
+}
+
+#[tokio::test]
+async fn request_visible_at_mention_descriptions_applies_descriptions_to_open_lookup() {
+    // Arrange
+    let (mut app, _temp_dir) = crate::test_support::new_test_app().await;
+    let session_id = SessionId::from("missing-session");
+    let lookup_root = app.at_mention_lookup_root(&session_id);
+    fs::write(lookup_root.join("lib.rs"), "//! Library root.\n")
+        .expect("failed to write described file");
+    app.mode = prompt_mode_with_lookup(session_id, "@lib");
+
+    // Act
+    app.request_visible_at_mention_descriptions();
+    app.request_visible_at_mention_descriptions();
+    let descriptions_event = wait_for_at_mention_descriptions_event(&mut app).await;
+    app.apply_single_app_event(descriptions_event).await;
+
+    // Assert
+    let active = app
+        .mode
+        .active_at_mention_mut()
+        .expect("prompt lookup should stay open");
+    assert_eq!(
+        active.state.file_description("lib.rs"),
+        Some("Library root.")
+    );
+}
+
+#[tokio::test]
+async fn app_event_ignores_at_mention_descriptions_for_another_session() {
+    // Arrange
+    let mut app = crate::test_support::new_test_app_without_retained_base_dir().await;
+    app.mode = prompt_mode_with_lookup(SessionId::from("open-session"), "@lib");
+
+    // Act
+    app.apply_single_app_event(AppEvent::AtMentionDescriptionsLoaded {
+        descriptions: vec![("lib.rs".to_string(), Some("Library root.".to_string()))],
+        session_id: SessionId::from("other-session"),
+    })
+    .await;
+
+    // Assert
+    let active = app
+        .mode
+        .active_at_mention_mut()
+        .expect("prompt lookup should stay open");
+    assert_eq!(active.state.file_description("lib.rs"), None);
+}
+
+#[tokio::test]
+async fn request_visible_at_mention_descriptions_waits_for_an_active_query() {
+    // Arrange
+    let mut app = crate::test_support::new_test_app_without_retained_base_dir().await;
+    let session_id = SessionId::from("missing-session");
+    app.request_visible_at_mention_descriptions();
+    app.mode = prompt_mode_with_lookup(session_id, "lib");
+
+    // Act
+    app.request_visible_at_mention_descriptions();
+
+    // Assert
+    let active = app
+        .mode
+        .active_at_mention_mut()
+        .expect("prompt lookup should stay open");
+    assert_eq!(
+        active.state.take_description_requests("lib", 10),
+        vec!["lib.rs".to_string()]
+    );
+}
+
+/// Builds prompt mode with `input_text` and an open lookup over `lib.rs`.
+fn prompt_mode_with_lookup(session_id: SessionId, input_text: &str) -> AppMode {
+    let mut snapshot = test_prompt_mode_snapshot(session_id);
+    snapshot.input = InputState::with_text(input_text.to_string());
+    snapshot.at_mention_state = Some(PromptAtMentionState::new(vec![FileEntry {
+        is_dir: false,
+        path: "lib.rs".to_string(),
+    }]));
+
+    snapshot.into_prompt_mode()
+}
+
+/// Waits for the next description load and skips unrelated startup events.
+async fn wait_for_at_mention_descriptions_event(app: &mut App) -> AppEvent {
+    let deadline = Instant::now() + Duration::from_secs(1);
+
+    loop {
+        let next_event = timeout_at(deadline, app.next_app_event())
+            .await
+            .expect("description event should arrive")
+            .expect("app event channel closed unexpectedly");
+
+        if matches!(next_event, AppEvent::AtMentionDescriptionsLoaded { .. }) {
+            return next_event;
+        }
+    }
 }
 
 #[tokio::test]

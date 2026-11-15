@@ -223,11 +223,14 @@ where
     /// session first leaves input mode if it has been archived. The open
     /// session view then reconciles into the clarification panel when its
     /// session has reached `Status::Question`, covering cases where the live
-    /// `AgentResponseReceived` projection did not flip the view.
+    /// `AgentResponseReceived` projection did not flip the view. Visible `@`
+    /// lookup rows then request their file descriptions so drawing never reads
+    /// files.
     async fn run_cycle(&mut self) -> io::Result<EventResult> {
         self.app.process_pending_app_events().await;
         self.app.reconcile_terminal_session_input_mode().await;
         self.app.reconcile_open_session_question_mode().await;
+        self.app.request_visible_at_mention_descriptions();
         self.app
             .expire_project_sync_status(self.clock.now_instant());
         render_frame(

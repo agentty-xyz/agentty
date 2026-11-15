@@ -627,7 +627,11 @@ fn test_prompt_suggestion_list_for_command_stage_omits_disabled_apply() {
 #[test]
 fn test_file_lookup_suggestion_list_with_matches() {
     // Arrange
-    let state = PromptAtMentionState::new(file_entries_fixture());
+    let mut state = PromptAtMentionState::new(file_entries_fixture());
+    state.apply_file_descriptions([
+        ("src/lib.rs".to_string(), Some("Library root.".to_string())),
+        ("src/main.rs".to_string(), None),
+    ]);
 
     // Act
     let menu =
@@ -638,7 +642,9 @@ fn test_file_lookup_suggestion_list_with_matches() {
     assert_eq!(menu.items[0].label, "src/");
     assert_eq!(menu.items[0].detail, Some("folder".to_string()));
     assert_eq!(menu.items[1].label, "src/lib.rs");
+    assert_eq!(menu.items[1].detail, Some("Library root.".to_string()));
     assert_eq!(menu.items[2].label, "src/main.rs");
+    assert_eq!(menu.items[2].detail, None);
 }
 
 #[test]
