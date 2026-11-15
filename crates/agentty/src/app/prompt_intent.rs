@@ -184,6 +184,27 @@ impl App {
         snapshot: &ReviewCommentSnapshot,
         selections: &[ReviewCommentSelection],
     ) -> ReviewCommentResolutionOutcome {
+        let Some((prompt, thread_ids)) = build_resolve_review_comment_prompt(snapshot, selections)
+        else {
+            return ReviewCommentResolutionOutcome::KeepReviewComments;
+        };
+
+        self.submit_review_comment_turn(session_id, prompt, thread_ids)
+            .await
+    }
+
+    /// Submits one agent turn whose prompt asks for an outcome for every
+    /// forge thread in `thread_ids`.
+    ///
+    /// Returns a navigation effect that shows the session only when the
+    /// session accepts review-comment replies and its worker accepted the
+    /// turn.
+    pub(crate) async fn submit_review_comment_turn(
+        &mut self,
+        session_id: &SessionId,
+        prompt: TurnPrompt,
+        thread_ids: Vec<String>,
+    ) -> ReviewCommentResolutionOutcome {
         let Some(session_index) = self
             .sessions
             .sessions()
@@ -195,11 +216,6 @@ impl App {
         if !self.sessions.sessions()[session_index].allows_review_comment_reply() {
             return ReviewCommentResolutionOutcome::KeepReviewComments;
         }
-
-        let Some((prompt, thread_ids)) = build_resolve_review_comment_prompt(snapshot, selections)
-        else {
-            return ReviewCommentResolutionOutcome::KeepReviewComments;
-        };
 
         let is_queued = self.sessions.sessions()[session_index].queues_review_comment_reply();
         let enqueued = self

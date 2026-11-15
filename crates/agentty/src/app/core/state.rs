@@ -1990,6 +1990,7 @@ impl App {
         sync::SyncContext {
             run_client: services.run_client(),
             generation: 0,
+            fs_client: services.fs_client(),
             git_client: services.git_client(),
             project_branch_name: projects.git_branch().map(str::to_string),
             project_id: projects.active_project_id(),

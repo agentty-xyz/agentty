@@ -63,6 +63,10 @@ async fn fetch_authenticated_review_request_attention_reports_failed_jobs_and_tr
             GitLabReviewRequestAdapter::project_member_command(&remote, 3),
             serde_json::json!([{"id": 3, "access_level": 20}]).to_string(),
         ),
+        (
+            GitLabReviewRequestAdapter::project_member_command(&remote, 12),
+            "[]".to_string(),
+        ),
     ];
     for (expected_command, stdout) in responses {
         expect_command(&mut command_runner, &mut sequence, expected_command, stdout);
@@ -71,7 +75,11 @@ async fn fetch_authenticated_review_request_attention_reports_failed_jobs_and_tr
 
     // Act
     let attention = adapter
-        .fetch_authenticated_review_request_attention(remote, "!42".to_string())
+        .fetch_authenticated_review_request_attention(
+            remote,
+            "!42".to_string(),
+            vec!["review-bot".to_string()],
+        )
         .await
         .expect("GitLab attention fetch should succeed");
 
@@ -100,6 +108,7 @@ async fn fetch_authenticated_review_request_attention_reports_failed_jobs_and_tr
             ("discussion-trusted", vec!["Please simplify this.", "Ping."]),
             ("discussion-untrusted-reply", vec!["Handle the empty case."]),
             ("discussion-current-user", vec!["Rename this too."]),
+            ("discussion-trusted-bot", vec!["Handle the timeout."]),
         ]
     );
 }
@@ -152,7 +161,7 @@ async fn fetch_authenticated_review_request_attention_reports_pipeline_without_b
 
     // Act
     let attention = adapter
-        .fetch_authenticated_review_request_attention(remote, "42".to_string())
+        .fetch_authenticated_review_request_attention(remote, "42".to_string(), Vec::new())
         .await
         .expect("GitLab attention fetch should succeed");
 
@@ -204,7 +213,11 @@ async fn fetch_authenticated_review_request_attention_skips_jobs_for_unfinished_
 
         // Act
         let attention = adapter
-            .fetch_authenticated_review_request_attention(remote.clone(), "!42".to_string())
+            .fetch_authenticated_review_request_attention(
+                remote.clone(),
+                "!42".to_string(),
+                Vec::new(),
+            )
             .await
             .expect("GitLab attention fetch should succeed");
 
@@ -267,7 +280,7 @@ async fn fetch_authenticated_review_request_attention_fails_when_author_lookup_f
 
     // Act
     let error = adapter
-        .fetch_authenticated_review_request_attention(remote, "!42".to_string())
+        .fetch_authenticated_review_request_attention(remote, "!42".to_string(), Vec::new())
         .await
         .expect_err("author lookup failure should fail the whole fetch");
 
@@ -288,7 +301,11 @@ async fn fetch_authenticated_review_request_attention_rejects_invalid_display_id
 
     // Act
     let error = adapter
-        .fetch_authenticated_review_request_attention(gitlab_remote(), "!abc".to_string())
+        .fetch_authenticated_review_request_attention(
+            gitlab_remote(),
+            "!abc".to_string(),
+            Vec::new(),
+        )
         .await
         .expect_err("invalid display id should fail before running commands");
 
@@ -446,7 +463,8 @@ fn attention_json(has_conflicts: bool, pipeline: Option<(&str, u64)>) -> String 
 }
 
 /// Returns discussions covering every trust and actionability outcome. The
-/// authenticated fixture user is `bob` with id `2`.
+/// authenticated fixture user is `bob` with id `2`; `review-bot` is not a
+/// project member and is trusted only when the caller lists it.
 fn trust_discussions_json() -> String {
     serde_json::json!([
         discussion(
@@ -500,6 +518,11 @@ fn trust_discussions_json() -> String {
                 anonymous_diff_note("Anonymous note."),
                 reply_note(2, Some("bob"), "Rename this too."),
             ],
+        ),
+        discussion(
+            "discussion-trusted-bot",
+            false,
+            vec![diff_note(12, Some("review-bot"), "Handle the timeout.")],
         ),
         serde_json::json!({
             "id": "discussion-general",

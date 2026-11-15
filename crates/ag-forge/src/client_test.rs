@@ -440,7 +440,7 @@ async fn fetch_review_request_attention_authenticates_and_routes_to_github_adapt
 
     // Act
     let attention = client
-        .fetch_review_request_attention(remote, "#42".to_string())
+        .fetch_review_request_attention(remote, "#42".to_string(), Vec::new())
         .await;
 
     // Assert

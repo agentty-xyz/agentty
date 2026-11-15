@@ -24,10 +24,12 @@ use tokio::sync::{mpsc, watch};
 use tokio::time::MissedTickBehavior;
 
 use crate::app::core::SyncReviewRequestTaskResult;
+use crate::app::review_watch_config::ReviewWatchConfig;
 use crate::app::session_state::SessionGitStatus;
 use crate::app::{AppEvent, session};
 use crate::domain::agent::AgentModel;
 use crate::domain::session::{ReviewRequestState, SessionId};
+use crate::infra::fs::FsClient;
 
 /// Seconds between background read-only sync passes.
 const SYNC_TICK_INTERVAL_SECONDS: u64 = 30;
@@ -206,6 +208,9 @@ pub(crate) struct SyncContext {
     pub(crate) run_client: Arc<dyn ag_worker::RunClient>,
     /// Monotonic snapshot version used for stale-completion rejection.
     pub(crate) generation: u64,
+    /// Filesystem boundary used to read the project's review-watch
+    /// configuration.
+    pub(crate) fs_client: Arc<dyn FsClient>,
     /// Git boundary used for fetch, ahead/behind, and merge-conflict queries.
     pub(crate) git_client: Arc<dyn GitClient>,
     /// Active project branch, or `None` when the project has no git branch
@@ -570,6 +575,15 @@ impl SyncOrchestrator {
         let review_pass_index = self.review_pass_index;
         self.review_pass_index = self.review_pass_index.wrapping_add(1);
         let mut updates = Vec::new();
+        let review_watch_config = if context
+            .review_request_sync_targets
+            .iter()
+            .any(|target| target.is_watched)
+        {
+            ReviewWatchConfig::load(context.fs_client.as_ref(), &context.working_dir).await
+        } else {
+            Ok(ReviewWatchConfig::default())
+        };
 
         for review_request_sync_target in &context.review_request_sync_targets {
             if reject_stale_context && self.context_is_stale(context) {
@@ -584,6 +598,7 @@ impl SyncOrchestrator {
                 review_request_sync_target,
                 context.git_client.as_ref(),
                 context.review_request_client.as_ref(),
+                &review_watch_config,
             )
             .await;
 
@@ -845,12 +860,15 @@ async fn session_git_statuses(
 /// id. Otherwise, when the branch was published, this searches for an
 /// externally created review request by source branch name. An open linked
 /// review request of a watched target also reports the forge facts that may
-/// need automatic follow-up. A failed lookup of those facts is reported next
-/// to the refreshed summary instead of failing the refresh.
+/// need automatic follow-up, trusting the review bots named by
+/// `review_watch_config`. A failed lookup of those facts, or an invalid
+/// configuration, is reported next to the refreshed summary instead of
+/// failing the refresh.
 async fn sync_review_request_status(
     target: &ReviewRequestSyncTarget,
     git_client: &dyn GitClient,
     review_request_client: &dyn ReviewRequestClient,
+    review_watch_config: &Result<ReviewWatchConfig, String>,
 ) -> Result<SyncReviewRequestTaskResult, String> {
     let folder = target.folder.clone();
     let remote = review_request_remote(
@@ -871,12 +889,13 @@ async fn sync_review_request_status(
             session_head_hash_for_summary(git_client, &folder, &refreshed_summary).await;
         let attention = if target.is_watched && refreshed_summary.state == ReviewRequestState::Open
         {
-            Some(
-                review_request_client
-                    .fetch_review_request_attention(remote, display_id)
+            Some(match review_watch_config {
+                Ok(config) => review_request_client
+                    .fetch_review_request_attention(remote, display_id, config.trusted_bots.clone())
                     .await
                     .map_err(|error| error.detail_message()),
-            )
+                Err(error) => Err(error.clone()),
+            })
         } else {
             None
         };

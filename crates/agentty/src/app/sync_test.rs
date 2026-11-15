@@ -14,10 +14,12 @@ use super::{
     session_git_statuses, sync_review_request_status, sync_task_result_from_summary,
 };
 use crate::app::core::SyncReviewRequestTaskResult;
+use crate::app::review_watch_config::ReviewWatchConfig;
 use crate::app::session_state::SessionGitStatus;
 use crate::app::{AppEvent, session};
 use crate::domain::agent::AgentModel;
 use crate::domain::session::ReviewRequestState;
+use crate::infra::fs::MockFsClient;
 
 /// Builds one test review request summary for sync tests.
 fn test_review_request_summary(
@@ -79,6 +81,7 @@ fn sync_context_fixture(
     SyncContext {
         run_client: Arc::new(ag_worker::MockRunClient::new()),
         generation,
+        fs_client: Arc::new(MockFsClient::new()),
         git_client: Arc::new(MockGitClient::new()),
         project_branch_name: Some("main".to_string()),
         project_id: 1,
@@ -759,6 +762,7 @@ async fn sync_review_request_status_attaches_worktree_to_detected_remote() {
         &review_sync_target(folder, Some(linked), None, false),
         &mock_git_client,
         &mock_review_request_client,
+        &Ok(ReviewWatchConfig::default()),
     )
     .await
     .expect("sync should succeed");
@@ -852,6 +856,7 @@ async fn sync_review_request_status_falls_back_to_linked_web_url() {
         &review_sync_target(folder, Some(linked), None, false),
         &mock_git_client,
         &mock_review_request_client,
+        &Ok(ReviewWatchConfig::default()),
     )
     .await
     .expect("sync should use the linked review-request URL fallback");
@@ -936,6 +941,7 @@ async fn sync_review_request_status_maps_refresh_and_discovery_outcomes() {
             ),
             &mock_git_client,
             &mock_review_request_client,
+            &Ok(ReviewWatchConfig::default()),
         )
         .await;
 
@@ -1286,6 +1292,9 @@ async fn sync_review_request_status_reports_attention_only_for_watched_open_requ
         ("unwatched_open", false, ReviewRequestState::Open, false),
         ("watched_merged", true, ReviewRequestState::Merged, false),
     ];
+    let review_watch_config = Ok(ReviewWatchConfig {
+        trusted_bots: vec!["greptile-apps".to_string()],
+    });
     for (case, is_watched, state, expects_attention) in cases {
         let (mock_git_client, mut mock_review_request_client) =
             watched_review_status_sync_clients(state);
@@ -1294,8 +1303,10 @@ async fn sync_review_request_status_reports_attention_only_for_watched_open_requ
             mock_review_request_client
                 .expect_fetch_review_request_attention()
                 .once()
-                .withf(|_, display_id| display_id == "#42")
-                .returning(move |_, _| {
+                .withf(|_, display_id, trusted_bots| {
+                    display_id == "#42" && trusted_bots == &["greptile-apps".to_string()]
+                })
+                .returning(move |_, _, _| {
                     let attention = attention.clone();
 
                     Box::pin(async move { Ok(attention) })
@@ -1309,10 +1320,14 @@ async fn sync_review_request_status_reports_attention_only_for_watched_open_requ
         );
 
         // Act
-        let result =
-            sync_review_request_status(&target, &mock_git_client, &mock_review_request_client)
-                .await
-                .expect(case);
+        let result = sync_review_request_status(
+            &target,
+            &mock_git_client,
+            &mock_review_request_client,
+            &review_watch_config,
+        )
+        .await
+        .expect(case);
 
         // Assert
         assert_eq!(
@@ -1324,40 +1339,117 @@ async fn sync_review_request_status_reports_attention_only_for_watched_open_requ
 }
 
 #[tokio::test]
-/// A failed follow-up lookup is reported next to the refreshed summary, so
-/// watching never costs a session its ordinary review-request refresh.
+/// A failed follow-up lookup, or a configuration that cannot be read, is
+/// reported next to the refreshed summary, so watching never costs a session
+/// its ordinary review-request refresh.
 async fn sync_review_request_status_keeps_summary_when_attention_lookup_fails() {
     // Arrange
-    let (mock_git_client, mut mock_review_request_client) =
-        watched_review_status_sync_clients(ReviewRequestState::Open);
-    mock_review_request_client
-        .expect_fetch_review_request_attention()
-        .once()
-        .returning(|_, _| {
-            Box::pin(async { Err(forge_failure(ForgeKind::GitHub, "checks unavailable")) })
-        });
-    let target = review_sync_target(
-        PathBuf::from("/tmp/session-worktree"),
-        Some(linked_review_request("#42", ReviewRequestState::Open)),
-        None,
-        true,
-    );
+    let cases = [
+        (Ok(ReviewWatchConfig::default()), "checks unavailable"),
+        (
+            Err("Invalid `.agentty/review-watch.json`".to_string()),
+            "Invalid `.agentty/review-watch.json`",
+        ),
+    ];
+    for (review_watch_config, expected_error) in cases {
+        let (mock_git_client, mut mock_review_request_client) =
+            watched_review_status_sync_clients(ReviewRequestState::Open);
+        mock_review_request_client
+            .expect_fetch_review_request_attention()
+            .times(usize::from(review_watch_config.is_ok()))
+            .returning(|_, _, _| {
+                Box::pin(async { Err(forge_failure(ForgeKind::GitHub, "checks unavailable")) })
+            });
+        let target = review_sync_target(
+            PathBuf::from("/tmp/session-worktree"),
+            Some(linked_review_request("#42", ReviewRequestState::Open)),
+            None,
+            true,
+        );
 
-    // Act
-    let result = sync_review_request_status(&target, &mock_git_client, &mock_review_request_client)
+        // Act
+        let result = sync_review_request_status(
+            &target,
+            &mock_git_client,
+            &mock_review_request_client,
+            &review_watch_config,
+        )
         .await
         .expect("attention failure should not fail the sync");
 
-    // Assert
-    assert_eq!(
-        result.summary,
-        Some(test_review_request_summary("#42", ReviewRequestState::Open))
+        // Assert
+        assert_eq!(
+            result.summary,
+            Some(test_review_request_summary("#42", ReviewRequestState::Open))
+        );
+        let error = result
+            .attention
+            .expect("attention lookup should be reported")
+            .expect_err("attention lookup should fail");
+        assert!(error.contains(expected_error), "{error}");
+    }
+}
+
+#[tokio::test]
+/// A pass reads the project's review-watch configuration only when one of
+/// its targets is watched.
+async fn collect_review_request_pass_updates_loads_configuration_only_for_watched_targets() {
+    // Arrange
+    let mut fs_client = MockFsClient::new();
+    fs_client
+        .expect_read_file_prefix()
+        .once()
+        .withf(|path, _| path == Path::new("/tmp/project/.agentty/review-watch.json"))
+        .returning(|_, _| Box::pin(async { Ok(br#"{"trusted_bots":[""]}"#.to_vec()) }));
+    let (mock_git_client, mock_review_request_client) =
+        watched_review_status_sync_clients(ReviewRequestState::Open);
+    let mut watched_target = review_request_sync_target(
+        "session-1",
+        Some(linked_review_request("#42", ReviewRequestState::Open)),
     );
-    let error = result
+    watched_target.is_watched = true;
+    let watched_context = SyncContext {
+        fs_client: Arc::new(fs_client),
+        git_client: Arc::new(mock_git_client),
+        review_request_client: Arc::new(mock_review_request_client),
+        ..sync_context_fixture(0, vec![watched_target])
+    };
+    let unwatched_context = sync_context_fixture(0, Vec::new());
+    let (app_event_tx, _app_event_rx) = mpsc::unbounded_channel();
+    let (_command_tx, command_rx) = mpsc::unbounded_channel();
+    let (_context_tx, context_rx) = watch::channel(sync_context_fixture(0, Vec::new()));
+    let mut orchestrator = SyncOrchestrator {
+        app_event_tx,
+        command_rx,
+        context_rx,
+        review_pass_index: 0,
+        review_sync_failures: HashMap::new(),
+        tick_index: 0,
+    };
+
+    // Act
+    let unwatched_updates = orchestrator
+        .collect_review_request_pass_updates(&unwatched_context, true)
+        .await;
+    let watched_updates = orchestrator
+        .collect_review_request_pass_updates(&watched_context, true)
+        .await;
+
+    // Assert
+    assert!(unwatched_updates.is_empty());
+    assert_eq!(watched_updates.len(), 1);
+    let error = watched_updates[0]
+        .result
+        .as_ref()
+        .expect("refresh should succeed")
         .attention
-        .expect("attention lookup should be reported")
-        .expect_err("attention lookup should fail");
-    assert!(error.contains("checks unavailable"), "{error}");
+        .clone()
+        .expect("watched target should report attention")
+        .expect_err("invalid configuration should be reported");
+    assert!(
+        error.starts_with("`.agentty/review-watch.json` needs nonempty"),
+        "{error}"
+    );
 }
 
 #[test]

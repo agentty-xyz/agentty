@@ -555,16 +555,28 @@ follow-up:
 1. **Review comments**: addresses unresolved threads where you or a trusted author await
    a response, as described in
    [Addressing Review Comments](@/docs/usage/workflow.md#addressing-review-comments).
-   Comments from other authors are ignored.
+   Comments from other authors are ignored. When all checks have finished, failed checks
+   join the same turn, so a problem reported by both a check and a comment is fixed once
+   and its thread is still answered and resolved.
 1. **Failing checks**: after all checks finish, starts a turn to fix the failed ones. As
    with review comments, the generated prompt stays out of the transcript. If other work
    is still running, such as a push, the fix waits in the queue as
    `fix N failing checks: <names>`. While the turn runs, the status line shows
    `Addressing N failing checks: <names>...`.
 
-Trusted authors are GitHub owners, members, and collaborators, or GitLab project members
-with at least the Developer role. Each `[Review Watch]` notice records what was started.
-The session returns to **Watching** when the follow-up finishes.
+Trusted authors are GitHub owners, members, and collaborators, GitLab project members
+with at least the Developer role, and the review bots you list in
+`.agentty/review-watch.json` in the project folder:
+
+```json
+{ "trusted_bots": ["greptile-apps"] }
+```
+
+On GitHub, a listed login matches only a bot account, such as a GitHub App's bot; on
+GitLab, it matches the comment author's username. A trusted bot's own failed check is
+not fixed separately, because its findings arrive as its review comments. Without the
+file, no bot is trusted. Each `[Review Watch]` notice records what was started. The
+session returns to **Watching** when the follow-up finishes.
 
 Agentty tries each conflict or failed check once per pushed commit, and each thread once
 per new reviewer comment, so an unsuccessful attempt is not repeated until the review

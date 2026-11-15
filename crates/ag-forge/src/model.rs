@@ -474,18 +474,23 @@ pub struct ReviewCheckFailure {
 #[derive(Clone, Debug, Default, Eq, PartialEq)]
 pub struct ReviewRequestAttention {
     /// Completed checks that failed for `head_commit`.
+    ///
+    /// Checks reported by a trusted review bot are omitted: that bot's
+    /// findings arrive as its review threads, so they are addressed once,
+    /// through those threads.
     pub failed_checks: Vec<ReviewCheckFailure>,
     /// Whether the forge reports conflicts with the target branch.
     pub has_merge_conflict: bool,
-    /// Whether any check for `head_commit` is still queued or running.
+    /// Whether any check for `head_commit` is still queued or running,
+    /// including checks reported by trusted review bots.
     pub has_pending_checks: bool,
     /// Commit at the head of the source branch as seen by the forge.
     pub head_commit: String,
     /// Unresolved threads whose latest trusted comment awaits a response.
-    /// Trusted authors are the authenticated user and anyone the forge
-    /// reports with write-level project membership. Comments from other
-    /// authors are omitted and never decide whether a thread needs a
-    /// response.
+    /// Trusted authors are the authenticated user, anyone the forge reports
+    /// with write-level project membership, and the review bots the caller
+    /// trusts. Comments from other authors are omitted and never decide
+    /// whether a thread needs a response.
     pub review_threads: Vec<ReviewCommentThread>,
 }
 

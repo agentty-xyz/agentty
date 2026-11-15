@@ -48,17 +48,17 @@ const PULL_REQUEST_ATTENTION_QUERY: &str =
     "query($owner: String!, $repo: String!, $number: Int!, $endCursor: String) { \
      repository(owner: $owner, name: $repo) { pullRequest(number: $number) { headRefOid mergeable \
      statusCheckRollup { contexts(first: 100, after: $endCursor) { nodes { __typename ... on \
-     CheckRun { name status conclusion detailsUrl } ... on StatusContext { context state \
-     targetUrl } } pageInfo { hasNextPage endCursor } } } } } }";
+     CheckRun { name status conclusion detailsUrl checkSuite { app { slug } } } ... on \
+     StatusContext { context state targetUrl } } pageInfo { hasNextPage endCursor } } } } } }";
 
 /// Paginated GraphQL query used to fetch review threads for one pull request.
 const REVIEW_THREADS_QUERY: &str =
     "query($owner: String!, $repo: String!, $number: Int!, $endCursor: String) { \
      repository(owner: $owner, name: $repo) { pullRequest(number: $number) { reviewThreads(first: \
      100, after: $endCursor) { nodes { id diffSide isOutdated isResolved line path startLine \
-     subjectType comments(first: 100) { nodes { author { login } authorAssociation body \
-     viewerDidAuthor } pageInfo { hasNextPage endCursor } } } pageInfo { hasNextPage endCursor } \
-     } } } }";
+     subjectType comments(first: 100) { nodes { author { __typename login } authorAssociation \
+     body viewerDidAuthor } pageInfo { hasNextPage endCursor } } } pageInfo { hasNextPage \
+     endCursor } } } } }";
 /// Paginated GraphQL query used to fetch pull-request conversation comments.
 const PULL_REQUEST_COMMENTS_QUERY: &str =
     "query($owner: String!, $repo: String!, $number: Int!, $endCursor: String) { \
@@ -66,10 +66,11 @@ const PULL_REQUEST_COMMENTS_QUERY: &str =
      after: $endCursor) { nodes { author { login } body viewerDidAuthor } pageInfo { hasNextPage \
      endCursor } } } } }";
 /// Paginated GraphQL query used when one review thread exceeds 100 comments.
-const THREAD_COMMENTS_QUERY: &str =
-    "query($threadId: ID!, $endCursor: String) { node(id: $threadId) { ... on \
-     PullRequestReviewThread { comments(first: 100, after: $endCursor) { nodes { author { login } \
-     authorAssociation body viewerDidAuthor } pageInfo { hasNextPage endCursor } } } } }";
+const THREAD_COMMENTS_QUERY: &str = "query($threadId: ID!, $endCursor: String) { node(id: \
+                                     $threadId) { ... on PullRequestReviewThread { \
+                                     comments(first: 100, after: $endCursor) { nodes { author { \
+                                     __typename login } authorAssociation body viewerDidAuthor } \
+                                     pageInfo { hasNextPage endCursor } } } } }";
 /// GraphQL mutation used to add one reply to a pull-request review thread.
 const REPLY_TO_THREAD_MUTATION: &str =
     "mutation($threadId: ID!, $body: String!) { addPullRequestReviewThreadReply(input: { \
@@ -324,8 +325,13 @@ impl GitHubReviewRequestAdapter {
     ///
     /// Every page must report the same head commit; otherwise the checks
     /// belong to different commits and the lookup fails instead of reporting
-    /// mixed facts.
-    fn parse_attention_pages(stdout: &str) -> Result<ReviewRequestAttention, String> {
+    /// mixed facts. Failed check runs reported by an app in `trusted_bots`
+    /// are left to that bot's review threads; they still count as pending
+    /// while they run.
+    fn parse_attention_pages(
+        stdout: &str,
+        trusted_bots: &[String],
+    ) -> Result<ReviewRequestAttention, String> {
         let responses: Vec<GitHubAttentionEnvelope> = serde_json::from_str(stdout)
             .map_err(|error| format!("invalid GitHub pull-request attention response: {error}"))?;
         let mut combined: Option<ReviewRequestAttention> = None;
@@ -356,8 +362,10 @@ impl GitHubReviewRequestAdapter {
                 .flat_map(|rollup| rollup.contexts.nodes)
                 .flatten();
             for check_context in check_contexts {
-                attention.failed_checks.extend(check_context.failure());
                 attention.has_pending_checks |= check_context.is_pending();
+                if !check_context.is_reported_by(trusted_bots) {
+                    attention.failed_checks.extend(check_context.failure());
+                }
             }
         }
 
@@ -614,12 +622,13 @@ impl GitHubReviewRequestAdapter {
     /// whose latest trusted comment is an Agentty reply.
     fn trusted_review_thread_from_node(
         node: GitHubReviewThreadNode,
+        trusted_bots: &[String],
     ) -> Option<ReviewCommentThread> {
         let trusted_comments = node
             .comments
             .nodes
             .iter()
-            .map(GitHubReviewCommentNode::is_trusted_author)
+            .map(|comment| comment.is_trusted_author(trusted_bots))
             .collect::<Vec<_>>();
         let mut thread = Self::review_comment_thread_from_node(node);
         thread.comments = std::mem::take(&mut thread.comments)
@@ -923,6 +932,7 @@ impl ReviewRequestAdapter for GitHubReviewRequestAdapter {
         &self,
         remote: ForgeRemote,
         display_id: String,
+        trusted_bots: Vec<String>,
     ) -> ForgeFuture<Result<ReviewRequestAttention, ReviewRequestError>> {
         let operations = self.operations.clone();
 
@@ -937,13 +947,13 @@ impl ReviewRequestAdapter for GitHubReviewRequestAdapter {
                 .await?;
             let mut attention = map_parse_error(
                 ForgeKind::GitHub,
-                Self::parse_attention_pages(&attention_output.stdout),
+                Self::parse_attention_pages(&attention_output.stdout, &trusted_bots),
             )?;
             attention.review_threads =
                 Self::fetch_review_thread_nodes(&operations, &remote, &pull_request_number)
                     .await?
                     .into_iter()
-                    .filter_map(Self::trusted_review_thread_from_node)
+                    .filter_map(|node| Self::trusted_review_thread_from_node(node, &trusted_bots))
                     .collect();
 
             Ok(attention)
@@ -1123,18 +1133,23 @@ struct GitHubReviewCommentNode {
 }
 
 impl GitHubReviewCommentNode {
-    /// Returns whether the authenticated user wrote this comment or GitHub
+    /// Returns whether the authenticated user wrote this comment, GitHub
     /// reports its author as a repository owner, organization member, or
-    /// collaborator.
+    /// collaborator, or its author is a bot account listed in
+    /// `trusted_bots`.
     ///
     /// Previous contributors stay untrusted: GitHub reports that association
-    /// for anyone with a merged commit, with or without write access.
-    fn is_trusted_author(&self) -> bool {
+    /// for anyone with a merged commit, with or without write access. A user
+    /// account sharing a trusted bot's login stays untrusted too.
+    fn is_trusted_author(&self, trusted_bots: &[String]) -> bool {
         self.viewer_did_author
             || matches!(
                 self.author_association.as_deref(),
                 Some("OWNER" | "MEMBER" | "COLLABORATOR")
             )
+            || self.author.as_ref().is_some_and(|author| {
+                author.typename == "Bot" && trusted_bots.contains(&author.login)
+            })
     }
 }
 
@@ -1143,6 +1158,9 @@ impl GitHubReviewCommentNode {
 #[derive(Deserialize)]
 struct GitHubReviewCommentAuthor {
     login: String,
+    /// GraphQL actor type, such as `User` or `Bot`.
+    #[serde(default, rename = "__typename")]
+    typename: String,
 }
 
 /// Outer GraphQL attention response returned by `gh api graphql`.
@@ -1187,10 +1205,12 @@ struct GitHubCheckContextConnection {
 }
 
 /// One check run or commit status. Check runs carry `name`, `status`,
-/// `conclusion`, and `detailsUrl`; status contexts carry `context`, `state`,
-/// and `targetUrl`.
+/// `conclusion`, `detailsUrl`, and their reporting app; status contexts carry
+/// `context`, `state`, and `targetUrl`.
 #[derive(Deserialize)]
 struct GitHubCheckContextNode {
+    #[serde(default, rename = "checkSuite")]
+    check_suite: Option<GitHubCheckSuite>,
     conclusion: Option<String>,
     context: Option<String>,
     #[serde(rename = "detailsUrl")]
@@ -1205,6 +1225,15 @@ struct GitHubCheckContextNode {
 }
 
 impl GitHubCheckContextNode {
+    /// Returns whether this check run was reported by an app whose bot login
+    /// is listed in `trusted_bots`. A GitHub App's bot login is its slug.
+    fn is_reported_by(&self, trusted_bots: &[String]) -> bool {
+        self.check_suite
+            .as_ref()
+            .and_then(|check_suite| check_suite.app.as_ref())
+            .is_some_and(|app| trusted_bots.contains(&app.slug))
+    }
+
     /// Returns the normalized failure when this completed check failed.
     ///
     /// Cancelled, skipped, neutral, stale, and action-required check runs and
@@ -1246,6 +1275,19 @@ impl GitHubCheckContextNode {
             _ => false,
         }
     }
+}
+
+/// Check suite that owns one check run.
+#[derive(Deserialize)]
+struct GitHubCheckSuite {
+    /// App that reported the suite; absent for suites without an app.
+    app: Option<GitHubCheckApp>,
+}
+
+/// GitHub App that reported one check suite.
+#[derive(Deserialize)]
+struct GitHubCheckApp {
+    slug: String,
 }
 
 /// Outer GraphQL status response returned by `gh api graphql`.
