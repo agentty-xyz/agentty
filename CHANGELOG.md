@@ -7,6 +7,66 @@ this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
 
 ## [Unreleased]
 
+## [v0.19.0] - 2026-11-14
+
+### Added
+
+- `agentty`: add the `/graph` split-screen workflow with model-generated proposals,
+  graph node questions in the question panel and chat, attachments in graph chat input,
+  chat replies that accept or revise awaiting outputs, and persisted provider-call
+  budgets.
+- `agentty`: add a `Watching` status that follows up on review requests automatically,
+  asks to watch after branch name input, and routes follow-ups through comment
+  resolution.
+- `agentty`: show `[ready (bypass)]` for conflict-free, admin-mergeable pull requests
+  once required checks report.
+- `agentty`: let users set the subagent limit for Claude and Codex sessions, and allow
+  setting slash commands while sessions are busy.
+- `agentty`: show one-line file descriptions for Rust and Python files in `@` mention
+  suggestions, and greet new draft sessions with an animated braille nerpa.
+- docs: add SEO metadata, a sitemap, a social card, a 404 page, and a glyph-art hero
+  animation to the docs site.
+
+### Changed
+
+- `agentty`: move resource stats from the session chat header to the tab bar, color the
+  session size badge by size, and refine session list row layout.
+- `agentty`: defer automatic push until queued session actions finish, and generate
+  session titles for graph proposal requests.
+- `agentty`: replace Claude Fable 5.1 and Haiku 4.5 with Fable 5.2 and Haiku 5.5, update
+  the Antigravity model catalog and reasoning efforts, and disable the Claude command
+  sandbox in Auto Edit mode.
+- `agentty`: replace the bottom help line on every screen with a `?: help` hint in the
+  top line.
+- `agentty`: show an error for unsupported fast mode instead of switching models.
+- workspace: upgrade `agent-client-protocol` to `5.0.0`, pin SQLx to the SQLite security
+  fix, require 100% line and function coverage, and update dependencies, GitHub Actions,
+  and the Rust toolchain.
+- release: bump workspace crate metadata and lockfile package versions to `0.19.0`.
+
+### Fixed
+
+- `agentty`: keep clipboard PNG payloads intact on image paste and insert a space
+  between pasted image placeholders and typed text.
+- `agentty`: keep session output scrolling responsive for long histories, preserve
+  session view scroll offsets, and preserve tree connectors in narrow diff file rows.
+- `agentty`: indent multi-paragraph review items and wrapped list rows, and remove the
+  empty session header row left by the old resources line.
+- `agentty`: list help popup shortcuts that match the actual keybindings.
+- `agentty`: handle resource sensor discovery failures and unwrap self-wrapped utility
+  answers in protocol parsing.
+
+### Removed
+
+- `agentty`: remove plan mode in favor of graph workflows.
+- `agentty`: remove Gemini CLI agent support and FYI hints from the TUI.
+
+### Contributors
+
+- @andagaev
+- @dependabot
+- @minev-dev
+
 ## [v0.18.3] - 2026-11-05
 
 ### Changed
