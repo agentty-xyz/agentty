@@ -10,8 +10,8 @@ use super::{
     EMPTY_SESSIONS_HINT, SessionListPage, TABLE_COLUMN_SPACING, column_width,
     extend_row_backgrounds_to_page_edges, model_column_width, pr_ready_label,
     prepare_grouped_table_state, prepared_session_rows, reasoning_level_color, selected_render_row,
-    selected_session_id, session_list_help_line, size_color, status_column_width,
-    timer_column_width, tree_position_label,
+    selected_session_id, session_list_help_line, status_column_width, timer_column_width,
+    tree_position_label,
 };
 use crate::app::session_state::SessionGitStatus;
 use crate::domain::agent::{AgentModel, ReasoningLevel};
@@ -903,24 +903,6 @@ fn test_render_size_badges_share_one_title_column() {
         title_columns.windows(2).all(|pair| pair[0] == pair[1]),
         "titles start at {title_columns:?}"
     );
-}
-
-#[test]
-fn test_size_color_uses_expected_palette() {
-    // Arrange
-    let test_cases = [
-        (SessionSize::Xs, style::palette::success()),
-        (SessionSize::S, style::palette::success_soft()),
-        (SessionSize::M, style::palette::warning()),
-        (SessionSize::L, style::palette::warning_soft()),
-        (SessionSize::Xl, style::palette::danger_soft()),
-        (SessionSize::Xxl, style::palette::danger()),
-    ];
-
-    // Act & Assert
-    for (size, expected_color) in test_cases {
-        assert_eq!(size_color(size), expected_color);
-    }
 }
 
 #[test]

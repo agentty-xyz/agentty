@@ -84,7 +84,13 @@ pub fn session_header_lines(
         .fg(style::palette::warning())
         .add_modifier(Modifier::BOLD);
     let mut title_spans = markdown::parse_inline_spans(&title_text, base_style);
-    title_spans.insert(0, Span::styled(format!("[{}] ", session.size), base_style));
+    title_spans.insert(
+        0,
+        Span::styled(
+            format!("[{}] ", session.size),
+            base_style.fg(style::size_color(session.size)),
+        ),
+    );
     let totals = vec![
         Span::styled("(", Style::default().fg(style::palette::warning())),
         Span::styled(

@@ -9,8 +9,10 @@ use super::{
 };
 use crate::domain::agent::{AgentModel, ResponseStyle};
 use crate::domain::session::{
-    ForgeKind, ReviewRequest, ReviewRequestState, ReviewRequestSummary, Session, Status,
+    ForgeKind, ReviewRequest, ReviewRequestState, ReviewRequestSummary, Session, SessionSize,
+    Status,
 };
+use crate::domain::theme::ColorTheme;
 use crate::presentation::frame_time::FrameTime;
 use crate::test_support::SessionFixtureBuilder;
 use crate::ui::icon::Icon;
@@ -165,6 +167,8 @@ fn test_session_header_lines_show_red_merge_conflict_alert() {
 
 #[test]
 fn session_header_keeps_in_progress_highlight_in_every_status() {
+    let _theme_scope = style::scoped_active_theme(ColorTheme::Current);
+
     for status in Status::ALL {
         // Arrange
         let mut session = SessionFixtureBuilder::new().build();
@@ -175,15 +179,34 @@ fn session_header_keeps_in_progress_highlight_in_every_status() {
         let header = session_header_lines(&session, 80, false);
 
         // Assert
-        for span in &header[0].spans[..2] {
-            assert_eq!(
-                span.style.fg,
-                Some(style::palette::warning()),
-                "title and size should keep the in-progress color for {status:?}"
-            );
-            assert!(span.style.add_modifier.contains(Modifier::BOLD));
-        }
+        let title_span = &header[0].spans[1];
+        assert_eq!(
+            title_span.style.fg,
+            Some(style::palette::warning()),
+            "title should keep the in-progress color for {status:?}"
+        );
+        assert!(title_span.style.add_modifier.contains(Modifier::BOLD));
         assert!(header[0].to_string().contains("Consistent session title"));
+    }
+}
+
+#[test]
+fn session_header_colors_size_badge_by_session_size() {
+    let _theme_scope = style::scoped_active_theme(ColorTheme::Current);
+
+    for size in SessionSize::ALL {
+        // Arrange
+        let mut session = SessionFixtureBuilder::new().build();
+        session.size = size;
+
+        // Act
+        let header = session_header_lines(&session, 80, false);
+
+        // Assert
+        let badge_span = &header[0].spans[0];
+        assert_eq!(badge_span.content, format!("[{size}] "));
+        assert_eq!(badge_span.style.fg, Some(style::size_color(size)));
+        assert!(badge_span.style.add_modifier.contains(Modifier::BOLD));
     }
 }
 
