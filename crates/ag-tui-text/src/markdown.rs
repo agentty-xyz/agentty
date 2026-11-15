@@ -662,6 +662,10 @@ fn render_markdown_line(raw_line: &str, width: usize) -> Vec<Line<'static>> {
         return vec![horizontal_rule_line(width)];
     }
 
+    if let Some(lines) = render_indented_line(raw_line, width) {
+        return lines;
+    }
+
     if let Some(content) = raw_line.strip_prefix("> ") {
         return render_prefixed_inline_line(
             "│ ",
@@ -698,6 +702,46 @@ fn render_markdown_line(raw_line: &str, width: usize) -> Vec<Line<'static>> {
     }
 
     render_inline_line(raw_line, Style::default(), width)
+}
+
+/// Renders a space-indented line with its indentation repeated on every
+/// wrapped row, so nested list items and list-item continuation paragraphs
+/// stay visually attached to their parent item.
+///
+/// Rows still wider than the space left after indentation, such as long paths
+/// or URLs, wrap at character boundaries so the indentation cannot push their
+/// ends past `width`.
+///
+/// Returns `None` for unindented or blank lines and when the indentation
+/// leaves no room for content.
+fn render_indented_line(raw_line: &str, width: usize) -> Option<Vec<Line<'static>>> {
+    let content = raw_line.trim_start_matches(' ');
+    let indent_width = raw_line.len() - content.len();
+    if indent_width == 0 || content.trim().is_empty() || indent_width >= width {
+        return None;
+    }
+
+    let indent = &raw_line[..indent_width];
+    let content_width = width - indent_width;
+    let lines = render_markdown_line(content, content_width)
+        .into_iter()
+        .flat_map(|line| {
+            if line.width() > content_width {
+                return wrap_verbatim_spans(line.spans, content_width);
+            }
+
+            vec![line]
+        })
+        .map(|line| {
+            let mut spans = Vec::with_capacity(line.spans.len() + 1);
+            spans.push(Span::raw(indent.to_string()));
+            spans.extend(line.spans);
+
+            Line::from(spans)
+        })
+        .collect();
+
+    Some(lines)
 }
 
 fn render_prefixed_inline_line(

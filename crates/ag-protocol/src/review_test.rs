@@ -62,6 +62,39 @@ fn focused_review_formats_structured_fields_as_markdown() {
 }
 
 #[test]
+fn focused_review_indents_multi_paragraph_items_under_their_bullets() {
+    // Arrange
+    let review = FocusedReview {
+        candidate_decisions: Vec::new(),
+        project_impact: vec!["Speeds up paste.\n\nAffects X11.".to_string()],
+        suggestions: vec![
+            FocusedReviewSuggestion {
+                evidence: None,
+                details: "Repeated read.\n\nRuns twice:\n- X11 waits again.  \n\nRead once."
+                    .to_string(),
+                severity: FocusedReviewSeverity::Medium,
+            },
+            FocusedReviewSuggestion {
+                evidence: None,
+                details: "Next finding.".to_string(),
+                severity: FocusedReviewSeverity::High,
+            },
+        ],
+    };
+
+    // Act
+    let markdown = review.to_markdown();
+
+    // Assert
+    assert_eq!(
+        markdown,
+        "## Review\n\n### Project Impact\n\n- Speeds up paste.\n\n  Affects X11.\n\n### \
+         Suggestions\n\n- [Medium] (unanchored): Repeated read.\n\n  Runs twice:\n  - X11 waits \
+         again.\n\n  Read once.\n- [High] (unanchored): Next finding."
+    );
+}
+
+#[test]
 fn focused_review_formats_empty_arrays_with_none_sentinels() {
     // Arrange
     let review = FocusedReview {
