@@ -460,6 +460,7 @@ async fn test_session_review_comment_result_updates_open_diff_help_overlay() {
     app.mode = AppMode::Help {
         context: HelpContext::Diff {
             can_comment: true,
+            can_reply_review_comments: false,
             diff: String::new(),
             file_explorer_selected_index: 0,
             focus: DiffFocus::Files,
@@ -1321,6 +1322,7 @@ async fn test_diff_preview_event_resolves_while_help_is_open() {
     app.mode = AppMode::Help {
         context: HelpContext::Diff {
             can_comment: true,
+            can_reply_review_comments: false,
             diff: "diff --git a/README.md b/README.md\n+preview".to_string(),
             file_explorer_selected_index: 0,
             focus: DiffFocus::Files,

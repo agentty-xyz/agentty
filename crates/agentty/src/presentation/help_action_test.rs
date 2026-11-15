@@ -1,12 +1,9 @@
 use super::{
-    DiffFileCommentAvailability, DiffFooterContext, DiffLineCommentFooterState,
-    PROMPT_IMAGE_PASTE_SHORTCUT_LABEL, ViewActionAvailability, ViewHelpState, ViewSessionState,
-    diff_actions, diff_footer_actions, project_list_actions, session_list_actions,
-    session_list_footer_actions, session_view_state, settings_actions, view_actions,
-    view_actions_with_review_request, view_footer_actions,
+    DiffReviewCommentHelp, PROMPT_IMAGE_PASTE_SHORTCUT_LABEL, ViewActionAvailability,
+    ViewHelpState, ViewSessionState, diff_actions, project_list_actions, session_list_actions,
+    session_view_state, settings_actions, view_actions, view_actions_with_review_request,
 };
 use crate::domain::session::{PublishBranchAction, ReviewWatchToggle, Status};
-use crate::presentation::app_mode::{DiffFocus, DiffSidebarFocus};
 use crate::test_support::SessionFixtureBuilder;
 
 #[test]
@@ -59,6 +56,17 @@ fn test_session_list_actions_include_switch_project_shortcut() {
 }
 
 #[test]
+fn test_session_list_actions_include_cancel_and_open_for_selected_session() {
+    // Arrange
+    // Act
+    let actions = session_list_actions(true, true);
+
+    // Assert
+    assert!(actions.iter().any(|action| action.key == "c"));
+    assert!(actions.iter().any(|action| action.key == "Enter"));
+}
+
+#[test]
 fn test_session_list_actions_hide_enter_without_openable_session() {
     // Arrange
     // Act
@@ -70,40 +78,7 @@ fn test_session_list_actions_hide_enter_without_openable_session() {
 }
 
 #[test]
-fn test_session_list_footer_actions_hides_non_critical_session_commands() {
-    // Arrange
-
-    // Act
-    let actions = session_list_footer_actions(false, true);
-
-    // Assert
-    assert!(actions.iter().any(|action| action.key == "Enter"));
-    assert!(actions.iter().any(|action| action.key == "a"));
-    assert!(
-        actions
-            .iter()
-            .any(|action| action.key == "p" && action.footer_label == "projects")
-    );
-    assert!(!actions.iter().any(|action| action.key == "d"));
-    assert!(!actions.iter().any(|action| action.key == "c"));
-    assert!(!actions.iter().any(|action| action.key == "Tab"));
-}
-
-#[test]
-fn test_session_list_footer_actions_includes_cancel_when_session_is_cancelable() {
-    // Arrange
-
-    // Act
-    let actions = session_list_footer_actions(true, true);
-
-    // Assert
-    assert!(actions.iter().any(|action| action.key == "c"));
-    assert!(actions.iter().any(|action| action.key == "Enter"));
-    assert!(!actions.iter().any(|action| action.key == "Tab"));
-}
-
-#[test]
-fn test_view_actions_in_progress_shows_stop_and_sync_and_hides_open_and_edit_actions() {
+fn test_view_actions_in_progress_shows_stop_sync_and_queue_and_hides_open_and_commands() {
     // Arrange
     let state = ViewHelpState {
         can_fork_session: ViewActionAvailability::Enabled,
@@ -124,9 +99,38 @@ fn test_view_actions_in_progress_shows_stop_and_sync_and_hides_open_and_edit_act
     // Assert
     assert!(actions.iter().any(|action| action.key == "Ctrl+c"));
     assert!(actions.iter().any(|action| action.key == "r"));
-    assert!(!actions.iter().any(|action| action.key == "Enter"));
+    assert!(
+        actions
+            .iter()
+            .any(|action| action.key == "Enter" && action.popup_label == "Queue message")
+    );
+    assert!(!actions.iter().any(|action| action.key == "/"));
     assert!(!actions.iter().any(|action| action.key == "o"));
     assert!(actions.iter().any(|action| action.key == "d"));
+}
+
+#[test]
+fn test_view_actions_in_progress_hides_queue_when_stack_blocks_reply() {
+    // Arrange
+    let state = ViewHelpState {
+        can_fork_session: ViewActionAvailability::Disabled,
+        can_merge_session_branch: ViewActionAvailability::Disabled,
+        can_mutate_session_branch: ViewActionAvailability::Disabled,
+        can_rebase_session_branch: ViewActionAvailability::Disabled,
+        can_show_diff: ViewActionAvailability::Disabled,
+        can_open_worktree: ViewActionAvailability::Disabled,
+        reply_to_session: ViewActionAvailability::Disabled,
+        can_start_staged_session: ViewActionAvailability::Disabled,
+        publish_pull_request_action: None,
+        session_state: ViewSessionState::InProgress,
+    };
+
+    // Act
+    let actions = view_actions(state);
+
+    // Assert
+    assert!(!actions.iter().any(|action| action.key == "Enter"));
+    assert!(actions.iter().any(|action| action.key == "Ctrl+c"));
 }
 
 #[test]
@@ -376,11 +380,9 @@ fn test_review_actions_hide_commands_when_mutation_and_reply_are_blocked() {
 
     // Act
     let actions = view_actions(state);
-    let footer_actions = view_footer_actions(state);
 
     // Assert
     assert!(!actions.iter().any(|action| action.key == "/"));
-    assert!(!footer_actions.iter().any(|action| action.key == "/"));
 }
 
 #[test]
@@ -594,291 +596,6 @@ fn test_view_actions_done_shows_continue_and_hides_edit_actions() {
 }
 
 #[test]
-fn test_view_footer_actions_review_shows_advanced_actions() {
-    // Arrange
-    let state = ViewHelpState {
-        can_fork_session: ViewActionAvailability::Enabled,
-        can_merge_session_branch: ViewActionAvailability::Enabled,
-        can_mutate_session_branch: ViewActionAvailability::Enabled,
-        can_rebase_session_branch: ViewActionAvailability::Enabled,
-        can_show_diff: ViewActionAvailability::Enabled,
-        can_open_worktree: ViewActionAvailability::Enabled,
-        reply_to_session: ViewActionAvailability::Enabled,
-        can_start_staged_session: ViewActionAvailability::Disabled,
-        publish_pull_request_action: Some(PublishBranchAction::PublishPullRequest),
-        session_state: ViewSessionState::Review,
-    };
-
-    // Act
-    let actions = view_footer_actions(state);
-
-    // Assert
-    assert!(actions.iter().any(|action| action.key == "Enter"));
-    assert!(actions.iter().any(|action| action.key == "/"));
-    assert!(actions.iter().any(|action| action.key == "o"));
-    assert!(actions.iter().any(|action| action.key == "f"));
-    assert!(actions.iter().any(|action| action.key == "F"));
-    assert!(actions.iter().any(|action| action.key == "p"));
-    assert!(actions.iter().any(|action| action.key == "p"));
-    assert!(actions.iter().any(|action| action.key == "m"));
-    assert!(actions.iter().any(|action| action.key == "r"));
-}
-
-#[test]
-fn test_view_footer_actions_review_hides_fork_when_unavailable() {
-    // Arrange
-    let state = ViewHelpState {
-        can_fork_session: ViewActionAvailability::Disabled,
-        can_merge_session_branch: ViewActionAvailability::Enabled,
-        can_mutate_session_branch: ViewActionAvailability::Enabled,
-        can_rebase_session_branch: ViewActionAvailability::Enabled,
-        can_show_diff: ViewActionAvailability::Enabled,
-        can_open_worktree: ViewActionAvailability::Enabled,
-        reply_to_session: ViewActionAvailability::Enabled,
-        can_start_staged_session: ViewActionAvailability::Disabled,
-        publish_pull_request_action: Some(PublishBranchAction::PublishPullRequest),
-        session_state: ViewSessionState::Review,
-    };
-
-    // Act
-    let actions = view_footer_actions(state);
-
-    // Assert
-    assert!(!actions.iter().any(|action| action.key == "F"));
-}
-
-#[test]
-fn test_view_footer_actions_review_keeps_commands_when_stack_allows_reply() {
-    // Arrange
-    let state = ViewHelpState {
-        can_fork_session: ViewActionAvailability::Enabled,
-        can_merge_session_branch: ViewActionAvailability::Enabled,
-        can_mutate_session_branch: ViewActionAvailability::Disabled,
-        can_rebase_session_branch: ViewActionAvailability::Enabled,
-        can_show_diff: ViewActionAvailability::Enabled,
-        can_open_worktree: ViewActionAvailability::Enabled,
-        reply_to_session: ViewActionAvailability::Enabled,
-        can_start_staged_session: ViewActionAvailability::Disabled,
-        publish_pull_request_action: Some(PublishBranchAction::PublishPullRequest),
-        session_state: ViewSessionState::Review,
-    };
-
-    // Act
-    let actions = view_footer_actions(state);
-
-    // Assert
-    assert!(actions.iter().any(|action| action.key == "o"));
-    assert!(actions.iter().any(|action| action.key == "f"));
-    assert!(actions.iter().any(|action| action.key == "p"));
-    assert!(actions.iter().any(|action| action.key == "Enter"));
-    assert!(actions.iter().any(|action| action.key == "/"));
-    assert!(actions.iter().any(|action| action.key == "m"));
-    assert!(actions.iter().any(|action| action.key == "r"));
-}
-
-#[test]
-fn test_view_footer_actions_review_uses_merge_gate_separately_from_sync() {
-    // Arrange
-    let state = ViewHelpState {
-        can_fork_session: ViewActionAvailability::Enabled,
-        can_merge_session_branch: ViewActionAvailability::Enabled,
-        can_mutate_session_branch: ViewActionAvailability::Disabled,
-        can_rebase_session_branch: ViewActionAvailability::Disabled,
-        can_show_diff: ViewActionAvailability::Enabled,
-        can_open_worktree: ViewActionAvailability::Enabled,
-        reply_to_session: ViewActionAvailability::Enabled,
-        can_start_staged_session: ViewActionAvailability::Disabled,
-        publish_pull_request_action: None,
-        session_state: ViewSessionState::Review,
-    };
-
-    // Act
-    let actions = view_footer_actions(state);
-
-    // Assert
-    assert!(actions.iter().any(|action| action.key == "m"));
-    assert!(!actions.iter().any(|action| action.key == "r"));
-    assert!(actions.iter().any(|action| action.key == "/"));
-}
-
-#[test]
-fn test_view_footer_actions_agent_review_shows_sync() {
-    // Arrange
-    let state = ViewHelpState {
-        can_fork_session: ViewActionAvailability::Enabled,
-        can_merge_session_branch: ViewActionAvailability::Enabled,
-        can_mutate_session_branch: ViewActionAvailability::Enabled,
-        can_rebase_session_branch: ViewActionAvailability::Enabled,
-        can_show_diff: ViewActionAvailability::Enabled,
-        can_open_worktree: ViewActionAvailability::Enabled,
-        reply_to_session: ViewActionAvailability::Enabled,
-        can_start_staged_session: ViewActionAvailability::Disabled,
-        publish_pull_request_action: Some(PublishBranchAction::PublishPullRequest),
-        session_state: ViewSessionState::AgentReview,
-    };
-
-    // Act
-    let actions = view_footer_actions(state);
-
-    // Assert
-    assert!(actions.iter().any(|action| action.key == "Enter"));
-    assert!(actions.iter().any(|action| action.key == "/"));
-    assert!(actions.iter().any(|action| action.key == "o"));
-    assert!(actions.iter().any(|action| action.key == "f"));
-    assert!(actions.iter().any(|action| action.key == "p"));
-    assert!(actions.iter().any(|action| action.key == "p"));
-    assert!(actions.iter().any(|action| action.key == "m"));
-    assert!(actions.iter().any(|action| action.key == "r"));
-}
-
-#[test]
-fn test_view_footer_actions_rebasing_shows_queue_publish_and_hides_open_and_stop() {
-    // Arrange
-    let state = ViewHelpState {
-        can_fork_session: ViewActionAvailability::Enabled,
-        can_merge_session_branch: ViewActionAvailability::Enabled,
-        can_mutate_session_branch: ViewActionAvailability::Enabled,
-        can_rebase_session_branch: ViewActionAvailability::Enabled,
-        can_show_diff: ViewActionAvailability::Enabled,
-        can_open_worktree: ViewActionAvailability::Enabled,
-        reply_to_session: ViewActionAvailability::Enabled,
-        can_start_staged_session: ViewActionAvailability::Disabled,
-        publish_pull_request_action: Some(PublishBranchAction::PublishPullRequest),
-        session_state: ViewSessionState::Rebasing,
-    };
-
-    // Act
-    let actions = view_footer_actions(state);
-
-    // Assert
-    assert!(!actions.iter().any(|action| action.key == "o"));
-    assert!(actions.iter().any(|action| action.key == "p"));
-    assert!(!actions.iter().any(|action| action.key == "Ctrl+c"));
-    assert!(
-        actions
-            .iter()
-            .any(|action| { action.key == "Enter" && action.footer_label == "queue message" })
-    );
-}
-
-#[test]
-fn test_view_footer_actions_new_session_keeps_edit_actions_grouped() {
-    // Arrange
-    let state = ViewHelpState {
-        can_fork_session: ViewActionAvailability::Enabled,
-        can_merge_session_branch: ViewActionAvailability::Enabled,
-        can_mutate_session_branch: ViewActionAvailability::Enabled,
-        can_rebase_session_branch: ViewActionAvailability::Enabled,
-        can_show_diff: ViewActionAvailability::Enabled,
-        can_open_worktree: ViewActionAvailability::Enabled,
-        reply_to_session: ViewActionAvailability::Enabled,
-        can_start_staged_session: ViewActionAvailability::Enabled,
-        publish_pull_request_action: None,
-        session_state: ViewSessionState::NewSession,
-    };
-
-    // Act
-    let actions = view_footer_actions(state);
-    let ordered_keys = actions.iter().map(|action| action.key).collect::<Vec<_>>();
-
-    // Assert
-    assert_eq!(
-        &ordered_keys[..6],
-        [
-            "q",
-            "Enter",
-            "s",
-            PROMPT_IMAGE_PASTE_SHORTCUT_LABEL,
-            "/",
-            "m"
-        ]
-    );
-}
-
-#[test]
-fn test_view_footer_actions_stacked_draft_shows_start_and_hides_merge_sync() {
-    // Arrange
-    let state = ViewHelpState {
-        can_fork_session: ViewActionAvailability::Enabled,
-        can_merge_session_branch: ViewActionAvailability::Enabled,
-        can_mutate_session_branch: ViewActionAvailability::Enabled,
-        can_rebase_session_branch: ViewActionAvailability::Enabled,
-        can_show_diff: ViewActionAvailability::Enabled,
-        can_open_worktree: ViewActionAvailability::Enabled,
-        reply_to_session: ViewActionAvailability::Enabled,
-        can_start_staged_session: ViewActionAvailability::Enabled,
-        publish_pull_request_action: None,
-        session_state: ViewSessionState::StackedDraft,
-    };
-
-    // Act
-    let actions = view_footer_actions(state);
-    let ordered_keys = actions.iter().map(|action| action.key).collect::<Vec<_>>();
-
-    // Assert
-    assert_eq!(
-        &ordered_keys[..5],
-        ["q", "Enter", "s", PROMPT_IMAGE_PASTE_SHORTCUT_LABEL, "/"]
-    );
-    assert!(actions.iter().any(|action| action.key == "Enter"));
-    assert!(actions.iter().any(|action| action.key == "/"));
-    assert!(actions.iter().any(|action| action.key == "s"));
-    assert!(!actions.iter().any(|action| action.key == "m"));
-    assert!(!actions.iter().any(|action| action.key == "r"));
-}
-
-#[test]
-fn test_view_footer_actions_merge_queue_hides_worktree_shortcuts_and_stop() {
-    // Arrange
-    let state = ViewHelpState {
-        can_fork_session: ViewActionAvailability::Enabled,
-        can_merge_session_branch: ViewActionAvailability::Enabled,
-        can_mutate_session_branch: ViewActionAvailability::Enabled,
-        can_rebase_session_branch: ViewActionAvailability::Enabled,
-        can_show_diff: ViewActionAvailability::Enabled,
-        can_open_worktree: ViewActionAvailability::Enabled,
-        reply_to_session: ViewActionAvailability::Enabled,
-        can_start_staged_session: ViewActionAvailability::Disabled,
-        publish_pull_request_action: None,
-        session_state: ViewSessionState::MergeQueue,
-    };
-
-    // Act
-    let actions = view_footer_actions(state);
-
-    // Assert
-    assert!(!actions.iter().any(|action| action.key == "Enter"));
-    assert!(!actions.iter().any(|action| action.key == "o"));
-    assert!(!actions.iter().any(|action| action.key == "Ctrl+c"));
-    assert!(actions.iter().any(|action| action.key == "q"));
-    assert!(actions.iter().any(|action| action.key == "j/k"));
-}
-
-#[test]
-fn test_view_footer_actions_in_progress_shows_stop_and_sync() {
-    // Arrange
-    let state = ViewHelpState {
-        can_fork_session: ViewActionAvailability::Enabled,
-        can_merge_session_branch: ViewActionAvailability::Enabled,
-        can_mutate_session_branch: ViewActionAvailability::Enabled,
-        can_rebase_session_branch: ViewActionAvailability::Enabled,
-        can_show_diff: ViewActionAvailability::Enabled,
-        can_open_worktree: ViewActionAvailability::Enabled,
-        reply_to_session: ViewActionAvailability::Enabled,
-        can_start_staged_session: ViewActionAvailability::Disabled,
-        publish_pull_request_action: None,
-        session_state: ViewSessionState::InProgress,
-    };
-
-    // Act
-    let actions = view_footer_actions(state);
-    let ordered_keys = actions.iter().map(|action| action.key).collect::<Vec<_>>();
-
-    // Assert
-    assert_eq!(&ordered_keys[..4], ["q", "r", "Ctrl+c", "j/k"]);
-}
-
-#[test]
 fn test_view_actions_canceled_shows_continue_without_edit_actions() {
     // Arrange
     let state = ViewHelpState {
@@ -907,30 +624,6 @@ fn test_view_actions_canceled_shows_continue_without_edit_actions() {
     assert!(!actions.iter().any(|action| action.key == "Enter"));
     assert!(!actions.iter().any(|action| action.key == "o"));
     assert!(!actions.iter().any(|action| action.key == "t"));
-}
-
-#[test]
-fn test_view_footer_actions_done_shows_continue_before_scroll() {
-    // Arrange
-    let state = ViewHelpState {
-        can_fork_session: ViewActionAvailability::Enabled,
-        can_merge_session_branch: ViewActionAvailability::Enabled,
-        can_mutate_session_branch: ViewActionAvailability::Enabled,
-        can_rebase_session_branch: ViewActionAvailability::Enabled,
-        can_show_diff: ViewActionAvailability::Enabled,
-        can_open_worktree: ViewActionAvailability::Enabled,
-        reply_to_session: ViewActionAvailability::Enabled,
-        can_start_staged_session: ViewActionAvailability::Disabled,
-        publish_pull_request_action: None,
-        session_state: ViewSessionState::Done,
-    };
-
-    // Act
-    let actions = view_footer_actions(state);
-    let ordered_keys = actions.iter().map(|action| action.key).collect::<Vec<_>>();
-
-    // Assert
-    assert_eq!(&ordered_keys[..4], ["q", "c", "j/k", "?"]);
 }
 
 #[test]
@@ -1008,56 +701,6 @@ fn test_view_actions_non_terminal_review_comments_follow_availability() {
 }
 
 #[test]
-fn test_view_footer_actions_canceled_shows_continue_before_scroll() {
-    // Arrange
-    let state = ViewHelpState {
-        can_fork_session: ViewActionAvailability::Enabled,
-        can_merge_session_branch: ViewActionAvailability::Enabled,
-        can_mutate_session_branch: ViewActionAvailability::Enabled,
-        can_rebase_session_branch: ViewActionAvailability::Enabled,
-        can_show_diff: ViewActionAvailability::Enabled,
-        can_open_worktree: ViewActionAvailability::Enabled,
-        reply_to_session: ViewActionAvailability::Enabled,
-        can_start_staged_session: ViewActionAvailability::Disabled,
-        publish_pull_request_action: None,
-        session_state: ViewSessionState::Canceled,
-    };
-
-    // Act
-    let actions = view_footer_actions(state);
-    let ordered_keys = actions.iter().map(|action| action.key).collect::<Vec<_>>();
-
-    // Assert
-    assert_eq!(&ordered_keys[..4], ["q", "c", "j/k", "?"]);
-}
-
-#[test]
-fn test_view_footer_actions_in_progress_shows_stop_and_hides_open() {
-    // Arrange
-    let state = ViewHelpState {
-        can_fork_session: ViewActionAvailability::Enabled,
-        can_merge_session_branch: ViewActionAvailability::Enabled,
-        can_mutate_session_branch: ViewActionAvailability::Enabled,
-        can_rebase_session_branch: ViewActionAvailability::Enabled,
-        can_show_diff: ViewActionAvailability::Enabled,
-        can_open_worktree: ViewActionAvailability::Enabled,
-        reply_to_session: ViewActionAvailability::Enabled,
-        can_start_staged_session: ViewActionAvailability::Disabled,
-        publish_pull_request_action: None,
-        session_state: ViewSessionState::InProgress,
-    };
-
-    // Act
-    let actions = view_footer_actions(state);
-
-    // Assert
-    assert!(actions.iter().any(|action| action.key == "Ctrl+c"));
-    assert!(!actions.iter().any(|action| action.key == "o"));
-    assert!(!actions.iter().any(|action| action.key == "Enter"));
-    assert!(!actions.iter().any(|action| action.key == "d"));
-}
-
-#[test]
 fn test_view_actions_review_hides_stop() {
     // Arrange
     let state = ViewHelpState {
@@ -1081,29 +724,6 @@ fn test_view_actions_review_hides_stop() {
 }
 
 #[test]
-fn test_view_footer_actions_review_hides_stop() {
-    // Arrange
-    let state = ViewHelpState {
-        can_fork_session: ViewActionAvailability::Enabled,
-        can_merge_session_branch: ViewActionAvailability::Enabled,
-        can_mutate_session_branch: ViewActionAvailability::Enabled,
-        can_rebase_session_branch: ViewActionAvailability::Enabled,
-        can_show_diff: ViewActionAvailability::Enabled,
-        can_open_worktree: ViewActionAvailability::Enabled,
-        reply_to_session: ViewActionAvailability::Enabled,
-        can_start_staged_session: ViewActionAvailability::Disabled,
-        publish_pull_request_action: None,
-        session_state: ViewSessionState::Review,
-    };
-
-    // Act
-    let actions = view_footer_actions(state);
-
-    // Assert
-    assert!(!actions.iter().any(|action| action.key == "Ctrl+c"));
-}
-
-#[test]
 fn test_session_view_state_maps_agent_review_status() {
     // Arrange
     let session = SessionFixtureBuilder::new()
@@ -1120,22 +740,10 @@ fn test_session_view_state_maps_agent_review_status() {
 #[test]
 fn test_read_only_detail_and_diff_action_groups_expose_expected_keys() {
     // Arrange, Act
-    let diff_keys = diff_actions(true)
+    let diff_keys = diff_actions(true, DiffReviewCommentHelp::Reply)
         .iter()
         .map(|action| action.key)
         .collect::<Vec<_>>();
-    let file_footer_keys = diff_footer_actions(DiffFooterContext {
-        file_comment: DiffFileCommentAvailability::Available,
-        can_mark_selected: true,
-        can_submit: true,
-        focus: DiffFocus::Files,
-        has_review_comments: true,
-        line_comment_state: DiffLineCommentFooterState::Ready { comment_count: 0 },
-        sidebar_focus: DiffSidebarFocus::Files,
-    })
-    .iter()
-    .map(|action| action.key)
-    .collect::<Vec<_>>();
 
     // Assert
     assert_eq!(
@@ -1144,7 +752,7 @@ fn test_read_only_detail_and_diff_action_groups_expose_expected_keys() {
             "q",
             "j/k",
             "Enter/l",
-            "f/Esc/Left",
+            "f/h/Esc/Left",
             "c",
             "p",
             "J/K/Up/Down",
@@ -1158,145 +766,92 @@ fn test_read_only_detail_and_diff_action_groups_expose_expected_keys() {
             "?"
         ]
     );
-    assert_eq!(
-        file_footer_keys,
-        ["q/Esc", "j/k", "Enter/l", "p", "Shift+C", "c", "?"]
-    );
-}
-
-#[test]
-fn test_diff_content_footer_exposes_line_navigation_and_file_return() {
-    // Arrange, Act
-    let content_footer_keys = diff_footer_actions(DiffFooterContext {
-        file_comment: DiffFileCommentAvailability::Unavailable,
-        can_mark_selected: false,
-        can_submit: false,
-        focus: DiffFocus::Content,
-        has_review_comments: true,
-        line_comment_state: DiffLineCommentFooterState::Ready { comment_count: 2 },
-        sidebar_focus: DiffSidebarFocus::Files,
-    })
-    .iter()
-    .map(|action| action.key)
-    .collect::<Vec<_>>();
-
-    // Assert
-    assert_eq!(
-        content_footer_keys,
-        ["q", "Esc/Left", "j/k", "Enter", "s", "?"]
-    );
-}
-
-#[test]
-fn test_diff_file_footer_exposes_completed_comment_submission() {
-    // Arrange, Act
-    let file_footer_keys = diff_footer_actions(DiffFooterContext {
-        file_comment: DiffFileCommentAvailability::Available,
-        can_mark_selected: false,
-        can_submit: false,
-        focus: DiffFocus::Files,
-        has_review_comments: true,
-        line_comment_state: DiffLineCommentFooterState::Ready { comment_count: 2 },
-        sidebar_focus: DiffSidebarFocus::Files,
-    })
-    .iter()
-    .map(|action| action.key)
-    .collect::<Vec<_>>();
-
-    // Assert
-    assert_eq!(
-        file_footer_keys,
-        ["q/Esc", "s", "j/k", "Enter/l", "p", "Shift+C", "c", "?"]
-    );
 }
 
 #[test]
 fn test_read_only_diff_hides_inline_comment_actions() {
     // Arrange, Act
-    let help_labels = diff_actions(false)
+    let help_labels = diff_actions(false, DiffReviewCommentHelp::Hidden)
         .iter()
         .map(|action| action.footer_label)
         .collect::<Vec<_>>();
-    let footer_keys = diff_footer_actions(DiffFooterContext {
-        file_comment: DiffFileCommentAvailability::Unavailable,
-        can_mark_selected: false,
-        can_submit: false,
-        focus: DiffFocus::Content,
-        has_review_comments: false,
-        line_comment_state: DiffLineCommentFooterState::ReadOnly,
-        sidebar_focus: DiffSidebarFocus::Files,
-    })
-    .iter()
-    .map(|action| action.key)
-    .collect::<Vec<_>>();
 
     // Assert
+    assert!(help_labels.contains(&"open"));
     assert!(!help_labels.contains(&"open/comment"));
     assert!(!help_labels.contains(&"comment file"));
     assert!(!help_labels.contains(&"save comment"));
     assert!(!help_labels.contains(&"submit comments"));
-    assert_eq!(footer_keys, ["q", "Esc/Left", "j/k", "?"]);
 }
 
 #[test]
-fn test_diff_content_footer_limits_actions_while_editing_comment() {
+fn test_diff_actions_hide_review_comment_keys_without_linked_review_request() {
     // Arrange, Act
-    let editing_keys = diff_footer_actions(DiffFooterContext {
-        file_comment: DiffFileCommentAvailability::Unavailable,
-        can_mark_selected: false,
-        can_submit: false,
-        focus: DiffFocus::Content,
-        has_review_comments: false,
-        line_comment_state: DiffLineCommentFooterState::Editing,
-        sidebar_focus: DiffSidebarFocus::Files,
-    })
-    .iter()
-    .map(|action| action.key)
-    .collect::<Vec<_>>();
+    let diff_keys = diff_actions(true, DiffReviewCommentHelp::Hidden)
+        .iter()
+        .map(|action| action.key)
+        .collect::<Vec<_>>();
 
     // Assert
-    assert_eq!(editing_keys, ["Alt/Shift+Enter", "Enter/Esc"]);
+    assert!(!diff_keys.contains(&"c"));
+    assert!(!diff_keys.contains(&"Space"));
+    assert!(!diff_keys.contains(&"Enter"));
+    assert_eq!(diff_keys.last(), Some(&"?"));
 }
 
 #[test]
-fn test_diff_content_footer_exposes_visual_row_selection_actions() {
+fn test_diff_actions_read_only_review_comments_keep_focus_and_hide_reply_keys() {
     // Arrange, Act
-    let selecting_keys = diff_footer_actions(DiffFooterContext {
-        file_comment: DiffFileCommentAvailability::Available,
-        can_mark_selected: false,
-        can_submit: false,
-        focus: DiffFocus::Content,
-        has_review_comments: false,
-        line_comment_state: DiffLineCommentFooterState::Selecting,
-        sidebar_focus: DiffSidebarFocus::Files,
-    })
-    .iter()
-    .map(|action| action.key)
-    .collect::<Vec<_>>();
+    let diff_keys = diff_actions(false, DiffReviewCommentHelp::ReadOnly)
+        .iter()
+        .map(|action| action.key)
+        .collect::<Vec<_>>();
 
     // Assert
-    assert_eq!(selecting_keys, ["q", "Esc", "j/k", "Enter", "Shift+C"]);
+    assert!(diff_keys.contains(&"c"));
+    assert!(!diff_keys.contains(&"Space"));
+    assert!(!diff_keys.contains(&"Enter"));
 }
 
 #[test]
-fn test_review_comment_actions_include_selection_and_submit_keys() {
-    // Arrange, Act
-    let actions = diff_footer_actions(DiffFooterContext {
-        file_comment: DiffFileCommentAvailability::Unavailable,
-        can_mark_selected: true,
-        can_submit: true,
-        focus: DiffFocus::Files,
-        has_review_comments: true,
-        line_comment_state: DiffLineCommentFooterState::Ready { comment_count: 2 },
-        sidebar_focus: DiffSidebarFocus::Comments,
-    });
-    let comment_keys = actions.iter().map(|action| action.key).collect::<Vec<_>>();
-
-    // Assert
+fn test_diff_review_comment_help_requires_linked_comments_before_reply() {
+    // Arrange, Act, Assert
     assert_eq!(
-        comment_keys,
-        ["q", "s", "j/k", "Space", "Enter", "f/Esc", "Up/Down", "?"]
+        DiffReviewCommentHelp::new(false, true),
+        DiffReviewCommentHelp::Hidden
     );
+    assert_eq!(
+        DiffReviewCommentHelp::new(true, false),
+        DiffReviewCommentHelp::ReadOnly
+    );
+    assert_eq!(
+        DiffReviewCommentHelp::new(true, true),
+        DiffReviewCommentHelp::Reply
+    );
+}
+
+#[test]
+fn test_list_actions_list_reverse_tab_cycling() {
+    // Arrange, Act
+    let tab_actions = [
+        session_list_actions(false, false),
+        project_list_actions(),
+        settings_actions(),
+    ];
+
+    // Assert
+    for actions in tab_actions {
+        assert!(
+            actions
+                .iter()
+                .any(|action| action.key == "Tab" && action.popup_label == "Next tab")
+        );
+        assert!(
+            actions
+                .iter()
+                .any(|action| action.key == "Shift+Tab" && action.popup_label == "Previous tab")
+        );
+    }
 }
 
 #[test]

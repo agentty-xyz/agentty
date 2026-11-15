@@ -3,7 +3,7 @@ use ratatui::layout::Rect;
 
 use crate::app::{App, AppEvent};
 use crate::domain::input::InputState;
-use crate::domain::session::SessionId;
+use crate::domain::session::{Session, SessionId};
 use crate::presentation::app_mode::{
     AppMode, DiffCommentTarget, DiffFocus, DiffLineCommentTarget, DiffLineComments, DiffPreview,
     DiffPreviewUnavailableReason, DiffRestoreTarget, DiffReviewComments, DiffScrollCache,
@@ -78,9 +78,14 @@ fn handle_help_key(app: &mut App, key: KeyEvent) -> bool {
         ..
     } = mode
     {
+        let can_reply_review_comments = app
+            .sessions
+            .session_for_id(session_id.as_str())
+            .is_some_and(Session::allows_review_comment_reply);
         app.mode = AppMode::Help {
             context: HelpContext::Diff {
                 can_comment,
+                can_reply_review_comments,
                 diff,
                 file_explorer_selected_index,
                 focus,

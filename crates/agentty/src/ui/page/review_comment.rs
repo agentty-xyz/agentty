@@ -217,17 +217,6 @@ pub(crate) fn review_comment_item_count(snapshot: Option<&ReviewCommentSnapshot>
     })
 }
 
-/// Returns whether the selected inline thread can be sent to the session
-/// agent.
-pub(crate) fn review_comment_selected_is_actionable(
-    rows: &[review_comment_selection::GroupedReviewCommentRow<'_>],
-    selected_comment_index: usize,
-) -> bool {
-    review_comment_selection::selected_entry(rows, selected_comment_index).is_some_and(
-        |entry| matches!(entry, review_comment_selection::ReviewCommentEntry::Thread(thread) if thread.is_actionable()),
-    )
-}
-
 /// Builds the selection marker aligned before one inline thread row.
 fn review_comment_selection_marker(
     thread: &ReviewCommentThread,

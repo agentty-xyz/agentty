@@ -1,6 +1,5 @@
 use crate::domain::session::{PublishBranchAction, ReviewWatchToggle, Session, Status};
 use crate::domain::session_order::ArchiveAction;
-use crate::presentation::app_mode::{DiffFocus, DiffSidebarFocus};
 
 /// Footer shortcut label for prompt image paste.
 ///
@@ -37,6 +36,12 @@ const LIST_BASE_ACTIONS: [HelpAction; 2] = [
     HelpAction::new("sync", "s", "Sync"),
 ];
 
+/// Tab-cycling shortcuts shared by every list-mode tab.
+const SWITCH_TAB_ACTIONS: [HelpAction; 2] = [
+    HelpAction::new("next tab", "Tab", "Next tab"),
+    HelpAction::new("previous tab", "Shift+Tab", "Previous tab"),
+];
+
 /// Full session-view scroll shortcuts shown in the help overlay.
 const VIEW_OUTPUT_SCROLL_ACTIONS: [HelpAction; 5] = [
     HelpAction::new("scroll", "j/k", "Scroll output"),
@@ -46,20 +51,14 @@ const VIEW_OUTPUT_SCROLL_ACTIONS: [HelpAction; 5] = [
     HelpAction::new("half up", "Ctrl+u", "Half page up"),
 ];
 
-/// Compact trailing session-view footer shortcuts.
-const VIEW_FOOTER_TRAILING_ACTIONS: [HelpAction; 2] = [
-    HelpAction::new("scroll", "j/k", "Scroll output"),
-    HelpAction::new("help", "?", "Help"),
-];
-
-/// Prompt image paste shortcut shared by full help and compact draft footers.
+/// Prompt image paste shortcut shown in session-view help.
 const PROMPT_IMAGE_PASTE_ACTION: HelpAction = HelpAction::new(
     "paste image",
     PROMPT_IMAGE_PASTE_SHORTCUT_LABEL,
     "Paste image",
 );
 
-/// Command-menu shortcut shared by full help and compact editable footers.
+/// Command-menu shortcut shown in session-view help.
 const COMMANDS_MENU_ACTION: HelpAction =
     HelpAction::new("commands menu", "/", "Open commands menu");
 
@@ -155,7 +154,7 @@ pub(crate) struct ViewHelpState {
     pub(crate) session_state: ViewSessionState,
 }
 
-/// Derived view-mode action gates shared by full help and compact footer rows.
+/// Derived view-mode action gates used by session-view help.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 struct ViewActionSet {
     continue_terminal_session: ViewActionAvailability,
@@ -276,7 +275,7 @@ pub(crate) fn session_list_actions(
         can_open_selected_session,
     );
     actions.push(HelpAction::new("project", "p", "Switch project"));
-    actions.push(HelpAction::new("next tab", "Tab", "Switch tab"));
+    actions.extend(SWITCH_TAB_ACTIONS);
     actions.push(HelpAction::new("help", "?", "Help"));
 
     actions
@@ -295,37 +294,7 @@ pub(crate) fn project_list_actions() -> Vec<HelpAction> {
         "Discover projects in a folder",
     ));
     actions.push(HelpAction::new("nav", "j/k", "Navigate projects"));
-    actions.push(HelpAction::new("next tab", "Tab", "Switch tab"));
-    actions.push(HelpAction::new("help", "?", "Help"));
-
-    actions
-}
-
-/// Returns compact projects footer actions for the page-level hint line.
-pub(crate) fn project_list_footer_actions() -> Vec<HelpAction> {
-    vec![
-        HelpAction::new("quit", "q", "Quit"),
-        HelpAction::new("select", "Enter", "Select active project"),
-        HelpAction::new("add", "a", "Add project by path"),
-        HelpAction::new("discover", "d", "Discover projects in a folder"),
-        HelpAction::new("nav", "j/k", "Navigate projects"),
-        HelpAction::new("help", "?", "Help"),
-    ]
-}
-
-/// Returns compact session list footer actions for the page-level hint line,
-/// including `c` only when the selected session can be canceled.
-pub(crate) fn session_list_footer_actions(
-    can_cancel_selected_session: bool,
-    can_open_selected_session: bool,
-) -> Vec<HelpAction> {
-    let mut actions = list_base_actions();
-    append_session_list_selection_actions(
-        &mut actions,
-        can_cancel_selected_session,
-        can_open_selected_session,
-    );
-    actions.push(HelpAction::new("projects", "p", "Switch project"));
+    actions.extend(SWITCH_TAB_ACTIONS);
     actions.push(HelpAction::new("help", "?", "Help"));
 
     actions
@@ -361,20 +330,10 @@ pub(crate) fn settings_actions() -> Vec<HelpAction> {
         "Enter",
         "Open selector or command editor",
     ));
-    actions.push(HelpAction::new("next tab", "Tab", "Switch tab"));
+    actions.extend(SWITCH_TAB_ACTIONS);
     actions.push(HelpAction::new("help", "?", "Help"));
 
     actions
-}
-
-/// Returns compact settings footer actions for the page-level hint line.
-pub(crate) fn settings_footer_actions() -> Vec<HelpAction> {
-    vec![
-        HelpAction::new("quit", "q", "Quit"),
-        HelpAction::new("nav", "j/k", "Navigate settings"),
-        HelpAction::new("open/edit", "Enter", "Open selector or command editor"),
-        HelpAction::new("help", "?", "Help"),
-    ]
 }
 
 /// Projects currently available view-mode actions into help entries.
@@ -452,32 +411,6 @@ pub(crate) fn view_actions_with_review_request(
     actions
 }
 
-/// Returns compact session-view footer actions for the page-level hint line.
-///
-/// Review-oriented and running sessions keep sync controls discoverable in
-/// the footer.
-pub(crate) fn view_footer_actions(state: ViewHelpState) -> Vec<HelpAction> {
-    let action_set = ViewActionSet::from_state(state);
-    let mut actions = vec![HelpAction::new("back", "q", "Back to list")];
-
-    append_view_footer_edit_actions(
-        &mut actions,
-        state.session_state,
-        state.can_start_staged_session,
-        action_set.open_prompt,
-        action_set.launch_configuration,
-        action_set.merge_session,
-        action_set.rebase_session,
-    );
-    append_view_stop_action(&mut actions, action_set);
-    append_view_open_action(&mut actions, action_set);
-    append_view_review_actions(&mut actions, state, action_set);
-    append_view_continue_action(&mut actions, action_set);
-    actions.extend(VIEW_FOOTER_TRAILING_ACTIONS);
-
-    actions
-}
-
 /// Returns whether linked review comments should be added to session-view
 /// actions without competing with terminal continuation on `c`.
 fn can_append_review_comments(
@@ -525,7 +458,7 @@ fn append_review_comment_action(actions: &mut Vec<HelpAction>, is_available: boo
     );
 }
 
-/// Appends the stop action shared by full help and compact footer rows.
+/// Appends the stop action for running sessions.
 fn append_view_stop_action(actions: &mut Vec<HelpAction>, action_set: ViewActionSet) {
     if action_set.stop_session.is_enabled() {
         actions.push(HelpAction::new(
@@ -536,16 +469,14 @@ fn append_view_stop_action(actions: &mut Vec<HelpAction>, action_set: ViewAction
     }
 }
 
-/// Appends the worktree-open action shared by full help and compact footer
-/// rows.
+/// Appends the worktree-open action when the worktree can be opened.
 fn append_view_open_action(actions: &mut Vec<HelpAction>, action_set: ViewActionSet) {
     if action_set.open_worktree.is_enabled() {
         actions.push(HelpAction::new("open", "o", "Open worktree"));
     }
 }
 
-/// Appends review and publish actions shared by full help and compact footer
-/// rows.
+/// Appends review, fork, and publish actions.
 fn append_view_review_actions(
     actions: &mut Vec<HelpAction>,
     state: ViewHelpState,
@@ -568,8 +499,7 @@ fn append_view_review_actions(
     }
 }
 
-/// Appends the terminal continuation action shared by full help and compact
-/// footer rows.
+/// Appends the terminal continuation action for finished sessions.
 fn append_view_continue_action(actions: &mut Vec<HelpAction>, action_set: ViewActionSet) {
     if action_set.continue_terminal_session.is_enabled() {
         actions.push(HelpAction::new("continue", "c", "Continue in new session"));
@@ -591,7 +521,8 @@ fn can_open_view_prompt(
     reply_to_session.is_enabled()
         && matches!(
             session_state,
-            ViewSessionState::Rebasing
+            ViewSessionState::InProgress
+                | ViewSessionState::Rebasing
                 | ViewSessionState::Interactive
                 | ViewSessionState::Review
                 | ViewSessionState::AgentReview
@@ -652,60 +583,6 @@ fn can_merge_view_session(
         )
 }
 
-/// Appends footer actions that operate on an editable session in their
-/// canonical order.
-///
-/// The explicit draft-session start action stays immediately after the draft
-/// edit action so it remains visible in standard-width terminals. Stacked
-/// drafts keep only draft-editing and start actions until their first turn
-/// launches.
-fn append_view_footer_edit_actions(
-    actions: &mut Vec<HelpAction>,
-    session_state: ViewSessionState,
-    can_start_staged_session: ViewActionAvailability,
-    can_open_prompt: ViewActionAvailability,
-    can_launch_configuration: ViewActionAvailability,
-    can_merge_session: ViewActionAvailability,
-    can_rebase_session: ViewActionAvailability,
-) {
-    if !can_open_prompt.is_enabled()
-        && !can_launch_configuration.is_enabled()
-        && !can_merge_session.is_enabled()
-        && !can_rebase_session.is_enabled()
-        && !can_start_staged_session.is_enabled()
-    {
-        return;
-    }
-
-    if can_open_prompt.is_enabled() {
-        actions.push(prompt_action_help_action(session_state));
-    }
-
-    if can_start_staged_session.is_enabled() {
-        actions.push(HelpAction::new("start", "s", "Start staged session"));
-    }
-
-    if can_open_prompt.is_enabled() {
-        append_prompt_image_paste_action(actions, session_state);
-    }
-
-    if can_launch_configuration.is_enabled() {
-        actions.push(COMMANDS_MENU_ACTION);
-    }
-
-    if can_merge_session.is_enabled() {
-        actions.push(HelpAction::new(
-            "add to merge queue",
-            "m",
-            "Add to merge queue",
-        ));
-    }
-
-    if can_rebase_session.is_enabled() {
-        actions.push(HelpAction::new("sync", "r", "Sync"));
-    }
-}
-
 /// Appends the session-view shortcuts that open the prompt composer.
 ///
 /// Editable sessions expose both `Enter` for a blank composer and `/` for the
@@ -753,18 +630,48 @@ fn prompt_action_help_action(session_state: ViewSessionState) -> HelpAction {
     ) {
         return HelpAction::new("add draft", "Enter", "Add draft");
     }
-    if matches!(session_state, ViewSessionState::Rebasing) {
+    if matches!(
+        session_state,
+        ViewSessionState::InProgress | ViewSessionState::Rebasing
+    ) {
         return HelpAction::new("queue message", "Enter", "Queue message");
     }
 
     HelpAction::new("reply", "Enter", "Reply")
 }
 
+/// Linked review-comment actions available in the diff help overlay.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) enum DiffReviewCommentHelp {
+    /// No review request is linked, so the comments pane is absent.
+    Hidden,
+    /// Review comments can be browsed but not sent to the agent.
+    ReadOnly,
+    /// Actionable review comments can be selected and sent to the agent.
+    Reply,
+}
+
+impl DiffReviewCommentHelp {
+    /// Projects linked-comment presence and reply availability into the
+    /// review-comment shortcuts the diff page accepts.
+    pub(crate) fn new(has_review_comments: bool, can_reply_review_comments: bool) -> Self {
+        match (has_review_comments, can_reply_review_comments) {
+            (false, _) => Self::Hidden,
+            (true, false) => Self::ReadOnly,
+            (true, true) => Self::Reply,
+        }
+    }
+}
+
 /// Returns help entries for diff-mode actions.
 ///
-/// The help overlay is a complete cross-focus reference; the compact footer
-/// below filters actions to those usable in the current sidebar state.
-pub(crate) fn diff_actions(can_comment: bool) -> Vec<HelpAction> {
+/// The help overlay is a complete cross-focus reference. Review-comment
+/// shortcuts appear only when a review request is linked, and their reply
+/// actions only when the session can send comments to the agent.
+pub(crate) fn diff_actions(
+    can_comment: bool,
+    review_comment_help: DiffReviewCommentHelp,
+) -> Vec<HelpAction> {
     let mut actions = vec![
         HelpAction::new("back", "q", "Back to session"),
         HelpAction::new("select item", "j/k", "Select file or comment"),
@@ -777,15 +684,19 @@ pub(crate) fn diff_actions(can_comment: bool) -> Vec<HelpAction> {
                 "Open selected file"
             },
         ),
-        HelpAction::new("files", "f/Esc/Left", "Focus changed files"),
-        HelpAction::new("comments", "c", "Focus review comments"),
+        HelpAction::new("files", "f/h/Esc/Left", "Focus changed files"),
+    ];
+    if review_comment_help != DiffReviewCommentHelp::Hidden {
+        actions.push(HelpAction::new("comments", "c", "Focus review comments"));
+    }
+    actions.extend([
         HelpAction::new("preview", "p", "Toggle selected markdown preview"),
         HelpAction::new(
             "scroll/select row",
             "J/K/Up/Down",
             "Scroll a file or select a changed line/comment",
         ),
-    ];
+    ]);
     if can_comment {
         actions.push(HelpAction::new(
             "comment file",
@@ -813,210 +724,15 @@ pub(crate) fn diff_actions(can_comment: bool) -> Vec<HelpAction> {
             "Submit all diff comments",
         ));
     }
-    actions.extend([
-        HelpAction::new("select", "Space", "Toggle comment selection"),
-        HelpAction::new("submit", "Enter", "Submit selected comments to the agent"),
-        HelpAction::new("help", "?", "Help"),
-    ]);
-
-    actions
-}
-
-/// Inputs that select compact actions for the current Diff footer state.
-#[derive(Clone, Copy)]
-pub(crate) struct DiffFooterContext {
-    /// Whether the selected forge comment can be marked for handling.
-    pub(crate) can_mark_selected: bool,
-    /// Whether marked forge comments can be submitted.
-    pub(crate) can_submit: bool,
-    /// Whole-file comment availability for the selected tree row.
-    pub(crate) file_comment: DiffFileCommentAvailability,
-    /// Changed-file panel that currently receives navigation input.
-    pub(crate) focus: DiffFocus,
-    /// Whether the diff includes a linked forge-comment sidebar.
-    pub(crate) has_review_comments: bool,
-    /// Diff comment state for footer editing actions.
-    pub(crate) line_comment_state: DiffLineCommentFooterState,
-    /// Sidebar section that currently controls the right pane.
-    pub(crate) sidebar_focus: DiffSidebarFocus,
-}
-
-impl DiffFooterContext {
-    /// Appends actions for the sidebar section that currently controls the Diff
-    /// pane.
-    fn add_sidebar_actions(self, actions: &mut Vec<HelpAction>, can_submit_line_comments: bool) {
-        match self.sidebar_focus {
-            DiffSidebarFocus::Files if self.focus == DiffFocus::Files => {
-                actions.push(HelpAction::new("select file", "j/k", "Select file"));
-                actions.push(HelpAction::new(
-                    "open",
-                    "Enter/l",
-                    "Focus the selected file's changed lines",
-                ));
-                actions.push(HelpAction::new("preview", "p", "Toggle markdown preview"));
-                actions.extend(self.file_comment.help_action("comment"));
-                if self.has_review_comments {
-                    actions.push(HelpAction::new("comments", "c", "Focus review comments"));
-                }
-            }
-            DiffSidebarFocus::Files => {
-                actions[0] = HelpAction::new("back", "q", "Back to session");
-                actions.push(HelpAction::new("files", "Esc/Left", "Focus changed files"));
-                actions.push(HelpAction::new(
-                    "select row",
-                    "j/k",
-                    "Select changed line or inline comment",
-                ));
-                if matches!(
-                    self.line_comment_state,
-                    DiffLineCommentFooterState::Ready { .. }
-                ) {
-                    actions.push(HelpAction::new(
-                        "comment",
-                        "Enter",
-                        "Edit the selected line's or inline comment's feedback",
-                    ));
-                }
-                if can_submit_line_comments {
-                    actions.push(diff_comment_submit_action());
-                }
-            }
-            DiffSidebarFocus::Comments => {
-                actions[0] = HelpAction::new("back", "q", "Back to session");
-                actions.push(HelpAction::new("select comment", "j/k", "Select comment"));
-                if self.can_mark_selected {
-                    actions.push(HelpAction::new(
-                        "select",
-                        "Space",
-                        "Toggle selected comment for agent evaluation",
-                    ));
-                }
-                if self.can_submit {
-                    actions.push(HelpAction::new(
-                        "submit",
-                        "Enter",
-                        "Submit selected comments to the agent",
-                    ));
-                }
-            }
-        }
-        if self.sidebar_focus == DiffSidebarFocus::Comments {
-            actions.push(HelpAction::new("files", "f/Esc", "Focus changed files"));
-            actions.push(HelpAction::new(
-                "scroll pane",
-                "Up/Down",
-                "Scroll comment details",
-            ));
-        }
+    if review_comment_help == DiffReviewCommentHelp::Reply {
+        actions.extend([
+            HelpAction::new("select", "Space", "Toggle comment selection"),
+            HelpAction::new("submit", "Enter", "Submit selected comments to the agent"),
+        ]);
     }
-}
-
-/// Whether the selected diff-tree row supports whole-file comments.
-#[derive(Clone, Copy)]
-pub(crate) enum DiffFileCommentAvailability {
-    /// The selected row is editable and identifies one file.
-    Available,
-    /// The selected row is read-only or identifies a folder.
-    Unavailable,
-}
-
-impl DiffFileCommentAvailability {
-    /// Maps one computed availability predicate into the footer state.
-    pub(crate) fn from_bool(is_available: bool) -> Self {
-        if is_available {
-            return Self::Available;
-        }
-
-        Self::Unavailable
-    }
-
-    /// Returns whether whole-file commenting is available.
-    fn is_available(self) -> bool {
-        matches!(self, Self::Available)
-    }
-
-    /// Returns the whole-file comment action when the selected row supports it.
-    fn help_action(self, footer_label: &'static str) -> Option<HelpAction> {
-        self.is_available()
-            .then(|| HelpAction::new(footer_label, "Shift+C", "Comment on the selected file"))
-    }
-}
-
-/// Inline-comment state that changes the compact Diff footer actions.
-#[derive(Clone, Copy)]
-pub(crate) enum DiffLineCommentFooterState {
-    /// One diff comment currently receives keyboard input.
-    Editing,
-    /// The visible session cannot accept a diff-comment reply.
-    ReadOnly,
-    /// Visual changed-row selection is active for one range comment.
-    Selecting,
-    /// Diff navigation is active with this many completed comments.
-    Ready {
-        /// Number of diff comments ready for batch submission.
-        comment_count: usize,
-    },
-}
-
-impl DiffLineCommentFooterState {
-    /// Returns whether completed diff comments are ready for submission.
-    fn can_submit(self) -> bool {
-        matches!(self, Self::Ready { comment_count } if comment_count > 0)
-    }
-}
-
-/// Returns compact diff footer actions for the page-level hint line.
-pub(crate) fn diff_footer_actions(context: DiffFooterContext) -> Vec<HelpAction> {
-    if matches!(
-        context.line_comment_state,
-        DiffLineCommentFooterState::Editing
-    ) {
-        return diff_comment_editing_actions();
-    }
-    if matches!(
-        context.line_comment_state,
-        DiffLineCommentFooterState::Selecting
-    ) {
-        let mut actions = vec![
-            HelpAction::new("back", "q", "Back to session"),
-            HelpAction::new("cancel", "Esc", "Cancel row selection"),
-            HelpAction::new("extend", "j/k", "Extend row selection"),
-            HelpAction::new("comment", "Enter", "Comment on selected rows"),
-        ];
-        actions.extend(context.file_comment.help_action("comment file"));
-
-        return actions;
-    }
-
-    let can_submit_line_comments = context.line_comment_state.can_submit();
-    let mut actions = vec![HelpAction::new("back", "q/Esc", "Back to session")];
-    if can_submit_line_comments
-        && !(context.sidebar_focus == DiffSidebarFocus::Files
-            && context.focus == DiffFocus::Content)
-    {
-        actions.push(diff_comment_submit_action());
-    }
-    context.add_sidebar_actions(&mut actions, can_submit_line_comments);
     actions.push(HelpAction::new("help", "?", "Help"));
 
     actions
-}
-
-/// Returns compact actions for the active multiline diff comment editor.
-fn diff_comment_editing_actions() -> Vec<HelpAction> {
-    vec![
-        HelpAction::new(
-            "newline",
-            "Alt/Shift+Enter",
-            "Insert a newline in the diff comment",
-        ),
-        HelpAction::new("save comment", "Enter/Esc", "Finish the diff comment"),
-    ]
-}
-
-/// Builds the shared diff-comment submission action for every Diff pane.
-fn diff_comment_submit_action() -> HelpAction {
-    HelpAction::new("submit comments", "s", "Submit all diff comments")
 }
 
 /// Returns list-mode actions shared by all tabs.

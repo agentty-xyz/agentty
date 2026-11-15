@@ -385,7 +385,6 @@ async fn test_project_switcher() {
             |frame, report| {
                 Box::pin(async move {
                     let full = Region::full(frame.cols(), frame.rows());
-                    assertion::assert_text_in_region(frame, "p: projects", &full);
                     assertion::assert_text_in_region(frame, "Project: test-project", &full);
                     assertion::assert_not_visible(frame, "Switch project");
 
@@ -527,22 +526,35 @@ async fn project_sync_blocks_staged_draft_start() {
                     .wait_for_text("Enter: stage draft", 5000)
                     .write_text("Start after project sync")
                     .press_key("Enter")
-                    .wait_for_text("s: start", 5000)
-                    .press_key("q")
-                    .wait_for_text("new session", 5000)
+                    .step(common::wait_for_session_view())
+                    .compose(&common::return_to_session_list())
                     .press_key("s")
                     .wait_for_text("Syncing test-project/main...", 5000)
                     .press_key("Enter")
                     .wait_for_text("Draft Session", 5000)
                     .press_key("s")
                     .wait_for_text("[Start Error]", 5000)
+                    .capture_labeled("start_error", "Draft start is blocked during project sync")
+                    .press_key("?")
+                    .wait_for_text("s: Start stage", 5000)
             },
-            |frame, _report| {
+            |frame, report| {
                 Box::pin(async move {
+                    let start_error = common::frame_from_capture(&report.captures[0]);
+                    let start_error_full = Region::full(start_error.cols(), start_error.rows());
+                    assertion::assert_text_in_region(
+                        &start_error,
+                        "[Start Error]",
+                        &start_error_full,
+                    );
+                    assertion::assert_text_in_region(
+                        &start_error,
+                        "is synchronizing",
+                        &start_error_full,
+                    );
+
                     let full = Region::full(frame.cols(), frame.rows());
-                    assertion::assert_text_in_region(frame, "[Start Error]", &full);
-                    assertion::assert_text_in_region(frame, "is synchronizing", &full);
-                    assertion::assert_text_in_region(frame, "s: start", &full);
+                    assertion::assert_text_in_region(frame, "s: Start stage", &full);
                 })
             },
         )

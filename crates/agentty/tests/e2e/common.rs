@@ -1517,11 +1517,14 @@ pub(crate) fn switch_to_tab_reverse(tab_name: &str) -> Journey {
         .step(Step::wait_for_text(tab_page_marker(tab_name), 5000))
 }
 
+/// Sessions table column header absent from the Projects and Settings pages.
+const SESSIONS_TABLE_HEADER_MARKER: &str = "Timer";
+
 /// Return content rendered only on the requested primary tab page.
 fn tab_page_marker(tab_name: &str) -> &'static str {
     match tab_name {
         "Projects" => "Activity",
-        "Sessions" => SESSION_LIST_FOOTER_MARKER,
+        "Sessions" => SESSIONS_TABLE_HEADER_MARKER,
         "Settings" => "Default Smart Model",
         _ => "<unsupported E2E tab>",
     }
@@ -1605,21 +1608,17 @@ pub(crate) fn open_help_overlay() -> Journey {
         .step(Step::wait_for_stable_frame(300, 3000))
 }
 
-/// Footer marker that only renders inside the in-session chat view.
+/// Tab-bar label that only renders while a list tab is visible.
 ///
-/// `q: back` is the back-to-list help action exposed by the session view
-/// footer. The sessions list view never renders this label, so it is a
-/// reliable predicate target for the eventually waiter that detects when
-/// the prompt-submit transition has completed.
-const SESSION_VIEW_FOOTER_MARKER: &str = "q: back";
+/// The session chat view replaces the tab bar with the session header, so the
+/// padded `Sessions` tab label is a reliable predicate target for the
+/// eventually waiter that detects when the back-to-list transition has
+/// completed.
+const SESSION_LIST_TAB_MARKER: &str = " Sessions ";
 
-/// Footer marker that only renders on the sessions list view.
-///
-/// `new session` is the `a` shortcut label exposed by the sessions list
-/// footer. The session chat view never renders this label, so it is a
-/// reliable predicate target for the eventually waiter that detects when
-/// the back-to-list transition has completed.
-const SESSION_LIST_FOOTER_MARKER: &str = "new session";
+/// Number of top rows scanned for the list tab bar: the status bar plus the
+/// bordered three-row tab bar below it.
+const SESSION_LIST_TAB_ROWS: u16 = 4;
 
 /// Wait budget for predicate-driven session-view transitions.
 ///
@@ -1635,54 +1634,45 @@ const SESSION_TRANSITION_TIMEOUT: Duration = Duration::from_secs(5);
 /// a single render frame on healthy hosts.
 const SESSION_TRANSITION_POLL: Duration = Duration::from_millis(50);
 
-/// Number of bottom rows scanned for footer help-action markers.
+/// Wait until the currently selected session has opened into chat view.
 ///
-/// Both the sessions list page and the session view page render their
-/// page-level help-action line directly above the global worktree-status
-/// footer bar. Scanning the bottom two rows covers both without reaching into
-/// the chat transcript or prompt input where agent output or user-typed text
-/// could contain a matching substring.
-const SESSION_TRANSITION_FOOTER_ROWS: u16 = 2;
-
-/// Build an `eventually` step that succeeds once `marker` appears in the
-/// live frame's bottom footer rows.
-///
-/// Wraps `assertion::match_text_in_region` against the bottom
-/// `SESSION_TRANSITION_FOOTER_ROWS` rows so the waiter cannot be tricked by
-/// prompt input or agent output that happens to contain the marker text, and
-/// a timeout still surfaces a structured `AssertionFailure` carrying the
-/// missing needle and current frame excerpt instead of a generic timeout
-/// panic.
-fn eventually_footer_text_visible(marker: &'static str) -> Step {
+/// Session-scoped frames show the session worktree branch in the bottom
+/// footer bar, while the list keeps project context there. The prompt
+/// composer also shows the session branch, so the waiter additionally requires
+/// its footer to be gone; a timeout surfaces a structured `AssertionFailure`.
+pub(crate) fn wait_for_session_view() -> Step {
     Step::eventually(
         SESSION_TRANSITION_TIMEOUT,
         SESSION_TRANSITION_POLL,
-        move |frame| {
+        |frame| {
             let rows = frame.rows();
-            let height = SESSION_TRANSITION_FOOTER_ROWS.min(rows);
-            let region = Region::new(0, rows.saturating_sub(height), frame.cols(), height);
+            let footer_bar = Region::new(0, rows.saturating_sub(1), frame.cols(), 1.min(rows));
 
-            assertion::match_text_in_region(frame, marker, &region)
+            assertion::match_text_in_region(frame, SESSION_WORKTREE_PREFIX, &footer_bar)?;
+            assertion::match_not_visible(frame, PROMPT_COMPOSER_FOOTER_MARKER)
         },
     )
 }
 
-/// Wait until the currently selected session has opened into chat view.
-pub(crate) fn wait_for_session_view_footer() -> Step {
-    eventually_footer_text_visible(SESSION_VIEW_FOOTER_MARKER)
-}
-
 /// Wait until the app has returned to the Sessions list view.
-pub(crate) fn wait_for_session_list_footer() -> Step {
-    eventually_footer_text_visible(SESSION_LIST_FOOTER_MARKER)
+pub(crate) fn wait_for_session_list() -> Step {
+    Step::eventually(
+        SESSION_TRANSITION_TIMEOUT,
+        SESSION_TRANSITION_POLL,
+        |frame| {
+            let tab_bar = Region::new(0, 0, frame.cols(), SESSION_LIST_TAB_ROWS.min(frame.rows()));
+
+            assertion::match_text_in_region(frame, SESSION_LIST_TAB_MARKER, &tab_bar)
+        },
+    )
 }
 
 /// Press `Enter` and wait for the selected session view to render.
 pub(crate) fn open_selected_session_view() -> Journey {
     Journey::new("open_selected_session_view")
-        .with_description("Press Enter and wait for the session view footer")
+        .with_description("Press Enter and wait for the session view")
         .step(Step::press_key("Enter"))
-        .step(wait_for_session_view_footer())
+        .step(wait_for_session_view())
 }
 
 /// Decline the watch question asked after confirming the review-request branch
@@ -1697,9 +1687,9 @@ pub(crate) fn decline_review_watch_before_publish() -> Journey {
 /// Press `q` and wait for the Sessions list to render.
 pub(crate) fn return_to_session_list() -> Journey {
     Journey::new("return_to_session_list")
-        .with_description("Press q and wait for the session list footer")
+        .with_description("Press q and wait for the session list")
         .step(Step::press_key("q"))
-        .step(wait_for_session_list_footer())
+        .step(wait_for_session_list())
 }
 
 /// Footer help prefix rendered while a prompt composer is focused and
@@ -1731,9 +1721,9 @@ pub(crate) fn wait_for_prompt_composer() -> Step {
 /// the agent asynchronously while the session persists), and presses `q` from
 /// the session view to return to the list.
 ///
-/// Uses predicate-driven `eventually` waits keyed off footer markers because
-/// the agent may produce continuous output after submit, so a stable-frame
-/// wait can never settle.
+/// Uses predicate-driven `eventually` waits keyed off view and list markers
+/// because the agent may produce continuous output after submit, so a
+/// stable-frame wait can never settle.
 ///
 /// Requires the Sessions tab to be active and a git-initialized workdir.
 pub(crate) fn create_session_and_return_to_list() -> Journey {
@@ -1743,9 +1733,9 @@ pub(crate) fn create_session_and_return_to_list() -> Journey {
 /// Create a session with a caller-provided prompt, submit it, and return to
 /// the Sessions list.
 ///
-/// Uses predicate-driven `eventually` waits keyed off footer markers because
-/// the agent may produce continuous output after submit, so a stable-frame
-/// wait can never settle.
+/// Uses predicate-driven `eventually` waits keyed off view and list markers
+/// because the agent may produce continuous output after submit, so a
+/// stable-frame wait can never settle.
 ///
 /// Requires the Sessions tab to be active and a git-initialized workdir.
 pub(crate) fn create_session_with_prompt_and_return_to_list(prompt: &str) -> Journey {
@@ -1759,9 +1749,9 @@ pub(crate) fn create_session_with_prompt_and_return_to_list(prompt: &str) -> Jou
         .step(Step::write_text(prompt))
         .step(Step::wait_for_text(prompt, 3000))
         .step(Step::press_key("Enter"))
-        .step(wait_for_session_view_footer())
+        .step(wait_for_session_view())
         .step(Step::press_key("q"))
-        .step(wait_for_session_list_footer())
+        .step(wait_for_session_list())
 }
 
 #[cfg(test)]

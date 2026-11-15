@@ -28,6 +28,13 @@ use crate::common::{
 const REVIEW_REQUEST_TIMELINE_NOTICE_TEXT: &str =
     "Created PR https://github.com/agentty-xyz/agentty/pull/42";
 
+/// Inactive composer border rendered only in an active Codex session view.
+const SESSION_COMPOSER_MARKER: &str = "╭ codex/";
+
+/// Timing row label that remains in an archived session view without a
+/// composer.
+const ARCHIVED_TIMING_MARKER: &str = "Timer: ";
+
 /// Holds publish steps until the scenario releases them, keeping the create
 /// command active while the UI refreshes its persisted upstream reference.
 async fn seed_gated_review_request_publish(
@@ -697,7 +704,11 @@ async fn review_request_publish_runs_in_background() -> E2eResult {
                         "Publishing review request...",
                         &loading_full,
                     );
-                    assertion::assert_text_in_region(&loading_frame, "q: back", &loading_full);
+                    assertion::assert_text_in_region(
+                        &loading_frame,
+                        SESSION_COMPOSER_MARKER,
+                        &loading_full,
+                    );
 
                     let help_frame = common::frame_from_capture(&report.captures[1]);
                     let help_full = Region::full(help_frame.cols(), help_frame.rows());
@@ -722,7 +733,7 @@ async fn review_request_publish_runs_in_background() -> E2eResult {
                     "[Review Request] Created PR https://github.com/agentty-xyz/agentty/pull/42",
                     &full,
                 );
-                    assertion::assert_text_in_region(frame, "q: back", &full);
+                    assertion::assert_text_in_region(frame, SESSION_COMPOSER_MARKER, &full);
                     assertion::assert_not_visible(frame, "Auto-resolve checks");
                 })
             },
@@ -818,19 +829,33 @@ async fn review_request_sync_runs_in_background() -> E2eResult {
                         "review_request_background_sync",
                         "Review session help overlay without a manual sync shortcut",
                     )
+                    .press_key("Esc")
+                    .wait_for_stable_frame(300, 3000)
+                    .press_key("m")
+                    .wait_for_stable_frame(300, 3000)
             },
-            |frame, _report| {
+            |frame, report| {
                 Box::pin(async move {
                     // Assert
-                    let full = Region::full(frame.cols(), frame.rows());
-                    let view_text = frame.text_in_region(&full);
+                    let help_frame = common::frame_from_capture(&report.captures[0]);
+                    let help_full = Region::full(help_frame.cols(), help_frame.rows());
+                    let help_text = help_frame.text_in_region(&help_full);
 
-                    assertion::assert_text_in_region(frame, "p: Create or refresh", &full);
+                    assertion::assert_text_in_region(
+                        &help_frame,
+                        "p: Create or refresh",
+                        &help_full,
+                    );
                     assert!(
-                        !view_text.contains("s: Sync"),
+                        !help_text.contains("s: Sync"),
                         "manual sync help action should be absent"
                     );
-                    assertion::assert_not_visible(frame, "m: add to merge queue");
+                    assertion::assert_not_visible(&help_frame, "Add to merge queue");
+
+                    let full = Region::full(frame.cols(), frame.rows());
+                    assertion::assert_text_in_region(frame, SESSION_COMPOSER_MARKER, &full);
+                    assertion::assert_not_visible(frame, "Keybindings");
+                    assertion::assert_not_visible(frame, "Confirm Merge");
                 })
             },
         )
@@ -892,12 +917,27 @@ async fn review_request_closure_leaves_focused_reply_composer() -> E2eResult {
                             Ok(())
                         },
                     )
-                    .wait_for_text("c: continue", 10000)
+                    .eventually(
+                        Duration::from_secs(10),
+                        Duration::from_millis(20),
+                        |frame| {
+                            assertion::match_text_in_region(
+                                frame,
+                                ARCHIVED_TIMING_MARKER,
+                                &Region::full(frame.cols(), frame.rows()),
+                            )?;
+                            assertion::match_not_visible(frame, "unfinished reply")?;
+                            assertion::match_not_visible(frame, SESSION_COMPOSER_MARKER)
+                        },
+                    )
                     .capture_labeled("archived", "Background closure exits the focused composer")
                     .press_key("c")
                     .wait_for_text("Confirm Continue", 5000)
                     .press_key("Esc")
-                    .wait_for_text("c: continue", 5000)
+                    .step(common::wait_for_frame_text(
+                        &[ARCHIVED_TIMING_MARKER],
+                        &["Confirm Continue"],
+                    ))
                     .press_key("q")
                     .wait_for_text("ARCHIVE", 5000)
             },
@@ -949,15 +989,18 @@ async fn test_merged_review_request_waits_for_manual_sync() -> E2eResult {
                     .press_key("d")
                     .wait_for_text("main.rs", 5000)
                     .press_key("j")
-                    .wait_for_text("Enter/l: open", 5000)
                     .press_key("Enter")
-                    .wait_for_text("Esc/Left: files", 5000)
                     .press_key("Enter")
                     .wait_for_stable_frame(300, 5000)
                     .capture_labeled(
                         "merged_diff_read_only",
                         "Merged diff hides inline comment actions",
                     )
+                    .press_key("?")
+                    .wait_for_text("Keybindings", 5000)
+                    .wait_for_stable_frame(300, 5000)
+                    .capture_labeled("merged_diff_help", "Merged diff help omits comment actions")
+                    .press_key("?")
                     .press_key("q")
                     .press_key("q")
                     .press_key("s")
@@ -970,7 +1013,7 @@ async fn test_merged_review_request_waits_for_manual_sync() -> E2eResult {
             },
             |frame, report| {
                 Box::pin(async move {
-                    assert_eq!(report.captures.len(), 4);
+                    assert_eq!(report.captures.len(), 5);
                     let merged_frame = common::frame_from_capture(&report.captures[0]);
                     let merged_full = Region::full(merged_frame.cols(), merged_frame.rows());
                     assertion::assert_text_in_region(&merged_frame, "ACTIVE —— 1", &merged_full);
@@ -996,10 +1039,20 @@ async fn test_merged_review_request_waits_for_manual_sync() -> E2eResult {
 
                     let diff_frame = common::frame_from_capture(&report.captures[2]);
                     let diff_full = Region::full(diff_frame.cols(), diff_frame.rows());
-                    let diff_text = diff_frame.text_in_region(&diff_full);
-                    assertion::assert_text_in_region(&diff_frame, "Esc/Left: files", &diff_full);
-                    assert!(!diff_text.contains("Enter: comment"));
-                    assert!(!diff_text.contains("s: submit comments"));
+                    assertion::assert_text_in_region(&diff_frame, ") Diff — ", &diff_full);
+                    assertion::assert_not_visible(&diff_frame, "New line");
+
+                    let diff_help_frame = common::frame_from_capture(&report.captures[3]);
+                    let diff_help_full =
+                        Region::full(diff_help_frame.cols(), diff_help_frame.rows());
+                    assertion::assert_text_in_region(
+                        &diff_help_frame,
+                        "Enter/l: Open",
+                        &diff_help_full,
+                    );
+                    for comment_key in ["Shift+C", "Shift+V"] {
+                        assertion::assert_not_visible(&diff_help_frame, comment_key);
+                    }
 
                     let full = Region::full(frame.cols(), frame.rows());
                     assertion::assert_text_in_region(frame, "Done", &full);

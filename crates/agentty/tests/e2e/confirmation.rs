@@ -309,7 +309,6 @@ async fn draft_session_cancel_confirmation() -> E2eResult {
                         &list_full,
                     );
                     assertion::assert_text_in_region(&list_frame, "Draft", &list_full);
-                    assertion::assert_text_in_region(&list_frame, "c: cancel", &list_full);
 
                     let confirmation_frame = common::frame_from_capture(&report.captures[1]);
                     let confirmation_full =
@@ -374,7 +373,6 @@ async fn running_session_cancel_confirmation() -> E2eResult {
                         "Cancel running session",
                         &list_full,
                     );
-                    assertion::assert_text_in_region(&list_frame, "c: cancel", &list_full);
 
                     let confirmation_frame = common::frame_from_capture(&report.captures[1]);
                     let confirmation_full =
@@ -494,7 +492,6 @@ async fn stacked_parent_cancel_cascades_active_descendant() -> E2eResult {
                     .compose(&common::wait_for_agentty_startup())
                     .compose(&common::switch_to_tab("Sessions"))
                     .wait_for_text("Active cascade grandchild", 5000)
-                    .wait_for_text("c: cancel", 5000)
                     .capture_labeled(
                         "active_nested_stack",
                         "Nested stack before parent cancellation",

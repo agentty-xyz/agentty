@@ -17,7 +17,6 @@ use crate::domain::session_message::SessionTranscript;
 use crate::presentation::app_mode::{AppMode, ChatFocus};
 use crate::presentation::frame_time::FrameTime;
 use crate::presentation::graph_chat::GraphChatSnapshot;
-use crate::presentation::help_action;
 use crate::presentation::prompt::{
     PromptAtMentionState, PromptAttachmentState, PromptGraphState, PromptHistoryState,
     PromptSlashState,
@@ -123,7 +122,7 @@ fn test_composer_margin_stays_outside_transcript_viewport() {
 }
 
 #[test]
-fn test_transcript_view_height_reclaims_inactive_composer_row() {
+fn test_transcript_view_height_reclaims_inactive_composer_and_footer_rows() {
     // Arrange
     let session = session_fixture();
     let view_mode = AppMode::View {
@@ -143,11 +142,11 @@ fn test_transcript_view_height_reclaims_inactive_composer_row() {
 
             // Assert
             assert!(
-                view_height == prompt_height || view_height == prompt_height + 1,
+                (prompt_height..=prompt_height + 2).contains(&view_height),
                 "width {width}, height {height}"
             );
             if width >= 40 && height >= 20 {
-                assert_eq!(view_height, prompt_height + 1);
+                assert_eq!(view_height, prompt_height + 2);
             }
         }
     }
@@ -231,91 +230,46 @@ fn buffer_row_text(buffer: &ratatui::buffer::Buffer, row: u16, width: u16) -> St
         .collect()
 }
 
-/// Verifies the chat footer advertises continuation for completed
-/// sessions.
+/// Verifies view mode renders no keybinding help line for any session state.
 #[test]
-fn test_render_done_session_shows_continue_footer_action() {
-    // Arrange
-    let mut session = session_fixture();
-    session.status = Status::Done;
-    let mode = AppMode::View {
-        session_id: "session-id".into(),
-        scroll_offset: None,
-    };
-    let mut page = test_session_chat_page(&session, &mode);
-    let backend = ratatui::backend::TestBackend::new(80, 12);
-    let mut terminal = ratatui::Terminal::new(backend).expect("failed to create terminal");
+fn test_render_view_mode_omits_keybinding_help_line() {
+    for status in [
+        Status::Done,
+        Status::Canceled,
+        Status::InProgress,
+        Status::Review,
+    ] {
+        // Arrange
+        let mut session = session_fixture();
+        session.status = status;
+        let mode = AppMode::View {
+            session_id: "session-id".into(),
+            scroll_offset: None,
+        };
+        let mut page = test_session_chat_page(&session, &mode);
+        let backend = ratatui::backend::TestBackend::new(80, 12);
+        let mut terminal = ratatui::Terminal::new(backend).expect("failed to create terminal");
 
-    // Act
-    terminal
-        .draw(|frame| {
-            let area = frame.area();
-            Page::render(&mut page, frame, area);
-        })
-        .expect("failed to draw done session");
+        // Act
+        terminal
+            .draw(|frame| {
+                let area = frame.area();
+                Page::render(&mut page, frame, area);
+            })
+            .expect("failed to draw session");
 
-    // Assert
-    let text = buffer_text(terminal.backend().buffer());
-    assert!(text.contains("c: continue"));
-    assert!(!text.contains("comments"));
-}
-
-/// Verifies canceled terminal sessions advertise continuation in the chat
-/// footer.
-#[test]
-fn test_render_canceled_session_shows_continue_footer_action() {
-    // Arrange
-    let mut session = session_fixture();
-    session.status = Status::Canceled;
-    let mode = AppMode::View {
-        session_id: "session-id".into(),
-        scroll_offset: None,
-    };
-    let mut page = test_session_chat_page(&session, &mode);
-    let backend = ratatui::backend::TestBackend::new(80, 12);
-    let mut terminal = ratatui::Terminal::new(backend).expect("failed to create terminal");
-
-    // Act
-    terminal
-        .draw(|frame| {
-            let area = frame.area();
-            Page::render(&mut page, frame, area);
-        })
-        .expect("failed to draw canceled session");
-
-    // Assert
-    let text = buffer_text(terminal.backend().buffer());
-    assert!(text.contains("c: continue"));
-    assert!(!text.contains("comments"));
-}
-
-/// Verifies running sessions advertise sync as a queued action while
-/// keeping the running-turn stop action visible.
-#[test]
-fn test_render_in_progress_session_shows_sync_and_stop_footer_actions() {
-    // Arrange
-    let mut session = session_fixture();
-    session.status = Status::InProgress;
-    let mode = AppMode::View {
-        session_id: "session-id".into(),
-        scroll_offset: None,
-    };
-    let mut page = test_session_chat_page(&session, &mode);
-    let backend = ratatui::backend::TestBackend::new(80, 12);
-    let mut terminal = ratatui::Terminal::new(backend).expect("failed to create terminal");
-
-    // Act
-    terminal
-        .draw(|frame| {
-            let area = frame.area();
-            Page::render(&mut page, frame, area);
-        })
-        .expect("failed to draw in-progress session");
-
-    // Assert
-    let text = buffer_text(terminal.backend().buffer());
-    assert!(text.contains("r: sync"));
-    assert!(text.contains("Ctrl+c: stop"));
+        // Assert
+        let text = buffer_text(terminal.backend().buffer());
+        for action in [
+            "q: back",
+            "?: help",
+            "c: continue",
+            "r: sync",
+            "Ctrl+c: stop",
+        ] {
+            assert!(!text.contains(action), "unexpected {action} for {status:?}");
+        }
+    }
 }
 
 #[test]
@@ -521,42 +475,12 @@ fn test_render_session_view_keeps_settings_in_an_inactive_composer() {
         assert_eq!(border.symbol(), "╭");
         assert_eq!(border.fg, style::palette::border());
         assert!(!buffer_text(buffer).contains("Type your message"));
-        assert_eq!(composer_row, height - 3);
+        assert_eq!(composer_row, height - 2);
         assert_eq!(buffer[(1, composer_row + 1)].symbol(), "╰");
         assert!(!buffer_text(buffer).contains("›"));
-        assert!(buffer_row_text(buffer, height - 1, width).contains("q: back"));
         let text = buffer_text(buffer);
         assert!(text.contains("Merge conflict with main"));
         assert!(!text.contains("CPU"));
-    }
-}
-
-#[test]
-fn test_worktree_availability_preserves_default_and_builder_values() {
-    // Arrange
-    let session = session_fixture();
-    let mode = AppMode::View {
-        session_id: session.id.clone(),
-        scroll_offset: None,
-    };
-
-    for availability in [None, Some(false), Some(true)] {
-        let page = test_session_chat_page(&session, &mode);
-
-        // Act
-        let page = if let Some(available) = availability {
-            page.can_open_worktree(available)
-        } else {
-            page
-        };
-        let actions = help_action::view_actions(page.view_help_state(&session));
-
-        // Assert
-        assert_eq!(page.can_open_worktree, availability.unwrap_or(false));
-        assert_eq!(
-            actions.iter().any(|action| action.key == "o"),
-            availability.unwrap_or(false)
-        );
     }
 }
 
@@ -583,7 +507,7 @@ fn test_archived_session_reclaims_composer_space_for_transcript() {
 }
 
 #[test]
-fn test_render_archived_session_keeps_transcript_and_navigation_without_composer() {
+fn test_render_archived_session_keeps_transcript_and_timing_without_composer() {
     // Arrange
     for status in [Status::Done, Status::Canceled] {
         let mut session = session_fixture();
@@ -613,13 +537,10 @@ fn test_render_archived_session_keeps_transcript_and_navigation_without_composer
         let text = buffer_text(buffer);
         assert!(text.contains("Archived conversation remains readable."));
         assert!(!text.contains("Auto Edit"));
-        let timing = buffer_row_text(buffer, 18, 100);
+        let timing = buffer_row_text(buffer, 19, 100);
         assert!(timing.contains("Timer: 2m 5s · Started"));
         assert!(!text.contains("╭"));
-        let footer = buffer_row_text(buffer, 19, 100);
-        for action in ["q: back", "c: continue", "j/k: scroll", "?: help"] {
-            assert!(footer.contains(action), "missing archive action: {action}");
-        }
+        assert!(!text.contains("q: back"));
     }
 }
 
@@ -1235,32 +1156,6 @@ fn test_render_session_omits_started_label_when_rows_are_too_narrow() {
 
     // Assert
     assert!(rows.iter().all(|row| !row.contains("Started")));
-}
-
-#[test]
-fn terminal_diff_help_requires_retained_archive() {
-    // Arrange
-    for status in [Status::Done, Status::Canceled] {
-        for has_archived_diff in [false, true] {
-            let mut session = session_fixture();
-            session.status = status;
-            session.has_archived_diff = has_archived_diff;
-            let mode = AppMode::View {
-                session_id: session.id.clone(),
-                scroll_offset: None,
-            };
-            let page = test_session_chat_page(&session, &mode);
-
-            // Act
-            let actions = help_action::view_actions(page.view_help_state(&session));
-
-            // Assert
-            assert_eq!(
-                actions.iter().any(|action| action.key == "d"),
-                has_archived_diff
-            );
-        }
-    }
 }
 
 #[test]

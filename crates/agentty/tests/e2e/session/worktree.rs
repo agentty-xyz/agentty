@@ -117,7 +117,9 @@ async fn bare_repo_worktree_layout_supports_session_turn() -> E2eResult {
                     .wait_for_text("Summarize the bare worktree layout", 3000)
                     .press_key("Enter")
                     .wait_for_text(BARE_LAYOUT_ANSWER_TEXT, 30000)
-                    .wait_for_text("Enter: reply", 5000)
+                    // The active-turn loader animates, so a stable frame
+                    // proves the turn and its auto-commit have finished.
+                    .wait_for_stable_frame(500, 10000)
                     .capture_labeled(
                         "bare_layout_review",
                         "Session reaches review after one turn in a bare worktree layout",
@@ -127,7 +129,8 @@ async fn bare_repo_worktree_layout_supports_session_turn() -> E2eResult {
                 Box::pin(async move {
                     let full = Region::full(frame.cols(), frame.rows());
                     assertion::assert_text_in_region(frame, BARE_LAYOUT_ANSWER_TEXT, &full);
-                    assertion::assert_text_in_region(frame, "Enter: reply", &full);
+                    assertion::assert_not_visible(frame, "Working...");
+                    assertion::assert_not_visible(frame, "Committing...");
                     assertion::assert_not_visible(
                         frame,
                         "this operation must be run in a work tree",

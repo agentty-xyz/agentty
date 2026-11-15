@@ -1171,12 +1171,51 @@ async fn focused_review_ignores_blank_completed_fallback() -> E2eResult {
     Ok(())
 }
 
-/// Verify the `AgentReview` session footer keeps the sync shortcut visible so
+/// Verify the `AgentReview` session help keeps the sync shortcut available so
 /// users can start a rebase without waiting for focused review generation.
 #[tokio::test]
 async fn agent_review_session_shows_sync_shortcut() -> E2eResult {
     // Arrange, Act, Assert
     FeatureTest::new("agent_review_sync_shortcut")
+        .with_git()
+        .with_terminal_size(120, 40)
+        .setup(|env| Box::pin(async move { seed_agent_review_session(env).await }))
+        .run(
+            |scenario| {
+                scenario
+                    .compose(&common::wait_for_agentty_startup())
+                    .compose(&common::switch_to_tab("Sessions"))
+                    .compose(&common::open_selected_session_view())
+                    .press_key("?")
+                    .step(common::wait_for_frame_text(
+                        &["Keybindings", "r: Sync"],
+                        &[],
+                    ))
+                    .viewing_pause_ms(1500)
+                    .capture_labeled(
+                        "agent_review_sync_shortcut",
+                        "AgentReview session help with sync shortcut",
+                    )
+            },
+            |frame, _report| {
+                Box::pin(async move {
+                    let full = Region::full(frame.cols(), frame.rows());
+                    assertion::assert_text_in_region(frame, "Agent review sync shortcut", &full);
+                    assertion::assert_text_in_region(frame, "r: Sync", &full);
+                })
+            },
+        )
+        .await?;
+
+    Ok(())
+}
+
+/// Verify a default-size terminal cues the overflowing session help list and
+/// scrolls it to reveal the sync shortcut below the first page.
+#[tokio::test]
+async fn session_help_cues_scrolling_to_hidden_shortcuts() -> E2eResult {
+    // Arrange, Act, Assert
+    FeatureTest::new("session_help_scroll_cue")
         .with_git()
         .setup(|env| Box::pin(async move { seed_agent_review_session(env).await }))
         .run(
@@ -1184,19 +1223,25 @@ async fn agent_review_session_shows_sync_shortcut() -> E2eResult {
                 scenario
                     .compose(&common::wait_for_agentty_startup())
                     .compose(&common::switch_to_tab("Sessions"))
-                    .press_key("Enter")
-                    .step(common::wait_for_frame_text(&["q: back", "r: sync"], &[]))
-                    .viewing_pause_ms(1500)
-                    .capture_labeled(
-                        "agent_review_sync_shortcut",
-                        "AgentReview session view with sync shortcut",
-                    )
+                    .compose(&common::open_selected_session_view())
+                    .press_key("?")
+                    .step(common::wait_for_frame_text(
+                        &["Keybindings", "j/k: scroll"],
+                        &[],
+                    ))
+                    .capture_labeled("help_first_page", "Help cues hidden shortcuts")
+                    .press_key("j")
+                    .press_key("j")
+                    .press_key("j")
+                    .wait_for_text("r: Sync", 5000)
             },
-            |frame, _report| {
+            |frame, report| {
                 Box::pin(async move {
+                    let first_page = common::frame_from_capture(&report.captures[0]);
+                    assertion::assert_not_visible(&first_page, "r: Sync");
                     let full = Region::full(frame.cols(), frame.rows());
-                    assertion::assert_text_in_region(frame, "Agent review sync shortcut", &full);
-                    assertion::assert_text_in_region(frame, "r: sync", &full);
+                    assertion::assert_text_in_region(frame, "j/k: scroll", &full);
+                    assertion::assert_text_in_region(frame, "r: Sync", &full);
                 })
             },
         )

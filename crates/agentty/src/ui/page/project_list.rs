@@ -11,7 +11,6 @@ use ratatui::widgets::{Block, Borders, Cell, Paragraph, Row, Table, TableState, 
 use crate::domain::agent::{AgentCliInfo, AgentCliVersion};
 use crate::domain::project::ProjectListItem;
 use crate::domain::session::DailyActivity;
-use crate::presentation::help_action;
 use crate::ui::activity_heatmap::{
     RecentActivityStats, build_activity_heatmap_grid, build_recent_activity_stats,
     build_visible_heatmap_month_row, heatmap_intensity_level, heatmap_max_count,
@@ -79,12 +78,11 @@ impl Page for ProjectListPage<'_> {
     /// Renders the projects page with separate activity and work-pace dashboard
     /// panels, project rows, and compact tab-page spacing.
     fn render(&mut self, f: &mut Frame, area: Rect) {
-        let areas = layout::tab_page_areas(area);
         let content_chunks = Layout::vertical([
             Constraint::Length(PROJECT_DASHBOARD_PANEL_HEIGHT),
             Constraint::Min(0),
         ])
-        .split(areas.main_area);
+        .split(layout::tab_page_area(area));
         let info_area = content_chunks[0];
         let project_area = content_chunks[1];
         let info_panel_chunks =
@@ -154,9 +152,6 @@ impl Page for ProjectListPage<'_> {
         f.render_widget(heatmap_panel, heatmap_area);
         f.render_widget(details_panel, details_area);
         f.render_widget(agent_cli_panel, agent_cli_area);
-
-        let help_message = Paragraph::new(project_list_footer_line());
-        f.render_widget(help_message, areas.footer_area);
     }
 }
 
@@ -384,11 +379,6 @@ fn stat_value_span(text: impl Into<String>) -> Span<'static> {
         text.into(),
         Style::default().fg(style::palette::accent_soft()),
     )
-}
-
-/// Returns the footer help content rendered below the projects table.
-fn project_list_footer_line() -> Line<'static> {
-    crate::ui::help_format::footer_line(&help_action::project_list_footer_actions())
 }
 
 /// Returns project row display values for reuse and testing.

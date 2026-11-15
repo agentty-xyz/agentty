@@ -571,7 +571,6 @@ fn selector_snapshot_separates_model_reasoning_and_speed() {
     let mut model_state = SettingsPresentationState::default();
     select_row(&mut model_state, &view, SettingRow::DefaultSmartModel);
     let _ = model_state.apply(&view, SettingsAction::Activate);
-    let model_footer_hint = model_state.footer_hint();
     let mut theme_state = SettingsPresentationState::default();
     let _ = theme_state.apply(&view, SettingsAction::Activate);
 
@@ -585,12 +584,10 @@ fn selector_snapshot_separates_model_reasoning_and_speed() {
         .snapshot(&view)
         .selector_dropdown
         .expect("reasoning selector should be open");
-    let reasoning_footer_hint = model_state.footer_hint();
     let mut speed_state = SettingsPresentationState::default();
     select_row(&mut speed_state, &view, SettingRow::DefaultFastModel);
     let _ = speed_state.apply(&view, SettingsAction::Activate);
     let _ = speed_state.apply(&view, SettingsAction::Confirm);
-    let speed_capable_reasoning_footer_hint = speed_state.footer_hint();
     let _ = speed_state.apply(&view, SettingsAction::Confirm);
     let speed_next_operation = speed_state.apply(&view, SettingsAction::Next);
     let speed_previous_operation = speed_state.apply(&view, SettingsAction::Previous);
@@ -598,7 +595,6 @@ fn selector_snapshot_separates_model_reasoning_and_speed() {
         .snapshot(&view)
         .selector_dropdown
         .expect("speed selector should be open");
-    let speed_footer_hint = speed_state.footer_hint();
     let theme_snapshot = theme_state.snapshot(&view);
     let theme_dropdown = theme_snapshot
         .selector_dropdown
@@ -608,10 +604,6 @@ fn selector_snapshot_separates_model_reasoning_and_speed() {
     assert_eq!(model_operation, None);
     assert_eq!(model_dropdown.title, "Select model");
     assert_eq!(
-        model_footer_hint,
-        "Selecting model: j/k move, Enter continue, Esc/q close"
-    );
-    assert_eq!(
         model_dropdown.options[model_dropdown.selected_index].label,
         display_model_selector_value(view.default_smart_selection)
     );
@@ -620,10 +612,6 @@ fn selector_snapshot_separates_model_reasoning_and_speed() {
         view.available_model_selections.len() + 1
     );
     assert_eq!(reasoning_dropdown.title, "Select reasoning level");
-    assert_eq!(
-        reasoning_footer_hint,
-        "Selecting reasoning: j/k move, Enter save, Esc/q close"
-    );
     assert_eq!(
         reasoning_dropdown.options[reasoning_dropdown.selected_index].label,
         ReasoningLevel::High.as_str()
@@ -643,10 +631,6 @@ fn selector_snapshot_separates_model_reasoning_and_speed() {
     assert_eq!(speed_next_operation, None);
     assert_eq!(speed_previous_operation, None);
     assert_eq!(
-        speed_capable_reasoning_footer_hint,
-        "Selecting reasoning: j/k move, Enter continue, Esc/q close"
-    );
-    assert_eq!(
         speed_dropdown.options[speed_dropdown.selected_index].label,
         SpeedMode::Fast.name()
     );
@@ -660,10 +644,6 @@ fn selector_snapshot_separates_model_reasoning_and_speed() {
             .iter()
             .map(|speed_mode| speed_mode.name())
             .collect::<Vec<_>>()
-    );
-    assert_eq!(
-        speed_footer_hint,
-        "Selecting speed: j/k move, Enter save, Esc/q close"
     );
     assert_eq!(theme_dropdown.title, "Select setting value");
 }

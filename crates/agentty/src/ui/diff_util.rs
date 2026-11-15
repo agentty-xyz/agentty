@@ -1,4 +1,4 @@
-use ratatui::layout::{Constraint, Direction, Layout, Rect};
+use ratatui::layout::{Constraint, Direction, Layout, Margin, Rect};
 use ratatui::style::Style;
 
 use crate::ui::style;
@@ -8,8 +8,6 @@ const BORDER_HORIZONTAL_WIDTH: u16 = 2;
 const DIFF_GIT_FILE_HEADER_PREFIX: &str = "diff --git";
 
 const DIFF_GIT_HEADER_PREFIX: &str = "diff --git ";
-
-const FOOTER_HEIGHT: u16 = 1;
 
 const GUTTER_EXTRA_WIDTH: usize = 2;
 
@@ -69,8 +67,6 @@ pub struct DiffPageAreas {
     pub diff_area: Rect,
     /// Left-side changed-file explorer panel.
     pub file_list_area: Rect,
-    /// Bottom keybinding footer.
-    pub footer_area: Rect,
 }
 
 /// Vertical sections inside the unified diff sidebar.
@@ -312,9 +308,9 @@ pub fn wrap_diff_content(content: &str, max_width: usize) -> Vec<&str> {
     chunks
 }
 
-/// Returns the shared diff-page areas with top and side margins, a help footer
-/// flush with the page bottom. The preferred file-list width includes borders
-/// and is capped at 30% of available width and 60 columns.
+/// Returns the shared diff-page areas with top and side margins, filling the
+/// remaining height down to the page bottom. The preferred file-list width
+/// includes borders and is capped at 30% of available width and 60 columns.
 pub fn diff_page_areas(terminal_area: Rect, preferred_file_list_width: u16) -> DiffPageAreas {
     let terminal_area = Rect {
         y: terminal_area
@@ -323,24 +319,18 @@ pub fn diff_page_areas(terminal_area: Rect, preferred_file_list_width: u16) -> D
         height: terminal_area.height.saturating_sub(LAYOUT_MARGIN),
         ..terminal_area
     };
-    let page_chunks = Layout::default()
-        .constraints([Constraint::Min(0), Constraint::Length(FOOTER_HEIGHT)])
-        .horizontal_margin(LAYOUT_MARGIN)
-        .split(terminal_area);
+    let page_area = terminal_area.inner(Margin::new(LAYOUT_MARGIN, 0));
     let content_layout = Layout::default()
         .direction(Direction::Horizontal)
         .constraints([
-            Constraint::Length(
-                preferred_file_list_width.min(page_chunks[0].width.min(200) * 3 / 10),
-            ),
+            Constraint::Length(preferred_file_list_width.min(page_area.width.min(200) * 3 / 10)),
             Constraint::Min(0),
         ])
-        .split(page_chunks[0]);
+        .split(page_area);
 
     DiffPageAreas {
         diff_area: content_layout[1],
         file_list_area: content_layout[0],
-        footer_area: page_chunks[1],
     }
 }
 

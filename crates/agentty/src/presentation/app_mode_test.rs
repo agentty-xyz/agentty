@@ -252,7 +252,7 @@ fn test_confirmation_view_mode_into_view_mode_restores_view_identity() {
 }
 
 #[test]
-fn test_help_context_view_keybindings_for_in_progress_show_sync_and_hide_edit_actions() {
+fn test_help_context_view_keybindings_for_in_progress_show_sync_and_queue_and_hide_merge() {
     // Arrange
     let context = HelpContext::View {
         can_fork_session: true,
@@ -280,7 +280,11 @@ fn test_help_context_view_keybindings_for_in_progress_show_sync_and_hide_edit_ac
     assert!(bindings.iter().any(|binding| binding.key == "?"));
     assert!(bindings.iter().any(|binding| binding.key == "Ctrl+c"));
     assert!(bindings.iter().any(|binding| binding.key == "r"));
-    assert!(!bindings.iter().any(|binding| binding.key == "Enter"));
+    assert!(
+        bindings
+            .iter()
+            .any(|binding| binding.key == "Enter" && binding.popup_label == "Queue message")
+    );
     assert!(bindings.iter().any(|binding| binding.key == "d"));
     assert!(!bindings.iter().any(|binding| binding.key == "m"));
     assert!(!bindings.iter().any(|binding| binding.key == "S-Tab"));
@@ -325,6 +329,7 @@ fn test_help_context_restore_mode_unboxes_diff_review_comments() {
     // Arrange
     let context = HelpContext::Diff {
         can_comment: true,
+        can_reply_review_comments: false,
         diff: "diff --git a/a.rs b/a.rs".to_string(),
         file_explorer_selected_index: 2,
         focus: DiffFocus::Content,
@@ -355,6 +360,45 @@ fn test_help_context_restore_mode_unboxes_diff_review_comments() {
         } if *review_comments == DiffReviewComments::loading(7)
             && session_id.as_str() == "session-id"
     ));
+}
+
+#[test]
+fn test_help_context_diff_keybindings_follow_linked_review_comment_reply() {
+    // Arrange
+    let diff_context = |review_comments: Option<Box<DiffReviewComments>>,
+                        can_reply_review_comments: bool| HelpContext::Diff {
+        can_comment: false,
+        can_reply_review_comments,
+        diff: "diff --git a/a.rs b/a.rs".to_string(),
+        file_explorer_selected_index: 0,
+        focus: DiffFocus::Files,
+        line_comments: DiffLineComments::default(),
+        preview: DiffPreview::default(),
+        review_comments,
+        restore: None,
+        session_id: "session-id".into(),
+        scroll_offset: 0,
+        selected_diff_line_index: 0,
+    };
+
+    // Act
+    let unlinked_keys = diff_context(None, true)
+        .keybindings()
+        .into_iter()
+        .map(|binding| binding.key)
+        .collect::<Vec<_>>();
+    let linked_keys = diff_context(Some(Box::new(DiffReviewComments::loading(1))), true)
+        .keybindings()
+        .into_iter()
+        .map(|binding| binding.key)
+        .collect::<Vec<_>>();
+
+    // Assert
+    assert!(!unlinked_keys.contains(&"c"));
+    assert!(!unlinked_keys.contains(&"Space"));
+    assert!(linked_keys.contains(&"c"));
+    assert!(linked_keys.contains(&"Space"));
+    assert!(linked_keys.contains(&"Enter"));
 }
 
 #[test]
@@ -516,6 +560,7 @@ fn test_active_at_mention_mut_returns_question_and_editing_diff_lookups() {
 fn diff_mode_with_line_comments(line_comments: DiffLineComments) -> AppMode {
     HelpContext::Diff {
         can_comment: true,
+        can_reply_review_comments: false,
         diff: String::new(),
         file_explorer_selected_index: 0,
         focus: DiffFocus::Content,

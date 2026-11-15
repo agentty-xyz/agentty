@@ -19,7 +19,7 @@ use crate::presentation::app_mode::{
     DiffCommentTarget, DiffFocus, DiffLineComment, DiffLineCommentAnchor, DiffLineComments,
     DiffLineSide, DiffPreview, DiffPreviewUnavailableReason, DiffReviewComments, DiffSidebarFocus,
 };
-use crate::presentation::{help_action, review_comment as review_comment_selection};
+use crate::presentation::review_comment as review_comment_selection;
 use crate::ui::component::chat_input::ChatInput;
 use crate::ui::component::file_explorer::FileExplorer;
 use crate::ui::component::vertical_scrollbar::VerticalScrollbar;
@@ -2021,7 +2021,7 @@ impl DiffPage<'_> {
     }
 
     /// Paints repository suggestions adjacent to the active comment input.
-    fn render_comment_lookup(&self, f: &mut Frame, diff_area: Rect, footer_area: Rect) {
+    fn render_comment_lookup(&self, f: &mut Frame, diff_area: Rect) {
         let Some(state) = &self.line_comments.at_mention_state else {
             return;
         };
@@ -2078,7 +2078,24 @@ impl DiffPage<'_> {
         } else {
             "Esc: dismiss lookup"
         };
-        f.render_widget(Paragraph::new(help), footer_area);
+        // The editor consumes `?` as text, so lookup keys stay on the diff
+        // pane's bottom border while the lookup is open.
+        let hint_area = Rect::new(
+            diff_area.x.saturating_add(1),
+            diff_area.y + diff_area.height.saturating_sub(1),
+            diff_area.width.saturating_sub(2),
+            diff_area.height.min(1),
+        );
+        f.render_widget(
+            Paragraph::new(
+                Line::styled(
+                    format!(" {help} "),
+                    Style::default().fg(style::palette::text_muted()),
+                )
+                .right_aligned(),
+            ),
+            hint_area,
+        );
     }
 }
 
@@ -2140,53 +2157,7 @@ impl Page for DiffPage<'_> {
             );
         }
 
-        let (can_mark_selected, can_submit) = if self.sidebar_focus == DiffSidebarFocus::Comments {
-            self.review_comments
-                .map_or((false, false), |review_comments| {
-                    let rows = review_comments
-                        .comment_snapshot
-                        .as_ref()
-                        .map_or_default(review_comment_selection::grouped_review_comment_rows);
-                    let can_reply = self.session.allows_review_comment_reply();
-
-                    (
-                        can_reply
-                            && review_comment::review_comment_selected_is_actionable(
-                                &rows,
-                                review_comments.selected_comment_index,
-                            ),
-                        can_reply && !review_comments.selected_comments.is_empty(),
-                    )
-                })
-        } else {
-            (false, false)
-        };
-        let help_message = Paragraph::new(crate::ui::help_format::footer_line(
-            &help_action::diff_footer_actions(help_action::DiffFooterContext {
-                can_mark_selected,
-                can_submit,
-                file_comment: help_action::DiffFileCommentAvailability::from_bool(
-                    self.can_comment
-                        && content.selected_item_is_file(self.file_explorer_selected_index),
-                ),
-                focus: self.focus,
-                has_review_comments: self.review_comments.is_some(),
-                line_comment_state: if !self.can_comment {
-                    help_action::DiffLineCommentFooterState::ReadOnly
-                } else if self.line_comments.is_editing() {
-                    help_action::DiffLineCommentFooterState::Editing
-                } else if self.line_comments.is_selecting() {
-                    help_action::DiffLineCommentFooterState::Selecting
-                } else {
-                    help_action::DiffLineCommentFooterState::Ready {
-                        comment_count: self.line_comments.comments.len(),
-                    }
-                },
-                sidebar_focus: self.sidebar_focus,
-            }),
-        ));
-        f.render_widget(help_message, areas.footer_area);
-        self.render_comment_lookup(f, areas.diff_area, areas.footer_area);
+        self.render_comment_lookup(f, areas.diff_area);
     }
 }
 

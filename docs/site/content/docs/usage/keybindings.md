@@ -5,7 +5,9 @@ weight = 2
 +++
 
 <a id="usage-keybindings-introduction"></a> This page lists keyboard shortcuts for each
-Agentty view.
+Agentty view. In the app, press `?`, shown as `?: help` at the right of the top bar, to
+list the shortcuts available on the current page. When the list is longer than the
+popup, its bottom border shows `j/k: scroll`.
 
 For session states and transition behavior, see [Workflow](@/docs/usage/workflow.md).
 

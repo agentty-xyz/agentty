@@ -9,8 +9,7 @@ use ratatui::text::Line;
 use super::{
     ReviewCommentPage, ReviewCommentPageInput, ReviewCommentRenderCaches, code_context_line,
     code_context_lines, comment_detail_lines, comment_list_items, comment_list_title,
-    diff_line_matches_anchor, review_comment_item_count, review_comment_selected_is_actionable,
-    review_comment_view_max_scroll_offset,
+    diff_line_matches_anchor, review_comment_item_count, review_comment_view_max_scroll_offset,
 };
 use crate::domain::theme::ColorTheme;
 use crate::presentation::app_mode::ReviewCommentSelection;
@@ -702,62 +701,24 @@ fn test_comment_list_items_map_grouped_rows_to_selectable_indexes() {
 }
 
 #[test]
-fn test_review_comment_actionability_includes_outdated_unresolved_rows() {
+fn test_review_comment_selected_thread_id_skips_general_comments() {
     // Arrange
     let mut current = inline_thread(2);
     current.id = "current".to_string();
-    let mut resolved = inline_thread(3);
-    resolved.id = "resolved".to_string();
-    resolved.is_resolved = true;
-    let mut outdated = inline_thread(4);
-    outdated.id = "outdated".to_string();
-    outdated.is_outdated = Some(true);
     let snapshot = ReviewCommentSnapshot {
         pr_level_comments: vec![ReviewComment {
             author: "bob".to_string(),
             authored_by_current_user: false,
             body: "General note".to_string(),
         }],
-        threads: vec![current, resolved, outdated],
+        threads: vec![current],
     };
-    let rows = review_comment_selection::grouped_review_comment_rows(&snapshot);
 
     // Act
-    let current_is_actionable = review_comment_selected_is_actionable(&rows, 0);
-    let outdated_is_actionable = review_comment_selected_is_actionable(&rows, 1);
-    let resolved_is_actionable = review_comment_selected_is_actionable(&rows, 2);
-    let general_is_actionable = review_comment_selected_is_actionable(&rows, 3);
-    let missing_is_actionable = review_comment_selected_is_actionable(&rows, 99);
     let current_thread_id = review_comment_selection::selected_thread_id(&snapshot, 0);
-    let general_thread_id = review_comment_selection::selected_thread_id(&snapshot, 3);
+    let general_thread_id = review_comment_selection::selected_thread_id(&snapshot, 1);
 
     // Assert
-    assert!(!general_is_actionable);
-    assert!(current_is_actionable);
-    assert!(!resolved_is_actionable);
-    assert!(outdated_is_actionable);
-    assert!(!missing_is_actionable);
     assert_eq!(current_thread_id, Some("current"));
     assert_eq!(general_thread_id, None);
-    assert!(!review_comment_selected_is_actionable(&[], 0));
-}
-
-#[test]
-fn test_review_comment_actionability_is_false_without_general_or_current_threads() {
-    // Arrange
-    let mut resolved = inline_thread(2);
-    resolved.is_resolved = true;
-    let snapshot = ReviewCommentSnapshot {
-        pr_level_comments: vec![ReviewComment {
-            author: "bob".to_string(),
-            authored_by_current_user: false,
-            body: "Standalone note".to_string(),
-        }],
-        threads: vec![resolved],
-    };
-    let rows = review_comment_selection::grouped_review_comment_rows(&snapshot);
-
-    // Act, Assert
-    assert!(!review_comment_selected_is_actionable(&rows, 0));
-    assert!(!review_comment_selected_is_actionable(&rows, 1));
 }

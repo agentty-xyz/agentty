@@ -102,7 +102,6 @@ fn buffer_text(buffer: &ratatui::buffer::Buffer) -> String {
 
 fn settings_screen_with_overlays() -> SettingsScreenSnapshot {
     SettingsScreenSnapshot {
-        footer_hint: "Editing settings",
         global_rows: vec![("Theme", "Agentty Default".to_string())],
         launch_configuration_list_editor: Some(LaunchConfigurationListEditorSnapshot {
             commands: vec!["cargo test".to_string()],
@@ -202,7 +201,6 @@ fn render_list_backed_mode(mode: &AppMode) -> (bool, String) {
     let active_prompt_outputs = HashMap::new();
     let session_progress_messages = HashMap::new();
     let session_update_versions = HashMap::new();
-    let session_worktree_availability = HashMap::new();
     let mut handled = false;
 
     terminal
@@ -217,14 +215,12 @@ fn render_list_backed_mode(mode: &AppMode) -> (bool, String) {
                     color_support: style::ColorSupport::Enabled,
                     diff_layout_cache: &diff_layout_cache,
                     greeting_animated: &Cell::new(false),
-                    is_tmux_session: true,
                     markdown_render_cache: &markdown_render_cache,
                     output_layout_cache: &output_layout_cache,
                     review_snapshot: None,
                     session_git_statuses: &HashMap::new(),
                     session_progress_messages: &session_progress_messages,
                     session_update_versions: &session_update_versions,
-                    session_worktree_availability: &session_worktree_availability,
                     frame_time: FrameTime::new(90, 90_000, -28_800),
                     graph_chat: None,
                 },
@@ -239,14 +235,12 @@ fn render_list_backed_mode(mode: &AppMode) -> (bool, String) {
                     color_support: style::ColorSupport::Enabled,
                     diff_layout_cache: &diff_layout_cache,
                     greeting_animated: &Cell::new(false),
-                    is_tmux_session: true,
                     markdown_render_cache: &markdown_render_cache,
                     output_layout_cache: &output_layout_cache,
                     review_snapshot: None,
                     session_git_statuses: &HashMap::new(),
                     session_progress_messages: &session_progress_messages,
                     session_update_versions: &session_update_versions,
-                    session_worktree_availability: &session_worktree_availability,
                     frame_time: FrameTime::new(90, 90_000, -28_800),
                     graph_chat: None,
                 },
@@ -282,6 +276,7 @@ fn surface_for_help_context_classifies_each_restored_page() {
     };
     let diff_context = HelpContext::Diff {
         can_comment: true,
+        can_reply_review_comments: false,
         diff: "diff --git a/file b/file".to_string(),
         file_explorer_selected_index: 0,
         focus: DiffFocus::Files,
@@ -575,6 +570,7 @@ fn render_help_mode_restores_markdown_diff_preview_background() {
     let mode = AppMode::Help {
         context: crate::presentation::app_mode::HelpContext::Diff {
             can_comment: true,
+            can_reply_review_comments: false,
             diff: "diff --git a/README.md b/README.md\n+# Preview".to_string(),
             file_explorer_selected_index: 0,
             focus: DiffFocus::Files,
@@ -627,14 +623,12 @@ fn render_help_mode_restores_markdown_diff_preview_background() {
                 color_support: style::ColorSupport::Enabled,
                 diff_layout_cache: &diff_layout_cache,
                 greeting_animated: &Cell::new(false),
-                is_tmux_session: true,
                 markdown_render_cache: &markdown_render_cache,
                 output_layout_cache: &output_layout_cache,
                 review_snapshot: None,
                 session_git_statuses: &HashMap::new(),
                 session_progress_messages: &HashMap::new(),
                 session_update_versions: &HashMap::new(),
-                session_worktree_availability: &HashMap::new(),
                 frame_time: FrameTime::new(0, 0, 0),
                 graph_chat: None,
             };
@@ -879,17 +873,12 @@ fn render_session_surface_renders_view_session_content() {
                     color_support: style::ColorSupport::Enabled,
                     diff_layout_cache: &diff_layout_cache,
                     greeting_animated: &Cell::new(false),
-                    is_tmux_session: false,
                     markdown_render_cache: &cache,
                     output_layout_cache: &output_layout_cache,
                     review_snapshot: None,
                     session_git_statuses: &session_git_statuses,
                     session_progress_messages: &progress_messages,
                     session_update_versions: &session_update_versions,
-                    session_worktree_availability: &HashMap::from([(
-                        session_id.to_string().into(),
-                        true,
-                    )]),
                     frame_time: FrameTime::new(0, 0, 0),
                     graph_chat: Some(&graph_chat),
                 },
@@ -903,7 +892,6 @@ fn render_session_surface_renders_view_session_content() {
     assert!(text.contains("Execution graph"));
     assert!(text.contains("Captured output"));
     assert!(text.contains("Merge conflict with main"));
-    assert!(!text.contains("o: open"));
 }
 
 #[test]
@@ -939,14 +927,12 @@ fn render_session_surface_keeps_background_when_session_is_missing() {
                     color_support: style::ColorSupport::Enabled,
                     diff_layout_cache: &diff_layout_cache,
                     greeting_animated: &Cell::new(false),
-                    is_tmux_session: true,
                     markdown_render_cache: &cache,
                     output_layout_cache: &output_layout_cache,
                     review_snapshot: None,
                     session_git_statuses: &HashMap::new(),
                     session_progress_messages: &progress_messages,
                     session_update_versions: &session_update_versions,
-                    session_worktree_availability: &HashMap::new(),
                     frame_time: FrameTime::new(0, 0, 0),
                     graph_chat: None,
                 },
@@ -1000,14 +986,12 @@ fn render_diff_surface_renders_page_for_matching_session() {
                     color_support: style::ColorSupport::Enabled,
                     diff_layout_cache: &diff_layout_cache,
                     greeting_animated: &Cell::new(false),
-                    is_tmux_session: true,
                     markdown_render_cache: &cache,
                     output_layout_cache: &output_layout_cache,
                     review_snapshot: None,
                     session_git_statuses: &HashMap::new(),
                     session_progress_messages: &progress_messages,
                     session_update_versions: &session_update_versions,
-                    session_worktree_availability: &HashMap::new(),
                     frame_time: FrameTime::new(0, 0, 0),
                     graph_chat: None,
                 },
@@ -1057,14 +1041,12 @@ fn render_diff_surface_preserves_frame_for_missing_session() {
                     color_support: style::ColorSupport::Enabled,
                     diff_layout_cache: &diff_layout_cache,
                     greeting_animated: &Cell::new(false),
-                    is_tmux_session: true,
                     markdown_render_cache: &markdown_render_cache,
                     output_layout_cache: &output_layout_cache,
                     review_snapshot: None,
                     session_git_statuses: &HashMap::new(),
                     session_progress_messages: &HashMap::new(),
                     session_update_versions: &HashMap::new(),
-                    session_worktree_availability: &HashMap::new(),
                     frame_time: FrameTime::new(0, 0, 0),
                     graph_chat: None,
                 },
@@ -1119,14 +1101,12 @@ fn render_diff_surface_renders_linked_comments_for_matching_session() {
                     color_support: style::ColorSupport::Enabled,
                     diff_layout_cache: &diff_layout_cache,
                     greeting_animated: &Cell::new(false),
-                    is_tmux_session: true,
                     markdown_render_cache: &cache,
                     output_layout_cache: &output_layout_cache,
                     review_snapshot: None,
                     session_git_statuses: &HashMap::new(),
                     session_progress_messages: &progress_messages,
                     session_update_versions: &session_update_versions,
-                    session_worktree_availability: &HashMap::new(),
                     frame_time: FrameTime::new(0, 0, 0),
                     graph_chat: None,
                 },

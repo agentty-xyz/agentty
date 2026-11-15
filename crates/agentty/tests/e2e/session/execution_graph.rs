@@ -167,7 +167,12 @@ fn close_graph_question() -> Journey {
     Journey::new("graph_question_closed")
         .step(Step::wait_for_text("Question 1/1", 5000))
         .step(Step::press_key("Ctrl+c"))
-        .step(Step::wait_for_text("Enter: reply", 5000))
+        .step(common::wait_for_session_view())
+}
+
+/// Waits for `q` to leave the execution-graph page for the session chat view.
+fn wait_for_chat_after_graph_page() -> Step {
+    common::wait_for_frame_text(&["Graph controls"], &["Execution graphs"])
 }
 
 /// Waits for the editor to disappear as well as the controls to reappear.
@@ -244,7 +249,7 @@ async fn saved_execution_graph_controls() -> E2eResult {
                     .wait_for_text("Cancelled", 5000)
                     .capture_labeled("cancelled", "Graph cancellation is terminal")
                     .press_key("q")
-                    .wait_for_text("Enter: reply", 5000)
+                    .step(wait_for_chat_after_graph_page())
             },
             |frame, report| {
                 Box::pin(async move {
@@ -407,7 +412,7 @@ async fn rejected_graph_drafts_stay_visible_until_explicit_reconciliation() -> E
                     .press_key("Esc")
                     .compose(&wait_for_graph_controls())
                     .press_key("q")
-                    .wait_for_text("Enter: reply", 5000)
+                    .step(wait_for_chat_after_graph_page())
                     .press_key("Enter")
                     .write_text("Local documentation only")
                     .press_key("Enter")
@@ -509,8 +514,7 @@ printf '%s\n' '{{"type":"result","subtype":"success","result":"{{\"answer\":\"Ba
                 scenario
                     .compose(&common::wait_for_agentty_startup())
                     .wait_for_text("Graph controls", 5000)
-                    .press_key("Enter")
-                    .wait_for_text("Enter: reply", 5000)
+                    .compose(&common::open_selected_session_view())
                     .press_key("Enter")
                     .write_text("Ask a session question")
                     .press_key("Enter")
@@ -518,7 +522,7 @@ printf '%s\n' '{{"type":"result","subtype":"success","result":"{{\"answer\":\"Ba
                         Duration::from_secs(10),
                         Duration::from_millis(50),
                         |frame| assertion::match_text_in_region(
-                            frame, "Ctrl+c: stop", &Region::full(frame.cols(), frame.rows()),
+                            frame, "Working...", &Region::full(frame.cols(), frame.rows()),
                         ),
                     ))
                     .press_key("w")

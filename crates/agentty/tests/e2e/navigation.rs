@@ -234,8 +234,8 @@ async fn tab_cycles_through_all_tabs() -> E2eResult {
                         &settings_full,
                     );
                     for tab_frame in [&sessions_frame, &settings_frame] {
-                        let help_row = Region::new(0, tab_frame.rows() - 2, tab_frame.cols(), 1);
-                        assertion::assert_text_in_region(tab_frame, "?: help", &help_row);
+                        let top_bar = Region::new(0, 0, tab_frame.cols(), 1);
+                        assertion::assert_text_in_region(tab_frame, "?: help", &top_bar);
                     }
                 })
             },
@@ -283,16 +283,17 @@ async fn quit_shows_confirmation_dialog() -> E2eResult {
     Ok(())
 }
 
-/// Verify that the footer shows keybinding hints on startup.
+/// Verify that the top bar shows only the `?: help` hint instead of a
+/// per-screen keybinding footer.
 #[tokio::test]
-async fn startup_shows_footer_hints() -> E2eResult {
+async fn startup_shows_help_hint_in_top_bar() -> E2eResult {
     // Arrange, Act, Assert
-    FeatureTest::new("footer_hints")
+    FeatureTest::new("help_hint")
         .with_git()
         .setup(|env| Box::pin(common::seed_projects_startup_tab(env)))
         .zola(
-            "Footer hints",
-            "Context-sensitive hints in the footer guide available actions.",
+            "Help hint",
+            "A `?: help` hint in the top bar opens every available shortcut.",
             110,
         )
         .run(
@@ -300,13 +301,13 @@ async fn startup_shows_footer_hints() -> E2eResult {
                 scenario
                     .compose(&common::wait_for_settled_agentty_startup())
                     .viewing_pause_ms(3000)
-                    .capture_labeled("startup", "Footer with keybinding hints")
+                    .capture_labeled("startup", "Top bar with the help hint")
             },
             |frame, _report| {
                 Box::pin(async move {
-                    let help_row = Region::new(0, frame.rows() - 2, frame.cols(), 1);
-                    assertion::assert_text_in_region(frame, "q: quit", &help_row);
-                    assertion::assert_text_in_region(frame, "?: help", &help_row);
+                    let top_bar = Region::new(0, 0, frame.cols(), 1);
+                    assertion::assert_text_in_region(frame, "?: help", &top_bar);
+                    assertion::assert_not_visible(frame, "q: quit");
                 })
             },
         )

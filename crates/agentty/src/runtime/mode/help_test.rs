@@ -135,6 +135,7 @@ fn test_handle_restores_diff_mode_with_content() {
     let mut mode = AppMode::Help {
         context: HelpContext::Diff {
             can_comment: true,
+            can_reply_review_comments: false,
             session_id: "s1".into(),
             diff: "diff content".to_string(),
             focus: DiffFocus::Content,

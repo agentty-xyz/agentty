@@ -510,8 +510,8 @@ async fn quit_exports_active_and_queued_turn_outcomes() -> Result<(), Box<dyn st
                     .compose(&common::create_session_with_prompt_and_return_to_list(
                         "Keep exit turn active",
                     ))
-                    .press_key("Enter")
-                    .wait_for_text("Ctrl+c: stop", 10000)
+                    .compose(&common::open_selected_session_view())
+                    .wait_for_text("Working...", 10000)
                     .press_key("Enter")
                     .step(common::wait_for_prompt_composer())
                     .write_text("Queued exit prompt")

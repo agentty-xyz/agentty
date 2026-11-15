@@ -904,7 +904,10 @@ async fn settings_help_shows_edit_hint() {
                 Box::pin(async move {
                     let full = Region::full(frame.cols(), frame.rows());
                     assertion::assert_text_in_region(frame, "Keybindings", &full);
-                    assertion::assert_text_in_region(frame, "edit", &full);
+                    // The 80-column overlay truncates the
+                    // "Open selector or command editor" label.
+                    assertion::assert_text_in_region(frame, "Enter: Open", &full);
+                    assertion::assert_text_in_region(frame, "j/k: Navigate", &full);
                 })
             },
         )

@@ -48,7 +48,7 @@ fn tab_page_marker_maps_supported_tabs() {
     let markers = tab_names.map(tab_page_marker);
 
     // Assert
-    assert_eq!(markers, ["Activity", "new session", "Default Smart Model"]);
+    assert_eq!(markers, ["Activity", "Timer", "Default Smart Model"]);
 }
 
 #[test]

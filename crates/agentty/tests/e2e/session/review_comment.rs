@@ -12,6 +12,7 @@ use testty::frame::TerminalFrame;
 use testty::proof::report::ProofReport;
 use testty::region::Region;
 use testty::scenario::Scenario;
+use testty::step::Step;
 
 use super::fixture::{
     E2eResult, run_git, seed_review_ready_session_with_review_request, seed_sessions_startup_tab,
@@ -22,6 +23,25 @@ use crate::common::{BuilderEnv, FeatureTest, ReleaseGate};
 /// User-authored prompt retained in composer history after review resolution.
 const REVIEW_HISTORY_PROMPT_TEXT: &str = "Explain the review status loader";
 
+/// Diff panel title suffix rendered while changed files own the right pane.
+const DIFF_PANEL_TITLE_MARKER: &str = ") Diff — ";
+
+/// Review comment sidebar heading rendered once linked comments are loaded.
+const COMMENTS_PANEL_TITLE_MARKER: &str = "Comments (";
+
+/// Comment detail title rendered only while review comments own the right
+/// pane.
+const COMMENT_DETAIL_TITLE_MARKER: &str = "Comment — ";
+
+/// Selection checkbox rendered once linked review threads finish loading.
+const UNSELECTED_COMMENT_MARKER: &str = "[ ] ";
+
+/// Transcript notice added once a finished turn's auto-commit succeeds.
+const TURN_COMMITTED_TEXT: &str = "[Commit] committed with hash";
+
+/// Loader labels the session view renders while a turn or its auto-commit is
+/// still running.
+const ACTIVE_TURN_LOADER_LABELS: [&str; 2] = ["Working...", "Committing..."];
 /// Seeds one unresolved thread whose latest comment is a prior Agentty reply.
 async fn seed_addressed_review_comment(env: &BuilderEnv) -> Result<(), Box<dyn std::error::Error>> {
     seed_review_ready_session_with_review_request(env).await?;
@@ -192,8 +212,8 @@ async fn test_session_review_comments() -> E2eResult {
                     .compose(&common::wait_for_agentty_startup())
                     .compose(&common::open_selected_session_view())
                     .press_key("d")
-                    .wait_for_text("j/k: select file", 5000)
-                    .wait_for_text("c: comments", 5000)
+                    .wait_for_text(DIFF_PANEL_TITLE_MARKER, 5000)
+                    .wait_for_text(COMMENTS_PANEL_TITLE_MARKER, 5000)
                     // Wait for both asynchronous panels before focusing a
                     // comment, avoiding a timing-dependent loading frame.
                     .wait_for_text("println!(\"review\")", 5000)
@@ -219,7 +239,6 @@ async fn test_session_review_comments() -> E2eResult {
                     )
                     .press_key("j")
                     .wait_for_text("Original code context unavailable.", 5000)
-                    .wait_for_text("Space: select", 5000)
                     .press_key("Space")
                     .wait_for_text("[x]", 5000)
                     .wait_for_stable_frame(300, 5000)
@@ -228,7 +247,7 @@ async fn test_session_review_comments() -> E2eResult {
                         "Outdated comment without misleading current diff context",
                     )
                     .press_key("f")
-                    .wait_for_text("c: comments", 5000)
+                    .wait_for_text(DIFF_PANEL_TITLE_MARKER, 5000)
                     .wait_for_stable_frame(300, 5000)
             },
             |frame, report| {
@@ -261,8 +280,12 @@ async fn test_session_review_comments() -> E2eResult {
 
                     let files_focus_region = Region::full(frame.cols(), frame.rows());
                     assertion::assert_text_in_region(frame, "Files", &files_focus_region);
-                    assertion::assert_not_visible(frame, "Space: select");
-                    assertion::assert_not_visible(frame, "Enter: submit");
+                    assertion::assert_text_in_region(
+                        frame,
+                        DIFF_PANEL_TITLE_MARKER,
+                        &files_focus_region,
+                    );
+                    assertion::assert_not_visible(frame, COMMENT_DETAIL_TITLE_MARKER);
                 })
             },
         )
@@ -291,16 +314,14 @@ async fn test_review_comments_escape_focuses_files() -> E2eResult {
                     .compose(&common::wait_for_agentty_startup())
                     .compose(&common::open_selected_session_view())
                     .press_key("d")
-                    .wait_for_text("j/k: select file", 5000)
-                    .wait_for_text("c: comments", 5000)
+                    .wait_for_text(DIFF_PANEL_TITLE_MARKER, 5000)
+                    .wait_for_text(COMMENTS_PANEL_TITLE_MARKER, 5000)
                     .press_key("c")
-                    .wait_for_text("Space: select", 5000)
-                    .wait_for_text("q: back", 5000)
-                    .wait_for_text("f/Esc: files", 5000)
+                    .wait_for_text(COMMENT_DETAIL_TITLE_MARKER, 5000)
                     .press_key("Esc")
                     .step(common::wait_for_frame_text(
-                        &["Files", "c: comments"],
-                        &["Space: select"],
+                        &["Files", DIFF_PANEL_TITLE_MARKER],
+                        &[COMMENT_DETAIL_TITLE_MARKER],
                     ))
             },
             |frame, _report| {
@@ -308,8 +329,9 @@ async fn test_review_comments_escape_focuses_files() -> E2eResult {
                     let full = Region::full(frame.cols(), frame.rows());
 
                     assertion::assert_text_in_region(frame, "Files", &full);
-                    assertion::assert_text_in_region(frame, "c: comments", &full);
-                    assertion::assert_not_visible(frame, "Space: select");
+                    assertion::assert_text_in_region(frame, DIFF_PANEL_TITLE_MARKER, &full);
+                    assertion::assert_text_in_region(frame, COMMENTS_PANEL_TITLE_MARKER, &full);
+                    assertion::assert_not_visible(frame, COMMENT_DETAIL_TITLE_MARKER);
                 })
             },
         )
@@ -333,8 +355,8 @@ async fn test_review_comment_addressed_guard() -> E2eResult {
                     .compose(&common::wait_for_agentty_startup())
                     .compose(&common::open_selected_session_view())
                     .press_key("d")
-                    .wait_for_text("j/k: select file", 5000)
-                    .wait_for_text("c: comments", 5000)
+                    .wait_for_text(DIFF_PANEL_TITLE_MARKER, 5000)
+                    .wait_for_text(COMMENTS_PANEL_TITLE_MARKER, 5000)
                     .press_key("c")
                     .wait_for_text("addressed", 5000)
                     .press_key("Space")
@@ -344,10 +366,13 @@ async fn test_review_comment_addressed_guard() -> E2eResult {
                         "Agentty-authored marker disables unchanged feedback",
                     )
                     .press_key("j")
-                    .wait_for_text("Space: select", 5000)
+                    .step(common::wait_for_frame_text(
+                        &["Still needs work."],
+                        &["No change is needed."],
+                    ))
                     .press_key("Space")
                     .step(common::wait_for_frame_text(
-                        &["Still needs work.", "[x]", "Selected 1", "Enter: submit"],
+                        &["Still needs work.", "[x]", "Selected 1"],
                         &[],
                     ))
             },
@@ -367,16 +392,13 @@ async fn test_review_comment_addressed_guard() -> E2eResult {
                         &addressed_full,
                     );
                     assertion::assert_not_visible(&addressed_frame, "[x]");
-                    assertion::assert_not_visible(&addressed_frame, "Space: select");
-                    assertion::assert_not_visible(&addressed_frame, "Enter: submit");
+                    assertion::assert_not_visible(&addressed_frame, "Selected 1");
 
                     let full = Region::full(frame.cols(), frame.rows());
 
                     assertion::assert_text_in_region(frame, "Still needs work.", &full);
                     assertion::assert_text_in_region(frame, "[x]", &full);
                     assertion::assert_text_in_region(frame, "Selected 1", &full);
-                    assertion::assert_text_in_region(frame, "Space: select", &full);
-                    assertion::assert_text_in_region(frame, "Enter: submit", &full);
                 })
             },
         )
@@ -443,8 +465,7 @@ fn assert_outdated_review_comment(frame: &TerminalFrame) {
     assertion::assert_text_in_region(frame, "This comment refers to an earlier diff.", &full);
     assertion::assert_text_in_region(frame, "[x]", &full);
     assertion::assert_not_visible(frame, "println!(\"review\")");
-    assertion::assert_text_in_region(frame, "Space: select", &full);
-    assertion::assert_text_in_region(frame, "j/k: select comment", &full);
+    assertion::assert_text_in_region(frame, COMMENT_DETAIL_TITLE_MARKER, &full);
 }
 
 /// Verify actionable review threads can be selected and submitted to the
@@ -468,10 +489,11 @@ async fn session_review_comment_agent_resolution() -> E2eResult {
                     .compose(&common::switch_to_tab("Sessions"))
                     .compose(&common::open_selected_session_view())
                     .press_key("d")
-                    .wait_for_text("j/k: select file", 5000)
-                    .wait_for_text("c: comments", 5000)
+                    .wait_for_text(DIFF_PANEL_TITLE_MARKER, 5000)
+                    .wait_for_text(COMMENTS_PANEL_TITLE_MARKER, 5000)
                     .press_key("c")
-                    .wait_for_text("Space: select", 5000)
+                    .wait_for_text(COMMENT_DETAIL_TITLE_MARKER, 5000)
+                    .wait_for_text(UNSELECTED_COMMENT_MARKER, 5000)
                     .press_key("Space")
                     .wait_for_text("[x]", 5000)
                     .press_key("j")
@@ -490,7 +512,8 @@ async fn session_review_comment_agent_resolution() -> E2eResult {
                         "Selected comments submitted to the session agent",
                     )
                     .wait_for_text("Processed the selected review threads.", 15000)
-                    .wait_for_text("Enter: reply", 15000)
+                    // The auto-commit notice follows only a finished turn.
+                    .wait_for_text(TURN_COMMITTED_TEXT, 15000)
                     .press_key("Enter")
                     .wait_for_text("Type your message", 5000)
                     .press_key("Up")
@@ -551,10 +574,11 @@ async fn test_review_comment_incomplete_outcomes() -> E2eResult {
                     .compose(&common::switch_to_tab("Sessions"))
                     .compose(&common::open_selected_session_view())
                     .press_key("d")
-                    .wait_for_text("j/k: select file", 5000)
-                    .wait_for_text("c: comments", 5000)
+                    .wait_for_text(DIFF_PANEL_TITLE_MARKER, 5000)
+                    .wait_for_text(COMMENTS_PANEL_TITLE_MARKER, 5000)
                     .press_key("c")
-                    .wait_for_text("Space: select", 5000)
+                    .wait_for_text(COMMENT_DETAIL_TITLE_MARKER, 5000)
+                    .wait_for_text(UNSELECTED_COMMENT_MARKER, 5000)
                     .press_key("Space")
                     .press_key("j")
                     .press_key("Space")
@@ -773,11 +797,10 @@ async fn review_comments_queue_behind_running_turn_and_chat() -> E2eResult {
                     )
                     .compose(&later_turn.release())
                     .wait_for_text("Later queued edit completed", 10000)
-                    .wait_for_text(
+                    .step(wait_for_finished_turn(
                         "Replied to 1 review thread(s) and resolved 1 fixed thread(s).",
-                        10000,
-                    )
-                    .wait_for_text("Enter: reply", 10000)
+                        Duration::from_secs(10),
+                    ))
             },
             move |frame, report| {
                 Box::pin(async move {
@@ -815,7 +838,8 @@ fn start_queued_review_batch(scenario: Scenario, slow_turn: &ReleaseGate) -> Sce
         .write_text("Start slow review work")
         .wait_for_text("Start slow review work", 3000)
         .press_key("Enter")
-        .wait_for_text("Ctrl+c: stop", 5000)
+        .step(common::wait_for_session_view())
+        .step(common::wait_for_frame_text(&["Working..."], &[]))
         .press_key("Enter")
         .wait_for_text("Type your message", 5000)
         .write_text("Earlier queued chat")
@@ -823,7 +847,8 @@ fn start_queued_review_batch(scenario: Scenario, slow_turn: &ReleaseGate) -> Sce
         .press_key("Enter")
         .wait_for_text("≡ queued › Earlier queued chat", 5000)
         .press_key("c")
-        .wait_for_text("Space: select", 5000)
+        .wait_for_text(COMMENT_DETAIL_TITLE_MARKER, 5000)
+        .wait_for_text(UNSELECTED_COMMENT_MARKER, 5000)
         .press_key("Space")
         .wait_for_text("Selected 1", 5000)
         .press_key("Enter")
@@ -839,6 +864,20 @@ fn start_queued_review_batch(scenario: Scenario, slow_turn: &ReleaseGate) -> Sce
             "running_review_comments",
             "Review comments start after earlier chat",
         )
+}
+
+/// Wait until `marker` renders and no active-turn loader remains, proving the
+/// turn and its post-turn auto-commit have finished.
+fn wait_for_finished_turn(marker: &'static str, timeout: Duration) -> Step {
+    Step::eventually(timeout, Duration::from_millis(50), move |frame| {
+        let full = Region::full(frame.cols(), frame.rows());
+        assertion::match_text_in_region(frame, marker, &full)?;
+        for label in ACTIVE_TURN_LOADER_LABELS {
+            assertion::match_not_visible(frame, label)?;
+        }
+
+        Ok(())
+    })
 }
 
 /// Returns calls made since the selected review turn began; earlier chat may
@@ -940,9 +979,10 @@ async fn review_comments_question_queue(restored: bool, recover_queued_review: b
                     .press_key("Tab")
                     .wait_for_text("j/k: scroll", 5000)
                     .press_key("d")
-                    .wait_for_text("c: comments", 5000)
+                    .wait_for_text(COMMENTS_PANEL_TITLE_MARKER, 5000)
                     .press_key("c")
-                    .wait_for_text("Space: select", 5000)
+                    .wait_for_text(COMMENT_DETAIL_TITLE_MARKER, 5000)
+                    .wait_for_text(UNSELECTED_COMMENT_MARKER, 5000)
                     .press_key("Space")
                     .wait_for_text("Selected 1", 5000)
                     .press_key("Enter")
@@ -955,8 +995,10 @@ async fn review_comments_question_queue(restored: bool, recover_queued_review: b
                     )
                     .press_key("Enter")
                     .wait_for_text("Clarification accepted", 10000)
-                    .wait_for_text("Review completed after clarification", 10000)
-                    .wait_for_text("Enter: reply", 5000)
+                    .step(wait_for_finished_turn(
+                        "Review completed after clarification",
+                        Duration::from_secs(10),
+                    ))
             },
             |frame, report| {
                 Box::pin(async move {
@@ -1083,16 +1125,19 @@ printf '{"type":"result","subtype":"success","result":"%s","usage":{"input_token
                     .compose(&common::switch_to_tab("Sessions"))
                     .compose(&common::open_selected_session_view())
                     .press_key("d")
-                    .wait_for_text("c: comments", 5000)
+                    .wait_for_text(COMMENTS_PANEL_TITLE_MARKER, 5000)
                     .press_key("c")
-                    .wait_for_text("Space: select", 5000)
+                    .wait_for_text(COMMENT_DETAIL_TITLE_MARKER, 5000)
+                    .wait_for_text(UNSELECTED_COMMENT_MARKER, 5000)
                     .press_key("Space")
                     .press_key("Enter")
                     .wait_for_text("Question 1/1", 10000)
                     .wait_for_text("Which output format?", 5000)
                     .press_key("Enter")
-                    .wait_for_text("Review completed with JSON output", 10000)
-                    .wait_for_text("Enter: reply", 10000)
+                    .step(wait_for_finished_turn(
+                        "Review completed with JSON output",
+                        Duration::from_secs(10),
+                    ))
             },
             // Assert
             move |frame, _report| {

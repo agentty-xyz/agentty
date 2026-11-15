@@ -148,6 +148,7 @@ async fn help_and_info_overlays_follow_their_background_tick_driven_ui() {
             AppMode::Help {
                 context: HelpContext::Diff {
                     can_comment: false,
+                    can_reply_review_comments: false,
                     diff: String::new(),
                     file_explorer_selected_index: 0,
                     focus: DiffFocus::Files,

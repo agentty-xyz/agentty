@@ -10,8 +10,7 @@ use super::{
     EMPTY_SESSIONS_HINT, SessionListPage, TABLE_COLUMN_SPACING, column_width,
     extend_row_backgrounds_to_page_edges, model_column_width, pr_ready_label,
     prepare_grouped_table_state, prepared_session_rows, reasoning_level_color, selected_render_row,
-    selected_session_id, session_list_help_line, status_column_width, timer_column_width,
-    tree_position_label,
+    selected_session_id, status_column_width, timer_column_width, tree_position_label,
 };
 use crate::app::session_state::SessionGitStatus;
 use crate::domain::agent::{AgentModel, ReasoningLevel};
@@ -82,7 +81,7 @@ fn test_table_column_spacing_is_wider_for_readability() {
 }
 
 #[test]
-fn test_render_sessions_table_starts_with_header_and_ends_with_divider() {
+fn test_render_sessions_table_starts_with_header_without_frame_or_help_line() {
     // Arrange
     let backend = ratatui::backend::TestBackend::new(100, 12);
     let mut terminal = ratatui::Terminal::new(backend).expect("failed to create terminal");
@@ -104,12 +103,11 @@ fn test_render_sessions_table_starts_with_header_and_ends_with_divider() {
     // Assert
     let lines = buffer_lines(terminal.backend().buffer());
     let text = lines.concat();
-    let divider_line = &lines[lines.len() - 2];
     assert!(lines[0].starts_with(" Session"));
     assert!(!text.contains('┌'));
     assert!(!text.contains('│'));
-    assert!(divider_line.chars().all(|character| character == '─'));
-    assert!(lines[lines.len() - 1].contains("quit"));
+    assert!(!text.contains('─'));
+    assert!(!text.contains("quit"));
 }
 
 #[test]
@@ -936,67 +934,6 @@ fn test_render_session_row_includes_size_prefix_in_title() {
 }
 
 #[test]
-fn test_session_list_help_line_includes_sync_for_non_empty_sessions() {
-    // Arrange
-    let session = crate::test_support::titled_session_fixture("session-1", Status::Review);
-
-    // Act
-    let help_text = session_list_help_line(Some(&session)).to_string();
-
-    // Assert
-    assert!(help_text.contains("s: sync"));
-}
-
-#[test]
-fn test_session_list_help_line_includes_project_switcher() {
-    // Arrange
-    let session = crate::test_support::titled_session_fixture("session-1", Status::Review);
-
-    // Act
-    let help_text = session_list_help_line(Some(&session)).to_string();
-
-    // Assert
-    assert!(help_text.contains("p: projects"));
-}
-
-#[test]
-fn test_session_list_help_line_hides_cancel_for_regular_new_session() {
-    // Arrange
-    let session = crate::test_support::titled_session_fixture("session-1", Status::Draft);
-
-    // Act
-    let help_text = session_list_help_line(Some(&session)).to_string();
-
-    // Assert
-    assert!(!help_text.contains("c: cancel"));
-}
-
-#[test]
-fn test_session_list_help_line_includes_cancel_for_draft_session() {
-    // Arrange
-    let mut session = crate::test_support::titled_session_fixture("session-1", Status::Draft);
-    session.is_draft = true;
-
-    // Act
-    let help_text = session_list_help_line(Some(&session)).to_string();
-
-    // Assert
-    assert!(help_text.contains("c: cancel"));
-}
-
-#[test]
-fn test_session_list_help_line_includes_open_for_canceled_session() {
-    // Arrange
-    let session = crate::test_support::titled_session_fixture("session-1", Status::Canceled);
-
-    // Act
-    let help_text = session_list_help_line(Some(&session)).to_string();
-
-    // Assert
-    assert!(help_text.contains("Enter: open session"));
-}
-
-#[test]
 fn test_render_shows_live_active_work_timer_in_grouped_session_row() {
     // Arrange
     let backend = ratatui::backend::TestBackend::new(100, 12);
@@ -1155,7 +1092,6 @@ fn archive_load_more_row_is_selectable_and_disappears_at_end() {
     let action =
         find_text_start_cell(terminal.backend().buffer(), "Load more...").expect("action visible");
     let action_background = action.bg;
-    let text = buffer_text(terminal.backend().buffer());
     let preserved_selection = table_state.selected();
     terminal
         .draw(|frame| {
@@ -1168,13 +1104,11 @@ fn archive_load_more_row_is_selectable_and_disappears_at_end() {
     // Assert
     assert_eq!(action_background, style::palette::surface_selection());
     assert_eq!(preserved_selection, Some(1));
-    assert!(text.contains("Enter: load more"));
-    assert!(!text.contains("Enter: open session"));
     assert!(!buffer_text(terminal.backend().buffer()).contains("Load more..."));
 }
 
 #[test]
-fn archive_show_less_row_follows_load_more_and_owns_its_footer() {
+fn archive_show_less_row_follows_load_more() {
     for has_more in [true, false] {
         // Arrange
         let _theme_scope = style::scoped_active_theme(ColorTheme::DarkHorizon);
@@ -1213,9 +1147,6 @@ fn archive_show_less_row_follows_load_more_and_owns_its_footer() {
                 .map(|row| row + 1),
             has_more.then_some(show_less_row)
         );
-        let text = buffer_text(buffer);
-        assert!(text.contains("Enter: show less"));
-        assert!(!text.contains("Enter: load more"));
     }
 }
 
@@ -1292,7 +1223,6 @@ fn archive_header_remains_visible_without_loaded_archived_rows() {
             assert!(!text.contains(EMPTY_SESSIONS_HINT));
         }
         assert_eq!(text.contains("Load more..."), has_more);
-        assert_eq!(text.contains("Enter: load more"), has_more);
         if with_active_session {
             let lines = buffer_lines(terminal.backend().buffer());
             let archive_row = lines

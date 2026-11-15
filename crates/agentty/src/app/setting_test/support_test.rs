@@ -253,10 +253,6 @@ impl SettingsTestHarness {
     pub(super) fn project_settings_rows(&self) -> Vec<(&'static str, String)> {
         self.presentation.snapshot(&self.view).project_rows
     }
-
-    pub(super) fn footer_hint(&self) -> &'static str {
-        self.presentation.snapshot(&self.view).footer_hint
-    }
 }
 
 /// Selects the settings row with `label` through the screen navigation

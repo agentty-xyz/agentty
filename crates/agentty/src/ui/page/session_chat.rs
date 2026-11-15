@@ -2,22 +2,17 @@ use std::cell::Cell;
 use std::ops::{Deref, DerefMut};
 
 use ratatui::Frame;
-use ratatui::layout::{Constraint, Layout, Rect};
+use ratatui::layout::Rect;
 use ratatui::style::Style;
 use ratatui::text::Line;
 use ratatui::widgets::{Block, Paragraph};
 
 use crate::domain::question::QuestionItem;
-use crate::domain::session::{
-    Session, Status, can_merge_session_branch_in_stack, can_mutate_session_branch_in_stack,
-    can_rebase_session_branch_in_stack, can_reply_to_session_in_stack,
-    can_start_staged_session_in_stack,
-};
+use crate::domain::session::{Session, Status};
 use crate::domain::{file_entry, input, review};
 use crate::presentation::app_mode::{AppMode, ChatFocus};
 use crate::presentation::frame_time::FrameTime;
 use crate::presentation::graph_chat::GraphChatSnapshot;
-use crate::presentation::help_action::{self, ViewActionAvailability, ViewHelpState};
 use crate::presentation::prompt::{PromptAtMentionState, PromptSlashCommandSet};
 use crate::ui::component::chat_input::{ChatInput, SuggestionList};
 use crate::ui::component::nerpa_greeting::NerpaGreeting;
@@ -34,8 +29,8 @@ use crate::ui::{
     Component, Page, layout, markdown, prompt_format, question_format, session_format, style,
 };
 
-/// Archived sessions reserve one timing row and one navigation row.
-const ARCHIVED_FOOTER_HEIGHT: u16 = 2;
+/// Archived sessions reserve one timing row.
+const ARCHIVED_FOOTER_HEIGHT: u16 = 1;
 
 /// Placeholder of an ordinary session composer.
 const DEFAULT_COMPOSER_PLACEHOLDER: &str = "Type your message";
@@ -50,7 +45,7 @@ const INACTIVE_COMPOSER_HEIGHT: u16 = 2;
 /// `u16`.
 const SESSION_HEADER_FALLBACK_HEIGHT: u16 = 2;
 
-/// Height of the single-row footer reserved by non-prompt, non-question modes.
+/// Height of the single-row footer kept below the question panel.
 const SINGLE_ROW_FOOTER_HEIGHT: u16 = 1;
 
 /// Prompt-panel data prepared once per render pass so layout and painting use
@@ -179,8 +174,6 @@ pub struct SessionChatPageInput<'a> {
 /// Field access delegates to the stored inputs so callers can continue reading
 /// and updating render state directly.
 pub struct SessionChatPage<'a> {
-    /// Whether the session worktree can be opened externally.
-    pub can_open_worktree: bool,
     graph_chat: Option<&'a GraphChatSnapshot>,
     /// Borrowed render state shared with page construction.
     input: SessionChatPageInput<'a>,
@@ -190,18 +183,9 @@ impl<'a> SessionChatPage<'a> {
     /// Creates a session chat page renderer.
     pub fn new(input: SessionChatPageInput<'a>) -> Self {
         Self {
-            can_open_worktree: false,
             graph_chat: None,
             input,
         }
-    }
-
-    /// Sets whether the rendered session currently exposes a materialized
-    /// worktree that can be opened from the footer/help affordances.
-    #[must_use]
-    pub fn can_open_worktree(mut self, can_open_worktree: bool) -> Self {
-        self.can_open_worktree = can_open_worktree;
-        self
     }
 
     /// Supplies the current graph proposal and execution status.
@@ -300,8 +284,8 @@ impl<'a> SessionChatPage<'a> {
         f.render_widget(header, header_area);
     }
 
-    /// Renders the composer and footer, or the interactive question panel.
-    /// Archived sessions keep timing and navigation rows without a composer.
+    /// Renders the composer, the active prompt composer and its footer, or the
+    /// interactive question panel. Archived sessions keep only a timing row.
     ///
     /// Every composer right-aligns timing in its bottom border, prioritizing
     /// the active-work timer when the session age does not fit alongside it.
@@ -315,8 +299,6 @@ impl<'a> SessionChatPage<'a> {
         let bottom_area = layout_plan.areas.bottom_area;
 
         if matches!(session.status, Status::Done | Status::Canceled) {
-            let footer_areas =
-                Layout::vertical([Constraint::Min(0), Constraint::Length(1)]).split(bottom_area);
             f.render_widget(
                 Paragraph::new(
                     Line::styled(
@@ -325,13 +307,7 @@ impl<'a> SessionChatPage<'a> {
                     )
                     .right_aligned(),
                 ),
-                footer_areas[0],
-            );
-            f.render_widget(
-                Paragraph::new(session_format::session_view_footer_line(
-                    self.view_help_state(session),
-                )),
-                footer_areas[1],
+                bottom_area,
             );
 
             return;
@@ -378,17 +354,11 @@ impl<'a> SessionChatPage<'a> {
 
         let title = session_composer_title(session);
         let status = session_format::prompt_session_status(session);
-        let panel_areas = layout::prompt_panel_areas(bottom_area);
         ChatInput::new(&title, "", 0)
             .status(&status)
             .footer(timing_label)
             .active(false)
-            .render(f, panel_areas.input_area);
-
-        let help_message = Paragraph::new(session_format::session_view_footer_line(
-            self.view_help_state(session),
-        ));
-        f.render_widget(help_message, panel_areas.footer_area);
+            .render(f, bottom_area);
     }
 
     /// Renders the active composer, its suggestion dropdown, and its footer.
@@ -442,36 +412,6 @@ impl<'a> SessionChatPage<'a> {
                 panel_areas.footer_area,
                 Icon::spinner_frame_from_millis(self.frame_time.unix_millis()),
             );
-        }
-    }
-
-    /// Resolves which view-mode footer actions apply to `session` within its
-    /// stack.
-    fn view_help_state(&self, session: &Session) -> ViewHelpState {
-        let can_start_staged_session =
-            can_start_staged_session_in_stack(self.sessions, session.id.as_str());
-        let can_reply_to_session =
-            can_reply_to_session_in_stack(self.sessions, session.id.as_str());
-        let can_merge_session_branch =
-            can_merge_session_branch_in_stack(self.sessions, session.id.as_str());
-        let can_mutate_session_branch =
-            can_mutate_session_branch_in_stack(self.sessions, session.id.as_str());
-        let can_rebase_session_branch =
-            can_rebase_session_branch_in_stack(self.sessions, session.id.as_str());
-
-        ViewHelpState {
-            can_fork_session: ViewActionAvailability::from_bool(session.allows_fork_action()),
-            can_merge_session_branch: ViewActionAvailability::from_bool(can_merge_session_branch),
-            can_mutate_session_branch: ViewActionAvailability::from_bool(can_mutate_session_branch),
-            can_open_worktree: ViewActionAvailability::from_bool(
-                self.can_open_worktree && session.allows_worktree_open_action(),
-            ),
-            can_rebase_session_branch: ViewActionAvailability::from_bool(can_rebase_session_branch),
-            can_show_diff: ViewActionAvailability::from_bool(session.allows_diff_view()),
-            reply_to_session: ViewActionAvailability::from_bool(can_reply_to_session),
-            can_start_staged_session: ViewActionAvailability::from_bool(can_start_staged_session),
-            publish_pull_request_action: session.publish_pull_request_action(),
-            session_state: help_action::session_view_state(session),
         }
     }
 }
@@ -602,8 +542,8 @@ fn prepare_prompt_panel(
 /// Returns the bottom-panel height reserved for non-prompt page modes.
 ///
 /// Question mode derives its height from the question layout helper and the
-/// visible option list. All other modes reserve the inactive composer borders
-/// and a footer row, with no empty input row.
+/// visible option list. All other modes reserve only the inactive composer
+/// borders, with no empty input row or help footer.
 fn non_prompt_bottom_height(area: Rect, mode: &AppMode) -> u16 {
     let AppMode::Question {
         questions,
@@ -613,9 +553,7 @@ fn non_prompt_bottom_height(area: Rect, mode: &AppMode) -> u16 {
         ..
     } = mode
     else {
-        return INACTIVE_COMPOSER_HEIGHT
-            .saturating_add(SINGLE_ROW_FOOTER_HEIGHT)
-            .min(area.height.saturating_sub(1));
+        return INACTIVE_COMPOSER_HEIGHT.min(area.height.saturating_sub(1));
     };
 
     let question_item = questions.get(*current_index);

@@ -5,12 +5,11 @@ use ratatui::widgets::{Table, TableState};
 
 use super::{
     SettingsPage, TABLE_COLUMN_SPACING, project_section_title, render_settings_selector_dropdown,
-    section_table_state, settings_footer_line_for_mode, settings_name_column_width,
-    settings_section_height, settings_selector_dropdown_area, settings_selector_dropdown_lines,
+    section_table_state, settings_name_column_width, settings_section_height,
+    settings_selector_dropdown_area, settings_selector_dropdown_lines,
     settings_selector_option_window_start, settings_table_rows,
 };
 use crate::domain::theme::ColorTheme;
-use crate::presentation::help_action;
 use crate::presentation::setting::{
     SettingsScreenSnapshot, SettingsSelectorDropdown, SettingsSelectorDropdownOption,
 };
@@ -23,7 +22,6 @@ fn test_settings_selection_highlight_and_columns_across_sections_and_themes() {
             // Arrange
             let _theme_scope = style::scoped_active_theme(theme);
             let snapshot = SettingsScreenSnapshot {
-                footer_hint: "",
                 global_rows: vec![("Theme", theme.label().to_string())],
                 launch_configuration_list_editor: None,
                 project_rows: vec![
@@ -381,30 +379,4 @@ fn test_settings_selector_dropdown_renders_stage_title() {
     // Assert
     assert!(rendered_text.contains("Select model"));
     assert!(rendered_text.contains(&format!("codex/{}", model_fixture::CODEX_MODEL_ID)));
-}
-
-#[test]
-fn test_settings_footer_line_uses_inline_hint_while_overlay_is_open() {
-    // Arrange
-    let footer_hint = "Editing launch configurations";
-
-    // Act
-    let footer_line = settings_footer_line_for_mode(true, footer_hint);
-
-    // Assert
-    assert_eq!(footer_line, Line::from(footer_hint.to_string()));
-}
-
-#[test]
-fn test_settings_footer_line_uses_shared_actions_in_list_mode() {
-    // Arrange
-    let footer_hint = "unused while not editing";
-    let expected_line =
-        crate::ui::help_format::footer_line(&help_action::settings_footer_actions());
-
-    // Act
-    let footer_line = settings_footer_line_for_mode(false, footer_hint);
-
-    // Assert
-    assert_eq!(footer_line, expected_line);
 }

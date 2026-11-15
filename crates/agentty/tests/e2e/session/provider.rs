@@ -488,7 +488,10 @@ async fn test_session_antigravity_preserves_stream_context() -> E2eResult {
                     .wait_for_text("Hi from Agentty stdin", 3000)
                     .press_key("Enter")
                     .wait_for_text("Antigravity received the stdin prompt.", 60000)
-                    .wait_for_text("Enter: reply", 5000)
+                    .step(wait_for_finished_turn(
+                        "Antigravity received the stdin prompt.",
+                        Duration::from_secs(10),
+                    ))
                     .press_key("Enter")
                     .wait_for_text("Type your message", 5000)
                     .write_text("Keep the native conversation")
@@ -518,6 +521,24 @@ async fn test_session_antigravity_preserves_stream_context() -> E2eResult {
         .await?;
 
     Ok(())
+}
+
+/// Loader labels the session view renders while a turn or its auto-commit is
+/// still running.
+const ACTIVE_TURN_LOADER_LABELS: [&str; 2] = ["Working...", "Committing..."];
+
+/// Wait until `marker` renders and no active-turn loader remains, proving the
+/// turn and its post-turn auto-commit have finished.
+fn wait_for_finished_turn(marker: &'static str, timeout: Duration) -> Step {
+    Step::eventually(timeout, Duration::from_millis(50), move |frame| {
+        let full = Region::full(frame.cols(), frame.rows());
+        assertion::match_text_in_region(frame, marker, &full)?;
+        for label in ACTIVE_TURN_LOADER_LABELS {
+            assertion::match_not_visible(frame, label)?;
+        }
+
+        Ok(())
+    })
 }
 
 /// Verify resumed transcripts larger than the former argv ceiling are sent
@@ -590,7 +611,10 @@ async fn test_session_commit_index_lock() -> E2eResult {
                     .write_text("Create a pending change")
                     .press_key("Enter")
                     .wait_for_text("Auto-commit blocked by a Git index lock", 30000)
-                    .wait_for_text("Enter: reply", 5000)
+                    .step(wait_for_finished_turn(
+                        "Auto-commit blocked by a Git index lock",
+                        Duration::from_secs(5),
+                    ))
                     .write_text("g")
                     .wait_for_stable_frame(300, 5000)
                     .capture_labeled(
@@ -657,7 +681,10 @@ async fn test_session_commit_index_lock_recovers() -> E2eResult {
                     .step(common::wait_for_prompt_composer())
                     .write_text("Create a pending change")
                     .press_key("Enter")
-                    .wait_for_text("Enter: reply", 30000)
+                    .step(wait_for_finished_turn(
+                        "Preserve pending worktree change",
+                        Duration::from_secs(30),
+                    ))
                     .write_text("g")
                     .wait_for_stable_frame(300, 5000)
                     .capture_labeled("commit_recovered", "Auto-commit waits for the index writer")
@@ -811,13 +838,11 @@ async fn test_session_pre_commit_hook_warning() -> E2eResult {
     Ok(())
 }
 
-/// Wait for the session to accept replies and for the background review after
-/// an auto-commit to stop appending output, so later scrolling acts on a
-/// settled transcript.
+/// Wait for the background review after an auto-commit to stop appending
+/// output, so later scrolling acts on a settled transcript.
 fn wait_for_settled_review() -> Journey {
     Journey::new("settled_review")
         .with_description("Wait for the post-commit review to finish")
-        .step(Step::wait_for_text("Enter: reply", 5000))
         .step(Step::wait_for_stable_frame(1000, 30000))
         .step(Step::eventually(
             Duration::from_secs(30),
@@ -940,7 +965,10 @@ async fn test_session_commit_input_limit_fallback() -> E2eResult {
                     .step(common::wait_for_prompt_composer())
                     .write_text("Create large fallback file")
                     .press_key("Enter")
-                    .wait_for_text("Enter: reply", 30000)
+                    .step(wait_for_finished_turn(
+                        "Created the large fallback file",
+                        Duration::from_secs(30),
+                    ))
                     .write_text("g")
                     // A stable frame can occur before the committing loader
                     // first paints, so wait for the commit notice instead of
