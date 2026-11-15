@@ -1,4 +1,4 @@
-use std::sync::Arc;
+use std::sync::{Arc, Mutex};
 
 use ag_contracts::{
     AgentRequestKind, OneShotError, OneShotSubmission, PermissionMode, SessionStats,
@@ -852,6 +852,71 @@ async fn graph_proposal_cancels_while_waiting_for_workspace_access() {
     app.services.wait_for_cleanup_tasks(None).await;
 }
 
+#[tokio::test]
+async fn graph_proposal_generation_shows_the_session_in_progress_until_stopped() {
+    // Arrange
+    let (mut app, _directory) = new_test_app().await;
+    seed_session(&mut app.sessions, app.services.db()).await;
+    app.experimental_graph = true;
+    let mut client = MockRunClient::new();
+    expect_title_requests(&mut client);
+    client.expect_submit().never();
+    app.services.set_run_client(Arc::new(client));
+    let lease = app
+        .services
+        .graph_resources
+        .environment(&ag_session::EnvId::SessionWorktree("sess".into()))
+        .write_owned()
+        .await;
+    let status = Arc::clone(
+        &app.sessions
+            .session_handles_or_err("sess")
+            .expect("handles")
+            .status,
+    );
+    let service = app.session_service();
+
+    // Act
+    app.drive_session_request(
+        service.generate_graph_proposal(graph_proposal_state("preview", "sess").input),
+    )
+    .await
+    .expect("reserve");
+    wait_for_status(&status, Status::InProgress).await;
+    app.services.stop_graph_activity("sess").await;
+    drop(lease);
+    app.services.wait_for_cleanup_tasks(None).await;
+
+    // Assert
+    assert_eq!(*status.lock().expect("status"), Status::Review);
+    let row = app
+        .services
+        .db()
+        .sessions()
+        .load_session("sess")
+        .await
+        .expect("session row")
+        .expect("session exists");
+    assert_eq!(row.status, Status::Review.to_string());
+    assert!(
+        app.services
+            .db()
+            .operations()
+            .load_unfinished_session_operations()
+            .await
+            .expect("operations")
+            .is_empty()
+    );
+    assert!(
+        app.drive_session_request(service.get_graph_proposal("preview"))
+            .await
+            .expect("query")
+            .expect("state")
+            .version
+            .is_cancelled
+    );
+}
+
 #[test]
 fn graph_proposal_preview_explains_outcomes_and_separates_output_acceptance() {
     for case in [
@@ -992,6 +1057,18 @@ fn expect_title_requests(client: &mut MockRunClient) {
         .expect_submit()
         .withf(|request| request.request_kind == AgentRequestKind::UtilityPrompt)
         .returning(|_| Err(OneShotError::new("title unavailable")));
+}
+
+/// Lets background tasks run until the live session status reaches
+/// `expected`.
+async fn wait_for_status(status: &Mutex<Status>, expected: Status) {
+    tokio::time::timeout(std::time::Duration::from_secs(5), async {
+        while *status.lock().expect("status") != expected {
+            tokio::task::yield_now().await;
+        }
+    })
+    .await
+    .expect("session status");
 }
 
 async fn wait_proposal(

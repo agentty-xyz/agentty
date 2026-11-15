@@ -17,6 +17,7 @@ use super::{
     fresh_turn_cancel_token, live_transcript_source, load_session_permission_mode,
     load_session_response_style, load_title_reasoning_level, prepare_turn_request,
 };
+use crate::app::graph_activity::GraphActivityRegistry;
 use crate::app::service::HarnessModels;
 use crate::app::session::SessionError;
 use crate::domain::agent::{
@@ -570,6 +571,7 @@ fn turn_test_context(db: AppRepositories) -> SessionWorkerContext {
     SessionWorkerContext {
         app_event_tx: mpsc::unbounded_channel().0,
         available_agent_kinds: Arc::from(AgentKind::ALL),
+        graph_activity: GraphActivityRegistry::default(),
         harness_models: HarnessModels::default(),
         branch_operation_lock: Arc::new(tokio::sync::Mutex::new(())),
         cancel_token: Arc::new(Mutex::new(CancellationToken::new())),

@@ -37,6 +37,11 @@ and keeps the `w` inspector shortcut visible.
 Generation reads the workspace through the utility worker; no proposed node executes
 yet. The sidebar restores the latest proposal after a restart.
 
+A session in **Review** shows **InProgress** while a proposal is generated or a chat
+reply to a proposal or output is decided, and returns to **Review** when that work ends.
+A message sent meanwhile starts at once. Stopping it with `Ctrl+C` cancels a proposal
+being generated and drops an undecided reply without acting on it.
+
 While a proposal is pending, reply in chat to act on it. The session model reads your
 reply and decides what it means:
 

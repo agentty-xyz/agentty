@@ -24,6 +24,7 @@ use super::worker::{
 use super::{SessionTaskService, StatusTransition, published_branch};
 use crate::app::AppEvent;
 use crate::app::assist::AssistContext;
+use crate::app::graph_activity::GraphActivityRegistry;
 use crate::app::service::{HarnessModels, SessionUpdateVersionMap};
 use crate::app::session::{Clock, SessionError, TurnAppliedState};
 use crate::domain::agent::{AgentKind, AgentSelection};
@@ -179,6 +180,8 @@ pub(super) struct TurnFinalizerContext {
     pub(super) fs_client: Arc<dyn FsClient>,
     /// Git boundary used by diff-stat refresh.
     pub(super) git_client: Arc<dyn GitClient>,
+    /// Graph leases that may defer the turn-ending `Review`.
+    pub(super) graph_activity: GraphActivityRegistry,
     /// Session identifier whose final state is being refreshed.
     pub(super) session_id: SessionId,
     /// Per-app session update versions shared with the main runtime.
@@ -197,6 +200,7 @@ impl TurnFinalizerContext {
             folder: context.folder.clone(),
             fs_client: Arc::clone(&context.fs_client),
             git_client: Arc::clone(&context.git_client),
+            graph_activity: context.graph_activity.clone(),
             session_update_versions: context.session_update_versions.clone(),
             session_id: context.session_id.clone(),
             status: Arc::clone(&context.status),
@@ -324,7 +328,8 @@ pub(super) async fn finalize_channel_turn(
             context.session_id.clone(),
             Arc::clone(&context.session_update_versions),
             Arc::clone(&context.status),
-        );
+        )
+        .with_graph_activity(context.graph_activity.clone());
         let _ = status_transition.apply(target_status).await;
     }
 }

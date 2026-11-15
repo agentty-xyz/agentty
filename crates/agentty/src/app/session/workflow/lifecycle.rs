@@ -1965,10 +1965,13 @@ impl SessionManager {
     /// only for the active app session, so queued prompts are discarded on
     /// `agentty` restart. The session worker drains the queue between turns
     /// without bouncing through `Review` and pauses drainage while the
-    /// session sits in `Question`. `Ctrl+C` on the running turn drops the
-    /// most recently queued chat message (LIFO) one press at a time without
-    /// interrupting the running turn, and once the queue is empty a further
-    /// press cancels the active turn.
+    /// session sits in `Question`. A session held `InProgress` only by a
+    /// graph lease, or already back in `Review`, wakes the worker so the
+    /// message starts at once.
+    /// `Ctrl+C` on the running turn drops the most recently queued chat
+    /// message (LIFO) one press at a time without interrupting the running
+    /// turn, and once the queue is empty a further press cancels the active
+    /// turn.
     ///
     /// The just-pushed entry is mirrored into the render snapshot via
     /// [`SessionState::sync_session_from_handle`] so the inline `≡ queued ›`
@@ -2010,6 +2013,7 @@ impl SessionManager {
                 .trace_queued_message(session_id, order);
             guard.push_back(QueuedMessage::new(order, prompt));
         }
+        self.wake_queued_message_worker(services, session_id)?;
 
         self.state.sync_session_from_handle(session_id);
 

@@ -13,6 +13,7 @@
 //! guidance: chat can only accept its output, and a reply with attachments is
 //! rejected before echoing and keeps the draft.
 
+use std::collections::hash_map::Entry;
 use std::num::NonZeroU64;
 use std::sync::{Arc, Mutex, PoisonError};
 
@@ -20,6 +21,7 @@ use ag_session::{
     ContinueGraphNodeRequest, GraphExecutionRef, GraphNode, GraphNodeContinuation, GraphResultRef,
     SessionError,
 };
+use tokio_util::sync::CancellationToken;
 use uuid::Uuid;
 
 use crate::app::App;
@@ -36,6 +38,12 @@ use crate::presentation::execution_graph::{
 
 /// Run purpose recorded for the reply decision.
 const DECISION_RUN_PURPOSE: &str = "graph output reply decision";
+
+/// A background output decision, canceled when its session stops.
+pub(super) struct OutputReplyDecision {
+    pub(super) cancellation: CancellationToken,
+    pub(super) session_id: SessionId,
+}
 
 /// Validated output a pending dependent waits to see accepted.
 struct AwaitingOutput {
@@ -159,13 +167,19 @@ impl App {
                 )
                 .await;
         }
-        if !self
+        let cancellation = CancellationToken::new();
+        if let Entry::Vacant(entry) = self
             .services
             .output_reply_decisions
             .lock()
             .unwrap_or_else(PoisonError::into_inner)
-            .insert(output.reference.id.clone())
+            .entry(output.reference.id.clone())
         {
+            entry.insert(OutputReplyDecision {
+                cancellation: cancellation.clone(),
+                session_id: session_id.clone(),
+            });
+        } else {
             return self
                 .reject_graph_output_reply(
                     session_id,
@@ -194,7 +208,14 @@ impl App {
             ),
             reply: prompt.text.clone(),
         };
-        self.spawn_graph_output_reply_decision(session_id, decision, output, prompt, transcript);
+        self.spawn_graph_output_reply_decision(
+            session_id,
+            decision,
+            output,
+            prompt,
+            transcript,
+            cancellation,
+        );
 
         PromptWorkflowOutcome::ShowSession {
             session_id: session_id.clone(),
@@ -204,7 +225,8 @@ impl App {
     /// Decides with the producer's captured selection, then admits the
     /// action for the exact inspected output and execution. An output or
     /// execution that changed meanwhile rejects the action instead of
-    /// retargeting it.
+    /// retargeting it. Stopping the session abandons the reply without
+    /// acting on it.
     fn spawn_graph_output_reply_decision(
         &self,
         session_id: &SessionId,
@@ -212,10 +234,12 @@ impl App {
         output: AwaitingOutput,
         prompt: &TurnPrompt,
         transcript: Arc<Mutex<SessionTranscript>>,
+        cancellation: CancellationToken,
     ) {
         let run_client = ag_worker::scoped_client(
             self.services.run_client(),
             ag_worker::RunScope {
+                cancellation: Some(cancellation.clone()),
                 purpose: Some(DECISION_RUN_PURPOSE.to_string()),
                 session_id: Some(session_id.to_string()),
                 ..ag_worker::RunScope::default()
@@ -224,8 +248,14 @@ impl App {
         let handle = self.sessions.handle();
         let services = self.services.clone();
         let session_id = session_id.clone();
+        let status = self
+            .sessions
+            .session_handles_or_err(&session_id)
+            .ok()
+            .map(|handles| Arc::clone(&handles.status));
         let attachments = prompt.attachments.clone();
         tokio::spawn(async move {
+            let activity = services.begin_graph_activity(&session_id, status).await;
             let node_id = output.node.id.clone();
             let reply = if attachments.is_empty() {
                 decision.decide(run_client.as_ref()).await
@@ -233,6 +263,10 @@ impl App {
                 GraphOutputReply::Revise
             };
             let result = match reply {
+                _ if cancellation.is_cancelled() => Err(SessionError::Operation(format!(
+                    "the reply decision for `{node_id}` was canceled. Reply again to act on its \
+                     output."
+                ))),
                 GraphOutputReply::Accept => handle
                     .accept_execution_graph_result(output.reference.clone())
                     .await
@@ -280,6 +314,7 @@ impl App {
                 &notice,
             )
             .await;
+            activity.finish(&services).await;
         });
     }
 

@@ -1,5 +1,5 @@
 use std::path::PathBuf;
-use std::sync::{Arc, Mutex};
+use std::sync::{Arc, Mutex, PoisonError};
 use std::time::{Duration, SystemTime};
 
 use ag_contracts::OneShotError;
@@ -19,6 +19,7 @@ use crate::db::AppRepositories;
 use crate::domain::agent::{AgentCliInfo, AgentKind, AgentModel, AgentSelection};
 use crate::domain::session::{SessionHandles, Status};
 use crate::domain::session_message::{SessionMessage, SessionMessageKind, SessionTranscript};
+use crate::infra::clock::Clock;
 use crate::infra::fs;
 use crate::test_support::{enable_tracing_log_fallback, poison_lock};
 
@@ -402,32 +403,33 @@ async fn test_run_agent_assist_task_tolerates_stats_and_usage_persistence_failur
 }
 
 #[tokio::test]
-/// Verifies a poisoned live status lock rejects the transition without
-/// touching persistence or the reducer.
-async fn test_update_status_rejects_poisoned_status_lock() {
+/// Verifies a poisoned live status lock is recovered and still transitions.
+async fn test_status_transition_recovers_poisoned_status_lock() {
     // Arrange
     let database = AppRepositories::in_memory().await.expect("db should open");
     insert_review_session(&database, model_fixture::CODEX_MODEL_ID).await;
     let status = Arc::new(Mutex::new(Status::Review));
     poison_lock(Arc::clone(&status));
-    let clock = StaticClock::new(SystemTime::UNIX_EPOCH);
     let (app_event_tx, mut app_event_rx) = mpsc::unbounded_channel();
+    let status_transition = StatusTransition::from_parts(
+        app_event_tx,
+        Arc::new(StaticClock::new(SystemTime::UNIX_EPOCH)),
+        database,
+        "session-id",
+        Arc::default(),
+        Arc::clone(&status),
+    );
 
     // Act
-    let status_updated = SessionTaskService::update_status(
-        &status,
-        &clock,
-        &database,
-        &app_event_tx,
-        &Arc::default(),
-        "session-id",
-        Status::InProgress,
-    )
-    .await;
+    let status_updated = status_transition.apply(Status::InProgress).await;
 
     // Assert
-    assert!(!status_updated);
-    assert!(app_event_rx.try_recv().is_err());
+    assert!(status_updated);
+    assert_eq!(
+        *status.lock().unwrap_or_else(PoisonError::into_inner),
+        Status::InProgress
+    );
+    assert!(app_event_rx.try_recv().is_ok());
 }
 
 #[tokio::test]
@@ -454,21 +456,19 @@ async fn test_status_and_notice_failures_keep_live_effects_after_reducer_shutdow
     .execute(&pool)
     .await
     .expect("failing message fixture");
-    let status = Mutex::new(Status::Review);
-    let clock = StaticClock::new(SystemTime::UNIX_EPOCH);
+    let status = Arc::new(Mutex::new(Status::Review));
     let app_event_tx = mpsc::unbounded_channel().0;
+    let status_transition = StatusTransition::from_parts(
+        app_event_tx.clone(),
+        Arc::new(StaticClock::new(SystemTime::UNIX_EPOCH)),
+        database.clone(),
+        "session-id",
+        Arc::default(),
+        Arc::clone(&status),
+    );
 
     // Act
-    let status_updated = SessionTaskService::update_status(
-        &status,
-        &clock,
-        &database,
-        &app_event_tx,
-        &Arc::default(),
-        "session-id",
-        Status::InProgress,
-    )
-    .await;
+    let status_updated = status_transition.apply(Status::InProgress).await;
     SessionTaskService::persist_workflow_notice(&database, "session-id", "[Commit] Done").await;
     SessionTaskService::request_git_status_refresh(&app_event_tx);
     let session_row = database
@@ -515,55 +515,27 @@ async fn test_update_status_accumulates_repeated_in_progress_intervals() {
         )
         .await
         .expect("failed to insert session");
-    let status = Mutex::new(Status::Draft);
-    let clock = StaticClock::new(SystemTime::UNIX_EPOCH + Duration::from_secs(10));
+    let clock = Arc::new(StaticClock::new(
+        SystemTime::UNIX_EPOCH + Duration::from_secs(10),
+    ));
     let (app_event_tx, _app_event_rx) = mpsc::unbounded_channel();
-    let session_update_versions = Arc::default();
+    let status_transition = StatusTransition::from_parts(
+        app_event_tx,
+        Arc::clone(&clock) as Arc<dyn Clock>,
+        database.clone(),
+        "session-id",
+        Arc::default(),
+        Arc::new(Mutex::new(Status::Draft)),
+    );
 
     // Act
-    let entered_first_interval = SessionTaskService::update_status(
-        &status,
-        &clock,
-        &database,
-        &app_event_tx,
-        &session_update_versions,
-        "session-id",
-        Status::InProgress,
-    )
-    .await;
+    let entered_first_interval = status_transition.apply(Status::InProgress).await;
     clock.set_now_system_time(SystemTime::UNIX_EPOCH + Duration::from_secs(70));
-    let left_first_interval = SessionTaskService::update_status(
-        &status,
-        &clock,
-        &database,
-        &app_event_tx,
-        &session_update_versions,
-        "session-id",
-        Status::Review,
-    )
-    .await;
+    let left_first_interval = status_transition.apply(Status::Review).await;
     clock.set_now_system_time(SystemTime::UNIX_EPOCH + Duration::from_secs(100));
-    let entered_second_interval = SessionTaskService::update_status(
-        &status,
-        &clock,
-        &database,
-        &app_event_tx,
-        &session_update_versions,
-        "session-id",
-        Status::InProgress,
-    )
-    .await;
+    let entered_second_interval = status_transition.apply(Status::InProgress).await;
     clock.set_now_system_time(SystemTime::UNIX_EPOCH + Duration::from_secs(190));
-    let left_second_interval = SessionTaskService::update_status(
-        &status,
-        &clock,
-        &database,
-        &app_event_tx,
-        &session_update_versions,
-        "session-id",
-        Status::Question,
-    )
-    .await;
+    let left_second_interval = status_transition.apply(Status::Question).await;
     let session_row = database
         .sessions()
         .load_sessions()

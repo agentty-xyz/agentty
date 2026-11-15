@@ -1,10 +1,10 @@
 use std::collections::BTreeMap;
-use std::sync::Arc;
+use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
 use ag_contracts::{
-    AgentRequestKind, MockAgentChannel, OneShotError, OneShotSubmission, SessionStats, TurnRequest,
-    TurnResult,
+    AgentRequestKind, MockAgentChannel, OneShotError, OneShotRequest, OneShotSubmission,
+    SessionStats, TurnRequest, TurnResult,
 };
 use ag_git::MockGitClient;
 use ag_protocol::{AgentResponse, TurnPrompt};
@@ -14,11 +14,15 @@ use ag_session::{
     StartExecutionGraphRequest,
 };
 use ag_store::{DbError, MockGraphRepository, StoredGraphResult};
-use ag_worker::{GraphExecutor, GraphNodeRunner, GraphRunRequest, MockRunClient, SessionRunClient};
+use ag_worker::{
+    GraphExecutor, GraphNodeRunner, GraphRunRequest, MockRunClient, RunClient, SessionRunClient,
+};
 use async_trait::async_trait;
 use tempfile::TempDir;
-use tokio::sync::mpsc;
+use tokio::sync::{Semaphore, mpsc};
+use tokio_util::sync::CancellationToken;
 
+use super::OutputReplyDecision;
 use crate::app::App;
 use crate::app::execution_graph::GraphDriverRegistration;
 use crate::app::execution_graph::tests::{graph, seed_session};
@@ -26,7 +30,8 @@ use crate::app::graph_node_reply::tests::{app_with, messages, screenshot};
 use crate::app::graph_proposal_reply::tests::{apply_next_command, wait_for_message};
 use crate::app::prompt_intent::{PromptSessionMode, PromptSubmission, PromptWorkflowOutcome};
 use crate::app::service::MockSessionRunFactory;
-use crate::domain::session::SessionId;
+use crate::domain::session::{SessionId, Status};
+use crate::domain::transcript_notice::TranscriptNotice;
 use crate::infra::fs::MockFsClient;
 use crate::presentation::execution_graph::tests::{acceptance_gated_view, consumed_gated_view};
 use crate::test_support::{new_test_app_with_clients, test_app_clients};
@@ -299,6 +304,58 @@ async fn accept_reply_reports_a_stale_output_instead_of_retargeting_it() {
 }
 
 #[tokio::test]
+async fn stopping_the_session_abandons_an_undecided_output_reply() {
+    // Arrange
+    let (graph, progress) = gated();
+    let (mut app, _directory) = app_with(listing(graph, progress)).await;
+    let _driver = live_driver(&app);
+    let gate = Arc::new(Semaphore::new(0));
+    app.services
+        .set_run_client(Arc::new(GatedAcceptance(Arc::clone(&gate))));
+    let status = Arc::clone(
+        &app.sessions
+            .session_handles_or_err("sess")
+            .expect("handles")
+            .status,
+    );
+
+    // Act
+    let outcome = app
+        .submit_graph_output_reply(
+            &SessionId::from("sess"),
+            &TurnPrompt::from_text("Looks good".into()),
+        )
+        .await;
+    wait_for_status(&status, Status::InProgress).await;
+    app.services.stop_graph_activity("sess").await;
+    gate.add_permits(1);
+    let notice = wait_for_message(&app, "was canceled").await;
+    wait_for_status(&status, Status::Review).await;
+
+    // Assert
+    assert_eq!(
+        outcome,
+        Some(PromptWorkflowOutcome::ShowSession {
+            session_id: "sess".into()
+        })
+    );
+    assert_eq!(
+        notice,
+        TranscriptNotice::ReplyError.format(
+            "Graph output: the reply decision for `first` was canceled. Reply again to act on its \
+             output."
+        )
+    );
+    assert!(
+        app.services
+            .output_reply_decisions
+            .lock()
+            .expect("decision lock")
+            .is_empty()
+    );
+}
+
+#[tokio::test]
 async fn reply_while_the_previous_one_is_decided_keeps_the_composer() {
     // Arrange
     let (graph, progress) = gated();
@@ -307,7 +364,13 @@ async fn reply_while_the_previous_one_is_decided_keeps_the_composer() {
         .output_reply_decisions
         .lock()
         .expect("decision lock")
-        .insert("result".into());
+        .insert(
+            "result".into(),
+            OutputReplyDecision {
+                cancellation: CancellationToken::new(),
+                session_id: SessionId::from("sess"),
+            },
+        );
 
     // Act
     let outcome = app
@@ -647,6 +710,33 @@ fn unavailable() -> DbError {
     DbError::InvalidData {
         entity: "graph",
         reason: "Read failed".into(),
+    }
+}
+
+/// Lets background tasks run until the live session status reaches
+/// `expected`.
+async fn wait_for_status(status: &Mutex<Status>, expected: Status) {
+    tokio::time::timeout(Duration::from_secs(5), async {
+        while *status.lock().expect("status") != expected {
+            tokio::task::yield_now().await;
+        }
+    })
+    .await
+    .expect("session status");
+}
+
+/// Decision run that accepts once the test opens its gate.
+struct GatedAcceptance(Arc<Semaphore>);
+
+#[async_trait]
+impl RunClient for GatedAcceptance {
+    async fn submit(&self, _request: OneShotRequest) -> Result<OneShotSubmission, OneShotError> {
+        let _permit = self.0.acquire().await.expect("gate");
+
+        Ok(OneShotSubmission {
+            response: AgentResponse::plain("accept"),
+            stats: SessionStats::default(),
+        })
     }
 }
 

@@ -43,7 +43,8 @@ pub(super) async fn run(
         context.session_id.clone(),
         Arc::clone(&context.session_update_versions),
         Arc::clone(&context.status),
-    );
+    )
+    .with_graph_activity(context.graph_activity.clone());
     transition
         .apply_or_invalid_transition(Status::InProgress)
         .await?;

@@ -19,8 +19,22 @@ use crate::session::fixture::{CLIPBOARD_IMAGE_FILE, E2eResult, run_git};
 
 const SESSION: &str = "proposal-session";
 
+/// Stub-directory file whose content is the generation delay in seconds.
+const GENERATION_DELAY_FILE: &str = "generation-delay";
+
 async fn seed(env: &BuilderEnv, node_count: usize) -> E2eResult {
     seed_gated(env, node_count, GraphProposalGate::ExecutionSucceeded {}).await
+}
+
+/// Seeds one node whose generation takes `seconds`, long enough to observe.
+async fn seed_slow(env: &BuilderEnv, seconds: u32) -> E2eResult {
+    seed(env, 1).await?;
+    std::fs::write(
+        env.stub_bin.join(GENERATION_DELAY_FILE),
+        seconds.to_string(),
+    )?;
+
+    Ok(())
 }
 
 /// Seeds a chain of `node_count` nodes, each waiting for its predecessor
@@ -79,6 +93,8 @@ prompt=$(cat)
 printf '%s\n' '{{"type":"system","subtype":"init"}}'
 case "$prompt" in
   *'Propose an initial execution graph'*)
+    delay="$(dirname "$0")/{GENERATION_DELAY_FILE}"
+    if [ -f "$delay" ]; then sleep "$(cat "$delay")"; fi
     printf '%s\n' "$prompt" | sed -n 's/^Task input attachment [0-9]*: //p' | while IFS= read -r image_path; do
       case " $* " in
         *" --add-dir $(dirname "$image_path") "*) cmp -s "$image_path" "$(dirname "$0")/{CLIPBOARD_IMAGE_FILE}" ;;
@@ -355,6 +371,96 @@ async fn graph_output_acceptance_reply_continues_the_graph() -> E2eResult {
                     assertion::assert_text_in_region(&continued, "node-1   ✓ Done", &sidebar);
                     assertion::assert_text_in_region(&continued, "│ accepted report ✓", &sidebar);
                     assertion::assert_not_visible(&continued, "Awaiting your approval");
+                })
+            },
+        )
+        .await?;
+
+    Ok(())
+}
+
+#[tokio::test]
+async fn graph_generation_shows_the_session_working_until_the_proposal_is_ready() -> E2eResult {
+    // Arrange
+    FeatureTest::new("graph_generation_shows_the_session_working")
+        .with_git()
+        .with_terminal_size(160, 50)
+        .args(["--experimental-graph".into()])
+        .setup(|env| Box::pin(seed_slow(env, 2)))
+        .run(
+            |scenario| {
+                // Act
+                scenario
+                    .compose(&common::wait_for_agentty_startup())
+                    .wait_for_text("Graph proposals", 5000)
+                    .compose(&common::open_selected_session_view())
+                    .press_key("Enter")
+                    .write_text("/graph")
+                    .press_key("Enter")
+                    .write_text("query the current architecture")
+                    .press_key("Enter")
+                    .wait_for_text("Working...", 5000)
+                    .capture_labeled("generating", "Generation keeps the session working")
+                    .wait_for_text("Graph proposal v1 ready: 1 node", 10000)
+                    .step(common::wait_for_frame_text(
+                        &["Graph proposal v1 ready: 1 node"],
+                        &["Working..."],
+                    ))
+            },
+            |frame, report| {
+                Box::pin(async move {
+                    // Assert
+                    let generating = common::frame_from_capture(&report.captures[0]);
+                    let chat = Region::new(0, 0, generating.cols() * 65 / 100, generating.rows());
+                    assertion::assert_text_in_region(&generating, "Working...", &chat);
+                    assertion::assert_not_visible(&generating, "Graph proposal v1 ready");
+                    assertion::assert_text_in_region(
+                        frame,
+                        "Graph proposal v1 ready: 1 node",
+                        &chat,
+                    );
+                    assertion::assert_not_visible(frame, "Working...");
+                })
+            },
+        )
+        .await?;
+
+    Ok(())
+}
+
+#[tokio::test]
+async fn stopping_graph_generation_cancels_the_proposal() -> E2eResult {
+    // Arrange
+    FeatureTest::new("stopping_graph_generation_cancels_the_proposal")
+        .with_git()
+        .with_terminal_size(160, 50)
+        .args(["--experimental-graph".into()])
+        .setup(|env| Box::pin(seed_slow(env, 30)))
+        .run(
+            |scenario| {
+                // Act
+                scenario
+                    .compose(&common::wait_for_agentty_startup())
+                    .wait_for_text("Graph proposals", 5000)
+                    .compose(&common::open_selected_session_view())
+                    .press_key("Enter")
+                    .write_text("/graph")
+                    .press_key("Enter")
+                    .write_text("query the current architecture")
+                    .press_key("Enter")
+                    .wait_for_text("Working...", 5000)
+                    .press_key("ctrl+c")
+                    .wait_for_text("Cancelled. No graph was launched", 5000)
+                    .step(common::wait_for_frame_text(
+                        &["Cancelled. No graph was launched"],
+                        &["Working..."],
+                    ))
+            },
+            |frame, _| {
+                Box::pin(async move {
+                    // Assert
+                    assertion::assert_not_visible(frame, "Working...");
+                    assertion::assert_not_visible(frame, "Graph proposal v1 ready");
                 })
             },
         )

@@ -19,6 +19,7 @@ use crate::app::assist::{
     AssistContext, AssistPolicy, FailureTracker, append_assist_header, format_detail_lines,
     run_agent_assist,
 };
+use crate::app::graph_activity::{GraphActivityRegistry, StatusChange};
 use crate::app::service::{AppServices, SessionUpdateVersionMap};
 use crate::app::session::{Clock, SessionError, unix_timestamp_from_system_time};
 use crate::app::{AppEvent, SessionManager, setting};
@@ -88,6 +89,9 @@ pub(crate) struct StatusTransition {
     clock: Arc<dyn Clock>,
     /// Repository bundle used for status persistence.
     db: AppRepositories,
+    /// Graph leases that may defer a turn's `Review`, when the caller starts
+    /// or ends turns.
+    graph_activity: Option<GraphActivityRegistry>,
     /// Stable session identifier receiving the transition.
     session_id: SessionId,
     /// Per-app session update versions shared with the main runtime.
@@ -107,6 +111,7 @@ impl StatusTransition {
             app_event_tx: services.event_sender(),
             clock: services.clock(),
             db: services.db().clone(),
+            graph_activity: Some(services.graph_activity.clone()),
             session_id: session_id.into(),
             session_update_versions: services.session_update_versions(),
             status: Arc::clone(&handles.status),
@@ -126,24 +131,56 @@ impl StatusTransition {
             app_event_tx,
             clock,
             db,
+            graph_activity: None,
             session_id: session_id.into(),
             session_update_versions,
             status,
         }
     }
 
+    /// Lets held graph leases defer this caller's turn-ending `Review`.
+    pub(crate) fn with_graph_activity(mut self, graph_activity: GraphActivityRegistry) -> Self {
+        self.graph_activity = Some(graph_activity);
+
+        self
+    }
+
     /// Applies a status transition using the bound session dependencies.
+    ///
+    /// A `Review` deferred to a held graph lease counts as applied.
     pub(crate) async fn apply(&self, status: Status) -> bool {
-        SessionTaskService::update_status(
-            self.status.as_ref(),
+        let change = match &self.graph_activity {
+            Some(graph_activity) => {
+                graph_activity.transition(&self.session_id, &self.status, status)
+            }
+            None => StatusChange::set(
+                &mut self.status.lock().unwrap_or_else(PoisonError::into_inner),
+                status,
+            ),
+        };
+        match change {
+            StatusChange::Applied | StatusChange::Held => {}
+            StatusChange::Deferred => return true,
+            StatusChange::Rejected => return false,
+        }
+        let _publication = match &self.graph_activity {
+            Some(graph_activity) => Some(graph_activity.lock_publication().await),
+            None => None,
+        };
+        // A lease on another task may have changed the status since; persist
+        // the latest value so this write never overwrites a newer one.
+        let published = *self.status.lock().unwrap_or_else(PoisonError::into_inner);
+        SessionTaskService::publish_status(
             self.clock.as_ref(),
             &self.db,
             &self.app_event_tx,
             &self.session_update_versions,
             self.session_id.as_str(),
-            status,
+            published,
         )
-        .await
+        .await;
+
+        true
     }
 
     /// Applies a status transition or returns a workflow error for invalid
@@ -1366,35 +1403,20 @@ impl SessionTaskService {
         }
     }
 
-    /// Applies a status transition to memory and database when valid.
+    /// Persists a status already applied in memory and announces it.
     ///
     /// This bumps the session-update version, emits
     /// [`AppEvent::SessionUpdated`] for targeted snapshot sync, and emits
     /// session/project refresh events for transitions that affect list
     /// snapshots or project session aggregates.
-    pub(crate) async fn update_status(
-        status: &Mutex<Status>,
+    pub(crate) async fn publish_status(
         clock: &dyn Clock,
         db: &AppRepositories,
         app_event_tx: &mpsc::UnboundedSender<AppEvent>,
         session_update_versions: &SessionUpdateVersionMap,
         id: &str,
         new: Status,
-    ) -> bool {
-        let should_update = if let Ok(mut current) = status.lock() {
-            if (*current).can_transition_to(new) {
-                *current = new;
-                true
-            } else {
-                false
-            }
-        } else {
-            false
-        };
-        if !should_update {
-            return false;
-        }
-
+    ) {
         let timestamp_seconds = unix_timestamp_from_system_time(clock.now_system_time());
 
         if let Err(error) = db
@@ -1413,8 +1435,6 @@ impl SessionTaskService {
         if Self::status_requires_full_refresh(new) {
             Self::send_session_and_project_refresh_events(app_event_tx, id);
         }
-
-        true
     }
 
     /// Appends one formatted workflow notice to the in-memory transcript and

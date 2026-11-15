@@ -1,6 +1,6 @@
 //! Shared app dependency container for managers and background workflows.
 
-use std::collections::{HashMap, HashSet};
+use std::collections::HashMap;
 use std::num::NonZeroUsize;
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex, PoisonError};
@@ -33,13 +33,16 @@ use crate::infra::fs::FsClient;
 /// Shared app dependencies used by managers and background workflows.
 #[derive(Clone)]
 pub struct AppServices {
+    /// Background graph work that holds its session `InProgress`.
+    pub(crate) graph_activity: crate::app::graph_activity::GraphActivityRegistry,
     /// Graphs whose budget writers still hold spending the store lacks.
     pub(super) graph_budget_writers: crate::app::graph_budget::GraphBudgetWriters,
     pub(super) graph_drivers: crate::app::execution_graph::GraphDrivers,
     pub(super) graph_resources: Arc<ag_worker::GraphResources>,
     pub(super) graph_wake: tokio::sync::watch::Sender<u64>,
     /// Graph outputs whose chat reply is waiting for its background decision.
-    pub(super) output_reply_decisions: Arc<Mutex<HashSet<String>>>,
+    pub(super) output_reply_decisions:
+        Arc<Mutex<HashMap<String, super::graph_output_reply::OutputReplyDecision>>>,
     pub(super) proposal_generations:
         Arc<Mutex<HashMap<String, super::graph_proposal::ProposalGeneration>>>,
     /// Proposals whose chat reply is waiting for its background decision.
@@ -108,6 +111,7 @@ impl AppServices {
             .unwrap_or_else(|| Arc::new(RealAgentCatalogClient));
 
         Self {
+            graph_activity: crate::app::graph_activity::GraphActivityRegistry::default(),
             graph_resources: Arc::new(ag_worker::GraphResources::new(
                 NonZeroUsize::new(8).unwrap_or(NonZeroUsize::MIN),
                 HashMap::new(),
