@@ -864,72 +864,125 @@ fn graph_proposal_preview_explains_outcomes_and_separates_output_acceptance() {
         "unresolved",
     ] {
         // Arrange
-        let mut state = graph_proposal_state("preview", "sess");
-        match case {
-            "failed" => {
-                state.version.outcome = GraphProposalVersionOutcome::Failed("Unavailable".into());
-            }
-            "cancelled" => state.version.is_cancelled = true,
-            "approved" => {
-                state.version.approval = Some(ag_session::GraphProposalApproval {
-                    graph_id: "published".into(),
-                    limits: state.limits.clone(),
-                    version: 1,
-                });
-            }
-            "questions" => {
-                state.version.outcome = GraphProposalVersionOutcome::Generated {
-                    launch: None,
-                    response: GraphProposalResponse {
-                        outcome: GraphProposalOutcome::Clarification {
-                            questions: vec![ag_protocol::QuestionItem::new("Target?")],
-                        },
-                    },
-                }
-            }
-            "proposal" | "unresolved" => {
-                let mut graph = crate::app::execution_graph::tests::graph();
-                graph.nodes[0].definition.prompt =
-                    "Saved instructions\nUse the captured definition.".into();
-                state.version.outcome = GraphProposalVersionOutcome::Generated {
-                    launch: (case == "proposal").then(|| {
-                        Box::new(ag_session::StartExecutionGraphRequest {
-                            graph,
-                            provider_call_limits: std::collections::BTreeMap::new(),
-                        })
-                    }),
-                    response: GraphProposalResponse {
-                        outcome: GraphProposalOutcome::Proposal {
-                            proposal: graph_proposal(),
-                        },
-                    },
-                }
-            }
-            _ => {}
-        }
+        let state = preview_state(case);
 
         // Act
         let preview = crate::presentation::graph_chat::proposal_preview(&state);
 
         // Assert
-        assert!(preview.contains("Graph proposal preview v1"));
-        assert!(preview.contains("Limits:"));
+        assert!(preview.starts_with("## Graph proposal v1\n"), "{preview}");
+        assert!(preview.contains("**Limits:**"));
+        assert!(preview.contains("### Request\n\n> "), "{preview}");
         let expected = match case {
             "generating" => "sidebar updates automatically",
-            "failed" => "Unavailable",
+            "failed" => "Generation failed:\n\n> Unavailable:\n> ```\n> boom\n> ```\n",
             "cancelled" => "Cancelled",
             "approved" => "output acceptance remains separate",
-            "questions" => "Clarification required",
-            "proposal" => "Preview awaiting exact-version approval",
+            "questions" => {
+                "Clarification required before preview:\n1. Target? (Docs / Code)\n2.\n\n> Which \
+                 file?\n> ```\n> foo\n> ```\n"
+            }
+            "proposal" => "Awaiting approval of this exact version",
             _ => "Reply in chat to approve, revise, or cancel",
         };
-        assert!(preview.contains(expected), "{case}");
+        assert!(preview.contains(expected), "{case}\n{preview}");
+        assert!(
+            preview.lines().all(|line| !line.trim().starts_with("```")),
+            "{case} opens a code fence\n{preview}"
+        );
+        if !matches!(case, "cancelled" | "approved") {
+            assert!(
+                preview.ends_with(
+                    "\n---\nReply in chat to approve, revise, or cancel a pending proposal. \
+                     Approval of this graph does not accept outputs produced later."
+                ),
+                "{case}\n{preview}"
+            );
+        }
         if case == "proposal" {
-            assert!(preview.contains(
-                "Captured instructions:\nSaved instructions\nUse the captured definition."
-            ));
+            for expected in [
+                "### Nodes (2)",
+                "#### 1. first · Custom agent",
+                "- **Objective:**\n\n> Run:\n> ```\n> cargo test\n> ```\n\n- **Access:** shared \
+                 read",
+                "- **Objective:** Inspect the requested code\n- **Access:** exclusive write",
+                "**Access:** shared read · **Context:** fresh · **Effects:** none · **Schema:** \
+                 session turn",
+                "**Requires:** none",
+                "**Outputs:** `response` (session turn)",
+                "> Saved instructions\n> Use the captured definition.",
+                "**Access:** exclusive write · **Context:** task `task-second` · **Effects:** \
+                 session workflow",
+                "**Requires:** `first` (accepted response)",
+                "#### 2. second · Second ˋˋˋagent\n",
+                "**Inputs:** `accepted ˋinputˋ` ← `first.response`",
+            ] {
+                assert!(preview.contains(expected), "{expected}\n{preview}");
+            }
         }
     }
+}
+
+/// Builds the proposal state for one preview case. Failed, question, and
+/// objective text spans several lines and embeds a code fence; proposal names
+/// embed line breaks and backticks.
+fn preview_state(case: &str) -> GraphProposalState {
+    let mut state = graph_proposal_state("preview", "sess");
+    match case {
+        "failed" => {
+            state.version.outcome =
+                GraphProposalVersionOutcome::Failed("Unavailable:\n```\nboom\n```".into());
+        }
+        "cancelled" => state.version.is_cancelled = true,
+        "approved" => {
+            state.version.approval = Some(ag_session::GraphProposalApproval {
+                graph_id: "published".into(),
+                limits: state.limits.clone(),
+                version: 1,
+            });
+        }
+        "questions" => {
+            state.version.outcome = GraphProposalVersionOutcome::Generated {
+                launch: None,
+                response: GraphProposalResponse {
+                    outcome: GraphProposalOutcome::Clarification {
+                        questions: vec![
+                            ag_protocol::QuestionItem::with_options(
+                                "Target?",
+                                vec!["Docs".into(), "Code".into()],
+                            ),
+                            ag_protocol::QuestionItem::new("Which file?\n```\nfoo\n```"),
+                        ],
+                    },
+                },
+            }
+        }
+        "proposal" | "unresolved" => {
+            let mut graph = crate::app::execution_graph::tests::graph();
+            graph.nodes[0].definition.prompt =
+                "Saved instructions\nUse the captured definition.".into();
+            graph.nodes[0].objective = "Run:\n```\ncargo test\n```".into();
+            graph.nodes[0].execution.context = ag_session::GraphContext::Fresh;
+            graph.nodes[1].definition.name = "Second\n```agent".into();
+            graph.nodes[1].inputs[0].name = "accepted\n`input`".into();
+            state.version.outcome = GraphProposalVersionOutcome::Generated {
+                launch: (case == "proposal").then(|| {
+                    Box::new(ag_session::StartExecutionGraphRequest {
+                        graph,
+                        provider_call_limits: std::collections::BTreeMap::new(),
+                    })
+                }),
+                response: GraphProposalResponse {
+                    outcome: GraphProposalOutcome::Proposal {
+                        proposal: graph_proposal(),
+                    },
+                },
+            }
+        }
+        _ => {}
+    }
+
+    state
 }
 
 /// Accepts the detached title request that admission starts for an untitled

@@ -491,7 +491,7 @@ async fn graph_proposal_restored_pending_preview() -> E2eResult {
                     .wait_for_text("Graph proposals", 5000)
                     .compose(&common::open_selected_session_view())
                     .press_key("w")
-                    .wait_for_text("Preview awaiting exact-version approval", 5000)
+                    .wait_for_text("Awaiting approval of this exact version", 5000)
                     .wait_for_text("reply in chat to approve, revise, or cancel", 5000)
             },
             |frame, _| {
