@@ -49,8 +49,8 @@ use crate::domain::setting::SettingName;
 use crate::domain::subagent::SubagentLimit;
 use crate::domain::transcript_notice::TranscriptNotice;
 use crate::domain::transient_message::{
-    TransientMessage, TransientMessageAnchor, TransientMessageBody, TransientMessageLifecycle,
-    TransientMessageSlot,
+    GeneratedTurnLabels, TransientMessage, TransientMessageAnchor, TransientMessageBody,
+    TransientMessageLifecycle, TransientMessageSlot,
 };
 use crate::domain::turn_prompt::TurnPrompt;
 use crate::infra::agent_profile::{AgentCatalogClient, RealAgentCatalogClient};
@@ -954,6 +954,34 @@ impl App {
             Ok(false) => {}
             Err(_) => return false,
         }
+
+        self.reply_turn(session_id, prompt, None).await
+    }
+
+    /// Submits an Agentty-generated follow-up prompt for an existing session.
+    ///
+    /// Unlike [`App::reply`], the prompt never appears as a user message: as
+    /// for review-comment resolution, `labels` show the turn in the shared
+    /// worker queue and then replace the working indicator while it runs.
+    /// Returns `true` when the reply command was enqueued on the session
+    /// worker.
+    pub(crate) async fn reply_with_generated_prompt(
+        &mut self,
+        session_id: &str,
+        prompt: TurnPrompt,
+        labels: GeneratedTurnLabels,
+    ) -> bool {
+        self.reply_turn(session_id, prompt, Some(labels)).await
+    }
+
+    /// Clears focused-review state and enqueues one follow-up turn, hiding
+    /// the prompt behind generated-turn `labels` when they are given.
+    async fn reply_turn(
+        &mut self,
+        session_id: &str,
+        prompt: TurnPrompt,
+        labels: Option<GeneratedTurnLabels>,
+    ) -> bool {
         if self
             .sessions
             .session_or_err(session_id)
@@ -970,10 +998,15 @@ impl App {
             .update_session_focused_review(session_id, None, None, None)
             .await;
 
-        let enqueued = self
-            .sessions
-            .reply(&self.services, session_id, prompt)
-            .await;
+        let enqueued = if let Some(labels) = labels {
+            self.sessions
+                .reply_with_generated_prompt(&self.services, session_id, prompt, labels)
+                .await
+        } else {
+            self.sessions
+                .reply(&self.services, session_id, prompt)
+                .await
+        };
         if enqueued {
             self.clear_review_output_for_new_turn(session_id);
             self.clear_diff_comment_progress(session_id);

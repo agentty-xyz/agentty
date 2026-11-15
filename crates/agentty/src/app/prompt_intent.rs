@@ -17,10 +17,6 @@ use crate::domain::permission::PermissionMode;
 use crate::domain::review;
 use crate::domain::session::{Session, SessionId, Status};
 use crate::domain::transcript_notice::TranscriptNotice;
-use crate::domain::transient_message::{
-    TransientMessage, TransientMessageAnchor, TransientMessageBody, TransientMessageLifecycle,
-    TransientMessageSlot,
-};
 use crate::domain::turn_prompt::{TurnPrompt, TurnPromptAttachment, TurnPromptTextSource};
 use crate::presentation::app_mode::{AppMode, ReviewCommentSelection};
 use crate::presentation::prompt::{PendingImagePaste, insert_prompt_local_image_at};
@@ -206,7 +202,6 @@ impl App {
         };
 
         let is_queued = self.sessions.sessions()[session_index].queues_review_comment_reply();
-        let comment_count = thread_ids.len();
         let enqueued = self
             .sessions
             .reply_to_review_comments(&self.services, session_id, prompt, thread_ids)
@@ -221,20 +216,6 @@ impl App {
         }
         self.clear_review_output(session_id.as_str());
         self.clear_diff_comment_progress(session_id);
-
-        // Reply enqueueing cannot reorder the exclusively borrowed session
-        // state, so the validated index remains stable across the
-        // awaited operation.
-        let session = &mut self.sessions.sessions_mut()[session_index];
-        session.transient_messages.upsert(TransientMessage {
-            anchor: TransientMessageAnchor::Tail,
-            body: TransientMessageBody::Loading(review_comment_resolution_loading_text(
-                comment_count,
-            )),
-            lifecycle: TransientMessageLifecycle::UntilResolved,
-            slot: TransientMessageSlot::ReviewCommentResolution,
-            turn_position: None,
-        });
 
         ReviewCommentResolutionOutcome::ShowSession {
             session_id: session_id.clone(),
@@ -1059,17 +1040,6 @@ impl App {
         self.append_output_for_session(session_id, &notice.format(message))
             .await;
     }
-}
-
-/// Formats the in-progress label for one accepted review-comment batch.
-pub(crate) fn review_comment_resolution_loading_text(comment_count: usize) -> String {
-    let noun = if comment_count == 1 {
-        "review comment"
-    } else {
-        "review comments"
-    };
-
-    format!("Resolving {comment_count} {noun}...")
 }
 
 /// Builds an agent-facing review-comment prompt and its forge thread

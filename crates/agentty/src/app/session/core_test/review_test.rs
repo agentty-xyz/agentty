@@ -26,8 +26,8 @@ use crate::domain::question::QuestionItem;
 use crate::domain::session::{SESSION_DATA_DIR, SessionId, Status};
 use crate::domain::session_message::SessionMessageKind;
 use crate::domain::transient_message::{
-    TransientMessage, TransientMessageAnchor, TransientMessageBody, TransientMessageLifecycle,
-    TransientMessageSlot,
+    GeneratedTurnLabels, GeneratedTurnUpdate, TransientMessage, TransientMessageAnchor,
+    TransientMessageBody, TransientMessageLifecycle, TransientMessageSlot,
 };
 use crate::infra::clock::Clock;
 use crate::infra::db::AppRepositories;
@@ -399,7 +399,7 @@ async fn test_resolve_session_review_comments_enqueues_turn_and_clears_focused_r
     let active_status = active_session.status;
     let resolution_loader = active_session
         .transient_messages
-        .get(TransientMessageSlot::ReviewCommentResolution)
+        .get(TransientMessageSlot::GeneratedTurnProgress)
         .map(|message| message.body.text().to_string());
     let generated_prompt_kind = active_session
         .transcript
@@ -550,7 +550,7 @@ async fn review_comment_batch_joins_chat_queue_and_survives_refresh() {
     let queued_session = &app.sessions.sessions()[0];
     let queued = queued_session
         .transient_messages
-        .get(TransientMessageSlot::ReviewCommentQueue)
+        .get(TransientMessageSlot::GeneratedTurnQueue)
         .expect("queued row");
     let action = match &queued.body {
         TransientMessageBody::Queued(action) => Some(action),
@@ -563,7 +563,7 @@ async fn review_comment_batch_joins_chat_queue_and_survives_refresh() {
     assert!(
         queued_session
             .transient_messages
-            .get(TransientMessageSlot::ReviewCommentResolution)
+            .get(TransientMessageSlot::GeneratedTurnProgress)
             .is_none()
     );
     let duplicate = app
@@ -578,11 +578,11 @@ async fn review_comment_batch_joins_chat_queue_and_survives_refresh() {
     let active = &app.sessions.sessions()[0];
     let loading = active
         .transient_messages
-        .get(TransientMessageSlot::ReviewCommentResolution)
+        .get(TransientMessageSlot::GeneratedTurnProgress)
         .map(|message| message.body.text().to_string());
     let queue_cleared = active
         .transient_messages
-        .get(TransientMessageSlot::ReviewCommentQueue)
+        .get(TransientMessageSlot::GeneratedTurnQueue)
         .is_none();
     resolution_release.notify_one();
     wait_for_status(&mut app, &session_id, Status::Review).await;
@@ -608,7 +608,7 @@ async fn review_comment_batch_joins_chat_queue_and_survives_refresh() {
     assert!(
         app.sessions.sessions()[0]
             .transient_messages
-            .get(TransientMessageSlot::ReviewCommentResolution)
+            .get(TransientMessageSlot::GeneratedTurnProgress)
             .is_none()
     );
 }
@@ -745,13 +745,13 @@ async fn assert_review_comment_batch_preserves_question(
     assert!(
         session
             .transient_messages
-            .get(TransientMessageSlot::ReviewCommentQueue)
+            .get(TransientMessageSlot::GeneratedTurnQueue)
             .is_some()
     );
     assert!(
         session
             .transient_messages
-            .get(TransientMessageSlot::ReviewCommentResolution)
+            .get(TransientMessageSlot::GeneratedTurnProgress)
             .is_none()
     );
     assert!(
@@ -957,33 +957,36 @@ fn review_comment_queue_channel(
 }
 
 #[tokio::test]
-async fn review_comment_resolution_projection_handles_skips_missing_sessions_and_coalesced_events()
-{
+async fn generated_turn_projection_handles_skips_missing_sessions_and_coalesced_events() {
     // Arrange
     let dir = tempdir().expect("test directory");
     let mut app = new_test_app_with_git(dir.path()).await;
     let session_id = prepare_review_comment_resolution_session(&mut app).await;
     app.sessions
-        .queue_review_comment_resolution(&session_id, 0, 2);
+        .queue_generated_turn(&session_id, 0, "resolve 2 review comments".to_string());
 
     // Act
+    app.sessions.update_generated_turn(
+        "missing",
+        GeneratedTurnUpdate::Started("Resolving 2 review comments...".to_string()),
+    );
     app.sessions
-        .update_review_comment_resolution("missing", Some(2));
+        .update_generated_turn("missing", GeneratedTurnUpdate::Finished);
     app.sessions
-        .update_review_comment_resolution(&session_id, Some(0));
+        .update_generated_turn(&session_id, GeneratedTurnUpdate::Skipped);
     let skipped_row_removed = app.sessions.sessions()[0]
         .transient_messages
-        .get(TransientMessageSlot::ReviewCommentQueue)
+        .get(TransientMessageSlot::GeneratedTurnQueue)
         .is_none();
     app.services
-        .emit_app_event(AppEvent::SessionReviewCommentResolutionUpdated {
-            comment_count: Some(2),
+        .emit_app_event(AppEvent::SessionGeneratedTurnUpdated {
             session_id: session_id.clone(),
+            update: GeneratedTurnUpdate::Started("Resolving 2 review comments...".to_string()),
         });
     app.services
-        .emit_app_event(AppEvent::SessionReviewCommentResolutionUpdated {
-            comment_count: None,
+        .emit_app_event(AppEvent::SessionGeneratedTurnUpdated {
             session_id: session_id.clone(),
+            update: GeneratedTurnUpdate::Finished,
         });
     app.process_pending_app_events().await;
 
@@ -992,7 +995,137 @@ async fn review_comment_resolution_projection_handles_skips_missing_sessions_and
     assert!(
         app.sessions.sessions()[0]
             .transient_messages
-            .get(TransientMessageSlot::ReviewCommentResolution)
+            .get(TransientMessageSlot::GeneratedTurnProgress)
             .is_none()
     );
+}
+
+#[tokio::test]
+async fn generated_follow_up_waits_in_the_shared_queue_behind_pending_work() {
+    // Arrange
+    let dir = tempdir().expect("test directory");
+    let mut app = new_test_app_with_git(dir.path()).await;
+    let session_id = prepare_review_comment_resolution_session(&mut app).await;
+    let first_turn_release = Arc::new(Notify::new());
+    let follow_up_release = Arc::new(Notify::new());
+    let (started_tx, mut started_rx) = mpsc::unbounded_channel();
+    let channel = generated_follow_up_channel(&first_turn_release, &follow_up_release, started_tx);
+    TestSessionRunFactory::install(&mut app.services).register(&session_id, Arc::new(channel));
+    assert!(app.reply(&session_id, "Active turn").await);
+    assert_eq!(started_rx.recv().await.expect("first turn"), "Active turn");
+    app.sessions.sync_from_handles();
+    // An idle review status with in-flight worker work, as while a manual
+    // push runs for a watched session.
+    app.sessions.sessions_mut()[0].status = Status::Review;
+    app.sessions
+        .start_branch_publish(&session_id, "Pushing branch".to_string());
+    let labels = GeneratedTurnLabels {
+        active: "Addressing 1 failing check: lint...".to_string(),
+        queued: "fix 1 failing check: lint".to_string(),
+    };
+
+    // Act
+    let accepted = app
+        .reply_with_generated_prompt(&session_id, "Fix the failing checks".into(), labels)
+        .await;
+    // The live worker would accept this second follow-up, so only the
+    // one-queued-generated-turn guard can reject it.
+    let second_accepted = app
+        .reply_with_generated_prompt(
+            &session_id,
+            "Fix the other failing checks".into(),
+            GeneratedTurnLabels {
+                active: "Addressing 1 failing check: test...".to_string(),
+                queued: "fix 1 failing check: test".to_string(),
+            },
+        )
+        .await;
+    let waiting_session = &app.sessions.sessions()[0];
+    let waiting = waiting_session
+        .transient_messages
+        .get(TransientMessageSlot::GeneratedTurnQueue)
+        .map(|message| message.body.clone());
+    let progress_while_waiting = waiting_session
+        .transient_messages
+        .get(TransientMessageSlot::GeneratedTurnProgress)
+        .is_some();
+    first_turn_release.notify_one();
+    let follow_up = started_rx.recv().await.expect("generated follow-up");
+    app.process_pending_app_events().await;
+    let active_session = &app.sessions.sessions()[0];
+    let active = active_session
+        .transient_messages
+        .get(TransientMessageSlot::GeneratedTurnProgress)
+        .map(|message| message.body.text().to_string());
+    let queue_cleared = active_session
+        .transient_messages
+        .get(TransientMessageSlot::GeneratedTurnQueue)
+        .is_none();
+    follow_up_release.notify_one();
+    wait_for_status(&mut app, &session_id, Status::Review).await;
+    app.process_pending_app_events().await;
+
+    // Assert
+    assert!(accepted);
+    assert!(!second_accepted);
+    assert!(matches!(
+        waiting,
+        Some(TransientMessageBody::Queued(action)) if action.text == "fix 1 failing check: lint"
+    ));
+    assert!(!progress_while_waiting);
+    assert_eq!(follow_up, "Fix the failing checks");
+    assert_eq!(
+        active.as_deref(),
+        Some("Addressing 1 failing check: lint...")
+    );
+    assert!(queue_cleared);
+    assert!(
+        app.sessions.sessions()[0]
+            .transient_messages
+            .get(TransientMessageSlot::GeneratedTurnProgress)
+            .is_none()
+    );
+}
+
+/// Builds an active turn and a generated follow-up, each held until released.
+fn generated_follow_up_channel(
+    first_turn_release: &Arc<Notify>,
+    follow_up_release: &Arc<Notify>,
+    started_tx: mpsc::UnboundedSender<String>,
+) -> MockAgentChannel {
+    let mut channel = MockAgentChannel::new();
+    let first_release = Arc::clone(first_turn_release);
+    let follow_up_release = Arc::clone(follow_up_release);
+    channel
+        .expect_run_turn()
+        .times(2)
+        .returning(move |_, request, _| {
+            let prompt = request.prompt.text;
+            let release = if prompt == "Active turn" {
+                Arc::clone(&first_release)
+            } else {
+                Arc::clone(&follow_up_release)
+            };
+            let started_tx = started_tx.clone();
+            Box::pin(async move {
+                started_tx
+                    .send(prompt.clone())
+                    .expect("report started turn");
+                release.notified().await;
+
+                Ok(TurnResult {
+                    assistant_message: AgentResponse::plain("Completed queued work"),
+                    context_reset: false,
+                    harness_report: None,
+                    input_tokens: 0,
+                    output_tokens: 0,
+                    provider_conversation_id: None,
+                })
+            })
+        });
+    channel
+        .expect_shutdown_session()
+        .returning(|_| Box::pin(async { Ok(()) }));
+
+    channel
 }

@@ -95,7 +95,7 @@ fn test_queue_follows_review_resolution_status_and_updates_indicator_positions()
         anchor: TransientMessageAnchor::Tail,
         body: TransientMessageBody::Loading("Resolving 1 review comment...".to_string()),
         lifecycle: TransientMessageLifecycle::UntilResolved,
-        slot: TransientMessageSlot::ReviewCommentResolution,
+        slot: TransientMessageSlot::GeneratedTurnProgress,
         turn_position: None,
     });
     session.transient_messages.upsert(TransientMessage {
@@ -115,7 +115,7 @@ fn test_queue_follows_review_resolution_status_and_updates_indicator_positions()
     let initial = cache.layout(&session, area, line_context(), None);
     session
         .transient_messages
-        .retract(TransientMessageSlot::ReviewCommentResolution);
+        .retract(TransientMessageSlot::GeneratedTurnProgress);
     let updated = cache.layout(
         &session,
         area,

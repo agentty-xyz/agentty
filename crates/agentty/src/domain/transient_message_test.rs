@@ -1,6 +1,6 @@
 use super::{
-    QueuedAction, TransientMessage, TransientMessageAnchor, TransientMessageBody,
-    TransientMessageLifecycle, TransientMessageSlot, TransientMessageStore,
+    GeneratedTurnLabels, QueuedAction, TransientMessage, TransientMessageAnchor,
+    TransientMessageBody, TransientMessageLifecycle, TransientMessageSlot, TransientMessageStore,
 };
 
 #[test]
@@ -64,7 +64,7 @@ fn clear_for_new_turn_only_retracts_older_turn_scoped_messages() {
     // Arrange
     let mut store = TransientMessageStore::default();
     store.upsert(message(
-        TransientMessageSlot::ReviewCommentResolution,
+        TransientMessageSlot::GeneratedTurnProgress,
         "old",
         2,
     ));
@@ -90,7 +90,7 @@ fn clear_for_new_turn_only_retracts_older_turn_scoped_messages() {
     // Assert
     assert!(
         store
-            .get(TransientMessageSlot::ReviewCommentResolution)
+            .get(TransientMessageSlot::GeneratedTurnProgress)
             .is_none()
     );
     assert!(store.get(TransientMessageSlot::Review).is_some());
@@ -188,4 +188,32 @@ fn fingerprint_matches_fresh_store_after_last_message_is_retracted() {
     assert!(retracted_message.is_some());
     assert_eq!(emptied_store.messages(), []);
     assert_eq!(emptied_store.fingerprint(), fresh_store.fingerprint());
+}
+
+#[test]
+fn review_comment_labels_pluralize_the_comment_count() {
+    // Arrange
+    let cases = [
+        (
+            1,
+            "Resolving 1 review comment...",
+            "resolve 1 review comment",
+        ),
+        (
+            2,
+            "Resolving 2 review comments...",
+            "resolve 2 review comments",
+        ),
+    ];
+
+    // Act, Assert
+    for (comment_count, active, queued) in cases {
+        assert_eq!(
+            GeneratedTurnLabels::review_comments(comment_count),
+            GeneratedTurnLabels {
+                active: active.to_string(),
+                queued: queued.to_string(),
+            }
+        );
+    }
 }

@@ -145,7 +145,7 @@ pub(crate) fn output_tail(session: &Session, active_progress: Option<&str>) -> S
         session.status,
         active_progress,
         review_loading_message(session),
-        review_comment_resolution_loading_message(session),
+        generated_turn_progress_message(session),
     )
 }
 
@@ -336,7 +336,7 @@ impl<'assembly> SessionOutputAssembly<'assembly> {
             self.status,
             self.active_progress,
             review_loading_message(self.session),
-            review_comment_resolution_loading_message(self.session),
+            generated_turn_progress_message(self.session),
         );
     }
 }
@@ -453,10 +453,10 @@ fn review_loading_message(session: &Session) -> Option<&str> {
         })
 }
 
-fn review_comment_resolution_loading_message(session: &Session) -> Option<&str> {
+fn generated_turn_progress_message(session: &Session) -> Option<&str> {
     session
         .transient_messages
-        .get(TransientMessageSlot::ReviewCommentResolution)
+        .get(TransientMessageSlot::GeneratedTurnProgress)
         .and_then(|message| match &message.body {
             TransientMessageBody::Loading(message) => Some(message.as_str()),
             TransientMessageBody::Markdown(_)
@@ -503,7 +503,7 @@ fn append_transient_message(
         TransientMessageBody::Loading(status_message) => {
             if matches!(
                 message.slot,
-                TransientMessageSlot::Review | TransientMessageSlot::ReviewCommentResolution
+                TransientMessageSlot::Review | TransientMessageSlot::GeneratedTurnProgress
             ) {
                 return None;
             }

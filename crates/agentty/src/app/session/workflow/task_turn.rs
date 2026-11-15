@@ -186,6 +186,7 @@ async fn apply_implementation_effects(
         &post,
         TurnMetadata {
             published_upstream_ref: upstream,
+            generated_turn: None,
             review_comment_thread_ids: Vec::new(),
             session_agent: history.context.context.assignment.agent,
         },

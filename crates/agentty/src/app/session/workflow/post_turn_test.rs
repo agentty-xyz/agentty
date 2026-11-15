@@ -22,6 +22,7 @@ use crate::app::session::SessionError;
 use crate::domain::agent::{AgentKind, AgentModel, AgentSelection};
 use crate::domain::session::QueuedMessage;
 use crate::domain::session_message::SessionTranscript;
+use crate::domain::transient_message::GeneratedTurnLabels;
 use crate::domain::turn_prompt::TurnPrompt;
 use crate::infra::db::AppRepositories;
 use crate::test_support::enable_tracing_log_fallback;
@@ -99,6 +100,7 @@ async fn task_publication_awaits_success_and_propagates_blocked_failed_and_panic
             ));
         let metadata = TurnMetadata {
             published_upstream_ref: Some("origin/wt/session-id".to_string()),
+            generated_turn: None,
             review_comment_thread_ids: Vec::new(),
             session_agent: AgentSelection::new(AgentKind::Antigravity, AgentModel::Gemini38Flash),
         };
@@ -550,6 +552,7 @@ async fn test_auto_push_rechecks_queued_work_after_waiting_for_branch_lock() {
             &context,
             TurnMetadata {
                 published_upstream_ref: Some("origin/wt/session-id".to_string()),
+                generated_turn: Some(GeneratedTurnLabels::review_comments(1)),
                 review_comment_thread_ids: vec!["thread-42".to_string()],
                 session_agent: AgentSelection::new(
                     AgentKind::Antigravity,
@@ -689,6 +692,7 @@ async fn stopped_review_does_not_wait_for_publish_lock() {
         .await;
     let metadata = TurnMetadata {
         published_upstream_ref: Some("origin/wt/session-id".to_string()),
+        generated_turn: Some(GeneratedTurnLabels::review_comments(1)),
         review_comment_thread_ids: vec!["thread-42".to_string()],
         session_agent: AgentSelection::new(AgentKind::Antigravity, AgentModel::Gemini38Flash),
     };

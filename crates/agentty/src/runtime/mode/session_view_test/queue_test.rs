@@ -284,7 +284,7 @@ async fn test_end_in_progress_turn_second_press_after_empty_queue_cancels_turn()
             anchor: TransientMessageAnchor::Tail,
             body: TransientMessageBody::Loading("Resolving 2 review comments...".to_string()),
             lifecycle: TransientMessageLifecycle::UntilResolved,
-            slot: TransientMessageSlot::ReviewCommentResolution,
+            slot: TransientMessageSlot::GeneratedTurnProgress,
             turn_position: None,
         });
     let _ = app
@@ -324,7 +324,7 @@ async fn test_end_in_progress_turn_second_press_after_empty_queue_cancels_turn()
     assert!(
         app.sessions.sessions()[0]
             .transient_messages
-            .get(TransientMessageSlot::ReviewCommentResolution)
+            .get(TransientMessageSlot::GeneratedTurnProgress)
             .is_none()
     );
 }

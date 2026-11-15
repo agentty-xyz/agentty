@@ -39,6 +39,7 @@ use crate::domain::session_message::{SessionMessageKind, SessionTranscript};
 use crate::domain::session_order;
 use crate::domain::setting::SettingName;
 use crate::domain::transcript_notice::TranscriptNotice;
+use crate::domain::transient_message::GeneratedTurnLabels;
 use crate::domain::turn_prompt::{TurnPrompt, TurnPromptAttachment, TurnPromptTextSource};
 use crate::infra::db;
 use crate::infra::fs::{FsClient, FsError};
@@ -87,6 +88,7 @@ const USER_PROMPT_CONTINUATION_PREFIX: &str = "   ";
 
 /// Input bag for constructing a queued session command.
 struct BuildSessionCommandInput {
+    generated_turn: Option<GeneratedTurnLabels>,
     is_first_message: bool,
     operation_id: Option<String>,
     prompt: TurnPrompt,
@@ -154,13 +156,24 @@ impl ReplyEligibility {
     }
 }
 
+/// Owner of the transcript record for one reply prompt.
+#[derive(Clone, Copy, Eq, PartialEq)]
+enum PromptRecording {
+    /// The host appends the prompt as a visible user message.
+    Host,
+    /// The host writes no transcript record, as for hidden durable messages
+    /// and generated turns whose worker records hidden agent context.
+    None,
+}
+
 /// Reply-command behavior selected by the caller.
 struct ReplyOptions {
     defer_prompt_until_enqueued: bool,
     eligibility: ReplyEligibility,
+    generated_turn: Option<GeneratedTurnLabels>,
     joins_worker_queue: bool,
     operation_id: Option<String>,
-    persist_prompt: bool,
+    prompt_recording: PromptRecording,
     review_comment_thread_ids: Vec<String>,
     task: Option<ag_session::SubmitTaskRequest>,
 }
@@ -171,8 +184,9 @@ impl ReplyOptions {
         Self {
             defer_prompt_until_enqueued: false,
             eligibility: ReplyEligibility::Standard,
+            generated_turn: None,
             operation_id: None,
-            persist_prompt: true,
+            prompt_recording: PromptRecording::Host,
             joins_worker_queue: false,
             review_comment_thread_ids,
             task: None,
@@ -185,8 +199,9 @@ impl ReplyOptions {
         Self {
             defer_prompt_until_enqueued: true,
             eligibility: ReplyEligibility::QuestionAnswer,
+            generated_turn: None,
             operation_id: None,
-            persist_prompt: true,
+            prompt_recording: PromptRecording::Host,
             joins_worker_queue,
             review_comment_thread_ids: Vec::new(),
             task: None,
@@ -198,9 +213,29 @@ impl ReplyOptions {
         Self {
             defer_prompt_until_enqueued: true,
             eligibility: ReplyEligibility::Standard,
+            generated_turn: None,
             operation_id: Some(operation_id),
-            persist_prompt,
+            prompt_recording: if persist_prompt {
+                PromptRecording::Host
+            } else {
+                PromptRecording::None
+            },
             joins_worker_queue: false,
+            review_comment_thread_ids: Vec::new(),
+            task: None,
+        }
+    }
+
+    /// Builds hidden generated-prompt behavior for one Agentty-authored
+    /// follow-up turn, joining the shared worker queue behind pending work.
+    fn generated(labels: GeneratedTurnLabels, joins_worker_queue: bool) -> Self {
+        Self {
+            defer_prompt_until_enqueued: true,
+            eligibility: ReplyEligibility::Standard,
+            generated_turn: Some(labels),
+            operation_id: None,
+            prompt_recording: PromptRecording::None,
+            joins_worker_queue,
             review_comment_thread_ids: Vec::new(),
             task: None,
         }
@@ -208,16 +243,12 @@ impl ReplyOptions {
 
     /// Builds hidden generated-prompt behavior for forge review comments.
     fn review_comments(review_comment_thread_ids: Vec<String>, joins_worker_queue: bool) -> Self {
+        let labels = GeneratedTurnLabels::review_comments(review_comment_thread_ids.len());
+
         Self {
-            defer_prompt_until_enqueued: true,
             eligibility: ReplyEligibility::ReviewComments,
-            operation_id: None,
-            // The worker persists generated context only when execution
-            // starts, so the host never records or renders the prompt.
-            persist_prompt: false,
-            joins_worker_queue,
             review_comment_thread_ids,
-            task: None,
+            ..Self::generated(labels, joins_worker_queue)
         }
     }
 }
@@ -1659,6 +1690,7 @@ impl SessionManager {
             replay_transcript: None,
             prompt: prompt.clone(),
             turn_metadata: TurnMetadata {
+                generated_turn: None,
                 published_upstream_ref: None,
                 review_comment_thread_ids: Vec::new(),
                 session_agent,
@@ -1772,6 +1804,41 @@ impl SessionManager {
             prompt,
             session_agent,
             ReplyOptions::standard(Vec::new()),
+        )
+        .await
+    }
+
+    /// Queues one Agentty-generated follow-up prompt whose text stays out of
+    /// the visible transcript.
+    ///
+    /// Like review-comment resolution, the turn joins the shared worker queue
+    /// behind pending work and shows `labels.queued` until it starts; the
+    /// worker then records the prompt as hidden agent context and shows
+    /// `labels.active`. A session holds at most one queued generated turn.
+    /// Returns `true` when the command reaches the session worker.
+    pub(crate) async fn reply_with_generated_prompt(
+        &mut self,
+        services: &AppServices,
+        session_id: &str,
+        prompt: impl Into<TurnPrompt>,
+        labels: GeneratedTurnLabels,
+    ) -> bool {
+        let prompt = prompt.into();
+        let Ok(session) = self.session_or_err(session_id) else {
+            return false;
+        };
+        if session.has_queued_generated_turn() {
+            return false;
+        }
+        let joins_worker_queue = session.has_pending_worker_work();
+        let session_agent = session.agent;
+
+        self.reply_impl(
+            services,
+            session_id,
+            prompt,
+            session_agent,
+            ReplyOptions::generated(labels, joins_worker_queue),
         )
         .await
     }
@@ -2483,12 +2550,14 @@ impl SessionManager {
         let ReplyOptions {
             defer_prompt_until_enqueued,
             eligibility,
+            generated_turn,
             operation_id,
-            persist_prompt,
+            prompt_recording,
             joins_worker_queue,
             review_comment_thread_ids,
             task,
         } = options;
+        let persist_prompt = prompt_recording == PromptRecording::Host;
         // A saved fork prompt still needs the copied history if its worker
         // rejected acceptance after an earlier successful enqueue.
         let should_replay_history = self.should_replay_history(session_id)
@@ -2540,6 +2609,7 @@ impl SessionManager {
         let idempotent = operation_id.is_some();
 
         let command = Self::build_session_command(BuildSessionCommandInput {
+            generated_turn,
             is_first_message,
             operation_id,
             prompt: prompt.clone(),
@@ -2902,6 +2972,7 @@ impl SessionManager {
     /// for subsequent replies.
     fn build_session_command(input: BuildSessionCommandInput) -> SessionCommand {
         let BuildSessionCommandInput {
+            generated_turn,
             is_first_message,
             operation_id,
             prompt,
@@ -2923,6 +2994,7 @@ impl SessionManager {
             replay_transcript,
             prompt,
             turn_metadata: TurnMetadata {
+                generated_turn,
                 published_upstream_ref,
                 review_comment_thread_ids,
                 session_agent,
@@ -2967,7 +3039,7 @@ impl SessionManager {
         options: ReplyEnqueueOptions,
     ) -> ReplyEnqueueOutcome {
         let preparation_owned = command.is_preparation_prompt(persisted_session_id);
-        let review_comment_count = command.review_comment_count();
+        let generated_turn = command.generated_turn().cloned();
         let enqueue_result = if options.idempotent {
             self.enqueue_session_command_idempotently(
                 services,
@@ -2981,11 +3053,11 @@ impl SessionManager {
             self.enqueue_queued_session_command(services, &persisted_session_id, command)
                 .await
                 .map(|order| {
-                    if review_comment_count > 0 {
-                        self.queue_review_comment_resolution(
+                    if let Some(labels) = generated_turn {
+                        self.queue_generated_turn(
                             persisted_session_id.as_str(),
                             order,
-                            review_comment_count,
+                            labels.queued,
                         );
                     }
 
@@ -2994,7 +3066,13 @@ impl SessionManager {
         } else {
             self.enqueue_session_command(services, persisted_session_id, command)
                 .await
-                .map(|()| true)
+                .map(|()| {
+                    if let Some(labels) = generated_turn {
+                        self.show_generated_turn_progress(persisted_session_id, labels.active);
+                    }
+
+                    true
+                })
         };
         let newly_enqueued = match enqueue_result {
             Ok(newly_enqueued) => newly_enqueued,

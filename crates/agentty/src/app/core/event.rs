@@ -43,7 +43,7 @@ use crate::domain::session::{
     Status,
 };
 use crate::domain::transcript_notice::TranscriptNotice;
-use crate::domain::transient_message::TransientMessageBody;
+use crate::domain::transient_message::{GeneratedTurnUpdate, TransientMessageBody};
 use crate::infra::db::DbError;
 use crate::presentation::app_mode::{
     AppMode, ChatFocus, ConfirmationViewMode, DiffPreview, DiffPreviewUnavailableReason,
@@ -220,10 +220,10 @@ pub(crate) enum AppEvent {
     BranchPublishActionStarted { session_id: SessionId },
     /// Indicates a queued session sync has either started or failed visibly.
     SessionQueuedSyncResolved { session_id: SessionId },
-    /// Review-comment work started, finished, or was skipped (zero count).
-    SessionReviewCommentResolutionUpdated {
-        comment_count: Option<usize>,
+    /// An Agentty-generated turn started, finished, or was skipped.
+    SessionGeneratedTurnUpdated {
         session_id: SessionId,
+        update: GeneratedTurnUpdate,
     },
     /// A rebase conflict invalidated the focused review before assistance.
     SessionRebaseReviewInvalidated { session_id: SessionId },
@@ -424,6 +424,7 @@ pub(super) struct AppEventBatch {
     pub(super) session_creations: Vec<(String, Result<String, String>)>,
     pub(super) session_diff_stats_updates: HashMap<SessionId, SessionDiffStats>,
     pub(super) session_diff_updates: Vec<crate::app::SessionDiffUpdate>,
+    pub(super) session_generated_turn_updates: Vec<(SessionId, GeneratedTurnUpdate)>,
     pub(super) session_git_status_updates: HashMap<SessionId, SessionGitStatus>,
     pub(super) session_ids: HashSet<SessionId>,
     pub(super) session_model_updates: HashMap<SessionId, crate::domain::agent::AgentSelection>,
@@ -436,7 +437,6 @@ pub(super) struct AppEventBatch {
         HashMap<SessionId, crate::domain::agent::ReasoningLevel>,
     pub(super) session_response_style_updates:
         HashMap<SessionId, crate::domain::agent::ResponseStyle>,
-    pub(super) session_review_comment_resolution_updates: Vec<(SessionId, Option<usize>)>,
     pub(super) session_review_comment_snapshots: Vec<SessionReviewCommentSnapshotUpdate>,
     pub(super) session_speed_mode_updates: HashMap<SessionId, crate::domain::agent::SpeedMode>,
     pub(super) session_title_generation_finished: HashMap<SessionId, u64>,
@@ -513,7 +513,7 @@ impl AppEventBatch {
             || !self.session_permission_mode_updates.is_empty()
             || !self.session_progress_updates.is_empty()
             || !self.session_activity_updates.is_empty()
-            || !self.session_review_comment_resolution_updates.is_empty()
+            || !self.session_generated_turn_updates.is_empty()
             || !self.session_queued_sync_resolved_ids.is_empty()
             || !self.session_rebase_review_invalidated_ids.is_empty()
             || !self.session_turn_started_ids.is_empty()
@@ -566,13 +566,10 @@ impl AppEventBatch {
                 attempt_id,
                 session_id,
             } => self.collect_implementer_attempt_succeeded(session_id, attempt_id),
-            AppEvent::SessionReviewCommentResolutionUpdated {
-                comment_count,
-                session_id,
-            } => {
+            AppEvent::SessionGeneratedTurnUpdated { session_id, update } => {
                 self.session_ids.insert(session_id.clone());
-                self.session_review_comment_resolution_updates
-                    .push((session_id, comment_count));
+                self.session_generated_turn_updates
+                    .push((session_id, update));
             }
             AppEvent::SessionTurnStarted { agent, session_id } => {
                 self.session_turn_starts.push(agent);
@@ -748,7 +745,7 @@ impl AppEventBatch {
             | AppEvent::RefreshSessions
             | AppEvent::RefreshProjects
             | AppEvent::RefreshGitStatus
-            | AppEvent::SessionReviewCommentResolutionUpdated { .. }
+            | AppEvent::SessionGeneratedTurnUpdated { .. }
             | AppEvent::SessionTurnStarted { .. }
             | AppEvent::SessionTurnEnded { .. } => unreachable!("event was already collected"),
         }
@@ -1276,14 +1273,12 @@ impl App {
         for (session_id, activity) in std::mem::take(&mut event_batch.session_activity_updates) {
             self.sessions.update_live_activity(&session_id, activity);
         }
-        for (session_id, comment_count) in
-            std::mem::take(&mut event_batch.session_review_comment_resolution_updates)
+        for (session_id, update) in std::mem::take(&mut event_batch.session_generated_turn_updates)
         {
-            if comment_count.is_some_and(|count| count > 0) {
+            if matches!(update, GeneratedTurnUpdate::Started(_)) {
                 self.clear_review_output(&session_id);
             }
-            self.sessions
-                .update_review_comment_resolution(&session_id, comment_count);
+            self.sessions.update_generated_turn(&session_id, update);
         }
         for (session_id, notices) in
             std::mem::take(&mut event_batch.session_workflow_notice_updates)

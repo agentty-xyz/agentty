@@ -533,7 +533,7 @@ fn test_review_comments_reject_duplicate_queued_batch() {
         anchor: TransientMessageAnchor::Tail,
         body: TransientMessageBody::Queued(QueuedAction::new(1, "resolve comments".to_string())),
         lifecycle: TransientMessageLifecycle::UntilResolved,
-        slot: TransientMessageSlot::ReviewCommentQueue,
+        slot: TransientMessageSlot::GeneratedTurnQueue,
         turn_position: None,
     });
 

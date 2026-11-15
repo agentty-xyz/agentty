@@ -6,8 +6,8 @@ use ratatui::text::Line;
 use super::{
     SESSION_OUTPUT_BLOCK_ORDER, SessionOutputAssembly, SessionOutputTranscriptSection,
     append_markdown_lines, append_queued_entries, append_transient_message, append_user_prompt,
-    output_assembly, output_body, protect_user_prompt_indentation,
-    review_comment_resolution_loading_message, typed_transcript_sections,
+    generated_turn_progress_message, output_assembly, output_body, protect_user_prompt_indentation,
+    typed_transcript_sections,
 };
 use crate::domain::session::{QueuedMessage, Session, Status};
 use crate::domain::session_message::{SessionMessage, SessionMessageKind, SessionTranscript};
@@ -282,7 +282,7 @@ fn test_generated_review_prompt_is_hidden_behind_resolution_loader() {
         anchor: TransientMessageAnchor::Tail,
         body: TransientMessageBody::Loading("Resolving 3 review comments...".to_string()),
         lifecycle: crate::domain::transient_message::TransientMessageLifecycle::UntilResolved,
-        slot: TransientMessageSlot::ReviewCommentResolution,
+        slot: TransientMessageSlot::GeneratedTurnProgress,
         turn_position: None,
     });
 
@@ -313,12 +313,12 @@ fn test_review_comment_resolution_loader_ignores_non_loading_body() {
         anchor: TransientMessageAnchor::Tail,
         body: TransientMessageBody::Plain("not loading".to_string()),
         lifecycle: crate::domain::transient_message::TransientMessageLifecycle::UntilResolved,
-        slot: TransientMessageSlot::ReviewCommentResolution,
+        slot: TransientMessageSlot::GeneratedTurnProgress,
         turn_position: None,
     });
 
     // Act
-    let loading_message = review_comment_resolution_loading_message(&session);
+    let loading_message = generated_turn_progress_message(&session);
 
     // Assert
     assert_eq!(loading_message, None);

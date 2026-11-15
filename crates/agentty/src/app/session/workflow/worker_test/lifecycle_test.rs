@@ -84,6 +84,7 @@ async fn test_cancel_after_preparation_marker_skips_start_and_fork_reply() {
             prompt: prompt.clone(),
             turn_metadata: TurnMetadata {
                 published_upstream_ref: None,
+                generated_turn: None,
                 review_comment_thread_ids: Vec::new(),
                 session_agent: context.session_agent,
             },

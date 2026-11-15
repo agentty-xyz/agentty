@@ -186,13 +186,14 @@ only a successful manual target sync archives it as `Done`.
 <a id="architecture-runtime-flow-session-chat"></a> Durable transcript rows contain user
 prompts, final answers, and workflow notices. Typed transient slots hold progress,
 queued actions, and review output with explicit placement and lifetime. Chat messages
-and workflow actions, including selected review-comment batches, share one submission
-sequence for both display and execution. Review-comment commands retain their thread
-allowlist and replace the queued row with loading progress only when execution starts.
-Queued review batches wait for clarification answers, including after session
-restoration. A restored question session creates a paused worker when accepting the
-batch. Generated prompts enter durable history when the worker starts them, so canceled
-waiting work cannot be replayed.
+and workflow actions, including selected review-comment batches and watched follow-ups,
+share one submission sequence for both display and execution. Generated turns replace
+their queued row with loading progress only when execution starts. The worker clears
+that row or progress when it skips or finishes the turn. Review-comment commands also
+retain their thread allowlist. Queued review batches wait for clarification answers,
+including after session restoration. A restored question session creates a paused worker
+when accepting the batch. Generated prompts enter durable history when the worker starts
+them, so canceled waiting work cannot be replayed.
 
 Completion replaces matching progress with its result in one reducer update. Stale
 results cannot persist notices. Rendering reads snapshots; it does not perform workflow

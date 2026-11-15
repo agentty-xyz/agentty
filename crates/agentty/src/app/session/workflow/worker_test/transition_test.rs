@@ -372,6 +372,7 @@ async fn test_apply_turn_result_reports_background_push_failures() {
     // Act
     let turn_metadata = TurnMetadata {
         published_upstream_ref: Some("origin/wt/session-id".to_string()),
+        generated_turn: None,
         review_comment_thread_ids: Vec::new(),
         session_agent,
     };

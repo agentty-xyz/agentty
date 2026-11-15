@@ -178,6 +178,7 @@ async fn test_enqueue_reply_command_reports_worker_failure_in_transcript() {
     );
     let prompt = TurnPrompt::from_text("Continue".to_string());
     let command = SessionManager::build_session_command(BuildSessionCommandInput {
+        generated_turn: None,
         is_first_message: false,
         operation_id: None,
         prompt: prompt.clone(),

@@ -39,6 +39,7 @@ use crate::domain::session::{
 };
 use crate::domain::session_message::{SessionMessageKind, SessionTranscript};
 use crate::domain::transcript_notice::TranscriptNotice;
+use crate::domain::transient_message::{GeneratedTurnLabels, GeneratedTurnUpdate};
 use crate::domain::turn_prompt::TurnPrompt;
 use crate::infra::db::{AppRepositories, OperationRepository, SessionOperationRow};
 use crate::infra::fs::FsClient;
@@ -69,6 +70,11 @@ pub(super) type ReviewRequestResponse =
 /// policies, model overrides, etc.) should be added here instead of widening
 /// every intermediate signature.
 pub(super) struct TurnMetadata {
+    /// Labels for an Agentty-generated turn. When set, the worker records
+    /// the prompt as hidden agent context when execution starts, because the
+    /// host never rendered it as a user prompt, and reports the turn's
+    /// progress through [`AppEvent::SessionGeneratedTurnUpdated`].
+    pub(super) generated_turn: Option<GeneratedTurnLabels>,
     /// Published-upstream reference captured when the turn was queued,
     /// consumed after turn completion by the auto-push workflow.
     pub(super) published_upstream_ref: Option<String>,
@@ -135,6 +141,15 @@ impl SessionCommand {
     /// preparation until execution starts.
     pub(super) fn is_preparation_prompt(&self, session_id: &str) -> bool {
         self.operation_id() == format!("workspace:{session_id}")
+    }
+
+    /// Returns the labels of an Agentty-generated turn carried by this
+    /// command.
+    pub(super) fn generated_turn(&self) -> Option<&GeneratedTurnLabels> {
+        match self {
+            Self::Run { turn_metadata, .. } => turn_metadata.generated_turn.as_ref(),
+            _ => None,
+        }
     }
 
     /// Returns the selected thread count carried through this command's turn.
@@ -1449,7 +1464,7 @@ impl SessionWorkerService {
             Self::append_preparation_prompt(context, request_kind, prompt);
         }
 
-        let review_comment_count = Self::begin_review_comment_resolution(context, &command).await;
+        let is_generated_turn = Self::begin_generated_turn(context, &command).await;
 
         let turn_agent = command.turn_agent();
         if let Some(agent) = turn_agent {
@@ -1484,8 +1499,8 @@ impl SessionWorkerService {
             Self::emit_queue_session_updated(context);
         }
 
-        if review_comment_count > 0 {
-            Self::emit_review_comment_resolution_update(context, None);
+        if is_generated_turn {
+            Self::emit_generated_turn_update(context, GeneratedTurnUpdate::Finished);
         }
 
         // Auto-commit can swallow cancellation errors during post-processing.
@@ -1509,49 +1524,61 @@ impl SessionWorkerService {
         Some(result)
     }
 
-    /// Persists generated context after skip checks and starts review progress.
-    async fn begin_review_comment_resolution(
+    /// Persists generated context after skip checks and starts generated-turn
+    /// progress, returning whether the command is a generated turn.
+    async fn begin_generated_turn(
         context: &SessionWorkerContext,
         command: &SessionCommand,
-    ) -> usize {
-        let comment_count = command.review_comment_count();
-        if comment_count > 0
-            && let SessionCommand::Run { prompt, .. } = command
-        {
-            let prompt_text = prompt.transcript_text();
-            SessionTaskService::append_session_transcript_message(
-                &context.transcript,
-                &context.db,
-                &context.app_event_tx,
-                &context.session_update_versions,
-                &context.session_id,
-                SessionTranscriptMessageAppend {
-                    kind: SessionMessageKind::AgentPrompt,
-                    raw_content: &prompt_text,
-                },
-            )
-            .await;
+    ) -> bool {
+        let SessionCommand::Run {
+            prompt,
+            turn_metadata,
+            ..
+        } = command
+        else {
+            return false;
+        };
+
+        if !turn_metadata.review_comment_thread_ids.is_empty() {
             let _ = context
                 .db
                 .sessions()
                 .update_session_focused_review(&context.session_id, None, None, None)
                 .await;
-            Self::emit_review_comment_resolution_update(context, Some(comment_count));
         }
 
-        comment_count
+        let Some(labels) = &turn_metadata.generated_turn else {
+            return false;
+        };
+
+        let prompt_text = prompt.transcript_text();
+        SessionTaskService::append_session_transcript_message(
+            &context.transcript,
+            &context.db,
+            &context.app_event_tx,
+            &context.session_update_versions,
+            &context.session_id,
+            SessionTranscriptMessageAppend {
+                kind: SessionMessageKind::AgentPrompt,
+                raw_content: &prompt_text,
+            },
+        )
+        .await;
+        Self::emit_generated_turn_update(
+            context,
+            GeneratedTurnUpdate::Started(labels.active.clone()),
+        );
+
+        true
     }
 
-    /// Sends one review-comment lifecycle update to the foreground reducer.
-    fn emit_review_comment_resolution_update(
-        context: &SessionWorkerContext,
-        comment_count: Option<usize>,
-    ) {
+    /// Sends one generated-turn lifecycle update to the foreground reducer.
+    fn emit_generated_turn_update(context: &SessionWorkerContext, update: GeneratedTurnUpdate) {
         let _ = context
             .app_event_tx
-            .send(AppEvent::SessionReviewCommentResolutionUpdated {
-                comment_count,
+            .send(AppEvent::SessionGeneratedTurnUpdated {
                 session_id: context.session_id.clone(),
+                update,
             });
     }
 
@@ -1636,9 +1663,9 @@ impl SessionWorkerService {
                     .into()));
         }
         if let SessionCommand::Run { turn_metadata, .. } = command
-            && !turn_metadata.review_comment_thread_ids.is_empty()
+            && turn_metadata.generated_turn.is_some()
         {
-            Self::emit_review_comment_resolution_update(context, Some(0));
+            Self::emit_generated_turn_update(context, GeneratedTurnUpdate::Skipped);
         }
 
         if let SessionCommand::CreateReviewRequest { operation_id, .. } = command {
@@ -1704,6 +1731,7 @@ impl SessionWorkerService {
             prompt,
             turn_metadata: TurnMetadata {
                 published_upstream_ref,
+                generated_turn: None,
                 review_comment_thread_ids: Vec::new(),
                 session_agent: context.session_agent,
             },
