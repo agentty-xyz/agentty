@@ -1280,8 +1280,9 @@ async fn review_request_publish_skips_watch_question_for_pushed_branch() -> E2eR
 }
 
 /// Verify that confirming the branch name asks whether to watch the review
-/// request before pushing, that accepting moves the published session to
-/// `Watching`, and that a failing check then starts an automatic follow-up.
+/// request before pushing with `Yes` preselected, that accepting with `Enter`
+/// moves the published session to `Watching`, and that a failing check then
+/// starts an automatic follow-up.
 #[tokio::test]
 async fn review_request_publish_asks_to_watch_and_follows_up_on_failed_checks() -> E2eResult {
     // Arrange
@@ -1310,7 +1311,7 @@ async fn review_request_publish_asks_to_watch_and_follows_up_on_failed_checks() 
                         "review_request_watch_offer",
                         "Watch question shown before the branch is pushed",
                     )
-                    .press_key("y")
+                    .press_key("Enter")
                     .wait_for_text("[Review Watch] Watching pull request #42", 20000)
                     .capture_labeled(
                         "review_request_watch_enabled",
