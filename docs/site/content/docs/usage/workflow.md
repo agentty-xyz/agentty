@@ -353,8 +353,9 @@ three iterations.
 
 ### Session Output Markdown
 
-Chat supports headings, lists, quotes, code blocks, and tables. Pasted indentation is
-preserved; tabs use four-column stops.
+Chat supports headings, lists, quotes, code blocks, and tables. Space-indented lines,
+such as nested list items and later paragraphs of a list item, keep their indentation
+when wrapped. Pasted indentation is preserved; tabs use four-column stops.
 
 <a id="usage-session-mermaid"></a> Mermaid code blocks render simple flowcharts, entity
 relationships, and sequence diagrams. Flowcharts support `TD`, `TB`, and `LR`; labels

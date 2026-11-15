@@ -1,5 +1,5 @@
 use crate::markdown::{
-    STATS_LABEL_WIDTH, code_block_style, heading_style, horizontal_rule_style,
+    STATS_LABEL_WIDTH, code_block_style, heading_style, horizontal_rule_style, list_prefix_style,
     markdown_block_preservation_mask, render_markdown, stats_metric_style, stats_section_style,
     stats_value_style, table_header_style,
 };
@@ -166,6 +166,56 @@ fn test_render_markdown_wraps_numbered_list_with_continuation_indent() {
     assert!(lines.len() >= 2);
     assert!(lines[0].to_string().starts_with("12. "));
     assert!(lines[1].to_string().starts_with("    "));
+}
+
+#[test]
+fn test_render_markdown_keeps_indentation_on_wrapped_continuation_rows() {
+    // Arrange
+    let input = "- item\n\n  one two three\n  - nested four";
+
+    // Act
+    let lines = render_markdown(input, 10);
+    let rendered_lines = lines.iter().map(ToString::to_string).collect::<Vec<_>>();
+
+    // Assert
+    assert_eq!(
+        rendered_lines,
+        vec![
+            "- item",
+            "",
+            "  one two",
+            "  three",
+            "  - nested",
+            "    four"
+        ]
+    );
+    assert_eq!(lines[4].spans[1].style, list_prefix_style());
+}
+
+#[test]
+fn test_render_markdown_breaks_indented_words_wider_than_remaining_width() {
+    // Arrange
+    let input = "  abcdefghi";
+
+    // Act
+    let lines = render_markdown(input, 10);
+    let rendered_lines = lines.iter().map(ToString::to_string).collect::<Vec<_>>();
+
+    // Assert
+    assert_eq!(rendered_lines, vec!["  abcdefgh", "  i"]);
+}
+
+#[test]
+fn test_render_markdown_ignores_indentation_without_room_for_content() {
+    // Arrange
+    let input = "    word\n   ";
+
+    // Act
+    let lines = render_markdown(input, 4);
+    let rendered_lines = lines.iter().map(ToString::to_string).collect::<Vec<_>>();
+
+    // Assert
+    assert_eq!(rendered_lines, vec!["word", ""]);
 }
 
 #[test]

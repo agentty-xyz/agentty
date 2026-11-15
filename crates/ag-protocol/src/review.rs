@@ -191,11 +191,11 @@ impl FocusedReviewSuggestion {
     /// references from the primary evidence location.
     fn to_markdown(&self) -> String {
         let Some(evidence) = &self.evidence else {
-            return format!(
-                "- [{}] (unanchored): {}",
+            return markdown_bullet(&format!(
+                "[{}] (unanchored): {}",
                 self.severity,
                 self.details.trim()
-            );
+            ));
         };
         let location = if evidence.start_line == 0 {
             format!("`{}` (unanchored)", evidence.path)
@@ -207,15 +207,15 @@ impl FocusedReviewSuggestion {
             FocusedReviewSide::Old => " (before change)",
         };
 
-        format!(
-            "- [{}]: {location}{side}: {} Trigger: {} Impact: {} Correction: {} Supporting \
+        markdown_bullet(&format!(
+            "[{}]: {location}{side}: {} Trigger: {} Impact: {} Correction: {} Supporting \
              references are unverified.",
             self.severity,
             self.details.trim(),
             evidence.trigger.trim(),
             evidence.impact.trim(),
             evidence.correction.trim(),
-        )
+        ))
     }
 
     /// Reconciles citations matching the original primary path and line.
@@ -341,9 +341,26 @@ fn markdown_bullets(items: &[String]) -> String {
 
     items
         .iter()
-        .map(|item| format!("- {}", item.trim()))
+        .map(|item| markdown_bullet(item))
         .collect::<Vec<_>>()
         .join("\n")
+}
+
+/// Formats one Markdown bullet and indents its continuation lines under the
+/// marker, so multi-paragraph model text stays inside the same list item.
+fn markdown_bullet(content: &str) -> String {
+    let mut content_lines = content.trim().lines();
+    let mut bullet = format!("- {}", content_lines.next().unwrap_or_default());
+    for line in content_lines {
+        bullet.push('\n');
+        let line = line.trim_end();
+        if !line.is_empty() {
+            bullet.push_str("  ");
+            bullet.push_str(line);
+        }
+    }
+
+    bullet
 }
 
 /// Wire input keeps a required disposition separate from the nullable public
