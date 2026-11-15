@@ -19,8 +19,8 @@ use crate::domain::question::QuestionItem;
 use crate::domain::session::{Session, Status};
 use crate::domain::session_message::{SessionMessage, SessionMessageKind, SessionTranscript};
 use crate::presentation::app_mode::{
-    AppMode, ChatFocus, ConfirmationIntent, ConfirmationViewMode, DiffFocus, DiffLineComments,
-    DiffPreview, DiffReviewComments, DiffSidebarFocus, HelpContext,
+    AppMode, ChatFocus, ConfirmationIntent, ConfirmationViewMode, DiffCommentTarget, DiffFocus,
+    DiffLineComments, DiffPreview, DiffReviewComments, DiffSidebarFocus, HelpContext,
 };
 use crate::presentation::frame_time::FrameTime;
 use crate::presentation::graph_chat::GraphChatSnapshot;
@@ -1141,6 +1141,44 @@ fn render_mode_overlay_renders_publish_input() {
     // Assert
     assert!(text.contains("Publish Review Request"));
     assert!(text.contains("wt/session-publish"));
+}
+
+#[test]
+fn render_mode_overlay_previews_diff_comments_only_while_confirming_exit() {
+    // Arrange
+    let mut line_comments = DiffLineComments::default();
+    line_comments.start_editing_target(DiffCommentTarget::file("src/main.rs"));
+    line_comments
+        .editing_input_mut()
+        .expect("file comment should be editable")
+        .insert_text("Split this module");
+    line_comments.finish_editing();
+    let diff_mode = |line_comments: DiffLineComments| AppMode::Diff {
+        diff: String::new(),
+        file_explorer_selected_index: 0,
+        focus: DiffFocus::Files,
+        line_comments,
+        preview: DiffPreview::default(),
+        review_comments: None,
+        restore: None,
+        scroll_cache: None,
+        scroll_offset: 0,
+        selected_diff_line_index: 0,
+        session_id: "session-overlay".into(),
+    };
+    let browsing_mode = diff_mode(line_comments.clone());
+    line_comments.submit_confirmation_index = Some(0);
+    let confirming_mode = diff_mode(line_comments);
+
+    // Act
+    let (_, browsing_text) = render_list_backed_mode(&browsing_mode);
+    let (_, confirming_text) = render_list_backed_mode(&confirming_mode);
+
+    // Assert
+    assert!(!browsing_text.contains("Submit diff comments?"));
+    assert!(confirming_text.contains("Submit diff comments?"));
+    assert!(confirming_text.contains("File comments:"));
+    assert!(confirming_text.contains("Split this module"));
 }
 
 #[test]

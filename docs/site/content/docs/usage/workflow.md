@@ -297,8 +297,9 @@ These controls also work while answering questions. `Shift+Tab` cycles permissio
 without changing your draft.
 
 In Diff mode, add file, line, or range comments and press `s` to submit them together
-with the existing draft and images. Finished comments survive leaving Diff mode and
-clear when the next turn starts. Read-only sessions cannot submit comments. See
+with the existing draft and images. Leaving Diff mode with comments previews them and
+asks whether to submit; declined comments are kept and clear when the next turn starts.
+Read-only sessions cannot submit comments. See
 [Diff Mode](@/docs/usage/keybindings.md#diff-mode) for editing and preview controls.
 
 ### Focused Review

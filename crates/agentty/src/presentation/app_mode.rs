@@ -233,6 +233,8 @@ pub struct DiffLineComments {
     pub(crate) selected_comment_index: Option<usize>,
     /// Changed-row index where visual line selection started.
     pub(crate) selection_anchor_index: Option<usize>,
+    /// Highlighted option of the leave-diff submit confirmation, when open.
+    pub(crate) submit_confirmation_index: Option<usize>,
 }
 
 impl DiffLineComments {

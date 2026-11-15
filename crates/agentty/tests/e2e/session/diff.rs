@@ -27,6 +27,9 @@ const BINARY_DIFF_SESSION_ID: &str = "binary-diff-0001";
 /// Diff panel title suffix rendered only once Diff mode shows a patch.
 const DIFF_PANEL_TITLE_MARKER: &str = ") Diff — ";
 
+/// Popup title rendered while leaving a diff that has pending comments.
+const DIFF_SUBMIT_CONFIRMATION_TITLE: &str = "Submit diff comments?";
+
 /// Inactive composer border rendered only in the Codex session chat view.
 const SESSION_COMPOSER_MARKER: &str = "╭ codex/";
 
@@ -991,6 +994,14 @@ fn diff_line_comments_scenario(scenario: Scenario) -> Scenario {
         )
         .viewing_pause_ms(1500)
         .press_key("q")
+        .wait_for_text(DIFF_SUBMIT_CONFIRMATION_TITLE, 5000)
+        .wait_for_stable_frame(300, 5000)
+        .viewing_pause_ms(1500)
+        .capture_labeled(
+            "leave_diff_submit_confirmation",
+            "Leaving the diff previews pending comments and offers to submit them",
+        )
+        .press_key("n")
         .wait_for_text(SESSION_COMPOSER_MARKER, 5000)
         .press_key("d")
         .wait_for_text(DIFF_PANEL_TITLE_MARKER, 5000)
@@ -1102,7 +1113,20 @@ fn assert_diff_line_comments(frame: &TerminalFrame, report: &ProofReport) {
     assertion::assert_text_in_region(&diff_frame, "Why print review?", &diff_full);
     assertion::assert_not_visible(&diff_frame, "Why print review?|");
 
-    let restored_frame = common::frame_from_capture(&report.captures[3]);
+    let confirmation_frame = common::frame_from_capture(&report.captures[3]);
+    let confirmation_full = Region::full(confirmation_frame.cols(), confirmation_frame.rows());
+    for text in [
+        DIFF_SUBMIT_CONFIRMATION_TITLE,
+        "File comments:",
+        "src/main.rs: Review the whole file.",
+        "Line comments:",
+        "Yes",
+        "No",
+    ] {
+        assertion::assert_text_in_region(&confirmation_frame, text, &confirmation_full);
+    }
+
+    let restored_frame = common::frame_from_capture(&report.captures[4]);
     let restored_full = Region::full(restored_frame.cols(), restored_frame.rows());
     assertion::assert_text_in_region(
         &restored_frame,
@@ -1111,8 +1135,8 @@ fn assert_diff_line_comments(frame: &TerminalFrame, report: &ProofReport) {
     );
 
     let response_frames = [
-        common::frame_from_capture(&report.captures[4]),
         common::frame_from_capture(&report.captures[5]),
+        common::frame_from_capture(&report.captures[6]),
     ];
     let review_frame = &response_frames[0];
     assertion::assert_text_in_region(
@@ -1129,7 +1153,7 @@ fn assert_diff_line_comments(frame: &TerminalFrame, report: &ProofReport) {
         );
     }
 
-    let purged_frame = common::frame_from_capture(&report.captures[6]);
+    let purged_frame = common::frame_from_capture(&report.captures[7]);
     assertion::assert_not_visible(&purged_frame, "Explain the entry point. Updated.");
     assertion::assert_not_visible(&purged_frame, "Why print review?");
     assertion::assert_text_in_region(

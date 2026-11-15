@@ -193,6 +193,7 @@ impl App {
         line_comments.editing_index = None;
         line_comments.selection_anchor_index = None;
         line_comments.selected_comment_index = None;
+        line_comments.submit_confirmation_index = None;
         if line_comments.comments.is_empty() {
             self.diff_comment_progress.remove(&session_id);
 

@@ -14,6 +14,7 @@ use crate::presentation::prompt::{
     PromptAtMentionState, PromptAttachmentState, PromptHistoryState,
 };
 use crate::runtime::EventResult;
+use crate::runtime::mode::confirmation::{self, ConfirmationDecision};
 use crate::runtime::mode::{at_mention, input_key};
 use crate::ui::component::file_explorer::FileExplorer;
 use crate::ui::{RenderCacheStore, diff_util, page};
@@ -30,6 +31,10 @@ pub(crate) fn handle_with_cache(
     content_area: Rect,
     key: KeyEvent,
 ) -> EventResult {
+    if handle_submit_confirmation_key(app, key) {
+        return EventResult::Continue;
+    }
+
     if handle_line_comment_edit_key(app, key) {
         return EventResult::Continue;
     }
@@ -54,6 +59,40 @@ pub(crate) fn handle_loading(app: &mut App, key: KeyEvent) -> EventResult {
     }
 
     EventResult::Continue
+}
+
+/// Returns whether the leave-diff comment submission confirmation is open.
+pub(crate) fn is_submit_confirmation_open(app: &App) -> bool {
+    matches!(
+        &app.mode,
+        AppMode::Diff { line_comments, .. } if line_comments.submit_confirmation_index.is_some()
+    )
+}
+
+/// Resolves one key for the open leave-diff confirmation: `Yes` submits every
+/// comment, `No` leaves while keeping the drafts, and cancel stays in diff.
+fn handle_submit_confirmation_key(app: &mut App, key: KeyEvent) -> bool {
+    let AppMode::Diff { line_comments, .. } = &mut app.mode else {
+        return false;
+    };
+    let Some(selected_index) = line_comments.submit_confirmation_index.as_mut() else {
+        return false;
+    };
+
+    match confirmation::handle(selected_index, key) {
+        ConfirmationDecision::Confirm => {
+            line_comments.submit_confirmation_index = None;
+            open_line_comment_prompt(app);
+        }
+        ConfirmationDecision::Reject => {
+            line_comments.submit_confirmation_index = None;
+            leave_diff(app);
+        }
+        ConfirmationDecision::Cancel => line_comments.submit_confirmation_index = None,
+        ConfirmationDecision::Continue => {}
+    }
+
+    true
 }
 
 /// Opens diff help while preserving the current diff-mode snapshot.
@@ -106,7 +145,8 @@ fn handle_help_key(app: &mut App, key: KeyEvent) -> bool {
     true
 }
 
-/// Leaves diff mode and restores the originating view or question state.
+/// Leaves diff mode and restores the originating view or question state,
+/// first asking whether to submit pending comments the session can receive.
 fn handle_exit_key(app: &mut App, key: KeyEvent) -> bool {
     let should_exit = match key.code {
         KeyCode::Char('q') => true,
@@ -123,6 +163,23 @@ fn handle_exit_key(app: &mut App, key: KeyEvent) -> bool {
         return false;
     }
 
+    let can_reply_with_line_comments = can_reply_with_line_comments(app);
+    if let AppMode::Diff { line_comments, .. } = &mut app.mode
+        && can_reply_with_line_comments
+        && !line_comments.comments.is_empty()
+    {
+        line_comments.cancel_selection();
+        line_comments.submit_confirmation_index = Some(confirmation::YES_OPTION_INDEX);
+
+        return true;
+    }
+    leave_diff(app);
+
+    true
+}
+
+/// Saves comment progress and restores the view that opened diff mode.
+fn leave_diff(app: &mut App) {
     let mode = std::mem::replace(&mut app.mode, AppMode::List);
     if let AppMode::Diff {
         line_comments,
@@ -143,8 +200,6 @@ fn handle_exit_key(app: &mut App, key: KeyEvent) -> bool {
     } else {
         app.mode = mode;
     }
-
-    true
 }
 
 /// Applies file-selection and scroll navigation keys in diff mode.
@@ -257,11 +312,18 @@ fn handle_navigation_key(
     }
 }
 
-/// Returns whether `s` requests submission of all completed diff comments.
+/// Returns whether `s`, or confirming the leave-diff prompt, requests
+/// submission of all completed diff comments.
 pub(crate) fn should_submit_line_comments(app: &App, key: KeyEvent) -> bool {
     let AppMode::Diff { line_comments, .. } = &app.mode else {
         return false;
     };
+    if let Some(mut selected_index) = line_comments.submit_confirmation_index {
+        return matches!(
+            confirmation::handle(&mut selected_index, key),
+            ConfirmationDecision::Confirm
+        );
+    }
 
     can_reply_with_line_comments(app)
         && is_plain_char_key(key, 's')

@@ -36,6 +36,8 @@ where
     // Diff mode needs the pre-key line-comment submission state both to route
     // the key and to submit after the diff handler runs.
     let submit_line_comments = mode::diff::should_submit_line_comments(app, key);
+    // The leave-diff confirmation owns every key, even over focused comments.
+    let diff_submit_confirmation_open = mode::diff::is_submit_confirmation_open(app);
     let result = match &mut app.mode {
         AppMode::Confirmation {
             selected_confirmation_index,
@@ -81,6 +83,7 @@ where
             ..
         } if review_comments.sidebar_focus == DiffSidebarFocus::Comments
             && !submit_line_comments
+            && !diff_submit_confirmation_open
             && !matches!(key.code, KeyCode::Char('?' | 'q')) =>
         {
             handle_review_comment_key(app, presentation, terminal, key).await

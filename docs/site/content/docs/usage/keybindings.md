@@ -287,7 +287,9 @@ Press `Enter` on a comment to edit it and `Enter` or `Esc` to finish. Finish wit
 text to delete it. `@` opens file lookup: arrows choose, `Tab` / `Enter` insert, and
 `Esc` dismisses. Completed comments survive navigation. `s` combines them with existing
 draft text and images; a new turn clears them. Retracting a queued batch preserves them.
-Read-only diffs hide comment editing and submission.
+Leaving with comments shows them in a `Submit diff comments?` preview: `Yes` submits,
+`No` leaves and keeps them, and `Esc` stays in Diff mode. Read-only diffs hide comment
+editing and submission.
 
 For Markdown, `p` previews the complete post-change file and stays enabled across file
 navigation. Other file types keep showing diffs; unavailable files show a notice. Press
