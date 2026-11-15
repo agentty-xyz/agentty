@@ -1,13 +1,14 @@
 use ratatui::Frame;
-use ratatui::layout::Rect;
+use ratatui::layout::{Constraint, Layout, Rect};
 use ratatui::style::{Modifier, Style};
 use ratatui::text::{Line, Span};
 use ratatui::widgets::Paragraph;
 
 use crate::app::{ProjectSyncPhase, ProjectSyncStatus, UpdateStatus};
-use crate::ui::{Component, style};
+use crate::ui::{Component, help_format, style};
 
-/// Top status bar showing current version, update progress, and availability.
+/// Top status bar showing current version, update progress, availability, and
+/// a right-aligned `?: help` hint.
 pub struct StatusBar {
     current_version: String,
     latest_available_version: Option<String>,
@@ -151,13 +152,35 @@ impl Component for StatusBar {
             ));
         }
 
-        let status_bar = Paragraph::new(Line::from(version_spans)).style(
-            Style::default()
-                .bg(style::palette::surface())
-                .fg(style::palette::text()),
-        );
-        f.render_widget(status_bar, area);
+        let bar_style = Style::default()
+            .bg(style::palette::surface())
+            .fg(style::palette::text());
+        let status_line = Line::from(version_spans);
+        let help_hint = help_hint_line();
+        let required_width = status_line.width().saturating_add(help_hint.width());
+        if required_width > usize::from(area.width) {
+            f.render_widget(Paragraph::new(status_line).style(bar_style), area);
+
+            return;
+        }
+
+        let help_hint_width = u16::try_from(help_hint.width()).unwrap_or(u16::MAX);
+        let [status_area, help_hint_area] =
+            Layout::horizontal([Constraint::Min(0), Constraint::Length(help_hint_width)])
+                .areas(area);
+
+        f.render_widget(Paragraph::new(status_line).style(bar_style), status_area);
+        f.render_widget(Paragraph::new(help_hint).style(bar_style), help_hint_area);
     }
+}
+
+/// Builds the right-aligned `?: help` hint, shown whenever the status text
+/// leaves room for it so update and sync notices are never truncated.
+fn help_hint_line() -> Line<'static> {
+    Line::from(vec![
+        help_format::footer_key_span("?"),
+        help_format::footer_muted_span(": help "),
+    ])
 }
 
 /// Formats one singular or plural count label.

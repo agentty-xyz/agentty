@@ -353,7 +353,7 @@ async fn workspace_preparation_refresh_tracks_unloaded_sessions_and_ignores_read
         .await;
 
     // Assert
-    let availability = app.sessions.render_parts().session_worktree_availability;
+    let availability = app.sessions.session_worktree_availability();
     assert_eq!(availability.get("unloaded-session"), Some(&false));
     assert_eq!(availability.get("unreadable-session"), None);
 }

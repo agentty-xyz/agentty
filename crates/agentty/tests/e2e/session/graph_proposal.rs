@@ -135,8 +135,7 @@ async fn graph_proposal_request_preview_approval_execution() -> E2eResult {
                 scenario
                     .compose(&common::wait_for_agentty_startup())
                     .wait_for_text("Graph proposals", 5000)
-                    .press_key("Enter")
-                    .wait_for_text("Enter: reply", 5000)
+                    .compose(&common::open_selected_session_view())
                     .press_key("Enter")
                     .write_text("/graph")
                     .press_key("Enter")
@@ -166,7 +165,10 @@ async fn graph_proposal_request_preview_approval_execution() -> E2eResult {
                             )
                         },
                     )
-                    .wait_for_text("Enter: reply", 10000)
+                    .step(common::wait_for_frame_text(
+                        &["Graph execution complete"],
+                        &["Working..."],
+                    ))
                     .capture_labeled("discussion", "Regular chat after approval")
                     .press_key("w")
                     .wait_for_text("Execution graphs", 5000)
@@ -251,8 +253,7 @@ async fn graph_request_and_revision_deliver_pasted_images_to_generation() -> E2e
                 scenario
                     .compose(&common::wait_for_agentty_startup())
                     .wait_for_text("Graph proposals", 5000)
-                    .press_key("Enter")
-                    .wait_for_text("Enter: reply", 5000)
+                    .compose(&common::open_selected_session_view())
                     .press_key("Enter")
                     .write_text("/graph")
                     .press_key("Enter")
@@ -306,8 +307,7 @@ async fn graph_output_acceptance_reply_continues_the_graph() -> E2eResult {
                 scenario
                     .compose(&common::wait_for_agentty_startup())
                     .wait_for_text("Graph proposals", 5000)
-                    .press_key("Enter")
-                    .wait_for_text("Enter: reply", 5000)
+                    .compose(&common::open_selected_session_view())
                     .press_key("Enter")
                     .write_text("/graph")
                     .press_key("Enter")
@@ -376,8 +376,7 @@ async fn graph_proposal_clarification_and_cancel() -> E2eResult {
                 scenario
                     .compose(&common::wait_for_agentty_startup())
                     .wait_for_text("Graph proposals", 5000)
-                    .press_key("Enter")
-                    .wait_for_text("Enter: reply", 5000)
+                    .compose(&common::open_selected_session_view())
                     .press_key("Enter")
                     .write_text("/graph")
                     .press_key("Enter")
@@ -490,10 +489,10 @@ async fn graph_proposal_restored_pending_preview() -> E2eResult {
                 scenario
                     .compose(&common::wait_for_agentty_startup())
                     .wait_for_text("Graph proposals", 5000)
-                    .press_key("Enter")
-                    .wait_for_text("Enter: reply", 5000)
+                    .compose(&common::open_selected_session_view())
                     .press_key("w")
                     .wait_for_text("Preview awaiting exact-version approval", 5000)
+                    .wait_for_text("reply in chat to approve, revise, or cancel", 5000)
             },
             |frame, _| {
                 Box::pin(async move {
@@ -536,8 +535,7 @@ async fn graph_sidebar_overflow_keeps_chat_and_controls_visible() -> E2eResult {
                 scenario
                     .compose(&common::wait_for_agentty_startup())
                     .wait_for_text("Graph proposals", 5000)
-                    .press_key("Enter")
-                    .wait_for_text("Enter: reply", 5000)
+                    .compose(&common::open_selected_session_view())
                     .press_key("Enter")
                     .write_text("/graph")
                     .press_key("Enter")

@@ -1,6 +1,7 @@
 use super::StatusBar;
 use crate::app::{ProjectSyncPhase, ProjectSyncStatus, UpdateStatus};
-use crate::ui::Component;
+use crate::domain::theme::ColorTheme;
+use crate::ui::{Component, style};
 
 fn project_sync_status(phase: ProjectSyncPhase) -> ProjectSyncStatus {
     ProjectSyncStatus {
@@ -62,6 +63,32 @@ fn test_status_bar_render_shows_current_version_without_update() {
     let text = buffer_text(&terminal);
     assert!(text.contains("Agentty v0.1.12"));
     assert!(!text.contains("version available update"));
+}
+
+#[test]
+fn test_status_bar_render_right_aligns_help_hint_with_accent_key() {
+    // Arrange
+    let _theme_scope = style::scoped_active_theme(ColorTheme::Current);
+    let backend = ratatui::backend::TestBackend::new(40, 1);
+    let mut terminal = ratatui::Terminal::new(backend).expect("failed to create terminal");
+    let status_bar = StatusBar::new("v0.1.12".to_string());
+
+    // Act
+    terminal
+        .draw(|frame| {
+            let area = frame.area();
+            Component::render(&status_bar, frame, area);
+        })
+        .expect("failed to draw");
+
+    // Assert
+    let text = buffer_text(&terminal);
+    let buffer = terminal.backend().buffer();
+    assert!(text.starts_with(" Agentty v0.1.12"));
+    assert!(text.ends_with("?: help "));
+    assert_eq!(buffer[(32, 0)].symbol(), "?");
+    assert_eq!(buffer[(32, 0)].fg, style::palette::accent());
+    assert_eq!(buffer[(39, 0)].bg, style::palette::surface());
 }
 
 #[test]
@@ -168,6 +195,7 @@ fn test_status_bar_render_shows_update_notice_when_available() {
     let text = buffer_text(&terminal);
     assert!(text.contains("Agentty v0.1.12"));
     assert!(text.contains("v0.1.13 available — rerun your original install command"));
+    assert!(!text.contains("?: help"));
 }
 
 #[test]

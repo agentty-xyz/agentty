@@ -9,7 +9,7 @@ use super::{
     QuestionPanelLayout, app_frame_areas, centered_content_rect, centered_horizontal_layout,
     prompt_panel_areas, question_at_mention_max_visible, question_options_height,
     question_panel_areas, question_panel_layout, question_panel_reserved_height,
-    session_chat_areas, tab_page_areas,
+    session_chat_areas, tab_page_area,
 };
 use crate::domain::agent::AgentKind;
 use crate::domain::file_entry::FileEntry;
@@ -24,6 +24,7 @@ use crate::presentation::prompt::{
     PromptAtMentionState, PromptGraphState, PromptSlashCommandSet, PromptSlashStage,
     PromptSlashState,
 };
+use crate::ui::help_format::footer_line;
 use crate::ui::icon::Icon;
 use crate::ui::input_layout::{
     bottom_pinned_scroll_offset, calculate_input_height, calculate_input_viewport,
@@ -40,7 +41,6 @@ use crate::ui::question_format::{
 use crate::ui::session_format::{
     format_review_markdown, session_header_lines, session_output_done_line,
     session_output_panel_borders, session_output_status_lines, session_timing_label,
-    session_view_footer_line,
 };
 use crate::ui::style;
 
@@ -50,8 +50,8 @@ fn session_fixture() -> Session {
         .build()
 }
 
-fn view_footer_text(session: &Session, can_open_worktree: bool) -> String {
-    session_view_footer_line(ViewHelpState {
+fn view_help_text(session: &Session, can_open_worktree: bool) -> String {
+    let actions = help_action::view_actions(ViewHelpState {
         can_fork_session: ViewActionAvailability::from_bool(session.allows_fork_action()),
         can_merge_session_branch: ViewActionAvailability::Enabled,
         can_mutate_session_branch: ViewActionAvailability::Enabled,
@@ -64,8 +64,9 @@ fn view_footer_text(session: &Session, can_open_worktree: bool) -> String {
         ),
         publish_pull_request_action: session.publish_pull_request_action(),
         session_state: help_action::session_view_state(session),
-    })
-    .to_string()
+    });
+
+    footer_line(&actions).to_string()
 }
 
 fn file_entries_fixture() -> Vec<FileEntry> {
@@ -262,32 +263,31 @@ fn test_session_timing_label_freezes_timer_after_in_progress_ends() {
 }
 
 #[test]
-fn test_session_view_footer_line_in_progress_shows_stop_and_hides_open_and_diff() {
+fn test_session_view_help_actions_in_progress_shows_stop_and_hides_open() {
     // Arrange
     let mut session = session_fixture();
     session.status = Status::InProgress;
 
     // Act
-    let help_text = view_footer_text(&session, true);
+    let help_text = view_help_text(&session, true);
 
     // Assert
     assert!(help_text.contains("q: back"));
     assert!(help_text.contains("Ctrl+c: stop"));
     assert!(help_text.contains("j/k: scroll"));
     assert!(!help_text.contains("o: open"));
-    assert!(!help_text.contains("d: diff"));
     assert!(!help_text.contains("Enter: reply"));
 }
 
 #[test]
-fn test_session_view_footer_line_hides_known_empty_diff() {
+fn test_session_view_help_actions_hides_known_empty_diff() {
     // Arrange
     let mut session = session_fixture();
     session.status = Status::Review;
     session.stats.diff_state = SessionDiffState::Empty;
 
     // Act
-    let help_text = view_footer_text(&session, true);
+    let help_text = view_help_text(&session, true);
 
     // Assert
     assert!(!help_text.contains("d: diff"));
@@ -295,7 +295,7 @@ fn test_session_view_footer_line_hides_known_empty_diff() {
 }
 
 #[test]
-fn test_session_view_footer_line_noninteractive_busy_statuses_hide_worktree_open_hint() {
+fn test_session_view_help_actions_noninteractive_busy_statuses_hide_worktree_open_hint() {
     // Arrange
     let busy_statuses = [Status::Rebasing, Status::Queued, Status::Merging];
 
@@ -306,7 +306,7 @@ fn test_session_view_footer_line_noninteractive_busy_statuses_hide_worktree_open
             let mut session = session_fixture();
             session.status = *session_status;
 
-            view_footer_text(&session, true)
+            view_help_text(&session, true)
         })
         .collect();
 
@@ -320,7 +320,7 @@ fn test_session_view_footer_line_noninteractive_busy_statuses_hide_worktree_open
 }
 
 #[test]
-fn test_session_view_footer_line_new_session_shows_draft_and_start_actions() {
+fn test_session_view_help_actions_new_session_shows_draft_and_start_actions() {
     // Arrange
     let mut session = session_fixture();
     session.folder = PathBuf::new();
@@ -328,7 +328,7 @@ fn test_session_view_footer_line_new_session_shows_draft_and_start_actions() {
     session.prompt = "Staged draft".to_string();
 
     // Act
-    let help_text = view_footer_text(&session, false);
+    let help_text = view_help_text(&session, false);
 
     // Assert
     assert!(help_text.contains("Enter: add draft"));
@@ -341,13 +341,13 @@ fn test_session_view_footer_line_new_session_shows_draft_and_start_actions() {
 }
 
 #[test]
-fn test_session_view_footer_line_done_session_shows_continue_action() {
+fn test_session_view_help_actions_done_session_shows_continue_action() {
     // Arrange
     let mut session = session_fixture();
     session.status = Status::Done;
 
     // Act
-    let help_text = view_footer_text(&session, true);
+    let help_text = view_help_text(&session, true);
 
     // Assert
     assert!(help_text.contains("c: continue"));
@@ -1141,34 +1141,20 @@ fn test_centered_content_rect_clamps_requested_size_to_available_area() {
 }
 
 #[test]
-fn test_tab_page_areas_start_content_at_top_and_keep_footer_flush_with_bottom() {
+fn test_tab_page_area_keeps_side_insets_and_full_height() {
     // Arrange
     let cases = [
-        (
-            Rect::new(5, 3, 40, 10),
-            Rect::new(6, 3, 38, 9),
-            Rect::new(6, 12, 38, 1),
-        ),
-        (
-            Rect::new(5, 3, 1, 1),
-            Rect::new(5, 3, 1, 0),
-            Rect::new(5, 3, 1, 1),
-        ),
-        (
-            Rect::new(5, 3, 0, 0),
-            Rect::new(5, 3, 0, 0),
-            Rect::new(5, 3, 0, 0),
-        ),
+        (Rect::new(5, 3, 40, 10), Rect::new(6, 3, 38, 10)),
+        (Rect::new(5, 3, 1, 1), Rect::new(5, 3, 1, 1)),
+        (Rect::new(5, 3, 0, 0), Rect::new(5, 3, 0, 0)),
     ];
 
-    for (area, main_area, footer_area) in cases {
+    for (area, expected_area) in cases {
         // Act
-        let areas = tab_page_areas(area);
+        let page_area = tab_page_area(area);
 
         // Assert
-        assert_eq!(areas.main_area, main_area);
-        assert_eq!(areas.footer_area, footer_area);
-        assert_eq!(areas.footer_area.bottom(), area.bottom());
+        assert_eq!(page_area, expected_area);
     }
 }
 

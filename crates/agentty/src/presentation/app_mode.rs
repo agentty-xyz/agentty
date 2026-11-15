@@ -3,7 +3,8 @@ use std::fmt::Write as _;
 use ag_forge::ReviewCommentSnapshot;
 
 use super::help_action::{
-    self, HelpAction, ViewActionAvailability, ViewHelpState, ViewSessionState,
+    self, DiffReviewCommentHelp, HelpAction, ViewActionAvailability, ViewHelpState,
+    ViewSessionState,
 };
 use super::prompt::{
     PromptAtMentionState, PromptAttachmentState, PromptHistoryState, PromptSlashState,
@@ -1047,6 +1048,9 @@ pub enum HelpContext {
     Diff {
         /// Whether this session may collect diff comments for a reply.
         can_comment: bool,
+        /// Whether linked review comments may be selected and sent to the
+        /// agent.
+        can_reply_review_comments: bool,
         /// Raw git diff to restore after help closes.
         diff: String,
         /// Selected file-tree row to restore.
@@ -1115,7 +1119,15 @@ impl HelpContext {
                 *review_watch_toggle,
             ),
             HelpContext::List { keybindings } => keybindings.clone(),
-            HelpContext::Diff { can_comment, .. } => help_action::diff_actions(*can_comment),
+            HelpContext::Diff {
+                can_comment,
+                can_reply_review_comments,
+                review_comments,
+                ..
+            } => help_action::diff_actions(
+                *can_comment,
+                DiffReviewCommentHelp::new(review_comments.is_some(), *can_reply_review_comments),
+            ),
         }
     }
 
@@ -1134,6 +1146,7 @@ impl HelpContext {
             },
             HelpContext::Diff {
                 can_comment: _,
+                can_reply_review_comments: _,
                 diff,
                 file_explorer_selected_index,
                 focus,

@@ -71,15 +71,6 @@ pub struct AppFrameAreas {
     pub status_bar_area: Rect,
 }
 
-/// Content and footer areas used by top-level tab pages.
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub struct TabPageAreas {
-    /// Area used for the one-line footer below the tab page content.
-    pub footer_area: Rect,
-    /// Area used for the tab page's primary panels or tables.
-    pub main_area: Rect,
-}
-
 /// Split an area into a centered content column with side gutters.
 pub fn centered_horizontal_layout(area: Rect) -> std::rc::Rc<[Rect]> {
     Layout::default()
@@ -125,26 +116,19 @@ pub fn app_frame_areas(area: Rect) -> AppFrameAreas {
     }
 }
 
-/// Splits a tab page area so content starts directly below the tab header.
+/// Returns the tab page content area directly below the tab header.
 ///
 /// The tab header already provides the vertical separation through its bottom
-/// border, so tab pages keep only side insets. The one-line help footer sits
-/// flush with the page bottom, directly above the app's footer bar.
-pub fn tab_page_areas(area: Rect) -> TabPageAreas {
+/// border, so tab pages keep only side insets and fill the full height down to
+/// the app's footer bar.
+pub fn tab_page_area(area: Rect) -> Rect {
     let horizontal_inset = TAB_PAGE_INSET.min(area.width / 2);
     let content_x = area.x.saturating_add(horizontal_inset);
     let content_width = area
         .width
         .saturating_sub(horizontal_inset.saturating_mul(2));
-    let footer_y = area
-        .y
-        .saturating_add(area.height.saturating_sub(SINGLE_LINE_FOOTER_HEIGHT));
-    let main_height = area.height.saturating_sub(SINGLE_LINE_FOOTER_HEIGHT);
 
-    TabPageAreas {
-        footer_area: Rect::new(content_x, footer_y, content_width, 1.min(area.height)),
-        main_area: Rect::new(content_x, area.y, content_width, main_height),
-    }
+    Rect::new(content_x, area.y, content_width, area.height)
 }
 
 /// Splits one session chat page into header, transcript, and bottom panel.

@@ -326,7 +326,7 @@ async fn session_question_resume_after_leaving_to_list() -> E2eResult {
                     .press_key("Enter")
                     .wait_for_text("Question 2/2", 5000)
                     .press_key("q")
-                    .wait_for_text("new session", 5000)
+                    .step(common::wait_for_session_list())
                     .press_key("Enter")
                     .wait_for_text("Question 2/2", 5000)
                     .capture_labeled(
@@ -464,7 +464,7 @@ async fn session_question_reconcile_after_help_overlay() -> E2eResult {
                     .write_text("Need clarification")
                     .wait_for_text("Need clarification", 3000)
                     .press_key("Enter")
-                    .wait_for_text("q: back", 5000)
+                    .step(common::wait_for_session_view())
                     .press_key("?")
                     .wait_for_text("Keybindings", 5000)
                     .viewing_pause_ms(4500)

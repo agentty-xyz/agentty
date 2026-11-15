@@ -100,8 +100,8 @@ async fn seed_nested_stacked_at_lookup_session(
     Ok(())
 }
 
-/// Verify that viewing a session collapses the composer and keeps help next to
-/// the bottom bar, while opening a reply restores the editable input row.
+/// Verify that viewing a session collapses the composer directly above the
+/// bottom bar, while opening a reply restores the editable input row.
 /// The composer border separates the transcript without an extra rule above it.
 #[tokio::test]
 async fn session_collapsed_composer() -> E2eResult {
@@ -117,7 +117,7 @@ async fn session_collapsed_composer() -> E2eResult {
                     .compose(&common::switch_to_tab("Sessions"))
                     .wait_for_text("Review-ready session shortcuts", 5000)
                     .press_key("Enter")
-                    .wait_for_text("q: back", 3000)
+                    .step(common::wait_for_session_view())
                     .capture_labeled("collapsed", "Inactive composer keeps only border rows")
                     .press_key("Enter")
                     .wait_for_text("Type your message", 3000)
@@ -126,11 +126,10 @@ async fn session_collapsed_composer() -> E2eResult {
                 Box::pin(async move {
                     // Assert
                     let collapsed = common::frame_from_capture(&report.captures[0]);
-                    let help_row = collapsed.rows() - 2;
-                    assert!(collapsed.row_text(help_row).contains("q: back"));
-                    assert!(collapsed.row_text(help_row - 1).contains("Started"));
-                    assert!(collapsed.row_text(help_row - 2).contains("Auto Edit"));
-                    assert_eq!(collapsed.row_text(help_row - 3).trim(), "");
+                    let timing_row = collapsed.rows() - 2;
+                    assert!(collapsed.row_text(timing_row).contains("Started"));
+                    assert!(collapsed.row_text(timing_row - 1).contains("Auto Edit"));
+                    assert_eq!(collapsed.row_text(timing_row - 2).trim(), "");
                     assertion::assert_not_visible(&collapsed, "›");
                     assert!(frame.row_text(frame.rows() - 2).contains("Enter: send"));
                     assert!(frame.row_text(frame.rows() - 3).contains("Started"));
@@ -169,7 +168,7 @@ async fn session_prompt_chat_focus_toggle() -> E2eResult {
                 // Act
                 scenario
                     .compose(&common::wait_for_agentty_startup())
-                    .wait_for_text("new session", 5000)
+                    .wait_for_text("No sessions", 5000)
                     .viewing_pause_ms(1500)
                     .press_key("a")
                     .press_key("Enter")
@@ -188,7 +187,8 @@ async fn session_prompt_chat_focus_toggle() -> E2eResult {
                         "Tab focuses the chat transcript for scrolling",
                     )
                     .press_key("q")
-                    .wait_for_text("new session", 5000)
+                    // Only the list renders the tab bar.
+                    .wait_for_text("| Settings", 5000)
                     .viewing_pause_ms(1200)
                     .capture_labeled(
                         "sessions_list",
@@ -269,11 +269,14 @@ async fn draft_session_view_paste_image_opens_composer() -> E2eResult {
                     .wait_for_text("Enter: stage draft", 5000)
                     .write_text("Draft with image")
                     .press_key("Enter")
-                    .wait_for_text("Enter: add draft", 5000)
+                    .step(common::wait_for_session_view())
+                    .press_key("?")
+                    .wait_for_text("Enter: Add draft", 5000)
                     .capture_labeled(
                         "draft_view",
-                        "Draft-session view showing direct image paste action",
+                        "Draft-session help listing the direct image paste action",
                     )
+                    .press_key("q")
                     .press_key("ctrl+v")
                     .wait_for_text("Paste Image Error", 5000)
                     .capture_labeled(
@@ -288,7 +291,7 @@ async fn draft_session_view_paste_image_opens_composer() -> E2eResult {
                         Region::full(draft_view_frame.cols(), draft_view_frame.rows());
                     assertion::assert_text_in_region(
                         &draft_view_frame,
-                        "Ctrl+V/Alt+V: paste image",
+                        "Ctrl+V/Alt+V: Paste image",
                         &draft_view_full,
                     );
 
@@ -454,8 +457,7 @@ async fn stacked_session_at_lookup() -> E2eResult {
                     .compose(&common::wait_for_agentty_startup())
                     .compose(&common::switch_to_tab("Sessions"))
                     .wait_for_text("Nested lookup child", 5000)
-                    .press_key("Enter")
-                    .wait_for_text("Enter: add draft", 3000)
+                    .compose(&common::open_selected_session_view())
                     .press_key("Enter")
                     .wait_for_text("Enter: stage draft", 3000)
                     .write_text("@ancestor_lookup")
@@ -676,7 +678,7 @@ async fn prompt_paste_indentation() -> E2eResult {
                     .write_text("\x1b[200~    indented prompt\x1b[201~")
                     .wait_for_text("indented prompt", 3000)
                     .press_key("Enter")
-                    .wait_for_text("q: back", 10000)
+                    .step(common::wait_for_session_view())
                     .capture_labeled(
                         "submitted_indentation",
                         "Submitted pasted prompt retaining leading indentation",

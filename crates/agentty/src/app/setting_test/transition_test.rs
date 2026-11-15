@@ -16,22 +16,6 @@ fn is_launch_configuration_list_editor_open_returns_false_by_default() {
 }
 
 #[test]
-fn footer_hint_returns_selector_dropdown_hint_when_dropdown_is_open() {
-    // Arrange
-    let mut manager = new_settings_manager();
-    manager.handle_enter();
-
-    // Act
-    let footer_hint = manager.footer_hint();
-
-    // Assert
-    assert_eq!(
-        footer_hint,
-        "Selecting setting value: j/k move, Enter select, Esc/q close"
-    );
-}
-
-#[test]
 fn next_and_previous_do_not_move_selection_while_launch_configuration_editor_is_open() {
     // Arrange
     let mut manager = new_settings_manager();

@@ -162,7 +162,6 @@ struct SessionChatRenderContext<'a> {
     frame_time: FrameTime,
     graph_chat: Option<&'a GraphChatSnapshot>,
     greeting_animated: &'a Cell<bool>,
-    is_tmux_session: bool,
     markdown_render_cache: &'a markdown::MarkdownRenderCache,
     mode: &'a AppMode,
     output_layout_cache: &'a component::session_output::SessionOutputLayoutCache,
@@ -172,7 +171,6 @@ struct SessionChatRenderContext<'a> {
     session_id: &'a str,
     session_progress_messages: &'a HashMap<SessionId, String>,
     session_update_versions: &'a HashMap<SessionId, u64>,
-    session_worktree_availability: &'a HashMap<SessionId, bool>,
     sessions: &'a [Session],
 }
 
@@ -191,14 +189,12 @@ struct FrameResources<'a> {
     /// Records whether the drawn session chat painted an animating nerpa
     /// greeting.
     greeting_animated: &'a Cell<bool>,
-    is_tmux_session: bool,
     markdown_render_cache: &'a markdown::MarkdownRenderCache,
     output_layout_cache: &'a component::session_output::SessionOutputLayoutCache,
     review_snapshot: Option<&'a SessionReviewSnapshot<'a>>,
     session_git_statuses: &'a HashMap<SessionId, SessionGitStatus>,
     session_progress_messages: &'a HashMap<SessionId, String>,
     session_update_versions: &'a HashMap<SessionId, u64>,
-    session_worktree_availability: &'a HashMap<SessionId, bool>,
 }
 
 impl<'a> FrameResources<'a> {
@@ -219,7 +215,6 @@ impl<'a> FrameResources<'a> {
             greeting_animated: self.greeting_animated,
             active_prompt_outputs: self.active_prompt_outputs,
             color_support: self.color_support,
-            is_tmux_session: self.is_tmux_session,
             markdown_render_cache: self.markdown_render_cache,
             mode,
             output_layout_cache: self.output_layout_cache,
@@ -228,7 +223,6 @@ impl<'a> FrameResources<'a> {
             session_git_statuses: self.session_git_statuses,
             session_progress_messages: self.session_progress_messages,
             session_update_versions: self.session_update_versions,
-            session_worktree_availability: self.session_worktree_availability,
             sessions,
             scroll_offset,
             frame_time: self.frame_time,
@@ -271,13 +265,11 @@ pub(crate) fn route_frame(f: &mut Frame, area: Rect, context: RenderContext<'_>)
         session_git_statuses,
         session_progress_messages,
         session_update_versions,
-        session_worktree_availability,
         settings_screen,
         stats_activity,
         sessions,
         table_state,
         frame_time,
-        is_tmux_session,
         ..
     } = context;
 
@@ -308,14 +300,12 @@ pub(crate) fn route_frame(f: &mut Frame, area: Rect, context: RenderContext<'_>)
         color_support,
         diff_layout_cache: render_cache_store.diff_layout_cache(),
         greeting_animated: render_cache_store.greeting_animated(),
-        is_tmux_session,
         markdown_render_cache: render_cache_store.markdown_render_cache(),
         output_layout_cache: render_cache_store.session_output_layout_cache(),
         review_snapshot: session_review_snapshot,
         session_git_statuses,
         session_progress_messages,
         session_update_versions,
-        session_worktree_availability,
         frame_time,
     };
 
@@ -817,7 +807,6 @@ fn render_session_chat(f: &mut Frame, area: Rect, context: SessionChatRenderCont
         greeting_animated,
         active_prompt_outputs,
         color_support,
-        is_tmux_session,
         markdown_render_cache,
         mode,
         output_layout_cache,
@@ -826,7 +815,6 @@ fn render_session_chat(f: &mut Frame, area: Rect, context: SessionChatRenderCont
         session_progress_messages,
         session_git_statuses,
         session_update_versions,
-        session_worktree_availability,
         sessions,
         scroll_offset,
         frame_time,
@@ -869,14 +857,9 @@ fn render_session_chat(f: &mut Frame, area: Rect, context: SessionChatRenderCont
         sessions,
         frame_time,
     };
-    let can_open_worktree = is_tmux_session
-        && *session_worktree_availability
-            .get(session_id)
-            .unwrap_or(&false);
 
     page::session_chat::SessionChatPage::new(page_input)
         .graph_chat(graph_chat.filter(|snapshot| snapshot.proposal.input.session_id == session_id))
-        .can_open_worktree(can_open_worktree)
         .render(f, area);
 }
 

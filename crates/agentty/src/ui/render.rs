@@ -71,8 +71,6 @@ pub struct RenderContext<'a> {
     pub has_more_archived_sessions: bool,
     /// Whether the archive collapse action should be visible.
     pub is_archive_expanded: bool,
-    /// Whether tmux-only worktree actions can be rendered.
-    pub is_tmux_session: bool,
     /// Newer stable version when one is available.
     pub latest_available_version: Option<&'a str>,
     /// Current app mode and its transient state.
@@ -100,9 +98,6 @@ pub struct RenderContext<'a> {
     pub session_review_snapshot: Option<&'a SessionReviewSnapshot<'a>>,
     /// Latest observable update versions keyed by session id.
     pub session_update_versions: &'a HashMap<SessionId, u64>,
-    /// Whether each rendered session currently has a materialized worktree on
-    /// disk, keyed by session id.
-    pub session_worktree_availability: &'a HashMap<SessionId, bool>,
     /// Session rows available for rendering.
     pub sessions: &'a [Session],
     /// Daily session activity series used by dashboard activity summaries.

@@ -1,8 +1,12 @@
+use ratatui::Terminal;
+use ratatui::backend::TestBackend;
+use ratatui::buffer::Cell;
 use ratatui::layout::Rect;
 
 use super::{HelpOverlay, OVERLAY_DIMENSIONS};
 use crate::presentation::app_mode::HelpContext;
 use crate::presentation::help_action::HelpAction;
+use crate::ui::Component;
 
 #[test]
 fn test_popup_area_centers_within_area() {
@@ -71,4 +75,33 @@ fn test_help_overlay_new_stores_fields() {
 
     // Assert
     assert_eq!(overlay.scroll_offset, 5);
+}
+
+#[test]
+fn test_help_overlay_shows_scroll_hint_only_when_entries_overflow() {
+    for (action_count, expects_hint) in [(10, false), (11, true)] {
+        // Arrange
+        let context = HelpContext::List {
+            keybindings: (0..action_count)
+                .map(|_| HelpAction::new("quit", "q", "Quit"))
+                .collect(),
+        };
+        let backend = TestBackend::new(80, 24);
+        let mut terminal = Terminal::new(backend).expect("failed to create terminal");
+
+        // Act
+        terminal
+            .draw(|frame| HelpOverlay::new(&context).render(frame, frame.area()))
+            .expect("failed to render help overlay");
+
+        // Assert
+        let text: String = terminal
+            .backend()
+            .buffer()
+            .content
+            .iter()
+            .map(Cell::symbol)
+            .collect();
+        assert_eq!(text.contains("j/k: scroll"), expects_hint);
+    }
 }

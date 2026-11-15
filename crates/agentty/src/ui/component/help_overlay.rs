@@ -18,6 +18,9 @@ const OVERLAY_DIMENSIONS: overlay::OverlayDimensions =
 
 const SCROLL_X_OFFSET: u16 = 0;
 
+/// Bottom-border cue shown when the shortcut list overflows the popup.
+const SCROLL_HINT: &str = " j/k: scroll ";
+
 /// Centered popup overlay showing keybindings for the current page.
 pub struct HelpOverlay<'a> {
     context: &'a HelpContext,
@@ -84,11 +87,15 @@ impl Component for HelpOverlay<'_> {
             ]));
         }
 
+        let mut block = overlay::overlay_block(self.context.title(), palette::accent());
+        if overlay::overlay_required_height(lines.len()) > popup_area.height {
+            block = block.title_bottom(
+                Line::styled(SCROLL_HINT, Style::default().fg(palette::text_muted()))
+                    .right_aligned(),
+            );
+        }
         let paragraph = Paragraph::new(lines)
-            .block(overlay::overlay_block(
-                self.context.title(),
-                palette::accent(),
-            ))
+            .block(block)
             .scroll((self.scroll_offset, SCROLL_X_OFFSET));
 
         f.render_widget(paragraph, popup_area);

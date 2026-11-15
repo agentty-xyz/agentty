@@ -2,6 +2,7 @@
 
 #[cfg(unix)]
 use std::os::unix::fs::PermissionsExt;
+use std::time::Duration;
 
 use ag_session::test_support as model_fixture;
 use agentty::domain::session_message::SessionMessageKind;
@@ -9,6 +10,7 @@ use testty::assertion;
 use testty::frame::TerminalFrame;
 use testty::proof::report::ProofReport;
 use testty::region::Region;
+use testty::step::Step;
 
 use super::fixture::{E2eResult, seed_project_settings};
 use crate::common::{BuilderEnv, FeatureTest, ReleaseGate, SessionSeed};
@@ -921,7 +923,7 @@ async fn session_output_scrollbar_is_visible() -> E2eResult {
                     .compose(&common::wait_for_agentty_startup())
                     .compose(&common::switch_to_tab("Sessions"))
                     .press_key("Enter")
-                    .wait_for_text("q: back", 5000)
+                    .wait_for_text("Scrollable output (+", 5000)
                     .press_key("g")
                     .wait_for_stable_frame(300, 5000)
                     .viewing_pause_ms(1500)
@@ -1112,7 +1114,7 @@ async fn session_view_compact_mermaid_output() -> E2eResult {
                         "Bottom of compacted over-wide Mermaid flow",
                     )
                     .write_text("q")
-                    .step(common::wait_for_session_list_footer())
+                    .step(common::wait_for_session_list())
             },
             |frame, report| {
                 Box::pin(async move {
@@ -1308,13 +1310,33 @@ printf '{"type":"result","subtype":"success","result":"%s","usage":{"input_token
                 .compose(&thinking.release())
                 // The summary is published before live-row cleanup completes.
                 // Wait for turn finalization before asserting the final frame.
-                .wait_for_text("Enter: reply", 15000)
+                .step(wait_for_finalized_live_activity())
         }, |frame, report| Box::pin(async move {
             assert_live_activity_report(frame, report);
         }))
         .await?;
 
     Ok(())
+}
+
+/// Wait until the live-activity turn has finished: the answer and saved
+/// counts-only footer render while the active-turn loader and live status
+/// rows are gone.
+fn wait_for_finalized_live_activity() -> Step {
+    Step::eventually(
+        Duration::from_secs(15),
+        Duration::from_millis(50),
+        |frame| {
+            let full = Region::full(frame.cols(), frame.rows());
+            assertion::match_text_in_region(frame, "Activity demo finished", &full)?;
+            assertion::match_text_in_region(frame, "Skills: review ×1 (1 failed)", &full)?;
+            for hidden in ["Working...", "Committing...", "Status:"] {
+                assertion::match_not_visible(frame, hidden)?;
+            }
+
+            Ok(())
+        },
+    )
 }
 
 /// Checks live replacement, readable previews, and the counts-only saved

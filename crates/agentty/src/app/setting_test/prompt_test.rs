@@ -109,24 +109,6 @@ async fn confirm_launch_configuration_input_drops_empty_edited_command() {
 }
 
 #[test]
-fn footer_hint_returns_launch_configuration_input_hint_when_input_is_active() {
-    // Arrange
-    let mut manager = new_settings_manager();
-    select_row(&mut manager, "Launch Configurations");
-    manager.handle_enter();
-    manager.start_adding_launch_configuration();
-
-    // Act
-    let footer_hint = manager.footer_hint();
-
-    // Assert
-    assert_eq!(
-        footer_hint,
-        "Launch Configurations: type a command, Enter save, Esc cancel"
-    );
-}
-
-#[test]
 fn cancel_launch_configuration_input_returns_to_browse_without_changing_value() {
     // Arrange
     let mut manager = new_settings_manager();

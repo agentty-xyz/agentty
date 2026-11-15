@@ -386,6 +386,7 @@ async fn test_refresh_sessions_loads_diff_help_detail_when_another_session_is_se
     app.mode = AppMode::Help {
         context: HelpContext::Diff {
             can_comment: true,
+            can_reply_review_comments: false,
             diff: String::new(),
             file_explorer_selected_index: 0,
             focus: DiffFocus::Files,

@@ -80,6 +80,35 @@ async fn test_merged_diff_rejects_inline_comment_creation_and_submission() {
         AppMode::Help {
             context: HelpContext::Diff {
                 can_comment: false,
+                can_reply_review_comments: false,
+                ..
+            },
+            ..
+        }
+    ));
+}
+
+#[tokio::test]
+async fn test_review_diff_help_allows_review_comment_reply() {
+    // Arrange
+    let (mut app, _base_dir) = preview_test_app(ag_git::MockGitClient::new()).await;
+    app.sessions.sessions_mut()[0].status = crate::domain::session::Status::Review;
+    let diff = "diff --git a/src/main.rs b/src/main.rs\n+review();\n";
+    app.mode = diff_mode_fixture(diff, 1, DiffFocus::Files, DiffPreview::default());
+
+    // Act
+    handle(
+        &mut app,
+        TEST_TERMINAL_SIZE,
+        KeyEvent::new(KeyCode::Char('?'), KeyModifiers::NONE),
+    );
+
+    // Assert
+    assert!(matches!(
+        &app.mode,
+        AppMode::Help {
+            context: HelpContext::Diff {
+                can_reply_review_comments: true,
                 ..
             },
             ..

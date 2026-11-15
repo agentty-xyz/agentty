@@ -394,7 +394,7 @@ fn test_wrap_diff_content_exact() {
 }
 
 #[test]
-fn test_diff_page_areas_keep_footer_flush_with_bottom() {
+fn test_diff_page_areas_fill_height_to_page_bottom() {
     // Arrange
     let area = Rect::new(5, 3, 42, 10);
 
@@ -402,10 +402,9 @@ fn test_diff_page_areas_keep_footer_flush_with_bottom() {
     let areas = diff_page_areas(area, 12);
 
     // Assert
-    assert_eq!(areas.file_list_area, Rect::new(6, 4, 12, 8));
-    assert_eq!(areas.diff_area, Rect::new(18, 4, 28, 8));
-    assert_eq!(areas.footer_area, Rect::new(6, 12, 40, 1));
-    assert_eq!(areas.footer_area.bottom(), area.bottom());
+    assert_eq!(areas.file_list_area, Rect::new(6, 4, 12, 9));
+    assert_eq!(areas.diff_area, Rect::new(18, 4, 28, 9));
+    assert_eq!(areas.diff_area.bottom(), area.bottom());
 }
 
 #[test]

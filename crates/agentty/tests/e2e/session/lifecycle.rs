@@ -305,7 +305,10 @@ async fn test_session_title_uses_stable_context() -> E2eResult {
                         "The session title workflow is ready for a focused follow-up.",
                         30000,
                     )
-                    .wait_for_text("Enter: reply", 5000)
+                    .step(common::wait_for_frame_text(
+                        &["The session title workflow is ready for a focused follow-up."],
+                        &["Working...", "Committing..."],
+                    ))
                     .press_key("Enter")
                     .step(common::wait_for_prompt_composer())
                     .write_text("Also reject punctuation-only copies.")
@@ -512,7 +515,7 @@ async fn session_chat_header_and_composer_metadata() -> E2eResult {
                     .wait_for_text("editable-composer-check", 5000)
                     .capture_labeled("active_composer", "Enter activates the reply composer")
                     .press_key("Escape")
-                    .wait_for_text("q: back", 5000)
+                    .step(common::wait_for_session_view())
                     .capture_labeled("inactive_again", "Settings remain visible after cancelling")
             },
             |frame, report| {
@@ -623,8 +626,9 @@ async fn session_chat_keeps_session_age_across_focus_changes() -> E2eResult {
                     let view_frame = common::frame_from_capture(&report.captures[0]);
                     let reply_frame = common::frame_from_capture(&report.captures[1]);
                     let chat_frame = common::frame_from_capture(&report.captures[2]);
+                    assertion::assert_not_visible(&view_frame, "Tab: focus");
                     for (captured_frame, footer_text) in [
-                        (&view_frame, "q: back"),
+                        (&view_frame, "?: help"),
                         (&reply_frame, "Enter: send"),
                         (&chat_frame, "j/k: scroll"),
                         (frame, "Enter: send"),
@@ -692,7 +696,6 @@ async fn session_list_selected_row_remains_readable_under_dark_horizon() -> E2eR
                     .wait_for_text("Review-ready session shortcuts", 5000)
                     .press_key("j")
                     .wait_for_stable_frame(200, 3000)
-                    .wait_for_text("Enter: open", 3000)
                     .capture_labeled(
                         "selected_row_highlight",
                         "Selected session row on the dedicated selection surface",
@@ -749,30 +752,62 @@ async fn session_stop_turn_returns_to_review() -> E2eResult {
                     .compose(&common::wait_for_agentty_startup())
                     .compose(&common::switch_to_tab("Sessions"))
                     .press_key("Enter")
-                    .wait_for_text("Ctrl+c: stop", 5000)
+                    .step(common::wait_for_session_view())
+                    .wait_for_text("Working...", 5000)
                     .viewing_pause_ms(1200)
                     .capture_labeled(
                         "running_session",
                         "Running session before stopping the turn",
                     )
+                    .press_key("?")
+                    .wait_for_text("Ctrl+c: Stop", 5000)
+                    .capture_labeled(
+                        "running_help",
+                        "Help overlay lists stop while the turn runs",
+                    )
+                    .press_key("Escape")
+                    .step(common::wait_for_frame_text(
+                        &["Working..."],
+                        &["Keybindings"],
+                    ))
                     .press_key("ctrl+c")
-                    .wait_for_text("Enter: reply", 5000)
+                    .step(common::wait_for_frame_text(
+                        &["Running session stop"],
+                        &["Working..."],
+                    ))
                     .viewing_pause_ms(1200)
                     .capture_labeled(
                         "review_after_stop",
                         "Session view after Ctrl+c stops only the active turn",
+                    )
+                    .press_key("?")
+                    .wait_for_text("Enter: Reply", 5000)
+                    .capture_labeled(
+                        "review_help",
+                        "Help overlay lists review-ready reply controls after stopping",
                     )
             },
             |frame, report| {
                 Box::pin(async move {
                     let running_frame = common::frame_from_capture(&report.captures[0]);
                     let running_full = Region::full(running_frame.cols(), running_frame.rows());
-                    assertion::assert_text_in_region(&running_frame, "Ctrl+c: stop", &running_full);
-                    assertion::assert_not_visible(&running_frame, "o: open");
+                    assertion::assert_text_in_region(&running_frame, "Working...", &running_full);
+
+                    let running_help = common::frame_from_capture(&report.captures[1]);
+                    let running_help_full = Region::full(running_help.cols(), running_help.rows());
+                    assertion::assert_text_in_region(
+                        &running_help,
+                        "Ctrl+c: Stop",
+                        &running_help_full,
+                    );
+                    assertion::assert_not_visible(&running_help, "o: Open worktree");
+
+                    let stopped_frame = common::frame_from_capture(&report.captures[2]);
+                    assertion::assert_not_visible(&stopped_frame, "Working...");
 
                     let full = Region::full(frame.cols(), frame.rows());
-                    assertion::assert_text_in_region(frame, "Enter: reply", &full);
-                    assertion::assert_not_visible(frame, "Ctrl+c: stop");
+                    assertion::assert_text_in_region(frame, "Enter: Reply", &full);
+                    assertion::assert_not_visible(frame, "Ctrl+c: Stop");
                 })
             },
         )
@@ -1323,8 +1358,10 @@ async fn session_open_and_return_to_list() -> E2eResult {
                     .viewing_pause_ms(1500)
                     .compose(&common::open_selected_session_view())
                     // The stub agent's failed turn settles asynchronously;
-                    // wait for the review footer so captures never race it.
-                    .wait_for_text("Enter: reply", 10000)
+                    // wait for its error and a settled frame so captures
+                    // never race it.
+                    .wait_for_text("terminated before emitting a turn result", 10000)
+                    .wait_for_stable_frame(300, 5000)
                     .viewing_pause_ms(2000)
                     .capture_labeled("session_view", "Session view after Enter")
                     .compose(&common::return_to_session_list())
@@ -1336,7 +1373,9 @@ async fn session_open_and_return_to_list() -> E2eResult {
                     let session_view_frame = common::frame_from_capture(&report.captures[0]);
                     let view_full =
                         Region::full(session_view_frame.cols(), session_view_frame.rows());
-                    assertion::assert_text_in_region(&session_view_frame, "q: back", &view_full);
+                    assertion::assert_text_in_region(&session_view_frame, "› test", &view_full);
+                    assertion::assert_not_visible(&session_view_frame, "Working...");
+                    assertion::assert_not_visible(&session_view_frame, "| Settings");
 
                     let full = Region::full(frame.cols(), frame.rows());
                     assertion::assert_text_in_region(frame, "test", &full);
@@ -1370,13 +1409,15 @@ async fn terminal_session_continue_opens_seeded_prompt() -> E2eResult {
                     .compose(&common::wait_for_agentty_startup())
                     .compose(&common::switch_to_tab("Sessions"))
                     .press_key("Enter")
-                    .wait_for_text("c: continue", 5000)
-                    .wait_for_text("Press 'c' to continue in a new session.", 3000)
+                    .wait_for_text("Press 'c' to continue in a new session.", 5000)
+                    .press_key("?")
+                    .wait_for_text("c: Continue in new", 3000)
                     .viewing_pause_ms(1500)
                     .capture_labeled(
                         "done_session_actions",
                         "Linked done session offers continuation without review comments",
                     )
+                    .press_key("q")
                     .press_key("c")
                     .wait_for_text("Confirm Continue", 3000)
                     .viewing_pause_ms(1500)
@@ -1399,10 +1440,10 @@ async fn terminal_session_continue_opens_seeded_prompt() -> E2eResult {
                         Region::full(done_session_frame.cols(), done_session_frame.rows());
                     assertion::assert_text_in_region(
                         &done_session_frame,
-                        "c: continue",
+                        "c: Continue in new",
                         &done_session_full,
                     );
-                    assertion::assert_not_visible(&done_session_frame, "comments");
+                    assertion::assert_not_visible(&done_session_frame, "Show review comments");
 
                     let confirmation_frame = common::frame_from_capture(&report.captures[1]);
                     let confirmation_full =
@@ -1452,7 +1493,7 @@ async fn canceled_session_continue_opens_seeded_prompt() -> E2eResult {
                     .compose(&common::wait_for_agentty_startup())
                     .compose(&common::switch_to_tab("Sessions"))
                     .press_key("Enter")
-                    .wait_for_text("c: continue", 5000)
+                    .wait_for_text("Resume the remaining work.", 5000)
                     .press_key("c")
                     .wait_for_text("Confirm Continue", 3000)
                     .viewing_pause_ms(1500)
@@ -1550,17 +1591,19 @@ async fn session_list_jk_navigation() -> E2eResult {
                     .viewing_pause_ms(2000)
                     .capture_labeled("two_sessions", "Two sessions in list")
                     // Navigate down with j, open the selection, and capture.
+                    // Only the session view suffixes the title with its diff
+                    // size, and only the list renders the tab bar.
                     .press_key("j")
                     .press_key("Enter")
-                    .wait_for_text("q: back", 5000)
+                    .wait_for_text("[XS] beta (+", 5000)
                     .viewing_pause_ms(2000)
                     .capture_labeled("opened_after_j", "Session opened after pressing j")
                     .press_key("q")
-                    .wait_for_text("new session", 5000)
+                    .wait_for_text("| Settings", 5000)
                     // Navigate back up with k, open the selection, and capture.
                     .press_key("k")
                     .press_key("Enter")
-                    .wait_for_text("q: back", 5000)
+                    .wait_for_text("[XS] alpha (+", 5000)
                     .viewing_pause_ms(2000)
                     .capture_labeled("opened_after_k", "Session opened after pressing k")
             },

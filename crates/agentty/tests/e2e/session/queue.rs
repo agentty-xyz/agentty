@@ -9,6 +9,8 @@ use std::time::Duration;
 use ag_session::test_support as model_fixture;
 use agentty::domain::session_message::SessionMessageKind;
 use testty::assertion;
+use testty::frame::TerminalFrame;
+use testty::proof::report::ProofReport;
 use testty::region::Region;
 
 use super::fixture::{
@@ -457,10 +459,10 @@ esac
 /// `Enter` while a session is `InProgress` opens the chat composer and queues
 /// the typed message inline beneath the running turn; with two messages
 /// queued, the first `Ctrl+c` pops only the most recently queued entry while
-/// the older entry and the running turn remain (`Ctrl+c: stop` still
+/// the older entry and the running turn remain (`Working...` still
 /// rendered); a follow-up `Ctrl+c` pops the remaining queued entry; and a
 /// final `Ctrl+c` with an empty queue cancels the running turn and returns
-/// the session to review-ready controls.
+/// the session to review-ready controls listed by the help overlay.
 #[tokio::test]
 async fn session_queue_chat_messages_during_in_progress_turn() -> E2eResult {
     // Arrange, Act, Assert
@@ -473,7 +475,8 @@ async fn session_queue_chat_messages_during_in_progress_turn() -> E2eResult {
                     .compose(&common::wait_for_agentty_startup())
                     .compose(&common::switch_to_tab("Sessions"))
                     .press_key("Enter")
-                    .wait_for_text("Ctrl+c: stop", 5000)
+                    .step(common::wait_for_session_view())
+                    .wait_for_text("Working...", 5000)
                     .press_key("Enter")
                     .step(common::wait_for_prompt_composer())
                     .write_text(QUEUED_CHAT_PREVIEW_MESSAGE)
@@ -508,65 +511,66 @@ async fn session_queue_chat_messages_during_in_progress_turn() -> E2eResult {
                          running turn",
                     )
                     .press_key("ctrl+c")
-                    .wait_for_text("Enter: reply", 5000)
+                    .step(common::wait_for_frame_text(
+                        &["Running session stop"],
+                        &["Working..."],
+                    ))
                     .viewing_pause_ms(1000)
                     .capture_labeled(
                         "third_ctrl_c_cancels_turn",
                         "Third Ctrl+c cancels the running turn and returns the session to review",
                     )
+                    .press_key("?")
+                    .wait_for_text("Enter: Reply", 5000)
+                    .capture_labeled(
+                        "review_ready_help_actions",
+                        "Help overlay lists review-ready reply controls after cancellation",
+                    )
             },
             |frame, report| {
                 Box::pin(async move {
-                    let queued_frame = common::frame_from_capture(&report.captures[0]);
-                    let status_row = queued_frame.find_text("Working...")[0].rect.row;
-                    let first_row = queued_frame.find_text("queued › first queued")[0].rect.row;
-                    let second_row = queued_frame.find_text("queued › second queued")[0].rect.row;
-                    assert_eq!(first_row, status_row + 2);
-                    assert_eq!(second_row, first_row + 1);
-                    assertion::assert_not_visible(&queued_frame, "must fit on one preview row");
-
-                    let after_first_frame = common::frame_from_capture(&report.captures[1]);
-                    let after_first_full =
-                        Region::full(after_first_frame.cols(), after_first_frame.rows());
-                    assertion::assert_text_in_region(
-                        &after_first_frame,
-                        "Ctrl+c: stop",
-                        &after_first_full,
-                    );
-                    assertion::assert_text_in_region(
-                        &after_first_frame,
-                        "≡ queued ›",
-                        &after_first_full,
-                    );
-                    assertion::assert_text_in_region(
-                        &after_first_frame,
-                        "first queued",
-                        &after_first_full,
-                    );
-                    assertion::assert_not_visible(&after_first_frame, "second queued");
-
-                    let after_second_frame = common::frame_from_capture(&report.captures[2]);
-                    let after_second_full =
-                        Region::full(after_second_frame.cols(), after_second_frame.rows());
-                    assertion::assert_text_in_region(
-                        &after_second_frame,
-                        "Ctrl+c: stop",
-                        &after_second_full,
-                    );
-                    assertion::assert_not_visible(&after_second_frame, "queued ›");
-                    assertion::assert_not_visible(&after_second_frame, "first queued");
-                    assertion::assert_not_visible(&after_second_frame, "second queued");
-
-                    let cleared_full = Region::full(frame.cols(), frame.rows());
-                    assertion::assert_text_in_region(frame, "Enter: reply", &cleared_full);
-                    assertion::assert_not_visible(frame, "Ctrl+c: stop");
-                    assertion::assert_not_visible(frame, "queued ›");
+                    assert_queued_chat_message_pops(frame, report);
                 })
             },
         )
         .await?;
 
     Ok(())
+}
+
+/// Asserts the queued-message layout, the per-press LIFO pops, and the
+/// review-ready help actions captured by
+/// `session_queue_chat_messages_during_in_progress_turn`.
+fn assert_queued_chat_message_pops(frame: &TerminalFrame, report: &ProofReport) {
+    let queued_frame = common::frame_from_capture(&report.captures[0]);
+    let status_row = queued_frame.find_text("Working...")[0].rect.row;
+    let first_row = queued_frame.find_text("queued › first queued")[0].rect.row;
+    let second_row = queued_frame.find_text("queued › second queued")[0].rect.row;
+    assert_eq!(first_row, status_row + 2);
+    assert_eq!(second_row, first_row + 1);
+    assertion::assert_not_visible(&queued_frame, "must fit on one preview row");
+
+    let after_first_frame = common::frame_from_capture(&report.captures[1]);
+    let after_first_full = Region::full(after_first_frame.cols(), after_first_frame.rows());
+    assertion::assert_text_in_region(&after_first_frame, "Working...", &after_first_full);
+    assertion::assert_text_in_region(&after_first_frame, "≡ queued ›", &after_first_full);
+    assertion::assert_text_in_region(&after_first_frame, "first queued", &after_first_full);
+    assertion::assert_not_visible(&after_first_frame, "second queued");
+
+    let after_second_frame = common::frame_from_capture(&report.captures[2]);
+    let after_second_full = Region::full(after_second_frame.cols(), after_second_frame.rows());
+    assertion::assert_text_in_region(&after_second_frame, "Working...", &after_second_full);
+    assertion::assert_not_visible(&after_second_frame, "queued ›");
+    assertion::assert_not_visible(&after_second_frame, "first queued");
+    assertion::assert_not_visible(&after_second_frame, "second queued");
+
+    let cleared_frame = common::frame_from_capture(&report.captures[3]);
+    assertion::assert_not_visible(&cleared_frame, "Working...");
+    assertion::assert_not_visible(&cleared_frame, "queued ›");
+
+    let help_full = Region::full(frame.cols(), frame.rows());
+    assertion::assert_text_in_region(frame, "Enter: Reply", &help_full);
+    assertion::assert_not_visible(frame, "Ctrl+c: Stop");
 }
 
 /// Verify a `Rebasing` session offers setting slash commands and defers a
@@ -633,8 +637,19 @@ async fn session_queue_chat_message_during_rebase() -> E2eResult {
                     .compose(&common::switch_to_tab("Sessions"))
                     .press_key("Enter")
                     .wait_for_text("Rebasing...", 5000)
-                    .wait_for_text("Enter: queue message", 5000)
-                    .wait_for_text("p: PR", 5000)
+                    .press_key("?")
+                    .wait_for_text("Enter: Queue message", 5000)
+                    .wait_for_text("p: Create or refresh", 5000)
+                    .capture_labeled(
+                        "rebase_help_actions",
+                        "Help overlay lists queued replies and review-request publishing during \
+                         sync",
+                    )
+                    .press_key("Escape")
+                    .step(common::wait_for_frame_text(
+                        &["Rebasing..."],
+                        &["Keybindings"],
+                    ))
                     .press_key("Enter")
                     .wait_for_text("Type your message", 5000)
                     .write_text("follow up after sync")
@@ -647,11 +662,23 @@ async fn session_queue_chat_message_during_rebase() -> E2eResult {
                         "Follow-up message queued inline while session sync remains active",
                     )
             },
-            |frame, _report| {
+            |frame, report| {
                 Box::pin(async move {
+                    let help_frame = common::frame_from_capture(&report.captures[0]);
+                    let help_full = Region::full(help_frame.cols(), help_frame.rows());
+                    assertion::assert_text_in_region(
+                        &help_frame,
+                        "Enter: Queue message",
+                        &help_full,
+                    );
+                    assertion::assert_text_in_region(
+                        &help_frame,
+                        "p: Create or refresh",
+                        &help_full,
+                    );
+
                     let full = Region::full(frame.cols(), frame.rows());
                     assertion::assert_text_in_region(frame, "Rebasing...", &full);
-                    assertion::assert_text_in_region(frame, "p: PR", &full);
                     assertion::assert_text_in_region(
                         frame,
                         "[Commit] No changes to commit.",
@@ -717,10 +744,8 @@ async fn review_request_creation_queues_during_rebase() -> E2eResult {
                     .compose(&common::switch_to_tab("Sessions"))
                     .compose(&common::open_selected_session_view())
                     .wait_for_text("Completed answer before rebase.", 5000)
-                    .wait_for_text("r: sync", 5000)
                     .press_key("r")
                     .wait_for_text("Rebasing...", 5000)
-                    .wait_for_text("p: PR", 5000)
                     .press_key("p")
                     .wait_for_text("Publish Review Request", 5000)
                     .press_key("Enter")
@@ -799,8 +824,18 @@ async fn session_running_turn_shows_sync_shortcut() -> E2eResult {
                     .write_text("Keep the active turn running")
                     .wait_for_text("Keep the active turn running", 3000)
                     .press_key("Enter")
-                    .wait_for_text("Ctrl+c: stop", 5000)
-                    .wait_for_text("r: sync", 5000)
+                    .wait_for_text("Working...", 5000)
+                    .press_key("?")
+                    .wait_for_text("r: Sync", 5000)
+                    .capture_labeled(
+                        "running_sync_help_action",
+                        "Help overlay lists sync beside stop while the turn runs",
+                    )
+                    .press_key("Escape")
+                    .step(common::wait_for_frame_text(
+                        &["Working..."],
+                        &["Keybindings"],
+                    ))
                     .press_key("r")
                     .wait_for_text("rebase onto the base branch after this turn", 5000)
                     .viewing_pause_ms(1000)
@@ -811,7 +846,10 @@ async fn session_running_turn_shows_sync_shortcut() -> E2eResult {
                     .compose(&turn.release())
                     .wait_for_text(QUEUED_SYNC_TURN_ANSWER, 10000)
                     .wait_for_text("[Sync] Successfully synced", 10000)
-                    .wait_for_text("Enter: reply", 5000)
+                    .step(common::wait_for_frame_text(
+                        &["[Sync] Successfully synced"],
+                        &["Working...", "Rebasing..."],
+                    ))
                     .capture_labeled(
                         "running_sync_completed",
                         "Running turn completes before queued sync",
@@ -819,14 +857,19 @@ async fn session_running_turn_shows_sync_shortcut() -> E2eResult {
             },
             |frame, report| {
                 Box::pin(async move {
-                    let queued_frame = common::frame_from_capture(&report.captures[0]);
+                    let help_frame = common::frame_from_capture(&report.captures[0]);
+                    let help_full = Region::full(help_frame.cols(), help_frame.rows());
+                    assertion::assert_text_in_region(&help_frame, "Ctrl+c: Stop", &help_full);
+                    assertion::assert_text_in_region(&help_frame, "r: Sync", &help_full);
+
+                    let queued_frame = common::frame_from_capture(&report.captures[1]);
                     let queued_full = Region::full(queued_frame.cols(), queued_frame.rows());
                     assertion::assert_text_in_region(
                         &queued_frame,
                         "≡ sync — rebase onto the base branch after this turn",
                         &queued_full,
                     );
-                    assertion::assert_text_in_region(&queued_frame, "Ctrl+c: stop", &queued_full);
+                    assertion::assert_text_in_region(&queued_frame, "Working...", &queued_full);
                     let active_turn_row = queued_frame
                         .find_text("Working...")
                         .first()
@@ -844,7 +887,8 @@ async fn session_running_turn_shows_sync_shortcut() -> E2eResult {
                     let full = Region::full(frame.cols(), frame.rows());
                     assertion::assert_text_in_region(frame, QUEUED_SYNC_TURN_ANSWER, &full);
                     assertion::assert_text_in_region(frame, "[Sync] Successfully synced", &full);
-                    assertion::assert_text_in_region(frame, "Enter: reply", &full);
+                    assertion::assert_not_visible(frame, "Working...");
+                    assertion::assert_not_visible(frame, "Rebasing...");
                     assertion::assert_not_visible(frame, "[Stopped]");
                     assertion::assert_not_visible(frame, "≡ sync —");
 
@@ -892,8 +936,7 @@ async fn session_queued_sync_resumes_after_question_cancel() -> E2eResult {
                     .write_text("Ask before completing this turn")
                     .wait_for_text("Ask before completing this turn", 3000)
                     .press_key("Enter")
-                    .wait_for_text("Ctrl+c: stop", 5000)
-                    .wait_for_text("r: sync", 5000)
+                    .wait_for_text("Working...", 5000)
                     .press_key("r")
                     .wait_for_text("rebase onto the base branch after this turn", 5000)
                     .compose(&turn.release())
@@ -904,7 +947,10 @@ async fn session_queued_sync_resumes_after_question_cancel() -> E2eResult {
                     )
                     .press_key("ctrl+c")
                     .wait_for_text("[Sync] Successfully synced", 10000)
-                    .wait_for_text("Enter: reply", 5000)
+                    .step(common::wait_for_frame_text(
+                        &["[Sync] Successfully synced"],
+                        &["Rebasing...", QUEUED_SYNC_QUESTION_TEXT],
+                    ))
             },
             |frame, report| {
                 Box::pin(async move {
@@ -923,7 +969,8 @@ async fn session_queued_sync_resumes_after_question_cancel() -> E2eResult {
 
                     let full = Region::full(frame.cols(), frame.rows());
                     assertion::assert_text_in_region(frame, "[Sync] Successfully synced", &full);
-                    assertion::assert_text_in_region(frame, "Enter: reply", &full);
+                    assertion::assert_not_visible(frame, "Rebasing...");
+                    assertion::assert_not_visible(frame, "Working...");
                     assertion::assert_not_visible(frame, QUEUED_SYNC_QUESTION_TEXT);
                     assertion::assert_not_visible(frame, "≡ sync —");
                 })
@@ -957,9 +1004,8 @@ async fn session_queued_action_survives_project_switching() -> E2eResult {
                     .write_text("Keep queued sync visible")
                     .wait_for_text("Keep queued sync visible", 3000)
                     .press_key("Enter")
-                    .wait_for_text("Ctrl+c: stop", 5000)
-                    .press_key("q")
-                    .wait_for_text("new session", 5000)
+                    .wait_for_text("Working...", 5000)
+                    .compose(&common::return_to_session_list())
                     .press_key("p")
                     .wait_for_text("Switch project", 5000)
                     .press_key("j")
@@ -970,9 +1016,9 @@ async fn session_queued_action_survives_project_switching() -> E2eResult {
                     .press_key("Enter")
                     .wait_for_text("Project: test-project", 5000)
                     .press_key("j")
-                    .press_key("Enter")
+                    .compose(&common::open_selected_session_view())
                     .wait_for_text("Keep queued sync visible", 5000)
-                    .wait_for_text("r: sync", 5000)
+                    .wait_for_text("Working...", 5000)
                     .press_key("r")
                     .wait_for_text("rebase onto the base branch after this turn", 5000)
                     .capture_labeled(
@@ -982,7 +1028,10 @@ async fn session_queued_action_survives_project_switching() -> E2eResult {
                     .compose(&turn.release())
                     .wait_for_text(QUEUED_SYNC_TURN_ANSWER, 10000)
                     .wait_for_text("[Sync] Successfully synced", 10000)
-                    .wait_for_text("Enter: reply", 5000)
+                    .step(common::wait_for_frame_text(
+                        &["[Sync] Successfully synced"],
+                        &["Working...", "Rebasing..."],
+                    ))
             },
             |frame, report| {
                 Box::pin(async move {
@@ -993,7 +1042,7 @@ async fn session_queued_action_survives_project_switching() -> E2eResult {
                         "≡ sync — rebase onto the base branch after this turn",
                         &queued_full,
                     );
-                    assertion::assert_text_in_region(&queued_frame, "Ctrl+c: stop", &queued_full);
+                    assertion::assert_text_in_region(&queued_frame, "Working...", &queued_full);
                     assertion::assert_text_in_region(
                         &queued_frame,
                         "Keep queued sync visible",
@@ -1003,7 +1052,8 @@ async fn session_queued_action_survives_project_switching() -> E2eResult {
                     let full = Region::full(frame.cols(), frame.rows());
                     assertion::assert_text_in_region(frame, QUEUED_SYNC_TURN_ANSWER, &full);
                     assertion::assert_text_in_region(frame, "[Sync] Successfully synced", &full);
-                    assertion::assert_text_in_region(frame, "Enter: reply", &full);
+                    assertion::assert_not_visible(frame, "Working...");
+                    assertion::assert_not_visible(frame, "Rebasing...");
                     assertion::assert_not_visible(frame, "≡ sync —");
                 })
             },
@@ -1129,7 +1179,7 @@ async fn session_queued_sync_clears_when_turn_is_cancelled() -> E2eResult {
                     .write_text("Cancel the turn and queued sync")
                     .wait_for_text("Cancel the turn and queued sync", 3000)
                     .press_key("Enter")
-                    .wait_for_text("Ctrl+c: stop", 5000)
+                    .wait_for_text("Working...", 5000)
                     .press_key("r")
                     .wait_for_text("rebase onto the base branch after this turn", 5000)
                     .capture_labeled(
@@ -1142,7 +1192,12 @@ async fn session_queued_sync_clears_when_turn_is_cancelled() -> E2eResult {
                         Duration::from_millis(100),
                         |frame| {
                             let full = Region::full(frame.cols(), frame.rows());
-                            assertion::match_text_in_region(frame, "Enter: reply", &full)?;
+                            assertion::match_text_in_region(
+                                frame,
+                                "Cancel the turn and queued sync",
+                                &full,
+                            )?;
+                            assertion::match_not_visible(frame, "Working...")?;
 
                             assertion::match_not_visible(frame, "≡ sync —")
                         },
@@ -1162,8 +1217,7 @@ async fn session_queued_sync_clears_when_turn_is_cancelled() -> E2eResult {
                         &queued_full,
                     );
 
-                    let full = Region::full(frame.cols(), frame.rows());
-                    assertion::assert_text_in_region(frame, "Enter: reply", &full);
+                    assertion::assert_not_visible(frame, "Working...");
                     assertion::assert_not_visible(frame, "≡ sync —");
                     assertion::assert_not_visible(frame, "Rebasing...");
                     assertion::assert_not_visible(frame, "[Sync] Successfully synced");
@@ -1197,7 +1251,7 @@ async fn session_queued_sync_validation_failure_is_visible() -> E2eResult {
                     .write_text("Fail queued sync validation")
                     .wait_for_text("Fail queued sync validation", 3000)
                     .press_key("Enter")
-                    .wait_for_text("Ctrl+c: stop", 5000)
+                    .wait_for_text("Working...", 5000)
                     .press_key("r")
                     .wait_for_text("rebase onto the base branch after this turn", 5000)
                     .capture_labeled(
@@ -1207,7 +1261,10 @@ async fn session_queued_sync_validation_failure_is_visible() -> E2eResult {
                     .compose(&turn.release())
                     .wait_for_text(QUEUED_SYNC_TURN_ANSWER, 10000)
                     .wait_for_text("[Sync Error] Session isolation violation", 10000)
-                    .wait_for_text("Enter: reply", 5000)
+                    .step(common::wait_for_frame_text(
+                        &["[Sync Error] Session isolation violation"],
+                        &["Working...", "Rebasing..."],
+                    ))
                     .wait_for_stable_frame(300, 5000)
                     .capture_labeled(
                         "queued_sync_validation_failed",
@@ -1231,7 +1288,7 @@ async fn session_queued_sync_validation_failure_is_visible() -> E2eResult {
                         "[Sync Error] Session isolation violation",
                         &full,
                     );
-                    assertion::assert_text_in_region(frame, "Enter: reply", &full);
+                    assertion::assert_not_visible(frame, "Working...");
                     assertion::assert_not_visible(frame, "≡ sync —");
                     assertion::assert_not_visible(frame, "Rebasing...");
                     let answer_row = frame
@@ -1277,8 +1334,7 @@ async fn review_request_creation_queues_during_running_turn() -> E2eResult {
                     .write_text("Queue the review request")
                     .wait_for_text("Queue the review request", 3000)
                     .press_key("Enter")
-                    .wait_for_text("Ctrl+c: stop", 5000)
-                    .wait_for_text("p: PR", 5000)
+                    .wait_for_text("Working...", 5000)
                     .press_key("p")
                     .wait_for_text("Publish Review Request", 5000)
                     .press_key("Enter")
@@ -1315,7 +1371,7 @@ async fn review_request_creation_queues_during_running_turn() -> E2eResult {
                         "Queue the review request",
                         &queued_full,
                     );
-                    assertion::assert_text_in_region(&queued_frame, "Ctrl+c: stop", &queued_full);
+                    assertion::assert_text_in_region(&queued_frame, "Working...", &queued_full);
 
                     let started_frame = common::frame_from_capture(&report.captures[1]);
                     let started_full = Region::full(started_frame.cols(), started_frame.rows());
@@ -1366,8 +1422,7 @@ async fn review_request_queued_creation_clears_when_turn_is_cancelled() -> E2eRe
                     .write_text("Cancel the turn and queued review request")
                     .wait_for_text("Cancel the turn and queued review request", 3000)
                     .press_key("Enter")
-                    .wait_for_text("Ctrl+c: stop", 5000)
-                    .wait_for_text("p: PR", 5000)
+                    .wait_for_text("Working...", 5000)
                     .press_key("p")
                     .wait_for_text("Publish Review Request", 5000)
                     .press_key("Enter")
@@ -1383,7 +1438,12 @@ async fn review_request_queued_creation_clears_when_turn_is_cancelled() -> E2eRe
                         Duration::from_millis(100),
                         |frame| {
                             let full = Region::full(frame.cols(), frame.rows());
-                            assertion::match_text_in_region(frame, "Enter: reply", &full)?;
+                            assertion::match_text_in_region(
+                                frame,
+                                "Cancel the turn and queued review request",
+                                &full,
+                            )?;
+                            assertion::match_not_visible(frame, "Working...")?;
 
                             assertion::match_not_visible(frame, "≡ review request —")
                         },
@@ -1445,8 +1505,7 @@ async fn session_queued_work_uses_fifo_display_and_execution_order() -> E2eResul
                     .write_text("Queue mixed work")
                     .wait_for_text("Queue mixed work", 3000)
                     .press_key("Enter")
-                    .wait_for_text("Ctrl+c: stop", 5000)
-                    .wait_for_text("p: PR", 5000)
+                    .wait_for_text("Working...", 5000)
                     .press_key("Enter")
                     .wait_for_text("Type your message", 5000)
                     .write_text("Review once more")

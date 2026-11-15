@@ -78,9 +78,6 @@ pub(crate) struct SessionRenderParts<'a> {
     pub(crate) session_git_statuses: &'a HashMap<SessionId, SessionGitStatus>,
     /// Cached session list positions keyed by stable session id.
     pub(crate) session_index_by_id: &'a HashMap<SessionId, usize>,
-    /// Whether each rendered session currently has a materialized worktree on
-    /// disk, keyed by session id.
-    pub(crate) session_worktree_availability: &'a HashMap<SessionId, bool>,
     /// Session rows available for rendering.
     pub(crate) sessions: &'a [Session],
     /// Daily session activity series used by dashboard activity summaries.
@@ -319,7 +316,6 @@ impl SessionManager {
             session_branch_names: &self.state.session_branch_names,
             session_git_statuses: &self.state.session_git_statuses,
             session_index_by_id: &self.state.session_index_by_id,
-            session_worktree_availability: &self.state.session_worktree_availability,
             sessions: &self.state.sessions,
             stats_activity: &self.stats_activity,
             selected_index: self.state.table_state.selected(),

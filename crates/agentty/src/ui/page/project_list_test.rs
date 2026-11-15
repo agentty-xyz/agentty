@@ -7,15 +7,13 @@ use ratatui::widgets::TableState;
 use super::{
     ActiveProjectStats, HEATMAP_CONTENT_HEIGHT, PROJECT_DASHBOARD_PANEL_HEIGHT, ProjectListPage,
     TABLE_COLUMN_SPACING, agent_cli_summary_lines, display_project_path, left_aligned_line,
-    project_dashboard_panel_constraints, project_list_footer_line, project_row_style,
-    project_row_values, project_table_column_constraints, session_count_line,
-    work_stats_summary_lines,
+    project_dashboard_panel_constraints, project_row_style, project_row_values,
+    project_table_column_constraints, session_count_line, work_stats_summary_lines,
 };
 use crate::domain::agent::{AgentCliInfo, AgentKind};
 use crate::domain::project::{Project, ProjectListItem};
 use crate::domain::session::DailyActivity;
 use crate::domain::theme::ColorTheme;
-use crate::presentation::help_action;
 use crate::ui::activity_heatmap::RecentActivityStats;
 use crate::ui::render::Page;
 use crate::ui::style;
@@ -388,19 +386,6 @@ fn test_project_row_style_uses_text_color_for_inactive_project() {
 
     // Assert
     assert_eq!(style.fg, Some(style::palette::text()));
-}
-
-#[test]
-fn test_project_list_footer_line_matches_project_shortcuts() {
-    // Arrange
-    let expected_line =
-        crate::ui::help_format::footer_line(&help_action::project_list_footer_actions());
-
-    // Act
-    let footer_line = project_list_footer_line();
-
-    // Assert
-    assert_eq!(footer_line, expected_line);
 }
 
 #[test]

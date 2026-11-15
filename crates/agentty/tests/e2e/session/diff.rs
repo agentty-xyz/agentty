@@ -7,7 +7,7 @@ use ag_session::SettingName;
 use ag_session::test_support as model_fixture;
 use agentty::domain::theme::ColorTheme;
 use testty::assertion;
-use testty::frame::TerminalFrame;
+use testty::frame::{CellStyle, TerminalFrame};
 use testty::proof::report::ProofReport;
 use testty::region::Region;
 use testty::scenario::Scenario;
@@ -23,6 +23,19 @@ use crate::{common, selection, test_support};
 
 /// Stable id for the seeded binary-only diff session.
 const BINARY_DIFF_SESSION_ID: &str = "binary-diff-0001";
+
+/// Diff panel title suffix rendered only once Diff mode shows a patch.
+const DIFF_PANEL_TITLE_MARKER: &str = ") Diff — ";
+
+/// Inactive composer border rendered only in the Codex session chat view.
+const SESSION_COMPOSER_MARKER: &str = "╭ codex/";
+
+/// Timing row label that an archived session view renders without a
+/// composer.
+const ARCHIVED_TIMING_MARKER: &str = "Timer: ";
+
+/// Help overlay title rendered while `?` keybindings are open.
+const HELP_OVERLAY_TITLE: &str = "Keybindings";
 
 /// File and changed-line selection remain distinct while moving focus.
 #[tokio::test]
@@ -62,14 +75,13 @@ async fn selection_visibility_in_diff_views() -> E2eResult {
                     .wait_for_stable_frame(200, 3000)
                     .capture_labeled("files", "Selected file highlighted")
                     .press_key("l")
-                    .wait_for_text("Esc/Left: files", 5000)
                     .wait_for_stable_frame(200, 3000)
                     .capture_labeled("lines", "Changed-line selection owns focus")
                     .press_key("j")
                     .wait_for_stable_frame(200, 3000)
                     .capture_labeled("next_line", "Highlight moves to the next source row")
                     .press_key("Esc")
-                    .wait_for_text("j/k: select file", 5000)
+                    .wait_for_stable_frame(200, 3000)
                     .capture_labeled("files_again", "File highlight restored")
             },
             move |_frame, report| {
@@ -460,7 +472,7 @@ async fn diff_preview_opens_from_session() -> E2eResult {
                     .compose(&common::switch_to_tab("Sessions"))
                     .compose(&common::open_selected_session_view())
                     .press_key("d")
-                    .wait_for_text("j/k: select file", 5000)
+                    .wait_for_text(DIFF_PANEL_TITLE_MARKER, 5000)
                     .wait_for_text("println!(\"review\")", 5000)
                     .wait_for_stable_frame(300, 5000)
                     .viewing_pause_ms(1500)
@@ -469,11 +481,12 @@ async fn diff_preview_opens_from_session() -> E2eResult {
             |frame, _report| {
                 Box::pin(async move {
                     let full = Region::full(frame.cols(), frame.rows());
+                    let status_bar = Region::new(0, 0, frame.cols(), 1);
 
                     assert_diff_file_tree_change_totals(frame);
                     assertion::assert_text_in_region(frame, "println!(\"review\")", &full);
-                    let help_row = Region::new(0, frame.rows() - 2, frame.cols(), 1);
-                    assertion::assert_text_in_region(frame, "j/k: select file", &help_row);
+                    assertion::assert_text_in_region(frame, DIFF_PANEL_TITLE_MARKER, &full);
+                    assertion::assert_text_in_region(frame, "?: help", &status_bar);
                 })
             },
         )
@@ -584,32 +597,41 @@ async fn test_clean_session_hides_diff_action() -> E2eResult {
     // Arrange, Act, Assert
     FeatureTest::new("clean_session_hides_diff_action")
         .with_git()
+        .with_terminal_size(120, 40)
         .setup(|env| Box::pin(async move { seed_clean_review_ready_session(env).await }))
         .run(
             |scenario| {
-                scenario
-                    .compose(&common::wait_for_agentty_startup())
-                    .compose(&common::switch_to_tab("Sessions"))
-                    .compose(&common::open_selected_session_view())
-                    .wait_for_text("Enter: reply", 5000)
-                    .press_key("d")
-                    .wait_for_stable_frame(300, 5000)
-                    .capture_labeled(
-                        "clean_session_view",
-                        "Clean session remains in chat after pressing d",
-                    )
+                open_session_help_and_close(
+                    scenario
+                        .compose(&common::wait_for_agentty_startup())
+                        .compose(&common::switch_to_tab("Sessions"))
+                        .compose(&common::open_selected_session_view()),
+                    &[SESSION_COMPOSER_MARKER],
+                    "clean_session_help",
+                    "Clean session help omits the diff action",
+                )
+                .press_key("d")
+                .wait_for_stable_frame(300, 5000)
+                .capture_labeled(
+                    "clean_session_view",
+                    "Clean session remains in chat after pressing d",
+                )
             },
-            |frame, _report| {
+            |frame, report| {
                 Box::pin(async move {
-                    let full = Region::full(frame.cols(), frame.rows());
+                    let help_frame = common::frame_from_capture(&report.captures[0]);
+                    let help_full = Region::full(help_frame.cols(), help_frame.rows());
+                    assertion::assert_text_in_region(&help_frame, "Enter: Reply", &help_full);
+                    assertion::assert_not_visible(&help_frame, "Show diff");
 
+                    let full = Region::full(frame.cols(), frame.rows());
                     assertion::assert_text_in_region(
                         frame,
                         "Review-ready session shortcuts",
                         &full,
                     );
-                    assertion::assert_text_in_region(frame, "Enter: reply", &full);
-                    assertion::assert_not_visible(frame, "d: diff");
+                    assertion::assert_text_in_region(frame, SESSION_COMPOSER_MARKER, &full);
+                    assertion::assert_not_visible(frame, DIFF_PANEL_TITLE_MARKER);
                     assertion::assert_not_visible(frame, "Loading diff...");
                 })
             },
@@ -626,34 +648,40 @@ async fn test_worktree_open_reenables_diff_action() -> E2eResult {
     FeatureTest::new("worktree_open_reenables_diff_action")
         .env("TMUX", "/tmp/tmux-agentty-test/default,1,0")
         .with_git()
+        .with_terminal_size(120, 40)
         .setup(|env| {
             Box::pin(async move { seed_clean_review_session_with_worktree_edit(env).await })
         })
         .run(
             |scenario| {
-                scenario
-                    .compose(&common::wait_for_agentty_startup())
-                    .compose(&common::switch_to_tab("Sessions"))
-                    .compose(&common::open_selected_session_view())
-                    .wait_for_text("Enter: reply", 5000)
-                    .capture_labeled("clean_session", "Clean session hides the diff action")
-                    .press_key("o")
-                    .wait_for_stable_frame(300, 5000)
-                    .press_key("d")
-                    .wait_for_text("external worktree edit", 5000)
-                    .capture_labeled(
-                        "external_edit_diff",
-                        "Diff opened after editing through the writable worktree",
-                    )
+                open_session_help_and_close(
+                    scenario
+                        .compose(&common::wait_for_agentty_startup())
+                        .compose(&common::switch_to_tab("Sessions"))
+                        .compose(&common::open_selected_session_view()),
+                    &[SESSION_COMPOSER_MARKER],
+                    "clean_session",
+                    "Clean session hides the diff action",
+                )
+                .press_key("o")
+                .wait_for_stable_frame(300, 5000)
+                .press_key("d")
+                .wait_for_text("external worktree edit", 5000)
+                .capture_labeled(
+                    "external_edit_diff",
+                    "Diff opened after editing through the writable worktree",
+                )
             },
             |frame, report| {
                 Box::pin(async move {
                     let clean_frame = common::frame_from_capture(&report.captures[0]);
-                    assertion::assert_not_visible(&clean_frame, "d: diff");
+                    let clean_full = Region::full(clean_frame.cols(), clean_frame.rows());
+                    assertion::assert_text_in_region(&clean_frame, "o: Open worktree", &clean_full);
+                    assertion::assert_not_visible(&clean_frame, "Show diff");
 
                     let full = Region::full(frame.cols(), frame.rows());
                     assertion::assert_text_in_region(frame, "external worktree edit", &full);
-                    assertion::assert_text_in_region(frame, "q/Esc: back", &full);
+                    assertion::assert_text_in_region(frame, DIFF_PANEL_TITLE_MARKER, &full);
                 })
             },
         )
@@ -752,7 +780,6 @@ async fn test_diff_changed_line_navigation() -> E2eResult {
                             "Selected file scrolled without leaving Files focus",
                         )
                         .press_key("l")
-                        .wait_for_text("Esc/Left: files", 5000)
                         .wait_for_text("changed line 70", 5000)
                         .wait_for_stable_frame(300, 5000)
                         .viewing_pause_ms(1500)
@@ -774,10 +801,9 @@ async fn test_diff_changed_line_navigation() -> E2eResult {
                             "changed line 70",
                             &file_focus_full,
                         );
-                        assertion::assert_text_in_region(
-                            &file_focus_frame,
-                            "j/k: select file",
-                            &file_focus_full,
+                        assert!(
+                            !diff_panel_has_focus(&file_focus_frame),
+                            "Files focus must leave the Diff panel border unfocused"
                         );
                         assertion::assert_text_in_region(frame, "changed line 70", &full);
                         let file_tree = diff_file_tree_region(frame);
@@ -793,8 +819,10 @@ async fn test_diff_changed_line_navigation() -> E2eResult {
                             "M └ main.rs",
                             &diff_file_tree_region(frame),
                         );
-                        assertion::assert_text_in_region(frame, "Esc/Left: files", &full);
-                        assertion::assert_text_in_region(frame, "j/k: select row", &full);
+                        assert!(
+                            diff_panel_has_focus(frame),
+                            "`l` must move focus into the Diff panel"
+                        );
                         let source_row = frame
                             .find_text("changed line 70")
                             .first()
@@ -842,11 +870,10 @@ async fn test_diff_comment_file_lookup() -> E2eResult {
                     .press_key("d")
                     .wait_for_text("main.rs", 5000)
                     .press_key("j")
-                    .wait_for_text("Enter/l: open", 5000)
                     .write_text("C")
                     .wait_for_text("File comment", 5000)
                     .write_text("See @src/ma")
-                    .wait_for_text("Tab/Enter: select", 5000)
+                    .wait_for_text("Files (", 5000)
                     .capture_labeled(
                         "comment_lookup",
                         "File lookup beside the active comment input",
@@ -916,12 +943,11 @@ fn diff_line_comments_scenario(scenario: Scenario) -> Scenario {
     let scenario = scenario
         .wait_for_text("Review-ready session shortcuts", 30000)
         .press_key("Enter")
-        .wait_for_text("q: back", 5000)
+        .wait_for_text(SESSION_COMPOSER_MARKER, 5000)
         .press_key("d")
-        .wait_for_text("j/k: select file", 5000)
+        .wait_for_text(DIFF_PANEL_TITLE_MARKER, 5000)
         .wait_for_text("main.rs", 5000)
         .press_key("j")
-        .wait_for_text("Enter/l: open", 5000)
         .wait_for_text("println!(\"review\")", 5000)
         .write_text("C")
         .wait_for_text("File comment", 5000);
@@ -930,14 +956,12 @@ fn diff_line_comments_scenario(scenario: Scenario) -> Scenario {
         .wait_for_text("Add regression coverage.", 3000)
         .press_key("Esc")
         .wait_for_text("Add regression coverage.", 3000)
-        .wait_for_text("Enter: comment", 5000)
         .wait_for_stable_frame(300, 3000)
         .capture_labeled(
             "whole_file_comment",
             "Multiline whole-file feedback appears above the selected patch",
         )
         .press_key("j")
-        .wait_for_text("Enter: comment", 5000)
         .press_key(ENTER_KEY)
         .wait_for_text("New line 1", 5000)
         .write_text("Explain the entry point.")
@@ -960,7 +984,6 @@ fn diff_line_comments_scenario(scenario: Scenario) -> Scenario {
         .wait_for_text("Why print review?|", 3000)
         .press_key(ENTER_KEY)
         .wait_for_text("Why print review?", 3000)
-        .wait_for_text("Enter: comment", 5000)
         .wait_for_stable_frame(1000, 5000)
         .capture_labeled(
             "inline_line_comments",
@@ -968,9 +991,9 @@ fn diff_line_comments_scenario(scenario: Scenario) -> Scenario {
         )
         .viewing_pause_ms(1500)
         .press_key("q")
-        .wait_for_text("Enter: reply", 5000)
+        .wait_for_text(SESSION_COMPOSER_MARKER, 5000)
         .press_key("d")
-        .wait_for_text("j/k: select file", 5000)
+        .wait_for_text(DIFF_PANEL_TITLE_MARKER, 5000)
         .wait_for_text("main.rs", 5000)
         .press_key("j")
         .wait_for_text("Explain the entry point. Updated.", 5000)
@@ -1002,9 +1025,8 @@ fn enter_multiline_diff_file_comment(scenario: Scenario) -> Scenario {
 /// Submits completed comments, inspects the response, and verifies their purge.
 fn submit_diff_line_comments(scenario: Scenario) -> Scenario {
     scenario
-        .wait_for_text("s: submit comments", 3000)
         .press_key("s")
-        .wait_for_text("Ctrl+c: stop", 5000)
+        .wait_for_text(SESSION_COMPOSER_MARKER, 5000)
         .press_key("g")
         .wait_for_text("File comments:", 5000)
         .wait_for_text("src/main.rs: Review the whole file.", 5000)
@@ -1017,7 +1039,6 @@ fn submit_diff_line_comments(scenario: Scenario) -> Scenario {
             5000,
         )
         .wait_for_text("src/main.rs:2 [new]: Why print review?", 5000)
-        .wait_for_text("Enter: reply", 5000)
         .write_text("G")
         // Reply is available before automatic review finishes. Its final
         // output must exist before capturing or scrolling the transcript.
@@ -1037,17 +1058,16 @@ fn submit_diff_line_comments(scenario: Scenario) -> Scenario {
             "Submitted feedback response above the automatic review",
         )
         .press_key("d")
-        .wait_for_text("j/k: select file", 5000)
+        .wait_for_text(DIFF_PANEL_TITLE_MARKER, 5000)
         .wait_for_text("main.rs", 5000)
         .press_key("j")
-        .wait_for_text("Shift+C: comment", 5000)
         .wait_for_stable_frame(300, 5000)
         .capture_labeled(
             "submitted_comments_purged",
             "Submitted comments no longer appear in the next diff view",
         )
         .press_key("q")
-        .wait_for_text("Enter: reply", 5000)
+        .wait_for_text(SESSION_COMPOSER_MARKER, 5000)
 }
 
 /// Verifies inline comment selection, editing, and next-turn submission.
@@ -1060,7 +1080,7 @@ fn assert_diff_line_comments(frame: &TerminalFrame, report: &ProofReport) {
         "Add regression coverage.",
         &file_comment_full,
     );
-    assertion::assert_text_in_region(&file_comment_frame, "Enter: comment", &file_comment_full);
+    assertion::assert_not_visible(&file_comment_frame, "Add regression coverage.|");
 
     let selected_comment_frame = common::frame_from_capture(&report.captures[1]);
     let selected_comment_full =
@@ -1080,7 +1100,7 @@ fn assert_diff_line_comments(frame: &TerminalFrame, report: &ProofReport) {
     let diff_full = Region::full(diff_frame.cols(), diff_frame.rows());
     assertion::assert_text_in_region(&diff_frame, "Explain the entry point. Updated.", &diff_full);
     assertion::assert_text_in_region(&diff_frame, "Why print review?", &diff_full);
-    assertion::assert_text_in_region(&diff_frame, "Enter: comment", &diff_full);
+    assertion::assert_not_visible(&diff_frame, "Why print review?|");
 
     let restored_frame = common::frame_from_capture(&report.captures[3]);
     let restored_full = Region::full(restored_frame.cols(), restored_frame.rows());
@@ -1112,10 +1132,15 @@ fn assert_diff_line_comments(frame: &TerminalFrame, report: &ProofReport) {
     let purged_frame = common::frame_from_capture(&report.captures[6]);
     assertion::assert_not_visible(&purged_frame, "Explain the entry point. Updated.");
     assertion::assert_not_visible(&purged_frame, "Why print review?");
-    assertion::assert_not_visible(&purged_frame, "s: submit comments");
+    assertion::assert_text_in_region(
+        &purged_frame,
+        DIFF_PANEL_TITLE_MARKER,
+        &Region::full(purged_frame.cols(), purged_frame.rows()),
+    );
 
     let full = Region::full(frame.cols(), frame.rows());
-    assertion::assert_text_in_region(frame, "Enter: reply", &full);
+    assertion::assert_text_in_region(frame, SESSION_COMPOSER_MARKER, &full);
+    assertion::assert_not_visible(frame, DIFF_PANEL_TITLE_MARKER);
 }
 
 /// Verify that `Shift+V` selects a changed-row range for one inline comment.
@@ -1142,11 +1167,9 @@ async fn test_diff_row_selection_comments() -> E2eResult {
                     .press_key("d")
                     .wait_for_text("main.rs", 5000)
                     .press_key("j")
-                    .wait_for_text("Enter/l: open", 5000)
+                    .wait_for_text("println!(\"after\")", 5000)
                     .press_key(ENTER_KEY)
-                    .wait_for_text("Enter: comment", 5000)
                     .write_text("V")
-                    .wait_for_text("Esc: cancel", 5000)
                     .press_key("j")
                     .wait_for_stable_frame(300, 5000)
                     .capture_labeled(
@@ -1252,7 +1275,7 @@ async fn test_markdown_diff_preview() -> E2eResult {
 
                     let full = Region::full(frame.cols(), frame.rows());
                     assertion::assert_text_in_region(frame, "# Rendered Markdown Preview", &full);
-                    assertion::assert_text_in_region(frame, "p: preview", &full);
+                    assertion::assert_text_in_region(frame, DIFF_PANEL_TITLE_MARKER, &full);
                 })
             },
         )
@@ -1289,7 +1312,7 @@ async fn diff_preview_opens_from_prompt_chat_focus() -> E2eResult {
                         "Chat transcript focused in the reply composer",
                     )
                     .press_key("d")
-                    .wait_for_text("j/k: select file", 5000)
+                    .wait_for_text(DIFF_PANEL_TITLE_MARKER, 5000)
                     .wait_for_text("println!(\"review\")", 5000)
                     .wait_for_stable_frame(300, 5000)
                     .viewing_pause_ms(1500)
@@ -1315,7 +1338,11 @@ async fn diff_preview_opens_from_prompt_chat_focus() -> E2eResult {
                         "println!(\"review\")",
                         &diff_full,
                     );
-                    assertion::assert_text_in_region(&diff_frame, "j/k: select file", &diff_full);
+                    assertion::assert_text_in_region(
+                        &diff_frame,
+                        DIFF_PANEL_TITLE_MARKER,
+                        &diff_full,
+                    );
 
                     // Leaving the diff restores the composer with the draft
                     // intact.
@@ -1360,6 +1387,47 @@ fn diff_file_tree_region(frame: &TerminalFrame) -> Region {
     assert!(border_column.is_some(), "Files right border");
 
     Region::new(0, 0, border_column.unwrap_or_default() + 1, frame.rows())
+}
+
+/// Returns whether the Diff panel border uses its focused bold style.
+///
+/// The rightmost top-right corner on the Diff title row belongs to the Diff
+/// panel; the Files panel border never changes style with focus.
+fn diff_panel_has_focus(frame: &TerminalFrame) -> bool {
+    frame
+        .find_text(DIFF_PANEL_TITLE_MARKER)
+        .first()
+        .is_some_and(|title| {
+            let row = title.rect.row;
+
+            (0..frame.cols())
+                .rev()
+                .find(|column| frame.cell_text(row, *column) == "┐")
+                .and_then(|column| frame.cell_style(row, column))
+                .is_some_and(CellStyle::bold)
+        })
+}
+
+/// Opens the session-view help overlay, captures it, and closes it again.
+///
+/// `restored_markers` must render in the session view once the overlay
+/// closes.
+fn open_session_help_and_close(
+    scenario: Scenario,
+    restored_markers: &'static [&'static str],
+    label: &str,
+    description: &str,
+) -> Scenario {
+    scenario
+        .press_key("?")
+        .wait_for_text(HELP_OVERLAY_TITLE, 5000)
+        .wait_for_stable_frame(300, 3000)
+        .capture_labeled(label, description)
+        .press_key("Esc")
+        .step(common::wait_for_frame_text(
+            restored_markers,
+            &[HELP_OVERLAY_TITLE],
+        ))
 }
 
 /// Verify binary-only changes retain the chat-focus diff hint and open in the
@@ -1416,9 +1484,9 @@ fn assert_diff_row_selection_comments(
     report: &testty::proof::report::ProofReport,
 ) {
     let selection_frame = common::frame_from_capture(&report.captures[0]);
-    let selection_full = Region::full(selection_frame.cols(), selection_frame.rows());
-    assertion::assert_text_in_region(&selection_frame, "Esc: cancel", &selection_full);
-    assertion::assert_text_in_region(&selection_frame, "Shift+C", &selection_full);
+    for selected_row in ["println!(\"before\")", "println!(\"after\")"] {
+        assertion::assert_span_is_highlighted(&selection_frame, selected_row);
+    }
 
     let file_comment_frame = common::frame_from_capture(&report.captures[1]);
     let file_comment_full = Region::full(file_comment_frame.cols(), file_comment_frame.rows());
@@ -1428,7 +1496,9 @@ fn assert_diff_row_selection_comments(
         "Review the selected file.",
         &file_comment_full,
     );
-    assertion::assert_not_visible(&file_comment_frame, "Esc: cancel");
+    for released_row in ["println!(\"before\")", "println!(\"after\")"] {
+        assertion::assert_span_is_not_highlighted(&file_comment_frame, released_row);
+    }
 
     let editor_frame = common::frame_from_capture(&report.captures[2]);
     let editor_full = Region::full(editor_frame.cols(), editor_frame.rows());
@@ -1447,6 +1517,7 @@ async fn canceled_session_without_archive_hides_diff_action() -> E2eResult {
     // Arrange, Act, Assert
     FeatureTest::new("canceled_session_without_archive_hides_diff_action")
         .with_git()
+        .with_terminal_size(120, 40)
         .setup(|env| {
             Box::pin(async move {
                 seed_review_ready_session(env).await?;
@@ -1456,12 +1527,12 @@ async fn canceled_session_without_archive_hides_diff_action() -> E2eResult {
         })
         .run(
             |scenario| {
-                scenario
+                let scenario = scenario
                     .compose(&common::wait_for_agentty_startup())
                     .compose(&common::switch_to_tab("Sessions"))
                     .compose(&common::open_selected_session_view())
                     .press_key("d")
-                    .wait_for_text("j/k: select file", 5000)
+                    .wait_for_text(DIFF_PANEL_TITLE_MARKER, 5000)
                     .press_key("q")
                     .compose(&common::return_to_session_list())
                     .press_key("c")
@@ -1469,21 +1540,37 @@ async fn canceled_session_without_archive_hides_diff_action() -> E2eResult {
                     .press_key("y")
                     .wait_for_text("Canceled", 5000)
                     .compose(&common::open_selected_session_view())
-                    .wait_for_text("c: continue", 5000)
-                    .press_key("d")
-                    .wait_for_stable_frame(300, 5000)
-                    .capture_labeled(
-                        "canceled_chat",
-                        "Canceled session has no archived diff action",
-                    )
+                    .wait_for_text(ARCHIVED_TIMING_MARKER, 5000);
+
+                open_session_help_and_close(
+                    scenario,
+                    &[ARCHIVED_TIMING_MARKER],
+                    "canceled_help",
+                    "Canceled session help offers continuation without diff",
+                )
+                .press_key("d")
+                .wait_for_stable_frame(300, 5000)
+                .capture_labeled(
+                    "canceled_chat",
+                    "Canceled session has no archived diff action",
+                )
             },
-            |frame, _report| {
+            |frame, report| {
                 Box::pin(async move {
+                    let help_frame = common::frame_from_capture(&report.captures[0]);
+                    let help_full = Region::full(help_frame.cols(), help_frame.rows());
+                    assertion::assert_text_in_region(
+                        &help_frame,
+                        "c: Continue in new session",
+                        &help_full,
+                    );
+                    assertion::assert_not_visible(&help_frame, "Show diff");
+
                     let full = Region::full(frame.cols(), frame.rows());
-                    assertion::assert_text_in_region(frame, "c: continue", &full);
-                    assertion::assert_not_visible(frame, "d: diff");
+                    assertion::assert_text_in_region(frame, ARCHIVED_TIMING_MARKER, &full);
+                    assertion::assert_not_visible(frame, SESSION_COMPOSER_MARKER);
                     assertion::assert_not_visible(frame, "Loading diff...");
-                    assertion::assert_not_visible(frame, "j/k: select file");
+                    assertion::assert_not_visible(frame, DIFF_PANEL_TITLE_MARKER);
                 })
             },
         )

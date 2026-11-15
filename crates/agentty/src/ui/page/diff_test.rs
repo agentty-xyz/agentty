@@ -423,7 +423,7 @@ fn test_comment_lookup_tracks_input_and_scroll_position() {
 }
 
 #[test]
-fn test_diff_comment_lookup_renders_matches_and_constrained_footer() {
+fn test_diff_comment_lookup_renders_matches_and_border_hint() {
     for (height, has_match, editing) in [
         (14, true, true),
         (3, true, true),
@@ -744,9 +744,14 @@ fn test_diff_page_distinguishes_cursor_inside_commented_range() {
 }
 
 #[test]
-fn test_diff_page_shows_visual_selection_footer() {
+fn test_diff_page_highlights_every_row_in_visual_selection() {
     // Arrange
-    let diff = "diff --git a/main.rs b/main.rs\n@@ -0,0 +1 @@\n+review();";
+    let diff = concat!(
+        "diff --git a/src/main.rs b/src/main.rs\n",
+        "@@ -0,0 +1,2 @@\n",
+        "+fn main() {}\n",
+        "+review();\n",
+    );
     let mut line_comments = DiffLineComments::default();
     line_comments.start_selection(0);
     let session = session_fixture();
@@ -756,14 +761,14 @@ fn test_diff_page_shows_visual_selection_footer() {
         can_comment: true,
         diff,
         diff_layout_cache: &diff_layout_cache,
-        file_explorer_selected_index: 0,
+        file_explorer_selected_index: 1,
         focus: DiffFocus::Content,
         line_comments: &line_comments,
         markdown_render_cache: &markdown_render_cache,
         preview: test_diff_preview(),
         review_comments: None,
         scroll_offset: 0,
-        selected_diff_line_index: 0,
+        selected_diff_line_index: 1,
         session: &session,
         sidebar_focus: DiffSidebarFocus::Files,
     });
@@ -776,56 +781,29 @@ fn test_diff_page_shows_visual_selection_footer() {
         .expect("failed to render diff page");
 
     // Assert
-    assert!(buffer_text(terminal.backend().buffer()).contains("Esc: cancel"));
-}
-
-#[test]
-fn test_diff_page_shows_comment_submission_in_file_window() {
-    // Arrange
-    let diff = "diff --git a/main.rs b/main.rs\n@@ -0,0 +1 @@\n+review();";
-    let mut line_comments = DiffLineComments::default();
-    line_comments.start_editing_target(DiffLineCommentTarget::single(DiffLineCommentAnchor {
-        content: "review();".to_string(),
-        line: 1,
-        path: "main.rs".to_string(),
-        side: DiffLineSide::New,
-    }));
-    line_comments
-        .editing_input_mut()
-        .expect("line comment should be editable")
-        .insert_text("Explain this call");
-    line_comments.finish_editing();
-    let session = session_fixture();
-    let diff_layout_cache = DiffLayoutCache::default();
-    let markdown_render_cache = markdown::MarkdownRenderCache::default();
-    let mut page = DiffPage::new(DiffPageInput {
-        can_comment: true,
-        diff,
-        diff_layout_cache: &diff_layout_cache,
-        file_explorer_selected_index: 0,
-        focus: DiffFocus::Files,
-        line_comments: &line_comments,
-        markdown_render_cache: &markdown_render_cache,
-        preview: test_diff_preview(),
-        review_comments: None,
-        scroll_offset: 0,
-        selected_diff_line_index: 0,
-        session: &session,
-        sidebar_focus: DiffSidebarFocus::Files,
-    });
-    let backend = ratatui::backend::TestBackend::new(100, 14);
-    let mut terminal = ratatui::Terminal::new(backend).expect("failed to create terminal");
-
-    // Act
-    terminal
-        .draw(|frame| page.render(frame, frame.area()))
-        .expect("failed to render diff page");
-
-    // Assert
-    assert!(
-        buffer_text(terminal.backend().buffer()).contains("s: submit comments"),
-        "completed comments should be submittable while Files owns focus"
-    );
+    let selected_source_rows = terminal
+        .backend()
+        .buffer()
+        .content()
+        .chunks(100)
+        .filter(|row| {
+            let row_text = row
+                .iter()
+                .map(ratatui::buffer::Cell::symbol)
+                .collect::<String>();
+            row_text.contains("fn main() {}") || row_text.contains("review();")
+        })
+        .collect::<Vec<_>>();
+    assert_eq!(selected_source_rows.len(), 2);
+    for row in selected_source_rows {
+        assert!(
+            row.iter().any(|cell| {
+                cell.fg == style::palette::text_selection()
+                    && cell.bg == style::palette::surface_selection()
+            }),
+            "every row between the selection anchor and cursor should be highlighted"
+        );
+    }
 }
 
 #[test]
@@ -1722,7 +1700,7 @@ fn test_diff_comment_cache_tracks_input_snapshot_and_width() {
 }
 
 #[test]
-fn test_render_shows_updated_diff_help_hint() {
+fn test_render_shows_diff_title_without_help_line() {
     // Arrange
     let _theme_scope = style::scoped_active_theme(ColorTheme::Current);
     let mut session = session_fixture();
@@ -1746,9 +1724,8 @@ fn test_render_shows_updated_diff_help_hint() {
     let text = buffer_text(buffer);
     assert!(text.contains("(+1 -0) Diff — Diff Session"));
     assert_eq!(text.matches("+1/-0").count(), 2);
-    assert!(text.contains("j/k: select file"));
-    assert!(text.contains("Enter/l: open"));
-    assert!(text.contains("?: help"));
+    assert!(!text.contains("j/k: select file"));
+    assert!(!text.contains("?: help"));
     assert!(foreground_symbol_cell_count(buffer, "┌") >= 2);
 }
 

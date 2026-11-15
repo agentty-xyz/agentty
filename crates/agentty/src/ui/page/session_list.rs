@@ -8,7 +8,7 @@ use ratatui::buffer::Buffer;
 use ratatui::layout::{Alignment, Constraint, Rect};
 use ratatui::style::{Color, Modifier, Style};
 use ratatui::text::{Line, Span};
-use ratatui::widgets::{Block, Borders, Cell, Paragraph, Row, Table, TableState};
+use ratatui::widgets::{Cell, Row, Table, TableState};
 
 use crate::app::session_state::SessionGitStatus;
 use crate::domain::agent::ReasoningLevel;
@@ -16,7 +16,6 @@ use crate::domain::session::{ReviewRequestSummary, Session, SessionId, Status};
 use crate::domain::session_order::{
     self, ArchiveAction, GroupedSessionRow, SessionGroup, SessionTreePosition,
 };
-use crate::presentation::help_action;
 use crate::ui::input_layout::first_table_column_width;
 use crate::ui::{Page, layout, markdown, style};
 
@@ -272,16 +271,13 @@ impl<'a> PreparedSessionRow<'a> {
 }
 
 impl Page for SessionListPage<'_> {
-    /// Renders the grouped session table directly below the tab header plus
-    /// the list footer.
+    /// Renders the grouped session table directly below the tab header.
     ///
-    /// The table has no side or top frame because the active `Sessions` tab
-    /// already names the page; a full-width bottom divider separates it from
-    /// the help line. The header bar and selected row span the full page
-    /// width while column text keeps the page inset.
+    /// The table has no frame because the active `Sessions` tab already names
+    /// the page. The header bar and selected row span the full page width
+    /// while column text keeps the page inset.
     fn render(&mut self, f: &mut Frame, area: Rect) {
-        let areas = layout::tab_page_areas(area);
-        let table_area = render_bottom_divider(f, area, areas.main_area);
+        let table_area = layout::tab_page_area(area);
 
         let selected_style = style::row_selection_style();
         let header_style = Style::default()
@@ -359,44 +355,7 @@ impl Page for SessionListPage<'_> {
         f.render_stateful_widget(table, table_area, self.table_state);
         extend_row_backgrounds_to_page_edges(f.buffer_mut(), area, table_area);
         self.table_state.select(previous_selection);
-
-        let selected_session = self
-            .table_state
-            .selected()
-            .and_then(|selected_index| self.sessions.get(selected_index));
-        let help_line = match selected_action_position {
-            Some(action_position) => {
-                let mut actions = help_action::session_list_footer_actions(false, false);
-                actions.insert(
-                    0,
-                    help_action::archive_action(archive_actions[action_position]),
-                );
-                crate::ui::help_format::footer_line(&actions)
-            }
-            None => session_list_help_line(selected_session),
-        };
-        let help_message = Paragraph::new(help_line);
-        f.render_widget(help_message, areas.footer_area);
     }
-}
-
-/// Draws the full-width divider on the last row of `main_area` and returns
-/// the inset area left above it for the table.
-fn render_bottom_divider(f: &mut Frame, page_area: Rect, main_area: Rect) -> Rect {
-    let divider = Block::default()
-        .borders(Borders::BOTTOM)
-        .border_style(style::border_style());
-    let table_area = divider.inner(main_area);
-    f.render_widget(
-        divider,
-        Rect {
-            width: page_area.width,
-            x: page_area.x,
-            ..main_area
-        },
-    );
-
-    table_area
 }
 
 /// Extends painted table-row backgrounds, such as the header bar and the
@@ -429,18 +388,6 @@ fn extend_row_backgrounds_to_page_edges(buffer: &mut Buffer, page_area: Rect, ta
             }
         }
     }
-}
-
-/// Builds footer help content for session list mode.
-fn session_list_help_line(selected_session: Option<&Session>) -> Line<'static> {
-    let can_cancel_selected_session = selected_session.is_some_and(Session::allows_cancel_action);
-    let can_open_selected_session = selected_session.is_some();
-    let actions = help_action::session_list_footer_actions(
-        can_cancel_selected_session,
-        can_open_selected_session,
-    );
-
-    crate::ui::help_format::footer_line(&actions)
 }
 
 /// Prepares list table state for grouped row rendering.

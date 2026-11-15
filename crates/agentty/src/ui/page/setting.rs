@@ -5,7 +5,6 @@ use ratatui::style::Style;
 use ratatui::text::{Line, Span};
 use ratatui::widgets::{Block, Borders, Cell, Paragraph, Row, Table, TableState, Wrap};
 
-use crate::presentation::help_action;
 use crate::presentation::setting::{
     SettingsScreenSnapshot, SettingsSelectorDropdown, SettingsSelectorDropdownOption,
 };
@@ -45,7 +44,7 @@ impl Page for SettingsPage<'_> {
     /// Renders the global and project settings tables with compact tab-page
     /// spacing.
     fn render(&mut self, f: &mut Frame, area: Rect) {
-        let areas = layout::tab_page_areas(area);
+        let main_area = layout::tab_page_area(area);
 
         let selected_style = style::selection_style();
         let global_rows = settings_table_rows(&self.snapshot.global_rows);
@@ -70,7 +69,7 @@ impl Page for SettingsPage<'_> {
         let table_chunks = Layout::default()
             .direction(Direction::Vertical)
             .constraints(section_heights)
-            .split(areas.main_area);
+            .split(main_area);
 
         let name_column_width = settings_name_column_width(
             table_chunks[0].width,
@@ -103,14 +102,10 @@ impl Page for SettingsPage<'_> {
         f.render_stateful_widget(global_table, table_chunks[0], &mut global_table_state);
         f.render_stateful_widget(project_table, table_chunks[1], &mut project_table_state);
 
-        let footer = Paragraph::new(settings_footer_line(self.snapshot));
-
-        f.render_widget(footer, areas.footer_area);
-
         if let Some(selector_dropdown) = &self.snapshot.selector_dropdown {
             render_settings_selector_dropdown(
                 f,
-                areas.main_area,
+                main_area,
                 &table_chunks,
                 global_row_count,
                 selector_dropdown,
@@ -121,7 +116,7 @@ impl Page for SettingsPage<'_> {
             component::launch_configuration_list_editor::LaunchConfigurationListEditor::new(
                 launch_configuration_editor,
             )
-            .render(f, areas.main_area);
+            .render(f, main_area);
         }
     }
 }
@@ -372,29 +367,6 @@ fn settings_selector_dropdown_option_line(
         Span::styled(" ", Style::default().fg(style::palette::text_subtle())),
         Span::styled(option_label, Style::default().fg(style::palette::text())),
     ])
-}
-
-/// Returns the footer help content for settings mode.
-///
-/// Selector dropdowns and command-list editing keep using the
-/// manager-provided hint string, while list mode uses the shared styled
-/// help-action rendering.
-fn settings_footer_line(snapshot: &SettingsScreenSnapshot) -> Line<'static> {
-    settings_footer_line_for_mode(
-        snapshot.launch_configuration_list_editor.is_some() || snapshot.selector_dropdown.is_some(),
-        snapshot.footer_hint,
-    )
-}
-
-/// Returns the footer help content for either list mode or overlay mode.
-fn settings_footer_line_for_mode(uses_inline_hint: bool, footer_hint: &str) -> Line<'static> {
-    if uses_inline_hint {
-        return Line::from(footer_hint.to_string());
-    }
-
-    let actions = help_action::settings_footer_actions();
-
-    crate::ui::help_format::footer_line(&actions)
 }
 
 /// Builds single-line settings table rows.

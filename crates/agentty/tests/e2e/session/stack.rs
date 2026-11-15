@@ -327,6 +327,8 @@ async fn stacked_session_creation() -> E2eResult {
     // Arrange, Act, Assert
     FeatureTest::new("stacked_session_creation")
         .with_git()
+        // Tall enough for the help overlay to list every draft action.
+        .with_terminal_size(80, 40)
         .setup(|env| Box::pin(async move { seed_four_level_review_stack(env).await }))
         .run(
             |scenario| {
@@ -351,15 +353,19 @@ async fn stacked_session_creation() -> E2eResult {
                     .capture_labeled("stacked_draft_view", "Stacked draft action footer")
                     .write_text("Stack level 5")
                     .press_key("Enter")
+                    .step(common::wait_for_session_view())
                     // The empty draft already shows its header, so wait for
-                    // the action only a staged draft offers.
-                    .wait_for_text("s: start", 5000)
+                    // the help action only a staged draft offers. The 80-column
+                    // overlay truncates labels, so match the stable prefix.
+                    .press_key("?")
+                    .wait_for_text("s: Start", 5000)
                     .capture_labeled(
                         "stacked_draft_ready",
                         "Stacked draft staged with start action available",
                     )
                     .viewing_pause_ms(1200)
                     .press_key("q")
+                    .compose(&common::return_to_session_list())
                     .wait_for_text("ACTIVE", 5000)
                     .capture_labeled("stacked_list", "Stacked draft connected in session list")
             },
@@ -375,16 +381,12 @@ async fn stacked_session_creation() -> E2eResult {
                     );
                     assertion::assert_not_visible(&selector_frame, "[Preview] Stack on selected");
 
-                    let draft_view_frame = common::frame_from_capture(&report.captures[1]);
-                    assertion::assert_not_visible(&draft_view_frame, "s: start");
-                    assertion::assert_not_visible(&draft_view_frame, "m: add to merge queue");
-                    assertion::assert_not_visible(&draft_view_frame, "r: sync");
-
                     let ready_frame = common::frame_from_capture(&report.captures[2]);
                     let ready_full = Region::full(ready_frame.cols(), ready_frame.rows());
-                    assertion::assert_text_in_region(&ready_frame, "s: start", &ready_full);
-                    assertion::assert_not_visible(&ready_frame, "m: add to merge queue");
-                    assertion::assert_not_visible(&ready_frame, "r: sync");
+                    assertion::assert_text_in_region(&ready_frame, "s: Start", &ready_full);
+                    assertion::assert_text_in_region(&ready_frame, "?: Help", &ready_full);
+                    assertion::assert_not_visible(&ready_frame, "m: Add to");
+                    assertion::assert_not_visible(&ready_frame, "r: Sync");
 
                     let full = Region::full(frame.cols(), frame.rows());
                     assertion::assert_text_in_region(frame, "Stack root", &full);
@@ -505,6 +507,8 @@ async fn stacked_parent_merge_remains_available_with_review_child() -> E2eResult
     // Arrange, Act, Assert
     FeatureTest::new("stacked_parent_merge_remains_available_with_review_child")
         .with_git()
+        // Tall enough for the help overlay to list every review action.
+        .with_terminal_size(80, 40)
         .setup(|env| Box::pin(async move { seed_review_ready_parent_with_review_child(env).await }))
         .run(
             |scenario| {
@@ -513,12 +517,18 @@ async fn stacked_parent_merge_remains_available_with_review_child() -> E2eResult
                     .compose(&common::switch_to_tab("Sessions"))
                     .wait_for_text("Parent stack review", 5000)
                     .press_key("Up")
-                    .press_key("Enter")
-                    .wait_for_text("Enter: reply", 5000)
+                    .compose(&common::open_selected_session_view())
+                    .press_key("?")
+                    .wait_for_text("Enter: Reply", 5000)
                     .capture_labeled(
                         "parent_review",
                         "Parent review session with reply, commands, and sync available",
                     )
+                    .press_key("Escape")
+                    .step(common::wait_for_frame_text(
+                        &["Parent stack review"],
+                        &["Keybindings"],
+                    ))
                     .press_key("/")
                     .wait_for_text("Slash Command", 3000)
                     .capture_labeled(
@@ -535,18 +545,18 @@ async fn stacked_parent_merge_remains_available_with_review_child() -> E2eResult
                         "Parent stack review",
                         &parent_full,
                     );
-                    assertion::assert_text_in_region(&parent_frame, "Enter: reply", &parent_full);
+                    assertion::assert_text_in_region(&parent_frame, "Enter: Reply", &parent_full);
                     assertion::assert_text_in_region(
                         &parent_frame,
-                        "/: commands menu",
+                        "/: Open commands",
                         &parent_full,
                     );
                     assertion::assert_text_in_region(
                         &parent_frame,
-                        "m: add to merge queue",
+                        "m: Add to merge",
                         &parent_full,
                     );
-                    assertion::assert_text_in_region(&parent_frame, "r: sync", &parent_full);
+                    assertion::assert_text_in_region(&parent_frame, "r: Sync", &parent_full);
 
                     let full = Region::full(frame.cols(), frame.rows());
                     assertion::assert_text_in_region(frame, "Parent stack review", &full);
@@ -640,6 +650,8 @@ async fn stacked_session_start_waits_for_parent_review() -> E2eResult {
     // Arrange, Act, Assert
     FeatureTest::new("stacked_session_start_waits_for_parent_review")
         .with_git()
+        // Tall enough for the help overlay to list every draft action.
+        .with_terminal_size(80, 40)
         .setup(|env| Box::pin(async move { seed_running_stop_session(env).await }))
         .run(
             |scenario| {
@@ -658,11 +670,15 @@ async fn stacked_session_start_waits_for_parent_review() -> E2eResult {
                     .write_text("Waiting child draft")
                     .press_key("Enter")
                     .wait_for_text("Draft Session", 5000)
+                    .step(common::wait_for_session_view())
+                    .press_key("?")
+                    .wait_for_text("Enter: Add draft", 5000)
                     .capture_labeled(
                         "stacked_draft_waiting_parent",
                         "Stacked draft staged while parent is still running",
                     )
                     .press_key("q")
+                    .compose(&common::return_to_session_list())
                     .wait_for_text("ACTIVE", 5000)
                     .press_key("a")
                     .wait_for_text("Stacked", 5000)
@@ -679,10 +695,11 @@ async fn stacked_session_start_waits_for_parent_review() -> E2eResult {
                 Box::pin(async move {
                     let draft_frame = common::frame_from_capture(&report.captures[0]);
                     let draft_full = Region::full(draft_frame.cols(), draft_frame.rows());
-                    assertion::assert_text_in_region(&draft_frame, "Enter: add draft", &draft_full);
-                    assertion::assert_not_visible(&draft_frame, "s: start");
-                    assertion::assert_not_visible(&draft_frame, "m: add to merge queue");
-                    assertion::assert_not_visible(&draft_frame, "r: sync");
+                    assertion::assert_text_in_region(&draft_frame, "Enter: Add draft", &draft_full);
+                    assertion::assert_text_in_region(&draft_frame, "?: Help", &draft_full);
+                    assertion::assert_not_visible(&draft_frame, "s: Start staged session");
+                    assertion::assert_not_visible(&draft_frame, "m: Add to merge");
+                    assertion::assert_not_visible(&draft_frame, "r: Sync");
 
                     let full = Region::full(frame.cols(), frame.rows());
                     assertion::assert_text_in_region(frame, "Stack on selected", &full);
@@ -709,10 +726,16 @@ async fn session_fork_confirmation_creates_session_from_review_session() -> E2eR
                 scenario
                     .compose(&common::wait_for_agentty_startup())
                     .compose(&common::switch_to_tab("Sessions"))
-                    .press_key("Enter")
-                    .wait_for_stable_frame(300, 5000)
+                    .compose(&common::open_selected_session_view())
+                    .press_key("?")
+                    .wait_for_text("F: Fork session", 5000)
                     .viewing_pause_ms(1000)
-                    .capture_labeled("session_view", "Fork shortcut visible in session view")
+                    .capture_labeled("session_view", "Fork shortcut listed in session help")
+                    .press_key("Escape")
+                    .step(common::wait_for_frame_text(
+                        &["Review-ready session shortcuts"],
+                        &["Keybindings"],
+                    ))
                     .write_text("F")
                     .wait_for_text("Confirm Fork", 3000)
                     .viewing_pause_ms(1000)
@@ -739,7 +762,11 @@ async fn session_fork_confirmation_creates_session_from_review_session() -> E2eR
                     let session_view_frame = common::frame_from_capture(&report.captures[0]);
                     let view_full =
                         Region::full(session_view_frame.cols(), session_view_frame.rows());
-                    assertion::assert_text_in_region(&session_view_frame, "F: fork", &view_full);
+                    assertion::assert_text_in_region(
+                        &session_view_frame,
+                        "F: Fork session",
+                        &view_full,
+                    );
 
                     let confirmation_frame = common::frame_from_capture(&report.captures[1]);
                     let confirmation_full =
@@ -803,7 +830,8 @@ async fn stacked_child_hides_session_fork_shortcut() -> E2eResult {
     // Arrange, Act, Assert
     FeatureTest::new("stacked_child_hides_session_fork_shortcut")
         .with_git()
-        .with_terminal_size(120, 24)
+        // Tall enough for the help overlay to list every review action.
+        .with_terminal_size(120, 40)
         .setup(|env| Box::pin(async move { seed_review_ready_parent_with_review_child(env).await }))
         .run(
             |scenario| {
@@ -811,11 +839,17 @@ async fn stacked_child_hides_session_fork_shortcut() -> E2eResult {
                     .compose(&common::wait_for_agentty_startup())
                     .compose(&common::switch_to_tab("Sessions"))
                     .wait_for_text("Child stack review", 5000)
-                    .press_key("Enter")
+                    .compose(&common::open_selected_session_view())
                     .wait_for_text("Child stack review", 5000)
-                    .wait_for_stable_frame(300, 5000)
+                    .press_key("?")
+                    .wait_for_text("?: Help", 5000)
                     .viewing_pause_ms(1000)
                     .capture_labeled("child_view", "Fork shortcut hidden for stacked child")
+                    .press_key("Escape")
+                    .step(common::wait_for_frame_text(
+                        &["Child stack review"],
+                        &["Keybindings"],
+                    ))
                     .write_text("F")
                     .wait_for_stable_frame(300, 5000)
                     .viewing_pause_ms(1000)
@@ -830,11 +864,15 @@ async fn stacked_child_hides_session_fork_shortcut() -> E2eResult {
                         "Child stack review",
                         &view_full,
                     );
-                    assertion::assert_not_visible(&child_view_frame, "F: fork");
+                    assertion::assert_text_in_region(
+                        &child_view_frame,
+                        "f: Focused review",
+                        &view_full,
+                    );
+                    assertion::assert_not_visible(&child_view_frame, "F: Fork session");
 
                     let full = Region::full(frame.cols(), frame.rows());
                     assertion::assert_text_in_region(frame, "Child stack review", &full);
-                    assertion::assert_not_visible(frame, "F: fork");
                     assertion::assert_not_visible(frame, "Confirm Fork");
                     assertion::assert_not_visible(frame, "Reviewing changes with");
                     assertion::assert_not_visible(frame, "No diff changes found for review.");

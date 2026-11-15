@@ -1,4 +1,4 @@
-//! Session header, footer, and transcript display formatting.
+//! Session header and transcript display formatting.
 
 use ag_tui_text::text_util;
 use ratatui::style::{Modifier, Style};
@@ -8,7 +8,6 @@ use ratatui::widgets::Borders;
 use crate::domain::review;
 use crate::domain::session::{COMMITTING_PROGRESS_LABEL, Session, Status};
 use crate::presentation::frame_time::FrameTime;
-use crate::presentation::help_action::{self, ViewHelpState};
 use crate::ui::icon::Icon;
 use crate::ui::{markdown, style};
 
@@ -180,11 +179,6 @@ pub(crate) fn prompt_session_status(session: &Session) -> String {
             format!("{response_style} · {speed_mode} · {permission_mode}")
         }
     }
-}
-
-/// Builds the compact session-view footer.
-pub(crate) fn session_view_footer_line(view_help_state: ViewHelpState) -> Line<'static> {
-    crate::ui::help_format::footer_line(&help_action::view_footer_actions(view_help_state))
 }
 
 /// Formats focused-review section headings with compact spacing and adds the

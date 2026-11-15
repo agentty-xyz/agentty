@@ -120,7 +120,6 @@ pub struct LaunchConfigurationListEditorSnapshot {
 /// Immutable data required to render one settings screen frame.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub(crate) struct SettingsScreenSnapshot {
-    pub(crate) footer_hint: &'static str,
     pub(crate) global_rows: Vec<(&'static str, String)>,
     pub(crate) launch_configuration_list_editor: Option<LaunchConfigurationListEditorSnapshot>,
     pub(crate) project_rows: Vec<(&'static str, String)>,
@@ -290,7 +289,6 @@ impl SettingsPresentationState {
     /// Creates the immutable settings-screen projection consumed by the UI.
     pub(crate) fn snapshot(&self, view: &SettingsView) -> SettingsScreenSnapshot {
         SettingsScreenSnapshot {
-            footer_hint: self.footer_hint(),
             global_rows: SettingRow::GLOBAL
                 .iter()
                 .map(|row| (row.label(), display_value_for_row(view, *row)))
@@ -693,19 +691,6 @@ impl SettingsPresentationState {
         editor.input = InputState::default();
         editor.mode = LaunchConfigurationListEditorMode::Add;
     }
-
-    fn footer_hint(&self) -> &'static str {
-        if self.is_launch_configuration_list_editor_input_active() {
-            "Launch Configurations: type a command, Enter save, Esc cancel"
-        } else if self.is_launch_configuration_list_editor_open() {
-            "Launch Configurations: j/k move, a add, e/Enter edit, d delete, J/K reorder, Esc/q \
-             close"
-        } else if let Some(selector_dropdown) = self.selector_dropdown {
-            selector_dropdown.footer_hint()
-        } else {
-            "Settings: Enter opens selectors or command editor"
-        }
-    }
 }
 
 fn settings_operation_for_model_selector(
@@ -890,28 +875,6 @@ impl SelectorDropdownState {
             SelectorDropdownStage::Primary => "Select setting value",
             SelectorDropdownStage::Reasoning { .. } => "Select reasoning level",
             SelectorDropdownStage::Speed { .. } => "Select response speed",
-        }
-    }
-
-    fn footer_hint(self) -> &'static str {
-        match self.stage {
-            SelectorDropdownStage::Primary if self.row.is_model_selector() => {
-                "Selecting model: j/k move, Enter continue, Esc/q close"
-            }
-            SelectorDropdownStage::Primary => {
-                "Selecting setting value: j/k move, Enter select, Esc/q close"
-            }
-            SelectorDropdownStage::Reasoning { selection, .. }
-                if selection.kind().supports_speed_mode() =>
-            {
-                "Selecting reasoning: j/k move, Enter continue, Esc/q close"
-            }
-            SelectorDropdownStage::Reasoning { .. } => {
-                "Selecting reasoning: j/k move, Enter save, Esc/q close"
-            }
-            SelectorDropdownStage::Speed { .. } => {
-                "Selecting speed: j/k move, Enter save, Esc/q close"
-            }
         }
     }
 }

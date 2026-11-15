@@ -58,10 +58,14 @@ async fn session_archive_chat_hides_composer() -> E2eResult {
                         .compose(&common::wait_for_agentty_startup())
                         .wait_for_text("Archived conversation", 5000)
                         .press_key("Enter")
-                        .wait_for_text("c: continue", 5000)
+                        .wait_for_text("Archived transcript remains readable.", 5000)
                         .wait_for_text("Timer: 2m 5s", 5000)
                         .wait_for_stable_frame(300, 5000)
                         .capture_labeled("archive", "Archived chat without a composer")
+                        .press_key("?")
+                        .wait_for_text("c: Continue in new session", 5000)
+                        .capture_labeled("archive_help", "Help overlay lists archived actions")
+                        .press_key("q")
                         .press_key("q")
                         .wait_for_text("ARCHIVE", 5000)
                 },
@@ -70,19 +74,27 @@ async fn session_archive_chat_hides_composer() -> E2eResult {
                         // Assert
                         let archived = common::frame_from_capture(&report.captures[0]);
                         let full = Region::full(archived.cols(), archived.rows());
-                        for text in [
+                        let status_bar = Region::new(0, 0, archived.cols(), 1);
+                        assertion::assert_text_in_region(
+                            &archived,
                             "Archived transcript remains readable.",
-                            "q: back",
-                            "c: continue",
-                            "j/k: scroll",
-                            "?: help",
-                        ] {
-                            assertion::assert_text_in_region(&archived, text, &full);
-                        }
-                        let timing_row = archived.row_text(archived.rows() - 3);
+                            &full,
+                        );
+                        assertion::assert_text_in_region(&archived, "?: help", &status_bar);
+                        let timing_row = archived.row_text(archived.rows() - 2);
                         assert!(timing_row.contains("Timer: 2m 5s · Started"));
                         for text in ["Auto Edit", "╭"] {
                             assertion::assert_not_visible(&archived, text);
+                        }
+                        let help = common::frame_from_capture(&report.captures[1]);
+                        let help_full = Region::full(help.cols(), help.rows());
+                        for text in [
+                            "q: Back to list",
+                            "c: Continue in new session",
+                            "j/k: Scroll output",
+                            "?: Help",
+                        ] {
+                            assertion::assert_text_in_region(&help, text, &help_full);
                         }
                         let full = Region::full(frame.cols(), frame.rows());
                         assertion::assert_text_in_region(frame, "Archived conversation", &full);
@@ -141,7 +153,6 @@ async fn session_archive_load_more_and_show_less_pages() -> E2eResult {
                     .wait_for_text("Load more...", 5000)
                     .capture_labeled("initial", "First ten archived sessions")
                     .press_key("k")
-                    .wait_for_text("Enter: load more", 5000)
                     .press_key("Enter")
                     .wait_for_text("archive-19", 5000)
                     .capture_labeled("second", "Twenty archived sessions after Enter");
@@ -150,13 +161,12 @@ async fn session_archive_load_more_and_show_less_pages() -> E2eResult {
                     scenario = scenario.press_key("j");
                 }
                 let mut scenario = scenario
-                    .wait_for_text("Enter: load more", 5000)
                     .press_key("Enter")
                     .wait_for_text("archive-22", 5000)
                     .wait_for_stable_frame(300, 5000)
                     .capture_labeled("last", "Remaining archive with only the show-less action")
                     .press_key("Enter")
-                    .wait_for_text("q: back", 5000)
+                    .step(common::wait_for_session_view())
                     .capture_labeled("opened", "Newly loaded archive session can be opened")
                     .press_key("q")
                     .wait_for_text("Show less...", 5000);
@@ -164,11 +174,16 @@ async fn session_archive_load_more_and_show_less_pages() -> E2eResult {
                     scenario = scenario.press_key("j");
                 }
                 scenario
-                    .wait_for_text("Enter: show less", 5000)
                     .press_key("Enter")
                     .wait_for_text("Load more...", 5000)
                     .wait_for_stable_frame(300, 5000)
                     .capture_labeled("collapsed", "Show less returns to the first ten")
+                    .press_key("?")
+                    .wait_for_text("Enter: Load next 10 archived", 5000)
+                    .capture_labeled(
+                        "collapsed_help",
+                        "Help overlay keeps load-more selected after collapse",
+                    )
             },
             |_frame, report| {
                 Box::pin(async move {
@@ -206,7 +221,13 @@ fn assert_archive_load_more_and_show_less(report: &ProofReport) {
     assertion::assert_text_in_region(&second, "Show less...", &full);
     assertion::assert_not_visible(&initial, "Show less...");
     assertion::assert_not_visible(&collapsed, "Show less...");
-    assertion::assert_text_in_region(&collapsed, "Enter: load more", &full);
+    let collapsed_help = common::frame_from_capture(&report.captures[5]);
+    let help_full = Region::full(collapsed_help.cols(), collapsed_help.rows());
+    assertion::assert_text_in_region(
+        &collapsed_help,
+        "Enter: Load next 10 archived sessions",
+        &help_full,
+    );
     let full = Region::full(last.cols(), last.rows());
     assertion::assert_text_in_region(&last, "archive-22", &full);
     assertion::assert_text_in_region(&last, "active-visible", &full);
@@ -260,7 +281,6 @@ async fn session_archive_total_survives_skipped_permission_modes() -> E2eResult 
                     if archive_count > 10 {
                         scenario
                             .press_key("j")
-                            .wait_for_text("Enter: load more", 5000)
                             .press_key("Enter")
                             .wait_for_text("archive-10", 5000)
                             .capture_labeled("loaded", "Next page restores a loadable archive")
