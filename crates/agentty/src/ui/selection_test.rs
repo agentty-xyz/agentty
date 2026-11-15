@@ -238,7 +238,7 @@ fn active_tabs_have_readable_colors_and_bold_text_without_an_underline() {
             let _theme_scope = style::scoped_active_theme(theme);
             let mut terminal =
                 ratatui::Terminal::new(TestBackend::new(100, 5)).expect("create terminal");
-            let tabs = Tabs::new(tab, 0, &[]);
+            let tabs = Tabs::new(tab);
 
             // Act
             terminal

@@ -1495,6 +1495,36 @@ pub(crate) fn wait_for_frame_text(
     )
 }
 
+/// Wait until the footer bar shows `project_name` as the active project.
+///
+/// Only the footer row is matched because the project switcher popup and the
+/// project list also render bare project names. Published scenarios wait for
+/// the footer project path instead, because VHS replays `Step::eventually` as
+/// a sleep for its full timeout.
+pub(crate) fn wait_for_active_project(project_name: &'static str) -> Step {
+    Step::eventually(
+        SESSION_TRANSITION_TIMEOUT,
+        SESSION_TRANSITION_POLL,
+        move |frame| match_active_project(frame, project_name),
+    )
+}
+
+/// Match that the footer bar shows `project_name` as the active project.
+///
+/// # Errors
+///
+/// Returns the assertion failure when the footer row lacks `project_name`.
+pub(crate) fn match_active_project(
+    frame: &TerminalFrame,
+    project_name: &str,
+) -> assertion::MatchResult {
+    assertion::match_text_in_region(
+        frame,
+        project_name,
+        &Region::footer(frame.cols(), frame.rows()),
+    )
+}
+
 /// Switch to a tab by pressing `Tab` and waiting for page-specific content.
 ///
 /// Waiting for content unique to the destination avoids accepting an

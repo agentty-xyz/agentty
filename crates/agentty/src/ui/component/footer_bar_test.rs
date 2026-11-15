@@ -1,9 +1,12 @@
 use std::env;
 use std::path::Path;
 
+use ratatui::backend::TestBackend;
 use ratatui::layout::Rect;
+use ratatui::style::Modifier;
 
-use super::FooterBar;
+use super::{FooterBar, centered_label_area};
+use crate::domain::theme::ColorTheme;
 use crate::ui::{Component, style};
 
 #[test]
@@ -417,4 +420,145 @@ fn test_footer_bar_render_keeps_one_space_after_branch_name() {
     let second_to_last_symbol = buffer[(second_to_last_column_index, 0)].symbol();
     assert_eq!(last_symbol, " ");
     assert_eq!(second_to_last_symbol, "n");
+}
+
+/// Renders `footer` into a one-row terminal of `width` columns and returns
+/// the terminal for buffer inspection.
+fn rendered_footer(footer: &FooterBar, width: u16) -> ratatui::Terminal<TestBackend> {
+    let mut terminal =
+        ratatui::Terminal::new(TestBackend::new(width, 1)).expect("failed to create terminal");
+    terminal
+        .draw(|f| Component::render(footer, f, f.area()))
+        .expect("failed to draw");
+
+    terminal
+}
+
+/// Returns the first row of `terminal` as plain text.
+fn footer_text(terminal: &ratatui::Terminal<TestBackend>) -> String {
+    terminal
+        .backend()
+        .buffer()
+        .content()
+        .iter()
+        .map(ratatui::buffer::Cell::symbol)
+        .collect()
+}
+
+#[test]
+fn test_footer_bar_render_centers_project_name_between_path_and_branch() {
+    // Arrange
+    let _theme_scope = style::scoped_active_theme(ColorTheme::Current);
+    let footer = FooterBar::new("/tmp/p".to_string())
+        .git_branch(Some("main".to_string()))
+        .project_name(Some("agentty".to_string()));
+
+    // Act
+    let terminal = rendered_footer(&footer, 60);
+
+    // Assert
+    let text = footer_text(&terminal);
+    let buffer = terminal.backend().buffer();
+    assert!(text.starts_with(" /tmp/p "));
+    assert!(text.ends_with("● main "));
+    assert_eq!(text.find("agentty"), Some(26));
+    assert_eq!(buffer[(26, 0)].fg, style::palette::accent_soft());
+    assert_eq!(buffer[(26, 0)].bg, style::palette::surface());
+    assert!(buffer[(26, 0)].modifier.contains(Modifier::BOLD));
+}
+
+#[test]
+fn test_footer_bar_render_shortens_then_omits_project_name_before_path_and_branch() {
+    // Arrange
+    let footer = FooterBar::new("/tmp/project".to_string())
+        .git_branch(Some("main".to_string()))
+        .project_name(Some("my-long-project-name".to_string()));
+
+    // Act
+    let shortened = footer_text(&rendered_footer(&footer, 40));
+    let omitted = footer_text(&rendered_footer(&footer, 24));
+
+    // Assert
+    assert_eq!(shortened, " /tmp/project my-long-project... ● main ");
+    assert_eq!(omitted, " /tmp/project    ● main ");
+}
+
+#[test]
+fn test_footer_bar_render_keeps_joined_emoji_project_name_that_fits() {
+    // Arrange
+    let footer = FooterBar::new("/tmp/project".to_string())
+        .git_branch(Some("main".to_string()))
+        .project_name(Some("👩‍💻".to_string()));
+
+    // Act
+    let terminal = rendered_footer(&footer, 40);
+
+    // Assert
+    let text = footer_text(&terminal);
+    assert!(text.contains("👩‍💻"), "footer was {text:?}");
+    assert!(!text.contains(".."), "footer was {text:?}");
+}
+
+#[test]
+fn test_footer_bar_render_hides_project_name_with_workspace_context() {
+    // Arrange
+    let footer = FooterBar::new("/tmp/project".to_string())
+        .project_name(Some("agentty".to_string()))
+        .workspace_context_visible(false);
+
+    // Act
+    let text = footer_text(&rendered_footer(&footer, 40));
+
+    // Assert
+    assert_eq!(text.trim(), "");
+}
+
+#[test]
+fn test_centered_label_area_centers_label_across_full_width() {
+    // Arrange
+    let (area_width, left_width, right_width, label_width) = (60, 16, 8, 7);
+
+    // Act
+    let label_area = centered_label_area(area_width, left_width, right_width, label_width);
+
+    // Assert
+    assert_eq!(label_area, Some((26, 7)));
+}
+
+#[test]
+fn test_centered_label_area_moves_label_into_free_gap_near_long_left_text() {
+    // Arrange
+    let (area_width, left_width, right_width, label_width) = (60, 30, 8, 10);
+
+    // Act
+    let label_area = centered_label_area(area_width, left_width, right_width, label_width);
+
+    // Assert
+    assert_eq!(label_area, Some((36, 10)));
+}
+
+#[test]
+fn test_centered_label_area_shortens_label_to_free_gap() {
+    // Arrange, Act
+    let shortened = centered_label_area(40, 16, 8, 20);
+    let minimum = centered_label_area(30, 16, 8, 10);
+    let whole_short_label = centered_label_area(29, 16, 8, 2);
+
+    // Assert
+    assert_eq!(shortened, Some((17, 14)));
+    assert_eq!(minimum, Some((17, 4)));
+    assert_eq!(whole_short_label, Some((17, 2)));
+}
+
+#[test]
+fn test_centered_label_area_omits_label_without_room() {
+    // Arrange, Act
+    let below_minimum = centered_label_area(29, 16, 8, 10);
+    let no_gap = centered_label_area(10, 16, 0, 5);
+    let empty_label = centered_label_area(60, 16, 8, 0);
+
+    // Assert
+    assert_eq!(below_minimum, None);
+    assert_eq!(no_gap, None);
+    assert_eq!(empty_label, None);
 }
