@@ -287,6 +287,8 @@ async fn graph_request_and_revision_deliver_pasted_images_to_generation() -> E2e
                     .wait_for_text("Use this layout [Image #", 5000)
                     .press_key("Enter")
                     .wait_for_text("Graph proposal v2 ready: 1 node", 10000)
+                    .wait_for_text("Proposal v2", 5000)
+                    .wait_for_text("Awaiting your approval", 5000)
                     .capture_labeled("revision", "Revision image reaches regeneration")
             },
             |frame, _report| {

@@ -7,10 +7,11 @@ use tempfile::tempdir;
 
 use crate::error::GitError;
 use crate::repo::{
-    AsyncGitCommand, apply_non_interactive_environment, batch_mode_ssh_command,
-    command_output_detail, format_git_invocation, main_checkout_working_tree_sync, main_repo_root,
-    normalize_repo_url, parse_git_directory_paths, parse_repo_root, repo_root_from_git_dir_async,
-    resolve_git_dir, run_git_command_sync, run_git_command_with_timeout,
+    AsyncGitCommand, GIT_COMMAND_TIMEOUT, NETWORK_GIT_COMMAND_TIMEOUT,
+    apply_non_interactive_environment, batch_mode_ssh_command, command_output_detail,
+    format_git_invocation, main_checkout_working_tree_sync, main_repo_root, normalize_repo_url,
+    parse_git_directory_paths, parse_repo_root, repo_root_from_git_dir_async, resolve_git_dir,
+    run_git_command_sync, run_git_command_with_timeout,
 };
 
 #[test]
@@ -62,6 +63,53 @@ fn test_batch_mode_ssh_command_extends_configured_command_or_defaults_to_ssh() {
     // Assert
     assert_eq!(extended_command, "ssh -i /keys/agentty -o BatchMode=yes");
     assert_eq!(default_command, "ssh -o BatchMode=yes");
+}
+
+#[test]
+fn test_async_git_command_timeout_widens_bound_for_remote_transfers() {
+    // Arrange
+    let command_for = |arguments: &[&str]| {
+        AsyncGitCommand::new(
+            Path::new("/tmp/repo").to_path_buf(),
+            arguments.iter().map(ToString::to_string).collect(),
+        )
+    };
+    let network_commands = [
+        command_for(&["push", "--porcelain", "origin", "HEAD:feature"]),
+        command_for(&["fetch"]),
+        command_for(&["pull", "--rebase", "origin", "main"]),
+        command_for(&["ls-remote", "--heads", "origin", "feature"]),
+        command_for(&["-c", "http.lowSpeedLimit=1", "--no-pager", "push"]),
+    ];
+    let local_commands = [
+        command_for(&["status"]),
+        command_for(&["-c", "diff.noprefix=false", "diff", "--no-color"]),
+        command_for(&["-c", "push"]),
+        command_for(&["--version"]),
+        command_for(&[]),
+    ];
+
+    // Act
+    let network_timeouts: Vec<Duration> = network_commands
+        .iter()
+        .map(AsyncGitCommand::timeout)
+        .collect();
+    let local_timeouts: Vec<Duration> = local_commands
+        .iter()
+        .map(AsyncGitCommand::timeout)
+        .collect();
+
+    // Assert
+    assert!(
+        network_timeouts
+            .iter()
+            .all(|timeout| *timeout == NETWORK_GIT_COMMAND_TIMEOUT)
+    );
+    assert!(
+        local_timeouts
+            .iter()
+            .all(|timeout| *timeout == GIT_COMMAND_TIMEOUT)
+    );
 }
 
 #[tokio::test]
