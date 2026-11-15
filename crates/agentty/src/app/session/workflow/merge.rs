@@ -21,6 +21,7 @@ use crate::app::assist::{
     AssistContext, AssistPolicy, FailureTracker, append_assist_header, format_detail_lines,
     run_agent_assist,
 };
+use crate::app::graph_activity::GraphActivityRegistry;
 use crate::app::service::{HarnessModels, SessionUpdateVersionMap};
 use crate::app::session::{Clock, SessionError};
 use crate::app::sync::SyncMainEventContext;
@@ -240,6 +241,8 @@ pub(super) struct RebaseCommandInput {
     pub(super) fs_client: Arc<dyn FsClient>,
     /// Git boundary used for rebase commands.
     pub(super) git_client: Arc<dyn GitClient>,
+    /// Graph leases that keep the session `InProgress` after the rebase.
+    pub(super) graph_activity: GraphActivityRegistry,
     /// Harness models a Fast default naming one needs ready before
     /// pre-rebase auto-commit prompts use it.
     pub(super) harness_models: HarnessModels,
@@ -1895,6 +1898,7 @@ impl SessionManager {
             folder,
             fs_client,
             git_client,
+            graph_activity,
             harness_models,
             id,
             run_client,
@@ -1913,7 +1917,8 @@ impl SessionManager {
             id.clone(),
             Arc::clone(&session_update_versions),
             Arc::clone(&status),
-        );
+        )
+        .with_graph_activity(graph_activity);
         status_transition
             .apply_or_invalid_transition(Status::Rebasing)
             .await?;

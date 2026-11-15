@@ -345,8 +345,15 @@ Previously executed mutating requests are never blindly replayed.
 <a id="architecture-runtime-flow-status"></a> `Status::can_transition_to()` and workflow
 eligibility policies govern lifecycle changes. See
 [Session Lifecycle](@/docs/usage/workflow.md#session-lifecycle) for visible states.
-Stack operations evaluate one shared snapshot of parent, child, and sibling activity
-before starting branch work.
+Graph proposal generation and graph reply decisions run on the utility worker but hold a
+`Review` session `InProgress` through a lease backed by a running session operation.
+Other statuses keep their own meaning. A turn or rebase that ends while a lease is held
+leaves `Review` to the last lease, and that lease never ends a turn still running.
+Leases and turns persist the latest in-memory status under one lock, so an older write
+never overwrites a newer status. Queued chat wakes the session worker when only a lease
+holds `InProgress` or the session is back in `Review`, so it runs during a lease. Stack
+operations evaluate one shared snapshot of parent, child, and sibling activity before
+starting branch work.
 
 ## Agent Channel Architecture
 

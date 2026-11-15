@@ -14,7 +14,7 @@ use super::support::{
     register_session_backend, test_session_manager, wait_for_status, wait_for_status_with_retries,
 };
 use crate::app::session::SessionLoadInput;
-use crate::app::session::workflow::task::SessionTaskService;
+use crate::app::session::workflow::task::StatusTransition;
 use crate::app::test_support::TestSessionRunFactory;
 use crate::domain::agent::{AgentKind, AgentSelection, ReasoningLevel, ResponseStyle, SpeedMode};
 use crate::domain::permission::PermissionMode;
@@ -87,32 +87,14 @@ async fn test_done_status_triggers_app_server_shutdown() {
         .sessions
         .session_handles_or_err(&session_id)
         .expect("missing session handles");
-    let session_status = Arc::clone(&handles.status);
-    let app_event_tx = app.services.event_sender();
-    let transitioned_to_merging = SessionTaskService::update_status(
-        &session_status,
-        app.services.clock().as_ref(),
-        app.services.db(),
-        &app_event_tx,
-        &app.services.session_update_versions(),
-        &session_id,
-        Status::Merging,
-    )
-    .await;
+    let status_transition =
+        StatusTransition::from_services(&app.services, handles, session_id.clone());
+    let transitioned_to_merging = status_transition.apply(Status::Merging).await;
     assert!(
         transitioned_to_merging,
         "status transition to Merging should succeed"
     );
-    let transitioned_to_done = SessionTaskService::update_status(
-        &session_status,
-        app.services.clock().as_ref(),
-        app.services.db(),
-        &app_event_tx,
-        &app.services.session_update_versions(),
-        &session_id,
-        Status::Done,
-    )
-    .await;
+    let transitioned_to_done = status_transition.apply(Status::Done).await;
     assert!(
         transitioned_to_done,
         "status transition to Done should succeed"

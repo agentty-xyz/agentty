@@ -320,7 +320,13 @@ impl App {
         let handle = self.sessions.handle();
         let services = self.services.clone();
         let session_id = state.input.session_id.clone();
+        let status = self
+            .sessions
+            .session_handles_or_err(&session_id)
+            .ok()
+            .map(|handles| Arc::clone(&handles.status));
         self.services.track_cleanup_task(tokio::spawn(async move {
+            let activity = services.begin_graph_activity(&session_id, status).await;
             let outcome = match reply.outcome {
                 Some(outcome) => outcome,
                 None => match decision.decide(run_client.as_ref()).await {
@@ -344,18 +350,18 @@ impl App {
             };
             services.finish_proposal_reply_decision(&reply.proposal_id);
             // A reply left for recovery reports once its action is attempted.
-            let Some(notice) = notice else {
-                return;
-            };
-            SessionTaskService::append_workflow_notice(
-                &transcript,
-                services.db(),
-                &services.event_sender(),
-                &services.session_update_versions(),
-                &session_id,
-                &notice,
-            )
-            .await;
+            if let Some(notice) = notice {
+                SessionTaskService::append_workflow_notice(
+                    &transcript,
+                    services.db(),
+                    &services.event_sender(),
+                    &services.session_update_versions(),
+                    &session_id,
+                    &notice,
+                )
+                .await;
+            }
+            activity.finish(&services).await;
         }));
     }
 }

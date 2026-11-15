@@ -33,6 +33,7 @@ use super::support::{
 };
 use crate::app::AppEvent;
 use crate::app::branch_publish::BranchPublishTaskSession;
+use crate::app::graph_activity::{GRAPH_ACTIVITY_OPERATION_KIND, GraphActivityRegistry};
 use crate::app::service::HarnessModels;
 use crate::app::session::SessionError;
 use crate::domain::agent::{AgentKind, AgentModel, AgentSelection, ReasoningLevel};
@@ -76,6 +77,7 @@ async fn test_should_skip_worker_command_without_cancel_request() {
     let context = SessionWorkerContext {
         app_event_tx: mpsc::unbounded_channel().0,
         available_agent_kinds: Arc::from(AgentKind::ALL),
+        graph_activity: GraphActivityRegistry::default(),
         harness_models: HarnessModels::default(),
         branch_operation_lock: Arc::new(tokio::sync::Mutex::new(())),
         cancel_token: Arc::new(Mutex::new(CancellationToken::new())),
@@ -151,6 +153,7 @@ async fn test_should_skip_worker_command_when_cancel_is_requested() {
     let context = SessionWorkerContext {
         app_event_tx: mpsc::unbounded_channel().0,
         available_agent_kinds: Arc::from(AgentKind::ALL),
+        graph_activity: GraphActivityRegistry::default(),
         harness_models: HarnessModels::default(),
         branch_operation_lock: Arc::new(tokio::sync::Mutex::new(())),
         cancel_token: Arc::new(Mutex::new(CancellationToken::new())),
@@ -240,6 +243,7 @@ async fn test_should_skip_worker_command_allows_new_operation_after_cancel() {
     let context = SessionWorkerContext {
         app_event_tx: mpsc::unbounded_channel().0,
         available_agent_kinds: Arc::from(AgentKind::ALL),
+        graph_activity: GraphActivityRegistry::default(),
         harness_models: HarnessModels::default(),
         branch_operation_lock: Arc::new(tokio::sync::Mutex::new(())),
         cancel_token: Arc::new(Mutex::new(CancellationToken::new())),
@@ -346,6 +350,7 @@ async fn test_apply_turn_result_reports_background_push_failures() {
     let context = SessionWorkerContext {
         app_event_tx,
         available_agent_kinds: Arc::from(AgentKind::ALL),
+        graph_activity: GraphActivityRegistry::default(),
         harness_models: HarnessModels::default(),
         branch_operation_lock: Arc::new(tokio::sync::Mutex::new(())),
         cancel_token: Arc::new(Mutex::new(CancellationToken::new())),
@@ -504,6 +509,7 @@ async fn test_run_channel_turn_finalizes_invalid_permission_setup_failure() {
     let context = SessionWorkerContext {
         app_event_tx: mpsc::unbounded_channel().0,
         available_agent_kinds: Arc::from(AgentKind::ALL),
+        graph_activity: GraphActivityRegistry::default(),
         harness_models: HarnessModels::default(),
         branch_operation_lock: Arc::new(tokio::sync::Mutex::new(())),
         cancel_token: Arc::new(Mutex::new(CancellationToken::new())),
@@ -603,6 +609,7 @@ async fn test_run_channel_turn_returns_stopped_when_cancel_token_fires() {
     let context = SessionWorkerContext {
         app_event_tx: mpsc::unbounded_channel().0,
         available_agent_kinds: Arc::from(AgentKind::ALL),
+        graph_activity: GraphActivityRegistry::default(),
         harness_models: HarnessModels::default(),
         branch_operation_lock: Arc::new(tokio::sync::Mutex::new(())),
         cancel_token: Arc::clone(&cancel_token),
@@ -618,10 +625,7 @@ async fn test_run_channel_turn_returns_stopped_when_cancel_token_fires() {
         review_request_client: Arc::new(forge::MockReviewRequestClient::new()),
         session_update_versions: Arc::default(),
         session_id: "sess1".into(),
-        session_agent: AgentSelection::new(
-            crate::domain::agent::AgentKind::Antigravity,
-            AgentModel::Gemini38Flash,
-        ),
+        session_agent: AgentSelection::new(AgentKind::Antigravity, AgentModel::Gemini38Flash),
         status: Arc::new(Mutex::new(Status::InProgress)),
     };
 
@@ -747,6 +751,7 @@ async fn test_run_channel_turn_proceeds_read_only_after_previous_cancellation() 
     let context = SessionWorkerContext {
         app_event_tx: mpsc::unbounded_channel().0,
         available_agent_kinds: Arc::from(AgentKind::ALL),
+        graph_activity: GraphActivityRegistry::default(),
         harness_models: HarnessModels::default(),
         branch_operation_lock: Arc::new(tokio::sync::Mutex::new(())),
         cancel_token: Arc::new(Mutex::new(stale_token)),
@@ -848,6 +853,7 @@ async fn test_run_channel_turn_skips_warning_when_main_checkout_is_clean_after_t
     let context = SessionWorkerContext {
         app_event_tx: mpsc::unbounded_channel().0,
         available_agent_kinds: Arc::from(AgentKind::ALL),
+        graph_activity: GraphActivityRegistry::default(),
         harness_models: HarnessModels::default(),
         branch_operation_lock: Arc::new(tokio::sync::Mutex::new(())),
         cancel_token: Arc::new(Mutex::new(CancellationToken::new())),
@@ -938,6 +944,7 @@ async fn test_run_channel_turn_skips_warning_when_main_checkout_stays_dirty() {
     let context = SessionWorkerContext {
         app_event_tx: mpsc::unbounded_channel().0,
         available_agent_kinds: Arc::from(AgentKind::ALL),
+        graph_activity: GraphActivityRegistry::default(),
         harness_models: HarnessModels::default(),
         branch_operation_lock: Arc::new(tokio::sync::Mutex::new(())),
         cancel_token: Arc::new(Mutex::new(CancellationToken::new())),
@@ -1034,6 +1041,7 @@ async fn test_run_channel_turn_skips_main_checkout_snapshot_for_bare_repo() {
     let context = SessionWorkerContext {
         app_event_tx: mpsc::unbounded_channel().0,
         available_agent_kinds: Arc::from(AgentKind::ALL),
+        graph_activity: GraphActivityRegistry::default(),
         harness_models: HarnessModels::default(),
         branch_operation_lock: Arc::new(tokio::sync::Mutex::new(())),
         cancel_token: Arc::new(Mutex::new(CancellationToken::new())),
@@ -1107,6 +1115,7 @@ async fn test_run_turn_with_cancellation_honours_pre_turn_cancel() {
     let context = SessionWorkerContext {
         app_event_tx: mpsc::unbounded_channel().0,
         available_agent_kinds: Arc::from(AgentKind::ALL),
+        graph_activity: GraphActivityRegistry::default(),
         harness_models: HarnessModels::default(),
         branch_operation_lock: Arc::new(tokio::sync::Mutex::new(())),
         cancel_token: Arc::new(Mutex::new(CancellationToken::new())),
@@ -1223,6 +1232,7 @@ async fn test_run_turn_with_cancellation_returns_stopped_after_drain_timeout() {
         let context = SessionWorkerContext {
             app_event_tx: mpsc::unbounded_channel().0,
             available_agent_kinds: Arc::from(AgentKind::ALL),
+            graph_activity: GraphActivityRegistry::default(),
             harness_models: HarnessModels::default(),
             branch_operation_lock: Arc::new(tokio::sync::Mutex::new(())),
             cancel_token: Arc::new(Mutex::new(CancellationToken::new())),
@@ -1377,6 +1387,83 @@ async fn test_restart_recovery_skips_abort_without_rebase_in_progress() {
 
     // Assert
     assert!(result.is_ok(), "{result:?}");
+    assert!(unfinished.is_empty());
+}
+
+#[tokio::test]
+/// Verifies an interrupted graph lease leaves every status it never claimed,
+/// because a lease only moves `Review` to `InProgress`.
+async fn test_restart_recovery_keeps_statuses_a_graph_lease_never_claimed() {
+    for status in [
+        Status::Draft,
+        Status::AgentReview,
+        Status::Watching,
+        Status::Question,
+    ] {
+        // Arrange
+        let base_dir = tempdir().expect("failed to create temp dir");
+        let db = AppRepositories::in_memory().await.expect("db should open");
+        seed_recovery_test_operation(&db, status, GRAPH_ACTIVITY_OPERATION_KIND).await;
+        db.operations()
+            .mark_session_operation_running("op-1")
+            .await
+            .expect("operation should start");
+
+        // Act
+        let result = SessionWorkerService::fail_unfinished_operations_from_previous_run_at(
+            &db,
+            base_dir.path(),
+            Arc::new(MockGitClient::new()),
+            300,
+        )
+        .await;
+        let sessions = db
+            .sessions()
+            .load_sessions()
+            .await
+            .expect("sessions should load");
+
+        // Assert
+        assert!(result.is_ok(), "{result:?}");
+        assert_eq!(sessions[0].status, status.to_string());
+    }
+}
+
+#[tokio::test]
+/// Verifies an interrupted graph lease that held `InProgress` returns the
+/// session to `Review`.
+async fn test_restart_recovery_returns_graph_lease_in_progress_to_review() {
+    // Arrange
+    let base_dir = tempdir().expect("failed to create temp dir");
+    let db = AppRepositories::in_memory().await.expect("db should open");
+    seed_recovery_test_operation(&db, Status::InProgress, GRAPH_ACTIVITY_OPERATION_KIND).await;
+    db.operations()
+        .mark_session_operation_running("op-1")
+        .await
+        .expect("operation should start");
+
+    // Act
+    let result = SessionWorkerService::fail_unfinished_operations_from_previous_run_at(
+        &db,
+        base_dir.path(),
+        Arc::new(MockGitClient::new()),
+        300,
+    )
+    .await;
+    let sessions = db
+        .sessions()
+        .load_sessions()
+        .await
+        .expect("sessions should load");
+    let unfinished = db
+        .operations()
+        .load_unfinished_session_operations()
+        .await
+        .expect("operations should load");
+
+    // Assert
+    assert!(result.is_ok(), "{result:?}");
+    assert_eq!(sessions[0].status, "Review");
     assert!(unfinished.is_empty());
 }
 

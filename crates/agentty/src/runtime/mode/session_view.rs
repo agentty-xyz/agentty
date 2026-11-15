@@ -796,13 +796,16 @@ async fn pop_last_queued_chat_message_if_any(app: &mut App, session_id: &str) ->
 /// (where the child is guaranteed alive because `run_turn` has not
 /// returned yet), and app-server channels shut down through
 /// `shutdown_session`. Both paths converge on the worker returning a
-/// `[Stopped]` error. After signalling, the persisted status is updated to
-/// `Review`, the in-memory snapshot and shared handle are refreshed, and UI
-/// events are emitted so the user can inspect or continue the session instead
-/// of treating it as canceled.
+/// `[Stopped]` error. Background graph work, such as proposal generation or a
+/// reply decision, is stopped too. After signalling, the persisted status is
+/// updated to `Review`, the in-memory snapshot and shared handle are
+/// refreshed, and UI events are emitted so the user can inspect or continue
+/// the session instead of treating it as canceled.
 async fn cancel_in_progress_turn(app: &mut App, session_id: &str) {
     let timestamp_seconds =
         app::session::unix_timestamp_from_system_time(app.services.clock().now_system_time());
+
+    app.services.stop_graph_activity(session_id).await;
 
     if let Err(error) = app
         .services

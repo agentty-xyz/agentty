@@ -30,6 +30,7 @@ use super::support::{
 };
 use crate::app::AppEvent;
 use crate::app::branch_publish::BranchPublishTaskSession;
+use crate::app::graph_activity::GraphActivityRegistry;
 use crate::app::service::HarnessModels;
 use crate::app::session::SessionError;
 use crate::domain::agent::{AgentKind, AgentModel, AgentSelection};
@@ -189,6 +190,7 @@ async fn test_apply_turn_result_starts_background_push_for_published_branch() {
         let context = SessionWorkerContext {
             app_event_tx,
             available_agent_kinds: Arc::from(AgentKind::ALL),
+            graph_activity: GraphActivityRegistry::default(),
             harness_models: HarnessModels::default(),
             branch_operation_lock: Arc::new(tokio::sync::Mutex::new(())),
             cancel_token: Arc::new(Mutex::new(CancellationToken::new())),
@@ -286,6 +288,7 @@ async fn test_apply_turn_result_resolves_fixed_review_threads_after_push() {
         let mut context = SessionWorkerContext {
             app_event_tx,
             available_agent_kinds: Arc::from(AgentKind::ALL),
+            graph_activity: GraphActivityRegistry::default(),
             harness_models: HarnessModels::default(),
             branch_operation_lock: Arc::new(tokio::sync::Mutex::new(())),
             cancel_token: Arc::new(Mutex::new(CancellationToken::new())),
@@ -465,6 +468,7 @@ async fn test_apply_turn_result_rejects_incomplete_review_comment_outcome_batch(
     let context = SessionWorkerContext {
         app_event_tx: mpsc::unbounded_channel().0,
         available_agent_kinds: Arc::from(AgentKind::ALL),
+        graph_activity: GraphActivityRegistry::default(),
         harness_models: HarnessModels::default(),
         branch_operation_lock: Arc::new(tokio::sync::Mutex::new(())),
         cancel_token: Arc::new(Mutex::new(CancellationToken::new())),
@@ -547,6 +551,7 @@ async fn test_failed_push_retains_but_does_not_resolve_review_fix_undone_by_desc
     let context = SessionWorkerContext {
         app_event_tx,
         available_agent_kinds: Arc::from(AgentKind::ALL),
+        graph_activity: GraphActivityRegistry::default(),
         harness_models: HarnessModels::default(),
         branch_operation_lock: Arc::new(tokio::sync::Mutex::new(())),
         cancel_token: Arc::new(Mutex::new(CancellationToken::new())),
@@ -859,6 +864,7 @@ async fn test_commit_failure_discards_review_operations_before_later_push() {
     let context = SessionWorkerContext {
         app_event_tx,
         available_agent_kinds: Arc::from(AgentKind::ALL),
+        graph_activity: GraphActivityRegistry::default(),
         harness_models: HarnessModels::default(),
         branch_operation_lock: Arc::new(tokio::sync::Mutex::new(())),
         cancel_token: Arc::new(Mutex::new(CancellationToken::new())),
@@ -949,6 +955,7 @@ async fn test_commit_binding_failure_retains_review_operation_for_fresh_retry() 
     let context = SessionWorkerContext {
         app_event_tx,
         available_agent_kinds: Arc::from(AgentKind::ALL),
+        graph_activity: GraphActivityRegistry::default(),
         harness_models: HarnessModels::default(),
         branch_operation_lock: Arc::new(tokio::sync::Mutex::new(())),
         cancel_token: Arc::new(Mutex::new(CancellationToken::new())),

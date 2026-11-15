@@ -560,7 +560,8 @@ async fn prepare_session_turn(context: &SessionWorkerContext, request_kind: &Age
         context.session_id.clone(),
         Arc::clone(&context.session_update_versions),
         Arc::clone(&context.status),
-    );
+    )
+    .with_graph_activity(context.graph_activity.clone());
     let _ = status_transition.apply(Status::InProgress).await;
 }
 

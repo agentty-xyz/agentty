@@ -13,7 +13,7 @@ use tokio_util::sync::CancellationToken;
 
 use super::super::{ProposalGeneration, finish_proposal_generation};
 use crate::app::execution_graph::tests::seed_session;
-use crate::domain::session::Status;
+use crate::domain::session::{SessionId, Status};
 use crate::infra::agent_profile::MockAgentCatalogClient;
 use crate::test_support::new_test_app;
 
@@ -26,6 +26,7 @@ fn old_generation_cleanup_preserves_regenerated_cancellation() {
         "preview".into(),
         ProposalGeneration {
             cancellation: old.clone(),
+            session_id: SessionId::from("sess"),
             version: 1,
         },
     )]));
@@ -35,6 +36,7 @@ fn old_generation_cleanup_preserves_regenerated_cancellation() {
         "preview".into(),
         ProposalGeneration {
             cancellation: newer.clone(),
+            session_id: SessionId::from("sess"),
             version: 2,
         },
     );

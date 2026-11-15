@@ -30,6 +30,7 @@ use crate::app::branch_publish::{
     BranchPublishTaskContext, BranchPublishTaskSession, review_request_from_publish_result,
     run_branch_publish_action,
 };
+use crate::app::graph_activity::{GRAPH_ACTIVITY_OPERATION_KIND, GraphActivityRegistry};
 use crate::app::service::{HarnessModels, SessionUpdateVersionMap};
 use crate::app::session::{Clock, SessionError, unix_timestamp_from_system_time};
 use crate::app::{AppEvent, AppServices, SessionManager};
@@ -563,6 +564,8 @@ pub(super) struct SessionWorkerContext {
     pub(super) folder: PathBuf,
     pub(super) fs_client: Arc<dyn FsClient>,
     pub(super) git_client: Arc<dyn GitClient>,
+    /// Graph leases that hold the session `InProgress` across turn ends.
+    pub(super) graph_activity: GraphActivityRegistry,
     /// Harness models a Fast default naming one needs ready before title
     /// and auto-commit utility prompts use it.
     pub(super) harness_models: HarnessModels,
@@ -1006,6 +1009,41 @@ impl SessionWorkerService {
                     .collect();
 
                 for session_id in interrupted_session_ids {
+                    let session_operations: Vec<_> = unfinished_operations
+                        .iter()
+                        .filter(|operation| operation.session_id == session_id)
+                        .collect();
+                    // A graph lease only ever moves `Review` to `InProgress`,
+                    // so interrupted graph work alone undoes just that and
+                    // leaves every other status as the lease found it.
+                    let is_graph_activity_only = session_operations
+                        .iter()
+                        .any(|operation| operation.kind == GRAPH_ACTIVITY_OPERATION_KIND)
+                        && session_operations.iter().all(|operation| {
+                            operation.started_at.is_none()
+                                || operation.kind == GRAPH_ACTIVITY_OPERATION_KIND
+                        });
+                    if is_graph_activity_only {
+                        let is_in_progress = db
+                            .sessions()
+                            .load_session(session_id)
+                            .await?
+                            .is_some_and(|session| {
+                                session.status.parse::<Status>().ok() == Some(Status::InProgress)
+                            });
+                        if is_in_progress {
+                            db.sessions()
+                                .update_session_status_with_timing_at(
+                                    session_id,
+                                    &Status::Review.to_string(),
+                                    timestamp_seconds,
+                                )
+                                .await?;
+                        }
+
+                        continue;
+                    }
+
                     let unstarted_first_prompt = unfinished_operations
                         .iter()
                         .filter(|operation| operation.session_id == session_id)
@@ -1297,6 +1335,7 @@ impl SessionWorkerService {
             folder: runtime.folder.clone(),
             fs_client: services.fs_client(),
             git_client: services.git_client(),
+            graph_activity: services.graph_activity.clone(),
             harness_models: services.harness_models(),
             queued_messages: Arc::clone(&runtime.queued_messages),
             review_request_client: Arc::clone(&runtime.review_request_client),
@@ -1972,6 +2011,7 @@ impl SessionWorkerService {
             folder: context.folder.clone(),
             fs_client: Arc::clone(&context.fs_client),
             git_client: Arc::clone(&context.git_client),
+            graph_activity: context.graph_activity.clone(),
             harness_models: context.harness_models.clone(),
             id: context.session_id.clone(),
             run_client,
@@ -2482,6 +2522,35 @@ impl SessionManager {
     /// current session status.
     pub(crate) fn wake_session_worker(&mut self, session_id: &str) {
         self.worker_service_mut().wake_session_worker(session_id);
+    }
+
+    /// Wakes the worker that drains a newly queued chat message.
+    ///
+    /// A graph lease holds `InProgress` without a worker turn, so a session
+    /// with no worker yet, such as one restored at startup, gets one here.
+    /// The lease may already have ended, leaving `Review`, which gets one
+    /// too. Any other status keeps the message queued for the worker that
+    /// owns the running work.
+    ///
+    /// # Errors
+    /// Returns an error when the session runtime handles are missing.
+    pub(super) fn wake_queued_message_worker(
+        &mut self,
+        services: &AppServices,
+        session_id: &str,
+    ) -> Result<(), SessionError> {
+        let runtime = self.session_worker_runtime_or_err(services, session_id)?;
+        if !services
+            .graph_activity
+            .needs_queue_worker(&runtime.session_id, &runtime.status)
+        {
+            return Ok(());
+        }
+        self.worker_service_mut()
+            .ensure_session_worker(services, &runtime);
+        self.wake_session_worker(session_id);
+
+        Ok(())
     }
 
     /// Drops worker queues for touched sessions that reached terminal status.

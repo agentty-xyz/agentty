@@ -16,8 +16,10 @@ use tokio_util::sync::CancellationToken;
 
 use crate::app::App;
 use crate::app::command_gateway::GraphProposalCommand;
+use crate::app::service::AppServices;
 use crate::app::session::SessionTaskService;
-use crate::domain::session::Status;
+use crate::domain::session::{SessionId, Status};
+use crate::domain::session_message::SessionTranscript;
 
 #[derive(Template)]
 #[template(path = "graph_proposal_prompt.md", escape = "none")]
@@ -30,6 +32,7 @@ struct GraphProposalPrompt<'a> {
 
 pub(super) struct ProposalGeneration {
     pub(super) cancellation: CancellationToken,
+    pub(super) session_id: SessionId,
     pub(super) version: u32,
 }
 
@@ -230,7 +233,11 @@ impl App {
                     || stored.permission_mode != state.permission.to_string()
                     || !matches!(
                         session.status,
-                        Status::Draft | Status::Review | Status::AgentReview | Status::Watching
+                        Status::Draft
+                            | Status::Review
+                            | Status::AgentReview
+                            | Status::Watching
+                            | Status::InProgress
                     )
                 {
                     return Err(SessionError::Operation(
@@ -356,6 +363,7 @@ impl App {
                 state.input.id.clone(),
                 ProposalGeneration {
                     cancellation: cancellation.clone(),
+                    session_id: state.input.session_id.clone(),
                     version: state.version.number,
                 },
             );
@@ -373,31 +381,75 @@ impl App {
         let handles = self
             .sessions
             .session_handles_or_err(&state.input.session_id)
-            .ok()
-            .map(|handles| handles.transcript.clone());
+            .ok();
+        let status = handles.map(|handles| Arc::clone(&handles.status));
+        let transcript = handles.map(|handles| Arc::clone(&handles.transcript));
         self.services.track_cleanup_task(tokio::spawn(async move {
-            let environment = services.graph_resources.environment(&ag_session::EnvId::SessionWorktree(state.input.session_id.clone()));
-            let outcome = tokio::select! {
-                biased;
-                () = cancellation.cancelled() => return,
-                lease = environment.read_owned() => {
-                    ag_worker::with_execution_resource(lease, generate(&state, folder, client.as_ref())).await
-                }
-            };
-            if services.db().graph_proposals().finish(&state.input.id, state.version.number, &outcome).await.is_ok()
-                && let Some(transcript) = handles
-            {
-                let mut completed = state.clone();
-                completed.version.outcome = outcome;
-                SessionTaskService::append_workflow_notice(
-                    &transcript, services.db(), &services.event_sender(), &services.session_update_versions(),
-                    &state.input.session_id, &crate::presentation::graph_chat::proposal_chat_notice(&completed),
-                ).await;
-            }
-            services.wake_graphs();
-            finish_proposal_generation(&services.proposal_generations, &state.input.id, state.version.number);
+            let activity = services
+                .begin_graph_activity(&state.input.session_id, status)
+                .await;
+            run_graph_proposal_generation(
+                &services,
+                &state,
+                folder,
+                client.as_ref(),
+                &cancellation,
+                transcript,
+            )
+            .await;
+            activity.finish(&services).await;
         }));
     }
+}
+
+/// Generates one proposal version and reports it in chat. Cancellation
+/// before the workspace read lease leaves the version to its canceller.
+async fn run_graph_proposal_generation(
+    services: &AppServices,
+    state: &GraphProposalState,
+    folder: PathBuf,
+    client: &dyn ag_worker::RunClient,
+    cancellation: &CancellationToken,
+    transcript: Option<Arc<Mutex<SessionTranscript>>>,
+) {
+    let environment = services
+        .graph_resources
+        .environment(&ag_session::EnvId::SessionWorktree(
+            state.input.session_id.clone(),
+        ));
+    let outcome = tokio::select! {
+        biased;
+        () = cancellation.cancelled() => return,
+        lease = environment.read_owned() => {
+            ag_worker::with_execution_resource(lease, generate(state, folder, client)).await
+        }
+    };
+    if services
+        .db()
+        .graph_proposals()
+        .finish(&state.input.id, state.version.number, &outcome)
+        .await
+        .is_ok()
+        && let Some(transcript) = transcript
+    {
+        let mut completed = state.clone();
+        completed.version.outcome = outcome;
+        SessionTaskService::append_workflow_notice(
+            &transcript,
+            services.db(),
+            &services.event_sender(),
+            &services.session_update_versions(),
+            &state.input.session_id,
+            &crate::presentation::graph_chat::proposal_chat_notice(&completed),
+        )
+        .await;
+    }
+    services.wake_graphs();
+    finish_proposal_generation(
+        &services.proposal_generations,
+        &state.input.id,
+        state.version.number,
+    );
 }
 
 /// Remove only this generation's token while holding the same map lock used
