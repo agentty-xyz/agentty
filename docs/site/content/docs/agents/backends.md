@@ -416,16 +416,10 @@ for [queued work](@/docs/usage/workflow.md#active-turns-and-the-message-queue).
 
 Claude and Codex also support `/fast`. Press `Enter` on the command to toggle the
 current session between `Normal` and `Fast`. `Fast` reduces latency at higher provider
-cost and may switch to a compatible model:
-
-| Selection   | Model used with Fast |
-| ----------- | -------------------- |
-| Claude      | `claude-opus-5-5`    |
-| Codex Spark | `gpt-6.1-sol`        |
-
-Returning to `Normal` keeps the resulting model. Choosing an incompatible model resets
-speed to `Normal`. These changes do not alter project defaults. Antigravity has no speed
-control. See the provider guides for
+cost. On a model without Fast support, such as `claude-haiku-5-5` or Codex Spark,
+`/fast` shows an error and keeps the current model; use `/model` to pick a supported
+one. Choosing an incompatible model resets speed to `Normal`. These changes do not alter
+project defaults. Antigravity has no speed control. See the provider guides for
 [Codex fast mode](https://learn.chatgpt.com/docs/agent-configuration/speed) and
 [Claude Code fast mode](https://code.claude.com/docs/en/fast-mode).
 

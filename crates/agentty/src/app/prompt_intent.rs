@@ -642,10 +642,9 @@ impl App {
     /// idle and reports it in the session transcript.
     ///
     /// Choosing the speed the session will have after any pending model
-    /// change cancels a pending speed change. Enabling fast
-    /// mode later switches to the fast-compatible variant of the pending or
-    /// current model, matching an immediate change. Fast mode is refused
-    /// when the pending or current provider has no speed control.
+    /// change cancels a pending speed change. Like an immediate change, fast
+    /// mode is refused with an error notice when the pending or current model
+    /// has no Fast support.
     async fn defer_prompt_session_speed_mode(
         &mut self,
         session_id: &SessionId,
@@ -658,14 +657,10 @@ impl App {
             .entry(session_id.clone())
             .or_default();
         let effective_agent = settings.agent.unwrap_or(current_agent);
-        if speed_mode == SpeedMode::Fast && !effective_agent.kind().supports_speed_mode() {
-            let notice = format!(
-                "Keeping normal responses because `{}` has no fast mode.",
-                effective_agent.model().as_str()
-            );
+        if speed_mode == SpeedMode::Fast && !effective_agent.supports_fast_mode() {
             self.discard_empty_deferred_session_settings(session_id);
 
-            self.append_prompt_status_line(session_id, TranscriptNotice::Settings, &notice)
+            self.append_unsupported_fast_mode_notice(session_id, effective_agent)
                 .await;
 
             return;
@@ -688,6 +683,21 @@ impl App {
         self.discard_empty_deferred_session_settings(session_id);
 
         self.append_prompt_status_line(session_id, TranscriptNotice::Settings, &notice)
+            .await;
+    }
+
+    /// Reports that `agent` cannot run fast mode and points to `/model`.
+    async fn append_unsupported_fast_mode_notice(
+        &self,
+        session_id: &SessionId,
+        agent: AgentSelection,
+    ) {
+        let notice = format!(
+            "Fast mode is not supported by `{}`. Use `/model` to choose a model that supports it.",
+            agent.model().as_str()
+        );
+
+        self.append_prompt_status_line(session_id, TranscriptNotice::Error, &notice)
             .await;
     }
 
@@ -875,7 +885,9 @@ impl App {
     /// failure with session context.
     ///
     /// Like model changes, speed changes wait while the session worker still
-    /// owns accepted work, because enabling fast mode may switch the model.
+    /// owns accepted work. Enabling Fast on a model without Fast support
+    /// keeps the session unchanged and appends an error notice instead of
+    /// switching models.
     pub(crate) async fn update_prompt_session_speed_mode(
         &mut self,
         session_id: &SessionId,
@@ -908,33 +920,20 @@ impl App {
     }
 
     /// Persists one response-speed preference for a session running
-    /// `session_agent`, first switching to its fast-compatible model when
-    /// enabling fast mode requires one.
+    /// `session_agent`.
     ///
-    /// Emitted events are left for the caller to reduce.
+    /// Enabling fast mode on a model without Fast support appends an error
+    /// notice and keeps the session unchanged. Emitted events are left for
+    /// the caller to reduce.
     async fn switch_session_speed_mode(
         &mut self,
         session_id: &SessionId,
         session_agent: AgentSelection,
         speed_mode: SpeedMode,
     ) {
-        let fast_agent = session_agent.compatible_with_speed_mode(SpeedMode::Fast);
-        if speed_mode == SpeedMode::Fast
-            && fast_agent != session_agent
-            && let Err(error) = self
-                .sessions
-                .set_session_model_for_speed_mode(&self.services, session_id.as_str(), fast_agent)
-                .await
-        {
-            let agent_kind = fast_agent.kind();
-            let agent_model = fast_agent.model().as_str();
-            warn!(
-                session_id = %session_id,
-                agent = %agent_kind,
-                model = %agent_model,
-                error = %error,
-                "failed to switch session model before enabling fast mode"
-            );
+        if speed_mode == SpeedMode::Fast && !session_agent.supports_fast_mode() {
+            self.append_unsupported_fast_mode_notice(session_id, session_agent)
+                .await;
 
             return;
         }

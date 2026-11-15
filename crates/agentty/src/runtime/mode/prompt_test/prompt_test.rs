@@ -80,16 +80,10 @@ fn test_prompt_edit_prunes_attachment_after_undo_revision_eviction() {
 }
 
 #[tokio::test]
-async fn test_fast_slash_submit_toggles_speed_and_preserves_compatible_model() {
-    for (initial_agent, fast_agent) in [
-        (
-            AgentSelection::new(AgentKind::Claude, AgentModel::ClaudeFable52),
-            AgentSelection::new(AgentKind::Claude, AgentModel::ClaudeOpus55),
-        ),
-        (
-            AgentSelection::new(AgentKind::Codex, AgentModel::Gpt53CodexSpark),
-            model_fixture::codex_selection(),
-        ),
+async fn test_fast_slash_submit_toggles_speed_and_keeps_model() {
+    for initial_agent in [
+        AgentSelection::new(AgentKind::Claude, AgentModel::ClaudeOpus55),
+        model_fixture::codex_selection(),
     ] {
         // Arrange
         let (mut app, _base_dir) = new_test_prompt_app("/fast", None).await;
@@ -121,7 +115,7 @@ async fn test_fast_slash_submit_toggles_speed_and_preserves_compatible_model() {
             ));
             assert_eq!(app.sessions.sessions()[0].speed_mode, expected_speed);
             assert_eq!(persisted_speed_mode, expected_speed);
-            assert_eq!(app.sessions.sessions()[0].agent, fast_agent);
+            assert_eq!(app.sessions.sessions()[0].agent, initial_agent);
         }
     }
 }

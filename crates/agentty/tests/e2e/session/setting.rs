@@ -501,6 +501,60 @@ async fn session_fast_mode_toggle() -> E2eResult {
     Ok(())
 }
 
+/// Seeds the review-ready session on a Claude model without Fast support.
+async fn seed_claude_haiku_review_session(
+    env: &BuilderEnv,
+) -> Result<(), Box<dyn std::error::Error>> {
+    seed_review_ready_session(env).await?;
+
+    (async {
+        let database = common::open_database(env).await?;
+        database
+            .sessions()
+            .update_session_model("review-shortcut-0001", "claude-haiku-5-5")
+            .await
+    })
+    .await?;
+
+    Ok(())
+}
+
+/// Verify `/fast` on a model without Fast support shows an error and keeps
+/// the session's model and normal speed.
+#[tokio::test]
+async fn session_fast_mode_rejects_unsupported_model() -> E2eResult {
+    // Arrange, Act, Assert
+    FeatureTest::new("session_fast_mode_rejects_unsupported_model")
+        .with_git()
+        .with_terminal_size(180, 24)
+        .setup(|env| Box::pin(async move { seed_claude_haiku_review_session(env).await }))
+        .run(
+            |scenario| {
+                scenario
+                    .compose(&common::wait_for_agentty_startup())
+                    .compose(&common::switch_to_tab("Sessions"))
+                    .compose(&common::open_selected_session_view())
+                    .press_key("/")
+                    .write_text("fast")
+                    .wait_for_text("Toggle between normal and fast responses", 3000)
+                    .press_key("Enter")
+                    .wait_for_text("Fast mode is not supported by", 5000)
+            },
+            |frame, _report| {
+                Box::pin(async move {
+                    let full = Region::full(frame.cols(), frame.rows());
+                    assertion::assert_text_in_region(frame, "[Error] Fast mode", &full);
+                    assertion::assert_text_in_region(frame, "claude/claude-haiku-5-5", &full);
+                    assertion::assert_text_in_region(frame, "· Balanced · Normal", &full);
+                    assertion::assert_not_visible(frame, "claude-opus-5-5");
+                })
+            },
+        )
+        .await?;
+
+    Ok(())
+}
+
 /// Verify `/style` exposes response-detail choices and persists the selected
 /// style visibly in the current session.
 #[tokio::test]
