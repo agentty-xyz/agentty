@@ -573,8 +573,9 @@ fn assert_queued_chat_message_pops(frame: &TerminalFrame, report: &ProofReport) 
     assertion::assert_not_visible(frame, "Ctrl+c: Stop");
 }
 
-/// Verify a `Rebasing` session offers setting slash commands and defers a
-/// `/fast` toggle until the active sync finishes instead of queueing text.
+/// Verify a `Rebasing` session offers setting slash commands, defers a
+/// `/fast` toggle until the active sync finishes instead of queueing text,
+/// and returns to the session view instead of keeping the composer open.
 #[tokio::test]
 async fn session_slash_setting_deferred_during_rebase() -> E2eResult {
     // Arrange, Act, Assert
@@ -614,6 +615,7 @@ async fn session_slash_setting_deferred_during_rebase() -> E2eResult {
                     );
                     assertion::assert_not_visible(frame, "≡ queued ›");
                     assertion::assert_not_visible(frame, "Slash Command");
+                    assertion::assert_not_visible(frame, "Type your message");
                 })
             },
         )

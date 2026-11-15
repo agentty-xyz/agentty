@@ -1146,6 +1146,12 @@ fn reduce_prompt_slash_submit(
         }
         _ => None,
     };
+    if let Some(effect) = selection.as_ref().and_then(prompt_slash_setting_effect) {
+        finish_prompt_slash_setting(mode, prompt_context, effects, effect);
+
+        return;
+    }
+
     match selection {
         Some(PromptSuggestionSelection::Command("/graph")) => {
             push_attachment_cleanup(effects, clear_prompt_slash_input(mode));
@@ -1169,10 +1175,6 @@ fn reduce_prompt_slash_submit(
 
             open_prompt_slash_stage(mode, PromptSlashStage::Reasoning, selected_index);
         }
-        Some(PromptSuggestionSelection::Command("/fast")) => {
-            push_attachment_cleanup(effects, clear_prompt_slash_input(mode));
-            effects.push(PromptEffect::ToggleSpeedMode);
-        }
         Some(PromptSuggestionSelection::Command("/style")) => {
             let selected_index = ResponseStyle::ALL
                 .iter()
@@ -1195,27 +1197,63 @@ fn reduce_prompt_slash_submit(
                 slash_state.selected_index = 0;
             });
         }
-        Some(PromptSuggestionSelection::Model(selected_agent)) => {
-            push_attachment_cleanup(effects, clear_prompt_slash_input(mode));
-            effects.push(PromptEffect::UpdateModel(selected_agent));
-        }
         Some(PromptSuggestionSelection::SignIn(selected_agent)) => {
             push_attachment_cleanup(effects, clear_prompt_slash_input(mode));
             open_chatgpt_sign_in(mode, selected_agent, effects);
         }
-        Some(PromptSuggestionSelection::Mode(permission_mode)) => {
-            push_attachment_cleanup(effects, clear_prompt_slash_input(mode));
-            effects.push(PromptEffect::PersistPermissionMode(permission_mode));
+        // Setting selections were applied above.
+        Some(
+            PromptSuggestionSelection::Model(_)
+            | PromptSuggestionSelection::Mode(_)
+            | PromptSuggestionSelection::Reasoning(_)
+            | PromptSuggestionSelection::Style(_),
+        )
+        | None => {}
+    }
+}
+
+/// Returns the setting change a slash `selection` applies immediately, or
+/// `None` when the selection opens a stage or runs another action.
+fn prompt_slash_setting_effect(selection: &PromptSuggestionSelection) -> Option<PromptEffect> {
+    match selection {
+        PromptSuggestionSelection::Command("/fast") => Some(PromptEffect::ToggleSpeedMode),
+        PromptSuggestionSelection::Model(selected_agent) => {
+            Some(PromptEffect::UpdateModel(*selected_agent))
         }
-        Some(PromptSuggestionSelection::Reasoning(reasoning_level)) => {
-            push_attachment_cleanup(effects, clear_prompt_slash_input(mode));
-            effects.push(PromptEffect::UpdateReasoningLevel(reasoning_level));
+        PromptSuggestionSelection::Mode(permission_mode) => {
+            Some(PromptEffect::PersistPermissionMode(*permission_mode))
         }
-        Some(PromptSuggestionSelection::Style(response_style)) => {
-            push_attachment_cleanup(effects, clear_prompt_slash_input(mode));
-            effects.push(PromptEffect::UpdateResponseStyle(response_style));
+        PromptSuggestionSelection::Reasoning(reasoning_level) => {
+            Some(PromptEffect::UpdateReasoningLevel(*reasoning_level))
         }
-        None => {}
+        PromptSuggestionSelection::Style(response_style) => {
+            Some(PromptEffect::UpdateResponseStyle(*response_style))
+        }
+        PromptSuggestionSelection::Agent(_)
+        | PromptSuggestionSelection::Command(_)
+        | PromptSuggestionSelection::SignIn(_) => None,
+    }
+}
+
+/// Clears the slash buffer and requests one setting `effect`.
+///
+/// While the session runs a turn or rebase, the composer then returns to the
+/// session view, matching a queued message, so the chat does not stay
+/// focused after the setting is applied.
+fn finish_prompt_slash_setting(
+    mode: &mut AppMode,
+    prompt_context: &PromptContext,
+    effects: &mut Vec<PromptEffect>,
+    effect: PromptEffect,
+) {
+    push_attachment_cleanup(effects, clear_prompt_slash_input(mode));
+    effects.push(effect);
+
+    if prompt_context.slash_command_set == PromptSlashCommandSet::SettingsOnly {
+        *mode = AppMode::View {
+            scroll_offset: prompt_context.scroll_offset,
+            session_id: prompt_context.session_id.clone(),
+        };
     }
 }
 

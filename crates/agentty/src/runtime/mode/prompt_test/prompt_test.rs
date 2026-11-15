@@ -1992,6 +1992,42 @@ fn test_handle_prompt_slash_submit_selects_agent_and_advances_to_model_stage() {
     assert!(effects.is_empty());
 }
 
+#[test]
+fn test_handle_prompt_slash_submit_returns_to_view_after_setting_while_busy() {
+    // Arrange
+    let mut context = new_test_prompt_context();
+    context.scroll_offset = Some(7);
+    context.slash_command_set = PromptSlashCommandSet::SettingsOnly;
+    let mut fast_mode = new_test_prompt_mode("/fast");
+    let mut style_mode = new_test_prompt_mode("/style");
+    if let AppMode::Prompt { slash_state, .. } = &mut style_mode {
+        slash_state.stage = PromptSlashStage::Style;
+    }
+    let mut fast_effects = Vec::new();
+    let mut style_effects = Vec::new();
+
+    // Act
+    reduce_prompt_slash_submit(&mut fast_mode, &context, &mut fast_effects);
+    reduce_prompt_slash_submit(&mut style_mode, &context, &mut style_effects);
+
+    // Assert
+    for mode in [&fast_mode, &style_mode] {
+        assert!(matches!(
+            mode,
+            AppMode::View { scroll_offset: Some(7), session_id }
+                if session_id == "prompt-test-session"
+        ));
+    }
+    assert!(matches!(
+        fast_effects.as_slice(),
+        [PromptEffect::ToggleSpeedMode]
+    ));
+    assert!(matches!(
+        style_effects.as_slice(),
+        [PromptEffect::UpdateResponseStyle(_)]
+    ));
+}
+
 #[tokio::test]
 async fn test_handle_prompt_slash_submit_sets_selected_model_and_resets_input() {
     // Arrange
