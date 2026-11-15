@@ -578,6 +578,96 @@ async fn test_handle_key_event_routes_loading_diff_cancel() {
 }
 
 #[tokio::test]
+async fn test_handle_key_event_routes_diff_exit_confirmation_over_focused_review_comments() {
+    // Arrange
+    let (mut app, base_dir) = crate::test_support::new_test_app().await;
+    let session = crate::test_support::SessionFixtureBuilder::new()
+        .id("session-id")
+        .folder(base_dir.path().to_path_buf())
+        .status(crate::domain::session::Status::Review)
+        .build();
+    app.sessions =
+        crate::test_support::session_manager_with_handles(vec![session], HashMap::new()).into();
+    let mut line_comments = DiffLineComments::default();
+    line_comments.start_editing_target(DiffLineCommentTarget::single(DiffLineCommentAnchor {
+        content: "review();".to_string(),
+        line: 1,
+        path: "src/main.rs".to_string(),
+        side: DiffLineSide::New,
+    }));
+    line_comments
+        .editing_input_mut()
+        .expect("seeded comment should be editable")
+        .insert_text("Explain this call");
+    line_comments.finish_editing();
+    app.mode = AppMode::Diff {
+        diff: "diff --git a/src/main.rs b/src/main.rs\n+review();\n".to_string(),
+        file_explorer_selected_index: 1,
+        focus: DiffFocus::Files,
+        line_comments,
+        selected_diff_line_index: 0,
+        preview: DiffPreview::default(),
+        review_comments: Some(DiffReviewComments {
+            sidebar_focus: DiffSidebarFocus::Comments,
+            ..DiffReviewComments::loading(1)
+        }),
+        restore: None,
+        scroll_cache: None,
+        session_id: "session-id".into(),
+        scroll_offset: 0,
+    };
+    let backend = ratatui::backend::TestBackend::new(120, 30);
+    let mut terminal = ratatui::Terminal::new(backend).expect("failed to create terminal");
+    let presentation = PresentationState::default();
+    let key = |key_code| KeyEvent::new(key_code, KeyModifiers::NONE);
+
+    // Act
+    handle_key_event(
+        &mut app,
+        &presentation,
+        &mut terminal,
+        key(KeyCode::Char('q')),
+    )
+    .await
+    .expect("quit key should open the confirmation");
+    handle_key_event(&mut app, &presentation, &mut terminal, key(KeyCode::Esc))
+        .await
+        .expect("escape should cancel the confirmation");
+
+    // Assert
+    assert!(matches!(
+        &app.mode,
+        AppMode::Diff {
+            line_comments,
+            review_comments: Some(review_comments),
+            ..
+        } if line_comments.submit_confirmation_index.is_none()
+            && review_comments.sidebar_focus == DiffSidebarFocus::Comments
+    ));
+
+    // Act
+    handle_key_event(
+        &mut app,
+        &presentation,
+        &mut terminal,
+        key(KeyCode::Char('q')),
+    )
+    .await
+    .expect("quit key should reopen the confirmation");
+    let event_result = handle_key_event(
+        &mut app,
+        &presentation,
+        &mut terminal,
+        key(KeyCode::Char('y')),
+    )
+    .await;
+
+    // Assert
+    assert!(matches!(event_result, Ok(EventResult::Continue)));
+    assert!(matches!(app.mode, AppMode::View { .. }));
+}
+
+#[tokio::test]
 async fn test_handle_key_event_submits_completed_diff_comments() {
     // Arrange
     let (mut app, base_dir) = crate::test_support::new_test_app().await;

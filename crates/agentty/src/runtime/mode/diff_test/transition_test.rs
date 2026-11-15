@@ -913,6 +913,11 @@ async fn test_handle_quit_saves_and_reopens_diff_comments() {
         TEST_TERMINAL_SIZE,
         KeyEvent::new(KeyCode::Char('q'), KeyModifiers::NONE),
     );
+    handle(
+        &mut app,
+        TEST_TERMINAL_SIZE,
+        KeyEvent::new(KeyCode::Char('n'), KeyModifiers::NONE),
+    );
 
     // Assert
     let saved_comments = app
@@ -923,6 +928,7 @@ async fn test_handle_quit_saves_and_reopens_diff_comments() {
     assert_eq!(saved_comments.editing_index, None);
     assert_eq!(saved_comments.selection_anchor_index, None);
     assert_eq!(saved_comments.selected_comment_index, None);
+    assert_eq!(saved_comments.submit_confirmation_index, None);
 
     // Act
     enter_diff_mode(

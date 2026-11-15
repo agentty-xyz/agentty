@@ -26,6 +26,7 @@ use crate::presentation::frame_time::FrameTime;
 use crate::presentation::graph_chat::GraphChatSnapshot;
 use crate::presentation::setting::SettingsScreenSnapshot;
 use crate::ui::component::confirmation_overlay::ConfirmationOverlay;
+use crate::ui::component::diff_comment_submit_overlay::DiffCommentSubmitOverlay;
 use crate::ui::component::info_overlay::InfoOverlay;
 use crate::ui::component::project_catalog_overlay::ProjectCatalogOverlay;
 use crate::ui::{
@@ -575,8 +576,10 @@ fn render_mode_overlay(
         | AppMode::View { .. }
         | AppMode::Prompt { .. }
         | AppMode::Question { .. }
-        | AppMode::DiffLoading { .. }
-        | AppMode::Diff { .. } => {}
+        | AppMode::DiffLoading { .. } => {}
+        AppMode::Diff { line_comments, .. } => {
+            render_diff_comment_submit_overlay(f, area, line_comments);
+        }
         AppMode::ProjectCatalog { dialog } => ProjectCatalogOverlay { dialog }.render(f, area),
         AppMode::SessionCreation {
             selected_option_index,
@@ -665,6 +668,20 @@ fn render_mode_overlay(
         )
         .render(f, area),
     }
+}
+
+/// Previews pending diff comments while the leave-diff confirmation is open.
+fn render_diff_comment_submit_overlay(
+    frame: &mut Frame,
+    area: Rect,
+    line_comments: &DiffLineComments,
+) {
+    let Some(selected_index) = line_comments.submit_confirmation_index else {
+        return;
+    };
+    let preview = line_comments.prompt_text();
+
+    DiffCommentSubmitOverlay::new(&preview, selected_index == 0).render(frame, area);
 }
 
 /// Shares the frame's spinner phase between informational overlays.

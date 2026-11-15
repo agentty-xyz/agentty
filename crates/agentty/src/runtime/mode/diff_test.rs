@@ -21,6 +21,9 @@ mod question;
 #[path = "diff_test/review_test.rs"]
 mod review;
 
+#[path = "diff_test/submit_confirmation_test.rs"]
+mod submit_confirmation;
+
 #[path = "diff_test/synchronization_test.rs"]
 mod synchronization;
 
