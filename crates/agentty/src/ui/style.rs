@@ -8,7 +8,7 @@ use ratatui::buffer::Buffer;
 use ratatui::style::{Color, Modifier, Style};
 
 use super::icon::Icon;
-use crate::domain::session::{ReviewRequestState, Status};
+use crate::domain::session::{ReviewRequestState, SessionSize, Status};
 use crate::domain::theme::ColorTheme;
 
 static ACTIVE_THEME: AtomicU8 = AtomicU8::new(theme_index(ColorTheme::Current));
@@ -440,6 +440,19 @@ pub fn status_color(status: Status) -> Color {
         Status::Rebasing | Status::Merging => palette::accent(),
         Status::Merged | Status::Done => palette::success(),
         Status::Canceled => palette::danger(),
+    }
+}
+
+/// Returns the terminal color representing one session size bucket.
+#[must_use]
+pub fn size_color(size: SessionSize) -> Color {
+    match size {
+        SessionSize::Xs => palette::success(),
+        SessionSize::S => palette::success_soft(),
+        SessionSize::M => palette::warning(),
+        SessionSize::L => palette::warning_soft(),
+        SessionSize::Xl => palette::danger_soft(),
+        SessionSize::Xxl => palette::danger(),
     }
 }
 

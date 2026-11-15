@@ -6,9 +6,9 @@ use super::super::icon::Icon;
 use super::{
     CURRENT_PALETTE, DARK_HORIZON_PALETTE, GREEN_PALETTE, border_style, forge_indicator_color,
     palette, prepare_terminal_frame, row_selection_style, scoped_active_theme, selection_style,
-    set_active_theme, status_color, status_icon,
+    set_active_theme, size_color, status_color, status_icon,
 };
-use crate::domain::session::{ReviewRequestState, Status};
+use crate::domain::session::{ReviewRequestState, SessionSize, Status};
 use crate::domain::theme::ColorTheme;
 
 #[test]
@@ -135,6 +135,25 @@ fn relative_luminance(color: Color) -> f64 {
     };
 
     linear(red) * 0.2126 + linear(green) * 0.7152 + linear(blue) * 0.0722
+}
+
+#[test]
+fn size_color_uses_expected_palette() {
+    // Arrange
+    let _theme_scope = scoped_active_theme(ColorTheme::Current);
+    let test_cases = [
+        (SessionSize::Xs, palette::success()),
+        (SessionSize::S, palette::success_soft()),
+        (SessionSize::M, palette::warning()),
+        (SessionSize::L, palette::warning_soft()),
+        (SessionSize::Xl, palette::danger_soft()),
+        (SessionSize::Xxl, palette::danger()),
+    ];
+
+    // Act & Assert
+    for (size, expected_color) in test_cases {
+        assert_eq!(size_color(size), expected_color);
+    }
 }
 
 #[test]

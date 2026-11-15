@@ -221,7 +221,7 @@ fn test_session_header_lines_keep_theme_highlight_when_canceled() {
 
     // Assert
     assert_eq!(
-        header_lines[0].spans[0].style.fg,
+        header_lines[0].spans[1].style.fg,
         Some(style::palette::warning())
     );
 }

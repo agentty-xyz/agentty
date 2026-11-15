@@ -12,7 +12,7 @@ use ratatui::widgets::{Block, Borders, Cell, Paragraph, Row, Table, TableState};
 
 use crate::app::session_state::SessionGitStatus;
 use crate::domain::agent::ReasoningLevel;
-use crate::domain::session::{ReviewRequestSummary, Session, SessionId, SessionSize, Status};
+use crate::domain::session::{ReviewRequestSummary, Session, SessionId, Status};
 use crate::domain::session_order::{
     self, ArchiveAction, GroupedSessionRow, SessionGroup, SessionTreePosition,
 };
@@ -808,7 +808,10 @@ fn render_session_title(
         0,
         Span::styled(
             format!("{size_badge:<SIZE_BADGE_WIDTH$} "),
-            Style::default().fg(session_detail_color(session, size_color(session.size))),
+            Style::default().fg(session_detail_color(
+                session,
+                style::size_color(session.size),
+            )),
         ),
     );
 
@@ -851,18 +854,6 @@ fn pr_ready_label(summary: &ReviewRequestSummary) -> Option<&'static str> {
         Some(PR_BYPASS_READY_LABEL)
     } else {
         None
-    }
-}
-
-/// Returns the palette color representing each session size bucket.
-fn size_color(size: SessionSize) -> Color {
-    match size {
-        SessionSize::Xs => style::palette::success(),
-        SessionSize::S => style::palette::success_soft(),
-        SessionSize::M => style::palette::warning(),
-        SessionSize::L => style::palette::warning_soft(),
-        SessionSize::Xl => style::palette::danger_soft(),
-        SessionSize::Xxl => style::palette::danger(),
     }
 }
 
