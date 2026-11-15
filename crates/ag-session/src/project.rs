@@ -1,3 +1,5 @@
+//! Project models, display labels, and most-recently-used ordering.
+
 use std::cmp::Reverse;
 use std::path::{Path, PathBuf};
 

@@ -1,3 +1,6 @@
+//! Durable session unit tests for history retention and replay, system
+//! prompts, database initialization, and persistence failures.
+
 use std::num::NonZeroUsize;
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex};

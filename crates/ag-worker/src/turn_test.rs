@@ -1,3 +1,5 @@
+//! Session run client turn submission, cancellation, and shutdown unit tests.
+
 use std::num::NonZeroUsize;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};

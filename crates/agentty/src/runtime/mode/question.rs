@@ -1,3 +1,6 @@
+//! Key handling for question-answer mode, including answer input, chat
+//! scrolling, `@`-mention lookup, and reply submission.
+
 use ag_session::{AnswerQuestionsRequest, QuestionAnswer};
 use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
 use ratatui::layout::Rect;

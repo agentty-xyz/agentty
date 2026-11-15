@@ -1,3 +1,5 @@
+//! Agent CLI version detection, update, and refresh unit tests.
+
 use std::ffi::OsStr;
 #[cfg(unix)]
 use std::os::unix::fs::PermissionsExt;

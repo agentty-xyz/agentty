@@ -1,3 +1,5 @@
+//! Session message intent routing unit tests.
+
 use ag_session::SessionStatus;
 
 use crate::app::message_admission::{MessageIntent, MessagePlan};

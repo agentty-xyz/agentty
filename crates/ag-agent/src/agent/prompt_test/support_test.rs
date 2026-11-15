@@ -1,3 +1,5 @@
+//! Workspace root and prompt normalization helpers shared by prompt tests.
+
 use std::path::Path;
 
 /// Returns the workspace root used by prompt preparation tests.

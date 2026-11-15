@@ -1,3 +1,6 @@
+//! Settings page rendering global and project setting tables with an option
+//! selector dropdown.
+
 use ag_tui_text::text_util::truncate_with_ellipsis;
 use ratatui::Frame;
 use ratatui::layout::{Alignment, Constraint, Direction, Layout, Rect};

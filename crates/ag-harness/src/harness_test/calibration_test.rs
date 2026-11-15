@@ -1,3 +1,6 @@
+//! Harness context calibration unit tests across requests, turns, model
+//! switches, and registered profile estimators.
+
 use std::io::Cursor;
 use std::num::NonZeroU64;
 use std::sync::atomic::{AtomicUsize, Ordering};

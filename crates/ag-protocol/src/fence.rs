@@ -1,3 +1,5 @@
+//! Markdown code-fence delimiters sized to safely wrap prompt payloads.
+
 /// Builds a Markdown code-fence delimiter long enough to safely wrap an
 /// arbitrary prompt payload.
 ///

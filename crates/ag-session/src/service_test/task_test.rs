@@ -1,3 +1,6 @@
+//! Session service tests for hosts that reject unsupported graph, task, and
+//! plan-acceptance capabilities.
+
 use std::collections::BTreeMap;
 use std::sync::Arc;
 

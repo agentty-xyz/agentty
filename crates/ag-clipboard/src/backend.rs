@@ -1,3 +1,6 @@
+//! Platform clipboard backends and the selection of the backend for the
+//! current operating system.
+
 mod contract;
 #[cfg(any(target_os = "linux", test))]
 mod linux;

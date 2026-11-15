@@ -1,3 +1,6 @@
+//! Agent response model tests for display text, question caps, review
+//! outcomes, and schema field-description templates.
+
 use crate::model::{
     AgentResponse, AgentResponseParseError, MAX_QUESTIONS, ReviewCommentOutcome,
     ReviewCommentResolution, questions_field_description, render_field_description_template,

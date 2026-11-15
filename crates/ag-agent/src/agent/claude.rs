@@ -1,3 +1,5 @@
+//! Claude CLI backend that builds per-turn `stream-json` subprocess commands.
+
 use std::path::Path;
 use std::process::{Command, Stdio};
 

@@ -1,3 +1,6 @@
+//! Embedded schema migration tests that verify legacy data is preserved,
+//! converted, or retired.
+
 use ag_session::{
     AgentKind, AgentModel, AgentSelection, DurableMessageVisibility, SessionMessageKind,
     SettingName, SubmitAgentTaskRequest, SubmitTaskRequest, TaskAgentAssignment, TaskAgentInput,

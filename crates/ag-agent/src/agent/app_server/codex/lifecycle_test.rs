@@ -1,3 +1,5 @@
+//! Unit tests for the Codex app-server lifecycle, split by behavior.
+
 #[path = "lifecycle_test/payload_test.rs"]
 mod payload;
 #[path = "lifecycle_test/runtime_test.rs"]

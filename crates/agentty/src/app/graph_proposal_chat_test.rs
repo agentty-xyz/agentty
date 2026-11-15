@@ -1,3 +1,5 @@
+//! Graph generation unit tests for the mode-selected composer.
+
 use std::sync::Arc;
 
 use ag_protocol::TurnPrompt;

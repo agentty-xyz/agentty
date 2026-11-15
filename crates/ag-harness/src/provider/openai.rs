@@ -1,3 +1,6 @@
+//! `OpenAI` Responses API model identifiers, context profiles, and
+//! configuration.
+
 use crate::model::{HeuristicContextEstimator, ModelProfile};
 
 pub(crate) const DEFAULT_BASE_URL: &str = "https://api.openai.com/v1";

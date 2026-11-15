@@ -1,3 +1,5 @@
+//! Review-comment navigation, selection, resolution, and dispatch tests.
+
 use ag_forge::{
     ReviewComment, ReviewCommentAnchorSide, ReviewCommentSnapshot, ReviewCommentThread,
 };

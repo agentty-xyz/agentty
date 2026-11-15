@@ -1,3 +1,5 @@
+//! Line-paged, byte-bounded reading of worktree files for the `read` tool.
+
 use std::path::Path;
 
 use tokio::io::{AsyncBufReadExt as _, AsyncRead, AsyncReadExt as _, BufReader};

@@ -1,3 +1,6 @@
+//! List mode key tests for tabs, session and project selection, settings,
+//! sync, and archive pagination.
+
 use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
 
 use super::{

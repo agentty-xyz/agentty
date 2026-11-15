@@ -1,3 +1,5 @@
+//! One-shot submission cancellation, panic, and forced-shutdown unit tests.
+
 use std::sync::{Arc, Mutex};
 
 use ag_contracts::{

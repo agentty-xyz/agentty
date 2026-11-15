@@ -1,3 +1,6 @@
+//! Linux backend selection tests covering Wayland preference, X11 fallback,
+//! and display-variable detection.
+
 #[cfg(target_os = "linux")]
 use std::ffi::OsString;
 #[cfg(target_os = "linux")]

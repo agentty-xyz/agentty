@@ -1,3 +1,5 @@
+//! Centered popup for choosing the type of session to create.
+
 use ratatui::Frame;
 use ratatui::layout::{Alignment, Rect};
 use ratatui::style::{Modifier, Style};

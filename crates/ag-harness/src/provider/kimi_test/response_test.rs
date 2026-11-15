@@ -1,3 +1,6 @@
+//! Kimi provider tests for metadata, construction, and structured-output
+//! response decoding and validation.
+
 use serde_json::{Value, json};
 use wiremock::matchers::{method, path};
 use wiremock::{Mock, MockServer, ResponseTemplate};

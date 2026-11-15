@@ -1,3 +1,6 @@
+//! Harness tool policy unit tests for schema validation, write and read
+//! permissions, call batches, typed failures, and Bash grants.
+
 use std::io;
 use std::io::Cursor;
 use std::path::PathBuf;

@@ -1,3 +1,5 @@
+//! Unit tests for the app-server agent channel, split by behavior.
+
 #[path = "app_server_test/repair_test.rs"]
 mod repair;
 #[path = "app_server_test/stream_test.rs"]

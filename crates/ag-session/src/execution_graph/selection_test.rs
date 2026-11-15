@@ -1,3 +1,5 @@
+//! Execution graph snapshot round-trip and agent selection decoding tests.
+
 use ag_protocol::ProtocolRequestProfile;
 
 use crate::execution_graph::test_support::{graph, result};

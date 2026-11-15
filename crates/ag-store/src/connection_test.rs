@@ -1,3 +1,6 @@
+//! Unit tests for the SQLite database connection and repositories, split by
+//! behavior.
+
 #[path = "connection_test/connection_test.rs"]
 mod connection;
 

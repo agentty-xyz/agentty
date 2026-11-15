@@ -1,3 +1,5 @@
+//! Unit tests for the session store, split by behavior.
+
 #[path = "session_test/lifecycle_test.rs"]
 mod lifecycle;
 

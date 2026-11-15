@@ -1,3 +1,5 @@
+//! Span highlight and foreground/background color assertion unit tests.
+
 use crate::assertion::{
     Expected, assert_span_is_highlighted, assert_span_is_not_highlighted, assert_text_has_bg_color,
     assert_text_has_fg_color, match_span_is_highlighted, match_span_is_not_highlighted,

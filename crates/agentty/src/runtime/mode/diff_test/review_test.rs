@@ -1,3 +1,6 @@
+//! Diff markdown preview, review-comment focus, and review-output restore
+//! tests.
+
 use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
 
 use super::super::{selected_preview_is_visible, viewport_rect};

@@ -1,3 +1,5 @@
+//! Repository root discovery and branch detection unit tests.
+
 use std::fs;
 use std::path::{Path, PathBuf};
 

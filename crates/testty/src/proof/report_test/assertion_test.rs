@@ -1,3 +1,5 @@
+//! `ProofReport` soft-failure recording and capture attachment unit tests.
+
 use crate::assertion::{
     AssertionFailure, Expected, SoftAssertions, match_not_visible, match_text_in_region,
 };

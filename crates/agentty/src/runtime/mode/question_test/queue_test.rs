@@ -1,3 +1,5 @@
+//! Question reply enqueue and failed-reply restoration tests.
+
 use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
 
 use super::super::{

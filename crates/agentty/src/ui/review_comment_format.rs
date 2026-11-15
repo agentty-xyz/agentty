@@ -1,3 +1,6 @@
+//! Shared formatting of review comment thread headers, anchors, and comment
+//! bodies into styled lines.
+
 use ag_forge::{ReviewComment, ReviewCommentAnchorSide, ReviewCommentThread};
 use ratatui::style::{Modifier, Style};
 use ratatui::text::{Line, Span};

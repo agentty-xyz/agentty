@@ -1,3 +1,5 @@
+//! `AppError` conversion and display unit tests.
+
 use ag_contracts::OneShotError;
 
 use super::AppError;

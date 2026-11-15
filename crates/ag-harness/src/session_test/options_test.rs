@@ -1,3 +1,6 @@
+//! Turn options snapshot persistence tests: commit before execution, corrupt
+//! snapshot rejection, and legacy schema and fingerprint rules.
+
 use std::sync::Arc;
 
 use serde_json::{Value, json};

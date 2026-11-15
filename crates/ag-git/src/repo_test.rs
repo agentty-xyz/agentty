@@ -1,3 +1,6 @@
+//! Repository helper tests covering non-interactive git commands, timeouts,
+//! URL normalization, and repository root and layout resolution.
+
 use std::fs;
 use std::path::Path;
 use std::process::Command;

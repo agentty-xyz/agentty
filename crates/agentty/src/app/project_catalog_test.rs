@@ -1,3 +1,5 @@
+//! Project catalog registration, discovery scans, and dialog error unit tests.
+
 use std::fs;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;

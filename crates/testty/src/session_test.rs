@@ -1,3 +1,6 @@
+//! PTY session spawning, key encoding, step execution, and frame-wait unit
+//! tests.
+
 use std::collections::VecDeque;
 use std::io::{self, Cursor, Read, Write};
 #[cfg(unix)]

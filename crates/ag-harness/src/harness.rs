@@ -1,3 +1,6 @@
+//! `Harness` entry point for one-shot model turns and durable sessions, with
+//! session builders, turn handles, and history.
+
 use std::future::{Future, IntoFuture};
 use std::hash::{BuildHasher, RandomState};
 use std::num::NonZeroUsize;

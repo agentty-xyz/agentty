@@ -1,3 +1,6 @@
+//! Chat command parsing, model selection and catalog, and model connector
+//! configuration unit tests.
+
 use std::env;
 
 use ag_harness::provider::ModelProvider;

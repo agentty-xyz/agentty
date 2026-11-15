@@ -1,3 +1,5 @@
+//! Markdown rendering, prompt-block handling, and render-cache unit tests.
+
 use std::sync::Arc;
 
 use ratatui::style::Style;

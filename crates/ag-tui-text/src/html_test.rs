@@ -1,3 +1,5 @@
+//! HTML rendering and HTML-to-Markdown normalization unit tests.
+
 use ratatui::style::Modifier;
 use ratatui::text::Line;
 

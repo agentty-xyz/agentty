@@ -1,3 +1,5 @@
+//! Runtime configuration, provider discovery, and native harness unit tests.
+
 use std::env;
 use std::num::NonZeroUsize;
 use std::process::Command;

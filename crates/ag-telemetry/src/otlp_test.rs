@@ -1,3 +1,6 @@
+//! OTLP export tests for initialization, endpoint handling, trace and event
+//! log export, and diagnostics.
+
 use std::sync::Arc;
 use std::sync::atomic::{AtomicU64, Ordering};
 

@@ -1,3 +1,6 @@
+//! Turn-result persistence and unfinished-operation recovery tests for the
+//! session worker.
+
 use std::collections::VecDeque;
 use std::sync::{Arc, Mutex};
 

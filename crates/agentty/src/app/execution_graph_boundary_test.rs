@@ -1,3 +1,6 @@
+//! Execution graph launch, handoff, pause, and lifecycle storage failure unit
+//! tests.
+
 use std::collections::BTreeMap;
 use std::future;
 use std::num::NonZeroU64;

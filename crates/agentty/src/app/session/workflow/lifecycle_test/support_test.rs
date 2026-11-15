@@ -1,3 +1,6 @@
+//! Shared fixtures for lifecycle workflow tests: session managers, mock
+//! clients, test services, and seeded databases.
+
 use std::collections::HashMap;
 use std::path::PathBuf;
 use std::sync::Arc;

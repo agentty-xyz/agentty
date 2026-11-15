@@ -1,3 +1,5 @@
+//! Graph chat snapshot cache refresh and proposal-outcome notice unit tests.
+
 use std::collections::BTreeMap;
 use std::time::{Duration, Instant};
 

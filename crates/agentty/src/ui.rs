@@ -1,3 +1,5 @@
+//! Terminal UI layer: pages, components, and shared rendering helpers.
+
 /// Calendar-style recent session activity renderer.
 pub mod activity_heatmap;
 mod app_render;

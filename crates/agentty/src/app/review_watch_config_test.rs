@@ -1,3 +1,6 @@
+//! `ReviewWatchConfig` loader unit tests covering trusted bots, defaults,
+//! invalid configuration, and read failures.
+
 use std::io;
 use std::path::Path;
 

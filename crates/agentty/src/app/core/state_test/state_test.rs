@@ -1,3 +1,6 @@
+//! `App` event batch coalescing, upstream tracking, and session progress unit
+//! tests.
+
 use std::collections::HashMap;
 use std::fs;
 use std::path::PathBuf;

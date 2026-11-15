@@ -1,3 +1,5 @@
+//! Graph node runner that executes fresh utility nodes through `RunWorker`.
+
 use std::fmt::Write as _;
 use std::sync::Arc;
 

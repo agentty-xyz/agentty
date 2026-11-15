@@ -1,3 +1,6 @@
+//! Session manager state tests covering status-driven shutdown, persisted
+//! sizes, setting updates, live activity, and published branch sync.
+
 use std::path::PathBuf;
 use std::process::{Command, Stdio};
 use std::sync::Arc;

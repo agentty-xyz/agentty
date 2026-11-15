@@ -1,3 +1,6 @@
+//! Muse provider tests: environment configuration, metadata, structured
+//! output, `read` tool calls, and preflight validation.
+
 use std::env;
 use std::process::Command;
 

@@ -1,3 +1,5 @@
+//! `GitHub` display-id and request-response parsing error tests.
+
 use crate::github::GitHubReviewRequestAdapter;
 use crate::model::{ForgeKind, ReviewRequestError};
 

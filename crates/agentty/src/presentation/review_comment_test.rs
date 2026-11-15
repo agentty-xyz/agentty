@@ -1,3 +1,5 @@
+//! Grouped review-comment selector projection and selection unit tests.
+
 use ag_forge::{
     ReviewComment, ReviewCommentAnchorSide, ReviewCommentSnapshot, ReviewCommentThread,
 };

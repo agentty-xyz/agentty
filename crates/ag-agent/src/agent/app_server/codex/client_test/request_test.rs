@@ -1,3 +1,5 @@
+//! Codex app-server request payload and approval response unit tests.
+
 use std::path::Path;
 
 use ag_contracts::{ReasoningLevel, SpeedMode};

@@ -1,3 +1,5 @@
+//! App-server turn prompt shaping and replay transcript selection unit tests.
+
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 

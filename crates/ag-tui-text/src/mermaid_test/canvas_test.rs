@@ -1,3 +1,5 @@
+//! Mermaid canvas bounds and label-overwrite tests.
+
 use crate::mermaid::{CONNECT_LEFT, CONNECT_RIGHT, Canvas};
 
 #[test]

@@ -1,3 +1,5 @@
+//! Squash-merge workflows and merge-conflict detection between branches.
+
 use std::path::{Path, PathBuf};
 
 use tempfile::tempdir;

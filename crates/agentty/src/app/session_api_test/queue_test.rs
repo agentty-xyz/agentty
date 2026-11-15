@@ -1,3 +1,6 @@
+//! Session API queue tests covering question resumes queued behind turns and
+//! worker enqueue failures.
+
 use std::sync::Arc;
 
 use ag_contracts::AgentRequestKind;

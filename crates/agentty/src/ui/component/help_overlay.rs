@@ -1,3 +1,5 @@
+//! Centered popup listing keybindings for the current page.
+
 use ratatui::Frame;
 use ratatui::layout::Rect;
 use ratatui::style::{Modifier, Style};

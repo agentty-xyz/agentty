@@ -1,3 +1,5 @@
+//! Chat Completions response decoding tests.
+
 use serde_json::json;
 
 use crate::chat_completion::ChatCompletionBackend;

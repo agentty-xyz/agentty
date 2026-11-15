@@ -1,3 +1,6 @@
+//! In-memory session model used by the UI and app layers, with status- and
+//! stack-based action gates.
+
 use std::collections::VecDeque;
 use std::fmt;
 use std::path::PathBuf;

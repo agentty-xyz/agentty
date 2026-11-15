@@ -1,3 +1,6 @@
+//! Image input fixtures and live provider checks that describe, replay, or
+//! reject colored images.
+
 use std::io::{self, Write};
 use std::sync::Arc;
 

@@ -1,3 +1,6 @@
+//! Output schema safety-profile validation and structured-output parsing
+//! tests.
+
 use std::io::Write as _;
 
 use serde_json::{Value, json};

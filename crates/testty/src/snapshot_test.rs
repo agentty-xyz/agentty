@@ -1,3 +1,5 @@
+//! Frame snapshot comparison, baseline update, and pixel-distance unit tests.
+
 use std::fs;
 use std::path::Path;
 

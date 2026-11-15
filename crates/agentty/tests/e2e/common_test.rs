@@ -1,3 +1,6 @@
+//! Unit tests for the E2E harness builder environment, GIF mode parsing, and
+//! GIF status validation.
+
 use std::path::{Path, PathBuf};
 
 use ag_git::{GitClient, RealGitClient};

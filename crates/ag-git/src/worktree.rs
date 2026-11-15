@@ -1,3 +1,6 @@
+//! Git worktree creation and removal, repository root discovery, and current
+//! branch detection.
+
 use std::fs;
 use std::path::{Path, PathBuf};
 

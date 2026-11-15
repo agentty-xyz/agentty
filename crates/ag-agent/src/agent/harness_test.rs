@@ -1,3 +1,5 @@
+//! Fail-closed CLI-path unit tests for the `Harness` agent kind.
+
 use std::sync::Arc;
 
 use ag_contracts::{

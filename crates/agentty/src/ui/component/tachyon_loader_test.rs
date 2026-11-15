@@ -1,3 +1,6 @@
+//! `Tachyonfx` loader emphasis, frame advancement, and glyph lookup unit
+//! tests.
+
 use ratatui::buffer::Buffer;
 use ratatui::layout::Rect;
 

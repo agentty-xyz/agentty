@@ -1,3 +1,6 @@
+//! Discovery of locally runnable agent CLIs, harness models, and `ChatGPT`
+//! plan sign-in.
+
 use async_trait::async_trait;
 
 use crate::{AgentKind, HarnessModelOption};

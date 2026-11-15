@@ -1,3 +1,6 @@
+//! Session manager synchronization tests covering rebase, merge, stacking,
+//! and main-branch sync queueing and validation.
+
 use std::sync::{Arc, Mutex};
 
 use ag_contracts::{MockAgentChannel, TurnResult};

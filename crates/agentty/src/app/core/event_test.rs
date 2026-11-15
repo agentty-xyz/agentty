@@ -1,3 +1,5 @@
+//! `AppEvent` batching, reduction planning, and event application unit tests.
+
 use std::collections::HashMap;
 use std::panic::AssertUnwindSafe;
 use std::sync::Arc;

@@ -1,3 +1,6 @@
+//! Task automation tests covering when implementer and role completions may
+//! start ordinary reviews and how review ownership is retained.
+
 use std::sync::Arc;
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::time::Duration;

@@ -1,3 +1,6 @@
+//! Session chat page rendering the session header, transcript, and bottom
+//! prompt composer or question panel.
+
 use std::cell::Cell;
 use std::ops::{Deref, DerefMut};
 

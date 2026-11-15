@@ -1,3 +1,5 @@
+//! Validation planning, package selection, check reuse, and ledger unit tests.
+
 use std::cell::RefCell;
 use std::collections::VecDeque;
 #[cfg(unix)]

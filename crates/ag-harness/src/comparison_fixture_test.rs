@@ -1,3 +1,6 @@
+//! Comparison test fixtures: a fixed `ComparisonBase` and a temporary Git
+//! repository with a comparison commit and a movable branch.
+
 use std::path::Path;
 use std::process::Stdio;
 

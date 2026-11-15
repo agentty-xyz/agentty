@@ -1,3 +1,5 @@
+//! Prompt image attachment rendering and access-directory unit tests.
+
 #[cfg(unix)]
 use std::ffi::OsString;
 #[cfg(unix)]

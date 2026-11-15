@@ -1,3 +1,5 @@
+//! Generated session title test that rejects first-person progress output.
+
 use crate::app::SessionManager;
 
 #[test]

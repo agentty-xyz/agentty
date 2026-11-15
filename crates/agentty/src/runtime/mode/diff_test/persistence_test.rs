@@ -1,3 +1,5 @@
+//! Diff markdown preview reload test on file selection change.
+
 use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
 
 use super::support::{TEST_TERMINAL_SIZE, handle, next_diff_preview_event, preview_test_app};

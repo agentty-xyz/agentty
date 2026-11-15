@@ -1,3 +1,5 @@
+//! Rendered session-output line counts for runtime scroll metrics.
+
 use crate::app::App;
 use crate::ui::RenderCacheStore;
 use crate::ui::component::session_output::SessionOutputLineContext;

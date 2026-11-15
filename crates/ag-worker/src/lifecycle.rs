@@ -1,3 +1,6 @@
+//! Operation lifecycle tracking: execution with heartbeats, terminal state,
+//! and recovery.
+
 use std::future::Future;
 use std::time::Duration;
 

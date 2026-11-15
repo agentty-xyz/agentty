@@ -1,3 +1,5 @@
+//! Instruction bootstrap and delta delivery planning unit tests.
+
 use ag_contracts::AgentRequestKind;
 
 use crate::agent::instruction::{

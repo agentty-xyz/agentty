@@ -1,3 +1,5 @@
+//! Unit tests for the Qwen provider, split by behavior.
+
 #[path = "qwen_test/failure_test.rs"]
 mod failure;
 #[path = "qwen_test/reasoning_test.rs"]

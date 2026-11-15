@@ -1,3 +1,6 @@
+//! Qwen provider tests for construction, response metadata, and
+//! structured-output decoding and validation.
+
 use serde_json::json;
 use wiremock::matchers::{method, path};
 use wiremock::{Mock, MockServer, ResponseTemplate};

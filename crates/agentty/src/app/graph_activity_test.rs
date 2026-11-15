@@ -1,3 +1,5 @@
+//! Graph activity lease ownership of session status unit tests.
+
 use std::collections::HashMap;
 use std::sync::{Arc, Mutex};
 

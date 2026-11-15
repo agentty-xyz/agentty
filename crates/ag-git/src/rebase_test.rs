@@ -1,3 +1,6 @@
+//! Rebase workflow tests covering index-lock retries, abort recovery, stale
+//! metadata cleanup, and in-progress operation detection.
+
 use std::fs;
 use std::io::ErrorKind;
 #[cfg(unix)]

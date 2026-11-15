@@ -1,3 +1,6 @@
+//! Commit, diff, worktree status, and remote synchronization workflows,
+//! including pre-commit hook handling, pull-rebase, push, and branch tracking.
+
 use std::collections::HashMap;
 use std::io::Read;
 use std::path::{Component, Path, PathBuf};

@@ -1,3 +1,6 @@
+//! Native sandbox access tests: filesystem, network, metadata, and alias
+//! denials outside granted scopes, and permitted access inside them.
+
 use std::os::unix::fs::PermissionsExt;
 use std::path::PathBuf;
 use std::time::Duration;

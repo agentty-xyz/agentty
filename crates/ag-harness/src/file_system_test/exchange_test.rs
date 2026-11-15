@@ -1,3 +1,6 @@
+//! Atomic exchange unit tests for concurrent target changes, rollback, and
+//! exchange error handling.
+
 use std::ffi::OsStr;
 use std::io;
 use std::path::Path;

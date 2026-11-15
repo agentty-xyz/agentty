@@ -1,3 +1,6 @@
+//! Session message append tests for blank input, deleted sessions, and error
+//! context.
+
 use ag_session::SessionMessageKind;
 
 use crate::session_message::APPEND_SESSION_MESSAGE;

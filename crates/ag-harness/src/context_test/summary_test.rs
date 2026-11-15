@@ -1,3 +1,6 @@
+//! Round summary unit tests for summary requests, installation, sources,
+//! failure limits, and shared-prefix continuation.
+
 use serde_json::{Value, json};
 
 use super::support::{

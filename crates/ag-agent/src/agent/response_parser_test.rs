@@ -1,3 +1,5 @@
+//! Unit tests for agent response parsing, split by provider.
+
 #[path = "response_parser_test/antigravity_test.rs"]
 mod antigravity;
 #[path = "response_parser_test/claude_test.rs"]

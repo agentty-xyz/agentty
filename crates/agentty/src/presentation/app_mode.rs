@@ -1,3 +1,6 @@
+//! Active UI modes and their state, including diff comments, confirmations,
+//! and help overlays.
+
 use std::fmt::Write as _;
 
 use ag_forge::ReviewCommentSnapshot;

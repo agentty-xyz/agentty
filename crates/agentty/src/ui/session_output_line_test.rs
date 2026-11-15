@@ -1,3 +1,5 @@
+//! `OutputLines` segment append, trim, and shared-row unit tests.
+
 use std::sync::Arc;
 
 use ratatui::text::Line;

@@ -1,3 +1,5 @@
+//! Timestamp source unit tests.
+
 use crate::timestamp::{TimestampSource, system_timestamp_source};
 
 #[test]

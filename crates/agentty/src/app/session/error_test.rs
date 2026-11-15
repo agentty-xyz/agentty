@@ -1,3 +1,5 @@
+//! `SessionError` display, conversion, and context-prefixing unit tests.
+
 use ag_contracts::OneShotError;
 
 use super::SessionError;

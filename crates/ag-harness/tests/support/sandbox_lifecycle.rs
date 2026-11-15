@@ -1,3 +1,6 @@
+//! Sandboxed command lifecycle conformance tests: descendant waits, timeouts,
+//! detached processes, and cleanup under output floods.
+
 use std::time::Duration;
 
 use ag_harness::bash::{CommandOutcome, CommandTermination};

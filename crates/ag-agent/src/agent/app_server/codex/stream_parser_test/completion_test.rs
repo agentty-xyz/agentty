@@ -1,3 +1,5 @@
+//! Codex turn completion and final assistant message extraction unit tests.
+
 use ag_protocol::ProtocolRequestProfile;
 
 use crate::agent::app_server::codex::stream_parser::{

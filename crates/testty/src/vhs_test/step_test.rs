@@ -1,3 +1,5 @@
+//! VHS step compilation, duration formatting, and escaping unit tests.
+
 use std::path::Path;
 
 use super::super::{

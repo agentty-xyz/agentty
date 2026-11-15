@@ -1,3 +1,6 @@
+//! Session-view mode key handling, with action availability gated on the
+//! viewed session's status.
+
 use std::io;
 
 use crossterm::event::{self, KeyCode, KeyEvent};

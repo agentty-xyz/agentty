@@ -1,3 +1,6 @@
+//! `GitHub` review-request attention tests covering check pagination,
+//! conflicts, pending checks, and trusted bot comments.
+
 use std::sync::Arc;
 
 use mockall::Sequence;

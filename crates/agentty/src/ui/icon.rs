@@ -1,3 +1,5 @@
+//! Semantic icons and stable glyphs used throughout terminal rendering.
+
 use std::fmt;
 
 /// Stable loader glyph painted by the Tachyonfx session-output effect.

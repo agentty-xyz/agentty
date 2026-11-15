@@ -1,3 +1,6 @@
+//! Execution graph clarification, node question, resume, and cancellation unit
+//! tests.
+
 use std::collections::BTreeMap;
 use std::num::NonZeroU64;
 use std::sync::Arc;

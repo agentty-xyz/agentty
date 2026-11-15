@@ -1,3 +1,6 @@
+//! Rebase and merge workflow tests covering assist loops, stale rebase
+//! recovery, merge target checks, and auto-push after rebase.
+
 use std::path::PathBuf;
 use std::sync::{Arc, Mutex};
 

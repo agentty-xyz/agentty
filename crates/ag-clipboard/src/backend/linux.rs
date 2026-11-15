@@ -1,3 +1,6 @@
+//! Linux clipboard backend selection, preferring Wayland and falling back to
+//! X11 based on the display environment.
+
 #[cfg(target_os = "linux")]
 use std::env;
 

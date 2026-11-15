@@ -1,3 +1,6 @@
+//! Session preparation cancellation tests for late completion and cleanup
+//! ownership.
+
 use super::support::{prepare_saved_operation, reservation};
 use crate::AppRepositories;
 use crate::session_preparation::SessionPreparationState;

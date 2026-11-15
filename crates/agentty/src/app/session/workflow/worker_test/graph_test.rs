@@ -1,3 +1,6 @@
+//! Execution-graph task tests for review gating, cancellation, question
+//! routing, and node settlement on the session worker.
+
 use std::collections::VecDeque;
 use std::sync::{Arc, Mutex};
 

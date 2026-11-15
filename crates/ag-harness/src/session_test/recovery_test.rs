@@ -1,3 +1,6 @@
+//! Session recovery tests: atomic recovery acquisition, corrupt terminal
+//! data, expired host requests, and outcome migration.
+
 use std::sync::Arc;
 use std::sync::atomic::{AtomicI64, Ordering};
 use std::time::Duration;

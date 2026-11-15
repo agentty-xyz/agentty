@@ -1,3 +1,5 @@
+//! Provider-specific session settings derived from the selected speed mode.
+
 use ag_contracts::SpeedMode;
 
 /// Codex app-server service-tier value for this speed mode.

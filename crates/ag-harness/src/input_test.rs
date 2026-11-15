@@ -1,3 +1,6 @@
+//! Turn input unit tests for text and image blocks, input limits, stored
+//! input encoding, and content-free diagnostics.
+
 use crate::input::{
     ImageContent, ImageMediaType, InputBlock, StoredInputError, StoredTurnInput, TurnInput,
     TurnInputError,

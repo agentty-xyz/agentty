@@ -1,3 +1,6 @@
+//! Session header, prompt status, output status, and started-label formatting
+//! unit tests.
+
 use ag_session::test_support as model_fixture;
 use ratatui::style::Modifier;
 

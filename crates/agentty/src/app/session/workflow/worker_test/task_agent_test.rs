@@ -1,3 +1,6 @@
+//! Planner and implementer task-agent execution tests covering admission,
+//! permissions, cancellation, and result projection.
+
 use std::collections::{HashMap, VecDeque};
 use std::path::PathBuf;
 use std::sync::{Arc, Mutex};

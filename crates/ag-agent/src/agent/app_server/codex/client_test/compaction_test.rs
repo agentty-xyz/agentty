@@ -1,3 +1,6 @@
+//! Codex app-server compaction unit tests covering budgets, proactive and
+//! overflow-triggered compaction, and compaction spans.
+
 use std::future::{self, Future};
 use std::sync::{Arc, Mutex};
 use std::task::Poll;

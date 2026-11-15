@@ -1,3 +1,6 @@
+//! Session metadata persistence tests for conversation IDs, upstream refs,
+//! merged commits, and turn metadata.
+
 use ag_session::{SessionDiffState, SessionStats, test_support as model_fixture};
 
 use super::support::insert_session_fixture;

@@ -1,3 +1,6 @@
+//! Version parsing, latest `npm` version lookup, and auto-update command
+//! tests.
+
 use std::os::unix::fs::PermissionsExt;
 use std::path::{Path, PathBuf};
 use std::time::Duration;

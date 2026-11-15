@@ -1,3 +1,5 @@
+//! Graph question panel opening and answer routing unit tests.
+
 use std::sync::Arc;
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::time::Instant;

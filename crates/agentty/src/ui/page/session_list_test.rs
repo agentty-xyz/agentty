@@ -1,3 +1,6 @@
+//! Session list table rendering, grouping, column sizing, and archive-row
+//! unit tests.
+
 use std::collections::HashMap;
 
 use ag_session::test_support as model_fixture;

@@ -1,3 +1,6 @@
+//! Final response and stream-line parsing for Claude, Codex, and Antigravity
+//! CLI output.
+
 use ag_contracts::{SessionDiffState, SessionStats};
 use ag_protocol::{FocusedReview, ReviewMetadata, UtilityResponse};
 use serde::Deserialize;

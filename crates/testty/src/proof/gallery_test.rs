@@ -1,3 +1,5 @@
+//! Proof gallery index generation, ordering, and escaping unit tests.
+
 use crate::proof::gallery::write_gallery;
 
 #[test]

@@ -1,3 +1,5 @@
+//! Latest-round result capping and dropped-round note unit tests.
+
 use std::num::NonZeroU64;
 
 use serde_json::json;

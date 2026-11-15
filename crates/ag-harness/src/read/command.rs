@@ -1,3 +1,6 @@
+//! Bounded Git command execution and repository root verification for the
+//! `read` tool.
+
 use std::future::Future;
 use std::io;
 use std::path::{Path, PathBuf};

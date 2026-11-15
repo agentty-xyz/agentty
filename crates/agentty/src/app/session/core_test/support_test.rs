@@ -1,3 +1,6 @@
+//! Shared fixtures for session manager tests: test apps, mock git and
+//! filesystem clients, clocks, and synthetic diffs.
+
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};

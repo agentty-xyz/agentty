@@ -1,3 +1,6 @@
+//! Shared Kimi test fixtures: schemas, requests, mock-server clients, and
+//! mounted structured and tool-call responses.
+
 use serde_json::{Value, json};
 use wiremock::matchers::{bearer_token, body_json, method, path};
 use wiremock::{Match, Mock, MockServer, Request, ResponseTemplate};

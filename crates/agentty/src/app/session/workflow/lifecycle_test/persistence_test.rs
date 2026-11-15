@@ -1,3 +1,6 @@
+//! Title generation persistence tests covering context loading and
+//! persistence failures.
+
 use std::sync::Arc;
 
 use ag_worker::RunClient;

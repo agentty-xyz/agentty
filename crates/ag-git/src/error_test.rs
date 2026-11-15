@@ -1,3 +1,5 @@
+//! `GitError` display, conversion, and index-lock classification tests.
+
 use std::time::Duration;
 
 use crate::error::GitError;

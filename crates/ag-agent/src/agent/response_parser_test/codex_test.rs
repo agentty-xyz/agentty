@@ -1,3 +1,5 @@
+//! Codex response, stream-line, and progress message parsing unit tests.
+
 use crate::agent::response_parser::{
     compact_codex_progress_message, parse_codex_response_with_fallback,
     parse_codex_stream_output_line,

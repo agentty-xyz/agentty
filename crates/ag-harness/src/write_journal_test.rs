@@ -1,3 +1,6 @@
+//! Write journal tests: intent and outcome ordering around file mutation,
+//! ownership checks, migrations, and storage failures.
+
 use std::ffi::OsString;
 use std::io;
 use std::os::unix::ffi::{OsStrExt as _, OsStringExt as _};

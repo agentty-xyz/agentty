@@ -1,3 +1,5 @@
+//! Grouped review-comment selector projection and thread selection helpers.
+
 use ag_forge::{ReviewComment, ReviewCommentSnapshot, ReviewCommentThread};
 
 use super::app_mode::ReviewCommentSelection;

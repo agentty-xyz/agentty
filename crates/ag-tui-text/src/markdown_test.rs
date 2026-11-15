@@ -1,3 +1,5 @@
+//! Unit tests for Markdown rendering, split by behavior.
+
 #[path = "markdown_test/block_test.rs"]
 mod block;
 #[path = "markdown_test/cache_test.rs"]

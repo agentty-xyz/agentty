@@ -1,3 +1,5 @@
+//! `GraphBudgetLedger` spending persistence and relaunch unit tests.
+
 use std::collections::BTreeMap;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicI64, AtomicUsize, Ordering};

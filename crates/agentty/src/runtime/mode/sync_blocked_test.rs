@@ -1,3 +1,5 @@
+//! Sync informational popup close-key unit tests.
+
 use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
 
 use super::handle;

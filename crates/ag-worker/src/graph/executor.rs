@@ -1,3 +1,6 @@
+//! Graph executor that admits and runs ready nodes in waves under shared
+//! capacity, Env, and budget limits.
+
 use std::collections::HashMap;
 use std::future::{Future, poll_fn};
 use std::num::{NonZeroU64, NonZeroUsize};

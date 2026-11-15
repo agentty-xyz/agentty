@@ -1,3 +1,6 @@
+//! Remote, `GraphQL` JSON payload, and command-output fixtures shared by the
+//! `GitHub` adapter tests.
+
 use crate::command::ForgeCommandOutput;
 use crate::github::{GitHubReviewRequestAdapter, GitHubViewResponse};
 use crate::model::{

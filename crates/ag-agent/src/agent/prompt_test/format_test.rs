@@ -1,3 +1,6 @@
+//! Prompt formatting unit tests for response styles, diff fences, and resume
+//! replay.
+
 use std::path::PathBuf;
 
 use ag_contracts::ResponseStyle;

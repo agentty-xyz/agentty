@@ -1,3 +1,5 @@
+//! Session title candidate ordering and authority invalidation tests.
+
 use super::support::{insert_session_fixture, load_session_row};
 use crate::connection::Database;
 

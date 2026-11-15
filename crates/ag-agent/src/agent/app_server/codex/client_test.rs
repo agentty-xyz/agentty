@@ -1,3 +1,5 @@
+//! Unit tests for the Codex app-server client, split by behavior.
+
 #[path = "client_test/compaction_test.rs"]
 mod compaction;
 #[path = "client_test/request_test.rs"]

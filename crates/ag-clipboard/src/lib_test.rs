@@ -1,3 +1,6 @@
+//! `Clipboard` facade tests covering the disable environment variable,
+//! backend injection, error propagation, and RGBA image reads.
+
 use std::path::PathBuf;
 use std::process::Command;
 

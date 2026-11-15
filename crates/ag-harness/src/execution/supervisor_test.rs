@@ -1,3 +1,6 @@
+//! Supervisor unit tests for deadlines, completion conditions, output
+//! floods, cancellation, and cleanup retries and settlement.
+
 use std::collections::VecDeque;
 use std::future::{Future, pending, ready};
 use std::path::Path;

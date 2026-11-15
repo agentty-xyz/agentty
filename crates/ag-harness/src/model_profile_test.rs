@@ -1,3 +1,6 @@
+//! Model profile unit tests for token reservations, estimate margins, and
+//! context budget derivation.
+
 use std::num::NonZeroU64;
 
 use crate::context::{ContextBudget, ContextBudgetError, HeuristicContextEstimator};

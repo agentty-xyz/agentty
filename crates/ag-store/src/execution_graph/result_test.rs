@@ -1,3 +1,6 @@
+//! Graph result tests for production, validation and acceptance evidence,
+//! immutability, and session-deletion cascades.
+
 use std::num::NonZeroU64;
 
 use ag_session::{GraphExecutionRef, GraphResultState};

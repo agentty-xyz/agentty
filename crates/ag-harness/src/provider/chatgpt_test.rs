@@ -1,3 +1,5 @@
+//! `ChatGPT` provider unit tests for auth file location and sign-in status.
+
 use std::path::PathBuf;
 use std::{env, fs};
 

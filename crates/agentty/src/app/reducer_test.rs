@@ -1,3 +1,5 @@
+//! `AppEventReducer` drain budget unit tests.
+
 use tokio::sync::mpsc;
 
 use super::super::core::AppEvent;

@@ -1,3 +1,5 @@
+//! Shared page and popup layout calculations.
+
 use ag_tui_text::text_util;
 use ratatui::layout::{Constraint, Direction, Layout, Rect};
 

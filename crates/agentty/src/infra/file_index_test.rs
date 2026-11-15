@@ -1,3 +1,6 @@
+//! File index listing tests for sorting, `.gitignore` handling, depth, and
+//! entry limits.
+
 use std::path::Path;
 use std::process::Command;
 use std::{fs, io};

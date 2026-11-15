@@ -1,3 +1,6 @@
+//! Review state unit tests covering progress text, agent labels, review cache
+//! hydration, pruning, and update application.
+
 use std::collections::HashMap;
 use std::sync::Arc;
 

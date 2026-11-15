@@ -1,3 +1,6 @@
+//! Stdio JSON-RPC transport helper unit tests for responses, errors, and
+//! child shutdown.
+
 use std::os::unix::process::CommandExt as _;
 use std::process::Stdio;
 use std::time::Duration;

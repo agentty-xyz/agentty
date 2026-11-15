@@ -1,3 +1,6 @@
+//! Header tabs for list-mode pages with right-aligned Agentty process-tree
+//! stats.
+
 use ratatui::Frame;
 use ratatui::layout::Rect;
 use ratatui::style::Style;

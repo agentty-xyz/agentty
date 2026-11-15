@@ -1,3 +1,6 @@
+//! Session review tests for review requests, stack gates, pull-request
+//! publishing, review-comment replies, and review watch.
+
 use std::path::PathBuf;
 
 use ag_contracts::{SessionStats, SpeedMode};

@@ -1,3 +1,5 @@
+//! Question mode key transition, focus, and submission tests.
+
 use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
 
 use super::support::{

@@ -1,3 +1,6 @@
+//! Stale result unit tests for superseded-result elision, supersession
+//! causes, and repeated-read notices.
+
 use serde_json::{Value, json};
 
 use super::support::{

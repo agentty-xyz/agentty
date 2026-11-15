@@ -1,3 +1,5 @@
+//! Repeated timing comparison and nextest `JUnit` report parsing unit tests.
+
 use std::collections::BTreeMap;
 use std::path::PathBuf;
 

@@ -1,3 +1,6 @@
+//! Filesystem effect completion unit tests for unacknowledged workers and
+//! dropped outcome recording.
+
 use std::sync::Arc;
 
 use tokio::sync::Mutex;

@@ -1,3 +1,6 @@
+//! Unit tests for session and handle lookup helpers and their not-found
+//! errors.
+
 use std::collections::HashMap;
 
 use crate::app::session::SessionError;

@@ -1,3 +1,6 @@
+//! Merge-conflict detection and squash-merge tests, including the
+//! temporary-clone compatibility probe for older `git merge-tree`.
+
 use std::fs;
 #[cfg(unix)]
 use std::os::unix::fs::PermissionsExt;

@@ -1,3 +1,6 @@
+//! Harness cancellation and concurrency unit tests for durable interruption,
+//! lease renewal and recovery, and overlapping turns.
+
 use std::io;
 use std::path::Path;
 use std::sync::Arc;

@@ -1,3 +1,5 @@
+//! HTML proof report structure, embedding, and escaping unit tests.
+
 use super::super::build_html;
 use crate::frame::TerminalFrame;
 use crate::proof::backend::{ProofBackend, RenderContext};

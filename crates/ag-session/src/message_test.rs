@@ -1,3 +1,6 @@
+//! Session message kind, transcript formatting, replay, and stored-content
+//! normalization tests.
+
 use crate::message::{
     SessionMessage, SessionMessageKind, SessionTranscript, normalized_message_content,
     stored_message_content,

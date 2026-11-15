@@ -1,3 +1,6 @@
+//! Reasoning-level mapping tests for Claude, Antigravity, and Codex effort
+//! values.
+
 use ag_contracts::ReasoningLevel;
 use ag_session::AgentModel;
 

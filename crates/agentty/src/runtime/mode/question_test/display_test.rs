@@ -1,3 +1,5 @@
+//! Question mode chat scrolling tests.
+
 use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
 
 use super::support::{TEST_TERMINAL_SIZE, handle, question_mode_with_options};

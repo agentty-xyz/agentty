@@ -1,3 +1,5 @@
+//! Minimal session fixture for session domain tests.
+
 use super::super::super::agent::ReasoningLevel;
 use super::super::Session;
 use crate::test_support::SessionFixtureBuilder;

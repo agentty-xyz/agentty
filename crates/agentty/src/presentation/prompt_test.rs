@@ -1,3 +1,5 @@
+//! Prompt `@`-mention file-description request and loading unit tests.
+
 use crate::domain::file_entry::FileEntry;
 use crate::presentation::prompt::PromptAtMentionState;
 

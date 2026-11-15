@@ -1,3 +1,6 @@
+//! `App` project sync, merge queue, and merged-session reconciliation unit
+//! tests.
+
 use std::collections::{HashMap, HashSet};
 use std::fs;
 use std::path::PathBuf;

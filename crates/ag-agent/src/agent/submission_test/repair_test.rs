@@ -1,3 +1,5 @@
+//! One-shot protocol repair and invalid utility output unit tests.
+
 use std::process::Command;
 use std::sync::{Arc, Mutex};
 

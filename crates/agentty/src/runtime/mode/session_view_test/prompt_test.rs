@@ -1,3 +1,5 @@
+//! Session view prompt composer opening and restoration tests.
+
 use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
 
 use super::super::{

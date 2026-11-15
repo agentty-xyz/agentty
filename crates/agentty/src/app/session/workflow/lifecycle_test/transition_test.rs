@@ -1,3 +1,6 @@
+//! Lifecycle transition tests covering selection navigation, generated title
+//! parsing, title generation tasks, and worktree cleanup errors.
+
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 

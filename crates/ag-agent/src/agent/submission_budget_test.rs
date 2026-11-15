@@ -1,3 +1,6 @@
+//! Provider call budget unit tests across CLI and app-server one-shot
+//! submissions.
+
 use std::path::PathBuf;
 use std::process::Command;
 use std::sync::Arc;

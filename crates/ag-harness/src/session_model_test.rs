@@ -1,3 +1,5 @@
+//! Recorded model snapshot decoding and generation overflow tests.
+
 use serde_json::json;
 
 use crate::session_model::{RecordedModel, next_generation};

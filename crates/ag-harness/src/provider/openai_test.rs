@@ -1,3 +1,6 @@
+//! `OpenAI` provider tests for model context profiles and client capability
+//! policy.
+
 use serde_json::json;
 
 use super::{

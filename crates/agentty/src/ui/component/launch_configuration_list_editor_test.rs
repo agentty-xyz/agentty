@@ -1,3 +1,6 @@
+//! Launch-configuration list editor row, cursor, and command-window unit
+//! tests.
+
 use super::{LaunchConfigurationListEditor, command_window_start, format_input_with_cursor};
 use crate::domain::input::InputState;
 use crate::presentation::setting::{

@@ -1,3 +1,5 @@
+//! Agent CLI discovery and default availability-probe tests.
+
 use std::sync::{Arc, Mutex};
 
 use crate::{

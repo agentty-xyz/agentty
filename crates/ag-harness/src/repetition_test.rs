@@ -1,3 +1,6 @@
+//! Repeated tool call detection tests: nudge and stop thresholds, the
+//! counting window, and feedback text.
+
 use serde_json::json;
 
 use crate::repetition::{

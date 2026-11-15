@@ -1,3 +1,6 @@
+//! Session output rebase caching, sync-status ordering, and live-activity
+//! rendering unit tests.
+
 use std::sync::Arc;
 
 use ratatui::layout::Rect;

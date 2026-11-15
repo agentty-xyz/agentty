@@ -1,3 +1,6 @@
+//! Message queue workflow tests covering poisoned queues, follow-up reply
+//! context, enqueue events, and worker failures.
+
 use std::sync::Arc;
 
 use ag_forge as forge;

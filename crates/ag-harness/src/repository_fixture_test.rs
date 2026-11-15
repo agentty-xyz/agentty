@@ -1,3 +1,6 @@
+//! Test fixtures that build a `Repository` with a trusted Git executable
+//! found on `PATH`.
+
 use std::path::PathBuf;
 
 use super::{Repository, is_executable};

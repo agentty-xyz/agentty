@@ -1,3 +1,5 @@
+//! Footer bar showing the working directory and optional git branch status.
+
 use std::env;
 use std::path::Path;
 

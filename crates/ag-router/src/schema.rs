@@ -1,3 +1,5 @@
+//! Validated, provider-independent JSON Schemas for structured model output.
+
 use std::fmt;
 use std::io::{self, Write};
 use std::sync::Arc;

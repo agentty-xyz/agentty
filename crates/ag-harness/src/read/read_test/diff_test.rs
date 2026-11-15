@@ -1,3 +1,6 @@
+//! `read` tool diff tests: path filters, untracked files, and bounded patch
+//! collection.
+
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 

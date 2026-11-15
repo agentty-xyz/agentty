@@ -1,3 +1,6 @@
+//! `ChatGPT` access-token tests for stored-token reuse, refresh rotation,
+//! failures, and credential lock files.
+
 use std::fs;
 #[cfg(unix)]
 use std::os::unix::fs::PermissionsExt as _;

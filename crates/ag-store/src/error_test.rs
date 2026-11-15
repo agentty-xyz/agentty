@@ -1,3 +1,5 @@
+//! Database error query-context unit tests.
+
 use crate::error::{DbError, DbResultExt};
 
 #[test]

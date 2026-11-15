@@ -1,3 +1,5 @@
+//! `TerminalFrame` parsing, text lookup, style, and ANSI color unit tests.
+
 use super::ansi_index_to_rgb;
 use crate::frame::{CellColor, CellStyle, TerminalFrame};
 use crate::region::Region;

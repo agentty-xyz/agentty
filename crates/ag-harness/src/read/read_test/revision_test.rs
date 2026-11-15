@@ -1,3 +1,6 @@
+//! `read` tool revision tests: base and head file reads, capture and scan
+//! limits, subdirectory scope, and comparison-base pinning.
+
 use std::io::Cursor;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;

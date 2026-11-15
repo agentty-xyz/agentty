@@ -1,3 +1,6 @@
+//! `SessionRunClient`, the session-owned handle for submitting agent turns
+//! and shutting down their runtime.
+
 use std::time::Duration;
 
 use ag_contracts::{AgentError, TurnEvent, TurnRequest, TurnResult};

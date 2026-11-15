@@ -1,3 +1,5 @@
+//! Stream-label progress message mapping unit tests.
+
 use crate::agent::response_parser::compact_progress_message_from_stream_label;
 
 #[test]

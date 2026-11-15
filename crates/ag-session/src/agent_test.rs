@@ -1,3 +1,5 @@
+//! Unit tests for agent kinds, models, and selection, split by behavior.
+
 #[path = "agent_test/model_test.rs"]
 mod model;
 #[path = "agent_test/persistence_test.rs"]

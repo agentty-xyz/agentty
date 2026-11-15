@@ -1,3 +1,6 @@
+//! Session load, insert, and update lifecycle tests, including unknown
+//! statuses and draft state.
+
 use ag_session::ResponseStyle;
 
 use crate::{AppRepositories, DbError, test_support};

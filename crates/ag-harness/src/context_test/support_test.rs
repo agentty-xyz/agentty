@@ -1,3 +1,6 @@
+//! Shared context test fixtures: fixed and byte estimators, budgets, tool
+//! call and result builders, and request helpers.
+
 use std::num::NonZeroU64;
 
 use serde_json::{Value, json};

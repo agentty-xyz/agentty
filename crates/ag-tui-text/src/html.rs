@@ -1,3 +1,5 @@
+//! Renders HTML embedded in forge-authored Markdown as terminal lines.
+
 use ratatui::text::Line;
 
 use crate::{TextRenderSettings, markdown};

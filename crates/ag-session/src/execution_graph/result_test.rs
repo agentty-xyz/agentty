@@ -1,3 +1,5 @@
+//! Graph result reference and execution-identity validation unit tests.
+
 use crate::execution_graph::test_support::result;
 use crate::{GraphContractError, GraphExecutionRef, GraphResultRef};
 

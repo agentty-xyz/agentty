@@ -1,3 +1,6 @@
+//! HTTP transport tests for body limits, error classification, timeouts, and
+//! rate-limit retries.
+
 use std::io;
 use std::io::{Read as _, Write as _};
 use std::net::TcpListener;

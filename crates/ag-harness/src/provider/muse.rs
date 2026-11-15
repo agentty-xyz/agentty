@@ -1,3 +1,6 @@
+//! Muse model identifiers and the `Muse` model served through Meta's Model
+//! API.
+
 use std::env;
 
 use async_trait::async_trait;

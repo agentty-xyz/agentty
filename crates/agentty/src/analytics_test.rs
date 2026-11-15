@@ -1,3 +1,6 @@
+//! Analytics destinations, installation identity, install-method detection,
+//! and model reporting unit tests.
+
 use std::collections::BTreeMap;
 use std::fs;
 #[cfg(unix)]

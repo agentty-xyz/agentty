@@ -1,3 +1,5 @@
+//! `App` subagent limit and `tmux` launch configuration setting unit tests.
+
 use std::path::PathBuf;
 use std::sync::Arc;
 

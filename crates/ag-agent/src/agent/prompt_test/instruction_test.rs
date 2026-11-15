@@ -1,3 +1,5 @@
+//! Protocol instruction and agent profile prompt preparation unit tests.
+
 use ag_contracts::AgentDefinitionPromptUpdate;
 use ag_protocol::{
     ProtocolRequestProfile, ProtocolSchemaInstructionMode,

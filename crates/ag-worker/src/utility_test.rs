@@ -1,3 +1,6 @@
+//! `RunWorker` submission, concurrency, cancellation, persistence, and shutdown
+//! unit tests.
+
 use std::collections::HashSet;
 use std::num::NonZeroUsize;
 use std::sync::atomic::{AtomicU8, Ordering};

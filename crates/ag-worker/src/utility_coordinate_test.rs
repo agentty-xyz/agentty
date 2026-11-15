@@ -1,3 +1,6 @@
+//! `RunWorker::coordinate_recorded` lifecycle, cancellation, and shutdown
+//! unit tests.
+
 use std::num::NonZeroUsize;
 use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex};

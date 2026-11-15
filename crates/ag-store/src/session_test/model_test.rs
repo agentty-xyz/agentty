@@ -1,3 +1,5 @@
+//! Session agent model inference and persistence round-trip tests.
+
 use ag_session::{AgentKind, AgentModel, AgentSelection, parse_persisted_session_agent_model};
 
 use crate::AppRepositories;

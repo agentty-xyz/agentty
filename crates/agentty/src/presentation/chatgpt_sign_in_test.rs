@@ -1,3 +1,5 @@
+//! `ChatGPT` sign-in dialog content tests for each sign-in phase.
+
 use super::{ChatGptSignInDialog, ChatGptSignInPhase};
 use crate::domain::agent::{AgentKind, AgentModel, AgentSelection};
 use crate::domain::session::SessionId;

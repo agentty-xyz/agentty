@@ -1,3 +1,5 @@
+//! Execution graph structural validation and input-resolution unit tests.
+
 use std::num::NonZeroU64;
 
 use ag_protocol::ProtocolRequestProfile;

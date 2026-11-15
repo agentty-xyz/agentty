@@ -1,3 +1,5 @@
+//! Help overlay popup sizing and scroll-hint unit tests.
+
 use ratatui::Terminal;
 use ratatui::backend::TestBackend;
 use ratatui::buffer::Cell;

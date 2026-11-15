@@ -1,3 +1,5 @@
+//! Session fork snapshot preparation and source validation unit tests.
+
 use std::sync::Arc;
 
 use ag_session::PermissionMode;

@@ -1,3 +1,6 @@
+//! `OneShotClient` default-method tests for repeatable close and cancellable
+//! submission.
+
 use std::path::PathBuf;
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::time::Duration;

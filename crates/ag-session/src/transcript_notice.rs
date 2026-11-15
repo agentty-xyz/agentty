@@ -1,3 +1,6 @@
+//! Canonical labels and formatting for workflow notices in session
+//! transcripts.
+
 use std::fmt;
 
 /// Canonical labels for bracketed workflow notices appended to a session

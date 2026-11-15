@@ -1,3 +1,5 @@
+//! Harness availability and model catalog preference tests.
+
 use crate::domain::agent::{
     AgentModel, HarnessModelOption, HarnessModelStatus, ModelCost, ServedModel,
 };

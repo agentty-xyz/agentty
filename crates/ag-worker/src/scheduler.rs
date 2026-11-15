@@ -1,3 +1,6 @@
+//! Serial work scheduling that orders commands and messages for a session
+//! worker host.
+
 use std::collections::VecDeque;
 use std::sync::Arc;
 

@@ -1,3 +1,5 @@
+//! Stored graph evidence, result, history, and proposal-reply records.
+
 use ag_protocol::TurnPromptAttachment;
 use ag_session::{GraphProposalReplyOutcome, GraphResult};
 pub use ag_worker::GraphExecutionRecord;

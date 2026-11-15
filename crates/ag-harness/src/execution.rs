@@ -1,3 +1,6 @@
+//! Bash command execution: shared contracts, the supervisor, and sandboxed
+//! and unsandboxed executors.
+
 mod contract;
 #[cfg(any(target_os = "linux", test))]
 mod landlock;

@@ -1,3 +1,6 @@
+//! Review-request title and description generation tests, including
+//! preservation of user-authored description content.
+
 use std::path::Path;
 
 use ag_contracts::{AgentRequestKind, PermissionMode};

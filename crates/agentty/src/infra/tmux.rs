@@ -1,3 +1,6 @@
+//! `tmux` boundary for detecting sessions, opening windows, and sending
+//! commands.
+
 use std::ffi::OsString;
 use std::future::Future;
 use std::path::PathBuf;

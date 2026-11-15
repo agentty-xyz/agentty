@@ -1,3 +1,6 @@
+//! Session chat page layout, transcript, composer, and question-panel
+//! rendering unit tests.
+
 use std::cell::Cell;
 
 use ag_session::test_support as model_fixture;

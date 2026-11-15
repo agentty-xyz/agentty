@@ -1,3 +1,6 @@
+//! Persists graph task-agent turns and appends node questions to the session
+//! transcript.
+
 use ag_protocol::{AgentResponse, ProtocolRequestProfile, parse_protocol_response_strict};
 use ag_session::{
     ExecutionGraph, GraphExecutionRef, SessionMessageKind, node_question_notice,

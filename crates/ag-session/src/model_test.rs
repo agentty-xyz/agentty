@@ -1,3 +1,5 @@
+//! Session identity, status lifecycle, and activity-day unit tests.
+
 use std::path::Path;
 use std::sync::Arc;
 

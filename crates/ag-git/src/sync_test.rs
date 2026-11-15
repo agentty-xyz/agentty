@@ -1,3 +1,6 @@
+//! Unit tests for the `sync` commit, diff, hook, remote, and worktree
+//! workflows, split by behavior.
+
 #[path = "sync_test/support_test.rs"]
 mod support;
 

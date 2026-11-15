@@ -1,3 +1,5 @@
+//! Warning-log tests for rejected workspace agent definitions.
+
 use std::io;
 use std::os::unix::fs::symlink;
 use std::path::{Path, PathBuf};

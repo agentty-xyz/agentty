@@ -1,3 +1,5 @@
+//! Session API test that rejects invalid persisted session data.
+
 use ag_session::SessionError as ApiSessionError;
 
 use super::super::{api_questions_from_json, build_api_session};

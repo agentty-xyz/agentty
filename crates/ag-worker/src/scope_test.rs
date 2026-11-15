@@ -1,3 +1,5 @@
+//! Run scope trace inheritance and execution-resource retention unit tests.
+
 use std::sync::Arc;
 
 use ag_telemetry::{Context, TraceContextExt as _};

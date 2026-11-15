@@ -1,3 +1,5 @@
+//! Settings-screen navigation and launch-configuration editor state tests.
+
 use super::support::{new_settings_manager, select_row, settings_manager, test_services};
 use crate::domain::input::InputCommand;
 use crate::domain::setting::SettingName;

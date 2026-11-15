@@ -1,3 +1,6 @@
+//! Rebase and conflict workflows, including in-progress operation detection
+//! and index-lock retries.
+
 use std::fs;
 use std::io::ErrorKind;
 use std::path::{Path, PathBuf};

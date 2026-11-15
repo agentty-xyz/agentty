@@ -1,3 +1,5 @@
+//! Unit tests for one-shot submission, split by behavior.
+
 #[path = "submission_test/app_server_test.rs"]
 mod app_server;
 #[path = "submission_test/cli_test.rs"]

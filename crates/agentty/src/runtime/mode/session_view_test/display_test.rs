@@ -1,3 +1,5 @@
+//! Session view scrolling, output appending, and line-count tests.
+
 use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
 
 use super::super::{apply_view_scroll_and_output_mode, handle_with_cache};

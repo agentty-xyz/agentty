@@ -1,3 +1,5 @@
+//! Diff mode navigation, inline-comment selection, and exit tests.
+
 use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
 use ratatui::layout::Rect;
 

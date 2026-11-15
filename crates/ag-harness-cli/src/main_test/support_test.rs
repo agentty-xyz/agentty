@@ -1,3 +1,6 @@
+//! Shared CLI test fixtures: stub models, provider responses, argument
+//! parsing helpers, and a test Git executable.
+
 use std::ffi::OsString;
 use std::io;
 use std::path::{Path, PathBuf};

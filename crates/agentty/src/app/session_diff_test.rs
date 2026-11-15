@@ -1,3 +1,6 @@
+//! Session diff loading tests covering diff view completions, review diff
+//! requests, durable auto-review triggers, and apply remediation.
+
 use std::collections::HashSet;
 
 use ag_session::test_support as model_fixture;

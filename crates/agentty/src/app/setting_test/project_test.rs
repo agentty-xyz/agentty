@@ -1,3 +1,5 @@
+//! Project-scoped settings loading and row grouping tests.
+
 use ag_session::test_support as model_fixture;
 
 use super::super::{load_default_smart_model_setting, load_project_speed_mode_setting};

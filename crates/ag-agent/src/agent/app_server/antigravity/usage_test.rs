@@ -1,3 +1,5 @@
+//! Antigravity per-turn token usage accounting unit tests.
+
 use crate::agent::app_server::antigravity::usage::{TokenUsage, TurnUsageTracker};
 
 #[test]

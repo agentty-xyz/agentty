@@ -1,3 +1,6 @@
+//! Key handling for the prompt composer, reducing keys into effects that
+//! drive app workflows.
+
 use std::io;
 
 use crossterm::event::{self, KeyCode, KeyEvent};

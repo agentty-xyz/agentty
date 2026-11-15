@@ -1,3 +1,5 @@
+//! Confirmation overlay construction and choice rendering unit tests.
+
 use super::ConfirmationOverlay;
 use crate::ui::Component;
 

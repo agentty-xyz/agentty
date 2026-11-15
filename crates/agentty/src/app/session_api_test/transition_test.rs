@@ -1,3 +1,6 @@
+//! Session API transition tests covering durable turns, permission-mode
+//! validation, workflow and read errors, and error translation.
+
 use std::sync::Arc;
 use std::time::Duration;
 

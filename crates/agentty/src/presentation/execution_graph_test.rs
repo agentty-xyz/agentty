@@ -1,3 +1,6 @@
+//! Graph inspector state unit tests for revision guidance, output acceptance,
+//! result-schema display, action authority, and draft reconciliation.
+
 use std::num::NonZeroU64;
 
 use ag_protocol::{ProtocolRequestProfile, QuestionItem, TurnPrompt};

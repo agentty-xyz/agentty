@@ -1,3 +1,6 @@
+//! Context calibration unit tests for fitting request weights to
+//! provider-reported usage and restating budget failures.
+
 use std::num::NonZeroU64;
 
 use crate::calibration::{ContextCalibration, Envelope, Slope};

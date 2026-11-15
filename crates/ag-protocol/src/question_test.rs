@@ -1,3 +1,5 @@
+//! Clarification question construction unit tests.
+
 use crate::question::QuestionItem;
 
 #[test]

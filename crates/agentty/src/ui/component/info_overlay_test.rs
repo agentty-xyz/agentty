@@ -1,3 +1,6 @@
+//! Info overlay message formatting, loading state, width, and rendering unit
+//! tests.
+
 use ratatui::layout::Rect;
 use ratatui::text::Line;
 use unicode_width::UnicodeWidthStr;

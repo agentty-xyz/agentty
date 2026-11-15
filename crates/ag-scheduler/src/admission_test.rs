@@ -1,3 +1,5 @@
+//! Session admission tests for turn waits, closing, and shared cleanup slots.
+
 use std::num::NonZeroUsize;
 
 use crate::admission::SessionAdmission;

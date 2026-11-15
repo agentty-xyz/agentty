@@ -1,3 +1,6 @@
+//! Session API review request tests covering queueing, runtime handling, and
+//! published review request mapping.
+
 use std::sync::Arc;
 
 use ag_session::{

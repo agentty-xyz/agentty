@@ -1,3 +1,5 @@
+//! Shared yes/no confirmation selector key-handling tests.
+
 use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
 
 use super::{ConfirmationDecision, NO_OPTION_INDEX, YES_OPTION_INDEX, handle};

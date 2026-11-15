@@ -1,3 +1,5 @@
+//! Agent CLI stdin payload writer unit tests.
+
 use std::io;
 use std::pin::Pin;
 use std::task::{Context, Poll};

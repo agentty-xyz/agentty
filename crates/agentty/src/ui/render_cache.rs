@@ -1,3 +1,5 @@
+//! UI-owned store of render caches shared by drawing and scroll-metric paths.
+
 use std::cell::Cell;
 
 use crate::ui::{component, markdown, page};

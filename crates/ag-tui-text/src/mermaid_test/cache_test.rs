@@ -1,3 +1,5 @@
+//! Parsed Mermaid source cache reuse and bounds tests.
+
 use std::sync::Arc;
 
 use crate::mermaid::{

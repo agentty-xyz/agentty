@@ -1,3 +1,6 @@
+//! Antigravity runtime lifecycle unit tests covering restored state, startup,
+//! and turn execution failures.
+
 #[cfg(unix)]
 use std::ffi::OsString;
 #[cfg(unix)]

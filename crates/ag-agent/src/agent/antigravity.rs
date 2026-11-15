@@ -1,3 +1,5 @@
+//! Antigravity CLI backend that builds the persistent `agy` runtime command.
+
 use std::ffi::{OsStr, OsString};
 use std::path::Path;
 use std::process::{Command, Stdio};

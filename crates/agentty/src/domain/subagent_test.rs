@@ -1,3 +1,5 @@
+//! Subagent concurrency limit persistence and default tests.
+
 use std::num::NonZeroUsize;
 
 use crate::domain::subagent::SubagentLimit;

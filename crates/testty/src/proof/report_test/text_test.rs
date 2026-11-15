@@ -1,3 +1,5 @@
+//! `ProofReport` annotated-text rendering unit tests.
+
 use crate::frame::TerminalFrame;
 use crate::proof::report::{AssertionResult, ProofReport};
 

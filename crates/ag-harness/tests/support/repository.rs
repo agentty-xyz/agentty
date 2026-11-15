@@ -1,3 +1,5 @@
+//! Repository fixture backed by a trusted host Git executable.
+
 use std::path::Path;
 
 use ag_harness::Repository;

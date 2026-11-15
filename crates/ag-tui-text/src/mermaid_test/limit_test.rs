@@ -1,3 +1,5 @@
+//! Mermaid preview limit and label truncation tests.
+
 use std::fmt::Write;
 
 use super::support::diagram_text;

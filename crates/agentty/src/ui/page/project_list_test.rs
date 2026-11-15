@@ -1,3 +1,6 @@
+//! Projects page table, activity heatmap, work stats, and agent CLI summary
+//! rendering unit tests.
+
 use std::path::PathBuf;
 
 use ratatui::layout::{Alignment, Constraint};

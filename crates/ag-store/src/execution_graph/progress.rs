@@ -1,3 +1,6 @@
+//! Read-only graph progress projection: node status, gates, and blocked
+//! reasons.
+
 use ag_protocol::parse_protocol_response_strict;
 use ag_session::{
     ExecutionGraph, ExecutionGraphProgress, ExecutionGraphStatus, GraphBlockedReason,

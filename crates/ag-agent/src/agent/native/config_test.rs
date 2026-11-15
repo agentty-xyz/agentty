@@ -1,3 +1,6 @@
+//! Native harness configuration unit tests covering model listing, provider
+//! registration, sign-in, environments, and session storage.
+
 use std::collections::BTreeMap;
 use std::ffi::OsString;
 use std::os::unix::ffi::OsStringExt;

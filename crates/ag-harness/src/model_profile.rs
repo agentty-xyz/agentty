@@ -1,3 +1,6 @@
+//! Host-declared model profiles describing a model's context window,
+//! reservations, and request weight estimator.
+
 use std::num::NonZeroU64;
 
 use crate::calibration::CALIBRATED_CAPACITY_PERCENT;

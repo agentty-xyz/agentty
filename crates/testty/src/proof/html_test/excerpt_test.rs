@@ -1,3 +1,5 @@
+//! HTML proof frame-excerpt highlighting and column-ruler unit tests.
+
 use super::super::{build_html, highlight_limit};
 use crate::assertion::{AssertionFailure, Expected};
 use crate::frame::CellColor;

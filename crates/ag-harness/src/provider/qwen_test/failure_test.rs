@@ -1,3 +1,6 @@
+//! Qwen provider failure tests: truncated responses, oversized bodies, and
+//! HTTP or malformed-response errors.
+
 use serde_json::json;
 use wiremock::matchers::{method, path};
 use wiremock::{Mock, MockServer, ResponseTemplate};

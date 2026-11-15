@@ -1,3 +1,6 @@
+//! Theme-aware Markdown rendering into wrapped terminal lines, with a bounded
+//! render cache.
+
 use std::sync::Arc;
 
 pub use ag_tui_text::markdown::{markdown_block_preservation_mask, parse_inline_spans};

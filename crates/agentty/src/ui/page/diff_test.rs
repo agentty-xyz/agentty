@@ -1,3 +1,6 @@
+//! Diff page layout caching, content snapshots, comments, preview, and
+//! rendering unit tests.
+
 use std::fmt::Write as _;
 use std::sync::Arc;
 

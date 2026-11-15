@@ -1,3 +1,6 @@
+//! Question reply workflow tests covering protocol title parsing, answer
+//! reply context, and replies to missing or blocked sessions.
+
 use std::sync::Arc;
 
 use ag_forge as forge;

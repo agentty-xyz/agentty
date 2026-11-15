@@ -1,3 +1,6 @@
+//! Crate-wide test lock that serializes tests replacing the global tracer
+//! provider.
+
 use tokio::sync::Mutex;
 
 /// Holds exclusive provider ownership through execution and span assertions.

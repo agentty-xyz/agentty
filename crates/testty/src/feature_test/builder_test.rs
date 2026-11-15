@@ -1,3 +1,5 @@
+//! `FeatureDemo` builder metadata, GIF settings, and redaction unit tests.
+
 use std::path::Path;
 
 use crate::feature::{FeatureDemo, GifMode, GifStatus, Redaction};

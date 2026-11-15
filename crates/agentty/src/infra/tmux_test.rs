@@ -1,3 +1,6 @@
+//! `tmux` environment detection, command construction, and window-id parsing
+//! tests.
+
 use std::ffi::OsString;
 use std::os::unix::fs::PermissionsExt;
 use std::path::PathBuf;

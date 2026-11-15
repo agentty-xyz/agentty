@@ -1,3 +1,5 @@
+//! Review diff chunking, hunk splitting, and citation anchor repair unit tests.
+
 use ag_git::DiffFile;
 use ag_protocol::{
     FocusedReview, FocusedReviewEvidence, FocusedReviewSeverity, FocusedReviewSide,

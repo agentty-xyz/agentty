@@ -1,3 +1,6 @@
+//! X11 clipboard backend that reads `CLIPBOARD` selection targets, including
+//! incremental (`INCR`) transfers, with timeouts and payload size limits.
+
 use std::path::PathBuf;
 use std::time::{Duration, Instant};
 

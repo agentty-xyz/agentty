@@ -1,3 +1,5 @@
+//! `ClipboardBackend` read contract implemented by each clipboard source.
+
 use std::path::PathBuf;
 
 use crate::{ClipboardError, ClipboardImage};

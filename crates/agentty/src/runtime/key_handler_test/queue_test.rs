@@ -1,3 +1,5 @@
+//! Key-handler test for retracting a queued diff-comment submission.
+
 use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
 
 use super::super::handle_key_event;

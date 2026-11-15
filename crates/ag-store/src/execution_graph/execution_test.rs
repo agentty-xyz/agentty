@@ -1,3 +1,6 @@
+//! Graph execution link tests for input binding, authority checks, and
+//! corrupt-receipt rejection.
+
 use std::num::NonZeroU64;
 
 use ag_session::{GraphContext, GraphExecutionRef, GraphResolvedInput};

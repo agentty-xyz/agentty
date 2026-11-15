@@ -1,3 +1,6 @@
+//! Auto-commit agent selection, co-author trailer, and session setting load
+//! tests.
+
 use std::sync::{Arc, Mutex};
 
 use ag_session::{AgentSelectionMetadata, test_support as model_fixture};

@@ -1,3 +1,6 @@
+//! Kimi provider tests for carrying reasoning content and tool results into
+//! continuation turns, and for bounding reasoning size.
+
 use serde_json::{Value, json};
 use wiremock::matchers::{bearer_token, body_json, method, path};
 use wiremock::{Mock, MockServer, ResponseTemplate};

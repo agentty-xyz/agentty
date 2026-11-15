@@ -1,3 +1,6 @@
+//! Runtime-owned presentation state: render caches, table selection, and
+//! terminal-clear tracking for frame drawing.
+
 use std::cell::{Cell, RefCell};
 
 use ratatui::Frame;

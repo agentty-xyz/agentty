@@ -1,3 +1,5 @@
+//! Unit tests for agent prompt preparation, split by behavior.
+
 #[path = "prompt_test/attachment_test.rs"]
 mod attachment;
 #[path = "prompt_test/format_test.rs"]

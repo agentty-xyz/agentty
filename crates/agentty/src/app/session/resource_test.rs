@@ -1,3 +1,6 @@
+//! `ResourceMonitor` unit tests covering descendant process totals, sampling
+//! throttling, failed samples, and in-flight abort on drop.
+
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 

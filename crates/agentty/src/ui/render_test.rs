@@ -1,3 +1,5 @@
+//! Footer bar directory, branch, and git-status rendering unit tests.
+
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 

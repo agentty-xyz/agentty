@@ -1,3 +1,6 @@
+//! Session stack persistence tests: parent linkage, restacking, and child
+//! retargeting on delete.
+
 use super::support::{insert_session_fixture, load_session_row};
 use crate::connection::Database;
 

@@ -1,3 +1,5 @@
+//! Migration discovery and duplicate-prefix check unit tests.
+
 use std::path::{Path, PathBuf};
 use std::{fs, io};
 

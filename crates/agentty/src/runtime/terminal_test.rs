@@ -1,3 +1,6 @@
+//! Terminal setup, keyboard-enhancement selection, SSH detection, and restore
+//! unit tests.
+
 use std::ffi::OsString;
 use std::io;
 use std::sync::Arc;

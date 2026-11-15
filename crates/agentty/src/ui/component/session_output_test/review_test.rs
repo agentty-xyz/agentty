@@ -1,3 +1,6 @@
+//! Session output review text, draft preview, and branch-publish rendering
+//! and caching unit tests.
+
 use std::sync::Arc;
 
 use ratatui::layout::Rect;

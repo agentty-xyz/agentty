@@ -1,3 +1,5 @@
+//! Unit tests for context projection and request fitting, split by behavior.
+
 #[path = "context_test/budget_test.rs"]
 mod budget;
 #[path = "context_test/cap_test.rs"]

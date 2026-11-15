@@ -1,3 +1,6 @@
+//! Session view draft start, archived diff loading, and image-paste draft
+//! tests.
+
 use std::path::PathBuf;
 use std::sync::Arc;
 

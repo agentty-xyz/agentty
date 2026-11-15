@@ -1,3 +1,6 @@
+//! First-prompt handoff tests covering attachment cleanup, retries, and
+//! restart recovery.
+
 use std::sync::Arc;
 
 use ag_contracts::AgentRequestKind;

@@ -1,3 +1,6 @@
+//! Chat loop unit tests for interactive, non-interactive, and one-shot turns,
+//! failure reporting, slash commands, and model switching.
+
 use std::env;
 use std::sync::atomic::AtomicUsize;
 

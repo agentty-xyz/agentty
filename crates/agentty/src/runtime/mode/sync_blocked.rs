@@ -1,3 +1,5 @@
+//! Key handling for the sync informational popup.
+
 use crossterm::event::{KeyCode, KeyEvent};
 
 use crate::app::App;

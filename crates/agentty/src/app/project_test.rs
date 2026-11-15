@@ -1,3 +1,5 @@
+//! `ProjectManager` navigation and active project context unit tests.
+
 use std::path::{Path, PathBuf};
 
 use super::ProjectManager;

@@ -1,3 +1,5 @@
+//! Tool trace metadata allowlisting and bounded content preview unit tests.
+
 use std::io::Write as _;
 
 use ag_telemetry::KeyValue;

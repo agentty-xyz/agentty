@@ -1,3 +1,6 @@
+//! Shared Qwen test fixtures: schemas, requests, mock-server clients, and
+//! mounted structured, tool-call, and continuation responses.
+
 use serde_json::json;
 use wiremock::matchers::{bearer_token, body_json, method, path};
 use wiremock::{Mock, MockServer, ResponseTemplate};

@@ -1,3 +1,5 @@
+//! Unit tests for the `ag-harness` CLI entry point, split by behavior.
+
 #[path = "main_test/chat_test.rs"]
 mod chat;
 #[path = "main_test/command_test.rs"]

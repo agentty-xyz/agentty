@@ -1,3 +1,6 @@
+//! Kimi provider tests for advertising, decoding, and rejecting `read` tool
+//! calls.
+
 use serde_json::json;
 use wiremock::MockServer;
 

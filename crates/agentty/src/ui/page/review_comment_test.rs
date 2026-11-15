@@ -1,3 +1,6 @@
+//! Review comment page rendering, code-context derivation, and selection unit
+//! tests.
+
 use ag_forge::{
     ReviewComment, ReviewCommentAnchorSide, ReviewCommentSnapshot, ReviewCommentThread,
 };

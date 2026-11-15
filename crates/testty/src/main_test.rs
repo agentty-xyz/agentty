@@ -1,3 +1,5 @@
+//! `testty` CLI argument parsing and scenario-run dispatch tests.
+
 #[cfg(unix)]
 use std::os::unix::fs::PermissionsExt;
 use std::path::{Path, PathBuf};

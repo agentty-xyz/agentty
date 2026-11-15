@@ -1,3 +1,6 @@
+//! Session manager prompt tests covering turn-applied state, at-mention index
+//! caching, history replay, and first-message titles.
+
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant, SystemTime};
 

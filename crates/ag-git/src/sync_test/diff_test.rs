@@ -1,3 +1,6 @@
+//! Diff and branch-deletion tests covering staged and untracked changes,
+//! linked worktrees, diff targets, and repository-unavailable errors.
+
 use std::fs;
 use std::path::PathBuf;
 

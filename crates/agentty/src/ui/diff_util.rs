@@ -1,3 +1,5 @@
+//! Unified-diff parsing, layout, and scroll helpers.
+
 use ratatui::layout::{Constraint, Direction, Layout, Margin, Rect};
 use ratatui::style::Style;
 

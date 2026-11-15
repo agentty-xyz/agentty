@@ -1,3 +1,6 @@
+//! Status bar version, update, project sync, project name, and help-hint
+//! rendering unit tests.
+
 use ratatui::style::Modifier;
 
 use super::{StatusBar, centered_label_area};

@@ -1,3 +1,6 @@
+//! Test guard that serializes access to the process-wide Antigravity
+//! compatibility snapshot.
+
 use std::sync::{Mutex, MutexGuard};
 
 /// Serializes tests that update the process-wide Antigravity compatibility

@@ -1,3 +1,5 @@
+//! Execution graph driver relaunch, capacity reuse, and wakeup unit tests.
+
 use std::collections::{BTreeMap, HashMap};
 use std::num::NonZeroU64;
 use std::path::Path;

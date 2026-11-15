@@ -1,3 +1,6 @@
+//! `RunClient` and `RunWorker`, the concurrent executor for worker-owned
+//! utility runs with durable lifecycle tracking.
+
 use std::collections::{BTreeMap, HashMap};
 use std::future::poll_fn;
 use std::num::NonZeroUsize;

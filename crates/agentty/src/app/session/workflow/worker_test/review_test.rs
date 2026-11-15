@@ -1,3 +1,6 @@
+//! Published-branch auto-push, review-thread resolution, and review-request
+//! command tests for the session worker.
+
 use std::collections::VecDeque;
 use std::future::pending;
 use std::sync::{Arc, Mutex};

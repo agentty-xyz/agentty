@@ -1,3 +1,6 @@
+//! Replacement metadata unit tests for access metadata, extended attributes,
+//! Apple metadata, and mode rollback.
+
 use std::ffi::OsStr;
 #[cfg(any(target_os = "android", target_os = "linux"))]
 use std::ffi::OsString;

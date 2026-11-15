@@ -1,3 +1,5 @@
+//! Chat transcript scroll keys, focus toggling, and scroll-metric tests.
+
 use std::cell::Cell;
 use std::collections::HashMap;
 use std::io;

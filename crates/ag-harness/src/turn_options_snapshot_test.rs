@@ -1,3 +1,6 @@
+//! Turn options snapshot tests: round trips, versioned fingerprints, and
+//! comparison metadata validation.
+
 use std::num::NonZeroUsize;
 
 use serde_json::{Value, json};

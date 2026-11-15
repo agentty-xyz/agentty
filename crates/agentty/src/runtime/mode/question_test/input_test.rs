@@ -1,3 +1,5 @@
+//! Question free-text and option input key tests.
+
 use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
 
 use super::super::{QuestionAction, resolve_question_action};

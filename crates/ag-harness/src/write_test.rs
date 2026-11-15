@@ -1,3 +1,6 @@
+//! `write` tool tests: unified-diff parsing, hunk matching and relocation,
+//! line-ending conventions, and rejected patches.
+
 use std::fmt::Write as _;
 use std::io;
 use std::io::Cursor;

@@ -1,3 +1,6 @@
+//! `App` review unit tests for auto-review, review caching, review request
+//! status updates, and branch publication.
+
 use std::collections::HashSet;
 use std::fs;
 use std::path::PathBuf;

@@ -1,3 +1,5 @@
+//! Mermaid flowchart parsing and rendering tests.
+
 use super::support::diagram_text;
 use crate::mermaid::{MAX_LABEL_WIDTH, is_ignorable_flow_statement, render_mermaid};
 use crate::style;

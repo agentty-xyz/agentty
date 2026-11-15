@@ -1,3 +1,6 @@
+//! `SessionState`, the in-memory session list with its live worker handles,
+//! selection, refresh tracking, and cached branch and git metadata.
+
 use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
 use std::time::Instant;

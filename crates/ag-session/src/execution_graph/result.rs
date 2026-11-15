@@ -1,3 +1,6 @@
+//! References to persisted graph node outputs and the execution records that
+//! produced them.
+
 use std::num::NonZeroU64;
 
 use ag_protocol::ProtocolRequestProfile;

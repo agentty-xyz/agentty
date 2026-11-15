@@ -1,3 +1,5 @@
+//! Unit tests for turn reservation, split by behavior.
+
 #[path = "reservation_test/admission_test.rs"]
 mod admission;
 #[path = "reservation_test/journal_test.rs"]

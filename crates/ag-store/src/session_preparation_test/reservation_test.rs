@@ -1,3 +1,6 @@
+//! Session preparation reservation tests for prompt retention, rollback, and
+//! lazy and fork preparation.
+
 use super::support::reservation;
 use crate::session_preparation::SessionPreparationState;
 use crate::{AppRepositories, ForkSessionSnapshot};

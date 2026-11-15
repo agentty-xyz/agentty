@@ -1,3 +1,5 @@
+//! `Tachyonfx` animation effect for the shared session loader glyph.
+
 use ratatui::buffer::Buffer;
 use ratatui::layout::Rect;
 use tachyonfx::{Duration, Effect, Interpolation, fx};

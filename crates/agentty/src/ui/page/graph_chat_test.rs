@@ -1,3 +1,6 @@
+//! Graph chat sidebar sizing, node status, dependency connector, and
+//! overflow rendering unit tests.
+
 use std::collections::BTreeMap;
 use std::num::NonZeroU64;
 

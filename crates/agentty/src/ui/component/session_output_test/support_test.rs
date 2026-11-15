@@ -1,3 +1,6 @@
+//! Shared fixtures for session output tests: session snapshots, transcripts,
+//! line contexts, and rendered-line helpers.
+
 use ratatui::layout::Rect;
 use ratatui::style::Color;
 use ratatui::text::Line;

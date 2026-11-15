@@ -1,3 +1,6 @@
+//! `RealFsClient` filesystem operation and startup worktree cleanup scan
+//! tests.
+
 use tempfile::tempdir;
 
 use super::RealFsClient;

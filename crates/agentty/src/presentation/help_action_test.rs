@@ -1,3 +1,6 @@
+//! Shortcut availability tests for list, settings, session view, and diff
+//! help actions.
+
 use super::{
     DiffReviewCommentHelp, PROMPT_IMAGE_PASTE_SHORTCUT_LABEL, ViewActionAvailability,
     ViewHelpState, ViewSessionState, diff_actions, project_list_actions, session_list_actions,

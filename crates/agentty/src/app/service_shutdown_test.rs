@@ -1,3 +1,6 @@
+//! App service shutdown tests covering cleanup deadlines and per-session
+//! worker cleanup.
+
 use std::future;
 use std::sync::Arc;
 use std::time::{Duration, SystemTime};

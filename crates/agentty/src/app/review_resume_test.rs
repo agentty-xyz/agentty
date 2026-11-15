@@ -1,3 +1,6 @@
+//! `ReviewResumeClient` unit tests covering checkpoint reuse, invalidation,
+//! and rejection of invalid or corrupted cached responses.
+
 use std::collections::HashSet;
 use std::fmt::Write as _;
 use std::sync::{Arc, Mutex};

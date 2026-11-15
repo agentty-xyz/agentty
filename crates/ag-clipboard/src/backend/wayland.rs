@@ -1,3 +1,6 @@
+//! Wayland clipboard backend that reads text, URI lists, and PNG images
+//! through the `wl-paste` command.
+
 use std::io;
 use std::path::PathBuf;
 use std::process::Command;

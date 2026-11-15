@@ -1,3 +1,5 @@
+//! `Sleeper` boundary used to wait between git retry attempts.
+
 use std::time::Duration;
 
 /// Suspends execution for a bounded duration.

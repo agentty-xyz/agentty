@@ -1,3 +1,6 @@
+//! Protocol envelope tests for instruction prepending, refresh reminders, and
+//! repair prompts.
+
 use std::fmt;
 use std::path::Path;
 

@@ -1,3 +1,5 @@
+//! `Region` construction, bounds, and layout-split unit tests.
+
 use crate::region::Region;
 
 #[test]

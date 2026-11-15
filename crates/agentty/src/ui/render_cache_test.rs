@@ -1,3 +1,5 @@
+//! Unit tests for shared cache reuse in `RenderCacheStore`.
+
 use super::RenderCacheStore;
 
 #[test]

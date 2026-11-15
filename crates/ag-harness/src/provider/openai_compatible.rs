@@ -1,3 +1,6 @@
+//! Configuration, context profiles, and local server lookup for any server
+//! implementing the OpenAI-compatible Chat Completions API.
+
 use std::env;
 
 use ag_router::LocalServer;

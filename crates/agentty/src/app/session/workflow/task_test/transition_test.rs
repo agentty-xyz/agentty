@@ -1,3 +1,6 @@
+//! Auto-commit flow tests covering commit errors, assist retries, hook
+//! warnings, and commit-message generation fallbacks.
+
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex};

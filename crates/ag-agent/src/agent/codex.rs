@@ -1,3 +1,5 @@
+//! Codex backend that builds the `codex app-server` runtime command.
+
 use std::path::Path;
 use std::process::Command;
 

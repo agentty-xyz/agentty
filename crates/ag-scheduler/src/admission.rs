@@ -1,3 +1,5 @@
+//! Shared admission capacity for session model turns and cleanup.
+
 use std::num::NonZeroUsize;
 use std::sync::Arc;
 

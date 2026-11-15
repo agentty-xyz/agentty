@@ -1,3 +1,6 @@
+//! Session messages and transcripts, with display formatting, replay text,
+//! and stored-content normalization.
+
 use std::fmt;
 use std::hash::Hasher;
 use std::str::FromStr;

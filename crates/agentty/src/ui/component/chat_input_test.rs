@@ -1,3 +1,6 @@
+//! Prompt input frame, title, footer, theme styling, and suggestion dropdown
+//! rendering unit tests.
+
 use ratatui::style::Style;
 use unicode_width::UnicodeWidthStr;
 

@@ -1,3 +1,6 @@
+//! Session manager persistence tests covering session loading, daily
+//! activity, branch-name refresh, and periodic reloads.
+
 use std::collections::{BTreeMap, HashMap};
 use std::path::PathBuf;
 use std::sync::Arc;

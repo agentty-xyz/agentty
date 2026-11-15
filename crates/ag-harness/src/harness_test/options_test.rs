@@ -1,3 +1,6 @@
+//! Harness turn option unit tests for capture, persistence, session defaults,
+//! schema overrides, and comparison scope.
+
 use std::io::Cursor;
 use std::num::NonZeroUsize;
 use std::path::Path;

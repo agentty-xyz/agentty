@@ -1,3 +1,6 @@
+//! Turn acquisition tests: acknowledgement recovery, failed commits,
+//! cancelled waiters, and expired acquisitions.
+
 use std::sync::Arc;
 use std::time::Duration;
 

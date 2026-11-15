@@ -1,3 +1,6 @@
+//! Shared input key classification, command mapping, and paste normalization
+//! tests.
+
 use crossterm::event;
 use crossterm::event::{KeyCode, KeyEvent};
 

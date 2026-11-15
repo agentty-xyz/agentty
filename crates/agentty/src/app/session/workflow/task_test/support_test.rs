@@ -1,3 +1,6 @@
+//! Shared clock, one-shot result, session, and transcript fixtures for
+//! session task tests.
+
 use std::sync::{Mutex, Mutex as StdMutex};
 use std::time::{Instant, SystemTime};
 

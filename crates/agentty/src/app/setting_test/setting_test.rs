@@ -1,3 +1,6 @@
+//! `SettingsManager` tests for settings rows, defaults, persisted values, and
+//! role model selection.
+
 use ag_session::{AgentSelectionMetadata, test_support as model_fixture};
 
 use super::super::{

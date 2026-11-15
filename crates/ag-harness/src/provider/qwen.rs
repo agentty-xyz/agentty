@@ -1,3 +1,6 @@
+//! Qwen model identifiers, flash-model context profiles, and configuration
+//! for Alibaba Cloud Model Studio's OpenAI-compatible API.
+
 use crate::model::{HeuristicContextEstimator, ModelProfile};
 
 pub(crate) const DASHSCOPE_API_KEY_ENV: &str = "DASHSCOPE_API_KEY";

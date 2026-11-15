@@ -1,3 +1,5 @@
+//! Session chat output panel renderer and its bounded layout cache.
+
 use std::cell::RefCell;
 use std::collections::{HashMap, VecDeque};
 use std::hash::Hasher;

@@ -1,3 +1,5 @@
+//! Browser boundary that opens URLs with the platform URL handler.
+
 use std::ffi::OsString;
 use std::process::Stdio;
 

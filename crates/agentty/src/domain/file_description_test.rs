@@ -1,3 +1,6 @@
+//! File-description syntax detection and Rust and Python summary extraction
+//! tests.
+
 use super::FileDescriptionSyntax;
 
 #[test]

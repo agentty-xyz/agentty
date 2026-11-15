@@ -1,3 +1,6 @@
+//! Prompt-composer tests for image attachments, slash suggestions, and
+//! prompt submission rendering.
+
 use std::path::PathBuf;
 
 use ag_protocol::render_prompt_text_for_agent;

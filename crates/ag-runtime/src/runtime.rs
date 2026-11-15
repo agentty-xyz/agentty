@@ -1,3 +1,6 @@
+//! Runtime composition for worker-owned session turns and pooled utility
+//! execution.
+
 use std::path::PathBuf;
 use std::sync::Arc;
 

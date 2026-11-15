@@ -1,3 +1,6 @@
+//! Session timer, forge indicator, stack branch gate, identifier, and diff
+//! statistics tests.
+
 use std::collections::HashMap;
 use std::path::PathBuf;
 

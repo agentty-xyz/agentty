@@ -1,3 +1,6 @@
+//! Unified-diff header and hunk parsing, filtering, wrapping, and diff page
+//! layout unit tests.
+
 use ratatui::layout::Rect;
 
 use super::{

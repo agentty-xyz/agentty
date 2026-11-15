@@ -1,3 +1,6 @@
+//! Settings persistence tests for launch-configuration reordering, response
+//! style selection, and navigation.
+
 use super::support::{
     new_settings_manager, select_row, settings_manager, settings_manager_with_launch_configuration,
     test_services,

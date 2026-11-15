@@ -1,3 +1,5 @@
+//! Tab, footer, dialog, and status-message assertion recipe unit tests.
+
 use crate::frame::TerminalFrame;
 use crate::recipe::{
     expect_dialog_title, expect_footer_action, expect_instruction_visible, expect_keybinding_hint,

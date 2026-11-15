@@ -1,3 +1,6 @@
+//! Session task persistence tests covering diff stats refresh and workflow
+//! notice appends under persistence and lock failures.
+
 use std::path::PathBuf;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};

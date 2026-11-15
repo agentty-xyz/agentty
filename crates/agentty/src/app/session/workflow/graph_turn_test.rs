@@ -1,3 +1,6 @@
+//! Graph turn unit tests covering image marker disambiguation, continuation
+//! prompts, permission intersection, and effect budgets.
+
 use std::sync::Arc;
 
 use ag_contracts::{

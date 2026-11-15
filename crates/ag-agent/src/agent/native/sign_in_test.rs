@@ -1,3 +1,6 @@
+//! `ChatGPT` browser sign-in unit tests for approval, denial, and missing
+//! credentials.
+
 use std::collections::BTreeMap;
 use std::io::{Read as _, Write as _};
 use std::net::TcpStream;

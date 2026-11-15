@@ -1,3 +1,6 @@
+//! Batched review prompt unit tests covering fragment batching, cross-file
+//! passes, verification, reduction, deadlines, and partial-review coverage.
+
 use std::collections::{BTreeMap, VecDeque};
 use std::fmt::Write as _;
 use std::path::PathBuf;

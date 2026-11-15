@@ -1,3 +1,5 @@
+//! Stdio app-server transport output reading and response-wait unit tests.
+
 use crate::agent::app_server::stdio_transport::{
     AppServerRuntimeTransport, AppServerStdioTransport,
 };

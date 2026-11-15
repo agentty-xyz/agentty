@@ -1,3 +1,5 @@
+//! Typed error for app-server runtime, prompt, and transport failures.
+
 use std::error::Error;
 
 use crate::app_server_transport::AppServerTransportError;

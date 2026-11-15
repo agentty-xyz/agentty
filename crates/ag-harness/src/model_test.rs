@@ -1,3 +1,6 @@
+//! Model boundary unit tests for completions, client observation, requests
+//! and responses, and model error classification.
+
 use std::io;
 use std::sync::{Arc, Mutex};
 

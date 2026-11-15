@@ -1,3 +1,5 @@
+//! List-view tab parsing, ordering, and `TabManager` cycling tests.
+
 use super::{Tab, TabManager, TabScope};
 
 #[test]

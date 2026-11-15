@@ -1,3 +1,5 @@
+//! Clarification question answer pairing and progress validation tests.
+
 use ag_session::{QuestionAnswer, QuestionItem};
 
 use super::{QuestionProgress, question_answer_message};

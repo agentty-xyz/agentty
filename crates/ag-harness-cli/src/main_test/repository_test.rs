@@ -1,3 +1,5 @@
+//! Git executable resolution and comparison-base selection unit tests.
+
 use std::env;
 
 use ag_harness::{Repository, Tool};

@@ -1,3 +1,5 @@
+//! Unit tests for session preparation, split by behavior.
+
 #[path = "session_preparation_test/publication_test.rs"]
 mod publication;
 

@@ -1,3 +1,6 @@
+//! Shared `@`-mention dropdown helpers for input modes: sync decisions, entry
+//! loading, selection movement, and replacement text.
+
 use std::path::PathBuf;
 
 use tokio::sync::mpsc;

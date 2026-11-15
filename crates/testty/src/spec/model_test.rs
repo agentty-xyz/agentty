@@ -1,3 +1,5 @@
+//! YAML scenario spec deserialization and validation unit tests.
+
 use std::path::PathBuf;
 
 use crate::spec::model::{ExpectSpec, RegionSpec, SUPPORTED_VERSION, ScenarioSpec, StepSpec};

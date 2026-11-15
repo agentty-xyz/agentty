@@ -1,3 +1,6 @@
+//! Agent assist execution, repeated-failure tracking, and detail formatting
+//! unit tests.
+
 use std::sync::{Arc, Mutex};
 
 use ag_contracts::OneShotSubmission;

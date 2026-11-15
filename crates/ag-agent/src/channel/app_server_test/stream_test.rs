@@ -1,3 +1,6 @@
+//! App-server channel stream-event tests covering suppressed assistant
+//! output, thinking and progress routing, and activity snapshots.
+
 use std::sync::Arc;
 
 use ag_contracts::{AgentChannel, TurnEvent};

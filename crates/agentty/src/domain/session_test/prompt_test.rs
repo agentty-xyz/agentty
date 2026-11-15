@@ -1,3 +1,5 @@
+//! Latest user prompt position tests for sessions.
+
 use ag_session::SessionStatus as Status;
 
 use super::super::super::session_message::SessionTranscript;

@@ -1,3 +1,6 @@
+//! `GitLab` merge request lookup, creation, and status-mapping tests,
+//! including command construction and remote detection.
+
 use std::path::PathBuf;
 use std::sync::Arc;
 

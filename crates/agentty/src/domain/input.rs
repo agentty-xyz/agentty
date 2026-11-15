@@ -1,3 +1,6 @@
+//! Editable text input state shared by every text field, with semantic
+//! editing commands and bounded undo history.
+
 use std::collections::VecDeque;
 
 /// Maximum number of text snapshots retained by each input's undo or redo

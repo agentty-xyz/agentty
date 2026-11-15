@@ -1,3 +1,6 @@
+//! Request kind and `--settings` argument helpers shared by Claude backend
+//! tests.
+
 use std::process::Command;
 
 use ag_contracts::AgentRequestKind;

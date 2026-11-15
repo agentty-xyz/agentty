@@ -1,3 +1,6 @@
+//! Session model setting tests covering persistence, conversation reset,
+//! project defaults, and missing sessions.
+
 use std::sync::Arc;
 
 use ag_forge as forge;

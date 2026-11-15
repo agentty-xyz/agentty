@@ -1,3 +1,6 @@
+//! Landlock write enforcement unit tests for ABI requirements, handled
+//! rights, grant identity, and kernel rejection handling.
+
 use super::{
     ACCESS_REFER, ACCESS_TRUNCATE, DEVICE_ACCESS, GRANT_ACCESS, enforceable, ruleset_access,
     validate_write_grants, verify_grant_identity,

@@ -1,3 +1,6 @@
+//! Shared helpers for session API tests: service request drivers, scripted
+//! app-server responses, and session row fixtures.
+
 use std::sync::Arc;
 
 use ag_contracts::{AgentRequestKind, PermissionMode, ReasoningLevel, SpeedMode};

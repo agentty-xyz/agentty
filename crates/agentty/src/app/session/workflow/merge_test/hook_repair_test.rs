@@ -1,3 +1,6 @@
+//! Pre-commit hook failure repair tests for session and project rebase
+//! assistance.
+
 use std::sync::{Arc, Mutex};
 
 use ag_contracts::OneShotError;

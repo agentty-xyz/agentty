@@ -1,3 +1,6 @@
+//! Repository, provider, and runner doubles plus graph fixtures for the graph
+//! dispatch contract tests.
+
 use std::error::Error;
 use std::num::NonZeroU64;
 use std::path::Path;

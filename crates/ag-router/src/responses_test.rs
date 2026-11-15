@@ -1,3 +1,6 @@
+//! Responses API event-stream parsing, bounds, reasoning replay, and endpoint
+//! tests.
+
 use serde_json::json;
 
 use super::{EventStream, endpoint, replayed_reasoning};

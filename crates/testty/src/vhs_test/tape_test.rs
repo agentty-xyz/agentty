@@ -1,3 +1,5 @@
+//! VHS tape compilation and tape settings unit tests.
+
 use std::path::Path;
 
 use super::super::compile_tape;

@@ -1,3 +1,5 @@
+//! Prompt input component with an optional suggestion dropdown.
+
 use ag_tui_text::text_util;
 use ratatui::Frame;
 use ratatui::layout::{Constraint, Layout, Rect};

@@ -1,3 +1,6 @@
+//! Protocol JSON Schema generation tests for prompt and transport schemas,
+//! required keys, and metadata.
+
 use serde_json::Value;
 
 use crate::model::questions_field_description;

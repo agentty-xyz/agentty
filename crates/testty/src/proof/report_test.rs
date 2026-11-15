@@ -1,3 +1,5 @@
+//! Unit tests for `ProofReport`, split by behavior.
+
 #[path = "report_test/capture_test.rs"]
 mod capture;
 

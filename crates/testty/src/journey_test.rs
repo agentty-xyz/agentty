@@ -1,3 +1,5 @@
+//! `Journey` building and preset step-sequence unit tests.
+
 use std::time::Duration;
 
 use crate::journey::{Journey, StartupWait};

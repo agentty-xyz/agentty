@@ -1,3 +1,6 @@
+//! Registry of keyed model registrations with their declared capabilities
+//! and execution identities.
+
 use std::collections::HashMap;
 use std::collections::hash_map::Entry;
 use std::sync::Arc;

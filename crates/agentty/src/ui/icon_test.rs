@@ -1,3 +1,5 @@
+//! Icon glyph, display, and spinner frame unit tests.
+
 use super::{Icon, QUEUED_ACTION_GLYPH, TACHYON_LOADER_GLYPH};
 
 #[test]

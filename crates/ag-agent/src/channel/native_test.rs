@@ -1,3 +1,6 @@
+//! Native channel unit tests for loaded-history input aging and bootstrap
+//! marker encoding.
+
 use ag_harness::model::ModelMessage;
 use ag_harness::store::HistoryTurn;
 

@@ -1,3 +1,5 @@
+//! Question status transition tests for sessions.
+
 use ag_session::SessionStatus as Status;
 
 #[test]

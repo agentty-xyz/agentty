@@ -1,3 +1,5 @@
+//! Operation lifecycle tests for heartbeats, cancellation, and recovery.
+
 use std::sync::Mutex;
 use std::time::Duration;
 

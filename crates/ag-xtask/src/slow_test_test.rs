@@ -1,3 +1,5 @@
+//! Slow test report ranking, threshold, and allowlist unit tests.
+
 use std::collections::BTreeMap;
 use std::path::PathBuf;
 

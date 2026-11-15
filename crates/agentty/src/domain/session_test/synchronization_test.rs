@@ -1,3 +1,5 @@
+//! Session review-request sync, merge, and rebase gate tests.
+
 use ag_session::{
     ForgeKind, ReviewRequest, ReviewRequestState, ReviewRequestSummary, SessionId,
     SessionStatus as Status,

@@ -1,3 +1,5 @@
+//! Unbounded context budget fixture for integration tests.
+
 use std::num::NonZeroU64;
 
 use ag_harness::model::ContextBudget;

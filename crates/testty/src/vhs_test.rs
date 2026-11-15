@@ -1,3 +1,5 @@
+//! Unit tests for VHS tape compilation and execution, split by behavior.
+
 #[path = "vhs_test/tape_test.rs"]
 mod tape;
 

@@ -1,3 +1,6 @@
+//! Repository wiring tests for injected clocks, focused adapters, and
+//! snapshot fixture schemas.
+
 use std::sync::Arc;
 use std::sync::atomic::{AtomicI64, Ordering};
 

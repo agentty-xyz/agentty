@@ -1,3 +1,6 @@
+//! Turn-request and stdin-capturing command fixtures shared by the CLI
+//! channel tests.
+
 use std::path::PathBuf;
 
 use ag_contracts::{AgentRequestKind, ReasoningLevel, TurnRequest};

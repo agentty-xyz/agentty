@@ -1,3 +1,5 @@
+//! Question focus, `@`-mention lookup, diff, and answer-storage tests.
+
 use ag_session::QuestionAnswer;
 use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
 use tempfile::tempdir;

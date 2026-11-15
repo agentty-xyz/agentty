@@ -1,3 +1,5 @@
+//! Session row fixtures and assertions shared by the connection tests.
+
 use crate::SessionRow;
 use crate::connection::Database;
 

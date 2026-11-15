@@ -1,3 +1,5 @@
+//! Overlay popup geometry and compositing helpers.
+
 use ratatui::Frame;
 use ratatui::layout::{Alignment, Rect};
 use ratatui::style::{Color, Modifier, Style};

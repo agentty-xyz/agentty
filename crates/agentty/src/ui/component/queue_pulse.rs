@@ -1,3 +1,5 @@
+//! Stateless breathing effect for queued-action glyphs.
+
 use ratatui::buffer::Buffer;
 use ratatui::layout::Rect;
 use tachyonfx::{Duration, Effect, Interpolation, fx};

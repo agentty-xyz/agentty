@@ -1,3 +1,6 @@
+//! Built-in `write` tool that applies unified-diff patches to repository
+//! files.
+
 use std::borrow::Cow;
 use std::io;
 use std::path::{Path, PathBuf};

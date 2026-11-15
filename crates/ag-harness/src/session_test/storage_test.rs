@@ -1,3 +1,6 @@
+//! Session storage tests: database setup and migrations, persisted data
+//! validation, and the message codec.
+
 use std::path::Path;
 use std::sync::Arc;
 

@@ -1,3 +1,6 @@
+//! Wayland backend tests covering `wl-paste` invocation, MIME selection,
+//! payload decoding, and command failure reporting.
+
 use std::fs;
 use std::os::unix::fs::PermissionsExt;
 use std::path::PathBuf;

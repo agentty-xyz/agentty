@@ -1,3 +1,6 @@
+//! Persistent chat tests: session info, history restoration, saved model
+//! identity validation, and history budgets on reopen.
+
 use std::num::NonZeroUsize;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicUsize, Ordering};

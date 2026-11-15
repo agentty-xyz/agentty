@@ -1,3 +1,6 @@
+//! `RealGitClient` tests against temporary repositories, covering commits,
+//! diffs, merges, rebases, worktree status, upstream commits, and pushes.
+
 use std::fs;
 use std::path::{Path, PathBuf};
 use std::process::Command;

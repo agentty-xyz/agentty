@@ -1,3 +1,6 @@
+//! Review execution graph unit tests covering fragment fan-out, joins,
+//! cancellation, deadlines, and provider-call bounds.
+
 use std::path::PathBuf;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicUsize, Ordering};

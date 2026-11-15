@@ -1,3 +1,6 @@
+//! Claude CLI command construction unit tests for models, effort, schemas,
+//! and prompt delivery.
+
 use std::ffi::OsStr;
 use std::path::{Path, PathBuf};
 

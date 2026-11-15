@@ -1,3 +1,6 @@
+//! Database turn reservation tests: beginning, reserving, cancelling, and
+//! finishing turns, and recovering expired active turns.
+
 use std::sync::Arc;
 use std::sync::atomic::{AtomicI64, Ordering};
 use std::time::Duration;

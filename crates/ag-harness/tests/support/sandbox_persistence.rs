@@ -1,3 +1,6 @@
+//! Sandbox persistence conformance tests for durable commands across reopen,
+//! journal failures, and lease loss.
+
 use std::path::Path;
 use std::sync::Arc;
 use std::time::Duration;

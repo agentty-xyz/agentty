@@ -1,3 +1,6 @@
+//! Channel turn preparation and execution tests covering session settings,
+//! permission modes, and failure handling.
+
 use std::path::PathBuf;
 use std::sync::{Arc, Mutex};
 

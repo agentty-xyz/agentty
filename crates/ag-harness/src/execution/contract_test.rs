@@ -1,3 +1,6 @@
+//! Execution contract unit tests for commands, policies and grants,
+//! environment, deadlines, retained output, and retained controls.
+
 use std::ffi::OsString;
 use std::future::pending;
 use std::path::{Path, PathBuf};

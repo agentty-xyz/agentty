@@ -1,3 +1,6 @@
+//! Request fitting unit tests for result elision, reasoning clearing, round
+//! and history dropping, and typed fit failures.
+
 use serde_json::json;
 
 use super::support::{

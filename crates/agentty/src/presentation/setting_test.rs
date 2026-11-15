@@ -1,3 +1,6 @@
+//! Settings screen input translation, selector, and launch-configuration
+//! editor unit tests.
+
 use ag_session::test_support as model_fixture;
 
 use super::{

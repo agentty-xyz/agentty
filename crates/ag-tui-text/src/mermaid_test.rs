@@ -1,3 +1,5 @@
+//! Unit tests for Mermaid diagram rendering, split by behavior.
+
 #[path = "mermaid_test/cache_test.rs"]
 mod cache;
 #[path = "mermaid_test/canvas_test.rs"]

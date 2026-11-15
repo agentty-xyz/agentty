@@ -1,3 +1,5 @@
+//! Publish-branch and review-request popup layout and rendering unit tests.
+
 use ratatui::layout::Rect;
 
 use super::{

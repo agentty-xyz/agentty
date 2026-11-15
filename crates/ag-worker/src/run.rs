@@ -1,3 +1,6 @@
+//! Utility run identity, persisted state, and the `RunRepository` persistence
+//! boundary.
+
 use std::path::PathBuf;
 
 use ag_contracts::OneShotError;

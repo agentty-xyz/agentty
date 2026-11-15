@@ -1,3 +1,6 @@
+//! Shared helpers for sync tests: git command runners, test repository setup,
+//! and executable hook writers.
+
 use std::fs;
 #[cfg(unix)]
 use std::os::unix::fs::PermissionsExt;

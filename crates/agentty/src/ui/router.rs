@@ -1,3 +1,6 @@
+//! Content-area router that maps the current `AppMode` to a page surface and
+//! its overlays.
+
 use std::cell::Cell;
 use std::collections::HashMap;
 

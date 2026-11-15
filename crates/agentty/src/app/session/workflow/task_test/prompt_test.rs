@@ -1,3 +1,6 @@
+//! Commit-message prompt rendering and input-size limit tests for session
+//! auto-commit.
+
 use std::path::PathBuf;
 use std::sync::{Arc, Mutex};
 

@@ -1,3 +1,6 @@
+//! TUI terminal setup and restore: raw mode, alternate screen, and keyboard
+//! enhancement modes.
+
 use std::cell::Cell;
 use std::ffi::OsString;
 use std::{env, fmt, io};

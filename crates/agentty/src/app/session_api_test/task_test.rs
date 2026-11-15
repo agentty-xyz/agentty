@@ -1,3 +1,6 @@
+//! Session API test that task planning uses persisted sessions without
+//! starting work.
+
 use ag_session::{CreateTaskRequest, SessionError, SessionId, Task, TaskAttempt};
 
 use crate::test_support::new_test_app;

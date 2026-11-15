@@ -1,3 +1,6 @@
+//! Forge remote detection and URL parsing tests, including userinfo
+//! redaction.
+
 use crate::model::{ForgeKind, ForgeRemote, ReviewRequestError};
 use crate::remote::{ParsedRemote, detect_remote, display_safe_remote_url, parse_remote_url};
 

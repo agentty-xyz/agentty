@@ -1,3 +1,6 @@
+//! Shared mocks, session seeds, and worker-context builders for session
+//! worker tests.
+
 use std::collections::{HashMap, VecDeque};
 use std::path::PathBuf;
 use std::sync::{Arc, Mutex};

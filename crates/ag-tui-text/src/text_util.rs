@@ -1,3 +1,6 @@
+//! Terminal text helpers for wrapping, truncation, painting, and token and
+//! duration formatting.
+
 use std::borrow::Cow;
 use std::fmt::Write as _;
 

@@ -1,3 +1,6 @@
+//! `Repository` validation tests: root canonicalization, trusted Git
+//! executable checks, and containing worktree boundaries.
+
 use std::fs;
 #[cfg(unix)]
 use std::os::unix::fs::PermissionsExt as _;

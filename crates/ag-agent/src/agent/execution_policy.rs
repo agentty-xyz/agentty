@@ -1,3 +1,6 @@
+//! Execution policy validation per agent kind and Claude tool-control
+//! translation.
+
 use ag_contracts::{ExecutionPolicy, McpPolicy, PermissionMode, ToolPolicy};
 use ag_session::AgentKind;
 

@@ -1,3 +1,5 @@
+//! Color theme parsing, cycling, and display tests.
+
 use super::ColorTheme;
 
 #[test]

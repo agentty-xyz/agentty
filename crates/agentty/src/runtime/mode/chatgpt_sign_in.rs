@@ -1,3 +1,5 @@
+//! Key handling for the `ChatGPT` sign-in popup.
+
 use crossterm::event::{KeyCode, KeyEvent};
 
 use crate::app::App;

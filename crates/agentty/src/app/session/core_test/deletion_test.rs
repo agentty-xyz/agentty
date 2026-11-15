@@ -1,3 +1,6 @@
+//! Session manager test that deletion and cancellation wait for running
+//! utilities before removing resources.
+
 use std::path::PathBuf;
 use std::sync::Arc;
 use std::time::Duration;

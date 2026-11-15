@@ -1,3 +1,6 @@
+//! App-server channel turn lifecycle tests covering lazy session start,
+//! shutdown, PID updates, attachments, errors, and returned turn metadata.
+
 use std::path::PathBuf;
 use std::sync::Arc;
 

@@ -1,3 +1,5 @@
+//! `PermissionMode` values that govern agent execution permissions.
+
 use std::fmt;
 use std::str::FromStr;
 

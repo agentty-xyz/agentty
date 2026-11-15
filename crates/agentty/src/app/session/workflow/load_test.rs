@@ -1,3 +1,6 @@
+//! Session loading tests covering workspace preparation, live handle
+//! merging, persisted detail, diff stats, and retired-model migration.
+
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;

@@ -1,3 +1,6 @@
+//! Turn engine that drives model requests and tool calls to a final output,
+//! with context fitting, summaries, and overflow recovery.
+
 use std::collections::HashMap;
 use std::sync::Arc;
 use std::time::{Duration, Instant};

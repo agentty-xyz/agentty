@@ -1,3 +1,5 @@
+//! Host process-table sampling and process-tree aggregation tests.
+
 #[cfg(unix)]
 use std::os::unix::process::ExitStatusExt;
 use std::time::Duration;

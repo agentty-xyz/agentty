@@ -1,3 +1,6 @@
+//! `App` persistence unit tests for continued sessions, active tabs, and
+//! failed writes.
+
 use std::collections::HashMap;
 use std::fs;
 use std::sync::Arc;

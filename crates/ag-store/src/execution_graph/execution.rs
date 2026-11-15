@@ -1,3 +1,6 @@
+//! Graph execution links: binding executions to graph nodes and inputs and
+//! verifying their authority.
+
 use std::num::NonZeroU64;
 
 use ag_session::{GraphContext, GraphExecutionRef, GraphResolvedInput, GraphResultRef};

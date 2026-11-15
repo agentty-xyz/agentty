@@ -1,3 +1,5 @@
+//! Header tab spacing, highlighting, and process-stats rendering unit tests.
+
 use ratatui::Terminal;
 use ratatui::backend::TestBackend;
 use ratatui::style::Modifier;

@@ -1,3 +1,6 @@
+//! Top status bar showing the version, update and sync notices, the active
+//! project name, and a help hint.
+
 use std::borrow::Cow;
 
 use ag_tui_text::text_util;

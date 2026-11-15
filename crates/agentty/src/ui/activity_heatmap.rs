@@ -1,3 +1,6 @@
+//! Calendar-style session activity heatmap: week grid, month labels, and
+//! recent activity stats built from daily activity counts.
+
 use crate::domain::session::DailyActivity;
 
 const HEATMAP_DAY_COUNT: usize = 7;

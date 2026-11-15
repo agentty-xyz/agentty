@@ -1,3 +1,6 @@
+//! History projection unit tests for per-turn replay forms, appending, and
+//! reprojection once the history outgrows its limit.
+
 use serde_json::json;
 
 use super::support::{ByteEstimator, FixedEstimator, read_call, reasoned_read_call, tool_result};

@@ -1,3 +1,6 @@
+//! macOS pasteboard backend tests covering text, file URL, PNG, and TIFF
+//! reads.
+
 use std::io::Cursor;
 use std::mem;
 use std::path::PathBuf;

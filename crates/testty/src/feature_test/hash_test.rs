@@ -1,3 +1,5 @@
+//! Frame and GIF hashing, redaction, and hash sidecar unit tests.
+
 use std::path::Path;
 
 use super::super::{

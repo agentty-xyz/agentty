@@ -1,3 +1,6 @@
+//! Stack parent selector rendering, height, and candidate windowing unit
+//! tests.
+
 use ratatui::layout::Rect;
 
 use super::StackAppendParentOverlay;

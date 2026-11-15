@@ -1,3 +1,5 @@
+//! Overlay geometry, sync popup message, and popup clearing unit tests.
+
 use ratatui::layout::Rect;
 use ratatui::style::Style;
 use ratatui::widgets::Block;

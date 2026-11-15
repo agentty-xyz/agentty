@@ -1,3 +1,6 @@
+//! CLI argument parsing, database path, chat mode, stored model identity, and
+//! configuration error unit tests.
+
 use std::env;
 use std::path::PathBuf;
 

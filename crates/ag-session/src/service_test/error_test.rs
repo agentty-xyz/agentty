@@ -1,3 +1,5 @@
+//! Session service backend error propagation and fake backend result tests.
+
 use std::collections::VecDeque;
 use std::sync::Arc;
 

@@ -1,3 +1,6 @@
+//! Command execution unit tests for session creation and resume, credential
+//! checks, and advertised repository tool permissions.
+
 use std::env;
 
 use ag_harness::provider::ModelConfigurationError;

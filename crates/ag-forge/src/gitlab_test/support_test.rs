@@ -1,3 +1,6 @@
+//! Remote, JSON payload, and command-output fixtures shared by the `GitLab`
+//! adapter tests.
+
 use crate::command::ForgeCommandOutput;
 use crate::model::{ForgeKind, ForgeRemote, ReviewRequestMetadataFieldUpdate};
 

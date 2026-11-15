@@ -1,3 +1,5 @@
+//! Check-only GIF freshness and stale-artifact detection unit tests.
+
 use std::path::Path;
 
 use super::super::{GifContext, VhsContext, generate_gif};

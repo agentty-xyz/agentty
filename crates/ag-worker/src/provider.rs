@@ -1,3 +1,6 @@
+//! Worker runtime configuration and provider setup, discovery, and cleanup
+//! entry points.
+
 use std::collections::BTreeMap;
 use std::num::NonZeroUsize;
 use std::path::{Path, PathBuf};
