@@ -1,7 +1,8 @@
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
+use std::sync::atomic::{AtomicUsize, Ordering};
 
-use ag_clipboard::{Clipboard, ClipboardBackend, RgbaImageData};
+use ag_clipboard::{Clipboard, ClipboardBackend, ClipboardImage, RgbaImageData};
 
 use super::{
     ClipboardError, ClipboardImageClient, ClipboardOpener, ClipboardPayload,
@@ -19,10 +20,14 @@ struct FixedClock {
 }
 
 /// In-memory clipboard source; `None` fields report missing content.
+///
+/// Clones share `image_read_count`, so a test can count image reads across
+/// every clipboard its opener creates.
 #[derive(Clone, Default)]
 struct FakeClipboardBackend {
     file_list: Option<Vec<PathBuf>>,
-    image: Option<RgbaImageData>,
+    image: Option<ClipboardImage>,
+    image_read_count: Arc<AtomicUsize>,
     text: Option<&'static str>,
 }
 
@@ -46,7 +51,9 @@ impl ClipboardBackend for FakeClipboardBackend {
             .ok_or(ag_clipboard::ClipboardError::ContentUnavailable)
     }
 
-    fn read_image_rgba(&mut self) -> Result<RgbaImageData, ag_clipboard::ClipboardError> {
+    fn read_image(&mut self) -> Result<ClipboardImage, ag_clipboard::ClipboardError> {
+        self.image_read_count.fetch_add(1, Ordering::SeqCst);
+
         self.image
             .clone()
             .ok_or(ag_clipboard::ClipboardError::ContentUnavailable)
@@ -471,19 +478,42 @@ async fn test_persist_clipboard_image_copies_png_from_clipboard_file_list() {
     assert_eq!(persisted_image.local_image_path, resolved_image_path);
 }
 
-/// Verifies image data wins over clipboard text when no copied PNG file is
-/// present.
+/// Verifies an encoded clipboard PNG is kept byte-for-byte instead of being
+/// decoded and re-encoded from pixel data.
+#[tokio::test]
+async fn test_read_clipboard_payload_keeps_clipboard_png_bytes_unchanged() {
+    // Arrange
+    let clipboard_png_bytes = b"\x89PNG\r\n\x1a\nclipboard-png".to_vec();
+    let clipboard = FakeClipboardBackend {
+        image: Some(ClipboardImage::Png(clipboard_png_bytes.clone())),
+        text: Some("/tmp/ignored.png"),
+        ..FakeClipboardBackend::default()
+    };
+
+    // Act
+    let payload = read_clipboard_payload(clipboard.opener()).await;
+
+    // Assert
+    assert!(matches!(
+        payload,
+        Ok(ClipboardPayload::EncodedPng(bytes)) if bytes == clipboard_png_bytes
+    ));
+}
+
+/// Verifies non-PNG image data wins over clipboard text when no copied PNG
+/// file or encoded PNG payload is present.
 #[tokio::test]
 async fn test_read_clipboard_payload_encodes_image_without_copied_png_file() {
     // Arrange
     let clipboard = FakeClipboardBackend {
         file_list: Some(vec![PathBuf::from("/tmp/notes.txt")]),
-        image: Some(RgbaImageData {
+        image: Some(ClipboardImage::Rgba(RgbaImageData {
             height: 1,
             rgba_bytes: vec![255, 0, 0, 255],
             width: 1,
-        }),
+        })),
         text: Some("/tmp/ignored.png"),
+        ..FakeClipboardBackend::default()
     };
 
     // Act
@@ -496,7 +526,8 @@ async fn test_read_clipboard_payload_encodes_image_without_copied_png_file() {
     ));
 }
 
-/// Verifies clipboard text naming a PNG path is the last-resort payload.
+/// Verifies clipboard text naming a PNG path is the last-resort payload,
+/// reached after exactly one missing image read.
 #[tokio::test]
 async fn test_read_clipboard_payload_uses_png_path_from_text() {
     // Arrange
@@ -504,6 +535,7 @@ async fn test_read_clipboard_payload_uses_png_path_from_text() {
         text: Some("  /tmp/screenshot.PNG\n"),
         ..FakeClipboardBackend::default()
     };
+    let image_read_count = Arc::clone(&clipboard.image_read_count);
 
     // Act
     let payload = read_clipboard_payload(clipboard.opener()).await;
@@ -513,6 +545,7 @@ async fn test_read_clipboard_payload_uses_png_path_from_text() {
         payload,
         Ok(ClipboardPayload::ExistingPngPath(path)) if path == Path::new("/tmp/screenshot.PNG")
     ));
+    assert_eq!(image_read_count.load(Ordering::SeqCst), 1);
 }
 
 /// Verifies missing text and non-PNG text both report that no image exists.
@@ -563,11 +596,11 @@ async fn test_read_clipboard_payload_reports_unavailable_clipboard() {
 async fn test_read_clipboard_payload_reports_unencodable_image() {
     // Arrange
     let clipboard = FakeClipboardBackend {
-        image: Some(RgbaImageData {
+        image: Some(ClipboardImage::Rgba(RgbaImageData {
             height: 1,
             rgba_bytes: Vec::new(),
             width: 0,
-        }),
+        })),
         ..FakeClipboardBackend::default()
     };
 

@@ -16,6 +16,7 @@ use crate::backend::macos::{
     PASTEBOARD_TYPE_TIFF, new_backend,
 };
 use crate::error::ClipboardError;
+use crate::image_data::{ClipboardImage, RgbaImageData};
 
 /// Value of `NSPasteboardNameGeneral`, the system clipboard's pasteboard.
 const GENERAL_PASTEBOARD_NAME: &str = "Apple CFPasteboard general";
@@ -188,42 +189,55 @@ fn test_read_file_list_reports_content_unavailable_without_file_urls() {
 }
 
 #[test]
-fn test_read_image_rgba_decodes_png_and_tiff_payloads() {
+fn test_read_image_returns_original_png_payload() {
     // Arrange
-    let png_pasteboard =
+    let test_pasteboard =
         TestPasteboard::with_items(&[&[(PASTEBOARD_TYPE_PNG, PasteboardValue::Data(png_bytes()))]]);
-    let tiff_pasteboard = TestPasteboard::with_items(&[&[(
-        PASTEBOARD_TYPE_TIFF,
-        PasteboardValue::Data(tiff_bytes()),
-    )]]);
+    let mut clipboard = test_pasteboard.clipboard();
 
     // Act
-    let png_image = png_pasteboard
-        .clipboard()
-        .read_image_rgba()
-        .expect("private pasteboard PNG should decode");
-    let tiff_image = tiff_pasteboard
-        .clipboard()
-        .read_image_rgba()
-        .expect("private pasteboard TIFF should decode");
+    let image = clipboard
+        .read_image()
+        .expect("private pasteboard PNG should be read");
 
     // Assert
-    for image_data in [png_image, tiff_image] {
-        assert_eq!(image_data.width, 1);
-        assert_eq!(image_data.height, 1);
-        assert_eq!(image_data.rgba_bytes, RED_PIXEL_RGBA.to_vec());
-    }
+    assert_eq!(image, ClipboardImage::Png(png_bytes()));
 }
 
 #[test]
-fn test_read_image_rgba_reports_content_unavailable_without_image_data() {
+fn test_read_image_decodes_tiff_only_payload() {
+    // Arrange
+    let test_pasteboard = TestPasteboard::with_items(&[&[(
+        PASTEBOARD_TYPE_TIFF,
+        PasteboardValue::Data(tiff_bytes()),
+    )]]);
+    let mut clipboard = test_pasteboard.clipboard();
+
+    // Act
+    let image = clipboard
+        .read_image()
+        .expect("private pasteboard TIFF should decode");
+
+    // Assert
+    assert_eq!(
+        image,
+        ClipboardImage::Rgba(RgbaImageData {
+            height: 1,
+            rgba_bytes: RED_PIXEL_RGBA.to_vec(),
+            width: 1,
+        })
+    );
+}
+
+#[test]
+fn test_read_image_reports_content_unavailable_without_image_data() {
     // Arrange
     let test_pasteboard =
         TestPasteboard::with_items(&[&[(PASTEBOARD_TYPE_STRING, PasteboardValue::Text("text"))]]);
     let mut clipboard = test_pasteboard.clipboard();
 
     // Act
-    let result = clipboard.read_image_rgba();
+    let result = clipboard.read_image();
 
     // Assert
     assert!(matches!(result, Err(ClipboardError::ContentUnavailable)));

@@ -11,11 +11,12 @@ use std::path::PathBuf;
 #[cfg(any(test, feature = "test-utils"))]
 pub use backend::ClipboardBackend;
 pub use error::ClipboardError;
-pub use image_data::RgbaImageData;
+use image::ImageFormat;
+pub use image_data::{ClipboardImage, RgbaImageData};
 
 const DISABLE_CLIPBOARD_ENV: &str = "AGENTTY_DISABLE_CLIPBOARD";
 
-/// System clipboard reader for text, copied files, and RGBA image data.
+/// System clipboard reader for text, copied files, and image data.
 pub struct Clipboard {
     backend: Box<dyn backend::ClipboardBackend>,
 }
@@ -59,13 +60,32 @@ impl Clipboard {
         self.backend.read_file_list()
     }
 
-    /// Reads clipboard image data as RGBA pixels.
+    /// Reads one clipboard image payload.
+    ///
+    /// PNG payloads are returned as their original encoded bytes, so callers
+    /// that store or forward PNG skip decoding and re-encoding large
+    /// screenshots. Other formats are returned as decoded RGBA pixels.
+    ///
+    /// # Errors
+    /// Returns a [`ClipboardError`] when the clipboard has no image payload,
+    /// a PNG header is invalid, image decoding fails, or the backend cannot
+    /// complete the read.
+    pub fn read_image(&mut self) -> Result<ClipboardImage, ClipboardError> {
+        self.backend.read_image()
+    }
+
+    /// Reads clipboard image data as RGBA pixels, decoding PNG payloads.
     ///
     /// # Errors
     /// Returns a [`ClipboardError`] when the clipboard has no image payload,
     /// image decoding fails, or the backend cannot complete the read.
     pub fn read_image_rgba(&mut self) -> Result<RgbaImageData, ClipboardError> {
-        self.backend.read_image_rgba()
+        match self.read_image()? {
+            ClipboardImage::Png(png_bytes) => {
+                format::decode_image_rgba(&png_bytes, ImageFormat::Png)
+            }
+            ClipboardImage::Rgba(image_data) => Ok(image_data),
+        }
     }
 
     fn new_with_backend<B>(

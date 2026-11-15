@@ -2,10 +2,8 @@ use std::io;
 use std::path::PathBuf;
 use std::process::Command;
 
-use image::ImageFormat;
-
 use super::ClipboardBackend;
-use crate::{ClipboardError, RgbaImageData, format, uri};
+use crate::{ClipboardError, ClipboardImage, format, uri};
 
 const IMAGE_PNG_MIME: &str = "image/png";
 const TEXT_MIME_CANDIDATES: &[&str] = &[
@@ -156,7 +154,7 @@ impl ClipboardBackend for WaylandClipboard {
         Ok(paths)
     }
 
-    fn read_image_rgba(&mut self) -> Result<RgbaImageData, ClipboardError> {
+    fn read_image(&mut self) -> Result<ClipboardImage, ClipboardError> {
         let mime_types = self.available_mime_types()?;
         if !mime_types
             .iter()
@@ -166,7 +164,7 @@ impl ClipboardBackend for WaylandClipboard {
         }
         let bytes = self.read_clipboard_bytes_for_mime(IMAGE_PNG_MIME)?;
 
-        format::decode_image_rgba(&bytes, ImageFormat::Png)
+        format::validate_png(bytes).map(ClipboardImage::Png)
     }
 }
 

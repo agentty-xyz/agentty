@@ -12,6 +12,7 @@ use crate::backend::wayland::{
     WaylandClipboard, WaylandCommandOutput, WaylandCommandRunner,
 };
 use crate::error::ClipboardError;
+use crate::image_data::ClipboardImage;
 
 #[test]
 fn test_run_successful_reports_backend_failure_for_unsuccessful_command() {
@@ -178,7 +179,7 @@ fn test_read_file_list_reads_wayland_uri_list_payload() {
 }
 
 #[test]
-fn test_read_image_rgba_reads_wayland_png_payload() {
+fn test_read_image_returns_wayland_png_payload_unchanged() {
     // Arrange
     let mut runner = MockWaylandCommandRunner::new();
     runner
@@ -210,18 +211,16 @@ fn test_read_image_rgba_reads_wayland_png_payload() {
     let mut clipboard = WaylandClipboard::with_runner(Box::new(runner));
 
     // Act
-    let image_data = clipboard
-        .read_image_rgba()
-        .expect("mocked PNG payload should decode");
+    let image = clipboard
+        .read_image()
+        .expect("mocked PNG payload should be read");
 
     // Assert
-    assert_eq!(image_data.width, 1);
-    assert_eq!(image_data.height, 1);
-    assert_eq!(image_data.rgba_bytes, vec![255, 0, 0, 255]);
+    assert_eq!(image, ClipboardImage::Png(test_png_bytes()));
 }
 
 #[test]
-fn test_read_image_rgba_reports_content_unavailable_without_png_mime() {
+fn test_read_image_reports_content_unavailable_without_png_mime() {
     // Arrange
     let mut runner = MockWaylandCommandRunner::new();
     runner
@@ -240,7 +239,7 @@ fn test_read_image_rgba_reports_content_unavailable_without_png_mime() {
     let mut clipboard = WaylandClipboard::with_runner(Box::new(runner));
 
     // Act
-    let result = clipboard.read_image_rgba();
+    let result = clipboard.read_image();
 
     // Assert
     assert!(matches!(result, Err(ClipboardError::ContentUnavailable)));

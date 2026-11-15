@@ -28,6 +28,7 @@ use crate::backend::x11::{
     MAX_CLIPBOARD_BYTE_COUNT, X11Clipboard, checked_clipboard_byte_count,
 };
 use crate::error::ClipboardError;
+use crate::image_data::ClipboardImage;
 
 const MAX_CLIPBOARD_BYTE_COUNT_U32: u32 = 64 * 1024 * 1024;
 const TEST_RESOURCE_ID_BASE: u32 = 0x0100_0000;
@@ -1114,14 +1115,14 @@ fn test_read_file_list_reports_content_unavailable_without_paths() {
 }
 
 #[test]
-fn test_read_image_rgba_decodes_png_target() {
+fn test_read_image_returns_png_target_unchanged() {
     // Arrange
     let atoms = test_atoms();
     let mut png_bytes = Vec::new();
     PngEncoder::new(&mut png_bytes)
         .write_image(&[0, 0, 255, 255], 1, 1, ExtendedColorType::Rgba8)
         .expect("test PNG should encode");
-    let steps = available_target_steps(atoms, atoms.PNG_MIME, atoms.PNG_MIME, png_bytes);
+    let steps = available_target_steps(atoms, atoms.PNG_MIME, atoms.PNG_MIME, png_bytes.clone());
     let (server, connection) = X11TestServer::start(steps);
     let mut clipboard = X11Clipboard {
         atoms,
@@ -1130,16 +1131,14 @@ fn test_read_image_rgba_decodes_png_target() {
     };
 
     // Act
-    let image_data = clipboard
-        .read_image_rgba()
-        .expect("scripted X11 PNG should decode");
+    let image = clipboard
+        .read_image()
+        .expect("scripted X11 PNG should be read");
     drop(clipboard);
     server.finish();
 
     // Assert
-    assert_eq!(image_data.width, 1);
-    assert_eq!(image_data.height, 1);
-    assert_eq!(image_data.rgba_bytes, vec![0, 0, 255, 255]);
+    assert_eq!(image, ClipboardImage::Png(png_bytes));
 }
 
 #[test]

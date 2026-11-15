@@ -1,7 +1,6 @@
 use std::path::PathBuf;
 use std::time::{Duration, Instant};
 
-use image::ImageFormat;
 use rustix::event::{self, PollFd, PollFlags, Timespec};
 use x11rb::connection::Connection;
 use x11rb::cookie::Cookie;
@@ -15,7 +14,7 @@ use x11rb::rust_connection::RustConnection;
 use x11rb::{COPY_DEPTH_FROM_PARENT, COPY_FROM_PARENT, NONE};
 
 use super::ClipboardBackend;
-use crate::{ClipboardError, RgbaImageData, format, uri};
+use crate::{ClipboardError, ClipboardImage, format, uri};
 
 const INCR_RESERVATION_BYTE_CAP: usize = 16 * 1024 * 1024;
 const INCR_SEGMENT_TIMEOUT: Duration = Duration::from_secs(1);
@@ -423,10 +422,10 @@ impl ClipboardBackend for X11Clipboard {
         Ok(paths)
     }
 
-    fn read_image_rgba(&mut self) -> Result<RgbaImageData, ClipboardError> {
+    fn read_image(&mut self) -> Result<ClipboardImage, ClipboardError> {
         let clipboard_data = self.read_clipboard_data(&[self.atoms.PNG_MIME])?;
 
-        format::decode_image_rgba(&clipboard_data.bytes, ImageFormat::Png)
+        format::validate_png(clipboard_data.bytes).map(ClipboardImage::Png)
     }
 }
 

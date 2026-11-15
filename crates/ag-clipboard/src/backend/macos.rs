@@ -6,7 +6,7 @@ use objc2_app_kit::NSPasteboard;
 use objc2_foundation::NSString;
 
 use super::ClipboardBackend;
-use crate::{ClipboardError, RgbaImageData, format, uri};
+use crate::{ClipboardError, ClipboardImage, format, uri};
 
 const PASTEBOARD_TYPE_FILE_URL: &str = "public.file-url";
 const PASTEBOARD_TYPE_PNG: &str = "public.png";
@@ -86,16 +86,16 @@ impl ClipboardBackend for MacosClipboard {
         })
     }
 
-    fn read_image_rgba(&mut self) -> Result<RgbaImageData, ClipboardError> {
+    fn read_image(&mut self) -> Result<ClipboardImage, ClipboardError> {
         let png_type = NSString::from_str(PASTEBOARD_TYPE_PNG);
         if let Ok(png_bytes) = self.read_data_for_type(&png_type) {
-            return format::decode_image_rgba(&png_bytes, ImageFormat::Png);
+            return format::validate_png(png_bytes).map(ClipboardImage::Png);
         }
 
         let tiff_type = NSString::from_str(PASTEBOARD_TYPE_TIFF);
         let tiff_bytes = self.read_data_for_type(&tiff_type)?;
 
-        format::decode_image_rgba(&tiff_bytes, ImageFormat::Tiff)
+        format::decode_image_rgba(&tiff_bytes, ImageFormat::Tiff).map(ClipboardImage::Rgba)
     }
 }
 
