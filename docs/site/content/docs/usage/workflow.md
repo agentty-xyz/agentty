@@ -162,9 +162,9 @@ responsive.
 Agentty opens the repository you launch it from. Outside a repository, use the
 **Projects** tab to choose or add one. Saved projects load from the database; Agentty
 checks their folders only when you open them. Unavailable projects remain in your
-history and show an error when opened. The active project's name is centered in the
-footer bar whenever it shows the working directory; on narrow terminals it is shortened
-or hidden before the path or branch.
+history and show an error when opened. The active project's name is centered in the top
+status bar; on narrow terminals it is shortened or hidden before the version, status
+notices, or help hint.
 
 Launch directories outside repositories stay out of the project catalog. Older projects
 saved as repository subdirectories remain selectable in **Projects** and retain their

@@ -423,17 +423,15 @@ async fn test_project_switcher() {
         .expect("feature test failed");
 }
 
-/// Asserts the footer bar shows `project_name` as the active project, centered
-/// within a column of the footer row's middle.
-///
-/// The footer path can also contain the name, so any centered match passes.
+/// Asserts the top status bar shows `project_name` as the active project,
+/// centered within a column of the top row's middle.
 fn assert_active_project_centered(frame: &TerminalFrame, project_name: &str) {
-    let footer_row = Region::footer(frame.cols(), frame.rows());
-    assertion::assert_text_in_region(frame, project_name, &footer_row);
+    let top_row = Region::top_row(frame.cols());
+    assertion::assert_text_in_region(frame, project_name, &top_row);
 
     let row_center = frame.cols() / 2;
     let name_centers = frame
-        .find_text_in_region(project_name, &footer_row)
+        .find_text_in_region(project_name, &top_row)
         .into_iter()
         .map(|name_match| name_match.rect.col + name_match.rect.width / 2)
         .collect::<Vec<_>>();
@@ -441,7 +439,7 @@ fn assert_active_project_centered(frame: &TerminalFrame, project_name: &str) {
         name_centers
             .iter()
             .any(|name_center| name_center.abs_diff(row_center) <= 1),
-        "project name must be centered in the footer row: centers {name_centers:?}, row center \
+        "project name must be centered in the top row: centers {name_centers:?}, row center \
          {row_center}"
     );
 }
