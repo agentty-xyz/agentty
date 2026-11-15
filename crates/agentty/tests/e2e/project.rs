@@ -58,7 +58,14 @@ async fn test_relative_agentty_root_excludes_managed_worktrees()
             |frame, report| {
                 Box::pin(async move {
                     let full = Region::full(frame.cols(), frame.rows());
-                    assertion::assert_text_in_region(frame, "test-project", &full);
+                    // The popup truncates the temp path, so count candidate
+                    // rows: only the project repository, not its managed
+                    // worktree, is offered.
+                    assert_eq!(
+                        frame.find_text("[ ]").len(),
+                        1,
+                        "discovery must offer only the project repository"
+                    );
                     assertion::assert_not_visible(frame, "wt/session");
                     let capture = report
                         .captures
@@ -170,7 +177,7 @@ async fn test_non_repository_launch_stays_out_of_project_switcher()
                     .press_key("Enter")
                     .wait_for_text("added-repo", 5000)
                     .press_key("Enter")
-                    .wait_for_text("Project: added-repo", 5000)
+                    .step(common::wait_for_active_project("added-repo"))
                     .press_key("p")
                     .wait_for_text("Switch project", 5000)
                     .wait_for_stable_frame(300, 5000)
@@ -365,7 +372,10 @@ async fn test_project_switcher() {
                     .press_key("j")
                     .viewing_pause_ms(1000)
                     .press_key("Enter")
-                    .wait_for_text("Project: zeta-project", 5000)
+                    // The footer path is the only switch-specific text the
+                    // published recording can wait for: the popup lists bare
+                    // project names too.
+                    .wait_for_text("~/zeta-project", 5000)
                     .wait_for_stable_frame(300, 5000)
                     .viewing_pause_ms(2000)
                     .capture_labeled("switched", "Sessions view scoped to the switched project")
@@ -374,7 +384,7 @@ async fn test_project_switcher() {
                     .wait_for_stable_frame(300, 5000)
                     .viewing_pause_ms(1500)
                     .press_key("Enter")
-                    .wait_for_text("Project: test-project", 5000)
+                    .wait_for_text("~/test-project", 5000)
                     .wait_for_stable_frame(300, 5000)
                     .viewing_pause_ms(2000)
                     .capture_labeled(
@@ -384,8 +394,8 @@ async fn test_project_switcher() {
             },
             |frame, report| {
                 Box::pin(async move {
-                    let full = Region::full(frame.cols(), frame.rows());
-                    assertion::assert_text_in_region(frame, "Project: test-project", &full);
+                    assert_active_project_centered(frame, "test-project");
+                    assertion::assert_not_visible(frame, "Project:");
                     assertion::assert_not_visible(frame, "Switch project");
 
                     let popup_capture = report
@@ -405,18 +415,35 @@ async fn test_project_switcher() {
                         .find(|capture| capture.label == "switched")
                         .expect("missing switched capture");
                     let switched_frame = common::frame_from_capture(switched_capture);
-                    let switched_region =
-                        Region::full(switched_frame.cols(), switched_frame.rows());
-                    assertion::assert_text_in_region(
-                        &switched_frame,
-                        "Project: zeta-project",
-                        &switched_region,
-                    );
+                    assert_active_project_centered(&switched_frame, "zeta-project");
                 })
             },
         )
         .await
         .expect("feature test failed");
+}
+
+/// Asserts the footer bar shows `project_name` as the active project, centered
+/// within a column of the footer row's middle.
+///
+/// The footer path can also contain the name, so any centered match passes.
+fn assert_active_project_centered(frame: &TerminalFrame, project_name: &str) {
+    let footer_row = Region::footer(frame.cols(), frame.rows());
+    assertion::assert_text_in_region(frame, project_name, &footer_row);
+
+    let row_center = frame.cols() / 2;
+    let name_centers = frame
+        .find_text_in_region(project_name, &footer_row)
+        .into_iter()
+        .map(|name_match| name_match.rect.col + name_match.rect.width / 2)
+        .collect::<Vec<_>>();
+    assert!(
+        name_centers
+            .iter()
+            .any(|name_center| name_center.abs_diff(row_center) <= 1),
+        "project name must be centered in the footer row: centers {name_centers:?}, row center \
+         {row_center}"
+    );
 }
 
 /// Verify explicit project sync reports progress in the status bar while tab
@@ -462,7 +489,7 @@ async fn test_project_sync_non_modal() {
                     .wait_for_text("Switch project", 5000)
                     .press_key("j")
                     .press_key("Enter")
-                    .wait_for_text("Project: zeta-project", 5000)
+                    .wait_for_text("~/zeta-project", 5000)
                     .press_key("s")
                     .wait_for_text("Syncing zeta-project/main...", 15_000)
                     .capture_labeled(

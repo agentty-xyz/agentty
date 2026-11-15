@@ -1,11 +1,10 @@
 use ratatui::Frame;
 use ratatui::layout::Rect;
-use ratatui::style::{Modifier, Style};
+use ratatui::style::Style;
 use ratatui::text::{Line, Span};
 use ratatui::widgets::{Block, Borders, Padding, Paragraph};
 
 use crate::app::Tab;
-use crate::domain::project::ProjectListItem;
 use crate::domain::resource::SessionResources;
 use crate::ui::{Component, style};
 
@@ -14,22 +13,17 @@ const PROCESS_STATS_GAP: usize = 2;
 
 /// Header tabs rendered at the top of list mode pages, with Agentty
 /// process-tree stats right-aligned on the same row.
-pub struct Tabs<'a> {
-    active_project_id: i64,
+pub struct Tabs {
     current_tab: Tab,
     process_resources: Option<SessionResources>,
-    projects: &'a [ProjectListItem],
 }
 
-impl Tabs<'_> {
-    /// Creates a tabs component with the provided active tab and project
-    /// context used to label the project-scoped tab group.
-    pub fn new(current_tab: Tab, active_project_id: i64, projects: &[ProjectListItem]) -> Tabs<'_> {
-        Tabs {
-            active_project_id,
+impl Tabs {
+    /// Creates a tabs component with the provided active tab.
+    pub fn new(current_tab: Tab) -> Self {
+        Self {
             current_tab,
             process_resources: None,
-            projects,
         }
     }
 
@@ -43,15 +37,11 @@ impl Tabs<'_> {
     }
 }
 
-impl Component for Tabs<'_> {
+impl Component for Tabs {
     /// Renders the tabs and right-aligns the process stats in the space left
     /// beside them. Tabs keep priority on narrow terminals.
     fn render(&self, f: &mut Frame, area: Rect) {
-        let line = Line::from(tab_spans(
-            self.current_tab,
-            self.active_project_id,
-            self.projects,
-        ));
+        let line = Line::from(tab_spans(self.current_tab));
         let block = Block::default()
             .borders(Borders::BOTTOM)
             .border_style(style::border_style())
@@ -101,18 +91,12 @@ fn process_stats_label(
         .find(|label| Line::raw(label.as_str()).width() <= max_width)
 }
 
-/// Returns styled tab spans with separators and a shared project-scope label.
-fn tab_spans(
-    current_tab: Tab,
-    active_project_id: i64,
-    projects: &[ProjectListItem],
-) -> Vec<Span<'static>> {
+/// Returns styled tab spans with separators between the top-level tabs.
+fn tab_spans(current_tab: Tab) -> Vec<Span<'static>> {
     let tab_count = Tab::project_scoped_tabs().len();
-    let mut spans = Vec::with_capacity(2 * tab_count + 3);
+    let mut spans = Vec::with_capacity(2 * tab_count + 1);
 
     spans.push(tab_span(Tab::Projects, current_tab));
-    spans.push(tab_separator_span());
-    spans.push(project_context_span(active_project_id, projects));
 
     for tab in Tab::project_scoped_tabs() {
         spans.push(tab_separator_span());
@@ -120,11 +104,6 @@ fn tab_spans(
     }
 
     spans
-}
-
-/// Returns one styled separator span between tabs.
-fn tab_separator_span() -> Span<'static> {
-    Span::styled("|", Style::default().fg(style::palette::border()))
 }
 
 /// Returns one styled tab span with active/inactive affordance treatment.
@@ -138,41 +117,14 @@ fn tab_span(tab: Tab, current_tab: Tab) -> Span<'static> {
     Span::styled(label, Style::default().fg(style::palette::text_muted()))
 }
 
-/// Returns a styled span describing the active project for project-scoped tabs.
-fn project_context_span(active_project_id: i64, projects: &[ProjectListItem]) -> Span<'static> {
-    let (project_name, project_scope_style) = active_project_name(active_project_id, projects)
-        .map_or_else(
-            || {
-                (
-                    "None".to_string(),
-                    Style::default().fg(style::palette::text_subtle()),
-                )
-            },
-            |project_name| {
-                (
-                    project_name,
-                    Style::default()
-                        .fg(style::palette::accent_soft())
-                        .add_modifier(Modifier::BOLD),
-                )
-            },
-        );
-    let project_scope = format!(" Project: {project_name} ");
-
-    Span::styled(project_scope, project_scope_style)
-}
-
 /// Returns the display label for a top-level tab.
 fn tab_label(tab: Tab) -> &'static str {
     tab.title()
 }
 
-/// Returns the active project name shown before project-scoped tabs.
-fn active_project_name(active_project_id: i64, projects: &[ProjectListItem]) -> Option<String> {
-    projects
-        .iter()
-        .find(|project_item| project_item.project.id == active_project_id)
-        .map(|project_item| project_item.project.display_label())
+/// Returns one styled separator span between tabs.
+fn tab_separator_span() -> Span<'static> {
+    Span::styled("|", Style::default().fg(style::palette::border()))
 }
 
 #[cfg(test)]

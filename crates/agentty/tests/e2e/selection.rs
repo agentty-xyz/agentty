@@ -234,7 +234,7 @@ fn assert_active_tab(
     active_tab: Tab,
     colors: Option<(CellColor, CellColor)>,
 ) {
-    let headers = frame.find_text(" | Project: ");
+    let headers = frame.find_text(" Projects | ");
     assert_eq!(headers.len(), 1, "tab header must be visible");
     let header_row = Region::new(0, headers[0].rect.row, frame.cols(), 1);
     let tabs = frame.find_text_in_region(active_tab.title(), &header_row);

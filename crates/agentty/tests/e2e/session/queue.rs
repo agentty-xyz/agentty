@@ -1010,11 +1010,11 @@ async fn session_queued_action_survives_project_switching() -> E2eResult {
                     .wait_for_text("Switch project", 5000)
                     .press_key("j")
                     .press_key("Enter")
-                    .wait_for_text("Project: zeta-project", 5000)
+                    .step(common::wait_for_active_project("zeta-project"))
                     .press_key("p")
                     .wait_for_text("Switch project", 5000)
                     .press_key("Enter")
-                    .wait_for_text("Project: test-project", 5000)
+                    .step(common::wait_for_active_project("test-project"))
                     .press_key("j")
                     .compose(&common::open_selected_session_view())
                     .wait_for_text("Keep queued sync visible", 5000)
@@ -1102,7 +1102,7 @@ async fn completed_session_review_survives_project_switching() -> E2eResult {
                     .wait_for_text("Switch project", 5000)
                     .press_key("j")
                     .press_key("Enter")
-                    .wait_for_text("Project: zeta-project", 5000)
+                    .step(common::wait_for_active_project("zeta-project"))
                     .eventually(
                         Duration::from_secs(30),
                         Duration::from_millis(100),
@@ -1126,7 +1126,7 @@ async fn completed_session_review_survives_project_switching() -> E2eResult {
                     .press_key("p")
                     .wait_for_text("Switch project", 5000)
                     .press_key("Enter")
-                    .wait_for_text("Project: test-project", 5000)
+                    .step(common::wait_for_active_project("test-project"))
                     .press_key("j")
                     .press_key("Enter")
                     .wait_for_text(DEFERRED_PROJECT_REVIEW_TEXT, 30000)
@@ -1139,12 +1139,13 @@ async fn completed_session_review_survives_project_switching() -> E2eResult {
                 Box::pin(async move {
                     // Assert
                     let inactive_project_frame = common::frame_from_capture(&report.captures[0]);
-                    let inactive_project_full =
-                        Region::full(inactive_project_frame.cols(), inactive_project_frame.rows());
                     assertion::assert_text_in_region(
                         &inactive_project_frame,
-                        "Project: zeta-project",
-                        &inactive_project_full,
+                        "zeta-project",
+                        &Region::footer(
+                            inactive_project_frame.cols(),
+                            inactive_project_frame.rows(),
+                        ),
                     );
 
                     let full = Region::full(frame.cols(), frame.rows());

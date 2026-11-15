@@ -134,8 +134,8 @@ struct ProjectFooterContext<'a> {
     working_dir: &'a Path,
 }
 
-/// Borrowed data required to render the footer bar for one frame.
-#[derive(Clone, Copy)]
+/// Data required to render the footer bar for one frame.
+#[derive(Clone)]
 struct FooterBarRenderContext<'a> {
     /// Active top-level tab used to suppress workspace context on dashboard
     /// pages.
@@ -144,6 +144,8 @@ struct FooterBarRenderContext<'a> {
     mode: &'a AppMode,
     /// Project footer values used when the active mode is not session-scoped.
     project: ProjectFooterContext<'a>,
+    /// Active project name centered in the footer.
+    project_name: Option<String>,
     /// Detected session worktree branch names keyed by session id.
     session_branch_names: &'a HashMap<SessionId, String>,
     /// Latest session-branch ahead/behind snapshots keyed by session id.
@@ -161,6 +163,9 @@ pub fn render(f: &mut Frame, context: RenderContext<'_>) {
         footer_bar_area,
         status_bar_area,
     } = layout::app_frame_areas(f.area());
+
+    let active_project_name =
+        router::active_project_name(context.active_project_id, context.projects);
 
     component::status_bar::StatusBar::new(context.current_version_display_text.to_string())
         .latest_available_version(
@@ -183,6 +188,7 @@ pub fn render(f: &mut Frame, context: RenderContext<'_>) {
                 git_upstream_ref: context.git_upstream_ref,
                 working_dir: context.working_dir,
             },
+            project_name: active_project_name,
             session_branch_names: context.session_branch_names,
             session_git_statuses: context.session_git_statuses,
             session_index_by_id: context.session_index_by_id,
@@ -204,6 +210,7 @@ fn render_footer_bar(f: &mut Frame, footer_bar_area: Rect, context: FooterBarRen
         current_tab,
         mode,
         project,
+        project_name,
         session_branch_names,
         session_git_statuses,
         session_index_by_id,
@@ -291,6 +298,7 @@ fn render_footer_bar(f: &mut Frame, footer_bar_area: Rect, context: FooterBarRen
         .git_base_status(footer_base_status)
         .git_upstream_ref(footer_upstream_ref)
         .git_status(footer_status)
+        .project_name(project_name)
         .workspace_context_visible(workspace_context_visible)
         .render(f, footer_bar_area);
 }

@@ -318,6 +318,18 @@ pub(crate) fn surface_kind_for_mode(mode: &AppMode) -> SurfaceKind {
     surface_for_mode(mode).kind()
 }
 
+/// Returns the active project's display label for the footer bar and scoped
+/// page titles.
+pub(crate) fn active_project_name(
+    active_project_id: i64,
+    projects: &[ProjectListItem],
+) -> Option<String> {
+    projects
+        .iter()
+        .find(|project_item| project_item.project.id == active_project_id)
+        .map(|project_item| project_item.project.display_label())
+}
+
 /// Resolves the base page painted for every mode before any overlay.
 fn surface_for_mode(mode: &AppMode) -> Surface<'_> {
     match mode {
@@ -874,13 +886,9 @@ fn render_list_background(
         .constraints([Constraint::Length(3), Constraint::Min(0)])
         .split(content_area);
 
-    component::tab::Tabs::new(
-        shared.current_tab,
-        shared.active_project_id,
-        shared.projects,
-    )
-    .process_stats(shared.process_resources)
-    .render(f, chunks[0]);
+    component::tab::Tabs::new(shared.current_tab)
+        .process_stats(shared.process_resources)
+        .render(f, chunks[0]);
 
     match shared.current_tab {
         Tab::Projects => {
@@ -919,14 +927,6 @@ fn render_list_background(
             }
         }
     }
-}
-
-/// Returns the active project's display label for scoped page titles.
-fn active_project_name(active_project_id: i64, projects: &[ProjectListItem]) -> Option<String> {
-    projects
-        .iter()
-        .find(|project_item| project_item.project.id == active_project_id)
-        .map(|project_item| project_item.project.display_label())
 }
 
 #[cfg(test)]

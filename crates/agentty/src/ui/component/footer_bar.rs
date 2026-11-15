@@ -1,6 +1,8 @@
+use std::borrow::Cow;
 use std::env;
 use std::path::Path;
 
+use ag_tui_text::text_util;
 use ratatui::Frame;
 use ratatui::layout::Rect;
 use ratatui::style::{Modifier, Style};
@@ -10,13 +12,21 @@ use ratatui::widgets::Paragraph;
 use crate::ui::icon::Icon;
 use crate::ui::{Component, style};
 
-/// Footer widget that renders the working directory and optional git status.
+/// Minimum columns a shortened project name keeps before it is omitted.
+const MIN_TRUNCATED_PROJECT_NAME_WIDTH: usize = 4;
+
+/// Footer widget that renders the working directory, the centered active
+/// project name, and optional git status.
+///
+/// Space is assigned by priority on narrow terminals: the working directory
+/// first, then the branch, then the project name.
 pub struct FooterBar {
     git_base_ref: Option<String>,
     git_base_status: Option<(u32, u32)>,
     git_branch: Option<String>,
     git_status: Option<(u32, u32)>,
     git_upstream_ref: Option<String>,
+    project_name: Option<String>,
     working_dir: String,
     workspace_context_visible: bool,
 }
@@ -31,9 +41,19 @@ impl FooterBar {
             git_branch: None,
             git_status: None,
             git_upstream_ref: None,
+            project_name: None,
             working_dir,
             workspace_context_visible: true,
         }
+    }
+
+    /// Sets the active project name centered in the footer; `None` leaves the
+    /// center empty.
+    #[must_use]
+    pub fn project_name(mut self, project_name: Option<String>) -> Self {
+        self.project_name = project_name;
+
+        self
     }
 
     /// Sets whether the footer renders active workspace path and branch
@@ -176,6 +196,7 @@ impl Component for FooterBar {
         let left_text = Span::styled(format!(" {display_path}"), path_style);
 
         let left_width = left_text.width();
+        let mut right_width = 0;
         let mut spans = vec![left_text];
 
         if let Some(branch) = &self.git_branch {
@@ -194,6 +215,7 @@ impl Component for FooterBar {
                 spans.push(Span::raw(padding));
                 spans.push(branch_span);
                 spans.push(Span::raw(" ".repeat(trailing_branch_padding)));
+                right_width = branch_width + trailing_branch_padding;
             }
         }
 
@@ -202,10 +224,80 @@ impl Component for FooterBar {
             spans.push(Span::raw(" ".repeat(total_width - line_width)));
         }
 
-        let footer =
-            Paragraph::new(Line::from(spans)).style(Style::default().bg(style::palette::surface()));
+        let bar_style = Style::default().bg(style::palette::surface());
+        let footer = Paragraph::new(Line::from(spans)).style(bar_style);
 
         f.render_widget(footer, area);
+
+        let Some(project_name) = self.project_name.as_deref() else {
+            return;
+        };
+        let project_name_width = Line::raw(project_name).width();
+
+        if let Some((label_offset, label_width)) =
+            centered_label_area(total_width, left_width, right_width, project_name_width)
+        {
+            // Shorten only when the rendered width overflows, so joined
+            // grapheme clusters such as ZWJ emoji that fit stay intact.
+            let label_text: Cow<'_, str> = if label_width < project_name_width {
+                Cow::Owned(text_util::truncate_with_ellipsis(project_name, label_width))
+            } else {
+                Cow::Borrowed(project_name)
+            };
+            let label = Span::styled(
+                label_text,
+                Style::default()
+                    .fg(style::palette::accent_soft())
+                    .add_modifier(Modifier::BOLD),
+            );
+            f.render_widget(
+                Paragraph::new(Line::from(label)).style(bar_style),
+                column_slice(area, label_offset, label_width),
+            );
+        }
+    }
+}
+
+/// Returns the column offset and width for a label centered across
+/// `area_width` between a left text of `left_width` and a right text of
+/// `right_width` columns.
+///
+/// One blank column separates the label from each side. When the centered
+/// position would touch either side, the label is centered in the free gap
+/// instead. A label wider than the gap is shortened to the gap width, and
+/// `None` is returned when the label is empty or the gap is narrower than
+/// [`MIN_TRUNCATED_PROJECT_NAME_WIDTH`] for a label that does not fit whole.
+fn centered_label_area(
+    area_width: usize,
+    left_width: usize,
+    right_width: usize,
+    label_width: usize,
+) -> Option<(usize, usize)> {
+    let gap_start = left_width.saturating_add(1);
+    let gap_end = area_width.saturating_sub(right_width.saturating_add(1));
+    let gap_width = gap_end.saturating_sub(gap_start);
+    let fitted_width = label_width.min(gap_width);
+    if fitted_width == 0
+        || (fitted_width < label_width && fitted_width < MIN_TRUNCATED_PROJECT_NAME_WIDTH)
+    {
+        return None;
+    }
+
+    let centered_start = (area_width - fitted_width) / 2;
+    if centered_start >= gap_start && centered_start + fitted_width <= gap_end {
+        return Some((centered_start, fitted_width));
+    }
+
+    Some((gap_start + (gap_width - fitted_width) / 2, fitted_width))
+}
+
+/// Returns the one-row slice of `area` starting `offset` columns from its
+/// left edge and spanning `width` columns.
+fn column_slice(area: Rect, offset: usize, width: usize) -> Rect {
+    Rect {
+        width: u16::try_from(width).unwrap_or(area.width),
+        x: area.x + u16::try_from(offset).unwrap_or_default(),
+        ..area
     }
 }
 

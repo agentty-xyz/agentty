@@ -625,21 +625,19 @@ async fn published_branch_push_survives_project_switching() -> E2eResult {
                     .wait_for_text("Switch project", 5000)
                     .press_key("j")
                     .press_key("Enter")
-                    .wait_for_text("Project: zeta-project", 5000)
+                    .step(common::wait_for_active_project("zeta-project"))
                     .eventually(
                         Duration::from_secs(15),
                         Duration::from_millis(20),
                         move |frame| {
                             std::fs::write(&release_path, "release").expect("release branch push");
-                            let expected = if scenario_notice_persisted.load(Ordering::Acquire) {
-                                "Project: zeta-project"
-                            } else {
-                                "persisted branch-push notice"
-                            };
+                            if scenario_notice_persisted.load(Ordering::Acquire) {
+                                return common::match_active_project(frame, "zeta-project");
+                            }
 
                             assertion::match_text_in_region(
                                 frame,
-                                expected,
+                                "persisted branch-push notice",
                                 &Region::full(frame.cols(), frame.rows()),
                             )
                         },
@@ -647,7 +645,7 @@ async fn published_branch_push_survives_project_switching() -> E2eResult {
                     .press_key("p")
                     .wait_for_text("Switch project", 5000)
                     .press_key("Enter")
-                    .wait_for_text("Project: test-project", 5000)
+                    .step(common::wait_for_active_project("test-project"))
                     .press_key("j")
                     .press_key("Enter")
                     .wait_for_text("[Branch Push]", 5000)
