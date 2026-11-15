@@ -24,8 +24,7 @@ use crate::app::{App, ReviewCacheEntry, SessionState};
 use crate::domain::agent::{ReasoningLevel, SpeedMode};
 use crate::domain::permission::PermissionMode;
 use crate::domain::session::{
-    ReviewRequest, SESSION_DATA_DIR, Session, SessionHandles, SessionId, SessionSize, SessionStats,
-    Status,
+    ReviewRequest, Session, SessionHandles, SessionId, SessionSize, SessionStats, Status,
 };
 use crate::domain::session_message::SessionTranscript;
 use crate::domain::transient_message::{
@@ -330,19 +329,11 @@ pub(super) fn setup_mock_worktree_expectations(mock: &mut git::MockGitClient, re
             Box::pin(async move {
                 let fs_client = create_passthrough_mock_fs_client();
                 fs_client
-                    .create_dir_all(worktree_path.clone())
+                    .create_dir_all(worktree_path)
                     .await
                     .map_err(|error| {
                         git::GitError::OutputParse(format!(
                             "Failed to create mock worktree directory: {error}"
-                        ))
-                    })?;
-                fs_client
-                    .create_dir_all(worktree_path.join(SESSION_DATA_DIR))
-                    .await
-                    .map_err(|error| {
-                        git::GitError::OutputParse(format!(
-                            "Failed to create mock session data directory: {error}"
                         ))
                     })?;
 
@@ -455,17 +446,17 @@ pub(super) fn setup_mock_merge_and_rebase_expectations(mock: &mut git::MockGitCl
 /// Builds a synthetic git-diff payload from a session worktree.
 ///
 /// Production tests rely on file-edit volume to estimate session size.
-/// This helper counts lines in non-metadata files so mocked git clients
+/// This helper counts lines in worktree files so mocked git clients
 /// can still drive size-related assertions without invoking shell `git`.
 pub(super) async fn synthetic_diff_from_session_folder(folder: &Path) -> String {
     let fs_client = create_passthrough_mock_fs_client();
-    let line_count = count_non_metadata_lines(&fs_client, folder).await;
+    let line_count = count_worktree_lines(&fs_client, folder).await;
 
     synthetic_added_line_diff(line_count)
 }
 
-/// Counts lines across one worktree while ignoring session metadata.
-pub(super) async fn count_non_metadata_lines(fs_client: &dyn fs::FsClient, root: &Path) -> usize {
+/// Counts lines across every file in one worktree.
+pub(super) async fn count_worktree_lines(fs_client: &dyn fs::FsClient, root: &Path) -> usize {
     let mut pending_entries = vec![root.to_path_buf()];
     let mut line_count = 0;
 
@@ -473,10 +464,6 @@ pub(super) async fn count_non_metadata_lines(fs_client: &dyn fs::FsClient, root:
         if !fs_client.is_dir(entry.clone()) {
             line_count += count_file_lines(fs_client, &entry).await;
 
-            continue;
-        }
-
-        if is_session_metadata_dir(&entry) {
             continue;
         }
 
@@ -494,12 +481,6 @@ pub(super) async fn count_file_lines(fs_client: &dyn fs::FsClient, path: &Path) 
         .map_or(0, |content| {
             String::from_utf8_lossy(&content).lines().count()
         })
-}
-
-/// Returns whether `path` points at Agentty's session metadata directory.
-pub(super) fn is_session_metadata_dir(path: &Path) -> bool {
-    path.file_name()
-        .is_some_and(|name| name == SESSION_DATA_DIR)
 }
 
 /// Returns direct child paths for a directory, or an empty list if
@@ -687,8 +668,7 @@ pub(super) fn add_manual_session_with_status(
     status: Status,
 ) {
     let folder = session_folder(base_path, id);
-    let data_dir = folder.join(SESSION_DATA_DIR);
-    std::fs::create_dir_all(&data_dir).expect("failed to create data dir");
+    std::fs::create_dir_all(&folder).expect("failed to create session dir");
     app.sessions
         .session_handles_mut()
         .insert(id.to_string().into(), SessionHandles::new(status));

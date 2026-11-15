@@ -112,6 +112,7 @@ fn full_mapping_keeps_transcript_detail_separate_from_list_metadata() {
     let full = joined.into_session_row();
 
     // Assert
+    assert_eq!(full.draft_attachments.as_deref(), Some("[]"));
     assert_eq!(full.prompt, "Implement feature");
     assert_eq!(full.questions.as_deref(), Some("Question text"));
 }
@@ -126,6 +127,7 @@ impl SessionJoinRow {
             base_branch: "main".to_string(),
             created_at: 100,
             deleted_lines: 6,
+            draft_attachments: Some("[]".to_string()),
             has_archived_diff: false,
             has_diff: Some(true),
             id: "session-a".to_string(),

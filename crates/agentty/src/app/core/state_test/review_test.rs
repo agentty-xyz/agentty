@@ -39,7 +39,7 @@ use crate::app::test_support::diff_content_hash;
 use crate::domain::agent::AgentModel;
 use crate::domain::session::{
     ForgeKind, PublishBranchAction, ReviewRequest, ReviewRequestState, ReviewRequestSummary,
-    SESSION_DATA_DIR, SessionHandles, SessionId, SessionStats, Status,
+    SessionHandles, SessionId, SessionStats, Status,
 };
 use crate::domain::session_message::SessionMessageKind;
 use crate::domain::transient_message::{TransientMessageBody, TransientMessageSlot};
@@ -311,7 +311,7 @@ async fn test_switch_project_recovers_persisted_deferred_review_after_restart() 
         )
         .await
         .expect("failed to insert pending review session");
-    fs::create_dir_all(session::session_folder(&base_path, session_id).join(SESSION_DATA_DIR))
+    fs::create_dir_all(session::session_folder(&base_path, session_id))
         .expect("failed to create pending review session data dir");
     assert!(
         database
@@ -763,12 +763,8 @@ async fn test_apply_review_request_status_update_persists_summary() {
         .await
         .expect("failed to insert session");
     let session_folder_name = session_id.chars().take(8).collect::<String>();
-    let session_data_dir = app
-        .services
-        .base_path()
-        .join(session_folder_name)
-        .join(SESSION_DATA_DIR);
-    fs::create_dir_all(session_data_dir).expect("failed to create session data dir");
+    let session_data_dir = app.services.base_path().join(session_folder_name);
+    fs::create_dir_all(session_data_dir).expect("failed to create session dir");
     app.refresh_sessions_now().await;
 
     let summary = test_review_request_summary("#5", ReviewRequestState::Open);
@@ -822,12 +818,8 @@ async fn test_apply_review_request_status_update_closed_cancels_session() {
         .await
         .expect("failed to insert session");
     let session_folder_name = session_id.chars().take(8).collect::<String>();
-    let session_data_dir = app
-        .services
-        .base_path()
-        .join(session_folder_name)
-        .join(SESSION_DATA_DIR);
-    fs::create_dir_all(session_data_dir).expect("failed to create session data dir");
+    let session_data_dir = app.services.base_path().join(session_folder_name);
+    fs::create_dir_all(session_data_dir).expect("failed to create session dir");
     app.refresh_sessions_now().await;
     let mut draft = test_prompt_mode_snapshot(session_id.into());
     draft.scroll_offset = Some(3);
@@ -903,12 +895,8 @@ async fn test_apply_review_request_status_update_closed_cancels_stacked_child() 
         .await
         .expect("failed to insert child session");
     let session_folder_name = session_id.chars().take(8).collect::<String>();
-    let session_data_dir = app
-        .services
-        .base_path()
-        .join(session_folder_name)
-        .join(SESSION_DATA_DIR);
-    fs::create_dir_all(session_data_dir).expect("failed to create session data dir");
+    let session_data_dir = app.services.base_path().join(session_folder_name);
+    fs::create_dir_all(session_data_dir).expect("failed to create session dir");
     app.refresh_sessions_now().await;
 
     let task_result = SyncReviewRequestTaskResult {
@@ -2238,12 +2226,8 @@ async fn apply_app_events_review_request_status_transition_updates_session() {
         .await
         .expect("failed to insert session");
     let session_folder_name = session_id.chars().take(8).collect::<String>();
-    let session_data_dir = app
-        .services
-        .base_path()
-        .join(session_folder_name)
-        .join(SESSION_DATA_DIR);
-    fs::create_dir_all(session_data_dir).expect("failed to create session data dir");
+    let session_data_dir = app.services.base_path().join(session_folder_name);
+    fs::create_dir_all(session_data_dir).expect("failed to create session dir");
     app.refresh_sessions_now().await;
     let generation = app.sync_handle.current_generation();
     // Act

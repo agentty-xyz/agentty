@@ -18,8 +18,7 @@ use super::support::{
 use crate::app::session::SessionLoadInput;
 use crate::domain::agent::AgentModel;
 use crate::domain::session::{
-    DailyActivity, SESSION_DATA_DIR, SessionHandles, SessionId, Status,
-    activity_day_key_with_offset,
+    DailyActivity, SessionHandles, SessionId, Status, activity_day_key_with_offset,
 };
 use crate::infra::clock::{Clock, RealClock};
 use crate::infra::db::AppRepositories;
@@ -147,9 +146,7 @@ async fn test_load_existing_sessions() {
         .expect("failed to insert");
 
     let session_dir = dir.path().join("12345678");
-    let data_dir = session_dir.join(SESSION_DATA_DIR);
     std::fs::create_dir(&session_dir).expect("failed to create session dir");
-    std::fs::create_dir(&data_dir).expect("failed to create data dir");
     db.sessions()
         .update_session_prompt("12345678", "Existing")
         .await
@@ -302,8 +299,7 @@ async fn test_refresh_sessions_if_needed_reloads_and_preserves_selection() {
         .expect("failed to set beta0000 timestamp");
     for session_id in ["alpha000", "beta0000"] {
         let session_dir = session_folder(dir.path(), session_id);
-        let data_dir = session_dir.join(SESSION_DATA_DIR);
-        std::fs::create_dir_all(&data_dir).expect("failed to create data dir");
+        std::fs::create_dir_all(&session_dir).expect("failed to create session dir");
     }
     let mut app = new_test_app_with_db(
         dir.path().to_path_buf(),
@@ -368,8 +364,7 @@ async fn test_refresh_sessions_loads_diff_help_detail_when_another_session_is_se
         .expect("failed to set beta0000 timestamp");
     for session_id in ["alpha000", "beta0000"] {
         let session_dir = session_folder(dir.path(), session_id);
-        let data_dir = session_dir.join(SESSION_DATA_DIR);
-        std::fs::create_dir_all(&data_dir).expect("failed to create data dir");
+        std::fs::create_dir_all(&session_dir).expect("failed to create session dir");
     }
     let mut app = new_test_app_with_db(
         dir.path().to_path_buf(),

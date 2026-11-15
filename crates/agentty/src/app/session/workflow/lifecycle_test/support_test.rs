@@ -379,21 +379,6 @@ pub(super) async fn load_persisted_session_row(database: &AppRepositories) -> db
         .expect("session row should exist")
 }
 
-/// Expects rollback to remove both the worktree registration and branch.
-pub(super) fn rollback_git_client() -> git::MockGitClient {
-    let mut client = git::MockGitClient::new();
-    client
-        .expect_remove_worktree()
-        .once()
-        .returning(|_| Box::pin(async { Ok(()) }));
-    client
-        .expect_delete_branch()
-        .once()
-        .returning(|_, _| Box::pin(async { Ok(()) }));
-
-    client
-}
-
 /// Builds a session manager containing the supplied sessions with no
 /// pre-selected row.
 pub(super) fn session_manager_with_sessions(sessions: Vec<Session>) -> SessionManager {

@@ -107,6 +107,7 @@ pub struct SessionReviewAuditRow {
 // contracts. Detail fields stay out of list rows and list-query allocations.
 macro_rules! session_rows {
     (
+        before_draft_attachments { $( $(#[$first_doc:meta])* pub $first:ident: $first_type:ty, )* }
         before_prompt { $( $(#[$before_doc:meta])* pub $before:ident: $before_type:ty, )* }
         before_questions { $( $(#[$between_doc:meta])* pub $between:ident: $between_type:ty, )* }
         remaining { $( $(#[$after_doc:meta])* pub $after:ident: $after_type:ty, )* }
@@ -116,6 +117,9 @@ macro_rules! session_rows {
         /// Includes normalized forge review-request metadata loaded through
         /// `session_review_request` when published for remote review.
         pub struct SessionRow {
+            $( $(#[$first_doc])* pub $first: $first_type, )*
+            /// Serialized staged draft attachments, when present.
+            pub draft_attachments: Option<String>,
             $( $(#[$before_doc])* pub $before: $before_type, )*
             /// Initial or staged prompt text.
             pub prompt: String,
@@ -127,9 +131,11 @@ macro_rules! session_rows {
 
         /// Lightweight row returned when loading session-list metadata.
         ///
-        /// Omits transcript-scale fields (`prompt` and `questions`) so list
-        /// refreshes scale with metadata rather than saved conversations.
+        /// Omits transcript-scale fields (`draft_attachments`, `prompt`, and
+        /// `questions`) so list refreshes scale with metadata rather than
+        /// saved conversations.
         pub struct SessionListRow {
+            $( $(#[$first_doc])* pub $first: $first_type, )*
             $( $(#[$before_doc])* pub $before: $before_type, )*
             $( $(#[$between_doc])* pub $between: $between_type, )*
             $( $(#[$after_doc])* pub $after: $after_type, )*
@@ -139,6 +145,8 @@ macro_rules! session_rows {
             /// Combines list metadata with separately loaded transcript detail.
             fn into_session_row(self, detail: SessionDetailRow) -> SessionRow {
                 SessionRow {
+                    $( $first: self.$first, )*
+                    draft_attachments: detail.draft_attachments,
                     $( $before: self.$before, )*
                     prompt: detail.prompt,
                     $( $between: self.$between, )*
@@ -151,6 +159,7 @@ macro_rules! session_rows {
         impl From<SessionRow> for SessionListRow {
             fn from(row: SessionRow) -> Self {
                 Self {
+                    $( $first: row.$first, )*
                     $( $before: row.$before, )*
                     $( $between: row.$between, )*
                     $( $after: row.$after, )*
@@ -161,7 +170,7 @@ macro_rules! session_rows {
 }
 
 session_rows! {
-    before_prompt {
+    before_draft_attachments {
         /// Persisted added-line count from the latest diff stats refresh.
         pub added_lines: i64,
         /// Persisted agent provider kind selected for this session.
@@ -172,6 +181,8 @@ session_rows! {
         pub created_at: i64,
         /// Persisted deleted-line count from the latest diff stats refresh.
         pub deleted_lines: i64,
+    }
+    before_prompt {
         /// Whether retained archive storage contains a nonempty diff.
         pub has_archived_diff: bool,
         /// Whether the latest successful diff refresh returned content, or
@@ -237,6 +248,8 @@ pub struct SessionAgentModelRow {
 
 /// Transcript-detail row loaded lazily for the session being viewed.
 pub struct SessionDetailRow {
+    /// Serialized staged draft attachments, when present.
+    pub draft_attachments: Option<String>,
     /// Initial or staged prompt text.
     pub prompt: String,
     /// Serialized clarification-question payload, when present.
@@ -579,6 +592,23 @@ pub trait SessionRepository: crate::SessionPreparationRepository + Send + Sync {
         parent_session_id: Option<&str>,
         base_branch: &str,
         stack_base_commit_hash: Option<String>,
+    ) -> Result<(), DbError>;
+
+    /// Updates the saved prompt and serialized staged draft attachments for a
+    /// session row as one atomic row mutation.
+    async fn update_session_draft(
+        &self,
+        id: &str,
+        prompt: &str,
+        draft_attachments: Option<&str>,
+    ) -> Result<(), DbError>;
+
+    /// Updates or clears the serialized staged draft attachments for a session
+    /// row.
+    async fn update_session_draft_attachments(
+        &self,
+        id: &str,
+        draft_attachments: Option<&str>,
     ) -> Result<(), DbError>;
 
     /// Updates the saved prompt for a session row.
@@ -1240,6 +1270,7 @@ SELECT session.base_branch AS base_branch,
        session.agent AS agent,
        session.created_at AS created_at,
        session.deleted_lines AS deleted_lines,
+       session.draft_attachments,
        COALESCE(length(trim(session.archived_diff, char(9) || char(10) || char(13) || ' ')) > 0, 0) AS has_archived_diff,
        session.has_diff AS has_diff,
        session.id AS id,
@@ -1316,6 +1347,7 @@ SELECT session.base_branch AS base_branch,
        session.agent AS agent,
        session.created_at AS created_at,
        session.deleted_lines AS deleted_lines,
+       session.draft_attachments,
        COALESCE(length(trim(session.archived_diff, char(9) || char(10) || char(13) || ' ')) > 0, 0) AS "has_archived_diff!: bool",
        session.has_diff AS "has_diff: bool",
        session.id AS id,
@@ -1377,6 +1409,7 @@ SELECT session.base_branch AS base_branch,
        session.agent AS agent,
        session.created_at AS created_at,
        session.deleted_lines AS deleted_lines,
+       NULL AS "draft_attachments: String",
        COALESCE(length(trim(session.archived_diff, char(9) || char(10) || char(13) || ' ')) > 0, 0) AS "has_archived_diff!: bool",
        session.has_diff AS "has_diff: bool",
        session.id AS id,
@@ -1450,6 +1483,7 @@ SELECT session.base_branch AS base_branch,
        session.agent AS agent,
        session.created_at AS created_at,
        session.deleted_lines AS deleted_lines,
+       NULL AS draft_attachments,
        COALESCE(length(trim(session.archived_diff, char(9) || char(10) || char(13) || ' ')) > 0, 0) AS has_archived_diff,
        session.has_diff AS has_diff,
        session.id AS id,
@@ -1540,7 +1574,8 @@ ORDER BY session.updated_at DESC, session.created_at DESC, session.id
         let row = sqlx::query_as!(
             SessionDetailRow,
             r"
-SELECT prompt,
+SELECT draft_attachments,
+       prompt,
        questions
 FROM session
 WHERE id = ?
@@ -2271,6 +2306,57 @@ WHERE id = ?
         Ok(())
     }
 
+    async fn update_session_draft(
+        &self,
+        id: &str,
+        prompt: &str,
+        draft_attachments: Option<&str>,
+    ) -> Result<(), DbError> {
+        let now = self.now();
+
+        sqlx::query!(
+            r"
+UPDATE session
+SET prompt = ?,
+    draft_attachments = ?,
+    updated_at = ?
+WHERE id = ?
+",
+            prompt,
+            draft_attachments,
+            now,
+            id
+        )
+        .execute(&self.0)
+        .await?;
+
+        Ok(())
+    }
+
+    async fn update_session_draft_attachments(
+        &self,
+        id: &str,
+        draft_attachments: Option<&str>,
+    ) -> Result<(), DbError> {
+        let now = self.now();
+
+        sqlx::query!(
+            r"
+UPDATE session
+SET draft_attachments = ?,
+    updated_at = ?
+WHERE id = ?
+",
+            draft_attachments,
+            now,
+            id
+        )
+        .execute(&self.0)
+        .await?;
+
+        Ok(())
+    }
+
     async fn update_session_prompt(&self, id: &str, prompt: &str) -> Result<(), DbError> {
         let now = self.now();
 
@@ -2956,6 +3042,7 @@ struct SessionJoinRow {
     base_branch: String,
     created_at: i64,
     deleted_lines: i64,
+    draft_attachments: Option<String>,
     has_archived_diff: bool,
     has_diff: Option<bool>,
     id: String,
@@ -3032,6 +3119,7 @@ impl SessionJoinRow {
             base_branch,
             created_at,
             deleted_lines,
+            draft_attachments,
             has_archived_diff,
             has_diff,
             id,
@@ -3106,7 +3194,11 @@ impl SessionJoinRow {
             title,
             updated_at,
         };
-        let detail = SessionDetailRow { prompt, questions };
+        let detail = SessionDetailRow {
+            draft_attachments,
+            prompt,
+            questions,
+        };
 
         (metadata, detail)
     }

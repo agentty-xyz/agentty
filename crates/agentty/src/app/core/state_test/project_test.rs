@@ -14,7 +14,7 @@ use super::support::{
 };
 use crate::app::{AppError, Tab};
 use crate::domain::agent::AgentModel;
-use crate::domain::session::{SESSION_DATA_DIR, Status};
+use crate::domain::session::Status;
 use crate::domain::setting::SettingName;
 use crate::infra::db::AppRepositories;
 use crate::infra::tmux::MockTmuxClient;
@@ -517,8 +517,7 @@ async fn test_new_with_clients_falls_back_from_stale_active_project_and_loads_cu
         .expect("failed to insert stale project session");
     let current_session_folder =
         agentty_home.join(current_session_id.chars().take(8).collect::<String>());
-    fs::create_dir_all(current_session_folder.join(SESSION_DATA_DIR))
-        .expect("failed to create current session folder");
+    fs::create_dir_all(current_session_folder).expect("failed to create current session folder");
 
     // Act
     let app = App::new_with_clients(

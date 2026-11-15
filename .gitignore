@@ -1,7 +1,6 @@
 /target
 /coverage.lcov
 /timing-action.lcov
-.agentty/
 docs/site/public/
 
 # Claude Code session worktrees

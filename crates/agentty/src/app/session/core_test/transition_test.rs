@@ -32,7 +32,7 @@ use crate::app::test_support::TestSessionRunFactory;
 use crate::app::{SessionState, Tab};
 use crate::domain::agent::{AgentKind, AgentModel, AgentSelection, ReasoningLevel, SpeedMode};
 use crate::domain::selection::SelectionState;
-use crate::domain::session::{SESSION_DATA_DIR, Status};
+use crate::domain::session::Status;
 use crate::domain::session_message::SessionTranscript;
 use crate::infra::clock::RealClock;
 use crate::infra::db::AppRepositories;
@@ -54,10 +54,7 @@ async fn test_spawn_session_task_auto_commits_changes() {
             let repo_root = repo_root.clone();
             Box::pin(async move { Some(repo_root) })
         });
-    mock_git_client
-        .expect_create_worktree()
-        .times(1)
-        .returning(|_, _, _, _| Box::pin(async { Ok(()) }));
+    expect_create_worktree_directory(&mut mock_git_client);
     mock_git_client
         .expect_is_worktree_clean()
         .times(1)
@@ -159,32 +156,7 @@ async fn test_spawn_session_task_skips_commit_when_nothing_to_commit() {
             let repo_root = repo_root.clone();
             Box::pin(async move { Some(repo_root) })
         });
-    mock_git_client
-        .expect_create_worktree()
-        .times(1)
-        .returning(|_, worktree_path, _, _| {
-            Box::pin(async move {
-                let fs_client = create_passthrough_mock_fs_client();
-                fs_client
-                    .create_dir_all(worktree_path.clone())
-                    .await
-                    .map_err(|error| {
-                        git::GitError::OutputParse(format!(
-                            "Failed to create mock worktree: {error}"
-                        ))
-                    })?;
-                fs_client
-                    .create_dir_all(worktree_path.join(SESSION_DATA_DIR))
-                    .await
-                    .map_err(|error| {
-                        git::GitError::OutputParse(format!(
-                            "Failed to create mock worktree data dir: {error}"
-                        ))
-                    })?;
-
-                Ok(())
-            })
-        });
+    expect_create_worktree_directory(&mut mock_git_client);
     mock_git_client
         .expect_is_worktree_clean()
         .times(1)
@@ -1206,4 +1178,24 @@ async fn test_next_tab() {
     assert_eq!(app.tabs.current(), Tab::Settings);
     app.next_tab();
     assert_eq!(app.tabs.current(), Tab::Projects);
+}
+
+/// Expects one worktree creation and materializes the worktree folder on
+/// disk so agent commands can run inside it.
+fn expect_create_worktree_directory(mock_git_client: &mut git::MockGitClient) {
+    mock_git_client
+        .expect_create_worktree()
+        .times(1)
+        .returning(|_, worktree_path, _, _| {
+            Box::pin(async move {
+                create_passthrough_mock_fs_client()
+                    .create_dir_all(worktree_path)
+                    .await
+                    .map_err(|error| {
+                        git::GitError::OutputParse(format!(
+                            "Failed to create mock worktree: {error}"
+                        ))
+                    })
+            })
+        });
 }

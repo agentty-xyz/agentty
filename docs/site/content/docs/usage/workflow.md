@@ -913,7 +913,9 @@ not refill shared budgets. See
 <a id="usage-data-location"></a> Agentty keeps its database, logs, and worktrees in its
 data root, normally `~/.agentty/`. Worktrees are removed when sessions finish, are
 canceled, or are deleted. Set `AGENTTY_ROOT` to use another root; each root allows one
-running Agentty instance.
+running Agentty instance. Session state, including staged draft attachments, stays in
+the data root, so a project's `.agentty/` folder holds only configuration you can
+commit.
 
 ### Continuing long sessions
 

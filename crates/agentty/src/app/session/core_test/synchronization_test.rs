@@ -26,7 +26,7 @@ use crate::app::App;
 use crate::app::session::SessionError;
 use crate::app::test_support::{SyncSessionStartError, TestSessionRunFactory};
 use crate::domain::agent::AgentModel;
-use crate::domain::session::{SESSION_DATA_DIR, SessionId, Status};
+use crate::domain::session::{SessionId, Status};
 use crate::domain::session_message::SessionMessageKind;
 use crate::domain::transient_message::TransientMessageSlot;
 use crate::infra::db::AppRepositories;
@@ -501,19 +501,11 @@ async fn test_rebase_session_queues_while_branch_operation_is_busy() {
             Box::pin(async move {
                 let fs_client = create_passthrough_mock_fs_client();
                 fs_client
-                    .create_dir_all(worktree_path.clone())
+                    .create_dir_all(worktree_path)
                     .await
                     .map_err(|error| {
                         git::GitError::OutputParse(format!(
                             "Failed to create mock worktree: {error}"
-                        ))
-                    })?;
-                fs_client
-                    .create_dir_all(worktree_path.join(SESSION_DATA_DIR))
-                    .await
-                    .map_err(|error| {
-                        git::GitError::OutputParse(format!(
-                            "Failed to create mock worktree data dir: {error}"
                         ))
                     })?;
 
@@ -706,19 +698,11 @@ async fn test_rebase_session_auto_commits_uncommitted_changes() {
             Box::pin(async move {
                 let fs_client = create_passthrough_mock_fs_client();
                 fs_client
-                    .create_dir_all(worktree_path.clone())
+                    .create_dir_all(worktree_path)
                     .await
                     .map_err(|error| {
                         git::GitError::OutputParse(format!(
                             "Failed to create mock worktree: {error}"
-                        ))
-                    })?;
-                fs_client
-                    .create_dir_all(worktree_path.join(SESSION_DATA_DIR))
-                    .await
-                    .map_err(|error| {
-                        git::GitError::OutputParse(format!(
-                            "Failed to create mock worktree data dir: {error}"
                         ))
                     })?;
 
