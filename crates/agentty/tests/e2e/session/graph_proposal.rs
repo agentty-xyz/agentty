@@ -140,6 +140,7 @@ async fn graph_proposal_request_preview_approval_execution() -> E2eResult {
                     .write_text("/graph")
                     .press_key("Enter")
                     .wait_for_text("Describe the task for the execution graph", 5000)
+                    .wait_for_text("Graph · claude/claude-haiku-5-5", 5000)
                     .write_text("query the current architecture")
                     .press_key("Enter")
                     .wait_for_text("Graph proposal v1 ready: 2 nodes", 10000)
