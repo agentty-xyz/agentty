@@ -16,7 +16,9 @@ use ag_forge::{
 use tracing::warn;
 
 use crate::app::App;
-use crate::app::prompt_intent::ReviewCommentResolutionOutcome;
+use crate::app::prompt_intent::{
+    ReviewCommentResolutionOutcome, build_resolve_review_comment_prompt,
+};
 use crate::app::session::{SessionTaskService, StatusTransition};
 use crate::domain::session::{ReviewRequest, ReviewRequestState, SessionId, Status};
 use crate::domain::transcript_notice::TranscriptNotice;
@@ -30,6 +32,10 @@ use crate::presentation::app_mode::{
 /// Checked-in prompt template submitted when watched checks fail.
 const FIX_FAILED_CHECKS_PROMPT_TEMPLATE: &str =
     include_str!("template/fix_failed_checks_prompt.md");
+/// Checked-in prompt section appended to a review-comment turn that also
+/// fixes failed checks.
+const REVIEW_COMMENT_FAILED_CHECKS_PROMPT_TEMPLATE: &str =
+    include_str!("template/review_comment_failed_checks_prompt.md");
 /// Body of the confirmation that offers or enables watching. The overlay
 /// shows one truncated line, so the question stays short.
 const WATCH_CONFIRMATION_MESSAGE: &str = "Auto-resolve checks, comments, conflicts?";
@@ -104,8 +110,15 @@ struct PendingReviewRequestPublish {
 /// One automatic follow-up selected from a watched review request.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub(crate) enum ReviewWatchAction {
-    /// Evaluates trusted reviewer threads in one agent turn.
-    AddressComments {
+    /// Evaluates trusted reviewer threads, and any failed checks ready at the
+    /// same time, in one agent turn, so a problem reported by both is fixed
+    /// once and its threads still resolve.
+    AddressReview {
+        /// Checks that failed for `head_commit`; empty while checks are
+        /// pending or their failures were already attempted.
+        failed_checks: Vec<ReviewCheckFailure>,
+        /// Commit the checks ran against.
+        head_commit: String,
         /// Unresolved threads awaiting a response.
         threads: Vec<ReviewCommentThread>,
     },
@@ -127,21 +140,28 @@ impl ReviewWatchAction {
     /// Selects the highest-priority follow-up not yet attempted.
     ///
     /// Conflicts come first because syncing replaces the head commit and
-    /// reruns checks. Checks wait until none is pending so one turn sees every
-    /// failure. Each conflict or check result is attempted once per head
-    /// commit and each thread once per comment count, so an unsuccessful
-    /// attempt is not repeated until the forge state changes.
+    /// reruns checks. Review threads come next and never wait for checks;
+    /// failed checks join them when every check has finished, so one turn
+    /// sees each problem once. Checks alone also wait until none is pending.
+    /// Each conflict or check result is attempted once per head commit and
+    /// each thread once per comment count, so an unsuccessful attempt is not
+    /// repeated until the forge state changes.
     pub(crate) fn plan(
         attention: &ReviewRequestAttention,
         handled_keys: &[String],
     ) -> Option<Self> {
         let is_unhandled = |key: &String| !handled_keys.contains(key);
-        if attention.has_merge_conflict && is_unhandled(&conflict_key(&attention.head_commit)) {
-            return Some(Self::ResolveConflicts {
-                head_commit: attention.head_commit.clone(),
-            });
+        let head_commit = attention.head_commit.clone();
+        if attention.has_merge_conflict && is_unhandled(&conflict_key(&head_commit)) {
+            return Some(Self::ResolveConflicts { head_commit });
         }
 
+        let failed_checks =
+            if !attention.has_pending_checks && is_unhandled(&checks_key(&head_commit)) {
+                attention.failed_checks.clone()
+            } else {
+                Vec::new()
+            };
         let threads = attention
             .review_threads
             .iter()
@@ -149,22 +169,31 @@ impl ReviewWatchAction {
             .cloned()
             .collect::<Vec<_>>();
         if !threads.is_empty() {
-            return Some(Self::AddressComments { threads });
+            return Some(Self::AddressReview {
+                failed_checks,
+                head_commit,
+                threads,
+            });
         }
 
-        (!attention.has_pending_checks
-            && !attention.failed_checks.is_empty()
-            && is_unhandled(&checks_key(&attention.head_commit)))
-        .then(|| Self::FixChecks {
-            failed_checks: attention.failed_checks.clone(),
-            head_commit: attention.head_commit.clone(),
+        (!failed_checks.is_empty()).then_some(Self::FixChecks {
+            failed_checks,
+            head_commit,
         })
     }
 
     /// Returns the keys that mark this follow-up as attempted.
     fn handled_keys(&self) -> Vec<String> {
         match self {
-            Self::AddressComments { threads } => threads.iter().map(thread_key).collect(),
+            Self::AddressReview {
+                failed_checks,
+                head_commit,
+                threads,
+            } => threads
+                .iter()
+                .map(thread_key)
+                .chain((!failed_checks.is_empty()).then(|| checks_key(head_commit)))
+                .collect(),
             Self::FixChecks { head_commit, .. } => vec![checks_key(head_commit)],
             Self::ResolveConflicts { head_commit } => vec![conflict_key(head_commit)],
         }
@@ -173,9 +202,22 @@ impl ReviewWatchAction {
     /// Returns the transcript notice announcing this follow-up.
     fn notice(&self, review_request: &ReviewRequest) -> String {
         match self {
-            Self::AddressComments { threads } => {
+            Self::AddressReview {
+                failed_checks,
+                threads,
+                ..
+            } if failed_checks.is_empty() => {
                 format!("Addressing {}", counted(threads.len(), "review comment"))
             }
+            Self::AddressReview {
+                failed_checks,
+                threads,
+                ..
+            } => format!(
+                "Addressing {} and {}",
+                counted(threads.len(), "review comment"),
+                failed_checks_summary(failed_checks)
+            ),
             Self::FixChecks { failed_checks, .. } => {
                 format!("Fixing {}", failed_checks_summary(failed_checks))
             }
@@ -482,19 +524,21 @@ impl App {
         action: ReviewWatchAction,
     ) -> Result<(), String> {
         match action {
-            ReviewWatchAction::AddressComments { threads } => {
-                let selections = threads
-                    .iter()
-                    .map(|thread| ReviewCommentSelection {
-                        thread_id: thread.id.clone(),
-                    })
-                    .collect::<Vec<_>>();
-                let snapshot = ReviewCommentSnapshot {
-                    pr_level_comments: Vec::new(),
+            ReviewWatchAction::AddressReview {
+                failed_checks,
+                head_commit,
+                threads,
+            } => {
+                let Some((prompt, thread_ids)) = build_address_review_prompt(
+                    review_request,
+                    &head_commit,
+                    &failed_checks,
                     threads,
+                ) else {
+                    return Err("no review comment needs a response".to_string());
                 };
                 match self
-                    .resolve_session_review_comments(session_id, &snapshot, &selections)
+                    .submit_review_comment_turn(session_id, prompt, thread_ids)
                     .await
                 {
                     ReviewCommentResolutionOutcome::ShowSession { .. } => Ok(()),
@@ -635,15 +679,64 @@ impl App {
     }
 }
 
-/// Builds the agent-facing prompt for one batch of failed checks.
+/// Builds the agent-facing prompt and thread allowlist for one batch of
+/// review threads, followed by the failed checks of the same turn.
 ///
-/// Forge-reported values stay inside one collision-safe fence so check names
-/// and URLs cannot read as instructions.
+/// Returns `None` when no thread still needs a response.
+pub(crate) fn build_address_review_prompt(
+    review_request: &ReviewRequest,
+    head_commit: &str,
+    failed_checks: &[ReviewCheckFailure],
+    threads: Vec<ReviewCommentThread>,
+) -> Option<(TurnPrompt, Vec<String>)> {
+    let selections = threads
+        .iter()
+        .map(|thread| ReviewCommentSelection {
+            thread_id: thread.id.clone(),
+        })
+        .collect::<Vec<_>>();
+    let snapshot = ReviewCommentSnapshot {
+        pr_level_comments: Vec::new(),
+        threads,
+    };
+    let (mut prompt, thread_ids) = build_resolve_review_comment_prompt(&snapshot, &selections)?;
+    if !failed_checks.is_empty() {
+        prompt.text.push_str("\n\n");
+        prompt.text.push_str(&render_failed_checks_template(
+            REVIEW_COMMENT_FAILED_CHECKS_PROMPT_TEMPLATE,
+            review_request,
+            head_commit,
+            failed_checks,
+        ));
+    }
+
+    Some((prompt, thread_ids))
+}
+
+/// Builds the agent-facing prompt for one batch of failed checks.
 pub(crate) fn build_fix_failed_checks_prompt(
     review_request: &ReviewRequest,
     head_commit: &str,
     failed_checks: &[ReviewCheckFailure],
 ) -> TurnPrompt {
+    TurnPrompt::from_agent_data(render_failed_checks_template(
+        FIX_FAILED_CHECKS_PROMPT_TEMPLATE,
+        review_request,
+        head_commit,
+        failed_checks,
+    ))
+}
+
+/// Renders one failed-checks prompt template.
+///
+/// Forge-reported values stay inside one collision-safe fence so check names
+/// and URLs cannot read as instructions.
+fn render_failed_checks_template(
+    template: &str,
+    review_request: &ReviewRequest,
+    head_commit: &str,
+    failed_checks: &[ReviewCheckFailure],
+) -> String {
     let summary = &review_request.summary;
     let mut check_data = format!(
         "Review request: {}\nCommit: {head_commit}\n",
@@ -661,7 +754,8 @@ pub(crate) fn build_fix_failed_checks_prompt(
     }
     let check_data = check_data.trim_end();
     let fence = ag_protocol::diff_fence(check_data);
-    let prompt = FIX_FAILED_CHECKS_PROMPT_TEMPLATE
+
+    template
         .trim_end()
         .replace(
             "{{ review_request_name }}",
@@ -671,9 +765,7 @@ pub(crate) fn build_fix_failed_checks_prompt(
         .replace(
             "{{ fenced_failed_checks }}",
             &format!("{fence}text\n{check_data}\n{fence}"),
-        );
-
-    TurnPrompt::from_agent_data(prompt)
+        )
 }
 
 /// Returns the user-facing name of one linked review request, such as

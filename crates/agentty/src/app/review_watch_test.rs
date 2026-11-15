@@ -8,7 +8,8 @@ use ag_forge::{
 };
 
 use super::{
-    ReviewWatchAction, ReviewWatchState, build_fix_failed_checks_prompt, retain_current_keys,
+    ReviewWatchAction, ReviewWatchState, build_address_review_prompt,
+    build_fix_failed_checks_prompt, retain_current_keys,
 };
 use crate::app::branch_publish::{BranchPublishTaskFailure, BranchPublishTaskSuccess};
 use crate::app::core::SyncReviewRequestTaskResult;
@@ -127,7 +128,7 @@ fn handle_status(app: &App, session_id: &str) -> Status {
 }
 
 #[test]
-fn plan_prefers_conflicts_then_comments_then_completed_failed_checks() {
+fn plan_prefers_conflicts_then_threads_with_completed_failed_checks() {
     // Arrange
     let attention = busy_attention();
     let conflict_handled = vec!["conflict:abc123".to_string()];
@@ -156,7 +157,9 @@ fn plan_prefers_conflicts_then_comments_then_completed_failed_checks() {
     );
     assert_eq!(
         comments,
-        Some(ReviewWatchAction::AddressComments {
+        Some(ReviewWatchAction::AddressReview {
+            failed_checks: vec![failed_check("test", None)],
+            head_commit: "abc123".to_string(),
             threads: vec![review_thread("thread-1", 1)],
         })
     );
@@ -207,10 +210,42 @@ fn plan_waits_for_pending_checks_and_retries_after_forge_state_changes() {
     );
     assert_eq!(
         follow_up_plan,
-        Some(ReviewWatchAction::AddressComments {
+        Some(ReviewWatchAction::AddressReview {
+            failed_checks: Vec::new(),
+            head_commit: "abc123".to_string(),
             threads: vec![review_thread("thread-1", 2)],
         })
     );
+}
+
+#[test]
+fn plan_addresses_threads_without_failed_checks_that_are_pending_or_already_attempted() {
+    // Arrange
+    let pending = ReviewRequestAttention {
+        failed_checks: vec![failed_check("test", None)],
+        has_pending_checks: true,
+        head_commit: "abc123".to_string(),
+        review_threads: vec![review_thread("thread-1", 1)],
+        ..ReviewRequestAttention::default()
+    };
+    let attempted = ReviewRequestAttention {
+        has_pending_checks: false,
+        ..pending.clone()
+    };
+    let checks_handled = vec!["checks:abc123".to_string()];
+    let expected = Some(ReviewWatchAction::AddressReview {
+        failed_checks: Vec::new(),
+        head_commit: "abc123".to_string(),
+        threads: vec![review_thread("thread-1", 1)],
+    });
+
+    // Act
+    let pending_plan = ReviewWatchAction::plan(&pending, &[]);
+    let attempted_plan = ReviewWatchAction::plan(&attempted, &checks_handled);
+
+    // Assert
+    assert_eq!(pending_plan, expected);
+    assert_eq!(attempted_plan, expected);
 }
 
 #[test]
@@ -226,7 +261,9 @@ fn actions_describe_their_follow_up_and_handled_keys() {
             vec!["conflict:abc123".to_string()],
         ),
         (
-            ReviewWatchAction::AddressComments {
+            ReviewWatchAction::AddressReview {
+                failed_checks: Vec::new(),
+                head_commit: "abc123".to_string(),
                 threads: vec![review_thread("thread-1", 1), review_thread("thread-2", 3)],
             },
             "Addressing 2 review comments",
@@ -234,6 +271,15 @@ fn actions_describe_their_follow_up_and_handled_keys() {
                 "thread:thread-1:1".to_string(),
                 "thread:thread-2:3".to_string(),
             ],
+        ),
+        (
+            ReviewWatchAction::AddressReview {
+                failed_checks: vec![failed_check("test", None)],
+                head_commit: "abc123".to_string(),
+                threads: vec![review_thread("thread-1", 1)],
+            },
+            "Addressing 1 review comment and 1 failing check: test",
+            vec!["thread:thread-1:1".to_string(), "checks:abc123".to_string()],
         ),
         (
             ReviewWatchAction::FixChecks {
@@ -291,6 +337,64 @@ fn failed_checks_prompt_fences_forge_data_and_names_the_forge_cli() {
         prompt.text
     );
     assert!(!prompt.text.contains("{{"), "{}", prompt.text);
+}
+
+#[test]
+fn address_review_prompt_appends_failed_checks_after_the_review_comments() {
+    // Arrange
+    let linked = review_request(ForgeKind::GitHub, ReviewRequestState::Open);
+    let threads = vec![review_thread("thread-1", 1)];
+    let failed_checks = [failed_check("lint", Some("https://ci.example/lint"))];
+
+    // Act
+    let (comments_only, comment_thread_ids) =
+        build_address_review_prompt(&linked, "abc123", &[], threads.clone())
+            .expect("actionable thread");
+    let (combined, combined_thread_ids) =
+        build_address_review_prompt(&linked, "abc123", &failed_checks, threads)
+            .expect("actionable thread");
+
+    // Assert
+    assert_eq!(comment_thread_ids, vec!["thread-1".to_string()]);
+    assert_eq!(combined_thread_ids, comment_thread_ids);
+    assert_eq!(combined.text_source, TurnPromptTextSource::AgentData);
+    assert!(comments_only.text.contains("Thread ID: thread-1"));
+    assert!(!comments_only.text.contains("failed checks"));
+    assert!(combined.text.starts_with(&comments_only.text));
+    assert!(
+        combined
+            .text
+            .contains("The pull request also has failed checks")
+    );
+    assert!(combined.text.contains("with the `gh` CLI"));
+    assert!(
+        combined
+            .text
+            .contains("return one `review_comment_outcomes` item for every thread ID")
+    );
+    assert!(
+        combined.text.ends_with(
+            "```text\nReview request: https://github.com/agentty-xyz/agentty/pull/42\nCommit: \
+             abc123\n\nCheck: lint\nOutcome: Failure\nDetails: https://ci.example/lint\n```"
+        ),
+        "{}",
+        combined.text
+    );
+    assert!(!combined.text.contains("{{"), "{}", combined.text);
+}
+
+#[test]
+fn address_review_prompt_requires_a_thread_that_needs_a_response() {
+    // Arrange
+    let linked = review_request(ForgeKind::GitHub, ReviewRequestState::Open);
+    let mut resolved_thread = review_thread("thread-1", 1);
+    resolved_thread.is_resolved = true;
+
+    // Act
+    let prompt = build_address_review_prompt(&linked, "abc123", &[], vec![resolved_thread]);
+
+    // Assert
+    assert_eq!(prompt, None);
 }
 
 #[test]
@@ -927,6 +1031,71 @@ async fn attention_starts_sync_and_review_comment_turns_through_session_workflow
         "{transcript}"
     );
     assert!(!transcript.contains("Could not start"), "{transcript}");
+}
+
+#[tokio::test]
+async fn attention_addresses_threads_and_failed_checks_in_one_turn() {
+    // Arrange
+    let (mut app, _base_dir) = new_git_test_app().await;
+    let session_id = seed_review_session(&mut app, Status::Review, ReviewRequestState::Open).await;
+    app.enable_review_watch(&session_id).await;
+    let attention = ReviewRequestAttention {
+        failed_checks: vec![failed_check("test", None)],
+        ..comment_attention()
+    };
+
+    // Act
+    app.apply_review_request_attention(&session_id, attention.clone())
+        .await;
+    set_session_status_for_test(&mut app, &session_id, Status::Watching);
+    app.apply_review_request_attention(&session_id, attention)
+        .await;
+
+    // Assert
+    assert_eq!(
+        app.review_watch.handled_keys.get(&session_id),
+        Some(&vec![
+            "thread:thread-1:1".to_string(),
+            "checks:abc123".to_string(),
+        ])
+    );
+    let transcript = transcript(&app, &session_id);
+    assert_eq!(
+        transcript
+            .matches("[Review Watch] Addressing 1 review comment and 1 failing check: test")
+            .count(),
+        1,
+        "{transcript}"
+    );
+    assert!(!transcript.contains("Fixing"), "{transcript}");
+}
+
+#[tokio::test]
+async fn attention_reports_a_thread_that_no_longer_needs_a_response() {
+    // Arrange
+    let (mut app, _base_dir) = new_git_test_app().await;
+    let session_id = seed_review_session(&mut app, Status::Review, ReviewRequestState::Open).await;
+    app.enable_review_watch(&session_id).await;
+    let mut resolved_thread = review_thread("thread-1", 1);
+    resolved_thread.is_resolved = true;
+    let attention = ReviewRequestAttention {
+        head_commit: "abc123".to_string(),
+        review_threads: vec![resolved_thread],
+        ..ReviewRequestAttention::default()
+    };
+
+    // Act
+    app.apply_review_request_attention(&session_id, attention)
+        .await;
+
+    // Assert
+    let transcript = transcript(&app, &session_id);
+    assert!(
+        transcript.contains(
+            "Could not start: no review comment needs a response; retrying on the next check"
+        ),
+        "{transcript}"
+    );
 }
 
 #[tokio::test]

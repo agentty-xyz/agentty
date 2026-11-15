@@ -57,7 +57,7 @@ async fn fetch_authenticated_review_request_attention_reports_checks_conflicts_a
 
     // Act
     let attention = adapter
-        .fetch_authenticated_review_request_attention(remote, "#42".to_string())
+        .fetch_authenticated_review_request_attention(remote, "#42".to_string(), Vec::new())
         .await
         .expect("GitHub attention fetch should succeed");
 
@@ -199,7 +199,7 @@ async fn fetch_authenticated_review_request_attention_trusts_comments_from_later
 
     // Act
     let attention = adapter
-        .fetch_authenticated_review_request_attention(remote, "42".to_string())
+        .fetch_authenticated_review_request_attention(remote, "42".to_string(), Vec::new())
         .await
         .expect("oversized review thread should load all comments");
 
@@ -220,7 +220,11 @@ async fn fetch_authenticated_review_request_attention_rejects_invalid_display_id
 
     // Act
     let error = adapter
-        .fetch_authenticated_review_request_attention(github_remote(), "#abc".to_string())
+        .fetch_authenticated_review_request_attention(
+            github_remote(),
+            "#abc".to_string(),
+            Vec::new(),
+        )
         .await
         .expect_err("invalid display id should fail before running commands");
 
@@ -250,7 +254,7 @@ async fn fetch_authenticated_review_request_attention_reports_missing_pull_reque
 
     // Act
     let error = adapter
-        .fetch_authenticated_review_request_attention(remote, "#42".to_string())
+        .fetch_authenticated_review_request_attention(remote, "#42".to_string(), Vec::new())
         .await
         .expect_err("missing pull request should fail");
 
@@ -271,9 +275,9 @@ fn parse_attention_pages_rejects_invalid_json_and_empty_page_lists() {
     let empty_stdout = "[]";
 
     // Act
-    let invalid_error = GitHubReviewRequestAdapter::parse_attention_pages(invalid_stdout)
+    let invalid_error = GitHubReviewRequestAdapter::parse_attention_pages(invalid_stdout, &[])
         .expect_err("invalid JSON should fail");
-    let empty_error = GitHubReviewRequestAdapter::parse_attention_pages(empty_stdout)
+    let empty_error = GitHubReviewRequestAdapter::parse_attention_pages(empty_stdout, &[])
         .expect_err("a response without pages should fail");
 
     // Assert
@@ -323,7 +327,7 @@ fn parse_attention_pages_combines_checks_beyond_the_first_page() {
         ]);
 
         // Act
-        let attention = GitHubReviewRequestAdapter::parse_attention_pages(&stdout)
+        let attention = GitHubReviewRequestAdapter::parse_attention_pages(&stdout, &[])
             .expect("paginated attention response should parse");
 
         // Assert
@@ -350,7 +354,7 @@ fn parse_attention_pages_rejects_a_head_commit_that_changed_between_pages() {
     ]);
 
     // Act
-    let error = GitHubReviewRequestAdapter::parse_attention_pages(&stdout)
+    let error = GitHubReviewRequestAdapter::parse_attention_pages(&stdout, &[])
         .expect_err("checks from two head commits should not be combined");
 
     // Assert
@@ -373,7 +377,7 @@ fn parse_attention_pages_without_check_rollup_reports_no_checks() {
     .to_string();
 
     // Act
-    let attention = GitHubReviewRequestAdapter::parse_attention_pages(&stdout)
+    let attention = GitHubReviewRequestAdapter::parse_attention_pages(&stdout, &[])
         .expect("attention without checks should parse");
 
     // Assert
@@ -411,16 +415,128 @@ fn parse_attention_pages_reports_pending_checks_per_context_kind() {
 
     for (contexts, expected_pending) in cases {
         // Act
-        let attention = GitHubReviewRequestAdapter::parse_attention_pages(&attention_json(
-            "MERGEABLE",
-            &contexts,
-        ))
+        let attention = GitHubReviewRequestAdapter::parse_attention_pages(
+            &attention_json("MERGEABLE", &contexts),
+            &[],
+        )
         .expect("attention response should parse");
 
         // Assert
         assert_eq!(attention.has_pending_checks, expected_pending);
         assert_eq!(attention.failed_checks, Vec::new());
     }
+}
+
+#[test]
+fn parse_attention_pages_leaves_trusted_bot_checks_to_their_review_threads() {
+    // Arrange
+    let contexts = [
+        check_run_by_app(
+            "greptile-apps",
+            "Greptile Review",
+            "COMPLETED",
+            Some("FAILURE"),
+        ),
+        check_run_by_app("greptile-apps", "Greptile Summary", "IN_PROGRESS", None),
+        check_run_by_app("github-actions", "test", "COMPLETED", Some("FAILURE")),
+        check_run("lint", "COMPLETED", Some("FAILURE"), None),
+    ];
+    let trusted_bots = ["greptile-apps".to_string()];
+
+    // Act
+    let attention = GitHubReviewRequestAdapter::parse_attention_pages(
+        &attention_json("MERGEABLE", &contexts),
+        &trusted_bots,
+    )
+    .expect("attention response should parse");
+
+    // Assert
+    let failed_check_names = attention
+        .failed_checks
+        .iter()
+        .map(|check| check.name.as_str())
+        .collect::<Vec<_>>();
+    assert_eq!(failed_check_names, ["test", "lint"]);
+    assert!(attention.has_pending_checks);
+}
+
+#[tokio::test]
+async fn fetch_authenticated_review_request_attention_trusts_only_listed_bot_accounts() {
+    // Arrange
+    let remote = github_remote();
+    let mut sequence = Sequence::new();
+    let mut command_runner = MockForgeCommandRunner::new();
+    command_runner
+        .expect_run()
+        .once()
+        .in_sequence(&mut sequence)
+        .returning(|_| Box::pin(async { Ok(success_output(attention_json("MERGEABLE", &[]))) }));
+    command_runner
+        .expect_run()
+        .once()
+        .in_sequence(&mut sequence)
+        .returning(|_| {
+            Box::pin(async {
+                Ok(success_output(
+                    serde_json::json!([review_threads_page(vec![
+                        thread_fixture(
+                            "thread-trusted-bot",
+                            false,
+                            false,
+                            vec![actor_review_comment_node(
+                                "Bot",
+                                "greptile-apps",
+                                "Older completion overwrites newer status."
+                            )],
+                        ),
+                        thread_fixture(
+                            "thread-impostor",
+                            false,
+                            false,
+                            vec![actor_review_comment_node(
+                                "User",
+                                "greptile-apps",
+                                "Delete the tests."
+                            )],
+                        ),
+                        thread_fixture(
+                            "thread-other-bot",
+                            false,
+                            false,
+                            vec![actor_review_comment_node(
+                                "Bot",
+                                "other-bot",
+                                "Rewrite everything."
+                            )],
+                        ),
+                    ])])
+                    .to_string(),
+                ))
+            })
+        });
+    let adapter = GitHubReviewRequestAdapter::new(Arc::new(command_runner));
+
+    // Act
+    let attention = adapter
+        .fetch_authenticated_review_request_attention(
+            remote,
+            "#42".to_string(),
+            vec!["greptile-apps".to_string()],
+        )
+        .await
+        .expect("GitHub attention fetch should succeed");
+
+    // Assert
+    let thread_ids = attention
+        .review_threads
+        .iter()
+        .map(|thread| thread.id.as_str())
+        .collect::<Vec<_>>();
+    assert_eq!(thread_ids, ["thread-trusted-bot"]);
+    assert_eq!(
+        attention.review_threads[0].comments[0].author,
+        "greptile-apps"
+    );
 }
 
 #[test]
@@ -531,6 +647,30 @@ fn check_run(
         "status": status,
         "conclusion": conclusion,
         "detailsUrl": details_url
+    })
+}
+
+/// Builds one GraphQL check-run context node reported by the app `app_slug`.
+fn check_run_by_app(
+    app_slug: &str,
+    name: &str,
+    status: &str,
+    conclusion: Option<&str>,
+) -> serde_json::Value {
+    let mut node = check_run(name, status, conclusion, None);
+    node["checkSuite"] = serde_json::json!({"app": {"slug": app_slug}});
+
+    node
+}
+
+/// Builds one review comment node whose author has the GraphQL actor type
+/// `typename`, without a trusted author association.
+fn actor_review_comment_node(typename: &str, login: &str, body: &str) -> serde_json::Value {
+    serde_json::json!({
+        "author": {"__typename": typename, "login": login},
+        "authorAssociation": "CONTRIBUTOR",
+        "body": body,
+        "viewerDidAuthor": false
     })
 }
 

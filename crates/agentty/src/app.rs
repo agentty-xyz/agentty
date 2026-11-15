@@ -39,6 +39,7 @@ mod review_request;
 mod review_resume;
 mod review_rules;
 mod review_watch;
+mod review_watch_config;
 mod service;
 pub(crate) mod session;
 mod session_api;

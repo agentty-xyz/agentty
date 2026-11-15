@@ -426,10 +426,12 @@ impl GitLabReviewRequestAdapter {
 
     /// Loads the inline discussions awaiting a response from trusted authors,
     /// looking up each distinct note author's project membership once.
+    /// Authors whose username is listed in `trusted_bots` are trusted too.
     async fn fetch_trusted_review_threads(
         operations: &ReviewRequestOperations,
         remote: &ForgeRemote,
         merge_request_iid: &str,
+        trusted_bots: &[String],
     ) -> Result<Vec<ReviewCommentThread>, ReviewRequestError> {
         let current_user = Self::fetch_current_user(operations, remote).await?;
         let discussions_output = operations
@@ -463,7 +465,7 @@ impl GitLabReviewRequestAdapter {
         Ok(candidates
             .into_iter()
             .filter_map(|candidate| {
-                candidate.into_trusted_thread(current_user.id, &trusted_author_ids)
+                candidate.into_trusted_thread(current_user.id, &trusted_author_ids, trusted_bots)
             })
             .collect())
     }
@@ -896,11 +898,13 @@ impl ReviewRequestAdapter for GitLabReviewRequestAdapter {
 
     /// Fetches head-commit, conflict, and head-pipeline facts from the merge
     /// request, the failed jobs of a failed pipeline, and the discussions
-    /// awaiting a response from trusted project members.
+    /// awaiting a response from trusted project members and trusted bots.
+    /// Pipeline jobs have no reporting bot, so every failed job is reported.
     fn fetch_authenticated_review_request_attention(
         &self,
         remote: ForgeRemote,
         display_id: String,
+        trusted_bots: Vec<String>,
     ) -> ForgeFuture<Result<ReviewRequestAttention, ReviewRequestError>> {
         let operations = self.operations.clone();
 
@@ -923,9 +927,13 @@ impl ReviewRequestAdapter for GitLabReviewRequestAdapter {
                 failed_checks = Self::fetch_failed_checks(&operations, &remote, pipeline).await?;
                 has_pending_checks = pipeline.is_pending();
             }
-            let review_threads =
-                Self::fetch_trusted_review_threads(&operations, &remote, &merge_request_iid)
-                    .await?;
+            let review_threads = Self::fetch_trusted_review_threads(
+                &operations,
+                &remote,
+                &merge_request_iid,
+                &trusted_bots,
+            )
+            .await?;
 
             Ok(ReviewRequestAttention {
                 failed_checks,
@@ -1121,8 +1129,9 @@ struct GitLabAttentionCandidate {
 }
 
 impl GitLabAttentionCandidate {
-    /// Returns the thread with only the comments of the authenticated user
-    /// and trusted members when the latest of them still awaits a response.
+    /// Returns the thread with only the comments of the authenticated user,
+    /// trusted members, and trusted bots when the latest of them still awaits
+    /// a response.
     ///
     /// Untrusted notes are dropped before the thread is evaluated, so they
     /// can neither request work nor hide a trusted request.
@@ -1130,6 +1139,7 @@ impl GitLabAttentionCandidate {
         self,
         current_user_id: u64,
         trusted_author_ids: &[u64],
+        trusted_bots: &[String],
     ) -> Option<ReviewCommentThread> {
         let trusted_notes = self
             .notes
@@ -1137,7 +1147,11 @@ impl GitLabAttentionCandidate {
             .map(|note| {
                 note.author.id.is_some_and(|author_id| {
                     author_id == current_user_id || trusted_author_ids.contains(&author_id)
-                })
+                }) || note
+                    .author
+                    .username
+                    .as_ref()
+                    .is_some_and(|username| trusted_bots.contains(username))
             })
             .collect::<Vec<_>>();
         let mut thread = self.thread;

@@ -110,6 +110,11 @@ pub trait ReviewRequestClient: Send + Sync {
     /// conflicts with its target branch, and unresolved review threads
     /// awaiting a response from trusted authors.
     ///
+    /// `trusted_bots` lists review-bot logins whose comments count as
+    /// trusted and whose own failed checks are left to their review threads.
+    /// GitHub matches bot accounts by login, never users with the same name;
+    /// GitLab matches note author usernames.
+    ///
     /// # Errors
     /// Returns a provider-specific review-request error when any forge lookup
     /// cannot be completed, including the author-trust lookups, so callers
@@ -118,6 +123,7 @@ pub trait ReviewRequestClient: Send + Sync {
         &self,
         remote: ForgeRemote,
         display_id: String,
+        trusted_bots: Vec<String>,
     ) -> ForgeFuture<Result<ReviewRequestAttention, ReviewRequestError>>;
 
     /// Adds one reply to an existing review thread.
@@ -283,9 +289,10 @@ impl ReviewRequestClient for RealReviewRequestClient {
         &self,
         remote: ForgeRemote,
         display_id: String,
+        trusted_bots: Vec<String>,
     ) -> ForgeFuture<Result<ReviewRequestAttention, ReviewRequestError>> {
         self.call_with_authenticated_adapter(remote, move |adapter, remote| {
-            adapter.fetch_authenticated_review_request_attention(remote, display_id)
+            adapter.fetch_authenticated_review_request_attention(remote, display_id, trusted_bots)
         })
     }
 
@@ -374,11 +381,13 @@ pub(crate) trait ReviewRequestAdapter: Send + Sync {
         display_id: String,
     ) -> ForgeFuture<Result<ReviewCommentSnapshot, ReviewRequestError>>;
 
-    /// Fetches review-request attention facts after authentication.
+    /// Fetches review-request attention facts after authentication, trusting
+    /// the review bots named by `trusted_bots`.
     fn fetch_authenticated_review_request_attention(
         &self,
         remote: ForgeRemote,
         display_id: String,
+        trusted_bots: Vec<String>,
     ) -> ForgeFuture<Result<ReviewRequestAttention, ReviewRequestError>>;
 
     /// Adds one reply after authentication.
