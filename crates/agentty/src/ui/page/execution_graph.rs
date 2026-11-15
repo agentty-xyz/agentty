@@ -2,7 +2,7 @@
 
 use std::fmt::Write as _;
 
-use ag_session::{GraphBlockedReason, GraphCompletionGate, GraphNodeStatus};
+use ag_session::{GraphBlockedReason, GraphNodeStatus};
 use ag_tui_text::text_util::{
     borrowed_paint_line, split_line_at_width, wrap_lines_breaking_long_words,
 };
@@ -12,7 +12,7 @@ use ratatui::style::Style;
 use ratatui::widgets::{Block, Borders, Paragraph, Wrap};
 
 use crate::presentation::execution_graph::{GraphEditKind, GraphEditor, GraphView};
-use crate::presentation::graph_chat::proposal_preview;
+use crate::presentation::graph_chat::{gate_label, proposal_preview};
 use crate::ui::Component;
 use crate::ui::component::chat_input::ChatInput;
 use crate::ui::markdown::MarkdownRenderCache;
@@ -124,7 +124,19 @@ fn render_details(frame: &mut Frame, area: Rect, view: &GraphView, markdown: &Ma
     let inner = block.inner(area);
     let width = usize::from(inner.width);
     let metadata = details(view);
-    let metadata = wrap_lines_breaking_long_words(&metadata, width);
+    // Proposal previews are Markdown; node metadata stays plain text.
+    let proposal = view
+        .selected_proposal()
+        .map(|_| markdown.render(&metadata, width));
+    let metadata = proposal.as_deref().map_or_else(
+        || wrap_lines_breaking_long_words(&metadata, width),
+        |lines| {
+            lines
+                .iter()
+                .flat_map(|line| split_line_at_width(borrowed_paint_line(line), width))
+                .collect()
+        },
+    );
     let output = view
         .outputs
         .get(view.selected_output)
@@ -310,14 +322,6 @@ fn details(view: &GraphView) -> String {
     }
 
     text
-}
-
-fn gate_label(gate: &GraphCompletionGate) -> String {
-    match gate {
-        GraphCompletionGate::ExecutionSucceeded => "successful execution without questions".into(),
-        GraphCompletionGate::ResultValidated { output_name } => format!("validated {output_name}"),
-        GraphCompletionGate::ResultAccepted { output_name } => format!("accepted {output_name}"),
-    }
 }
 
 #[cfg(test)]

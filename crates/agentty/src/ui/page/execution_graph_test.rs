@@ -9,10 +9,11 @@ use ratatui::backend::TestBackend;
 use ratatui::buffer::CellWidth;
 use ratatui::style::Modifier;
 
-use super::{actions, details, gate_label, render, render_details};
+use super::{actions, details, render, render_details};
 use crate::domain::input::InputState;
 use crate::presentation::execution_graph::tests::graph_view;
 use crate::presentation::execution_graph::{GraphEditKind, GraphEditor, GraphViewOutput};
+use crate::presentation::graph_chat::gate_label;
 use crate::ui::markdown::MarkdownRenderCache;
 
 #[test]
