@@ -20,6 +20,7 @@ use super::{Diagnostics, OtlpError, OtlpExport, Service};
 
 const SERVICE: Service = Service {
     name: "otlp-test",
+    user_id: None,
     version: "1.2.3",
 };
 
@@ -76,7 +77,12 @@ async fn invalid_endpoints_fail_without_echoing_credentials() {
     ];
 
     // Act / Assert
+    assert_eq!(
+        OtlpExport::validate("http://localhost:4318/v1/traces"),
+        Ok(())
+    );
     for endpoint in endpoints {
+        assert_eq!(OtlpExport::validate(endpoint), Err(OtlpError::Endpoint));
         let error = OtlpExport::start(Some(endpoint), SERVICE)
             .await
             .err()
@@ -138,6 +144,7 @@ async fn shutdown_exports_protobuf_with_the_service_identity() {
         Some(any_value::Value::StringValue("1.2.3".to_string()))
     );
     assert!(attribute("service.instance.id").is_some());
+    assert_eq!(attribute("user.id"), None);
 }
 
 #[tokio::test]
@@ -231,7 +238,11 @@ async fn event_log_exports_records_beside_traces_with_one_resource_identity() {
             .await;
     }
     let endpoint = format!("{}/otlp/v1/traces?tenant=local", server.uri());
-    let export = OtlpExport::start_with_events(Some(&endpoint), SERVICE)
+    let service = Service {
+        user_id: Some("installation-id".to_string()),
+        ..SERVICE
+    };
+    let export = OtlpExport::start_with_events(Some(&endpoint), service)
         .await
         .expect("start")
         .expect("enabled");
@@ -294,6 +305,14 @@ async fn event_log_exports_records_beside_traces_with_one_resource_identity() {
     assert_eq!(
         attribute(log_resource, "service.instance.id"),
         attribute(trace_resource, "service.instance.id")
+    );
+    assert_eq!(
+        attribute(log_resource, "user.id"),
+        string("installation-id")
+    );
+    assert_eq!(
+        attribute(trace_resource, "user.id"),
+        string("installation-id")
     );
 }
 

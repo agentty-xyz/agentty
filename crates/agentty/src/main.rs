@@ -7,16 +7,14 @@ use std::process::ExitCode;
 use std::time::Duration;
 
 use ag_git::{GitClient, RealGitClient};
-use ag_telemetry::otlp::{EventLog, OtlpExport, Service};
+use ag_telemetry::otlp::{OtlpError, OtlpExport, Service};
 use ag_telemetry::{CaptureToolContent, Context, FutureExt as _};
 use agentty::analytics::Analytics;
 #[cfg(not(debug_assertions))]
 use agentty::analytics::TELEMETRY_ENABLED_ENV;
 use agentty::app::{AGENTTY_WT_DIR, App, AppError, agentty_home};
-#[cfg(not(debug_assertions))]
-use agentty::infra::db::AppRepositories;
 use agentty::infra::db::{
-    DB_DIR, DB_FILE, Database, acquire_instance_lock,
+    AppRepositories, DB_DIR, DB_FILE, Database, acquire_instance_lock,
     timestamp_source_from_environment as environment_timestamp_source,
 };
 use clap::Parser;
@@ -81,38 +79,17 @@ async fn run(
     cli: Cli,
     runtime: impl for<'a> AsyncFnOnce(&'a mut App) -> Result<(), AppError>,
 ) -> Result<(), AppError> {
-    let telemetry = OtlpExport::start_with_events(
-        cli.otlp_endpoint.as_deref(),
-        Service {
-            name: "agentty",
-            version: env!("CARGO_PKG_VERSION"),
-        },
-    )
-    .await
-    .map_err(|error| AppError::Workflow(error.to_string()))?;
-    if let Some(telemetry) = &telemetry {
-        telemetry.install();
+    if let Some(endpoint) = cli.otlp_endpoint.as_deref() {
+        OtlpExport::validate(endpoint).map_err(otlp_startup_error)?;
     }
-    let event_log = telemetry.as_ref().and_then(OtlpExport::event_log);
-    let result = async {
-        let context = Context::current().with_value(CaptureToolContent(cli.otlp_capture_content));
-        run_application(cli, event_log, runtime)
-            .with_context(context)
-            .await
-    }
-    .await;
-    if let Some(telemetry) = telemetry {
-        let warnings = telemetry.shutdown().await;
-        if warnings > 0 {
-            let _ = writeln!(
-                io::stderr().lock(),
-                "OTLP export reported {warnings} warnings or failures; some traces or usage \
-                 events may be missing."
-            );
-        }
-    }
+    let context = Context::current().with_value(CaptureToolContent(cli.otlp_capture_content));
 
-    result
+    run_application(cli, runtime).with_context(context).await
+}
+
+/// Reports an OTLP setup failure using its bounded, credential-free message.
+fn otlp_startup_error(error: OtlpError) -> AppError {
+    AppError::Workflow(error.to_string())
 }
 
 async fn run_with_analytics(
@@ -155,9 +132,11 @@ async fn run_with_analytics(
     result
 }
 
+/// Opens the Agentty root, then starts OTLP export after the database so its
+/// resource carries the stored installation ID, and flushes it after the
+/// runtime ends.
 async fn run_application(
     cli: Cli,
-    event_log: Option<EventLog>,
     runtime: impl for<'a> AsyncFnOnce(&'a mut App) -> Result<(), AppError>,
 ) -> Result<(), AppError> {
     let home = agentty_home();
@@ -185,16 +164,35 @@ async fn run_application(
     let db = Database::open_with_timestamp_source(&db_path, environment_timestamp_source()).await?;
     // Debug builds, including tests, never report to the public project.
     #[cfg(debug_assertions)]
-    let analytics: Option<Analytics> = None;
+    let reports_to_posthog = false;
     #[cfg(not(debug_assertions))]
-    let analytics = if Analytics::is_enabled(std::env::var_os(TELEMETRY_ENABLED_ENV).as_deref()) {
-        Analytics::posthog(&AppRepositories::from(db.clone())).await
+    let reports_to_posthog =
+        Analytics::is_enabled(std::env::var_os(TELEMETRY_ENABLED_ENV).as_deref());
+    let installation_id = if reports_to_posthog || cli.otlp_endpoint.is_some() {
+        Some(Analytics::installation_id(&AppRepositories::from(db.clone())).await)
     } else {
         None
     };
-    let analytics = Analytics::mirror(analytics, event_log);
+    let posthog = installation_id
+        .as_deref()
+        .filter(|_| reports_to_posthog)
+        .and_then(Analytics::posthog);
+    let telemetry = OtlpExport::start_with_events(
+        cli.otlp_endpoint.as_deref(),
+        Service {
+            name: "agentty",
+            user_id: installation_id,
+            version: env!("CARGO_PKG_VERSION"),
+        },
+    )
+    .await
+    .map_err(otlp_startup_error)?;
+    if let Some(telemetry) = &telemetry {
+        telemetry.install();
+    }
+    let analytics = Analytics::mirror(posthog, telemetry.as_ref().and_then(OtlpExport::event_log));
 
-    run_with_analytics(
+    let result = run_with_analytics(
         Box::pin(async {
             let mut app = App::new(
                 !cli.no_update,
@@ -212,7 +210,19 @@ async fn run_application(
         }),
         analytics.as_ref(),
     )
-    .await
+    .await;
+    if let Some(telemetry) = telemetry {
+        let warnings = telemetry.shutdown().await;
+        if warnings > 0 {
+            let _ = writeln!(
+                io::stderr().lock(),
+                "OTLP export reported {warnings} warnings or failures; some traces or usage \
+                 events may be missing."
+            );
+        }
+    }
+
+    result
 }
 
 #[cfg(test)]

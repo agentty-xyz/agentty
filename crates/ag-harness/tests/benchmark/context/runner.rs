@@ -37,6 +37,7 @@ const OTLP_ENDPOINT_ENV: &str = "AG_HARNESS_BENCHMARK_OTLP_ENDPOINT";
 /// Resource identity of the exported benchmark traces.
 const SERVICE: Service = Service {
     name: "ag-harness-benchmark",
+    user_id: None,
     version: env!("CARGO_PKG_VERSION"),
 };
 /// Agentty's declared context profiles of the benchmarked models, as

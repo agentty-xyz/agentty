@@ -1,6 +1,7 @@
 //! CLI argument parsing, telemetry setup, and startup failure tests for the
 //! entry point.
 
+use std::collections::BTreeSet;
 use std::net::TcpListener;
 use std::os::unix::fs::PermissionsExt;
 use std::time::Duration;
@@ -12,8 +13,10 @@ use agentty::infra::db::{DB_DIR, DB_FILE, acquire_instance_lock};
 use clap::Parser;
 use clap::error::ErrorKind;
 use opentelemetry_proto::tonic::collector::logs::v1::ExportLogsServiceRequest;
+use opentelemetry_proto::tonic::collector::trace::v1::ExportTraceServiceRequest;
 use opentelemetry_proto::tonic::common::v1::any_value;
 use prost::Message as _;
+use uuid::Uuid;
 use wiremock::{Mock, MockServer, Request, ResponseTemplate};
 
 use super::{Cli, ExperimentalFeatures, run, run_with_analytics};
@@ -276,14 +279,14 @@ async fn run_rejects_an_incomplete_otlp_endpoint_before_startup() {
 }
 
 #[tokio::test]
-async fn run_installs_trace_export_and_flushes_after_startup_failure() {
+async fn run_exports_nothing_when_startup_fails_before_the_database_opens() {
     if env::var_os(TRACED_STARTUP_CHILD_ENV).is_some() {
         // Arrange
         let cli = Cli {
             experimental: ExperimentalFeatures::default(),
             no_update: false,
             otlp_capture_content: false,
-            otlp_endpoint: Some("http://127.0.0.1:9/v1/traces".to_string()),
+            otlp_endpoint: env::var("AGENTTY_TEST_OTLP_ENDPOINT").ok(),
         };
 
         // Act
@@ -308,19 +311,31 @@ async fn run_installs_trace_export_and_flushes_after_startup_failure() {
         .await
         .expect("blocking root file should be created");
     let test_binary = env::current_exe().expect("test binary path should resolve");
+    let server = MockServer::start().await;
 
     // Act
     let status = tokio::process::Command::new(test_binary)
         .arg("--exact")
-        .arg("tests::run_installs_trace_export_and_flushes_after_startup_failure")
+        .arg("tests::run_exports_nothing_when_startup_fails_before_the_database_opens")
         .env(TRACED_STARTUP_CHILD_ENV, "1")
         .env("AGENTTY_ROOT", blocking_root)
+        .env(
+            "AGENTTY_TEST_OTLP_ENDPOINT",
+            format!("{}/v1/traces", server.uri()),
+        )
         .status()
         .await
         .expect("isolated traced startup test should run");
 
     // Assert
     assert!(status.success());
+    assert!(
+        server
+            .received_requests()
+            .await
+            .expect("requests")
+            .is_empty()
+    );
 }
 
 #[tokio::test]
@@ -512,6 +527,7 @@ async fn startup_runs_application_through_telemetry_wrapper() {
     fs::set_permissions(&codex_stub, fs::Permissions::from_mode(0o750))
         .expect("executable codex stub");
     let child_path = format!("{}:/usr/bin:/bin", stub_bin.display());
+    let mut installation_ids = BTreeSet::new();
 
     for (response_status, capture) in [
         (None, false),
@@ -577,7 +593,47 @@ async fn startup_runs_application_through_telemetry_wrapper() {
             Vec::new()
         };
         assert_eq!(exported_events(&requests), expected_events);
+        installation_ids.extend(exported_user_ids(&requests));
     }
+    let installation_id = installation_ids
+        .pop_first()
+        .flatten()
+        .expect("exported installation ID");
+    assert!(installation_ids.is_empty(), "every batch shares one ID");
+    assert!(Uuid::parse_str(&installation_id).is_ok());
+}
+
+/// Returns the string `user.id` resource attribute of every exported trace
+/// and log batch, or `None` for a batch without one.
+fn exported_user_ids(requests: &[Request]) -> Vec<Option<String>> {
+    requests
+        .iter()
+        .flat_map(|request| match request.url.path() {
+            "/v1/logs" => ExportLogsServiceRequest::decode(request.body.as_slice())
+                .expect("OTLP logs")
+                .resource_logs
+                .into_iter()
+                .filter_map(|resource| resource.resource)
+                .collect::<Vec<_>>(),
+            _ => ExportTraceServiceRequest::decode(request.body.as_slice())
+                .expect("OTLP traces")
+                .resource_spans
+                .into_iter()
+                .filter_map(|resource| resource.resource)
+                .collect(),
+        })
+        .map(|resource| {
+            resource
+                .attributes
+                .into_iter()
+                .find(|attribute| attribute.key == "user.id")
+                .and_then(|attribute| attribute.value)
+                .and_then(|value| match value.value {
+                    Some(any_value::Value::StringValue(user_id)) => Some(user_id),
+                    _ => None,
+                })
+        })
+        .collect()
 }
 
 /// An exported event name with its sorted event-specific attributes.
