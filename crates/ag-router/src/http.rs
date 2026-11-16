@@ -57,8 +57,13 @@ pub(crate) fn is_context_overflow(
 /// Lowercase markers that, in a `429` body, mean the account's quota or
 /// credit is spent rather than its request rate exceeded: the
 /// `insufficient_quota` code and "exceeded your current quota" message of
-/// the `OpenAI` API.
-const QUOTA_EXCEEDED_MARKERS: [&str; 2] = ["insufficient_quota", "exceeded your current quota"];
+/// the `OpenAI` API, and the `exceeded_current_quota_error` type of the
+/// Moonshot (Kimi) API.
+const QUOTA_EXCEEDED_MARKERS: [&str; 3] = [
+    "insufficient_quota",
+    "exceeded your current quota",
+    "exceeded_current_quota",
+];
 
 /// Returns whether an unsuccessful response reports a spent quota or
 /// credit balance, which waiting does not fix: any `402`, or a `429` whose
@@ -174,7 +179,8 @@ impl HttpTransport {
     }
 
     /// Sends `request` and returns its successful response with the body
-    /// unread, retrying rate limits and one connection failure.
+    /// unread, retrying rate limits and one connection failure. A `429`
+    /// whose body reports a spent quota is returned without a retry.
     ///
     /// A timed-out request is reported without a retry, since a reasoning
     /// model that ran out the bound would likely run it out again.
@@ -208,25 +214,27 @@ impl HttpTransport {
                 Err(error) => return Err(TransportError::transport(error)),
             };
 
-            if response.status() == reqwest::StatusCode::TOO_MANY_REQUESTS
-                && rate_limit_retries < MAX_RATE_LIMIT_RETRIES
-            {
-                let delay = rate_limit_retry_delay(
-                    response.headers(),
-                    rate_limit_retries,
-                    self.retry_delay,
-                    self.max_retry_delay,
-                );
-                rate_limit_retries += 1;
-                drop(response);
-                tokio::time::sleep(delay).await;
-
-                continue;
-            }
             if let Err(source) = response.error_for_status_ref() {
                 let status = response.status();
                 let retry_after = retry_after(response.headers());
                 let body = error_body_summary(&mut response).await;
+
+                if status == reqwest::StatusCode::TOO_MANY_REQUESTS
+                    && rate_limit_retries < MAX_RATE_LIMIT_RETRIES
+                    && !is_quota_exceeded(status, &body)
+                {
+                    let delay = rate_limit_retry_delay(
+                        retry_after,
+                        rate_limit_retries,
+                        self.retry_delay,
+                        self.max_retry_delay,
+                    );
+                    rate_limit_retries += 1;
+                    drop(response);
+                    tokio::time::sleep(delay).await;
+
+                    continue;
+                }
 
                 return Err(TransportError::Http {
                     body,
@@ -256,26 +264,27 @@ where
 }
 
 fn rate_limit_retry_delay(
-    headers: &reqwest::header::HeaderMap,
+    provider_delay: Option<Duration>,
     retry: usize,
     retry_delay: Duration,
     max_retry_delay: Duration,
 ) -> Duration {
-    let provider_delay = retry_after(headers).unwrap_or_default();
     let backoff = retry_delay
         .saturating_mul(1_u32 << retry.min(31))
         .min(max_retry_delay);
 
-    provider_delay.min(MAX_PROVIDER_RETRY_DELAY).max(backoff)
+    provider_delay.unwrap_or_default().max(backoff)
 }
 
-/// Returns the provider's `Retry-After` delay, read as whole seconds.
+/// Returns the provider's `Retry-After` delay, read as whole delta-seconds
+/// and capped at [`MAX_PROVIDER_RETRY_DELAY`]; an HTTP-date or other value
+/// reads as absent.
 fn retry_after(headers: &reqwest::header::HeaderMap) -> Option<Duration> {
     headers
         .get(reqwest::header::RETRY_AFTER)
         .and_then(|value| value.to_str().ok())
         .and_then(|value| value.parse::<u64>().ok())
-        .map(Duration::from_secs)
+        .map(|seconds| Duration::from_secs(seconds).min(MAX_PROVIDER_RETRY_DELAY))
 }
 
 async fn error_body_summary(response: &mut reqwest::Response) -> String {

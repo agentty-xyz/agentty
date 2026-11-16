@@ -1,23 +1,29 @@
 //! Embedder-facing failure classification.
 //!
-//! [`RunError`] classifies a failed turn, and [`HarnessError`] a failed
-//! session operation, by one [`ErrorKind`] and whether retrying the same
-//! call later may succeed. Both convert from the detailed [`TurnError`],
-//! [`SessionError`], and [`ModelError`] values the harness returns, and
-//! display and chain exactly like them.
+//! [`RunError`] classifies a failed run (turn), and [`HarnessError`] a failed
+//! build, configuration, or session operation, by one [`ErrorKind`] and
+//! whether retrying the same call later may succeed. Both convert from the
+//! detailed errors the harness returns, display like them, and expose their
+//! source chain; the converted error itself stays reachable through
+//! `get_ref` and `into_inner`, mirroring [`std::io::Error`].
 
 use std::error::Error;
 use std::fmt;
 use std::time::Duration;
 
-use crate::model::{ModelError, ModelErrorType};
+use crate::bash::BashError;
+use crate::model::{ModelError, ModelErrorType, ModelRegistryError};
 use crate::session::SessionError;
 use crate::turn::TurnError;
+use crate::{OutputSchemaError, RepositoryError, TurnInputError};
 
-/// Stable reason that a run or session operation failed.
+/// Stable reason that a run or harness operation failed, for embedder retry
+/// and recovery policy.
 ///
 /// Every harness failure maps to exactly one kind. New kinds may be added as
-/// the harness gains failure modes.
+/// the harness gains failure modes. [`crate::lifecycle::TurnErrorType`]
+/// remains the low-cardinality telemetry label of a failed turn; `ErrorKind`
+/// is the embedder-facing classification and its intended successor.
 #[derive(Clone, Copy, Debug, Eq, Hash, PartialEq)]
 #[non_exhaustive]
 pub enum ErrorKind {
@@ -26,7 +32,8 @@ pub enum ErrorKind {
     /// The provider limited the request rate; retry after
     /// [`RunError::retry_after`] when present.
     RateLimited,
-    /// The provider failed or was temporarily unavailable (HTTP `5xx`).
+    /// The provider was temporarily unavailable (HTTP `500`, `502`, `503`,
+    /// `504`, or `529`).
     Overloaded,
     /// The provider rejected the credentials (HTTP `401` or `403`).
     Auth,
@@ -35,31 +42,33 @@ pub enum ErrorKind {
     /// The request exceeds the model's context window or budget, even after
     /// every allowed reduction.
     ContextOverflow,
-    /// The model returned output that is unusable: invalid JSON, a schema
-    /// violation, a malformed tool call, or an oversized or incomplete
-    /// response.
+    /// The model or provider returned output that is unusable: invalid JSON,
+    /// a schema violation, a malformed tool call, an undecodable response
+    /// envelope, or an oversized or incomplete response.
     InvalidOutput,
-    /// The network or the provider's response envelope failed in transit.
+    /// The network failed or the provider timed out the request.
     Transport,
-    /// The model request failed for a reason without a finer
-    /// classification, including other provider rejections and failures a
-    /// custom [`crate::Model`] reports through [`ModelError::request`].
-    Model,
+    /// A model request failed for a reason without a finer classification,
+    /// such as another provider rejection or a failure a custom
+    /// [`crate::Model`] reports through [`ModelError::request`].
+    Other,
     /// A repository or sandbox tool failed in a way that ends the turn.
     ToolFailed,
     /// The model kept repeating tool calls without progress after a nudge.
     Repetition,
-    /// The session already has an active turn or matching host request.
+    /// The session already has an active turn or matching host request, or
+    /// the session store is temporarily locked or saturated.
     Busy,
     /// The request conflicts with the session's recorded state, such as an
     /// existing identifier, a reused host turn ID, or a stale handle.
     Conflict,
     /// The requested session does not exist.
     NotFound,
-    /// The session store failed or holds invalid data.
+    /// The session store failed or holds invalid data, so the session's
+    /// durable state may be incomplete.
     Store,
-    /// The harness, session, or request configuration cannot be satisfied,
-    /// including capabilities the model does not support.
+    /// The harness, session, sandbox, or request configuration cannot be
+    /// satisfied, including capabilities the model does not support.
     Config,
 }
 
@@ -75,7 +84,7 @@ impl ErrorKind {
             Self::ContextOverflow => "context_overflow",
             Self::InvalidOutput => "invalid_output",
             Self::Transport => "transport",
-            Self::Model => "model",
+            Self::Other => "other",
             Self::ToolFailed => "tool_failed",
             Self::Repetition => "repetition",
             Self::Busy => "busy",
@@ -88,7 +97,7 @@ impl ErrorKind {
 
     /// Returns whether a failure of this kind is transient, so the same call
     /// may succeed when retried later.
-    fn is_transient(self) -> bool {
+    pub fn is_retryable(self) -> bool {
         matches!(
             self,
             Self::RateLimited | Self::Overloaded | Self::Transport | Self::Busy
@@ -104,118 +113,189 @@ impl fmt::Display for ErrorKind {
 
 /// Classified failure of one run (turn).
 ///
-/// Converts from [`TurnError`], [`SessionError`], and [`ModelError`]. Its
-/// `Display` and [`Error::source`] are those of the converted error.
+/// Use it for the result of a turn, whether returned as [`TurnError`] or as
+/// [`SessionError`] by a session; use [`HarnessError`] for building a
+/// harness or opening, creating, and inspecting sessions. Its `Display` and
+/// [`Error::source`] are those of the converted error, which
+/// [`Self::get_ref`] and [`Self::into_inner`] return.
 #[derive(Debug)]
-#[non_exhaustive]
 pub struct RunError {
-    kind: ErrorKind,
-    retry_after: Option<Duration>,
-    retryable: bool,
-    source: Box<dyn Error + Send + Sync>,
+    classified: Classified,
 }
 
 impl RunError {
     /// Returns the failure's classification.
     pub fn kind(&self) -> ErrorKind {
-        self.kind
+        self.classified.kind
     }
 
     /// Returns whether the failure is transient, so retrying the same run
     /// later may succeed.
     pub fn is_retryable(&self) -> bool {
-        self.retryable
+        self.classified.kind.is_retryable()
     }
 
     /// Returns the provider-declared delay before a retry, when the failure
     /// is retryable and the provider sent `Retry-After`.
     pub fn retry_after(&self) -> Option<Duration> {
-        self.retry_after
+        self.classified.retry_after
     }
 
-    fn new(classification: Classification, source: Box<dyn Error + Send + Sync>) -> Self {
-        let retryable = classification.kind.is_transient();
+    /// Returns the converted error, such as a [`TurnError`], for downcasting.
+    pub fn get_ref(&self) -> &(dyn Error + Send + Sync + 'static) {
+        self.classified.source.as_ref()
+    }
 
-        Self {
-            kind: classification.kind,
-            retry_after: classification.retry_after.filter(|_| retryable),
-            retryable,
-            source,
-        }
+    /// Consumes the classification and returns the converted error.
+    pub fn into_inner(self) -> Box<dyn Error + Send + Sync> {
+        self.classified.source
     }
 }
 
 impl fmt::Display for RunError {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
-        fmt::Display::fmt(&self.source, formatter)
+        fmt::Display::fmt(&self.classified.source, formatter)
     }
 }
 
 impl Error for RunError {
     fn source(&self) -> Option<&(dyn Error + 'static)> {
-        self.source.source()
+        self.classified.source.source()
     }
 }
 
 impl From<TurnError> for RunError {
     fn from(error: TurnError) -> Self {
-        Self::new(Classification::turn(&error), Box::new(error))
+        Self {
+            classified: Classified::new(Classification::turn(&error), Box::new(error)),
+        }
     }
 }
 
 impl From<SessionError> for RunError {
     fn from(error: SessionError) -> Self {
-        Self::new(Classification::session(&error), Box::new(error))
+        Self {
+            classified: Classified::new(Classification::session(&error), Box::new(error)),
+        }
     }
 }
 
 impl From<ModelError> for RunError {
     fn from(error: ModelError) -> Self {
-        Self::new(Classification::model(&error), Box::new(error))
+        Self {
+            classified: Classified::new(Classification::model(&error), Box::new(error)),
+        }
     }
 }
 
-/// Classified failure of a harness or session operation outside a run.
+/// Classified failure of a build, configuration, or session operation
+/// outside a run.
 ///
-/// Converts from [`SessionError`] without exposing storage-backend types.
-/// Its `Display` and [`Error::source`] are those of the converted error.
+/// Converts from [`SessionError`] and the build-time errors without exposing
+/// storage-backend types; use [`RunError`] for the result of a turn. Its
+/// `Display` and [`Error::source`] are those of the converted error, which
+/// [`Self::get_ref`] and [`Self::into_inner`] return.
 #[derive(Debug)]
-#[non_exhaustive]
 pub struct HarnessError {
-    kind: ErrorKind,
-    source: Box<dyn Error + Send + Sync>,
+    classified: Classified,
 }
 
 impl HarnessError {
     /// Returns the failure's classification.
     pub fn kind(&self) -> ErrorKind {
-        self.kind
+        self.classified.kind
     }
 
     /// Returns whether the failure is transient, so retrying the same
     /// operation later may succeed.
     pub fn is_retryable(&self) -> bool {
-        self.kind.is_transient()
+        self.classified.kind.is_retryable()
+    }
+
+    /// Returns the provider-declared delay before a retry, when the failure
+    /// is retryable and the provider sent `Retry-After`.
+    pub fn retry_after(&self) -> Option<Duration> {
+        self.classified.retry_after
+    }
+
+    /// Returns the converted error, such as a [`SessionError`], for
+    /// downcasting.
+    pub fn get_ref(&self) -> &(dyn Error + Send + Sync + 'static) {
+        self.classified.source.as_ref()
+    }
+
+    /// Consumes the classification and returns the converted error.
+    pub fn into_inner(self) -> Box<dyn Error + Send + Sync> {
+        self.classified.source
+    }
+
+    fn config(error: impl Error + Send + Sync + 'static) -> Self {
+        Self {
+            classified: Classified::new(Classification::kind(ErrorKind::Config), Box::new(error)),
+        }
     }
 }
 
 impl fmt::Display for HarnessError {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
-        fmt::Display::fmt(&self.source, formatter)
+        fmt::Display::fmt(&self.classified.source, formatter)
     }
 }
 
 impl Error for HarnessError {
     fn source(&self) -> Option<&(dyn Error + 'static)> {
-        self.source.source()
+        self.classified.source.source()
     }
 }
 
 impl From<SessionError> for HarnessError {
     fn from(error: SessionError) -> Self {
         Self {
-            kind: Classification::session(&error).kind,
-            source: Box::new(error),
+            classified: Classified::new(Classification::session(&error), Box::new(error)),
+        }
+    }
+}
+
+impl From<OutputSchemaError> for HarnessError {
+    fn from(error: OutputSchemaError) -> Self {
+        Self::config(error)
+    }
+}
+
+impl From<TurnInputError> for HarnessError {
+    fn from(error: TurnInputError) -> Self {
+        Self::config(error)
+    }
+}
+
+impl From<RepositoryError> for HarnessError {
+    fn from(error: RepositoryError) -> Self {
+        Self::config(error)
+    }
+}
+
+impl From<ModelRegistryError> for HarnessError {
+    fn from(error: ModelRegistryError) -> Self {
+        Self::config(error)
+    }
+}
+
+/// Classification stored with the converted error it was derived from.
+#[derive(Debug)]
+struct Classified {
+    kind: ErrorKind,
+    retry_after: Option<Duration>,
+    source: Box<dyn Error + Send + Sync>,
+}
+
+impl Classified {
+    fn new(classification: Classification, source: Box<dyn Error + Send + Sync>) -> Self {
+        let kind = classification.kind;
+
+        Self {
+            kind,
+            retry_after: classification.retry_after.filter(|_| kind.is_retryable()),
+            source,
         }
     }
 }
@@ -232,14 +312,14 @@ impl Classification {
         let kind = match error {
             TurnError::Model(error) => return Self::model(error),
             TurnError::Cancelled => ErrorKind::Cancelled,
+            TurnError::Bash(BashError::InvalidPolicy | BashError::Unavailable)
+            | TurnError::RepositoryRequired
+            | TurnError::ComparisonRepositoryMismatch => ErrorKind::Config,
             TurnError::CommandFailed { .. }
             | TurnError::Bash(_)
             | TurnError::Read(_)
             | TurnError::Write(_) => ErrorKind::ToolFailed,
             TurnError::CommandJournal { .. } | TurnError::MessageJournal { .. } => ErrorKind::Store,
-            TurnError::RepositoryRequired | TurnError::ComparisonRepositoryMismatch => {
-                ErrorKind::Config
-            }
             TurnError::ContextBudgetExceeded { .. } => ErrorKind::ContextOverflow,
             TurnError::RepeatedToolCalls { .. } => ErrorKind::Repetition,
         };
@@ -249,8 +329,9 @@ impl Classification {
 
     fn session(error: &SessionError) -> Self {
         let kind = match error {
-            SessionError::Turn(turn) | SessionError::TurnPersistence { turn, .. } => {
-                return Self::turn(turn);
+            SessionError::Turn(turn) => return Self::turn(turn),
+            SessionError::QueryContext { source, .. } if is_store_contention(source) => {
+                ErrorKind::Busy
             }
             SessionError::Busy { .. } | SessionError::HostTurnInProgress(_) => ErrorKind::Busy,
             SessionError::StaleModel { .. }
@@ -261,7 +342,8 @@ impl Classification {
             | SessionError::OwnershipLost { .. } => ErrorKind::Conflict,
             SessionError::NotFound { .. } => ErrorKind::NotFound,
             SessionError::ImageInputExceedsHistory { .. } => ErrorKind::ContextOverflow,
-            SessionError::Checkpoint(_)
+            SessionError::TurnPersistence { .. }
+            | SessionError::Checkpoint(_)
             | SessionError::Store { .. }
             | SessionError::Io(_)
             | SessionError::InvalidData { .. }
@@ -283,17 +365,16 @@ impl Classification {
         let kind = match error.error_type() {
             ModelErrorType::Provider => Self::provider_kind(error),
             ModelErrorType::ContextOverflow => ErrorKind::ContextOverflow,
-            ModelErrorType::Transport | ModelErrorType::InvalidProviderResponse => {
-                ErrorKind::Transport
-            }
-            ModelErrorType::InvalidResponse
+            ModelErrorType::Transport => ErrorKind::Transport,
+            ModelErrorType::InvalidProviderResponse
+            | ModelErrorType::InvalidResponse
             | ModelErrorType::ResponseTooLarge
             | ModelErrorType::InvalidOutput
             | ModelErrorType::InvalidToolCall => ErrorKind::InvalidOutput,
             ModelErrorType::UnsupportedOutput | ModelErrorType::UnsupportedInput => {
                 ErrorKind::Config
             }
-            ModelErrorType::Request => ErrorKind::Model,
+            ModelErrorType::Request => ErrorKind::Other,
         };
 
         Self {
@@ -313,8 +394,8 @@ impl Classification {
             Some(401 | 403) => ErrorKind::Auth,
             Some(408) => ErrorKind::Transport,
             Some(429) => ErrorKind::RateLimited,
-            Some(500..=599) => ErrorKind::Overloaded,
-            _ => ErrorKind::Model,
+            Some(500 | 502 | 503 | 504 | 529) => ErrorKind::Overloaded,
+            _ => ErrorKind::Other,
         }
     }
 
@@ -323,6 +404,23 @@ impl Classification {
             kind,
             retry_after: None,
         }
+    }
+}
+
+/// Returns whether a store query failed only because the database was
+/// temporarily saturated or locked: a pool timeout, or `SQLite`'s
+/// `SQLITE_BUSY` or `SQLITE_LOCKED` primary result code.
+fn is_store_contention(error: &sqlx::Error) -> bool {
+    const SQLITE_BUSY: i32 = 5;
+    const SQLITE_LOCKED: i32 = 6;
+
+    match error {
+        sqlx::Error::PoolTimedOut => true,
+        sqlx::Error::Database(error) => error
+            .code()
+            .and_then(|code| code.parse::<i32>().ok())
+            .is_some_and(|code| matches!(code & 0xff, SQLITE_BUSY | SQLITE_LOCKED)),
+        _ => false,
     }
 }
 

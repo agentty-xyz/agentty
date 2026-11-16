@@ -316,6 +316,11 @@ impl fmt::Display for ModelResponseType {
 }
 
 /// Stable, low-cardinality reason that a harness turn failed.
+///
+/// This is the telemetry label of a failed turn. Embedder retry and recovery
+/// policy should use [`crate::ErrorKind`] through [`crate::RunError`], its
+/// intended successor, which also separates provider, store, and
+/// configuration failures.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 #[non_exhaustive]
 pub enum TurnErrorType {

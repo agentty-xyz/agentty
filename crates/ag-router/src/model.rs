@@ -426,7 +426,8 @@ impl ModelError {
     }
 
     /// Returns the provider-declared `Retry-After` delay of an unsuccessful
-    /// HTTP response, read as whole seconds, when one was sent.
+    /// HTTP response, when one was sent as whole delta-seconds. The delay is
+    /// capped at sixty seconds; an HTTP-date value reads as absent.
     pub fn retry_after(&self) -> Option<Duration> {
         self.provider_rejection()
             .and_then(|rejection| rejection.retry_after)

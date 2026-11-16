@@ -12,6 +12,7 @@ use super::{
     ERROR_BODY_LIMIT_BYTES, HttpTransport, MAX_PROVIDER_RETRY_DELAY, MAX_RATE_LIMIT_RETRIES,
     MAX_RETRY_DELAY, ProviderRequest, RETRY_DELAY, SUCCESS_BODY_LIMIT_BYTES, TransportError,
     append_success_chunk, has_context_overflow_marker, is_quota_exceeded, rate_limit_retry_delay,
+    retry_after,
 };
 use crate::model;
 
@@ -118,6 +119,11 @@ fn recognizes_a_spent_quota_by_status_and_rate_limit_body() {
             "You Exceeded Your Current Quota, please check your plan",
             true,
         ),
+        (
+            reqwest::StatusCode::TOO_MANY_REQUESTS,
+            r#"{"error":{"type":"exceeded_current_quota_error"}}"#,
+            true,
+        ),
         (reqwest::StatusCode::TOO_MANY_REQUESTS, "slow down", false),
         (
             reqwest::StatusCode::FORBIDDEN,
@@ -168,13 +174,15 @@ async fn keeps_the_retry_after_of_an_unsuccessful_response() {
 }
 
 #[tokio::test]
-async fn classifies_a_payment_required_response_as_a_spent_quota() {
+async fn reports_a_spent_quota_rate_limit_without_retrying() {
     // Arrange
-    let response = b"HTTP/1.1 402 Payment Required\r\n\
-                     Content-Length: 7\r\n\
-                     Connection: close\r\n\r\n\
-                     no fund"
-        .to_vec();
+    let body = r#"{"error":{"code":"insufficient_quota"}}"#;
+    let response = format!(
+        "HTTP/1.1 429 Too Many Requests\r\nContent-Length: {}\r\nRetry-After: 0\r\nConnection: \
+         close\r\n\r\n{body}",
+        body.len()
+    )
+    .into_bytes();
     let (address, server) = serve_once(response);
     let client = transport(REQUEST_TIMEOUT);
 
@@ -186,9 +194,8 @@ async fn classifies_a_payment_required_response_as_a_spent_quota() {
         .into_model_error("Provider", &[]);
 
     // Assert
-    assert_eq!(error.error_class(), model::ErrorClass::Provider);
+    assert_eq!(error.http_status(), Some(429));
     assert!(error.is_quota_exceeded());
-    assert_eq!(error.retry_after(), None);
 }
 
 /// Serves one raw HTTP response to the first request on a local listener.
@@ -287,56 +294,51 @@ fn streaming_transport_keeps_the_whole_request_bound() {
 }
 
 #[test]
-fn rate_limit_retry_delay_uses_bounded_headers_and_backoff() {
+fn retry_after_reads_bounded_delta_seconds() {
     // Arrange
-    let mut headers = reqwest::header::HeaderMap::new();
+    let cases: [(&[u8], Option<Duration>); 6] = [
+        (b"7", Some(Duration::from_secs(7))),
+        (b"0", Some(Duration::ZERO)),
+        (b"18446744073709551615", Some(MAX_PROVIDER_RETRY_DELAY)),
+        (b"Wed, 21 Oct 2015 07:28:00 GMT", None),
+        (b"soon", None),
+        (b"\xff", None),
+    ];
 
-    // Act and Assert
-    assert_eq!(
-        rate_limit_retry_delay(&headers, 0, RETRY_DELAY, MAX_RETRY_DELAY),
-        Duration::from_secs(1)
-    );
-    assert_eq!(
-        rate_limit_retry_delay(&headers, 1, RETRY_DELAY, MAX_RETRY_DELAY),
-        Duration::from_secs(2)
-    );
-    headers.insert(
-        reqwest::header::RETRY_AFTER,
-        "1".parse().expect("valid header"),
-    );
-    assert_eq!(
-        rate_limit_retry_delay(&headers, 2, RETRY_DELAY, MAX_RETRY_DELAY),
-        Duration::from_secs(4)
-    );
-    headers.insert(
-        reqwest::header::RETRY_AFTER,
-        "30".parse().expect("valid header"),
-    );
-    assert_eq!(
-        rate_limit_retry_delay(&headers, 0, RETRY_DELAY, MAX_RETRY_DELAY),
-        Duration::from_secs(30)
-    );
-    headers.insert(
-        reqwest::header::RETRY_AFTER,
-        "99".parse().expect("valid header"),
-    );
-    assert_eq!(
-        rate_limit_retry_delay(&headers, 0, RETRY_DELAY, MAX_RETRY_DELAY),
-        MAX_PROVIDER_RETRY_DELAY
-    );
-    headers.remove(reqwest::header::RETRY_AFTER);
-    assert_eq!(
-        rate_limit_retry_delay(&headers, 9, RETRY_DELAY, MAX_RETRY_DELAY),
-        MAX_RETRY_DELAY
-    );
-    headers.insert(
-        reqwest::header::RETRY_AFTER,
-        reqwest::header::HeaderValue::from_bytes(b"invalid").expect("valid header bytes"),
-    );
-    assert_eq!(
-        rate_limit_retry_delay(&headers, 0, RETRY_DELAY, MAX_RETRY_DELAY),
-        RETRY_DELAY
-    );
+    for (value, expected) in cases {
+        let mut headers = reqwest::header::HeaderMap::new();
+        headers.insert(
+            reqwest::header::RETRY_AFTER,
+            reqwest::header::HeaderValue::from_bytes(value).expect("valid header bytes"),
+        );
+
+        // Act
+        let delay = retry_after(&headers);
+
+        // Assert
+        assert_eq!(delay, expected, "{value:?}");
+    }
+    assert_eq!(retry_after(&reqwest::header::HeaderMap::new()), None);
+}
+
+#[test]
+fn rate_limit_retry_delay_uses_provider_delay_and_backoff() {
+    // Arrange
+    let cases = [
+        (None, 0, Duration::from_secs(1)),
+        (None, 1, Duration::from_secs(2)),
+        (Some(Duration::from_secs(1)), 2, Duration::from_secs(4)),
+        (Some(Duration::from_secs(30)), 0, Duration::from_secs(30)),
+        (None, 9, MAX_RETRY_DELAY),
+    ];
+
+    for (provider_delay, retry, expected) in cases {
+        // Act
+        let delay = rate_limit_retry_delay(provider_delay, retry, RETRY_DELAY, MAX_RETRY_DELAY);
+
+        // Assert
+        assert_eq!(delay, expected, "{provider_delay:?} {retry}");
+    }
 }
 
 #[tokio::test]
@@ -507,7 +509,9 @@ async fn retains_http_status_when_error_body_read_fails() {
         .local_addr()
         .expect("truncated-response listener should have an address");
     let server = tokio::task::spawn_blocking(move || {
-        for _ in 0..=MAX_RATE_LIMIT_RETRIES {
+        for attempt in 0..=MAX_RATE_LIMIT_RETRIES {
+            // Only the final response's `Retry-After` should be surfaced.
+            let retry_after = u8::from(attempt == MAX_RATE_LIMIT_RETRIES);
             let (mut stream, _) = listener
                 .accept()
                 .expect("truncated-response listener should accept a request");
@@ -519,14 +523,12 @@ async fn retains_http_status_when_error_body_read_fails() {
                 bytes_read > 0,
                 "truncated-response request should not be empty"
             );
+            let response = format!(
+                "HTTP/1.1 429 Too Many Requests\r\nContent-Length: 64\r\nRetry-After: \
+                 {retry_after}\r\nConnection: close\r\n\r\npartial error body"
+            );
             stream
-                .write_all(
-                    b"HTTP/1.1 429 Too Many Requests\r\n\
-                      Content-Length: 64\r\n\
-                      Retry-After: 0\r\n\
-                      Connection: close\r\n\r\n\
-                      partial error body",
-                )
+                .write_all(response.as_bytes())
                 .expect("truncated-response server should write the response");
         }
     });
@@ -553,6 +555,9 @@ async fn retains_http_status_when_error_body_read_fails() {
         source.status(),
         Some(reqwest::StatusCode::TOO_MANY_REQUESTS)
     );
+    let error = error.into_model_error("Provider", &[]);
+    assert_eq!(error.retry_after(), Some(Duration::from_secs(1)));
+    assert!(!error.is_quota_exceeded());
 }
 
 #[tokio::test]

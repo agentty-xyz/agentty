@@ -1130,6 +1130,40 @@ impl ModelError {
         )
     }
 
+    /// Wraps an unsuccessful provider HTTP response, so custom [`Model`]s
+    /// report the same status and `Retry-After` classification as built-in
+    /// providers.
+    pub fn provider(
+        http_status: u16,
+        retry_after: Option<Duration>,
+        error: impl Error + Send + Sync + 'static,
+    ) -> Self {
+        Self::classified_request(
+            ModelErrorType::Provider,
+            ProviderStatus {
+                http_status: Some(http_status),
+                quota_exceeded: false,
+                retry_after,
+            },
+            Box::new(error),
+        )
+    }
+
+    /// Wraps a provider failure reporting a spent quota or credit balance,
+    /// so custom [`Model`]s report the same non-retryable failure as
+    /// built-in providers.
+    pub fn quota_exceeded(error: impl Error + Send + Sync + 'static) -> Self {
+        Self::classified_request(
+            ModelErrorType::Provider,
+            ProviderStatus {
+                http_status: None,
+                quota_exceeded: true,
+                retry_after: None,
+            },
+            Box::new(error),
+        )
+    }
+
     /// Returns whether the provider rejected the request because its input
     /// exceeds the model's context window.
     pub fn is_context_overflow(&self) -> bool {
@@ -1171,12 +1205,13 @@ impl ModelError {
     }
 
     /// Returns the provider-declared `Retry-After` delay of an unsuccessful
-    /// HTTP response, when a built-in provider received one.
+    /// HTTP response, when one was received. Built-in providers honor only
+    /// delta-seconds values, capped at sixty seconds.
     pub fn retry_after(&self) -> Option<Duration> {
         self.provider_status().and_then(|status| status.retry_after)
     }
 
-    /// Returns whether a built-in provider reported a spent quota or credit
+    /// Returns whether the provider reported a spent quota or credit
     /// balance, which waiting does not fix.
     pub fn is_quota_exceeded(&self) -> bool {
         self.provider_status()

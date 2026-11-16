@@ -1,6 +1,7 @@
-//! Failure classification unit tests proving every turn, session, and model
-//! failure maps to one kind with the right retry signal.
+//! Failure classification unit tests proving every turn, session, model, and
+//! build failure maps to one kind with the right retry signal.
 
+use std::borrow::Cow;
 use std::error::Error;
 use std::io;
 use std::time::Duration;
@@ -13,7 +14,40 @@ use crate::model::{ModelError, ModelErrorType, ModelRegistryError, ProviderStatu
 use crate::recovery::{HostRequest, HostTurnRecord, HostTurnStatus};
 use crate::store::CheckpointError;
 use crate::tool::{ReadError, WriteError};
-use crate::{OutputSchemaError, SessionError, TurnError};
+use crate::{OutputSchemaError, RepositoryError, SessionError, TurnError, TurnInputError};
+
+/// Database failure carrying a fixed backend result code.
+#[derive(Debug, thiserror::Error)]
+#[error("database failure {code:?}")]
+struct CodedDatabaseError {
+    code: Option<&'static str>,
+}
+
+impl sqlx::error::DatabaseError for CodedDatabaseError {
+    fn message(&self) -> &'static str {
+        "database failure"
+    }
+
+    fn code(&self) -> Option<Cow<'_, str>> {
+        self.code.map(Cow::Borrowed)
+    }
+
+    fn as_error(&self) -> &(dyn Error + Send + Sync + 'static) {
+        self
+    }
+
+    fn as_error_mut(&mut self) -> &mut (dyn Error + Send + Sync + 'static) {
+        self
+    }
+
+    fn into_error(self: Box<Self>) -> Box<dyn Error + Send + Sync + 'static> {
+        self
+    }
+
+    fn kind(&self) -> sqlx::error::ErrorKind {
+        sqlx::error::ErrorKind::Other
+    }
+}
 
 fn command_outcome() -> Box<CommandOutcome> {
     Box::new(CommandOutcome {
@@ -45,13 +79,17 @@ fn host_turn_record() -> Box<HostTurnRecord> {
     })
 }
 
-fn provider_error(http_status: Option<u16>, quota_exceeded: bool) -> ModelError {
+fn provider_error(
+    http_status: Option<u16>,
+    quota_exceeded: bool,
+    retry_after: Option<Duration>,
+) -> ModelError {
     ModelError::classified_request(
         ModelErrorType::Provider,
         ProviderStatus {
             http_status,
             quota_exceeded,
-            retry_after: Some(Duration::from_secs(3)),
+            retry_after,
         },
         io::Error::other("provider rejected the request").into(),
     )
@@ -72,6 +110,13 @@ fn store_failure() -> SessionError {
     }
 }
 
+fn database_failure(code: Option<&'static str>) -> SessionError {
+    SessionError::QueryContext {
+        operation: "fixture",
+        source: sqlx::Error::Database(Box::new(CodedDatabaseError { code })),
+    }
+}
+
 #[test]
 fn classifies_every_turn_failure() {
     // Arrange
@@ -89,10 +134,14 @@ fn classifies_every_turn_failure() {
             },
             ErrorKind::Store,
         ),
+        (TurnError::Bash(BashError::InvalidPolicy), ErrorKind::Config),
+        (TurnError::Bash(BashError::Unavailable), ErrorKind::Config),
         (
-            TurnError::Bash(BashError::InvalidPolicy),
+            TurnError::Bash(BashError::InvalidArguments),
             ErrorKind::ToolFailed,
         ),
+        (TurnError::Bash(BashError::Execution), ErrorKind::ToolFailed),
+        (TurnError::Bash(BashError::Cleanup), ErrorKind::ToolFailed),
         (
             TurnError::MessageJournal {
                 source: Box::new(store_failure()),
@@ -161,6 +210,7 @@ fn assert_session_classifications(cases: Vec<(SessionError, ErrorKind)>) {
         // Assert
         assert_eq!(run_error.kind(), expected, "{message}");
         assert_eq!(run_error.is_retryable(), retryable, "{message}");
+        assert_eq!(run_error.retry_after(), None, "{message}");
         assert_eq!(run_error.to_string(), message);
     }
 }
@@ -277,14 +327,38 @@ fn classifies_session_store_and_turn_failures() {
         ),
         (
             SessionError::TurnPersistence {
-                turn: TurnError::RepeatedToolCalls {
-                    repeats: 3,
-                    tool: "read".into(),
-                },
+                turn: TurnError::Model(provider_error(
+                    Some(429),
+                    false,
+                    Some(Duration::from_secs(3)),
+                )),
                 persistence: Box::new(store_failure()),
             },
-            ErrorKind::Repetition,
+            ErrorKind::Store,
         ),
+    ];
+
+    // Act and Assert
+    assert_session_classifications(cases);
+}
+
+#[test]
+fn classifies_store_contention_as_busy() {
+    // Arrange
+    let cases = vec![
+        (
+            SessionError::QueryContext {
+                operation: "fixture",
+                source: sqlx::Error::PoolTimedOut,
+            },
+            ErrorKind::Busy,
+        ),
+        (database_failure(Some("5")), ErrorKind::Busy),
+        (database_failure(Some("517")), ErrorKind::Busy),
+        (database_failure(Some("6")), ErrorKind::Busy),
+        (database_failure(Some("19")), ErrorKind::Store),
+        (database_failure(Some("busy")), ErrorKind::Store),
+        (database_failure(None), ErrorKind::Store),
     ];
 
     // Act and Assert
@@ -296,10 +370,16 @@ fn harness_error_classifies_session_failures_like_runs() {
     // Arrange
     let busy = SessionError::Busy { id: "s".into() };
     let missing = SessionError::NotFound { id: "s".into() };
+    let rate_limited = SessionError::Turn(TurnError::Model(provider_error(
+        Some(429),
+        false,
+        Some(Duration::from_secs(3)),
+    )));
 
     // Act
     let busy = HarnessError::from(busy);
     let missing = HarnessError::from(missing);
+    let rate_limited = HarnessError::from(rate_limited);
 
     // Assert
     assert_eq!((busy.kind(), busy.is_retryable()), (ErrorKind::Busy, true));
@@ -309,6 +389,29 @@ fn harness_error_classifies_session_failures_like_runs() {
     );
     assert_eq!(missing.to_string(), "persistent session `s` does not exist");
     assert!(missing.source().is_none());
+    assert_eq!(rate_limited.kind(), ErrorKind::RateLimited);
+    assert_eq!(rate_limited.retry_after(), Some(Duration::from_secs(3)));
+}
+
+#[test]
+fn harness_error_classifies_build_failures_as_configuration() {
+    // Arrange
+    let cases = [
+        HarnessError::from(OutputSchemaError::TooLarge),
+        HarnessError::from(TurnInputError::EmptyImage),
+        HarnessError::from(RepositoryError::RootIsGitAdministrative {
+            path: "/repo/.git".into(),
+        }),
+        HarnessError::from(ModelRegistryError::UnknownKey { key: "k".into() }),
+    ];
+
+    for error in cases {
+        // Act
+        let classification = (error.kind(), error.is_retryable(), error.retry_after());
+
+        // Assert
+        assert_eq!(classification, (ErrorKind::Config, false, None), "{error}");
+    }
 }
 
 #[test]
@@ -328,65 +431,85 @@ fn harness_error_chains_the_backend_source() {
 }
 
 #[test]
+fn converted_errors_stay_reachable() {
+    // Arrange
+    let stopped = HarnessError::from(SessionError::HostTurnStopped(host_turn_record()));
+    let budget = RunError::from(TurnError::ContextBudgetExceeded {
+        budget: 10,
+        required: 20,
+    });
+
+    // Act
+    let stopped_ref = matches!(
+        stopped.get_ref().downcast_ref::<SessionError>(),
+        Some(SessionError::HostTurnStopped(record)) if record.turn_position == 0
+    );
+    let budget_ref = budget.get_ref().downcast_ref::<TurnError>().is_some();
+    let stopped = stopped.into_inner().downcast::<SessionError>();
+    let budget = budget.into_inner().downcast::<TurnError>();
+
+    // Assert
+    assert!(stopped_ref);
+    assert!(budget_ref);
+    assert!(matches!(
+        stopped.as_deref(),
+        Ok(SessionError::HostTurnStopped(_))
+    ));
+    assert!(matches!(
+        budget.as_deref(),
+        Ok(TurnError::ContextBudgetExceeded {
+            budget: 10,
+            required: 20
+        })
+    ));
+}
+
+#[test]
 fn classifies_provider_rejections_by_quota_and_status() {
     // Arrange
     let three_seconds = Some(Duration::from_secs(3));
     let cases = [
         (
-            provider_error(Some(429), true),
-            ErrorKind::QuotaExceeded,
-            None,
-        ),
-        (
-            provider_error(Some(402), true),
-            ErrorKind::QuotaExceeded,
-            None,
-        ),
-        (provider_error(Some(401), false), ErrorKind::Auth, None),
-        (provider_error(Some(403), false), ErrorKind::Auth, None),
-        (
-            provider_error(Some(408), false),
-            ErrorKind::Transport,
+            Some(429),
+            true,
             three_seconds,
+            ErrorKind::QuotaExceeded,
+            false,
         ),
+        (Some(402), true, None, ErrorKind::QuotaExceeded, false),
+        (Some(401), false, None, ErrorKind::Auth, false),
+        (Some(403), false, None, ErrorKind::Auth, false),
+        (Some(408), false, three_seconds, ErrorKind::Transport, true),
         (
-            provider_error(Some(429), false),
+            Some(429),
+            false,
+            three_seconds,
             ErrorKind::RateLimited,
-            three_seconds,
+            true,
         ),
-        (
-            provider_error(Some(500), false),
-            ErrorKind::Overloaded,
-            three_seconds,
-        ),
-        (
-            provider_error(Some(503), false),
-            ErrorKind::Overloaded,
-            three_seconds,
-        ),
-        (
-            provider_error(Some(529), false),
-            ErrorKind::Overloaded,
-            three_seconds,
-        ),
-        (provider_error(Some(400), false), ErrorKind::Model, None),
-        (provider_error(Some(404), false), ErrorKind::Model, None),
-        (provider_error(None, false), ErrorKind::Model, None),
+        (Some(429), false, None, ErrorKind::RateLimited, true),
+        (Some(500), false, three_seconds, ErrorKind::Overloaded, true),
+        (Some(502), false, None, ErrorKind::Overloaded, true),
+        (Some(503), false, None, ErrorKind::Overloaded, true),
+        (Some(504), false, None, ErrorKind::Overloaded, true),
+        (Some(529), false, three_seconds, ErrorKind::Overloaded, true),
+        (Some(501), false, three_seconds, ErrorKind::Other, false),
+        (Some(505), false, None, ErrorKind::Other, false),
+        (Some(400), false, None, ErrorKind::Other, false),
+        (Some(404), false, None, ErrorKind::Other, false),
+        (None, false, None, ErrorKind::Other, false),
     ];
 
-    for (error, expected_kind, expected_retry_after) in cases {
-        let status = error.http_status();
+    for (status, quota_exceeded, retry_after, expected_kind, expected_retryable) in cases {
+        let error = provider_error(status, quota_exceeded, retry_after);
+        let expected_retry_after = retry_after.filter(|_| expected_retryable);
 
         // Act
         let run_error = RunError::from(error);
 
         // Assert
         assert_eq!(run_error.kind(), expected_kind, "{status:?}");
-        assert_eq!(
-            run_error.is_retryable(),
-            expected_retry_after.is_some(),
-            "{status:?}"
-        );
+        assert_eq!(run_error.is_retryable(), expected_retryable, "{status:?}");
         assert_eq!(run_error.retry_after(), expected_retry_after, "{status:?}");
     }
 }
@@ -407,8 +530,8 @@ fn classifies_every_model_failure_type() {
         ),
         (
             classified(ModelErrorType::InvalidProviderResponse),
-            ErrorKind::Transport,
-            true,
+            ErrorKind::InvalidOutput,
+            false,
         ),
         (ModelError::InvalidResponse, ErrorKind::InvalidOutput, false),
         (
@@ -440,7 +563,12 @@ fn classifies_every_model_failure_type() {
         ),
         (
             ModelError::request(io::Error::other("custom model failed")),
-            ErrorKind::Model,
+            ErrorKind::Other,
+            false,
+        ),
+        (
+            ModelError::quota_exceeded(io::Error::other("no credit")),
+            ErrorKind::QuotaExceeded,
             false,
         ),
     ];
@@ -461,7 +589,11 @@ fn classifies_every_model_failure_type() {
 #[test]
 fn turn_model_failure_keeps_the_provider_retry_delay() {
     // Arrange
-    let error = TurnError::Model(provider_error(Some(429), false));
+    let error = TurnError::Model(provider_error(
+        Some(429),
+        false,
+        Some(Duration::from_secs(3)),
+    ));
 
     // Act
     let run_error = RunError::from(error);
@@ -488,7 +620,7 @@ fn kinds_have_stable_names() {
         (ErrorKind::ContextOverflow, "context_overflow"),
         (ErrorKind::InvalidOutput, "invalid_output"),
         (ErrorKind::Transport, "transport"),
-        (ErrorKind::Model, "model"),
+        (ErrorKind::Other, "other"),
         (ErrorKind::ToolFailed, "tool_failed"),
         (ErrorKind::Repetition, "repetition"),
         (ErrorKind::Busy, "busy"),

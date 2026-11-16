@@ -353,17 +353,25 @@ async fn client_classifies_provider_context_overflow() {
 }
 
 #[test]
-fn custom_models_report_context_overflow() {
+fn custom_models_report_classified_failures() {
     // Arrange
     let overflow = ModelError::context_overflow(io::Error::other("input exceeds the window"));
+    let rate_limited = ModelError::provider(
+        429,
+        Some(Duration::from_secs(2)),
+        io::Error::other("slow down"),
+    );
+    let quota = ModelError::quota_exceeded(io::Error::other("no credit"));
     let other = ModelError::request(io::Error::other("offline"));
 
     // Act
-    let classifications = [&overflow, &other].map(|error| {
+    let classifications = [&overflow, &rate_limited, &quota, &other].map(|error| {
         (
             error.error_type(),
             error.is_context_overflow(),
             error.http_status(),
+            error.retry_after(),
+            error.is_quota_exceeded(),
         )
     });
 
@@ -371,8 +379,16 @@ fn custom_models_report_context_overflow() {
     assert_eq!(
         classifications,
         [
-            (ModelErrorType::ContextOverflow, true, None),
-            (ModelErrorType::Request, false, None),
+            (ModelErrorType::ContextOverflow, true, None, None, false),
+            (
+                ModelErrorType::Provider,
+                false,
+                Some(429),
+                Some(Duration::from_secs(2)),
+                false
+            ),
+            (ModelErrorType::Provider, false, None, None, true),
+            (ModelErrorType::Request, false, None, None, false),
         ]
     );
     assert_eq!(
@@ -462,6 +478,7 @@ async fn client_reports_a_spent_quota() {
         .expect_err("provider failure should be returned");
 
     // Assert
+    assert_eq!(error.error_type(), ModelErrorType::Provider);
     assert!(error.is_quota_exceeded());
     assert_eq!(error.retry_after(), None);
     assert_eq!(error.http_status(), Some(402));
