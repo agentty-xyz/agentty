@@ -138,7 +138,9 @@ async fn orchestrator_runner_forwards_manual_sync_request() {
     let mut sync_context = sync_context_fixture(0, Vec::new());
     sync_context.project_branch_name = None;
     let (app_event_tx, mut app_event_rx) = mpsc::unbounded_channel();
-    let sync_handle = SyncHandle::spawn(app_event_tx.clone(), sync_context.clone());
+    let (sync_handle, orchestrator) =
+        SyncHandle::unstarted(app_event_tx.clone(), sync_context.clone());
+    orchestrator.spawn();
     let runner = sync_handle.sync_main_runner();
     let operation = project_sync_context();
 
@@ -164,6 +166,47 @@ async fn orchestrator_runner_forwards_manual_sync_request() {
                 ..
             }
         } if completed_operation == operation
+    ));
+}
+
+#[tokio::test]
+/// A context published before the orchestrator spawns waits for it, so the
+/// immediate first pass reads that context instead of the initial one.
+async fn unstarted_orchestrator_first_pass_reads_context_published_before_spawn() {
+    // Arrange
+    let mut mock_git_client = MockGitClient::new();
+    mock_git_client
+        .expect_find_git_repo_root()
+        .once()
+        .returning(|_| Box::pin(async { None }));
+    mock_git_client
+        .expect_fetch_remote()
+        .once()
+        .returning(|_| Box::pin(async { Ok(()) }));
+    mock_git_client
+        .expect_branch_tracking_statuses()
+        .once()
+        .returning(|_| Box::pin(async { Ok(HashMap::new()) }));
+    let initial_context = SyncContext {
+        git_client: Arc::new(mock_git_client),
+        ..sync_context_fixture(0, Vec::new())
+    };
+    let reconciled_context = initial_context.clone();
+    let (app_event_tx, mut app_event_rx) = mpsc::unbounded_channel();
+    let (sync_handle, orchestrator) = SyncHandle::unstarted(app_event_tx, initial_context);
+    sync_handle.publish_refresh_context(reconciled_context);
+
+    // Act
+    orchestrator.spawn();
+    let event = tokio::time::timeout(Duration::from_secs(1), app_event_rx.recv())
+        .await
+        .expect("the first pass should run at once")
+        .expect("the orchestrator should emit a git status");
+
+    // Assert
+    assert!(matches!(
+        event,
+        AppEvent::GitStatusUpdated { generation: 1, .. }
     ));
 }
 

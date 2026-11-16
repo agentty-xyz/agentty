@@ -140,7 +140,7 @@ impl App {
         );
         let settings =
             Self::load_settings(&repositories, &services, startup.active_project_id).await;
-        let (sessions, review_cache, recoverable_review_sessions, review_watch) =
+        let (sessions, review_cache, recoverable_reviews, review_watch) =
             Self::load_startup_sessions_and_reviews(
                 &services,
                 Arc::clone(&clients.resource_client),
@@ -150,7 +150,7 @@ impl App {
             .await?;
 
         let sync_context = Self::sync_context_for(&projects, &services, &sessions);
-        let sync_handle = sync::SyncHandle::spawn(event_tx.clone(), sync_context);
+        let (sync_handle, sync_task) = sync::SyncHandle::unstarted(event_tx.clone(), sync_context);
         Self::spawn_startup_background_tasks(auto_update, &event_tx, &services, &clients);
         let app = Self {
             mode: crate::presentation::app_mode::AppMode::List,
@@ -204,14 +204,22 @@ impl App {
             graph_questions: GraphQuestionState::default(),
             tmux_client: clients.tmux_client,
         };
-        Ok(app.complete_startup(recoverable_review_sessions).await)
+        Ok(app.complete_startup(recoverable_reviews, sync_task).await)
     }
 
-    /// Starts recovered reviews, resumes review-request watches, and suggests
-    /// project discovery once all state exists.
-    async fn complete_startup(mut self, recoverable_review_sessions: Vec<String>) -> Self {
+    /// Starts recovered reviews, resumes review-request watches, spawns
+    /// `sync_task`, and suggests project discovery once all state exists.
+    async fn complete_startup(
+        mut self,
+        recoverable_review_sessions: Vec<String>,
+        sync_task: sync::SyncOrchestrator,
+    ) -> Self {
         self.recover_startup_focused_reviews(recoverable_review_sessions);
         self.reconcile_review_watch_statuses().await;
+        // Resuming watches changes polling targets. The orchestrator's first
+        // pass runs at once and its next forge refresh only a minute later,
+        // so it starts after them to report the resumed watches right away.
+        sync_task.spawn();
         self.suggest_project_discovery().await;
 
         self
