@@ -30,7 +30,7 @@ use crate::store::{SessionStore, StoredTurn};
 use crate::tool::{MalformedArguments, ReadArguments, ToolCall, UnknownToolCall, WriteArguments};
 use crate::transcript::{TurnRange, TurnStatus};
 use crate::turn_options_snapshot::{StoredTurnOptions, StoredTurnOptionsError};
-use crate::usage::TurnUsage;
+use crate::usage::{StoredTurnUsage, TurnUsage};
 use crate::write_journal::{WriteRecord, WriteStatus, content_hash};
 use crate::{OutputSchema, OutputSchemaError, TurnError, TurnOutcome};
 
@@ -194,7 +194,7 @@ impl TranscriptTurnRow {
             .as_deref()
             .map(decode_terminal_outcome)
             .transpose()?;
-        let usage = self.usage.as_deref().map(deserialize_payload).transpose()?;
+        let usage = self.usage.as_deref().map(decode_usage).transpose()?;
 
         Ok(StoredTurn::new(
             self.turn_position,
@@ -940,7 +940,7 @@ impl SessionStore for Database {
 
     async fn record_usage(&self, owner: &TurnOwner, usage: &TurnUsage) -> Result<(), SessionError> {
         self.validate_owner(owner)?;
-        let usage = serialize_payload(usage)?;
+        let usage = serialize_payload(&StoredTurnUsage::from(usage))?;
         let now = self.timestamp_source.now_timestamp_seconds();
         let result = sqlx::query!(
             r"
@@ -972,9 +972,12 @@ WHERE session_id = ? AND turn_position = ? AND owner_token = ? AND status = 'run
             .await
             .session_context("load session usage")?;
         require_session(&mut connection, session_id).await?;
-        let rows = sqlx::query_scalar!(
+        // Only a turn without recorded usage reads its outcome, which turns
+        // stored before migration 015 with a host request ID still carry.
+        let rows = sqlx::query!(
             r"
-SELECT usage FROM session_turn
+SELECT usage, CASE WHEN usage IS NULL THEN terminal_outcome END AS terminal_outcome
+FROM session_turn
 WHERE session_id = ? AND status IN ('completed', 'failed', 'interrupted')
 ORDER BY turn_position
 ",
@@ -985,7 +988,16 @@ ORDER BY turn_position
         .session_context("load session usage")?;
 
         rows.iter()
-            .map(|usage| usage.as_deref().map(deserialize_payload).transpose())
+            .map(|row| {
+                let usage = row.usage.as_deref().map(decode_usage).transpose()?;
+                let outcome = row
+                    .terminal_outcome
+                    .as_deref()
+                    .map(decode_terminal_outcome)
+                    .transpose()?;
+
+                Ok(TurnUsage::settled(usage, outcome.as_ref()))
+            })
             .collect()
     }
 
@@ -2234,6 +2246,11 @@ fn decode_terminal_outcome(stored: &str) -> Result<TurnOutcome, SessionError> {
     }
 
     serde_json::from_value(stored["outcome"].clone()).map_err(invalid_json)
+}
+
+/// Decodes a turn's stored usage record.
+fn decode_usage(stored: &str) -> Result<TurnUsage, SessionError> {
+    deserialize_payload::<StoredTurnUsage>(stored).map(TurnUsage::from)
 }
 
 /// Loads the settled turns `range` selects, oldest first, with every

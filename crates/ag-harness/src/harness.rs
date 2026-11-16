@@ -46,7 +46,7 @@ use crate::store::{AcquiredTurn, SessionStore};
 use crate::tool::Tool;
 use crate::transcript::{TurnRange, TurnRecord};
 use crate::turn::{HistoryActivity, TurnError, TurnOptions, TurnOutcome};
-use crate::usage::UsageTotals;
+use crate::usage::{TurnUsage, UsageTotals};
 use crate::write_journal::WriteRecord;
 
 const DEFAULT_MAX_HISTORY_BYTES: usize = 256 * 1024;
@@ -78,6 +78,8 @@ impl Session {
     /// older handles, including when switching back to a previous
     /// registration. Historical
     /// provider reasoning is not portable and causes an explicit rejection.
+    /// A registered model has no prices, so later runs report no
+    /// [`crate::Cost`] and their turns count as unpriced.
     /// Ordinary completed messages and tool groups remain intact. Recovery
     /// lookup remains usable on stale handles; new execution requires a fresh
     /// handle.
@@ -304,9 +306,13 @@ impl Session {
     /// failed, including turns stopped by a run limit, and interrupted ones,
     /// never a turn still running.
     ///
-    /// Each turn's usage is recorded as its model requests complete, so a
-    /// stopped turn keeps the usage of its completed requests. Turns recorded
-    /// before usage was stored count as [`UsageTotals::unknown_turns`].
+    /// Each turn's usage is recorded when the session admits it and as its
+    /// model requests complete, so a stopped turn keeps the usage of its
+    /// completed requests; a failed usage write stops the turn with
+    /// [`TurnError::UsageJournal`]. Turns recorded before usage was stored
+    /// take their unpriced usage from a stored outcome, kept for turns run
+    /// with a host request ID, and otherwise count as
+    /// [`UsageTotals::unknown_turns`].
     ///
     /// # Errors
     ///
@@ -583,6 +589,9 @@ impl Session {
         self.history.replace(&turns, projection);
         let (request, retained_messages, history, replayed) =
             self.build_request(input, options, available_history_weight);
+        guard
+            .record_admitted_usage(TurnUsage::new(self.harness.inner.pricing))
+            .await?;
         let journal = guard.write_journal();
         let engine = self.harness.controlled_engine(options, control, effects);
         let started = self.started_event(guard.owner().turn_position);
@@ -1047,7 +1056,6 @@ impl Harness {
             model_reasoning_effort: None,
             model_selector: None,
             policy: ToolPolicy::default(),
-            pricing: None,
             repository: None,
             storage: None,
         }
@@ -1652,7 +1660,6 @@ pub struct HarnessBuilder {
     model_reasoning_effort: Option<ReasoningEffort>,
     model_selector: Option<ModelSelector>,
     policy: ToolPolicy,
-    pricing: Option<Pricing>,
     repository: Option<Repository>,
     storage: Option<StorageSource>,
 }
@@ -1675,6 +1682,12 @@ impl HarnessBuilder {
     ///
     /// Without [`Self::context_budget`], the request budget and estimator
     /// come from the resolved [`crate::catalog::ModelHandle::profile`].
+    ///
+    /// Runs report a [`crate::Cost`] priced with the resolved entry's
+    /// [`crate::catalog::Pricing`], which a host replaces with
+    /// [`crate::catalog::CatalogBuilder::pricing`] or declares for its own
+    /// models with [`crate::catalog::ModelSpec::with_pricing`]. A model set
+    /// with [`Self::model`] has no prices and reports no cost.
     pub fn catalog(mut self, catalog: Arc<ModelCatalog>) -> Self {
         self.catalog = Some(catalog);
 
@@ -1685,21 +1698,6 @@ impl HarnessBuilder {
     /// fails without a catalog or together with an explicit [`Self::model`].
     pub fn model_selector(mut self, selector: impl Into<ModelSelector>) -> Self {
         self.model_selector = Some(selector.into());
-
-        self
-    }
-
-    /// Prices the model's tokens with `pricing`, overriding the prices of
-    /// the model's [`Self::catalog`] entry, and keeping `pricing`'s
-    /// [`crate::catalog::PricingSource`].
-    ///
-    /// Runs report a [`crate::Cost`] only when the model has prices: from
-    /// this setter or from its catalog entry, such as the built-in list
-    /// prices of [`ModelCatalog::from_environment`]. A model supplied with
-    /// [`Self::model`] and no prices, or one switched to later with
-    /// [`Session::switch_model`], reports none.
-    pub fn pricing(mut self, pricing: Pricing) -> Self {
-        self.pricing = Some(pricing);
 
         self
     }
@@ -1867,7 +1865,7 @@ impl HarnessBuilder {
         config.model_id = model_id;
         config.model_reasoning_effort = self.model_reasoning_effort;
         config.policy = self.policy;
-        config.pricing = self.pricing.or(cataloged_pricing);
+        config.pricing = cataloged_pricing;
         config.repository = self.repository;
 
         Ok(Harness::from_config(config))
@@ -1954,8 +1952,8 @@ struct HarnessConfig {
     model_reasoning_effort: Option<ReasoningEffort>,
     model_registration: Option<ModelRegistration>,
     policy: ToolPolicy,
-    /// Prices of [`Self::model`], from [`HarnessBuilder::pricing`] or the
-    /// catalog entry the builder selected.
+    /// Prices of [`Self::model`], from the catalog entry the builder
+    /// selected; `None` for any other model.
     pricing: Option<Pricing>,
     repository: Option<Repository>,
     store: Option<Arc<dyn SessionStore>>,

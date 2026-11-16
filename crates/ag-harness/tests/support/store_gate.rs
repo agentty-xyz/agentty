@@ -2,7 +2,7 @@
 
 use std::path::Path;
 use std::sync::Arc;
-use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 
 use ag_harness::model::{ModelMessage, ModelMetadata};
 use ag_harness::recovery::HostTurnRecord;
@@ -19,7 +19,8 @@ pub(crate) struct Gate {
     pub(crate) after_commit: bool,
     pub(crate) entered: Notify,
     pub(crate) fail_cleanup: AtomicBool,
-    pub(crate) fail_usage: AtomicBool,
+    /// Usage records that succeed before every later one fails.
+    pub(crate) usage_records: AtomicUsize,
     pub(crate) identity: StoreIdentity,
     pub(crate) interrupted: Notify,
     pub(crate) panic_acquire: AtomicBool,
@@ -36,7 +37,7 @@ impl Gate {
             after_commit,
             entered: Notify::new(),
             fail_cleanup: AtomicBool::new(false),
-            fail_usage: AtomicBool::new(false),
+            usage_records: AtomicUsize::new(usize::MAX),
             identity: store.identity().clone(),
             interrupted: Notify::new(),
             panic_acquire: AtomicBool::new(false),
@@ -161,7 +162,12 @@ impl SessionStore for Gate {
     }
 
     async fn record_usage(&self, owner: &TurnOwner, usage: &TurnUsage) -> Result<(), SessionError> {
-        if self.fail_usage.load(Ordering::SeqCst) {
+        let remaining = self
+            .usage_records
+            .try_update(Ordering::SeqCst, Ordering::SeqCst, |left| {
+                left.checked_sub(1)
+            });
+        if remaining.is_err() {
             return Err(SessionError::Store {
                 operation: "record usage",
                 source: Box::new(std::io::Error::other("injected usage failure")),

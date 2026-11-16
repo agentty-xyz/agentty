@@ -29,7 +29,7 @@ use crate::policy::ToolPolicy;
 use crate::request_option::{GenerationParams, OutputMode};
 use crate::session::SessionError;
 use crate::store::SessionStore;
-use crate::turn::{TurnOptions, TurnReport};
+use crate::turn::{ModelRequestActivity, TurnOptions, TurnReport};
 use crate::usage::Cost;
 use crate::write_journal::{WriteRecord, WriteStatus};
 
@@ -517,8 +517,13 @@ pub struct Usage {
 impl Usage {
     /// Sums the usage of every model request in `report`.
     pub(crate) fn from_report(report: &TurnReport) -> Self {
-        report
-            .model_requests()
+        Self::from_requests(report.model_requests())
+    }
+
+    /// Sums the usage of `requests`; `cache_write` is known only when every
+    /// request reported it.
+    pub(crate) fn from_requests(requests: &[ModelRequestActivity]) -> Self {
+        requests
             .iter()
             .map(|request| {
                 Self::from_request(
@@ -527,7 +532,8 @@ impl Usage {
                         .and_then(|completion| completion.usage()),
                 )
             })
-            .fold(Self::default(), Self::saturating_add)
+            .reduce(Self::saturating_add)
+            .unwrap_or_default()
     }
 
     /// Adds `other` to these counts, saturating; `cache_write` stays known

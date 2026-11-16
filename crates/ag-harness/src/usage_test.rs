@@ -5,12 +5,12 @@ use std::time::Duration;
 
 use serde_json::json;
 
-use super::{Cost, TurnUsage, UsageTotals};
+use super::{Cost, StoredTurnUsage, TurnUsage, UsageTotals};
 use crate::catalog::{Pricing, PricingSource};
 use crate::lifecycle::ModelResponseType;
 use crate::model::{CompletionMetadata, CompletionUsage};
 use crate::run::Usage;
-use crate::turn::{ModelRequestActivity, TurnReport};
+use crate::turn::{ModelRequestActivity, TurnOutcome, TurnReport};
 
 /// Returns usage of `input` and `output` tokens, `cache_read` of them read
 /// from the provider's cache.
@@ -159,29 +159,128 @@ fn cost_serializes_as_micro_usd_and_a_snake_case_source() -> Result<(), serde_js
 }
 
 #[test]
-fn turn_usage_accumulates_requests_and_keeps_an_unpriced_turn_unpriced() {
+fn turn_usage_starts_at_zero_and_settles_from_a_stored_outcome() {
     // Arrange
     let pricing = Pricing::new(1_000_000, 2_000_000);
-    let first = usage(100, 0, 10);
-    let second = usage(200, 50, 20);
+    let recorded = TurnUsage {
+        cost: Some(Cost::of(&usage(5, 0, 0), pricing)),
+        usage: usage(5, 0, 0),
+    };
+    let outcome = TurnOutcome::new(
+        json!({}),
+        TurnReport::new(
+            Duration::ZERO,
+            vec![request(100, 10), request(200, 20)],
+            Vec::new(),
+        ),
+    );
 
     // Act
-    let priced = TurnUsage::new(Some(pricing))
-        .add(first, Some(Cost::of(&first, pricing)))
-        .add(second, Some(Cost::of(&second, pricing)));
-    let unpriced = TurnUsage::new(None).add(first, None);
+    let priced = TurnUsage::new(Some(pricing));
+    let unpriced = TurnUsage::new(None);
+    let kept = TurnUsage::settled(Some(recorded), Some(&outcome));
+    let derived = TurnUsage::settled(None, Some(&outcome));
+    let unknown = TurnUsage::settled(None, None);
 
     // Assert
-    assert_eq!(priced.usage, usage(300, 50, 30));
-    assert_eq!(priced.cost.map(|cost| cost.micro_usd), Some(120 + 240));
+    assert_eq!(priced.cost.map(|cost| cost.micro_usd), Some(0));
+    assert_eq!(priced.usage, Usage::default());
+    assert_eq!(unpriced, TurnUsage::default());
+    assert_eq!(kept, Some(recorded));
     assert_eq!(
-        TurnUsage::new(Some(pricing))
-            .cost
-            .map(|cost| cost.micro_usd),
-        Some(0)
+        derived,
+        Some(TurnUsage {
+            cost: None,
+            usage: usage(300, 0, 30),
+        }),
+        "a turn stored before usage was recorded reads its outcome, unpriced"
     );
-    assert_eq!(unpriced.usage, first);
-    assert_eq!(unpriced.cost, None);
+    assert_eq!(unknown, None);
+}
+
+#[test]
+fn request_usage_sums_every_request_and_is_zero_without_one() {
+    // Arrange
+    let requests = [request(1, 2), request(3, 4)];
+
+    // Act
+    let summed = Usage::from_requests(&requests);
+    let none = Usage::from_requests(&[]);
+
+    // Assert
+    assert_eq!(summed, usage(4, 0, 6));
+    assert_eq!(none, Usage::default());
+}
+
+#[test]
+fn cost_sums_keep_a_shared_source_and_mix_different_ones() {
+    // Arrange
+    let host = Cost::of(&usage(1_000, 0, 0), Pricing::new(1_000_000, 0));
+    let built_in = Cost::of(&usage(1_000, 0, 0), Pricing::built_in(1_000_000, 0));
+
+    // Act
+    let same = host.saturating_add(host);
+    let mixed = host.saturating_add(built_in);
+
+    // Assert
+    assert_eq!((same.micro_usd, same.pricing), (2_000, PricingSource::Host));
+    assert_eq!(
+        (mixed.micro_usd, mixed.pricing),
+        (2_000, PricingSource::Mixed)
+    );
+}
+
+#[test]
+fn stored_usage_decodes_its_golden_record_and_round_trips_every_source()
+-> Result<(), serde_json::Error> {
+    // Arrange
+    let golden = r#"{"cache_read":200,"cache_write":null,"cost":{"micro_usd":3960,"pricing":"host"},"input":1000,"output":100,"reasoning":40,"unreported_requests":0}"#;
+    let mut tokens = usage(1_000, 200, 100);
+    tokens.reasoning = 40;
+    let expected = TurnUsage {
+        cost: Some(Cost {
+            micro_usd: 3_960,
+            pricing: PricingSource::Host,
+        }),
+        usage: tokens,
+    };
+    let sources = [
+        PricingSource::BuiltIn,
+        PricingSource::Host,
+        PricingSource::Mixed,
+    ];
+    let mut turns: Vec<TurnUsage> = sources
+        .into_iter()
+        .map(|pricing| TurnUsage {
+            cost: Some(Cost {
+                micro_usd: 1,
+                pricing,
+            }),
+            usage: tokens,
+        })
+        .collect();
+    turns.push(TurnUsage::default());
+
+    // Act
+    let decoded = TurnUsage::from(serde_json::from_str::<StoredTurnUsage>(golden)?);
+    let encoded = serde_json::to_string(&StoredTurnUsage::from(&expected))?;
+    let round_trips = turns
+        .iter()
+        .map(|turn| {
+            let stored = serde_json::to_string(&StoredTurnUsage::from(turn))?;
+
+            Ok(TurnUsage::from(serde_json::from_str::<StoredTurnUsage>(
+                &stored,
+            )?))
+        })
+        .collect::<Result<Vec<_>, serde_json::Error>>()?;
+
+    // Assert
+    assert_eq!(decoded, expected, "records written so far keep decoding");
+    assert_eq!(encoded, golden, "the stored record is unchanged");
+    assert_eq!(round_trips, turns);
+
+    Ok(())
 }
 
 #[test]
@@ -205,23 +304,48 @@ fn totals_count_unknown_and_unpriced_turns_and_sum_the_rest() {
     let pricing = Pricing::new(1_000_000, 0);
     let mut cached = usage(100, 0, 5);
     cached.cache_write = Some(7);
-    let priced = TurnUsage::new(Some(pricing)).add(cached, Some(Cost::of(&cached, pricing)));
-    let unpriced = TurnUsage::new(None).add(usage(20, 0, 1), None);
+    let priced = TurnUsage {
+        cost: Some(Cost::of(&cached, pricing)),
+        usage: cached,
+    };
+    let unpriced = TurnUsage {
+        cost: None,
+        usage: usage(20, 0, 1),
+    };
+    let listed = TurnUsage {
+        cost: Some(Cost::of(&cached, Pricing::built_in(1_000_000, 0))),
+        usage: cached,
+    };
     let turns = [Some(priced), None, Some(unpriced), Some(priced)];
 
     // Act
     let totals = UsageTotals::from_turns(&turns);
-    let only_known = UsageTotals::from_turns(&[Some(TurnUsage {
+    let only_unpriced = UsageTotals::from_turns(&[Some(TurnUsage {
         cost: None,
         usage: cached,
     })]);
+    let mixed = UsageTotals::from_turns(&[Some(priced), Some(listed)]);
 
     // Assert
     assert_eq!(totals.turns, 4);
     assert_eq!(totals.unknown_turns, 1);
     assert_eq!(totals.unpriced_turns, 1);
-    assert_eq!(totals.cost_micro_usd, 200);
+    assert_eq!(
+        totals.cost,
+        Some(Cost {
+            micro_usd: 200,
+            pricing: PricingSource::Host,
+        })
+    );
     assert_eq!(totals.usage, usage(220, 0, 11));
-    assert_eq!(only_known.usage.cache_write, Some(7));
+    assert_eq!(only_unpriced.usage.cache_write, Some(7));
+    assert_eq!(
+        only_unpriced.cost, None,
+        "no priced turn is no cost, not zero"
+    );
+    assert_eq!(
+        mixed.cost.map(|cost| (cost.micro_usd, cost.pricing)),
+        Some((200, PricingSource::Mixed))
+    );
     assert_eq!(UsageTotals::from_turns(&[]), UsageTotals::default());
 }

@@ -154,7 +154,7 @@ async fn external_store_without_command_support_fails_closed() {
         Err(SessionError::InvalidData { .. })
     ));
     store
-        .record_usage(acquired.owner(), &TurnUsage::new(None))
+        .record_usage(acquired.owner(), &TurnUsage::default())
         .await
         .expect("a store without usage storage records nothing");
     assert!(matches!(
@@ -181,7 +181,7 @@ async fn backends_record_usage_only_under_a_live_owner() {
         )
         .await
         .expect("owner");
-        let mut recorded = TurnUsage::new(None);
+        let mut recorded = TurnUsage::default();
         recorded.usage.input = 7;
 
         // Act
@@ -195,7 +195,7 @@ async fn backends_record_usage_only_under_a_live_owner() {
             .await
             .expect("complete");
         let after_completion = store
-            .record_usage(acquired.owner(), &TurnUsage::new(None))
+            .record_usage(acquired.owner(), &TurnUsage::default())
             .await;
 
         // Assert
@@ -217,6 +217,74 @@ async fn backends_record_usage_only_under_a_live_owner() {
             Err(SessionError::NotFound { .. })
         ));
     }
+}
+
+/// Begins a turn of a new session `id` in `store` and records usage of
+/// `input` tokens on it, leaving the turn running.
+async fn running_turn_with_usage(
+    store: &Arc<dyn SessionStore>,
+    id: &str,
+    input: u64,
+) -> (AcquiredTurn, TurnUsage) {
+    store
+        .create_session(&NewSession::new(id, schema()), None, 1024)
+        .await
+        .expect("create");
+    let acquired = AcquiredTurn::begin(
+        Arc::clone(store),
+        id,
+        &TurnInput::from("run"),
+        &options(),
+        0,
+    )
+    .await
+    .expect("owner");
+    let mut recorded = TurnUsage::default();
+    recorded.usage.input = input;
+    store
+        .record_usage(acquired.owner(), &recorded)
+        .await
+        .expect("record usage");
+
+    (acquired, recorded)
+}
+
+#[tokio::test]
+async fn backends_count_a_turn_whose_lease_expired_with_its_recorded_usage() {
+    // Arrange
+    let memory: Arc<dyn SessionStore> = Arc::new(MemoryStore::new());
+    let directory = tempfile::tempdir().expect("directory");
+    let path = directory.path().join("usage.sqlite");
+    let sqlite: Arc<dyn SessionStore> = Arc::new(SqliteStore::open(&path).await.expect("sqlite"));
+    let (memory_turn, memory_usage) = running_turn_with_usage(&memory, "crashed", 3).await;
+    let (sqlite_turn, sqlite_usage) = running_turn_with_usage(&sqlite, "crashed", 5).await;
+    let pool =
+        sqlx::SqlitePool::connect_with(sqlx::sqlite::SqliteConnectOptions::new().filename(&path))
+            .await
+            .expect("expiry connection");
+    sqlx::query("UPDATE session_turn SET lease_expires_at = 0 WHERE session_id = 'crashed'")
+        .execute(&pool)
+        .await
+        .expect("expire the SQLite lease");
+    tokio::time::pause();
+    tokio::time::advance(Duration::from_secs(301)).await;
+    tokio::time::resume();
+
+    // Act
+    let memory_loaded = memory.load_usage("crashed").await.expect("memory usage");
+    let sqlite_loaded = sqlite.load_usage("crashed").await.expect("sqlite usage");
+
+    // Assert
+    assert_eq!(memory_loaded, [Some(memory_usage)]);
+    assert_eq!(sqlite_loaded, [Some(sqlite_usage)]);
+    for store in [&memory, &sqlite] {
+        let transcript = store
+            .load_transcript("crashed", &TurnRange::All)
+            .await
+            .expect("transcript");
+        assert_eq!(transcript[0].status, TurnStatus::Interrupted);
+    }
+    drop((memory_turn, sqlite_turn));
 }
 
 #[tokio::test]

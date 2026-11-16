@@ -491,6 +491,28 @@ impl TurnGuard {
         self.finalize(database.fail_turn(&owner, error)).await
     }
 
+    /// Records `usage`, the admitted turn's zero usage, before anything can
+    /// stop the turn, so only turns stored before usage was recorded read as
+    /// unknown.
+    ///
+    /// # Errors
+    ///
+    /// Settles the turn as failed with [`TurnError::UsageJournal`] when the
+    /// store cannot record it, and returns that failure.
+    pub(crate) async fn record_admitted_usage(
+        &mut self,
+        usage: TurnUsage,
+    ) -> Result<(), SessionError> {
+        let Err(source) = self.write_journal().record_usage(&usage).await else {
+            return Ok(());
+        };
+        let error = TurnError::UsageJournal {
+            source: Box::new(source),
+        };
+
+        Err(self.settle_failure(error, false).await)
+    }
+
     /// Settles a turn that failed with `error` and returns the failure to
     /// report. An `interrupted` turn stopped while a tool call ran, so its
     /// effects are unknown: like a cancelled turn, it is recorded as

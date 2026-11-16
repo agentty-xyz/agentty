@@ -5,7 +5,7 @@
   "type": "object",
   "properties": {
     "cost": {
-      "description": "Price of [`Self::usage`], or `None` when the usage is unknown or the\nturn's model had no [`crate::catalog::Pricing`].",
+      "description": "Price of [`Self::usage`], or `None` when the usage is unknown or\nderived from a stored outcome, or the turn's model had no\n[`crate::catalog::Pricing`].",
       "anyOf": [
         {
           "$ref": "#/$defs/Cost"
@@ -68,7 +68,7 @@
       "$ref": "#/$defs/TurnIndex"
     },
     "usage": {
-      "description": "Tokens of the turn's completed model requests, also for a failed or\ninterrupted turn; `None` for a turn recorded before usage was stored,\nor by a store that does not record it.",
+      "description": "Tokens of the turn's completed model requests, also for a failed or\ninterrupted turn. A turn recorded before usage was stored, or by a\nstore that does not record it, reports the usage of its stored\noutcome, kept only for turns run with a host request ID, and `None`\nwithout one.",
       "anyOf": [
         {
           "$ref": "#/$defs/Usage"
@@ -89,7 +89,7 @@
   ],
   "$defs": {
     "Cost": {
-      "description": "Price of some [`Usage`] in integer micro-USD, one millionth of a US\ndollar, with where its prices came from.\n\n[`Self::of`] prices usage as follows, given that the [`Usage`] counts\noverlap: `cache_read` and a known `cache_write` are part of `input`, and\n`reasoning` is part of `output`.\n\n- Input tokens neither read from nor written to the cache bill at the input\n  price.\n- `cache_read` tokens bill at [`Pricing::cache_read_per_mtok_micro_usd`] and\n  `cache_write` tokens at [`Pricing::cache_write_per_mtok_micro_usd`]; both\n  fall back to the input price when the pricing declares no cache price, as\n  built-in prices do not yet.\n- Output tokens, reasoning included, bill at the output price.\n\nThe exact sum is rounded once to the nearest micro-USD, halves up, so a\nrun's cost, the sum of its requests' costs, can differ from pricing its\nsummed usage by less than one micro-USD per request. Arithmetic never\noverflows: a cost beyond `u64::MAX` micro-USD saturates at it.\n\nA model without [`Pricing`], such as a host model nobody priced, an\nOpenAI-compatible server, or a plan-billed `ChatGPT` model whose marginal\nrequests are not metered, has no cost: `Option<Cost>` is `None` there.\nOn the wire it is `{\"micro_usd\": 1250, \"pricing\": \"built_in\"}`.",
+      "description": "Price of some [`Usage`] in integer micro-USD, one millionth of a US\ndollar, with where its prices came from.\n\n[`Self::of`] prices usage as follows, given that the [`Usage`] counts\noverlap: `cache_read` and a known `cache_write` are part of `input`, and\n`reasoning` is part of `output`.\n\n- Input tokens neither read from nor written to the cache bill at the input\n  price.\n- `cache_read` tokens bill at [`Pricing::cache_read_per_mtok_micro_usd`] and\n  `cache_write` tokens at [`Pricing::cache_write_per_mtok_micro_usd`]; both\n  fall back to the input price when the pricing declares no cache price, as\n  built-in prices do not yet.\n- Output tokens, reasoning included, bill at the output price.\n\nThe exact sum is rounded once to the nearest micro-USD, halves up, so a\nrun's cost, the sum of its requests' costs, can differ from pricing its\nsummed usage by less than one micro-USD per request. Arithmetic never\noverflows: a cost beyond `u64::MAX` micro-USD saturates at it. A sum of\ncosts priced from different sources is [`PricingSource::Mixed`].\n\nA model without [`Pricing`], such as a host model nobody priced, an\nOpenAI-compatible server, or a plan-billed `ChatGPT` model whose marginal\nrequests are not metered, has no cost: `Option<Cost>` is `None` there.\nOn the wire it is `{\"micro_usd\": 1250, \"pricing\": \"built_in\"}`.",
       "type": "object",
       "properties": {
         "micro_usd": {
@@ -109,7 +109,7 @@
       ]
     },
     "PricingSource": {
-      "description": "Where a [`Pricing`] came from.\n\nOn the wire it is `built_in` or `host`.",
+      "description": "Where a [`Pricing`] came from.\n\nOn the wire it is `built_in`, `host`, or `mixed`.",
       "oneOf": [
         {
           "description": "The harness's built-in list prices, as the providers published them\non 2026-10-29 at their lowest input tier.",
@@ -120,6 +120,11 @@
           "description": "Prices the host supplied, such as a negotiated rate.",
           "type": "string",
           "const": "host"
+        },
+        {
+          "description": "Prices from more than one source, only on a summed\n[`crate::Cost`], such as a session total over turns of differently\npriced models; no [`Pricing`] has it.",
+          "type": "string",
+          "const": "mixed"
         }
       ]
     },

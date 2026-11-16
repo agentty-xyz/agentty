@@ -149,6 +149,12 @@ fn classifies_every_turn_failure() {
             },
             ErrorKind::Store,
         ),
+        (
+            TurnError::UsageJournal {
+                source: Box::new(store_failure()),
+            },
+            ErrorKind::Store,
+        ),
         (TurnError::Cancelled, ErrorKind::Cancelled),
         (
             TurnError::Model(ModelError::InvalidResponse),

@@ -250,24 +250,6 @@ impl SessionStore for MemoryStore {
         Ok(())
     }
 
-    async fn load_usage(&self, session_id: &str) -> Result<Vec<Option<TurnUsage>>, SessionError> {
-        let mut state = self.lock();
-        let session = state
-            .sessions
-            .get_mut(session_id)
-            .ok_or_else(|| SessionError::NotFound {
-                id: session_id.to_string(),
-            })?;
-        session.recover();
-
-        Ok(session
-            .turns
-            .iter()
-            .filter(|turn| turn.status != Status::Running)
-            .map(|turn| turn.usage)
-            .collect())
-    }
-
     fn identity(&self) -> &StoreIdentity {
         &self.identity
     }

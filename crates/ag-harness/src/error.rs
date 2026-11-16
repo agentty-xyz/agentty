@@ -463,7 +463,9 @@ impl Classification {
             | TurnError::Bash(_)
             | TurnError::Read(_)
             | TurnError::Write(_) => ErrorKind::ToolFailed,
-            TurnError::CommandJournal { .. } | TurnError::MessageJournal { .. } => ErrorKind::Store,
+            TurnError::CommandJournal { .. }
+            | TurnError::MessageJournal { .. }
+            | TurnError::UsageJournal { .. } => ErrorKind::Store,
             TurnError::ContextBudgetExceeded { .. } => ErrorKind::ContextOverflow,
             TurnError::RepeatedToolCalls { .. } => ErrorKind::Repetition,
             TurnError::LimitReached { limit } => ErrorKind::BudgetExhausted(*limit),

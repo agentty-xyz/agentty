@@ -135,8 +135,10 @@ pub trait SessionStore: Send + Sync {
     /// harness records a turn's usage when it starts and after each model
     /// request completes, so a failed or interrupted turn keeps the usage of
     /// its completed requests. Keep the recorded usage when the turn
-    /// settles, and copy it with forked turns. The default records nothing,
-    /// so such a store's turns read as unknown usage.
+    /// settles, return it as [`StoredTurn::usage`], and copy it with forked
+    /// turns. The default records nothing, so such a store's turns have
+    /// unknown usage unless a stored outcome gives it, as [`Self::load_usage`]
+    /// describes.
     async fn record_usage(
         &self,
         _owner: &TurnOwner,
@@ -145,14 +147,21 @@ pub trait SessionStore: Send + Sync {
         Ok(())
     }
 
-    /// Returns the recorded usage of every settled turn, oldest first,
-    /// `None` for a turn without recorded usage. Recover expired turns
-    /// first; never include a running turn. Missing sessions return
-    /// `NotFound`; unsupported stores fail closed.
-    async fn load_usage(&self, _session_id: &str) -> Result<Vec<Option<TurnUsage>>, SessionError> {
-        Err(SessionError::InvalidData {
-            reason: "usage storage unsupported".into(),
-        })
+    /// Returns the usage of every settled turn, oldest first: its recorded
+    /// usage, else the unpriced usage of its stored outcome, else `None`.
+    /// Recover expired turns first; never include a running turn. Missing
+    /// sessions return `NotFound`.
+    ///
+    /// The default derives it from [`Self::load_transcript`], so a store
+    /// without transcript support fails closed here too; a store overrides
+    /// it only to avoid loading messages.
+    async fn load_usage(&self, session_id: &str) -> Result<Vec<Option<TurnUsage>>, SessionError> {
+        Ok(self
+            .load_transcript(session_id, &TurnRange::All)
+            .await?
+            .iter()
+            .map(|turn| TurnUsage::settled(turn.usage, turn.outcome.as_ref()))
+            .collect())
     }
 
     /// Independent handles for the same backing store share this identity.

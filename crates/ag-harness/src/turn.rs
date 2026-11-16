@@ -953,10 +953,19 @@ pub enum TurnError {
     /// A sandbox policy, execution, or cleanup failed.
     #[error(transparent)]
     Bash(#[from] BashError),
-    /// Persisting a finished model response, tool result, or the turn's
-    /// usage failed; the turn stops before any further model or tool call.
+    /// Persisting a finished model response or tool result failed; the turn
+    /// stops before any further model or tool call.
     #[error("message journal failed: {source}")]
     MessageJournal {
+        /// Underlying transactional store error.
+        #[source]
+        source: Box<crate::SessionError>,
+    },
+    /// Recording the turn's usage, when it starts or after a model request
+    /// completes, failed; the turn stops before any further model or tool
+    /// call, so a session's usage totals never miss a completed request.
+    #[error("usage journal failed: {source}")]
+    UsageJournal {
         /// Underlying transactional store error.
         #[source]
         source: Box<crate::SessionError>,
@@ -1029,7 +1038,7 @@ impl TurnError {
             Self::ContextBudgetExceeded { .. } => TurnErrorType::ContextBudget,
             Self::RepeatedToolCalls { .. } => TurnErrorType::RepeatedToolCalls,
             Self::LimitReached { limit } => TurnErrorType::RunLimit(*limit),
-            Self::MessageJournal { .. } => TurnErrorType::Session,
+            Self::MessageJournal { .. } | Self::UsageJournal { .. } => TurnErrorType::Session,
         }
     }
 

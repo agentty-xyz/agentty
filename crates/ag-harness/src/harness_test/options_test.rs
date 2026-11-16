@@ -666,6 +666,12 @@ async fn comparison_scope_mismatch_fails_before_calling_the_model() {
         durable,
         Err(SessionError::Turn(TurnError::ComparisonRepositoryMismatch))
     ));
+    let totals = session.usage().await.expect("usage");
+    assert_eq!(
+        (totals.turns, totals.unknown_turns, totals.usage.input),
+        (1, 0, 0),
+        "a turn failing before its first request recorded zero usage"
+    );
     let failures = events
         .lock()
         .expect("events lock")

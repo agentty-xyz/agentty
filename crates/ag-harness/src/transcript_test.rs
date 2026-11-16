@@ -149,6 +149,23 @@ fn ranges_round_trip_as_tagged_objects() -> Result<(), serde_json::Error> {
 }
 
 #[test]
+fn record_of_a_turn_without_recorded_usage_reads_its_stored_outcome_unpriced() {
+    // Arrange
+    let outcome = TurnOutcome::new(
+        json!({"answer": "done"}),
+        TurnReport::new(Duration::ZERO, Vec::new(), Vec::new()),
+    );
+    let turn = stored(vec![ModelMessage::User("question".to_string())]).with_outcome(Some(outcome));
+
+    // Act
+    let record = TurnRecord::from_stored(turn);
+
+    // Assert
+    assert_eq!(record.usage, Some(Usage::default()));
+    assert_eq!(record.cost, None);
+}
+
+#[test]
 fn record_orders_reasoning_text_calls_results_and_json_output() {
     // Arrange
     let turn = stored(vec![

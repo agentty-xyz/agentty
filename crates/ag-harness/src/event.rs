@@ -202,6 +202,8 @@ pub enum RunEventKind {
     /// A model request completed, with the tokens its provider reported.
     /// The usage and cost of these events sum to the run outcome's
     /// [`crate::RunOutcome::usage`] and [`crate::RunOutcome::cost`].
+    /// Later per-request fields may be added, so match it with `..`.
+    #[non_exhaustive]
     ModelRequestCompleted {
         /// Price of `usage`, or `None` when the run's model has no
         /// [`crate::catalog::Pricing`].

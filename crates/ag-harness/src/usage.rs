@@ -6,7 +6,7 @@ use serde::{Deserialize, Serialize};
 
 use crate::catalog::{Pricing, PricingSource};
 use crate::run::Usage;
-use crate::turn::TurnReport;
+use crate::turn::{TurnOutcome, TurnReport};
 
 /// Tokens per million, the unit [`Pricing`] prices are quoted in.
 const TOKENS_PER_MTOK: u128 = 1_000_000;
@@ -29,7 +29,8 @@ const TOKENS_PER_MTOK: u128 = 1_000_000;
 /// The exact sum is rounded once to the nearest micro-USD, halves up, so a
 /// run's cost, the sum of its requests' costs, can differ from pricing its
 /// summed usage by less than one micro-USD per request. Arithmetic never
-/// overflows: a cost beyond `u64::MAX` micro-USD saturates at it.
+/// overflows: a cost beyond `u64::MAX` micro-USD saturates at it. A sum of
+/// costs priced from different sources is [`PricingSource::Mixed`].
 ///
 /// A model without [`Pricing`], such as a host model nobody priced, an
 /// OpenAI-compatible server, or a plan-billed `ChatGPT` model whose marginal
@@ -100,12 +101,17 @@ impl Cost {
         }
     }
 
-    /// Adds `other` to this cost, saturating, keeping this cost's source.
+    /// Adds `other` to this cost, saturating; the sum of costs from
+    /// different sources is [`PricingSource::Mixed`].
     #[must_use]
     pub(crate) fn saturating_add(self, other: Self) -> Self {
         Self {
             micro_usd: self.micro_usd.saturating_add(other.micro_usd),
-            pricing: self.pricing,
+            pricing: if self.pricing == other.pricing {
+                self.pricing
+            } else {
+                PricingSource::Mixed
+            },
         }
     }
 }
@@ -115,8 +121,11 @@ impl Cost {
 /// [`crate::store::StoredTurn::usage`].
 ///
 /// It covers the model requests the turn completed so far, whether the turn
-/// went on to complete, fail, reach a run limit, or be interrupted.
-#[derive(Clone, Copy, Debug, Default, Deserialize, Eq, Hash, PartialEq, Serialize)]
+/// went on to complete, fail, reach a run limit, or be interrupted. A store
+/// that persists it chooses its own encoding; the harness's SQLite store
+/// keeps a private record that does not follow the wire shapes of
+/// [`Usage`] and [`Cost`].
+#[derive(Clone, Copy, Debug, Default, Eq, Hash, PartialEq)]
 #[non_exhaustive]
 pub struct TurnUsage {
     /// Cost of [`Self::usage`], or `None` when the turn's model had no
@@ -129,22 +138,101 @@ pub struct TurnUsage {
 impl TurnUsage {
     /// Returns the usage of a turn before its first model request: no
     /// tokens, at zero cost under `pricing`.
-    pub fn new(pricing: Option<Pricing>) -> Self {
+    pub(crate) fn new(pricing: Option<Pricing>) -> Self {
         Self {
             cost: pricing.map(Cost::zero),
             usage: Usage::default(),
         }
     }
 
-    /// Adds one completed request's `usage` and `cost`.
-    #[must_use]
-    pub(crate) fn add(self, usage: Usage, cost: Option<Cost>) -> Self {
+    /// Returns the usage a settled turn `recorded`, or, for a turn without
+    /// it, such as one stored before usage was recorded, the unpriced usage
+    /// of its stored `outcome`. `None` means the turn's usage is unknown.
+    pub(crate) fn settled(recorded: Option<Self>, outcome: Option<&TurnOutcome>) -> Option<Self> {
+        recorded.or_else(|| {
+            outcome.map(|outcome| Self {
+                cost: None,
+                usage: Usage::from_report(outcome.report()),
+            })
+        })
+    }
+}
+
+/// Storage record of a [`TurnUsage`] in the SQLite store.
+///
+/// It is kept apart from the public wire shapes of [`Usage`], [`Cost`], and
+/// [`PricingSource`], so they can change without breaking stored turns. Add
+/// fields only with `#[serde(default)]` and never rename one; a change that
+/// cannot decode earlier records needs a data migration.
+#[derive(Debug, Deserialize, Eq, PartialEq, Serialize)]
+pub(crate) struct StoredTurnUsage {
+    cache_read: u64,
+    cache_write: Option<u64>,
+    cost: Option<StoredCost>,
+    input: u64,
+    output: u64,
+    reasoning: u64,
+    unreported_requests: u32,
+}
+
+/// Storage record of a [`Cost`].
+#[derive(Debug, Deserialize, Eq, PartialEq, Serialize)]
+struct StoredCost {
+    micro_usd: u64,
+    pricing: StoredPricingSource,
+}
+
+/// Storage record of a [`PricingSource`].
+#[derive(Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(rename_all = "snake_case")]
+enum StoredPricingSource {
+    BuiltIn,
+    Host,
+    Mixed,
+}
+
+impl From<&TurnUsage> for StoredTurnUsage {
+    fn from(turn: &TurnUsage) -> Self {
+        let usage = turn.usage;
+
         Self {
-            cost: self
-                .cost
-                .zip(cost)
-                .map(|(total, cost)| total.saturating_add(cost)),
-            usage: self.usage.saturating_add(usage),
+            cache_read: usage.cache_read,
+            cache_write: usage.cache_write,
+            cost: turn.cost.map(|cost| StoredCost {
+                micro_usd: cost.micro_usd,
+                pricing: match cost.pricing {
+                    PricingSource::BuiltIn => StoredPricingSource::BuiltIn,
+                    PricingSource::Host => StoredPricingSource::Host,
+                    PricingSource::Mixed => StoredPricingSource::Mixed,
+                },
+            }),
+            input: usage.input,
+            output: usage.output,
+            reasoning: usage.reasoning,
+            unreported_requests: usage.unreported_requests,
+        }
+    }
+}
+
+impl From<StoredTurnUsage> for TurnUsage {
+    fn from(stored: StoredTurnUsage) -> Self {
+        Self {
+            cost: stored.cost.map(|cost| Cost {
+                micro_usd: cost.micro_usd,
+                pricing: match cost.pricing {
+                    StoredPricingSource::BuiltIn => PricingSource::BuiltIn,
+                    StoredPricingSource::Host => PricingSource::Host,
+                    StoredPricingSource::Mixed => PricingSource::Mixed,
+                },
+            }),
+            usage: Usage {
+                input: stored.input,
+                output: stored.output,
+                cache_read: stored.cache_read,
+                cache_write: stored.cache_write,
+                reasoning: stored.reasoning,
+                unreported_requests: stored.unreported_requests,
+            },
         }
     }
 }
@@ -152,29 +240,31 @@ impl TurnUsage {
 /// Usage summed over a session's settled turns, returned by
 /// [`crate::Session::usage`].
 ///
-/// Turns recorded before this harness version stored usage, or by a store
-/// that does not record it, are counted in [`Self::unknown_turns`] and add
-/// nothing, so totals with unknown turns are lower bounds. Turns whose
-/// model had no [`Pricing`] add their tokens but no cost and are counted in
-/// [`Self::unpriced_turns`].
+/// Turns without recorded usage or a stored outcome to derive it from, such
+/// as turns recorded before this harness version stored usage without a
+/// host request ID, are counted in [`Self::unknown_turns`] and add nothing,
+/// so totals with unknown turns are lower bounds. Turns whose model had no
+/// [`Pricing`], and older turns whose usage comes from their stored outcome,
+/// add their tokens but no cost and are counted in [`Self::unpriced_turns`].
 #[derive(Clone, Copy, Debug, Default, Deserialize, Eq, Hash, JsonSchema, PartialEq, Serialize)]
 #[non_exhaustive]
 pub struct UsageTotals {
-    /// Summed cost of the priced turns in micro-USD, saturating at
-    /// `u64::MAX`, whatever each turn's [`PricingSource`].
-    pub cost_micro_usd: u64,
+    /// Summed cost of the priced turns, saturating at `u64::MAX` micro-USD,
+    /// [`PricingSource::Mixed`] when their prices came from different
+    /// sources, or `None` when no turn was priced.
+    pub cost: Option<Cost>,
     /// Settled turns, including unknown and unpriced ones.
     pub turns: u64,
-    /// Settled turns without recorded usage.
+    /// Settled turns without known usage.
     pub unknown_turns: u64,
-    /// Settled turns with recorded usage but no cost.
+    /// Settled turns with known usage but no cost.
     pub unpriced_turns: u64,
-    /// Summed tokens of the turns with recorded usage.
+    /// Summed tokens of the turns with known usage.
     pub usage: Usage,
 }
 
 impl UsageTotals {
-    /// Sums the recorded usage of `turns`, one entry per settled turn.
+    /// Sums the usage of `turns`, one entry per settled turn.
     pub(crate) fn from_turns(turns: &[Option<TurnUsage>]) -> Self {
         let mut totals = Self::default();
         let mut usage: Option<Usage> = None;
@@ -187,7 +277,8 @@ impl UsageTotals {
             usage = Some(usage.map_or(turn.usage, |total| total.saturating_add(turn.usage)));
             match turn.cost {
                 Some(cost) => {
-                    totals.cost_micro_usd = totals.cost_micro_usd.saturating_add(cost.micro_usd);
+                    totals.cost =
+                        Some(totals.cost.map_or(cost, |total| total.saturating_add(cost)));
                 }
                 None => totals.unpriced_turns = totals.unpriced_turns.saturating_add(1),
             }

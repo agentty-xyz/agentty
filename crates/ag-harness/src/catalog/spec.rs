@@ -174,7 +174,7 @@ impl fmt::Display for Capabilities {
 
 /// Where a [`Pricing`] came from.
 ///
-/// On the wire it is `built_in` or `host`.
+/// On the wire it is `built_in`, `host`, or `mixed`.
 #[derive(Clone, Copy, Debug, Deserialize, Eq, Hash, JsonSchema, PartialEq, Serialize)]
 #[serde(rename_all = "snake_case")]
 #[non_exhaustive]
@@ -184,6 +184,10 @@ pub enum PricingSource {
     BuiltIn,
     /// Prices the host supplied, such as a negotiated rate.
     Host,
+    /// Prices from more than one source, only on a summed
+    /// [`crate::Cost`], such as a session total over turns of differently
+    /// priced models; no [`Pricing`] has it.
+    Mixed,
 }
 
 /// Token prices of one model in integer micro-USD per million tokens.
@@ -195,7 +199,8 @@ pub enum PricingSource {
 /// both fall back to the input price. Built-in prices do not model cache
 /// discounts yet, so they overstate cached input for providers that publish
 /// one; a host can declare those prices through
-/// [`super::CatalogBuilder::pricing`] or [`crate::HarnessBuilder::pricing`].
+/// [`super::CatalogBuilder::pricing`], or [`ModelSpec::with_pricing`] for a
+/// model it catalogs itself.
 ///
 /// Changing a cache price marks the prices [`PricingSource::Host`].
 #[derive(Clone, Copy, Debug, Eq, Hash, PartialEq)]

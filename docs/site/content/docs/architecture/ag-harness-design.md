@@ -156,8 +156,9 @@ the cap reset on `switch_model` or estimator replacement. `TurnReport` and
   them, so they never steer another turn.
 - Every durable turn records its usage and cost when it starts and after each completed
   model request, so stopped turns keep what they used, and forks copy it.
-  `Session::usage` sums settled turns; turns stored before usage was recorded count as
-  unknown, never as zero.
+  `Session::usage` sums settled turns; turns stored before usage was recorded take
+  unpriced usage from a stored host-request outcome, or else count as unknown, never as
+  zero.
 - Each turn records its effective options, comparison identity, and model provenance
   before execution. Write and command intents persist before their effects.
 - `host_id`/`recover` bind host-assigned request IDs to a fingerprint of the effective

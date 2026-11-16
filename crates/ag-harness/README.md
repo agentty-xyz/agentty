@@ -108,9 +108,11 @@ prompt-cache key, and the source is unchanged. If the fork cannot be resumed wit
 harness's model, it stays stored; resume it with a matching harness.
 
 `Session::usage` sums the tokens and cost of every settled turn into `UsageTotals`. Each
-turn records its usage as its model requests complete, so failed, limit-stopped, and
-interrupted turns keep the usage of their completed requests. Turns stored before usage
-was recorded count as `unknown_turns`, never as zero.
+turn records its usage when admitted and as its model requests complete, so failed,
+limit-stopped, and interrupted turns keep the usage of their completed requests; a
+failed usage write stops the turn. Turns stored before usage was recorded take unpriced
+usage from their stored outcome when run with a host request ID, and otherwise count as
+`unknown_turns`, never as zero.
 
 ## Turns
 
@@ -173,14 +175,16 @@ let outcome = session
   count as zero. Wall time starts once the session admits the run and also stops a
   pending request or tool call; a stopped tool call leaves its turn interrupted.
 - **Runs report cost in micro-USD.** A `Cost` is integer micro-USD with its
-  `catalog::PricingSource`, from the model's `Pricing`: the catalog entry's list prices,
-  `CatalogBuilder::pricing`, or `HarnessBuilder::pricing` for any model. `Usage` counts
-  overlap: `cache_read` is part of `input` and `reasoning` part of `output`. Uncached
-  input, cached input, and output bill at their own prices, and cached input falls back
-  to the input price when no cache price is declared, as built-in prices do not yet.
-  Each request's exact cost rounds to the nearest micro-USD, halves up, and sums
-  saturate at `u64::MAX`. Models without prices, such as unpriced host models,
-  OpenAI-compatible servers, and plan-billed ChatGPT models, report no cost.
+  `catalog::PricingSource`, from the `Pricing` of the model's catalog entry: built-in
+  list prices, `CatalogBuilder::pricing`, or `ModelSpec::with_pricing` for a host model.
+  `Usage` counts overlap: `cache_read` and a known `cache_write` are part of `input`,
+  and `reasoning` is part of `output`. Uncached input, cache reads, cache writes, and
+  output bill at their own prices, and cache reads and writes fall back to the input
+  price when no cache price is declared, as built-in prices do not yet. Each request's
+  exact cost rounds to the nearest micro-USD, halves up, and sums saturate at
+  `u64::MAX`. Models without prices, such as models set with `HarnessBuilder::model` or
+  `switch_model`, OpenAI-compatible servers, and plan-billed ChatGPT models, report no
+  cost.
 - **Runs stream typed events.** `run.into_parts()` returns an `EventStream` (a
   `futures::Stream` of `RunEvent`) and a `RunHandle`. Each event has the run ID, a
   gap-free `seq`, and a timestamp in Unix milliseconds. Events report the admitted turn
@@ -559,9 +563,10 @@ record the decision from `TurnAdmission::admit` or `ModelSwitch::admit`, while t
 harness owns the admission rules and every lease. `complete_turn` also hands the store
 the session's `store::HistoryProjection`, which later loads apply and a model switch
 resets. `load_transcript` and `fork_session` back transcripts and forks, and
-`record_usage` and `load_usage` back per-turn usage; a store that does not implement
-them fails those calls closed, except that its turns record no usage. The shared
-conformance suite is in `tests/support/store_conformance.rs`.
+`record_usage` backs per-turn usage; a store that does not implement them fails
+transcripts and forks closed, and records no usage, so its turns' usage comes only from
+outcomes it stores. `load_usage` defaults to reading transcripts. The shared conformance
+suite is in `tests/support/store_conformance.rs`.
 
 ## Observability
 

@@ -690,37 +690,43 @@ impl Engine<'_> {
     /// Emits a [`RunEventKind::ModelRequestCompleted`] for every model
     /// request `state` recorded since the last call, so the events' usage
     /// and cost sum to the run outcome's, then records the turn's usage so
-    /// far on its durable turn. The first call records it before any request
-    /// completes, so a turn stopped before its first response reads as zero
-    /// usage rather than unknown.
+    /// far on its durable turn. The session recorded zero usage when it
+    /// admitted the turn, so a turn stopped before its first response never
+    /// reads as unknown.
     ///
     /// # Errors
     ///
-    /// Returns [`TurnError::MessageJournal`] when the store cannot record
-    /// the usage.
+    /// Returns [`TurnError::UsageJournal`] when the store cannot record the
+    /// usage.
     async fn publish_requests(&self, state: &mut TurnState) -> Result<(), TurnError> {
         let completed = state.model_requests.len();
-        if state.usage_recorded && state.published_requests == completed {
+        if state.published_requests == completed {
             return Ok(());
         }
         for activity in &state.model_requests[state.published_requests..] {
             let usage =
                 Usage::from_request(activity.completion().and_then(CompletionMetadata::usage));
             let cost = self.pricing.map(|pricing| Cost::of(&usage, pricing));
-            state.usage = state.usage.add(usage, cost);
+            state.cost = state
+                .cost
+                .zip(cost)
+                .map(|(total, cost)| total.saturating_add(cost));
             self.publish(RunEventKind::ModelRequestCompleted { usage, cost })
                 .await;
         }
         state.published_requests = completed;
-        state.usage_recorded = true;
         let Some(recorder) = &state.rounds.recorder else {
             return Ok(());
         };
+        let usage = TurnUsage {
+            cost: state.cost,
+            usage: Usage::from_requests(&state.model_requests),
+        };
 
         recorder
-            .record_usage(&state.usage)
+            .record_usage(&usage)
             .await
-            .map_err(|source| TurnError::MessageJournal {
+            .map_err(|source| TurnError::UsageJournal {
                 source: Box::new(source),
             })
     }
@@ -1101,10 +1107,9 @@ struct TurnState {
     model_requests: Vec<ModelRequestActivity>,
     /// Leading [`Self::model_requests`] already published as run events.
     published_requests: usize,
-    /// Usage and cost of the published requests.
-    usage: TurnUsage,
-    /// Whether [`Self::usage`] was recorded at least once.
-    usage_recorded: bool,
+    /// Summed cost of the published requests, or `None` for an unpriced
+    /// model.
+    cost: Option<Cost>,
     output_corrections: usize,
     consecutive_malformed_responses: usize,
     malformed_tool_calls: usize,
@@ -1123,8 +1128,7 @@ impl TurnState {
             model_request_index: 0,
             model_requests: Vec::new(),
             published_requests: 0,
-            usage: TurnUsage::new(pricing),
-            usage_recorded: false,
+            cost: pricing.map(Cost::zero),
             output_corrections: 0,
             consecutive_malformed_responses: 0,
             malformed_tool_calls: 0,

@@ -24,7 +24,7 @@ use crate::model::{ModelErrorType, ModelMessage};
 use crate::run::{RunOutput, Usage};
 use crate::store::StoredTurn;
 use crate::tool::ToolCall;
-use crate::usage::Cost;
+use crate::usage::{Cost, TurnUsage};
 
 /// Which settled turns a transcript returns, oldest first.
 ///
@@ -148,8 +148,9 @@ pub enum TurnStatus {
 #[derive(Clone, Debug, Deserialize, Eq, JsonSchema, PartialEq, Serialize)]
 #[non_exhaustive]
 pub struct TurnRecord {
-    /// Price of [`Self::usage`], or `None` when the usage is unknown or the
-    /// turn's model had no [`crate::catalog::Pricing`].
+    /// Price of [`Self::usage`], or `None` when the usage is unknown or
+    /// derived from a stored outcome, or the turn's model had no
+    /// [`crate::catalog::Pricing`].
     pub cost: Option<Cost>,
     /// Why a failed or cancelled turn stopped; `None` for a completed turn
     /// and for a turn interrupted because its owner stopped renewing it.
@@ -186,16 +187,19 @@ pub struct TurnRecord {
     /// Durable position of the turn within its session.
     pub turn: TurnIndex,
     /// Tokens of the turn's completed model requests, also for a failed or
-    /// interrupted turn; `None` for a turn recorded before usage was stored,
-    /// or by a store that does not record it.
+    /// interrupted turn. A turn recorded before usage was stored, or by a
+    /// store that does not record it, reports the usage of its stored
+    /// outcome, kept only for turns run with a host request ID, and `None`
+    /// without one.
     pub usage: Option<Usage>,
 }
 
 impl TurnRecord {
     /// Builds the transcript record of the settled `turn`.
     pub(crate) fn from_stored(turn: StoredTurn) -> Self {
+        let usage = TurnUsage::settled(turn.usage, turn.outcome.as_ref());
         let mut record = Self {
-            cost: turn.usage.and_then(|usage| usage.cost),
+            cost: usage.and_then(|usage| usage.cost),
             error: turn.error_type.as_deref().and_then(Self::stored_error),
             finished_at: turn.finished_at,
             input: Vec::new(),
@@ -204,7 +208,7 @@ impl TurnRecord {
             started_at: turn.started_at,
             status: turn.status,
             turn: TurnIndex::from_position(turn.position),
-            usage: turn.usage.map(|usage| usage.usage),
+            usage: usage.map(|usage| usage.usage),
         };
         for message in turn.messages {
             record.push_message(message, turn.text_output);
