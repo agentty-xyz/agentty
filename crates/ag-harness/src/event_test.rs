@@ -6,7 +6,7 @@ use serde_json::json;
 
 use super::{
     EVENT_BUFFER, EventSink, EventStream, Item, ItemId, ItemKind, RunEvent, RunEventKind,
-    RunFailure, RunSummary, SessionId, ToolCallItem, ToolCallStatus, TurnIndex,
+    RunFailure, RunId, RunSummary, SessionId, ToolCallItem, ToolCallStatus, TurnIndex,
 };
 use crate::catalog::{ModelId, Pricing};
 use crate::error::{ErrorKind, RunError};
@@ -14,7 +14,7 @@ use crate::lifecycle::ToolUnavailableReason;
 use crate::limit::LimitKind;
 use crate::run::{RunOutcome, RunOutput, Usage};
 use crate::tool::{ReadAction, Tool, ToolCall};
-use crate::turn::{ContextActivity, ToolActivity, TurnError, TurnReport};
+use crate::turn::{ContextActivity, HostToolOutcome, ToolActivity, TurnError, TurnReport};
 use crate::usage::Cost;
 
 /// Committed JSON schema of [`RunEvent`]; regenerate it from the failure
@@ -58,7 +58,7 @@ async fn drain(mut stream: EventStream) -> Vec<RunEvent> {
 #[tokio::test]
 async fn sink_numbers_events_and_items_and_ends_with_the_output() {
     // Arrange
-    let (sink, stream) = EventSink::channel();
+    let (sink, stream) = EventSink::channel(RunId::generate());
     let output = RunOutput::Json(json!({"name": "Ada"}));
 
     // Act
@@ -95,7 +95,7 @@ async fn sink_numbers_events_and_items_and_ends_with_the_output() {
 #[tokio::test]
 async fn sink_discards_events_after_the_stream_is_dropped() {
     // Arrange
-    let (sink, stream) = EventSink::channel();
+    let (sink, stream) = EventSink::channel(RunId::generate());
     drop(stream);
 
     // Act
@@ -110,7 +110,7 @@ async fn sink_discards_events_after_the_stream_is_dropped() {
 #[tokio::test(start_paused = true)]
 async fn completion_skips_the_wait_of_a_full_stream_without_a_sequence_gap() {
     // Arrange
-    let (sink, stream) = EventSink::channel();
+    let (sink, stream) = EventSink::channel(RunId::generate());
     for _ in 0..EVENT_BUFFER {
         sink.emit(request_completed()).await;
     }
@@ -167,23 +167,26 @@ fn tool_activity_maps_to_how_the_call_was_answered() {
             },
             ToolCallStatus::Unavailable,
         ),
-        (
-            ToolActivity::Custom {
-                duration,
-                rejected: false,
-                tool: "fetch".into(),
-            },
-            ToolCallStatus::Completed,
-        ),
-        (
-            ToolActivity::Custom {
-                duration,
-                rejected: true,
-                tool: "fetch".into(),
-            },
-            ToolCallStatus::Rejected,
-        ),
     ];
+    let cases = cases.into_iter().chain(
+        [
+            (HostToolOutcome::Completed, ToolCallStatus::Completed),
+            (HostToolOutcome::ResultTooLarge, ToolCallStatus::Completed),
+            (HostToolOutcome::Rejected, ToolCallStatus::Rejected),
+            (HostToolOutcome::InvalidArguments, ToolCallStatus::Rejected),
+        ]
+        .map(|(outcome, status)| {
+            (
+                ToolActivity::Host {
+                    duration,
+                    outcome,
+                    tool: "fetch".into(),
+                },
+                status,
+            )
+        }),
+    );
+    let cases = cases.collect::<Vec<_>>();
 
     // Act
     let statuses: Vec<ToolCallStatus> = cases
@@ -225,7 +228,7 @@ fn priced_usage() -> (Usage, Cost) {
 #[test]
 fn run_event_round_trips_through_json_matching_its_schema() -> Result<(), Box<dyn Error>> {
     // Arrange
-    let (sink, _stream) = EventSink::channel();
+    let (sink, _stream) = EventSink::channel(RunId::generate());
     let session = SessionId::new("s");
     let turn = TurnIndex::from_position(2);
     let (usage, cost) = priced_usage();
@@ -394,7 +397,7 @@ fn run_failure_rejects_a_limit_that_does_not_match_its_kind() {
 #[test]
 fn run_event_before_the_unix_epoch_does_not_serialize() {
     // Arrange
-    let (sink, _stream) = EventSink::channel();
+    let (sink, _stream) = EventSink::channel(RunId::generate());
     let event = RunEvent {
         at: UNIX_EPOCH - Duration::from_secs(1),
         kind: request_completed(),
@@ -412,7 +415,7 @@ fn run_event_before_the_unix_epoch_does_not_serialize() {
 #[tokio::test]
 async fn sink_timestamps_events_to_the_millisecond() {
     // Arrange
-    let (sink, stream) = EventSink::channel();
+    let (sink, stream) = EventSink::channel(RunId::generate());
     let before = SystemTime::now();
 
     // Act

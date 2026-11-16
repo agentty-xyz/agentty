@@ -2571,7 +2571,7 @@ pub(crate) fn advertised_tools(options: &TurnOptions) -> Vec<ToolDefinition> {
                 .tool_policy()
                 .allows(*tool)
                 .then(|| builtin_definition(*tool, options)),
-            ToolEntry::Handler { handler, .. } => Some(handler.definition()),
+            ToolEntry::Handler { definition, .. } => Some(definition.clone()),
         })
         .collect()
 }

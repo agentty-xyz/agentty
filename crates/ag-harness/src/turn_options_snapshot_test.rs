@@ -10,7 +10,8 @@ use sha2::{Digest as _, Sha256};
 use super::{StoredTurnOptions, StoredTurnOptionsError};
 use crate::limit::RunLimits;
 use crate::{
-    ComparisonBase, GenerationParams, OutputMode, OutputSchema, Tool, ToolPolicy, TurnOptions,
+    ComparisonBase, GenerationParams, OutputMode, OutputSchema, Tool, ToolPolicy, ToolSet,
+    TurnOptions,
 };
 
 #[test]
@@ -389,6 +390,38 @@ fn version_six_records_text_output_instructions_and_output_bounds() {
         decoded.fingerprint(),
         StoredTurnOptions::decode(&StoredTurnOptions::encode(&turn_options()))
             .expect("plain snapshot")
+            .fingerprint()
+    );
+    assert!(matches!(
+        legacy,
+        Err(StoredTurnOptionsError::InvalidData { .. })
+    ));
+}
+
+#[test]
+fn a_tool_set_other_than_the_built_ins_is_recorded_and_fingerprinted() {
+    // Arrange
+    let custom =
+        turn_options().with_tools(ToolSet::builder().bash().read().build().expect("tool set"));
+    let legacy_with_tools = versioned_snapshot(&custom, 4);
+
+    // Act
+    let default_snapshot: Value =
+        serde_json::from_str(&StoredTurnOptions::encode(&turn_options())).expect("snapshot");
+    let custom_snapshot = StoredTurnOptions::encode(&custom);
+    let decoded = StoredTurnOptions::decode(&custom_snapshot).expect("custom snapshot");
+    let legacy = StoredTurnOptions::decode(&legacy_with_tools.to_string());
+
+    // Assert
+    assert!(default_snapshot.get("tools").is_none());
+    assert_eq!(
+        decoded.tools,
+        Some(vec!["bash".to_string(), "read".to_string()])
+    );
+    assert_ne!(
+        decoded.fingerprint(),
+        StoredTurnOptions::decode(&default_snapshot.to_string())
+            .expect("default snapshot")
             .fingerprint()
     );
     assert!(matches!(

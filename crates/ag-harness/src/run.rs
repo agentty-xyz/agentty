@@ -22,7 +22,7 @@ use crate::cancellation::{
 use crate::catalog::Pricing;
 use crate::comparison::ComparisonBase;
 use crate::error::{ErrorKind, RunError};
-use crate::event::{EventSink, EventStream};
+use crate::event::{EventSink, EventStream, RunId};
 use crate::input::TurnInput;
 use crate::limit::RunLimits;
 use crate::model::CompletionUsage;
@@ -89,7 +89,8 @@ impl RunRequest {
 
     /// Replaces the harness's default tool set for this run, like
     /// [`TurnOptions::with_tools`]; built-ins in it still need the tool
-    /// policy.
+    /// policy. The sets are never merged: to add a tool to a default, such
+    /// as [`ToolSet::builtins`], extend it with [`ToolSet::to_builder`].
     pub fn tools(mut self, tools: ToolSet) -> Self {
         self.tools = Some(tools);
 
@@ -216,6 +217,7 @@ pub struct Run {
     cancel: CancelToken,
     events: Option<Arc<EventSink>>,
     journal: RunJournal,
+    id: RunId,
     turn: ControlledTurn<'static, RunError>,
 }
 
@@ -238,10 +240,9 @@ impl Run {
     /// the stream concurrently: the run waits while too many events are
     /// unread, although cancelling it still resolves its outcome. Dropping
     /// the stream discards later events without stalling or cancelling the
-    /// run. Only a split run has a [`crate::event::RunId`], carried by its
-    /// events.
+    /// run. Every event carries the run's [`RunId`].
     pub fn into_parts(mut self) -> (EventStream, RunHandle) {
-        let (sink, stream) = EventSink::channel();
+        let (sink, stream) = EventSink::channel(self.id.clone());
         self.cancel.control.attach_events(&sink);
         self.events = Some(sink);
 
@@ -250,11 +251,14 @@ impl Run {
 
     /// Wraps a controlled turn whose durable records `journal` locates.
     pub(crate) fn new(turn: ControlledTurn<'static, RunError>, journal: RunJournal) -> Self {
+        let control = turn.control();
+        let id = RunId::generate();
+        control.assign_run(id.clone());
+
         Self {
-            cancel: CancelToken {
-                control: turn.control(),
-            },
+            cancel: CancelToken { control },
             events: None,
+            id,
             journal,
             turn,
         }
@@ -268,6 +272,7 @@ impl Run {
             events,
             journal,
             turn,
+            ..
         } = self;
         let started_at = Instant::now();
         let result = turn.await;

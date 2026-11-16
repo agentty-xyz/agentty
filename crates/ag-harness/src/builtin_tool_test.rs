@@ -11,13 +11,15 @@ use crate::bash::{BashConfig, Enforcement, UnsandboxedExecutor};
 use crate::command_settlement::Commands;
 use crate::file_system::LocalFileSystem;
 
+/// Returns a `read` handler over `root` whose Git executable does not
+/// exist: file reads never spawn Git.
 fn read_handler(root: &std::path::Path) -> ReadHandler {
     ReadHandler {
         definition: ToolDefinition::read_with_comparison_base(None),
         tool: ReadTool::with_git(
             Arc::new(LocalFileSystem),
             root.to_path_buf(),
-            "/usr/bin/git".into(),
+            "/nonexistent/git".into(),
             None,
         ),
     }
@@ -46,13 +48,14 @@ fn bash_handler() -> BashHandler {
     }
 }
 
+// Binding `bash` captures the current Tokio runtime, so the test needs one.
 #[tokio::test]
 async fn built_in_handlers_advertise_their_definitions_and_effects() {
     // Arrange
-    let root = tempfile::tempdir().expect("temporary directory");
-    let read = read_handler(root.path());
+    let root = std::path::Path::new("/workspace");
+    let read = read_handler(root);
     let write = WriteHandler {
-        tool: WriteTool::new(Arc::new(LocalFileSystem), root.path().to_path_buf()),
+        tool: WriteTool::new(Arc::new(LocalFileSystem), root.to_path_buf()),
     };
     let bash = bash_handler();
 

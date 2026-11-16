@@ -126,16 +126,29 @@ Every tool is a `ToolHandler`: it returns its `ToolDefinition`, declares its
 lists handlers in the order the model sees them; names are unique, and `read`, `write`,
 and `bash` are reserved for the built-ins.
 
-```rust
-use ag_harness::tool::{ToolContext, ToolDefinition, ToolEffects, ToolError, ToolOutput};
-use ag_harness::{Tool, ToolHandler, ToolSet};
+Implementing `ToolHandler` needs the `async-trait` crate, as implementing `Model` does.
 
-struct Clock;
+```rust
+use std::sync::Arc;
+
+use ag_harness::tool::{
+    ToolContext, ToolDefinition, ToolDefinitionError, ToolEffects, ToolError, ToolOutput,
+};
+use ag_harness::{Harness, ToolHandler, ToolSet};
+use serde_json::{Value, json};
+
+struct Clock(ToolDefinition);
+
+impl Clock {
+    fn new() -> Result<Self, ToolDefinitionError> {
+        ToolDefinition::new("clock", "Read the clock.", json!({"type": "object"})).map(Self)
+    }
+}
 
 #[async_trait::async_trait]
 impl ToolHandler for Clock {
     fn definition(&self) -> ToolDefinition {
-        ToolDefinition::new("clock", "Read the clock.", json!({"type": "object"})).unwrap()
+        self.0.clone()
     }
 
     fn effects(&self) -> ToolEffects {
@@ -147,20 +160,26 @@ impl ToolHandler for Clock {
     }
 }
 
-let tools = ToolSet::builder().builtin(Tool::Read).handler(Arc::new(Clock)).build()?;
+let tools = ToolSet::builder().read().handler(Arc::new(Clock::new()?)).build()?;
 let harness = Harness::builder().model(model).tools(tools).build()?;
 ```
 
 - `HarnessBuilder::tools` sets the default set, `RunRequest::tools` replaces it for one
-  run, and `TurnOptions::with_tools` for one turn. The default is `ToolSet::builtins()`.
+  run, and `TurnOptions::with_tools` for one turn; sets never merge, so extend a default
+  with `ToolSet::to_builder`. The default is `ToolSet::builtins()`.
 - A host handler is offered whenever it is in the set and needs no repository. A
-  built-in is offered only while the `ToolPolicy` also allows it.
+  built-in is offered only while the `ToolPolicy` also allows it. The set reads each
+  definition once, and only a call naming the tool exactly runs its handler.
 - `ToolError::rejected` sends feedback to the model and the turn continues, as do
-  arguments that are not JSON and results over 64 KiB. `ToolError::failed` fails the
-  turn with `ErrorKind::ToolFailed`. Reports list host calls as `ToolActivity::Custom`.
-- `ToolContext` names the call, its session and run, and the workspace;
-  `ToolContext::cancelled` resolves when the turn is cancelled, which also drops the
-  call's future.
+  arguments that are not a JSON object, which also count toward the malformed-response
+  limit. A result over 64 KiB is dropped and the model is told the call ran.
+  `ToolError::failed` or a panic fails the turn with `ErrorKind::ToolFailed`. Reports
+  list host calls as `ToolActivity::Host` with a `HostToolOutcome`.
+- Identical host calls with identical results count toward repetition detection, like
+  built-in calls: the model is nudged, then the turn stops.
+- `ToolContext` names the call, its run, its session (only for a host-created session),
+  and the workspace; `ToolContext::cancelled` resolves when the turn is cancelled, which
+  also drops the call's future.
 
 ## Turns
 

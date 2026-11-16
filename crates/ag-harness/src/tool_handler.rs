@@ -26,12 +26,14 @@ pub(crate) type SharedResultFits = Arc<dyn Fn(&str) -> bool + Send + Sync>;
 ///
 /// Add a handler to a [`ToolSet`] to offer its tool: the harness advertises
 /// [`Self::definition`], and calls [`Self::call`] for each model call that
-/// names it, in the order the model sent them. A turn runs one call at a
-/// time; dropping the turn, as cancellation does, drops the call's future.
+/// names it exactly, in the order the model sent them. A turn runs one call
+/// at a time; dropping the turn, as cancellation does, drops the call's
+/// future. A call that panics fails the turn as a tool failure.
 #[async_trait]
 pub trait ToolHandler: Send + Sync {
-    /// Returns the definition advertised to the model. It must name the
-    /// same tool every time it is called.
+    /// Returns the definition advertised to the model. The set reads it
+    /// once, when the handler is added, and advertises and dispatches by
+    /// that copy.
     fn definition(&self) -> ToolDefinition;
 
     /// Returns what a call may change, for hosts that gate or schedule
@@ -57,7 +59,8 @@ pub trait ToolHandler: Send + Sync {
 pub enum ToolEffects {
     /// Reads state without changing it, like the built-in `read`.
     ReadOnly,
-    /// Changes files in the workspace, like the built-in `write`.
+    /// Changes state outside the model's context, such as workspace files
+    /// or records in another system, like the built-in `write`.
     Writes,
     /// Runs commands or other actions whose effects the harness cannot
     /// bound, like the built-in `bash`.
@@ -104,13 +107,16 @@ impl ToolContext {
         &self.call_id
     }
 
-    /// Returns the run's identifier when the call belongs to a run that
-    /// streams its events.
+    /// Returns the identifier of the [`crate::Run`] that made the call;
+    /// `None` for a call outside a run, such as one from
+    /// [`crate::Harness::turn`].
     pub fn run_id(&self) -> Option<&RunId> {
         self.run.as_ref()
     }
 
-    /// Returns the identifier of the session whose turn made the call.
+    /// Returns the identifier of the host-created session whose turn made
+    /// the call; `None` for a stateless [`crate::Harness::run`] or
+    /// [`crate::Harness::turn`].
     pub fn session_id(&self) -> Option<&SessionId> {
         self.session.as_ref()
     }
@@ -146,7 +152,8 @@ impl fmt::Debug for ToolContext {
 /// The result of one tool call, sent to the model as text.
 ///
 /// The harness bounds a host handler's result to 64 KiB: a larger one is
-/// answered with an error result instead.
+/// dropped, and the model is told the call ran but its output was too
+/// large.
 #[derive(Clone, Debug, Eq, PartialEq)]
 #[non_exhaustive]
 pub struct ToolOutput {
@@ -274,10 +281,11 @@ pub(crate) enum ToolEntry {
     /// A built-in tool, bound to the turn's repository and options when the
     /// turn starts.
     Builtin(Tool),
-    /// A host handler under its definition's name.
+    /// A host handler with the definition read when it was added, which the
+    /// turn advertises and dispatches by.
     Handler {
+        definition: ToolDefinition,
         handler: Arc<dyn ToolHandler>,
-        name: String,
     },
 }
 
@@ -285,7 +293,7 @@ impl ToolEntry {
     fn name(&self) -> &str {
         match self {
             Self::Builtin(tool) => tool.name(),
-            Self::Handler { name, .. } => name,
+            Self::Handler { definition, .. } => definition.name(),
         }
     }
 }
@@ -299,6 +307,15 @@ impl ToolSet {
                 .into_iter()
                 .map(ToolEntry::Builtin)
                 .collect(),
+        }
+    }
+
+    /// Starts a builder holding this set's tools, to extend a default set,
+    /// such as [`Self::builtins`], for one run.
+    pub fn to_builder(&self) -> ToolSetBuilder {
+        ToolSetBuilder {
+            entries: self.entries.clone(),
+            error: None,
         }
     }
 
@@ -343,11 +360,30 @@ impl ToolSet {
             .iter()
             .any(|entry| matches!(entry, ToolEntry::Builtin(builtin) if *builtin == tool))
     }
-}
 
-impl Default for ToolSet {
-    fn default() -> Self {
-        Self::builtins()
+    /// Returns the tool names in order, or `None` for [`Self::builtins`],
+    /// which durable records leave out so earlier records stay comparable.
+    pub(crate) fn recorded_names(&self) -> Option<Vec<String>> {
+        (*self != Self::builtins()).then(|| self.names().map(str::to_string).collect())
+    }
+
+    /// Returns what identifies the set in a host request, or `None` for
+    /// [`Self::builtins`]: each built-in by name and each host tool by its
+    /// advertised definition, in order.
+    pub(crate) fn identity(&self) -> Option<Value> {
+        (*self != Self::builtins()).then(|| {
+            self.entries
+                .iter()
+                .map(|entry| match entry {
+                    ToolEntry::Builtin(tool) => serde_json::json!({"builtin": tool.name()}),
+                    ToolEntry::Handler { definition, .. } => serde_json::json!({
+                        "name": definition.name(),
+                        "description": definition.description(),
+                        "parameters": definition.parameters(),
+                    }),
+                })
+                .collect()
+        })
     }
 }
 
@@ -387,17 +423,30 @@ pub struct ToolSetBuilder {
 }
 
 impl ToolSetBuilder {
-    /// Adds the built-in `tool`; the turn's policy must still allow it.
-    pub fn builtin(self, tool: Tool) -> Self {
-        self.push(ToolEntry::Builtin(tool))
+    /// Adds the built-in `read`; the turn's policy must still allow it.
+    pub fn read(self) -> Self {
+        self.push(ToolEntry::Builtin(Tool::Read))
+    }
+
+    /// Adds the built-in `write`; the turn's policy must still allow it.
+    pub fn write(self) -> Self {
+        self.push(ToolEntry::Builtin(Tool::Write))
+    }
+
+    /// Adds the built-in `bash`; the turn's policy must still allow it.
+    pub fn bash(self) -> Self {
+        self.push(ToolEntry::Builtin(Tool::Bash))
     }
 
     /// Adds a host `handler` under its definition's name, which must not
-    /// name a built-in tool.
+    /// name a built-in tool. The definition is read once, here.
     pub fn handler(self, handler: Arc<dyn ToolHandler>) -> Self {
-        let name = handler.definition().name().to_string();
+        let definition = handler.definition();
 
-        self.push(ToolEntry::Handler { handler, name })
+        self.push(ToolEntry::Handler {
+            definition,
+            handler,
+        })
     }
 
     /// Returns the set.

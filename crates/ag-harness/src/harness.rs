@@ -516,12 +516,15 @@ impl Session {
             configuration["options"]["bash"] = bash.fingerprint();
         }
         // Later options join only when set, so earlier recorded requests
-        // stay recognizable.
+        // stay recognizable; the default tool set likewise stays out.
         if let Some(instructions) = options.instructions() {
             configuration["options"]["instructions"] = json!(instructions);
         }
         if !options.generation().is_default() {
             configuration["options"]["generation"] = json!(options.generation());
+        }
+        if let Some(tools) = options.tools().identity() {
+            configuration["options"]["tools"] = tools;
         }
 
         HostRequest::from_configuration(id, configuration)
@@ -1327,6 +1330,7 @@ impl Harness {
         if let Some(budget) = budget {
             harness.config_mut().budget = budget;
         }
+        harness.config_mut().ephemeral = true;
 
         Run::new(
             ControlledTurn::new(move |control| async move {
@@ -1695,7 +1699,7 @@ impl Harness {
             control,
             effects,
             events: control.and_then(TurnControl::events),
-            session: Some(SessionId::new(session.to_string())),
+            session: (!self.inner.ephemeral).then(|| SessionId::new(session.to_string())),
             ..self.engine(options)
         }
     }
@@ -2083,6 +2087,9 @@ struct HarnessConfig {
     database: Arc<OnceCell<Database>>,
     #[cfg(feature = "sqlite")]
     database_path: Option<PathBuf>,
+    /// Whether this harness runs one [`Harness::run`] in a throwaway
+    /// session, whose identifier tool handlers never see.
+    ephemeral: bool,
     execution_identity: Option<ExecutionIdentity>,
     file_system: Arc<dyn FileSystem>,
     history_budget: HistoryBudget,
@@ -2120,6 +2127,7 @@ impl HarnessConfig {
             database: Arc::new(OnceCell::new()),
             #[cfg(feature = "sqlite")]
             database_path: None,
+            ephemeral: false,
             execution_identity: None,
             file_system: Arc::new(LocalFileSystem),
             history_budget: HistoryBudget::Fixed(DEFAULT_MAX_HISTORY_BYTES),

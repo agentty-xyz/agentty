@@ -35,6 +35,10 @@ pub struct StoredTurnOptions {
     /// Output schema, or, from version 6, `null` for a plain-text turn.
     output_schema: Value,
     tool_policy: ToolPolicy,
+    /// Tool names of a turn whose tool set was not the built-in default,
+    /// in advertised order; absent for the default set.
+    #[serde(default)]
+    tools: Option<Vec<String>>,
     version: u8,
 }
 
@@ -54,6 +58,7 @@ impl StoredTurnOptions {
                 .schema()
                 .map_or(Value::Null, |schema| schema.value().clone()),
             tool_policy: options.tool_policy(),
+            tools: options.tools().recorded_names(),
             version: 6,
         };
         let mut snapshot = stored.effective_options();
@@ -74,7 +79,10 @@ impl StoredTurnOptions {
             || (stored.version < 4 && stored.bash.is_some())
             || (stored.version < 5) != stored.max_tool_calls.is_some()
             || (stored.version < 6
-                && (text_output || stored.instructions.is_some() || stored.generation.is_some()))
+                && (text_output
+                    || stored.instructions.is_some()
+                    || stored.generation.is_some()
+                    || stored.tools.is_some()))
         {
             return Err(StoredTurnOptionsError::InvalidData {
                 reason: format!("unsupported turn options version {}", stored.version),
@@ -132,6 +140,10 @@ impl StoredTurnOptions {
         if self.version >= 6 {
             value["instructions"] = json!(self.instructions);
             value["generation"] = json!(self.generation);
+        }
+        // Absent for the default set, so earlier fingerprints still match.
+        if let Some(tools) = &self.tools {
+            value["tools"] = json!(tools);
         }
 
         value

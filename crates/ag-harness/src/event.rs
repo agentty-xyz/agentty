@@ -42,13 +42,18 @@ const FINAL_EVENTS: usize = 3;
 
 /// Identifier of one run, unique across processes.
 ///
-/// Only a run split with [`crate::Run::into_parts`] has one; every event of
-/// its stream carries it.
+/// Every [`crate::Run`] has one: each event of its stream carries it, and
+/// each of its tool calls sees it in [`crate::tool::ToolContext::run_id`].
 #[derive(Clone, Debug, Deserialize, Eq, Hash, JsonSchema, PartialEq, Serialize)]
 #[serde(transparent)]
 pub struct RunId(String);
 
 impl RunId {
+    /// Returns a new random identifier.
+    pub(crate) fn generate() -> Self {
+        Self(uuid::Uuid::new_v4().to_string())
+    }
+
     /// Returns the identifier text.
     pub fn as_str(&self) -> &str {
         &self.0
@@ -313,7 +318,8 @@ impl ToolCallItem {
 #[serde(rename_all = "snake_case")]
 #[non_exhaustive]
 pub enum ToolCallStatus {
-    /// The tool ran; a `bash` result reports the command's own exit status.
+    /// The tool ran; a `bash` result reports the command's own exit status,
+    /// and a host tool's oversized output is dropped.
     Completed,
     /// The tool rejected the call, such as malformed arguments or a path
     /// outside the repository, and the model was told why.
@@ -338,12 +344,10 @@ impl From<&ToolActivity> for ToolCallStatus {
             ToolActivity::Bash { .. }
             | ToolActivity::Read { .. }
             | ToolActivity::ReadInspection { .. }
-            | ToolActivity::Write { .. }
-            | ToolActivity::Custom {
-                rejected: false, ..
-            } => Self::Completed,
+            | ToolActivity::Write { .. } => Self::Completed,
+            ToolActivity::Host { outcome, .. } if !outcome.is_rejected() => Self::Completed,
             ToolActivity::MalformedArguments { .. }
-            | ToolActivity::Custom { rejected: true, .. }
+            | ToolActivity::Host { .. }
             | ToolActivity::ReadInspectionRejected { .. }
             | ToolActivity::ReadRejected { .. }
             | ToolActivity::WriteRejected { .. } => Self::Rejected,
@@ -482,8 +486,8 @@ pub(crate) struct EventSink {
 }
 
 impl EventSink {
-    /// Creates a sink for a new run and the stream that reads it.
-    pub(crate) fn channel() -> (Arc<Self>, EventStream) {
+    /// Creates a sink for the run `run` and the stream that reads it.
+    pub(crate) fn channel(run: RunId) -> (Arc<Self>, EventStream) {
         let (sender, receiver) = mpsc::channel(EVENT_BUFFER + FINAL_EVENTS);
         let final_permits = (0..FINAL_EVENTS)
             .filter_map(|_| sender.clone().try_reserve_owned().ok())
@@ -504,11 +508,6 @@ impl EventSink {
         };
 
         (Arc::new(sink), stream)
-    }
-
-    /// Returns the identifier of the run this sink streams.
-    pub(crate) fn run_id(&self) -> &RunId {
-        &self.run
     }
 
     /// Sends `kind`, waiting while the stream is full; does nothing once the

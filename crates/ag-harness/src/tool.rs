@@ -335,10 +335,11 @@ impl ToolCall {
             "bash" => Tool::Bash,
             READ_NAME => Tool::Read,
             WRITE_NAME => Tool::Write,
-            _ if let Some(name) = ag_router::replayable_function_name(name) => {
+            _ if let Some(replayable) = ag_router::replayable_function_name(name) => {
                 return Ok(Self {
                     arguments: ToolArguments::Unknown(UnknownToolCall {
-                        name,
+                        renamed: replayable != name,
+                        name: replayable,
                         raw: arguments.to_string(),
                     }),
                     assistant_text: None,
@@ -478,18 +479,27 @@ impl ToolCall {
         }
     }
 
-    /// Returns the arguments as the JSON value a [`ToolHandler`] receives.
+    /// Returns the arguments as the JSON object a [`ToolHandler`] receives.
+    /// Blank verbatim arguments, which some providers send for a tool
+    /// without parameters, read as an empty object.
     ///
     /// # Errors
-    /// Returns an error when verbatim arguments are not JSON.
-    pub(crate) fn arguments_value(&self) -> Result<Value, serde_json::Error> {
-        match &self.arguments {
+    /// Returns why verbatim arguments are not a JSON object.
+    pub(crate) fn arguments_value(&self) -> Result<Value, String> {
+        let value = match &self.arguments {
             ToolArguments::Bash(arguments) => serde_json::to_value(arguments),
             ToolArguments::Read(arguments) => serde_json::to_value(arguments),
             ToolArguments::Write(arguments) => serde_json::to_value(arguments),
             ToolArguments::Malformed(arguments) => serde_json::from_str(&arguments.raw),
+            ToolArguments::Unknown(call) if call.raw.trim().is_empty() => Ok(json!({})),
             ToolArguments::Unknown(call) => serde_json::from_str(&call.raw),
         }
+        .map_err(|error| format!("failed to parse function arguments: {error}"))?;
+        if !value.is_object() {
+            return Err("function arguments must be a JSON object".to_string());
+        }
+
+        Ok(value)
     }
 
     /// Returns optional provider reasoning needed to replay the assistant
@@ -606,19 +616,29 @@ impl MalformedArguments {
     }
 }
 
-/// A call naming no built-in tool, such as one the model invented.
+/// A call naming no built-in tool: a host [`ToolHandler`]'s, or one the
+/// model invented.
 ///
 /// The arguments text is kept verbatim and the name as the model sent it
 /// when providers can replay it, so the call is journaled and replayed as
-/// sent, and is answered with a correctable result naming the turn's
-/// available tools instead of running.
+/// sent. A call whose name had to be rewritten never runs a handler; like
+/// a call to a tool the turn does not offer, it is answered with a
+/// correctable result naming the turn's available tools.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct UnknownToolCall {
     name: String,
     raw: String,
+    /// Whether `name` differs from the name the model sent.
+    renamed: bool,
 }
 
 impl UnknownToolCall {
+    /// Returns whether the name had to be rewritten for providers to
+    /// replay it.
+    pub(crate) fn renamed(&self) -> bool {
+        self.renamed
+    }
+
     /// Returns the function name as the model sent it, with characters
     /// providers cannot replay replaced by `_`.
     pub fn name(&self) -> &str {

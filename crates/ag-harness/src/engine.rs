@@ -2,7 +2,11 @@
 //! with context fitting, summaries, and overflow recovery.
 
 use std::collections::HashMap;
+use std::future::Future;
+use std::panic::{self, AssertUnwindSafe};
+use std::pin::Pin;
 use std::sync::Arc;
+use std::task::{Context as TaskContext, Poll};
 use std::time::{Duration, Instant};
 
 use serde_json::{Value, json};
@@ -17,7 +21,9 @@ use crate::cancellation::TurnControl;
 use crate::catalog::Pricing;
 use crate::context::{ContextEstimator, ContextSummaryPolicy, FitStep, SentHistory};
 use crate::effect::Effects;
-use crate::event::{EventSink, Item, ItemId, ItemKind, RunEventKind, SessionId, ToolCallItem};
+use crate::event::{
+    EventSink, Item, ItemId, ItemKind, RunEventKind, SessionId, ToolCallItem, ToolCallStatus,
+};
 use crate::execution::BashTool;
 use crate::file_system::FileSystem;
 use crate::lifecycle::{
@@ -37,12 +43,13 @@ use crate::round_summary::RoundSummaryJob;
 use crate::run::Usage;
 use crate::tool::{
     MAX_TOOL_RESULT_BYTES, MalformedArguments, ReadArguments, Tool, ToolCall, ToolCallArguments,
-    ToolDefinition,
+    ToolDefinition, UnknownToolCall,
 };
 use crate::tool_handler::{SharedResultFits, ToolContext, ToolEntry, ToolErrorKind, ToolHandler};
 use crate::turn::{
-    ContextActivity, ModelRequestActivity, ModelRequestPurpose, ToolActivity, TurnError,
-    TurnOptions, TurnOutcome, TurnReport, sanitize_report_text, sanitized_completion_metadata,
+    ContextActivity, HostToolOutcome, ModelRequestActivity, ModelRequestPurpose, ToolActivity,
+    TurnError, TurnOptions, TurnOutcome, TurnReport, sanitize_report_text,
+    sanitized_completion_metadata,
 };
 use crate::usage::{Cost, TurnUsage};
 use crate::write::{WriteError, WriteTool};
@@ -67,6 +74,10 @@ pub(crate) const MAX_CONSECUTIVE_MALFORMED_TOOL_RESPONSES: usize = 3;
 /// one, while a provider whose window cannot hold even the mandatory content
 /// stops after a bounded number of wasted requests.
 pub(crate) const MAX_CONTEXT_OVERFLOW_RECOVERIES: usize = 2;
+
+/// Status of the error result answering a host tool call that ran but whose
+/// result was too large to send.
+const OUTPUT_TOO_LARGE_STATUS: &str = "output_too_large";
 
 /// Request-only feedback after a summary request that continues the turn,
 /// tools included, was answered with tool calls; the calls never run.
@@ -873,14 +884,21 @@ impl Engine<'_> {
         };
         let mut tools = Tools::default();
         for entry in self.options.tools().entries() {
-            let handler: Arc<dyn ToolHandler> = match (entry, repository) {
-                (ToolEntry::Handler { handler, .. }, _) => Arc::clone(handler),
+            let (definition, handler) = match (entry, repository) {
+                (
+                    ToolEntry::Handler {
+                        definition,
+                        handler,
+                    },
+                    _,
+                ) => (definition.clone(), Arc::clone(handler)),
                 (ToolEntry::Builtin(tool), Some(repository)) if policy.allows(*tool) => {
-                    self.builtin_handler(*tool, repository, journal)?
+                    let handler = self.builtin_handler(*tool, repository, journal)?;
+
+                    (handler.definition(), handler)
                 }
                 (ToolEntry::Builtin(_), _) => continue,
             };
-            let definition = handler.definition();
             tools
                 .handlers
                 .push((definition.name().to_string(), handler));
@@ -1094,7 +1112,7 @@ impl Engine<'_> {
         let mut tool_lifecycle =
             self.lifecycle
                 .request_tool(call.id().to_string(), call.name().to_string(), turn_id);
-        let handler = tools.handler(call.name());
+        let handler = tools.handler_for(call);
         let execution = match call.arguments() {
             ToolCallArguments::Read(arguments) => handler.map(|handler| match shortcut {
                 Some(ReadShortcut::Repeat(earlier)) => {
@@ -1146,7 +1164,7 @@ impl Engine<'_> {
             call_id: call.id().to_string(),
             control: self.control.cloned(),
             fits,
-            run: self.events.as_ref().map(|events| events.run_id().clone()),
+            run: self.control.and_then(TurnControl::run_id).cloned(),
             session: self.session.clone(),
             workspace: self
                 .repository
@@ -1161,14 +1179,7 @@ impl Engine<'_> {
         match result {
             Ok(result) => {
                 if let Some(tool_lifecycle) = tool_lifecycle {
-                    if matches!(
-                        &result.1,
-                        ToolActivity::MalformedArguments { .. }
-                            | ToolActivity::Custom { rejected: true, .. }
-                            | ToolActivity::ReadInspectionRejected { .. }
-                            | ToolActivity::ReadRejected { .. }
-                            | ToolActivity::WriteRejected { .. }
-                    ) {
+                    if ToolCallStatus::from(&result.1) == ToolCallStatus::Rejected {
                         tool_lifecycle.failed(ToolErrorType::Execution);
                     } else {
                         tool_lifecycle.completed();
@@ -1580,6 +1591,16 @@ impl Tools {
             .find_map(|(handler_name, handler)| (handler_name == name).then_some(handler))
     }
 
+    /// Returns the handler of the tool `call` names exactly; a name
+    /// rewritten for replay never runs one.
+    fn handler_for(&self, call: &ToolCall) -> Option<&Arc<dyn ToolHandler>> {
+        if call.unknown_tool().is_some_and(UnknownToolCall::renamed) {
+            return None;
+        }
+
+        self.handler(call.name())
+    }
+
     /// Whether the turn offers the built-in `tool`.
     fn allows(&self, tool: Tool) -> bool {
         self.handler(tool.name()).is_some()
@@ -1726,9 +1747,9 @@ async fn execute_tool(
 }
 
 /// Runs `call` with `handler`. A built-in handler reports its own result
-/// and activity. A host handler's result is bounded, and arguments that are
-/// not JSON, a rejection, or an oversized result are answered with an error
-/// result.
+/// and activity. A host handler's result is bounded: arguments that are not
+/// a JSON object and a rejection are answered with an error result, and an
+/// oversized result is dropped. A panic fails the turn as a tool failure.
 async fn run_handler(
     handler: &dyn ToolHandler,
     call: &ToolCall,
@@ -1738,37 +1759,40 @@ async fn run_handler(
     let name = call.name();
     let arguments = match call.arguments_value() {
         Ok(arguments) => arguments,
-        Err(error) => {
+        Err(reason) => {
             return Ok(rejected_call(
                 name,
-                &format!("failed to parse function arguments: {error}"),
+                HostToolOutcome::InvalidArguments,
+                &reason,
                 started_at,
             ));
         }
     };
-    match handler.call(arguments, tool_context).await {
+    let result = CatchUnwind(handler.call(arguments, tool_context))
+        .await
+        .map_err(|_| TurnError::ToolFailed {
+            source: "the handler panicked".into(),
+            tool: name.to_string(),
+        })?;
+    match result {
         Ok(output) => Ok(match output.into_parts() {
             (content, Some(activity)) => (content, activity),
-            (content, None) if content.len() > MAX_TOOL_RESULT_BYTES => rejected_call(
-                name,
-                &format!(
-                    "the tool returned {} bytes, over the {MAX_TOOL_RESULT_BYTES}-byte result \
-                     limit",
-                    content.len()
-                ),
-                started_at,
+            (content, None) if content.len() > MAX_TOOL_RESULT_BYTES => (
+                oversized_result(content.len()),
+                host_activity(name, HostToolOutcome::ResultTooLarge, started_at),
             ),
             (content, None) => (
                 content,
-                ToolActivity::Custom {
-                    duration: started_at.elapsed(),
-                    rejected: false,
-                    tool: name.to_string(),
-                },
+                host_activity(name, HostToolOutcome::Completed, started_at),
             ),
         }),
         Err(error) => match error.kind {
-            ToolErrorKind::Rejected(feedback) => Ok(rejected_call(name, &feedback, started_at)),
+            ToolErrorKind::Rejected(feedback) => Ok(rejected_call(
+                name,
+                HostToolOutcome::Rejected,
+                &feedback,
+                started_at,
+            )),
             ToolErrorKind::Failed(source) => Err(TurnError::ToolFailed {
                 source,
                 tool: name.to_string(),
@@ -1778,23 +1802,62 @@ async fn run_handler(
     }
 }
 
-/// Answers a host tool call to `name` that did not produce a result with
-/// an error result naming `reason`.
-fn rejected_call(name: &str, reason: &str, started_at: Instant) -> (String, ToolActivity) {
+/// Polls a tool call, resolving to the panic that interrupted it instead
+/// of unwinding through the turn.
+struct CatchUnwind<'a, T>(Pin<Box<dyn Future<Output = T> + Send + 'a>>);
+
+impl<T> Future for CatchUnwind<'_, T> {
+    type Output = std::thread::Result<T>;
+
+    fn poll(mut self: Pin<&mut Self>, context: &mut TaskContext<'_>) -> Poll<Self::Output> {
+        let future = &mut self.0;
+        match panic::catch_unwind(AssertUnwindSafe(|| future.as_mut().poll(context))) {
+            Ok(Poll::Pending) => Poll::Pending,
+            Ok(Poll::Ready(output)) => Poll::Ready(Ok(output)),
+            Err(payload) => Poll::Ready(Err(payload)),
+        }
+    }
+}
+
+/// Reports a host tool call to `name` answered with `outcome`.
+fn host_activity(name: &str, outcome: HostToolOutcome, started_at: Instant) -> ToolActivity {
+    ToolActivity::Host {
+        duration: started_at.elapsed(),
+        outcome,
+        tool: name.to_string(),
+    }
+}
+
+/// Answers a host tool call to `name` that did not run, or that its handler
+/// rejected, with an error result naming `reason`.
+fn rejected_call(
+    name: &str,
+    outcome: HostToolOutcome,
+    reason: &str,
+    started_at: Instant,
+) -> (String, ToolActivity) {
     let result = json!({
         "error": schema_contract::bounded_diagnostic(reason),
         "status": "rejected",
     })
     .to_string();
 
-    (
-        result,
-        ToolActivity::Custom {
-            duration: started_at.elapsed(),
-            rejected: true,
-            tool: name.to_string(),
-        },
-    )
+    (result, host_activity(name, outcome, started_at))
+}
+
+/// Tells the model a host tool ran but its `bytes`-byte result was
+/// dropped, so it does not repeat the call's effects to see it.
+fn oversized_result(bytes: usize) -> String {
+    json!({
+        "error": format!(
+            "the tool ran, but its {bytes}-byte result is over the {MAX_TOOL_RESULT_BYTES}-byte \
+             limit and was dropped"
+        ),
+        "hint": "The call's effects already happened; do not repeat it to see the result. Ask \
+                 for less output if the tool supports it.",
+        "status": OUTPUT_TOO_LARGE_STATUS,
+    })
+    .to_string()
 }
 
 /// Counts the malformed calls of one response and the run of responses
@@ -1802,8 +1865,10 @@ fn rejected_call(name: &str, reason: &str, started_at: Instant) -> (String, Tool
 /// [`MAX_CONSECUTIVE_MALFORMED_TOOL_RESPONSES`]. A malformed call is
 /// journaled and answered with an error result like any other call; only a
 /// model that sends nothing else for several responses in a row fails the
-/// turn, unjournaled. A malformed call to a tool `tools` does not enable is
-/// answered as unavailable and bounded by the repetition guard instead.
+/// turn, unjournaled. A host tool call whose arguments are not a JSON
+/// object counts as malformed too. A malformed call to a tool `tools` does
+/// not enable is answered as unavailable and bounded by the repetition guard
+/// instead.
 fn count_malformed(
     calls: &[ToolCall],
     tools: &Tools,
@@ -1811,26 +1876,41 @@ fn count_malformed(
 ) -> Result<usize, TurnError> {
     let malformed = calls
         .iter()
-        .filter_map(ToolCall::malformed_arguments)
-        .filter(|arguments| tools.allows(arguments.tool()))
+        .filter_map(|call| malformed_call(call, tools))
         .collect::<Vec<_>>();
     if malformed.len() < calls.len() {
         *consecutive = 0;
     } else {
         *consecutive += 1;
         if *consecutive == MAX_CONSECUTIVE_MALFORMED_TOOL_RESPONSES {
+            let (name, reason) = &malformed[0];
+
             return Err(ModelError::InvalidToolArguments {
-                reason: schema_contract::bounded_diagnostic(format!(
-                    "`{}`: {}",
-                    malformed[0].tool().name(),
-                    malformed[0].reason()
-                )),
+                reason: schema_contract::bounded_diagnostic(format!("`{name}`: {reason}")),
             }
             .into());
         }
     }
 
     Ok(malformed.len())
+}
+
+/// Returns the tool name and decoding failure of `call` when it calls a
+/// tool `tools` offers with arguments that tool cannot decode.
+fn malformed_call(call: &ToolCall, tools: &Tools) -> Option<(String, String)> {
+    if let Some(arguments) = call.malformed_arguments() {
+        let tool = arguments.tool();
+
+        return tools
+            .allows(tool)
+            .then(|| (tool.name().to_string(), arguments.reason().to_string()));
+    }
+    call.unknown_tool()?;
+    tools.handler_for(call)?;
+
+    call.arguments_value()
+        .err()
+        .map(|reason| (call.name().to_string(), reason))
 }
 
 /// Renders the bounded feedback that re-requests a rejected final output.

@@ -790,16 +790,50 @@ pub enum ToolActivity {
     },
     /// A call to a host [`crate::ToolHandler`]. Arguments and results are
     /// never reported.
-    Custom {
+    #[non_exhaustive]
+    Host {
         /// Elapsed tool-execution time.
         duration: Duration,
-        /// Whether the call was answered with an error result instead of
-        /// the handler's output: arguments that are not JSON, a rejection,
-        /// or an oversized result.
-        rejected: bool,
+        /// How the call was answered.
+        outcome: HostToolOutcome,
         /// Function name of the handler's tool.
         tool: String,
     },
+}
+
+/// How the harness answered a call to a host [`crate::ToolHandler`].
+#[derive(Clone, Copy, Debug, Deserialize, Eq, Hash, PartialEq, Serialize)]
+#[serde(rename_all = "snake_case")]
+#[non_exhaustive]
+pub enum HostToolOutcome {
+    /// The handler ran and its output was sent to the model.
+    Completed,
+    /// The handler rejected the call with [`crate::tool::ToolError::rejected`],
+    /// and the model was told why.
+    Rejected,
+    /// The arguments were not a JSON object, so the handler did not run.
+    InvalidArguments,
+    /// The handler ran, but its output was over 64 KiB and was dropped; the
+    /// model was told the call ran.
+    ResultTooLarge,
+}
+
+impl HostToolOutcome {
+    /// Returns whether the handler did not run or rejected the call, so the
+    /// model was told to correct it.
+    pub(crate) fn is_rejected(self) -> bool {
+        matches!(self, Self::Rejected | Self::InvalidArguments)
+    }
+
+    /// Returns the outcome as a report phrase.
+    fn label(self) -> &'static str {
+        match self {
+            Self::Completed => "completed",
+            Self::Rejected => "rejected",
+            Self::InvalidArguments => "invalid arguments",
+            Self::ResultTooLarge => "result too large",
+        }
+    }
 }
 
 impl ToolActivity {
@@ -817,7 +851,7 @@ impl ToolActivity {
             | Self::Unavailable { duration, .. }
             | Self::Write { duration, .. }
             | Self::WriteRejected { duration, .. }
-            | Self::Custom { duration, .. } => *duration,
+            | Self::Host { duration, .. } => *duration,
         }
     }
 
@@ -833,7 +867,7 @@ impl ToolActivity {
             Self::Write { .. } | Self::WriteRejected { .. } => "write",
             Self::Bash { .. } => "bash",
             Self::MalformedArguments { tool, .. } => tool.name(),
-            Self::Unavailable { tool, .. } | Self::Custom { tool, .. } => tool,
+            Self::Unavailable { tool, .. } | Self::Host { tool, .. } => tool,
         }
     }
 
@@ -844,7 +878,7 @@ impl ToolActivity {
             Self::Bash { .. }
             | Self::MalformedArguments { .. }
             | Self::Unavailable { .. }
-            | Self::Custom { .. } => "",
+            | Self::Host { .. } => "",
             Self::Read { path, .. }
             | Self::ReadRejected { path, .. }
             | Self::Write { path, .. }
@@ -936,7 +970,7 @@ impl fmt::Display for ToolActivity {
                 sanitize_report_text(reason),
                 format_report_duration(*duration)
             ),
-            Self::Unavailable { duration, tool, .. } | Self::Custom { duration, tool, .. } => {
+            Self::Unavailable { duration, tool, .. } | Self::Host { duration, tool, .. } => {
                 self.write_call(formatter, tool, *duration)
             }
             Self::Write {
@@ -969,10 +1003,7 @@ impl ToolActivity {
         duration: Duration,
     ) -> fmt::Result {
         let outcome = match self {
-            Self::Custom {
-                rejected: false, ..
-            } => "completed",
-            Self::Custom { rejected: true, .. } => "rejected",
+            Self::Host { outcome, .. } => outcome.label(),
             _ => "unavailable",
         };
 
@@ -1045,7 +1076,7 @@ pub enum TurnError {
     #[error(transparent)]
     Write(#[from] WriteError),
     /// A host [`crate::ToolHandler`] failed the turn with
-    /// [`crate::tool::ToolError::failed`].
+    /// [`crate::tool::ToolError::failed`], or panicked.
     #[error("tool `{tool}` failed: {source}")]
     ToolFailed {
         /// The handler's failure.

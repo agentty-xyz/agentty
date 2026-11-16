@@ -485,35 +485,64 @@ impl ag_harness::ToolHandler for Clock {
     }
 }
 
+/// Calls `clock` once, then answers with the call's result.
+struct ClockModel;
+
+#[async_trait]
+impl Model for ClockModel {
+    async fn complete(&self, request: ModelRequest) -> Result<ModelCompletion, ModelError> {
+        let response = match request.messages().last() {
+            Some(ModelMessage::ToolResult { content, .. }) => ModelResponse::Output(json!({
+                "clock": serde_json::from_str::<serde_json::Value>(content)
+                    .map_err(ModelError::request)?,
+            })),
+            _ => ModelResponse::ToolCall(ToolCall::from_json(
+                "call_1".to_string(),
+                "clock",
+                "{}",
+                None,
+            )?),
+        };
+
+        Ok(ModelCompletion::from_response(response))
+    }
+}
+
 #[tokio::test]
-async fn external_consumer_adds_a_tool_handler_beside_the_built_ins() -> Result<(), Box<dyn Error>>
-{
+async fn external_consumer_runs_a_turn_with_its_tool_handler() -> Result<(), Box<dyn Error>> {
     // Arrange
-    let definition = ag_harness::tool::ToolDefinition::new(
-        "clock",
-        "Read the clock.",
-        json!({"type": "object"}),
-    )?;
-    let clock: Arc<dyn ag_harness::ToolHandler> = Arc::new(Clock(definition));
+    let definition = ToolDefinition::new("clock", "Read the clock.", json!({"type": "object"}))?;
     let tools = ag_harness::ToolSet::builder()
-        .builtin(Tool::Read)
-        .handler(Arc::clone(&clock))
+        .read()
+        .handler(Arc::new(Clock(definition)))
+        .build()?;
+    let harness = Harness::builder()
+        .model(Arc::new(ClockModel))
+        .context_budget(unbounded_context_budget())
+        .tools(tools)
         .build()?;
 
     // Act
-    let output = clock
-        .call(json!({}), ag_harness::tool::ToolContext::new("call_1"))
-        .await?;
-    let harness = Harness::builder()
-        .model(Arc::new(ExternalModel))
-        .context_budget(unbounded_context_budget())
-        .tools(tools.clone())
-        .build()?;
+    let outcome = harness
+        .run(
+            RunRequest::new("What time is it?")
+                .output(OutputSchema::new(json!({"type": "object"}))?),
+        )
+        .await;
 
     // Assert
-    assert_eq!(output.content(), r#"{"call":"call_1"}"#);
-    assert_eq!(tools.names().collect::<Vec<_>>(), ["read", "clock"]);
-    drop(harness);
+    assert!(matches!(
+        outcome.result?,
+        RunOutput::Json(output) if output == json!({"clock": {"call": "call_1"}})
+    ));
+    assert!(matches!(
+        outcome.report.tool_calls(),
+        [ag_harness::turn::ToolActivity::Host {
+            outcome: ag_harness::turn::HostToolOutcome::Completed,
+            tool,
+            ..
+        }] if tool == "clock"
+    ));
 
     Ok(())
 }

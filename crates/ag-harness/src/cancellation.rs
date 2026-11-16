@@ -10,7 +10,7 @@ use thiserror::Error;
 use tokio::sync::watch;
 
 use crate::effect::Effects;
-use crate::event::EventSink;
+use crate::event::{EventSink, RunId};
 use crate::session::{SessionError, TurnOwner};
 use crate::turn::TurnReport;
 use crate::{ModelError, TurnError, TurnOutcome, reservation, telemetry};
@@ -43,6 +43,7 @@ impl<'a, E: From<TurnError> + Send + 'static> ControlledTurn<'a, E> {
             effects: Effects::default(),
             events: Arc::default(),
             record: Arc::default(),
+            run: Arc::default(),
             settlement: Settlement(watch::Sender::new(State::default())),
         };
         let lease = control.settlement.retain();
@@ -104,6 +105,8 @@ pub struct TurnControl {
     /// future owns the sink, so dropping the run ends the stream.
     events: Arc<OnceLock<Weak<EventSink>>>,
     record: Arc<Mutex<TurnRecord>>,
+    /// Identifier of the run this turn belongs to, if any.
+    run: Arc<OnceLock<RunId>>,
 }
 
 impl TurnControl {
@@ -206,6 +209,16 @@ impl TurnControl {
     /// been dropped.
     pub(crate) fn events(&self) -> Option<Arc<EventSink>> {
         self.events.get().and_then(Weak::upgrade)
+    }
+
+    /// Marks this turn as the run `run`'s; only the first run is kept.
+    pub(crate) fn assign_run(&self, run: RunId) {
+        let _ = self.run.set(run);
+    }
+
+    /// Returns the identifier of the run this turn belongs to, if any.
+    pub(crate) fn run_id(&self) -> Option<&RunId> {
+        self.run.get()
     }
 
     /// Records the durable turn position the turn acquired, which scopes its

@@ -915,6 +915,8 @@ fn arguments_value_is_what_a_handler_receives() {
     let host = call("fetch", r#"{"url":"https://example.com"}"#);
     let malformed = call("read", r#"{"path":"a.txt","extra":1}"#);
     let unparsable = call("fetch", r#"{"url""#);
+    let blank = call("fetch", " ");
+    let not_object = call("fetch", "[1]");
 
     // Act / Assert
     assert_eq!(
@@ -937,5 +939,34 @@ fn arguments_value_is_what_a_handler_receives() {
         malformed.arguments_value().expect("malformed but JSON"),
         json!({"path": "a.txt", "extra": 1})
     );
-    assert!(unparsable.arguments_value().is_err());
+    assert!(
+        unparsable
+            .arguments_value()
+            .expect_err("not JSON")
+            .starts_with("failed to parse function arguments: ")
+    );
+    assert_eq!(blank.arguments_value().expect("blank"), json!({}));
+    assert_eq!(
+        not_object.arguments_value().expect_err("not an object"),
+        "function arguments must be a JSON object"
+    );
+}
+
+#[test]
+fn only_a_name_providers_cannot_replay_is_marked_renamed() {
+    // Arrange
+    let call = |name: &str| {
+        ToolCall::from_json("call-id".to_string(), name, "{}", None).expect("tool call")
+    };
+
+    // Act
+    let renamed = [
+        call("lookup.issue"),
+        call(&"x".repeat(65)),
+        call("lookup_issue"),
+    ]
+    .map(|call| call.unknown_tool().expect("unknown tool").renamed());
+
+    // Assert
+    assert_eq!(renamed, [true, true, false]);
 }
