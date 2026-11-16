@@ -9,6 +9,7 @@
 use std::collections::HashSet;
 use std::error::Error;
 use std::ops::Deref;
+#[cfg(any(feature = "providers-compat", feature = "providers-openai"))]
 use std::sync::Arc;
 use std::time::Duration;
 
@@ -24,14 +25,19 @@ pub use crate::context::{
     HeuristicContextEstimator,
 };
 use crate::input::TurnInput;
-use crate::lifecycle::{LifecycleEmitter, LifecycleObserver, ModelResponseType};
+use crate::lifecycle::ModelResponseType;
+#[cfg(any(feature = "providers-compat", feature = "providers-openai"))]
+use crate::lifecycle::{LifecycleEmitter, LifecycleObserver};
 pub use crate::model_profile::ModelProfile;
 pub use crate::model_registry::{
     ModelCapabilities, ModelRegistration, ModelRegistry, ModelRegistryError,
 };
-use crate::provider::{
-    self, ChatGptConfig, KimiConfig, MuseConfig, OpenAiCompatibleConfig, OpenAiConfig, QwenConfig,
-};
+#[cfg(any(feature = "providers-compat", feature = "providers-openai"))]
+use crate::provider;
+#[cfg(feature = "providers-openai")]
+use crate::provider::{ChatGptConfig, OpenAiConfig};
+#[cfg(feature = "providers-compat")]
+use crate::provider::{KimiConfig, MuseConfig, OpenAiCompatibleConfig, QwenConfig};
 use crate::request_option::{GenerationParams, OutputMode};
 use crate::schema_contract::{OutputSchema, OutputValidationError, bounded_diagnostic};
 use crate::{telemetry, tool};
@@ -135,7 +141,9 @@ pub trait Model: Send + Sync {
 ///
 /// Provider request execution remains private so every request passes through
 /// [`ModelClient::complete`], which owns telemetry while `ag-router` validates
-/// structured output.
+/// structured output. Its constructors require the provider's `providers-*`
+/// feature.
+#[cfg(any(feature = "providers-compat", feature = "providers-openai"))]
 pub struct ModelClient {
     router: ag_router::Router,
     router_model: String,
@@ -144,6 +152,7 @@ pub struct ModelClient {
     profile: Option<ModelProfile>,
 }
 
+#[cfg(any(feature = "providers-compat", feature = "providers-openai"))]
 impl ModelClient {
     /// Creates a client backed by Moonshot AI's Kimi API.
     ///
@@ -151,6 +160,7 @@ impl ModelClient {
     ///
     /// Returns [`ModelMetadataError`] when the configured model identifier is
     /// empty or contains only whitespace.
+    #[cfg(feature = "providers-compat")]
     pub fn kimi(config: KimiConfig) -> Result<Self, ModelMetadataError> {
         Self::routed(
             ag_router::Provider::Kimi,
@@ -167,6 +177,7 @@ impl ModelClient {
     ///
     /// Returns [`ModelMetadataError`] when the configured model identifier is
     /// empty or contains only whitespace.
+    #[cfg(feature = "providers-compat")]
     pub fn muse(config: MuseConfig) -> Result<Self, ModelMetadataError> {
         Self::routed(
             ag_router::Provider::Muse,
@@ -186,6 +197,7 @@ impl ModelClient {
     ///
     /// Returns [`ModelMetadataError`] when the configured model identifier is
     /// empty or contains only whitespace.
+    #[cfg(feature = "providers-openai")]
     pub fn openai(config: OpenAiConfig) -> Result<Self, ModelMetadataError> {
         let profile = provider::openai_profile(&config.model);
 
@@ -207,6 +219,7 @@ impl ModelClient {
     ///
     /// Returns [`ModelMetadataError`] when the configured model identifier is
     /// empty or contains only whitespace.
+    #[cfg(feature = "providers-openai")]
     pub fn chatgpt(config: ChatGptConfig) -> Result<Self, ModelMetadataError> {
         let profile = provider::chatgpt_profile(&config.model);
 
@@ -232,6 +245,7 @@ impl ModelClient {
     ///
     /// Returns [`ModelMetadataError`] when the configured model identifier is
     /// empty or contains only whitespace.
+    #[cfg(feature = "providers-compat")]
     pub fn openai_compatible(config: OpenAiCompatibleConfig) -> Result<Self, ModelMetadataError> {
         Self::routed(
             ag_router::Provider::OpenAiCompatible,
@@ -248,6 +262,7 @@ impl ModelClient {
     ///
     /// Returns [`ModelMetadataError`] when the configured model identifier is
     /// empty or contains only whitespace.
+    #[cfg(feature = "providers-compat")]
     pub fn qwen(config: QwenConfig) -> Result<Self, ModelMetadataError> {
         let profile = provider::qwen_profile(&config.model);
 
@@ -603,17 +618,23 @@ impl ModelClient {
     }
 }
 
+/// Returns the stable provider name that telemetry and persisted model
+/// metadata use. `ChatGPT` billing stays apart from `OpenAI` API billing so a
+/// resumed session keeps its billing, and OpenAI-compatible servers, which
+/// `gen_ai` semantic conventions do not enumerate, get their own name.
+#[cfg(any(feature = "providers-compat", feature = "providers-openai"))]
 fn provider_telemetry_name(provider: ag_router::Provider) -> &'static str {
     match provider {
-        ag_router::Provider::Kimi => telemetry::PROVIDER_MOONSHOT_AI,
-        ag_router::Provider::Muse => telemetry::PROVIDER_META,
-        ag_router::Provider::ChatGpt => telemetry::PROVIDER_OPENAI_CHATGPT,
-        ag_router::Provider::OpenAi => telemetry::PROVIDER_OPENAI,
-        ag_router::Provider::OpenAiCompatible => telemetry::PROVIDER_OPENAI_COMPATIBLE,
-        ag_router::Provider::Qwen => telemetry::PROVIDER_ALIBABA_CLOUD,
+        ag_router::Provider::Kimi => "moonshot_ai",
+        ag_router::Provider::Muse => "meta",
+        ag_router::Provider::ChatGpt => "openai_chatgpt",
+        ag_router::Provider::OpenAi => "openai",
+        ag_router::Provider::OpenAiCompatible => "openai_compatible",
+        ag_router::Provider::Qwen => "alibaba_cloud",
     }
 }
 
+#[cfg(any(feature = "providers-compat", feature = "providers-openai"))]
 #[async_trait]
 impl Model for ModelClient {
     fn metadata(&self) -> Option<ModelMetadata> {
@@ -951,6 +972,7 @@ impl ModelRequest {
         self.tools.iter().any(|tool| tool.name() == name)
     }
 
+    #[cfg(any(feature = "providers-compat", feature = "providers-openai", test))]
     pub(crate) fn lifecycle_observed(&self) -> bool {
         self.lifecycle_observed
     }
@@ -1172,6 +1194,7 @@ impl ModelCompletion {
         }
     }
 
+    #[cfg(any(feature = "providers-compat", feature = "providers-openai"))]
     pub(crate) fn with_reasoning_content(mut self, reasoning_content: Option<String>) -> Self {
         self.reasoning_content = reasoning_content;
 

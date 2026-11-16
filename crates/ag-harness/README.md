@@ -581,6 +581,28 @@ its reported requests, tool calls, and counts. Each fitted request reports the
 calibrated capacity it was fitted into (`budget_weight`) and its weight before
 (`unreduced_weight`) and after (`estimated_weight`) reduction.
 
+## Features
+
+The default features build every backend. Turn them off with `default-features = false`
+to keep only the core: `MemoryStore` and custom stores, host-implemented `Model`s, and
+host-selected Bash executors such as `UnsandboxedExecutor`.
+
+| Feature               | Default | Enables                                                                                   |
+| --------------------- | ------- | ----------------------------------------------------------------------------------------- |
+| `sqlite`              | yes     | `store::SqliteStore`, `Harness::database`, `HarnessBuilder::sqlite`, bundled migrations   |
+| `native-sandbox`      | yes     | The default sandboxed Bash executor and the `ag-harness-sandbox` launcher                 |
+| `otel`                | yes     | OpenTelemetry request metrics, `LifecycleMetrics`, `LifecycleTraceObserver`, span context |
+| `providers-openai`    | yes     | `OpenAI` Responses API clients and `ChatGPT` plan sign-in                                 |
+| `providers-compat`    | yes     | Chat Completions clients: Kimi, Qwen, Muse, and local or self-hosted servers              |
+| `providers-anthropic` | no      | Reserved for the Anthropic Messages client; enables nothing yet                           |
+| `unstable-protocol`   | no      | Reserved for the unstable `serve` protocol types; enables nothing yet                     |
+
+Either provider feature builds the `provider` module, `ModelClient`, and
+`ModelCatalog::from_environment` with every provider's catalog entries; a client whose
+family is off fails with `ModelConfigurationError::ProviderDisabled`. Without
+`native-sandbox`, Bash requires `BashConfig::for_executor`. Without `sqlite`, durable
+sessions require `Harness::store`.
+
 ## Where things live
 
 The crate root holds what a typical host needs: `Harness`, `Session`, `TurnOptions`,

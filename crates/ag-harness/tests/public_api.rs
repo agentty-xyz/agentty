@@ -45,6 +45,7 @@ mod store_gate;
 mod compaction_test;
 
 #[cfg(test)]
+#[cfg(feature = "sqlite")]
 #[path = "support/shared_harness.rs"]
 mod shared_harness_test;
 
@@ -65,6 +66,7 @@ mod run_options_test;
 mod run_limits_test;
 
 #[cfg(test)]
+#[cfg(feature = "sqlite")]
 #[path = "support/legacy_store.rs"]
 mod legacy_store_test;
 
@@ -80,6 +82,7 @@ use std::error::Error;
 use std::ffi::OsString;
 use std::io::{self, Cursor};
 use std::num::{NonZeroU64, NonZeroUsize};
+#[cfg(feature = "sqlite")]
 use std::os::unix::ffi::OsStringExt as _;
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};
@@ -89,27 +92,38 @@ use ag_harness::bash::{
     Enforcement, ExecutionAccess, ExecutionCommand, ExecutionError, ExecutionPolicy, MainExit,
     OutputStream, ProcessEvent, UnsandboxedExecutor,
 };
-use ag_harness::catalog::{Capabilities, CatalogError, ModelId, ModelSpec, Pricing, PricingSource};
-use ag_harness::lifecycle::{
-    ContextSummaryErrorType, ContextSummaryTrigger, LifecycleEventKind, LifecycleMetrics,
-    LifecycleObserverSet, LifecycleTraceObserver,
-};
+#[cfg(all(feature = "providers-compat", feature = "providers-openai"))]
+use ag_harness::catalog::CatalogError;
+use ag_harness::catalog::{Capabilities, CostTier, ModelId, ModelSpec, Pricing, PricingSource};
+use ag_harness::lifecycle::LifecycleEventKind;
+#[cfg(feature = "sqlite")]
+use ag_harness::lifecycle::{ContextSummaryErrorType, ContextSummaryTrigger};
+#[cfg(feature = "otel")]
+use ag_harness::lifecycle::{LifecycleMetrics, LifecycleObserverSet, LifecycleTraceObserver};
+#[cfg(feature = "sqlite")]
+use ag_harness::model::ContextSummaryPolicy;
 use ag_harness::model::{
-    CompletionMetadata, CompletionUsage, ContextBudget, ContextSummaryPolicy, ModelCapabilities,
-    ModelCompletion, ModelMessage, ModelMetadata, ModelRegistry, ModelRequest, ModelResponse,
+    CompletionMetadata, CompletionUsage, ContextBudget, ModelCapabilities, ModelCompletion,
+    ModelMessage, ModelMetadata, ModelRegistry, ModelRequest, ModelResponse,
 };
+#[cfg(all(feature = "providers-compat", feature = "providers-openai"))]
 use ag_harness::provider::{
-    ChatGptCredentials, CostTier, ModelConfiguration, ModelProvider, QWEN_PLUS, QWEN3_8_FLASH,
+    ChatGptCredentials, ModelConfiguration, ModelProvider, QWEN_PLUS, QWEN3_8_FLASH,
 };
 use ag_harness::recovery::ExecutionIdentity;
-use ag_harness::store::{MemoryStore, SessionInfo, SessionStore, WriteStatus};
-use ag_harness::tool::{FileSystem, LocalFileSystem, ToolCall, ToolDefinition};
+use ag_harness::store::{MemoryStore, SessionStore};
+#[cfg(feature = "sqlite")]
+use ag_harness::store::{SessionInfo, WriteStatus};
+#[cfg(feature = "sqlite")]
+use ag_harness::tool::LocalFileSystem;
+use ag_harness::tool::{FileSystem, ToolCall, ToolDefinition};
+#[cfg(feature = "sqlite")]
+use ag_harness::{ComparisonBase, RunOutput, RunRequest, Session, SessionBuilder};
 use ag_harness::{
-    ComparisonBase, ErrorKind, Harness, HarnessBuildError, HarnessError, ImageContent,
-    ImageMediaType, InputBlock, Model, ModelCatalog, ModelError, ModelSelector, OutputSchema,
-    OutputSchemaError, Repository, RepositoryError, Role, RunError, RunOutput, RunRequest, Session,
-    SessionBuilder, SessionError, Tool, ToolPolicy, TurnError, TurnInput, TurnInputError,
-    TurnOptions,
+    ErrorKind, Harness, HarnessBuildError, HarnessError, ImageContent, ImageMediaType, InputBlock,
+    Model, ModelCatalog, ModelError, ModelSelector, OutputSchema, OutputSchemaError, Repository,
+    RepositoryError, Role, RunError, SessionError, Tool, ToolPolicy, TurnError, TurnInput,
+    TurnInputError, TurnOptions,
 };
 use async_trait::async_trait;
 use serde_json::json;
@@ -465,6 +479,7 @@ fn builder_requires_a_budget_for_a_model_without_a_declared_profile() {
     assert!(budgeted.is_ok());
 }
 
+#[cfg(all(feature = "providers-compat", feature = "providers-openai"))]
 #[test]
 fn builder_derives_the_budget_of_a_cataloged_built_in_model() -> Result<(), Box<dyn Error>> {
     // Arrange
@@ -525,6 +540,7 @@ fn external_consumer_selects_a_harness_model_from_a_host_catalog() -> Result<(),
     Ok(())
 }
 
+#[cfg(all(feature = "providers-compat", feature = "providers-openai"))]
 #[test]
 fn external_consumer_reads_built_in_specs_by_role_defaults() {
     // Arrange
@@ -624,8 +640,10 @@ impl Model for ExternalMetadataModel {
     }
 }
 
+#[cfg(feature = "otel")]
 fn assert_observer<Observer: ag_harness::lifecycle::LifecycleObserver>(_observer: Observer) {}
 
+#[cfg(all(feature = "providers-compat", feature = "providers-openai"))]
 #[test]
 fn external_consumer_configures_every_catalog_provider() {
     // Arrange and Act
@@ -674,6 +692,7 @@ fn external_consumer_configures_every_catalog_provider() {
     }
 }
 
+#[cfg(all(feature = "providers-compat", feature = "providers-openai"))]
 #[test]
 fn external_consumer_configures_a_local_server_from_the_environment() {
     // Arrange
@@ -700,6 +719,7 @@ fn external_consumer_configures_a_local_server_from_the_environment() {
     );
 }
 
+#[cfg(all(feature = "providers-compat", feature = "providers-openai"))]
 #[test]
 fn external_consumer_picks_a_cheap_cataloged_model() {
     // Arrange
@@ -724,6 +744,7 @@ fn external_consumer_picks_a_cheap_cataloged_model() {
     assert_eq!(CostTier::Cheap.as_str(), "cheap");
 }
 
+#[cfg(feature = "otel")]
 #[test]
 fn external_consumer_constructs_lifecycle_trace_observer() {
     // Arrange & Act
@@ -762,6 +783,7 @@ async fn external_response_only_provider_implements_model() -> Result<(), Box<dy
     Ok(())
 }
 
+#[cfg(feature = "sqlite")]
 #[tokio::test]
 async fn external_consumer_creates_and_reopens_persistent_session() -> Result<(), Box<dyn Error>> {
     // Arrange
@@ -851,6 +873,7 @@ fn ownership_lost_session_error_exposes_the_turn_identity() {
     ));
 }
 
+#[cfg(feature = "sqlite")]
 #[tokio::test]
 async fn session_info_exposes_stored_model_identity() -> Result<(), Box<dyn Error>> {
     // Arrange
@@ -956,6 +979,7 @@ async fn external_metadata_provider_reaches_harness_lifecycle() -> Result<(), Bo
     Ok(())
 }
 
+#[cfg(feature = "otel")]
 #[tokio::test]
 async fn external_observer_set_fans_out_lifecycle_events() -> Result<(), Box<dyn Error>> {
     // Arrange
@@ -1062,8 +1086,10 @@ async fn external_consumer_observes_a_repeated_call_nudge_then_stop() -> Result<
     Ok(())
 }
 
+#[cfg(feature = "sqlite")]
 struct FailingAfterWriteModel;
 
+#[cfg(feature = "sqlite")]
 #[async_trait]
 impl Model for FailingAfterWriteModel {
     async fn complete(&self, request: ModelRequest) -> Result<ModelCompletion, ModelError> {
@@ -1079,12 +1105,14 @@ impl Model for FailingAfterWriteModel {
     }
 }
 
+#[cfg(feature = "sqlite")]
 #[derive(Clone)]
 struct NativeRootFileSystem {
     native_root: PathBuf,
     physical_root: PathBuf,
 }
 
+#[cfg(feature = "sqlite")]
 #[async_trait]
 impl FileSystem for NativeRootFileSystem {
     async fn canonicalize(&self, path: &Path) -> io::Result<PathBuf> {
@@ -1120,6 +1148,7 @@ impl FileSystem for NativeRootFileSystem {
     }
 }
 
+#[cfg(feature = "sqlite")]
 #[tokio::test]
 async fn applied_write_survives_model_failure_and_session_reopen() -> Result<(), Box<dyn Error>> {
     for memory in [false, true] {
@@ -1186,6 +1215,7 @@ async fn applied_write_survives_model_failure_and_session_reopen() -> Result<(),
     Ok(())
 }
 
+#[cfg(feature = "sqlite")]
 #[tokio::test]
 async fn explicit_options_support_both_entry_points_and_retain_history_after_revocation()
 -> Result<(), Box<dyn Error>> {
@@ -1278,8 +1308,10 @@ async fn explicit_options_support_both_entry_points_and_retain_history_after_rev
     Ok(())
 }
 
+#[cfg(feature = "sqlite")]
 struct ExternalComparisonModel;
 
+#[cfg(feature = "sqlite")]
 #[async_trait]
 impl Model for ExternalComparisonModel {
     async fn complete(&self, request: ModelRequest) -> Result<ModelCompletion, ModelError> {
@@ -1315,6 +1347,7 @@ impl Model for ExternalComparisonModel {
     }
 }
 
+#[cfg(feature = "sqlite")]
 #[tokio::test]
 async fn host_comparison_api_supports_both_entry_points_and_nested_scope()
 -> Result<(), Box<dyn Error>> {
@@ -1400,6 +1433,7 @@ fn external_image_input(payload: &[u8]) -> Result<TurnInput, TurnInputError> {
     ])
 }
 
+#[cfg(feature = "sqlite")]
 #[tokio::test]
 async fn ordered_image_input_round_trips_through_sqlite_reopen() -> Result<(), Box<dyn Error>> {
     // Arrange

@@ -18,7 +18,8 @@ use crate::context_budget_fixture::unbounded_context_budget;
 use crate::harness::{Harness, SessionHistory};
 use crate::lifecycle::{LifecycleEventKind, TurnErrorType};
 use crate::model::{ModelError, ModelErrorType, ModelMessage, ModelResponse};
-use crate::session::{Database, SessionError};
+use crate::session::SessionError;
+use crate::sqlite_store::Database;
 use crate::turn::TurnError;
 
 #[tokio::test]

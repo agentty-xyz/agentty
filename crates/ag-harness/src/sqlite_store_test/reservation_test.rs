@@ -17,9 +17,8 @@ use crate::gated_store_test::{GatedStore, PauseAt};
 use crate::input::TurnInput;
 use crate::model::{ModelError, ModelMessage};
 use crate::reservation::TURN_LEASE_SECONDS;
-use crate::session::{
-    Database, NewSession, SessionError, TimestampSource, connect_options, interrupt_owned_turn,
-};
+use crate::session::{NewSession, SessionError};
+use crate::sqlite_store::{Database, TimestampSource, connect_options, interrupt_owned_turn};
 use crate::store::{AcquiredTurn, SessionStore as _, TurnAdmission};
 use crate::transcript::{TurnRange, TurnStatus};
 use crate::turn::TurnError;

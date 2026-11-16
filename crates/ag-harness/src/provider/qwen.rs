@@ -50,6 +50,7 @@ pub(crate) fn max_output_tokens(model: &str) -> Option<u64> {
 
 /// Configuration for a Qwen model served through Alibaba Cloud Model Studio's
 /// OpenAI-compatible API.
+#[cfg(feature = "providers-compat")]
 pub struct QwenConfig {
     /// API key sent as a bearer token.
     pub api_key: String,
@@ -60,5 +61,6 @@ pub struct QwenConfig {
 }
 
 #[cfg(test)]
+#[cfg(feature = "providers-compat")]
 #[path = "qwen_test.rs"]
 mod tests;

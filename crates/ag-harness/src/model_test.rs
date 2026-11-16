@@ -2,32 +2,50 @@
 //! and responses, and model error classification.
 
 use std::io;
+#[cfg(all(feature = "providers-compat", feature = "providers-openai"))]
 use std::num::NonZeroU32;
+#[cfg(all(feature = "providers-compat", feature = "providers-openai"))]
 use std::path::PathBuf;
+#[cfg(all(feature = "providers-compat", feature = "providers-openai"))]
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
 use async_trait::async_trait;
 use serde_json::json;
+#[cfg(all(feature = "providers-compat", feature = "providers-openai"))]
 use wiremock::matchers::{method, path};
+#[cfg(all(feature = "providers-compat", feature = "providers-openai"))]
 use wiremock::{Mock, MockServer, ResponseTemplate};
 
+#[cfg(all(feature = "providers-compat", feature = "providers-openai"))]
+use super::ModelClient;
 use super::{
-    CompletionMetadata, CompletionUsage, Model, ModelClient, ModelCompletion, ModelError,
-    ModelErrorType, ModelMessage, ModelMetadata, ModelMetadataError, ModelRequest, ModelResponse,
-    ProviderStatus, ReasoningEffort,
+    CompletionMetadata, CompletionUsage, Model, ModelCompletion, ModelError, ModelErrorType,
+    ModelMessage, ModelMetadata, ModelMetadataError, ModelRequest, ModelResponse, ProviderStatus,
+    ReasoningEffort,
 };
+#[cfg(all(
+    feature = "providers-compat",
+    feature = "providers-openai",
+    feature = "sqlite"
+))]
 use crate::input::StoredTurnInput;
+#[cfg(all(feature = "providers-compat", feature = "providers-openai"))]
 use crate::lifecycle::LifecycleEventKind;
+#[cfg(all(feature = "providers-compat", feature = "providers-openai"))]
 use crate::provider::{
     self, CHATGPT_GPT_6_SOL, ChatGptConfig, GPT_6_LUNA, KIMI_K3, KimiConfig, MuseConfig,
     OpenAiConfig, QWEN3_8_FLASH, QwenConfig,
 };
+#[cfg(all(feature = "providers-compat", feature = "providers-openai"))]
 use crate::request_option::{GenerationParams, OutputMode};
 use crate::schema_contract::{OutputSchema, OutputValidationError};
+#[cfg(all(feature = "providers-compat", feature = "providers-openai"))]
 use crate::store_fixture::image_input;
+use crate::tool;
 use crate::tool::{ReadArguments, ToolCall};
-use crate::{ImageContent, ImageMediaType, InputBlock, TurnInput, tool};
+#[cfg(all(feature = "providers-compat", feature = "providers-openai"))]
+use crate::{ImageContent, ImageMediaType, InputBlock, TurnInput};
 
 struct ResponseOnlyModel;
 
@@ -111,6 +129,7 @@ async fn model_completion_exposes_optional_metadata() {
     );
 }
 
+#[cfg(all(feature = "providers-compat", feature = "providers-openai"))]
 #[test]
 fn client_exposes_provider_and_model() {
     // Arrange
@@ -136,6 +155,7 @@ fn client_exposes_provider_and_model() {
     assert_eq!(&trait_metadata, metadata);
 }
 
+#[cfg(all(feature = "providers-compat", feature = "providers-openai"))]
 #[tokio::test]
 async fn client_observes_success_unless_request_is_already_observed() {
     // Arrange
@@ -199,6 +219,7 @@ async fn client_observes_success_unless_request_is_already_observed() {
     ));
 }
 
+#[cfg(all(feature = "providers-compat", feature = "providers-openai"))]
 #[test]
 fn text_requests_route_without_a_format_with_instructions_and_bound() {
     // Arrange
@@ -240,6 +261,7 @@ fn text_requests_route_without_a_format_with_instructions_and_bound() {
     assert!(completion.response().call().is_none());
 }
 
+#[cfg(all(feature = "providers-compat", feature = "providers-openai"))]
 #[test]
 fn instructions_mark_where_the_turns_tool_rounds_start() {
     // Arrange
@@ -262,6 +284,7 @@ fn instructions_mark_where_the_turns_tool_rounds_start() {
     );
 }
 
+#[cfg(all(feature = "providers-compat", feature = "providers-openai"))]
 #[test]
 fn clients_reject_output_bounds_their_provider_rejects() {
     // Arrange
@@ -285,6 +308,7 @@ fn clients_reject_output_bounds_their_provider_rejects() {
     assert!(accepted.is_ok());
 }
 
+#[cfg(all(feature = "providers-compat", feature = "providers-openai"))]
 #[tokio::test]
 async fn client_sends_slash_qualified_model_unchanged() {
     // Arrange
@@ -321,6 +345,7 @@ async fn client_sends_slash_qualified_model_unchanged() {
     assert_eq!(completion.response().output(), Some(&json!({"name":"Ada"})));
 }
 
+#[cfg(all(feature = "providers-compat", feature = "providers-openai"))]
 #[tokio::test]
 async fn client_returns_multiple_tool_calls() {
     // Arrange
@@ -389,6 +414,7 @@ async fn client_returns_multiple_tool_calls() {
     );
 }
 
+#[cfg(all(feature = "providers-compat", feature = "providers-openai"))]
 #[tokio::test]
 async fn client_classifies_provider_context_overflow() {
     // Arrange
@@ -489,6 +515,7 @@ fn custom_models_report_classified_failures() {
     );
 }
 
+#[cfg(all(feature = "providers-compat", feature = "providers-openai"))]
 #[tokio::test]
 async fn client_observes_classified_failure() {
     // Arrange
@@ -544,6 +571,7 @@ async fn client_observes_classified_failure() {
     ));
 }
 
+#[cfg(all(feature = "providers-compat", feature = "providers-openai"))]
 #[tokio::test]
 async fn client_reports_a_spent_quota() {
     // Arrange
@@ -576,6 +604,7 @@ async fn client_reports_a_spent_quota() {
     assert_eq!(error.http_status(), Some(402));
 }
 
+#[cfg(all(feature = "providers-compat", feature = "providers-openai"))]
 #[tokio::test]
 async fn client_supports_dynamic_model_dispatch() {
     // Arrange
@@ -599,6 +628,7 @@ async fn client_supports_dynamic_model_dispatch() {
     assert!(matches!(error, ModelError::UnsupportedOutputSchema { .. }));
 }
 
+#[cfg(all(feature = "providers-compat", feature = "providers-openai"))]
 #[test]
 fn models_accept_text_and_reject_images_unless_they_opt_in() {
     // Arrange
@@ -724,6 +754,46 @@ fn request_deduplicates_native_tools() {
 
     // Assert
     assert_eq!(request.tools(), &[tool::ToolDefinition::read()]);
+}
+
+#[test]
+fn response_exposes_a_text_answer_only_for_text() {
+    // Arrange
+    let text = ModelResponse::Text("Ada".into());
+    let output = ModelResponse::Output(json!({ "name": "Ada" }));
+    let call = ModelResponse::ToolCall(
+        ToolCall::from_json("call".into(), "read", r#"{"path":"a.txt"}"#, None).expect("call"),
+    );
+
+    // Act
+    let answers = [text.text(), output.text(), call.text()];
+
+    // Assert
+    assert_eq!(answers, [Some("Ada"), None, None]);
+    assert_eq!(call.call().map(ToolCall::id), Some("call"));
+    assert!(text.call().is_none());
+}
+
+#[test]
+fn final_output_records_its_reasoning_beside_the_answer() {
+    // Arrange
+    let mut request = test_request();
+
+    // Act
+    request.record_output_with_reasoning("{}".into(), Some("thought".into()));
+    request.record_output_with_reasoning("{}".into(), None);
+
+    // Assert
+    assert!(matches!(
+        &request.messages()[request.messages().len() - 2..],
+        [
+            ModelMessage::AssistantReasoning {
+                content,
+                reasoning_content,
+            },
+            ModelMessage::Assistant(plain),
+        ] if content == "{}" && reasoning_content == "thought" && plain == "{}"
+    ));
 }
 
 #[test]
@@ -1147,6 +1217,7 @@ fn converts_oversized_content_error() {
     );
 }
 
+#[cfg(all(feature = "providers-compat", feature = "providers-openai"))]
 #[test]
 fn routed_request_preserves_image_batch_cache_key_and_all_reasoning_efforts() {
     // Arrange
@@ -1223,6 +1294,7 @@ fn routed_request_preserves_image_batch_cache_key_and_all_reasoning_efforts() {
     }
 }
 
+#[cfg(all(feature = "providers-compat", feature = "providers-openai"))]
 #[test]
 fn continued_requests_route_the_schema_their_conversation_used() {
     // Arrange
@@ -1268,6 +1340,7 @@ fn continued_requests_route_the_schema_their_conversation_used() {
     assert_eq!(plain.options.prefix_schema, None);
 }
 
+#[cfg(all(feature = "providers-compat", feature = "providers-openai"))]
 #[test]
 fn routed_request_preserves_system_and_assistant_history() {
     // Arrange
@@ -1299,6 +1372,7 @@ fn routed_request_preserves_system_and_assistant_history() {
     );
 }
 
+#[cfg(all(feature = "providers-compat", feature = "providers-openai"))]
 #[tokio::test]
 async fn routed_request_rejects_invalid_replayed_tool_call_before_network() {
     // Arrange
@@ -1330,6 +1404,11 @@ async fn routed_request_rejects_invalid_replayed_tool_call_before_network() {
     assert!(matches!(error, ModelError::InvalidToolCallId));
 }
 
+#[cfg(all(
+    feature = "providers-compat",
+    feature = "providers-openai",
+    feature = "sqlite"
+))]
 #[tokio::test]
 async fn routed_request_rejects_persisted_input_above_current_image_limit() {
     // Arrange
@@ -1366,6 +1445,7 @@ async fn routed_request_rejects_persisted_input_above_current_image_limit() {
     assert_eq!(error.error_type(), ModelErrorType::Request);
 }
 
+#[cfg(all(feature = "providers-compat", feature = "providers-openai"))]
 #[tokio::test]
 async fn routed_request_rejects_persisted_image_above_current_per_image_limit() {
     // Arrange
@@ -1395,6 +1475,7 @@ async fn routed_request_rejects_persisted_image_above_current_per_image_limit() 
     assert_eq!(error.error_type(), ModelErrorType::Request);
 }
 
+#[cfg(all(feature = "providers-compat", feature = "providers-openai"))]
 #[test]
 fn maps_router_request_and_duplicate_call_errors() {
     // Arrange / Act
@@ -1408,6 +1489,7 @@ fn maps_router_request_and_duplicate_call_errors() {
     assert!(matches!(duplicate, ModelError::DuplicateToolCallId { id } if id == "call-1"));
 }
 
+#[cfg(all(feature = "providers-compat", feature = "providers-openai"))]
 #[tokio::test]
 async fn classifies_router_transport_failure() {
     // Arrange
@@ -1429,6 +1511,7 @@ async fn classifies_router_transport_failure() {
     assert_eq!(error.error_type(), ModelErrorType::Transport);
 }
 
+#[cfg(all(feature = "providers-compat", feature = "providers-openai"))]
 #[test]
 fn clients_declare_the_cataloged_profile_of_their_model() {
     // Arrange

@@ -16,7 +16,7 @@ name = "ag-harness"
 path = "src/main.rs"
 
 [dependencies]
-ag-harness.workspace = true
+ag-harness = { workspace = true, features = ["native-sandbox", "otel", "providers-compat", "providers-openai", "sqlite"] }
 ag-telemetry = { workspace = true, features = ["otlp"] }
 clap.workspace = true
 rustls.workspace = true

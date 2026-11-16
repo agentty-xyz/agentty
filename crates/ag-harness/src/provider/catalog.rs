@@ -11,7 +11,7 @@ use ag_router::chatgpt::{ChatGptAuthError, ChatGptCredentials};
 use thiserror::Error;
 
 use super::{chatgpt, kimi, muse, openai, openai_compatible, qwen};
-use crate::catalog::{Capabilities, ModelId, ModelSpec, Pricing};
+use crate::catalog::{Capabilities, CostTier, ModelId, ModelSpec, Pricing};
 use crate::model::{ModelClient, ModelMetadataError, ModelProfile};
 
 /// Provider supported by the built-in model client catalog.
@@ -304,37 +304,44 @@ impl ModelProvider {
         }
     }
 
+    /// Builds the client, or fails for a provider whose family feature is
+    /// not compiled in.
     fn client(
         self,
         credential: Credential,
         base_url: String,
         model: String,
-    ) -> Result<ModelClient, ModelMetadataError> {
+    ) -> Result<ModelClient, ModelConfigurationError> {
         let (api_key, auth_file) = match credential {
             Credential::ApiKey(api_key) => (api_key, None),
             Credential::SignIn(auth_file) => (None, Some(auth_file)),
         };
-        match self {
+        let client = match self {
+            #[cfg(feature = "providers-openai")]
             Self::ChatGpt => ModelClient::chatgpt(chatgpt::ChatGptConfig {
                 auth_file: auth_file.unwrap_or_default(),
                 base_url,
                 model,
             }),
+            #[cfg(feature = "providers-compat")]
             Self::Kimi => ModelClient::kimi(kimi::KimiConfig {
                 api_key: api_key.unwrap_or_default(),
                 base_url,
                 model,
             }),
+            #[cfg(feature = "providers-compat")]
             Self::Muse => ModelClient::muse(muse::MuseConfig {
                 api_key: api_key.unwrap_or_default(),
                 base_url,
                 model,
             }),
+            #[cfg(feature = "providers-openai")]
             Self::OpenAi => ModelClient::openai(openai::OpenAiConfig {
                 api_key: api_key.unwrap_or_default(),
                 base_url,
                 model,
             }),
+            #[cfg(feature = "providers-compat")]
             Self::OpenAiCompatible => {
                 ModelClient::openai_compatible(openai_compatible::OpenAiCompatibleConfig {
                     api_key,
@@ -342,12 +349,22 @@ impl ModelProvider {
                     model,
                 })
             }
+            #[cfg(feature = "providers-compat")]
             Self::Qwen => ModelClient::qwen(qwen::QwenConfig {
                 api_key: api_key.unwrap_or_default(),
                 base_url,
                 model,
             }),
-        }
+            // The disabled family's credential and endpoint go unused.
+            #[cfg(not(all(feature = "providers-compat", feature = "providers-openai")))]
+            provider => {
+                drop((api_key, auth_file, base_url, model));
+
+                return Err(ModelConfigurationError::ProviderDisabled { provider });
+            }
+        };
+
+        client.map_err(ModelConfigurationError::from)
     }
 
     /// Returns the catalog record of `model`, if this provider lists it.
@@ -375,44 +392,6 @@ impl FromStr for ModelProvider {
             .ok_or_else(|| ModelProviderParseError {
                 value: value.to_string(),
             })
-    }
-}
-
-/// Declared price class of a cataloged model, from its billing mode or its
-/// provider's list price per million output tokens; see
-/// [`Pricing::cost_tier`].
-#[derive(Clone, Copy, Debug, Eq, Ord, PartialEq, PartialOrd)]
-pub enum CostTier {
-    /// Served by a local or self-hosted server with no per-token charge.
-    Local,
-    /// Billed to the user's subscription plan, such as a `ChatGPT` plan, with
-    /// no per-token charge but subject to the plan's usage limits.
-    Plan,
-    /// At most $2.50 per million output tokens; suited to simple,
-    /// high-volume tasks such as titles and commit messages.
-    Cheap,
-    /// Between the cheap and premium bounds.
-    Standard,
-    /// At least $15 per million output tokens.
-    Premium,
-}
-
-impl CostTier {
-    /// Returns the lowercase label for this class, such as `cheap`.
-    pub const fn as_str(self) -> &'static str {
-        match self {
-            Self::Local => "local",
-            Self::Plan => "plan",
-            Self::Cheap => "cheap",
-            Self::Standard => "standard",
-            Self::Premium => "premium",
-        }
-    }
-}
-
-impl fmt::Display for CostTier {
-    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
-        formatter.write_str(self.as_str())
     }
 }
 
@@ -485,9 +464,7 @@ impl ModelConfiguration {
         };
         let base_url = self.resolve_base_url(environment)?;
 
-        self.provider
-            .client(credential, base_url, self.model)
-            .map_err(ModelConfigurationError::from)
+        self.provider.client(credential, base_url, self.model)
     }
 
     /// Returns the explicit base URL, else the provider's environment
@@ -577,6 +554,15 @@ pub enum ModelConfigurationError {
         context_window: u64,
         /// Declared response reservation in tokens.
         max_output_tokens: u64,
+    },
+    /// This build omits the provider's client: `providers-openai` serves
+    /// [`ModelProvider::OpenAi`] and [`ModelProvider::ChatGpt`], and
+    /// `providers-compat` the Chat Completions providers.
+    #[cfg(not(all(feature = "providers-compat", feature = "providers-openai")))]
+    #[error("{provider} support is not compiled in; enable its `providers-*` feature")]
+    ProviderDisabled {
+        /// Provider whose client family is disabled.
+        provider: ModelProvider,
     },
 }
 
@@ -737,5 +723,6 @@ const CATALOGED_MODELS: &[CatalogedModel] = &[
 ];
 
 #[cfg(test)]
+#[cfg(all(feature = "providers-compat", feature = "providers-openai"))]
 #[path = "catalog_test.rs"]
 mod tests;

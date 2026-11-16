@@ -1,22 +1,29 @@
 //! Model catalog unit tests for building, role requirements, selector
 //! resolution, price overrides, and environment-derived models and role
-//! defaults.
+//! defaults. Environment-derived catalogs need both provider families.
 
+#[cfg(all(feature = "providers-compat", feature = "providers-openai"))]
 use std::collections::BTreeMap;
+#[cfg(all(feature = "providers-compat", feature = "providers-openai"))]
 use std::ffi::OsString;
+#[cfg(all(feature = "providers-compat", feature = "providers-openai"))]
 use std::os::unix::ffi::OsStringExt as _;
 use std::sync::Arc;
+#[cfg(all(feature = "providers-compat", feature = "providers-openai"))]
 use std::{env, fs};
 
+#[cfg(all(feature = "providers-compat", feature = "providers-openai"))]
 use ag_router::chatgpt::ChatGptAuthError;
 
 use crate::catalog::{
     Capabilities, CatalogError, ModelCatalog, ModelId, ModelSelector, ModelSpec, Pricing,
     PricingSource, Role,
 };
+#[cfg(all(feature = "providers-compat", feature = "providers-openai"))]
 use crate::chatgpt_sign_in_fixture::save_chatgpt_sign_in;
 use crate::context::ContextBudgetError;
 use crate::model::{MockModel, Model, ModelProfile};
+#[cfg(all(feature = "providers-compat", feature = "providers-openai"))]
 use crate::provider::{ModelConfigurationError, ModelProvider};
 
 const TEXT: &str = "host/text";
@@ -25,6 +32,7 @@ const VISION: &str = "host/vision";
 /// Default-role table over host models: a text-only profiled model, an
 /// unprofiled vision model, an uncataloged model, and a profiled vision
 /// model.
+#[cfg(all(feature = "providers-compat", feature = "providers-openai"))]
 const HOST_ROLES: &[(Role, &[(ModelProvider, &str)])] = &[
     (
         Role::VISION,
@@ -87,6 +95,7 @@ fn catalog() -> ModelCatalog {
         .expect("catalog should build")
 }
 
+#[cfg(all(feature = "providers-compat", feature = "providers-openai"))]
 fn lookup(variables: &[(&str, &str)]) -> impl FnMut(&str) -> Result<String, env::VarError> + use<> {
     let variables = variables
         .iter()
@@ -354,6 +363,7 @@ fn build_rejects_duplicates_invalid_profiles_and_unknown_references() {
     }
 }
 
+#[cfg(all(feature = "providers-compat", feature = "providers-openai"))]
 #[test]
 fn default_roles_keep_only_cataloged_profiled_and_capable_candidates() {
     // Arrange
@@ -387,6 +397,7 @@ fn default_roles_keep_only_cataloged_profiled_and_capable_candidates() {
     );
 }
 
+#[cfg(all(feature = "providers-compat", feature = "providers-openai"))]
 #[test]
 fn environment_catalogs_configured_providers_with_default_roles() {
     // Arrange
@@ -464,6 +475,7 @@ fn environment_catalogs_configured_providers_with_default_roles() {
     );
 }
 
+#[cfg(all(feature = "providers-compat", feature = "providers-openai"))]
 #[test]
 fn environment_skips_a_provider_whose_required_base_url_is_absent() {
     // Arrange
@@ -476,6 +488,7 @@ fn environment_skips_a_provider_whose_required_base_url_is_absent() {
     assert_eq!(catalog.specs().count(), 0);
 }
 
+#[cfg(all(feature = "providers-compat", feature = "providers-openai"))]
 #[test]
 fn environment_prefers_plan_billed_chatgpt_models_when_signed_in() {
     // Arrange
@@ -515,6 +528,7 @@ fn environment_prefers_plan_billed_chatgpt_models_when_signed_in() {
     );
 }
 
+#[cfg(all(feature = "providers-compat", feature = "providers-openai"))]
 #[test]
 fn environment_skips_chatgpt_without_a_stored_sign_in() {
     // Arrange
@@ -530,6 +544,7 @@ fn environment_skips_chatgpt_without_a_stored_sign_in() {
     assert_eq!(catalog.specs().count(), 0);
 }
 
+#[cfg(all(feature = "providers-compat", feature = "providers-openai"))]
 #[test]
 fn environment_reports_a_broken_chatgpt_sign_in() {
     // Arrange
@@ -552,6 +567,7 @@ fn environment_reports_a_broken_chatgpt_sign_in() {
     ));
 }
 
+#[cfg(all(feature = "providers-compat", feature = "providers-openai"))]
 #[test]
 fn empty_environment_catalogs_nothing() {
     // Arrange
@@ -568,6 +584,7 @@ fn empty_environment_catalogs_nothing() {
     ));
 }
 
+#[cfg(all(feature = "providers-compat", feature = "providers-openai"))]
 #[test]
 fn environment_reports_an_invalid_configured_provider() {
     // Arrange
@@ -603,6 +620,7 @@ fn environment_reports_an_invalid_configured_provider() {
     ));
 }
 
+#[cfg(all(feature = "providers-compat", feature = "providers-openai"))]
 #[test]
 fn process_environment_catalog_delegates_to_the_process_environment() {
     // Arrange

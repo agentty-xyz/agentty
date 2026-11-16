@@ -13,9 +13,11 @@ use ag_harness::model::{
     ModelRequest, ModelResponse,
 };
 use ag_harness::recovery::HostTurnRecord;
+#[cfg(feature = "sqlite")]
+use ag_harness::store::SqliteStore;
 use ag_harness::store::{
     HistoryProjection, LoadedSession, MemoryStore, ModelSwitch, NewSession, Reservation,
-    SessionStore, SqliteStore, StoreIdentity, TurnAdmission, TurnOwner, WriteRecord, WriteStatus,
+    SessionStore, StoreIdentity, TurnAdmission, TurnOwner, WriteRecord, WriteStatus,
 };
 use ag_harness::tool::{FileSystem, LocalFileSystem, ToolCall};
 use ag_harness::turn::{SettlementError, SettlementPhase};
@@ -370,6 +372,8 @@ impl SessionStore for Gate {
     }
 }
 
+/// Returns one empty store of each backend this build includes.
+#[cfg(feature = "sqlite")]
 async fn stores() -> Vec<Arc<dyn SessionStore>> {
     vec![
         Arc::new(MemoryStore::new()),
@@ -380,6 +384,15 @@ async fn stores() -> Vec<Arc<dyn SessionStore>> {
                 .expect("sqlite"),
         ),
     ]
+}
+
+/// Returns one empty store of each backend this build includes.
+#[cfg(not(feature = "sqlite"))]
+fn stores() -> std::future::Ready<Vec<Arc<dyn SessionStore>>> {
+    std::future::ready(vec![
+        Arc::new(MemoryStore::new()),
+        Arc::new(ExternalStore::new()),
+    ])
 }
 
 #[tokio::test]
@@ -1213,6 +1226,7 @@ async fn stalled_renewal_and_terminal_persistence_keep_hard_deadlines() {
     }
 }
 
+#[cfg(feature = "sqlite")]
 #[tokio::test]
 async fn controlled_turns_reopen_sqlite_and_preserve_regular_results() {
     // Arrange

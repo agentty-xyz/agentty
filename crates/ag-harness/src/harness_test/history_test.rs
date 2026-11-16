@@ -4,14 +4,18 @@
 
 use std::collections::HashMap;
 use std::io::Cursor;
-use std::num::{NonZeroU64, NonZeroUsize};
+use std::num::NonZeroU64;
+#[cfg(feature = "sqlite")]
+use std::num::NonZeroUsize;
 use std::sync::{Arc, Mutex};
 
 use serde_json::json;
+#[cfg(feature = "sqlite")]
 use tempfile::tempdir;
 
 use super::support::{model, object_schema, response_without_metadata};
 use crate::context::ContextBudget;
+#[cfg(feature = "sqlite")]
 use crate::context_budget_fixture::unbounded_context_budget;
 use crate::file_system::MockFileSystem;
 use crate::harness::Harness;
@@ -137,6 +141,7 @@ fn assert_previous_turn_replayed_whole(requests: &[ModelRequest]) {
     }
 }
 
+#[cfg(feature = "sqlite")]
 #[tokio::test]
 async fn turns_append_to_the_history_earlier_turns_sent_within_the_byte_budget() {
     // Arrange

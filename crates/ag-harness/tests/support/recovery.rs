@@ -10,7 +10,9 @@ use std::time::Duration;
 use ag_harness::lifecycle::{LifecycleEvent, LifecycleEventKind, LifecycleObserver};
 use ag_harness::model::{ContextBudget, ModelCompletion, ModelRequest, ModelResponse};
 use ag_harness::recovery::{ExecutionIdentity, HostRequest, HostTurnAcquisition, HostTurnStatus};
-use ag_harness::store::{AcquiredTurn, NewSession, SessionStore, SqliteStore, WriteStatus};
+#[cfg(feature = "sqlite")]
+use ag_harness::store::SqliteStore;
+use ag_harness::store::{AcquiredTurn, NewSession, SessionStore, WriteStatus};
 use ag_harness::{
     Harness, Model, ModelError, SessionError, Tool, ToolPolicy, TurnError, TurnInput, TurnOptions,
 };
@@ -344,6 +346,7 @@ async fn backend_duplicate_acquisition_is_atomic_and_recovers_pending_effects() 
     }
 }
 
+#[cfg(feature = "sqlite")]
 #[tokio::test]
 async fn sqlite_reopen_recovers_original_outcomes_after_history_eviction() {
     // Arrange

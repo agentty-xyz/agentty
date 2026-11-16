@@ -7,13 +7,17 @@ use ag_harness::model::{
     ContextBudgetError, ModelCapabilities, ModelCompletion, ModelMetadata, ModelProfile,
     ModelRegistry, ModelRegistryError, ModelRequest, ModelResponse,
 };
+#[cfg(all(feature = "providers-compat", feature = "providers-openai"))]
 use ag_harness::provider::{ChatGptCredentials, ModelConfiguration, ModelProvider};
 use ag_harness::recovery::ExecutionIdentity;
+#[cfg(feature = "sqlite")]
 use ag_harness::store::SqliteStore;
 use ag_harness::{Harness, Model, ModelError, SessionError};
 use async_trait::async_trait;
 use serde_json::json;
+#[cfg(all(feature = "providers-compat", feature = "providers-openai"))]
 use wiremock::matchers::{bearer_token, body_partial_json, method, path};
+#[cfg(all(feature = "providers-compat", feature = "providers-openai"))]
 use wiremock::{Mock, MockServer, ResponseTemplate};
 
 use crate::context_budget_fixture::unbounded_context_budget;
@@ -262,6 +266,7 @@ async fn registered_identity_survives_snapshots_and_conflicts_on_changes() {
     }
 }
 
+#[cfg(feature = "sqlite")]
 #[tokio::test]
 async fn registry_reconstruction_recovers_sqlite_request_after_reopen() {
     // Arrange
@@ -326,6 +331,7 @@ async fn registry_reconstruction_recovers_sqlite_request_after_reopen() {
     assert_eq!(calls.load(Ordering::SeqCst), 2);
 }
 
+#[cfg(all(feature = "providers-compat", feature = "providers-openai"))]
 #[tokio::test]
 async fn registered_builtin_configurations_execute_through_the_selected_client() {
     for provider in ModelProvider::all() {

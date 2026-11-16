@@ -10,8 +10,9 @@ use super::contract::{
     BashExecutor, ExecutionCommand, ExecutionControl, ExecutionError, ExecutionPolicy,
     ExecutionResult, Executor, Grants, Limits, MainExit, Termination,
 };
-use super::native::{Monotonic, Native};
-use super::supervisor::Supervisor;
+#[cfg(feature = "native-sandbox")]
+use super::native::Native;
+use super::supervisor::{Monotonic, Supervisor};
 use crate::TurnError;
 use crate::bash::{BashArguments, BashConfig, BashError};
 use crate::command_journal::{
@@ -41,9 +42,13 @@ impl BashTool {
         }
         let selected: Arc<dyn BashExecutor> = match &configuration.executor {
             Some(executor) => Arc::clone(executor),
+            #[cfg(feature = "native-sandbox")]
             None => Arc::new(Native {
                 configuration: configuration.clone(),
             }),
+            // Without the native sandbox only a host-selected executor runs.
+            #[cfg(not(feature = "native-sandbox"))]
+            None => return Err(BashError::Unavailable),
         };
         let cleanup_scope = selected.cleanup_scope();
         let supervisor =

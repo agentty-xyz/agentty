@@ -12,6 +12,7 @@ pub const KIMI_K2_6: &str = "kimi-k2.6";
 
 /// Configuration for a Kimi model served through Moonshot AI's
 /// OpenAI-compatible API.
+#[cfg(feature = "providers-compat")]
 pub struct KimiConfig {
     /// API key sent as a bearer token.
     pub api_key: String,
@@ -22,5 +23,6 @@ pub struct KimiConfig {
 }
 
 #[cfg(test)]
+#[cfg(feature = "providers-compat")]
 #[path = "kimi_test.rs"]
 mod tests;

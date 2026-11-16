@@ -477,6 +477,7 @@ impl Classification {
     fn session(error: &SessionError) -> Self {
         let kind = match error {
             SessionError::Turn(turn) => return Self::turn(turn),
+            #[cfg(feature = "sqlite")]
             SessionError::QueryContext { source, .. } if is_store_contention(source) => {
                 ErrorKind::Busy
             }
@@ -496,9 +497,9 @@ impl Classification {
             | SessionError::Store { .. }
             | SessionError::Io(_)
             | SessionError::InvalidData { .. }
-            | SessionError::Migration(_)
-            | SessionError::QueryContext { .. }
             | SessionError::Schema(_) => ErrorKind::Store,
+            #[cfg(feature = "sqlite")]
+            SessionError::Migration(_) | SessionError::QueryContext { .. } => ErrorKind::Store,
             SessionError::UnsupportedModelHistory { .. }
             | SessionError::Registry(_)
             | SessionError::RegistrationMismatch { .. }
@@ -559,6 +560,7 @@ impl Classification {
 /// Returns whether a store query failed only because the database was
 /// temporarily saturated or locked: a pool timeout, or `SQLite`'s
 /// `SQLITE_BUSY` or `SQLITE_LOCKED` primary result code.
+#[cfg(feature = "sqlite")]
 fn is_store_contention(error: &sqlx::Error) -> bool {
     const SQLITE_BUSY: i32 = 5;
     const SQLITE_LOCKED: i32 = 6;

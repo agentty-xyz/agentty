@@ -3,8 +3,11 @@
 use std::fmt;
 use std::sync::Arc;
 
+#[cfg(feature = "sqlite")]
 use base64::Engine as _;
+#[cfg(feature = "sqlite")]
 use base64::engine::general_purpose::STANDARD as BASE64_STANDARD;
+#[cfg(feature = "sqlite")]
 use serde::{Deserialize, Serialize};
 use thiserror::Error;
 
@@ -208,6 +211,7 @@ impl ImageContent {
     }
 
     /// Shares validated bytes with another in-process model boundary.
+    #[cfg(any(feature = "providers-compat", feature = "providers-openai"))]
     pub(crate) fn shared_bytes(&self) -> Arc<[u8]> {
         Arc::clone(&self.bytes)
     }
@@ -281,6 +285,7 @@ impl ImageMediaType {
         }
     }
 
+    #[cfg(feature = "sqlite")]
     pub(crate) fn from_media_type(media_type: &str) -> Option<Self> {
         match media_type {
             "image/jpeg" => Some(Self::Jpeg),
@@ -341,12 +346,14 @@ pub enum TurnInputError {
 }
 
 /// Versioned storage representation of one image-bearing input.
+#[cfg(feature = "sqlite")]
 #[derive(Deserialize, Serialize)]
 pub(crate) struct StoredTurnInput {
     blocks: Vec<StoredInputBlock>,
     version: u32,
 }
 
+#[cfg(feature = "sqlite")]
 impl StoredTurnInput {
     const VERSION: u32 = 1;
 
@@ -368,6 +375,7 @@ impl StoredTurnInput {
     }
 }
 
+#[cfg(feature = "sqlite")]
 impl From<&TurnInput> for StoredTurnInput {
     fn from(input: &TurnInput) -> Self {
         let blocks = input
@@ -389,6 +397,7 @@ impl From<&TurnInput> for StoredTurnInput {
     }
 }
 
+#[cfg(feature = "sqlite")]
 #[derive(Deserialize, Serialize)]
 #[serde(tag = "kind", rename_all = "snake_case")]
 enum StoredInputBlock {
@@ -396,6 +405,7 @@ enum StoredInputBlock {
     Text { text: String },
 }
 
+#[cfg(feature = "sqlite")]
 impl StoredInputBlock {
     fn into_block(self) -> Result<InputBlock, StoredInputError> {
         match self {
@@ -419,6 +429,7 @@ impl StoredInputBlock {
 }
 
 /// Invalid stored user-input payload.
+#[cfg(feature = "sqlite")]
 #[derive(Debug, Error)]
 pub(crate) enum StoredInputError {
     /// The stored base64 image content cannot be decoded.

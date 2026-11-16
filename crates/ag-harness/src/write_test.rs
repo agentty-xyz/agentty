@@ -13,7 +13,12 @@ use serde_json::json;
 use tokio::io::{AsyncRead, ReadBuf};
 
 use super::{MAX_FILE_BYTES, WriteError, WriteTool, apply_unified_diff, parse_unified_diff};
+use crate::effect::Effects;
+use crate::fault_store_test::{Fault, FaultStore};
 use crate::file_system::MockFileSystem;
+use crate::reservation;
+use crate::store::{NewSession, SessionStore};
+use crate::store_fixture::{options, schema};
 use crate::tool::WriteArguments;
 
 fn arguments(file_path: &str, unified_diff: &str) -> WriteArguments {
@@ -707,6 +712,53 @@ async fn write_tool_applies_patch_through_file_system_boundary() {
         .expect("result should be JSON"),
         json!({ "bytes_written": 4, "path": "file.txt", "status": "applied" })
     );
+}
+
+#[tokio::test]
+async fn write_tool_reports_an_unrecorded_intent_without_writing() {
+    // Arrange
+    let mut file_system = rooted_file_system();
+    file_system
+        .expect_open_beneath()
+        .times(1)
+        .returning(|_, _| Ok(Box::new(Cursor::new(b"old\n".to_vec()))));
+    let store = Arc::new(FaultStore::new());
+    let backend: Arc<dyn SessionStore> = store.clone();
+    backend
+        .create_session(&NewSession::new("writes", schema()), None, 1024)
+        .await
+        .expect("session");
+    let mut acquired = reservation::acquire(
+        Arc::clone(&backend),
+        ("writes".into(), 0),
+        "run".into(),
+        options(),
+        None,
+        Effects::default(),
+    )
+    .await
+    .expect("acquire");
+    store.inject(Fault::WriteIntent);
+    let mut tool = WriteTool::new(Arc::new(file_system), PathBuf::from("repo"));
+    tool.journal = Some(acquired.guard.write_journal());
+    let arguments = arguments(
+        "file.txt",
+        "--- a/file.txt\n+++ b/file.txt\n@@ -1 +1 @@\n-old\n+new\n",
+    );
+
+    // Act
+    let error = tool
+        .execute(&arguments, "write-call")
+        .await
+        .expect_err("an unrecorded intent stops the write");
+
+    // Assert
+    assert!(matches!(error, WriteError::WriteTarget { path, .. } if path == "file.txt"));
+    assert_eq!(
+        backend.load_writes("writes").await.expect("writes"),
+        Vec::new()
+    );
+    acquired.guard.disarm();
 }
 
 #[tokio::test]

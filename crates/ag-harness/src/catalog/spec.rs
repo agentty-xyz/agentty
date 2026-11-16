@@ -7,7 +7,8 @@ use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 
 use crate::model_profile::ModelProfile;
-use crate::provider::{CostTier, ModelProvider};
+#[cfg(any(feature = "providers-compat", feature = "providers-openai"))]
+use crate::provider::ModelProvider;
 
 /// One million micro-USD, one US dollar.
 const MICRO_USD_PER_USD: u64 = 1_000_000;
@@ -35,6 +36,7 @@ impl ModelId {
 
     /// Returns the identifier of the built-in entry for `model` served by
     /// `provider`, such as `qwen/qwen3.8-flash`.
+    #[cfg(any(feature = "providers-compat", feature = "providers-openai"))]
     pub fn cataloged(provider: ModelProvider, model: &str) -> Self {
         Self(format!("{provider}/{model}"))
     }
@@ -294,6 +296,7 @@ impl Pricing {
     }
 
     /// Returns built-in list prices in micro-USD per million tokens.
+    #[cfg(any(feature = "providers-compat", feature = "providers-openai", test))]
     pub(crate) const fn built_in(
         input_per_mtok_micro_usd: u64,
         output_per_mtok_micro_usd: u64,
@@ -307,6 +310,44 @@ impl Pricing {
         self.source = source;
 
         self
+    }
+}
+
+/// Declared price class of a cataloged model, from its billing mode or its
+/// provider's list price per million output tokens; see
+/// [`Pricing::cost_tier`].
+#[derive(Clone, Copy, Debug, Eq, Ord, PartialEq, PartialOrd)]
+pub enum CostTier {
+    /// Served by a local or self-hosted server with no per-token charge.
+    Local,
+    /// Billed to the user's subscription plan, such as a `ChatGPT` plan, with
+    /// no per-token charge but subject to the plan's usage limits.
+    Plan,
+    /// At most $2.50 per million output tokens; suited to simple,
+    /// high-volume tasks such as titles and commit messages.
+    Cheap,
+    /// Between the cheap and premium bounds.
+    Standard,
+    /// At least $15 per million output tokens.
+    Premium,
+}
+
+impl CostTier {
+    /// Returns the lowercase label for this class, such as `cheap`.
+    pub const fn as_str(self) -> &'static str {
+        match self {
+            Self::Local => "local",
+            Self::Plan => "plan",
+            Self::Cheap => "cheap",
+            Self::Standard => "standard",
+            Self::Premium => "premium",
+        }
+    }
+}
+
+impl fmt::Display for CostTier {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter.write_str(self.as_str())
     }
 }
 
@@ -324,6 +365,7 @@ pub struct ModelSpec {
     max_output: Option<u64>,
     pricing: Option<Pricing>,
     profile: Option<ModelProfile>,
+    #[cfg(any(feature = "providers-compat", feature = "providers-openai"))]
     provider: Option<ModelProvider>,
 }
 
@@ -337,11 +379,13 @@ impl ModelSpec {
             max_output: None,
             pricing: None,
             profile: None,
+            #[cfg(any(feature = "providers-compat", feature = "providers-openai"))]
             provider: None,
         }
     }
 
     /// Sets the built-in provider serving the model.
+    #[cfg(any(feature = "providers-compat", feature = "providers-openai"))]
     #[must_use]
     pub fn with_provider(mut self, provider: ModelProvider) -> Self {
         self.provider = Some(provider);
@@ -401,6 +445,7 @@ impl ModelSpec {
 
     /// Returns the built-in provider, or `None` for a host-implemented
     /// model.
+    #[cfg(any(feature = "providers-compat", feature = "providers-openai"))]
     pub fn provider(&self) -> Option<ModelProvider> {
         self.provider
     }

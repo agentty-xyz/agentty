@@ -9,10 +9,12 @@ use std::time::Duration;
 use ag_harness::bash::{CommandCleanupScope, CommandIntent, CommandOutcome, CommandTermination};
 use ag_harness::event::{SessionId, TurnIndex};
 use ag_harness::model::{ModelCompletion, ModelMessage, ModelRequest, ModelResponse};
+#[cfg(feature = "sqlite")]
+use ag_harness::store::SqliteStore;
 use ag_harness::store::{
     AcquiredTurn, CompactionSource, HistoryProjection, HistoryTurn, MemoryStore, ModelSwitch,
-    NewSession, SessionCheckpoint, SessionStore, SqliteStore, StoreIdentity, StoredTurnOptions,
-    TurnOwner, TurnStop, TurnUsage, WriteStatus,
+    NewSession, SessionCheckpoint, SessionStore, StoreIdentity, StoredTurnOptions, TurnOwner,
+    TurnStop, TurnUsage, WriteStatus,
 };
 use ag_harness::tool::ToolCall;
 use ag_harness::transcript::TurnStatus;
@@ -249,14 +251,42 @@ async fn running_turn_with_usage(
     (acquired, recorded)
 }
 
+/// Asserts `store` counts the turn of session `crashed`, whose lease expired,
+/// with its `recorded` usage, and settles it as interrupted.
+async fn assert_expired_turn_counts_usage(store: &Arc<dyn SessionStore>, recorded: TurnUsage) {
+    // Act
+    let loaded = store.load_usage("crashed").await.expect("usage");
+
+    // Assert
+    assert_eq!(loaded, [Some(recorded)]);
+    let transcript = store
+        .load_transcript("crashed", &TurnRange::All)
+        .await
+        .expect("transcript");
+    assert_eq!(transcript[0].status, TurnStatus::Interrupted);
+}
+
 #[tokio::test]
-async fn backends_count_a_turn_whose_lease_expired_with_its_recorded_usage() {
+async fn memory_store_counts_a_turn_whose_lease_expired_with_its_recorded_usage() {
     // Arrange
     let memory: Arc<dyn SessionStore> = Arc::new(MemoryStore::new());
+    let (memory_turn, memory_usage) = running_turn_with_usage(&memory, "crashed", 3).await;
+    tokio::time::pause();
+    tokio::time::advance(Duration::from_secs(301)).await;
+    tokio::time::resume();
+
+    // Act / Assert
+    assert_expired_turn_counts_usage(&memory, memory_usage).await;
+    drop(memory_turn);
+}
+
+#[cfg(feature = "sqlite")]
+#[tokio::test]
+async fn sqlite_store_counts_a_turn_whose_lease_expired_with_its_recorded_usage() {
+    // Arrange
     let directory = tempfile::tempdir().expect("directory");
     let path = directory.path().join("usage.sqlite");
     let sqlite: Arc<dyn SessionStore> = Arc::new(SqliteStore::open(&path).await.expect("sqlite"));
-    let (memory_turn, memory_usage) = running_turn_with_usage(&memory, "crashed", 3).await;
     let (sqlite_turn, sqlite_usage) = running_turn_with_usage(&sqlite, "crashed", 5).await;
     let pool =
         sqlx::SqlitePool::connect_with(sqlx::sqlite::SqliteConnectOptions::new().filename(&path))
@@ -266,25 +296,10 @@ async fn backends_count_a_turn_whose_lease_expired_with_its_recorded_usage() {
         .execute(&pool)
         .await
         .expect("expire the SQLite lease");
-    tokio::time::pause();
-    tokio::time::advance(Duration::from_secs(301)).await;
-    tokio::time::resume();
 
-    // Act
-    let memory_loaded = memory.load_usage("crashed").await.expect("memory usage");
-    let sqlite_loaded = sqlite.load_usage("crashed").await.expect("sqlite usage");
-
-    // Assert
-    assert_eq!(memory_loaded, [Some(memory_usage)]);
-    assert_eq!(sqlite_loaded, [Some(sqlite_usage)]);
-    for store in [&memory, &sqlite] {
-        let transcript = store
-            .load_transcript("crashed", &TurnRange::All)
-            .await
-            .expect("transcript");
-        assert_eq!(transcript[0].status, TurnStatus::Interrupted);
-    }
-    drop((memory_turn, sqlite_turn));
+    // Act / Assert
+    assert_expired_turn_counts_usage(&sqlite, sqlite_usage).await;
+    drop(sqlite_turn);
 }
 
 #[tokio::test]
@@ -295,6 +310,8 @@ async fn all_backends_satisfy_lifecycle_and_journal_contract() {
     }
 }
 
+/// Returns the journaling backends this build includes.
+#[cfg(feature = "sqlite")]
 async fn journaled_stores() -> Vec<Arc<dyn SessionStore>> {
     vec![
         Arc::new(MemoryStore::new()),
@@ -304,6 +321,12 @@ async fn journaled_stores() -> Vec<Arc<dyn SessionStore>> {
                 .expect("sqlite"),
         ),
     ]
+}
+
+/// Returns the journaling backends this build includes.
+#[cfg(not(feature = "sqlite"))]
+fn journaled_stores() -> std::future::Ready<Vec<Arc<dyn SessionStore>>> {
+    std::future::ready(vec![Arc::new(MemoryStore::new())])
 }
 
 fn write_call(id: &str) -> ToolCall {
@@ -1921,6 +1944,7 @@ async fn abandoned_acquisition_retains_admission_and_never_executes() {
     }
 }
 
+#[cfg(feature = "sqlite")]
 #[tokio::test]
 async fn sqlite_reopen_and_configuration_precedence_preserve_stores() {
     // Arrange
@@ -2009,6 +2033,7 @@ async fn acquisition_task_failure_retains_backend_error_and_releases_admission()
         .expect("no reservation was submitted");
 }
 
+#[cfg(feature = "sqlite")]
 #[tokio::test]
 async fn temporary_sqlite_handles_share_one_database_until_dropped() {
     // Arrange

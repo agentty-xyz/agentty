@@ -47,6 +47,7 @@ const OPENAI_ESTIMATOR: HeuristicContextEstimator =
     HeuristicContextEstimator::DEFAULT.with_output_schema_in_prompt();
 
 /// Configuration for an `OpenAI` model served through the Responses API.
+#[cfg(feature = "providers-openai")]
 pub struct OpenAiConfig {
     /// API key sent as a bearer token.
     pub api_key: String,
@@ -74,5 +75,6 @@ pub(crate) fn max_output_tokens(model: &str) -> Option<u64> {
 }
 
 #[cfg(test)]
+#[cfg(feature = "providers-openai")]
 #[path = "openai_test.rs"]
 mod tests;

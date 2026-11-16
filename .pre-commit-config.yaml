@@ -379,6 +379,36 @@ repos:
         always_run: true
         pass_filenames: false
         stages: [manual]
+      - id: coverage-ag-harness-no-default-features
+        name: ag-harness minimal build coverage
+        description: Lint ag-harness with no features and with each optional feature alone, then cover its source and the tests that build without default features, listing every uncovered line and function.
+        entry: >-
+          bash -eu -o pipefail -c 'report=target/coverage-ag-harness-no-default-features.lcov; rm -f "$report";
+          export CARGO_RESOLVER_FEATURE_UNIFICATION=selected;
+          cargo clippy -q --locked -p ag-harness --all-targets --no-default-features -- -D warnings;
+          for feature in native-sandbox otel providers-anthropic providers-compat providers-openai sqlite unstable-protocol; do
+          cargo clippy -q --locked -p ag-harness --all-targets --no-default-features --features "$feature" -- -D warnings; done;
+          coverage_rustflags="${RUSTFLAGS:-} -C llvm-args=-runtime-counter-relocation";
+          case "$(uname -s)" in Darwin)
+          coverage_rustflags="$coverage_rustflags
+          -C link-arg=-Wl,-sectalign,__DATA,__llvm_prf_cnts,0x4000
+          -C link-arg=-Wl,-sectalign,__DATA,__llvm_prf_bits,0x4000
+          -C link-arg=-Wl,-sectalign,__DATA,__llvm_prf_data,0x4000";; esac;
+          env CARGO_LLVM_COV_TARGET_DIR="${CARGO_LLVM_COV_TARGET_DIR:-target/llvm-cov-target}"
+          CARGO_UNSTABLE_BUILD_DIR_NEW_LAYOUT=false
+          CARGO_UNSTABLE_FINE_GRAIN_LOCKING=false
+          RUSTFLAGS="$coverage_rustflags"
+          cargo llvm-cov nextest --timings -p ag-harness --no-default-features
+          --lib --tests --locked --profile ci --lcov
+          --no-default-ignore-filename-regex --ignore-filename-regex
+          "(/rustc/|/(tests|benches)/|/(tests\.rs|[0-9a-zA-Z_-]+[_-]tests?\.rs)$|/target/llvm-cov-target/|/\.cargo/(registry|git)/|/\.rustup/toolchains/)"
+          --output-path "$report";
+          test -s "$report";
+          env -u CARGO_RESOLVER_FEATURE_UNIFICATION cargo run -q --locked -p ag-xtask -- check-coverage "$report" --path crates/ag-harness/'
+        language: system
+        always_run: true
+        pass_filenames: false
+        stages: [manual]
       - id: check-slow-tests
         name: slow-test ratchet
         description: Report the slowest tests in the CI nextest JUnit report and fail on any test over 5 s that `.config/slow-tests.yaml` does not list.

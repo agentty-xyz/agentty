@@ -13,7 +13,8 @@ use crate::context_budget_fixture::unbounded_context_budget;
 use crate::harness::Harness;
 use crate::model::{ModelCompletion, ModelError, ModelMessage, ModelMetadata, ModelResponse};
 use crate::recovery::ExecutionIdentity;
-use crate::session::{Database, NewSession, SessionError, SessionInfo};
+use crate::session::{NewSession, SessionError};
+use crate::sqlite_store::{Database, SessionInfo};
 use crate::store::SessionStore as _;
 
 #[tokio::test]

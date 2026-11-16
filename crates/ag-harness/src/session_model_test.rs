@@ -1,9 +1,22 @@
 //! Recorded model snapshot decoding and generation overflow tests.
 
+#[cfg(feature = "sqlite")]
 use serde_json::json;
 
-use crate::session_model::{RecordedModel, next_generation};
+#[cfg(feature = "sqlite")]
+use crate::session_model::RecordedModel;
+use crate::session_model::next_generation;
 
+#[test]
+fn next_generation_rejects_overflow() {
+    // Act
+    let overflow = next_generation(i64::MAX);
+
+    // Assert
+    assert!(overflow.is_err());
+}
+
+#[cfg(feature = "sqlite")]
 #[test]
 fn snapshot_rejects_incomplete_or_invalid_identity() {
     // Arrange
@@ -36,5 +49,4 @@ fn snapshot_rejects_incomplete_or_invalid_identity() {
     for value in invalid {
         assert!(RecordedModel::decode(&value).is_err(), "{value}");
     }
-    assert!(next_generation(i64::MAX).is_err());
 }

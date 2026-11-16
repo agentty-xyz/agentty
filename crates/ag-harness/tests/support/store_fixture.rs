@@ -7,9 +7,10 @@ use std::path::Path;
 use std::sync::{Arc, Mutex};
 
 use ag_harness::model::{ModelCompletion, ModelMessage, ModelRequest, ModelResponse};
+#[cfg(feature = "sqlite")]
+use ag_harness::store::SqliteStore;
 use ag_harness::store::{
-    AcquiredTurn, HistoryProjection, MemoryStore, NewSession, SessionStore, SqliteStore,
-    WriteStatus,
+    AcquiredTurn, HistoryProjection, MemoryStore, NewSession, SessionStore, WriteStatus,
 };
 use ag_harness::{
     Harness, ImageContent, ImageMediaType, InputBlock, Model, ModelError, OutputSchema,
@@ -45,6 +46,8 @@ pub(crate) fn image_input(before: &str, payload: &[u8], after: &str) -> TurnInpu
     .expect("image input")
 }
 
+/// Returns one empty store of each backend this build includes.
+#[cfg(feature = "sqlite")]
 pub(crate) async fn stores() -> Vec<Arc<dyn SessionStore>> {
     vec![
         Arc::new(ExternalStore::new()),
@@ -55,6 +58,15 @@ pub(crate) async fn stores() -> Vec<Arc<dyn SessionStore>> {
                 .expect("sqlite"),
         ),
     ]
+}
+
+/// Returns one empty store of each backend this build includes.
+#[cfg(not(feature = "sqlite"))]
+pub(crate) fn stores() -> std::future::Ready<Vec<Arc<dyn SessionStore>>> {
+    std::future::ready(vec![
+        Arc::new(ExternalStore::new()),
+        Arc::new(MemoryStore::new()),
+    ])
 }
 
 pub(crate) struct Echo {

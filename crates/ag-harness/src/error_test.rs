@@ -1,6 +1,7 @@
 //! Failure classification unit tests proving every turn, session, model, and
 //! build failure maps to one kind with the right retry signal.
 
+#[cfg(feature = "sqlite")]
 use std::borrow::Cow;
 use std::error::Error;
 use std::io;
@@ -18,12 +19,14 @@ use crate::tool::{ReadError, WriteError};
 use crate::{OutputSchemaError, RepositoryError, SessionError, TurnError, TurnInputError};
 
 /// Database failure carrying a fixed backend result code.
+#[cfg(feature = "sqlite")]
 #[derive(Debug, thiserror::Error)]
 #[error("database failure {code:?}")]
 struct CodedDatabaseError {
     code: Option<&'static str>,
 }
 
+#[cfg(feature = "sqlite")]
 impl sqlx::error::DatabaseError for CodedDatabaseError {
     fn message(&self) -> &'static str {
         "database failure"
@@ -111,6 +114,7 @@ fn store_failure() -> SessionError {
     }
 }
 
+#[cfg(feature = "sqlite")]
 fn database_failure(code: Option<&'static str>) -> SessionError {
     SessionError::QueryContext {
         operation: "fixture",
@@ -325,17 +329,6 @@ fn classifies_session_store_and_turn_failures() {
             ErrorKind::Store,
         ),
         (
-            SessionError::Migration(sqlx::migrate::MigrateError::VersionMissing(1)),
-            ErrorKind::Store,
-        ),
-        (
-            SessionError::QueryContext {
-                operation: "fixture",
-                source: sqlx::Error::PoolClosed,
-            },
-            ErrorKind::Store,
-        ),
-        (
             SessionError::Schema(OutputSchemaError::TooLarge),
             ErrorKind::Store,
         ),
@@ -360,6 +353,29 @@ fn classifies_session_store_and_turn_failures() {
     assert_session_classifications(cases);
 }
 
+#[cfg(feature = "sqlite")]
+#[test]
+fn classifies_sqlite_failures_as_store_failures() {
+    // Arrange
+    let cases = vec![
+        (
+            SessionError::Migration(sqlx::migrate::MigrateError::VersionMissing(1)),
+            ErrorKind::Store,
+        ),
+        (
+            SessionError::QueryContext {
+                operation: "fixture",
+                source: sqlx::Error::PoolClosed,
+            },
+            ErrorKind::Store,
+        ),
+    ];
+
+    // Act and Assert
+    assert_session_classifications(cases);
+}
+
+#[cfg(feature = "sqlite")]
 #[test]
 fn classifies_store_contention_as_busy() {
     // Arrange

@@ -14,6 +14,7 @@ use ag_harness::{
 };
 use async_trait::async_trait;
 use serde_json::json;
+#[cfg(feature = "sqlite")]
 use tempfile::tempdir;
 
 use crate::context_budget_fixture::unbounded_context_budget;
@@ -95,6 +96,7 @@ fn recorded(requests: &Requests) -> Result<Vec<ModelRequest>, Box<dyn Error>> {
     Ok(requests.lock().map_err(|_| "requests")?.clone())
 }
 
+#[cfg(feature = "sqlite")]
 #[tokio::test]
 async fn instructions_follow_the_cached_prefix_and_steer_only_their_own_run()
 -> Result<(), Box<dyn Error>> {
@@ -192,6 +194,7 @@ async fn text_output_overrides_the_json_default_for_one_run_only() -> Result<(),
     Ok(())
 }
 
+#[cfg(feature = "sqlite")]
 #[tokio::test]
 async fn text_default_sessions_answer_in_text_after_resume() -> Result<(), Box<dyn Error>> {
     // Arrange

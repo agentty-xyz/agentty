@@ -1,23 +1,33 @@
 //! Catalog data unit tests for identifiers, capabilities, prices, cost
 //! tiers, and specifications.
 
-use crate::catalog::{Capabilities, ModelId, ModelSpec, Pricing, PricingSource};
+use crate::catalog::{Capabilities, CostTier, ModelId, ModelSpec, Pricing, PricingSource};
 use crate::model::ModelProfile;
-use crate::provider::{CostTier, ModelProvider};
+#[cfg(any(feature = "providers-compat", feature = "providers-openai"))]
+use crate::provider::ModelProvider;
 
 #[test]
-fn model_ids_convert_display_and_qualify_cataloged_models() {
+fn model_ids_convert_and_display() {
     // Arrange
     let from_str = ModelId::from("host/model");
-    let from_string = ModelId::from("host/model".to_string());
 
     // Act
-    let cataloged = ModelId::cataloged(ModelProvider::OpenAiCompatible, "qwen3:latest");
+    let from_string = ModelId::from("host/model".to_string());
 
     // Assert
     assert_eq!(from_str, from_string);
     assert_eq!(from_str, ModelId::new("host/model"));
     assert_eq!(from_str.as_str(), "host/model");
+    assert_eq!(from_str.to_string(), "host/model");
+}
+
+#[cfg(any(feature = "providers-compat", feature = "providers-openai"))]
+#[test]
+fn cataloged_model_ids_qualify_the_model_with_its_provider() {
+    // Act
+    let cataloged = ModelId::cataloged(ModelProvider::OpenAiCompatible, "qwen3:latest");
+
+    // Assert
     assert_eq!(cataloged.to_string(), "openai-compatible/qwen3:latest");
 }
 
@@ -50,6 +60,55 @@ fn capabilities_satisfy_only_needs_they_include() {
     );
     assert!(needs.iter().all(|need| every.satisfies(*need)));
     assert!(!Capabilities::NONE.satisfies(every));
+}
+
+#[test]
+fn capabilities_report_each_declared_flag() {
+    // Arrange
+    let vision = Capabilities::NONE
+        .with_image_input(true)
+        .with_tool_calls(true);
+
+    // Act
+    let flags = |capabilities: Capabilities| {
+        [
+            capabilities.image_input(),
+            capabilities.reasoning(),
+            capabilities.structured_output(),
+            capabilities.tool_calls(),
+        ]
+    };
+
+    // Assert
+    assert_eq!(flags(vision), [true, false, false, true]);
+    assert_eq!(
+        flags(
+            Capabilities::NONE
+                .with_reasoning(true)
+                .with_structured_output(true)
+        ),
+        [false, true, true, false]
+    );
+    assert_eq!(
+        flags(vision.with_image_input(false)),
+        [false, false, false, true]
+    );
+}
+
+#[test]
+fn cost_tiers_display_lowercase_labels() {
+    // Act
+    let labels = [
+        CostTier::Local,
+        CostTier::Plan,
+        CostTier::Cheap,
+        CostTier::Standard,
+        CostTier::Premium,
+    ]
+    .map(|tier| tier.to_string());
+
+    // Assert
+    assert_eq!(labels, ["local", "plan", "cheap", "standard", "premium"]);
 }
 
 #[test]
@@ -140,7 +199,6 @@ fn model_spec_starts_unknown_and_records_declarations() {
     // Act
     let declared = unknown
         .clone()
-        .with_provider(ModelProvider::Kimi)
         .with_profile(profile)
         .with_max_output(16_000)
         .with_capabilities(capabilities)
@@ -149,18 +207,30 @@ fn model_spec_starts_unknown_and_records_declarations() {
 
     // Assert
     assert_eq!(unknown.id().as_str(), "host/model");
-    assert_eq!(unknown.provider(), None);
     assert_eq!(unknown.profile(), None);
     assert_eq!(unknown.context_window(), None);
     assert_eq!(unknown.max_output(), None);
     assert_eq!(unknown.capabilities(), Capabilities::NONE);
     assert_eq!(unknown.pricing(), None);
     assert_eq!(unknown.max_concurrency(), None);
-    assert_eq!(declared.provider(), Some(ModelProvider::Kimi));
     assert_eq!(declared.profile(), Some(profile));
     assert_eq!(declared.context_window(), Some(200_000));
     assert_eq!(declared.max_output(), Some(16_000));
     assert_eq!(declared.capabilities(), capabilities);
     assert_eq!(declared.pricing(), Some(pricing));
     assert_eq!(declared.max_concurrency(), Some(4));
+}
+
+#[cfg(any(feature = "providers-compat", feature = "providers-openai"))]
+#[test]
+fn model_spec_records_its_built_in_provider() {
+    // Arrange
+    let unknown = ModelSpec::new("host/model");
+
+    // Act
+    let declared = unknown.clone().with_provider(ModelProvider::Kimi);
+
+    // Assert
+    assert_eq!(unknown.provider(), None);
+    assert_eq!(declared.provider(), Some(ModelProvider::Kimi));
 }

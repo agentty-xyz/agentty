@@ -6,7 +6,6 @@ use std::io;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
-use opentelemetry::trace::FutureExt as _;
 use serde::Serialize;
 use thiserror::Error;
 use tokio::io::AsyncReadExt as _;
@@ -14,8 +13,8 @@ use tokio::io::AsyncReadExt as _;
 use crate::effect::Effects;
 use crate::file_system::FileSystem;
 use crate::reservation::WriteJournal;
-use crate::schema_contract;
 use crate::tool::WriteArguments;
+use crate::{schema_contract, telemetry};
 
 const BYTE_ORDER_MARK: &[u8] = b"\xef\xbb\xbf";
 const MAX_FILE_BYTES: usize = 2 * 1024 * 1024;
@@ -272,7 +271,7 @@ impl WriteTool {
         };
         // Retain the tool context even after cancellation ends its lifecycle
         // span.
-        let task = tokio::spawn(operation.with_current_context());
+        let task = tokio::spawn(telemetry::with_current_context(operation));
 
         task.await.map_err(|source| WriteError::WriteTarget {
             path: arguments.path().to_string(),

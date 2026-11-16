@@ -4,6 +4,7 @@
 use std::os::unix::ffi::OsStringExt as _;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
+#[cfg(feature = "sqlite")]
 use std::sync::atomic::{AtomicI64, Ordering};
 use std::time::Duration;
 
@@ -13,7 +14,8 @@ use super::Status;
 use crate::bash::CommandIntent;
 use crate::model::{ModelMessage, ModelMetadata};
 use crate::recovery::{HostRequest, HostTurnAcquisition, HostTurnStatus};
-use crate::session::Database;
+#[cfg(feature = "sqlite")]
+use crate::sqlite_store::Database;
 use crate::store::{
     AcquiredTurn, HistoryProjection, HistoryTurn, MemoryStore, NewSession, SessionStore,
     StoreIdentity, TurnOwner, TurnStop, WriteRecord, WriteStatus,
@@ -248,6 +250,10 @@ async fn journal_ids_are_store_wide_and_paths_and_terminal_prompts_are_retained(
         assert_eq!(loaded.turns, Vec::<(i64, HistoryTurn)>::new());
         let writes = store.load_writes(name).await.expect("writes");
         assert_eq!(writes[0].repository_root, root);
+        assert_eq!(
+            serde_json::to_value(&writes[0]).expect("record serializes")["repository_root"],
+            serde_json::json!(b"repo-\xff")
+        );
         assert_eq!(writes[0].status, WriteStatus::Failed);
         assert_eq!(writes[0].expected_hash, None);
         let state = store.lock();
@@ -501,8 +507,10 @@ struct ExpiringStore {
     store: Arc<dyn SessionStore>,
 }
 
+/// Returns the memory store and a SQLite store on a controlled clock, each
+/// with a way to expire its running lease.
+#[cfg(feature = "sqlite")]
 async fn expiring_stores() -> Vec<ExpiringStore> {
-    let memory = Arc::new(MemoryStore::new());
     let timestamp = Arc::new(AtomicI64::new(1000));
     let clock = Arc::clone(&timestamp);
     let sqlite = Arc::new(
@@ -513,23 +521,9 @@ async fn expiring_stores() -> Vec<ExpiringStore> {
         .await
         .expect("sqlite"),
     );
-    let memory_clock = Arc::clone(&memory);
 
     vec![
-        ExpiringStore {
-            store: memory,
-            expire: Box::new(move || {
-                memory_clock
-                    .lock()
-                    .sessions
-                    .get_mut("expiry")
-                    .expect("session")
-                    .turns
-                    .last_mut()
-                    .expect("turn")
-                    .deadline = Instant::now() - Duration::from_secs(1);
-            }),
-        },
+        expiring_memory_store(),
         ExpiringStore {
             store: sqlite,
             expire: Box::new(move || {
@@ -537,6 +531,33 @@ async fn expiring_stores() -> Vec<ExpiringStore> {
             }),
         },
     ]
+}
+
+/// Returns the memory store with a way to expire its running lease; the
+/// build has no SQLite store to compare.
+#[cfg(not(feature = "sqlite"))]
+fn expiring_stores() -> std::future::Ready<Vec<ExpiringStore>> {
+    std::future::ready(vec![expiring_memory_store()])
+}
+
+fn expiring_memory_store() -> ExpiringStore {
+    let memory = Arc::new(MemoryStore::new());
+    let memory_clock = Arc::clone(&memory);
+
+    ExpiringStore {
+        store: memory,
+        expire: Box::new(move || {
+            memory_clock
+                .lock()
+                .sessions
+                .get_mut("expiry")
+                .expect("session")
+                .turns
+                .last_mut()
+                .expect("turn")
+                .deadline = Instant::now() - Duration::from_secs(1);
+        }),
+    }
 }
 
 #[tokio::test]

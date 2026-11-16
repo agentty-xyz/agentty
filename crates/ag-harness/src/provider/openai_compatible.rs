@@ -31,6 +31,7 @@ const ESTIMATE_UNDER_COUNT_PERCENT: u64 = 50;
 
 /// Configuration for any server implementing the `OpenAI` Chat Completions
 /// API, such as Ollama, llama.cpp, LM Studio, or vLLM.
+#[cfg(feature = "providers-compat")]
 pub struct OpenAiCompatibleConfig {
     /// Optional API key sent as a bearer token; local servers usually need
     /// none.
@@ -141,5 +142,6 @@ pub(crate) fn local_server(
 }
 
 #[cfg(test)]
+#[cfg(feature = "providers-compat")]
 #[path = "openai_compatible_test.rs"]
 mod tests;

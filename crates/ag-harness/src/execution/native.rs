@@ -7,7 +7,6 @@ use std::os::fd::OwnedFd;
 use std::os::unix::fs::{MetadataExt, PermissionsExt};
 use std::path::{Path, PathBuf};
 use std::process::Stdio;
-use std::time::Instant;
 
 use async_trait::async_trait;
 use rustix::process::{Pid, Signal, kill_process_group};
@@ -20,7 +19,6 @@ use super::contract::{
     ExecutionPolicy, MainExit, ProcessEvent,
 };
 use super::output;
-use super::supervisor::Clock;
 use super::wire::{Launch, Notice};
 use crate::bash::BashConfig;
 use crate::command_journal::CommandCleanupScope;
@@ -68,28 +66,6 @@ impl BashExecutor for Native {
 
     fn bind(&self) -> Result<Box<dyn BashProcess>, ExecutionError> {
         self.bind_for_platform(std::env::consts::OS)
-    }
-}
-
-pub(super) struct Monotonic;
-
-#[async_trait]
-impl Clock for Monotonic {
-    fn now(&self) -> Instant {
-        Instant::now()
-    }
-
-    async fn wait_until(&self, deadline: Instant) {
-        let now = self.now();
-        // An expired deadline must win over ready process events without
-        // waiting for Tokio's next timer tick.
-        if deadline <= now {
-            return;
-        }
-
-        // Convert using the same clock that supplied the deadline. Tokio's
-        // clock can have a different origin after controlled time advancement.
-        tokio::time::sleep(deadline.duration_since(now)).await;
     }
 }
 

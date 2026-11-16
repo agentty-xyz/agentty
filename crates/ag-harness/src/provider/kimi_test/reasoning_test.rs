@@ -1,15 +1,20 @@
 //! Kimi provider tests for carrying reasoning content and tool results into
 //! continuation turns, and for bounding reasoning size.
 
-use serde_json::{Value, json};
+#[cfg(feature = "sqlite")]
+use serde_json::Value;
+use serde_json::json;
 use wiremock::matchers::{bearer_token, body_json, method, path};
 use wiremock::{Mock, MockServer, ResponseTemplate};
 
+#[cfg(feature = "sqlite")]
+use super::support::{SessionBody, kimi_model, person_schema};
 use super::support::{
-    SessionBody, kimi, kimi_model, mount_tool_response, person_schema, person_schema_value,
-    read_request, read_tool_wire,
+    kimi, mount_tool_response, person_schema_value, read_request, read_tool_wire,
 };
+#[cfg(feature = "sqlite")]
 use crate::context_budget_fixture::unbounded_context_budget;
+#[cfg(feature = "sqlite")]
 use crate::harness::Harness;
 use crate::provider::test_support::STRUCTURED_OUTPUT_INSTRUCTION;
 use crate::{model, schema_contract};
@@ -108,6 +113,7 @@ async fn preserves_reasoning_text_and_named_tool_result_for_continuation() {
     assert_eq!(response.output(), Some(&json!({ "name": "Cargo" })));
 }
 
+#[cfg(feature = "sqlite")]
 #[tokio::test]
 async fn preserves_terminal_k3_reasoning_for_next_session_turn() {
     // Arrange
@@ -214,6 +220,7 @@ async fn preserves_terminal_k3_reasoning_for_next_session_turn() {
     assert_eq!(keys[0], keys[1]);
 }
 
+#[cfg(feature = "sqlite")]
 #[tokio::test]
 async fn preserves_terminal_k2_6_reasoning_for_next_session_turn() {
     // Arrange

@@ -52,6 +52,7 @@ const PLAN_PROFILE: ModelProfile = ModelProfile::new(272_000)
     .with_estimator(ESTIMATOR);
 
 /// Configuration for an `OpenAI` model billed to a `ChatGPT` plan.
+#[cfg(feature = "providers-openai")]
 pub struct ChatGptConfig {
     /// Credential file written by `ag-harness login chatgpt`.
     pub auth_file: PathBuf,
@@ -117,5 +118,6 @@ pub(crate) fn max_output_tokens(model: &str) -> Option<u64> {
 }
 
 #[cfg(test)]
+#[cfg(feature = "providers-openai")]
 #[path = "chatgpt_test.rs"]
 mod tests;

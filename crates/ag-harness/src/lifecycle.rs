@@ -2,8 +2,9 @@
 //!
 //! Attach a [`LifecycleObserver`] with `Harness::with_lifecycle_observer` to
 //! receive turn, model, and tool events that never carry prompts or output.
-//! [`LifecycleMetrics`] and [`LifecycleTraceObserver`] project those events to
-//! OpenTelemetry; [`LifecycleObserverSet`] fans out to several observers.
+//! With the `otel` feature, [`LifecycleMetrics`] and
+//! [`LifecycleTraceObserver`] project those events to OpenTelemetry;
+//! [`LifecycleObserverSet`] fans out to several observers.
 
 use std::collections::VecDeque;
 use std::fmt;
@@ -20,7 +21,9 @@ use serde::{Deserialize, Serialize};
 
 use crate::limit::LimitKind;
 use crate::model::{CompletionMetadata, ModelErrorType, ModelMetadata};
+#[cfg(feature = "otel")]
 pub use crate::telemetry::LifecycleMetrics;
+#[cfg(feature = "otel")]
 pub use crate::trace::LifecycleTraceObserver;
 use crate::turn::TurnReport;
 

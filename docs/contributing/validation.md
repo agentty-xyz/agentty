@@ -224,6 +224,15 @@ otherwise every reported file is checked. The hook writes a fresh
 through other packages' tests appears uncovered there; the `coverage` gate remains
 authoritative.
 
+`ag-harness` also builds without its default features. When a change touches its feature
+gates, run the minimal-build leg, which lints the crate with no features and with each
+optional feature alone, then requires full coverage of its sources from the tests that
+build without default features:
+
+```sh
+prek run coverage-ag-harness-no-default-features --all-files --hook-stage manual
+```
+
 A focused run rebuilds only the selected packages. Instrumented test binaries that
 unselected dependents left in the coverage build directory still contain a changed
 crate's old code, so the report can list gaps at line numbers that no longer match the
@@ -259,10 +268,10 @@ for `ag-xtask`, whose CLI suites the coverage gate includes.
 execute the cataloged `test-focused`, `coverage`, and `coverage-focused` commands with a
 stub runner to verify selection, required inputs, arguments, stale-report removal,
 isolation of coverage build settings from `check-coverage`, and failure propagation.
-`coverage-ag-harness-sandbox` still lacks such regression coverage; configuration and
-instruction checks are not replacements. Review changes to coverage commands, compiler
-wrappers, and native sandbox setup for argument quoting, failure propagation, report
-freshness, and setup ordering.
+`coverage-ag-harness-sandbox` and `coverage-ag-harness-no-default-features` still lack
+such regression coverage; configuration and instruction checks are not replacements.
+Review changes to coverage commands, compiler wrappers, and native sandbox setup for
+argument quoting, failure propagation, report freshness, and setup ordering.
 
 ## TUI Snapshots
 

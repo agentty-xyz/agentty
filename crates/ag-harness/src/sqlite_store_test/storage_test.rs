@@ -12,7 +12,8 @@ use super::support::{
 use crate::context::HistoryTurn;
 use crate::model::{ModelMessage, ModelMetadata};
 use crate::request_option::OutputMode;
-use crate::session::{Database, EncodedMessage, NewSession, SessionError, TimestampSource};
+use crate::session::{NewSession, SessionError};
+use crate::sqlite_store::{Database, EncodedMessage, TimestampSource};
 use crate::store::{SessionCheckpoint, SessionStore as _};
 use crate::store_fixture::image_input;
 use crate::tool::ToolCall;

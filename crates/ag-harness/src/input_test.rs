@@ -1,10 +1,9 @@
 //! Turn input unit tests for text and image blocks, input limits, stored
 //! input encoding, and content-free diagnostics.
 
-use crate::input::{
-    ImageContent, ImageMediaType, InputBlock, StoredInputError, StoredTurnInput, TurnInput,
-    TurnInputError,
-};
+use crate::input::{ImageContent, ImageMediaType, InputBlock, TurnInput, TurnInputError};
+#[cfg(feature = "sqlite")]
+use crate::input::{StoredInputError, StoredTurnInput};
 use crate::model::ModelMessage;
 
 pub(crate) fn png_bytes(payload_len: usize) -> Vec<u8> {
@@ -156,6 +155,7 @@ fn image_debug_excludes_content() {
     );
 }
 
+#[cfg(feature = "sqlite")]
 #[test]
 fn stored_input_round_trips_through_json() {
     // Arrange
@@ -179,6 +179,7 @@ fn stored_input_round_trips_through_json() {
     assert_eq!(decoded, input);
 }
 
+#[cfg(feature = "sqlite")]
 #[test]
 fn stored_input_decodes_beyond_current_input_bounds() {
     // Arrange
@@ -199,6 +200,7 @@ fn stored_input_decodes_beyond_current_input_bounds() {
     assert_eq!(decoded.blocks(), blocks.as_slice());
 }
 
+#[cfg(feature = "sqlite")]
 #[test]
 fn stored_input_rejects_invalid_payloads() {
     // Arrange

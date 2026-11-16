@@ -12,26 +12,56 @@ repository.workspace = true
 # Publish this crate only through the crates.io workflow.
 dist = false
 
+[features]
+default = ["native-sandbox", "otel", "providers-compat", "providers-openai", "sqlite"]
+# Native macOS Seatbelt and Linux Landlock/seccomp Bash executor, its
+# `ag-harness-sandbox` launcher binary, and the default executor selection.
+native-sandbox = ["dep:close_fds", "dep:libc", "dep:libproc"]
+# OpenTelemetry request metrics, lifecycle metric and trace observers, and
+# trace-context propagation into spawned turn work.
+otel = ["dep:opentelemetry"]
+# Reserved for the Anthropic Messages client; enables nothing yet.
+providers-anthropic = []
+# OpenAI-compatible Chat Completions clients: Kimi, Qwen, Muse, and local or
+# self-hosted servers.
+providers-compat = []
+# OpenAI Responses API clients: API-key billing and the ChatGPT plan sign-in.
+providers-openai = []
+# Durable `SqliteStore` sessions, `Harness::database`, and the bundled
+# migrations.
+sqlite = ["dep:sqlx"]
+# Reserved for the unstable `serve` protocol types; enables nothing yet.
+unstable-protocol = []
+
+[[bin]]
+name = "ag-harness-sandbox"
+required-features = ["native-sandbox"]
+
 [[test]]
 name = "benchmark_summary"
+required-features = ["otel", "providers-compat"]
 
 [[test]]
 name = "lifecycle"
+required-features = ["providers-compat", "sqlite"]
 
 [[test]]
 name = "public_api"
 
 [[test]]
 name = "sandbox"
+required-features = ["native-sandbox", "sqlite"]
 
 [[test]]
 name = "telemetry"
+required-features = ["otel", "providers-compat"]
 
 [[test]]
 name = "e2e"
 path = "tests/e2e/main.rs"
 test = false
 bench = false
+required-features = ["native-sandbox", "otel", "providers-compat", "providers-openai", "sqlite"]
 
 [[test]]
 name = "benchmark"
@@ -39,31 +69,32 @@ path = "tests/benchmark/main.rs"
 test = false
 bench = false
 harness = false
+required-features = ["native-sandbox", "otel", "providers-compat", "providers-openai", "sqlite"]
 
 [dependencies]
 ag-router.workspace = true
 async-trait.workspace = true
 base64.workspace = true
-close_fds.workspace = true
+close_fds = { workspace = true, optional = true }
 futures-core.workspace = true
 hex.workspace = true
-opentelemetry.workspace = true
+opentelemetry = { workspace = true, optional = true }
 rustix = { workspace = true, features = ["stdio", "thread"] }
 schemars.workspace = true
 serde.workspace = true
 serde_json.workspace = true
 sha2.workspace = true
-sqlx.workspace = true
+sqlx = { workspace = true, optional = true }
 tempfile.workspace = true
 thiserror.workspace = true
 tokio = { workspace = true, features = ["net"] }
 uuid.workspace = true
 
 [target.'cfg(target_os = "linux")'.dependencies]
-libc.workspace = true
+libc = { workspace = true, optional = true }
 
 [target.'cfg(target_os = "macos")'.dependencies]
-libproc.workspace = true
+libproc = { workspace = true, optional = true }
 
 [dev-dependencies]
 ag-telemetry = { workspace = true, features = ["otlp"] }

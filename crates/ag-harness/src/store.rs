@@ -1,7 +1,8 @@
 //! Where durable sessions live.
 //!
-//! [`SqliteStore`] is the default (configured with `Harness::database`),
-//! [`MemoryStore`] keeps resumable sessions for one process, and custom
+//! With the `sqlite` feature, [`SqliteStore`] is the default (configured with
+//! `Harness::database`); [`MemoryStore`] keeps resumable sessions for one
+//! process in every build, and custom
 //! backends implement [`SessionStore`] and are injected with `Harness::store`.
 //! The records returned by `Session::writes` and `Session::compact` are also
 //! defined here.
@@ -24,10 +25,10 @@ use crate::model::{ModelMessage, ModelMetadata};
 use crate::recovery::HostTurnRecord;
 pub use crate::reservation::AcquiredTurn;
 use crate::session::SessionError;
-pub use crate::session::{
-    Database as SqliteStore, LoadedSession, NewSession, SessionInfo, StoreIdentity, TurnOwner,
-};
+pub use crate::session::{LoadedSession, NewSession, StoreIdentity, TurnOwner};
 pub use crate::session_model::RecordedModel;
+#[cfg(feature = "sqlite")]
+pub use crate::sqlite_store::{Database as SqliteStore, SessionInfo};
 use crate::transcript::{TurnRange, TurnStatus};
 use crate::turn::{TurnError, TurnOutcome};
 pub use crate::turn_options_snapshot::{StoredTurnOptions, StoredTurnOptionsError};

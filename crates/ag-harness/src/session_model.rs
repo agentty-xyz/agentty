@@ -1,5 +1,6 @@
 //! Model admission fencing and immutable execution provenance.
 
+#[cfg(feature = "sqlite")]
 use serde::Deserialize;
 
 use crate::SessionError;
@@ -20,6 +21,7 @@ pub struct RecordedModel {
 }
 
 impl RecordedModel {
+    #[cfg(feature = "sqlite")]
     pub(crate) fn decode(value: &str) -> Result<Self, SessionError> {
         let snapshot: Snapshot =
             serde_json::from_str(value).map_err(|error| SessionError::InvalidData {
@@ -105,6 +107,7 @@ pub(crate) fn check_history<'a>(
     Ok(())
 }
 
+#[cfg(feature = "sqlite")]
 #[derive(Deserialize)]
 struct Snapshot {
     generation: i64,

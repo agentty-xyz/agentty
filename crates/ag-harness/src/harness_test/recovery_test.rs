@@ -2,9 +2,11 @@
 
 use std::num::NonZeroU64;
 use std::sync::Arc;
+use std::time::Duration;
 
 use serde_json::json;
 
+use crate::bash::BashConfig;
 use crate::context_budget_fixture::unbounded_context_budget;
 use crate::harness::Harness;
 use crate::harness::tests::support::{model, response_without_metadata};
@@ -54,6 +56,16 @@ async fn recovery_fingerprint_covers_effective_configuration_and_canonicalizes_s
         TurnOptions::new(
             options.output().clone(),
             ToolPolicy::default().allow(Tool::Read),
+        ),
+        options.clone().with_bash(
+            BashConfig::new(
+                "/trusted/launcher".into(),
+                "/bin/bash".into(),
+                "revision".into(),
+                Duration::from_secs(5),
+                1024,
+            )
+            .expect("bash configuration"),
         ),
     ] {
         assert_ne!(

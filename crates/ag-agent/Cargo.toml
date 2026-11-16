@@ -8,7 +8,7 @@ description.workspace = true
 repository.workspace = true
 
 [dependencies]
-ag-harness.workspace = true
+ag-harness = { workspace = true, features = ["native-sandbox", "otel", "providers-compat", "providers-openai", "sqlite"] }
 ag-telemetry.workspace = true
 ag-protocol.workspace = true
 ag-contracts.workspace = true

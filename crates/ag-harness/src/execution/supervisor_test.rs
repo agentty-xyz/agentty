@@ -13,14 +13,30 @@ use async_trait::async_trait;
 use tokio::runtime::Handle;
 use tokio::sync::{mpsc, oneshot, watch};
 
-use super::{Clock, Control, Running, Supervisor, Worker, interruptible};
+use super::{Clock, Control, Monotonic, Running, Supervisor, Worker, interruptible};
 use crate::command_journal::CommandCleanupScope;
 use crate::execution::contract::{
     BashExecutor, BashProcess, Enforcement, Execution, ExecutionCommand, ExecutionControl,
     ExecutionError, ExecutionPolicy, Executor, Grants, Limits, MainExit, OutputStream,
     PreparedExecution, ProcessEvent, RetainedStream, Termination,
 };
-use crate::execution::native::Monotonic;
+
+#[tokio::test(start_paused = true)]
+async fn monotonic_wait_preserves_remaining_time_after_runtime_clock_advance() {
+    // Arrange
+    tokio::time::advance(Duration::from_secs(101)).await;
+    let deadline = Monotonic.now() + Duration::from_secs(1);
+
+    // Act
+    let result =
+        tokio::time::timeout(Duration::from_millis(10), Monotonic.wait_until(deadline)).await;
+
+    // Assert
+    assert!(
+        result.is_err(),
+        "a future deadline must not expire immediately"
+    );
+}
 
 #[tokio::test(start_paused = true)]
 async fn expired_monotonic_deadline_preempts_continuously_ready_events() {

@@ -1,25 +1,50 @@
-//! Unit tests for durable sessions, split by behavior.
+//! Session protocol unit tests for stored defaults and the conversion of
+//! stored option failures into session errors.
 
-#[path = "session_test/chat_test.rs"]
-mod chat;
-#[path = "session_test/history_test.rs"]
-mod history;
-#[path = "session_test/options_test.rs"]
-mod options;
-#[path = "session_test/reservation_test.rs"]
-mod reservation;
-#[path = "session_test/storage_test.rs"]
-mod storage;
-#[path = "session_test/support_test.rs"]
-mod support;
-#[path = "write_journal_test.rs"]
-mod write_journal;
+use serde_json::json;
 
-#[path = "session_test/store_test.rs"]
-mod store;
+use crate::request_option::OutputMode;
+use crate::session::{NewSession, SessionError};
+use crate::turn_options_snapshot::StoredTurnOptionsError;
+use crate::{OutputSchema, OutputSchemaError};
 
-#[path = "session_test/recovery_test.rs"]
-mod recovery;
+#[test]
+fn new_sessions_expose_their_default_schema_only_for_json_output() {
+    // Arrange
+    let schema = OutputSchema::new(json!({"type": "object"})).expect("schema");
 
-#[path = "session_test/model_switch_test.rs"]
-mod model_switch;
+    // Act
+    let json = NewSession::new("json", schema.clone());
+    let text = NewSession::new("text", OutputMode::Text);
+
+    // Assert
+    assert_eq!(json.schema(), Some(&schema));
+    assert_eq!(text.schema(), None);
+}
+
+#[test]
+fn stored_option_failures_become_invalid_data_or_schema_errors() {
+    // Arrange
+    let decoding = serde_json::from_str::<serde_json::Value>("{").expect_err("invalid JSON");
+    let failures = [
+        StoredTurnOptionsError::InvalidData {
+            reason: "unknown version".into(),
+        },
+        StoredTurnOptionsError::Json(decoding),
+        StoredTurnOptionsError::Schema(OutputSchemaError::TooLarge),
+    ];
+
+    // Act
+    let errors = failures.map(SessionError::from);
+
+    // Assert
+    assert!(matches!(
+        &errors,
+        [
+            SessionError::InvalidData { reason: version },
+            SessionError::InvalidData { reason: json },
+            SessionError::Schema(OutputSchemaError::TooLarge),
+        ] if version == "unknown version"
+            && json.starts_with("invalid persistent message JSON")
+    ));
+}

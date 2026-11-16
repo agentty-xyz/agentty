@@ -2,8 +2,11 @@
 //! session builders, turn handles, and history.
 
 use std::future::{Future, IntoFuture};
+#[cfg(not(feature = "sqlite"))]
+use std::future::{Ready, ready};
 use std::hash::{BuildHasher, RandomState};
 use std::num::NonZeroUsize;
+#[cfg(feature = "sqlite")]
 use std::path::PathBuf;
 use std::pin::Pin;
 use std::sync::Arc;
@@ -13,6 +16,7 @@ use std::time::Instant;
 use serde_json::json;
 use sha2::{Digest, Sha256};
 use thiserror::Error;
+#[cfg(feature = "sqlite")]
 use tokio::sync::OnceCell;
 
 use crate::calibration::ContextCalibration;
@@ -41,7 +45,9 @@ use crate::request_option::OutputMode;
 use crate::reservation;
 use crate::run::{Run, RunJournal, RunRequest};
 use crate::schema_contract::OutputSchema;
-use crate::session::{Database, LoadedSession, NewSession, SessionError};
+use crate::session::{LoadedSession, NewSession, SessionError};
+#[cfg(feature = "sqlite")]
+use crate::sqlite_store::Database;
 use crate::store::{AcquiredTurn, SessionStore};
 use crate::tool::Tool;
 use crate::transcript::{TurnRange, TurnRecord};
@@ -1108,6 +1114,7 @@ impl Harness {
     /// The first create or resume initializes one shared connection pool and
     /// runs migrations. Reconfiguring the path starts a new lazy pool for
     /// future handles; existing handles retain their shared database.
+    #[cfg(feature = "sqlite")]
     #[must_use]
     pub fn database(mut self, path: impl Into<PathBuf>) -> Self {
         let config = self.config_mut();
@@ -1127,8 +1134,11 @@ impl Harness {
     pub fn store(mut self, store: Arc<dyn SessionStore>) -> Self {
         let config = self.config_mut();
         config.store = Some(store);
-        config.database = Arc::new(OnceCell::new());
-        config.database_path = None;
+        #[cfg(feature = "sqlite")]
+        {
+            config.database = Arc::new(OnceCell::new());
+            config.database_path = None;
+        }
 
         self
     }
@@ -1510,6 +1520,9 @@ impl Harness {
         }
     }
 
+    /// Returns the host store, else the configured SQLite database, opened
+    /// once and shared by clones.
+    #[cfg(feature = "sqlite")]
     async fn open_database(&self) -> Result<Arc<dyn SessionStore>, SessionError> {
         let config = &self.inner;
         if let Some(store) = &config.store {
@@ -1525,6 +1538,18 @@ impl Harness {
             .get_or_try_init(|| Database::open(path))
             .await
             .map(|database| Arc::new(database.clone()) as Arc<dyn SessionStore>)
+    }
+
+    /// Returns the host store; without the `sqlite` feature it is the only
+    /// durable storage.
+    #[cfg(not(feature = "sqlite"))]
+    fn open_database(&self) -> Ready<Result<Arc<dyn SessionStore>, SessionError>> {
+        ready(
+            self.inner
+                .store
+                .clone()
+                .ok_or(SessionError::StorageRequired),
+        )
     }
 
     fn validate_session_model(&self, id: &str, loaded: &LoadedSession) -> Result<(), SessionError> {
@@ -1714,6 +1739,7 @@ impl HarnessBuilder {
     /// [`Harness::database`]. Replaces an earlier [`Self::store`].
     ///
     /// Clones of the built harness share one lazily opened connection pool.
+    #[cfg(feature = "sqlite")]
     pub fn sqlite(mut self, path: impl Into<PathBuf>) -> Self {
         self.storage = Some(StorageSource::Sqlite(path.into()));
 
@@ -1856,6 +1882,7 @@ impl HarnessBuilder {
             config.max_history_bytes = max_history_bytes.get();
         }
         match self.storage {
+            #[cfg(feature = "sqlite")]
             Some(StorageSource::Sqlite(path)) => config.database_path = Some(path),
             Some(StorageSource::Store(store)) => config.store = Some(store),
             None => {}
@@ -1926,6 +1953,7 @@ pub enum HarnessBuildError {
 /// Session storage selected on a [`HarnessBuilder`].
 enum StorageSource {
     /// SQLite database path.
+    #[cfg(feature = "sqlite")]
     Sqlite(PathBuf),
     /// Host-provided store.
     Store(Arc<dyn SessionStore>),
@@ -1939,7 +1967,9 @@ struct HarnessConfig {
     context_calibration: ContextCalibration,
     context_estimator: Arc<dyn ContextEstimator>,
     context_summaries: ContextSummaryPolicy,
+    #[cfg(feature = "sqlite")]
     database: Arc<OnceCell<Database>>,
+    #[cfg(feature = "sqlite")]
     database_path: Option<PathBuf>,
     execution_identity: Option<ExecutionIdentity>,
     file_system: Arc<dyn FileSystem>,
@@ -1968,7 +1998,9 @@ impl HarnessConfig {
             context_calibration: ContextCalibration::default(),
             context_estimator: Arc::new(HeuristicContextEstimator::DEFAULT),
             context_summaries: ContextSummaryPolicy::Disabled,
+            #[cfg(feature = "sqlite")]
             database: Arc::new(OnceCell::new()),
+            #[cfg(feature = "sqlite")]
             database_path: None,
             execution_identity: None,
             file_system: Arc::new(LocalFileSystem),

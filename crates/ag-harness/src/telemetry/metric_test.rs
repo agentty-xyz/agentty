@@ -9,8 +9,7 @@ use super::{
     AGENT_CALL_BOUNDARIES, AGENT_DURATION_BOUNDARIES_SECONDS, AGENT_DURATION_DESCRIPTION,
     AGENT_DURATION_METRIC, AGENT_INFERENCE_CALLS_DESCRIPTION, AGENT_INFERENCE_CALLS_METRIC,
     AGENT_INFERENCE_CALLS_UNIT, AGENT_TOOL_CALLS_DESCRIPTION, AGENT_TOOL_CALLS_METRIC,
-    AGENT_TOOL_CALLS_UNIT, DURATION_BOUNDARIES_SECONDS, DURATION_METRIC, DURATION_UNIT,
-    ERROR_REPOSITORY_REQUIRED, ERROR_REQUEST, LifecycleMetrics, RequestMetrics,
+    AGENT_TOOL_CALLS_UNIT, DURATION_BOUNDARIES_SECONDS, DURATION_UNIT, LifecycleMetrics,
     TOOL_DURATION_DESCRIPTION, TOOL_DURATION_METRIC,
 };
 use crate::lifecycle::{
@@ -18,6 +17,8 @@ use crate::lifecycle::{
     ToolErrorType, ToolUnavailableReason, TurnErrorType,
 };
 use crate::model::{CompletionMetadata, CompletionUsage, ModelErrorType, ModelMetadata};
+use crate::telemetry::request::DURATION_METRIC;
+use crate::telemetry::{ERROR_REPOSITORY_REQUIRED, ERROR_REQUEST, RequestMetrics};
 
 fn attributes<T>(point: &HistogramDataPoint<T>) -> Vec<(&str, String)> {
     let mut attributes = point

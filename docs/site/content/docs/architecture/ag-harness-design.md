@@ -46,6 +46,15 @@ crates/
 └── ag-harness-cli   # interactive terminal host
 ```
 
+`ag-harness` gates its optional backends behind Cargo features that are all on by
+default: `sqlite` (the SQLite store and migrations), `native-sandbox` (the native Bash
+executor and launcher), `otel` (OpenTelemetry metrics, traces, and context propagation),
+`providers-openai`, and `providers-compat`. `providers-anthropic` and
+`unstable-protocol` are reserved and empty. The core without default features keeps the
+memory store, the `Model` boundary, and host-selected executors, and CI covers it on its
+own. Dependents enable the features they use explicitly. `ag-router` stays unsplit: it
+compiles every provider transport either way.
+
 ## Public boundary
 
 - `Harness` owns the model and its required `ContextBudget`, validated repository,
