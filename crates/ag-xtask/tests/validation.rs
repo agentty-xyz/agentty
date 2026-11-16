@@ -27,8 +27,9 @@ impl Fixture {
         fs::write(
             path.join(".pre-commit-config.yaml"),
             "default_stages: [pre-commit]\nrepos:\n- hooks:\n  - id: clippy\n  - id: \
-             clippy-agentty-e2e\n    stages: [manual]\n  - id: test-focused\n    stages: \
-             [manual]\n  - id: coverage\n    stages: [manual]\n",
+             clippy-agentty-e2e\n    stages: [manual]\n  - id: cargo-check\n    stages: \
+             [manual]\n  - id: test-focused\n    stages: [manual]\n  - id: coverage\n    stages: \
+             [manual]\n",
         )?;
         for (name, script) in [
             (
@@ -634,8 +635,8 @@ fn targets_cannot_hide_the_workspace_or_tracked_sources() -> Result<(), Box<dyn 
 }
 
 #[test]
-fn coordinated_clippy_keeps_its_scope_through_the_cataloged_command() -> Result<(), Box<dyn Error>>
-{
+fn coordinated_clippy_and_compile_checks_keep_their_scope_through_cataloged_commands()
+-> Result<(), Box<dyn Error>> {
     // Arrange
     let catalog: Value = serde_yaml_ng::from_str(include_str!("../../../.pre-commit-config.yaml"))?;
     let cases = [
@@ -657,6 +658,11 @@ fn coordinated_clippy_keeps_its_scope_through_the_cataloged_command() -> Result<
             ),
         ),
         ("clippy-agentty-e2e", "other", None),
+        (
+            "cargo-check",
+            "other",
+            Some("check -q --locked --all-targets --all-features -p other\n"),
+        ),
     ];
     for (hook_id, packages, expected) in cases {
         let fixture = Fixture::new()?;
@@ -691,7 +697,7 @@ case "$1" in
         shift
         exec "$AGENTTY_XTASK" "$@"
         ;;
-    clippy) printf '%s\n' "$*" >> lint-calls ;;
+    check | clippy) printf '%s\n' "$*" >> lint-calls ;;
     *) echo nextest-version ;;
 esac
 "#,

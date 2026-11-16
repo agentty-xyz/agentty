@@ -108,6 +108,14 @@ repos:
         files: (^|/)(Cargo\.toml|Cargo\.lock|.*\.rs)$
         require_serial: true
         stages: [manual]
+      - id: cargo-check
+        name: cargo check affected
+        description: Compile-check affected packages and Clippy's PTY target selection without linting, to catch compile errors before tests; shared files select the workspace.
+        entry: cargo run -q --locked -p ag-xtask -- clippy --check
+        language: system
+        files: (^|/)(Cargo\.toml|Cargo\.lock|.*\.rs)$
+        require_serial: true
+        stages: [manual]
       - id: test-workspace
         name: cargo nextest workspace
         description: Run workspace source and public API tests with `cargo-nextest`.

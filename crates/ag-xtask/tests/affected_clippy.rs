@@ -1,4 +1,5 @@
-//! Public affected-package Clippy CLI contracts with an injected Cargo.
+//! Public affected-package Clippy and compile-check CLI contracts with an
+//! injected Cargo.
 
 #![cfg(unix)]
 
@@ -9,14 +10,17 @@ use std::process::{Command, Output};
 
 use tempfile::TempDir;
 
+#[path = "support/hook_catalog.rs"]
+mod hook_catalog;
+
 struct Fixture {
     directory: TempDir,
 }
 
 impl Fixture {
     /// Creates a workspace where `agentty` has a development dependency on
-    /// `core`, while `other` stands alone. A `cargo` stub records Clippy
-    /// arguments.
+    /// `core`, while `other` stands alone. A `cargo` stub records Clippy and
+    /// check arguments and runs `ag-xtask` for cataloged `cargo run` entries.
     fn new(metadata: Option<&str>) -> Result<Self, Box<dyn Error>> {
         let directory = tempfile::tempdir()?;
         let root = directory.path().canonicalize()?;
@@ -33,8 +37,9 @@ impl Fixture {
         let cargo = directory.path().join("cargo");
         fs::write(
             &cargo,
-            "#!/bin/sh\nif [ \"$1\" = metadata ]; then cat metadata.json; else echo \"$*\" >> \
-             calls; case \" $* \" in *\" --test \"*) exit \
+            "#!/bin/sh\nif [ \"$1\" = metadata ]; then cat metadata.json; elif [ \"$1\" = run ]; \
+             then while [ \"$1\" != -- ]; do shift; done; shift; exec \"$AGENTTY_XTASK\" \"$@\"; \
+             else echo \"$*\" >> calls; case \" $* \" in *\" --test \"*) exit \
              \"${PTY_CLIPPY_EXIT:-${CLIPPY_EXIT:-0}}\";; *) exit \"${CLIPPY_EXIT:-0}\";; esac; \
              fi\n",
         )?;
@@ -62,9 +67,27 @@ impl Fixture {
 
     fn command(&self, files: &[&str], exit_code: i32) -> std::io::Result<Command> {
         let mut command = Command::new(env!("CARGO_BIN_EXE_ag-xtask"));
+        command.arg("clippy").args(files);
+
+        self.configure(command, exit_code)
+    }
+
+    /// Runs the cataloged entry for hook `id` the way `prek` passes changed
+    /// files to it.
+    fn hook(&self, id: &str, files: &[&str], exit_code: i32) -> Result<Output, Box<dyn Error>> {
+        let mut command = Command::new("sh");
         command
-            .arg("clippy")
-            .args(files)
+            .args(["-c", &format!("{} \"$@\"", hook_catalog::entry(id)?), "sh"])
+            .args(files);
+
+        Ok(self
+            .configure(command, exit_code)?
+            .env("AGENTTY_XTASK", env!("CARGO_BIN_EXE_ag-xtask"))
+            .output()?)
+    }
+
+    fn configure(&self, mut command: Command, exit_code: i32) -> std::io::Result<Command> {
+        command
             .current_dir(self.directory.path().canonicalize()?)
             .env_clear()
             .env(
@@ -326,6 +349,43 @@ fn combined_lint_runs_both_commands_and_preserves_either_failure() -> Result<(),
             "collect failures from both lint selections"
         );
     }
+
+    Ok(())
+}
+
+#[test]
+fn cataloged_compile_check_keeps_the_lint_selection_and_propagates_failures()
+-> Result<(), Box<dyn Error>> {
+    // Arrange
+    let fixture = Fixture::new(None)?;
+    let failing = Fixture::new(None)?;
+
+    // Act
+    let package_change = fixture.hook("cargo-check", &["crates/core/src/lib.rs"], 0)?;
+    let lockfile_change =
+        fixture.hook("cargo-check", &["crates/other/src/lib.rs", "Cargo.lock"], 0)?;
+    let failure = failing.hook("cargo-check", &["crates/other/src/lib.rs"], 1)?;
+
+    // Assert
+    assert!(package_change.status.success(), "{package_change:?}");
+    assert!(lockfile_change.status.success(), "{lockfile_change:?}");
+    let pty =
+        "check -q --locked -p agentty --test e2e --test protocol_compliance_e2e --test showcase";
+    assert_eq!(
+        fixture.calls()?,
+        [
+            "check -q --locked --all-targets --all-features -p agentty -p core",
+            pty,
+            "check -q --locked --all-targets --all-features --workspace",
+            pty,
+        ]
+    );
+    assert!(!failure.status.success());
+    assert!(String::from_utf8_lossy(&failure.stdout).contains("cargo check reported failures"));
+    assert_eq!(
+        failing.calls()?,
+        ["check -q --locked --all-targets --all-features -p other"]
+    );
 
     Ok(())
 }

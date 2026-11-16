@@ -15,6 +15,10 @@ rerunning it.
 needs no `--files` list. Formatter configuration or toolchain changes format the whole
 workspace. Unchanged files already match `main`, which CI keeps formatted.
 
+Before `test-focused`, catch compile errors with
+`prek run cargo-check --hook-stage manual --files <changed paths>`. It compile-checks
+the packages `clippy` would select for those paths, without linting.
+
 Before handoff, choose one validation rung covering every touched file and all affected
 dependents. Handoff means the task's final state, not each reply in a multi-turn
 session.
@@ -116,8 +120,8 @@ AGENTTY_TEST_PACKAGES='ag-git ag-agent' \
 ```
 
 The coordinator executes `clippy` and unrestricted `test-focused` selections through
-`prek`. Its Clippy subprocess receives the affected package selection in
-`AGENTTY_CLIPPY_PACKAGES`, so the hook's full file inventory cannot widen that
+`prek`. Its Clippy and `cargo-check` subprocesses receive the affected package selection
+in `AGENTTY_CLIPPY_PACKAGES`, so the hook's full file inventory cannot widen that
 selection. Ordinary Clippy hook invocations continue to select owners and dependents
 from their changed files, with root configuration changes selecting the whole workspace.
 
