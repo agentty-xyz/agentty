@@ -16,13 +16,15 @@ use tokio::sync::mpsc;
 use tokio_util::sync::CancellationToken;
 
 use crate::agent::cli::error;
-use crate::agent::cli::execution::{self, CliExecutionError, CliExecutionObserver, CliExitStatus};
+use crate::agent::cli::execution::{
+    self, CliExecutionError, CliExecutionObserver, CliExitStatus, CliStdoutPayload,
+};
 use crate::agent::{self as agent, AgentBackend, BuildCommandRequest};
 
 /// [`AgentChannel`] adapter that spawns one CLI subprocess per agent turn.
 ///
-/// Stdout lines are classified by
-/// [`agent::parse_stream_output_line`] and transient loader updates are
+/// Stdout line payloads are classified by
+/// [`agent::parse_stream_payload`] and transient loader updates are
 /// forwarded as [`TurnEvent::ThoughtDelta`]. A kill signal transitions the
 /// turn to a failed state with a `[Stopped]` banner. A spawn failure is
 /// surfaced through [`AgentError`].
@@ -117,15 +119,19 @@ impl CliExecutionObserver for CliTurnObserver {
         let _ = self.events.send(TurnEvent::PidUpdate(child_pid));
     }
 
-    fn stdout_line(&self, line: &str) {
-        self.activity
-            .lock()
-            .unwrap_or_else(std::sync::PoisonError::into_inner)
-            .observe_line(self.kind, line);
+    fn stdout_line(&self, _line: &str, payload: &CliStdoutPayload) {
+        if let Some(value) = payload.exact() {
+            self.activity
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner)
+                .observe(self.kind, value);
+        }
         if !self.show_progress {
             return;
         }
-        let Some((text, is_response_content)) = agent::parse_stream_output_line(self.kind, line)
+        let Some((text, is_response_content)) = payload
+            .trimmed()
+            .and_then(|value| agent::parse_stream_payload(self.kind, value))
         else {
             return;
         };

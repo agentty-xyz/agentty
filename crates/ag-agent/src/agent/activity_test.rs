@@ -58,7 +58,7 @@ fn claude_preserves_skill_parent_and_content() {
     });
 
     // Act
-    observer.observe_line(AgentKind::Claude, &json!({"type":"assistant","parent_tool_use_id":"parent","message":{"content":[{"type":"tool_use","id":"skill","name":"Skill","input":{"skill":"review","args":"secret"}},{"type":"tool_use","id":"read","name":"Read","input":{"file_path":"SKILL.md"}},{"type":"tool_use","id":"answer","name":"StructuredOutput"}]}}).to_string());
+    observer.observe(AgentKind::Claude, &json!({"type":"assistant","parent_tool_use_id":"parent","message":{"content":[{"type":"tool_use","id":"skill","name":"Skill","input":{"skill":"review","args":"secret"}},{"type":"tool_use","id":"read","name":"Read","input":{"file_path":"SKILL.md"}},{"type":"tool_use","id":"answer","name":"StructuredOutput"}]}}));
     observer.observe(AgentKind::Claude, &json!({"message":{"content":[{"type":"tool_result","tool_use_id":"skill","content":"private"},{"type":"tool_result","tool_use_id":"read","is_error":true}]}}));
     drop(observer);
 
@@ -116,8 +116,8 @@ fn claude_oversized_edits_and_writes_preserve_paths_through_failure_updates() {
         } else {
             json!({"file_path":"src/example.rs", "content":"x".repeat(8192)})
         };
-        observer.observe_line(AgentKind::Claude, &json!({"type":"assistant", "message":{"content":[{"type":"tool_use", "id":"edit", "name":name, "input":input}]}}).to_string());
-        observer.observe_line(AgentKind::Claude, &json!({"type":"user", "message":{"content":[{"type":"tool_result", "tool_use_id":"edit", "is_error":true, "content":"edit failed"}]}}).to_string());
+        observer.observe(AgentKind::Claude, &json!({"type":"assistant", "message":{"content":[{"type":"tool_use", "id":"edit", "name":name, "input":input}]}}));
+        observer.observe(AgentKind::Claude, &json!({"type":"user", "message":{"content":[{"type":"tool_result", "tool_use_id":"edit", "is_error":true, "content":"edit failed"}]}}));
         drop(observer);
 
         let events = events.lock().expect("events lock");
@@ -239,7 +239,6 @@ fn malformed_non_tool_and_unknown_events_are_ignored() {
         AgentKind::Antigravity,
         AgentKind::Harness,
     ] {
-        observer.observe_line(kind, "invalid");
         for event in [
             json!({}),
             json!({"method":"item/started"}),

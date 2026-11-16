@@ -1,8 +1,16 @@
 //! Claude response and stream-line parsing unit tests.
 
+use crate::agent::cli::execution::CliStdoutPayload;
 use crate::agent::response_parser::{
-    parse_claude_response_with_fallback, parse_claude_stream_output_line,
+    parse_claude_response_with_fallback, parse_claude_stream_payload,
 };
+
+/// Classifies one stdout line through the shared CLI payload parse.
+fn parse_stream_line(line: &str) -> Option<(String, bool)> {
+    CliStdoutPayload::parse(line)
+        .trimmed()
+        .and_then(parse_claude_stream_payload)
+}
 
 #[test]
 fn test_claude_parse_response_reads_result_payload() {
@@ -123,7 +131,7 @@ fn test_parse_claude_stream_output_line_reads_assistant_message_content_blocks()
     );
 
     // Act
-    let parsed_line = parse_claude_stream_output_line(stdout_line);
+    let parsed_line = parse_stream_line(stdout_line);
 
     // Assert
     assert_eq!(parsed_line, Some(("Partial answer".to_string(), true)));
@@ -135,7 +143,7 @@ fn test_parse_claude_stream_output_line_reads_message_event_content() {
     let stdout_line = r#"{"type":"message","role":"assistant","content":"Partial answer"}"#;
 
     // Act
-    let parsed_line = parse_claude_stream_output_line(stdout_line);
+    let parsed_line = parse_stream_line(stdout_line);
 
     // Assert
     assert_eq!(parsed_line, Some(("Partial answer".to_string(), true)));
@@ -147,7 +155,7 @@ fn test_parse_claude_stream_output_line_ignores_result_events_for_delta_streamin
     let stdout_line = r#"{"type":"result","subtype":"success","result":"Final answer"}"#;
 
     // Act
-    let parsed_line = parse_claude_stream_output_line(stdout_line);
+    let parsed_line = parse_stream_line(stdout_line);
 
     // Assert
     assert_eq!(parsed_line, None);
@@ -213,7 +221,7 @@ fn test_parse_claude_stream_output_line_maps_progress_labels_from_each_field() {
 
     for (stdout_line, expected_progress) in line_cases {
         // Act
-        let parsed_line = parse_claude_stream_output_line(stdout_line);
+        let parsed_line = parse_stream_line(stdout_line);
 
         // Assert
         assert_eq!(
@@ -233,7 +241,7 @@ fn test_parse_claude_stream_output_line_maps_tool_use_blocks_to_progress() {
     );
 
     // Act
-    let parsed_line = parse_claude_stream_output_line(stdout_line);
+    let parsed_line = parse_stream_line(stdout_line);
 
     // Assert
     assert_eq!(parsed_line, Some(("Running a command".to_string(), false)));

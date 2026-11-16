@@ -15,11 +15,16 @@ use tempfile::{tempdir, tempdir_in};
 use tokio::sync::mpsc;
 
 use super::support::{make_turn_request, stdin_capture_command};
-use crate::agent::cli::execution::{CliExecutionError, CliExecutionObserver};
+use crate::agent::cli::execution::{CliExecutionError, CliExecutionObserver, CliStdoutPayload};
 use crate::agent::{MockAgentBackend, create_backend};
 use crate::channel::cli::{
     CliAgentChannel, CliTurnObserver, build_command_request, map_cli_turn_execution_error,
 };
+
+/// Delivers one stdout line with the payload the shared executor parses.
+fn observe_line(observer: &CliTurnObserver, line: &str) {
+    observer.stdout_line(line, &CliStdoutPayload::parse(line));
+}
 
 /// Drains all currently buffered turn events from a test receiver.
 #[test]
@@ -57,7 +62,10 @@ fn test_cli_turn_observer_ignores_blank_progress_text() {
     let observer = CliTurnObserver::new(events, AgentKind::Codex, true);
 
     // Act
-    observer.stdout_line(r#"{"type":"item.updated","item":{"type":"reasoning","text":"   "}}"#);
+    observe_line(
+        &observer,
+        r#"{"type":"item.updated","item":{"type":"reasoning","text":"   "}}"#,
+    );
 
     // Assert
     assert!(event_receiver.try_recv().is_err());
@@ -553,7 +561,10 @@ fn repair_activity_is_forwarded_without_private_loader_text() {
     let observer = CliTurnObserver::new(sender, AgentKind::Claude, false);
 
     // Act
-    observer.stdout_line(r#"{"type":"assistant","message":{"content":[{"type":"tool_use","id":"call","name":"Read"},{"type":"text","text":"private repair text"}]}}"#);
+    observe_line(
+        &observer,
+        r#"{"type":"assistant","message":{"content":[{"type":"tool_use","id":"call","name":"Read"},{"type":"text","text":"private repair text"}]}}"#,
+    );
     drop(observer);
     let events = std::iter::from_fn(|| receiver.try_recv().ok()).collect::<Vec<_>>();
 
@@ -563,5 +574,50 @@ fn repair_activity_is_forwarded_without_private_loader_text() {
         events
             .iter()
             .all(|event| matches!(event, TurnEvent::Activity(_)))
+    );
+}
+
+#[test]
+fn cli_turn_observer_keeps_activity_and_progress_framing_for_each_line_shape() {
+    // Arrange
+    let (sender, mut receiver) = mpsc::unbounded_channel();
+    let observer = CliTurnObserver::new(sender, AgentKind::Claude, true);
+    let tool_use = |id: &str| {
+        format!(
+            r#"{{"type":"assistant","message":{{"content":[{{"type":"tool_use","id":"{id}","name":"Bash"}}]}}}}"#
+        )
+    };
+
+    // Act
+    for line in [
+        String::new(),
+        "plain diagnostic text".to_string(),
+        format!(" \t{}\t ", tool_use("json-whitespace")),
+        format!("\u{a0}{}", tool_use("unicode-whitespace")),
+        r#"{"type":"assistant","message":{"role":"assistant","content":"answer text"}}"#
+            .to_string(),
+    ] {
+        observe_line(&observer, &line);
+    }
+    let events = std::iter::from_fn(|| receiver.try_recv().ok())
+        .map(|event| match event {
+            TurnEvent::Activity(activity) => {
+                format!("activity {} {:?}", activity.id, activity.status)
+            }
+            TurnEvent::ThoughtDelta(text) => format!("thought {text}"),
+            other => format!("{other:?}"),
+        })
+        .collect::<Vec<_>>();
+
+    // Assert
+    // Activity reads only lines that parse exactly, while stream progress
+    // also accepts Unicode whitespace around the payload.
+    assert_eq!(
+        events,
+        [
+            "activity json-whitespace Running",
+            "thought Running a command",
+            "thought Running a command",
+        ]
     );
 }

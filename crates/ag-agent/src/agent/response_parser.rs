@@ -81,27 +81,28 @@ pub(super) fn parse_antigravity_response_with_fallback(
     })
 }
 
-/// Parses one Antigravity stream line.
+/// Classifies one parsed Antigravity stream-line payload.
 ///
 /// Response content is classified separately so the CLI channel can suppress
 /// duplicate partial answers while still surfacing reasoning and tool
 /// progress.
-pub(super) fn parse_antigravity_stream_output_line(stdout_line: &str) -> Option<(String, bool)> {
-    let stream_event = serde_json::from_str::<serde_json::Value>(stdout_line.trim()).ok()?;
-    let event_label = antigravity_event_label(&stream_event);
+pub(super) fn parse_antigravity_stream_payload(
+    stream_event: &serde_json::Value,
+) -> Option<(String, bool)> {
+    let event_label = antigravity_event_label(stream_event);
     if event_label.is_some_and(|label| {
         let label = label.to_ascii_lowercase();
 
         label.contains("thought") || label.contains("reason")
     }) {
-        return antigravity_event_text(&stream_event).map(|text| (text, false));
+        return antigravity_event_text(stream_event).map(|text| (text, false));
     }
 
-    if let Some(progress_message) = compact_progress_message_from_json(&stream_event) {
+    if let Some(progress_message) = compact_progress_message_from_json(stream_event) {
         return Some((progress_message, false));
     }
 
-    antigravity_event_text(&stream_event).map(|text| (text, true))
+    antigravity_event_text(stream_event).map(|text| (text, true))
 }
 
 /// Parses a complete Antigravity JSON or NDJSON response.
@@ -214,9 +215,9 @@ fn antigravity_protocol_payload(payload: &serde_json::Value) -> bool {
     let is_agent_response = payload.get("answer").is_some() && payload.get("questions").is_some();
 
     is_agent_response
-        || serde_json::from_value::<FocusedReview>(payload.clone()).is_ok()
-        || serde_json::from_value::<UtilityResponse>(payload.clone()).is_ok()
-        || serde_json::from_value::<ReviewMetadata>(payload.clone()).is_ok()
+        || FocusedReview::deserialize(payload).is_ok()
+        || UtilityResponse::deserialize(payload).is_ok()
+        || ReviewMetadata::deserialize(payload).is_ok()
 }
 
 /// Extracts string or structured content from an Antigravity event value.
@@ -400,20 +401,16 @@ fn record_claude_parsed_response(
     }
 }
 
-/// Parses one Claude stream line into display text and content/progress type.
-pub(super) fn parse_claude_stream_output_line(stdout_line: &str) -> Option<(String, bool)> {
-    let trimmed_line = stdout_line.trim();
-    if trimmed_line.is_empty() {
-        return None;
-    }
-
-    let stream_event = serde_json::from_str::<serde_json::Value>(trimmed_line).ok()?;
-
-    if let Some(content) = extract_claude_stream_assistant_content(&stream_event) {
+/// Classifies one parsed Claude stream-line payload into display text and
+/// content/progress type.
+pub(super) fn parse_claude_stream_payload(
+    stream_event: &serde_json::Value,
+) -> Option<(String, bool)> {
+    if let Some(content) = extract_claude_stream_assistant_content(stream_event) {
         return Some((content, true));
     }
 
-    let progress_message = compact_progress_message_from_json(&stream_event)?;
+    let progress_message = compact_progress_message_from_json(stream_event)?;
 
     Some((progress_message, false))
 }
@@ -511,14 +508,12 @@ fn record_codex_completed_item(
     }
 }
 
-/// Parses one Codex stream line into display text and content/progress type.
-pub(super) fn parse_codex_stream_output_line(stdout_line: &str) -> Option<(String, bool)> {
-    let trimmed_line = stdout_line.trim();
-    if trimmed_line.is_empty() {
-        return None;
-    }
-
-    let event = serde_json::from_str::<CodexEvent>(trimmed_line).ok()?;
+/// Classifies one parsed Codex stream-line payload into display text and
+/// content/progress type.
+pub(super) fn parse_codex_stream_payload(
+    stream_event: &serde_json::Value,
+) -> Option<(String, bool)> {
+    let event = CodexEvent::deserialize(stream_event).ok()?;
     let event_type = event.event_type.as_deref();
     if event_type == Some("item.started") {
         let item = event.item.as_ref()?;

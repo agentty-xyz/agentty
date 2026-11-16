@@ -45,7 +45,7 @@ pub(super) fn parse_response(_stdout: &str, _stderr: &str) -> ParsedResponse {
 }
 
 /// Returns no stream content because the harness writes no CLI output.
-pub(super) fn parse_stream_output_line(_stdout_line: &str) -> Option<(String, bool)> {
+pub(super) fn parse_stream_payload(_payload: &serde_json::Value) -> Option<(String, bool)> {
     None
 }
 

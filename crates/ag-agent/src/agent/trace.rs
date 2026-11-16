@@ -57,15 +57,6 @@ impl OperationTrace {
         }
     }
 
-    /// Observes a raw CLI line without changing its delivery or retained bytes.
-    pub(crate) fn observe_line(&mut self, kind: AgentKind, line: &[u8]) {
-        if self.context.span().is_recording()
-            && let Ok(payload) = serde_json::from_slice(line)
-        {
-            self.observe(kind, &payload);
-        }
-    }
-
     /// Records terminal items after the caller validates a successful
     /// completion for the active Codex turn and thread. Item identities
     /// deduplicate snapshots against standalone completion notifications.

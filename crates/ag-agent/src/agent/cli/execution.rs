@@ -1,5 +1,6 @@
 //! Shared raw subprocess execution for CLI-backed agent transports.
 
+use std::borrow::Cow;
 use std::io;
 use std::os::unix::process::ExitStatusExt as _;
 use std::process::ExitStatus;
@@ -8,19 +9,62 @@ use std::time::Duration;
 use ag_session::AgentKind;
 use ag_telemetry::FutureExt as _;
 use rustix::process::{self, Pid, Signal, WaitId, WaitIdOptions};
+use serde_json::Value;
 use tokio::io::{AsyncBufRead, AsyncBufReadExt as _, AsyncRead, AsyncReadExt as _};
 
 use super::stdin;
 use crate::agent::{self as agent, AgentBackend, AgentBackendError, BuildCommandRequest};
+
+/// Whitespace JSON permits around a value (RFC 8259 `ws`).
+const JSON_WHITESPACE: [char; 4] = [' ', '\t', '\n', '\r'];
 
 /// Observer for execution details that are meaningful to a transport adapter.
 pub(crate) trait CliExecutionObserver: Send + Sync {
     /// Reports the active child PID and clears it after process termination.
     fn pid_updated(&self, child_pid: Option<u32>);
 
-    /// Reports one complete stdout line while retaining the same line in the
-    /// final raw output.
-    fn stdout_line(&self, line: &str);
+    /// Reports one complete stdout line, without its terminator, while
+    /// retaining the same line in the final raw output. `payload` carries the
+    /// line's JSON, parsed once for every consumer.
+    fn stdout_line(&self, line: &str, payload: &CliStdoutPayload);
+}
+
+/// JSON parsed once from one stdout line and shared by every line consumer.
+///
+/// Activity and trace observers read the exact line, while provider stream
+/// parsers read it after trimming Unicode whitespace. One parse serves both
+/// framings: the exact line parses exactly when only JSON whitespace
+/// surrounds the trimmed text and that text parses.
+pub(crate) struct CliStdoutPayload {
+    /// Whether only JSON whitespace surrounds the trimmed line text.
+    exact: bool,
+    /// JSON value parsed from the Unicode-whitespace-trimmed line text.
+    value: Option<Value>,
+}
+
+impl CliStdoutPayload {
+    /// Parses one decoded stdout line.
+    pub(crate) fn parse(line: &str) -> Self {
+        let trimmed_line = line.trim();
+
+        Self {
+            // Unicode trimming removes a superset of JSON whitespace, so equal
+            // lengths mean every removed character was JSON whitespace.
+            exact: line.trim_matches(JSON_WHITESPACE).len() == trimmed_line.len(),
+            value: serde_json::from_str(trimmed_line).ok(),
+        }
+    }
+
+    /// Returns the value that parsing the exact line text yields.
+    pub(crate) fn exact(&self) -> Option<&Value> {
+        self.value.as_ref().filter(|_| self.exact)
+    }
+
+    /// Returns the value parsed after trimming Unicode whitespace, as
+    /// provider stream parsers read it.
+    pub(crate) fn trimmed(&self) -> Option<&Value> {
+        self.value.as_ref()
+    }
 }
 
 /// Classified process termination state independent of caller policy.
@@ -345,12 +389,20 @@ where
             first_activity = false;
         }
         output.extend_from_slice(&line);
-        operation_trace.observe_line(kind, &line);
         let line_text = String::from_utf8_lossy(&line);
-        observer.stdout_line(line_text.trim_end_matches(['\r', '\n']));
+        let line_text_without_terminator = line_text.trim_end_matches(['\r', '\n']);
+        let payload = CliStdoutPayload::parse(line_text_without_terminator);
+        // Tracing reads raw bytes, which never parse as JSON when they are
+        // not valid UTF-8, so lossily decoded lines stay out of the trace.
+        if let Cow::Borrowed(_) = line_text
+            && let Some(value) = payload.exact()
+        {
+            operation_trace.observe(kind, value);
+        }
+        observer.stdout_line(line_text_without_terminator, &payload);
     }
 
-    Ok(String::from_utf8_lossy(&output).into_owned())
+    Ok(decode_lossy(output))
 }
 
 /// Captures the complete stderr byte stream.
@@ -364,7 +416,14 @@ where
         .await
         .map_err(CliExecutionError::StderrRead)?;
 
-    Ok(String::from_utf8_lossy(&output).into_owned())
+    Ok(decode_lossy(output))
+}
+
+/// Decodes captured bytes like [`String::from_utf8_lossy`], reusing the
+/// buffer instead of copying it when the bytes are valid UTF-8.
+fn decode_lossy(bytes: Vec<u8>) -> String {
+    String::from_utf8(bytes)
+        .unwrap_or_else(|error| String::from_utf8_lossy(error.as_bytes()).into_owned())
 }
 
 /// Converts an OS exit status into the transport-neutral classification.

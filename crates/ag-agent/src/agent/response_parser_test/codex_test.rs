@@ -1,9 +1,16 @@
 //! Codex response, stream-line, and progress message parsing unit tests.
 
+use crate::agent::cli::execution::CliStdoutPayload;
 use crate::agent::response_parser::{
-    compact_codex_progress_message, parse_codex_response_with_fallback,
-    parse_codex_stream_output_line,
+    compact_codex_progress_message, parse_codex_response_with_fallback, parse_codex_stream_payload,
 };
+
+/// Classifies one stdout line through the shared CLI payload parse.
+fn parse_stream_line(line: &str) -> Option<(String, bool)> {
+    CliStdoutPayload::parse(line)
+        .trimmed()
+        .and_then(parse_codex_stream_payload)
+}
 
 /// Ensures final NDJSON parsing keeps the real assistant reply when
 /// completion-status messages trail the stream.
@@ -99,7 +106,7 @@ fn test_parse_stream_output_line_codex_ignores_completion_status_messages() {
 
     // Act & Assert
     for completion_status_line in completion_status_lines {
-        let parsed_line = parse_codex_stream_output_line(completion_status_line);
+        let parsed_line = parse_stream_line(completion_status_line);
 
         assert_eq!(parsed_line, None);
     }
@@ -112,7 +119,7 @@ fn test_parse_stream_output_line_codex_keeps_assistant_message_content() {
         r#"{"type":"item.completed","item":{"type":"agent_message","text":"Final answer"}}"#;
 
     // Act
-    let parsed_line = parse_codex_stream_output_line(assistant_line);
+    let parsed_line = parse_stream_line(assistant_line);
 
     // Assert
     assert_eq!(parsed_line, Some(("Final answer".to_string(), true)));
@@ -125,7 +132,7 @@ fn test_parse_stream_output_line_codex_marks_reasoning_as_loader_text() {
         r#"{"type":"item.updated","item":{"type":"reasoning","delta":"Inspecting files"}}"#;
 
     // Act
-    let parsed_line = parse_codex_stream_output_line(reasoning_line);
+    let parsed_line = parse_stream_line(reasoning_line);
 
     // Assert
     assert_eq!(parsed_line, Some(("Inspecting files".to_string(), false)));
@@ -136,6 +143,12 @@ fn test_parse_stream_output_line_codex_classifies_each_event_shape() {
     // Arrange
     let line_cases = [
         ("   ", None),
+        ("not json", None),
+        (r#"{"type":7}"#, None),
+        (
+            r#"{"type":"item.completed","item":{"type":"agent_message","text":"Done"},"usage":{"input_tokens":1.5}}"#,
+            None,
+        ),
         (r#"{"type":"item.started"}"#, None),
         (
             r#"{"type":"item.started","item":{"type":"thought"}}"#,
@@ -165,7 +178,7 @@ fn test_parse_stream_output_line_codex_classifies_each_event_shape() {
 
     for (line, expected) in line_cases {
         // Act
-        let parsed_line = parse_codex_stream_output_line(line);
+        let parsed_line = parse_stream_line(line);
 
         // Assert
         assert_eq!(parsed_line, expected, "line: {line}");

@@ -644,7 +644,6 @@ async fn reconstructed_and_observed_intervals_are_distinguished_and_bounded() {
         );
         trace.record("", "tool", None, None, Vec::new());
         trace.record(&"x".repeat(257), "tool", None, None, Vec::new());
-        trace.observe_line(AgentKind::Claude, b"invalid json");
     })
     .await;
 
@@ -725,7 +724,7 @@ fn disabled_tracing_ignores_provider_payloads() {
 
     // Act
     trace.observe(AgentKind::Codex, &json!({"method": "item/started", "params": {"item": {"id": "one", "type": "commandExecution"}}}));
-    trace.observe_line(AgentKind::Claude, b"{}");
+    trace.observe(AgentKind::Claude, &json!({}));
     trace.observe_codex_completed_turn(
         &json!({"params": {"turn": {"items": [{"id": "one", "type": "commandExecution"}]}}}),
     );
@@ -746,7 +745,7 @@ async fn capture_with_policy(kind: AgentKind, events: Vec<Value>, capture: bool)
             .scope(async {
                 let mut trace = OperationTrace::new();
                 for event in events {
-                    trace.observe_line(kind, &serde_json::to_vec(&event).expect("event"));
+                    trace.observe(kind, &event);
                 }
             })
             .await;

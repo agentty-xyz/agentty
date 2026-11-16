@@ -30,12 +30,6 @@ impl ActivityObserver {
         }
     }
 
-    pub(crate) fn observe_line(&mut self, kind: AgentKind, line: &str) {
-        if let Ok(payload) = serde_json::from_str(line) {
-            self.observe(kind, &payload);
-        }
-    }
-
     pub(crate) fn observe(&mut self, kind: AgentKind, payload: &Value) {
         match kind {
             AgentKind::Codex => self.codex(payload),

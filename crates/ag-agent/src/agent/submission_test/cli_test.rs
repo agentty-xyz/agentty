@@ -10,7 +10,7 @@ use tempfile::tempdir;
 
 use super::support::{mock_shell_command, stdin_capture_shell_command};
 use crate::agent::MockAgentBackend;
-use crate::agent::cli::execution::{CliExecutionError, CliExecutionObserver};
+use crate::agent::cli::execution::{CliExecutionError, CliExecutionObserver, CliStdoutPayload};
 use crate::agent::submission::{
     OneShotCliObserver, clear_child_pid_slot, format_one_shot_execution_error,
     submit_one_shot_with_backend,
@@ -60,7 +60,10 @@ fn test_one_shot_cli_observer_updates_child_pid_slot() {
     // Act
     observer.pid_updated(Some(42));
     let active_pid = *child_pid.lock().expect("PID lock should be available");
-    observer.stdout_line("collected output");
+    observer.stdout_line(
+        "collected output",
+        &CliStdoutPayload::parse("collected output"),
+    );
     observer.pid_updated(None);
     let cleared_pid = *child_pid.lock().expect("PID lock should be available");
 
