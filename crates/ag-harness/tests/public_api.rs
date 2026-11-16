@@ -44,6 +44,10 @@ mod store_gate;
 #[path = "support/compaction.rs"]
 mod compaction_test;
 
+#[cfg(test)]
+#[path = "support/shared_harness.rs"]
+mod shared_harness_test;
+
 use std::error::Error;
 use std::ffi::OsString;
 use std::io::{self, Cursor};
@@ -72,10 +76,10 @@ use ag_harness::recovery::ExecutionIdentity;
 use ag_harness::store::{MemoryStore, SessionInfo, SessionStore, WriteStatus};
 use ag_harness::tool::{FileSystem, LocalFileSystem, ToolCall, ToolDefinition};
 use ag_harness::{
-    ComparisonBase, ErrorKind, Harness, HarnessError, ImageContent, ImageMediaType, InputBlock,
-    Model, ModelError, OutputSchema, OutputSchemaError, Repository, RepositoryError, RunError,
-    Session, SessionBuilder, SessionError, Tool, ToolPolicy, TurnError, TurnInput, TurnInputError,
-    TurnOptions,
+    ComparisonBase, ErrorKind, Harness, HarnessBuildError, HarnessError, ImageContent,
+    ImageMediaType, InputBlock, Model, ModelError, OutputSchema, OutputSchemaError, Repository,
+    RepositoryError, RunError, Session, SessionBuilder, SessionError, Tool, ToolPolicy, TurnError,
+    TurnInput, TurnInputError, TurnOptions,
 };
 use async_trait::async_trait;
 use serde_json::json;
@@ -399,6 +403,37 @@ impl Model for ExternalModel {
 }
 
 struct ExternalMetadataModel;
+
+/// Compiles only while `Harness` stays a cloneable handle that can move
+/// into and be shared across spawned tasks.
+const _: fn() = || {
+    fn assert_shareable<T: Clone + Send + Sync + 'static>() {}
+    assert_shareable::<Harness>();
+};
+
+#[test]
+fn builder_requires_a_budget_for_a_model_without_a_declared_profile() {
+    // Arrange
+    let builder = Harness::builder().model(Arc::new(ExternalModel));
+
+    // Act
+    let error = builder
+        .build()
+        .err()
+        .expect("an unprofiled model needs an explicit budget");
+    let budgeted = Harness::builder()
+        .model(Arc::new(ExternalModel))
+        .context_budget(unbounded_context_budget())
+        .build();
+
+    // Assert
+    assert_eq!(error.kind(), ErrorKind::Config);
+    assert_eq!(
+        error.get_ref().downcast_ref::<HarnessBuildError>(),
+        Some(&HarnessBuildError::ContextBudgetRequired)
+    );
+    assert!(budgeted.is_ok());
+}
 
 #[test]
 fn completion_metadata_shares_router_type_and_storage_format() {

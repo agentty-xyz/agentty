@@ -49,7 +49,9 @@ crates/
 ## Public boundary
 
 - `Harness` owns the model and its required `ContextBudget`, validated repository,
-  configured defaults, lifecycle observers, and the selected session store.
+  configured defaults, lifecycle observers, and the selected session store. It is a
+  `Clone + Send + Sync` handle, so clones share one SQLite pool and calibration;
+  `Harness::builder` validates the model and budget at `build`.
 - `Session` is the only multi-turn abstraction; `run_once` executes a stateless turn.
   Durable and stateless turns can be awaited or started for a `TurnControl`.
 - `TurnOptions` fixes the schema, `ToolPolicy`, and optional `ComparisonBase` for one

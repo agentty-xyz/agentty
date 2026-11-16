@@ -12,6 +12,7 @@ use std::fmt;
 use std::time::Duration;
 
 use crate::bash::BashError;
+use crate::harness::HarnessBuildError;
 use crate::model::{ModelError, ModelErrorType, ModelRegistryError};
 use crate::session::SessionError;
 use crate::turn::TurnError;
@@ -253,6 +254,12 @@ impl From<RepositoryError> for HarnessError {
 
 impl From<ModelRegistryError> for HarnessError {
     fn from(error: ModelRegistryError) -> Self {
+        Self::config(error)
+    }
+}
+
+impl From<HarnessBuildError> for HarnessError {
+    fn from(error: HarnessBuildError) -> Self {
         Self::config(error)
     }
 }

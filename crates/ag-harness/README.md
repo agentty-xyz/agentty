@@ -13,6 +13,7 @@ Structured LLM turns with deny-by-default tools and durable sessions.
 
 ```rust
 use std::num::NonZeroU64;
+use std::sync::Arc;
 
 use ag_harness::model::ContextBudget;
 use ag_harness::provider::{MUSE_SPARK_1_3, Muse};
@@ -26,25 +27,37 @@ let schema = OutputSchema::new(json!({
 }))?;
 let budget = ContextBudget::new(NonZeroU64::new(128_000).ok_or("budget")?)
     .with_reserved_output(16_384)?;
-let harness = Harness::new(Muse::from_env(MUSE_SPARK_1_3)?, budget);
+let harness = Harness::builder()
+    .model(Arc::new(Muse::from_env(MUSE_SPARK_1_3)?))
+    .context_budget(budget)
+    .build()?;
 
 let outcome = harness.run_once("Summarize Cargo.toml", schema).await?;
 println!("{}", outcome.output()["summary"]);
 ```
 
 Every harness needs a `ContextBudget`: the approximate request weight the model's
-context window allows, in roughly token-sized units. `run_once` keeps no history. For a
-conversation, use a session.
+context window allows, in roughly token-sized units. The builder derives it from the
+model's declared `ModelProfile` when `Model::profile` returns one; otherwise set it with
+`context_budget`. `build` reports a missing model or budget as a `HarnessError`.
+`run_once` keeps no history. For a conversation, use a session.
+
+A `Harness` is a cheap, `Clone + Send + Sync` handle: clones share one configuration and
+one SQLite connection pool, so one harness can serve many concurrent sessions and turns.
+`Harness::new` and `Harness::from_registry` remain available.
 
 ## Sessions
 
 ```rust
 use ag_harness::{Harness, Repository, Tool};
 
-let harness = Harness::new(model, budget)
-    .database("harness.db")
+let harness = Harness::builder()
+    .model(model)
+    .context_budget(budget)
+    .sqlite("harness.db")
     .repository(Repository::new(".", git_executable)?)
-    .allow(Tool::Read);
+    .allow(Tool::Read)
+    .build()?;
 
 let mut session = harness
     .session("review-42", schema)

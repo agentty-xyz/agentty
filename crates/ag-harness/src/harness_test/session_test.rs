@@ -639,8 +639,8 @@ async fn building_handles_and_running_once_leave_storage_uninitialized() {
     // Assert
     assert_eq!(once.output(), &json!({"summary": "done"}));
     assert_eq!(explicit.output(), once.output());
-    assert!(harness.database.get().is_none());
-    assert!(builder.harness.database.get().is_none());
+    assert!(harness.inner.database.get().is_none());
+    assert!(builder.harness.inner.database.get().is_none());
     assert_eq!(
         tokio::fs::read_to_string(parent)
             .await
@@ -657,8 +657,8 @@ async fn concurrent_session_creation_and_resume_share_one_database_pool() {
         .database(directory.path().join("harness.db"));
     let first = harness.session("first", object_schema());
     let second = harness.session("second", object_schema());
-    let database = Arc::clone(&harness.database);
-    assert!(harness.database.get().is_none());
+    let database = Arc::clone(&harness.inner.database);
+    assert!(harness.inner.database.get().is_none());
 
     // Act
     let (first, second) = tokio::join!(tokio::spawn(first.create()), tokio::spawn(second.create()));
@@ -675,6 +675,7 @@ async fn concurrent_session_creation_and_resume_share_one_database_pool() {
     drop(harness);
     first
         .harness
+        .inner
         .database
         .get()
         .expect("initialized pool")
@@ -713,7 +714,7 @@ async fn database_initialization_retries_after_failure_and_resets_on_reconfigura
         .await
         .expect("first task")
         .err();
-    assert!(harness.database.get().is_none());
+    assert!(harness.inner.database.get().is_none());
     tokio::fs::remove_file(&parent)
         .await
         .expect("blocking file should be removed");
@@ -723,6 +724,7 @@ async fn database_initialization_retries_after_failure_and_resets_on_reconfigura
         .expect("initialization should retry");
     let original = session
         .harness
+        .inner
         .database
         .get()
         .expect("initialized pool")
@@ -779,6 +781,7 @@ async fn completion_persistence_failure_interrupts_the_session_turn() {
         .expect("session should be created");
     drop(session);
     let database = harness
+        .inner
         .database
         .get()
         .expect("database should be initialized");
@@ -868,6 +871,7 @@ END
     .execute(
         session
             .harness
+            .inner
             .database
             .get()
             .expect("initialized pool")

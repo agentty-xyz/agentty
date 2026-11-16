@@ -80,12 +80,12 @@ async fn recovery_fingerprint_covers_effective_configuration_and_canonicalizes_s
             .expect("budget")
     );
     session.history.max_bytes = 256 * 1024;
-    session.harness.repository = Some(Repository::fixture("scope-one"));
+    session.harness.config_mut().repository = Some(Repository::fixture("scope-one"));
     let scoped = session
         .host_request("id".into(), &TurnInput::from("input"), &options)
         .expect("scope");
     assert_ne!(request, scoped);
-    session.harness.repository = Some(Repository::fixture("scope-two"));
+    session.harness.config_mut().repository = Some(Repository::fixture("scope-two"));
     assert_ne!(
         scoped,
         session
@@ -170,14 +170,14 @@ async fn image_fingerprints_track_content_and_image_capability_only() {
             )
             .expect("repeatable")
     );
-    session.harness.model_registration = Some(registration(false));
+    session.harness.config_mut().model_registration = Some(registration(false));
     let text_without_capability = session
         .host_request("id".into(), &text, &options)
         .expect("text without capability");
     let image_without_capability = session
         .host_request("id".into(), &image, &options)
         .expect("image without capability");
-    session.harness.model_registration = Some(registration(true));
+    session.harness.config_mut().model_registration = Some(registration(true));
     assert_eq!(
         text_without_capability,
         session
@@ -221,7 +221,7 @@ async fn fingerprints_recorded_before_tool_call_limit_removal_still_match() {
     let unregistered = session
         .host_request("id".into(), &TurnInput::from("input"), &options)
         .expect("unregistered request");
-    session.harness.model_registration = Some(registration);
+    session.harness.config_mut().model_registration = Some(registration);
     let registered = session
         .host_request("id".into(), &TurnInput::from("input"), &options)
         .expect("registered request");

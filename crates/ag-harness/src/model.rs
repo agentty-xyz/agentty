@@ -47,6 +47,15 @@ pub trait Model: Send + Sync {
         None
     }
 
+    /// Returns the context profile the implementation declares for its
+    /// model, or `None`, as by default, when the host declares it.
+    ///
+    /// [`crate::Harness::builder`] derives the request budget and estimator
+    /// from this profile unless the host sets an explicit budget.
+    fn profile(&self) -> Option<ModelProfile> {
+        None
+    }
+
     /// Checks adapter-specific output-schema requirements without execution.
     /// Implementations accepting every validated schema may use the default.
     ///
