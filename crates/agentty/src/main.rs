@@ -79,7 +79,7 @@ async fn main() -> ExitCode {
 /// execution fails.
 async fn run(
     cli: Cli,
-    runtime: impl for<'a> AsyncFnOnce(&'a mut App) -> io::Result<()>,
+    runtime: impl for<'a> AsyncFnOnce(&'a mut App) -> Result<(), AppError>,
 ) -> Result<(), AppError> {
     let telemetry = OtlpExport::start_with_events(
         cli.otlp_endpoint.as_deref(),
@@ -155,14 +155,10 @@ async fn run_with_analytics(
     result
 }
 
-fn map_runtime_result(result: io::Result<()>) -> Result<(), AppError> {
-    result.map_err(|error| AppError::Workflow(format!("Failed to run terminal UI: {error}")))
-}
-
 async fn run_application(
     cli: Cli,
     event_log: Option<EventLog>,
-    runtime: impl for<'a> AsyncFnOnce(&'a mut App) -> io::Result<()>,
+    runtime: impl for<'a> AsyncFnOnce(&'a mut App) -> Result<(), AppError>,
 ) -> Result<(), AppError> {
     let home = agentty_home();
     let _instance_lock = acquire_instance_lock(&home).await.map_err(|error| {
@@ -212,7 +208,7 @@ async fn run_application(
             .await?;
             app.set_analytics(analytics.clone());
 
-            map_runtime_result(runtime(&mut app).await)
+            runtime(&mut app).await
         }),
         analytics.as_ref(),
     )

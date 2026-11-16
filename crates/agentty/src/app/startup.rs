@@ -62,12 +62,7 @@ impl AppStartup {
         harness_availability: HarnessAvailability,
     ) -> Result<(), AppError> {
         if available_agent_kinds.is_empty() && !harness_availability.is_available() {
-            return Err(AppError::Workflow(
-                "No supported backend CLI found on `PATH`. Install `codex`, `claude`, or \
-                 Antigravity CLI 1.1.7 or newer. For an older `agy`, run `agy update`, then \
-                 restart `agentty`."
-                    .to_string(),
-            ));
+            return Err(AppError::NoAgentAvailable);
         }
 
         Ok(())

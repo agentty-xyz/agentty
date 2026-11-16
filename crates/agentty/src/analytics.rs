@@ -1,8 +1,9 @@
 //! Optional application events sent to `PostHog` and mirrored to a local
 //! OTLP event log.
 
-use std::ffi::OsStr;
+use std::ffi::{OsStr, OsString};
 use std::fs;
+use std::io::{self, IsTerminal as _};
 use std::path::{Path, PathBuf};
 use std::time::Duration;
 
@@ -26,11 +27,24 @@ const POSTHOG_API_HOST: &str = "https://us.i.posthog.com";
 /// Environment variable that controls telemetry; `0` disables it.
 pub const TELEMETRY_ENABLED_ENV: &str = "AGENTTY_TELEMETRY_ENABLED";
 
+/// Environment variables that mark a CI run. Most providers, including
+/// GitHub Actions, GitLab CI/CD, `CircleCI`, Buildkite, and Bitbucket
+/// Pipelines, set `CI`; the others identify GitHub Actions explicitly and the
+/// Azure Pipelines, Jenkins, and AWS `CodeBuild` runners that do not.
+const CI_ENVIRONMENT_VARIABLES: [&str; 5] = [
+    "CI",
+    "GITHUB_ACTIONS",
+    "TF_BUILD",
+    "JENKINS_URL",
+    "CODEBUILD_BUILD_ID",
+];
+
 /// A telemetry sender for `PostHog`, a local OTLP event log, or both.
 /// Callers check [`Analytics::is_enabled`] before building the `PostHog`
 /// destination.
 #[derive(Clone)]
 pub struct Analytics {
+    environment: LaunchEnvironment,
     event_log: Option<EventLog>,
     install_method: InstallMethod,
     posthog: Option<PostHog>,
@@ -211,6 +225,46 @@ impl InstallMethod {
     }
 }
 
+/// Launch facts that separate automated runs from people at a terminal.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+struct LaunchEnvironment {
+    ci: bool,
+    interactive: bool,
+}
+
+impl LaunchEnvironment {
+    fn detect() -> Self {
+        Self::from_signals(
+            io::stdin().is_terminal() && io::stdout().is_terminal(),
+            |name| std::env::var_os(name),
+        )
+    }
+
+    /// Builds the facts from whether stdin and stdout are both terminals and
+    /// an environment lookup. A CI variable counts when it is set to a value
+    /// other than empty, `0`, or `false`.
+    fn from_signals(interactive: bool, variable: impl Fn(&str) -> Option<OsString>) -> Self {
+        let ci = CI_ENVIRONMENT_VARIABLES.iter().any(|name| {
+            variable(name).is_some_and(|value| {
+                !(value.is_empty() || value == "0" || value.eq_ignore_ascii_case("false"))
+            })
+        });
+
+        Self { ci, interactive }
+    }
+
+    fn properties(self) -> [(&'static str, &'static str); 2] {
+        [
+            ("ci", Self::flag(self.ci)),
+            ("interactive", Self::flag(self.interactive)),
+        ]
+    }
+
+    fn flag(value: bool) -> &'static str {
+        if value { "true" } else { "false" }
+    }
+}
+
 impl Analytics {
     /// Returns whether a `TELEMETRY_ENABLED_ENV` value allows telemetry.
     ///
@@ -274,6 +328,7 @@ impl Analytics {
                 ..analytics
             },
             None => Self {
+                environment: LaunchEnvironment::detect(),
                 event_log: Some(event_log),
                 install_method: InstallMethod::detect(),
                 posthog: None,
@@ -281,9 +336,11 @@ impl Analytics {
         })
     }
 
-    /// Records one application launch attempt.
+    /// Records one application launch attempt with whether it runs in CI and
+    /// at an interactive terminal.
     pub async fn record_launch(&self) {
-        self.send("agentty_launch", &[]).await;
+        self.send("agentty_launch", &self.environment.properties())
+            .await;
     }
 
     /// Records a newly reserved session's creation type, provider, and model.
@@ -311,15 +368,22 @@ impl Analytics {
         self.send(outcome.event_name(), &turn.properties()).await;
     }
 
-    /// Records a failure using only a bounded category, never its message.
+    /// Records a launch-ending failure using only its bounded category and
+    /// stage plus the launch environment, never its message.
     pub async fn record_failure(&self, error: &AppError) {
-        let category = match error {
-            AppError::Db(_) => "database",
-            _ => "application",
-        };
+        let (category, stage) = Self::failure_classification(error);
+        let [ci, interactive] = self.environment.properties();
 
-        self.send("agentty_failure", &[("failure_category", category)])
-            .await;
+        self.send(
+            "agentty_failure",
+            &[
+                ("failure_category", category),
+                ("stage", stage),
+                ci,
+                interactive,
+            ],
+        )
+        .await;
     }
 
     fn with_client(
@@ -331,6 +395,7 @@ impl Analytics {
         let client = client?;
 
         Some(Self {
+            environment: LaunchEnvironment::detect(),
             event_log: None,
             install_method: InstallMethod::detect(),
             posthog: Some(PostHog {
@@ -355,6 +420,25 @@ impl Analytics {
         }
         if let Some(posthog) = &self.posthog {
             posthog.send(name, &properties).await;
+        }
+    }
+
+    /// Returns the fixed category and stage for each error kind.
+    ///
+    /// The stage is `startup` until the terminal UI is prepared, and
+    /// `runtime` afterward. Only the running terminal UI can end a launch
+    /// after startup, so every other kind comes from building the
+    /// application.
+    fn failure_classification(error: &AppError) -> (&'static str, &'static str) {
+        match error {
+            AppError::Session(_) => ("session", "startup"),
+            AppError::Db(_) => ("database", "startup"),
+            AppError::Git(_) => ("git", "startup"),
+            AppError::OneShot(_) => ("one_shot", "startup"),
+            AppError::NoAgentAvailable => ("no_agent", "startup"),
+            AppError::TerminalSetup(_) => ("terminal", "startup"),
+            AppError::Terminal(_) => ("terminal", "runtime"),
+            AppError::Workflow(_) => ("workflow", "startup"),
         }
     }
 }

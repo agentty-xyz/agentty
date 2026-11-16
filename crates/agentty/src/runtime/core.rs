@@ -13,7 +13,7 @@ use ratatui::Terminal;
 use ratatui::backend::{Backend, ClearType, CrosstermBackend};
 use tokio::sync::mpsc;
 
-use crate::app::App;
+use crate::app::{App, AppError};
 use crate::infra::clock::{self, Clock};
 use crate::runtime::{FRAME_INTERVAL, PresentationState, event, terminal};
 use crate::ui::component::nerpa_greeting::NerpaGreeting;
@@ -94,10 +94,13 @@ impl EventReaderTask {
 /// Runs the TUI event/render loop until the user exits.
 ///
 /// # Errors
-/// Returns an error if terminal setup, rendering, or event processing fails.
-pub async fn run(app: &mut App) -> io::Result<()> {
+/// Returns [`AppError::TerminalSetup`] if the terminal cannot be prepared,
+/// or [`AppError::Terminal`] if rendering, event processing, or cleanup
+/// fails afterward.
+pub async fn run(app: &mut App) -> Result<(), AppError> {
     let terminal_guard = terminal::TerminalGuard::new();
-    let mut terminal = terminal::setup_terminal(&terminal_guard)?;
+    let mut terminal =
+        terminal::setup_terminal(&terminal_guard).map_err(AppError::TerminalSetup)?;
 
     // Spawn a dedicated thread for crossterm event reading so the main async
     // loop can yield to tokio between iterations.
@@ -112,7 +115,10 @@ pub async fn run(app: &mut App) -> io::Result<()> {
     app.wait_for_background_cleanup_tasks().await;
     let cursor_result = terminal.show_cursor().map_err(backend_err);
 
-    run_result.and(reader_shutdown_result).and(cursor_result)
+    run_result
+        .and(reader_shutdown_result)
+        .and(cursor_result)
+        .map_err(AppError::Terminal)
 }
 
 /// Runs the TUI event/render loop with an externally provided backend and

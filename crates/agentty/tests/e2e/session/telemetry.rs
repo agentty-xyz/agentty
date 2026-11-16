@@ -202,6 +202,7 @@ async fn run_timing_scenario(capture: bool) -> Result<(), Box<dyn std::error::Er
     })
     .with_git()
     .setup(|env| Box::pin(seed_tool_trace_project(env)))
+    .env("CI", "true")
     .args(args)
     .run(
         |scenario| {
@@ -286,7 +287,8 @@ async fn run_timing_scenario(capture: bool) -> Result<(), Box<dyn std::error::Er
 }
 
 /// Checks that usage events mirror the `PostHog` allowlist without turn
-/// content.
+/// content, and that the launch reports the PTY as interactive and the
+/// scenario's `CI` variable.
 fn assert_usage_events(events: &[LogRecord]) {
     for name in [
         "agentty_launch",
@@ -307,6 +309,8 @@ fn assert_usage_events(events: &[LogRecord]) {
         "agent",
         "model",
         "permission_mode",
+        "ci",
+        "interactive",
     ];
     for event in events {
         assert!(
@@ -317,6 +321,17 @@ fn assert_usage_events(events: &[LogRecord]) {
             "unexpected usage event attribute in {event:?}"
         );
     }
+    assert!(
+        events
+            .iter()
+            .filter(|event| event.event_name == "agentty_launch")
+            .all(|launch| {
+                ["ci", "interactive"]
+                    .iter()
+                    .all(|key| log_string_attribute(launch, key) == Some("true"))
+            }),
+        "launch reports the `CI` variable and an interactive PTY"
+    );
     assert!(
         events
             .iter()
@@ -340,6 +355,18 @@ fn assert_usage_events(events: &[LogRecord]) {
         "turn events report the agent and the session's default /mode"
     );
     assert!(!format!("{events:?}").contains("Private timing prompt"));
+}
+
+fn log_string_attribute<'a>(event: &'a LogRecord, key: &str) -> Option<&'a str> {
+    event
+        .attributes
+        .iter()
+        .find(|attribute| attribute.key == key)
+        .and_then(|attribute| attribute.value.as_ref())
+        .and_then(|value| match value.value.as_ref() {
+            Some(any_value::Value::StringValue(value)) => Some(value.as_str()),
+            _ => None,
+        })
 }
 
 async fn seed_tool_trace_project(env: &BuilderEnv) -> Result<(), Box<dyn std::error::Error>> {

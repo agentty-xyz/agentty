@@ -771,14 +771,26 @@ AGENTTY_TELEMETRY_ENABLED=0 agentty
 Every event includes `app_source` (`cli`), `app_version`, and `install_method` (`npm`,
 `sh`, `cargo`, or `unknown`).
 
-| Event                    | When sent                                                           | Additional properties                            |
-| ------------------------ | ------------------------------------------------------------------- | ------------------------------------------------ |
-| `agentty_launch`         | After the database opens                                            | None                                             |
-| `agentty_failure`        | When startup after the database opens or the terminal runtime fails | `failure_category` (`database` or `application`) |
-| `agentty_session_start`  | When new session metadata is reserved                               | `session_type`, `agent`, `model`                 |
-| `agentty_turn_start`     | When a first or follow-up message begins execution                  | `agent`, `model`, `permission_mode`              |
-| `agentty_turn_finish`    | When a turn and its post-processing complete successfully           | `agent`, `model`, `permission_mode`              |
-| `agentty_turn_interrupt` | When an executing turn is stopped by the user                       | `agent`, `model`, `permission_mode`              |
+| Event                    | When sent                                                      | Additional properties                            |
+| ------------------------ | -------------------------------------------------------------- | ------------------------------------------------ |
+| `agentty_launch`         | After the database opens                                       | `ci`, `interactive`                              |
+| `agentty_failure`        | When startup after the database opens or the terminal UI fails | `failure_category`, `stage`, `ci`, `interactive` |
+| `agentty_session_start`  | When new session metadata is reserved                          | `session_type`, `agent`, `model`                 |
+| `agentty_turn_start`     | When a first or follow-up message begins execution             | `agent`, `model`, `permission_mode`              |
+| `agentty_turn_finish`    | When a turn and its post-processing complete successfully      | `agent`, `model`, `permission_mode`              |
+| `agentty_turn_interrupt` | When an executing turn is stopped by the user                  | `agent`, `model`, `permission_mode`              |
+
+`ci` is `true` when `CI`, `GITHUB_ACTIONS`, `TF_BUILD`, `JENKINS_URL`, or
+`CODEBUILD_BUILD_ID` is set to a value other than empty, `0`, or `false`; otherwise it
+is `false`. `interactive` is `true` when both standard input and standard output are
+terminals, and `false` otherwise.
+
+`failure_category` names the kind of failure: `session`, `database`, `git`, `one_shot`,
+`no_agent` (no supported backend CLI or Harness is available), `terminal`, or
+`workflow`. `stage` is `startup` for failures before the terminal UI is ready, including
+terminal setup, and `runtime` for failures of the running terminal UI. Failures before
+the database opens, such as an invalid `--otlp-endpoint` or another instance using the
+same Agentty root, send no events.
 
 Session types are `regular`, `draft`, `stacked`, and `fork`. `agent` identifies the
 selected provider; `model` is its supported model identifier, or `openai-compatible` for
