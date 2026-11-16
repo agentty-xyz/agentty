@@ -10,12 +10,26 @@ use std::num::NonZeroU64;
 use serde::{Deserialize, Deserializer, Serialize, de};
 use serde_json::{Number, Value, json};
 
-use crate::bash::BashArguments;
+use crate::bash::{BashArguments, Enforcement};
 pub use crate::file_system::{FileSystem, LocalFileSystem};
 pub use crate::read::{ReadError, ReadOutput};
 pub use crate::write::{WriteError, WriteOutput};
 use crate::{ComparisonBase, model, schema_contract};
 
+/// `bash` isolation clause when the executor enforces nothing.
+const BASH_UNSANDBOXED: &str = "Run Bash directly on the host without a sandbox. Commands run \
+                                with the host process's own access; writes and network access are \
+                                not restricted by the harness.";
+/// `bash` isolation clause when only the filesystem policy is enforced.
+const BASH_FILE_SYSTEM_SANDBOX: &str = "Run Bash inside a host filesystem sandbox. Workspace \
+                                        reads are allowed; writes require host grants. Network \
+                                        access is not restricted by the sandbox.";
+/// `bash` isolation clause when filesystem and network policy are enforced.
+const BASH_FULL_SANDBOX: &str = "Run Bash inside the host sandbox. Workspace reads are allowed; \
+                                 writes require host grants. Network access is denied.";
+/// `bash` limits that hold for every executor.
+const BASH_LIMITS: &str = "Output and duration are bounded; long output keeps each stream's start \
+                           and end. Applied writes are not rolled back.";
 const READ_DESCRIPTION: &str = concat!(
     "Inspect the repository with one bounded read-only action. Use `file` with `path` and ",
     "optional `offset`/`limit` for worktree text; `list` with optional `path`/`limit`; ",
@@ -48,7 +62,8 @@ const WRITE_NAME: &str = "write";
 #[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
 #[serde(rename_all = "snake_case")]
 pub enum Tool {
-    /// Sandboxed Bash with explicit host capabilities.
+    /// Bash through the host-selected executor, which may or may not sandbox
+    /// commands.
     Bash,
     /// Read-only repository inspection.
     Read,
@@ -80,13 +95,16 @@ pub struct ToolDefinition {
 
 impl ToolDefinition {
     /// Defines shell source; the host fixes executable, grants, and limits.
-    pub fn bash() -> Self {
+    /// The description states exactly the isolation `enforcement` provides.
+    pub fn bash(enforcement: Enforcement) -> Self {
+        let isolation = match enforcement {
+            Enforcement::None => BASH_UNSANDBOXED,
+            Enforcement::FileSystem => BASH_FILE_SYSTEM_SANDBOX,
+            Enforcement::FileSystemAndNetwork => BASH_FULL_SANDBOX,
+        };
+
         Self {
-            description: "Run Bash inside the host sandbox. Workspace reads are allowed; writes \
-                          require host grants. Network access is denied. Output and duration are \
-                          bounded; long output keeps each stream's start and end. Applied writes \
-                          are not rolled back."
-                .into(),
+            description: format!("{isolation} {BASH_LIMITS}"),
             name: "bash",
             parameters: json!({"type":"object", "properties":{"command":{"type":"string","minLength":1,"maxLength":65536}}, "required":["command"], "additionalProperties":false}),
         }

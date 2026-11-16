@@ -53,7 +53,7 @@
 //! | [`provider`]  | Built-in Muse, Kimi, and Qwen clients                      |
 //! | [`model`]     | The [`Model`] trait, requests, registry, context profiles  |
 //! | [`tool`]      | Tool arguments, results, and the [`tool::FileSystem`] seam |
-//! | [`bash`]      | Sandboxed Bash configuration, executors, command records   |
+//! | [`bash`]      | Bash configuration, executors, enforcement, records        |
 //! | [`turn`]      | Turn builders, reports, activity, and settlement errors    |
 //! | [`store`]     | Session stores and durable write and checkpoint records    |
 //! | [`recovery`]  | Execution identities and idempotent host request records   |

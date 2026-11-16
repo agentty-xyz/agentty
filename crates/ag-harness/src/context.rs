@@ -10,6 +10,7 @@ use serde::Deserialize;
 use serde_json::{Map, Value, json};
 use thiserror::Error;
 
+use crate::bash::{BashConfig, Enforcement};
 use crate::input::TurnInput;
 use crate::lifecycle::ContextSummaryTrigger;
 use crate::model::{ModelMessage, ModelRequest};
@@ -2439,7 +2440,12 @@ pub(crate) fn advertised_tools(options: &TurnOptions) -> Vec<ToolDefinition> {
         tools.push(ToolDefinition::write());
     }
     if options.tool_policy().allows(Tool::Bash) {
-        tools.push(ToolDefinition::bash());
+        // Without a configuration the turn fails before any command runs;
+        // still claim no isolation rather than one nothing provides.
+        let enforcement = options
+            .bash()
+            .map_or(Enforcement::None, BashConfig::enforcement);
+        tools.push(ToolDefinition::bash(enforcement));
     }
 
     tools

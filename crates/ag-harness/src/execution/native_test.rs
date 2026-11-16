@@ -21,8 +21,8 @@ use super::{
 use crate::bash::BashConfig;
 use crate::command_journal::CommandCleanupScope;
 use crate::execution::contract::{
-    BashExecutor, BashProcess, ExecutionCommand, ExecutionError, ExecutionPolicy, Grants, MainExit,
-    ProcessEvent,
+    BashExecutor, BashProcess, Enforcement, ExecutionCommand, ExecutionError, ExecutionPolicy,
+    Grants, MainExit, ProcessEvent,
 };
 use crate::execution::supervisor::Clock;
 use crate::execution::wire::Notice;
@@ -45,7 +45,7 @@ async fn monotonic_wait_preserves_remaining_time_after_runtime_clock_advance() {
 }
 
 #[test]
-fn native_executor_states_identity_and_platform_cleanup_scope() {
+fn native_executor_states_identity_enforcement_and_platform_cleanup_scope() {
     // Arrange
     let native = Native {
         configuration: process().configuration,
@@ -53,6 +53,7 @@ fn native_executor_states_identity_and_platform_cleanup_scope() {
 
     // Act / Assert
     assert_eq!(native.identity(), "native");
+    assert_eq!(native.enforcement(), Enforcement::FileSystemAndNetwork);
     #[cfg(target_os = "linux")]
     assert_eq!(native.cleanup_scope(), CommandCleanupScope::PidNamespace);
     #[cfg(not(target_os = "linux"))]

@@ -16,8 +16,8 @@ use tokio::net::UnixStream;
 use tokio::process::{Child, ChildStderr, ChildStdout};
 
 use super::contract::{
-    BashExecutor, BashProcess, ExecutionAccess, ExecutionCommand, ExecutionError, ExecutionPolicy,
-    MainExit, ProcessEvent,
+    BashExecutor, BashProcess, Enforcement, ExecutionAccess, ExecutionCommand, ExecutionError,
+    ExecutionPolicy, MainExit, ProcessEvent,
 };
 use super::output;
 use super::supervisor::Clock;
@@ -51,6 +51,10 @@ impl Native {
 impl BashExecutor for Native {
     fn identity(&self) -> &str {
         crate::bash::NATIVE_EXECUTOR
+    }
+
+    fn enforcement(&self) -> Enforcement {
+        crate::bash::NATIVE_ENFORCEMENT
     }
 
     fn cleanup_scope(&self) -> CommandCleanupScope {

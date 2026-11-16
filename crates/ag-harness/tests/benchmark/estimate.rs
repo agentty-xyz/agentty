@@ -10,6 +10,7 @@ use std::io::{self, Write as _};
 use std::path::{Path, PathBuf};
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
+use ag_harness::bash::Enforcement;
 use ag_harness::tool::ToolDefinition;
 use ag_router::{
     Completion, CompletionMetadata, CompletionUsage, JsonSchemaFormat, ModelMessage, ModelRequest,
@@ -139,7 +140,7 @@ impl Probe {
         let tools = [
             ToolDefinition::read(),
             ToolDefinition::write(),
-            ToolDefinition::bash(),
+            ToolDefinition::bash(Enforcement::FileSystemAndNetwork),
         ];
         for count in 1..=tools.len() {
             probes.push(Self {
@@ -182,7 +183,7 @@ impl Probe {
                 .map(|name| match name.as_str() {
                     Some("read") => Ok(ToolDefinition::read()),
                     Some("write") => Ok(ToolDefinition::write()),
-                    Some("bash") => Ok(ToolDefinition::bash()),
+                    Some("bash") => Ok(ToolDefinition::bash(Enforcement::FileSystemAndNetwork)),
                     _ => Err(format!("unknown corpus tool {name}")),
                 })
                 .collect::<Result<_, _>>()?;

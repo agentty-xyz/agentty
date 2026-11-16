@@ -1,9 +1,13 @@
 //! Context budget, weight heuristic, mandatory admission, and stopped-turn
 //! replay unit tests.
 
+use std::sync::Arc;
+use std::time::Duration;
+
 use serde_json::json;
 
 use super::support::{FixedEstimator, budget, read_call, result};
+use crate::bash::{BashConfig, Enforcement, UnsandboxedExecutor};
 use crate::context::{
     ContextBudgetError, ContextEstimator, HeuristicContextEstimator, HistoryTurn, TurnStop,
     admit_mandatory_content, advertised_tools,
@@ -96,13 +100,14 @@ fn declared_heuristic_weights_use_their_rates_and_fixed_tokens() {
 
     // Act
     let message = estimator.message_weight(&ModelMessage::User("x".repeat(1_000)));
-    let tool = estimator.tool_definition_weight(&ToolDefinition::bash());
+    let tool =
+        estimator.tool_definition_weight(&ToolDefinition::bash(Enforcement::FileSystemAndNetwork));
     let request = estimator.request_weight(&schema);
     let request_with_schema = in_prompt.request_weight(&schema);
 
     // Assert
     assert_eq!(message, 265);
-    let definition = ToolDefinition::bash();
+    let definition = ToolDefinition::bash(Enforcement::FileSystemAndNetwork);
     let definition_bytes = definition.name().len()
         + definition.description().len()
         + definition.parameters().to_string().len();
@@ -171,6 +176,42 @@ fn advertised_tools_follow_the_turn_policy() {
         bash.iter().map(ToolDefinition::name).collect::<Vec<_>>(),
         ["bash"]
     );
+}
+
+#[test]
+fn advertised_bash_states_the_configured_executor_enforcement() {
+    // Arrange
+    let bash_policy = ToolPolicy::default().allow(Tool::Bash);
+    let native = BashConfig::new(
+        "/trusted/launcher".into(),
+        "/bin/bash".into(),
+        "revision".into(),
+        Duration::from_secs(5),
+        1024,
+    )
+    .expect("native configuration");
+    let unsandboxed = BashConfig::for_executor(
+        Arc::new(UnsandboxedExecutor::without_isolation()),
+        "/bin/bash".into(),
+        "revision".into(),
+        Duration::from_secs(5),
+        1024,
+    )
+    .expect("unsandboxed configuration");
+    let unconfigured = options_with(bash_policy);
+
+    // Act
+    let sandboxed = advertised_tools(&options_with(bash_policy).with_bash(native));
+    let direct = advertised_tools(&options_with(bash_policy).with_bash(unsandboxed));
+    let missing = advertised_tools(&unconfigured);
+
+    // Assert
+    assert_eq!(
+        sandboxed,
+        [ToolDefinition::bash(Enforcement::FileSystemAndNetwork)]
+    );
+    assert_eq!(direct, [ToolDefinition::bash(Enforcement::None)]);
+    assert_eq!(missing, [ToolDefinition::bash(Enforcement::None)]);
 }
 
 #[test]

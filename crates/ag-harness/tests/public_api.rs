@@ -54,8 +54,8 @@ use std::sync::{Arc, Mutex};
 
 use ag_harness::bash::{
     BashConfig, BashExecutor, BashProcess, CommandCleanupScope, CommandOutcome, CommandTermination,
-    ExecutionAccess, ExecutionCommand, ExecutionError, ExecutionPolicy, MainExit, OutputStream,
-    ProcessEvent, UnsandboxedExecutor,
+    Enforcement, ExecutionAccess, ExecutionCommand, ExecutionError, ExecutionPolicy, MainExit,
+    OutputStream, ProcessEvent, UnsandboxedExecutor,
 };
 use ag_harness::lifecycle::{
     ContextSummaryErrorType, ContextSummaryTrigger, LifecycleEventKind, LifecycleMetrics,
@@ -70,7 +70,7 @@ use ag_harness::provider::{
 };
 use ag_harness::recovery::ExecutionIdentity;
 use ag_harness::store::{MemoryStore, SessionInfo, SessionStore, WriteStatus};
-use ag_harness::tool::{FileSystem, LocalFileSystem, ToolCall};
+use ag_harness::tool::{FileSystem, LocalFileSystem, ToolCall, ToolDefinition};
 use ag_harness::{
     ComparisonBase, Harness, ImageContent, ImageMediaType, InputBlock, Model, ModelError,
     OutputSchema, OutputSchemaError, Repository, RepositoryError, Session, SessionBuilder,
@@ -1573,6 +1573,11 @@ struct BashDrivingModel;
 #[async_trait]
 impl Model for BashDrivingModel {
     async fn complete(&self, request: ModelRequest) -> Result<ModelCompletion, ModelError> {
+        assert_eq!(
+            request.tools(),
+            [ToolDefinition::bash(Enforcement::FileSystem)],
+            "the bash description states the executor's enforcement"
+        );
         let response =
             if let Some(ModelMessage::ToolResult { content, .. }) = request.messages().last() {
                 ModelResponse::Output(serde_json::from_str(content).map_err(ModelError::request)?)
@@ -1596,6 +1601,10 @@ struct ScriptedExecutor {
 impl BashExecutor for ScriptedExecutor {
     fn identity(&self) -> &'static str {
         "scripted-container"
+    }
+
+    fn enforcement(&self) -> Enforcement {
+        Enforcement::FileSystem
     }
 
     fn cleanup_scope(&self) -> CommandCleanupScope {

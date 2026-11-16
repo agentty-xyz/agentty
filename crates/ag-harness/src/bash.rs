@@ -1,11 +1,13 @@
-//! Sandboxed shell commands.
+//! Shell commands run through a host-selected executor.
 //!
 //! Bash is the only tool that needs per-turn configuration: enable
 //! `Tool::Bash` in the policy and attach a [`BashConfig`] with
 //! `TurnOptions::with_bash`. [`BashConfig::new`] selects the native sandbox;
 //! [`BashConfig::for_executor`] selects a host [`BashExecutor`] such as
-//! [`UnsandboxedExecutor`]. Command intents are journaled before spawning and
-//! surface as [`CommandRecord`]s.
+//! [`UnsandboxedExecutor`], which enforces no isolation. Each executor reports
+//! its [`Enforcement`], and the model-facing tool description states it.
+//! Command intents are journaled before spawning and surface as
+//! [`CommandRecord`]s.
 
 use std::collections::BTreeMap;
 use std::fmt;
@@ -21,12 +23,16 @@ pub use crate::command_journal::{
     CommandCleanupScope, CommandIntent, CommandOutcome, CommandRecord, CommandTermination,
 };
 pub use crate::execution::{
-    BashExecutor, BashProcess, ExecutionAccess, ExecutionCommand, ExecutionError, ExecutionPolicy,
-    MainExit, OutputStream, ProcessEvent, UnsandboxedExecutor,
+    BashExecutor, BashProcess, Enforcement, ExecutionAccess, ExecutionCommand, ExecutionError,
+    ExecutionPolicy, MainExit, OutputStream, ProcessEvent, UnsandboxedExecutor,
 };
 
 /// Identity recorded for the default native sandbox executor.
 pub(crate) const NATIVE_EXECUTOR: &str = "native";
+
+/// Isolation the default native sandbox enforces on every supported platform;
+/// unsupported platforms and kernels fail closed instead.
+pub(crate) const NATIVE_ENFORCEMENT: Enforcement = Enforcement::FileSystemAndNetwork;
 
 /// Immutable host capabilities for Bash. No external reads or environment
 /// values are inherited. Runtime libraries and executables require read grants.
@@ -257,6 +263,14 @@ impl BashConfig {
     /// Always returns unsupported; this does not modify the configuration.
     pub fn with_network(self) -> Result<Self, BashError> {
         Err(BashError::Unavailable)
+    }
+
+    /// Returns the isolation the selected executor enforces, which the
+    /// model-facing `bash` tool description states.
+    pub fn enforcement(&self) -> Enforcement {
+        self.executor
+            .as_ref()
+            .map_or(NATIVE_ENFORCEMENT, |executor| executor.enforcement())
     }
 
     pub(crate) fn fingerprint(&self) -> Value {

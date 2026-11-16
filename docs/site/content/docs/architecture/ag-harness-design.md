@@ -399,10 +399,12 @@ All tools are denied by default; per-turn policy enables them explicitly.
   host-supplied `BashExecutor`, or the shipped unsandboxed executor for hosts already
   inside a container or VM. Workspace reads are the default; writes, external reads,
   environment values, and host-information exposure require explicit grants. Git
-  metadata stays read-only, networking is denied, and unsupported policy fails closed on
-  enforcing executors. Output shares one capture budget: each stream keeps its start and
-  end, a short stream cedes its unused share, and the outcome reports the bytes omitted
-  from each stream.
+  metadata stays read-only, networking is never granted, and unsupported policy fails
+  closed on enforcing executors. Each executor reports its `Enforcement` (none,
+  filesystem, or filesystem and network), and the model-facing `bash` description states
+  exactly that, so an unsandboxed executor is never presented as a sandbox. Output
+  shares one capture budget: each stream keeps its start and end, a short stream cedes
+  its unused share, and the outcome reports the bytes omitted from each stream.
 
 Repository tools receive a validated `Repository` with a trusted Git executable outside
 the containing worktree; the library never searches `PATH`.

@@ -38,6 +38,11 @@ pub trait BashExecutor: Send + Sync {
     /// new identity or a host policy-revision change.
     fn identity(&self) -> &str;
 
+    /// Isolation this executor actually enforces on every command and its
+    /// descendants. The harness derives the model-facing `bash` description
+    /// from it, so it must never overstate enforcement.
+    fn enforcement(&self) -> Enforcement;
+
     /// Cleanup scope this executor acknowledges, carried on every recorded
     /// command outcome.
     fn cleanup_scope(&self) -> CommandCleanupScope;
@@ -50,6 +55,19 @@ pub trait BashExecutor: Send + Sync {
     /// Returns an error when this executor cannot execute on the current
     /// platform or configuration.
     fn bind(&self) -> Result<Box<dyn BashProcess>, ExecutionError>;
+}
+
+/// Isolation a [`BashExecutor`] enforces, reported to the model as stated.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+#[non_exhaustive]
+pub enum Enforcement {
+    /// Commands run with the host process's own access; no filesystem,
+    /// network, or Git-metadata boundary is enforced.
+    None,
+    /// The filesystem policy is enforced; network access is not restricted.
+    FileSystem,
+    /// The filesystem policy is enforced and network access is denied.
+    FileSystemAndNetwork,
 }
 
 /// One bound command execution driven by the harness supervisor.
