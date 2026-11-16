@@ -659,6 +659,11 @@ Agentty uses the URL as given, and endpoint environment variables cannot enable 
 For authenticated endpoints, set `OTEL_EXPORTER_OTLP_TRACES_HEADERS`, falling back to
 `OTEL_EXPORTER_OTLP_HEADERS`.
 
+When the traces URL ends in `/v1/traces`, Agentty also exports content-free Harness
+request metrics, such as `gen_ai.client.operation.duration` and
+`gen_ai.client.token.usage`, to the sibling `/v1/metrics` URL, authenticated with
+`OTEL_EXPORTER_OTLP_METRICS_HEADERS` or `OTEL_EXPORTER_OTLP_HEADERS`.
+
 Each turn has its own trace, correlated by session and operation identifiers. Spans
 cover queue and capacity waits (`agentty.queue.wait_ms` on the root span), workspace and
 context preparation, agent attempts, response validation, persistence, and

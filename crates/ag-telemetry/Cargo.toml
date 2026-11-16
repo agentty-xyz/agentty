@@ -12,7 +12,7 @@ workspace = true
 
 [features]
 default = ["otlp"]
-# OTLP HTTP/protobuf trace and event-log exporter setup for host composition roots.
+# OTLP HTTP/protobuf trace, metric, and event-log exporter setup for host composition roots.
 otlp = [
   "dep:opentelemetry-otlp",
   "dep:opentelemetry_sdk",

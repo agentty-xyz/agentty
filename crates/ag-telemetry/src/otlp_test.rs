@@ -1,20 +1,26 @@
-//! OTLP export tests for initialization, endpoint handling, trace and event
-//! log export, and diagnostics.
+//! OTLP export tests for initialization, endpoint handling, trace, metric,
+//! and event log export, and diagnostics.
 
 use std::future;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
+use opentelemetry::global;
 use opentelemetry::logs::Severity;
 use opentelemetry::trace::{Span as _, Tracer as _, TracerProvider as _};
 use opentelemetry_proto::tonic::collector::logs::v1::ExportLogsServiceRequest;
+use opentelemetry_proto::tonic::collector::metrics::v1::ExportMetricsServiceRequest;
 use opentelemetry_proto::tonic::collector::trace::v1::ExportTraceServiceRequest;
 use opentelemetry_proto::tonic::common::v1::{KeyValue, any_value};
 use opentelemetry_proto::tonic::logs::v1::SeverityNumber;
+use opentelemetry_proto::tonic::metrics::v1::metric;
 use opentelemetry_sdk::Resource;
 use opentelemetry_sdk::error::{OTelSdkError, OTelSdkResult};
 use opentelemetry_sdk::logs::{LogBatch, LogExporter as SdkLogExporter};
+use opentelemetry_sdk::metrics::Temporality;
+use opentelemetry_sdk::metrics::data::ResourceMetrics;
+use opentelemetry_sdk::metrics::exporter::PushMetricExporter;
 use opentelemetry_sdk::trace::{SpanData, SpanExporter as SdkSpanExporter};
 use prost::Message as _;
 use tracing_subscriber::Registry;
@@ -49,7 +55,7 @@ async fn initialization_worker_failure_returns_a_bounded_error() {
 #[test]
 fn exporter_configuration_failure_does_not_echo_the_endpoint() {
     // Arrange / Act
-    let error = OtlpExport::build("http://host/private invalid endpoint", None, SERVICE)
+    let error = OtlpExport::build("http://host/private invalid endpoint", None, None, SERVICE)
         .err()
         .expect("invalid exporter configuration");
 
@@ -361,7 +367,86 @@ async fn event_log_exports_records_beside_traces_with_one_resource_identity() {
 }
 
 #[tokio::test]
-async fn event_log_requires_opt_in_and_a_standard_traces_path() {
+async fn installed_meter_exports_histograms_beside_traces_with_one_resource_identity() {
+    // Arrange
+    let server = MockServer::start().await;
+    for signal in ["traces", "metrics"] {
+        Mock::given(method("POST"))
+            .and(path(format!("/otlp/v1/{signal}")))
+            .and(query_param("tenant", "local"))
+            .respond_with(ResponseTemplate::new(200))
+            .expect(1)
+            .mount(&server)
+            .await;
+    }
+    let endpoint = format!("{}/otlp/v1/traces?tenant=local", server.uri());
+    let export = OtlpExport::start(Some(&endpoint), SERVICE)
+        .await
+        .expect("start")
+        .expect("enabled");
+    export.install();
+
+    // Act
+    global::meter("metric-test")
+        .f64_histogram("gen_ai.client.operation.duration")
+        .with_unit("s")
+        .build()
+        .record(0.25, &[]);
+    let mut span = export.provider.tracer("metric-test").start("session.turn");
+    span.end();
+    let warnings = export.shutdown().await;
+
+    // Assert
+    assert_eq!(warnings, 0);
+    let requests = server.received_requests().await.expect("requests");
+    let body = |signal: &str| {
+        requests
+            .iter()
+            .find(|request| request.url.path().ends_with(signal))
+            .expect("signal request")
+            .body
+            .as_slice()
+    };
+    let metrics = ExportMetricsServiceRequest::decode(body("/v1/metrics")).expect("OTLP metrics");
+    let traces = ExportTraceServiceRequest::decode(body("/v1/traces")).expect("OTLP traces");
+    let exported = &metrics.resource_metrics[0].scope_metrics[0].metrics[0];
+    assert_eq!(exported.name, "gen_ai.client.operation.duration");
+    assert_eq!(exported.unit, "s");
+    assert!(matches!(
+        &exported.data,
+        Some(metric::Data::Histogram(histogram))
+            if histogram.data_points[0].count == 1
+    ));
+    let attribute = |attributes: &[KeyValue], key: &str| {
+        attributes
+            .iter()
+            .find(|attribute| attribute.key == key)
+            .and_then(|attribute| attribute.value.as_ref())
+            .and_then(|value| value.value.clone())
+    };
+    let metric_resource = &metrics.resource_metrics[0]
+        .resource
+        .as_ref()
+        .expect("metric resource")
+        .attributes;
+    let trace_resource = &traces.resource_spans[0]
+        .resource
+        .as_ref()
+        .expect("trace resource")
+        .attributes;
+    assert_eq!(
+        attribute(metric_resource, "service.name"),
+        Some(any_value::Value::StringValue("otlp-test".to_string()))
+    );
+    assert!(attribute(metric_resource, "service.instance.id").is_some());
+    assert_eq!(
+        attribute(metric_resource, "service.instance.id"),
+        attribute(trace_resource, "service.instance.id")
+    );
+}
+
+#[tokio::test]
+async fn sibling_signals_require_a_standard_traces_path_and_events_require_opt_in() {
     // Arrange
     let standard = "http://localhost:4318/v1/traces";
     let custom = "http://localhost:4318/custom/traces";
@@ -381,30 +466,76 @@ async fn event_log_requires_opt_in_and_a_standard_traces_path() {
 
     // Assert
     assert!(traces_only.event_log().is_none());
+    assert!(traces_only.metrics.is_some());
     assert!(custom_path.event_log().is_none());
+    assert!(custom_path.metrics.is_none());
     assert!(disabled.is_none());
     assert_eq!(traces_only.shutdown().await, 0);
     assert_eq!(custom_path.shutdown().await, 0);
 }
 
+#[tokio::test]
+async fn custom_traces_path_installs_no_meter_provider() {
+    // Arrange
+    let server = MockServer::start().await;
+    Mock::given(method("POST"))
+        .respond_with(ResponseTemplate::new(200))
+        .mount(&server)
+        .await;
+    let endpoint = format!("{}/custom/traces", server.uri());
+    let export = OtlpExport::start(Some(&endpoint), SERVICE)
+        .await
+        .expect("start")
+        .expect("enabled");
+    export.install();
+
+    // Act
+    global::meter("metric-test")
+        .u64_histogram("gen_ai.client.token.usage")
+        .build()
+        .record(3, &[]);
+    let warnings = export.shutdown().await;
+
+    // Assert
+    assert_eq!(warnings, 0);
+    assert!(
+        server
+            .received_requests()
+            .await
+            .expect("requests")
+            .is_empty()
+    );
+}
+
 #[test]
-fn events_endpoint_replaces_only_the_traces_signal_path() {
+fn signal_endpoint_replaces_only_the_traces_signal_path() {
     // Arrange
     let endpoints = [
-        ("http://host/v1/traces", Some("http://host/v1/logs")),
+        ("http://host/v1/traces", "logs", Some("http://host/v1/logs")),
+        (
+            "http://host/v1/traces",
+            "metrics",
+            Some("http://host/v1/metrics"),
+        ),
         (
             "https://host/otlp/v1/traces?tenant=a",
+            "logs",
             Some("https://host/otlp/v1/logs?tenant=a"),
         ),
-        ("http://host/v1/traces/", None),
-        ("http://host/traces", None),
+        (
+            "https://host/i/v1/traces?tenant=a",
+            "metrics",
+            Some("https://host/i/v1/metrics?tenant=a"),
+        ),
+        ("http://host/v1/traces/", "metrics", None),
+        ("http://host/traces", "logs", None),
     ];
 
     // Act / Assert
-    for (traces, expected) in endpoints {
+    for (traces, signal, expected) in endpoints {
         let traces = Url::parse(traces).expect("traces URL");
         assert_eq!(
-            OtlpExport::events_endpoint(&traces)
+            OtlpExport::signal_endpoint(&traces, signal)
                 .as_ref()
                 .map(Url::as_str),
             expected
@@ -413,23 +544,26 @@ fn events_endpoint_replaces_only_the_traces_signal_path() {
 }
 
 #[test]
-fn event_exporter_configuration_failure_does_not_echo_the_endpoint() {
-    // Arrange / Act
-    let error = OtlpExport::build(
-        "http://host/v1/traces",
-        Some("http://host/private invalid endpoint"),
-        SERVICE,
-    )
-    .err()
-    .expect("invalid event exporter configuration");
+fn sibling_exporter_configuration_failure_does_not_echo_the_endpoint() {
+    // Arrange
+    let invalid = Some("http://host/private invalid endpoint");
+
+    // Act
+    let errors = [(invalid, None), (None, invalid)].map(|(events, metrics)| {
+        OtlpExport::build("http://host/v1/traces", events, metrics, SERVICE)
+            .err()
+            .expect("invalid sibling exporter configuration")
+    });
 
     // Assert
-    assert_eq!(error, OtlpError::Configuration);
-    assert!(!error.to_string().contains("private"));
+    for error in errors {
+        assert_eq!(error, OtlpError::Configuration);
+        assert!(!error.to_string().contains("private"));
+    }
 }
 
 #[tokio::test]
-async fn event_shutdown_failure_is_counted() {
+async fn event_and_metric_shutdown_failures_are_counted() {
     // Arrange
     let export = OtlpExport::start_with_events(Some("http://localhost:4318/v1/traces"), SERVICE)
         .await
@@ -441,12 +575,18 @@ async fn event_shutdown_failure_is_counted() {
         .expect("event provider")
         .shutdown()
         .expect("first event shutdown");
+    export
+        .metrics
+        .as_ref()
+        .expect("meter provider")
+        .shutdown()
+        .expect("first metric shutdown");
 
     // Act
     let warnings = export.shutdown().await;
 
     // Assert
-    assert_eq!(warnings, 1);
+    assert_eq!(warnings, 2);
 }
 
 #[test]
@@ -589,6 +729,30 @@ impl SdkLogExporter for RecordingExporter {
     }
 }
 
+impl PushMetricExporter for RecordingExporter {
+    fn export(&self, _metrics: &ResourceMetrics) -> impl Future<Output = OTelSdkResult> + Send {
+        future::ready(self.record("metric export"))
+    }
+
+    fn force_flush(&self) -> OTelSdkResult {
+        self.record("metric force_flush")
+    }
+
+    fn shutdown_with_timeout(&self, _timeout: Duration) -> OTelSdkResult {
+        self.record("metric shutdown_with_timeout")
+    }
+
+    fn shutdown(&self) -> OTelSdkResult {
+        self.record("metric shutdown")
+    }
+
+    fn temporality(&self) -> Temporality {
+        let _ = self.record("metric temporality");
+
+        Temporality::Delta
+    }
+}
+
 #[tokio::test]
 async fn counted_exporter_forwards_every_method_and_counts_only_rejected_exports() {
     // Arrange
@@ -614,11 +778,25 @@ async fn counted_exporter_forwards_every_method_and_counts_only_rejected_exports
     ];
     let event_enabled = SdkLogExporter::event_enabled(&exporter, Severity::Info, "target", None);
     SdkLogExporter::set_resource(&mut exporter, &resource);
+    let metric_results = [
+        PushMetricExporter::export(&exporter, &ResourceMetrics::default()).await,
+        PushMetricExporter::force_flush(&exporter),
+        PushMetricExporter::shutdown_with_timeout(&exporter, Duration::from_secs(1)),
+        PushMetricExporter::shutdown(&exporter),
+    ];
+    let temporality = PushMetricExporter::temporality(&exporter);
 
     // Assert
-    assert!(span_results.iter().chain(&log_results).all(Result::is_err));
+    assert!(
+        span_results
+            .iter()
+            .chain(&log_results)
+            .chain(&metric_results)
+            .all(Result::is_err)
+    );
     assert!(!event_enabled);
-    assert_eq!(failures.load(Ordering::Relaxed), 2);
+    assert_eq!(temporality, Temporality::Delta);
+    assert_eq!(failures.load(Ordering::Relaxed), 3);
     assert_eq!(
         *exporter.exporter.calls.lock().expect("calls"),
         [
@@ -632,6 +810,11 @@ async fn counted_exporter_forwards_every_method_and_counts_only_rejected_exports
             "log shutdown",
             "log event_enabled",
             "log set_resource",
+            "metric export",
+            "metric force_flush",
+            "metric shutdown_with_timeout",
+            "metric shutdown",
+            "metric temporality",
         ]
     );
 }

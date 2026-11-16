@@ -98,4 +98,5 @@ child spans. Spans carry timings, model and tool identities, finish reasons, and
 usage; they never contain prompts, model output, or tool content. Authentication headers
 can come from `OTEL_EXPORTER_OTLP_TRACES_HEADERS` or `OTEL_EXPORTER_OTLP_HEADERS`. Spans
 are flushed when the chat exits; export failures print a warning without failing the
-chat.
+chat. A `/v1/traces` URL also exports content-free request duration and token-usage
+histograms to the sibling `/v1/metrics` URL.

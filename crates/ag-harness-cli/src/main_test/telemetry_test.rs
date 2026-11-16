@@ -51,11 +51,13 @@ async fn traced_chat_exports_the_turn_span() {
     let _export = EXPORT.lock().await;
     let model = model_server().await;
     let collector = MockServer::start().await;
-    Mock::given(method("POST"))
-        .and(path("/v1/traces"))
-        .respond_with(ResponseTemplate::new(200))
-        .mount(&collector)
-        .await;
+    for signal in ["traces", "metrics"] {
+        Mock::given(method("POST"))
+            .and(path(format!("/v1/{signal}")))
+            .respond_with(ResponseTemplate::new(200))
+            .mount(&collector)
+            .await;
+    }
     let storage = tempfile::tempdir().expect("temporary storage should exist");
     let endpoint = format!("{}/v1/traces", collector.uri());
     let cli = traced_cli(&model.uri(), &endpoint, &storage.path().join("harness.db"));
@@ -81,6 +83,7 @@ async fn traced_chat_exports_the_turn_span() {
         .await
         .expect("requests")
         .iter()
+        .filter(|request| request.url.path() == "/v1/traces")
         .map(|request| {
             ExportTraceServiceRequest::decode(request.body.as_slice()).expect("OTLP protobuf")
         })
@@ -126,9 +129,10 @@ async fn rejected_export_warns_without_failing_the_chat() {
             .expect("chat output should be UTF-8")
             .contains("assistant> hello\n")
     );
+    // The collector rejects both the trace and the metric export.
     assert_eq!(
         String::from_utf8(warnings).expect("warning output should be UTF-8"),
-        "OTLP export reported 1 warnings or failures; some traces may be missing.\n"
+        "OTLP export reported 2 warnings or failures; some traces may be missing.\n"
     );
 }
 
