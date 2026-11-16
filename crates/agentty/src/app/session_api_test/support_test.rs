@@ -190,6 +190,7 @@ pub(super) fn session_row() -> SessionRow {
         base_branch: "main".to_string(),
         created_at: 10,
         deleted_lines: 4,
+        draft_attachments: None,
         has_archived_diff: false,
         has_diff: Some(true),
         id: "session-1".to_string(),

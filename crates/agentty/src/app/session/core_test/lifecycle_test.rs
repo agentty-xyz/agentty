@@ -26,7 +26,7 @@ use crate::app::test_support::TestSessionRunFactory;
 use crate::domain::agent::{AgentKind, AgentModel, AgentSelection, ReasoningLevel, SpeedMode};
 use crate::domain::file_entry::FileEntry;
 use crate::domain::selection::SelectionState;
-use crate::domain::session::{SESSION_DATA_DIR, SessionHandles, SessionId, Status};
+use crate::domain::session::{SessionHandles, SessionId, Status};
 use crate::domain::setting::SettingName;
 use crate::infra::clock::RealClock;
 use crate::infra::db::AppRepositories;
@@ -70,9 +70,7 @@ async fn test_create_session() {
 
     // Check filesystem
     let session_dir = &app.sessions.sessions()[0].folder;
-    let data_dir = session_dir.join(SESSION_DATA_DIR);
     assert!(session_dir.exists());
-    assert!(data_dir.is_dir());
 
     // Check DB
     let db_sessions = app
@@ -401,8 +399,7 @@ async fn test_create_session_uses_default_smart_model_setting_and_most_recent_pe
         .expect("failed to update beta00002 timestamp");
     for session_id in ["alpha0001", "beta00002"] {
         let session_dir = session_folder(dir.path(), session_id);
-        let data_dir = session_dir.join(SESSION_DATA_DIR);
-        std::fs::create_dir_all(&data_dir).expect("failed to create session data dir");
+        std::fs::create_dir_all(&session_dir).expect("failed to create session dir");
     }
     let mut app = new_test_app_with_git_and_db(dir.path(), db).await;
 
@@ -941,13 +938,7 @@ async fn test_start_staged_session_launches_bundle_and_clears_staged_drafts() {
         app.sessions.sessions()[0].draft_attachments,
         [] as [ag_protocol::TurnPromptAttachment; 0]
     );
-    assert!(app.sessions.sessions()[0].folder.exists());
-    assert!(
-        app.sessions.sessions()[0]
-            .folder
-            .join(SESSION_DATA_DIR)
-            .is_dir()
-    );
+    assert!(app.sessions.sessions()[0].folder.is_dir());
     let db_sessions = app
         .services
         .db()
@@ -956,6 +947,7 @@ async fn test_start_staged_session_launches_bundle_and_clears_staged_drafts() {
         .await
         .expect("failed to load");
     assert_eq!(db_sessions[0].prompt, "First draft\n\nSecond draft");
+    assert_eq!(db_sessions[0].draft_attachments, None);
 }
 
 #[tokio::test]
@@ -1365,7 +1357,7 @@ async fn test_start_session_uses_full_prompt_text_as_title() {
 }
 
 #[tokio::test]
-async fn test_delete_selected_draft_session_removes_staged_draft_metadata() {
+async fn test_delete_selected_draft_session_removes_staged_draft_attachments() {
     // Arrange
     let dir = tempdir().expect("failed to create temp dir");
     let mut app = new_test_app_with_git(dir.path()).await;
@@ -1386,14 +1378,43 @@ async fn test_delete_selected_draft_session_removes_staged_draft_metadata() {
     )
     .await
     .expect("failed to stage first draft");
-    let staged_draft_root = app.services.base_path().join(&session_id);
-    assert!(staged_draft_root.exists());
+    let staged_detail = app
+        .services
+        .db()
+        .sessions()
+        .load_session_detail(&session_id)
+        .await
+        .expect("failed to load staged detail")
+        .expect("staged detail should exist");
 
     // Act
     app.delete_selected_session().await;
 
     // Assert
-    assert!(!staged_draft_root.exists());
+    let staged_attachments: Vec<TurnPromptAttachment> = serde_json::from_str(
+        staged_detail
+            .draft_attachments
+            .as_deref()
+            .expect("staged attachments should be persisted"),
+    )
+    .expect("staged attachments should be valid JSON");
+    assert_eq!(
+        staged_attachments,
+        vec![TurnPromptAttachment {
+            placeholder: "[Image #1]".to_string(),
+            local_image_path: dir.path().join("draft-image.png"),
+        }]
+    );
+    assert!(!app.services.base_path().join(&session_id).exists());
+    assert!(
+        app.services
+            .db()
+            .sessions()
+            .load_session_detail(&session_id)
+            .await
+            .expect("failed to load deleted detail")
+            .is_none()
+    );
 }
 
 #[tokio::test]

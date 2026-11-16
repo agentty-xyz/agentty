@@ -34,8 +34,7 @@ use crate::domain::composer::PromptAttachment;
 use crate::domain::question::QuestionItem;
 use crate::domain::session::{
     ForgeKind, PublishedBranchSyncStatus, ReviewRequest, ReviewRequestState, ReviewRequestSummary,
-    SESSION_DATA_DIR, SessionDiffState, SessionFollowUpTask, SessionHandles, SessionId,
-    SessionStats, Status,
+    SessionDiffState, SessionFollowUpTask, SessionHandles, SessionId, SessionStats, Status,
 };
 use crate::domain::session_message::SessionMessageKind;
 use crate::domain::transient_message::TransientMessageSlot;
@@ -124,13 +123,8 @@ async fn superseded_project_sync_completions_do_not_reconcile_session_state() {
         .await
         .expect("failed to insert review session");
     let session_folder_name = session_id.chars().take(8).collect::<String>();
-    fs::create_dir_all(
-        app.services
-            .base_path()
-            .join(session_folder_name)
-            .join(SESSION_DATA_DIR),
-    )
-    .expect("failed to create session data dir");
+    fs::create_dir_all(app.services.base_path().join(session_folder_name))
+        .expect("failed to create session dir");
     app.refresh_sessions_now().await;
     app.latest_project_sync_operation_ids.insert(project_id, 2);
     app.project_sync_status = Some(sync::ProjectSyncStatus {
@@ -1264,10 +1258,9 @@ async fn manual_sync_archives_merged_parent_and_merged_stacked_child() {
     fs::create_dir_all(
         app.services
             .base_path()
-            .join(child_session_id.chars().take(8).collect::<String>())
-            .join(SESSION_DATA_DIR),
+            .join(child_session_id.chars().take(8).collect::<String>()),
     )
-    .expect("failed to create child session data dir");
+    .expect("failed to create child session dir");
     app.refresh_sessions_now().await;
     let mut mock_git_client = ag_git::MockGitClient::new();
     mock_git_client
@@ -1886,12 +1879,8 @@ async fn apply_app_events_review_request_status_survives_same_batch_sync_refresh
         .await
         .expect("failed to insert session");
     let session_folder_name = session_id.chars().take(8).collect::<String>();
-    let session_data_dir = app
-        .services
-        .base_path()
-        .join(session_folder_name)
-        .join(SESSION_DATA_DIR);
-    fs::create_dir_all(session_data_dir).expect("failed to create session data dir");
+    let session_data_dir = app.services.base_path().join(session_folder_name);
+    fs::create_dir_all(session_data_dir).expect("failed to create session dir");
     app.refresh_sessions_now().await;
     let generation = app.sync_handle.current_generation();
     app.services

@@ -1,11 +1,22 @@
 {
   "db_name": "SQLite",
-  "query": "\nSELECT prompt,\n       questions\nFROM session\nWHERE id = ?\n",
+  "query": "\nSELECT draft_attachments,\n       prompt,\n       questions\nFROM session\nWHERE id = ?\n",
   "describe": {
     "columns": [
       {
-        "name": "prompt",
+        "name": "draft_attachments",
         "ordinal": 0,
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "session",
+            "name": "draft_attachments"
+          }
+        }
+      },
+      {
+        "name": "prompt",
+        "ordinal": 1,
         "type_info": "Text",
         "origin": {
           "Table": {
@@ -16,7 +27,7 @@
       },
       {
         "name": "questions",
-        "ordinal": 1,
+        "ordinal": 2,
         "type_info": "Text",
         "origin": {
           "Table": {
@@ -30,9 +41,10 @@
       "Right": 1
     },
     "nullable": [
+      true,
       false,
       true
     ]
   },
-  "hash": "0561d3d09640a0ae001ac38a88c7735562b01b801a0be50c8b92c55b6bed99c5"
+  "hash": "fb038b488f55c830ca153a50532f48d715cd03e377c1a6838c8dc998594238a8"
 }

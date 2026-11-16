@@ -19,8 +19,7 @@ use crate::domain::agent::{AgentCliInfo, AgentKind, AgentModel, AgentSelection};
 use crate::domain::harness::HarnessAvailability;
 use crate::domain::question::QuestionItem;
 use crate::domain::session::{
-    SESSION_DATA_DIR, SessionDiffState, SessionHandles, SessionId, SessionSize, SessionStats,
-    Status,
+    SessionDiffState, SessionHandles, SessionId, SessionSize, SessionStats, Status,
 };
 use crate::domain::session_message::SessionTranscript;
 use crate::infra::db::AppRepositories;
@@ -799,7 +798,7 @@ async fn apply_app_events_refresh_projects_reloads_project_active_session_count(
         .expect("failed to insert active session");
 
     let session_folder_name = "session-".chars().take(8).collect::<String>();
-    let session_data_dir = base_path.join(session_folder_name).join(SESSION_DATA_DIR);
+    let session_data_dir = base_path.join(session_folder_name);
     fs::create_dir_all(session_data_dir).expect("failed to create session dir");
 
     let mut app = App::new_with_clients(

@@ -25,7 +25,7 @@ use crate::app::{AppEvent, AppServices, ProjectManager, SessionManager, agentty_
 use crate::domain::agent::{AgentKind, AgentSelection, ReasoningLevel, ResponseStyle, SpeedMode};
 use crate::domain::permission::PermissionMode;
 use crate::domain::session::{
-    QueuedMessage, ReviewRequest, SESSION_DATA_DIR, Session, SessionHandles, SessionId, Status,
+    QueuedMessage, ReviewRequest, Session, SessionHandles, SessionId, Status,
     can_append_session_to_stack as stack_can_append_session,
     can_create_stacked_child as stack_can_create_stacked_child,
     can_merge_session_branch_in_stack as stack_can_merge_session_branch,
@@ -779,7 +779,6 @@ impl SessionManager {
                         &repo_root,
                         &session_id,
                         &session_branch(&session_id),
-                        true,
                         has_worktree,
                     )
                     .await;
@@ -922,7 +921,6 @@ impl SessionManager {
                 &working_dir,
                 &session_id,
                 &session_branch(&session_id),
-                true,
                 has_worktree,
             )
             .await;
@@ -966,8 +964,8 @@ impl SessionManager {
         Ok(session_id)
     }
 
-    /// Creates the git worktree and session-local metadata directory for one
-    /// session branch from an explicit start ref.
+    /// Creates the git worktree for one session branch from an explicit start
+    /// ref.
     ///
     /// Regular sessions pass the local base branch as the start ref, stacked
     /// drafts pass their parent branch, and forks pass the source session
@@ -975,11 +973,9 @@ impl SessionManager {
     /// time.
     ///
     /// # Errors
-    /// Returns an error if git worktree creation fails or the `.agentty`
-    /// metadata directory cannot be created inside the worktree.
+    /// Returns an error if git worktree creation fails.
     pub(super) async fn create_session_worktree(
         services: &AppServices,
-        session_id: &str,
         folder: &Path,
         repo_root: &Path,
         worktree_branch: &str,
@@ -999,27 +995,7 @@ impl SessionManager {
                     .await
                     .map_err(|error| {
                         SessionError::Workflow(format!("Failed to create git worktree: {error}"))
-                    })?;
-
-                let data_dir = folder.join(SESSION_DATA_DIR);
-                if let Err(error) = services.fs_client().create_dir_all(data_dir).await {
-                    Self::rollback_failed_session_creation(
-                        services,
-                        folder,
-                        repo_root,
-                        session_id,
-                        worktree_branch,
-                        false,
-                        true,
-                    )
-                    .await;
-
-                    return Err(SessionError::Workflow(format!(
-                        "Failed to create session metadata directory: {error}"
-                    )));
-                }
-
-                Ok(())
+                    })
             },
             |_| ag_telemetry::Outcome::Failed,
         )
@@ -1101,7 +1077,6 @@ impl SessionManager {
 
         Self::create_session_worktree(
             services,
-            &persisted_session_id,
             &folder,
             &repo_root,
             &worktree_branch,
@@ -1269,17 +1244,11 @@ impl SessionManager {
         staged_prompt: &str,
         title_to_save: Option<&str>,
     ) -> Result<(), SessionError> {
-        draft::store_staged_draft_attachments(
-            services.fs_client().as_ref(),
-            services.base_path(),
-            session_id,
-            staged_attachments,
-        )
-        .await?;
+        let serialized_attachments = draft::serialize_staged_draft_attachments(staged_attachments)?;
         services
             .db()
             .sessions()
-            .update_session_prompt(session_id, staged_prompt)
+            .update_session_draft(session_id, staged_prompt, serialized_attachments.as_deref())
             .await?;
         if let Some(title) = title_to_save {
             services
@@ -1315,7 +1284,8 @@ impl SessionManager {
     ) -> Result<(), SessionError> {
         let prompt = prompt.into();
         let session_index = self.session_index_or_err(session_id)?;
-        let persisted_prompt = Self::load_draft_prompt(services, session_id).await?;
+        let (persisted_prompt, persisted_attachments) =
+            Self::load_staged_draft(services, session_id).await?;
         let (
             folder,
             persisted_session_id,
@@ -1338,10 +1308,10 @@ impl SessionManager {
                 ));
             }
 
-            let next_attachment_number = session.draft_attachments.len().saturating_add(1);
+            let next_attachment_number = persisted_attachments.len().saturating_add(1);
             let staged_prompt =
                 Self::append_staged_prompt(&persisted_prompt, &prompt, next_attachment_number);
-            let mut staged_attachments = session.draft_attachments.clone();
+            let mut staged_attachments = persisted_attachments;
             staged_attachments.extend(Self::renumbered_attachments(
                 &prompt,
                 next_attachment_number,
@@ -1408,19 +1378,25 @@ impl SessionManager {
         Ok(())
     }
 
-    /// Reads the latest staged prompt before appending another draft message.
-    async fn load_draft_prompt(
+    /// Reads the latest staged prompt and attachments before appending another
+    /// draft message.
+    ///
+    /// Reading persisted state keeps attachment numbering correct even when
+    /// the in-memory session has not hydrated its detail row yet.
+    async fn load_staged_draft(
         services: &AppServices,
         session_id: &str,
-    ) -> Result<String, SessionError> {
+    ) -> Result<(String, Vec<TurnPromptAttachment>), SessionError> {
         let detail = services
             .db()
             .sessions()
             .load_session_detail(session_id)
             .await?
             .ok_or(SessionError::NotFound)?;
+        let attachments =
+            draft::parse_staged_draft_attachments(detail.draft_attachments.as_deref());
 
-        Ok(detail.prompt)
+        Ok((detail.prompt, attachments))
     }
 
     /// Starts title generation for the newly persisted staged draft.
@@ -1634,13 +1610,11 @@ impl SessionManager {
             session.draft_attachments.clear();
         }
 
-        if let Err(error) = draft::store_staged_draft_attachments(
-            services.fs_client().as_ref(),
-            services.base_path(),
-            session_id,
-            &[],
-        )
-        .await
+        if let Err(error) = services
+            .db()
+            .sessions()
+            .update_session_draft_attachments(session_id, None)
+            .await
         {
             warn!(
                 session_id = session_id,
@@ -3658,22 +3632,19 @@ impl SessionManager {
         repo_root: &Path,
         session_id: &str,
         worktree_branch: &str,
-        session_saved: bool,
         has_worktree: bool,
     ) {
-        if session_saved {
-            if let Err(error) = services.db().sessions().delete_session(session_id).await {
-                warn!(
-                    session_id = session_id,
-                    error = %error,
-                    "failed to roll back persisted session metadata"
-                );
-            }
-            SessionTaskService::remove_session_update_version(
-                &services.session_update_versions(),
-                session_id,
+        if let Err(error) = services.db().sessions().delete_session(session_id).await {
+            warn!(
+                session_id = session_id,
+                error = %error,
+                "failed to roll back persisted session metadata"
             );
         }
+        SessionTaskService::remove_session_update_version(
+            &services.session_update_versions(),
+            session_id,
+        );
 
         // A rejected checkout can refer to a branch that already existed;
         // only remove Git resources when this attempt has a worktree.

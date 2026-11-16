@@ -470,8 +470,11 @@ impl SessionManager {
         let session_agent =
             migrate_session_off_retired_model(db, &row.id, &row.agent, &row.model, session_status)
                 .await;
-        let draft_attachments =
-            draft::load_staged_draft_attachments(*fs_client, base, &session_id).await;
+        let draft_attachments = draft::parse_staged_draft_attachments(
+            session_detail
+                .as_ref()
+                .and_then(|detail| detail.draft_attachments.as_deref()),
+        );
         let questions = Self::loaded_session_questions(session_detail.as_ref());
         let reasoning_level_override = row
             .reasoning_level_override
@@ -687,6 +690,8 @@ impl SessionManager {
             return;
         };
 
+        session.draft_attachments =
+            draft::parse_staged_draft_attachments(detail.draft_attachments.as_deref());
         session.prompt = detail.prompt;
         if let Some(questions) = detail.questions {
             session.questions = parse_questions_json(&questions).unwrap_or_default();

@@ -1,78 +1,44 @@
-//! Draft-session persistence helpers for staged attachment metadata.
+//! Draft-session serialization helpers for staged attachment metadata.
+//!
+//! Staged attachments persist in the session row's `draft_attachments`
+//! column next to the staged prompt, so draft sessions keep their images
+//! across restarts without writing files into the session worktree.
 
-use std::path::{Path, PathBuf};
-
-use crate::domain::session::SESSION_DATA_DIR;
+use crate::app::session::SessionError;
 use crate::domain::turn_prompt::TurnPromptAttachment;
-use crate::infra::fs::{FsClient, FsError};
 
-/// Metadata filename used for staged draft-session image attachments.
-const STAGED_DRAFT_ATTACHMENT_FILE: &str = "draft_attachment.json";
-
-/// Returns the metadata file path storing staged draft-session attachments for
-/// one session.
-pub(super) fn staged_draft_attachment_path(base: &Path, session_id: &str) -> PathBuf {
-    session_data_dir(base, session_id).join(STAGED_DRAFT_ATTACHMENT_FILE)
-}
-
-/// Returns the dedicated `SESSION_DATA_DIR` directory for one session.
-fn session_data_dir(base: &Path, session_id: &str) -> PathBuf {
-    base.join(session_id).join(SESSION_DATA_DIR)
-}
-
-/// Loads persisted staged draft-session attachments for one session.
+/// Parses the persisted staged draft attachments for one session.
 ///
-/// Invalid or missing metadata is treated as empty so stale files do not
+/// Missing or invalid metadata is treated as empty so a stale value does not
 /// block session loading.
-pub(super) async fn load_staged_draft_attachments(
-    fs_client: &dyn FsClient,
-    base: &Path,
-    session_id: &str,
+pub(super) fn parse_staged_draft_attachments(
+    serialized_attachments: Option<&str>,
 ) -> Vec<TurnPromptAttachment> {
-    let attachment_path = staged_draft_attachment_path(base, session_id);
-    let Ok(attachment_bytes) = fs_client.read_file(attachment_path).await else {
-        return Vec::new();
-    };
-
-    serde_json::from_slice(&attachment_bytes).unwrap_or_default()
+    serialized_attachments
+        .and_then(|serialized_attachments| serde_json::from_str(serialized_attachments).ok())
+        .unwrap_or_default()
 }
 
-/// Persists the staged draft-session attachment list for one session.
+/// Serializes staged draft attachments for the session row.
 ///
-/// An empty slice removes the metadata file and its dedicated
-/// `SESSION_DATA_DIR` directory. When attachments are present, the session
-/// metadata directory is created before the JSON payload is written so draft
-/// staging still works after external cleanup removed the folder.
+/// An empty slice maps to `None` so the column is cleared instead of storing
+/// an empty list.
 ///
 /// # Errors
-/// Returns an error if the attachment metadata cannot be serialized or
-/// written.
-pub(super) async fn store_staged_draft_attachments(
-    fs_client: &dyn FsClient,
-    base: &Path,
-    session_id: &str,
+/// Returns an error if an attachment cannot be represented as JSON, such as
+/// a non-UTF-8 image path.
+pub(super) fn serialize_staged_draft_attachments(
     attachments: &[TurnPromptAttachment],
-) -> Result<(), FsError> {
-    let session_data_dir = session_data_dir(base, session_id);
-    let attachment_path = session_data_dir.join(STAGED_DRAFT_ATTACHMENT_FILE);
+) -> Result<Option<String>, SessionError> {
     if attachments.is_empty() {
-        fs_client.remove_file(attachment_path).await?;
-
-        if fs_client.is_dir(session_data_dir.clone()) {
-            fs_client.remove_dir_all(session_data_dir).await?;
-        }
-
-        return Ok(());
+        return Ok(None);
     }
 
-    fs_client.create_dir_all(session_data_dir).await?;
-
-    let serialized_attachments = serde_json::to_vec(attachments)
-        .map_err(|error| FsError::Io(std::io::Error::other(error)))?;
-
-    fs_client
-        .write_file(attachment_path, serialized_attachments)
-        .await
+    serde_json::to_string(attachments)
+        .map(Some)
+        .map_err(|error| {
+            SessionError::Workflow(format!("Failed to serialize draft attachments: {error}"))
+        })
 }
 
 #[cfg(test)]

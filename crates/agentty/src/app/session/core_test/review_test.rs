@@ -26,7 +26,7 @@ use crate::app::test_support::TestSessionRunFactory;
 use crate::app::{App, AppEvent, ReviewCacheEntry, SessionManager};
 use crate::domain::agent::{AgentKind, AgentModel, AgentSelection, ReasoningLevel, SpeedMode};
 use crate::domain::question::QuestionItem;
-use crate::domain::session::{SESSION_DATA_DIR, SessionId, Status};
+use crate::domain::session::{SessionId, Status};
 use crate::domain::session_message::SessionMessageKind;
 use crate::domain::transient_message::{
     GeneratedTurnLabels, GeneratedTurnUpdate, TransientMessage, TransientMessageAnchor,
@@ -268,8 +268,8 @@ async fn test_periodic_session_refresh_preserves_focused_review_states() {
             )
             .await
             .expect("failed to insert review session");
-        let data_dir = session_folder(dir.path(), session_id).join(SESSION_DATA_DIR);
-        std::fs::create_dir_all(data_dir).expect("failed to create session data dir");
+        let session_dir = session_folder(dir.path(), session_id);
+        std::fs::create_dir_all(session_dir).expect("failed to create session dir");
     }
     db.sessions()
         .update_session_focused_review(

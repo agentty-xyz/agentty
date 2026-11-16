@@ -8,7 +8,7 @@ use tempfile::tempdir;
 
 use super::super::session_folder;
 use super::support::new_test_app_with_db;
-use crate::domain::session::{SESSION_DATA_DIR, SessionId};
+use crate::domain::session::SessionId;
 use crate::infra::db::AppRepositories;
 use crate::presentation::app_mode::AppMode;
 
@@ -54,8 +54,7 @@ async fn test_refresh_sessions_loads_question_detail_when_another_session_is_sel
         .expect("failed to set beta0000 timestamp");
     for session_id in ["alpha000", "beta0000"] {
         let session_dir = session_folder(dir.path(), session_id);
-        let data_dir = session_dir.join(SESSION_DATA_DIR);
-        std::fs::create_dir_all(&data_dir).expect("failed to create data dir");
+        std::fs::create_dir_all(&session_dir).expect("failed to create session dir");
     }
     let mut app = new_test_app_with_db(
         dir.path().to_path_buf(),

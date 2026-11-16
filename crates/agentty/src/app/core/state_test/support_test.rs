@@ -27,8 +27,8 @@ use crate::domain::agent::{AgentKind, ReasoningLevel, SpeedMode};
 use crate::domain::input::InputState;
 use crate::domain::question::QuestionItem;
 use crate::domain::session::{
-    ForgeKind, ReviewRequestState, ReviewRequestSummary, SESSION_DATA_DIR, SessionDiffState,
-    SessionDiffStats, SessionFollowUpTask, SessionId, SessionSize, SessionStats, Status,
+    ForgeKind, ReviewRequestState, ReviewRequestSummary, SessionDiffState, SessionDiffStats,
+    SessionFollowUpTask, SessionId, SessionSize, SessionStats, Status,
 };
 use crate::domain::transient_message::{
     TransientMessage, TransientMessageAnchor, TransientMessageBody, TransientMessageLifecycle,
@@ -126,11 +126,9 @@ pub(super) async fn seed_materialized_session(
         )
         .await
         .expect("failed to insert materialized session");
-    tokio::fs::create_dir_all(
-        session::session_folder(base_path, session_id).join(SESSION_DATA_DIR),
-    )
-    .await
-    .expect("failed to create materialized session data dir");
+    tokio::fs::create_dir_all(session::session_folder(base_path, session_id))
+        .await
+        .expect("failed to create materialized session dir");
 }
 
 /// Seeds one review-ready session and its persisted focused review.
@@ -509,14 +507,9 @@ pub(in crate::app::core) async fn insert_review_session_with_data_dir(app: &App,
         .await
         .expect("failed to insert session");
     let session_folder_name = session_id.chars().take(8).collect::<String>();
-    tokio::fs::create_dir_all(
-        app.services
-            .base_path()
-            .join(session_folder_name)
-            .join(SESSION_DATA_DIR),
-    )
-    .await
-    .expect("failed to create session data dir");
+    tokio::fs::create_dir_all(app.services.base_path().join(session_folder_name))
+        .await
+        .expect("failed to create session dir");
 }
 
 pub(in crate::app::core) async fn new_test_app_with_database_pool()

@@ -1,6 +1,10 @@
 //! Session lifecycle workflow tests covering creation, rollback, draft
 //! staging and materialization, and title generation.
 
+#[cfg(unix)]
+use std::ffi::OsStr;
+#[cfg(unix)]
+use std::os::unix::ffi::OsStrExt as _;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::time::{Duration, Instant, SystemTime};
@@ -12,8 +16,8 @@ use tracing::instrument::WithSubscriber;
 
 use super::support::{
     create_passthrough_mock_fs_client, database_with_session, database_with_session_and_pool,
-    load_persisted_session_row, rollback_git_client, session_manager_with_one_session,
-    test_services, test_services_with_fs_client, test_session,
+    load_persisted_session_row, session_manager_with_one_session, test_services,
+    test_services_with_fs_client, test_session,
 };
 use crate::app::session::{SessionCreationSettings, SessionError};
 use crate::app::{ProjectManager, SessionManager};
@@ -289,7 +293,6 @@ async fn test_create_session_worktree_uses_local_base_branch_ref() {
     // Act
     let result = SessionManager::create_session_worktree(
         &services,
-        "session-id",
         folder.as_path(),
         repo_root.as_path(),
         "wt/session-id",
@@ -299,60 +302,6 @@ async fn test_create_session_worktree_uses_local_base_branch_ref() {
 
     // Assert
     assert!(result.is_ok());
-}
-
-#[tokio::test]
-async fn creation_rolls_back_when_metadata_directory_cannot_be_created() {
-    // Arrange
-    let source = test_session("source", Status::Review, None, "");
-    let database = database_with_session(&source).await;
-    let mut git = rollback_git_client();
-    git.expect_create_worktree()
-        .once()
-        .returning(|_, _, _, _| Box::pin(async { Ok(()) }));
-    let mut filesystem = fs::MockFsClient::new();
-    filesystem.expect_create_dir_all().once().returning(|_| {
-        Box::pin(async { Err(fs::FsError::Io(std::io::Error::other("directory rejected"))) })
-    });
-    filesystem
-        .expect_remove_dir_all()
-        .times(1..)
-        .returning(|_| Box::pin(async { Ok(()) }));
-    let services = test_services_with_fs_client(
-        &database,
-        Arc::new(RealClock),
-        Arc::new(filesystem),
-        Arc::new(git),
-        Arc::new(forge::MockReviewRequestClient::new()),
-    );
-
-    // Act
-    let result = SessionManager::create_session_worktree(
-        &services,
-        "new-session",
-        Path::new("/tmp/new-session"),
-        Path::new("/tmp/project"),
-        "wt/new-session",
-        "main",
-    )
-    .await;
-
-    // Assert
-    assert!(
-        result
-            .expect_err("directory creation must fail")
-            .to_string()
-            .contains("directory rejected")
-    );
-    assert_eq!(
-        database
-            .sessions()
-            .load_sessions_metadata()
-            .await
-            .expect("session count")
-            .0,
-        1
-    );
 }
 
 #[tokio::test]
@@ -578,8 +527,9 @@ async fn test_track_draft_title_generation_task_clears_older_task() {
     );
 }
 
+#[cfg(unix)]
 #[tokio::test]
-async fn test_stage_draft_message_preserves_persisted_prompt_when_attachment_write_fails() {
+async fn test_stage_draft_message_preserves_persisted_prompt_when_attachment_serialization_fails() {
     // Arrange
     let mut session = test_session("", Status::Draft, None, "");
     session.is_draft = true;
@@ -610,13 +560,6 @@ async fn test_stage_draft_message_preserves_persisted_prompt_when_attachment_wri
         .expect_is_dir()
         .times(0..)
         .returning(|path| path.is_dir());
-    mock_fs_client.expect_write_file().once().returning(|_, _| {
-        Box::pin(async {
-            Err(fs::FsError::Io(std::io::Error::other(
-                "simulated attachment write failure",
-            )))
-        })
-    });
     let services = test_services_with_fs_client(
         &database,
         Arc::new(crate::infra::clock::RealClock),
@@ -627,7 +570,7 @@ async fn test_stage_draft_message_preserves_persisted_prompt_when_attachment_wri
     let prompt = TurnPrompt {
         attachments: vec![TurnPromptAttachment {
             placeholder: "[Image #1]".to_string(),
-            local_image_path: PathBuf::from("/tmp/image-1.png"),
+            local_image_path: PathBuf::from(OsStr::from_bytes(b"/tmp/image-\xff.png")),
         }],
         text: "Review [Image #1]".to_string(),
         text_source: TurnPromptTextSource::UserPrompt,
@@ -637,11 +580,11 @@ async fn test_stage_draft_message_preserves_persisted_prompt_when_attachment_wri
     let error = session_manager
         .stage_draft_message(&services, "session-id", prompt)
         .await
-        .expect_err("attachment metadata failure should abort draft staging");
+        .expect_err("attachment serialization failure should abort draft staging");
     let persisted_session = load_persisted_session_row(&database).await;
 
     // Assert
-    assert!(matches!(error, SessionError::Fs(_)));
+    assert!(matches!(error, SessionError::Workflow(_)));
     assert_eq!(persisted_session.prompt, "");
     assert_eq!(session_manager.sessions()[0].prompt, "");
     assert_eq!(
@@ -861,10 +804,6 @@ async fn stacked_draft_materialization_records_the_parent_tip() {
     let mut manager = session_manager_with_one_session(session);
     let mut filesystem = fs::MockFsClient::new();
     filesystem.expect_is_dir().once().return_const(false);
-    filesystem
-        .expect_create_dir_all()
-        .once()
-        .returning(|_| Box::pin(async { Ok(()) }));
     let mut git = git::MockGitClient::new();
     git.expect_find_git_repo_root()
         .once()
@@ -1106,27 +1045,26 @@ async fn staged_session_start_requires_a_startable_staged_draft() {
 }
 
 #[tokio::test]
-async fn started_draft_attachment_cleanup_tolerates_missing_sessions_and_metadata_failures() {
+async fn started_draft_attachment_cleanup_tolerates_missing_sessions_and_persistence_failures() {
     // Arrange
     let mut session = test_session("", Status::Draft, None, "");
     session.draft_attachments = vec![TurnPromptAttachment {
         placeholder: "[Image #1]".to_string(),
         local_image_path: PathBuf::from("/tmp/image-1.png"),
     }];
-    let database = database_with_session(&session).await;
+    let (database, pool) = database_with_session_and_pool(&session).await;
+    sqlx::query(
+        "CREATE TRIGGER reject_draft_clear BEFORE UPDATE ON session BEGIN SELECT RAISE(FAIL, \
+         'update rejected'); END",
+    )
+    .execute(&pool)
+    .await
+    .expect("failure trigger");
     let mut manager = session_manager_with_one_session(session);
-    let mut filesystem = fs::MockFsClient::new();
-    filesystem
-        .expect_remove_file()
-        .once()
-        .withf(|path| path.starts_with("/tmp/agentty-tests/missing-session"))
-        .returning(|_| {
-            Box::pin(async { Err(fs::FsError::Io(std::io::Error::other("metadata busy"))) })
-        });
     let services = test_services_with_fs_client(
         &database,
         Arc::new(RealClock),
-        Arc::new(filesystem),
+        Arc::new(fs::MockFsClient::new()),
         Arc::new(git::MockGitClient::new()),
         Arc::new(forge::MockReviewRequestClient::new()),
     );
@@ -1136,9 +1074,18 @@ async fn started_draft_attachment_cleanup_tolerates_missing_sessions_and_metadat
     manager
         .clear_started_draft_attachments(&services, "missing-session")
         .await;
+    let attachment_count_after_missing = manager.sessions()[0].draft_attachments.len();
+    manager
+        .clear_started_draft_attachments(&services, "session-id")
+        .await;
 
-    // Assert: other sessions keep their staged attachments.
-    assert_eq!(manager.sessions()[0].draft_attachments.len(), 1);
+    // Assert: other sessions keep their staged attachments, and a rejected
+    // database clear still releases the accepted in-memory staging.
+    assert_eq!(attachment_count_after_missing, 1);
+    assert_eq!(
+        manager.sessions()[0].draft_attachments,
+        [] as [ag_protocol::TurnPromptAttachment; 0]
+    );
 }
 
 #[tokio::test]
@@ -1189,7 +1136,6 @@ async fn creation_rollback_attempts_every_cleanup_step_after_failures() {
         Path::new("/tmp/project"),
         "session-id",
         "wt/session-id",
-        true,
         true,
     )
     .await;

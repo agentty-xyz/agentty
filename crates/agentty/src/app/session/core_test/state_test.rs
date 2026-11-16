@@ -21,9 +21,7 @@ use crate::app::session::workflow::task::StatusTransition;
 use crate::app::test_support::TestSessionRunFactory;
 use crate::domain::agent::{AgentKind, AgentSelection, ReasoningLevel, ResponseStyle, SpeedMode};
 use crate::domain::permission::PermissionMode;
-use crate::domain::session::{
-    SESSION_DATA_DIR, SessionFollowUpTask, SessionSize, SessionStats, Status,
-};
+use crate::domain::session::{SessionFollowUpTask, SessionSize, SessionStats, Status};
 use crate::domain::session_message::SessionMessageKind;
 use crate::domain::transient_message::{TransientMessageAnchor, TransientMessageSlot};
 use crate::infra::clock::RealClock;
@@ -332,8 +330,7 @@ async fn test_load_existing_sessions_ordered_by_updated_at_desc() {
 
     for session_id in ["alpha000", "beta0000"] {
         let session_dir = session_folder(dir.path(), session_id);
-        let data_dir = session_dir.join(SESSION_DATA_DIR);
-        std::fs::create_dir_all(&data_dir).expect("failed to create data dir");
+        std::fs::create_dir_all(&session_dir).expect("failed to create session dir");
     }
 
     // Act

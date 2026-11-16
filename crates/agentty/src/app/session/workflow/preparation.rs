@@ -115,7 +115,6 @@ impl SessionManager {
                 })?;
             Self::create_session_worktree(
                 services,
-                session_id,
                 &folder,
                 &repo_root,
                 &session_branch(session_id),

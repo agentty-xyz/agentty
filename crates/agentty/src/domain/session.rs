@@ -24,9 +24,6 @@ use crate::domain::transient_message::{
 };
 use crate::domain::turn_prompt::{TurnPrompt, TurnPromptAttachment};
 
-/// Folder name under a project root that stores Agentty session metadata.
-pub const SESSION_DATA_DIR: &str = ".agentty";
-
 /// Maximum number of stacked descendants in one root-to-child chain.
 pub const MAX_STACK_DEPTH: usize = 5;
 

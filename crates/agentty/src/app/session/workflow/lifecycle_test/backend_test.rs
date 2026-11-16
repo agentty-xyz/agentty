@@ -110,9 +110,6 @@ fn draft_workspace_boundaries(
         git.expect_create_worktree()
             .once()
             .returning(|_, _, _, _| Box::pin(async { Ok(()) }));
-        fs.expect_create_dir_all()
-            .once()
-            .returning(|_| Box::pin(async { Ok(()) }));
         git.expect_remove_worktree().once().returning(move |_| {
             Box::pin(async move {
                 if cleanup_fails {

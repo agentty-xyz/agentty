@@ -23,7 +23,7 @@ use crate::domain::agent::{
     AgentKind, AgentModel, AgentSelection, AgentSelectionMetadata, ServedModel,
 };
 use crate::domain::harness::HarnessAvailability;
-use crate::domain::session::{PublishBranchAction, SESSION_DATA_DIR, SessionDiffState, Status};
+use crate::domain::session::{PublishBranchAction, SessionDiffState, Status};
 use crate::domain::setting::SettingName;
 use crate::infra::db::AppRepositories;
 use crate::infra::tmux::MockTmuxClient;
@@ -588,8 +588,8 @@ async fn test_new_prefers_active_session_for_initial_selection() {
         .expect("failed to insert archived session");
 
     let active_folder_name = active_session_id.chars().take(8).collect::<String>();
-    let active_session_data_dir = base_path.join(active_folder_name).join(SESSION_DATA_DIR);
-    fs::create_dir_all(active_session_data_dir).expect("failed to create active session dir");
+    let active_session_dir = base_path.join(active_folder_name);
+    fs::create_dir_all(active_session_dir).expect("failed to create active session dir");
 
     // Act
     let app = App::new_with_clients(

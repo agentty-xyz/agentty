@@ -107,6 +107,38 @@ async fn test_real_fs_client_read_file_returns_error_for_missing_file() {
     assert!(message.contains("No such file") || message.contains("cannot find the path"));
 }
 
+/// Verifies `RealFsClient::write_file()` replaces existing file contents and
+/// surfaces write failures through the async boundary.
+#[tokio::test]
+async fn test_real_fs_client_write_file_replaces_contents_and_reports_errors() {
+    // Arrange
+    let temp_dir = tempdir().expect("create temp dir");
+    let file_path = temp_dir.path().join("example.txt");
+    tokio::fs::write(&file_path, b"previous contents")
+        .await
+        .expect("write file");
+    let fs_client = RealFsClient;
+
+    // Act
+    let write_result = fs_client
+        .write_file(file_path.clone(), b"new".to_vec())
+        .await;
+    let missing_parent_result = fs_client
+        .write_file(temp_dir.path().join("missing").join("file.txt"), Vec::new())
+        .await;
+
+    // Assert
+    assert!(write_result.is_ok());
+    assert_eq!(
+        tokio::fs::read(&file_path).await.expect("read file"),
+        b"new"
+    );
+    assert!(matches!(
+        missing_parent_result,
+        Err(FsError::Io(error)) if error.kind() == std::io::ErrorKind::NotFound
+    ));
+}
+
 /// Verifies `RealFsClient::remove_file()` ignores missing files but surfaces
 /// other removal failures.
 #[tokio::test]
