@@ -767,14 +767,15 @@ Every event includes `app_source` (`cli`), `app_version`, and `install_method` (
 | `agentty_launch`         | After the database opens                                            | None                                             |
 | `agentty_failure`        | When startup after the database opens or the terminal runtime fails | `failure_category` (`database` or `application`) |
 | `agentty_session_start`  | When new session metadata is reserved                               | `session_type`, `agent`, `model`                 |
-| `agentty_turn_start`     | When a first or follow-up message begins execution                  | `agent`, `model`                                 |
-| `agentty_turn_finish`    | When a turn and its post-processing complete successfully           | `agent`, `model`                                 |
-| `agentty_turn_interrupt` | When an executing turn is stopped by the user                       | `agent`, `model`                                 |
+| `agentty_turn_start`     | When a first or follow-up message begins execution                  | `agent`, `model`, `permission_mode`              |
+| `agentty_turn_finish`    | When a turn and its post-processing complete successfully           | `agent`, `model`, `permission_mode`              |
+| `agentty_turn_interrupt` | When an executing turn is stopped by the user                       | `agent`, `model`, `permission_mode`              |
 
 Session types are `regular`, `draft`, `stacked`, and `fork`. `agent` identifies the
 selected provider; `model` is its supported model identifier, or `openai-compatible` for
 any local model, whose name is never sent. Turn events use the selection captured when
-the turn was queued.
+the turn was queued. `permission_mode` is the session's `/mode` when the turn begins
+execution: `auto_edit`, `auto_edit_address_comments`, or `read_only`.
 
 Each event carries a random installation ID that Agentty creates on the first launch
 with telemetry enabled and stores in its database, so events from one Agentty root share

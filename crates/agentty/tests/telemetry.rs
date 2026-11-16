@@ -5,9 +5,10 @@ use std::io::{self, Read, Write};
 use std::net::TcpListener;
 use std::time::{Duration, Instant};
 
-use agentty::analytics::{Analytics, SessionType, TurnOutcome};
+use agentty::analytics::{Analytics, SessionType, TurnOutcome, TurnSelection};
 use agentty::app::AppError;
 use agentty::domain::agent::{AgentKind, AgentSelection, AgentSelectionMetadata};
+use agentty::domain::permission::PermissionMode;
 use agentty::infra::db::{DbError, acquire_instance_lock};
 use serde_json::Value;
 use wiremock::MockServer;
@@ -98,6 +99,13 @@ async fn session_and_turn_lifecycle_events_report_only_bounded_metadata() -> Tes
     ];
     let agents = [AgentKind::Codex, AgentKind::Claude, AgentKind::Antigravity]
         .map(|kind| AgentSelection::new(kind, kind.default_model()));
+    let turns = agents
+        .into_iter()
+        .zip(PermissionMode::ALL)
+        .map(|(agent, permission_mode)| TurnSelection {
+            agent,
+            permission_mode,
+        });
     let event_count = session_types.len() + agents.len() * 3;
     let listener = TcpListener::bind("127.0.0.1:0")?;
     let host = format!("http://{}", listener.local_addr()?);
@@ -113,13 +121,11 @@ async fn session_and_turn_lifecycle_events_report_only_bounded_metadata() -> Tes
             .record_session_start(session_type, agents[0])
             .await;
     }
-    for agent in agents {
-        analytics.record_turn_start(agent).await;
+    for turn in turns.clone() {
+        analytics.record_turn_start(turn).await;
+        analytics.record_turn_end(turn, TurnOutcome::Finished).await;
         analytics
-            .record_turn_end(agent, TurnOutcome::Finished)
-            .await;
-        analytics
-            .record_turn_end(agent, TurnOutcome::Interrupted)
+            .record_turn_end(turn, TurnOutcome::Interrupted)
             .await;
     }
     let events = receiver
@@ -139,11 +145,11 @@ async fn session_and_turn_lifecycle_events_report_only_bounded_metadata() -> Tes
             ],
         );
     }
-    for (turn_events, agent) in events[session_types.len()..]
+    for (turn_events, turn) in events[session_types.len()..]
         .as_chunks::<3>()
         .0
         .iter()
-        .zip(agents)
+        .zip(turns)
     {
         for (event, name) in turn_events.iter().zip([
             "agentty_turn_start",
@@ -155,8 +161,9 @@ async fn session_and_turn_lifecycle_events_report_only_bounded_metadata() -> Tes
                 "token",
                 name,
                 &[
-                    ("agent", agent.kind().name()),
-                    ("model", agent.model().as_str()),
+                    ("agent", turn.agent.kind().name()),
+                    ("model", turn.agent.model().as_str()),
+                    ("permission_mode", turn.permission_mode.label()),
                 ],
             );
         }

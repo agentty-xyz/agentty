@@ -14,7 +14,7 @@ use tempfile::tempdir;
 
 use super::super::App;
 use super::support::{new_test_app_with_selected_session, seed_selected_session_empty_diff_state};
-use crate::analytics::TurnOutcome;
+use crate::analytics::{TurnOutcome, TurnSelection};
 use crate::app;
 use crate::app::branch_publish::BranchPublishTaskSuccess;
 use crate::app::core::event::AppEvent;
@@ -23,6 +23,7 @@ use crate::domain::agent::{
     AgentKind, AgentModel, AgentSelection, AgentSelectionMetadata, ServedModel,
 };
 use crate::domain::harness::HarnessAvailability;
+use crate::domain::permission::PermissionMode;
 use crate::domain::session::{PublishBranchAction, SessionDiffState, Status};
 use crate::domain::setting::SettingName;
 use crate::infra::db::AppRepositories;
@@ -265,8 +266,11 @@ async fn apply_turn_started_clears_saved_diff_comments() {
 
     // Act
     app.apply_app_events(AppEvent::SessionTurnStarted {
-        agent: AgentSelection::new(AgentKind::Antigravity, AgentModel::Gemini38Flash),
         session_id: "session-1".into(),
+        turn: TurnSelection {
+            agent: AgentSelection::new(AgentKind::Antigravity, AgentModel::Gemini38Flash),
+            permission_mode: PermissionMode::AutoEdit,
+        },
     })
     .await;
 
@@ -280,22 +284,26 @@ async fn turn_telemetry_counts_each_event_before_batch_coalescing() {
     let (mut app, _directory) = crate::test_support::new_test_app().await;
     let (analytics, receiver) = capture_events(2);
     app.set_analytics(Some(analytics));
-    app.services.emit_app_event(AppEvent::SessionTurnStarted {
+    let turn = TurnSelection {
         agent: AgentSelection::new(AgentKind::Antigravity, AgentModel::Gemini38Flash),
+        permission_mode: PermissionMode::ReadOnly,
+    };
+    app.services.emit_app_event(AppEvent::SessionTurnStarted {
         session_id: "private-session".into(),
+        turn,
     });
 
     // Act
     app.apply_app_events(AppEvent::SessionTurnStarted {
-        agent: AgentSelection::new(AgentKind::Antigravity, AgentModel::Gemini38Flash),
         session_id: "private-session".into(),
+        turn,
     })
     .await;
     app.services.wait_for_cleanup_tasks(None).await;
     app.set_analytics(None);
     app.apply_app_events(AppEvent::SessionTurnStarted {
-        agent: AgentSelection::new(AgentKind::Antigravity, AgentModel::Gemini38Flash),
         session_id: "private-session".into(),
+        turn,
     })
     .await;
     let events = receiver.join().expect("telemetry receiver");
@@ -306,10 +314,11 @@ async fn turn_telemetry_counts_each_event_before_batch_coalescing() {
         assert_eq!(event["event"], "agentty_turn_start");
         assert_eq!(event["properties"]["agent"], "antigravity");
         assert_eq!(event["properties"]["model"], "gemini-3.8-flash");
+        assert_eq!(event["properties"]["permission_mode"], "read_only");
         assert!(!event.to_string().contains("private-session"));
         assert_eq!(
             event["properties"].as_object().map(serde_json::Map::len),
-            Some(6)
+            Some(7)
         );
     }
 }
@@ -693,49 +702,60 @@ async fn turn_end_telemetry_preserves_each_outcome_and_queued_selection() {
     let (mut app, _directory) = crate::test_support::new_test_app().await;
     let (analytics, receiver) = capture_events(3);
     app.set_analytics(Some(analytics));
-    let agents = [
-        AgentSelection::new(AgentKind::Claude, AgentModel::ClaudeSonnet55),
-        AgentSelection::new(AgentKind::Antigravity, AgentModel::Gemini38Flash),
-        AgentSelection::new(AgentKind::Codex, AgentModel::Gpt61Sol),
-    ];
-    for agent in agents[..2].iter().copied() {
+    let turns = [
+        (AgentKind::Claude, AgentModel::ClaudeSonnet55),
+        (AgentKind::Antigravity, AgentModel::Gemini38Flash),
+        (AgentKind::Codex, AgentModel::Gpt61Sol),
+    ]
+    .into_iter()
+    .zip(PermissionMode::ALL)
+    .map(|((kind, model), permission_mode)| TurnSelection {
+        agent: AgentSelection::new(kind, model),
+        permission_mode,
+    })
+    .collect::<Vec<_>>();
+    for turn in turns[..2].iter().copied() {
         app.services.emit_app_event(AppEvent::SessionTurnEnded {
-            agent,
             outcome: TurnOutcome::Finished,
+            turn,
         });
     }
 
     // Act
     app.apply_app_events(AppEvent::SessionTurnEnded {
-        agent: agents[2],
         outcome: TurnOutcome::Interrupted,
+        turn: turns[2],
     })
     .await;
     app.services.wait_for_cleanup_tasks(None).await;
     app.set_analytics(None);
     app.apply_app_events(AppEvent::SessionTurnEnded {
-        agent: agents[2],
         outcome: TurnOutcome::Interrupted,
+        turn: turns[2],
     })
     .await;
     let events = receiver.join().expect("telemetry receiver");
 
     // Assert
     assert_eq!(events.len(), 3);
-    for (agent, name) in agents.into_iter().zip([
+    for (turn, name) in turns.into_iter().zip([
         "agentty_turn_finish",
         "agentty_turn_finish",
         "agentty_turn_interrupt",
     ]) {
         let event = events
             .iter()
-            .find(|event| event["properties"]["agent"] == agent.kind().name())
+            .find(|event| event["properties"]["agent"] == turn.agent.kind().name())
             .expect("event for each provider");
         assert_eq!(event["event"], name);
-        assert_eq!(event["properties"]["model"], agent.model().as_str());
+        assert_eq!(event["properties"]["model"], turn.agent.model().as_str());
+        assert_eq!(
+            event["properties"]["permission_mode"],
+            turn.permission_mode.label()
+        );
         assert_eq!(
             event["properties"].as_object().map(serde_json::Map::len),
-            Some(6)
+            Some(7)
         );
     }
 }

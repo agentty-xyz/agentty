@@ -13,7 +13,7 @@ use tokio::task::JoinHandle;
 use tokio::time;
 use tokio_util::sync::CancellationToken;
 
-use crate::analytics::TurnOutcome;
+use crate::analytics::{TurnOutcome, TurnSelection};
 use crate::app::branch_publish::BranchPublishTaskFailure;
 use crate::app::chatgpt_sign_in::ChatGptSignInUpdate;
 use crate::app::prompt_intent::PromptImagePasteUpdate;
@@ -282,8 +282,11 @@ fn app_event_label_names_rebase_review_invalidation() {
 fn app_event_label_names_turn_starts() {
     // Arrange
     let event = AppEvent::SessionTurnStarted {
-        agent: AgentSelection::new(AgentKind::Antigravity, AgentModel::Gemini38Flash),
         session_id: "session-id".into(),
+        turn: TurnSelection {
+            agent: AgentSelection::new(AgentKind::Antigravity, AgentModel::Gemini38Flash),
+            permission_mode: PermissionMode::AutoEdit,
+        },
     };
 
     // Act
@@ -1014,8 +1017,11 @@ async fn production_worker_reuses_isolated_review_runtime_and_closes_it() {
 fn app_event_label_names_turn_ends() {
     // Arrange
     let event = AppEvent::SessionTurnEnded {
-        agent: AgentSelection::new(AgentKind::Codex, AgentModel::Gpt61Sol),
         outcome: TurnOutcome::Finished,
+        turn: TurnSelection {
+            agent: AgentSelection::new(AgentKind::Codex, AgentModel::Gpt61Sol),
+            permission_mode: PermissionMode::AutoEdit,
+        },
     };
 
     // Act

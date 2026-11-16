@@ -25,7 +25,7 @@ use super::merge::{
 };
 use super::task::SessionTranscriptMessageAppend;
 use super::{SessionTaskService, graph_turn, isolation, session_folder, task_turn, turn};
-use crate::analytics::TurnOutcome;
+use crate::analytics::{TurnOutcome, TurnSelection};
 use crate::app::branch_publish::{
     BranchPublishTaskContext, BranchPublishTaskSession, review_request_from_publish_result,
     run_branch_publish_action,
@@ -1505,13 +1505,7 @@ impl SessionWorkerService {
 
         let is_generated_turn = Self::begin_generated_turn(context, &command).await;
 
-        let turn_agent = command.turn_agent();
-        if let Some(agent) = turn_agent {
-            let _ = context.app_event_tx.send(AppEvent::SessionTurnStarted {
-                agent,
-                session_id: context.session_id.clone(),
-            });
-        }
+        let turn_selection = Self::emit_turn_started(context, command.turn_agent()).await;
 
         let result = ag_worker::execute(
             context.db.operations(),
@@ -1554,10 +1548,10 @@ impl SessionWorkerService {
             Err(SessionError::StoppedByUser(_)) => Some(TurnOutcome::Interrupted),
             Err(_) => None,
         };
-        if let (Some(agent), Some(outcome)) = (turn_agent, outcome) {
+        if let (Some(turn), Some(outcome)) = (turn_selection, outcome) {
             let _ = context
                 .app_event_tx
-                .send(AppEvent::SessionTurnEnded { agent, outcome });
+                .send(AppEvent::SessionTurnEnded { outcome, turn });
         }
 
         Some(result)
@@ -1609,6 +1603,31 @@ impl SessionWorkerService {
         );
 
         true
+    }
+
+    /// Reports a model turn beginning execution with its queued selection and
+    /// the session `/mode` read now, returning both for its settlement event.
+    ///
+    /// A turn whose mode cannot be read fails during preparation, so the
+    /// default only labels its start event.
+    async fn emit_turn_started(
+        context: &SessionWorkerContext,
+        turn_agent: Option<AgentSelection>,
+    ) -> Option<TurnSelection> {
+        let agent = turn_agent?;
+        let permission_mode = turn::load_session_permission_mode(&context.db, &context.session_id)
+            .await
+            .unwrap_or_default();
+        let selection = TurnSelection {
+            agent,
+            permission_mode,
+        };
+        let _ = context.app_event_tx.send(AppEvent::SessionTurnStarted {
+            session_id: context.session_id.clone(),
+            turn: selection,
+        });
+
+        Some(selection)
     }
 
     /// Sends one generated-turn lifecycle update to the foreground reducer.

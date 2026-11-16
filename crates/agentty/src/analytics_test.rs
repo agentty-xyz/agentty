@@ -16,11 +16,12 @@ use uuid::Uuid;
 use wiremock::matchers::method;
 use wiremock::{Mock, MockServer, ResponseTemplate};
 
-use super::{Analytics, InstallMethod, SessionType, TurnOutcome, reported_model};
+use super::{Analytics, InstallMethod, SessionType, TurnOutcome, TurnSelection, reported_model};
 use crate::app::AppError;
 use crate::domain::agent::{
     AgentKind, AgentModel, AgentSelection, AgentSelectionMetadata as _, ServedModel,
 };
+use crate::domain::permission::PermissionMode;
 use crate::domain::setting::SettingName;
 use crate::infra::db::AppRepositories;
 
@@ -69,18 +70,20 @@ async fn mirror_without_posthog_exports_every_event_with_posthog_properties() {
         .expect("enabled");
     let analytics = Analytics::mirror(None, export.event_log()).expect("mirror-only sender");
     let agent = AgentSelection::new(AgentKind::Codex, AgentModel::Gpt61Sol);
+    let turn = TurnSelection {
+        agent,
+        permission_mode: PermissionMode::AutoEditAddressComments,
+    };
 
     // Act
     analytics.record_launch().await;
     analytics
         .record_session_start(SessionType::Stacked, agent)
         .await;
-    analytics.record_turn_start(agent).await;
+    analytics.record_turn_start(turn).await;
+    analytics.record_turn_end(turn, TurnOutcome::Finished).await;
     analytics
-        .record_turn_end(agent, TurnOutcome::Finished)
-        .await;
-    analytics
-        .record_turn_end(agent, TurnOutcome::Interrupted)
+        .record_turn_end(turn, TurnOutcome::Interrupted)
         .await;
     analytics
         .record_failure(&AppError::Workflow("private failure".to_string()))
@@ -137,6 +140,7 @@ async fn mirror_without_posthog_exports_every_event_with_posthog_properties() {
     let selection = [
         ("agent", agent.kind().name()),
         ("model", agent.model().as_str()),
+        ("permission_mode", "auto_edit_address_comments"),
     ];
     assert_eq!(
         records,

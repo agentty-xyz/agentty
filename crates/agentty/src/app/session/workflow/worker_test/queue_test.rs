@@ -27,12 +27,13 @@ use super::support::{
     queue_test_context, queued_message, resume_command, successful_turn_result,
     test_graph_resources,
 };
-use crate::analytics::TurnOutcome;
+use crate::analytics::{TurnOutcome, TurnSelection};
 use crate::app::AppEvent;
 use crate::app::graph_activity::GraphActivityRegistry;
 use crate::app::service::HarnessModels;
 use crate::app::session::SessionError;
 use crate::domain::agent::{AgentKind, AgentModel, AgentSelection};
+use crate::domain::permission::PermissionMode;
 use crate::domain::session::Status;
 use crate::infra::db::AppRepositories;
 use crate::infra::fs;
@@ -635,6 +636,10 @@ async fn worker_turn_telemetry_tracks_success_and_interruption_but_excludes_fail
         let (event_tx, mut event_rx) = mpsc::unbounded_channel();
         context.app_event_tx = event_tx;
         let expected_agent = AgentSelection::new(AgentKind::Claude, AgentModel::ClaudeSonnet55);
+        let expected_turn = TurnSelection {
+            agent: expected_agent,
+            permission_mode: PermissionMode::ReadOnly,
+        };
         let command = SessionCommand::Run {
             operation_id: "telemetry-turn".into(),
             request_kind: request_kind.clone(),
@@ -651,6 +656,10 @@ async fn worker_turn_telemetry_tracks_success_and_interruption_but_excludes_fail
             .insert_session_operation("telemetry-turn", &context.session_id, command.kind())
             .await
             .expect("operation");
+        db.sessions()
+            .update_session_permission_mode(&context.session_id, PermissionMode::ReadOnly)
+            .await
+            .expect("permission mode");
 
         // Act
         let result = SessionWorkerService::process_session_command(
@@ -663,10 +672,10 @@ async fn worker_turn_telemetry_tracks_success_and_interruption_but_excludes_fail
         let mut ends = Vec::new();
         while let Ok(event) = event_rx.try_recv() {
             match event {
-                AppEvent::SessionTurnStarted { agent, session_id } => {
-                    starts.push((agent, session_id));
+                AppEvent::SessionTurnStarted { session_id, turn } => {
+                    starts.push((turn, session_id));
                 }
-                AppEvent::SessionTurnEnded { agent, outcome } => ends.push((agent, outcome)),
+                AppEvent::SessionTurnEnded { outcome, turn } => ends.push((turn, outcome)),
                 _ => {}
             }
         }
@@ -676,13 +685,13 @@ async fn worker_turn_telemetry_tracks_success_and_interruption_but_excludes_fail
         if request_kind == AgentRequestKind::UtilityPrompt {
             assert_eq!(starts, Vec::new());
         } else {
-            assert_eq!(starts, vec![(expected_agent, context.session_id.clone())]);
+            assert_eq!(starts, vec![(expected_turn, context.session_id.clone())]);
         }
         assert_eq!(
             ends,
             expected_outcome
                 .into_iter()
-                .map(|outcome| (expected_agent, outcome))
+                .map(|outcome| (expected_turn, outcome))
                 .collect::<Vec<_>>()
         );
     }
@@ -695,7 +704,10 @@ async fn turn_telemetry_reports_interruption_during_auto_commit() {
     let (event_tx, mut event_rx) = mpsc::unbounded_channel();
     context.app_event_tx = event_tx;
     let command = resume_command("auto-commit-cancellation");
-    let expected_agent = AgentSelection::new(AgentKind::Claude, AgentModel::ClaudeSonnet55);
+    let expected_turn = TurnSelection {
+        agent: AgentSelection::new(AgentKind::Claude, AgentModel::ClaudeSonnet55),
+        permission_mode: PermissionMode::AutoEdit,
+    };
     db.operations()
         .insert_session_operation(
             "auto-commit-cancellation",
@@ -710,7 +722,7 @@ async fn turn_telemetry_reports_interruption_during_auto_commit() {
         SessionWorkerService::process_session_command(&context, &run_client, command).await;
     let ends = std::iter::from_fn(|| event_rx.try_recv().ok())
         .filter_map(|event| match event {
-            AppEvent::SessionTurnEnded { agent, outcome } => Some((agent, outcome)),
+            AppEvent::SessionTurnEnded { outcome, turn } => Some((turn, outcome)),
             _ => None,
         })
         .collect::<Vec<_>>();
@@ -727,7 +739,7 @@ async fn turn_telemetry_reports_interruption_during_auto_commit() {
             .expect("turn cancellation token")
             .is_cancelled()
     );
-    assert_eq!(ends, vec![(expected_agent, TurnOutcome::Interrupted)]);
+    assert_eq!(ends, vec![(expected_turn, TurnOutcome::Interrupted)]);
 }
 
 #[tokio::test]

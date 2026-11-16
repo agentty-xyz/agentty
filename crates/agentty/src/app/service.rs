@@ -15,7 +15,7 @@ use tokio::task::JoinHandle;
 use tokio::time::{self, Instant};
 use tracing::{debug, warn};
 
-use crate::analytics::{Analytics, SessionType, TurnOutcome};
+use crate::analytics::{Analytics, SessionType, TurnOutcome, TurnSelection};
 use crate::app::AppEvent;
 use crate::app::prompt_intent::PromptImagePasteUpdate;
 use crate::app::session::SessionManager;
@@ -228,19 +228,19 @@ impl AppServices {
     }
 
     /// Reports an accepted turn without delaying foreground event reduction.
-    pub(crate) fn record_turn_start(&self, agent: AgentSelection) {
+    pub(crate) fn record_turn_start(&self, turn: TurnSelection) {
         if let Some(analytics) = self.analytics.clone() {
             self.track_telemetry_task(tokio::spawn(async move {
-                analytics.record_turn_start(agent).await;
+                analytics.record_turn_start(turn).await;
             }));
         }
     }
 
     /// Reports a settled turn without delaying foreground event reduction.
-    pub(crate) fn record_turn_end(&self, agent: AgentSelection, outcome: TurnOutcome) {
+    pub(crate) fn record_turn_end(&self, turn: TurnSelection, outcome: TurnOutcome) {
         if let Some(analytics) = self.analytics.clone() {
             self.track_telemetry_task(tokio::spawn(async move {
-                analytics.record_turn_end(agent, outcome).await;
+                analytics.record_turn_end(turn, outcome).await;
             }));
         }
     }
@@ -506,9 +506,9 @@ impl AppServices {
             let mut unapplied_image_paths = Vec::new();
             while let Ok(event) = event_rx.try_recv() {
                 match event {
-                    AppEvent::SessionTurnStarted { agent, .. } => self.record_turn_start(agent),
-                    AppEvent::SessionTurnEnded { agent, outcome } => {
-                        self.record_turn_end(agent, outcome);
+                    AppEvent::SessionTurnStarted { turn, .. } => self.record_turn_start(turn),
+                    AppEvent::SessionTurnEnded { outcome, turn } => {
+                        self.record_turn_end(turn, outcome);
                     }
                     AppEvent::PromptImagePasted {
                         update:
