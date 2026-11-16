@@ -21,79 +21,50 @@ recordings stale even when their captured terminal frames are unchanged.
 A published digest is multi-architecture only when it resolves to an image index or
 manifest list containing both `linux/amd64` and `linux/arm64`; the Containerfile's
 support for both architectures does not prove that the registry reference contains both.
-Pull the immutable digest with an explicit platform so a missing variant fails instead
-of silently running the wrong architecture through emulation.
+The hook below pulls the immutable digest with an explicit platform so a missing variant
+fails instead of silently running the wrong architecture through emulation, where Rust
+compiler probes can crash before the test starts.
 
 On macOS or Windows, initialize the Podman machine once with `podman machine init`, then
 start it with `podman machine start` before pulling or running the image. Linux hosts
 run Podman directly without a machine.
 
-Record or refresh feature artifacts with a writable workspace mount and `generate` mode,
-which re-records only missing or stale GIFs. Run the local container as the host user so
-Linux bind mounts remain writable. A host-owned cache directory provides writable home,
-Cargo, `prek`, and build locations while preserving them between runs:
+Record or refresh feature artifacts with the `e2e-container` hook in `generate` mode,
+which re-records only missing or stale GIFs:
 
 ```sh
-published_e2e_image=ghcr.io/agentty-xyz/agentty-e2e@sha256:a72f0ec28f53b2746b3b3cd224aaa1e511e555c6a1b5c2bbdfa21e79538e55f4
-e2e_cache_root="${XDG_CACHE_HOME:-${HOME}/.cache}/agentty-e2e"
-mkdir -p \
-  "${e2e_cache_root}/home" \
-  "${e2e_cache_root}/cargo" \
-  "${e2e_cache_root}/prek" \
-  "${e2e_cache_root}/target"
-
-case "$(uname -m)" in
-  x86_64 | amd64)
-    e2e_platform=linux/amd64
-    ;;
-  arm64 | aarch64)
-    e2e_platform=linux/arm64
-    ;;
-  *)
-    echo "unsupported recording architecture: $(uname -m)" >&2
-    exit 1
-    ;;
-esac
-
-e2e_image="${published_e2e_image}"
-podman pull --platform "${e2e_platform}" "${e2e_image}"
-
-podman run --rm \
-  --platform "${e2e_platform}" \
-  --user "$(id -u):$(id -g)" \
-  --mount type=bind,source="$PWD",target=/workspace \
-  --mount type=bind,source="${e2e_cache_root}",target=/cache \
-  --env HOME=/cache/home \
-  --env CARGO_HOME=/cache/cargo \
-  --env PREK_HOME=/cache/prek \
-  --env CARGO_TARGET_DIR=/cache/target \
-  --env CARGO_BUILD_JOBS=1 \
-  --env CARGO_PROFILE_DEV_DEBUG=0 \
-  --env TESTTY_GIF_MODE=generate \
-  "${e2e_image}" \
-  cargo nextest run --locked --profile ci -p agentty --test e2e test_{name}
-
-test -s docs/site/static/features/{name}.gif || {
-  echo "generated feature GIF is missing or empty: {name}.gif" >&2
-  exit 1
-}
+TESTTY_GIF_MODE=generate AGENTTY_TEST_FILTER='test(<test_function>)' \
+  prek run e2e-container --all-files --hook-stage manual
 ```
 
-Both host branches pull their native variant from the same published image index; do not
-run the other architecture through emulation because Rust compiler probes can crash
-before the test starts. Local recording uses the host user's UID so the bind-mounted
-workspace remains writable. The reusable CI workflow instead overrides the image's
-unprivileged default user with root so `actions/checkout` can populate the job's
-writable workspace; `check` mode verifies recording freshness without rewriting the
-feature artifacts. Because GitHub's mounted checkout retains a different owner, the
-workflow also registers the exact `GITHUB_WORKSPACE` path as a Git `safe.directory`
-before invoking `prek`. Always perform the nonempty-file check after recording: VHS can
-exit successfully after creating its screenshots even when GIF finalization has not
-produced a usable artifact.
+The hook runs the Agentty `e2e` target in the native variant of the image pinned by
+`.github/workflows/e2e.yml`. `TESTTY_GIF_MODE` defaults to `check`, and the optional
+`AGENTTY_TEST_FILTER` nextest filterset narrows the run. The container runs as the host
+user so the bind-mounted workspace remains writable. A host-owned cache in
+`${XDG_CACHE_HOME:-$HOME/.cache}/agentty-e2e` keeps its home, Cargo, and `prek`
+directories between runs, plus one `target-<hash>` build directory per checkout path:
+every checkout is mounted at `/workspace`, and Cargo's modification-time fingerprints
+could otherwise reuse another checkout's binaries. Delete the directories of removed
+checkouts to reclaim space. One build job without development debug symbols bounds
+linker memory in smaller Podman machines while retaining runtime debug assertions. The
+hook then fails if a GIF declared by a feature page is missing or empty: VHS can exit
+successfully after creating its screenshots even when GIF finalization has not produced
+a usable artifact.
 
-The local example uses one build job and disables development debug symbols to reduce
-linker memory use in smaller Podman machines. It retains the development profile's
-runtime debug assertions and the pinned recording stack.
+Every local run shares that cache and the Podman machine, so the hook holds an OS lock
+in the cache directory until its container exits. A concurrent run from any checkout or
+session reports that it is waiting and starts after the lock is released. The hook
+labels its containers, and after taking the lock it also waits, without stopping them,
+for labeled containers left running by a killed invocation. Run the hook as one
+foreground command, or as a harness background task and wait for its completion notice.
+Do not poll its output, `podman ps`, or processes, wrap it in wait loops, or start the
+container by hand.
+
+The reusable CI workflow instead overrides the image's unprivileged default user with
+root so `actions/checkout` can populate the job's writable workspace; `check` mode
+verifies recording freshness without rewriting the feature artifacts. Because GitHub's
+mounted checkout retains a different owner, the workflow also registers the exact
+`GITHUB_WORKSPACE` path as a Git `safe.directory` before invoking `prek`.
 
 Review the changed GIF and `.{name}.hash` sidecar, then refresh the PNG poster for every
 regenerated GIF using the poster procedure below before committing all three together.
@@ -165,9 +136,8 @@ agent shells can deny that network access and crash `vhs` before Chrome launches
 macOS, even an unsandboxed bare-host run launches a local Chromium process that can
 abort during AppKit registration and show a **Chromium quit unexpectedly** dialog. The
 bare-host prohibition also covers direct `vhs` commands and ignored tests that
-regenerate demo assets. Use the platform-explicit Podman workflow above for every
-intentional recording; do not suppress macOS crash reporting to hide a bare-host browser
-failure.
+regenerate demo assets. Use the `e2e-container` hook above for every intentional
+recording; do not suppress macOS crash reporting to hide a bare-host browser failure.
 
 When changing the image itself, follow
 `docs/contributing/feature-test/image-maintenance.md`.
