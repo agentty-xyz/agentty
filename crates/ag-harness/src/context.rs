@@ -2714,7 +2714,9 @@ impl RoundNote {
                 {
                     Self::add(&mut self.files_modified, arguments.path().to_string());
                 }
-                ToolCallArguments::Write(_) | ToolCallArguments::Malformed(_) => {}
+                ToolCallArguments::Write(_)
+                | ToolCallArguments::Malformed(_)
+                | ToolCallArguments::Unknown(_) => {}
             }
         }
     }

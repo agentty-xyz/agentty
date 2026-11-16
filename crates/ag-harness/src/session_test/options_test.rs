@@ -43,9 +43,7 @@ async fn snapshots_are_committed_before_execution_and_survive_failure_and_interr
         .fail_turn(
             "session",
             first.guard.owner().turn_position,
-            &TurnError::ToolDenied {
-                name: "read".to_string(),
-            },
+            &TurnError::RepositoryRequired,
         )
         .await
         .expect("failed turn");

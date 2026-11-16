@@ -328,7 +328,11 @@ fn malformed_or_unsupported_host_grants_are_rejected() {
         ("ok", Duration::ZERO, 1),
         ("ok", Duration::from_secs(3601), 1),
         ("ok", Duration::from_secs(1), 0),
-        ("ok", Duration::from_secs(1), 8193),
+        (
+            "ok",
+            Duration::from_secs(1),
+            BashConfig::MAX_CAPTURE_BYTES + 1,
+        ),
     ] {
         assert!(
             BashConfig::new(
@@ -352,4 +356,36 @@ fn malformed_or_unsupported_host_grants_are_rejected() {
         .err(),
         Some(BashError::InvalidPolicy)
     );
+}
+
+#[test]
+fn capture_budget_accepts_the_default_and_the_maximum() {
+    // Arrange
+    let budgets = [
+        BashConfig::DEFAULT_CAPTURE_BYTES,
+        BashConfig::MAX_CAPTURE_BYTES,
+    ];
+
+    // Act
+    let configurations = budgets.map(|budget| {
+        BashConfig::new(
+            "/launcher".into(),
+            "/bin/bash".into(),
+            "revision".into(),
+            Duration::from_secs(1),
+            budget,
+        )
+    });
+
+    // Assert
+    assert_eq!(BashConfig::DEFAULT_CAPTURE_BYTES, 8 * 1024);
+    for (configuration, budget) in configurations.into_iter().zip(budgets) {
+        assert_eq!(
+            configuration
+                .expect("budget within bounds")
+                .snapshot
+                .capture_bytes,
+            budget
+        );
+    }
 }

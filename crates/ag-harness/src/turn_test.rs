@@ -28,6 +28,21 @@ fn bash_activity_exposes_only_its_name_and_duration() {
 }
 
 #[test]
+fn unavailable_activity_names_the_called_tool_without_a_path() {
+    // Arrange
+    let activity = ToolActivity::Unavailable {
+        duration: Duration::ZERO,
+        tool: "read_file".to_string(),
+    };
+
+    // Act / Assert
+    assert_eq!(activity.name(), "read_file");
+    assert_eq!(activity.path(), "");
+    assert_eq!(activity.duration(), Duration::ZERO);
+    assert_eq!(activity.to_string(), "read_file (unavailable; <1 ms)");
+}
+
+#[test]
 fn outcome_exposes_output_and_report() {
     // Arrange
     let completion = CompletionMetadata::new(

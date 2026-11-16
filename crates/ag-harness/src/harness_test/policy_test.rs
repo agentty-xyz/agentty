@@ -19,8 +19,8 @@ use crate::context_budget_fixture::unbounded_context_budget;
 use crate::file_system::MockFileSystem;
 use crate::harness::Harness;
 use crate::lifecycle::{LifecycleEventKind, TurnErrorType};
-use crate::model::{ModelError, ModelErrorType, ModelMessage, ModelResponse};
-use crate::tool::ToolDefinition;
+use crate::model::{MockModel, ModelError, ModelErrorType, ModelMessage, ModelResponse};
+use crate::tool::{ToolCall, ToolDefinition};
 use crate::turn::TurnError;
 use crate::{Repository, Tool, ToolPolicy, TurnOptions};
 
@@ -215,67 +215,73 @@ async fn returns_terminal_write_boundary_failure() {
     assert_eq!(error.error_type(), TurnErrorType::Tool);
 }
 
-#[tokio::test]
-async fn rejects_disabled_write_call() {
-    // Arrange
+/// Answers the first request with `call` and later ones with output,
+/// returning the tool result content each later request carried.
+fn denied_call_model(call: ToolCall) -> (MockModel, Arc<Mutex<Vec<String>>>) {
+    let results = Arc::new(Mutex::new(Vec::new()));
+    let recorded = Arc::clone(&results);
     let mut model = model();
-    model.expect_complete().times(1).returning(|request| {
+    model.expect_complete().times(2).returning(move |request| {
         assert_eq!(request.tools(), []);
+        let result = request.messages().iter().find_map(|message| match message {
+            ModelMessage::ToolResult { content, .. } => Some(content.clone()),
+            _ => None,
+        });
+        let response = match result {
+            Some(content) => {
+                recorded.lock().expect("results lock").push(content);
+                ModelResponse::Output(json!({"summary": "done"}))
+            }
+            None => ModelResponse::ToolCall(call.clone()),
+        };
 
-        Ok(response_without_metadata(ModelResponse::ToolCall(
-            write_call(
-                "call_denied",
-                "--- /dev/null\n+++ b/src/lib.rs\n@@ -0,0 +1 @@\n+new\n",
-            ),
-        )))
+        Ok(response_without_metadata(response))
     });
-    let mut file_system = MockFileSystem::new();
-    file_system.expect_canonicalize().times(0);
-    file_system.expect_open_beneath().times(0);
-    file_system.expect_replace_beneath().times(0);
-    let harness = Harness::new(model, unbounded_context_budget());
 
-    // Act
-    let error = harness
-        .run_once("update", object_schema())
-        .await
-        .expect_err("denied write should fail");
-
-    // Assert
-    assert!(matches!(
-        error,
-        TurnError::ToolDenied { name } if name == "write"
-    ));
+    (model, results)
 }
 
 #[tokio::test]
-async fn rejects_disabled_read_call() {
+async fn answers_a_disabled_write_call_without_running_it() {
     // Arrange
-    let mut model = model();
-    model.expect_complete().times(1).returning(|request| {
-        assert_eq!(request.tools(), []);
+    let (model, results) = denied_call_model(write_call(
+        "call_denied",
+        "--- /dev/null\n+++ b/src/lib.rs\n@@ -0,0 +1 @@\n+new\n",
+    ));
+    let harness = Harness::new(model, unbounded_context_budget());
 
-        Ok(response_without_metadata(ModelResponse::ToolCall(
-            read_call("call_denied"),
-        )))
-    });
-    let mut file_system = MockFileSystem::new();
-    file_system.expect_canonicalize().times(0);
-    file_system.expect_open_beneath().times(0);
+    // Act
+    harness
+        .run_once("update", object_schema())
+        .await
+        .expect("the turn continues after the denied write");
+
+    // Assert
+    let results = results.lock().expect("results lock");
+    let result: Value = serde_json::from_str(&results[0]).expect("JSON result");
+    assert_eq!(
+        result["error"],
+        "tool `write` is not available in this turn"
+    );
+}
+
+#[tokio::test]
+async fn answers_a_disabled_read_call_without_running_it() {
+    // Arrange
+    let (model, results) = denied_call_model(read_call("call_denied"));
     let harness = Harness::new(model, unbounded_context_budget()).with_lifecycle_observer(|_| {});
 
     // Act
-    let error = harness
+    let outcome = harness
         .run_once("inspect", object_schema())
         .await
-        .expect_err("denied tool should fail");
+        .expect("the turn continues after the denied read");
 
     // Assert
-    assert!(matches!(
-        &error,
-        TurnError::ToolDenied { name } if name == "read"
-    ));
-    assert_eq!(error.error_type(), TurnErrorType::ToolDenied);
+    let results = results.lock().expect("results lock");
+    let result: Value = serde_json::from_str(&results[0]).expect("JSON result");
+    assert_eq!(result["error"], "tool `read` is not available in this turn");
+    assert_eq!(outcome.report().tool_calls()[0].name(), "read");
 }
 
 #[tokio::test]

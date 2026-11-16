@@ -662,8 +662,8 @@ async fn reports_incomplete_refused_and_empty_responses() -> Result<(), Box<dyn 
 #[tokio::test]
 async fn rejects_unusable_function_calls() -> Result<(), Box<dyn std::error::Error>> {
     // Arrange
-    let mut unadvertised = function_call_item("call_x", "Cargo.toml");
-    unadvertised["name"] = json!("delete");
+    let mut invalid_name = function_call_item("call_x", "Cargo.toml");
+    invalid_name["name"] = json!("files.delete");
     let mut missing_call_id = function_call_item("call_y", "Cargo.toml");
     missing_call_id
         .as_object_mut()
@@ -671,9 +671,9 @@ async fn rejects_unusable_function_calls() -> Result<(), Box<dyn std::error::Err
         .remove("call_id");
     let cases = [
         (
-            vec![item_done(unadvertised)],
+            vec![item_done(invalid_name)],
             ErrorClass::InvalidToolCall,
-            "unsupported tool: delete",
+            "unsupported tool: files.delete",
         ),
         (
             vec![item_done(missing_call_id)],

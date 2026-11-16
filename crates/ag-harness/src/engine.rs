@@ -219,7 +219,8 @@ impl Engine<'_> {
                     &mut state.rounds,
                 )
                 .await?;
-            state.repetition_nudges += self.act_on_repetition(repetition, &mut request, turn_id)?;
+            state.repetition_nudges +=
+                self.act_on_repetition(repetition, &state.rounds.tools, &mut request, turn_id)?;
         }
     }
 
@@ -305,15 +306,15 @@ impl Engine<'_> {
     /// together to the share one round may take: the first results that fit
     /// are kept whole, and every later `read` is answered with the exact call
     /// that fetches it in a later response (see [`RoundShare`]).
-    async fn execute_tool_calls(
+    async fn execute_tool_calls<'a>(
         &self,
-        calls: &[ToolCall],
+        calls: &'a [ToolCall],
         batched: bool,
         turn_id: Option<LifecycleId>,
         request: &mut ModelRequest,
         context_fit: &context::ContextFit,
         rounds: &mut ToolRounds,
-    ) -> Result<Repetition, TurnError> {
+    ) -> Result<Repetition<'a>, TurnError> {
         let call_message = match (batched, calls) {
             (false, [call]) => request.record_tool_call(call.clone()),
             _ => request.record_tool_calls(calls.to_vec()),
@@ -339,7 +340,8 @@ impl Engine<'_> {
                     share.result_fits(call, content)
                 })
                 .await?;
-            if !share.keeps(call, &result, ran_read)
+            let unavailable = matches!(activity, ToolActivity::Unavailable { .. });
+            if !share.keeps(call, &result, ran_read && !unavailable)
                 && let Some(arguments) = call.read_arguments()
             {
                 result = context::deferred_read_result(arguments);
@@ -366,9 +368,14 @@ impl Engine<'_> {
                 call,
                 result_index,
                 (result_bytes, digest),
-                repeated.is_some() || deferred,
+                repeated.is_some() || deferred || unavailable,
             );
-            repetition = repetition.max(rounds.repeated_calls.record(call, digest));
+            let counted = if unavailable {
+                rounds.repeated_calls.record_unavailable(call, digest)
+            } else {
+                rounds.repeated_calls.record(call, digest)
+            };
+            repetition = repetition.max(counted);
             rounds.activity.push(activity);
         }
 
@@ -378,10 +385,12 @@ impl Engine<'_> {
     /// Fails the turn when the latest response's calls reached
     /// [`repetition::REPETITION_STOP_AT`] identical calls, or appends a
     /// request-only nudge, never journaled, when they first reached
-    /// [`repetition::REPETITION_NUDGE_AT`]; returns the nudges added.
+    /// [`repetition::REPETITION_NUDGE_AT`]; returns the nudges added. The
+    /// nudge for a tool `tools` does not offer says it is unavailable.
     fn act_on_repetition(
         &self,
-        repetition: Repetition,
+        repetition: Repetition<'_>,
+        tools: &Tools,
         request: &mut ModelRequest,
         turn_id: Option<LifecycleId>,
     ) -> Result<usize, TurnError> {
@@ -398,7 +407,11 @@ impl Engine<'_> {
                 tool: tool.to_string(),
             });
         }
-        request.record_feedback(repetition::repetition_feedback(tool, repeats));
+        request.record_feedback(if tools.offers(tool) {
+            repetition::repetition_feedback(tool, repeats)
+        } else {
+            repetition::unavailable_repetition_feedback(tool, repeats)
+        });
 
         Ok(1)
     }
@@ -700,15 +713,20 @@ impl Engine<'_> {
             ToolCallArguments::Malformed(arguments) => tools
                 .allows(arguments.tool())
                 .then_some(ToolExecution::Malformed(arguments, self.options)),
+            ToolCallArguments::Unknown(_) => None,
         };
         let Some(execution) = execution else {
             if let Some(tool_lifecycle) = tool_lifecycle {
                 tool_lifecycle.denied();
             }
 
-            return Err(TurnError::ToolDenied {
-                name: call.name().to_string(),
-            });
+            return Ok((
+                unavailable_tool_result(call.name(), self.options),
+                ToolActivity::Unavailable {
+                    duration: Duration::ZERO,
+                    tool: sanitize_report_text(call.name()),
+                },
+            ));
         };
         if let Some(tool_lifecycle) = tool_lifecycle.as_mut() {
             tool_lifecycle.started();
@@ -972,8 +990,9 @@ impl RepeatedReads {
     /// `result_digest` is the request message at `result_index`: an
     /// executed `read` as the latest
     /// for its arguments, and any `write` or `bash` call as a possible
-    /// change. A `read` `answered` without its own content, as a repeat or
-    /// deferred, and a malformed call change nothing.
+    /// change. A call `answered` without running, such as a repeated or
+    /// deferred `read` or a call to an unavailable tool, and a malformed call
+    /// change nothing.
     fn record(
         &mut self,
         call: &ToolCall,
@@ -982,7 +1001,7 @@ impl RepeatedReads {
         answered: bool,
     ) {
         match Self::key(call) {
-            Some(_) if answered => {}
+            _ if answered => {}
             Some(key) => {
                 self.executed.insert(
                     key,
@@ -1035,6 +1054,13 @@ impl Tools {
             Tool::Read => self.read.is_some(),
             Tool::Write => self.write.is_some(),
         }
+    }
+
+    /// Whether `name` is a built-in tool the turn's policy enabled.
+    fn offers(&self, name: &str) -> bool {
+        [Tool::Bash, Tool::Read, Tool::Write]
+            .into_iter()
+            .any(|tool| tool.name() == name && self.allows(tool))
     }
 }
 
@@ -1381,6 +1407,32 @@ fn output_feedback(error: &ModelError) -> String {
          JSON value that matches the output schema, with no prose or Markdown around it.",
         schema_contract::bounded_diagnostic(error)
     )
+}
+
+/// Renders the error result that answers a call to `name`, a tool the turn
+/// does not make available, listing the tools it does.
+fn unavailable_tool_result(name: &str, options: &TurnOptions) -> String {
+    let available = context::advertised_tools(options)
+        .iter()
+        .map(|tool| format!("`{}`", tool.name()))
+        .collect::<Vec<_>>();
+    let hint = if available.is_empty() {
+        "This call did not run. No tools are available in this turn; give your final response."
+            .to_string()
+    } else {
+        format!(
+            "This call did not run. Call only the available tools ({}) with their documented \
+             arguments, or give your final response.",
+            available.join(", ")
+        )
+    };
+
+    json!({
+        "error": format!("tool `{name}` is not available in this turn"),
+        "hint": hint,
+        "status": "rejected",
+    })
+    .to_string()
 }
 
 /// Renders the error result that answers a call with malformed arguments,

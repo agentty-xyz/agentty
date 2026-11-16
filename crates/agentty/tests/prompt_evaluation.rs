@@ -7,8 +7,9 @@
 //! errors, and timeouts fail the run; none is silently counted as a pass.
 //! Ordinary CI runs deterministic graders and a worker/runtime transport test
 //! without live providers. Set `AGENTTY_EVAL_PROVIDER=harness` to evaluate the
-//! Agentty-owned `bash` description; the deterministic `bash` test replays it
-//! through the in-process harness against a scripted provider.
+//! Agentty-owned `bash` description and unavailable-tool result; the
+//! deterministic `bash` and unavailable-tool tests replay them through the
+//! in-process harness against a scripted provider.
 
 use std::collections::BTreeMap;
 use std::io::{self, Write as _};
@@ -813,8 +814,31 @@ fn cases() -> Vec<Case> {
     cases.extend(description_cases());
     cases.extend(graph_cases());
     cases.extend(bash_cases());
+    cases.extend(unavailable_tool_cases());
 
     cases
+}
+
+/// Phrase the Harness result for a call to an unavailable tool carries.
+const UNAVAILABLE_TOOL_PHRASE: &str = "is not available in this turn";
+
+/// Read-only cases for the result that answers a call to a tool the turn
+/// does not offer. The case checks that the model recovers within the turn,
+/// reporting the refusal instead of claiming the write happened.
+fn unavailable_tool_cases() -> Vec<Case> {
+    vec![Case {
+        captured_diff: None,
+        forbidden: vec!["i created", "file was created", "has been created"],
+        name: "unavailable-tool-result-is-recovered",
+        permission_mode: PermissionMode::ReadOnly,
+        prompt: "Call the write tool to create notes.txt containing `eval-ok`. If that tool is \
+                 unavailable, do not create the file; put `write-unavailable` in answer and name \
+                 the tools you can use instead."
+            .into(),
+        request_kind: AgentRequestKind::UtilityPrompt,
+        required: vec!["write-unavailable"],
+        review_expectations: Vec::new(),
+    }]
 }
 
 /// Phrase every Harness `bash` description without isolation carries.
@@ -2051,13 +2075,10 @@ async fn scripted_bash_provider() -> MockServer {
     server
 }
 
-#[tokio::test]
-async fn bash_evaluation_reaches_the_harness_with_the_unsandboxed_description() {
-    // Arrange
-    let server = scripted_bash_provider().await;
-    let data_root = tempfile::tempdir().expect("harness data root");
-    let worktree = tempfile::tempdir().expect("worktree");
-    let environment = BTreeMap::from([
+/// Returns the native harness environment for a scripted provider at
+/// `server`, with no local model server and the host `PATH` for Git.
+fn scripted_harness_environment(server: &MockServer) -> BTreeMap<String, String> {
+    BTreeMap::from([
         ("HOME".to_string(), "/tmp".to_string()),
         ("MODEL_API_BASE_URL".to_string(), server.uri()),
         ("MODEL_API_KEY".to_string(), "test-key".to_string()),
@@ -2069,7 +2090,16 @@ async fn bash_evaluation_reaches_the_harness_with_the_unsandboxed_description() 
             "PATH".to_string(),
             std::env::var("PATH").unwrap_or_default(),
         ),
-    ]);
+    ])
+}
+
+#[tokio::test]
+async fn bash_evaluation_reaches_the_harness_with_the_unsandboxed_description() {
+    // Arrange
+    let server = scripted_bash_provider().await;
+    let data_root = tempfile::tempdir().expect("harness data root");
+    let worktree = tempfile::tempdir().expect("worktree");
+    let environment = scripted_harness_environment(&server);
     let database = Database::open_in_memory().await.expect("database");
     let worker = RunWorker::new(
         &RuntimeConfig::default()
@@ -2102,6 +2132,104 @@ async fn bash_evaluation_reaches_the_harness_with_the_unsandboxed_description() 
         .find(|body| body.contains(r#""tool_call_id":"call-bash""#))
         .expect("the bash result reaches the model");
     assert!(bash_result.contains("bash-ok"));
+}
+
+#[test]
+fn unavailable_tool_grader_rejects_claimed_writes_and_missing_refusals() {
+    // Arrange
+    let case = unavailable_tool_cases().remove(0);
+    let recovered = "write-unavailable: only the read tool is available in this session.";
+    let claimed = "write-unavailable, but I created notes.txt anyway.";
+    let silent = "Only the read tool is available.";
+
+    // Act
+    let grades =
+        [recovered, claimed, silent].map(|answer| case.grade(&AgentResponse::plain(answer)));
+
+    // Assert
+    assert_eq!(grades[0]["success"], true);
+    assert_eq!(grades[1]["success"], false);
+    assert_eq!(grades[1]["forbidden_output_matches"], 1);
+    assert_eq!(grades[2]["success"], false);
+    assert_eq!(grades[2]["missing_expectations"], 1);
+}
+
+/// Scripts a Chat Completions provider for the unavailable-tool case: it
+/// calls `write`, which a read-only turn does not offer, then answers only
+/// once the harness result naming the tool as unavailable arrives.
+async fn scripted_unavailable_tool_provider() -> MockServer {
+    let server = MockServer::start().await;
+    let completion = |message: Value| {
+        ResponseTemplate::new(200).set_body_json(json!({
+            "choices": [message],
+            "usage": {"prompt_tokens": 30, "completion_tokens": 7, "total_tokens": 37}
+        }))
+    };
+    Mock::given(method("POST"))
+        .and(path("/chat/completions"))
+        .and(body_string_contains(UNAVAILABLE_TOOL_PHRASE))
+        .respond_with(completion(json!({
+            "finish_reason": "stop",
+            "message": {"content": json!({"answer": "write-unavailable: only the read tool is \
+                available in this session."}).to_string()}
+        })))
+        .with_priority(1)
+        .mount(&server)
+        .await;
+    Mock::given(method("POST"))
+        .and(path("/chat/completions"))
+        .and(body_string_contains("Call the write tool"))
+        .respond_with(completion(json!({
+            "finish_reason": "tool_calls",
+            "message": {"content": null, "tool_calls": [{
+                "id": "call-write",
+                "type": "function",
+                "function": {"name": "write", "arguments": json!({
+                    "path": "notes.txt",
+                    "patch": "--- /dev/null\n+++ b/notes.txt\n@@ -0,0 +1 @@\n+eval-ok\n"
+                }).to_string()}
+            }]}
+        })))
+        .with_priority(2)
+        .mount(&server)
+        .await;
+
+    server
+}
+
+#[tokio::test]
+async fn unavailable_tool_evaluation_recovers_through_the_harness() {
+    // Arrange
+    let server = scripted_unavailable_tool_provider().await;
+    let data_root = tempfile::tempdir().expect("harness data root");
+    let worktree = tempfile::tempdir().expect("worktree");
+    let environment = scripted_harness_environment(&server);
+    let database = Database::open_in_memory().await.expect("database");
+    let worker = RunWorker::new(
+        &RuntimeConfig::default()
+            .with_native_harness_environment(data_root.path().to_path_buf(), environment),
+        database.runs(),
+        Arc::new(HeartbeatClock),
+        NonZeroUsize::MIN,
+    );
+    let case = unavailable_tool_cases().remove(0);
+
+    // Act
+    let submission = worker
+        .submit(request(
+            worktree.path(),
+            &case,
+            "harness",
+            "muse-spark-1.3",
+            ReasoningLevel::Low,
+        ))
+        .await;
+    worker.shutdown().await;
+
+    // Assert
+    let submission = submission.expect("unavailable-tool evaluation submission");
+    assert_eq!(case.grade(&submission.response)["success"], true);
+    assert!(!worktree.path().join("notes.txt").exists());
 }
 
 #[tokio::test]

@@ -88,7 +88,7 @@ fn record_lifecycle_fixtures(lifecycle: &LifecycleEmitter) {
         )
         .expect("observer should request a denied tool")
         .denied();
-    denied_turn.failed(TurnErrorType::ToolDenied);
+    denied_turn.failed(TurnErrorType::RepeatedToolCalls);
 
     let failed_turn = lifecycle
         .start_turn()
@@ -204,7 +204,7 @@ fn assert_agent_duration(metrics: &[&Metric]) {
                     vec![],
                     vec![("error.type", "cancelled".to_string())],
                     vec![("error.type", "context_budget_exceeded".to_string())],
-                    vec![("error.type", "tool_denied".to_string())],
+                    vec![("error.type", "repeated_tool_calls".to_string())],
                     vec![("error.type", "tool_execution_error".to_string())],
                 ]
             );

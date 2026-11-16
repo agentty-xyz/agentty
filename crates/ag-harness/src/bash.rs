@@ -51,11 +51,20 @@ pub struct BashConfig {
 }
 
 impl BashConfig {
+    /// Suggested `capture_bytes`: the combined stdout and stderr bytes one
+    /// command result keeps, split between the start and end of each stream.
+    pub const DEFAULT_CAPTURE_BYTES: usize = 8 * 1024;
+    /// Largest accepted `capture_bytes`, matching the bound on one `read`
+    /// result so a single command cannot dominate the context window.
+    pub const MAX_CAPTURE_BYTES: usize = 64 * 1024;
+
     /// Configures the default native sandbox executor with trusted launcher
     /// and Bash executables and a nonsecret policy revision. Change the
     /// revision whenever executable contents or granted environment values
     /// change. Paths must be absolute and outside the workspace; launch
-    /// performs filesystem validation.
+    /// performs filesystem validation. `capture_bytes` bounds the output
+    /// each command returns, from 1 to [`Self::MAX_CAPTURE_BYTES`]; use
+    /// [`Self::DEFAULT_CAPTURE_BYTES`] unless the host needs another bound.
     ///
     /// # Errors
     /// Rejects invalid identities, paths, deadlines, and capture bounds.
@@ -78,7 +87,8 @@ impl BashConfig {
     /// never falls back to another executor or consults the environment. The
     /// executor identity is recorded in durable policy snapshots and
     /// host-request fingerprints; hosts must supply a new identity or
-    /// revision when executor behavior changes.
+    /// revision when executor behavior changes. `capture_bytes` is bounded as
+    /// for [`Self::new`].
     ///
     /// # Errors
     /// Rejects invalid executor identities, paths, deadlines, and capture
@@ -123,7 +133,7 @@ impl BashConfig {
             || timeout.is_zero()
             || timeout > Duration::from_secs(3600)
             || capture_bytes == 0
-            || capture_bytes > 8192
+            || capture_bytes > Self::MAX_CAPTURE_BYTES
         {
             return Err(BashError::InvalidPolicy);
         }

@@ -927,15 +927,16 @@ fn assert_agent_metric_contract(
         inference_calls.data_points[0].sum,
         Some(f64::from(expected_model_calls))
     );
-    // One turn re-requests its invalid output twice, so it makes three
-    // inference calls; every other turn makes one or two.
-    let two_call_turns = expected_model_calls - expected_turns - 2;
+    // One turn re-requests its invalid output twice and one answers a denied
+    // write and a rejected read, so each makes three inference calls; every
+    // other turn makes one or two.
+    let two_call_turns = expected_model_calls - expected_turns - 4;
     assert_eq!(
         inference_calls.data_points[0].bucket_counts,
         [
-            u64::from(expected_turns - two_call_turns - 1),
+            u64::from(expected_turns - two_call_turns - 2),
             u64::from(two_call_turns),
-            1,
+            2,
             0,
             0,
             0,
@@ -955,9 +956,10 @@ fn assert_agent_metric_contract(
     assert_eq!(tool_calls.data_points.len(), 1);
     assert_eq!(tool_calls.data_points[0].count, u64::from(expected_turns));
     assert_eq!(tool_calls.data_points[0].sum, Some(3.0));
+    // The turn that answers a denied write also runs a read.
     assert_eq!(
         tool_calls.data_points[0].bucket_counts,
-        [u64::from(expected_turns), 0, 0, 0, 0, 0, 0, 0, 0]
+        [u64::from(expected_turns - 1), 1, 0, 0, 0, 0, 0, 0, 0]
     );
 }
 
@@ -1098,15 +1100,8 @@ fn expected_initial_trace_signatures() -> BTreeSet<TurnTraceSignature<'static>> 
             error_type: Some("invalid_output"),
         },
         TurnTraceSignature {
-            children: vec![expected_model_child(
-                None,
-                Some("tool_calls"),
-                Some("response-5"),
-            )],
-            error_type: Some("tool_denied"),
-        },
-        TurnTraceSignature {
             children: vec![
+                expected_model_child(None, Some("tool_calls"), Some("response-5")),
                 expected_model_child(None, Some("tool_calls"), Some("response-6")),
                 expected_model_child(None, Some("stop"), Some("response-7")),
                 expected_tool_child(Some("tool_execution_error"), None),
@@ -1787,16 +1782,11 @@ async fn exercise_lifecycle_outcomes(harness: &Arc<Harness>, pending_started: &N
         .await
         .expect_err("invalid output should fail the turn");
 
-    let denial = harness
+    // The denied write is answered as unavailable, and the model continues.
+    let recovered = harness
         .run_once("denied tool", lifecycle_schema())
         .await
-        .expect_err("denied tool should fail the turn");
-    assert_eq!(denial.to_string(), "tool `write` is denied by policy");
-
-    let recovered = harness
-        .run_once("failed tool", lifecycle_schema())
-        .await
-        .expect("the model should recover from the rejected read path");
+        .expect("the model should recover from the denied write and rejected read");
     assert_eq!(
         recovered.output(),
         &json!({"summary": "recovered-response"})
@@ -1827,7 +1817,7 @@ fn signal_requests(requests: &[OtlpRequest]) -> (Vec<&OtlpRequest>, Vec<&OtlpReq
 }
 
 fn assert_initial_lifecycle_metrics(request: &OtlpRequest) {
-    assert_lifecycle_metric_request(request, 10, 8, 6);
+    assert_lifecycle_metric_request(request, 10, 8, 5);
     let OtlpPayload::Metrics(payload) = &request.payload else {
         unreachable!("initial lifecycle metrics should be present");
     };
@@ -1853,7 +1843,6 @@ fn assert_initial_lifecycle_metrics(request: &OtlpRequest) {
             (None, 2),
             (Some("cancelled"), 1),
             (Some("invalid_output"), 1),
-            (Some("tool_denied"), 1),
             (Some("provider_error"), 1),
         ]
         .into_iter()
@@ -1862,8 +1851,8 @@ fn assert_initial_lifecycle_metrics(request: &OtlpRequest) {
 }
 
 fn assert_initial_lifecycle_traces(request: &OtlpRequest) {
-    let spans = assert_lifecycle_trace_request(request, 6, 10);
-    assert_eq!(spans.len(), 18);
+    let spans = assert_lifecycle_trace_request(request, 5, 10);
+    assert_eq!(spans.len(), 17);
     assert_eq!(
         turn_trace_signatures(&spans),
         expected_initial_trace_signatures()
@@ -1879,7 +1868,6 @@ fn assert_initial_lifecycle_traces(request: &OtlpRequest) {
             (None, 2),
             (Some("cancelled"), 1),
             (Some("invalid_output"), 1),
-            (Some("tool_denied"), 1),
             (Some("provider_error"), 1),
         ]
         .into_iter()
@@ -2062,7 +2050,7 @@ async fn run_otlp_lifecycle_contract_fixture() {
     let (metric_requests, trace_requests) = signal_requests(&shutdown_requests);
     assert_eq!(metric_requests.len(), 2);
     assert_eq!(trace_requests.len(), 2);
-    assert_lifecycle_metric_request(metric_requests[1], 11, 9, 7);
+    assert_lifecycle_metric_request(metric_requests[1], 11, 9, 6);
     let shutdown_spans = assert_lifecycle_trace_request(trace_requests[1], 1, 1);
     assert_eq!(shutdown_spans.len(), 2);
     for request in &shutdown_requests {

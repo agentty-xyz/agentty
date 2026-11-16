@@ -230,6 +230,39 @@ async fn returns_generic_tool_calls_for_caller_execution() -> Result<(), Box<dyn
 }
 
 #[tokio::test]
+async fn returns_unadvertised_tool_calls_for_the_caller_to_answer()
+-> Result<(), Box<dyn std::error::Error>> {
+    // Arrange
+    let server = MockServer::start().await;
+    Mock::given(method("POST"))
+        .and(path("/v1/chat/completions"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(json!({
+            "choices": [{
+                "finish_reason": "tool_calls",
+                "message": {"content": null, "tool_calls": [tool_call(
+                    "function",
+                    &json!({"name": "delete", "arguments": "{\"id\":7}"}),
+                )]}
+            }]
+        })))
+        .expect(1)
+        .mount(&server)
+        .await;
+
+    // Act
+    let result = router(Provider::Muse, &server)?
+        .execute(lookup_request()?)
+        .await
+        .expect("unadvertised tool call must decode");
+
+    // Assert
+    assert!(matches!(result, Completion::ToolCalls { calls, .. }
+        if calls.len() == 1 && calls[0].name() == "delete"));
+
+    Ok(())
+}
+
+#[tokio::test]
 async fn returns_malformed_tool_calls_and_replays_them_as_json_objects()
 -> Result<(), Box<dyn std::error::Error>> {
     // Arrange
@@ -930,9 +963,9 @@ async fn rejects_terminal_incomplete_and_unsupported_tool_call_completions()
             "tool_calls",
             json!({"content": null, "tool_calls": [tool_call(
                 "function",
-                &json!({"name": "unadvertised", "arguments": "{}"}),
+                &json!({"name": "not a name", "arguments": "{}"}),
             )]}),
-            |error| matches!(error, ModelError::UnsupportedToolName { name } if name == "unadvertised"),
+            |error| matches!(error, ModelError::UnsupportedToolName { name } if name == "not a name"),
         ),
     ];
 

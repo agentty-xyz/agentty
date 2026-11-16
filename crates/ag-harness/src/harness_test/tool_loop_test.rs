@@ -583,24 +583,138 @@ async fn malformed_call_results_mark_required_fields() {
 }
 
 #[tokio::test]
-async fn malformed_calls_to_disallowed_tools_are_denied() {
+async fn denied_unknown_and_malformed_denied_calls_get_unavailable_results() {
     // Arrange
-    let (model, _requests) = scripted(vec![Ok(ModelResponse::ToolCall(malformed(
-        "bad_bash", "bash", "{",
-    )))]);
+    let (model, requests) = scripted(vec![
+        Ok(ModelResponse::ToolCalls(vec![
+            malformed("denied_bash", "bash", r#"{"command":"ls"}"#),
+            malformed("bad_bash", "bash", "{"),
+            malformed("invented", "read_file", r#"{"file":"notes.txt"}"#),
+        ])),
+        Ok(output()),
+    ]);
+    let events = Arc::new(Mutex::new(Vec::new()));
+    let recorded = Arc::clone(&events);
     let harness = Harness::new(model, unbounded_context_budget())
         .repository(Repository::fixture("repo"))
         .allow(Tool::Read)
-        .file_system(MockFileSystem::new());
+        .file_system(MockFileSystem::new())
+        .with_lifecycle_observer(move |event: LifecycleEvent| {
+            recorded.lock().expect("events lock").push(event);
+        });
+
+    // Act
+    let outcome = harness
+        .run_once("run something", object_schema())
+        .await
+        .expect("the turn continues after unavailable calls");
+
+    // Assert
+    let requests = requests.lock().expect("requests lock");
+    for (call_id, tool) in [
+        ("denied_bash", "bash"),
+        ("bad_bash", "bash"),
+        ("invented", "read_file"),
+    ] {
+        let result = result_for(&requests[1], call_id);
+        assert_eq!(result["status"], "rejected");
+        assert_eq!(
+            result["error"],
+            format!("tool `{tool}` is not available in this turn")
+        );
+        assert!(
+            result["hint"]
+                .as_str()
+                .is_some_and(|hint| hint.contains("available tools (`read`)"))
+        );
+    }
+    let activity = outcome.report().tool_calls();
+    assert_eq!(
+        activity.iter().map(ToolActivity::name).collect::<Vec<_>>(),
+        ["bash", "bash", "read_file"]
+    );
+    assert!(
+        activity
+            .iter()
+            .all(|activity| matches!(activity, ToolActivity::Unavailable { .. }))
+    );
+    let denied = events
+        .lock()
+        .expect("events lock")
+        .iter()
+        .filter(|event| matches!(event.kind(), LifecycleEventKind::ToolDenied { .. }))
+        .count();
+    assert_eq!(denied, 3);
+}
+
+#[tokio::test]
+async fn an_unavailable_call_without_any_enabled_tool_asks_for_the_final_response() {
+    // Arrange
+    let (model, requests) = scripted(vec![
+        Ok(ModelResponse::ToolCall(malformed(
+            "invented",
+            "search",
+            r#"{"query":"x"}"#,
+        ))),
+        Ok(output()),
+    ]);
+    let harness = Harness::new(model, unbounded_context_budget());
+
+    // Act
+    harness
+        .run_once("answer", object_schema())
+        .await
+        .expect("the turn continues after an unavailable call");
+
+    // Assert
+    let requests = requests.lock().expect("requests lock");
+    let result = result_for(&requests[1], "invented");
+    assert_eq!(
+        result["hint"],
+        "This call did not run. No tools are available in this turn; give your final response."
+    );
+}
+
+#[tokio::test]
+async fn repeated_unavailable_calls_are_nudged_then_stop_the_turn() {
+    // Arrange
+    let (model, requests) = scripted(
+        (0..5)
+            .map(|index| {
+                Ok(ModelResponse::ToolCall(malformed(
+                    &format!("invented_{index}"),
+                    "read_file",
+                    &json!({"file": format!("file-{index}.txt")}).to_string(),
+                )))
+            })
+            .collect(),
+    );
+    let events = Arc::new(Mutex::new(Vec::new()));
+    let harness = repetition_harness(model, &events);
 
     // Act
     let error = harness
-        .run_once("run something", object_schema())
+        .run_once("read the notes", object_schema())
         .await
-        .expect_err("bash is not allowed");
+        .expect_err("the fifth unavailable call fails the turn");
 
     // Assert
-    assert!(matches!(error, crate::TurnError::ToolDenied { ref name } if name == "bash"));
+    assert!(matches!(
+        &error,
+        crate::TurnError::RepeatedToolCalls { repeats: 5, tool } if tool == "read_file"
+    ));
+    let requests = requests.lock().expect("requests lock");
+    let nudges = harness_feedback(&requests[3]);
+    assert_eq!(nudges.len(), 1);
+    assert!(nudges[0].contains("`read_file` 3 times"));
+    assert!(nudges[0].contains("not available in this turn"));
+    assert_eq!(
+        repetition_events(&events),
+        [
+            (3, false, "read_file".to_string()),
+            (5, true, "read_file".to_string())
+        ]
+    );
 }
 
 /// Responds with the same `read` call `times` times, each with its own call

@@ -193,10 +193,6 @@ impl ModelRequest {
     pub fn model_reasoning_effort(&self) -> Option<ReasoningEffort> {
         self.options.reasoning_effort
     }
-
-    pub(crate) fn advertises_tool(&self, name: &str) -> bool {
-        self.tools().iter().any(|tool| tool.name() == name)
-    }
 }
 
 /// Provider response metadata.

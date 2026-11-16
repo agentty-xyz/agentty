@@ -169,7 +169,9 @@ pub enum LifecycleEventKind {
         /// Owning turn.
         turn_id: LifecycleId,
     },
-    /// One requested tool was denied by policy.
+    /// One requested tool was unavailable to the turn, because its policy
+    /// denies it or no such tool exists; the model receives an error result
+    /// and the turn continues.
     ToolDenied {
         /// Elapsed time before denial.
         duration: Duration,
@@ -190,14 +192,14 @@ pub enum LifecycleEventKind {
         turn_id: LifecycleId,
     },
     /// The model repeated one tool call, with the same arguments and the
-    /// same result, often enough that the turn nudged it to stop or, when
-    /// `stopped`, failed.
+    /// same result, or called one unavailable tool with any arguments, often
+    /// enough that the turn nudged it to stop or, when `stopped`, failed.
     ToolCallsRepeated {
         /// Identical calls within the recent-call window.
         repeats: usize,
         /// Whether the repetition failed the turn rather than nudging it.
         stopped: bool,
-        /// Bounded built-in tool name.
+        /// Bounded name of the tool the model called.
         tool_name: String,
         /// Owning turn.
         turn_id: LifecycleId,
@@ -318,8 +320,6 @@ pub enum TurnErrorType {
     Model(ModelErrorType),
     /// A repository-scoped tool failed.
     Tool,
-    /// A requested tool was denied by policy.
-    ToolDenied,
     /// Mandatory request content exceeded the model's context budget.
     ContextBudget,
     /// The model kept repeating an identical tool call after a nudge.
@@ -339,7 +339,6 @@ impl TurnErrorType {
             Self::Cancelled => crate::telemetry::ERROR_CANCELLED,
             Self::Model(error_type) => error_type.as_str(),
             Self::Tool => crate::telemetry::ERROR_TOOL_EXECUTION,
-            Self::ToolDenied => crate::telemetry::ERROR_TOOL_DENIED,
             Self::ContextBudget => crate::telemetry::ERROR_CONTEXT_BUDGET,
             Self::RepeatedToolCalls => crate::telemetry::ERROR_REPEATED_TOOL_CALLS,
             Self::RepositoryRequired => crate::telemetry::ERROR_REPOSITORY_REQUIRED,

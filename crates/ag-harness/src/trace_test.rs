@@ -232,7 +232,7 @@ fn project_failures(emitter: &LifecycleEmitter, metadata: &ModelMetadata) {
         )
         .expect("turn should enable tools")
         .denied();
-    denied_turn.failed(TurnErrorType::ToolDenied);
+    denied_turn.failed(TurnErrorType::RepeatedToolCalls);
 
     let tool_failure_turn = emitter.start_turn().expect("observer should enable turns");
     let tool_failure_turn_id = tool_failure_turn.id();
@@ -466,7 +466,7 @@ fn assert_failure_spans(spans: &[SpanData]) {
     let standalone_cancelled =
         find_span(spans, "chat test-model", Some(telemetry::ERROR_CANCELLED));
     assert_eq!(standalone_cancelled.parent_span_id, SpanId::INVALID);
-    let denied_agent = find_span(spans, "invoke_agent", Some("tool_denied"));
+    let denied_agent = find_span(spans, "invoke_agent", Some("repeated_tool_calls"));
     assert_eq!(denied_agent.status, Status::error(""));
     assert!(!spans.iter().any(|span| {
         span.name == "execute_tool write"
@@ -905,7 +905,6 @@ fn lifecycle_error_types_are_bounded_and_documentable() {
         TurnErrorType::Cancelled,
         TurnErrorType::Model(ModelErrorType::InvalidOutput),
         TurnErrorType::Tool,
-        TurnErrorType::ToolDenied,
         TurnErrorType::ContextBudget,
         TurnErrorType::RepeatedToolCalls,
         TurnErrorType::RepositoryRequired,
@@ -924,7 +923,6 @@ fn lifecycle_error_types_are_bounded_and_documentable() {
             "cancelled",
             "invalid_output",
             "tool_execution_error",
-            "tool_denied",
             "context_budget_exceeded",
             "repeated_tool_calls",
             "repository_required",

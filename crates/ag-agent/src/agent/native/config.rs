@@ -52,8 +52,6 @@ const BASH_EXECUTABLE: &str = "/bin/bash";
 const BASH_POLICY_REVISION: &str = "agentty-unsandboxed-1";
 /// Deadline for one `bash` call.
 const BASH_TIMEOUT: Duration = Duration::from_secs(600);
-/// Output bytes kept from one `bash` call, the harness maximum.
-const BASH_CAPTURE_BYTES: usize = 8192;
 /// Environment variable naming the model the OpenAI-compatible server serves
 /// for [`AgentModel::OpenAiCompatible`], such as Ollama's `qwen3:latest`.
 const OPENAI_COMPATIBLE_MODEL_ENV: &str = "OPENAI_COMPATIBLE_MODEL";
@@ -721,7 +719,7 @@ fn bash_config(environment: &BTreeMap<String, String>) -> Result<BashConfig, Str
         PathBuf::from(BASH_EXECUTABLE),
         BASH_POLICY_REVISION.to_string(),
         BASH_TIMEOUT,
-        BASH_CAPTURE_BYTES,
+        BashConfig::DEFAULT_CAPTURE_BYTES,
     )
     .map_err(failure("Invalid harness bash policy"))?
     .with_host_information();

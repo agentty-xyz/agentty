@@ -222,10 +222,10 @@ async fn rejects_unsupported_tool_type_and_name() {
                 "tool_calls": [{
                     "id": "call_name",
                     "type": "function",
-                    "function": {"name": "write", "arguments": r#"{"path":"Cargo.toml"}"#}
+                    "function": {"name": "files.write", "arguments": r#"{"path":"Cargo.toml"}"#}
                 }]
             }),
-            "model requested unsupported tool: write",
+            "model requested unsupported tool: files.write",
         ),
         (
             json!({

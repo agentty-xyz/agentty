@@ -204,7 +204,12 @@ async fn native_denied_tool_and_unsafe_aliases_never_execute() {
         .await;
 
     // Assert
-    assert!(matches!(denied, Err(TurnError::ToolDenied { .. })));
+    let denied = denied.expect("a denied tool is answered, not fatal");
+    assert_eq!(denied.output()["status"], "rejected");
+    assert_eq!(
+        denied.output()["error"],
+        "tool `bash` is not available in this turn"
+    );
     let Err(TurnError::CommandFailed { outcome }) = alias else {
         std::panic::resume_unwind(Box::new("unsafe aliases must fail before execution"));
     };

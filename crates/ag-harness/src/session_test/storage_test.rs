@@ -523,8 +523,8 @@ fn message_decoder_rejects_invalid_json_arguments_and_unknown_tools() {
     let invalid_read =
         r#"{"arguments":{"bogus":true},"id":"call","name":"read","reasoning_content":null}"#;
     let unknown_tool = r#"{"arguments":{},"id":"call","name":"bash","reasoning_content":null}"#;
-    let malformed_unknown_tool =
-        r#"{"arguments":"{","id":"call","name":"grep","reasoning_content":null}"#;
+    let invalid_tool_name =
+        r#"{"arguments":"{","id":"call","name":"two words","reasoning_content":null}"#;
     let blank_bash_id =
         r#"{"arguments":{"command":"ls"},"id":" ","name":"bash","reasoning_content":null}"#;
     let invalid_write =
@@ -546,7 +546,7 @@ fn message_decoder_rejects_invalid_json_arguments_and_unknown_tools() {
     ));
     assert!(matches!(unknown, Err(SessionError::InvalidData { .. })));
     for payload in [
-        malformed_unknown_tool,
+        invalid_tool_name,
         blank_bash_id,
         invalid_write,
         decoded_unknown_tool,
@@ -560,16 +560,18 @@ fn message_decoder_rejects_invalid_json_arguments_and_unknown_tools() {
 }
 
 #[test]
-fn persisted_malformed_calls_keep_their_raw_arguments() {
+fn persisted_malformed_and_unknown_calls_keep_their_raw_arguments() {
     // Arrange
     let calls = [
         ("read", r#"{"path src/": "lib.rs""#),
         ("write", r#"{ "path": "lib.rs" }"#),
         ("bash", "[]"),
+        ("read_file", r#"{"file":"lib.rs"}"#),
+        ("grep", "{"),
     ]
     .map(|(name, raw)| {
         ToolCall::from_json(format!("{name}-call"), name, raw, Some("why".into()))
-            .expect("malformed call")
+            .expect("malformed or unknown call")
     });
 
     for call in calls {
@@ -589,6 +591,12 @@ fn persisted_malformed_calls_keep_their_raw_arguments() {
                 .map(crate::tool::MalformedArguments::raw),
             call.malformed_arguments()
                 .map(crate::tool::MalformedArguments::raw)
+        );
+        assert_eq!(
+            decoded[0]
+                .unknown_tool()
+                .map(crate::tool::UnknownToolCall::raw),
+            call.unknown_tool().map(crate::tool::UnknownToolCall::raw)
         );
     }
 }

@@ -69,6 +69,30 @@ fn rejects_invalid_function_calls_before_returning_them() {
 }
 
 #[test]
+fn keeps_any_valid_function_name_and_rejects_names_providers_cannot_replay() {
+    // Arrange
+    let longest = "n".repeat(64);
+    let valid = ["delete", "read_file", "str-replace", "A9", longest.as_str()];
+    let too_long = "n".repeat(65);
+    let invalid = ["", "files.delete", "two words", "naïve", too_long.as_str()];
+
+    // Act
+    let kept = valid.map(|name| ToolCall::from_json("id".to_string(), name, "{}", None));
+    let rejected = invalid.map(|name| ToolCall::from_json("id".to_string(), name, "{}", None));
+
+    // Assert
+    for (name, call) in valid.iter().zip(kept) {
+        assert_eq!(call.expect("valid name").name(), *name);
+    }
+    for (name, error) in invalid.iter().zip(rejected) {
+        assert!(
+            matches!(&error, Err(ModelError::UnsupportedToolName { name: reported }) if reported == name),
+            "{name}: {error:?}"
+        );
+    }
+}
+
+#[test]
 fn keeps_malformed_arguments_verbatim_and_wraps_them_on_the_wire() {
     // Arrange
     let cases = [

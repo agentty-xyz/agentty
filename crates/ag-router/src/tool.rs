@@ -93,11 +93,14 @@ impl ToolCall {
     /// Validates and decodes one function call.
     ///
     /// Arguments that are not a JSON object are kept verbatim as malformed
-    /// rather than rejected; see [`Self::malformed_reason`].
+    /// rather than rejected; see [`Self::malformed_reason`]. A call to a
+    /// function the request did not advertise is kept too, so the caller can
+    /// answer it with a correctable result; only its name must be a valid
+    /// function name (see [`is_valid_function_name`]).
     ///
     /// # Errors
-    /// Returns a typed error for an invalid call identifier or oversized
-    /// arguments or reasoning.
+    /// Returns a typed error for an invalid call identifier, an invalid
+    /// function name, or oversized arguments or reasoning.
     pub fn from_json(
         id: String,
         name: &str,
@@ -106,6 +109,11 @@ impl ToolCall {
     ) -> Result<Self, ModelError> {
         if id.trim().is_empty() || id.len() > 1024 {
             return Err(ModelError::InvalidToolCallId);
+        }
+        if !is_valid_function_name(name) {
+            return Err(ModelError::UnsupportedToolName {
+                name: schema::bounded_diagnostic(name),
+            });
         }
         schema::ensure_content_size(arguments).map_err(ModelError::from)?;
         if let Some(reasoning_content) = &reasoning_content {
@@ -204,6 +212,15 @@ impl ToolCall {
     pub fn assistant_text(&self) -> Option<&str> {
         self.assistant_text.as_deref()
     }
+}
+
+/// Returns whether `name` is a function name every supported provider accepts
+/// when the call is replayed: 1 to 64 ASCII letters, digits, `_`, or `-`.
+pub fn is_valid_function_name(name: &str) -> bool {
+    (1..=64).contains(&name.len())
+        && name
+            .bytes()
+            .all(|byte| byte.is_ascii_alphanumeric() || matches!(byte, b'_' | b'-'))
 }
 
 #[cfg(test)]

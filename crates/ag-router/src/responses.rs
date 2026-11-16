@@ -125,7 +125,7 @@ impl ResponsesBackend {
             )
         })?;
 
-        Ok(self.decode(request, response))
+        Ok(self.decode(response))
     }
 
     async fn create(
@@ -230,14 +230,10 @@ impl ResponsesBackend {
 
     /// Decodes a terminal response: a completed one into output or calls, an
     /// incomplete one by its reason, and a failed one by its error.
-    fn decode(
-        &self,
-        request: &model::ModelRequest,
-        response: ResponsesResponse,
-    ) -> GeneratedResponse {
+    fn decode(&self, response: ResponsesResponse) -> GeneratedResponse {
         let status = response.status.as_deref().unwrap_or_default();
         match status {
-            "completed" => Self::decode_completed(request, &response),
+            "completed" => Self::decode_completed(&response),
             "failed" => {
                 let metadata = response.metadata("failed".to_string());
 
@@ -291,10 +287,7 @@ impl ResponsesBackend {
         )
     }
 
-    fn decode_completed(
-        request: &model::ModelRequest,
-        response: &ResponsesResponse,
-    ) -> GeneratedResponse {
+    fn decode_completed(response: &ResponsesResponse) -> GeneratedResponse {
         let mut calls = Vec::new();
         let mut reasoning = Vec::new();
         let mut refusal = None;
@@ -344,7 +337,7 @@ impl ResponsesBackend {
         if !calls.is_empty() {
             let metadata = response.metadata("tool_calls".to_string());
 
-            return match Self::decode_calls(request, &calls, &text, reasoning_content) {
+            return match Self::decode_calls(&calls, &text, reasoning_content) {
                 Ok(calls) => GeneratedResponse::tool_calls(calls, metadata),
                 Err(error) => GeneratedResponse::failed(error, metadata),
             };
@@ -370,7 +363,6 @@ impl ResponsesBackend {
     /// Decodes function calls; the first carries the response's reasoning
     /// and text, like a Chat Completions assistant message.
     fn decode_calls(
-        request: &model::ModelRequest,
         calls: &[&Value],
         text: &str,
         reasoning_content: Option<String>,
@@ -386,11 +378,6 @@ impl ResponsesBackend {
                         reason: schema_contract::bounded_diagnostic(error),
                     }
                 })?;
-            if !request.advertises_tool(&call.name) {
-                return Err(model::ModelError::UnsupportedToolName {
-                    name: schema_contract::bounded_diagnostic(call.name),
-                });
-            }
             decoded.push(
                 tool::ToolCall::from_json(
                     call.call_id,

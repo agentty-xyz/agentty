@@ -238,7 +238,7 @@ pub struct ToolCall {
 }
 
 impl ToolCall {
-    /// Decodes a built-in tool call returned by a model adapter.
+    /// Decodes a tool call returned by a model adapter.
     ///
     /// The call identifier must contain non-whitespace text and be at most
     /// 1,024 UTF-8 bytes. Accepted identifiers are preserved verbatim.
@@ -250,11 +250,14 @@ impl ToolCall {
     /// read-action mistakes, including unsafe read paths, are retained for
     /// corrective tool feedback. The harness separately enforces tool
     /// permissions, repository containment, batch identifiers, and execution
-    /// limits.
+    /// limits. A call naming no built-in tool, such as a tool the model
+    /// invented, is kept verbatim as an [`UnknownToolCall`] so the harness
+    /// answers it with a correctable result listing the available tools.
     ///
     /// # Errors
-    /// Returns [`crate::ModelError`] for an invalid call identifier,
-    /// unsupported tool name, or oversized content.
+    /// Returns [`crate::ModelError`] for an invalid call identifier, a name
+    /// that is not a valid function name (1 to 64 ASCII letters, digits,
+    /// `_`, or `-`), or oversized content.
     pub fn from_json(
         id: String,
         name: &str,
@@ -274,6 +277,17 @@ impl ToolCall {
             "bash" => Tool::Bash,
             READ_NAME => Tool::Read,
             WRITE_NAME => Tool::Write,
+            _ if ag_router::is_valid_function_name(name) => {
+                return Ok(Self {
+                    arguments: ToolArguments::Unknown(UnknownToolCall {
+                        name: name.to_string(),
+                        raw: arguments.to_string(),
+                    }),
+                    assistant_text: None,
+                    id,
+                    reasoning_content,
+                });
+            }
             _ => {
                 return Err(model::ModelError::UnsupportedToolName {
                     name: schema_contract::bounded_diagnostic(name),
@@ -327,6 +341,7 @@ impl ToolCall {
             ToolArguments::Read(arguments) => ToolCallArguments::Read(arguments),
             ToolArguments::Write(arguments) => ToolCallArguments::Write(arguments),
             ToolArguments::Malformed(arguments) => ToolCallArguments::Malformed(arguments),
+            ToolArguments::Unknown(call) => ToolCallArguments::Unknown(call),
         }
     }
 
@@ -334,7 +349,21 @@ impl ToolCall {
     pub fn malformed_arguments(&self) -> Option<&MalformedArguments> {
         match &self.arguments {
             ToolArguments::Malformed(arguments) => Some(arguments),
-            ToolArguments::Bash(_) | ToolArguments::Read(_) | ToolArguments::Write(_) => None,
+            ToolArguments::Bash(_)
+            | ToolArguments::Read(_)
+            | ToolArguments::Write(_)
+            | ToolArguments::Unknown(_) => None,
+        }
+    }
+
+    /// Returns the verbatim call when it names no built-in tool.
+    pub fn unknown_tool(&self) -> Option<&UnknownToolCall> {
+        match &self.arguments {
+            ToolArguments::Unknown(call) => Some(call),
+            ToolArguments::Bash(_)
+            | ToolArguments::Read(_)
+            | ToolArguments::Write(_)
+            | ToolArguments::Malformed(_) => None,
         }
     }
 
@@ -342,14 +371,20 @@ impl ToolCall {
     pub fn read_arguments(&self) -> Option<&ReadArguments> {
         match &self.arguments {
             ToolArguments::Read(arguments) => Some(arguments),
-            ToolArguments::Write(_) | ToolArguments::Bash(_) | ToolArguments::Malformed(_) => None,
+            ToolArguments::Write(_)
+            | ToolArguments::Bash(_)
+            | ToolArguments::Malformed(_)
+            | ToolArguments::Unknown(_) => None,
         }
     }
 
     /// Returns typed `write` arguments when this is a `write` call.
     pub fn write_arguments(&self) -> Option<&WriteArguments> {
         match &self.arguments {
-            ToolArguments::Read(_) | ToolArguments::Bash(_) | ToolArguments::Malformed(_) => None,
+            ToolArguments::Read(_)
+            | ToolArguments::Bash(_)
+            | ToolArguments::Malformed(_)
+            | ToolArguments::Unknown(_) => None,
             ToolArguments::Write(arguments) => Some(arguments),
         }
     }
@@ -359,13 +394,15 @@ impl ToolCall {
         &self.id
     }
 
-    /// Returns the requested native function name.
-    pub fn name(&self) -> &'static str {
+    /// Returns the requested function name; for an [`UnknownToolCall`] it
+    /// names no built-in tool.
+    pub fn name(&self) -> &str {
         match &self.arguments {
             ToolArguments::Bash(_) => "bash",
             ToolArguments::Read(_) => READ_NAME,
             ToolArguments::Write(_) => WRITE_NAME,
             ToolArguments::Malformed(arguments) => arguments.tool.name(),
+            ToolArguments::Unknown(call) => &call.name,
         }
     }
 
@@ -379,6 +416,7 @@ impl ToolCall {
             ToolArguments::Read(arguments) => serde_json::to_string(arguments),
             ToolArguments::Write(arguments) => serde_json::to_string(arguments),
             ToolArguments::Malformed(arguments) => Ok(arguments.raw.clone()),
+            ToolArguments::Unknown(call) => Ok(call.raw.clone()),
         }
     }
 
@@ -446,6 +484,7 @@ enum ToolArguments {
     Read(ReadArguments),
     Write(WriteArguments),
     Malformed(MalformedArguments),
+    Unknown(UnknownToolCall),
 }
 
 /// Arguments of a built-in tool call that the tool could not decode.
@@ -477,6 +516,29 @@ impl MalformedArguments {
     }
 }
 
+/// A call naming no built-in tool, such as one the model invented.
+///
+/// The name and arguments text are kept verbatim, so the call is journaled
+/// and replayed as the model sent it, and is answered with a correctable
+/// result naming the turn's available tools instead of running.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct UnknownToolCall {
+    name: String,
+    raw: String,
+}
+
+impl UnknownToolCall {
+    /// Returns the function name exactly as the model sent it.
+    pub fn name(&self) -> &str {
+        &self.name
+    }
+
+    /// Returns the arguments text exactly as the model sent it.
+    pub fn raw(&self) -> &str {
+        &self.raw
+    }
+}
+
 /// Borrowed typed arguments for one native tool call.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum ToolCallArguments<'a> {
@@ -488,6 +550,8 @@ pub enum ToolCallArguments<'a> {
     Write(&'a WriteArguments),
     /// Arguments the called tool could not decode; the call never runs.
     Malformed(&'a MalformedArguments),
+    /// A call naming no built-in tool; the call never runs.
+    Unknown(&'a UnknownToolCall),
 }
 
 /// Structurally validated arguments for one native read-only repository action.

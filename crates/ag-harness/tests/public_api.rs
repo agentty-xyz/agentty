@@ -122,8 +122,10 @@ impl Model for ExternalToolModel {
             Some(ModelMessage::ToolResult { content, .. }) => {
                 let result: serde_json::Value =
                     serde_json::from_str(content).map_err(ModelError::request)?;
+                // A denied call is answered with an error result instead.
                 let name = result["content"]
                     .as_str()
+                    .or_else(|| result["error"].as_str())
                     .ok_or(ModelError::InvalidResponse)?;
 
                 Ok(ModelResponse::Output(json!({ "name": name.trim() })))
@@ -369,12 +371,15 @@ async fn external_tool_call_still_requires_harness_permission() -> Result<(), Bo
     );
 
     // Act
-    let result = harness
+    let outcome = harness
         .run_once("Read the name", request()?.schema().clone())
-        .await;
+        .await?;
 
     // Assert
-    assert!(matches!(result, Err(TurnError::ToolDenied { name }) if name == "read"));
+    assert_eq!(
+        outcome.output(),
+        &json!({"name": "tool `read` is not available in this turn"})
+    );
 
     Ok(())
 }

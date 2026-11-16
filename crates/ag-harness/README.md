@@ -207,13 +207,20 @@ let outcome = session
   `TurnReport::malformed_tool_calls` counts them and each is listed as
   `ToolActivity::MalformedArguments`. A third consecutive response made only of
   malformed calls fails the turn; any decodable call resets the count.
+- **Unavailable tools get error results.** A call to a tool the turn does not enable, or
+  to a tool that does not exist, does not run and does not fail the turn: it is
+  journaled and answered with an error result listing the available tools, emits
+  `LifecycleEventKind::ToolDenied`, and is listed as `ToolActivity::Unavailable`. Only a
+  name that is not a valid function name (1 to 64 ASCII letters, digits, `_`, or `-`)
+  fails the response.
 - **Repeated tool calls are nudged, then stopped.** A call that matches an earlier one
   in tool, arguments, and result is counted within the turn's last 12 calls, including
-  reads answered from the earlier result; a `write` or `bash` call unlike any in that
-  window restarts the count. At three identical calls the next request carries
-  request-only feedback asking the model to stop, counted by
-  `TurnReport::repetition_nudges`; at five the turn fails with
-  `TurnError::RepeatedToolCalls`. Both emit `LifecycleEventKind::ToolCallsRepeated`.
+  reads answered from the earlier result and calls to one unavailable tool with any
+  arguments; a `write` or `bash` call that ran unlike any in that window restarts the
+  count. At three identical calls the next request carries request-only feedback asking
+  the model to stop, counted by `TurnReport::repetition_nudges`; at five the turn fails
+  with `TurnError::RepeatedToolCalls`. Both emit
+  `LifecycleEventKind::ToolCallsRepeated`.
 
 Input is anything `Into<TurnInput>`: a string, or ordered `InputBlock`s mixing text with
 PNG/JPEG images for models that declare image support.
@@ -256,9 +263,11 @@ The workspace is read-only unless you grant `with_write`. External reads (`with_
 environment values (`with_environment`), and host details (`with_host_information`) are
 explicit too. Networking is never granted; enforcing that, like every grant, is the
 selected executor's job. Long output keeps each stream's start and end within the
-capture budget, with the omitted byte counts on the `CommandOutcome`. Command intents
-are recorded before spawning; await `settled()` (and `retry_settlement()` after
-failures) so unresolved commands never block new turns silently.
+capture budget (`capture_bytes`, up to `BashConfig::MAX_CAPTURE_BYTES`; hosts usually
+pass `BashConfig::DEFAULT_CAPTURE_BYTES`), with the omitted byte counts on the
+`CommandOutcome`. Command intents are recorded before spawning; await `settled()` (and
+`retry_settlement()` after failures) so unresolved commands never block new turns
+silently.
 
 ## Models
 

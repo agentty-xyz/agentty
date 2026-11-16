@@ -77,7 +77,8 @@ macro_rules! define_model_response_error {
                 /// Unsupported wire type.
                 kind: String,
             },
-            /// Provider returned an unadvertised function.
+            /// Provider returned a function name that is not a valid function
+            /// name, so the call could not be answered or replayed.
             #[error("model requested unsupported tool: {name}")]
             UnsupportedToolName {
                 /// Function name.
