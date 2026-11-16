@@ -18,7 +18,7 @@ use ag_protocol::{AgentResponse, parse_agent_response_strict};
 use ag_session::test_support as model_fixture;
 use ag_worker::RunClient;
 use async_trait::async_trait;
-use tokio::sync::mpsc;
+use tokio::sync::{mpsc, oneshot};
 use tokio::time::{Instant, sleep};
 
 use super::{
@@ -1373,13 +1373,17 @@ async fn review_assist_text_with_client_preserves_review_selection_provider() {
     assert!(text.contains("Unanchored findings: 0."));
 }
 
+/// Provider whose every call sleeps `delay` of paused Tokio time, releasing
+/// `clock` only for that sleep.
 struct DelayedReviewClient {
+    clock: AutoAdvanceHold,
     delay: Duration,
 }
 
 #[async_trait]
 impl RunClient for DelayedReviewClient {
     async fn submit(&self, _: OneShotRequest) -> Result<OneShotSubmission, OneShotError> {
+        let _released = self.clock.release();
         sleep(self.delay).await;
 
         Ok(OneShotSubmission {
@@ -1389,27 +1393,70 @@ impl RunClient for DelayedReviewClient {
     }
 }
 
+/// Stops a paused Tokio clock from auto-advancing while held, because a
+/// running blocking task inhibits auto-advance. Persistence waits on its
+/// SQLite worker thread, which a paused runtime would otherwise treat as idle
+/// and skip ahead to the next timer.
+#[derive(Clone, Default)]
+struct AutoAdvanceHold {
+    release: Arc<Mutex<Option<oneshot::Sender<()>>>>,
+}
+
+impl AutoAdvanceHold {
+    /// Holds the clock until [`Self::release`] or the last clone drops.
+    fn hold(&self) {
+        let (release, released) = oneshot::channel::<()>();
+        drop(tokio::task::spawn_blocking(move || {
+            released.blocking_recv()
+        }));
+        *self.release.lock().expect("clock hold") = Some(release);
+    }
+
+    /// Lets the clock auto-advance, in timer order, until the returned guard
+    /// drops, including when a deadline drops the sleeping call.
+    fn release(&self) -> AutoAdvanceRelease<'_> {
+        drop(self.release.lock().expect("clock hold").take());
+
+        AutoAdvanceRelease { hold: self }
+    }
+}
+
+/// Holds the clock again when dropped.
+struct AutoAdvanceRelease<'hold> {
+    hold: &'hold AutoAdvanceHold,
+}
+
+impl Drop for AutoAdvanceRelease<'_> {
+    fn drop(&mut self) {
+        self.hold.hold();
+    }
+}
+
 #[test]
 fn focused_review_phases_share_a_thirty_minute_deadline() {
     // Arrange / Act / Assert
     assert_eq!(REVIEW_DEADLINE, Duration::from_mins(30));
 }
 
-#[tokio::test]
+#[tokio::test(start_paused = true)]
 async fn one_deadline_allows_every_phase_within_it_but_caps_their_total() {
     // Scaled from the production budget: 3 x 6 of 30 minutes completes, while
-    // 3 x 11 stops consolidation at the shared deadline. Persistence runs on
-    // the real clock, so the scale keeps margins well above storage latency.
-    // Each case owns its fixture, so both cases wait out their phases at once.
+    // 3 x 11 stops consolidation at the shared deadline. The paused clock
+    // moves only while a provider call sleeps, so persistence latency never
+    // counts against the deadline. The short scale keeps the clock far below
+    // the store pool's acquire and idle timeouts. The cases share one clock,
+    // so they run in turn.
     // Arrange
+    let clock = AutoAdvanceHold::default();
+    clock.hold();
     let deadline = Duration::from_millis(1_000);
     let complete_delay = Duration::from_millis(200);
 
     // Act
-    let ((complete_elapsed, complete), (partial_elapsed, partial)) = tokio::join!(
-        review_with_phase_delay(complete_delay, deadline),
-        review_with_phase_delay(Duration::from_millis(450), deadline),
-    );
+    let (complete_elapsed, complete) =
+        review_with_phase_delay(&clock, complete_delay, deadline).await;
+    let (partial_elapsed, partial) =
+        review_with_phase_delay(&clock, Duration::from_millis(450), deadline).await;
 
     // Assert
     assert!(
@@ -1425,9 +1472,14 @@ async fn one_deadline_allows_every_phase_within_it_but_caps_their_total() {
     assert!(partial.contains("final consolidation failed"), "{partial}");
 }
 
-/// Reviews a one-file diff whose every provider call takes `delay`, returning
-/// the elapsed time and review text.
-async fn review_with_phase_delay(delay: Duration, deadline: Duration) -> (Duration, String) {
+/// Reviews a one-file diff whose every provider call takes `delay` while the
+/// paused `clock` is otherwise held, returning the elapsed time and review
+/// text.
+async fn review_with_phase_delay(
+    clock: &AutoAdvanceHold,
+    delay: Duration,
+    deadline: Duration,
+) -> (Duration, String) {
     let fixture = ReviewGraphFixture::new().await;
     let started = Instant::now();
     let text = TaskService::review_assist_text_with_client(
@@ -1446,7 +1498,10 @@ async fn review_with_phase_delay(delay: Duration, deadline: Duration) -> (Durati
             session_id: SESSION_ID.into(),
         },
         ReviewRules::default(),
-        Arc::new(DelayedReviewClient { delay }),
+        Arc::new(DelayedReviewClient {
+            clock: clock.clone(),
+            delay,
+        }),
         |_| {},
     )
     .await
