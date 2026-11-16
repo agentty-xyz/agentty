@@ -47,6 +47,9 @@
 //!   [`CommandRecord`]s, and its [`TurnReport`]; a [`CancelToken`] cancels it.
 //!   [`Run::into_parts`] also streams its ordered [`RunEvent`]s through an
 //!   [`EventStream`], ending with [`RunEventKind::Completed`].
+//! - `Session::transcript` reads settled turns as [`TurnRecord`]s for a
+//!   [`TurnRange`]; `Harness::fork` copies a session's turns through one index
+//!   into a new session with its own prompt-cache key.
 //! - [`Tool`]s are denied until allowed with [`Harness::allow`] or a
 //!   [`ToolPolicy`].
 //! - [`RunError`] and [`HarnessError`] classify any [`TurnError`] or
@@ -57,18 +60,19 @@
 //! The crate root holds everything a typical host needs. Extension points and
 //! detailed records live in modules:
 //!
-//! | Module        | Contents                                                   |
-//! | ------------- | ---------------------------------------------------------- |
-//! | [`provider`]  | Built-in Muse, Kimi, and Qwen clients                      |
-//! | [`catalog`]   | Model specs, roles, capabilities, pricing, and selection   |
-//! | [`model`]     | The [`Model`] trait, requests, registry, context profiles  |
-//! | [`tool`]      | Tool arguments, results, and the [`tool::FileSystem`] seam |
-//! | [`bash`]      | Bash configuration, executors, enforcement, records        |
-//! | [`turn`]      | Turn builders, reports, activity, and settlement errors    |
-//! | [`store`]     | Session stores and durable write and checkpoint records    |
-//! | [`recovery`]  | Execution identities and idempotent host request records   |
-//! | [`event`]     | Run events with items, usage, and their wire shape         |
-//! | [`lifecycle`] | Content-free events and OpenTelemetry observers            |
+//! | Module         | Contents                                                   |
+//! | -------------- | ---------------------------------------------------------- |
+//! | [`provider`]   | Built-in Muse, Kimi, and Qwen clients                      |
+//! | [`catalog`]    | Model specs, roles, capabilities, pricing, and selection   |
+//! | [`model`]      | The [`Model`] trait, requests, registry, context profiles  |
+//! | [`tool`]       | Tool arguments, results, and the [`tool::FileSystem`] seam |
+//! | [`bash`]       | Bash configuration, executors, enforcement, records        |
+//! | [`turn`]       | Turn builders, reports, activity, and settlement errors    |
+//! | [`store`]      | Session stores and durable write and checkpoint records    |
+//! | [`recovery`]   | Execution identities and idempotent host request records   |
+//! | [`event`]      | Run events with items, usage, and their wire shape         |
+//! | [`transcript`] | Settled-turn transcripts and their wire shape              |
+//! | [`lifecycle`]  | Content-free events and OpenTelemetry observers            |
 
 #[cfg(test)]
 extern crate self as ag_harness;
@@ -137,6 +141,7 @@ pub mod store;
 mod telemetry;
 pub mod tool;
 mod trace;
+pub mod transcript;
 pub mod turn;
 mod turn_options_snapshot;
 mod write;
@@ -160,6 +165,7 @@ pub use run::{
 pub use schema_contract::{OutputSchema, OutputSchemaError};
 pub use session::SessionError;
 pub use tool::Tool;
+pub use transcript::{TurnRange, TurnRecord};
 pub use turn::{TurnControl, TurnError, TurnOptions, TurnOutcome, TurnReport};
 pub use write_journal::WriteStatus;
 

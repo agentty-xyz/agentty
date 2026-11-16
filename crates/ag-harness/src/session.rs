@@ -28,6 +28,7 @@ use crate::request_option::OutputMode;
 use crate::reservation::{TURN_LEASE_SECONDS, lease_deadline};
 use crate::store::SessionStore;
 use crate::tool::{MalformedArguments, ReadArguments, ToolCall, UnknownToolCall, WriteArguments};
+use crate::transcript::{StoredTurn, TurnRange, TurnStatus};
 use crate::turn_options_snapshot::{StoredTurnOptions, StoredTurnOptionsError};
 use crate::write_journal::{WriteRecord, WriteStatus, content_hash};
 use crate::{OutputSchema, OutputSchemaError, TurnError, TurnOutcome};
@@ -152,6 +153,49 @@ struct TurnConfigurationRow {
     max_history_bytes: i64,
     model_generation: i64,
     turn_options: Option<String>,
+}
+
+struct TranscriptMessageRow {
+    kind: String,
+    payload: String,
+    turn_position: i64,
+}
+
+struct TranscriptTurnRow {
+    created_at: i64,
+    error_type: Option<String>,
+    status: String,
+    terminal_outcome: Option<String>,
+    turn_options: Option<String>,
+    turn_position: i64,
+    updated_at: i64,
+}
+
+impl TranscriptTurnRow {
+    /// Returns the stored turn of this row with its decoded `messages`.
+    fn into_stored(self, messages: Vec<ModelMessage>) -> Result<StoredTurn, SessionError> {
+        let time = |seconds: i64| UNIX_EPOCH + Duration::from_secs(seconds.max(0).unsigned_abs());
+        let status = match self.status.as_str() {
+            "completed" => TurnStatus::Completed,
+            "failed" => TurnStatus::Failed,
+            _ => TurnStatus::Interrupted,
+        };
+
+        Ok(StoredTurn {
+            error_type: self.error_type,
+            finished_at: time(self.updated_at),
+            messages,
+            options: self.turn_options,
+            outcome: self
+                .terminal_outcome
+                .as_deref()
+                .map(decode_terminal_outcome)
+                .transpose()?,
+            position: self.turn_position,
+            started_at: time(self.created_at),
+            status,
+        })
+    }
 }
 
 struct TurnSizeRow {
@@ -845,6 +889,43 @@ impl SessionStore for Database {
         Ok(())
     }
 
+    async fn load_transcript(
+        &self,
+        session_id: &str,
+        range: &TurnRange,
+    ) -> Result<Vec<StoredTurn>, SessionError> {
+        self.recover_stale_turns(session_id).await?;
+        let mut connection = self
+            .pool
+            .acquire()
+            .await
+            .session_context("load session transcript")?;
+        require_session(&mut connection, session_id).await?;
+
+        load_transcript_from(&mut connection, session_id, range).await
+    }
+
+    async fn fork_session(
+        &self,
+        source: &str,
+        through: i64,
+        target: &str,
+    ) -> Result<(), SessionError> {
+        let now = self.timestamp_source.now_timestamp_seconds();
+        let mut transaction = self
+            .pool
+            .begin_with("BEGIN IMMEDIATE")
+            .await
+            .session_context("fork persistent session")?;
+        recover_stale_turns(&mut transaction, source, now).await?;
+        require_session(&mut transaction, source).await?;
+        fork_session_in(&mut transaction, source, through, target, now).await?;
+        transaction
+            .commit()
+            .await
+            .session_context("fork persistent session")
+    }
+
     fn identity(&self) -> &StoreIdentity {
         &self.identity
     }
@@ -1513,6 +1594,14 @@ pub enum SessionError {
         /// Missing session identifier.
         id: String,
     },
+    /// The session has no settled turn at the requested position.
+    #[error("persistent session `{id}` has no settled turn {turn}")]
+    TurnNotFound {
+        /// Session identifier.
+        id: String,
+        /// Requested turn position.
+        turn: u64,
+    },
     /// The turn's owner token or lease is no longer valid for this store.
     #[error("persistent session `{id}` lost ownership of turn {turn_position}")]
     OwnershipLost {
@@ -2010,17 +2099,9 @@ async fn load_request_from(
     let request = deserialize_payload(row.host_request.as_deref().unwrap_or(""))?;
     let status = match row.status.as_str() {
         "pending" | "running" => HostTurnStatus::InProgress,
-        "completed" => {
-            let stored: Value = deserialize_payload(row.terminal_outcome.as_deref().unwrap_or(""))?;
-            if stored["version"] != 1 {
-                return Err(SessionError::InvalidData {
-                    reason: "unsupported host outcome version".into(),
-                });
-            }
-            HostTurnStatus::Completed(
-                serde_json::from_value(stored["outcome"].clone()).map_err(invalid_json)?,
-            )
-        }
+        "completed" => HostTurnStatus::Completed(decode_terminal_outcome(
+            row.terminal_outcome.as_deref().unwrap_or(""),
+        )?),
         "failed" => HostTurnStatus::Failed {
             error_type: row.error_type.unwrap_or_default(),
         },
@@ -2057,6 +2138,211 @@ async fn load_request_from(
         turn_position: position,
         writes,
     }))
+}
+
+/// Rejects a missing session with [`SessionError::NotFound`].
+async fn require_session(
+    connection: &mut SqliteConnection,
+    session_id: &str,
+) -> Result<(), SessionError> {
+    let found = sqlx::query_scalar!(
+        r#"SELECT COUNT(*) AS "count!: i64" FROM session WHERE id = ?"#,
+        session_id
+    )
+    .fetch_one(connection)
+    .await
+    .session_context("load persistent session")?;
+    if found == 0 {
+        return Err(SessionError::NotFound {
+            id: session_id.to_string(),
+        });
+    }
+
+    Ok(())
+}
+
+/// Decodes a host turn's committed result, as `complete` records it.
+fn decode_terminal_outcome(stored: &str) -> Result<TurnOutcome, SessionError> {
+    let stored: Value = deserialize_payload(stored)?;
+    if stored["version"] != 1 {
+        return Err(SessionError::InvalidData {
+            reason: "unsupported host outcome version".into(),
+        });
+    }
+
+    serde_json::from_value(stored["outcome"].clone()).map_err(invalid_json)
+}
+
+/// Loads the settled turns `range` selects, oldest first, with every
+/// persisted message, after the caller found the session.
+async fn load_transcript_from(
+    connection: &mut SqliteConnection,
+    session_id: &str,
+    range: &TurnRange,
+) -> Result<Vec<StoredTurn>, SessionError> {
+    let (start, end, newest) = range.stored_bounds();
+    let mut rows = sqlx::query_as!(
+        TranscriptTurnRow,
+        r#"
+SELECT turn_position AS "turn_position!: i64", status AS "status!: String", error_type,
+       turn_options, terminal_outcome, created_at AS "created_at!: i64",
+       updated_at AS "updated_at!: i64"
+FROM session_turn
+WHERE session_id = ? AND status IN ('completed', 'failed', 'interrupted')
+  AND turn_position >= ? AND turn_position < ?
+ORDER BY turn_position DESC
+LIMIT ?
+"#,
+        session_id,
+        start,
+        end,
+        newest
+    )
+    .fetch_all(&mut *connection)
+    .await
+    .session_context("load session transcript")?;
+    rows.reverse();
+    let positions =
+        Value::from(rows.iter().map(|row| row.turn_position).collect::<Vec<_>>()).to_string();
+    let messages = sqlx::query_as!(
+        TranscriptMessageRow,
+        r#"
+SELECT turn_position AS "turn_position!: i64", kind AS "kind!: String", payload AS "payload!: String"
+FROM session_message
+WHERE session_id = ? AND turn_position IN (SELECT value FROM json_each(?))
+ORDER BY turn_position, message_position
+"#,
+        session_id,
+        positions
+    )
+    .fetch_all(&mut *connection)
+    .await
+    .session_context("load session transcript")?;
+    let mut messages = messages.into_iter().peekable();
+    let mut turns = Vec::with_capacity(rows.len());
+    for row in rows {
+        let mut turn_messages = Vec::new();
+        while let Some(message) =
+            messages.next_if(|message| message.turn_position == row.turn_position)
+        {
+            turn_messages.push(EncodedMessage::into_message(
+                &message.kind,
+                &message.payload,
+            )?);
+        }
+        turns.push(row.into_stored(turn_messages)?);
+    }
+
+    Ok(turns)
+}
+
+/// Copies session `source`'s configuration and its turns through position
+/// `through`, with their messages, write and command records, into the new
+/// session `target`, as [`SessionStore::fork_session`] describes.
+async fn fork_session_in(
+    transaction: &mut Transaction<'_, sqlx::Sqlite>,
+    source: &str,
+    through: i64,
+    target: &str,
+    now: i64,
+) -> Result<(), SessionError> {
+    let settled = sqlx::query_scalar!(
+        r#"
+SELECT COUNT(*) AS "count!: i64" FROM session_turn
+WHERE session_id = ? AND turn_position = ? AND status IN ('completed', 'failed', 'interrupted')
+"#,
+        source,
+        through
+    )
+    .fetch_one(&mut **transaction)
+    .await
+    .session_context("fork persistent session")?;
+    if settled == 0 {
+        return Err(SessionError::TurnNotFound {
+            id: source.to_string(),
+            turn: through.unsigned_abs(),
+        });
+    }
+    let created = sqlx::query(
+        r"
+INSERT INTO session (
+    id, provider, model, output_schema, system_prompt, max_history_bytes, created_at, updated_at,
+    registration_key, registration_revision, model_generation
+)
+SELECT ?, provider, model, output_schema, system_prompt, max_history_bytes, ?, ?,
+       registration_key, registration_revision, model_generation
+FROM session WHERE id = ?
+ON CONFLICT(id) DO NOTHING
+",
+    )
+    .bind(target)
+    .bind(now)
+    .bind(now)
+    .bind(source)
+    .execute(&mut **transaction)
+    .await
+    .session_context("fork persistent session")?;
+    if created.rows_affected() == 0 {
+        return Err(SessionError::AlreadyExists {
+            id: target.to_string(),
+        });
+    }
+    for statement in [
+        r"
+INSERT INTO session_turn (
+    session_id, turn_position, status, error_type, lease_expires_at, created_at, updated_at,
+    owner_token, turn_options, host_id, host_request, terminal_outcome, model_snapshot
+)
+SELECT ?, turn_position, status, error_type, lease_expires_at, created_at, updated_at,
+       owner_token, turn_options, host_id, host_request, terminal_outcome, model_snapshot
+FROM session_turn WHERE session_id = ? AND turn_position <= ?
+",
+        r"
+INSERT INTO session_message (
+    session_id, turn_position, message_position, kind, payload, retained_bytes, created_at
+)
+SELECT ?, turn_position, message_position, kind, payload, retained_bytes, created_at
+FROM session_message WHERE session_id = ? AND turn_position <= ?
+ORDER BY id
+",
+        r"
+INSERT INTO session_write (
+    session_id, turn_position, call_id, path, expected_hash, resulting_hash, status,
+    repository_root, acknowledged_by_turn
+)
+SELECT ?, turn_position, call_id, path, expected_hash, resulting_hash, status,
+       repository_root, acknowledged_by_turn
+FROM session_write WHERE session_id = ? AND turn_position <= ?
+ORDER BY id
+",
+        r"
+INSERT INTO session_command (
+    session_id, turn_position, owner_token, intent, outcome, reconciled, unresolved
+)
+SELECT ?, turn_position, owner_token, intent, outcome, reconciled, unresolved
+FROM session_command WHERE session_id = ? AND turn_position <= ?
+ORDER BY id
+",
+        r"
+INSERT INTO session_checkpoint (
+    session_id, version, covered_through, model_generation, provider, model, summary,
+    created_at, updated_at
+)
+SELECT ?, version, covered_through, model_generation, provider, model, summary,
+       created_at, updated_at
+FROM session_checkpoint WHERE session_id = ? AND covered_through <= ?
+",
+    ] {
+        sqlx::query(statement)
+            .bind(target)
+            .bind(source)
+            .bind(through)
+            .execute(&mut **transaction)
+            .await
+            .session_context("fork persistent session")?;
+    }
+
+    Ok(())
 }
 
 struct SwitchMessageRow {

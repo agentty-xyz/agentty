@@ -1,0 +1,21 @@
+{
+  "db_name": "SQLite",
+  "query": "\nSELECT COUNT(*) AS \"count!: i64\" FROM session_turn\nWHERE session_id = ? AND turn_position = ? AND status IN ('completed', 'failed', 'interrupted')\n",
+  "describe": {
+    "columns": [
+      {
+        "name": "count!: i64",
+        "ordinal": 0,
+        "type_info": "Integer",
+        "origin": "Expression"
+      }
+    ],
+    "parameters": {
+      "Right": 2
+    },
+    "nullable": [
+      false
+    ]
+  },
+  "hash": "ecc5ac7dfc5f9e3accbd6bf4fa364c2ca053834026c010e56c92ca023880c101"
+}

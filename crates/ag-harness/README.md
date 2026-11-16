@@ -84,6 +84,27 @@ whose outcome is unknown; when it does not fit, it replays with its tool traffic
 replaced by notices, or else as only its input and note. Sessions run concurrently, with
 one active turn per session. The library never picks a database location for you.
 
+### Transcripts and forks
+
+```rust
+use ag_harness::event::{SessionId, TurnIndex};
+use ag_harness::TurnRange;
+
+let turns = session.transcript(TurnRange::Last(5)).await?;
+let retry = harness
+    .fork(&SessionId::new("review-42"), TurnIndex::new(1), SessionId::new("review-42b"))
+    .await?;
+```
+
+`Session::transcript` returns settled turns as serializable `TurnRecord`s: status,
+input, per-run instructions, reasoning, assistant text, tool calls with their results,
+the final output, timestamps, and usage for turns run with a host request ID.
+`TurnRange` selects all turns, the newest N, or an index span, and only those turns are
+read; history the replay budget leaves out is still included. `Harness::fork` copies a
+session's settled turns through one index, with their write and command records, into a
+new session that keeps the source's output mode, system prompt, and model. The fork's
+own ID gives it its own prompt-cache key, and the source is unchanged.
+
 ## Turns
 
 `run_once` and `send` run a turn with the defaults. When a turn needs more, call `turn`
@@ -520,7 +541,9 @@ atomic record operations: `reserve_turn` and `switch_model` read an `AdmissionSt
 record the decision from `TurnAdmission::admit` or `ModelSwitch::admit`, while the
 harness owns the admission rules and every lease. `complete_turn` also hands the store
 the session's `store::HistoryProjection`, which later loads apply and a model switch
-resets. The shared conformance suite is in `tests/support/store_conformance.rs`.
+resets. `load_transcript` and `fork_session` back transcripts and forks; a store that
+does not implement them fails those calls closed. The shared conformance suite is in
+`tests/support/store_conformance.rs`.
 
 ## Observability
 
@@ -542,17 +565,18 @@ The crate root holds what a typical host needs: `Harness`, `Session`, `TurnOptio
 `OutputSchema`, `Tool`, `ToolPolicy`, `Repository`, `TurnInput`, `Model`,
 `ModelCatalog`, `ModelSelector`, and `Role`. Everything else is grouped by topic:
 
-| Module      | Contents                                                 |
-| ----------- | -------------------------------------------------------- |
-| `provider`  | Muse, Kimi, Qwen, OpenAI, and OpenAI-compatible clients  |
-| `catalog`   | Model specs, roles, capabilities, pricing, and selection |
-| `model`     | The `Model` trait, requests, registry, context budgets   |
-| `tool`      | Tool arguments, results, and the `FileSystem` seam       |
-| `bash`      | Bash configuration, executors, enforcement, records      |
-| `turn`      | Turn builders, reports, activity, and settlement errors  |
-| `store`     | Session stores and durable write and checkpoint records  |
-| `recovery`  | Execution identities and idempotent host request records |
-| `lifecycle` | Content-free events and OpenTelemetry observers          |
+| Module       | Contents                                                 |
+| ------------ | -------------------------------------------------------- |
+| `provider`   | Muse, Kimi, Qwen, OpenAI, and OpenAI-compatible clients  |
+| `catalog`    | Model specs, roles, capabilities, pricing, and selection |
+| `model`      | The `Model` trait, requests, registry, context budgets   |
+| `tool`       | Tool arguments, results, and the `FileSystem` seam       |
+| `bash`       | Bash configuration, executors, enforcement, records      |
+| `turn`       | Turn builders, reports, activity, and settlement errors  |
+| `store`      | Session stores and durable write and checkpoint records  |
+| `recovery`   | Execution identities and idempotent host request records |
+| `transcript` | Settled-turn transcripts and their wire shape            |
+| `lifecycle`  | Content-free events and OpenTelemetry observers          |
 
 The API docs on each type carry the detailed contracts. The
 [design page](https://agentty.xyz/docs/architecture/ag-harness-design/) covers runtime

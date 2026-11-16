@@ -1,0 +1,341 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "TurnRecord",
+  "description": "One settled turn of a session transcript.",
+  "type": "object",
+  "properties": {
+    "error_type": {
+      "description": "Content-free classification of a failed or interrupted turn, such as\n`cancelled` or `RunLimit(ToolCalls)`; `None` for a completed turn.",
+      "type": [
+        "string",
+        "null"
+      ]
+    },
+    "finished_at": {
+      "description": "When the turn settled, to the second for SQLite sessions; on the\nwire, milliseconds since the Unix epoch.",
+      "type": "integer",
+      "format": "uint64",
+      "minimum": 0
+    },
+    "input": {
+      "description": "The turn's input blocks in order.",
+      "type": "array",
+      "items": {
+        "$ref": "#/$defs/TranscriptInput"
+      }
+    },
+    "instructions": {
+      "description": "Host instructions given for this turn only.",
+      "type": [
+        "string",
+        "null"
+      ]
+    },
+    "items": {
+      "description": "What the model produced, in order: reasoning, assistant text, tool\ncalls with their results, and, for a completed turn, the final\noutput last.",
+      "type": "array",
+      "items": {
+        "$ref": "#/$defs/TranscriptItem"
+      }
+    },
+    "started_at": {
+      "description": "When the turn was admitted, to the second for SQLite sessions; on the\nwire, milliseconds since the Unix epoch.",
+      "type": "integer",
+      "format": "uint64",
+      "minimum": 0
+    },
+    "status": {
+      "description": "How the turn ended.",
+      "$ref": "#/$defs/TurnStatus"
+    },
+    "turn": {
+      "description": "Durable position of the turn within its session.",
+      "$ref": "#/$defs/TurnIndex"
+    },
+    "usage": {
+      "description": "Tokens of the turn's model requests, when recorded: only turns run\nwith a host request ID keep their usage.",
+      "anyOf": [
+        {
+          "$ref": "#/$defs/Usage"
+        },
+        {
+          "type": "null"
+        }
+      ]
+    }
+  },
+  "required": [
+    "finished_at",
+    "input",
+    "items",
+    "started_at",
+    "status",
+    "turn"
+  ],
+  "$defs": {
+    "TranscriptInput": {
+      "description": "One input block of a transcript turn.",
+      "oneOf": [
+        {
+          "description": "An image.",
+          "type": "object",
+          "properties": {
+            "type": {
+              "type": "string",
+              "const": "image"
+            },
+            "data": {
+              "description": "Standard base64 encoding of the image bytes.",
+              "type": "string"
+            },
+            "media_type": {
+              "description": "IANA media type, such as `image/png`.",
+              "type": "string"
+            }
+          },
+          "required": [
+            "type",
+            "data",
+            "media_type"
+          ]
+        },
+        {
+          "description": "A text segment.",
+          "type": "object",
+          "properties": {
+            "type": {
+              "type": "string",
+              "const": "text"
+            },
+            "text": {
+              "description": "The text.",
+              "type": "string"
+            }
+          },
+          "required": [
+            "type",
+            "text"
+          ]
+        }
+      ]
+    },
+    "TranscriptItem": {
+      "description": "One item a transcript turn produced.\n\nIt mirrors [`crate::event::Item`], except that a tool call carries only\nwhat the session stores: its result text, without the status and summary\na live run reports.",
+      "oneOf": [
+        {
+          "description": "Assistant text the model wrote beside its tool calls.",
+          "type": "object",
+          "properties": {
+            "type": {
+              "type": "string",
+              "const": "message"
+            },
+            "text": {
+              "description": "The assistant text.",
+              "type": "string"
+            }
+          },
+          "required": [
+            "type",
+            "text"
+          ]
+        },
+        {
+          "description": "The validated final output of a completed turn.",
+          "type": "object",
+          "properties": {
+            "type": {
+              "type": "string",
+              "const": "output"
+            },
+            "output": {
+              "description": "The output, as [`crate::RunOutcome::result`] returned it.",
+              "$ref": "#/$defs/RunOutput"
+            }
+          },
+          "required": [
+            "type",
+            "output"
+          ]
+        },
+        {
+          "description": "Provider reasoning returned with a model response.",
+          "type": "object",
+          "properties": {
+            "type": {
+              "type": "string",
+              "const": "reasoning"
+            },
+            "text": {
+              "description": "The reasoning text.",
+              "type": "string"
+            }
+          },
+          "required": [
+            "type",
+            "text"
+          ]
+        },
+        {
+          "description": "A tool call and, when one was recorded, its result.",
+          "type": "object",
+          "properties": {
+            "type": {
+              "type": "string",
+              "const": "tool_call"
+            }
+          },
+          "$ref": "#/$defs/TranscriptToolCall",
+          "required": [
+            "type"
+          ]
+        }
+      ]
+    },
+    "RunOutput": {
+      "description": "Validated final output of a successful run.\n\nIt serializes as `{\"type\": \"json\" | \"text\", \"value\": ...}`.",
+      "oneOf": [
+        {
+          "description": "JSON output validated against the run's output schema.",
+          "type": "object",
+          "properties": {
+            "type": {
+              "type": "string",
+              "const": "json"
+            },
+            "value": true
+          },
+          "required": [
+            "type",
+            "value"
+          ]
+        },
+        {
+          "description": "The final assistant text of a run in text output mode.",
+          "type": "object",
+          "properties": {
+            "type": {
+              "type": "string",
+              "const": "text"
+            },
+            "value": {
+              "type": "string"
+            }
+          },
+          "required": [
+            "type",
+            "value"
+          ]
+        }
+      ]
+    },
+    "TranscriptToolCall": {
+      "description": "A tool call of a transcript turn.",
+      "type": "object",
+      "properties": {
+        "arguments": {
+          "description": "Arguments as the model sent them, as JSON text.",
+          "type": "string"
+        },
+        "call_id": {
+          "description": "Provider identifier of the call.",
+          "type": "string"
+        },
+        "name": {
+          "description": "Function name the model called.",
+          "type": "string"
+        },
+        "result": {
+          "description": "Result text the model received, or `None` when the turn stopped\nbefore the call was answered.",
+          "type": [
+            "string",
+            "null"
+          ]
+        }
+      },
+      "required": [
+        "arguments",
+        "call_id",
+        "name"
+      ]
+    },
+    "TurnStatus": {
+      "description": "How a settled turn ended.",
+      "oneOf": [
+        {
+          "description": "The turn committed its final output.",
+          "type": "string",
+          "const": "completed"
+        },
+        {
+          "description": "The turn failed, for example on a model error or a run limit.",
+          "type": "string",
+          "const": "failed"
+        },
+        {
+          "description": "The turn was cancelled or its owner stopped renewing it.",
+          "type": "string",
+          "const": "interrupted"
+        }
+      ]
+    },
+    "TurnIndex": {
+      "description": "Durable position of a turn within its session.",
+      "type": "integer",
+      "format": "uint64",
+      "minimum": 0
+    },
+    "Usage": {
+      "description": "Provider-reported tokens, summed over a run's model requests.\n\nThe counts overlap: `cache_read` is part of `input`, and `reasoning` is\npart of `output`. A count a provider omitted adds zero; a request whose\nprovider reported no input or output count is counted in\n`unreported_requests`, so totals with unreported requests are lower\nbounds. Requests the provider rejected as exceeding its context window,\nand a request in flight when the run was cancelled, are not counted.",
+      "type": "object",
+      "properties": {
+        "input": {
+          "description": "Input tokens, including `cache_read`.",
+          "type": "integer",
+          "format": "uint64",
+          "minimum": 0
+        },
+        "output": {
+          "description": "Output tokens, including `reasoning`.",
+          "type": "integer",
+          "format": "uint64",
+          "minimum": 0
+        },
+        "cache_read": {
+          "description": "Input tokens served from the provider's prompt cache.",
+          "type": "integer",
+          "format": "uint64",
+          "minimum": 0
+        },
+        "cache_write": {
+          "description": "Input tokens written to the provider's prompt cache, or `None` when\nunknown; no supported provider reports them yet.",
+          "type": [
+            "integer",
+            "null"
+          ],
+          "format": "uint64",
+          "minimum": 0
+        },
+        "reasoning": {
+          "description": "Reasoning tokens.",
+          "type": "integer",
+          "format": "uint64",
+          "minimum": 0
+        },
+        "unreported_requests": {
+          "description": "Model requests whose provider reported no input or output count.",
+          "type": "integer",
+          "format": "uint32",
+          "minimum": 0
+        }
+      },
+      "required": [
+        "input",
+        "output",
+        "cache_read",
+        "reasoning",
+        "unreported_requests"
+      ]
+    }
+  }
+}

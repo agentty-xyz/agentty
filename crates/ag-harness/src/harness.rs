@@ -44,6 +44,7 @@ use crate::schema_contract::OutputSchema;
 use crate::session::{Database, LoadedSession, NewSession, SessionError};
 use crate::store::{AcquiredTurn, SessionStore};
 use crate::tool::Tool;
+use crate::transcript::{TurnRange, TurnRecord};
 use crate::turn::{HistoryActivity, TurnError, TurnOptions, TurnOutcome};
 use crate::write_journal::WriteRecord;
 
@@ -277,6 +278,24 @@ impl Session {
     /// Returns [`SessionError`] if journal loading fails.
     pub async fn writes(&self) -> Result<Vec<WriteRecord>, SessionError> {
         self.database.load_writes(&self.id).await
+    }
+
+    /// Returns the settled turns `range` selects, oldest first, with their
+    /// input, instructions, items, and final output.
+    ///
+    /// Reads every selected turn in full, including turns the history
+    /// budget or a compaction checkpoint keeps out of later requests, and
+    /// never a turn still running. Loads only the selected turns.
+    ///
+    /// # Errors
+    ///
+    /// Returns an [`crate::ErrorKind::NotFound`] failure for a missing
+    /// session, and an [`crate::ErrorKind::Store`] failure when the store
+    /// cannot load the turns or does not support transcripts.
+    pub async fn transcript(&self, range: TurnRange) -> Result<Vec<TurnRecord>, HarnessError> {
+        let turns = self.database.load_transcript(&self.id, &range).await?;
+
+        Ok(turns.into_iter().map(TurnRecord::from_stored).collect())
     }
 
     /// Runs one turn with the session defaults and records it durably.
@@ -673,7 +692,8 @@ impl Session {
     }
 
     /// Returns the prompt-cache key shared by every turn request of this
-    /// session, stable across handles and resume. Hashing bounds its length
+    /// session, stable across handles and resume; a fork's own ID gives it a
+    /// key of its own. Hashing bounds its length
     /// and keeps the host-chosen session ID off the provider wire.
     fn cache_key(&self) -> String {
         let digest = Sha256::digest(self.id.as_bytes());
@@ -1276,6 +1296,50 @@ impl Harness {
             output: loaded.output,
             system_prompt: loaded.system_prompt,
         })
+    }
+
+    /// Creates session `new` from session `from`'s settled turns through
+    /// index `at`, and resumes it.
+    ///
+    /// The fork keeps the source's output mode, system prompt, history
+    /// budget, and model selection, and gets the prompt-cache key of its own
+    /// identifier, so the two sessions never share a provider cache slot. It
+    /// keeps the source's compaction checkpoint only when that covers no turn
+    /// after `at`, and replays its history from the start of its budget. The
+    /// source is left unchanged, so both sessions continue independently.
+    ///
+    /// # Errors
+    ///
+    /// Returns an [`crate::ErrorKind::NotFound`] failure when `from` or its
+    /// settled turn `at` does not exist, an [`crate::ErrorKind::Conflict`]
+    /// failure when `new` exists, an [`crate::ErrorKind::Config`] failure
+    /// for a blank `new` identifier, storage that is not configured, or a
+    /// source recorded with another model, and an
+    /// [`crate::ErrorKind::Store`] failure when the store fails or does not
+    /// support forking.
+    pub async fn fork(
+        &self,
+        from: &SessionId,
+        at: TurnIndex,
+        new: SessionId,
+    ) -> Result<Session, HarnessError> {
+        if new.as_str().trim().is_empty() {
+            return Err(HarnessError::config(SessionError::InvalidData {
+                reason: "session identifier must not be empty".to_string(),
+            }));
+        }
+        let database = self.open_database().await?;
+        let source = database.load_session(from.as_str()).await?;
+        self.validate_session_model(from.as_str(), &source)?;
+        let through = i64::try_from(at.get()).map_err(|_| SessionError::TurnNotFound {
+            id: from.as_str().to_string(),
+            turn: at.get(),
+        })?;
+        database
+            .fork_session(from.as_str(), through, new.as_str())
+            .await?;
+
+        Ok(self.resume(new.as_str()).await?)
     }
 
     fn from_shared_model(model: Arc<dyn Model>, context_budget: ContextBudget) -> Self {

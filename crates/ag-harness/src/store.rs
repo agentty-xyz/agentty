@@ -27,6 +27,8 @@ pub use crate::session::{
     Database as SqliteStore, LoadedSession, NewSession, SessionInfo, StoreIdentity, TurnOwner,
 };
 pub use crate::session_model::RecordedModel;
+pub use crate::transcript::StoredTurn;
+use crate::transcript::TurnRange;
 use crate::turn::{TurnError, TurnOutcome};
 pub use crate::turn_options_snapshot::{StoredTurnOptions, StoredTurnOptionsError};
 pub use crate::write_journal::{WriteRecord, WriteStatus};
@@ -85,6 +87,40 @@ pub trait SessionStore: Send + Sync {
     async fn reconcile_command(&self, _owner: &TurnOwner, _id: i64) -> Result<(), SessionError> {
         Err(SessionError::InvalidData {
             reason: "command storage unsupported".into(),
+        })
+    }
+
+    /// Loads the settled turns `range` selects, oldest first, each with every
+    /// persisted message. Recover expired turns first; never return a
+    /// running turn, and read only the selected turns. Missing sessions
+    /// return `NotFound`; unsupported stores fail closed.
+    async fn load_transcript(
+        &self,
+        _session_id: &str,
+        _range: &TurnRange,
+    ) -> Result<Vec<StoredTurn>, SessionError> {
+        Err(SessionError::InvalidData {
+            reason: "transcript storage unsupported".into(),
+        })
+    }
+
+    /// Atomically creates session `target` with `source`'s configuration and
+    /// model selection, and copies of its turns through position `through`
+    /// with their write and command records. The copy starts with the
+    /// default [`HistoryProjection`] and keeps the source's checkpoint only
+    /// when it covers no later turn. Recover expired turns first. Reject a
+    /// missing source with `NotFound`, a position that is not a settled turn
+    /// with `TurnNotFound`, and an existing target with `AlreadyExists`,
+    /// changing nothing. The source is never modified; unsupported stores
+    /// fail closed.
+    async fn fork_session(
+        &self,
+        _source: &str,
+        _through: i64,
+        _target: &str,
+    ) -> Result<(), SessionError> {
+        Err(SessionError::InvalidData {
+            reason: "session forking unsupported".into(),
         })
     }
 

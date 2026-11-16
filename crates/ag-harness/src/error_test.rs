@@ -286,6 +286,13 @@ fn classifies_session_state_and_configuration_failures() {
             ErrorKind::NotFound,
         ),
         (
+            SessionError::TurnNotFound {
+                id: "s".into(),
+                turn: 3,
+            },
+            ErrorKind::NotFound,
+        ),
+        (
             SessionError::OwnershipLost {
                 id: "s".into(),
                 turn_position: 0,

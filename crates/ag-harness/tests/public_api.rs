@@ -68,6 +68,10 @@ mod run_limits_test;
 #[path = "support/legacy_store.rs"]
 mod legacy_store_test;
 
+#[cfg(test)]
+#[path = "support/transcript.rs"]
+mod transcript_test;
+
 use std::error::Error;
 use std::ffi::OsString;
 use std::io::{self, Cursor};

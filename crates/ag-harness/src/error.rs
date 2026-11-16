@@ -372,7 +372,8 @@ pub struct HarnessError {
 }
 
 impl HarnessError {
-    fn config(error: impl Error + Send + Sync + 'static) -> Self {
+    /// Classifies `error` as an [`ErrorKind::Config`] failure.
+    pub(crate) fn config(error: impl Error + Send + Sync + 'static) -> Self {
         Self {
             classified: Classified::new(Classification::kind(ErrorKind::Config), Box::new(error)),
         }
@@ -484,7 +485,9 @@ impl Classification {
             | SessionError::HostTurnStopped(_)
             | SessionError::AlreadyExists { .. }
             | SessionError::OwnershipLost { .. } => ErrorKind::Conflict,
-            SessionError::NotFound { .. } => ErrorKind::NotFound,
+            SessionError::NotFound { .. } | SessionError::TurnNotFound { .. } => {
+                ErrorKind::NotFound
+            }
             SessionError::ImageInputExceedsHistory { .. } => ErrorKind::ContextOverflow,
             SessionError::TurnPersistence { .. }
             | SessionError::Checkpoint(_)

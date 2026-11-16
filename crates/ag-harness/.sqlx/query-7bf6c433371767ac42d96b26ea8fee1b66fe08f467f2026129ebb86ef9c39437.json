@@ -1,0 +1,50 @@
+{
+  "db_name": "SQLite",
+  "query": "\nSELECT turn_position AS \"turn_position!: i64\", kind AS \"kind!: String\", payload AS \"payload!: String\"\nFROM session_message\nWHERE session_id = ? AND turn_position IN (SELECT value FROM json_each(?))\nORDER BY turn_position, message_position\n",
+  "describe": {
+    "columns": [
+      {
+        "name": "turn_position!: i64",
+        "ordinal": 0,
+        "type_info": "Integer",
+        "origin": {
+          "Table": {
+            "table": "session_message",
+            "name": "turn_position"
+          }
+        }
+      },
+      {
+        "name": "kind!: String",
+        "ordinal": 1,
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "session_message",
+            "name": "kind"
+          }
+        }
+      },
+      {
+        "name": "payload!: String",
+        "ordinal": 2,
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "session_message",
+            "name": "payload"
+          }
+        }
+      }
+    ],
+    "parameters": {
+      "Right": 2
+    },
+    "nullable": [
+      false,
+      false,
+      false
+    ]
+  },
+  "hash": "7bf6c433371767ac42d96b26ea8fee1b66fe08f467f2026129ebb86ef9c39437"
+}

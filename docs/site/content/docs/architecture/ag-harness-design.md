@@ -54,7 +54,10 @@ crates/
   `Harness::builder` checks the model, the budget, and the repository required by
   allowed tools at `build`; storage still opens on first session use.
 - `Session` is the only multi-turn abstraction; `run_once` executes a stateless turn.
-  Durable and stateless turns can be awaited or started for a `TurnControl`.
+  `Session::transcript` reads settled turns in full (all, the newest N, or a span).
+  `Harness::fork` copies a session's configuration and settled turns through one index
+  into a new session atomically, with its own prompt-cache key; the source is never
+  changed. Durable and stateless turns can be awaited or started for a `TurnControl`.
 - `TurnOptions` fixes the schema, `ToolPolicy`, and optional `ComparisonBase` for one
   execution. Explicit options replace defaults; they are never merged.
 - `Model` is the object-safe provider boundary. `ModelRegistry` resolves built-in or

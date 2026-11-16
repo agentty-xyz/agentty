@@ -79,8 +79,8 @@ impl SessionId {
     }
 
     /// Wraps the session identifier `id`.
-    pub(crate) fn new(id: String) -> Self {
-        Self(id)
+    pub fn new(id: impl Into<String>) -> Self {
+        Self(id.into())
     }
 }
 
@@ -90,6 +90,11 @@ impl SessionId {
 pub struct TurnIndex(u64);
 
 impl TurnIndex {
+    /// Wraps the zero-based durable turn position `position`.
+    pub fn new(position: u64) -> Self {
+        Self(position)
+    }
+
     /// Returns the position.
     pub fn get(self) -> u64 {
         self.0
@@ -125,8 +130,12 @@ pub struct RunEvent {
 }
 
 impl RunEvent {
-    /// Encodes `at` as milliseconds since the Unix epoch.
-    fn serialize_at<S: Serializer>(at: &SystemTime, serializer: S) -> Result<S::Ok, S::Error> {
+    /// Encodes `at` as milliseconds since the Unix epoch; transcript turn
+    /// times share this encoding.
+    pub(crate) fn serialize_at<S: Serializer>(
+        at: &SystemTime,
+        serializer: S,
+    ) -> Result<S::Ok, S::Error> {
         let millis = at
             .duration_since(UNIX_EPOCH)
             .ok()
@@ -137,7 +146,9 @@ impl RunEvent {
     }
 
     /// Decodes `at` from milliseconds since the Unix epoch.
-    fn deserialize_at<'de, D: Deserializer<'de>>(deserializer: D) -> Result<SystemTime, D::Error> {
+    pub(crate) fn deserialize_at<'de, D: Deserializer<'de>>(
+        deserializer: D,
+    ) -> Result<SystemTime, D::Error> {
         let millis = u64::deserialize(deserializer)?;
 
         UNIX_EPOCH
