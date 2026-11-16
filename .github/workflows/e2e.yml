@@ -2,6 +2,10 @@ name: Agentty E2E
 
 on:
   workflow_call:
+    secrets:
+      TRUNK_API_TOKEN:
+        description: Trunk organization API token used to upload test results.
+        required: false
 
 permissions:
   contents: read
@@ -12,6 +16,7 @@ jobs:
     runs-on: ubuntu-latest
     env:
       CARGO_TARGET_DIR: target
+      TRUNK_API_TOKEN_AVAILABLE: ${{ secrets.TRUNK_API_TOKEN != '' }}
     container:
       image: ghcr.io/agentty-xyz/agentty-e2e@sha256:a72f0ec28f53b2746b3b3cd224aaa1e511e555c6a1b5c2bbdfa21e79538e55f4
       # GitHub requires the default root user to access `GITHUB_WORKSPACE`.
@@ -67,3 +72,18 @@ jobs:
         with:
           name: e2e-test-results
           outcome: ${{ steps.e2e-tests.outcome }}
+
+      # The variant keeps E2E history apart from the unit and integration
+      # uploads in the same Trunk collection.
+      - name: Upload E2E test results to Trunk
+        if: ${{ !cancelled() && env.TRUNK_API_TOKEN_AVAILABLE == 'true' }}
+        continue-on-error: true
+        uses: trunk-io/analytics-uploader@a86313c7029d22e6ea2d5c346060a224d90053dc # v2.1.6
+        env:
+          TRUNK_API_TOKEN: ${{ secrets.TRUNK_API_TOKEN }}
+        with:
+          junit-paths: target/nextest/ci/junit.xml
+          org-slug: agentty
+          previous-step-outcome: ${{ steps.e2e-tests.outcome }}
+          token: ${{ secrets.TRUNK_API_TOKEN }}
+          variant: e2e
