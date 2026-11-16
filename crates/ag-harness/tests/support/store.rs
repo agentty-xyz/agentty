@@ -157,6 +157,9 @@ impl Record {
             owner.turn_position(),
             HistoryTurn {
                 messages: std::mem::take(&mut self.pending),
+                // A switch needs an idle session, so the selection is the
+                // one the turn was reserved under.
+                model: Some(self.loaded.recorded_model()),
                 stop,
             },
         ));

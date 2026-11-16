@@ -16,6 +16,7 @@ use crate::session::LoadedSession;
 use crate::sqlite_store::tests::support::{schema, turn_options};
 use crate::sqlite_store::{Database, ReservationObserver};
 use crate::store::{AcquiredTurn, HistoryProjection, ModelSwitch, NewSession, SessionStore};
+use crate::tool::ToolCall;
 
 struct Validated {
     entered: Notify,
@@ -69,7 +70,8 @@ async fn switch_reports_unsupported_history_before_a_concurrent_successor_turn()
     assert_eq!(loaded.model_generation, 0);
 }
 
-/// Completes a turn with unsupported reasoning while a model switch waits
+/// Completes a turn with tool history, which the tool-less target cannot
+/// replay, while a model switch waits
 /// between history validation and its writer transaction, optionally
 /// reserving an active successor turn before the switch resumes.
 async fn switch_across_concurrent_unsupported_history(
@@ -116,10 +118,17 @@ async fn switch_across_concurrent_unsupported_history(
     store
         .complete_turn(
             acquired.owner(),
-            &[ModelMessage::AssistantReasoning {
-                content: "answer".into(),
-                reasoning_content: "provider state".into(),
-            }],
+            &[
+                ModelMessage::AssistantToolCall(
+                    ToolCall::from_json("call".into(), "read", r#"{"path":"a.txt"}"#, None)
+                        .expect("call"),
+                ),
+                ModelMessage::ToolResult {
+                    call_id: "call".into(),
+                    content: "{}".into(),
+                    name: "read".into(),
+                },
+            ],
             HistoryProjection::default(),
         )
         .await

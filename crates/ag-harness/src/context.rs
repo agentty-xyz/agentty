@@ -16,6 +16,7 @@ use crate::lifecycle::ContextSummaryTrigger;
 use crate::model::{ModelMessage, ModelRequest};
 use crate::round_summary::{self, CoveredCalls, RoundSummaryJob, SOURCE_TEXT_LEVELS};
 use crate::schema_contract::OutputSchema;
+use crate::session_model::{self, RecordedModel};
 use crate::tool::{ReadAction, ReadArguments, Tool, ToolCall, ToolCallArguments, ToolDefinition};
 use crate::turn::{ContextActivity, TurnError, TurnOptions};
 use crate::{compaction, read};
@@ -449,6 +450,11 @@ impl ContextEstimator for HeuristicContextEstimator {
 pub struct HistoryTurn {
     /// Persisted messages in order, starting with the turn's user input.
     pub messages: Vec<ModelMessage>,
+    /// Model selection recorded when the turn was reserved; `None` for a
+    /// legacy turn without a snapshot. A later request to a model of another
+    /// provider replays the turn's provider reasoning as text notes instead
+    /// of natively; a turn without a snapshot always replays natively.
+    pub model: Option<RecordedModel>,
     /// Why the turn stopped; `None` for a completed turn.
     pub stop: Option<TurnStop>,
 }
@@ -514,6 +520,7 @@ impl HistoryTurn {
 
         Self {
             messages,
+            model: self.model.clone(),
             stop: self.stop.clone(),
         }
     }
@@ -541,6 +548,7 @@ impl HistoryTurn {
                 .into_iter()
                 .chain(output)
                 .collect(),
+            model: self.model.clone(),
             stop: self.stop.clone(),
         }
     }
@@ -594,10 +602,11 @@ impl HistoryTurn {
 }
 
 impl From<Vec<ModelMessage>> for HistoryTurn {
-    /// Describes a completed turn.
+    /// Describes a completed turn without a model snapshot.
     fn from(messages: Vec<ModelMessage>) -> Self {
         Self {
             messages,
+            model: None,
             stop: None,
         }
     }
@@ -1046,11 +1055,15 @@ pub(crate) struct SentHistory {
 }
 
 /// The finished turns one turn's first request replayed, oldest first with
-/// their positions and in their replayed forms, and the projection they
-/// follow.
+/// their positions and in their replayed forms, the projection they follow,
+/// and the provider whose model the request targeted.
 #[derive(Debug, Default)]
 pub(crate) struct ReplayedHistory {
     pub(crate) projection: HistoryProjection,
+    /// Provider name of the request's model, which decides which turns
+    /// replayed their reasoning as notes (see
+    /// [`session_model::project_turn`]).
+    pub(crate) target: Option<&'static str>,
     pub(crate) turns: Vec<(i64, HistoryTurn)>,
 }
 
@@ -1068,7 +1081,7 @@ impl ReplayedHistory {
             self.projection.drop_before(position.saturating_add(1))
         });
         for ((position, turn), messages) in kept.iter().zip(&sent.turns) {
-            if *messages != turn.elided().replay() {
+            if *messages != session_model::project_turn(&turn.elided(), self.target).replay() {
                 break;
             }
             projection = projection.elide_before(position.saturating_add(1));

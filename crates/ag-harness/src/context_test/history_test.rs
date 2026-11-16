@@ -88,6 +88,7 @@ fn brief_turns_keep_the_input_and_any_final_output() {
             ModelMessage::User("stopped".to_string()),
             ModelMessage::AssistantToolCall(read_call("call")),
         ],
+        model: None,
         stop: Some(TurnStop {
             error_type: "cancelled".to_string(),
             ..TurnStop::default()

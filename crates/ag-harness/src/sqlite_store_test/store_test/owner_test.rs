@@ -19,6 +19,7 @@ use crate::sqlite_store::tests::support::{
     acquire, allow_interrupts, reject_interrupts, schema, turn_options,
 };
 use crate::store::{AcquiredTurn, SessionStore, WriteStatus};
+use crate::store_fixture::unselected_model;
 
 #[tokio::test]
 async fn expired_and_wrong_owners_cannot_mutate_but_existing_writes_can_settle() {
@@ -114,6 +115,7 @@ async fn expired_and_wrong_owners_cannot_mutate_but_existing_writes_can_settle()
             0,
             HistoryTurn {
                 messages: vec![ModelMessage::User("prompt".to_string())],
+                model: Some(unselected_model()),
                 stop: Some(TurnStop {
                     error_type: "cancelled".to_string(),
                     ..TurnStop::default()

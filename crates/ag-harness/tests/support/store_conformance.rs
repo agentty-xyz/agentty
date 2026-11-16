@@ -28,7 +28,8 @@ use tokio::sync::Notify;
 use crate::context_budget_fixture::unbounded_context_budget;
 use crate::model_profile_fixture::unbounded_model_profile;
 use crate::store_fixture::{
-    Echo, ExternalStore, harness, image_input, lifecycle, options, schema, stores,
+    Echo, ExternalStore, harness, image_input, lifecycle, loaded_turn, options, schema, stores,
+    unselected_model,
 };
 use crate::store_gate::Gate;
 
@@ -403,7 +404,7 @@ async fn all_backends_complete_after_appended_exchanges() {
             store.load_session("appended").await.expect("history").turns,
             vec![(
                 0,
-                HistoryTurn::from(vec![
+                loaded_turn(vec![
                     ModelMessage::User("done".to_string()),
                     call,
                     result,
@@ -482,6 +483,7 @@ async fn journaled_backends_replay_stopped_turn_messages_and_unfinished_effects(
                         ModelMessage::User("work".to_string()),
                         ModelMessage::AssistantToolCall(write_call("work-call")),
                     ],
+                    model: Some(unselected_model()),
                     stop: Some(TurnStop {
                         unfinished_commands: vec!["cargo test".to_string()],
                         unfinished_writes: vec!["src/lib.rs".to_string()],
@@ -562,6 +564,7 @@ async fn journaled_backends_keep_running_turn_effects_out_of_stopped_turn_notes(
                 0,
                 HistoryTurn {
                     messages: vec![ModelMessage::User("work".to_string())],
+                    model: Some(unselected_model()),
                     stop: Some(failed_stop()),
                 }
             )]
@@ -626,6 +629,7 @@ async fn journaled_backends_keep_only_the_input_of_a_stopped_turn_over_the_byte_
                 1,
                 HistoryTurn {
                     messages: vec![ModelMessage::User("work".to_string())],
+                    model: Some(unselected_model()),
                     stop: Some(failed_stop()),
                 }
             )]
@@ -689,7 +693,7 @@ async fn journaled_backends_keep_an_oversized_completed_turn_elided_or_brief() {
                 .expect("create");
             complete_tool_heavy_turn(&store, id).await;
         }
-        let old = HistoryTurn::from(vec![
+        let old = loaded_turn(vec![
             ModelMessage::User("old".to_string()),
             ModelMessage::Assistant("{}".to_string()),
         ]);
@@ -714,7 +718,7 @@ async fn journaled_backends_keep_an_oversized_completed_turn_elided_or_brief() {
             (0, old),
             (
                 1,
-                HistoryTurn::from(vec![
+                loaded_turn(vec![
                     ModelMessage::User("work".to_string()),
                     ModelMessage::Assistant("{}".to_string()),
                 ]),
@@ -769,7 +773,7 @@ fn read_turn(input: &str, bytes: usize) -> HistoryTurn {
     )
     .expect("read call");
 
-    HistoryTurn::from(vec![
+    loaded_turn(vec![
         ModelMessage::User(input.to_string()),
         ModelMessage::AssistantToolCall(call),
         ModelMessage::ToolResult {
@@ -995,7 +999,7 @@ async fn journaled_backends_load_the_oldest_uncovered_turns_as_the_compaction_so
             .expect("fail");
         drop(failed);
         let brief = |input: &str| {
-            HistoryTurn::from(vec![
+            loaded_turn(vec![
                 ModelMessage::User(input.to_string()),
                 ModelMessage::Assistant("{}".to_string()),
             ])
@@ -1157,14 +1161,14 @@ async fn journaled_backends_size_a_brief_turn_with_its_final_reasoning_cleared()
             vec![
                 (
                     0,
-                    HistoryTurn::from(vec![
+                    loaded_turn(vec![
                         ModelMessage::User("old".to_string()),
                         ModelMessage::Assistant("{}".to_string()),
                     ])
                 ),
                 (
                     1,
-                    HistoryTurn::from(vec![
+                    loaded_turn(vec![
                         ModelMessage::User("work".to_string()),
                         ModelMessage::AssistantReasoning {
                             content: "{}".to_string(),
@@ -1208,7 +1212,7 @@ async fn all_backends_preserve_ordered_image_input_in_history() {
             loaded.turns,
             vec![(
                 0,
-                HistoryTurn::from(vec![
+                loaded_turn(vec![
                     ModelMessage::UserInput(input),
                     ModelMessage::Assistant("described".to_string()),
                 ])
@@ -1639,6 +1643,7 @@ async fn expired_renewal_acknowledgment_cancels_a_short_lease_turn() {
             0,
             HistoryTurn {
                 messages: vec![ModelMessage::User("work".to_string())],
+                model: Some(unselected_model()),
                 stop: Some(TurnStop {
                     error_type: "interrupted".to_string(),
                     ..TurnStop::default()

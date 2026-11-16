@@ -20,7 +20,7 @@ use crate::store::{
     AcquiredTurn, HistoryProjection, HistoryTurn, MemoryStore, NewSession, SessionStore,
     StoreIdentity, TurnOwner, TurnStop, WriteRecord, WriteStatus,
 };
-use crate::store_fixture::{harness, options, schema};
+use crate::store_fixture::{harness, loaded_turn, options, schema, unselected_model};
 use crate::{ModelError, SessionError, TurnError, TurnInput};
 
 #[tokio::test]
@@ -304,10 +304,7 @@ async fn bounded_projection_keeps_complete_groups_and_canonical_records() {
     // Assert
     assert_eq!(
         loaded.turns,
-        vec![(
-            2,
-            HistoryTurn::from(vec![ModelMessage::User("last".to_string())])
-        )]
+        vec![(2, loaded_turn(vec![ModelMessage::User("last".to_string())]))]
     );
     assert_eq!(store.lock().sessions["session"].turns.len(), 3);
     store
@@ -480,6 +477,7 @@ async fn expiry_and_stale_cleanup_match_sqlite() {
                     1,
                     HistoryTurn {
                         messages: vec![ModelMessage::User("expired".to_string())],
+                        model: Some(unselected_model()),
                         stop: Some(TurnStop {
                             error_type: "interrupted".to_string(),
                             ..TurnStop::default()

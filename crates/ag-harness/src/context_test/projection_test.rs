@@ -229,6 +229,7 @@ fn reprojection_keeps_only_the_input_and_note_of_a_stopped_turn_that_does_not_fi
             ModelMessage::AssistantToolCall(read_call("call")),
             tool_result("call", "read", "{}"),
         ],
+        model: None,
         stop: Some(TurnStop {
             error_type: "cancelled".to_string(),
             ..TurnStop::default()
@@ -310,6 +311,7 @@ fn the_next_turn_keeps_what_this_turn_left_out_or_sent_elided() {
     ]);
     let replayed = ReplayedHistory {
         projection: HistoryProjection::new(0, 0, 2),
+        target: None,
         turns: turns.clone(),
     };
     let sent = SentHistory {
