@@ -25,7 +25,8 @@ struct Cli {
 /// Supported maintenance subcommands.
 #[derive(Subcommand)]
 enum Command {
-    /// Runs strict Clippy for the packages changed files can affect.
+    /// Runs strict Clippy, or `cargo check` with `--check`, for the packages
+    /// changed files can affect.
     Clippy(affected_clippy::Options),
     /// Reports every uncovered line and function in an LCOV report.
     #[command(name = "check-coverage")]

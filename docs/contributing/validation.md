@@ -10,6 +10,10 @@ diff, then run focused tests for the changed behavior. Use `test-focused` with a
 explicit `AGENTTY_TEST_FILTER`. Run mutating fixers one at a time; if a fixer modifies
 files, rerun only that hook rather than the entire hook set.
 
+Before `test-focused`, catch compile errors with
+`prek run cargo-check --hook-stage manual --files <changed paths>`. It compile-checks
+the packages `clippy` would select for those paths, without linting.
+
 Before handoff, choose one validation rung covering every touched file and all affected
 dependents. Handoff means the task's final state, not each reply in a multi-turn
 session.
