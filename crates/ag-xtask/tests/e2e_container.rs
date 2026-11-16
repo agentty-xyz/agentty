@@ -166,6 +166,58 @@ fn pinned_runs_pull_the_native_variant_and_mount_the_workspace() -> Result<(), B
 }
 
 #[test]
+fn ignored_generators_run_in_the_selected_target() -> Result<(), Box<dyn Error>> {
+    // Arrange
+    let fixture = Fixture::new()?;
+
+    // Act
+    let output = fixture
+        .command()
+        .env("AGENTTY_E2E_IMAGE", "sha256:candidate")
+        .env("AGENTTY_RUN_IGNORED", "only")
+        .env("AGENTTY_TEST_FILTER", "test(=feature_tab_tour)")
+        .env("AGENTTY_TEST_TARGET", "showcase")
+        .output()?;
+
+    // Assert
+    assert!(output.status.success(), "{}", logged(&output));
+    let calls = fixture.calls()?;
+    assert_eq!(calls.len(), 1);
+    assert!(
+        calls[0].ends_with(" --test showcase --run-ignored only -E test(=feature_tab_tour)"),
+        "{}",
+        calls[0]
+    );
+
+    Ok(())
+}
+
+#[test]
+fn invalid_selections_fail_before_any_container_runs() -> Result<(), Box<dyn Error>> {
+    // Arrange
+    let fixture = Fixture::new()?;
+
+    // Act
+    let target = fixture
+        .command()
+        .env("AGENTTY_TEST_TARGET", "prompt_evaluation")
+        .output()?;
+    let ignored = fixture
+        .command()
+        .env("AGENTTY_RUN_IGNORED", "all")
+        .output()?;
+
+    // Assert
+    assert!(!target.status.success());
+    assert!(logged(&target).contains("AGENTTY_TEST_TARGET must be one of e2e, showcase"));
+    assert!(!ignored.status.success());
+    assert!(logged(&ignored).contains("AGENTTY_RUN_IGNORED must be `only`"));
+    assert!(!fixture.directory.path().join("calls").exists());
+
+    Ok(())
+}
+
+#[test]
 fn a_second_run_waits_for_the_lock_holder() -> Result<(), Box<dyn Error>> {
     // Arrange
     let fixture = Fixture::new()?;

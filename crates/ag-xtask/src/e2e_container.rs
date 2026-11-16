@@ -22,20 +22,28 @@ const FEATURE_GIFS: &str = "docs/site/static/features";
 /// Label on every container this command starts.
 const LABEL: &str = "agentty.e2e-container=1";
 
-/// Runs the Agentty `e2e` target inside the pinned image.
+/// Agentty test targets the container may run.
+const TEST_TARGETS: [&str; 2] = ["e2e", "showcase"];
+
+/// Runs an Agentty PTY target inside the pinned image.
 ///
-/// `TESTTY_GIF_MODE` selects the freshness mode (default `check`),
-/// `AGENTTY_TEST_FILTER` optionally narrows the run with a nextest filterset,
-/// and `AGENTTY_E2E_IMAGE` replaces the pinned image with a local candidate
-/// without pulling it. Runs sharing a cache directory wait for each other.
+/// `AGENTTY_TEST_TARGET` selects `e2e` (default) or `showcase`,
+/// `AGENTTY_RUN_IGNORED=only` runs only that target's ignored asset
+/// generators, `TESTTY_GIF_MODE` selects the freshness mode (default
+/// `check`), `AGENTTY_TEST_FILTER` optionally narrows the run with a nextest
+/// filterset, and `AGENTTY_E2E_IMAGE` replaces the pinned image with a local
+/// candidate without pulling it. Runs sharing a cache directory wait for each
+/// other.
 pub(crate) fn run() -> Result<(), String> {
     let settings = Settings {
         architecture: std::env::consts::ARCH,
         cache: cache_root(std::env::var_os("XDG_CACHE_HOME"), std::env::var_os("HOME"))?,
         candidate: variable("AGENTTY_E2E_IMAGE"),
         filter: variable("AGENTTY_TEST_FILTER"),
+        ignored_only: ignored_only(variable("AGENTTY_RUN_IGNORED").as_deref())?,
         mode: variable("TESTTY_GIF_MODE").unwrap_or_else(|| "check".into()),
         pinned: pinned_image(WORKFLOW)?,
+        target: test_target(variable("AGENTTY_TEST_TARGET").as_deref())?,
         workspace: std::env::current_dir().map_err(error_text)?,
     };
 
@@ -61,6 +69,17 @@ fn variable(name: &str) -> Option<String> {
     std::env::var(name).ok().filter(|value| !value.is_empty())
 }
 
+/// Resolves `AGENTTY_RUN_IGNORED`, whose only accepted value is `only`.
+fn ignored_only(value: Option<&str>) -> Result<bool, String> {
+    match value {
+        None => Ok(false),
+        Some("only") => Ok(true),
+        Some(other) => Err(format!(
+            "AGENTTY_RUN_IGNORED must be `only` when set, not `{other}`"
+        )),
+    }
+}
+
 /// Reads the digest-pinned image from the E2E workflow.
 fn pinned_image(workflow: &str) -> Result<String, String> {
     let workflow: serde_yaml_ng::Value = serde_yaml_ng::from_str(workflow).map_err(error_text)?;
@@ -72,14 +91,33 @@ fn pinned_image(workflow: &str) -> Result<String, String> {
         .ok_or_else(|| "The E2E workflow must pin `jobs.test.container.image` by digest".into())
 }
 
+/// Resolves `AGENTTY_TEST_TARGET`, defaulting to the `e2e` target.
+fn test_target(value: Option<&str>) -> Result<&'static str, String> {
+    let Some(value) = value else {
+        return Ok(TEST_TARGETS[0]);
+    };
+
+    TEST_TARGETS
+        .into_iter()
+        .find(|target| *target == value)
+        .ok_or_else(|| {
+            format!(
+                "AGENTTY_TEST_TARGET must be one of {}, not `{value}`",
+                TEST_TARGETS.join(", ")
+            )
+        })
+}
+
 /// Inputs resolved from the invoking environment.
 struct Settings {
     architecture: &'static str,
     cache: PathBuf,
     candidate: Option<String>,
     filter: Option<String>,
+    ignored_only: bool,
     mode: String,
     pinned: String,
+    target: &'static str,
     workspace: PathBuf,
 }
 
@@ -178,8 +216,11 @@ impl Runner<'_> {
             "-p",
             "agentty",
             "--test",
-            "e2e",
+            settings.target,
         ]);
+        if settings.ignored_only {
+            arguments.extend(["--run-ignored", "only"]);
+        }
         if let Some(filter) = &settings.filter {
             arguments.extend(["-E", filter]);
         }

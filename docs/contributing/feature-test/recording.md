@@ -37,10 +37,13 @@ TESTTY_GIF_MODE=generate AGENTTY_TEST_FILTER='test(<test_function>)' \
   prek run e2e-container --all-files --hook-stage manual
 ```
 
-The hook runs the Agentty `e2e` target in the native variant of the image pinned by
-`.github/workflows/e2e.yml`. `TESTTY_GIF_MODE` defaults to `check`, and the optional
-`AGENTTY_TEST_FILTER` nextest filterset narrows the run. The container runs as the host
-user so the bind-mounted workspace remains writable. A host-owned cache in
+The hook runs an Agentty test target in the native variant of the image pinned by
+`.github/workflows/e2e.yml`. `AGENTTY_TEST_TARGET` selects `e2e` (the default) or
+`showcase`, `TESTTY_GIF_MODE` defaults to `check`, and the optional
+`AGENTTY_TEST_FILTER` nextest filterset narrows the run. `AGENTTY_RUN_IGNORED=only` runs
+only the target's ignored tests, which are the asset generators below; any other value,
+or another target, fails before a container starts. The container runs as the host user
+so the bind-mounted workspace remains writable. A host-owned cache in
 `${XDG_CACHE_HOME:-$HOME/.cache}/agentty-e2e` keeps its home, Cargo, and `prek`
 directories between runs, plus one `target-<hash>` build directory per checkout path:
 every checkout is mounted at `/workspace`, and Cargo's modification-time fingerprints
@@ -72,6 +75,34 @@ Testty records to a hidden staging file and replaces the committed GIF only afte
 recording is nonempty. Successful generation removes the previous same-named PNG
 intentionally so a stale poster cannot pass the nonempty-poster integrity check; a
 failed recording preserves the last valid GIF, hash sidecar, and poster.
+
+## Regenerate Marketing Assets
+
+The marketing demo and the `sessions` and `tab_tour` showcase recordings come from
+ignored generators that always re-record and write no hash sidecar. Run each one alone
+through the hook, then refresh its PNG poster with the procedure below. A rewritten GIF
+makes `prek` report the hook as failed with `files were modified by this hook`; the
+nextest summary above that message shows whether the generator passed.
+
+`docs/site/static/demo/demo.gif` comes from `generate_marketing_demo_gif` in the `e2e`
+target:
+
+```sh
+AGENTTY_RUN_IGNORED=only AGENTTY_TEST_FILTER='test(=demo::generate_marketing_demo_gif)' \
+  prek run e2e-container --all-files --hook-stage manual
+```
+
+`docs/site/static/features/sessions.gif` and `tab_tour.gif` come from the `showcase`
+target:
+
+```sh
+AGENTTY_TEST_TARGET=showcase AGENTTY_RUN_IGNORED=only \
+  AGENTTY_TEST_FILTER='test(=feature_sessions_tab)' \
+  prek run e2e-container --all-files --hook-stage manual
+AGENTTY_TEST_TARGET=showcase AGENTTY_RUN_IGNORED=only \
+  AGENTTY_TEST_FILTER='test(=feature_tab_tour)' \
+  prek run e2e-container --all-files --hook-stage manual
+```
 
 ## Create or Refresh the PNG Poster
 

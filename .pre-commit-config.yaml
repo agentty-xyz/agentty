@@ -291,7 +291,7 @@ repos:
         stages: [manual]
       - id: e2e-container
         name: agentty e2e in the pinned container
-        description: Run or record Agentty feature tests in the pinned E2E image with Podman; concurrent local runs wait for the host lock.
+        description: Run or record Agentty feature tests, or the ignored marketing asset generators, in the pinned E2E image with Podman; concurrent local runs wait for the host lock.
         entry: cargo run -q --locked -p ag-xtask -- e2e-container
         language: system
         always_run: true

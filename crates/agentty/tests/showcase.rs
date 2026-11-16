@@ -13,27 +13,13 @@
 //! Each test corresponds to a feature demo on the website. When a test
 //! changes, the corresponding GIF must be regenerated.
 //!
-//! # Prerequisites
-//!
-//! ```sh
-//! brew install vhs
-//! ```
-//!
 //! # Running
 //!
-//! Tests are marked `#[ignore]` so they do not run during regular
-//! `cargo test`. Use `--ignored` to opt in:
-//!
-//! ```sh
-//! cargo test -p agentty --test showcase -- --test-threads=1 --ignored --nocapture
-//! ```
-//!
-//! Override output directory:
-//!
-//! ```sh
-//! FEATURE_OUTPUT=/path/to/dir \
-//!     cargo test -p agentty --test showcase -- --test-threads=1 --ignored --nocapture
-//! ```
+//! Generators are marked `#[ignore]` so they do not run during regular test
+//! runs. Regenerate each GIF in the pinned recording container with the
+//! `e2e-container` commands in `docs/contributing/feature-test/recording.md`;
+//! never record on the bare host. `FEATURE_OUTPUT` overrides the default
+//! output directory.
 
 use std::fmt::Write;
 #[cfg(unix)]
