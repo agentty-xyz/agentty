@@ -73,8 +73,10 @@ the required `ContextBudget` bound a turn.
 
 A run's optional `RunLimits` (requests, reported tokens, tool calls, wall clock) are
 checked before each request and tool batch, so a stopped turn never starts work beyond
-its limit. It fails with `TurnError::LimitReached` and is journaled as failed, so the
-session continues normally. Limits are never stored in snapshots or session defaults.
+its limit; a refused batch replays as never run. It fails with `TurnError::LimitReached`
+and is journaled as failed, or as interrupted when the deadline dropped a running tool
+call, so the session continues normally. Limits are never stored in snapshots or session
+defaults.
 
 ```mermaid
 flowchart TD

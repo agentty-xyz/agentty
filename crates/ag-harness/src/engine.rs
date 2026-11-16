@@ -125,12 +125,17 @@ impl Engine<'_> {
         let deadline = self.options.limits().deadline();
         let driven = self.drive(request, turn_id, &mut progress.state);
         // Reaching the wall-clock limit drops the turn's pending request or
-        // tool call, as cancellation does, and fails the turn.
-        let driven = match deadline {
-            Some(deadline) => timeout_at(deadline, driven)
-                .await
-                .unwrap_or(Err(LimitKind::WallTime.into())),
-            None => driven.await,
+        // tool call, as cancellation does, and fails the turn; one that
+        // dropped a running tool call leaves effects of unknown outcome.
+        let (driven, interrupted) = match deadline {
+            Some(deadline) => match timeout_at(deadline, driven).await {
+                Ok(driven) => (driven, false),
+                Err(_) => (
+                    Err(TurnError::limit_reached(LimitKind::WallTime)),
+                    progress.state.running_tools,
+                ),
+            },
+            None => (driven.await, false),
         };
         match driven {
             Ok((output, request)) => {
@@ -143,10 +148,17 @@ impl Engine<'_> {
                     outcome: TurnOutcome::new(output, report),
                 })
             }
-            Err(error) => Err(EngineFailure {
-                error,
-                report: Some(Box::new(progress.finish())),
-            }),
+            Err(error) => {
+                // Summary requests recorded before the failure still reach
+                // the stream, so its usage matches the outcome's.
+                self.publish_requests(&mut progress.state).await;
+
+                Err(EngineFailure {
+                    error,
+                    interrupted,
+                    report: Some(Box::new(progress.finish())),
+                })
+            }
         }
     }
 
@@ -174,7 +186,8 @@ impl Engine<'_> {
             self.publish_requests(state).await;
             self.options
                 .limits()
-                .check_request(state.model_request_index, state.used_tokens())?;
+                .check_request(state.model_request_index, state.used_tokens())
+                .map_err(TurnError::limit_reached)?;
             // Tool traffic grows the request between model calls; a grown
             // request that no longer fits the calibrated budget is sent as a
             // reduced copy, possibly after summarizing earlier rounds, and
@@ -269,7 +282,9 @@ impl Engine<'_> {
 
     /// Executes one response's tool `calls` after checking them against
     /// the tool-call limit and the malformed-call bound, then acts on any
-    /// repetition among them.
+    /// repetition among them. Calls refused by the tool-call limit are
+    /// journaled without results, so the stopped turn replays them as never
+    /// run.
     async fn run_tool_round(
         &self,
         calls: &[ToolCall],
@@ -278,28 +293,51 @@ impl Engine<'_> {
         request: &mut ModelRequest,
         state: &mut TurnState,
     ) -> Result<(), TurnError> {
-        self.options
-            .limits()
-            .check_tool_calls(state.rounds.activity.len(), calls.len())?;
         self.publish_calls_message(calls).await;
+        if let Err(limit) = self
+            .options
+            .limits()
+            .check_tool_calls(state.rounds.activity.len(), calls.len())
+        {
+            Self::record_calls(calls, batched, request, &state.rounds).await?;
+
+            return Err(TurnError::limit_reached(limit));
+        }
         state.malformed_tool_calls += count_malformed(
             calls,
             &state.rounds.tools,
             &mut state.consecutive_malformed_responses,
         )?;
+        Self::record_calls(calls, batched, request, &state.rounds).await?;
+        state.running_tools = true;
         let repetition = self
             .execute_tool_calls(
                 calls,
-                batched,
                 turn_id,
                 request,
                 &state.context_fit,
                 &mut state.rounds,
             )
             .await?;
+        state.running_tools = false;
         state.repetition_nudges += self.act_on_repetition(repetition, request, turn_id)?;
 
         Ok(())
+    }
+
+    /// Records one response's `calls` in `request` and journals them.
+    async fn record_calls(
+        calls: &[ToolCall],
+        batched: bool,
+        request: &mut ModelRequest,
+        rounds: &ToolRounds,
+    ) -> Result<(), TurnError> {
+        let call_message = match (batched, calls) {
+            (false, [call]) => request.record_tool_call(call.clone()),
+            _ => request.record_tool_calls(calls.to_vec()),
+        };
+
+        Self::persist(rounds.recorder.as_ref(), call_message).await
     }
 
     /// Ends the turn with its validated final `output`, recorded in
@@ -393,8 +431,8 @@ impl Engine<'_> {
         )
     }
 
-    /// Journals one response's `calls`, then executes them in order and
-    /// journals each result, returning the strongest repetition among them.
+    /// Executes one response's journaled `calls` in order and journals each
+    /// result, returning the strongest repetition among them.
     /// Each `read` result is bounded as it runs to the share of the
     /// calibrated budget one result may take, and the round's results
     /// together to the share one round may take: the first results that fit
@@ -403,17 +441,11 @@ impl Engine<'_> {
     async fn execute_tool_calls<'a>(
         &self,
         calls: &'a [ToolCall],
-        batched: bool,
         turn_id: Option<LifecycleId>,
         request: &mut ModelRequest,
         context_fit: &context::ContextFit,
         rounds: &mut ToolRounds,
     ) -> Result<Repetition<'a>, TurnError> {
-        let call_message = match (batched, calls) {
-            (false, [call]) => request.record_tool_call(call.clone()),
-            _ => request.record_tool_calls(calls.to_vec()),
-        };
-        Self::persist(rounds.recorder.as_ref(), call_message).await?;
         let (budget, _) = self
             .context_calibration
             .effective_budget(self.context_budget);
@@ -1013,9 +1045,11 @@ pub(crate) struct FinishedTurn {
 }
 
 /// A failed turn's error with the report of what it did before failing,
-/// or `None` when it failed before preparing its request.
+/// or `None` when it failed before preparing its request. An `interrupted`
+/// turn stopped while a tool call ran, so that call's effects are unknown.
 pub(crate) struct EngineFailure {
     pub(crate) error: TurnError,
+    pub(crate) interrupted: bool,
     pub(crate) report: Option<Box<TurnReport>>,
 }
 
@@ -1023,6 +1057,7 @@ impl EngineFailure {
     fn unreported(error: TurnError) -> Self {
         Self {
             error,
+            interrupted: false,
             report: None,
         }
     }
@@ -1042,6 +1077,8 @@ struct TurnState {
     malformed_tool_calls: usize,
     repetition_nudges: usize,
     overflow: OverflowRecovery,
+    /// Whether a response's tool calls are running.
+    running_tools: bool,
 }
 
 impl TurnState {
@@ -1057,6 +1094,7 @@ impl TurnState {
             malformed_tool_calls: 0,
             repetition_nudges: 0,
             overflow: OverflowRecovery::default(),
+            running_tools: false,
         }
     }
 

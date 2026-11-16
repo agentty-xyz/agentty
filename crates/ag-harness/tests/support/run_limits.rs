@@ -1,11 +1,12 @@
 //! Per-run limits: each limit stops its run with its own kind, keeps the
-//! usage and events of completed requests, and leaves the session usable.
+//! usage and events of completed requests, replays the stopped turn with its
+//! stop note, and never carries over to the next run.
 
 use std::error::Error;
 use std::future::poll_fn;
+use std::num::{NonZeroU32, NonZeroU64};
 use std::pin::Pin;
-use std::sync::Arc;
-use std::sync::atomic::{AtomicUsize, Ordering};
+use std::sync::{Arc, Mutex, PoisonError};
 use std::time::Duration;
 
 use ag_harness::event::Item;
@@ -25,41 +26,57 @@ use tokio::time::{Instant, sleep};
 
 use crate::context_budget_fixture::unbounded_context_budget;
 
-/// Wall-clock time [`ScriptedModel`] takes per request for the prompt `slow`.
+/// Wall-clock time [`ScriptedModel`] takes per request for a `slow` prompt.
 const SLOW_REQUEST: Duration = Duration::from_secs(10);
 
+/// Assistant text sent with every tool-call response.
+const CALL_TEXT: &str = "Reading next";
+
 /// Answers by prompt, reporting 10 input and 5 output tokens per request:
-/// `answer` with output at once; `once` with one `read` call and then output;
-/// `batch` with two `read` calls and then output; `loop` with a new `read`
-/// call every time; `slow` like `loop`, after [`SLOW_REQUEST`].
+/// `answer` with output at once; `batch` with two `read` calls and then
+/// output; `loop` with a new `read` call every time; `invalid` with output
+/// that violates the schema every time. A `slow ` prefix makes every
+/// request take [`SLOW_REQUEST`].
 #[derive(Clone, Default)]
 struct ScriptedModel {
-    requests: Arc<AtomicUsize>,
+    requests: Arc<Mutex<Vec<ModelRequest>>>,
 }
 
 impl ScriptedModel {
-    fn requests(&self) -> usize {
-        self.requests.load(Ordering::SeqCst)
+    fn requests(&self) -> Vec<ModelRequest> {
+        self.requests
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+            .clone()
     }
 }
 
 #[async_trait]
 impl Model for ScriptedModel {
     async fn complete(&self, request: ModelRequest) -> Result<ModelCompletion, ModelError> {
-        let index = self.requests.fetch_add(1, Ordering::SeqCst);
+        let index = {
+            let mut requests = self.requests.lock().unwrap_or_else(PoisonError::into_inner);
+            requests.push(request.clone());
+
+            requests.len() - 1
+        };
+        let prompt = match request.prompt().strip_prefix("slow ") {
+            Some(prompt) => {
+                sleep(SLOW_REQUEST).await;
+
+                prompt
+            }
+            None => request.prompt(),
+        };
         let answered = matches!(
             request.messages().last(),
             Some(ModelMessage::ToolResult { .. })
         );
-        let response = match request.prompt() {
+        let response = match prompt {
             "answer" => ModelResponse::Output(json!({"name": "Ada"})),
-            "once" | "batch" if answered => ModelResponse::Output(json!({"name": "Ada"})),
+            "batch" if answered => ModelResponse::Output(json!({"name": "Ada"})),
             "batch" => ModelResponse::ToolCalls(vec![read_call(index, 0)?, read_call(index, 1)?]),
-            "slow" => {
-                sleep(SLOW_REQUEST).await;
-
-                ModelResponse::ToolCall(read_call(index, 0)?)
-            }
+            "invalid" => ModelResponse::Output(json!({"age": 1})),
             _ => ModelResponse::ToolCall(read_call(index, 0)?),
         };
         let usage = CompletionUsage::new(None, None, Some(10), Some(5), None, None);
@@ -71,14 +88,16 @@ impl Model for ScriptedModel {
     }
 }
 
-/// Returns a distinct `read` call of request `request`.
+/// Returns a distinct `read` call of request `request`; the first call of a
+/// response carries [`CALL_TEXT`].
 fn read_call(request: usize, position: usize) -> Result<ToolCall, ModelError> {
     ToolCall::from_json(
         format!("call-{request}-{position}"),
         "read",
         &json!({"path": format!("{request}-{position}.txt")}).to_string(),
         None,
-    )
+    )?
+    .with_assistant_text((position == 0).then(|| CALL_TEXT.to_string()))
 }
 
 fn name_schema() -> Result<OutputSchema, Box<dyn Error>> {
@@ -94,6 +113,10 @@ async fn session(model: &ScriptedModel) -> Result<Session, Box<dyn Error>> {
         Harness::new(model.clone(), unbounded_context_budget()).store(Arc::new(MemoryStore::new()));
 
     Ok(harness.session("limits", name_schema()?).create().await?)
+}
+
+fn nonzero(value: u32) -> Result<NonZeroU32, Box<dyn Error>> {
+    Ok(NonZeroU32::new(value).ok_or("limit must be nonzero")?)
 }
 
 /// Runs `prompt` under `limits`, reading every event of the run.
@@ -165,33 +188,101 @@ fn assert_stopped_at(
         .count())
 }
 
-/// Asserts that `session` still answers a run without limits.
-async fn assert_session_answers(session: &Session) -> Result<(), Box<dyn Error>> {
-    let outcome = session.run(RunRequest::new("answer")).await;
+/// Runs `follow_up`, which spends more than the stopped run's limits
+/// allowed, asserts that it succeeds, and returns the messages its first
+/// request replays before the stopped turn's note naming `error_type`.
+async fn next_run_replay(
+    session: &Session,
+    model: &ScriptedModel,
+    follow_up: &str,
+    error_type: &str,
+) -> Result<Vec<ModelMessage>, Box<dyn Error>> {
+    let sent_before = model.requests().len();
+
+    let outcome = session.run(RunRequest::new(follow_up)).await;
 
     assert_eq!(outcome.result?, RunOutput::Json(json!({"name": "Ada"})));
+    let requests = model.requests();
+    let messages = requests
+        .get(sent_before)
+        .ok_or("the follow-up run must send a request")?
+        .messages();
+    let stop_note = format!("[harness] The turn above failed ({error_type}) before completing");
+    let note_at = messages
+        .iter()
+        .position(|message| {
+            matches!(
+                message,
+                ModelMessage::User(note) if note.starts_with(&stop_note)
+            )
+        })
+        .ok_or("the stopped turn must replay with its stop note")?;
+
+    Ok(messages[..note_at].to_vec())
+}
+
+/// Asserts that `replay` ends with `call` and the result it got when it ran.
+fn assert_ends_with_answered_call(replay: &[ModelMessage], call: &ToolCall) {
+    let tail = &replay[replay.len().saturating_sub(2)..];
+
+    assert!(
+        matches!(
+            tail,
+            [ModelMessage::AssistantToolCall(replayed), ModelMessage::ToolResult { call_id, .. }]
+                if replayed == call && call_id == call.id()
+        ),
+        "the replay must end with the answered call: {replay:?}"
+    );
+}
+
+/// Returns the placeholder a stopped turn replays for a call without a
+/// result.
+fn placeholder(call_id: &str) -> ModelMessage {
+    ModelMessage::ToolResult {
+        call_id: call_id.to_string(),
+        content: r#"{"error":"no result was recorded before the turn stopped"}"#.to_string(),
+        name: "read".to_string(),
+    }
+}
+
+#[tokio::test]
+async fn model_request_limit_stops_before_the_next_model_request() -> Result<(), Box<dyn Error>> {
+    // Arrange
+    let model = ScriptedModel::default();
+    let session = session(&model).await?;
+    let limits = RunLimits::default().with_max_model_requests(nonzero(1)?);
+
+    // Act
+    let (events, outcome) = limited_run(&session, "loop", limits).await;
+
+    // Assert
+    let tool_calls = assert_stopped_at(LimitKind::ModelRequests, 1, &events, &outcome)?;
+    assert_eq!(model.requests().len(), 1);
+    assert_eq!(tool_calls, 1, "the response's call ran before the stop");
+    let replay = next_run_replay(&session, &model, "batch", "RunLimit(ModelRequests)").await?;
+    assert_ends_with_answered_call(&replay, &read_call(0, 0)?);
 
     Ok(())
 }
 
 #[tokio::test]
-async fn rounds_limit_stops_before_the_next_model_request() -> Result<(), Box<dyn Error>> {
+async fn re_sent_requests_count_toward_the_model_request_limit() -> Result<(), Box<dyn Error>> {
     // Arrange
     let model = ScriptedModel::default();
     let session = session(&model).await?;
+    let limits = RunLimits::default().with_max_model_requests(nonzero(1)?);
 
     // Act
-    let (events, outcome) =
-        limited_run(&session, "loop", RunLimits::default().with_max_rounds(2)).await;
+    let (events, outcome) = limited_run(&session, "invalid", limits).await;
 
     // Assert
-    let tool_calls = assert_stopped_at(LimitKind::Rounds, 2, &events, &outcome)?;
-    assert_eq!(model.requests(), 2);
+    let tool_calls = assert_stopped_at(LimitKind::ModelRequests, 1, &events, &outcome)?;
+    assert_eq!(tool_calls, 0);
     assert_eq!(
-        tool_calls, 2,
-        "the second response's call ran before the stop"
+        model.requests().len(),
+        1,
+        "the correction request is refused"
     );
-    assert_session_answers(&session).await?;
 
     Ok(())
 }
@@ -201,20 +292,32 @@ async fn tool_call_limit_stops_before_a_batch_that_would_exceed_it() -> Result<(
     // Arrange
     let model = ScriptedModel::default();
     let session = session(&model).await?;
+    let limits = RunLimits::default().with_max_tool_calls(nonzero(1)?);
 
     // Act
-    let (events, outcome) = limited_run(
-        &session,
-        "batch",
-        RunLimits::default().with_max_tool_calls(1),
-    )
-    .await;
+    let (events, outcome) = limited_run(&session, "batch", limits).await;
 
     // Assert
     let tool_calls = assert_stopped_at(LimitKind::ToolCalls, 1, &events, &outcome)?;
     assert_eq!(tool_calls, 0, "no call of the exceeding batch runs");
     assert_eq!(outcome.report.tool_calls().len(), 0);
-    assert_session_answers(&session).await?;
+    assert!(
+        events.iter().any(|event| matches!(
+            &event.kind,
+            RunEventKind::ItemCompleted { item: Item::Message { text }, .. } if text == CALL_TEXT
+        )),
+        "the refused response's assistant text is still streamed"
+    );
+    let replay = next_run_replay(&session, &model, "batch", "RunLimit(ToolCalls)").await?;
+    assert_eq!(
+        replay[replay.len().saturating_sub(3)..],
+        [
+            ModelMessage::AssistantToolCalls(vec![read_call(0, 0)?, read_call(0, 1)?]),
+            placeholder("call-0-0"),
+            placeholder("call-0-1"),
+        ],
+        "the refused batch replays as never run"
+    );
 
     Ok(())
 }
@@ -224,14 +327,11 @@ async fn token_limit_stops_once_completed_requests_reach_it() -> Result<(), Box<
     // Arrange
     let model = ScriptedModel::default();
     let session = session(&model).await?;
+    let limits = RunLimits::default()
+        .with_max_total_tokens(NonZeroU64::new(20).ok_or("limit must be nonzero")?);
 
     // Act
-    let (events, outcome) = limited_run(
-        &session,
-        "loop",
-        RunLimits::default().with_max_total_tokens(20),
-    )
-    .await;
+    let (events, outcome) = limited_run(&session, "loop", limits).await;
 
     // Assert
     assert_stopped_at(LimitKind::Tokens, 2, &events, &outcome)?;
@@ -240,7 +340,9 @@ async fn token_limit_stops_once_completed_requests_reach_it() -> Result<(), Box<
         30,
         "the request that crossed the limit overshoots it"
     );
-    assert_session_answers(&session).await?;
+    assert_eq!(model.requests().len(), 2);
+    let replay = next_run_replay(&session, &model, "batch", "RunLimit(Tokens)").await?;
+    assert_ends_with_answered_call(&replay, &read_call(1, 0)?);
 
     Ok(())
 }
@@ -251,14 +353,10 @@ async fn wall_time_limit_stops_a_run_awaiting_its_model() -> Result<(), Box<dyn 
     let model = ScriptedModel::default();
     let session = session(&model).await?;
     let started_at = Instant::now();
+    let limits = RunLimits::default().with_max_wall_time(Duration::from_secs(15));
 
     // Act
-    let (events, outcome) = limited_run(
-        &session,
-        "slow",
-        RunLimits::default().with_max_wall_time(Duration::from_secs(15)),
-    )
-    .await;
+    let (events, outcome) = limited_run(&session, "slow loop", limits).await;
 
     // Assert
     let elapsed = started_at.elapsed();
@@ -268,11 +366,39 @@ async fn wall_time_limit_stops_a_run_awaiting_its_model() -> Result<(), Box<dyn 
     );
     assert_stopped_at(LimitKind::WallTime, 1, &events, &outcome)?;
     assert_eq!(
-        model.requests(),
+        model.requests().len(),
         2,
         "the second request was dropped in flight"
     );
-    assert_session_answers(&session).await?;
+    let follow_up_started = Instant::now();
+    let replay = next_run_replay(&session, &model, "slow batch", "RunLimit(WallTime)").await?;
+    assert!(
+        follow_up_started.elapsed() > Duration::from_secs(15),
+        "the follow-up outlasts the stopped run's limit"
+    );
+    assert_ends_with_answered_call(&replay, &read_call(0, 0)?);
+
+    Ok(())
+}
+
+#[tokio::test]
+async fn zero_wall_time_is_rejected_before_the_run_starts() -> Result<(), Box<dyn Error>> {
+    // Arrange
+    let model = ScriptedModel::default();
+    let session = session(&model).await?;
+    let limits = RunLimits::default().with_max_wall_time(Duration::ZERO);
+
+    // Act
+    let (events, outcome) = limited_run(&session, "answer", limits).await;
+
+    // Assert
+    let error = outcome.result.as_ref().err().ok_or("the run must fail")?;
+    assert_eq!(error.kind(), ErrorKind::Config);
+    assert_eq!(model.requests(), Vec::<ModelRequest>::new());
+    assert!(matches!(
+        events.last().map(|event| &event.kind),
+        Some(RunEventKind::Completed(_))
+    ));
 
     Ok(())
 }
@@ -280,17 +406,20 @@ async fn wall_time_limit_stops_a_run_awaiting_its_model() -> Result<(), Box<dyn 
 #[tokio::test]
 async fn runs_within_their_limits_behave_like_unlimited_runs() -> Result<(), Box<dyn Error>> {
     // Arrange
-    let model = ScriptedModel::default();
-    let session = session(&model).await?;
+    let unlimited_model = ScriptedModel::default();
+    let limited_model = ScriptedModel::default();
+    let unlimited_session = session(&unlimited_model).await?;
+    let limited_session = session(&limited_model).await?;
     let exact = RunLimits::default()
-        .with_max_rounds(2)
-        .with_max_tool_calls(1)
-        .with_max_total_tokens(30)
+        .with_max_model_requests(nonzero(2)?)
+        .with_max_tool_calls(nonzero(2)?)
+        .with_max_total_tokens(NonZeroU64::new(30).ok_or("limit must be nonzero")?)
         .with_max_wall_time(Duration::from_secs(3600));
 
     // Act
-    let (unlimited_events, unlimited) = limited_run(&session, "once", RunLimits::default()).await;
-    let (limited_events, limited) = limited_run(&session, "once", exact).await;
+    let (unlimited_events, unlimited) =
+        limited_run(&unlimited_session, "batch", RunLimits::default()).await;
+    let (limited_events, limited) = limited_run(&limited_session, "batch", exact).await;
 
     // Assert
     for outcome in [&unlimited, &limited] {
@@ -299,10 +428,16 @@ async fn runs_within_their_limits_behave_like_unlimited_runs() -> Result<(), Box
             Some(&RunOutput::Json(json!({"name": "Ada"})))
         );
         assert_eq!((outcome.usage.input, outcome.usage.output), (20, 10));
-        assert_eq!(outcome.report.tool_calls().len(), 1);
     }
-    assert_eq!(unlimited_events.len(), limited_events.len());
-    assert_eq!(model.requests(), 4);
+    let kinds = |events: &[RunEvent]| -> Vec<RunEventKind> {
+        events.iter().map(|event| event.kind.clone()).collect()
+    };
+    assert_eq!(kinds(&limited_events), kinds(&unlimited_events));
+    assert_eq!(
+        limited.report.tool_calls().len(),
+        unlimited.report.tool_calls().len()
+    );
+    assert_eq!(limited_model.requests(), unlimited_model.requests());
 
     Ok(())
 }

@@ -1,5 +1,6 @@
 //! Run-limit checks, deadlines, and limit names.
 
+use std::num::{NonZeroU32, NonZeroU64};
 use std::time::Duration;
 
 use serde_json::json;
@@ -21,14 +22,15 @@ fn default_limits_never_stop_a_run() {
     assert_eq!(request, Ok(()));
     assert_eq!(tool_calls, Ok(()));
     assert_eq!(deadline, None);
+    assert!(!limits.is_unsatisfiable());
 }
 
 #[test]
-fn request_checks_stop_at_rounds_before_tokens() {
+fn request_checks_stop_at_model_requests_before_tokens() {
     // Arrange
     let limits = RunLimits::default()
-        .with_max_rounds(2)
-        .with_max_total_tokens(100);
+        .with_max_model_requests(NonZeroU32::MIN.saturating_add(1))
+        .with_max_total_tokens(NonZeroU64::MIN.saturating_add(99));
 
     // Act
     let results = [
@@ -43,9 +45,9 @@ fn request_checks_stop_at_rounds_before_tokens() {
         results,
         [
             Ok(()),
-            Err(LimitKind::Rounds),
+            Err(LimitKind::ModelRequests),
             Err(LimitKind::Tokens),
-            Err(LimitKind::Rounds),
+            Err(LimitKind::ModelRequests),
         ]
     );
 }
@@ -53,19 +55,28 @@ fn request_checks_stop_at_rounds_before_tokens() {
 #[test]
 fn tool_call_check_rejects_a_batch_that_would_exceed_the_limit() {
     // Arrange
-    let limits = RunLimits::default().with_max_tool_calls(3);
+    let limits = RunLimits::default().with_max_tool_calls(NonZeroU32::MIN.saturating_add(2));
 
     // Act
     let within = limits.check_tool_calls(1, 2);
     let beyond = limits.check_tool_calls(2, 2);
-    let none_allowed = RunLimits::default()
-        .with_max_tool_calls(0)
-        .check_tool_calls(0, 1);
 
     // Assert
     assert_eq!(within, Ok(()));
     assert_eq!(beyond, Err(LimitKind::ToolCalls));
-    assert_eq!(none_allowed, Err(LimitKind::ToolCalls));
+}
+
+#[test]
+fn only_a_zero_wall_time_is_unsatisfiable() {
+    // Arrange
+    let zero = RunLimits::default().with_max_wall_time(Duration::ZERO);
+    let positive = RunLimits::default().with_max_wall_time(Duration::from_nanos(1));
+
+    // Act
+    let unsatisfiable = [zero.is_unsatisfiable(), positive.is_unsatisfiable()];
+
+    // Assert
+    assert_eq!(unsatisfiable, [true, false]);
 }
 
 #[tokio::test(start_paused = true)]
@@ -87,7 +98,7 @@ async fn deadline_follows_the_wall_time_unless_the_clock_cannot_hold_it() {
 fn limit_kinds_have_stable_names() {
     // Arrange
     let kinds = [
-        LimitKind::Rounds,
+        LimitKind::ModelRequests,
         LimitKind::ToolCalls,
         LimitKind::Tokens,
         LimitKind::WallTime,
@@ -98,6 +109,9 @@ fn limit_kinds_have_stable_names() {
     let serialized = serde_json::to_value(kinds).expect("limit kinds serialize");
 
     // Assert
-    assert_eq!(names, ["rounds", "tool_calls", "tokens", "wall_time"]);
+    assert_eq!(
+        names,
+        ["model_requests", "tool_calls", "tokens", "wall_time"]
+    );
     assert_eq!(serialized, json!(names));
 }

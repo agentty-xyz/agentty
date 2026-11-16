@@ -9,7 +9,7 @@ use std::time::Duration;
 use serde_json::json;
 
 use crate::bash::{BashError, CommandCleanupScope, CommandOutcome, CommandTermination};
-use crate::error::{ErrorKind, HarnessError, RunError};
+use crate::error::{ErrorKind, ErrorKindName, ErrorKindWireError, HarnessError, RunError};
 use crate::limit::LimitKind;
 use crate::model::{ModelError, ModelErrorType, ModelRegistryError, ProviderStatus};
 use crate::recovery::{HostRequest, HostTurnRecord, HostTurnStatus};
@@ -183,7 +183,7 @@ fn classifies_every_turn_failure() {
             ErrorKind::Repetition,
         ),
         (
-            TurnError::from(LimitKind::ToolCalls),
+            TurnError::limit_reached(LimitKind::ToolCalls),
             ErrorKind::BudgetExhausted(LimitKind::ToolCalls),
         ),
     ];
@@ -642,24 +642,41 @@ fn kinds_have_stable_names() {
     for (kind, expected) in cases {
         // Act
         let name = kind.to_string();
+        let serialized = serde_json::to_value(kind).expect("kind serializes");
+        let restored = serde_json::from_value::<ErrorKind>(serialized.clone());
 
         // Assert
         assert_eq!(name, expected);
         assert_eq!(kind.as_str(), expected);
+        assert_eq!(serialized, json!(expected));
+        if matches!(kind, ErrorKind::BudgetExhausted(_)) {
+            assert!(restored.is_err(), "a bare name cannot restore its limit");
+        } else {
+            assert_eq!(restored.ok(), Some(kind));
+        }
     }
 }
 
 #[test]
-fn budget_exhausted_serializes_with_its_limit() {
+fn wire_kind_names_take_a_limit_only_for_budget_exhausted() {
     // Arrange
-    let kind = ErrorKind::BudgetExhausted(LimitKind::WallTime);
+    let limit = Some(LimitKind::WallTime);
 
     // Act
-    let serialized = serde_json::to_value(kind).expect("kind serializes");
-    let restored: ErrorKind = serde_json::from_value(serialized.clone()).expect("kind parses");
+    let results = [
+        ErrorKindName::BudgetExhausted.with_limit(limit),
+        ErrorKindName::BudgetExhausted.with_limit(None),
+        ErrorKindName::Cancelled.with_limit(limit),
+    ];
 
     // Assert
-    assert_eq!(serialized, json!({"budget_exhausted": "wall_time"}));
-    assert_eq!(restored, kind);
-    assert!(!kind.is_retryable());
+    assert_eq!(
+        results,
+        [
+            Ok(ErrorKind::BudgetExhausted(LimitKind::WallTime)),
+            Err(ErrorKindWireError::MissingLimit),
+            Err(ErrorKindWireError::UnexpectedLimit),
+        ]
+    );
+    assert!(!ErrorKind::BudgetExhausted(LimitKind::WallTime).is_retryable());
 }

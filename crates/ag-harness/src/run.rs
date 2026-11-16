@@ -69,7 +69,10 @@ impl RunRequest {
     /// Bounds this run's model requests, tool calls, tokens, and wall-clock
     /// time; a run without limits is bounded only by cancellation and the
     /// model's context budget. A run that reaches a limit fails with
-    /// [`ErrorKind::BudgetExhausted`].
+    /// [`ErrorKind::BudgetExhausted`]. Wall-clock time starts once the
+    /// session admits the run, so it excludes waiting for the session to
+    /// become free; a zero wall-clock limit fails with [`ErrorKind::Config`]
+    /// before the run starts.
     pub fn limits(mut self, limits: RunLimits) -> Self {
         self.limits = limits;
 
@@ -132,12 +135,15 @@ impl RunRequest {
     ///
     /// # Errors
     /// Returns a [`ErrorKind::Config`] failure when neither the request nor
-    /// the caller supplies an output mode.
+    /// the caller supplies an output mode, or when a limit cannot be met.
     pub(crate) fn into_turn(
         self,
         default_output: Option<&OutputMode>,
         default_policy: ToolPolicy,
     ) -> Result<(TurnInput, TurnOptions), RunError> {
+        if self.limits.is_unsatisfiable() {
+            return Err(RunError::with_kind(ErrorKind::Config, ZeroWallTime));
+        }
         let output = self
             .output
             .or_else(|| default_output.cloned())
@@ -606,3 +612,8 @@ impl RunJournal {
 #[derive(Debug, Error)]
 #[error("run requires an output mode; call `RunRequest::output`")]
 struct OutputRequired;
+
+/// A run whose wall-clock limit is zero.
+#[derive(Debug, Error)]
+#[error("run wall-clock limit must be greater than zero")]
+struct ZeroWallTime;

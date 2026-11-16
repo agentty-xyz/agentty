@@ -33,8 +33,9 @@ use crate::write::WriteError;
 /// Construct a new value for each turn. Explicit options never inherit
 /// permissions or schema changes from an earlier turn. Cancellation and
 /// conversation history belong to execution state, not this snapshot. A turn
-/// is unlimited unless [`Self::with_limits`] bounds it; cancellation and, when
-/// declared, the effective model's context budget bound it either way.
+/// is unlimited unless its run's [`crate::RunRequest::limits`] bound it;
+/// cancellation and, when declared, the effective model's context budget
+/// bound it either way.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct TurnOptions {
     bash: Option<BashConfig>,
@@ -64,14 +65,14 @@ impl TurnOptions {
     /// Bounds this turn's model requests, tool calls, tokens, and wall-clock
     /// time. Limits are never stored with the turn or the session.
     #[must_use]
-    pub fn with_limits(mut self, limits: RunLimits) -> Self {
+    pub(crate) fn with_limits(mut self, limits: RunLimits) -> Self {
         self.limits = limits;
 
         self
     }
 
     /// Returns this turn's limits.
-    pub fn limits(&self) -> RunLimits {
+    pub(crate) fn limits(&self) -> RunLimits {
         self.limits
     }
 
@@ -930,6 +931,7 @@ impl fmt::Display for ToolActivity {
 
 /// Failure returned by a complete harness turn.
 #[derive(Debug, Error)]
+#[non_exhaustive]
 pub enum TurnError {
     /// Sandbox preparation, execution, or cleanup failed. Retains all observed
     /// diagnostics, including simultaneous execution and cleanup failures.
@@ -1011,12 +1013,6 @@ pub enum TurnError {
     },
 }
 
-impl From<LimitKind> for TurnError {
-    fn from(limit: LimitKind) -> Self {
-        Self::LimitReached { limit }
-    }
-}
-
 impl TurnError {
     /// Returns the stable lifecycle classification for this failure.
     pub fn error_type(&self) -> TurnErrorType {
@@ -1032,9 +1028,14 @@ impl TurnError {
             Self::ComparisonRepositoryMismatch => TurnErrorType::ComparisonRepositoryMismatch,
             Self::ContextBudgetExceeded { .. } => TurnErrorType::ContextBudget,
             Self::RepeatedToolCalls { .. } => TurnErrorType::RepeatedToolCalls,
-            Self::LimitReached { .. } => TurnErrorType::RunLimit,
+            Self::LimitReached { limit } => TurnErrorType::RunLimit(*limit),
             Self::MessageJournal { .. } => TurnErrorType::Session,
         }
+    }
+
+    /// Returns the failure of a turn that reached `limit`.
+    pub(crate) fn limit_reached(limit: LimitKind) -> Self {
+        Self::LimitReached { limit }
     }
 }
 

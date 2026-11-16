@@ -11,6 +11,7 @@ use super::{
 use crate::catalog::ModelId;
 use crate::error::{ErrorKind, RunError};
 use crate::lifecycle::ToolUnavailableReason;
+use crate::limit::LimitKind;
 use crate::run::{RunOutcome, RunOutput, Usage};
 use crate::tool::{ReadAction, Tool, ToolCall};
 use crate::turn::{ContextActivity, ToolActivity, TurnError, TurnReport};
@@ -283,6 +284,65 @@ fn run_event_round_trips_through_json_matching_its_schema() -> Result<(), Box<dy
     assert_eq!(encoded[8]["kind"]["error"]["kind"], "cancelled");
 
     Ok(())
+}
+
+#[test]
+fn budget_failures_carry_their_limit_beside_a_string_kind() -> Result<(), Box<dyn Error>> {
+    // Arrange
+    let failure = RunFailure {
+        kind: ErrorKind::BudgetExhausted(LimitKind::Tokens),
+        message: "run stopped at its tokens limit".into(),
+        retryable: false,
+    };
+    let validator = Validator::new(&serde_json::to_value(schemars::schema_for!(RunFailure))?)?;
+
+    let cancelled = RunFailure {
+        kind: ErrorKind::Cancelled,
+        ..failure.clone()
+    };
+
+    // Act
+    let encoded = serde_json::to_value(&failure)?;
+    let decoded: RunFailure = serde_json::from_value(encoded.clone())?;
+    let cancelled_encoded = serde_json::to_value(&cancelled)?;
+
+    // Assert
+    assert_eq!(
+        encoded,
+        json!({
+            "kind": "budget_exhausted",
+            "limit": "tokens",
+            "message": "run stopped at its tokens limit",
+            "retryable": false
+        })
+    );
+    assert_eq!(decoded, failure);
+    assert!(validator.is_valid(&encoded));
+    assert_eq!(cancelled_encoded["kind"], "cancelled");
+    assert_eq!(cancelled_encoded.get("limit"), None);
+
+    Ok(())
+}
+
+#[test]
+fn run_failure_rejects_a_limit_that_does_not_match_its_kind() {
+    // Arrange
+    let failure = |kind: &str, limit: Option<&str>| {
+        let mut failure = json!({"kind": kind, "message": "stopped", "retryable": false});
+        if let Some(limit) = limit {
+            failure["limit"] = json!(limit);
+        }
+
+        failure
+    };
+
+    // Act
+    let missing = serde_json::from_value::<RunFailure>(failure("budget_exhausted", None));
+    let unexpected = serde_json::from_value::<RunFailure>(failure("cancelled", Some("tokens")));
+
+    // Assert
+    assert!(missing.is_err());
+    assert!(unexpected.is_err());
 }
 
 #[test]

@@ -29,6 +29,7 @@ use crate::lifecycle::{
     ContextSummaryErrorType, ContextSummaryTrigger, LifecycleEmitter, LifecycleEvent,
     LifecycleEventKind, ModelResponseType, ToolErrorType, ToolUnavailableReason, TurnErrorType,
 };
+use crate::limit::LimitKind;
 use crate::memory_store::MemoryStore;
 use crate::model::{
     CompletionMetadata, CompletionUsage, Model, ModelCompletion, ModelError, ModelErrorType,
@@ -907,7 +908,10 @@ fn lifecycle_error_types_are_bounded_and_documentable() {
         TurnErrorType::Tool,
         TurnErrorType::ContextBudget,
         TurnErrorType::RepeatedToolCalls,
-        TurnErrorType::RunLimit,
+        TurnErrorType::RunLimit(LimitKind::ModelRequests),
+        TurnErrorType::RunLimit(LimitKind::ToolCalls),
+        TurnErrorType::RunLimit(LimitKind::Tokens),
+        TurnErrorType::RunLimit(LimitKind::WallTime),
         TurnErrorType::RepositoryRequired,
         TurnErrorType::Session,
     ];
@@ -926,7 +930,10 @@ fn lifecycle_error_types_are_bounded_and_documentable() {
             "tool_execution_error",
             "context_budget_exceeded",
             "repeated_tool_calls",
-            "run_limit_reached",
+            "run_limit_model_requests",
+            "run_limit_tool_calls",
+            "run_limit_tokens",
+            "run_limit_wall_time",
             "repository_required",
             "session_error",
         ]

@@ -20,13 +20,18 @@ use super::support::{
 use crate::context_budget_fixture::unbounded_context_budget;
 use crate::file_system::FileSystem as _;
 use crate::harness::{DEFAULT_MAX_HISTORY_BYTES, Harness, Session, SessionHistory};
+use crate::limit::{LimitKind, RunLimits};
+use crate::memory_store::MemoryStore;
 use crate::model::ModelResponse;
+use crate::policy::ToolPolicy;
+use crate::recovery::{ExecutionIdentity, HostTurnStatus};
 use crate::repository::Repository;
 use crate::request_option::OutputMode;
 use crate::reservation::{TURN_LEASE_RENEWAL_INTERVAL_SECONDS, TURN_LEASE_SECONDS};
 use crate::session::{Database, NewSession, SessionError, TimestampSource};
 use crate::store::SessionStore as _;
 use crate::tool::Tool;
+use crate::turn::{TurnError, TurnOptions};
 
 #[tokio::test(flavor = "current_thread")]
 async fn cancelling_a_provider_request_durably_interrupts_the_session_turn() {
@@ -465,4 +470,71 @@ async fn different_sessions_run_concurrently() {
     // Assert
     assert!(first_result.is_ok());
     assert!(second_result.is_ok());
+}
+
+#[tokio::test(start_paused = true)]
+async fn wall_time_limit_during_a_tool_call_interrupts_the_host_turn() {
+    // Arrange
+    let requests = Arc::new(AtomicUsize::new(0));
+    let counted = Arc::clone(&requests);
+    let mut model = model();
+    model.expect_complete().returning(move |_| {
+        let response = if counted.fetch_add(1, Ordering::SeqCst) == 0 {
+            ModelResponse::ToolCall(read_call("pending-read"))
+        } else {
+            ModelResponse::Output(json!({"summary": "done"}))
+        };
+
+        Ok(response_without_metadata(response))
+    });
+    let harness = Harness::new(model, unbounded_context_budget())
+        .store(Arc::new(MemoryStore::new()))
+        .execution_identity(ExecutionIdentity::new("injected", "v1").expect("identity"))
+        .repository(Repository::fixture("repo"))
+        .allow(Tool::Read)
+        .file_system(PendingToolFileSystem {
+            started: Arc::new(Notify::new()),
+        });
+    let mut session = harness
+        .session("session-a", object_schema())
+        .create()
+        .await
+        .expect("session should be created");
+    let options = TurnOptions::new(object_schema(), ToolPolicy::default().allow(Tool::Read))
+        .with_limits(RunLimits::default().with_max_wall_time(Duration::from_secs(1)));
+
+    // Act
+    let controlled = session
+        .turn("read the pending file")
+        .options(options)
+        .host_id("limited")
+        .start();
+    let control = controlled.control();
+    let result = controlled.await;
+    control.settled().await.expect("dropped tool call settles");
+    let record = session
+        .recover("limited")
+        .await
+        .expect("record lookup")
+        .expect("host turn record");
+    let next = session.send("answer").await;
+
+    // Assert
+    assert!(matches!(
+        result,
+        Err(SessionError::Turn(TurnError::LimitReached {
+            limit: LimitKind::WallTime
+        }))
+    ));
+    assert_eq!(
+        record.status,
+        HostTurnStatus::Interrupted {
+            error_type: "run_limit_wall_time".to_string()
+        }
+    );
+    assert_eq!(
+        next.expect("the session runs its next turn").output(),
+        &json!({"summary": "done"})
+    );
+    assert_eq!(requests.load(Ordering::SeqCst), 2);
 }
