@@ -8,6 +8,7 @@ use std::sync::{Arc, Mutex};
 use serde_json::json;
 
 use super::support::{model, object_schema, response_without_metadata};
+use crate::catalog::{CatalogError, ModelCatalog, ModelSpec, Role};
 use crate::context::{
     ContextBudget, ContextBudgetError, ContextSummaryPolicy, HeuristicContextEstimator,
 };
@@ -17,7 +18,7 @@ use crate::file_system::MockFileSystem;
 use crate::harness::{Harness, HarnessBuildError};
 use crate::lifecycle::LifecycleEvent;
 use crate::memory_store::MemoryStore;
-use crate::model::{MockModel, ModelProfile, ModelResponse, ReasoningEffort};
+use crate::model::{MockModel, Model, ModelProfile, ModelResponse, ReasoningEffort};
 use crate::policy::ToolPolicy;
 use crate::recovery::ExecutionIdentity;
 use crate::repository::Repository;
@@ -157,6 +158,109 @@ fn explicit_budget_overrides_the_declared_profile() {
             .request_weight(&object_schema()),
         PROFILE_REQUEST_TOKENS
     );
+}
+
+#[test]
+fn build_resolves_the_catalog_selector_under_the_cataloged_profile() {
+    // Arrange
+    let profile = declared_profile();
+    let smart: Arc<dyn Model> = Arc::new(model());
+    let cheap: Arc<dyn Model> = Arc::new(model());
+    let catalog = ModelCatalog::builder()
+        .model(ModelSpec::new("host/smart"), Arc::clone(&smart))
+        .model(
+            ModelSpec::new("host/cheap").with_profile(profile),
+            Arc::clone(&cheap),
+        )
+        .assign(Role::SMART, ["host/smart"])
+        .assign(Role::CHEAP, ["host/cheap"])
+        .build()
+        .expect("catalog should build");
+
+    // Act
+    let harness = Harness::builder()
+        .catalog(Arc::new(catalog))
+        .model_selector(Role::CHEAP)
+        .build()
+        .expect("cataloged model should build");
+
+    // Assert
+    assert!(Arc::ptr_eq(&harness.inner.model, &cheap));
+    assert_eq!(
+        harness.inner.context_budget,
+        profile.context_budget().expect("valid profile")
+    );
+    assert_eq!(
+        harness
+            .inner
+            .context_estimator
+            .request_weight(&object_schema()),
+        PROFILE_REQUEST_TOKENS
+    );
+}
+
+#[test]
+fn build_defaults_the_catalog_selector_to_the_smart_role_and_model_profile() {
+    // Arrange
+    let profile = declared_profile();
+    let smart: Arc<dyn Model> = Arc::new(profiled_model(Some(profile)));
+    let catalog = ModelCatalog::builder()
+        .model(ModelSpec::new("host/smart"), Arc::clone(&smart))
+        .assign(Role::SMART, ["host/smart"])
+        .build()
+        .expect("catalog should build");
+
+    // Act
+    let harness = Harness::builder()
+        .catalog(Arc::new(catalog))
+        .build()
+        .expect("smart model should build");
+
+    // Assert
+    assert!(Arc::ptr_eq(&harness.inner.model, &smart));
+    assert_eq!(
+        harness.inner.context_budget,
+        profile.context_budget().expect("valid profile")
+    );
+}
+
+#[test]
+fn explicit_model_takes_precedence_over_the_catalog() {
+    // Arrange
+    let explicit: Arc<dyn Model> = Arc::new(profiled_model(Some(declared_profile())));
+    let empty = ModelCatalog::builder().build().expect("empty catalog");
+
+    // Act
+    let harness = Harness::builder()
+        .catalog(Arc::new(empty))
+        .model_selector(Role::VISION)
+        .model(Arc::clone(&explicit))
+        .build()
+        .expect("explicit model should build");
+
+    // Assert
+    assert!(Arc::ptr_eq(&harness.inner.model, &explicit));
+}
+
+#[test]
+fn build_reports_a_selector_without_catalog_and_an_unresolved_selector() {
+    // Arrange
+    let empty = Arc::new(ModelCatalog::builder().build().expect("empty catalog"));
+
+    // Act
+    let uncataloged = build_error(Harness::builder().model_selector(Role::FAST).build());
+    let unresolved = build_error(Harness::builder().catalog(empty).build());
+
+    // Assert
+    assert!(matches!(
+        uncataloged.get_ref().downcast_ref::<HarnessBuildError>(),
+        Some(HarnessBuildError::CatalogRequired)
+    ));
+    assert!(matches!(
+        unresolved.get_ref().downcast_ref::<HarnessBuildError>(),
+        Some(HarnessBuildError::Catalog(CatalogError::UnassignedRole { role }))
+            if *role == Role::SMART
+    ));
 }
 
 #[tokio::test]

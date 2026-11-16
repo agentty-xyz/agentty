@@ -1,5 +1,6 @@
-//! Built-in model provider catalog: known models, cost tiers, profiles, and
-//! client configuration from the environment.
+//! Built-in model provider catalog: known models, capabilities, list
+//! prices, cost tiers, profiles, and client configuration from the
+//! environment.
 
 use std::path::PathBuf;
 use std::str::FromStr;
@@ -10,6 +11,7 @@ use ag_router::chatgpt::{ChatGptAuthError, ChatGptCredentials};
 use thiserror::Error;
 
 use super::{chatgpt, kimi, muse, openai, openai_compatible, qwen};
+use crate::catalog::{Capabilities, ModelId, ModelSpec, Pricing};
 use crate::model::{ModelClient, ModelMetadataError, ModelProfile};
 
 /// Provider supported by the built-in model client catalog.
@@ -93,24 +95,76 @@ impl ModelProvider {
 
     /// Returns the price class of `model`, or `None` for a model this
     /// catalog does not list. Every [`Self::OpenAiCompatible`] model is
-    /// [`CostTier::Local`], and every cataloged [`Self::ChatGpt`] model is
-    /// [`CostTier::Plan`].
+    /// [`CostTier::Local`], every cataloged [`Self::ChatGpt`] model is
+    /// [`CostTier::Plan`], and other cataloged models take the class of
+    /// their [`Self::pricing`] through [`Pricing::cost_tier`].
     pub fn cost_tier(self, model: &str) -> Option<CostTier> {
         match self {
-            Self::OpenAiCompatible => return Some(CostTier::Local),
-            Self::ChatGpt => {
-                return self
-                    .known_models()
-                    .contains(&model)
-                    .then_some(CostTier::Plan);
+            Self::OpenAiCompatible => Some(CostTier::Local),
+            Self::ChatGpt => self
+                .known_models()
+                .contains(&model)
+                .then_some(CostTier::Plan),
+            Self::Kimi | Self::Muse | Self::OpenAi | Self::Qwen => {
+                self.pricing(model).map(Pricing::cost_tier)
             }
-            Self::Kimi | Self::Muse | Self::OpenAi | Self::Qwen => {}
+        }
+    }
+
+    /// Returns the built-in list prices of `model`, or `None` for a model
+    /// this catalog does not list or that is not billed per token, such as
+    /// a [`Self::ChatGpt`] plan model or an [`Self::OpenAiCompatible`]
+    /// server's model.
+    pub fn pricing(self, model: &str) -> Option<Pricing> {
+        self.cataloged(model)?.pricing
+    }
+
+    /// Returns what `model` can do, or `None` for a model this catalog does
+    /// not list. An [`Self::OpenAiCompatible`] server's model is assumed to
+    /// make tool calls and nothing more; the host declares other
+    /// capabilities itself.
+    pub fn capabilities(self, model: &str) -> Option<Capabilities> {
+        let tools_only = Capabilities::NONE.with_tool_calls(true);
+        if self == Self::OpenAiCompatible {
+            return Some(tools_only);
+        }
+        let cataloged = self.cataloged(model)?;
+
+        Some(
+            tools_only
+                .with_image_input(cataloged.supports.image_input())
+                .with_reasoning(cataloged.supports.reasoning())
+                .with_structured_output(matches!(self, Self::ChatGpt | Self::Muse | Self::OpenAi)),
+        )
+    }
+
+    /// Returns the catalog specification of a known `model` under its
+    /// [`ModelId::cataloged`] key, with its capabilities, prices, and the
+    /// profile and output limit this catalog declares, or `None` for a
+    /// model this catalog does not list.
+    pub fn model_spec(self, model: &str) -> Option<ModelSpec> {
+        let capabilities = self.capabilities(model)?;
+        let cataloged = self.cataloged(model)?;
+        let (profile, max_output) = match self {
+            Self::ChatGpt => (chatgpt::profile(model), chatgpt::max_output_tokens(model)),
+            Self::OpenAi => (openai::profile(model), openai::max_output_tokens(model)),
+            Self::Qwen => (qwen::profile(model), qwen::max_output_tokens(model)),
+            Self::Kimi | Self::Muse | Self::OpenAiCompatible => (None, None),
+        };
+        let mut spec = ModelSpec::new(ModelId::cataloged(self, model))
+            .with_provider(self)
+            .with_capabilities(capabilities);
+        if let Some(pricing) = cataloged.pricing {
+            spec = spec.with_pricing(pricing);
+        }
+        if let Some(profile) = profile {
+            spec = spec.with_profile(profile);
+        }
+        if let Some(max_output) = max_output {
+            spec = spec.with_max_output(max_output);
         }
 
-        MODEL_COST_TIERS
-            .iter()
-            .find(|(provider, cataloged, _)| *provider == self && *cataloged == model)
-            .map(|(_, _, tier)| *tier)
+        Some(spec)
     }
 
     /// Returns whether the provider may use `model`'s prompts and
@@ -295,6 +349,13 @@ impl ModelProvider {
             }),
         }
     }
+
+    /// Returns the catalog record of `model`, if this provider lists it.
+    fn cataloged(self, model: &str) -> Option<&'static CatalogedModel> {
+        CATALOGED_MODELS
+            .iter()
+            .find(|cataloged| cataloged.provider == self && cataloged.model == model)
+    }
 }
 
 impl fmt::Display for ModelProvider {
@@ -317,8 +378,9 @@ impl FromStr for ModelProvider {
     }
 }
 
-/// Declared price class of a cataloged model, from its provider's list price
-/// per million output tokens.
+/// Declared price class of a cataloged model, from its billing mode or its
+/// provider's list price per million output tokens; see
+/// [`Pricing::cost_tier`].
 #[derive(Clone, Copy, Debug, Eq, Ord, PartialEq, PartialOrd)]
 pub enum CostTier {
     /// Served by a local or self-hosted server with no per-token charge.
@@ -518,62 +580,159 @@ pub enum ModelConfigurationError {
     },
 }
 
-/// Price class of every cataloged hosted model, with its list price in USD per
-/// million input and output tokens at the lowest input tier, as published on
+/// Catalog record of one known model: its image and reasoning support, as
+/// the provider's wire policy accepts them, and its list prices.
+struct CatalogedModel {
+    model: &'static str,
+    pricing: Option<Pricing>,
+    provider: ModelProvider,
+    /// Image and reasoning support; [`ModelProvider::capabilities`] adds
+    /// the provider-wide ones.
+    supports: Capabilities,
+}
+
+/// Image input and reasoning effort, which most cataloged models support.
+const MULTIMODAL_REASONING: Capabilities = Capabilities::NONE
+    .with_image_input(true)
+    .with_reasoning(true);
+
+/// Every cataloged model. Hosted list prices, in micro-USD per million
+/// input and output tokens at the lowest input tier, are as published on
 /// 2026-10-29 by Meta's Model API pricing, Alibaba Cloud Model Studio's
 /// international (Singapore) pricing, Moonshot AI's Kimi pricing, and
-/// `OpenAI`'s API pricing.
-const MODEL_COST_TIERS: &[(ModelProvider, &str, CostTier)] = &[
-    // $1.25 in, $4.25 out.
-    (
-        ModelProvider::Muse,
-        muse::MUSE_SPARK_1_3,
-        CostTier::Standard,
-    ),
-    // $0.10 in, $0.20 out; Meta trains on prompts and completions.
-    (
-        ModelProvider::Muse,
-        muse::MUSE_SPARK_1_3_CONTRIBUTOR,
-        CostTier::Cheap,
-    ),
-    // $3 in, $15 out.
-    (ModelProvider::Kimi, kimi::KIMI_K3, CostTier::Premium),
-    // $0.95 in, $4 out; Moonshot AI retires the K2 models by the end of 2026.
-    (ModelProvider::Kimi, kimi::KIMI_K2_6, CostTier::Standard),
-    // $2 in, $6 out.
-    (ModelProvider::Qwen, qwen::QWEN3_8_MAX, CostTier::Standard),
-    // $0.40 in, $1.20 out under 256,000 input tokens.
-    (ModelProvider::Qwen, qwen::QWEN_PLUS, CostTier::Cheap),
-    // $0.15 in, $0.47 out.
-    (ModelProvider::Qwen, qwen::QWEN3_8_FLASH, CostTier::Cheap),
-    // $0.03 in, $0.13 out under 32,000 input tokens.
-    (ModelProvider::Qwen, qwen::QWEN3_7_FLASH, CostTier::Cheap),
-    // $2 in, $10 out.
-    (
-        ModelProvider::OpenAi,
-        openai::GPT_6_1_SOL,
-        CostTier::Standard,
-    ),
-    // $10 in, $50 out.
-    (
-        ModelProvider::OpenAi,
-        openai::GPT_6_ASTRA,
-        CostTier::Premium,
-    ),
-    // $0.10 in, $0.50 out.
-    (ModelProvider::OpenAi, openai::GPT_6_LUNA, CostTier::Cheap),
-    // $2 in, $12 out.
-    (
-        ModelProvider::OpenAi,
-        openai::GPT_5_6_TERRA,
-        CostTier::Standard,
-    ),
-    // $1.75 in, $14 out.
-    (
-        ModelProvider::OpenAi,
-        openai::GPT_5_3_CODEX,
-        CostTier::Standard,
-    ),
+/// `OpenAI`'s API pricing; no cataloged provider publishes separate cache
+/// prices. `ChatGPT` plan models carry no per-token price.
+const CATALOGED_MODELS: &[CatalogedModel] = &[
+    CatalogedModel {
+        model: muse::MUSE_SPARK_1_3,
+        pricing: Some(Pricing::built_in(1_250_000, 4_250_000)),
+        provider: ModelProvider::Muse,
+        supports: MULTIMODAL_REASONING,
+    },
+    // Meta trains on this tier's prompts and completions.
+    CatalogedModel {
+        model: muse::MUSE_SPARK_1_3_CONTRIBUTOR,
+        pricing: Some(Pricing::built_in(100_000, 200_000)),
+        provider: ModelProvider::Muse,
+        supports: MULTIMODAL_REASONING,
+    },
+    CatalogedModel {
+        model: kimi::KIMI_K3,
+        pricing: Some(Pricing::built_in(3_000_000, 15_000_000)),
+        provider: ModelProvider::Kimi,
+        supports: MULTIMODAL_REASONING,
+    },
+    // Moonshot AI retires the K2 models by the end of 2026.
+    CatalogedModel {
+        model: kimi::KIMI_K2_6,
+        pricing: Some(Pricing::built_in(950_000, 4_000_000)),
+        provider: ModelProvider::Kimi,
+        supports: MULTIMODAL_REASONING,
+    },
+    CatalogedModel {
+        model: qwen::QWEN3_8_MAX,
+        pricing: Some(Pricing::built_in(2_000_000, 6_000_000)),
+        provider: ModelProvider::Qwen,
+        supports: MULTIMODAL_REASONING,
+    },
+    // Under 256,000 input tokens.
+    CatalogedModel {
+        model: qwen::QWEN_PLUS,
+        pricing: Some(Pricing::built_in(400_000, 1_200_000)),
+        provider: ModelProvider::Qwen,
+        supports: MULTIMODAL_REASONING,
+    },
+    CatalogedModel {
+        model: qwen::QWEN3_8_FLASH,
+        pricing: Some(Pricing::built_in(150_000, 470_000)),
+        provider: ModelProvider::Qwen,
+        supports: MULTIMODAL_REASONING,
+    },
+    // Under 32,000 input tokens; text only, without reasoning effort.
+    CatalogedModel {
+        model: qwen::QWEN3_7_FLASH,
+        pricing: Some(Pricing::built_in(30_000, 130_000)),
+        provider: ModelProvider::Qwen,
+        supports: Capabilities::NONE,
+    },
+    CatalogedModel {
+        model: openai::GPT_6_1_SOL,
+        pricing: Some(Pricing::built_in(2_000_000, 10_000_000)),
+        provider: ModelProvider::OpenAi,
+        supports: MULTIMODAL_REASONING,
+    },
+    CatalogedModel {
+        model: openai::GPT_6_ASTRA,
+        pricing: Some(Pricing::built_in(10_000_000, 50_000_000)),
+        provider: ModelProvider::OpenAi,
+        supports: MULTIMODAL_REASONING,
+    },
+    CatalogedModel {
+        model: openai::GPT_6_LUNA,
+        pricing: Some(Pricing::built_in(100_000, 500_000)),
+        provider: ModelProvider::OpenAi,
+        supports: MULTIMODAL_REASONING,
+    },
+    CatalogedModel {
+        model: openai::GPT_5_6_TERRA,
+        pricing: Some(Pricing::built_in(2_000_000, 12_000_000)),
+        provider: ModelProvider::OpenAi,
+        supports: MULTIMODAL_REASONING,
+    },
+    CatalogedModel {
+        model: openai::GPT_5_3_CODEX,
+        pricing: Some(Pricing::built_in(1_750_000, 14_000_000)),
+        provider: ModelProvider::OpenAi,
+        supports: MULTIMODAL_REASONING,
+    },
+    CatalogedModel {
+        model: chatgpt::CHATGPT_GPT_6_1_SOL,
+        pricing: None,
+        provider: ModelProvider::ChatGpt,
+        supports: MULTIMODAL_REASONING,
+    },
+    CatalogedModel {
+        model: chatgpt::CHATGPT_GPT_6_1_TERRA,
+        pricing: None,
+        provider: ModelProvider::ChatGpt,
+        supports: MULTIMODAL_REASONING,
+    },
+    CatalogedModel {
+        model: chatgpt::CHATGPT_GPT_6_ASTRA,
+        pricing: None,
+        provider: ModelProvider::ChatGpt,
+        supports: MULTIMODAL_REASONING,
+    },
+    CatalogedModel {
+        model: chatgpt::CHATGPT_GPT_6_SOL,
+        pricing: None,
+        provider: ModelProvider::ChatGpt,
+        supports: MULTIMODAL_REASONING,
+    },
+    CatalogedModel {
+        model: chatgpt::CHATGPT_GPT_6_LUNA,
+        pricing: None,
+        provider: ModelProvider::ChatGpt,
+        supports: MULTIMODAL_REASONING,
+    },
+    CatalogedModel {
+        model: chatgpt::CHATGPT_GPT_5_6_SOL,
+        pricing: None,
+        provider: ModelProvider::ChatGpt,
+        supports: MULTIMODAL_REASONING,
+    },
+    CatalogedModel {
+        model: chatgpt::CHATGPT_GPT_5_6_TERRA,
+        pricing: None,
+        provider: ModelProvider::ChatGpt,
+        supports: MULTIMODAL_REASONING,
+    },
+    CatalogedModel {
+        model: chatgpt::CHATGPT_GPT_5_6_LUNA,
+        pricing: None,
+        provider: ModelProvider::ChatGpt,
+        supports: MULTIMODAL_REASONING,
+    },
 ];
 
 #[cfg(test)]

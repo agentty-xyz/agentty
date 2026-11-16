@@ -361,11 +361,15 @@ the one-hour access token shortly before it expires, serializing rotating refres
 across processes with a lock file. Its models report `openai_chatgpt` as their provider,
 so resumed sessions keep plan billing.
 
-`ModelProvider::cost_tier` declares each cataloged model's `CostTier` (`Cheap`,
-`Standard`, or `Premium` from the provider's list price per million output tokens,
-`Plan` for every ChatGPT plan model, and `Local` for every OpenAI-compatible model), so
-a host can route simple tasks to a cheap model. `ModelProvider::trains_on_prompts` flags
-tiers, such as `muse-spark-1.3-contributor`, that let the provider train on requests:
+`ModelProvider::pricing` returns each per-token model's list prices as
+`catalog::Pricing` in integer micro-USD per million tokens, and
+`ModelProvider::capabilities` its image, reasoning, native structured output, and tool
+support. `ModelProvider::cost_tier` derives each cataloged model's `CostTier` from those
+prices (`Cheap` up to $2.50 per million output tokens, `Premium` from $15, `Standard`
+between), with `Plan` for every ChatGPT plan model and `Local` for every
+OpenAI-compatible model, so a host can route simple tasks to a cheap model.
+`ModelProvider::trains_on_prompts` flags tiers, such as `muse-spark-1.3-contributor`,
+that let the provider train on requests:
 
 ```rust
 use ag_harness::provider::{CostTier, QWEN3_8_FLASH};
@@ -375,6 +379,34 @@ assert_eq!(
     Some(CostTier::Cheap)
 );
 ```
+
+### Model catalog
+
+A `ModelCatalog` lets a host select models by identifier, role, or capability. Each
+`catalog::ModelSpec` records a model's provider, context profile, output limit,
+`Capabilities`, optional `Pricing`, and optional concurrency limit. A `Role` is an open
+set (`Role::SMART`, `CHEAP`, `FAST`, `VISION`, or any `Role::new("review")`) mapped to
+ordered candidates; `ModelSelector::Require` picks the first candidate with the needed
+capabilities. `ModelCatalog::from_environment` catalogs every built-in model whose
+provider the environment configures, keyed `provider/model`, with default role
+candidates documented on `ModelCatalog`; `into_builder` changes them, and
+`CatalogBuilder::pricing` sets host prices:
+
+```rust
+use ag_harness::catalog::{Capabilities, ModelSelector, Role};
+use ag_harness::ModelCatalog;
+
+let catalog = ModelCatalog::from_environment()?;
+let vision = catalog.resolve(&ModelSelector::Require {
+    role: Role::SMART,
+    needs: Capabilities::NONE.with_image_input(true),
+})?;
+let harness = Harness::builder().model(vision.model()).build()?;
+```
+
+The catalog is optional. `HarnessBuilder::catalog` with `model_selector` (default
+`Role::SMART`) resolves the model at build time, and an explicit `model` takes
+precedence.
 
 Built-in clients call `ag-router` for provider transport and schema validation. Hosts
 can also use `ag-router` directly for structured chat calls without a harness. Implement
@@ -462,12 +494,13 @@ calibrated capacity it was fitted into (`budget_weight`) and its weight before
 
 The crate root holds what a typical host needs: `Harness`, `Session`, `TurnOptions`,
 `TurnOutcome`, `TurnError`, `SessionError`, `RunError`, `HarnessError`, `ErrorKind`,
-`OutputSchema`, `Tool`, `ToolPolicy`, `Repository`, `TurnInput`, and `Model`. Everything
-else is grouped by topic:
+`OutputSchema`, `Tool`, `ToolPolicy`, `Repository`, `TurnInput`, `Model`,
+`ModelCatalog`, `ModelSelector`, and `Role`. Everything else is grouped by topic:
 
 | Module      | Contents                                                 |
 | ----------- | -------------------------------------------------------- |
 | `provider`  | Muse, Kimi, Qwen, OpenAI, and OpenAI-compatible clients  |
+| `catalog`   | Model specs, roles, capabilities, pricing, and selection |
 | `model`     | The `Model` trait, requests, registry, context budgets   |
 | `tool`      | Tool arguments, results, and the `FileSystem` seam       |
 | `bash`      | Bash configuration, executors, enforcement, records      |

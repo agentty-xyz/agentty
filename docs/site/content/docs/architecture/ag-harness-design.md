@@ -203,8 +203,12 @@ or automatic provider fallback.
   Studio, vLLM) under one conservative Chat Completions policy. Because such servers may
   silently truncate input, the host asks the server for its running context window
   through `LocalServer` before declaring the model's profile.
-- The provider catalog declares each hosted model's price class
-  (`ModelProvider::cost_tier`); choosing a model for a task stays the host's decision.
+- The provider catalog declares each hosted model's list prices (micro-USD per million
+  tokens) and capabilities, and derives its price class (`ModelProvider::cost_tier`)
+  from those prices. The optional `ModelCatalog` maps open roles, such as smart or
+  cheap, to ordered candidate models with replaceable defaults and resolves a selector
+  to a model and its request budget; choosing a model for a task stays the host's
+  decision.
 
 Durable sessions send a stable prompt-cache key where the provider policy enables it.
 Requests have bounded timeouts and limited retries for connection failures and `429`

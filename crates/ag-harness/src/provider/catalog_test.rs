@@ -1,5 +1,5 @@
-//! Provider catalog unit tests for known models, profiles, cost tiers, and
-//! environment-based configuration.
+//! Provider catalog unit tests for known models, capabilities, prices,
+//! profiles, cost tiers, and environment-based configuration.
 
 use std::env;
 
@@ -7,9 +7,24 @@ use ag_router::chatgpt::{ChatGptAuthError, ChatGptCredentials};
 
 use super::{
     CostTier, ModelConfiguration, ModelConfigurationError, ModelProvider, ModelProviderParseError,
-    kimi, muse, openai_compatible, qwen,
+    chatgpt, kimi, muse, openai, openai_compatible, qwen,
 };
-use crate::model::{ModelMetadataError, ModelProfile};
+use crate::catalog::{Capabilities, ModelId, PricingSource};
+use crate::input::TurnInput;
+use crate::model::{Model, ModelMetadataError, ModelProfile};
+
+/// Returns every cataloged provider and model pair.
+fn cataloged_models() -> Vec<(ModelProvider, &'static str)> {
+    ModelProvider::all()
+        .iter()
+        .flat_map(|provider| {
+            provider
+                .known_models()
+                .iter()
+                .map(move |model| (*provider, *model))
+        })
+        .collect()
+}
 
 fn missing_environment(_: &str) -> Result<String, env::VarError> {
     Err(env::VarError::NotPresent)
@@ -635,4 +650,168 @@ fn configuration_rejects_an_empty_model() {
         error,
         ModelConfigurationError::Metadata(ModelMetadataError::EmptyModel)
     ));
+}
+
+#[test]
+fn every_per_token_model_has_sane_built_in_pricing() {
+    // Arrange
+    let cataloged = cataloged_models();
+
+    // Act
+    let priced = cataloged
+        .iter()
+        .filter_map(|(provider, model)| Some((*provider, *model, provider.pricing(model)?)))
+        .collect::<Vec<_>>();
+
+    // Assert
+    assert_eq!(priced.len(), 13);
+    for (provider, model, pricing) in &priced {
+        assert_ne!(*provider, ModelProvider::ChatGpt, "{model} is plan billed");
+        assert_eq!(pricing.source(), PricingSource::BuiltIn);
+        assert!(
+            pricing.input_per_mtok_micro_usd() > 0,
+            "{model} input price"
+        );
+        assert!(
+            pricing.output_per_mtok_micro_usd() >= pricing.input_per_mtok_micro_usd(),
+            "{model} output price"
+        );
+        assert_eq!(
+            pricing.cache_read_per_mtok_micro_usd(),
+            pricing.input_per_mtok_micro_usd()
+        );
+        assert_eq!(
+            pricing.cache_write_per_mtok_micro_usd(),
+            pricing.input_per_mtok_micro_usd()
+        );
+        assert_eq!(provider.cost_tier(model), Some(pricing.cost_tier()));
+    }
+    let muse = ModelProvider::Muse
+        .pricing(muse::MUSE_SPARK_1_3)
+        .expect("Muse is priced");
+    assert_eq!(muse.input_per_mtok_micro_usd(), 1_250_000);
+    assert_eq!(muse.output_per_mtok_micro_usd(), 4_250_000);
+    assert_eq!(
+        ModelProvider::ChatGpt.pricing(chatgpt::CHATGPT_GPT_6_LUNA),
+        None
+    );
+    assert_eq!(
+        ModelProvider::OpenAiCompatible.pricing("qwen3:latest"),
+        None
+    );
+    assert_eq!(ModelProvider::OpenAi.pricing("gpt-unlisted"), None);
+}
+
+#[test]
+fn declared_capabilities_match_each_client_wire_policy() {
+    // Arrange
+    let directory = tempfile::tempdir().expect("temporary directory");
+    let auth_file = directory.path().join("chatgpt.json");
+    ChatGptCredentials {
+        access_token: "access".to_string(),
+        client_id: "oaiapp_test".to_string(),
+        email: None,
+        expires_at: u64::MAX,
+        ext_agent_host_id: "urn:uuid:host".to_string(),
+        id_token: String::new(),
+        refresh_token: "refresh".to_string(),
+        scopes: vec!["chatgpt.tokens.use.direct".to_string()],
+    }
+    .save(&auth_file)
+    .expect("credentials should save");
+    let auth_file = auth_file.to_string_lossy().into_owned();
+    let image = TurnInput::image_probe();
+
+    // Act
+    let mismatched = cataloged_models()
+        .into_iter()
+        .filter(|(provider, model)| {
+            let client = ModelConfiguration::new(*provider, *model)
+                .base_url("https://models.example/v1")
+                .client_from_environment(|name| {
+                    Ok(if name == "CHATGPT_AUTH_FILE" {
+                        auth_file.clone()
+                    } else {
+                        "test-key".to_string()
+                    })
+                })
+                .expect("cataloged model should configure");
+            let capabilities = provider.capabilities(model).expect("cataloged model");
+
+            capabilities
+                != Capabilities::NONE
+                    .with_image_input(client.validate_input(&image).is_ok())
+                    .with_reasoning(capabilities.reasoning())
+                    .with_structured_output(!client.keeps_prefix_across_schemas())
+                    .with_tool_calls(true)
+        })
+        .collect::<Vec<_>>();
+
+    // Assert
+    assert_eq!(mismatched, []);
+    assert_eq!(
+        ModelProvider::OpenAiCompatible.capabilities("qwen3:latest"),
+        Some(Capabilities::NONE.with_tool_calls(true))
+    );
+    assert_eq!(ModelProvider::Qwen.capabilities("qwen-unlisted"), None);
+    assert!(
+        !ModelProvider::Qwen
+            .capabilities(qwen::QWEN3_7_FLASH)
+            .expect("cataloged")
+            .reasoning()
+    );
+}
+
+#[test]
+fn model_specs_carry_cataloged_profiles_limits_and_prices() {
+    // Arrange
+    let luna = (ModelProvider::OpenAi, openai::GPT_6_LUNA);
+    let plan = (ModelProvider::ChatGpt, chatgpt::CHATGPT_GPT_6_1_SOL);
+    let flash = (ModelProvider::Qwen, qwen::QWEN3_8_FLASH);
+    let max = (ModelProvider::Qwen, qwen::QWEN3_8_MAX);
+    let kimi = (ModelProvider::Kimi, kimi::KIMI_K3);
+
+    // Act
+    let specs = [luna, plan, flash, max, kimi].map(|(provider, model)| {
+        provider
+            .model_spec(model)
+            .expect("cataloged model has a spec")
+    });
+
+    // Assert
+    let [luna, plan, flash, max, kimi] = specs;
+    assert_eq!(luna.id(), &ModelId::new("openai/gpt-6-luna"));
+    assert_eq!(luna.provider(), Some(ModelProvider::OpenAi));
+    assert_eq!(luna.context_window(), Some(1_050_000));
+    assert_eq!(luna.max_output(), Some(128_000));
+    assert_eq!(
+        luna.pricing(),
+        ModelProvider::OpenAi.pricing(openai::GPT_6_LUNA)
+    );
+    assert!(luna.capabilities().structured_output());
+    assert!(luna.capabilities().image_input());
+    assert!(luna.capabilities().tool_calls());
+    assert_eq!(plan.context_window(), Some(500_000));
+    assert_eq!(plan.max_output(), Some(128_000));
+    assert_eq!(plan.pricing(), None);
+    assert_eq!(flash.context_window(), Some(1_000_000));
+    assert_eq!(flash.max_output(), Some(131_072));
+    assert!(!flash.capabilities().structured_output());
+    assert_eq!(max.profile(), None);
+    assert_eq!(max.max_output(), None);
+    assert_eq!(kimi.profile(), None);
+    assert_eq!(kimi.max_output(), None);
+    assert!(kimi.pricing().is_some());
+    assert_eq!(luna.max_concurrency(), None);
+    assert_eq!(
+        ModelProvider::OpenAiCompatible.model_spec("qwen3:latest"),
+        None
+    );
+    assert_eq!(ModelProvider::OpenAi.model_spec("gpt-unlisted"), None);
+    assert_eq!(
+        ModelProvider::Muse
+            .model_spec(muse::MUSE_SPARK_1_3_CONTRIBUTOR)
+            .map(|spec| spec.max_output()),
+        Some(None)
+    );
 }

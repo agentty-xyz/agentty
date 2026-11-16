@@ -24,11 +24,13 @@ pub const QWEN3_7_FLASH: &str = "qwen3.7-flash";
 /// flash tokens. The flash models have no fitted estimator yet, so this takes
 /// the 50% that keeps unknown tokenizers inside their window.
 const ESTIMATE_UNDER_COUNT_PERCENT: u64 = 50;
+/// Documented output limit of the flash models.
+const FLASH_MAX_OUTPUT_TOKENS: u64 = 131_072;
 /// Qwen3.8 Flash and Qwen3.7 Flash: documented 1,000,000-token window,
 /// 991,808-token maximum input, and 131,072-token maximum output. The
 /// harness states the output schema in the prompt.
 const QWEN_FLASH: ModelProfile = ModelProfile::new(1_000_000)
-    .with_estimate_margin(131_072, ESTIMATE_UNDER_COUNT_PERCENT)
+    .with_estimate_margin(FLASH_MAX_OUTPUT_TOKENS, ESTIMATE_UNDER_COUNT_PERCENT)
     .with_estimator(HeuristicContextEstimator::DEFAULT.with_output_schema_in_prompt());
 
 /// Returns the documented context profile of a Qwen flash model, or `None`
@@ -38,6 +40,12 @@ pub(crate) fn profile(model: &str) -> Option<ModelProfile> {
         QWEN3_8_FLASH | QWEN3_7_FLASH => Some(QWEN_FLASH),
         _ => None,
     }
+}
+
+/// Returns the documented output limit of a Qwen flash model, or `None` for
+/// the models the host profiles itself.
+pub(crate) fn max_output_tokens(model: &str) -> Option<u64> {
+    profile(model).map(|_| FLASH_MAX_OUTPUT_TOKENS)
 }
 
 /// Configuration for a Qwen model served through Alibaba Cloud Model Studio's
