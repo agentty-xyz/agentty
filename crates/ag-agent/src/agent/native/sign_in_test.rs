@@ -53,11 +53,15 @@ impl ApprovingBrowser {
                     .unwrap_or_default()
                     .to_string();
                 let mut stream = TcpStream::connect(&address).expect("callback listener");
-                write!(
-                    stream,
+                // Send the request in one write: the listener answers and
+                // closes after the request line, so later writes of a
+                // piecewise `write!` can fail with a broken pipe.
+                let request = format!(
                     "GET /auth/callback?state={state}{suffix} HTTP/1.1\r\nhost: {address}\r\n\r\n"
-                )
-                .expect("callback request");
+                );
+                stream
+                    .write_all(request.as_bytes())
+                    .expect("callback request");
                 let mut body = String::new();
                 let _ = stream.read_to_string(&mut body);
 
