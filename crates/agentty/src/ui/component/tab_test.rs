@@ -122,7 +122,7 @@ fn test_tabs_omit_process_stats_before_the_first_sample() {
 }
 
 #[test]
-fn test_tabs_fill_their_height_with_the_tab_row_and_bottom_rule() {
+fn test_tabs_fill_their_height_with_spacer_tab_row_and_bottom_rule() {
     // Arrange
     let tabs = Tabs::new(Tab::Sessions);
 
@@ -131,13 +131,14 @@ fn test_tabs_fill_their_height_with_the_tab_row_and_bottom_rule() {
 
     // Assert
     assert_eq!(rows.len(), usize::from(Tabs::HEIGHT));
-    assert_eq!(rows[0].trim_end(), " Projects | Sessions | Settings");
-    assert_eq!(rows[1], "─".repeat(40));
+    assert_eq!(rows[0], " ".repeat(40));
+    assert_eq!(rows[1].trim_end(), " Projects | Sessions | Settings");
+    assert_eq!(rows[2], "─".repeat(40));
 }
 
 /// Renders tabs at `width` columns and returns the tab-label row.
 fn rendered_tab_row(tabs: &Tabs, width: u16) -> String {
-    rendered_rows(tabs, width).swap_remove(0)
+    rendered_rows(tabs, width).swap_remove(1)
 }
 
 /// Renders tabs into a `width` by [`Tabs::HEIGHT`] terminal and returns every
