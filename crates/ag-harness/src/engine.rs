@@ -6,6 +6,7 @@ use std::sync::Arc;
 use std::time::{Duration, Instant};
 
 use serde_json::{Value, json};
+use tokio::time::timeout_at;
 
 use crate::bash::{BashArguments, BashError};
 use crate::calibration::{Calibration, ContextCalibration};
@@ -19,6 +20,7 @@ use crate::lifecycle::{
     ContextSummaryErrorType, ContextSummaryTrigger, LifecycleEmitter, LifecycleId,
     ModelResponseType, ToolErrorType, ToolLifecycle, ToolUnavailableReason,
 };
+use crate::limit::LimitKind;
 use crate::model::{
     CompletionMetadata, Model, ModelError, ModelMessage, ModelRequest, ModelResponse,
     ReasoningEffort, ensure_unique_tool_call_ids,
@@ -120,7 +122,17 @@ impl Engine<'_> {
                 context::ContextFit::new(shared_prefix_summaries),
             ),
         };
-        match self.drive(request, turn_id, &mut progress.state).await {
+        let deadline = self.options.limits().deadline();
+        let driven = self.drive(request, turn_id, &mut progress.state);
+        // Reaching the wall-clock limit drops the turn's pending request or
+        // tool call, as cancellation does, and fails the turn.
+        let driven = match deadline {
+            Some(deadline) => timeout_at(deadline, driven)
+                .await
+                .unwrap_or(Err(LimitKind::WallTime.into())),
+            None => driven.await,
+        };
+        match driven {
             Ok((output, request)) => {
                 let history = progress.state.context_fit.sent_history(&request);
                 let report = progress.finish();
@@ -160,6 +172,9 @@ impl Engine<'_> {
             // Summary requests and rejected outputs recorded since the last
             // round are published before the next request.
             self.publish_requests(state).await;
+            self.options
+                .limits()
+                .check_request(state.model_request_index, state.used_tokens())?;
             // Tool traffic grows the request between model calls; a grown
             // request that no longer fits the calibrated budget is sent as a
             // reduced copy, possibly after summarizing earlier rounds, and
@@ -247,24 +262,44 @@ impl Engine<'_> {
                     (calls, true)
                 }
             };
-            self.publish_calls_message(&calls).await;
-            state.malformed_tool_calls += count_malformed(
-                &calls,
-                &state.rounds.tools,
-                &mut state.consecutive_malformed_responses,
-            )?;
-            let repetition = self
-                .execute_tool_calls(
-                    &calls,
-                    batched,
-                    turn_id,
-                    &mut request,
-                    &state.context_fit,
-                    &mut state.rounds,
-                )
+            self.run_tool_round(&calls, batched, turn_id, &mut request, state)
                 .await?;
-            state.repetition_nudges += self.act_on_repetition(repetition, &mut request, turn_id)?;
         }
+    }
+
+    /// Executes one response's tool `calls` after checking them against
+    /// the tool-call limit and the malformed-call bound, then acts on any
+    /// repetition among them.
+    async fn run_tool_round(
+        &self,
+        calls: &[ToolCall],
+        batched: bool,
+        turn_id: Option<LifecycleId>,
+        request: &mut ModelRequest,
+        state: &mut TurnState,
+    ) -> Result<(), TurnError> {
+        self.options
+            .limits()
+            .check_tool_calls(state.rounds.activity.len(), calls.len())?;
+        self.publish_calls_message(calls).await;
+        state.malformed_tool_calls += count_malformed(
+            calls,
+            &state.rounds.tools,
+            &mut state.consecutive_malformed_responses,
+        )?;
+        let repetition = self
+            .execute_tool_calls(
+                calls,
+                batched,
+                turn_id,
+                request,
+                &state.context_fit,
+                &mut state.rounds,
+            )
+            .await?;
+        state.repetition_nudges += self.act_on_repetition(repetition, request, turn_id)?;
+
+        Ok(())
     }
 
     /// Ends the turn with its validated final `output`, recorded in
@@ -1023,6 +1058,23 @@ impl TurnState {
             repetition_nudges: 0,
             overflow: OverflowRecovery::default(),
         }
+    }
+
+    /// Returns the input plus output tokens the provider reported for the
+    /// turn's answered model requests so far.
+    fn used_tokens(&self) -> u64 {
+        self.model_requests
+            .iter()
+            .map(|request| {
+                let usage = Usage::from_request(
+                    request
+                        .completion()
+                        .and_then(|completion| completion.usage()),
+                );
+
+                usage.input.saturating_add(usage.output)
+            })
+            .fold(0, u64::saturating_add)
     }
 
     /// Moves the turn's recorded activity into a report over its elapsed

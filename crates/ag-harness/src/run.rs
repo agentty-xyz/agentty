@@ -22,6 +22,7 @@ use crate::comparison::ComparisonBase;
 use crate::error::{ErrorKind, RunError};
 use crate::event::{EventSink, EventStream};
 use crate::input::TurnInput;
+use crate::limit::RunLimits;
 use crate::model::CompletionUsage;
 use crate::policy::ToolPolicy;
 use crate::request_option::{GenerationParams, OutputMode};
@@ -45,6 +46,7 @@ pub struct RunRequest {
     generation: GenerationParams,
     input: TurnInput,
     instructions: Option<String>,
+    limits: RunLimits,
     output: Option<OutputMode>,
     tool_policy: Option<ToolPolicy>,
 }
@@ -58,9 +60,20 @@ impl RunRequest {
             generation: GenerationParams::default(),
             input: input.into(),
             instructions: None,
+            limits: RunLimits::default(),
             output: None,
             tool_policy: None,
         }
+    }
+
+    /// Bounds this run's model requests, tool calls, tokens, and wall-clock
+    /// time; a run without limits is bounded only by cancellation and the
+    /// model's context budget. A run that reaches a limit fails with
+    /// [`ErrorKind::BudgetExhausted`].
+    pub fn limits(mut self, limits: RunLimits) -> Self {
+        self.limits = limits;
+
+        self
     }
 
     /// Selects the form of the run's final answer instead of the session's
@@ -130,7 +143,8 @@ impl RunRequest {
             .or_else(|| default_output.cloned())
             .ok_or_else(|| RunError::with_kind(ErrorKind::Config, OutputRequired))?;
         let mut options = TurnOptions::new(output, self.tool_policy.unwrap_or(default_policy))
-            .with_generation(self.generation);
+            .with_generation(self.generation)
+            .with_limits(self.limits);
         if let Some(configuration) = self.bash {
             options = options.with_bash(configuration);
         }

@@ -10,6 +10,7 @@ use serde_json::json;
 
 use crate::bash::{BashError, CommandCleanupScope, CommandOutcome, CommandTermination};
 use crate::error::{ErrorKind, HarnessError, RunError};
+use crate::limit::LimitKind;
 use crate::model::{ModelError, ModelErrorType, ModelRegistryError, ProviderStatus};
 use crate::recovery::{HostRequest, HostTurnRecord, HostTurnStatus};
 use crate::store::CheckpointError;
@@ -180,6 +181,10 @@ fn classifies_every_turn_failure() {
                 tool: "read".to_string(),
             },
             ErrorKind::Repetition,
+        ),
+        (
+            TurnError::from(LimitKind::ToolCalls),
+            ErrorKind::BudgetExhausted(LimitKind::ToolCalls),
         ),
     ];
 
@@ -613,6 +618,10 @@ fn kinds_have_stable_names() {
     // Arrange
     let cases = [
         (ErrorKind::Cancelled, "cancelled"),
+        (
+            ErrorKind::BudgetExhausted(LimitKind::Tokens),
+            "budget_exhausted",
+        ),
         (ErrorKind::RateLimited, "rate_limited"),
         (ErrorKind::Overloaded, "overloaded"),
         (ErrorKind::Auth, "auth"),
@@ -638,4 +647,19 @@ fn kinds_have_stable_names() {
         assert_eq!(name, expected);
         assert_eq!(kind.as_str(), expected);
     }
+}
+
+#[test]
+fn budget_exhausted_serializes_with_its_limit() {
+    // Arrange
+    let kind = ErrorKind::BudgetExhausted(LimitKind::WallTime);
+
+    // Act
+    let serialized = serde_json::to_value(kind).expect("kind serializes");
+    let restored: ErrorKind = serde_json::from_value(serialized.clone()).expect("kind parses");
+
+    // Assert
+    assert_eq!(serialized, json!({"budget_exhausted": "wall_time"}));
+    assert_eq!(restored, kind);
+    assert!(!kind.is_retryable());
 }

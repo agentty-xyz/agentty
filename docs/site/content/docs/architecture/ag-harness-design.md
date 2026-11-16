@@ -71,6 +71,11 @@ A turn continues until the model responds without requesting a tool, and that te
 response must satisfy the caller's schema. There is no tool-call limit: cancellation and
 the required `ContextBudget` bound a turn.
 
+A run's optional `RunLimits` (requests, reported tokens, tool calls, wall clock) are
+checked before each request and tool batch, so a stopped turn never starts work beyond
+its limit. It fails with `TurnError::LimitReached` and is journaled as failed, so the
+session continues normally. Limits are never stored in snapshots or session defaults.
+
 ```mermaid
 flowchart TD
     Prompt["Receive prompt"] --> Pending["Persist running turn"]

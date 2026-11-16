@@ -334,6 +334,8 @@ pub enum TurnErrorType {
     ContextBudget,
     /// The model kept repeating an identical tool call after a nudge.
     RepeatedToolCalls,
+    /// The turn reached one of its run's [`crate::RunLimits`].
+    RunLimit,
     /// A repository-scoped tool was enabled without a repository root.
     RepositoryRequired,
     /// The comparison base belongs to a different repository scope.
@@ -351,6 +353,7 @@ impl TurnErrorType {
             Self::Tool => crate::telemetry::ERROR_TOOL_EXECUTION,
             Self::ContextBudget => crate::telemetry::ERROR_CONTEXT_BUDGET,
             Self::RepeatedToolCalls => crate::telemetry::ERROR_REPEATED_TOOL_CALLS,
+            Self::RunLimit => crate::telemetry::ERROR_RUN_LIMIT,
             Self::RepositoryRequired => crate::telemetry::ERROR_REPOSITORY_REQUIRED,
             Self::ComparisonRepositoryMismatch => {
                 crate::telemetry::ERROR_COMPARISON_REPOSITORY_MISMATCH

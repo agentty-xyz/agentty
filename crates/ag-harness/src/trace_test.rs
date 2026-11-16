@@ -907,6 +907,7 @@ fn lifecycle_error_types_are_bounded_and_documentable() {
         TurnErrorType::Tool,
         TurnErrorType::ContextBudget,
         TurnErrorType::RepeatedToolCalls,
+        TurnErrorType::RunLimit,
         TurnErrorType::RepositoryRequired,
         TurnErrorType::Session,
     ];
@@ -925,6 +926,7 @@ fn lifecycle_error_types_are_bounded_and_documentable() {
             "tool_execution_error",
             "context_budget_exceeded",
             "repeated_tool_calls",
+            "run_limit_reached",
             "repository_required",
             "session_error",
         ]

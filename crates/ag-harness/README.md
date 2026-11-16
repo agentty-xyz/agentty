@@ -134,6 +134,13 @@ let outcome = session
   the OpenAI API at least 16); otherwise the run fails with `ErrorKind::Config` before
   any request. Providers that state the schema in a leading prompt message (Kimi, Qwen,
   OpenAI-compatible) miss the cached prefix when a run changes the output mode.
+- **Runs can be bounded.** `RunRequest::limits` takes `RunLimits` for model requests,
+  tool calls, input plus output tokens, and wall-clock time; every limit is unset by
+  default and none is stored with the session. A run that reaches one fails with
+  `ErrorKind::BudgetExhausted(LimitKind)`, which is not retryable, keeps the usage of
+  its completed requests, and leaves the session ready for the next run. Tokens are
+  checked before each request, so the last request may overshoot; wall time also stops a
+  pending request or tool call.
 - **Runs stream typed events.** `run.into_parts()` returns an `EventStream` (a
   `futures::Stream` of `RunEvent`) and a `RunHandle`. Each event has the run ID, a
   gap-free `seq`, and a timestamp in Unix milliseconds. Events report the admitted turn

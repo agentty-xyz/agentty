@@ -61,6 +61,10 @@ mod run_events_test;
 mod run_options_test;
 
 #[cfg(test)]
+#[path = "support/run_limits.rs"]
+mod run_limits_test;
+
+#[cfg(test)]
 #[path = "support/legacy_store.rs"]
 mod legacy_store_test;
 

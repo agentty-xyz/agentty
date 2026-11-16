@@ -16,6 +16,7 @@ use serde::{Deserialize, Serialize};
 
 use crate::bash::BashError;
 use crate::harness::HarnessBuildError;
+use crate::limit::LimitKind;
 use crate::model::{ModelError, ModelErrorType, ModelRegistryError};
 use crate::session::SessionError;
 use crate::turn::TurnError;
@@ -34,6 +35,10 @@ use crate::{OutputSchemaError, RepositoryError, TurnInputError};
 pub enum ErrorKind {
     /// The caller cancelled the run.
     Cancelled,
+    /// The run reached one of its [`crate::RunLimits`]. It serializes as
+    /// `{"budget_exhausted": <limit>}`; retrying the same run would reach
+    /// the same limit.
+    BudgetExhausted(LimitKind),
     /// The provider limited the request rate; retry after
     /// [`RunError::retry_after`] when present.
     RateLimited,
@@ -82,6 +87,7 @@ impl ErrorKind {
     pub fn as_str(self) -> &'static str {
         match self {
             Self::Cancelled => "cancelled",
+            Self::BudgetExhausted(_) => "budget_exhausted",
             Self::RateLimited => "rate_limited",
             Self::Overloaded => "overloaded",
             Self::Auth => "auth",
@@ -320,6 +326,7 @@ impl Classification {
             TurnError::CommandJournal { .. } | TurnError::MessageJournal { .. } => ErrorKind::Store,
             TurnError::ContextBudgetExceeded { .. } => ErrorKind::ContextOverflow,
             TurnError::RepeatedToolCalls { .. } => ErrorKind::Repetition,
+            TurnError::LimitReached { limit } => ErrorKind::BudgetExhausted(*limit),
         };
 
         Self::kind(kind)
