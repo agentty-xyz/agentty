@@ -1,11 +1,13 @@
-//! Sandboxed shell commands.
+//! Shell commands run through a host-selected executor.
 //!
 //! Bash is the only tool that needs per-turn configuration: enable
 //! `Tool::Bash` in the policy and attach a [`BashConfig`] with
 //! `TurnOptions::with_bash`. [`BashConfig::new`] selects the native sandbox;
 //! [`BashConfig::for_executor`] selects a host [`BashExecutor`] such as
-//! [`UnsandboxedExecutor`]. Command intents are journaled before spawning and
-//! surface as [`CommandRecord`]s.
+//! [`UnsandboxedExecutor`], which enforces no isolation. Each executor reports
+//! its [`Enforcement`], and the model-facing tool description states it.
+//! Command intents are journaled before spawning and surface as
+//! [`CommandRecord`]s.
 
 use std::collections::BTreeMap;
 use std::fmt;
@@ -21,12 +23,16 @@ pub use crate::command_journal::{
     CommandCleanupScope, CommandIntent, CommandOutcome, CommandRecord, CommandTermination,
 };
 pub use crate::execution::{
-    BashExecutor, BashProcess, ExecutionAccess, ExecutionCommand, ExecutionError, ExecutionPolicy,
-    MainExit, OutputStream, ProcessEvent, UnsandboxedExecutor,
+    BashExecutor, BashProcess, Enforcement, ExecutionAccess, ExecutionCommand, ExecutionError,
+    ExecutionPolicy, MainExit, OutputStream, ProcessEvent, UnsandboxedExecutor,
 };
 
 /// Identity recorded for the default native sandbox executor.
 pub(crate) const NATIVE_EXECUTOR: &str = "native";
+
+/// Isolation the default native sandbox enforces on every supported platform;
+/// unsupported platforms and kernels fail closed instead.
+pub(crate) const NATIVE_ENFORCEMENT: Enforcement = Enforcement::FileSystemAndNetwork;
 
 /// Immutable host capabilities for Bash. No external reads or environment
 /// values are inherited. Runtime libraries and executables require read grants.
@@ -38,6 +44,7 @@ pub(crate) const NATIVE_EXECUTOR: &str = "native";
 /// [`BashConfig::for_executor`] selects an explicit host executor instead.
 #[derive(Clone)]
 pub struct BashConfig {
+    pub(crate) enforcement: Enforcement,
     pub(crate) environment: BTreeMap<String, String>,
     pub(crate) executor: Option<Arc<dyn BashExecutor>>,
     pub(crate) snapshot: BashPolicySnapshot,
@@ -124,8 +131,12 @@ impl BashConfig {
             Some((executor, identity)) => (Some(executor), identity),
             None => (None, NATIVE_EXECUTOR.to_string()),
         };
+        let enforcement = executor
+            .as_ref()
+            .map_or(NATIVE_ENFORCEMENT, |executor| executor.enforcement());
 
         Ok(Self {
+            enforcement,
             environment: BTreeMap::new(),
             executor,
             snapshot: BashPolicySnapshot {
@@ -259,6 +270,14 @@ impl BashConfig {
         Err(BashError::Unavailable)
     }
 
+    /// Returns the isolation the selected executor reported when this
+    /// configuration was built, which the model-facing `bash` tool
+    /// description states. Reading it once keeps every advertisement built
+    /// from one configuration identical.
+    pub(crate) fn enforcement(&self) -> Enforcement {
+        self.enforcement
+    }
+
     pub(crate) fn fingerprint(&self) -> Value {
         json!(self.snapshot)
     }
@@ -277,7 +296,9 @@ impl fmt::Debug for BashConfig {
 /// equal policies with separately constructed equivalent executors are equal.
 impl PartialEq for BashConfig {
     fn eq(&self, other: &Self) -> bool {
-        self.environment == other.environment && self.snapshot == other.snapshot
+        self.enforcement == other.enforcement
+            && self.environment == other.environment
+            && self.snapshot == other.snapshot
     }
 }
 

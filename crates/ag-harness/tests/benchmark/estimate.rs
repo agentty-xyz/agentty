@@ -10,6 +10,7 @@ use std::io::{self, Write as _};
 use std::path::{Path, PathBuf};
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
+use ag_harness::bash::Enforcement;
 use ag_harness::tool::ToolDefinition;
 use ag_router::{
     Completion, CompletionMetadata, CompletionUsage, JsonSchemaFormat, ModelMessage, ModelRequest,
@@ -25,6 +26,9 @@ const DEFAULT_RESULTS: &str = "target/ag-harness-estimate-probes.jsonl";
 const KIMI_REQUEST_INTERVAL: Duration = Duration::from_secs(25);
 const REQUEST_TIMEOUT: Duration = Duration::from_secs(180);
 const SIZES: [usize; 3] = [2_000, 8_000, 32_000];
+/// `bash` isolation the probes advertise: Agentty, the shipped host, runs
+/// commands unsandboxed, so calibration weighs the description it sends.
+const BASH_ENFORCEMENT: Enforcement = Enforcement::None;
 const PROMPT: &str = "Reply with the JSON object {\"answer\":\"ok\"} and nothing else.";
 const PROSE: &str = concat!(
     include_str!("../../README.md"),
@@ -139,7 +143,7 @@ impl Probe {
         let tools = [
             ToolDefinition::read(),
             ToolDefinition::write(),
-            ToolDefinition::bash(),
+            ToolDefinition::bash(BASH_ENFORCEMENT),
         ];
         for count in 1..=tools.len() {
             probes.push(Self {
@@ -182,7 +186,7 @@ impl Probe {
                 .map(|name| match name.as_str() {
                     Some("read") => Ok(ToolDefinition::read()),
                     Some("write") => Ok(ToolDefinition::write()),
-                    Some("bash") => Ok(ToolDefinition::bash()),
+                    Some("bash") => Ok(ToolDefinition::bash(BASH_ENFORCEMENT)),
                     _ => Err(format!("unknown corpus tool {name}")),
                 })
                 .collect::<Result<_, _>>()?;

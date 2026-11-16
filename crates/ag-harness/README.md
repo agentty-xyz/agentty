@@ -241,20 +241,23 @@ Ambiguous or unmatched hunks reject the whole patch, and insertion-only hunks st
 an exact `-N,0` anchor. A `read` `list` or `search` path that matches no repository file
 returns a corrective tool error rather than an empty result.
 
-### Sandboxed Bash
+### Bash
 
 `BashConfig::new` selects the native sandbox: Bubblewrap, Landlock, and seccomp on
 Linux; Seatbelt on macOS. Install the matching `ag-harness-sandbox` binary outside the
 workspace and pass its absolute path plus a trusted Bash. `BashConfig::for_executor`
 selects your own `BashExecutor` instead, such as
 `UnsandboxedExecutor::without_isolation` for hosts already inside a container or VM.
-There is never a silent fallback.
+There is never a silent fallback. Each executor reports its `Enforcement` (none,
+filesystem, or filesystem and network), and the `bash` tool description tells the model
+exactly that.
 
 The workspace is read-only unless you grant `with_write`. External reads (`with_read`),
 environment values (`with_environment`), and host details (`with_host_information`) are
-explicit too. Networking is always denied. Long output keeps each stream's start and end
-within the capture budget, with the omitted byte counts on the `CommandOutcome`. Command
-intents are recorded before spawning; await `settled()` (and `retry_settlement()` after
+explicit too. Networking is never granted; enforcing that, like every grant, is the
+selected executor's job. Long output keeps each stream's start and end within the
+capture budget, with the omitted byte counts on the `CommandOutcome`. Command intents
+are recorded before spawning; await `settled()` (and `retry_settlement()` after
 failures) so unresolved commands never block new turns silently.
 
 ## Models
@@ -426,7 +429,7 @@ The crate root holds what a typical host needs: `Harness`, `Session`, `TurnOptio
 | `provider`  | Muse, Kimi, Qwen, OpenAI, and OpenAI-compatible clients  |
 | `model`     | The `Model` trait, requests, registry, context budgets   |
 | `tool`      | Tool arguments, results, and the `FileSystem` seam       |
-| `bash`      | Sandboxed Bash configuration, executors, command records |
+| `bash`      | Bash configuration, executors, enforcement, records      |
 | `turn`      | Turn builders, reports, activity, and settlement errors  |
 | `store`     | Session stores and durable write and checkpoint records  |
 | `recovery`  | Execution identities and idempotent host request records |

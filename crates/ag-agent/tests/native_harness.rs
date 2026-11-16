@@ -16,6 +16,8 @@ use ag_contracts::{
     ProviderCallBudget, ReasoningLevel, ResponseStyle, SpeedMode, TurnContinuation, TurnEvent,
     TurnRequest,
 };
+use ag_harness::bash::Enforcement;
+use ag_harness::tool::ToolDefinition;
 use ag_protocol::{TurnPrompt, TurnPromptAttachment};
 use ag_session::AgentKind;
 use ag_telemetry::{KeyValue, Span};
@@ -700,6 +702,11 @@ async fn edit_mode_turn_reads_writes_and_runs_bash_without_provider_secrets() {
         ]
     );
     let bodies = request_bodies(&server).await;
+    let unsandboxed = json!(ToolDefinition::bash(Enforcement::None).description()).to_string();
+    assert!(
+        bodies[0].contains(&unsandboxed),
+        "the edit-mode bash tool must state that commands run unsandboxed"
+    );
     let bash_result = bodies
         .iter()
         .find(|body| body.contains(r#""tool_call_id":"call-bash""#))

@@ -18,8 +18,8 @@ use super::UnsandboxedProcess;
 use super::{GroupControl, UnsandboxedExecutor, main_exit, signal_group};
 use crate::command_journal::CommandCleanupScope;
 use crate::execution::contract::{
-    BashExecutor, BashProcess, ExecutionCommand, ExecutionError, ExecutionPolicy, Grants, MainExit,
-    OutputStream, ProcessEvent,
+    BashExecutor, BashProcess, Enforcement, ExecutionCommand, ExecutionError, ExecutionPolicy,
+    Grants, MainExit, OutputStream, ProcessEvent,
 };
 
 fn policy(workspace: PathBuf, grants: Grants) -> ExecutionPolicy {
@@ -86,12 +86,13 @@ async fn drive(process: &mut Box<dyn BashProcess>) -> (Vec<u8>, Vec<u8>, MainExi
 }
 
 #[test]
-fn executor_states_identity_scope_and_inert_binding() {
+fn executor_states_identity_enforcement_scope_and_inert_binding() {
     // Arrange
     let executor = UnsandboxedExecutor::without_isolation();
 
     // Act / Assert
     assert_eq!(executor.identity(), "unsandboxed");
+    assert_eq!(executor.enforcement(), Enforcement::None);
     assert_eq!(
         executor.cleanup_scope(),
         CommandCleanupScope::ProcessGroupBestEffort

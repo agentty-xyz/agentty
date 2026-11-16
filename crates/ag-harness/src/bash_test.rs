@@ -7,7 +7,7 @@ use std::time::Duration;
 use serde_json::json;
 
 use crate::bash::{
-    BashArguments, BashConfig, BashError, BashExecutor, BashProcess, ExecutionError,
+    BashArguments, BashConfig, BashError, BashExecutor, BashProcess, Enforcement, ExecutionError,
     UnsandboxedExecutor,
 };
 use crate::command_journal::CommandCleanupScope;
@@ -41,6 +41,10 @@ struct NamedExecutor(String);
 impl BashExecutor for NamedExecutor {
     fn identity(&self) -> &str {
         &self.0
+    }
+
+    fn enforcement(&self) -> Enforcement {
+        Enforcement::FileSystem
     }
 
     fn cleanup_scope(&self) -> CommandCleanupScope {
@@ -89,7 +93,7 @@ fn options(configuration: BashConfig) -> TurnOptions {
 fn validates_arguments_and_exposes_bounded_tool_contract_without_debug_content() {
     // Arrange
     let source = "printf secret-command";
-    let definition = ToolDefinition::bash();
+    let definition = ToolDefinition::bash(Enforcement::FileSystemAndNetwork);
 
     // Act
     let arguments = BashArguments::new(source.into()).expect("arguments");
@@ -224,6 +228,23 @@ fn executor_selection_records_identity_and_stays_distinct_from_native_snapshots(
     assert_ne!(selected_encoded, native_encoded);
     assert!(StoredTurnOptions::decode(&selected_encoded).is_ok());
     assert!(StoredTurnOptions::decode(&native_encoded).is_ok());
+}
+
+#[test]
+fn configuration_reports_the_selected_executor_enforcement() {
+    // Arrange
+    let native = configuration();
+    let custom = executor_configuration(Arc::new(NamedExecutor("container".to_string())))
+        .expect("executor configuration");
+
+    // Act
+    let enforcements = [native.enforcement(), custom.enforcement()];
+
+    // Assert
+    assert_eq!(
+        enforcements,
+        [Enforcement::FileSystemAndNetwork, Enforcement::FileSystem]
+    );
 }
 
 #[test]

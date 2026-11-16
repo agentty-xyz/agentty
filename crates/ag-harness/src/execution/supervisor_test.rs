@@ -16,9 +16,9 @@ use tokio::sync::{mpsc, oneshot, watch};
 use super::{Clock, Control, Running, Supervisor, Worker, interruptible};
 use crate::command_journal::CommandCleanupScope;
 use crate::execution::contract::{
-    BashExecutor, BashProcess, Execution, ExecutionCommand, ExecutionControl, ExecutionError,
-    ExecutionPolicy, Executor, Grants, Limits, MainExit, OutputStream, PreparedExecution,
-    ProcessEvent, RetainedStream, Termination,
+    BashExecutor, BashProcess, Enforcement, Execution, ExecutionCommand, ExecutionControl,
+    ExecutionError, ExecutionPolicy, Executor, Grants, Limits, MainExit, OutputStream,
+    PreparedExecution, ProcessEvent, RetainedStream, Termination,
 };
 use crate::execution::native::Monotonic;
 
@@ -881,6 +881,10 @@ impl BashExecutor for RejectBackend {
         "reject"
     }
 
+    fn enforcement(&self) -> Enforcement {
+        Enforcement::None
+    }
+
     fn cleanup_scope(&self) -> CommandCleanupScope {
         CommandCleanupScope::ProcessGroupBestEffort
     }
@@ -895,6 +899,10 @@ struct FakeBackend(Mutex<Option<FakeProcess>>);
 impl BashExecutor for FakeBackend {
     fn identity(&self) -> &'static str {
         "fake"
+    }
+
+    fn enforcement(&self) -> Enforcement {
+        Enforcement::None
     }
 
     fn cleanup_scope(&self) -> CommandCleanupScope {

@@ -8,8 +8,8 @@ use rustix::process::{Pid, Signal, kill_process_group};
 use tokio::process::{Child, ChildStderr, ChildStdout};
 
 use super::contract::{
-    BashExecutor, BashProcess, ExecutionCommand, ExecutionError, ExecutionPolicy, MainExit,
-    ProcessEvent,
+    BashExecutor, BashProcess, Enforcement, ExecutionCommand, ExecutionError, ExecutionPolicy,
+    MainExit, ProcessEvent,
 };
 use super::output;
 use crate::command_journal::CommandCleanupScope;
@@ -38,6 +38,10 @@ impl UnsandboxedExecutor {
 impl BashExecutor for UnsandboxedExecutor {
     fn identity(&self) -> &'static str {
         "unsandboxed"
+    }
+
+    fn enforcement(&self) -> Enforcement {
+        Enforcement::None
     }
 
     fn cleanup_scope(&self) -> CommandCleanupScope {

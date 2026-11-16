@@ -54,8 +54,8 @@ use std::sync::{Arc, Mutex};
 
 use ag_harness::bash::{
     BashConfig, BashExecutor, BashProcess, CommandCleanupScope, CommandOutcome, CommandTermination,
-    ExecutionAccess, ExecutionCommand, ExecutionError, ExecutionPolicy, MainExit, OutputStream,
-    ProcessEvent, UnsandboxedExecutor,
+    Enforcement, ExecutionAccess, ExecutionCommand, ExecutionError, ExecutionPolicy, MainExit,
+    OutputStream, ProcessEvent, UnsandboxedExecutor,
 };
 use ag_harness::lifecycle::{
     ContextSummaryErrorType, ContextSummaryTrigger, LifecycleEventKind, LifecycleMetrics,
@@ -70,7 +70,7 @@ use ag_harness::provider::{
 };
 use ag_harness::recovery::ExecutionIdentity;
 use ag_harness::store::{MemoryStore, SessionInfo, SessionStore, WriteStatus};
-use ag_harness::tool::{FileSystem, LocalFileSystem, ToolCall};
+use ag_harness::tool::{FileSystem, LocalFileSystem, ToolCall, ToolDefinition};
 use ag_harness::{
     ComparisonBase, Harness, ImageContent, ImageMediaType, InputBlock, Model, ModelError,
     OutputSchema, OutputSchemaError, Repository, RepositoryError, Session, SessionBuilder,
@@ -1568,11 +1568,17 @@ async fn image_host_requests_conflict_on_changed_content() -> Result<(), Box<dyn
     Ok(())
 }
 
-struct BashDrivingModel;
+/// Drives one `bash` call and records the tools advertised on each request.
+struct BashDrivingModel {
+    advertised: Arc<Mutex<Vec<Vec<ToolDefinition>>>>,
+}
 
 #[async_trait]
 impl Model for BashDrivingModel {
     async fn complete(&self, request: ModelRequest) -> Result<ModelCompletion, ModelError> {
+        if let Ok(mut advertised) = self.advertised.lock() {
+            advertised.push(request.tools().to_vec());
+        }
         let response =
             if let Some(ModelMessage::ToolResult { content, .. }) = request.messages().last() {
                 ModelResponse::Output(serde_json::from_str(content).map_err(ModelError::request)?)
@@ -1596,6 +1602,10 @@ struct ScriptedExecutor {
 impl BashExecutor for ScriptedExecutor {
     fn identity(&self) -> &'static str {
         "scripted-container"
+    }
+
+    fn enforcement(&self) -> Enforcement {
+        Enforcement::FileSystem
     }
 
     fn cleanup_scope(&self) -> CommandCleanupScope {
@@ -1689,7 +1699,11 @@ async fn external_executor_runs_bash_through_the_public_contract() -> Result<(),
         ToolPolicy::default().allow(Tool::Bash),
     )
     .with_bash(configuration);
-    let harness = Harness::new(BashDrivingModel, unbounded_context_budget())
+    let advertised = Arc::new(Mutex::new(Vec::new()));
+    let model = BashDrivingModel {
+        advertised: Arc::clone(&advertised),
+    };
+    let harness = Harness::new(model, unbounded_context_budget())
         .repository(repository_fixture::repository_with_host_git(&root));
 
     // Act
@@ -1707,6 +1721,12 @@ async fn external_executor_runs_bash_through_the_public_contract() -> Result<(),
     );
     assert!(!result.truncated);
     assert!(!result.cleanup_failed);
+    let bash = vec![ToolDefinition::bash(Enforcement::FileSystem)];
+    assert_eq!(
+        *advertised.lock().expect("advertised tools"),
+        [bash.clone(), bash],
+        "the bash description states the executor's enforcement"
+    );
     let _explicit: Arc<dyn BashExecutor> = Arc::new(UnsandboxedExecutor::without_isolation());
 
     Ok(())

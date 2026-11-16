@@ -1,4 +1,4 @@
-//! Tool call decoding, `read` and `write` definitions, and argument
+//! Tool call decoding, `bash`, `read`, and `write` definitions, and argument
 //! validation tests.
 
 use jsonschema::Validator;
@@ -9,6 +9,7 @@ use super::{
     ReadAction, ReadArguments, ReadSide, Tool, ToolCall, ToolCallArguments, ToolDefinition,
     WriteArguments,
 };
+use crate::bash::Enforcement;
 use crate::{ComparisonBase, model, schema_contract};
 
 #[test]
@@ -381,6 +382,48 @@ fn write_definition_exposes_native_function_contract() {
         "path": "src/lib.rs",
         "patch": "--- a/src/lib.rs\n+++ b/src/lib.rs\n@@ -1 +1 @@\n-old\n+new\n"
     })));
+}
+
+#[test]
+fn bash_definition_states_exactly_the_executor_enforcement() {
+    // Arrange
+    let limits = " Output and duration are bounded; long output keeps each stream's start and \
+                  end. Applied writes are not rolled back.";
+
+    // Act
+    let unsandboxed = ToolDefinition::bash(Enforcement::None);
+    let file_system = ToolDefinition::bash(Enforcement::FileSystem);
+    let full = ToolDefinition::bash(Enforcement::FileSystemAndNetwork);
+
+    // Assert
+    assert_eq!(
+        unsandboxed.description(),
+        format!(
+            "Run Bash directly on the host without a sandbox. Commands run with the host \
+             process's own access; writes and network access are not restricted by the \
+             harness.{limits}"
+        )
+    );
+    assert_eq!(
+        file_system.description(),
+        format!(
+            "Run Bash inside a host filesystem sandbox. Workspace reads are allowed; writes \
+             require host grants. Network access is not restricted by the harness.{limits}"
+        )
+    );
+    assert_eq!(
+        full.description(),
+        format!(
+            "Run Bash inside the host sandbox. Workspace reads are allowed; writes require host \
+             grants. Network access is denied.{limits}"
+        )
+    );
+    assert!(
+        [&unsandboxed, &file_system, &full]
+            .iter()
+            .all(|definition| definition.name() == "bash"
+                && definition.parameters() == full.parameters())
+    );
 }
 
 #[test]
