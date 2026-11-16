@@ -189,6 +189,44 @@ ORDER BY turn_position, message_position
 }
 
 #[tokio::test]
+async fn message_lookups_use_the_unique_position_index_only() {
+    // Arrange
+    let database = Database::open_in_memory()
+        .await
+        .expect("in-memory database should open");
+
+    // Act
+    let indexes = sqlx::query_scalar::<_, String>(
+        "SELECT name FROM pragma_index_list('session_message') ORDER BY name",
+    )
+    .fetch_all(database.pool())
+    .await
+    .expect("message indexes should load");
+    let turn_lookup_plan = sqlx::query_as::<_, (i64, i64, i64, String)>(
+        "EXPLAIN QUERY PLAN SELECT id FROM session_message WHERE session_id = ? AND turn_position \
+         = ?",
+    )
+    .bind("session-a")
+    .bind(0_i64)
+    .fetch_all(database.pool())
+    .await
+    .expect("turn lookup plan should load")
+    .into_iter()
+    .map(|(_, _, _, detail)| detail)
+    .collect::<Vec<_>>();
+
+    // Assert
+    assert_eq!(indexes, ["sqlite_autoindex_session_message_1"]);
+    assert_eq!(
+        turn_lookup_plan,
+        [
+            "SEARCH session_message USING COVERING INDEX sqlite_autoindex_session_message_1 \
+             (session_id=? AND turn_position=?)"
+        ]
+    );
+}
+
+#[tokio::test]
 async fn database_round_trips_every_persistent_message_kind() {
     // Arrange
     let database = Database::open_in_memory_with_timestamp_source(Arc::new(|| 456))
