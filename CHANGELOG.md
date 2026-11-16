@@ -7,6 +7,59 @@ this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
 
 ## [Unreleased]
 
+## [v0.19.1] - 2026-11-15
+
+### Added
+
+- `agentty`: let review watch answer comments from allowlisted review bots, handle a
+  failing check and its matching comment together, and rerun unfixed failed checks after
+  fix turns that push no new commit.
+- `agentty`: ask whether to submit unsent diff line comments, with a preview, when
+  leaving the session diff page.
+- `agentty`: allow pasting images into question answers, and show the agent and model in
+  the graph composer title.
+- `agentty`: add the permission mode to turn telemetry and attribute tool spans,
+  including native harness tool spans, to their run, naming Codex commands and file
+  changes.
+- `agentty`: classify `agentty_failure` events by failure category and `startup` or
+  `runtime` stage, and mark launches and failures with `ci` and `interactive` flags.
+
+### Changed
+
+- `agentty`: center the project name in the top status bar, and size the help popup to
+  its content with a `q` close hint.
+- `agentty`: render graph proposal previews as Markdown and show sessions as in progress
+  during graph generation and replies.
+- `agentty`: return to the session view after applying slash settings, list model and
+  slash command notices in the session action queue, and preselect `Yes` in the review
+  watch confirmation.
+- `agentty`: store draft attachments in the session row so a project's `.agentty/`
+  folder holds only configuration, and animate the nerpa tail.
+- workspace: add module docs to every Rust file, and add cataloged hooks for affected
+  package checks, serialized container E2E runs, and changed-file `rustfmt`.
+- workspace: update GitHub Actions and the `jsonschema` and `uuid` dependencies, and
+  upload E2E test results to Trunk.
+- workspace: let the `e2e-container` hook run ignored asset generators in the `e2e` and
+  `showcase` targets, and add a versioned site image refresh step to the `bump-version`
+  skill.
+- release: bump workspace crate metadata and lockfile package versions to `0.19.1`.
+
+### Fixed
+
+- `agentty`: keep focused reviews fresh after rebase-only diff changes.
+- `agentty`: give remote `fetch`, `ls-remote`, `pull`, and `push` commands a five-minute
+  timeout so slow but healthy transfers do not fail.
+- `agentty`: stop read-only runs from attempting shell commands they cannot use.
+- `agentty`: let resumed review watches act on the first sync pass after startup instead
+  of up to a minute later.
+- workspace: scope validation fingerprints to this checkout's Git configuration, and run
+  the shared review deadline test on a paused clock so it no longer flakes.
+
+### Contributors
+
+- @dependabot
+- @minev-dev
+
 ## [v0.19.0] - 2026-11-14
 
 ### Added
