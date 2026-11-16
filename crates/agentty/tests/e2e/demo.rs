@@ -1,11 +1,12 @@
 //! Generator for the marketing demo GIF served at
 //! `docs/site/static/demo/demo.gif`.
 //!
-//! Marked `#[ignore]` so the regular E2E suite stays fast; run explicitly with
-//! `cargo test -p agentty --test e2e demo -- --ignored` to regenerate the GIF.
-//! The test is self-contained: it seeds fake projects, installs a scripted
-//! `claude` stub that emits a canned reply over the stream-json protocol, and
-//! drives VHS with a hand-crafted tape.
+//! Marked `#[ignore]` so the regular E2E suite stays fast. Regenerate the GIF
+//! in the pinned recording container with the `e2e-container` command in
+//! `docs/contributing/feature-test/recording.md`; never record on the bare
+//! host. The test is self-contained: it seeds fake projects, installs a
+//! scripted `claude` stub that emits a canned reply over the stream-json
+//! protocol, and drives VHS with a hand-crafted tape.
 
 #[cfg(unix)]
 use std::os::unix::fs::PermissionsExt;

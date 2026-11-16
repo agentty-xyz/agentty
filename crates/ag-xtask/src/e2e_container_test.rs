@@ -4,7 +4,9 @@ use std::cell::RefCell;
 use std::fs;
 use std::path::{Path, PathBuf};
 
-use crate::e2e_container::{Guard, Host, ProcessHost, Runner, Settings, cache_root, pinned_image};
+use crate::e2e_container::{
+    Guard, Host, ProcessHost, Runner, Settings, cache_root, ignored_only, pinned_image, test_target,
+};
 
 const PINNED: &str = "ghcr.io/example/e2e@sha256:abc";
 
@@ -86,8 +88,10 @@ fn settings() -> Settings {
         cache: "/cache-root".into(),
         candidate: None,
         filter: Some("test(help)".into()),
+        ignored_only: false,
         mode: "generate".into(),
         pinned: PINNED.into(),
+        target: "e2e",
         workspace: "/workspace".into(),
     }
 }
@@ -148,6 +152,62 @@ fn candidate_images_run_without_pulling_or_filtering() {
     assert!(calls[4].ends_with(
         " sha256:candidate cargo nextest run --locked --profile ci -p agentty --test e2e"
     ));
+}
+
+#[test]
+fn ignored_generators_run_in_the_selected_target_before_the_filter() {
+    // Arrange
+    let host = ScriptedHost::new();
+    let settings = Settings {
+        filter: Some("test(=feature_tab_tour)".into()),
+        ignored_only: true,
+        target: "showcase",
+        ..settings()
+    };
+
+    // Act
+    let result = Runner { host: &host }.run(&settings);
+
+    // Assert
+    assert_eq!(result, Ok(()));
+    assert!(host.calls()[5].ends_with(
+        " cargo nextest run --locked --profile ci -p agentty --test showcase --run-ignored only \
+         -E test(=feature_tab_tour)"
+    ));
+}
+
+#[test]
+fn test_target_defaults_to_e2e_and_accepts_only_known_targets() {
+    // Arrange, Act
+    let default = test_target(None);
+    let e2e = test_target(Some("e2e"));
+    let showcase = test_target(Some("showcase"));
+    let unknown = test_target(Some("prompt_evaluation"));
+
+    // Assert
+    assert_eq!(default, Ok("e2e"));
+    assert_eq!(e2e, Ok("e2e"));
+    assert_eq!(showcase, Ok("showcase"));
+    assert_eq!(
+        unknown,
+        Err("AGENTTY_TEST_TARGET must be one of e2e, showcase, not `prompt_evaluation`".into())
+    );
+}
+
+#[test]
+fn ignored_only_is_opt_in_and_accepts_only_the_only_value() {
+    // Arrange, Act
+    let unset = ignored_only(None);
+    let only = ignored_only(Some("only"));
+    let all = ignored_only(Some("all"));
+
+    // Assert
+    assert_eq!(unset, Ok(false));
+    assert_eq!(only, Ok(true));
+    assert_eq!(
+        all,
+        Err("AGENTTY_RUN_IGNORED must be `only` when set, not `all`".into())
+    );
 }
 
 #[test]
