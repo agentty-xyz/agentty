@@ -43,7 +43,7 @@ flowchart LR
 crates/
 ├── ag-router        # structured chat routing + provider transports
 ├── ag-harness       # library + ag-harness-sandbox launcher binary
-└── ag-harness-cli   # interactive terminal host
+└── ag-harness-cli   # interactive terminal host and unstable stdio protocol server
 ```
 
 `ag-harness` gates its optional backends behind Cargo features that are all on by
@@ -289,6 +289,32 @@ Lifecycle observers receive content-free turn, model-request, and tool events; t
 chooses exporters. `LifecycleMetrics` and `LifecycleTraceObserver` project the stream to
 OpenTelemetry without storing prompts or tool output. Turns run under the caller's
 OpenTelemetry context, so harness spans nest under the host's span.
+
+## Stdio protocol (unstable)
+
+`ag-harness serve` exposes sessions and runs to non-Rust hosts as JSON-RPC 2.0 over
+standard input and output, one JSON message per line. The protocol is unstable: its
+methods and wire types may change in any release, and approvals and tools are not part
+of it yet.
+
+- The Rust API stays the source of truth. Requests map to `Harness::session`,
+  `Harness::resume`, `Session::run`, `CancelToken::cancel`, `Session::transcript`, and
+  `Session::usage`; models come from the environment's `ModelCatalog` by role or ID, or
+  as an uncataloged `provider/model`.
+- `run/start` answers with the run ID from `EventStream::run_id` before any of the run's
+  events. Each `RunEvent` is forwarded unchanged as one `run/event` notification, ending
+  with `Completed`, which carries the run's usage, cost, and failure.
+- Runs execute on their own tasks, so several sessions and runs can be in flight. Their
+  events reach one writer through a bounded channel, so lines never interleave and a
+  slow reader holds runs back instead of dropping events.
+- Failures become JSON-RPC errors: unreadable lines, invalid envelopes, unknown methods,
+  and invalid parameters use the standard codes without stopping the server; harness
+  failures use `-32000` with the `ErrorKind` name and retry flag as `data`.
+- `shutdown` and the end of input cancel runs in flight and wait for their `Completed`
+  events before exiting.
+
+`crates/ag-harness-cli/schema/serve_protocol.json` is the generated schema of every
+message, and a unit test fails when it is stale.
 
 ## Agentty integration
 

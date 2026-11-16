@@ -32,6 +32,7 @@ use thiserror::Error;
 use tokio::io::{AsyncBufRead, AsyncBufReadExt as _, AsyncWrite, AsyncWriteExt as _, BufReader};
 
 mod login;
+mod serve;
 
 const CHAT_COMMAND_HELP: &str = concat!(
     "commands:\n",
@@ -126,7 +127,22 @@ enum Command {
     Resume(ResumeArgs),
     /// Signs in to a provider that uses an account instead of an API key.
     Login(LoginArgs),
+    /// Serves an UNSTABLE JSON-RPC 2.0 protocol over standard input and
+    /// output for non-Rust hosts.
+    #[command(long_about = SERVE_HELP)]
+    Serve,
 }
+
+const SERVE_HELP: &str = concat!(
+    "Serves an UNSTABLE JSON-RPC 2.0 protocol over standard input and output for non-Rust ",
+    "hosts.\n\n",
+    "Each line is one JSON message. Requests: session/create, session/resume, run/start, ",
+    "run/cancel, session/transcript, session/usage, and shutdown. Each run streams its events ",
+    "as run/event notifications, ending with its completed event. Tools are denied. The end of ",
+    "input cancels runs in flight and exits.\n\n",
+    "The protocol and its schema (crates/ag-harness-cli/schema/serve_protocol.json) may change ",
+    "in any release."
+);
 
 /// Arguments for signing in to a provider.
 #[derive(Debug, Args)]
@@ -276,7 +292,7 @@ impl ChatMode {
         let initial_prompt = match &cli.command {
             Command::Run(args) => &args.prompt,
             Command::Resume(args) => &args.prompt,
-            Command::Login(_) => &None,
+            Command::Login(_) | Command::Serve => &None,
         };
         if stdin_is_terminal && initial_prompt.is_some() {
             return Self::OneShot;
@@ -534,12 +550,12 @@ where
     Input: AsyncBufRead + Unpin,
     Output: AsyncWrite + Unpin,
 {
-    let database = database_path(cli.database, &mut environment)?;
     let git_executable = cli.git_executable;
     let reasoning_effort = cli.reasoning_effort;
     let trace = cli.otlp_endpoint.is_some();
     match cli.command {
         Command::Run(args) => {
+            let database = database_path(cli.database, &mut environment)?;
             let session_id = args
                 .session
                 .unwrap_or_else(|| uuid::Uuid::new_v4().simple().to_string());
@@ -586,6 +602,7 @@ where
             .await
         }
         Command::Resume(args) => {
+            let database = database_path(cli.database, &mut environment)?;
             let info = SessionInfo::load(&database, &args.session).await?;
             let (provider, model) = stored_model_identity(&info)?;
             let mut models = ModelSwitcher {
@@ -631,6 +648,7 @@ where
         )
         .await
         .map_err(CliError::from),
+        Command::Serve => Ok(serve::serve(input, output, environment, reasoning_effort).await?),
     }
 }
 

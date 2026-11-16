@@ -452,6 +452,15 @@ impl From<RunFailure> for RunFailureFields {
 #[non_exhaustive]
 pub struct EventStream {
     receiver: mpsc::Receiver<RunEvent>,
+    run: RunId,
+}
+
+impl EventStream {
+    /// Returns the identifier every event of this stream carries, known
+    /// before the run starts.
+    pub fn run_id(&self) -> &RunId {
+        &self.run
+    }
 }
 
 impl Stream for EventStream {
@@ -475,8 +484,13 @@ impl EventSink {
         let final_permits = (0..FINAL_EVENTS)
             .filter_map(|_| sender.clone().try_reserve_owned().ok())
             .collect();
+        let run = RunId(uuid::Uuid::new_v4().to_string());
+        let stream = EventStream {
+            receiver,
+            run: run.clone(),
+        };
         let sink = Self {
-            run: RunId(uuid::Uuid::new_v4().to_string()),
+            run,
             state: Mutex::new(SinkState {
                 final_permits,
                 next_item: 0,
@@ -485,7 +499,7 @@ impl EventSink {
             }),
         };
 
-        (Arc::new(sink), EventStream { receiver })
+        (Arc::new(sink), stream)
     }
 
     /// Sends `kind`, waiting while the stream is full; does nothing once the

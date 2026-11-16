@@ -1,0 +1,1760 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "ServeMessage",
+  "description": "One line of the UNSTABLE `ag-harness serve` JSON-RPC 2.0 protocol: a client request, or a server response, error response, or `run/event` notification. The protocol may change in any release.",
+  "anyOf": [
+    {
+      "$ref": "#/$defs/Request"
+    },
+    {
+      "$ref": "#/$defs/Response"
+    },
+    {
+      "$ref": "#/$defs/ErrorResponse"
+    },
+    {
+      "$ref": "#/$defs/Notification"
+    }
+  ],
+  "$defs": {
+    "Call": {
+      "oneOf": [
+        {
+          "type": "object",
+          "properties": {
+            "method": {
+              "type": "string",
+              "const": "session/create"
+            },
+            "params": {
+              "$ref": "#/$defs/SessionCreateParams"
+            }
+          },
+          "required": [
+            "method",
+            "params"
+          ],
+          "description": "Creates a durable session and opens it on this server."
+        },
+        {
+          "type": "object",
+          "properties": {
+            "method": {
+              "type": "string",
+              "const": "session/resume"
+            },
+            "params": {
+              "$ref": "#/$defs/SessionResumeParams"
+            }
+          },
+          "required": [
+            "method",
+            "params"
+          ],
+          "description": "Opens an existing session on this server."
+        },
+        {
+          "type": "object",
+          "properties": {
+            "method": {
+              "type": "string",
+              "const": "run/start"
+            },
+            "params": {
+              "$ref": "#/$defs/RunStartParams"
+            }
+          },
+          "required": [
+            "method",
+            "params"
+          ],
+          "description": "Starts a run in an open session and returns its identifier at once;\nits events follow as `run/event` notifications."
+        },
+        {
+          "type": "object",
+          "properties": {
+            "method": {
+              "type": "string",
+              "const": "run/cancel"
+            },
+            "params": {
+              "$ref": "#/$defs/RunCancelParams"
+            }
+          },
+          "required": [
+            "method",
+            "params"
+          ],
+          "description": "Cancels a run in flight."
+        },
+        {
+          "type": "object",
+          "properties": {
+            "method": {
+              "type": "string",
+              "const": "session/transcript"
+            },
+            "params": {
+              "$ref": "#/$defs/SessionTranscriptParams"
+            }
+          },
+          "required": [
+            "method",
+            "params"
+          ],
+          "description": "Reads settled turns of an open session."
+        },
+        {
+          "type": "object",
+          "properties": {
+            "method": {
+              "type": "string",
+              "const": "session/usage"
+            },
+            "params": {
+              "$ref": "#/$defs/SessionParams"
+            }
+          },
+          "required": [
+            "method",
+            "params"
+          ],
+          "description": "Sums the tokens and cost of an open session's settled turns."
+        },
+        {
+          "type": "object",
+          "properties": {
+            "method": {
+              "type": "string",
+              "const": "shutdown"
+            },
+            "params": {
+              "$ref": "#/$defs/ShutdownParams"
+            }
+          },
+          "required": [
+            "method",
+            "params"
+          ],
+          "description": "Cancels every run in flight, waits for their last events, answers,\nand exits."
+        }
+      ],
+      "description": "A request's method with its decoded parameters.\n\nOn the wire, a request object carries `method` and `params` beside\n`jsonrpc` and `id`."
+    },
+    "SessionCreateParams": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "model": {
+          "$ref": "#/$defs/ModelChoice",
+          "description": "Model the session runs."
+        },
+        "output": {
+          "$ref": "#/$defs/OutputChoice",
+          "description": "Default form of each run's final answer."
+        },
+        "session": {
+          "type": [
+            "string",
+            "null"
+          ],
+          "description": "Session identifier; a random one is generated when omitted.",
+          "default": null
+        },
+        "store": {
+          "$ref": "#/$defs/StoreChoice",
+          "description": "Where the session is stored; in this server's memory when omitted."
+        },
+        "system_prompt": {
+          "type": [
+            "string",
+            "null"
+          ],
+          "description": "System prompt restored with the session.",
+          "default": null
+        }
+      },
+      "required": [
+        "model",
+        "output"
+      ],
+      "description": "Parameters of `session/create`."
+    },
+    "ModelChoice": {
+      "oneOf": [
+        {
+          "type": "object",
+          "properties": {
+            "id": {
+              "type": "string"
+            }
+          },
+          "required": [
+            "id"
+          ],
+          "additionalProperties": false,
+          "description": "A catalog identifier, or `provider/model`."
+        },
+        {
+          "type": "object",
+          "properties": {
+            "role": {
+              "type": "string"
+            }
+          },
+          "required": [
+            "role"
+          ],
+          "additionalProperties": false,
+          "description": "The first catalog candidate of this role, such as `smart`, `fast`,\nor `cheap`."
+        }
+      ],
+      "description": "Model a session runs: a model catalog role or identifier, as\n`{\"role\": \"smart\"}` or `{\"id\": \"openai/gpt-6-luna\"}`.\n\nAn identifier missing from the catalog that names a known provider as\n`provider/model` runs that provider's model."
+    },
+    "OutputChoice": {
+      "oneOf": [
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "type": {
+              "type": "string",
+              "const": "json"
+            },
+            "schema": {
+              "description": "JSON Schema of the answer."
+            }
+          },
+          "required": [
+            "type",
+            "schema"
+          ],
+          "description": "A JSON value validated against `schema`."
+        },
+        {
+          "type": "object",
+          "properties": {
+            "type": {
+              "type": "string",
+              "const": "text"
+            }
+          },
+          "required": [
+            "type"
+          ],
+          "additionalProperties": false,
+          "description": "Plain assistant text."
+        }
+      ],
+      "description": "Form of a run's final answer."
+    },
+    "StoreChoice": {
+      "oneOf": [
+        {
+          "type": "object",
+          "properties": {
+            "type": {
+              "type": "string",
+              "const": "memory"
+            }
+          },
+          "required": [
+            "type"
+          ],
+          "additionalProperties": false,
+          "description": "In this server's memory; sessions end with the server."
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "type": {
+              "type": "string",
+              "const": "sqlite"
+            },
+            "path": {
+              "type": "string",
+              "description": "Database file."
+            }
+          },
+          "required": [
+            "type",
+            "path"
+          ],
+          "description": "In the SQLite database at `path`, created when missing."
+        }
+      ],
+      "description": "Where a session is stored."
+    },
+    "SessionResumeParams": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "model": {
+          "$ref": "#/$defs/ModelChoice",
+          "description": "Model the session was created with."
+        },
+        "session": {
+          "type": "string",
+          "description": "Session identifier."
+        },
+        "store": {
+          "$ref": "#/$defs/StoreChoice",
+          "description": "Where the session is stored; in this server's memory when omitted."
+        }
+      },
+      "required": [
+        "model",
+        "session"
+      ],
+      "description": "Parameters of `session/resume`."
+    },
+    "RunStartParams": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "generation": {
+          "$ref": "#/$defs/GenerationChoice",
+          "description": "Provider generation settings for the run's model requests."
+        },
+        "input": {
+          "type": "string",
+          "description": "Text input of the run."
+        },
+        "instructions": {
+          "type": [
+            "string",
+            "null"
+          ],
+          "description": "Host instructions for this run only.",
+          "default": null
+        },
+        "limits": {
+          "$ref": "#/$defs/LimitsChoice",
+          "description": "Bounds on what the run may spend."
+        },
+        "output": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/OutputChoice"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "description": "Form of this run's final answer instead of the session default."
+        },
+        "session": {
+          "type": "string",
+          "description": "Identifier of an open session."
+        }
+      },
+      "required": [
+        "input",
+        "session"
+      ],
+      "description": "Parameters of `run/start`."
+    },
+    "GenerationChoice": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "max_output_tokens": {
+          "type": [
+            "integer",
+            "null"
+          ],
+          "format": "uint32",
+          "minimum": 1,
+          "description": "Upper bound on the tokens each model request generates.",
+          "default": null
+        }
+      },
+      "description": "Provider generation settings; every unset one keeps the provider default."
+    },
+    "LimitsChoice": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "max_model_requests": {
+          "type": [
+            "integer",
+            "null"
+          ],
+          "format": "uint32",
+          "minimum": 1,
+          "description": "Model requests the run may send.",
+          "default": null
+        },
+        "max_tool_calls": {
+          "type": [
+            "integer",
+            "null"
+          ],
+          "format": "uint32",
+          "minimum": 1,
+          "description": "Tool calls the model may request.",
+          "default": null
+        },
+        "max_total_tokens": {
+          "type": [
+            "integer",
+            "null"
+          ],
+          "format": "uint64",
+          "minimum": 1,
+          "description": "Input plus output tokens of the run's model requests.",
+          "default": null
+        },
+        "max_wall_time_ms": {
+          "type": [
+            "integer",
+            "null"
+          ],
+          "format": "uint64",
+          "minimum": 1,
+          "description": "Wall-clock milliseconds from the start of the run's turn.",
+          "default": null
+        }
+      },
+      "description": "Bounds on what one run may spend; every unset limit is unlimited."
+    },
+    "RunCancelParams": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "run": {
+          "$ref": "#/$defs/RunId",
+          "description": "Identifier `run/start` returned."
+        }
+      },
+      "required": [
+        "run"
+      ],
+      "description": "Parameters of `run/cancel`."
+    },
+    "RunId": {
+      "type": "string",
+      "description": "Identifier of one run, unique across processes.\n\nOnly a run split with [`crate::Run::into_parts`] has one; every event of\nits stream carries it."
+    },
+    "SessionTranscriptParams": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "range": {
+          "$ref": "#/$defs/TurnRange",
+          "description": "Which settled turns to return; every one when omitted.",
+          "default": {
+            "type": "all"
+          }
+        },
+        "session": {
+          "type": "string",
+          "description": "Identifier of an open session."
+        }
+      },
+      "required": [
+        "session"
+      ],
+      "description": "Parameters of `session/transcript`."
+    },
+    "TurnRange": {
+      "oneOf": [
+        {
+          "type": "object",
+          "properties": {
+            "type": {
+              "type": "string",
+              "const": "all"
+            }
+          },
+          "required": [
+            "type"
+          ],
+          "description": "Every settled turn."
+        },
+        {
+          "type": "object",
+          "properties": {
+            "type": {
+              "type": "string",
+              "const": "last"
+            },
+            "count": {
+              "type": "integer",
+              "format": "uint64",
+              "minimum": 0,
+              "description": "How many of the newest settled turns to keep."
+            }
+          },
+          "required": [
+            "type",
+            "count"
+          ],
+          "description": "The newest settled turns, at most `count`."
+        },
+        {
+          "type": "object",
+          "properties": {
+            "type": {
+              "type": "string",
+              "const": "span"
+            },
+            "end": {
+              "$ref": "#/$defs/TurnIndex",
+              "description": "Exclusive index bound."
+            },
+            "start": {
+              "$ref": "#/$defs/TurnIndex",
+              "description": "First index selected."
+            }
+          },
+          "required": [
+            "type",
+            "end",
+            "start"
+          ],
+          "description": "The settled turns from `start` up to, not including, `end`."
+        }
+      ],
+      "description": "Which settled turns a transcript returns, oldest first.\n\nOnly settled turns count: a turn still running is never returned and\nnever counts toward [`Self::Last`]. Selection first keeps the turns from\n[`Self::start`] up to, not including, [`Self::end`], then keeps at most\nthe newest [`Self::newest`] of them. On the wire it is an object tagged\nby `type`: `{\"type\": \"all\"}`, `{\"type\": \"last\", \"count\": 2}`, or\n`{\"type\": \"span\", \"start\": 1, \"end\": 3}`."
+    },
+    "TurnIndex": {
+      "type": "integer",
+      "format": "uint64",
+      "minimum": 0,
+      "description": "Durable position of a turn within its session."
+    },
+    "SessionParams": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "session": {
+          "type": "string",
+          "description": "Identifier of an open session."
+        }
+      },
+      "required": [
+        "session"
+      ],
+      "description": "Parameters naming one open session."
+    },
+    "ShutdownParams": {
+      "type": "object",
+      "additionalProperties": false,
+      "description": "Parameters of `shutdown`: none."
+    },
+    "RequestId": {
+      "description": "Identifier a client gives a request, echoed by its response: an integer or a string.",
+      "type": [
+        "integer",
+        "string"
+      ]
+    },
+    "JsonRpcVersion": {
+      "oneOf": [
+        {
+          "type": "string",
+          "const": "2.0",
+          "description": "JSON-RPC 2.0."
+        }
+      ],
+      "description": "The JSON-RPC version marker, always `\"2.0\"`."
+    },
+    "Response": {
+      "type": "object",
+      "properties": {
+        "id": {
+          "$ref": "#/$defs/RequestId",
+          "description": "Identifier of the request."
+        },
+        "jsonrpc": {
+          "$ref": "#/$defs/JsonRpcVersion",
+          "description": "JSON-RPC version."
+        },
+        "result": {
+          "$ref": "#/$defs/MethodResult",
+          "description": "Method result."
+        }
+      },
+      "required": [
+        "id",
+        "jsonrpc",
+        "result"
+      ],
+      "description": "Successful response to a request."
+    },
+    "MethodResult": {
+      "anyOf": [
+        {
+          "type": "object",
+          "properties": {
+            "session": {
+              "type": "string",
+              "description": "Identifier of the open session."
+            }
+          },
+          "required": [
+            "session"
+          ],
+          "description": "`session/create` and `session/resume`: the opened session."
+        },
+        {
+          "type": "object",
+          "properties": {
+            "run": {
+              "$ref": "#/$defs/RunId",
+              "description": "Identifier every event of the run carries."
+            }
+          },
+          "required": [
+            "run"
+          ],
+          "description": "`run/start`: the started run, whose events follow as `run/event`\nnotifications."
+        },
+        {
+          "type": "object",
+          "properties": {
+            "turns": {
+              "type": "array",
+              "items": {
+                "$ref": "#/$defs/TurnRecord"
+              },
+              "description": "Settled turns."
+            }
+          },
+          "required": [
+            "turns"
+          ],
+          "description": "`session/transcript`: the selected settled turns, oldest first."
+        },
+        {
+          "$ref": "#/$defs/UsageTotals",
+          "description": "`session/usage`: summed tokens and cost of the settled turns."
+        },
+        {
+          "type": "object",
+          "description": "`run/cancel` and `shutdown`: an empty object."
+        }
+      ],
+      "description": "Result of a successful request."
+    },
+    "TurnRecord": {
+      "type": "object",
+      "properties": {
+        "cost": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/Cost"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "description": "Price of [`Self::usage`], or `None` when the usage is unknown or\nderived from a stored outcome, or the turn's model had no\n[`crate::catalog::Pricing`]."
+        },
+        "error": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/TurnFailure"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "description": "Why a failed or cancelled turn stopped; `None` for a completed turn\nand for a turn interrupted because its owner stopped renewing it."
+        },
+        "finished_at": {
+          "type": "integer",
+          "format": "uint64",
+          "minimum": 0,
+          "description": "When the turn settled, to the second for SQLite sessions; on the\nwire, milliseconds since the Unix epoch."
+        },
+        "input": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/TranscriptInput"
+          },
+          "description": "The turn's input blocks in order."
+        },
+        "instructions": {
+          "type": [
+            "string",
+            "null"
+          ],
+          "description": "Host instructions given for this turn only."
+        },
+        "items": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/Item"
+          },
+          "description": "What the model produced, in order: reasoning, assistant text, tool\ncalls with their results, and, for a completed turn, the final\noutput last. A tool call reports\n[`ToolCallStatus::Answered`] with its result, or\n[`ToolCallStatus::Unanswered`] with empty output when\nthe turn stopped before answering it, and an empty summary."
+        },
+        "started_at": {
+          "type": "integer",
+          "format": "uint64",
+          "minimum": 0,
+          "description": "When the turn was admitted, to the second for SQLite sessions; on the\nwire, milliseconds since the Unix epoch."
+        },
+        "status": {
+          "$ref": "#/$defs/TurnStatus",
+          "description": "How the turn ended."
+        },
+        "turn": {
+          "$ref": "#/$defs/TurnIndex",
+          "description": "Durable position of the turn within its session."
+        },
+        "usage": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/Usage"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "description": "Tokens of the turn's completed model requests, also for a failed or\ninterrupted turn. A turn recorded before usage was stored, or by a\nstore that does not record it, reports the usage of its stored\noutcome, kept only for turns run with a host request ID, and `None`\nwithout one."
+        }
+      },
+      "required": [
+        "finished_at",
+        "input",
+        "items",
+        "started_at",
+        "status",
+        "turn"
+      ],
+      "description": "One settled turn of a session transcript."
+    },
+    "Cost": {
+      "type": "object",
+      "properties": {
+        "micro_usd": {
+          "type": "integer",
+          "format": "uint64",
+          "minimum": 0,
+          "description": "Price in micro-USD."
+        },
+        "pricing": {
+          "$ref": "#/$defs/PricingSource",
+          "description": "Where the prices came from."
+        }
+      },
+      "required": [
+        "micro_usd",
+        "pricing"
+      ],
+      "description": "Price of some [`Usage`] in integer micro-USD, one millionth of a US\ndollar, with where its prices came from.\n\n[`Self::of`] prices usage as follows, given that the [`Usage`] counts\noverlap: `cache_read` and a known `cache_write` are part of `input`, and\n`reasoning` is part of `output`.\n\n- Input tokens neither read from nor written to the cache bill at the input\n  price.\n- `cache_read` tokens bill at [`Pricing::cache_read_per_mtok_micro_usd`] and\n  `cache_write` tokens at [`Pricing::cache_write_per_mtok_micro_usd`]; both\n  fall back to the input price when the pricing declares no cache price, as\n  built-in prices do not yet.\n- Output tokens, reasoning included, bill at the output price.\n\nThe exact sum is rounded once to the nearest micro-USD, halves up, so a\nrun's cost, the sum of its requests' costs, can differ from pricing its\nsummed usage by less than one micro-USD per request. Arithmetic never\noverflows: a cost beyond `u64::MAX` micro-USD saturates at it. A sum of\ncosts priced from different sources is [`PricingSource::Mixed`].\n\nA model without [`Pricing`], such as a host model nobody priced, an\nOpenAI-compatible server, or a plan-billed `ChatGPT` model whose marginal\nrequests are not metered, has no cost: `Option<Cost>` is `None` there.\nOn the wire it is `{\"micro_usd\": 1250, \"pricing\": \"built_in\"}`."
+    },
+    "PricingSource": {
+      "oneOf": [
+        {
+          "type": "string",
+          "const": "built_in",
+          "description": "The harness's built-in list prices, as the providers published them\non 2026-10-29 at their lowest input tier."
+        },
+        {
+          "type": "string",
+          "const": "host",
+          "description": "Prices the host supplied, such as a negotiated rate."
+        },
+        {
+          "type": "string",
+          "const": "mixed",
+          "description": "Prices from more than one source, only on a summed\n[`crate::Cost`], such as a session total over turns of differently\npriced models; no [`Pricing`] has it."
+        }
+      ],
+      "description": "Where a [`Pricing`] came from.\n\nOn the wire it is `built_in`, `host`, or `mixed`."
+    },
+    "TurnFailure": {
+      "type": "object",
+      "properties": {
+        "kind": {
+          "$ref": "#/$defs/ErrorKind",
+          "description": "Failure classification; `cancelled` for a cancelled turn."
+        },
+        "limit": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/LimitKind"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "description": "The run limit a `budget_exhausted` turn reached."
+        }
+      },
+      "required": [
+        "kind"
+      ],
+      "description": "Why a settled turn stopped, as [`crate::event::RunFailure`] reports a\nlive run's failure without its message.\n\nOn the wire it is an object with `kind` and, for `budget_exhausted`, the\n`limit` it reached."
+    },
+    "ErrorKind": {
+      "oneOf": [
+        {
+          "type": "string",
+          "const": "cancelled",
+          "description": "The caller cancelled the run."
+        },
+        {
+          "type": "string",
+          "const": "budget_exhausted",
+          "description": "The run reached one of its run limits, named beside the kind;\nretrying the same run would reach the same limit."
+        },
+        {
+          "type": "string",
+          "const": "rate_limited",
+          "description": "The provider limited the request rate; retry after\n[`RunError::retry_after`] when present."
+        },
+        {
+          "type": "string",
+          "const": "overloaded",
+          "description": "The provider was temporarily unavailable (HTTP `500`, `502`, `503`,\n`504`, or `529`)."
+        },
+        {
+          "type": "string",
+          "const": "auth",
+          "description": "The provider rejected the credentials (HTTP `401` or `403`)."
+        },
+        {
+          "type": "string",
+          "const": "quota_exceeded",
+          "description": "The provider account's quota or credit balance is spent."
+        },
+        {
+          "type": "string",
+          "const": "context_overflow",
+          "description": "The request exceeds the model's context window or budget, even after\nevery allowed reduction."
+        },
+        {
+          "type": "string",
+          "const": "invalid_output",
+          "description": "The model or provider returned output that is unusable: invalid JSON,\na schema violation, a malformed tool call, an undecodable response\nenvelope, or an oversized or incomplete response."
+        },
+        {
+          "type": "string",
+          "const": "transport",
+          "description": "The network failed or the provider timed out the request."
+        },
+        {
+          "type": "string",
+          "const": "other",
+          "description": "A model request failed for a reason without a finer classification,\nsuch as another provider rejection or a failure a custom\n[`crate::Model`] reports through [`ModelError::request`]."
+        },
+        {
+          "type": "string",
+          "const": "tool_failed",
+          "description": "A repository or sandbox tool failed in a way that ends the turn."
+        },
+        {
+          "type": "string",
+          "const": "repetition",
+          "description": "The model kept repeating tool calls without progress after a nudge."
+        },
+        {
+          "type": "string",
+          "const": "busy",
+          "description": "The session already has an active turn or matching host request, or\nthe session store is temporarily locked or saturated."
+        },
+        {
+          "type": "string",
+          "const": "conflict",
+          "description": "The request conflicts with the session's recorded state, such as an\nexisting identifier, a reused host turn ID, or a stale handle."
+        },
+        {
+          "type": "string",
+          "const": "not_found",
+          "description": "The requested session does not exist."
+        },
+        {
+          "type": "string",
+          "const": "store",
+          "description": "The session store failed or holds invalid data, so the session's\ndurable state may be incomplete."
+        },
+        {
+          "type": "string",
+          "const": "config",
+          "description": "The harness, session, sandbox, or request configuration cannot be\nsatisfied, including capabilities the model does not support."
+        }
+      ],
+      "description": "Stable reason that a run or harness operation failed, for embedder retry\nand recovery policy, by its wire name.\n\nEvery harness failure maps to exactly one kind. New kinds may be added as\nthe harness gains failure modes. Data a kind carries travels beside it."
+    },
+    "LimitKind": {
+      "oneOf": [
+        {
+          "type": "string",
+          "const": "model_requests",
+          "description": "[`RunLimits::max_model_requests`]: model requests."
+        },
+        {
+          "type": "string",
+          "const": "tool_calls",
+          "description": "[`RunLimits::max_tool_calls`]: tool calls."
+        },
+        {
+          "type": "string",
+          "const": "tokens",
+          "description": "[`RunLimits::max_total_tokens`]: input plus output tokens."
+        },
+        {
+          "type": "string",
+          "const": "wall_time",
+          "description": "[`RunLimits::max_wall_time`]: wall-clock time."
+        }
+      ],
+      "description": "Which [`RunLimits`] limit stopped a run.\n\nIt serializes as its `snake_case` name."
+    },
+    "TranscriptInput": {
+      "oneOf": [
+        {
+          "type": "object",
+          "properties": {
+            "type": {
+              "type": "string",
+              "const": "image"
+            },
+            "data": {
+              "type": "string",
+              "description": "Standard base64 encoding of the image bytes."
+            },
+            "media_type": {
+              "type": "string",
+              "description": "IANA media type, such as `image/png`."
+            }
+          },
+          "required": [
+            "type",
+            "data",
+            "media_type"
+          ],
+          "description": "An image."
+        },
+        {
+          "type": "object",
+          "properties": {
+            "type": {
+              "type": "string",
+              "const": "text"
+            },
+            "text": {
+              "type": "string",
+              "description": "The text."
+            }
+          },
+          "required": [
+            "type",
+            "text"
+          ],
+          "description": "A text segment."
+        }
+      ],
+      "description": "One input block of a transcript turn."
+    },
+    "Item": {
+      "oneOf": [
+        {
+          "type": "object",
+          "properties": {
+            "type": {
+              "type": "string",
+              "const": "message"
+            },
+            "text": {
+              "type": "string",
+              "description": "The assistant text."
+            }
+          },
+          "required": [
+            "type",
+            "text"
+          ],
+          "description": "Assistant text the model wrote beside its tool calls; never the\nrun's final output."
+        },
+        {
+          "type": "object",
+          "properties": {
+            "type": {
+              "type": "string",
+              "const": "output"
+            },
+            "output": {
+              "$ref": "#/$defs/RunOutput",
+              "description": "The run's output, as in [`crate::RunOutcome::result`]."
+            }
+          },
+          "required": [
+            "type",
+            "output"
+          ],
+          "description": "The validated final output of a successful run, emitted after the\nturn committed and directly before [`RunEventKind::Completed`]; a\nfailed or cancelled run has none."
+        },
+        {
+          "type": "object",
+          "properties": {
+            "type": {
+              "type": "string",
+              "const": "reasoning"
+            },
+            "text": {
+              "type": "string",
+              "description": "The reasoning text."
+            }
+          },
+          "required": [
+            "type",
+            "text"
+          ],
+          "description": "Provider reasoning returned with a model response."
+        },
+        {
+          "$ref": "#/$defs/ToolCallItem",
+          "type": "object",
+          "properties": {
+            "type": {
+              "type": "string",
+              "const": "tool_call"
+            }
+          },
+          "required": [
+            "type"
+          ],
+          "description": "A tool call and its result."
+        }
+      ],
+      "description": "Content of a finished item."
+    },
+    "RunOutput": {
+      "oneOf": [
+        {
+          "type": "object",
+          "properties": {
+            "type": {
+              "type": "string",
+              "const": "json"
+            },
+            "value": true
+          },
+          "required": [
+            "type",
+            "value"
+          ],
+          "description": "JSON output validated against the run's output schema."
+        },
+        {
+          "type": "object",
+          "properties": {
+            "type": {
+              "type": "string",
+              "const": "text"
+            },
+            "value": {
+              "type": "string"
+            }
+          },
+          "required": [
+            "type",
+            "value"
+          ],
+          "description": "The final assistant text of a run in text output mode."
+        }
+      ],
+      "description": "Validated final output of a successful run.\n\nIt serializes as `{\"type\": \"json\" | \"text\", \"value\": ...}`."
+    },
+    "ToolCallStatus": {
+      "oneOf": [
+        {
+          "type": "string",
+          "const": "completed",
+          "description": "The tool ran; a `bash` result reports the command's own exit status."
+        },
+        {
+          "type": "string",
+          "const": "rejected",
+          "description": "The tool rejected the call, such as malformed arguments or a path\noutside the repository, and the model was told why."
+        },
+        {
+          "type": "string",
+          "const": "skipped",
+          "description": "The call was answered without running: a repeat of an earlier read,\nor a read deferred to a later response."
+        },
+        {
+          "type": "string",
+          "const": "unavailable",
+          "description": "The tool is denied by policy or does not exist."
+        },
+        {
+          "type": "string",
+          "const": "answered",
+          "description": "The call was answered, as a [`crate::TurnRecord`] reports every\nanswered call: sessions store the result text but not which of the\nstatuses above the live run reported."
+        },
+        {
+          "type": "string",
+          "const": "unanswered",
+          "description": "The turn stopped before the call was answered, as a\n[`crate::TurnRecord`] reports it; the output is empty."
+        }
+      ],
+      "description": "How a tool call was answered."
+    },
+    "ToolCallItem": {
+      "type": "object",
+      "properties": {
+        "arguments": {
+          "type": "string",
+          "description": "Arguments as the model sent them, as JSON text; arguments the tool\ncould not decode are kept verbatim and may not be valid JSON."
+        },
+        "call_id": {
+          "type": "string",
+          "description": "Provider identifier of the call."
+        },
+        "name": {
+          "type": "string",
+          "description": "Function name the model called."
+        },
+        "output": {
+          "type": "string",
+          "description": "Result text the model received; empty for a call that was never\nanswered."
+        },
+        "status": {
+          "$ref": "#/$defs/ToolCallStatus",
+          "description": "How the call was answered."
+        },
+        "summary": {
+          "type": "string",
+          "description": "Bounded one-line description of what the call did; empty in a\n[`crate::TurnRecord`], since sessions do not store it."
+        }
+      },
+      "required": [
+        "arguments",
+        "call_id",
+        "name",
+        "output",
+        "status",
+        "summary"
+      ],
+      "description": "A tool call the model made and the result it was answered with."
+    },
+    "TurnStatus": {
+      "oneOf": [
+        {
+          "type": "string",
+          "const": "completed",
+          "description": "The turn committed its final output."
+        },
+        {
+          "type": "string",
+          "const": "failed",
+          "description": "The turn failed, for example on a model error or a run limit."
+        },
+        {
+          "type": "string",
+          "const": "interrupted",
+          "description": "The turn was cancelled or its owner stopped renewing it."
+        }
+      ],
+      "description": "How a settled turn ended."
+    },
+    "Usage": {
+      "type": "object",
+      "properties": {
+        "input": {
+          "type": "integer",
+          "format": "uint64",
+          "minimum": 0,
+          "description": "Input tokens, including `cache_read`."
+        },
+        "output": {
+          "type": "integer",
+          "format": "uint64",
+          "minimum": 0,
+          "description": "Output tokens, including `reasoning`."
+        },
+        "cache_read": {
+          "type": "integer",
+          "format": "uint64",
+          "minimum": 0,
+          "description": "Input tokens served from the provider's prompt cache."
+        },
+        "cache_write": {
+          "type": [
+            "integer",
+            "null"
+          ],
+          "format": "uint64",
+          "minimum": 0,
+          "description": "Input tokens written to the provider's prompt cache, part of `input`,\nor `None` when unknown; no supported provider reports them yet."
+        },
+        "reasoning": {
+          "type": "integer",
+          "format": "uint64",
+          "minimum": 0,
+          "description": "Reasoning tokens."
+        },
+        "unreported_requests": {
+          "type": "integer",
+          "format": "uint32",
+          "minimum": 0,
+          "description": "Model requests whose provider reported no input or output count."
+        }
+      },
+      "required": [
+        "input",
+        "output",
+        "cache_read",
+        "reasoning",
+        "unreported_requests"
+      ],
+      "description": "Provider-reported tokens, summed over a run's model requests.\n\nThe counts overlap: `cache_read` and a known `cache_write` are part of\n`input`, and `reasoning` is part of `output`; [`crate::Cost`] prices them\naccordingly. A count a provider omitted adds zero; a request whose\nprovider reported no input or output count is counted in\n`unreported_requests`, so totals with unreported requests are lower\nbounds. Requests the provider rejected as exceeding its context window,\nand a request in flight when the run was cancelled, are not counted."
+    },
+    "UsageTotals": {
+      "type": "object",
+      "properties": {
+        "cost": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/Cost"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "description": "Summed cost of the priced turns, saturating at `u64::MAX` micro-USD,\n[`PricingSource::Mixed`] when their prices came from different\nsources, or `None` when no turn was priced."
+        },
+        "turns": {
+          "type": "integer",
+          "format": "uint64",
+          "minimum": 0,
+          "description": "Settled turns, including unknown and unpriced ones."
+        },
+        "unknown_turns": {
+          "type": "integer",
+          "format": "uint64",
+          "minimum": 0,
+          "description": "Settled turns without known usage."
+        },
+        "unpriced_turns": {
+          "type": "integer",
+          "format": "uint64",
+          "minimum": 0,
+          "description": "Settled turns with known usage but no cost."
+        },
+        "usage": {
+          "$ref": "#/$defs/Usage",
+          "description": "Summed tokens of the turns with known usage."
+        }
+      },
+      "required": [
+        "turns",
+        "unknown_turns",
+        "unpriced_turns",
+        "usage"
+      ],
+      "description": "Usage summed over a session's settled turns, returned by\n[`crate::Session::usage`].\n\nTurns without recorded usage or a stored outcome to derive it from, such\nas turns recorded before this harness version stored usage without a\nhost request ID, are counted in [`Self::unknown_turns`] and add nothing,\nso totals with unknown turns are lower bounds. Turns whose model had no\n[`Pricing`], and older turns whose usage comes from their stored outcome,\nadd their tokens but no cost and are counted in [`Self::unpriced_turns`]."
+    },
+    "ErrorResponse": {
+      "type": "object",
+      "properties": {
+        "error": {
+          "$ref": "#/$defs/ErrorObject",
+          "description": "What failed."
+        },
+        "id": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/RequestId"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "description": "Identifier of the request, or `null` when it could not be read."
+        },
+        "jsonrpc": {
+          "$ref": "#/$defs/JsonRpcVersion",
+          "description": "JSON-RPC version."
+        }
+      },
+      "required": [
+        "error",
+        "jsonrpc"
+      ],
+      "description": "Failed response to a request, or to a line that was not one."
+    },
+    "ErrorObject": {
+      "type": "object",
+      "properties": {
+        "code": {
+          "type": "integer",
+          "format": "int64",
+          "description": "JSON-RPC error code: `-32700` for unreadable JSON, `-32600` for an\ninvalid request, `-32601` for an unknown method, `-32602` for\ninvalid parameters, and `-32000` for a harness failure."
+        },
+        "data": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/ErrorData"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "description": "Classification of a `-32000` harness failure."
+        },
+        "message": {
+          "type": "string",
+          "description": "Bounded failure description."
+        }
+      },
+      "required": [
+        "code",
+        "message"
+      ],
+      "description": "JSON-RPC error object."
+    },
+    "ErrorData": {
+      "type": "object",
+      "properties": {
+        "kind": {
+          "$ref": "#/$defs/ErrorKind",
+          "description": "Failure classification, by its stable name."
+        },
+        "limit": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/LimitKind"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "description": "The run limit a `budget_exhausted` failure reached."
+        },
+        "retryable": {
+          "type": "boolean",
+          "description": "Whether retrying the same request later may succeed."
+        }
+      },
+      "required": [
+        "kind",
+        "retryable"
+      ],
+      "description": "Classification of a harness failure."
+    },
+    "Notification": {
+      "type": "object",
+      "properties": {
+        "jsonrpc": {
+          "$ref": "#/$defs/JsonRpcVersion",
+          "description": "JSON-RPC version."
+        },
+        "method": {
+          "$ref": "#/$defs/NotificationMethod",
+          "description": "Notification method."
+        },
+        "params": {
+          "$ref": "#/$defs/RunEventParams",
+          "description": "The event and the session of its run."
+        }
+      },
+      "required": [
+        "jsonrpc",
+        "method",
+        "params"
+      ],
+      "description": "Server notification carrying one run event."
+    },
+    "NotificationMethod": {
+      "oneOf": [
+        {
+          "type": "string",
+          "const": "run/event",
+          "description": "One event of a run, in order; the run's `completed` event is its\nlast."
+        }
+      ],
+      "description": "Method of a server notification."
+    },
+    "RunEventParams": {
+      "type": "object",
+      "properties": {
+        "event": {
+          "$ref": "#/$defs/RunEvent",
+          "description": "The run event, as `ag-harness` streams it."
+        },
+        "session": {
+          "type": "string",
+          "description": "Identifier of the run's session."
+        }
+      },
+      "required": [
+        "event",
+        "session"
+      ],
+      "description": "Parameters of a `run/event` notification."
+    },
+    "RunEvent": {
+      "type": "object",
+      "properties": {
+        "at": {
+          "type": "integer",
+          "format": "uint64",
+          "minimum": 0,
+          "description": "Wall-clock time the event was produced, to the millisecond; on the\nwire, milliseconds since the Unix epoch."
+        },
+        "kind": {
+          "$ref": "#/$defs/RunEventKind",
+          "description": "What happened."
+        },
+        "run": {
+          "$ref": "#/$defs/RunId",
+          "description": "Run that produced the event."
+        },
+        "seq": {
+          "type": "integer",
+          "format": "uint64",
+          "minimum": 0,
+          "description": "Zero-based position of the event in its run's stream; consecutive\nevents differ by one."
+        }
+      },
+      "required": [
+        "at",
+        "kind",
+        "run",
+        "seq"
+      ],
+      "description": "One event of a run, in the order the run produced it."
+    },
+    "RunEventKind": {
+      "oneOf": [
+        {
+          "type": "object",
+          "properties": {
+            "type": {
+              "type": "string",
+              "const": "started"
+            },
+            "model": {
+              "anyOf": [
+                {
+                  "$ref": "#/$defs/ModelId"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "Catalog identifier of the model, when the harness selected it\nfrom a [`crate::ModelCatalog`]; `None` for a model the host\nsupplied directly."
+            },
+            "session": {
+              "$ref": "#/$defs/SessionId",
+              "description": "Session the turn belongs to; a one-shot run reports its\nin-memory session."
+            },
+            "turn": {
+              "$ref": "#/$defs/TurnIndex",
+              "description": "Durable position of the run's turn within its session."
+            }
+          },
+          "required": [
+            "type",
+            "session",
+            "turn"
+          ],
+          "description": "The run's turn was admitted to its session and is about to send its\nfirst model request. A run that fails before admission, such as one\nwhose session is busy, emits only [`Self::Completed`]."
+        },
+        {
+          "type": "object",
+          "properties": {
+            "type": {
+              "type": "string",
+              "const": "item_started"
+            },
+            "id": {
+              "$ref": "#/$defs/ItemId",
+              "description": "Identifier of the item."
+            },
+            "item_kind": {
+              "$ref": "#/$defs/ItemKind",
+              "description": "What the item is."
+            }
+          },
+          "required": [
+            "type",
+            "id",
+            "item_kind"
+          ],
+          "description": "An item started. Its content arrives with [`Self::ItemCompleted`]\nfor the same `id`, unless the run fails or is cancelled first: an\nitem still open when [`Self::Completed`] arrives was interrupted\nand never completes."
+        },
+        {
+          "type": "object",
+          "properties": {
+            "type": {
+              "type": "string",
+              "const": "item_completed"
+            },
+            "id": {
+              "$ref": "#/$defs/ItemId",
+              "description": "Identifier of the item, as [`Self::ItemStarted`] reported it."
+            },
+            "item": {
+              "$ref": "#/$defs/Item",
+              "description": "The finished item."
+            }
+          },
+          "required": [
+            "type",
+            "id",
+            "item"
+          ],
+          "description": "An item finished with its content."
+        },
+        {
+          "type": "object",
+          "properties": {
+            "type": {
+              "type": "string",
+              "const": "model_request_completed"
+            },
+            "cost": {
+              "anyOf": [
+                {
+                  "$ref": "#/$defs/Cost"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "Price of `usage`, or `None` when the run's model has no\n[`crate::catalog::Pricing`]."
+            },
+            "usage": {
+              "$ref": "#/$defs/Usage",
+              "description": "Tokens of this request."
+            }
+          },
+          "required": [
+            "type",
+            "usage"
+          ],
+          "description": "A model request completed, with the tokens its provider reported.\nThe usage and cost of these events sum to the run outcome's\n[`crate::RunOutcome::usage`] and [`crate::RunOutcome::cost`].\nLater per-request fields may be added, so match it with `..`."
+        },
+        {
+          "$ref": "#/$defs/ContextActivity",
+          "type": "object",
+          "properties": {
+            "type": {
+              "type": "string",
+              "const": "context_reduced"
+            }
+          },
+          "required": [
+            "type"
+          ],
+          "description": "The next model request is sent reduced to fit the context budget.\nCounts describe that whole request, so a reduction carried over from\nan earlier request is reported again."
+        },
+        {
+          "$ref": "#/$defs/RunSummary",
+          "type": "object",
+          "properties": {
+            "type": {
+              "type": "string",
+              "const": "completed"
+            }
+          },
+          "required": [
+            "type"
+          ],
+          "description": "The run finished; always the last event."
+        }
+      ],
+      "description": "What a [`RunEvent`] reports.\n\n[`Self::Completed`] is always the last event, including for a run that\nfailed or was cancelled, unless the run itself was dropped before it\nfinished; then the stream ends without it. New kinds, such as\nstreamed deltas, retries, and approval requests, may be added."
+    },
+    "ModelId": {
+      "type": "string",
+      "description": "Catalog key of one model, unique within a [`super::ModelCatalog`].\n\nBuilt-in entries use `provider/model`, such as `openai/gpt-6-luna`, so a\nmodel served by two providers, such as an `OpenAI` model reached with an\nAPI key or through a `ChatGPT` plan, has two distinct identifiers."
+    },
+    "SessionId": {
+      "type": "string",
+      "description": "Identifier of the session a run's turn belongs to."
+    },
+    "ItemId": {
+      "type": "integer",
+      "format": "uint64",
+      "minimum": 0,
+      "description": "Identifier of one item within its run, assigned in the order items\nstart."
+    },
+    "ItemKind": {
+      "oneOf": [
+        {
+          "type": "string",
+          "const": "message",
+          "description": "Assistant text written beside tool calls."
+        },
+        {
+          "type": "string",
+          "const": "output",
+          "description": "The run's final output."
+        },
+        {
+          "type": "string",
+          "const": "reasoning",
+          "description": "Provider reasoning the model returned."
+        },
+        {
+          "type": "string",
+          "const": "tool_call",
+          "description": "A tool call and its result."
+        }
+      ],
+      "description": "What an item is, known when it starts."
+    },
+    "ContextActivity": {
+      "type": "object",
+      "properties": {
+        "cleared_reasoning": {
+          "type": "integer",
+          "format": "uint",
+          "minimum": 0
+        },
+        "dropped_history_turns": {
+          "type": "integer",
+          "format": "uint",
+          "minimum": 0
+        },
+        "dropped_tool_calls": {
+          "type": "integer",
+          "format": "uint",
+          "minimum": 0
+        },
+        "elided_results": {
+          "type": "integer",
+          "format": "uint",
+          "minimum": 0
+        },
+        "shrunk_latest_write_calls": {
+          "type": "integer",
+          "format": "uint",
+          "minimum": 0
+        },
+        "shrunk_write_calls": {
+          "type": "integer",
+          "format": "uint",
+          "minimum": 0
+        },
+        "summarized_tool_calls": {
+          "type": "integer",
+          "format": "uint",
+          "minimum": 0,
+          "default": 0
+        },
+        "superseded_results": {
+          "type": "integer",
+          "format": "uint",
+          "minimum": 0,
+          "default": 0
+        },
+        "truncated_results": {
+          "type": "integer",
+          "format": "uint",
+          "minimum": 0
+        }
+      },
+      "required": [
+        "cleared_reasoning",
+        "dropped_history_turns",
+        "dropped_tool_calls",
+        "elided_results",
+        "shrunk_latest_write_calls",
+        "shrunk_write_calls",
+        "truncated_results"
+      ],
+      "description": "Content-free counts of how one provider request was reduced to fit the\ncontext budget.\n\nReduction applies only to the copy sent to the provider: canonical turn\nmessages, durable journals, and replayed history keep the original\ncontent. Counts describe the whole sent request, so a reduction carried\nover from an earlier request of the same turn is counted again. All counts\nare zero when the request was sent unchanged."
+    },
+    "RunFailure": {
+      "type": "object",
+      "properties": {
+        "kind": {
+          "$ref": "#/$defs/ErrorKind",
+          "description": "Failure classification; `cancelled` for a cancelled run."
+        },
+        "limit": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/LimitKind"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "description": "The run limit a `budget_exhausted` failure reached."
+        },
+        "message": {
+          "type": "string",
+          "description": "Bounded failure description."
+        },
+        "retryable": {
+          "type": "boolean",
+          "description": "Whether retrying the run may succeed."
+        }
+      },
+      "required": [
+        "kind",
+        "message",
+        "retryable"
+      ],
+      "description": "A run's failure as plain data.\n\nOn the wire its `kind` is the [`ErrorKind::as_str`] name, and a\n[`ErrorKind::BudgetExhausted`] failure adds the reached `limit`."
+    },
+    "RunSummary": {
+      "type": "object",
+      "properties": {
+        "cost": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/Cost"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "description": "Price of [`Self::usage`], as in [`crate::RunOutcome::cost`]."
+        },
+        "error": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/RunFailure"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "description": "Why the run failed, or `None` when it produced its output."
+        },
+        "usage": {
+          "$ref": "#/$defs/Usage",
+          "description": "Tokens of every model request, as in [`crate::RunOutcome::usage`]."
+        }
+      },
+      "required": [
+        "usage"
+      ],
+      "description": "How a run finished, carried by [`RunEventKind::Completed`]."
+    },
+    "Request": {
+      "description": "Client request: `jsonrpc`, `id`, `method`, and the method's `params`. A message without `id` is a client notification, which the server ignores.",
+      "type": "object",
+      "properties": {
+        "id": {
+          "$ref": "#/$defs/RequestId"
+        },
+        "jsonrpc": {
+          "$ref": "#/$defs/JsonRpcVersion"
+        }
+      },
+      "required": [
+        "id",
+        "jsonrpc"
+      ],
+      "allOf": [
+        {
+          "$ref": "#/$defs/Call"
+        }
+      ]
+    }
+  }
+}

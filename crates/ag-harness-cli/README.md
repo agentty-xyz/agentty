@@ -65,6 +65,36 @@ provider it was given for; other providers read their base URL environment varia
 Sessions whose history contains provider reasoning cannot switch models. A model whose
 `provider/model` exceeds 256 bytes can start a session but cannot be a switch target.
 
+## Serve a protocol (unstable)
+
+`serve` lets non-Rust programs drive sessions over standard input and output with
+JSON-RPC 2.0, one JSON message per line. The protocol is **unstable**: methods and
+message shapes may change in any release.
+
+```sh
+cargo run --locked -p ag-harness-cli -- serve
+```
+
+```json
+{"jsonrpc":"2.0","id":1,"method":"session/create","params":{"model":{"role":"smart"},"output":{"type":"json","schema":{"type":"object","properties":{"answer":{"type":"string"}},"required":["answer"]}}}}
+{"jsonrpc":"2.0","id":2,"method":"run/start","params":{"session":"<id from 1>","input":"Hello"}}
+```
+
+- Methods: `session/create`, `session/resume`, `run/start`, `run/cancel`,
+  `session/transcript`, `session/usage`, and `shutdown`.
+- Models are selected by catalog role (`{"role": "smart"}`), catalog ID, or
+  `{"id": "provider/model"}`, with credentials from the environment as for `run`.
+  Sessions live in the server's memory unless `store` names a SQLite file.
+- `run/start` answers with a run ID at once. The run's events follow as `run/event`
+  notifications and end with a `completed` event that carries its usage, cost, and any
+  failure.
+- Errors are JSON-RPC errors; harness failures carry `data.kind` and `data.retryable`.
+  Malformed lines are answered with an error and the server keeps running.
+- Tools are denied. `shutdown` or closing standard input cancels runs in flight, writes
+  their last events, and exits.
+
+[`schema/serve_protocol.json`](schema/serve_protocol.json) describes every message.
+
 ## Defaults
 
 - Repository writes are disabled unless `--allow-write` is set.
