@@ -111,6 +111,52 @@ impl fmt::Display for ErrorKind {
     }
 }
 
+/// Implements the shared accessors, `Display`, and [`Error`] of a public
+/// error type wrapping a [`Classified`] field named `classified`.
+macro_rules! classified_error_accessors {
+    ($error:ident, $retryable_doc:literal, $get_ref_doc:literal) => {
+        impl $error {
+            /// Returns the failure's classification.
+            pub fn kind(&self) -> ErrorKind {
+                self.classified.kind
+            }
+
+            #[doc = $retryable_doc]
+            pub fn is_retryable(&self) -> bool {
+                self.classified.kind.is_retryable()
+            }
+
+            /// Returns the provider-declared delay before a retry, when the
+            /// failure is retryable and the provider sent `Retry-After`.
+            pub fn retry_after(&self) -> Option<Duration> {
+                self.classified.retry_after
+            }
+
+            #[doc = $get_ref_doc]
+            pub fn get_ref(&self) -> &(dyn Error + Send + Sync + 'static) {
+                self.classified.source.as_ref()
+            }
+
+            /// Consumes the classification and returns the converted error.
+            pub fn into_inner(self) -> Box<dyn Error + Send + Sync> {
+                self.classified.source
+            }
+        }
+
+        impl fmt::Display for $error {
+            fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+                fmt::Display::fmt(&self.classified.source, formatter)
+            }
+        }
+
+        impl Error for $error {
+            fn source(&self) -> Option<&(dyn Error + 'static)> {
+                self.classified.source.source()
+            }
+        }
+    };
+}
+
 /// Classified failure of one run (turn).
 ///
 /// Use it for the result of a turn, whether returned as [`TurnError`] or as
@@ -123,46 +169,11 @@ pub struct RunError {
     classified: Classified,
 }
 
-impl RunError {
-    /// Returns the failure's classification.
-    pub fn kind(&self) -> ErrorKind {
-        self.classified.kind
-    }
-
-    /// Returns whether the failure is transient, so retrying the same run
-    /// later may succeed.
-    pub fn is_retryable(&self) -> bool {
-        self.classified.kind.is_retryable()
-    }
-
-    /// Returns the provider-declared delay before a retry, when the failure
-    /// is retryable and the provider sent `Retry-After`.
-    pub fn retry_after(&self) -> Option<Duration> {
-        self.classified.retry_after
-    }
-
-    /// Returns the converted error, such as a [`TurnError`], for downcasting.
-    pub fn get_ref(&self) -> &(dyn Error + Send + Sync + 'static) {
-        self.classified.source.as_ref()
-    }
-
-    /// Consumes the classification and returns the converted error.
-    pub fn into_inner(self) -> Box<dyn Error + Send + Sync> {
-        self.classified.source
-    }
-}
-
-impl fmt::Display for RunError {
-    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
-        fmt::Display::fmt(&self.classified.source, formatter)
-    }
-}
-
-impl Error for RunError {
-    fn source(&self) -> Option<&(dyn Error + 'static)> {
-        self.classified.source.source()
-    }
-}
+classified_error_accessors!(
+    RunError,
+    "Returns whether the failure is transient, so retrying the same run later may succeed.",
+    "Returns the converted error, such as a [`TurnError`], for downcasting."
+);
 
 impl From<TurnError> for RunError {
     fn from(error: TurnError) -> Self {
@@ -201,34 +212,6 @@ pub struct HarnessError {
 }
 
 impl HarnessError {
-    /// Returns the failure's classification.
-    pub fn kind(&self) -> ErrorKind {
-        self.classified.kind
-    }
-
-    /// Returns whether the failure is transient, so retrying the same
-    /// operation later may succeed.
-    pub fn is_retryable(&self) -> bool {
-        self.classified.kind.is_retryable()
-    }
-
-    /// Returns the provider-declared delay before a retry, when the failure
-    /// is retryable and the provider sent `Retry-After`.
-    pub fn retry_after(&self) -> Option<Duration> {
-        self.classified.retry_after
-    }
-
-    /// Returns the converted error, such as a [`SessionError`], for
-    /// downcasting.
-    pub fn get_ref(&self) -> &(dyn Error + Send + Sync + 'static) {
-        self.classified.source.as_ref()
-    }
-
-    /// Consumes the classification and returns the converted error.
-    pub fn into_inner(self) -> Box<dyn Error + Send + Sync> {
-        self.classified.source
-    }
-
     fn config(error: impl Error + Send + Sync + 'static) -> Self {
         Self {
             classified: Classified::new(Classification::kind(ErrorKind::Config), Box::new(error)),
@@ -236,17 +219,11 @@ impl HarnessError {
     }
 }
 
-impl fmt::Display for HarnessError {
-    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
-        fmt::Display::fmt(&self.classified.source, formatter)
-    }
-}
-
-impl Error for HarnessError {
-    fn source(&self) -> Option<&(dyn Error + 'static)> {
-        self.classified.source.source()
-    }
-}
+classified_error_accessors!(
+    HarnessError,
+    "Returns whether the failure is transient, so retrying the same operation later may succeed.",
+    "Returns the converted error, such as a [`SessionError`], for downcasting."
+);
 
 impl From<SessionError> for HarnessError {
     fn from(error: SessionError) -> Self {
