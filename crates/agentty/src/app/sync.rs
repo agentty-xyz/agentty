@@ -104,17 +104,29 @@ pub(crate) struct SyncHandle {
 }
 
 impl SyncHandle {
-    /// Spawns the sync orchestrator and returns the app-side handle for its
-    /// command and context channels.
-    pub(crate) fn spawn(
+    /// Returns the app-side handle and the orchestrator it controls, which
+    /// does not run until [`SyncOrchestrator::spawn`].
+    ///
+    /// Contexts published and commands sent before the spawn wait for the
+    /// orchestrator, so the app can finish startup reconciliation first. Its
+    /// first pass then reads the reconciled polling targets instead of the
+    /// initial ones.
+    pub(crate) fn unstarted(
         app_event_tx: mpsc::UnboundedSender<AppEvent>,
         initial_context: SyncContext,
-    ) -> Self {
+    ) -> (Self, SyncOrchestrator) {
         let (command_tx, command_rx) = mpsc::unbounded_channel();
         let (context_tx, context_rx) = watch::channel(initial_context);
-        SyncOrchestrator::spawn(app_event_tx, command_rx, context_rx);
+        let orchestrator = SyncOrchestrator {
+            app_event_tx,
+            command_rx,
+            context_rx,
+            review_pass_index: 0,
+            review_sync_failures: HashMap::new(),
+            tick_index: 0,
+        };
 
-        Self::new(command_tx, context_tx)
+        (Self::new(command_tx, context_tx), orchestrator)
     }
 
     /// Creates a handle around the orchestrator command and context channels.
@@ -431,24 +443,12 @@ pub(crate) struct SyncOrchestrator {
 impl SyncOrchestrator {
     /// Spawns the orchestrator loop on the runtime.
     ///
+    /// The first pass starts at once and reads the latest published context.
     /// The task exits when the command channel closes, which happens when the
     /// app drops its [`SyncHandle`] at shutdown. The host execution context
     /// follows the task so conflict assistance retains its capture policy.
-    pub(crate) fn spawn(
-        app_event_tx: mpsc::UnboundedSender<AppEvent>,
-        command_rx: mpsc::UnboundedReceiver<SyncCommand>,
-        context_rx: watch::Receiver<SyncContext>,
-    ) {
-        let orchestrator = Self {
-            app_event_tx,
-            command_rx,
-            context_rx,
-            review_pass_index: 0,
-            review_sync_failures: HashMap::new(),
-            tick_index: 0,
-        };
-
-        tokio::spawn(orchestrator.run().with_context(Context::current()));
+    pub(crate) fn spawn(self) {
+        tokio::spawn(self.run().with_context(Context::current()));
     }
 
     /// Runs the command/tick loop until the command channel closes.

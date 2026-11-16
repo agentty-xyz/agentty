@@ -522,7 +522,8 @@ worktree changes to fit a prompt.
   the first may predate the rerun and a fast rerun can finish between reports. Started
   follow-ups are persisted to avoid repeating them for unchanged forge state; one that
   cannot start is retried on the next report. The reducer moves idle sessions between
-  `Review` and `Watching`.
+  `Review` and `Watching`. The orchestrator starts after startup moves watched sessions
+  to `Watching`, so its first refresh already reports their forge facts.
 
 Review-comment targets persist before execution and are scoped to the linked open review
 request. Clarification answers and subsequent turns restore unfinished targets and
