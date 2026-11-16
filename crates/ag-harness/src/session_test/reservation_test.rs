@@ -21,6 +21,7 @@ use crate::session::{
     Database, NewSession, SessionError, TimestampSource, connect_options, interrupt_owned_turn,
 };
 use crate::store::{AcquiredTurn, SessionStore as _, TurnAdmission};
+use crate::transcript::{TurnRange, TurnStatus};
 use crate::turn::TurnError;
 
 #[tokio::test]
@@ -767,4 +768,51 @@ async fn delayed_or_unowned_cleanup_preserves_the_turn_outcome() {
     // Assert
     assert_eq!(active.turns.len(), 1);
     assert_eq!(completed.turns.len(), 2);
+}
+
+#[tokio::test]
+async fn transcripts_and_forks_recover_a_turn_whose_lease_expired() {
+    // Arrange
+    let now = Arc::new(AtomicI64::new(10));
+    let timestamp_source: Arc<dyn TimestampSource> = {
+        let now = Arc::clone(&now);
+
+        Arc::new(move || now.load(Ordering::SeqCst))
+    };
+    let database = Database::open_in_memory_with_timestamp_source(timestamp_source)
+        .await
+        .expect("database should open");
+    database
+        .create_session(&NewSession::new("session-a", schema()), None, 100_000)
+        .await
+        .expect("session should be created");
+    let acquired = AcquiredTurn::begin(
+        Arc::new(database.clone()),
+        "session-a",
+        &TurnInput::from("prompt"),
+        &turn_options(),
+        0,
+    )
+    .await
+    .expect("turn should begin");
+    let running = database
+        .load_transcript("session-a", &TurnRange::All)
+        .await
+        .expect("transcript should load");
+    now.store(11 + TURN_LEASE_SECONDS, Ordering::SeqCst);
+
+    // Act
+    let transcript = database
+        .load_transcript("session-a", &TurnRange::All)
+        .await
+        .expect("transcript should load");
+    let fork = database.fork_session("session-a", 0, "session-b").await;
+
+    // Assert
+    assert_eq!(running, Vec::new(), "a live turn is not settled");
+    assert_eq!(transcript.len(), 1);
+    assert_eq!(transcript[0].status, TurnStatus::Interrupted);
+    assert_eq!(transcript[0].error_type.as_deref(), Some("interrupted"));
+    assert!(fork.is_ok(), "the recovered turn can be forked at");
+    drop(acquired);
 }

@@ -14,8 +14,8 @@ use crate::recovery::{HostRequest, HostTurnRecord, HostTurnStatus};
 use crate::reservation::TURN_LEASE_SECONDS;
 use crate::store::{
     Admission, AdmissionState, CompactionSource, LoadedSession, ModelSwitch, NewSession,
-    Reservation, ReservedTurn, SessionStore, StoreIdentity, StoredTurn, TurnAdmission, TurnOwner,
-    WriteRecord, WriteStatus,
+    Reservation, ReservedTurn, SessionStore, StoreIdentity, StoredTurn, StoredTurnOptions,
+    TurnAdmission, TurnOwner, WriteRecord, WriteStatus,
 };
 use crate::transcript::{TurnRange, TurnStatus};
 use crate::write_journal::content_hash;
@@ -214,11 +214,6 @@ impl SessionStore for MemoryStore {
             next_write,
             sessions,
         } = &mut *state;
-        if sessions.contains_key(target) {
-            return Err(SessionError::AlreadyExists {
-                id: target.to_string(),
-            });
-        }
         let session = sessions
             .get_mut(source)
             .ok_or_else(|| SessionError::NotFound {
@@ -235,7 +230,12 @@ impl SessionStore for MemoryStore {
                 turn: through.unsigned_abs(),
             });
         }
-        let fork = session.fork(&self.identity, through, target, next_command, next_write);
+        if sessions.contains_key(target) {
+            return Err(SessionError::AlreadyExists {
+                id: target.to_string(),
+            });
+        }
+        let fork = sessions[source].fork(&self.identity, through, target, next_command, next_write);
         sessions.insert(target.to_string(), fork);
 
         Ok(())
@@ -391,6 +391,7 @@ impl SessionStore for MemoryStore {
                 Admission::Recorded(record) => return Ok(Reservation::Recorded(record)),
                 Admission::Reserve(turn) => turn,
             };
+        let text_output = StoredTurnOptions::decode(turn.options())?.text_output();
         let position = session.next_turn;
         let next_position = position
             .checked_add(1)
@@ -411,12 +412,12 @@ impl SessionStore for MemoryStore {
             error_type: None,
             finished_at: None,
             messages: vec![turn.message().clone()],
-            options: turn.options().to_string(),
             outcome: None,
             owner: owner.clone(),
             request: turn.request().cloned(),
             started_at: SystemTime::now(),
             status: Status::Running,
+            text_output,
         });
         session.next_turn = next_position;
 
@@ -863,12 +864,12 @@ struct TurnRecord {
     finished_at: Option<SystemTime>,
     messages: Vec<ModelMessage>,
     model: crate::store::RecordedModel,
-    options: String,
     outcome: Option<TurnOutcome>,
     owner: TurnOwner,
     request: Option<HostRequest>,
     started_at: SystemTime,
     status: Status,
+    text_output: bool,
 }
 
 impl TurnRecord {
@@ -881,16 +882,18 @@ impl TurnRecord {
             Status::Interrupted => TurnStatus::Interrupted,
         };
 
-        Some(StoredTurn {
-            error_type: self.error_type.clone(),
-            finished_at: self.finished_at.unwrap_or(self.started_at),
-            messages: self.messages.clone(),
-            options: Some(self.options.clone()),
-            outcome: self.outcome.clone(),
-            position: self.owner.turn_position(),
-            started_at: self.started_at,
-            status,
-        })
+        Some(
+            StoredTurn::new(
+                self.owner.turn_position(),
+                status,
+                self.started_at,
+                self.finished_at.unwrap_or(self.started_at),
+                self.messages.clone(),
+            )
+            .with_error_type(self.error_type.clone())
+            .with_outcome(self.outcome.clone())
+            .with_text_output(self.text_output),
+        )
     }
 }
 

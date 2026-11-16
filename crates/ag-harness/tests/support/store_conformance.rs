@@ -7,6 +7,7 @@ use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
 use ag_harness::bash::{CommandCleanupScope, CommandIntent, CommandOutcome, CommandTermination};
+use ag_harness::event::{SessionId, TurnIndex};
 use ag_harness::model::{ModelCompletion, ModelMessage, ModelRequest, ModelResponse};
 use ag_harness::store::{
     AcquiredTurn, CompactionSource, HistoryProjection, HistoryTurn, MemoryStore, ModelSwitch,
@@ -14,7 +15,10 @@ use ag_harness::store::{
     TurnOwner, TurnStop, WriteStatus,
 };
 use ag_harness::tool::ToolCall;
-use ag_harness::{Harness, Model, ModelError, SessionError, TurnError, TurnInput};
+use ag_harness::transcript::TurnStatus;
+use ag_harness::{
+    ErrorKind, Harness, Model, ModelError, SessionError, TurnError, TurnInput, TurnRange,
+};
 use async_trait::async_trait;
 use serde_json::json;
 use tokio::sync::Notify;
@@ -2013,5 +2017,303 @@ async fn unresolved_commands_fence_model_switches_until_owner_reconciliation() {
         assert!(records[0].reconciled);
         assert!(records[0].outcome.is_none());
         store.interrupt(next.owner()).await.expect("stop successor");
+    }
+}
+
+#[tokio::test]
+async fn journaled_backends_fork_settled_turns_with_their_records_and_covered_checkpoint() {
+    for store in journaled_stores().await {
+        // Arrange
+        store
+            .create_session(&NewSession::new("source", schema()), None, 4096)
+            .await
+            .expect("create");
+        complete_forkable_turn(&store, "zero", true, HistoryProjection::default()).await;
+        let projection = HistoryProjection::new(1, 1, 1);
+        complete_forkable_turn(&store, "one", false, projection).await;
+        let checkpoint = SessionCheckpoint::new(
+            1,
+            0,
+            None,
+            None,
+            json!({"context": "c", "decisions": [], "state": "s"}),
+        )
+        .expect("checkpoint");
+        store
+            .publish_checkpoint("source", &checkpoint)
+            .await
+            .expect("publish");
+
+        // Act
+        store
+            .fork_session("source", 1, "whole")
+            .await
+            .expect("fork whole");
+        store
+            .fork_session("source", 0, "early")
+            .await
+            .expect("fork early");
+
+        // Assert
+        assert_eq!(
+            store
+                .load_session("source")
+                .await
+                .expect("source")
+                .projection,
+            projection
+        );
+        let whole = store.load_session("whole").await.expect("whole");
+        assert_eq!(whole.checkpoint, Some(checkpoint));
+        assert_eq!(whole.projection, HistoryProjection::default());
+        assert_eq!(
+            store.load_session("early").await.expect("early").checkpoint,
+            None
+        );
+        let writes = store.load_writes("whole").await.expect("writes");
+        assert_eq!(writes.len(), 1);
+        assert_eq!(writes[0].path, "a.txt");
+        let commands = store.load_commands("whole").await.expect("commands");
+        assert_eq!(commands.len(), 1);
+        assert_eq!(commands[0].owner().session_id(), "whole");
+        assert_eq!(commands[0].outcome, Some(completed_command()));
+        let copied = store
+            .load_transcript("whole", &TurnRange::All)
+            .await
+            .expect("whole transcript");
+        assert_eq!(copied.len(), 2);
+        assert_eq!(copied[1].messages[0], ModelMessage::User("one".to_string()));
+        assert_eq!(
+            store
+                .load_transcript("early", &TurnRange::All)
+                .await
+                .expect("early transcript")
+                .len(),
+            1
+        );
+        assert_eq!(
+            store
+                .load_transcript("source", &TurnRange::All)
+                .await
+                .expect("source transcript")
+                .len(),
+            2,
+            "the source is unchanged"
+        );
+    }
+}
+
+#[tokio::test]
+async fn journaled_backends_reject_forks_in_contract_order_changing_nothing() {
+    for store in journaled_stores().await {
+        // Arrange
+        store
+            .create_session(&NewSession::new("source", schema()), None, 4096)
+            .await
+            .expect("create");
+        complete_forkable_turn(&store, "zero", true, HistoryProjection::default()).await;
+        store
+            .fork_session("source", 0, "whole")
+            .await
+            .expect("fork whole");
+        let running = AcquiredTurn::begin(
+            Arc::clone(&store),
+            "source",
+            &TurnInput::from("one"),
+            &options(),
+            0,
+        )
+        .await
+        .expect("running turn");
+
+        // Act
+        let running_turn = store.fork_session("source", 1, "late").await;
+        let missing = store.fork_session("missing", 0, "other").await;
+        let taken = store.fork_session("source", 0, "whole").await;
+        let taken_and_unsettled = store.fork_session("source", 1, "whole").await;
+        let missing_transcript = store.load_transcript("missing", &TurnRange::All).await;
+
+        // Assert
+        assert!(matches!(
+            running_turn,
+            Err(SessionError::TurnNotFound { turn: 1, .. })
+        ));
+        assert!(matches!(missing, Err(SessionError::NotFound { .. })));
+        assert!(matches!(taken, Err(SessionError::AlreadyExists { .. })));
+        assert!(
+            matches!(
+                taken_and_unsettled,
+                Err(SessionError::TurnNotFound { turn: 1, .. })
+            ),
+            "the turn is checked before the target"
+        );
+        assert!(matches!(
+            missing_transcript,
+            Err(SessionError::NotFound { .. })
+        ));
+        for rejected in ["late", "other"] {
+            assert!(matches!(
+                store.load_session(rejected).await,
+                Err(SessionError::NotFound { .. })
+            ));
+        }
+        assert_eq!(
+            store
+                .load_transcript("whole", &TurnRange::All)
+                .await
+                .expect("whole transcript")
+                .len(),
+            1
+        );
+        assert_eq!(store.load_writes("whole").await.expect("writes").len(), 1);
+        store.interrupt(running.owner()).await.expect("interrupt");
+    }
+}
+
+#[tokio::test]
+async fn memory_backend_transcripts_and_forks_recover_a_turn_whose_lease_expired() {
+    // Arrange
+    let store: Arc<dyn SessionStore> = Arc::new(MemoryStore::new());
+    store
+        .create_session(&NewSession::new("source", schema()), None, 4096)
+        .await
+        .expect("create");
+    let running = AcquiredTurn::begin(
+        Arc::clone(&store),
+        "source",
+        &TurnInput::from("expired"),
+        &options(),
+        0,
+    )
+    .await
+    .expect("running turn");
+    let live = store
+        .load_transcript("source", &TurnRange::All)
+        .await
+        .expect("live transcript");
+    tokio::time::pause();
+    tokio::time::advance(Duration::from_secs(301)).await;
+    tokio::time::resume();
+
+    // Act
+    let transcript = store
+        .load_transcript("source", &TurnRange::All)
+        .await
+        .expect("recovered transcript");
+    let fork = store.fork_session("source", 0, "fork").await;
+
+    // Assert
+    assert_eq!(live, Vec::new(), "a live turn is not settled");
+    assert_eq!(transcript.len(), 1);
+    assert_eq!(transcript[0].status, TurnStatus::Interrupted);
+    assert_eq!(transcript[0].error_type.as_deref(), Some("interrupted"));
+    assert!(fork.is_ok(), "the recovered turn can be forked at");
+    drop(running);
+}
+
+#[tokio::test]
+async fn external_store_without_transcript_support_fails_closed() {
+    // Arrange
+    let store: Arc<dyn SessionStore> = Arc::new(ExternalStore::new());
+    let harness = harness(Arc::clone(&store));
+    let session = harness
+        .session("external", schema())
+        .create()
+        .await
+        .expect("session");
+
+    // Act
+    let loaded = store.load_transcript("external", &TurnRange::All).await;
+    let forked = store.fork_session("external", 0, "copy").await;
+    let transcript = session.transcript(TurnRange::All).await;
+    let fork = harness
+        .fork(
+            &SessionId::new("external"),
+            TurnIndex::new(0),
+            SessionId::new("copy"),
+        )
+        .await;
+
+    // Assert
+    assert!(matches!(loaded, Err(SessionError::InvalidData { .. })));
+    assert!(matches!(forked, Err(SessionError::InvalidData { .. })));
+    assert_eq!(
+        transcript.err().map(|error| error.kind()),
+        Some(ErrorKind::Store)
+    );
+    assert_eq!(fork.err().map(|error| error.kind()), Some(ErrorKind::Store));
+}
+
+/// Completes a turn of session `source` for `input` keeping `projection`,
+/// first recording an applied write and a completed command when
+/// `with_effects`.
+async fn complete_forkable_turn(
+    store: &Arc<dyn SessionStore>,
+    input: &str,
+    with_effects: bool,
+    projection: HistoryProjection,
+) {
+    let turn = AcquiredTurn::begin(
+        Arc::clone(store),
+        "source",
+        &TurnInput::from(input),
+        &options(),
+        0,
+    )
+    .await
+    .expect("turn");
+    if with_effects {
+        let write = store
+            .write_intent(
+                turn.owner(),
+                "call",
+                Path::new("/repo"),
+                "a.txt",
+                None,
+                b"new",
+            )
+            .await
+            .expect("write intent");
+        store
+            .finish_write(turn.owner(), write, true)
+            .await
+            .expect("finish write");
+        let intent = CommandIntent {
+            call_id: "call".into(),
+            command: "true".into(),
+            policy: json!({}),
+            workspace: "/repo".into(),
+        };
+        let command = store
+            .command_intent(turn.owner(), &intent)
+            .await
+            .expect("command intent");
+        store
+            .finish_command(turn.owner(), command, &completed_command())
+            .await
+            .expect("finish command");
+    }
+    let output = json!({"answer": input}).to_string();
+    store
+        .complete_turn(turn.owner(), &[ModelMessage::Assistant(output)], projection)
+        .await
+        .expect("complete");
+}
+
+fn completed_command() -> CommandOutcome {
+    CommandOutcome {
+        cleanup_failed: false,
+        cleanup_scope: CommandCleanupScope::PidNamespace,
+        execution_failure: None,
+        exit_code: Some(0),
+        signal: None,
+        stderr: String::new(),
+        stderr_omitted_bytes: 0,
+        stderr_tail: String::new(),
+        stdout: String::new(),
+        stdout_omitted_bytes: 0,
+        stdout_tail: String::new(),
+        termination: CommandTermination::Completed,
+        truncated: false,
     }
 }

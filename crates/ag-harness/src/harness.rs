@@ -1308,13 +1308,23 @@ impl Harness {
     /// after `at`, and replays its history from the start of its budget. The
     /// source is left unchanged, so both sessions continue independently.
     ///
+    /// Host request records of the copied turns are carried over: retrying
+    /// a host request ID the source used through `at` on the fork returns
+    /// its recorded outcome rather than starting a turn.
+    ///
+    /// The fork is created first and then resumed with this harness's
+    /// model, which validates the model selection it copied. When that
+    /// resume fails, for example on a source recorded with another model,
+    /// `new` is already stored: resume it with a matching harness rather
+    /// than forking to it again, which would fail as a conflict.
+    ///
     /// # Errors
     ///
     /// Returns an [`crate::ErrorKind::NotFound`] failure when `from` or its
     /// settled turn `at` does not exist, an [`crate::ErrorKind::Conflict`]
     /// failure when `new` exists, an [`crate::ErrorKind::Config`] failure
     /// for a blank `new` identifier, storage that is not configured, or a
-    /// source recorded with another model, and an
+    /// fork recorded with another model, and an
     /// [`crate::ErrorKind::Store`] failure when the store fails or does not
     /// support forking.
     pub async fn fork(
@@ -1329,8 +1339,6 @@ impl Harness {
             }));
         }
         let database = self.open_database().await?;
-        let source = database.load_session(from.as_str()).await?;
-        self.validate_session_model(from.as_str(), &source)?;
         let through = i64::try_from(at.get()).map_err(|_| SessionError::TurnNotFound {
             id: from.as_str().to_string(),
             turn: at.get(),

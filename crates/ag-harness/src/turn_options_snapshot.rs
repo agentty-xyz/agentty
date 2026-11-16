@@ -102,6 +102,12 @@ impl StoredTurnOptions {
         Ok(stored)
     }
 
+    /// Returns whether the turn answered in text output mode rather than
+    /// against an output schema.
+    pub fn text_output(&self) -> bool {
+        self.output_schema.is_null()
+    }
+
     fn effective_options(&self) -> Value {
         // Legacy v2 fingerprints hash unsorted keys, so the limit keeps its
         // original position for builds that preserve insertion order.

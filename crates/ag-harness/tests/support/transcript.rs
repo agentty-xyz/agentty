@@ -1,6 +1,8 @@
-//! Session transcripts and forks: typed records of settled turns for every
-//! range, through SQLite resume, and sessions forked at a settled turn that
-//! continue independently under their own prompt-cache key.
+//! Session transcripts and forks through the harness: typed records of
+//! settled turns for every range, through SQLite resume, and sessions forked
+//! at a settled turn that continue independently under their own
+//! prompt-cache key. Store-level fork and transcript contracts live in the
+//! store conformance suite.
 
 use std::error::Error;
 use std::future::IntoFuture;
@@ -8,21 +10,18 @@ use std::num::NonZeroU32;
 use std::path::Path;
 use std::sync::{Arc, Mutex, PoisonError};
 
-use ag_harness::bash::{CommandCleanupScope, CommandIntent, CommandOutcome, CommandTermination};
-use ag_harness::event::{SessionId, TurnIndex};
+use ag_harness::event::{Item, SessionId, ToolCallItem, ToolCallStatus, TurnIndex};
 use ag_harness::model::{
-    CompletionMetadata, CompletionUsage, ModelCompletion, ModelMessage, ModelRequest, ModelResponse,
+    CompletionMetadata, CompletionUsage, ModelCapabilities, ModelCompletion, ModelMessage,
+    ModelMetadata, ModelRegistry, ModelRequest, ModelResponse,
 };
 use ag_harness::recovery::ExecutionIdentity;
-use ag_harness::store::{
-    AcquiredTurn, HistoryProjection, MemoryStore, NewSession, SessionCheckpoint, SessionStore,
-    SqliteStore,
-};
+use ag_harness::store::{MemoryStore, SessionStore, SqliteStore};
 use ag_harness::tool::ToolCall;
-use ag_harness::transcript::{TranscriptInput, TranscriptItem, TranscriptToolCall, TurnStatus};
+use ag_harness::transcript::{TranscriptInput, TurnStatus};
 use ag_harness::{
-    ErrorKind, Harness, Model, ModelError, OutputMode, OutputSchema, RunLimits, RunOutput,
-    RunRequest, Session, SessionError, TurnInput, TurnRange, TurnRecord,
+    ErrorKind, Harness, LimitKind, Model, ModelError, OutputMode, OutputSchema, RunLimits,
+    RunOutput, RunRequest, Session, TurnRange, TurnRecord,
 };
 use async_trait::async_trait;
 use serde_json::json;
@@ -30,7 +29,7 @@ use tempfile::tempdir;
 use tokio::sync::Notify;
 
 use crate::context_budget_fixture::unbounded_context_budget;
-use crate::store_fixture::{ExternalStore, options, schema};
+use crate::model_profile_fixture::unbounded_model_profile;
 
 /// Assistant text sent with every tool-call response.
 const CALL_TEXT: &str = "Reading";
@@ -38,8 +37,10 @@ const CALL_TEXT: &str = "Reading";
 /// Answers JSON requests with `{"answer": <prompt>}` and text requests with
 /// `plain <prompt>`, reporting 10 input and 5 output tokens per request. A
 /// `batch` prompt first calls `read` twice; a `hang` prompt never answers.
+/// A named model reports itself as provider and model `name`.
 #[derive(Clone, Default)]
 struct ScriptedModel {
+    name: Option<&'static str>,
     requests: Arc<Mutex<Vec<ModelRequest>>>,
     started: Arc<Notify>,
 }
@@ -55,6 +56,11 @@ impl ScriptedModel {
 
 #[async_trait]
 impl Model for ScriptedModel {
+    fn metadata(&self) -> Option<ModelMetadata> {
+        self.name
+            .and_then(|name| ModelMetadata::new(name, name).ok())
+    }
+
     fn supports_text_output(&self) -> bool {
         true
     }
@@ -147,24 +153,26 @@ fn text(text: &str) -> Vec<TranscriptInput> {
     }]
 }
 
-fn json_output(answer: &str) -> TranscriptItem {
-    TranscriptItem::Output {
+fn json_output(answer: &str) -> Item {
+    Item::Output {
         output: RunOutput::Json(json!({"answer": answer})),
     }
 }
 
-/// Returns the identifier, name, and result of each tool call of `record`.
-fn tool_calls(record: &TurnRecord) -> Vec<(&str, &str, Option<&str>)> {
+/// Returns the identifier, name, status, and output of each tool call of
+/// `record`.
+fn tool_calls(record: &TurnRecord) -> Vec<(&str, &str, ToolCallStatus, &str)> {
     record
         .items
         .iter()
         .filter_map(|item| match item {
-            TranscriptItem::ToolCall(TranscriptToolCall {
+            Item::ToolCall(ToolCallItem {
                 call_id,
                 name,
-                result,
+                output,
+                status,
                 ..
-            }) => Some((call_id.as_str(), name.as_str(), result.as_deref())),
+            }) => Some((call_id.as_str(), name.as_str(), *status, output.as_str())),
             _ => None,
         })
         .collect()
@@ -184,6 +192,28 @@ fn sent_inputs(request: &ModelRequest) -> Vec<String> {
             _ => None,
         })
         .collect()
+}
+
+/// Returns a registry of the named scripted models `a` and `b`, sharing
+/// `model`'s request log.
+fn registry(model: &ScriptedModel) -> Result<ModelRegistry, Box<dyn Error>> {
+    let mut registry = ModelRegistry::new();
+    for name in ["a", "b"] {
+        registry.register(
+            ExecutionIdentity::new(name, "1")?,
+            ScriptedModel {
+                name: Some(name),
+                ..model.clone()
+            },
+            ModelCapabilities {
+                image_input: false,
+                profile: unbounded_model_profile(),
+                tool_calls: true,
+            },
+        )?;
+    }
+
+    Ok(registry)
 }
 
 #[tokio::test]
@@ -241,28 +271,38 @@ async fn transcript_records_completed_failed_and_interrupted_turns() -> Result<(
         assert_eq!(all[0].input, text("first"));
         assert_eq!(all[0].instructions.as_deref(), Some("be brief"));
         assert_eq!(all[0].items, [json_output("first")]);
-        assert_eq!(all[0].error_type, None);
+        assert_eq!(all[0].error, None);
         assert!(all[0].started_at <= all[0].finished_at);
         assert!(all[0].finished_at <= all[3].started_at);
         assert_eq!(all[1].instructions, None);
-        assert_eq!(all[1].error_type.as_deref(), Some("RunLimit(ToolCalls)"));
+        assert_eq!(
+            all[1].error.map(|error| error.kind),
+            Some(ErrorKind::BudgetExhausted(LimitKind::ToolCalls)),
+            "a limit stop reads as the live run reported it"
+        );
         assert_eq!(
             all[1].items.first(),
-            Some(&TranscriptItem::Message {
+            Some(&Item::Message {
                 text: CALL_TEXT.to_string()
             })
         );
         assert_eq!(
             tool_calls(&all[1]),
-            [("call-0", "read", None), ("call-1", "read", None)],
+            [
+                ("call-0", "read", ToolCallStatus::Unanswered, ""),
+                ("call-1", "read", ToolCallStatus::Unanswered, ""),
+            ],
             "the refused batch is recorded unanswered"
         );
         assert_eq!(all[2].input, text("hang"));
         assert_eq!(all[2].items, Vec::new());
-        assert!(all[2].error_type.is_some());
+        assert_eq!(
+            all[2].error.map(|error| error.kind),
+            Some(ErrorKind::Cancelled)
+        );
         assert_eq!(
             all[3].items,
-            [TranscriptItem::Output {
+            [Item::Output {
                 output: RunOutput::Text("plain last".to_string())
             }]
         );
@@ -306,7 +346,10 @@ async fn transcript_survives_sqlite_resume_with_answered_calls_and_usage()
     let calls = tool_calls(&after[0]);
     assert_eq!(calls.len(), 2);
     assert!(
-        calls.iter().all(|(_, _, result)| result.is_some()),
+        calls
+            .iter()
+            .all(|(_, _, status, output)| *status == ToolCallStatus::Answered
+                && !output.is_empty()),
         "both calls keep their results"
     );
     assert_eq!(after[0].items.last(), Some(&json_output("batch")));
@@ -375,6 +418,92 @@ async fn forked_sessions_continue_independently_under_their_own_cache_keys()
 }
 
 #[tokio::test]
+async fn forks_replay_host_requests_the_source_recorded() -> Result<(), Box<dyn Error>> {
+    for store in journaled_stores().await? {
+        // Arrange
+        let model = ScriptedModel::default();
+        let harness = harness(&model, store)?;
+        let mut source = harness.session("source", answer_schema()?).create().await?;
+        let recorded = source.turn("one").host_id("request").await?;
+        let mut fork = harness
+            .fork(
+                &SessionId::new("source"),
+                TurnIndex::new(0),
+                SessionId::new("fork"),
+            )
+            .await?;
+        let sent = model.requests().len();
+
+        // Act
+        let replayed = fork.turn("one").host_id("request").await?;
+        let fresh = fork.turn("two").host_id("fresh").await?;
+
+        // Assert
+        assert_eq!(replayed.output(), recorded.output());
+        assert_eq!(fresh.output(), &json!({"answer": "two"}));
+        assert_eq!(
+            model.requests().len(),
+            sent + 1,
+            "only the new host request reaches the model"
+        );
+        assert_eq!(indices(&fork.transcript(TurnRange::All).await?), [0, 1]);
+    }
+
+    Ok(())
+}
+
+#[tokio::test]
+async fn forks_keep_the_switched_model_and_reject_another() -> Result<(), Box<dyn Error>> {
+    for store in journaled_stores().await? {
+        // Arrange
+        let model = ScriptedModel::default();
+        let registry = registry(&model)?;
+        let on_a = Harness::from_registry(&registry, "a")?.store(Arc::clone(&store));
+        let on_b = Harness::from_registry(&registry, "b")?.store(Arc::clone(&store));
+        let mut source = on_a.session("source", answer_schema()?).create().await?;
+        assert!(source.run(RunRequest::new("one")).await.result.is_ok());
+        source.switch_model(&registry, "b").await?;
+        let source_id = SessionId::new("source");
+
+        // Act
+        let mismatched = on_a
+            .fork(&source_id, TurnIndex::new(0), SessionId::new("on-a"))
+            .await;
+        let fork = on_b
+            .fork(&source_id, TurnIndex::new(0), SessionId::new("on-b"))
+            .await?;
+        let outcome = fork.run(RunRequest::new("two")).await;
+
+        // Assert
+        assert_eq!(
+            mismatched.err().map(|error| error.kind()),
+            Some(ErrorKind::Config)
+        );
+        assert!(
+            on_b.resume("on-a").await.is_ok(),
+            "a fork whose resume failed stays stored"
+        );
+        assert!(outcome.result.is_ok());
+        let requests = model.requests();
+        let last = requests.last().ok_or("the fork sends a request")?;
+        assert_eq!(last.prompt(), "two");
+        let source_record = store.load_session("source").await?;
+        let fork_record = store.load_session("on-b").await?;
+        assert_eq!(fork_record.recorded_model(), source_record.recorded_model());
+        assert_eq!(
+            fork_record
+                .registration_identity
+                .as_ref()
+                .map(ExecutionIdentity::key),
+            Some("b")
+        );
+        assert_eq!(fork_record.model.as_deref(), Some("b"));
+    }
+
+    Ok(())
+}
+
+#[tokio::test]
 async fn fork_rejects_missing_sources_turns_and_existing_or_blank_targets()
 -> Result<(), Box<dyn Error>> {
     for store in journaled_stores().await? {
@@ -411,182 +540,11 @@ async fn fork_rejects_missing_sources_turns_and_existing_or_blank_targets()
         assert_eq!(taken, Some(ErrorKind::Conflict));
         assert_eq!(blank, Some(ErrorKind::Config));
         assert_eq!(source.transcript(TurnRange::All).await?.len(), 1);
-    }
-
-    Ok(())
-}
-
-#[tokio::test]
-async fn stores_fork_settled_turns_with_their_records_and_covered_checkpoint()
--> Result<(), Box<dyn Error>> {
-    for store in journaled_stores().await? {
-        // Arrange
-        store
-            .create_session(&NewSession::new("source", schema()), None, 4096)
-            .await?;
-        complete_turn(&store, "zero", true).await?;
-        complete_turn(&store, "one", false).await?;
-        let checkpoint = SessionCheckpoint::new(
-            1,
-            0,
-            None,
-            None,
-            json!({"context": "c", "decisions": [], "state": "s"}),
-        )?;
-        store.publish_checkpoint("source", &checkpoint).await?;
-        let running = AcquiredTurn::begin(
-            Arc::clone(&store),
-            "source",
-            &TurnInput::from("two"),
-            &options(),
-            0,
-        )
-        .await?;
-
-        // Act
-        store.fork_session("source", 1, "whole").await?;
-        store.fork_session("source", 0, "early").await?;
-        let running_turn = store.fork_session("source", 2, "late").await;
-        let missing = store.fork_session("missing", 0, "other").await;
-        let taken = store.fork_session("source", 0, "whole").await;
-        let missing_transcript = store.load_transcript("missing", &TurnRange::All).await;
-
-        // Assert
-        assert!(matches!(
-            running_turn,
-            Err(SessionError::TurnNotFound { turn: 2, .. })
-        ));
-        assert!(matches!(missing, Err(SessionError::NotFound { .. })));
-        assert!(matches!(taken, Err(SessionError::AlreadyExists { .. })));
-        assert!(matches!(
-            missing_transcript,
-            Err(SessionError::NotFound { .. })
-        ));
-        let whole = store.load_session("whole").await?;
-        assert_eq!(whole.checkpoint, Some(checkpoint));
-        assert_eq!(store.load_session("early").await?.checkpoint, None);
-        let writes = store.load_writes("whole").await?;
-        assert_eq!(writes.len(), 1);
-        assert_eq!(writes[0].path, "a.txt");
-        let commands = store.load_commands("whole").await?;
-        assert_eq!(commands.len(), 1);
-        assert_eq!(commands[0].owner().session_id(), "whole");
-        assert_eq!(commands[0].outcome, Some(completed_command()));
-        let copied = store.load_transcript("whole", &TurnRange::All).await?;
-        assert_eq!(copied.len(), 2);
-        assert_eq!(copied[1].messages[0], ModelMessage::User("one".to_string()));
-        assert_eq!(
-            store.load_transcript("early", &TurnRange::All).await?.len(),
-            1
-        );
-        store.interrupt(running.owner()).await?;
-        assert_eq!(
-            store
-                .load_transcript("source", &TurnRange::All)
-                .await?
-                .len(),
-            3,
-            "the source is unchanged"
+        assert!(
+            harness.resume("copy").await.is_err(),
+            "no rejected fork is created"
         );
     }
 
     Ok(())
-}
-
-#[tokio::test]
-async fn stores_without_transcript_support_fail_closed() -> Result<(), Box<dyn Error>> {
-    // Arrange
-    let model = ScriptedModel::default();
-    let harness = harness(&model, Arc::new(ExternalStore::new()))?;
-    let session = harness
-        .session("external", answer_schema()?)
-        .create()
-        .await?;
-
-    // Act
-    let transcript = session.transcript(TurnRange::All).await;
-    let fork = harness
-        .fork(
-            &SessionId::new("external"),
-            TurnIndex::new(0),
-            SessionId::new("copy"),
-        )
-        .await;
-
-    // Assert
-    assert_eq!(
-        transcript.err().map(|error| error.kind()),
-        Some(ErrorKind::Store)
-    );
-    assert_eq!(fork.err().map(|error| error.kind()), Some(ErrorKind::Store));
-
-    Ok(())
-}
-
-/// Completes a turn of session `source` for `input`, first recording an
-/// applied write and a completed command when `with_effects`.
-async fn complete_turn(
-    store: &Arc<dyn SessionStore>,
-    input: &str,
-    with_effects: bool,
-) -> Result<(), Box<dyn Error>> {
-    let turn = AcquiredTurn::begin(
-        Arc::clone(store),
-        "source",
-        &TurnInput::from(input),
-        &options(),
-        0,
-    )
-    .await?;
-    if with_effects {
-        let write = store
-            .write_intent(
-                turn.owner(),
-                "call",
-                Path::new("/repo"),
-                "a.txt",
-                None,
-                b"new",
-            )
-            .await?;
-        store.finish_write(turn.owner(), write, true).await?;
-        let intent = CommandIntent {
-            call_id: "call".into(),
-            command: "true".into(),
-            policy: json!({}),
-            workspace: "/repo".into(),
-        };
-        let command = store.command_intent(turn.owner(), &intent).await?;
-        store
-            .finish_command(turn.owner(), command, &completed_command())
-            .await?;
-    }
-    let output = json!({"answer": input}).to_string();
-    store
-        .complete_turn(
-            turn.owner(),
-            &[ModelMessage::Assistant(output)],
-            HistoryProjection::default(),
-        )
-        .await?;
-
-    Ok(())
-}
-
-fn completed_command() -> CommandOutcome {
-    CommandOutcome {
-        cleanup_failed: false,
-        cleanup_scope: CommandCleanupScope::PidNamespace,
-        execution_failure: None,
-        exit_code: Some(0),
-        signal: None,
-        stderr: String::new(),
-        stderr_omitted_bytes: 0,
-        stderr_tail: String::new(),
-        stdout: String::new(),
-        stdout_omitted_bytes: 0,
-        stdout_tail: String::new(),
-        termination: CommandTermination::Completed,
-        truncated: false,
-    }
 }

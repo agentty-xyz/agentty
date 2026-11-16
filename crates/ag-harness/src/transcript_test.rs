@@ -2,14 +2,15 @@ use std::time::{Duration, UNIX_EPOCH};
 
 use serde_json::json;
 
-use super::{
-    StoredTurn, TranscriptInput, TranscriptItem, TranscriptToolCall, TurnRange, TurnRecord,
-    TurnStatus,
-};
-use crate::event::TurnIndex;
+use super::{TranscriptInput, TurnErrorKind, TurnRange, TurnRecord, TurnStatus};
+use crate::error::ErrorKind;
+use crate::event::{Item, ToolCallItem, ToolCallStatus, TurnIndex};
 use crate::input::{ImageContent, ImageMediaType, InputBlock, TurnInput};
-use crate::model::ModelMessage;
+use crate::lifecycle::TurnErrorType;
+use crate::limit::LimitKind;
+use crate::model::{ModelErrorType, ModelMessage};
 use crate::run::{RunOutput, Usage};
+use crate::store::StoredTurn;
 use crate::tool::ToolCall;
 use crate::turn::{TurnOutcome, TurnReport};
 
@@ -17,19 +18,16 @@ use crate::turn::{TurnOutcome, TurnReport};
 /// message of [`turn_record_schema_matches_the_committed_snapshot`].
 const TURN_RECORD_SCHEMA: &str = include_str!("../schema/turn_record.json");
 
-/// Returns a settled turn at position 4 holding `messages`, recorded with
-/// `options`.
-fn stored(messages: Vec<ModelMessage>, options: Option<&str>) -> StoredTurn {
-    StoredTurn {
-        error_type: None,
-        finished_at: UNIX_EPOCH + Duration::from_secs(9),
+/// Returns a completed turn at position 4 holding `messages`, in JSON
+/// output mode.
+fn stored(messages: Vec<ModelMessage>) -> StoredTurn {
+    StoredTurn::new(
+        4,
+        TurnStatus::Completed,
+        UNIX_EPOCH + Duration::from_secs(8),
+        UNIX_EPOCH + Duration::from_secs(9),
         messages,
-        options: options.map(str::to_string),
-        outcome: None,
-        position: 4,
-        started_at: UNIX_EPOCH + Duration::from_secs(8),
-        status: TurnStatus::Completed,
-    }
+    )
 }
 
 /// Returns a `read` call `id`, with `text` as its assistant text.
@@ -52,13 +50,16 @@ fn tool_result(call_id: &str, content: &str) -> ModelMessage {
     }
 }
 
-fn call_item(call_id: &str, result: Option<&str>) -> TranscriptItem {
-    TranscriptItem::ToolCall(TranscriptToolCall {
-        arguments: r#"{"path":"a.txt"}"#.to_string(),
-        call_id: call_id.to_string(),
-        name: "read".to_string(),
-        result: result.map(str::to_string),
-    })
+/// Returns the transcript item of `read` call `call_id`, answered with
+/// `output` or unanswered.
+fn call_item(call_id: &str, output: Option<&str>) -> Item {
+    let mut item = ToolCallItem::unanswered(&read_call(call_id, None, None));
+    if let Some(output) = output {
+        item.output = output.to_string();
+        item.status = ToolCallStatus::Answered;
+    }
+
+    Item::ToolCall(item)
 }
 
 #[test]
@@ -109,33 +110,65 @@ fn ranges_report_their_bounds_and_stored_positions() {
 }
 
 #[test]
+fn ranges_round_trip_as_tagged_objects() -> Result<(), serde_json::Error> {
+    // Arrange
+    let ranges = [
+        TurnRange::All,
+        TurnRange::Last(2),
+        TurnRange::Span(TurnIndex::new(1)..TurnIndex::new(3)),
+    ];
+
+    // Act
+    let encoded = ranges
+        .iter()
+        .map(serde_json::to_value)
+        .collect::<Result<Vec<_>, _>>()?;
+    let decoded = encoded
+        .iter()
+        .cloned()
+        .map(serde_json::from_value)
+        .collect::<Result<Vec<TurnRange>, _>>()?;
+    let schema = serde_json::to_value(schemars::schema_for!(TurnRange))?;
+
+    // Assert
+    assert_eq!(
+        encoded,
+        [
+            json!({"type": "all"}),
+            json!({"type": "last", "count": 2}),
+            json!({"type": "span", "end": 3, "start": 1}),
+        ]
+    );
+    assert_eq!(decoded, ranges);
+    assert_eq!(schema["title"], json!("TurnRange"));
+    assert_eq!(schema["oneOf"].as_array().map(Vec::len), Some(3));
+
+    Ok(())
+}
+
+#[test]
 fn record_orders_reasoning_text_calls_results_and_json_output() {
     // Arrange
-    let turn = StoredTurn {
-        outcome: Some(TurnOutcome::new(
-            json!({"answer": "done"}),
-            TurnReport::new(Duration::ZERO, Vec::new(), Vec::new()),
-        )),
-        ..stored(
-            vec![
-                ModelMessage::User("question".to_string()),
-                ModelMessage::Instructions("be brief".to_string()),
-                ModelMessage::AssistantToolCalls(vec![
-                    read_call("first", Some("thinking"), Some("Reading")),
-                    read_call("second", None, None),
-                ]),
-                tool_result("second", "second result"),
-                tool_result("first", "first result"),
-                tool_result("unknown", "orphan result"),
-                ModelMessage::System("ignored".to_string()),
-                ModelMessage::AssistantReasoning {
-                    content: r#"{"answer":"done"}"#.to_string(),
-                    reasoning_content: "concluding".to_string(),
-                },
-            ],
-            Some(r#"{"output_schema":{"type":"object"}}"#),
-        )
-    };
+    let turn = stored(vec![
+        ModelMessage::User("question".to_string()),
+        ModelMessage::Instructions("be brief".to_string()),
+        ModelMessage::AssistantToolCalls(vec![
+            read_call("first", Some("thinking"), Some("Reading")),
+            read_call("second", None, None),
+        ]),
+        tool_result("second", "second result"),
+        tool_result("first", "first result"),
+        tool_result("unknown", "orphan result"),
+        ModelMessage::System("ignored".to_string()),
+        ModelMessage::AssistantReasoning {
+            content: r#"{"answer":"done"}"#.to_string(),
+            reasoning_content: "concluding".to_string(),
+        },
+    ])
+    .with_outcome(Some(TurnOutcome::new(
+        json!({"answer": "done"}),
+        TurnReport::new(Duration::ZERO, Vec::new(), Vec::new()),
+    )));
 
     // Act
     let record = TurnRecord::from_stored(turn);
@@ -143,6 +176,7 @@ fn record_orders_reasoning_text_calls_results_and_json_output() {
     // Assert
     assert_eq!(record.turn, TurnIndex::new(4));
     assert_eq!(record.status, TurnStatus::Completed);
+    assert_eq!(record.error, None);
     assert_eq!(
         record.input,
         [TranscriptInput::Text {
@@ -156,18 +190,18 @@ fn record_orders_reasoning_text_calls_results_and_json_output() {
     assert_eq!(
         record.items,
         [
-            TranscriptItem::Reasoning {
+            Item::Reasoning {
                 text: "thinking".to_string()
             },
-            TranscriptItem::Message {
+            Item::Message {
                 text: "Reading".to_string()
             },
             call_item("first", Some("first result")),
             call_item("second", Some("second result")),
-            TranscriptItem::Reasoning {
+            Item::Reasoning {
                 text: "concluding".to_string()
             },
-            TranscriptItem::Output {
+            Item::Output {
                 output: RunOutput::Json(json!({"answer": "done"}))
             },
         ]
@@ -187,21 +221,16 @@ fn record_keeps_text_output_unanswered_calls_and_image_input() {
         InputBlock::Image(image),
     ])
     .expect("image input");
-    let text_turn = stored(
-        vec![
-            ModelMessage::UserInput(input),
-            ModelMessage::AssistantToolCall(read_call("call", None, None)),
-            ModelMessage::Assistant("plain {answer".to_string()),
-        ],
-        Some(r#"{"output_schema":null}"#),
-    );
-    let unparsable_json = stored(
-        vec![
-            ModelMessage::User("question".to_string()),
-            ModelMessage::Assistant("not json".to_string()),
-        ],
-        Some("not an options snapshot"),
-    );
+    let text_turn = stored(vec![
+        ModelMessage::UserInput(input),
+        ModelMessage::AssistantToolCall(read_call("call", None, None)),
+        ModelMessage::Assistant("plain {answer".to_string()),
+    ])
+    .with_text_output(true);
+    let unparsable_json = stored(vec![
+        ModelMessage::User("question".to_string()),
+        ModelMessage::Assistant("not json".to_string()),
+    ]);
 
     // Act
     let text_record = TurnRecord::from_stored(text_turn);
@@ -225,14 +254,14 @@ fn record_keeps_text_output_unanswered_calls_and_image_input() {
         text_record.items,
         [
             call_item("call", None),
-            TranscriptItem::Output {
+            Item::Output {
                 output: RunOutput::Text("plain {answer".to_string())
             },
         ]
     );
     assert_eq!(
         json_record.items,
-        [TranscriptItem::Output {
+        [Item::Output {
             output: RunOutput::Text("not json".to_string())
         }],
         "output that does not parse is kept as text"
@@ -240,24 +269,104 @@ fn record_keeps_text_output_unanswered_calls_and_image_input() {
 }
 
 #[test]
-fn record_round_trips_with_millisecond_times() -> Result<(), serde_json::Error> {
+fn stored_classifications_read_as_the_kinds_live_runs_report() {
     // Arrange
-    let record = TurnRecord::from_stored(StoredTurn {
-        error_type: Some("cancelled".to_string()),
-        started_at: UNIX_EPOCH + Duration::from_millis(1_500),
-        status: TurnStatus::Interrupted,
-        ..stored(vec![ModelMessage::User("question".to_string())], None)
-    });
+    let stored_forms: Vec<(String, String)> = TurnErrorKind::ALL
+        .iter()
+        .map(|error| (format!("{:?}", error.0), error.0.as_str().to_string()))
+        .collect();
 
     // Act
-    let encoded = serde_json::to_value(&record)?;
-    let decoded: TurnRecord = serde_json::from_value(encoded.clone())?;
+    let kinds: Vec<_> = stored_forms
+        .iter()
+        .map(|(debug, telemetry)| {
+            (
+                TurnRecord::stored_error(debug).map(|error| error.kind),
+                TurnRecord::stored_error(telemetry).map(|error| error.kind),
+            )
+        })
+        .collect();
 
     // Assert
-    assert_eq!(encoded["started_at"], json!(1_500));
-    assert_eq!(encoded["finished_at"], json!(9_000));
-    assert_eq!(encoded["status"], json!("interrupted"));
-    assert_eq!(decoded, record);
+    let expected: Vec<_> = [
+        ErrorKind::Cancelled,
+        ErrorKind::ToolFailed,
+        ErrorKind::ContextOverflow,
+        ErrorKind::Repetition,
+        ErrorKind::Config,
+        ErrorKind::Config,
+        ErrorKind::Store,
+        ErrorKind::BudgetExhausted(LimitKind::ModelRequests),
+        ErrorKind::BudgetExhausted(LimitKind::ToolCalls),
+        ErrorKind::BudgetExhausted(LimitKind::Tokens),
+        ErrorKind::BudgetExhausted(LimitKind::WallTime),
+        ErrorKind::Other,
+        ErrorKind::Transport,
+        ErrorKind::Other,
+        ErrorKind::ContextOverflow,
+        ErrorKind::InvalidOutput,
+        ErrorKind::InvalidOutput,
+        ErrorKind::Config,
+        ErrorKind::Config,
+        ErrorKind::InvalidOutput,
+        ErrorKind::InvalidOutput,
+        ErrorKind::InvalidOutput,
+    ]
+    .into_iter()
+    .map(|kind| (Some(kind), Some(kind)))
+    .collect();
+    assert_eq!(kinds, expected);
+    assert_eq!(
+        stored_forms[7].0, "RunLimit(ModelRequests)",
+        "failed turns record the classification's Debug form"
+    );
+    assert_eq!(
+        TurnErrorKind::ALL[13].0,
+        TurnErrorType::Model(ModelErrorType::Provider)
+    );
+    assert_eq!(TurnRecord::stored_error("interrupted"), None);
+    assert_eq!(TurnRecord::stored_error("unknown"), None);
+}
+
+#[test]
+fn record_round_trips_with_millisecond_times_and_typed_errors() -> Result<(), serde_json::Error> {
+    // Arrange
+    let mut cancelled = stored(vec![ModelMessage::User("question".to_string())])
+        .with_error_type(Some("cancelled".to_string()));
+    cancelled.started_at = UNIX_EPOCH + Duration::from_millis(1_500);
+    cancelled.status = TurnStatus::Interrupted;
+    let mut limited = stored(Vec::new()).with_error_type(Some("RunLimit(ToolCalls)".to_string()));
+    limited.status = TurnStatus::Failed;
+    let records = [
+        TurnRecord::from_stored(cancelled),
+        TurnRecord::from_stored(limited),
+    ];
+
+    // Act
+    let encoded = records
+        .iter()
+        .map(serde_json::to_value)
+        .collect::<Result<Vec<_>, _>>()?;
+    let decoded = encoded
+        .iter()
+        .cloned()
+        .map(serde_json::from_value)
+        .collect::<Result<Vec<TurnRecord>, _>>()?;
+    let mut missing_limit = encoded[1].clone();
+    missing_limit["error"] = json!({"kind": "budget_exhausted"});
+    let invalid = serde_json::from_value::<TurnRecord>(missing_limit);
+
+    // Assert
+    assert_eq!(encoded[0]["started_at"], json!(1_500));
+    assert_eq!(encoded[0]["finished_at"], json!(9_000));
+    assert_eq!(encoded[0]["status"], json!("interrupted"));
+    assert_eq!(encoded[0]["error"], json!({"kind": "cancelled"}));
+    assert_eq!(
+        encoded[1]["error"],
+        json!({"kind": "budget_exhausted", "limit": "tool_calls"})
+    );
+    assert_eq!(decoded, records);
+    assert!(invalid.is_err(), "a budget failure must name its limit");
 
     Ok(())
 }

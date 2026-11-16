@@ -7,6 +7,7 @@
 //! defined here.
 
 use std::path::Path;
+use std::time::SystemTime;
 
 use async_trait::async_trait;
 use tokio::time::Instant;
@@ -27,8 +28,7 @@ pub use crate::session::{
     Database as SqliteStore, LoadedSession, NewSession, SessionInfo, StoreIdentity, TurnOwner,
 };
 pub use crate::session_model::RecordedModel;
-pub use crate::transcript::StoredTurn;
-use crate::transcript::TurnRange;
+use crate::transcript::{TurnRange, TurnStatus};
 use crate::turn::{TurnError, TurnOutcome};
 pub use crate::turn_options_snapshot::{StoredTurnOptions, StoredTurnOptionsError};
 pub use crate::write_journal::{WriteRecord, WriteStatus};
@@ -90,10 +90,13 @@ pub trait SessionStore: Send + Sync {
         })
     }
 
-    /// Loads the settled turns `range` selects, oldest first, each with every
-    /// persisted message. Recover expired turns first; never return a
-    /// running turn, and read only the selected turns. Missing sessions
-    /// return `NotFound`; unsupported stores fail closed.
+    /// Loads the settled turns `range` selects, as [`TurnRange`] defines the
+    /// selection, oldest first, each with every persisted message. Recover
+    /// expired turns first, so they are returned as interrupted; never return
+    /// a running turn, and read only the selected turns. Decode each turn's
+    /// options snapshot for [`StoredTurn::text_output`], failing on one that
+    /// does not decode. Missing sessions return `NotFound`; unsupported
+    /// stores fail closed.
     async fn load_transcript(
         &self,
         _session_id: &str,
@@ -108,11 +111,13 @@ pub trait SessionStore: Send + Sync {
     /// model selection, and copies of its turns through position `through`
     /// with their write and command records. The copy starts with the
     /// default [`HistoryProjection`] and keeps the source's checkpoint only
-    /// when it covers no later turn. Recover expired turns first. Reject a
-    /// missing source with `NotFound`, a position that is not a settled turn
-    /// with `TurnNotFound`, and an existing target with `AlreadyExists`,
-    /// changing nothing. The source is never modified; unsupported stores
-    /// fail closed.
+    /// when it covers no later turn. Copied turns keep their host request
+    /// records, so a host request ID used through `through` stays
+    /// idempotent on the copy. Recover expired turns first. Check in this
+    /// order and return the first failure, changing nothing: a missing
+    /// source with `NotFound`, a position that is not a settled turn with
+    /// `TurnNotFound`, then an existing target with `AlreadyExists`. The
+    /// source is never modified; unsupported stores fail closed.
     async fn fork_session(
         &self,
         _source: &str,
@@ -272,4 +277,83 @@ pub trait SessionStore: Send + Sync {
         id: i64,
         applied: bool,
     ) -> Result<(), SessionError>;
+}
+
+/// One settled turn as its store recorded it, returned by
+/// [`SessionStore::load_transcript`].
+///
+/// Unlike [`LoadedSession`], it is `#[non_exhaustive]` so it can gain fields
+/// without breaking stores: build it with [`Self::new`] and the `with_`
+/// setters.
+#[derive(Clone, Debug, PartialEq)]
+#[non_exhaustive]
+pub struct StoredTurn {
+    /// Content-free classification of a failed or interrupted turn, as the
+    /// harness hands it to [`SessionStore::fail_turn`] or the turn owner's
+    /// interruption records it.
+    pub error_type: Option<String>,
+    /// When the turn settled.
+    pub finished_at: SystemTime,
+    /// Persisted messages in order, starting with the turn's input.
+    pub messages: Vec<ModelMessage>,
+    /// Committed result of a host-request turn, when recorded.
+    pub outcome: Option<TurnOutcome>,
+    /// Durable position of the turn.
+    pub position: i64,
+    /// When the turn was admitted.
+    pub started_at: SystemTime,
+    /// How the turn ended.
+    pub status: TurnStatus,
+    /// Whether the turn answered in text output mode, as its decoded
+    /// [`StoredTurnOptions::text_output`] reports; `false` for a turn
+    /// recorded without an options snapshot.
+    pub text_output: bool,
+}
+
+impl StoredTurn {
+    /// Returns the turn at `position`, admitted at `started_at` and settled
+    /// with `status` at `finished_at`, holding `messages`, without error
+    /// classification or outcome, in JSON output mode.
+    pub fn new(
+        position: i64,
+        status: TurnStatus,
+        started_at: SystemTime,
+        finished_at: SystemTime,
+        messages: Vec<ModelMessage>,
+    ) -> Self {
+        Self {
+            error_type: None,
+            finished_at,
+            messages,
+            outcome: None,
+            position,
+            started_at,
+            status,
+            text_output: false,
+        }
+    }
+
+    /// Sets the recorded classification of a failed or interrupted turn.
+    #[must_use]
+    pub fn with_error_type(mut self, error_type: Option<String>) -> Self {
+        self.error_type = error_type;
+
+        self
+    }
+
+    /// Sets the committed result of a host-request turn.
+    #[must_use]
+    pub fn with_outcome(mut self, outcome: Option<TurnOutcome>) -> Self {
+        self.outcome = outcome;
+
+        self
+    }
+
+    /// Sets whether the turn answered in text output mode.
+    #[must_use]
+    pub fn with_text_output(mut self, text_output: bool) -> Self {
+        self.text_output = text_output;
+
+        self
+    }
 }

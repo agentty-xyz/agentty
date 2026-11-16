@@ -26,9 +26,9 @@ use crate::model::{ModelMessage, ModelMetadata};
 use crate::recovery::{ExecutionIdentity, HostRequest, HostTurnRecord, HostTurnStatus};
 use crate::request_option::OutputMode;
 use crate::reservation::{TURN_LEASE_SECONDS, lease_deadline};
-use crate::store::SessionStore;
+use crate::store::{SessionStore, StoredTurn};
 use crate::tool::{MalformedArguments, ReadArguments, ToolCall, UnknownToolCall, WriteArguments};
-use crate::transcript::{StoredTurn, TurnRange, TurnStatus};
+use crate::transcript::{TurnRange, TurnStatus};
 use crate::turn_options_snapshot::{StoredTurnOptions, StoredTurnOptionsError};
 use crate::write_journal::{WriteRecord, WriteStatus, content_hash};
 use crate::{OutputSchema, OutputSchemaError, TurnError, TurnOutcome};
@@ -181,20 +181,28 @@ impl TranscriptTurnRow {
             _ => TurnStatus::Interrupted,
         };
 
-        Ok(StoredTurn {
-            error_type: self.error_type,
-            finished_at: time(self.updated_at),
-            messages,
-            options: self.turn_options,
-            outcome: self
-                .terminal_outcome
-                .as_deref()
-                .map(decode_terminal_outcome)
-                .transpose()?,
-            position: self.turn_position,
-            started_at: time(self.created_at),
+        let text_output = self
+            .turn_options
+            .as_deref()
+            .map(StoredTurnOptions::decode)
+            .transpose()?
+            .is_some_and(|options| options.text_output());
+        let outcome = self
+            .terminal_outcome
+            .as_deref()
+            .map(decode_terminal_outcome)
+            .transpose()?;
+
+        Ok(StoredTurn::new(
+            self.turn_position,
             status,
-        })
+            time(self.created_at),
+            time(self.updated_at),
+            messages,
+        )
+        .with_error_type(self.error_type)
+        .with_outcome(outcome)
+        .with_text_output(text_output))
     }
 }
 

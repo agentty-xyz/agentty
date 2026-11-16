@@ -340,6 +340,16 @@
           "description": "The tool is denied by policy or does not exist.",
           "type": "string",
           "const": "unavailable"
+        },
+        {
+          "description": "The call was answered, as a [`crate::TurnRecord`] reports every\nanswered call: sessions store the result text but not which of the\nstatuses above the live run reported.",
+          "type": "string",
+          "const": "answered"
+        },
+        {
+          "description": "The turn stopped before the call was answered, as a\n[`crate::TurnRecord`] reports it; the output is empty.",
+          "type": "string",
+          "const": "unanswered"
         }
       ]
     },
@@ -360,7 +370,7 @@
           "type": "string"
         },
         "output": {
-          "description": "Result text the model received.",
+          "description": "Result text the model received; empty for a call that was never\nanswered.",
           "type": "string"
         },
         "status": {
@@ -368,7 +378,7 @@
           "$ref": "#/$defs/ToolCallStatus"
         },
         "summary": {
-          "description": "Bounded one-line description of what the call did.",
+          "description": "Bounded one-line description of what the call did; empty in a\n[`crate::TurnRecord`], since sessions do not store it.",
           "type": "string"
         }
       },

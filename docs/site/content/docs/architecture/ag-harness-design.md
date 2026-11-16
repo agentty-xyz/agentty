@@ -56,8 +56,10 @@ crates/
 - `Session` is the only multi-turn abstraction; `run_once` executes a stateless turn.
   `Session::transcript` reads settled turns in full (all, the newest N, or a span).
   `Harness::fork` copies a session's configuration and settled turns through one index
-  into a new session atomically, with its own prompt-cache key; the source is never
-  changed. Durable and stateless turns can be awaited or started for a `TurnControl`.
+  into a new session atomically, with their write, command, and host request records,
+  and gives it its own prompt-cache key; the source is never changed. Transcripts reuse
+  the live `event::Item` shape. Durable and stateless turns can be awaited or started
+  for a `TurnControl`.
 - `TurnOptions` fixes the schema, `ToolPolicy`, and optional `ComparisonBase` for one
   execution. Explicit options replace defaults; they are never merged.
 - `Model` is the object-safe provider boundary. `ModelRegistry` resolves built-in or

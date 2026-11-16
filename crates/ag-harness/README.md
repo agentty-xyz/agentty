@@ -96,14 +96,17 @@ let retry = harness
     .await?;
 ```
 
-`Session::transcript` returns settled turns as serializable `TurnRecord`s: status,
-input, per-run instructions, reasoning, assistant text, tool calls with their results,
-the final output, timestamps, and usage for turns run with a host request ID.
-`TurnRange` selects all turns, the newest N, or an index span, and only those turns are
-read; history the replay budget leaves out is still included. `Harness::fork` copies a
-session's settled turns through one index, with their write and command records, into a
-new session that keeps the source's output mode, system prompt, and model. The fork's
-own ID gives it its own prompt-cache key, and the source is unchanged.
+`Session::transcript` returns settled turns as serializable `TurnRecord`s: status, the
+`ErrorKind` a failed or cancelled turn stopped with, input, per-run instructions, the
+same `event::Item`s live runs emit (tool calls report `answered` or `unanswered`), the
+final output, timestamps, and usage for turns run with a host request ID. `TurnRange`
+selects all turns, the newest N, or an index span, and only those turns are read;
+history the replay budget leaves out is still included. `Harness::fork` copies a
+session's settled turns through one index, with their write, command, and host request
+records, into a new session that keeps the source's output mode, system prompt, and
+model. The fork's own ID gives it its own prompt-cache key, and the source is unchanged.
+If the fork cannot be resumed with the harness's model, it stays stored; resume it with
+a matching harness.
 
 ## Turns
 
