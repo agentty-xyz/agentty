@@ -115,8 +115,8 @@ AGENTTY_TEST_PACKAGES='ag-git ag-agent' \
 ```
 
 The coordinator executes `clippy` and unrestricted `test-focused` selections through
-`prek`. Its Clippy subprocess receives the affected package selection in
-`AGENTTY_CLIPPY_PACKAGES`, so the hook's full file inventory cannot widen that
+`prek`. Its Clippy and `cargo-check` subprocesses receive the affected package selection
+in `AGENTTY_CLIPPY_PACKAGES`, so the hook's full file inventory cannot widen that
 selection. Ordinary Clippy hook invocations continue to select owners and dependents
 from their changed files, with root configuration changes selecting the whole workspace.
 
