@@ -1,5 +1,6 @@
 //! Rust formatting limited to the files changed since the branch fork point.
 
+use std::ffi::OsStr;
 use std::path::{Path, PathBuf};
 
 use clap::Args;
@@ -68,7 +69,7 @@ impl Selection {
     fn from_changes(files: &[PathBuf], exists: impl Fn(&Path) -> bool) -> Self {
         if files.iter().any(|path| {
             path.file_name()
-                .and_then(|name| name.to_str())
+                .and_then(OsStr::to_str)
                 .is_some_and(|name| WORKSPACE_TRIGGERS.contains(&name))
         }) {
             return Self::Workspace;
