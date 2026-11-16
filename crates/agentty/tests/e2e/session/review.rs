@@ -1210,13 +1210,14 @@ async fn agent_review_session_shows_sync_shortcut() -> E2eResult {
     Ok(())
 }
 
-/// Verify a default-size terminal cues the overflowing session help list and
-/// scrolls it to reveal the sync shortcut below the first page.
+/// Verify a short terminal cues the overflowing session help list and scrolls
+/// it to reveal the sync shortcut below the first page.
 #[tokio::test]
 async fn session_help_cues_scrolling_to_hidden_shortcuts() -> E2eResult {
     // Arrange, Act, Assert
     FeatureTest::new("session_help_scroll_cue")
         .with_git()
+        .with_terminal_size(80, 13)
         .setup(|env| Box::pin(async move { seed_agent_review_session(env).await }))
         .run(
             |scenario| {
