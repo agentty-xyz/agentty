@@ -295,7 +295,7 @@ async fn install_agent_availability_stubs(env: &BuilderEnv) -> std::io::Result<(
     let stub_path = env.stub_bin.join("agy");
     fs::write(
         &stub_path,
-        "#!/bin/sh\nif [ \"$1\" = \"--version\" ]; then echo 'agy 0.42.0'; fi\nexit 0\n",
+        "#!/bin/sh\nif [ \"$1\" = \"--version\" ]; then echo 'agy 1.2.0'; fi\nexit 0\n",
     )
     .await?;
     #[cfg(unix)]
@@ -339,6 +339,13 @@ async fn seed_database(
     (async {
         let db_path = env.agentty_root.join(DB_DIR).join(DB_FILE);
         let database = Database::open(&db_path).await?;
+
+        // Skip the first-launch discovery prompt so it does not swallow the
+        // tape's opening keystrokes.
+        database
+            .settings()
+            .upsert_setting(ag_session::SettingName::ProjectDiscoveryPromptSeen, "true")
+            .await?;
 
         let selected_project_path = fake_project_paths
             .first()
@@ -777,6 +784,9 @@ Sleep 400ms
 Enter
 Sleep 700ms
 
+# Codex lists gpt-6-astra first; step down to gpt-6.1-sol.
+Down
+Sleep 400ms
 Enter
 Sleep 700ms
 

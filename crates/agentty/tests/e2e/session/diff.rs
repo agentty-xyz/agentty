@@ -485,10 +485,16 @@ async fn diff_preview_opens_from_session() -> E2eResult {
                 Box::pin(async move {
                     let full = Region::full(frame.cols(), frame.rows());
                     let status_bar = Region::new(0, 0, frame.cols(), 1);
+                    // The diff panels start directly below the status bar.
+                    let panel_title_row = Region::new(0, 1, frame.cols(), 1);
 
                     assert_diff_file_tree_change_totals(frame);
                     assertion::assert_text_in_region(frame, "println!(\"review\")", &full);
-                    assertion::assert_text_in_region(frame, DIFF_PANEL_TITLE_MARKER, &full);
+                    assertion::assert_text_in_region(
+                        frame,
+                        DIFF_PANEL_TITLE_MARKER,
+                        &panel_title_row,
+                    );
                     assertion::assert_text_in_region(frame, "?: help", &status_bar);
                 })
             },

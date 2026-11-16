@@ -903,7 +903,10 @@ fn render_list_background(
     frame_time: FrameTime,
 ) {
     let chunks = Layout::default()
-        .constraints([Constraint::Length(3), Constraint::Min(0)])
+        .constraints([
+            Constraint::Length(component::tab::Tabs::HEIGHT),
+            Constraint::Min(0),
+        ])
         .split(content_area);
 
     component::tab::Tabs::new(shared.current_tab)

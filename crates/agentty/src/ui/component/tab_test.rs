@@ -121,15 +121,40 @@ fn test_tabs_omit_process_stats_before_the_first_sample() {
     assert_eq!(tab_row.trim_end(), " Projects | Sessions | Settings");
 }
 
+#[test]
+fn test_tabs_fill_their_height_with_the_tab_row_and_bottom_rule() {
+    // Arrange
+    let tabs = Tabs::new(Tab::Sessions);
+
+    // Act
+    let rows = rendered_rows(&tabs, 40);
+
+    // Assert
+    assert_eq!(rows.len(), usize::from(Tabs::HEIGHT));
+    assert_eq!(rows[0].trim_end(), " Projects | Sessions | Settings");
+    assert_eq!(rows[1], "─".repeat(40));
+}
+
 /// Renders tabs at `width` columns and returns the tab-label row.
 fn rendered_tab_row(tabs: &Tabs, width: u16) -> String {
-    let mut terminal = Terminal::new(TestBackend::new(width, 3)).expect("create terminal");
+    rendered_rows(tabs, width).swap_remove(0)
+}
+
+/// Renders tabs into a `width` by [`Tabs::HEIGHT`] terminal and returns every
+/// row from top to bottom.
+fn rendered_rows(tabs: &Tabs, width: u16) -> Vec<String> {
+    let mut terminal =
+        Terminal::new(TestBackend::new(width, Tabs::HEIGHT)).expect("create terminal");
     terminal
         .draw(|frame| tabs.render(frame, frame.area()))
         .expect("draw tabs");
     let buffer = terminal.backend().buffer();
 
-    (0..buffer.area.width)
-        .map(|column| buffer[(column, 1)].symbol())
+    (0..buffer.area.height)
+        .map(|row| {
+            (0..buffer.area.width)
+                .map(|column| buffer[(column, row)].symbol())
+                .collect()
+        })
         .collect()
 }
