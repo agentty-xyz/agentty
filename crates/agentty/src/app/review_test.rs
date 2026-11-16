@@ -5,10 +5,11 @@ use ag_session::test_support as model_fixture;
 
 use super::{
     FocusedReviewPersistence, FocusedReviewPersistenceRetry, ReviewAgent, ReviewCacheEntry,
-    ReviewProgress, ReviewUpdate, apply_review_updates, hydrate_review_transient,
-    hydrate_review_transients, normalize_review_agent, prune_review_cache, review_agent_kind_label,
-    review_cache_from_rows, review_loading_message, review_progress_message,
-    review_reasoning_label, review_view_text, session_review_agent,
+    ReviewProgress, ReviewUpdate, apply_review_updates, diff_content_hash,
+    hydrate_review_transient, hydrate_review_transients, normalize_review_agent,
+    prune_review_cache, review_agent_kind_label, review_cache_from_rows, review_loading_message,
+    review_progress_message, review_reasoning_label, review_view_text, session_review_agent,
+    text_hash,
 };
 use crate::app::session_state::SessionState;
 use crate::domain::agent::{AgentKind, AgentModel, AgentSelection, ReasoningLevel, SpeedMode};
@@ -207,6 +208,69 @@ fn session_state_with_stale_review(session_id: &SessionId) -> SessionState {
         0,
         0,
     )
+}
+
+/// Builds one file diff whose base-dependent parts vary independently of the
+/// session's changed lines.
+fn file_diff(index: &str, hunk_start: u32, context: &str, changes: &str) -> String {
+    format!(
+        "diff --git a/src/lib.rs b/src/lib.rs\nsimilarity index 90%\nindex {index} 100644\n--- \
+         a/src/lib.rs\n+++ b/src/lib.rs\n@@ -{hunk_start},3 +{hunk_start},3 @@ fn {context}()\n \
+         {context}\n{changes} {context}\n"
+    )
+}
+
+#[test]
+fn diff_content_hash_ignores_rebase_only_changes() {
+    // Arrange
+    let changes = "-old\n+new\n\\ No newline at end of file\n";
+    let reviewed_diff = file_diff("1111111..2222222", 10, "before", changes);
+    let rebased_diff = file_diff("3333333..4444444", 40, "after", changes);
+    let trailing_context = format!("{rebased_diff}\\ No newline at end of file\n");
+
+    // Act
+    let reviewed_hash = diff_content_hash(&reviewed_diff);
+
+    // Assert
+    assert_eq!(diff_content_hash(&rebased_diff), reviewed_hash);
+    assert_eq!(diff_content_hash(&trailing_context), reviewed_hash);
+}
+
+#[test]
+fn diff_content_hash_tracks_session_changes() {
+    // Arrange
+    let reviewed_diff = file_diff("1111111..2222222", 10, "same", "-old\n+new\n");
+    let binary_diff = |index: &str| {
+        format!(
+            "diff --git a/logo.png b/logo.png\nindex {index} 100644\nBinary files a/logo.png and \
+             b/logo.png differ\n"
+        )
+    };
+
+    // Act
+    let reviewed_hash = diff_content_hash(&reviewed_diff);
+
+    // Assert
+    assert_ne!(
+        diff_content_hash(&file_diff("1111111..2222222", 10, "same", "-old\n+newer\n")),
+        reviewed_hash
+    );
+    assert_ne!(
+        diff_content_hash(&reviewed_diff.replace("src/lib.rs", "src/main.rs")),
+        reviewed_hash
+    );
+    assert_ne!(
+        diff_content_hash(&binary_diff("1111111..2222222")),
+        diff_content_hash(&binary_diff("1111111..3333333"))
+    );
+    assert_eq!(
+        diff_content_hash("Binary files a/x and b/x differ\n"),
+        text_hash("Binary files a/x and b/x differ\n")
+    );
+    assert_eq!(
+        diff_content_hash("diff --git a/x b/x\nBinary files a/x and b/x differ\n"),
+        text_hash("diff --git a/x b/x\nBinary files a/x and b/x differ\n")
+    );
 }
 
 #[test]
