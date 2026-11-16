@@ -225,6 +225,40 @@ fn git_path_decoding_preserves_unusual_names_and_rejects_escaping_paths() {
 }
 
 #[test]
+fn checkout_configuration_keeps_only_the_checked_out_branch_section() {
+    // Arrange
+    let configuration = b"core.bare\nfalse\0core.ignorecase\0branch.sort\n-committerdate\0\
+        branch.wt/a.b.remote\norigin\0branch.wt/a.b.merge\nrefs/heads/wt/a.b\0\
+        branch.other.remote\norigin\0branch.wt/a.remote\norigin\0";
+    let shared = [
+        &b"core.bare\nfalse"[..],
+        b"core.ignorecase",
+        b"branch.sort\n-committerdate",
+    ];
+
+    for (head, branch_entries) in [
+        (
+            &b"refs/heads/wt/a.b\n"[..],
+            &[
+                &b"branch.wt/a.b.remote\norigin"[..],
+                b"branch.wt/a.b.merge\nrefs/heads/wt/a.b",
+            ][..],
+        ),
+        (b"HEAD\n", &[]),
+    ] {
+        // Act
+        let kept = ProcessHost::checkout_configuration(configuration, head)
+            .filter(|entry| !entry.is_empty())
+            .collect::<Vec<_>>();
+
+        // Assert
+        let mut expected = shared.to_vec();
+        expected.extend(branch_entries);
+        assert_eq!(kept, expected, "{}", String::from_utf8_lossy(head));
+    }
+}
+
+#[test]
 fn files_map_to_their_innermost_workspace_package_or_to_the_whole_workspace() {
     // Arrange
     let metadata = metadata();

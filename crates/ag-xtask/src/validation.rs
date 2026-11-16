@@ -402,6 +402,33 @@ impl ProcessHost {
         Ok(output.stdout)
     }
 
+    /// Keeps the NUL-delimited `git config --list` entries that apply to this
+    /// checkout. Worktrees sharing the repository add, retarget, and remove
+    /// their own branches' `branch.<name>.*` sections at any time, so only the
+    /// section of the branch `head` names stays; detached checkouts keep none.
+    /// Settings without a branch name, such as `branch.sort`, apply to every
+    /// checkout and stay.
+    fn checkout_configuration<'entry>(
+        configuration: &'entry [u8],
+        head: &[u8],
+    ) -> impl Iterator<Item = &'entry [u8]> {
+        let branch = head.trim_ascii_end().strip_prefix(b"refs/heads/");
+        configuration.split(|byte| *byte == 0).filter(move |entry| {
+            let key = &entry[..entry
+                .iter()
+                .position(|byte| *byte == b'\n')
+                .unwrap_or(entry.len())];
+            let Some(section) = key.strip_prefix(b"branch.") else {
+                return true;
+            };
+
+            section
+                .iter()
+                .rposition(|byte| *byte == b'.')
+                .is_none_or(|end| Some(&section[..end]) == branch)
+        })
+    }
+
     /// Includes linked directories while avoiding recursive directory cycles.
     fn include_sources(
         paths: &[u8],
@@ -618,11 +645,17 @@ impl Host for ProcessHost {
             hash.update(bytes.len().to_le_bytes());
             hash.update(bytes);
         };
-        include(b"agentty-validation-v3");
+        include(b"agentty-validation-v4");
         include(relative.as_os_str().as_encoded_bytes());
         include(hook.as_bytes());
         for package in packages {
             include(package.as_bytes());
+        }
+        let head = Self::output("git", &["rev-parse", "--symbolic-full-name", "HEAD"])?;
+        include(&head);
+        let configuration = Self::output("git", &["config", "--null", "--list"])?;
+        for entry in Self::checkout_configuration(&configuration, &head) {
+            include(entry);
         }
         for (program, arguments) in [
             ("rustc", vec!["-Vv"]),
@@ -630,7 +663,6 @@ impl Host for ProcessHost {
             ("cargo", vec!["--version"]),
             ("cargo", vec!["nextest", "--version"]),
             ("git", vec!["--version"]),
-            ("git", vec!["config", "--null", "--list"]),
             ("git", vec!["rev-parse", "HEAD"]),
             (
                 "git",

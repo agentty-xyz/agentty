@@ -144,9 +144,11 @@ input fingerprints even when the target is not Git-ignored.
 Direct `ag-xtask validate` invocation accepts ordered `--hook` IDs and optional
 `--reuse`. Fresh execution is the default. Reuse applies only to allowlisted
 deterministic hooks with matching package selection, tracked and untracked source, Git
-state/configuration, tool versions, and environment. Changes or failures invalidate
-success; inputs changing during execution cannot produce a successful stamp. Coverage
-always runs fresh. Repository-required hooks still apply.
+state/configuration, tool versions, and environment. Git configuration keeps only the
+checked-out branch's `branch.<name>.*` section, because worktrees sharing the repository
+change their own branches' sections at any time. Changes or failures invalidate success;
+inputs changing during execution cannot produce a successful stamp. Coverage always runs
+fresh. Repository-required hooks still apply.
 
 ## Test Timings
 
