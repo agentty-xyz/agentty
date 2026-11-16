@@ -40,7 +40,10 @@ pub trait BashExecutor: Send + Sync {
 
     /// Isolation this executor actually enforces on every command and its
     /// descendants. The harness derives the model-facing `bash` description
-    /// from it, so it must never overstate enforcement.
+    /// from it, so it must never overstate enforcement. It must be constant
+    /// for the executor's lifetime and determined by [`Self::identity`]; a
+    /// change in enforcement requires a new identity or policy revision.
+    /// [`crate::bash::BashConfig`] reads it once at construction.
     fn enforcement(&self) -> Enforcement;
 
     /// Cleanup scope this executor acknowledges, carried on every recorded

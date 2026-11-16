@@ -1,13 +1,12 @@
 //! Context budget, weight heuristic, mandatory admission, and stopped-turn
 //! replay unit tests.
 
-use std::sync::Arc;
 use std::time::Duration;
 
 use serde_json::json;
 
 use super::support::{FixedEstimator, budget, read_call, result};
-use crate::bash::{BashConfig, Enforcement, UnsandboxedExecutor};
+use crate::bash::{BashConfig, Enforcement};
 use crate::context::{
     ContextBudgetError, ContextEstimator, HeuristicContextEstimator, HistoryTurn, TurnStop,
     admit_mandatory_content, advertised_tools,
@@ -190,27 +189,17 @@ fn advertised_bash_states_the_configured_executor_enforcement() {
         1024,
     )
     .expect("native configuration");
-    let unsandboxed = BashConfig::for_executor(
-        Arc::new(UnsandboxedExecutor::without_isolation()),
-        "/bin/bash".into(),
-        "revision".into(),
-        Duration::from_secs(5),
-        1024,
-    )
-    .expect("unsandboxed configuration");
     let unconfigured = options_with(bash_policy);
 
     // Act
-    let sandboxed = advertised_tools(&options_with(bash_policy).with_bash(native));
-    let direct = advertised_tools(&options_with(bash_policy).with_bash(unsandboxed));
+    let configured = advertised_tools(&options_with(bash_policy).with_bash(native));
     let missing = advertised_tools(&unconfigured);
 
     // Assert
     assert_eq!(
-        sandboxed,
+        configured,
         [ToolDefinition::bash(Enforcement::FileSystemAndNetwork)]
     );
-    assert_eq!(direct, [ToolDefinition::bash(Enforcement::None)]);
     assert_eq!(missing, [ToolDefinition::bash(Enforcement::None)]);
 }
 

@@ -408,7 +408,7 @@ fn bash_definition_states_exactly_the_executor_enforcement() {
         file_system.description(),
         format!(
             "Run Bash inside a host filesystem sandbox. Workspace reads are allowed; writes \
-             require host grants. Network access is not restricted by the sandbox.{limits}"
+             require host grants. Network access is not restricted by the harness.{limits}"
         )
     );
     assert_eq!(

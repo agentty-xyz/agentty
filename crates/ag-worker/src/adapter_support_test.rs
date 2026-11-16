@@ -46,6 +46,22 @@ impl RuntimeConfig {
             ..Self::default()
         }
     }
+
+    /// Enables in-process harness work whose provider credentials and `bash`
+    /// grants come from a fixed `environment`, so tests can point the
+    /// production harness path at a scripted provider.
+    #[must_use]
+    pub fn with_native_harness_environment(
+        mut self,
+        data_root: std::path::PathBuf,
+        environment: std::collections::BTreeMap<String, String>,
+    ) -> Self {
+        self.factory = self
+            .factory
+            .with_native_harness_environment(data_root, environment);
+
+        self
+    }
 }
 
 /// Serializes unit tests that replace the process-wide telemetry provider.

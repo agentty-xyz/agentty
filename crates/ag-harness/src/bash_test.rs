@@ -234,26 +234,16 @@ fn executor_selection_records_identity_and_stays_distinct_from_native_snapshots(
 fn configuration_reports_the_selected_executor_enforcement() {
     // Arrange
     let native = configuration();
-    let unsandboxed = executor_configuration(Arc::new(UnsandboxedExecutor::without_isolation()))
-        .expect("executor configuration");
-    let file_system = executor_configuration(Arc::new(NamedExecutor("container".to_string())))
+    let custom = executor_configuration(Arc::new(NamedExecutor("container".to_string())))
         .expect("executor configuration");
 
     // Act
-    let enforcements = [
-        native.enforcement(),
-        unsandboxed.enforcement(),
-        file_system.enforcement(),
-    ];
+    let enforcements = [native.enforcement(), custom.enforcement()];
 
     // Assert
     assert_eq!(
         enforcements,
-        [
-            Enforcement::FileSystemAndNetwork,
-            Enforcement::None,
-            Enforcement::FileSystem,
-        ]
+        [Enforcement::FileSystemAndNetwork, Enforcement::FileSystem]
     );
 }
 

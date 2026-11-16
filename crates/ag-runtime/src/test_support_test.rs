@@ -1,4 +1,6 @@
 //! Adapter fixtures for testing runtime integration without live providers.
+use std::collections::BTreeMap;
+use std::path::PathBuf;
 use std::sync::Arc;
 
 pub use ag_agent::{
@@ -24,6 +26,23 @@ impl RuntimeFactory {
             app_server: Some(client),
             ..Self::default()
         }
+    }
+
+    /// Enables in-process harness runtimes that read provider credentials and
+    /// `bash` grants from a fixed `environment` instead of the process
+    /// environment.
+    #[must_use]
+    pub fn with_native_harness_environment(
+        mut self,
+        data_root: PathBuf,
+        environment: BTreeMap<String, String>,
+    ) -> Self {
+        self.native_harness = Some(ag_agent::NativeHarnessConfig::with_environment(
+            data_root,
+            move || environment.clone(),
+        ));
+
+        self
     }
 }
 

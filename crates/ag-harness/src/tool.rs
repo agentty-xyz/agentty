@@ -23,7 +23,7 @@ const BASH_UNSANDBOXED: &str = "Run Bash directly on the host without a sandbox.
 /// `bash` isolation clause when only the filesystem policy is enforced.
 const BASH_FILE_SYSTEM_SANDBOX: &str = "Run Bash inside a host filesystem sandbox. Workspace \
                                         reads are allowed; writes require host grants. Network \
-                                        access is not restricted by the sandbox.";
+                                        access is not restricted by the harness.";
 /// `bash` isolation clause when filesystem and network policy are enforced.
 const BASH_FULL_SANDBOX: &str = "Run Bash inside the host sandbox. Workspace reads are allowed; \
                                  writes require host grants. Network access is denied.";

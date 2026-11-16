@@ -44,6 +44,7 @@ pub(crate) const NATIVE_ENFORCEMENT: Enforcement = Enforcement::FileSystemAndNet
 /// [`BashConfig::for_executor`] selects an explicit host executor instead.
 #[derive(Clone)]
 pub struct BashConfig {
+    pub(crate) enforcement: Enforcement,
     pub(crate) environment: BTreeMap<String, String>,
     pub(crate) executor: Option<Arc<dyn BashExecutor>>,
     pub(crate) snapshot: BashPolicySnapshot,
@@ -130,8 +131,12 @@ impl BashConfig {
             Some((executor, identity)) => (Some(executor), identity),
             None => (None, NATIVE_EXECUTOR.to_string()),
         };
+        let enforcement = executor
+            .as_ref()
+            .map_or(NATIVE_ENFORCEMENT, |executor| executor.enforcement());
 
         Ok(Self {
+            enforcement,
             environment: BTreeMap::new(),
             executor,
             snapshot: BashPolicySnapshot {
@@ -265,12 +270,12 @@ impl BashConfig {
         Err(BashError::Unavailable)
     }
 
-    /// Returns the isolation the selected executor enforces, which the
-    /// model-facing `bash` tool description states.
-    pub fn enforcement(&self) -> Enforcement {
-        self.executor
-            .as_ref()
-            .map_or(NATIVE_ENFORCEMENT, |executor| executor.enforcement())
+    /// Returns the isolation the selected executor reported when this
+    /// configuration was built, which the model-facing `bash` tool
+    /// description states. Reading it once keeps every advertisement built
+    /// from one configuration identical.
+    pub(crate) fn enforcement(&self) -> Enforcement {
+        self.enforcement
     }
 
     pub(crate) fn fingerprint(&self) -> Value {
@@ -291,7 +296,9 @@ impl fmt::Debug for BashConfig {
 /// equal policies with separately constructed equivalent executors are equal.
 impl PartialEq for BashConfig {
     fn eq(&self, other: &Self) -> bool {
-        self.environment == other.environment && self.snapshot == other.snapshot
+        self.enforcement == other.enforcement
+            && self.environment == other.environment
+            && self.snapshot == other.snapshot
     }
 }
 
