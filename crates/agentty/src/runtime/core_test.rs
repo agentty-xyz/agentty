@@ -20,9 +20,10 @@ use super::{
     DrawStamp, EventReaderTask, EventResult, FORCED_REDRAW_INTERVAL, MainLoopState, backend_err,
     forced_redraw_elapsed, render_frame, run, run_until_quit, run_with_backend,
 };
-use crate::analytics::TurnOutcome;
+use crate::analytics::{TurnOutcome, TurnSelection};
 use crate::app::{App, AppEvent};
 use crate::domain::agent::{AgentKind, AgentSelection, AgentSelectionMetadata};
+use crate::domain::permission::PermissionMode;
 use crate::domain::session::{SessionHandles, Status};
 use crate::domain::session_message::{SessionMessage, SessionMessageKind, SessionTranscript};
 use crate::infra::clock::Clock;
@@ -758,11 +759,15 @@ async fn run_with_backend_flushes_turn_telemetry_emitted_during_quit_cleanup() {
         app.services.track_cleanup_task(tokio::spawn(async move {
             release_rx.await.expect("release turn settlement");
             services.emit_app_event(AppEvent::RefreshSessions);
-            services.emit_app_event(AppEvent::SessionTurnStarted {
+            let turn = TurnSelection {
                 agent,
+                permission_mode: PermissionMode::ReadOnly,
+            };
+            services.emit_app_event(AppEvent::SessionTurnStarted {
                 session_id: "settled-turn".into(),
+                turn,
             });
-            services.emit_app_event(AppEvent::SessionTurnEnded { agent, outcome });
+            services.emit_app_event(AppEvent::SessionTurnEnded { outcome, turn });
         }));
         for key in ['q', 'y'] {
             event_tx
@@ -796,6 +801,7 @@ async fn run_with_backend_flushes_turn_telemetry_emitted_during_quit_cleanup() {
                 .expect("turn event sent before shutdown returns");
             assert_eq!(event["properties"]["agent"], agent.kind().name());
             assert_eq!(event["properties"]["model"], agent.model().as_str());
+            assert_eq!(event["properties"]["permission_mode"], "read_only");
         }
     }
 }

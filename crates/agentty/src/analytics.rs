@@ -13,6 +13,7 @@ use uuid::Uuid;
 
 use crate::app::AppError;
 use crate::domain::agent::{AgentModel, AgentSelection, AgentSelectionMetadata, ServedModel};
+use crate::domain::permission::PermissionMode;
 use crate::domain::setting::SettingName;
 use crate::infra::db::AppRepositories;
 
@@ -74,6 +75,25 @@ impl TurnOutcome {
             Self::Finished => "agentty_turn_finish",
             Self::Interrupted => "agentty_turn_interrupt",
         }
+    }
+}
+
+/// Bounded turn settings reported with every turn event.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct TurnSelection {
+    /// Provider and model captured when the turn was queued.
+    pub agent: AgentSelection,
+    /// Session `/mode` read when the turn began execution.
+    pub permission_mode: PermissionMode,
+}
+
+impl TurnSelection {
+    fn properties(self) -> [(&'static str, &'static str); 3] {
+        [
+            ("agent", self.agent.kind().name()),
+            ("model", reported_model(self.agent)),
+            ("permission_mode", self.permission_mode.label()),
+        ]
     }
 }
 
@@ -279,28 +299,16 @@ impl Analytics {
         .await;
     }
 
-    /// Records an accepted first or follow-up message without its contents.
-    pub async fn record_turn_start(&self, agent: AgentSelection) {
-        self.send(
-            "agentty_turn_start",
-            &[
-                ("agent", agent.kind().name()),
-                ("model", reported_model(agent)),
-            ],
-        )
-        .await;
+    /// Records an accepted first or follow-up message without its contents,
+    /// including the session `/mode` it executes under.
+    pub async fn record_turn_start(&self, turn: TurnSelection) {
+        self.send("agentty_turn_start", &turn.properties()).await;
     }
 
-    /// Records a successful or user-interrupted turn with its queued selection.
-    pub async fn record_turn_end(&self, agent: AgentSelection, outcome: TurnOutcome) {
-        self.send(
-            outcome.event_name(),
-            &[
-                ("agent", agent.kind().name()),
-                ("model", reported_model(agent)),
-            ],
-        )
-        .await;
+    /// Records a successful or user-interrupted turn with its queued selection
+    /// and the `/mode` reported when it started.
+    pub async fn record_turn_end(&self, turn: TurnSelection, outcome: TurnOutcome) {
+        self.send(outcome.event_name(), &turn.properties()).await;
     }
 
     /// Records a failure using only a bounded category, never its message.

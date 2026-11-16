@@ -285,6 +285,7 @@ fn assert_usage_events(events: &[LogRecord]) {
         "session_type",
         "agent",
         "model",
+        "permission_mode",
     ];
     for event in events {
         assert!(
@@ -298,11 +299,24 @@ fn assert_usage_events(events: &[LogRecord]) {
     assert!(
         events
             .iter()
-            .filter(|event| event.event_name == "agentty_turn_start")
-            .all(|event| event
-                .attributes
-                .iter()
-                .any(|attribute| attribute.key == "agent"))
+            .filter(|event| event.event_name.starts_with("agentty_turn_"))
+            .all(|event| {
+                let has_agent = event
+                    .attributes
+                    .iter()
+                    .any(|attribute| attribute.key == "agent");
+                let permission_mode = event
+                    .attributes
+                    .iter()
+                    .find(|attribute| attribute.key == "permission_mode")
+                    .and_then(|attribute| attribute.value.as_ref())
+                    .and_then(|value| value.value.as_ref());
+
+                has_agent
+                    && permission_mode
+                        == Some(&any_value::Value::StringValue("auto_edit".to_string()))
+            }),
+        "turn events report the agent and the session's default /mode"
     );
     assert!(!format!("{events:?}").contains("Private timing prompt"));
 }

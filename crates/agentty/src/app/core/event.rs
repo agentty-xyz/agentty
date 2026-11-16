@@ -22,7 +22,7 @@ use app::review::{
 use tracing::warn;
 
 use super::state::{App, SyncReviewRequestTaskResult, UpdateStatus};
-use crate::analytics::TurnOutcome;
+use crate::analytics::{TurnOutcome, TurnSelection};
 use crate::app::chatgpt_sign_in::ChatGptSignInUpdate;
 use crate::app::prompt_intent::PromptImagePasteUpdate;
 use crate::app::session::{
@@ -34,7 +34,7 @@ use crate::app::sync::{
     SyncMainReviewUpdate,
 };
 use crate::app::{self, SessionRuntimeCommand};
-use crate::domain::agent::{AgentCliInfo, AgentSelection, HarnessModelOption};
+use crate::domain::agent::{AgentCliInfo, HarnessModelOption};
 use crate::domain::file_entry::{
     AT_MENTION_MAX_VISIBLE_ENTRIES, FileEntry, at_mention_lookup_root,
 };
@@ -237,14 +237,14 @@ pub(crate) enum AppEvent {
     SessionRebaseReviewInvalidated { session_id: SessionId },
     /// Indicates a session start or resume command began its turn.
     SessionTurnStarted {
-        agent: AgentSelection,
         session_id: SessionId,
+        turn: TurnSelection,
     },
     /// Reports a successful or user-interrupted session turn after
     /// post-processing.
     SessionTurnEnded {
-        agent: AgentSelection,
         outcome: TurnOutcome,
+        turn: TurnSelection,
     },
     /// Indicates review assist output became available for a session.
     ReviewPrepared {
@@ -332,9 +332,9 @@ enum AppEventEffect {
     ReloadSessions,
     ReloadProjects,
     RefreshGitStatus,
-    RecordTurnStarts(Vec<AgentSelection>),
+    RecordTurnStarts(Vec<TurnSelection>),
     /// Sends every completed turn without coalescing outcomes.
-    RecordTurnEnds(Vec<(AgentSelection, TurnOutcome)>),
+    RecordTurnEnds(Vec<(TurnSelection, TurnOutcome)>),
     ApplyReviewUpdates(Vec<(SessionId, ReviewUpdate)>),
     PersistDeferredAutoReviewTriggers(
         Vec<crate::app::session_diff::DeferredAutoReviewPersistenceRetry>,
@@ -450,9 +450,9 @@ pub(super) struct AppEventBatch {
     pub(super) session_speed_mode_updates: HashMap<SessionId, crate::domain::agent::SpeedMode>,
     pub(super) session_title_generation_finished: HashMap<SessionId, u64>,
     /// Retains every settled turn even when UI updates are coalesced.
-    pub(super) session_turn_ends: Vec<(AgentSelection, TurnOutcome)>,
+    pub(super) session_turn_ends: Vec<(TurnSelection, TurnOutcome)>,
     /// Retains queued selections for every accepted message before coalescing.
-    pub(super) session_turn_starts: Vec<AgentSelection>,
+    pub(super) session_turn_starts: Vec<TurnSelection>,
     pub(super) session_turn_started_ids: HashSet<SessionId>,
     pub(super) session_update_versions: HashMap<SessionId, u64>,
     pub(super) session_workflow_notice_updates: HashMap<SessionId, Vec<String>>,
@@ -581,12 +581,12 @@ impl AppEventBatch {
                 self.session_generated_turn_updates
                     .push((session_id, update));
             }
-            AppEvent::SessionTurnStarted { agent, session_id } => {
-                self.session_turn_starts.push(agent);
+            AppEvent::SessionTurnStarted { session_id, turn } => {
+                self.session_turn_starts.push(turn);
                 self.session_turn_started_ids.insert(session_id);
             }
-            AppEvent::SessionTurnEnded { agent, outcome } => {
-                self.session_turn_ends.push((agent, outcome));
+            AppEvent::SessionTurnEnded { outcome, turn } => {
+                self.session_turn_ends.push((turn, outcome));
             }
             AppEvent::ReviewProgressUpdated {
                 request_id,
@@ -1664,14 +1664,14 @@ impl App {
                 AppEventEffect::ReloadSessions => self.refresh_sessions_now().await,
                 AppEventEffect::ReloadProjects => self.reload_projects().await,
                 AppEventEffect::RefreshGitStatus => self.restart_git_status_task(),
-                AppEventEffect::RecordTurnStarts(agents) => {
-                    for agent in agents {
-                        self.services.record_turn_start(agent);
+                AppEventEffect::RecordTurnStarts(turns) => {
+                    for turn in turns {
+                        self.services.record_turn_start(turn);
                     }
                 }
                 AppEventEffect::RecordTurnEnds(turns) => {
-                    for (agent, outcome) in turns {
-                        self.services.record_turn_end(agent, outcome);
+                    for (turn, outcome) in turns {
+                        self.services.record_turn_end(turn, outcome);
                     }
                 }
                 AppEventEffect::ApplyReviewUpdates(review_updates) => {
