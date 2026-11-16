@@ -43,6 +43,8 @@ jobs:
   e2e:
     name: End-to-end feature tests
     uses: $/.github/workflows/e2e.yml
+    secrets:
+      TRUNK_API_TOKEN: ${{ secrets.TRUNK_API_TOKEN }}
 
   validate:
     name: Workspace checks
