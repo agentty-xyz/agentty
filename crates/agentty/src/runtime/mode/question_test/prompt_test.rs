@@ -7,7 +7,7 @@ use super::support::{
     TEST_TERMINAL_SIZE, free_text_question_mode, handle, question_mode_with_options,
 };
 use crate::domain::input::InputState;
-use crate::domain::question::QuestionItem;
+use crate::domain::question::{QuestionAttachmentState, QuestionItem};
 use crate::presentation::app_mode::{AppMode, ChatFocus};
 
 #[tokio::test]
@@ -16,6 +16,7 @@ async fn test_handle_paste_normalizes_line_endings_in_free_text_mode() {
     let mut app = crate::test_support::new_test_app_without_retained_base_dir().await;
     app.mode = AppMode::Question {
         at_mention_state: None,
+        attachment_state: QuestionAttachmentState::default(),
         session_id: "session-id".into(),
         questions: vec![QuestionItem {
             options: vec!["Default".to_string()],
@@ -82,6 +83,7 @@ async fn test_handle_enter_on_type_custom_answer_with_blank_input_records_no_ans
     let mut app = crate::test_support::new_test_app_without_retained_base_dir().await;
     app.mode = AppMode::Question {
         at_mention_state: None,
+        attachment_state: QuestionAttachmentState::default(),
         session_id: "missing-session".into(),
         questions: vec![
             QuestionItem {

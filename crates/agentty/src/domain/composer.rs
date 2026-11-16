@@ -9,7 +9,7 @@ use crate::domain::agent::{
     AgentKind, AgentModel, AgentSelection, AgentSelectionMetadata, HarnessModelOption,
     HarnessModelStatus, MINIMUM_RUNNING_CONTEXT_WINDOW, ModelCost, ReasoningLevel, ResponseStyle,
 };
-use crate::domain::input::InputState;
+use crate::domain::input::{InputCommand, InputEffect, InputState};
 use crate::domain::permission::PermissionMode;
 
 /// One selectable row in the prompt slash-command menu.
@@ -348,6 +348,38 @@ impl PromptAttachmentState {
         self.archived_attachments = retained;
 
         unreachable
+    }
+
+    /// Tracks drained `attachments` again at their placeholders in `input`,
+    /// for example after restoring a submitted text whose delivery failed.
+    ///
+    /// Returns the attachments whose placeholder no longer appears in
+    /// `input`.
+    pub fn restore_drained(
+        &mut self,
+        input: &InputState,
+        attachments: Vec<PromptAttachment>,
+    ) -> Vec<PromptAttachment> {
+        let token_ranges = image_token_ranges(input.text());
+        let mut missing_attachments = Vec::new();
+
+        for mut attachment in attachments {
+            let Some((placeholder_start, _, _)) = token_ranges
+                .iter()
+                .find(|(_, _, placeholder)| *placeholder == attachment.placeholder)
+            else {
+                missing_attachments.push(attachment);
+
+                continue;
+            };
+
+            attachment.current_start = Some(*placeholder_start);
+            self.attachments.push(attachment);
+        }
+        self.remember_current_revision(input);
+        self.refresh_next_attachment_number();
+
+        missing_attachments
     }
 
     /// Returns whether a clipboard image capture is still running for this
@@ -882,6 +914,21 @@ pub fn insert_prompt_local_image(
     slash_state: &mut PromptSlashState,
     local_image_path: PathBuf,
 ) {
+    insert_local_image(attachment_state, input, local_image_path);
+    history_state.reset_navigation();
+    slash_state.reset();
+}
+
+/// Inserts one pasted image placeholder at the cursor of any
+/// attachment-aware input and records the attachment metadata.
+///
+/// When the cursor sits directly before text, a space follows the placeholder
+/// so that text does not run into it.
+pub fn insert_local_image(
+    attachment_state: &mut PromptAttachmentState,
+    input: &mut InputState,
+    local_image_path: PathBuf,
+) {
     attachment_state.remember_current_revision(input);
     let placeholder_start = input.cursor;
     let mut placeholder_text =
@@ -898,8 +945,6 @@ pub fn insert_prompt_local_image(
     attachment_state.sync_after_edit(input, placeholder_start, placeholder_start, input.cursor);
     attachment_state.register_local_image(local_image_path, placeholder_start);
     attachment_state.remember_current_revision(input);
-    history_state.reset_navigation();
-    slash_state.reset();
 }
 
 /// Inserts one pasted image placeholder at character offset `anchor` and
@@ -917,16 +962,23 @@ pub fn insert_prompt_local_image_at(
     local_image_path: PathBuf,
     anchor: usize,
 ) {
+    insert_local_image_at(attachment_state, input, local_image_path, anchor);
+    history_state.reset_navigation();
+    slash_state.reset();
+}
+
+/// Inserts one pasted image placeholder into any attachment-aware input at
+/// character offset `anchor` and keeps the cursor on the text it was on.
+pub fn insert_local_image_at(
+    attachment_state: &mut PromptAttachmentState,
+    input: &mut InputState,
+    local_image_path: PathBuf,
+    anchor: usize,
+) {
     let cursor = input.cursor;
     let anchor = anchor.min(input.text().chars().count());
     input.cursor = anchor;
-    insert_prompt_local_image(
-        attachment_state,
-        history_state,
-        input,
-        slash_state,
-        local_image_path,
-    );
+    insert_local_image(attachment_state, input, local_image_path);
     let placeholder_length = input.cursor - anchor;
     input.cursor = if cursor < anchor {
         cursor
@@ -949,16 +1001,115 @@ pub fn apply_prompt_delete_range(
     start: usize,
     end: usize,
 ) {
+    if delete_attachment_input_range(attachment_state, input, start, end) {
+        history_state.reset_navigation();
+        slash_state.reset();
+    }
+}
+
+/// Deletes one range from any attachment-aware input, expanding it to whole
+/// image placeholders, and returns whether text was removed.
+fn delete_attachment_input_range(
+    attachment_state: &mut PromptAttachmentState,
+    input: &mut InputState,
+    start: usize,
+    end: usize,
+) -> bool {
     let (delete_start, delete_end) = expand_delete_range_to_image_tokens(input.text(), start, end);
     if delete_start >= delete_end {
-        return;
+        return false;
     }
 
     attachment_state.remember_current_revision(input);
     input.replace_range(delete_start, delete_end, "");
     attachment_state.sync_after_edit(input, delete_start, delete_end, delete_start);
-    history_state.reset_navigation();
-    slash_state.reset();
+
+    true
+}
+
+/// Applies one shared editing command to any attachment-aware input.
+///
+/// Deletions remove whole `[Image #n]` placeholders, typed text is kept apart
+/// from a placeholder ending at the cursor, and undo or redo restores the
+/// attachments owned by the reached revision. Returns `None` when the text
+/// did not change; otherwise returns archived attachments no longer
+/// reachable through undo history, which the caller must clean up.
+pub fn apply_attachment_input_command(
+    attachment_state: &mut PromptAttachmentState,
+    input: &mut InputState,
+    command: InputCommand,
+) -> Option<Vec<PromptAttachment>> {
+    if let Some((start, end)) = command_delete_range(input, &command) {
+        return delete_attachment_input_range(attachment_state, input, start, end)
+            .then(|| attachment_state.prune_unreachable(input));
+    }
+
+    attachment_state.remember_current_revision(input);
+    let command = separate_text_from_image_placeholder(input, command);
+    let edit_span = command_edit_span(input, &command);
+    if input.apply(command) != InputEffect::TextChanged {
+        return None;
+    }
+
+    // Deletions return early above, so `Undo` and `Redo` are the only
+    // text-changing commands without an edit span.
+    if let Some((old_start, old_end, new_end)) = edit_span {
+        attachment_state.sync_after_edit(input, old_start, old_end, new_end);
+    } else {
+        attachment_state.sync_after_history_restore(input);
+    }
+
+    Some(attachment_state.prune_unreachable(input))
+}
+
+/// Returns the attachment-aware range for shared deletion commands.
+///
+/// Boundary deletions return `None` without evaluating an out-of-range cursor
+/// position.
+fn command_delete_range(input: &InputState, command: &InputCommand) -> Option<(usize, usize)> {
+    match command {
+        InputCommand::DeleteBackward => {
+            (input.cursor > 0).then(|| (input.cursor - 1, input.cursor))
+        }
+        InputCommand::DeleteCurrentLine => current_line_delete_range(input),
+        InputCommand::DeleteForward => (input.cursor < input.text().chars().count())
+            .then_some((input.cursor, input.cursor + 1)),
+        InputCommand::DeleteToLineEnd => input.line_end_delete_range(),
+        InputCommand::DeleteWordBackward => input.word_delete_range(),
+        _ => None,
+    }
+}
+
+/// Prefixes a typed character with a space when it would otherwise run into
+/// the `[Image #n]` placeholder ending at the cursor.
+fn separate_text_from_image_placeholder(input: &InputState, command: InputCommand) -> InputCommand {
+    match command {
+        InputCommand::Insert(character)
+            if needs_space_after_image_placeholder(input.text(), input.cursor, character) =>
+        {
+            InputCommand::InsertText(format!(" {character}"))
+        }
+        command => command,
+    }
+}
+
+/// Returns the exact character span replaced by one non-deletion text
+/// command before that command mutates the input.
+fn command_edit_span(input: &InputState, command: &InputCommand) -> Option<(usize, usize, usize)> {
+    match command {
+        InputCommand::Insert(_) | InputCommand::InsertNewline => {
+            Some((input.cursor, input.cursor, input.cursor + 1))
+        }
+        InputCommand::InsertText(text) => Some((
+            input.cursor,
+            input.cursor,
+            input.cursor + text.chars().count(),
+        )),
+        InputCommand::ReplaceRange { start, end, text } => {
+            Some((*start, *end, *start + text.chars().count()))
+        }
+        _ => None,
+    }
 }
 
 /// Drains the prompt composer into text plus attachment metadata suitable for

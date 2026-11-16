@@ -85,7 +85,10 @@ fn free_text_keys_move_cursor() {
         let action = resolve_question_action(&mut mode, key);
 
         // Assert
-        assert!(matches!(action, Some(QuestionAction::Continue)), "{key:?}");
+        assert!(
+            matches!(action, Some(QuestionAction::Continue(_))),
+            "{key:?}"
+        );
         let AppMode::Question { input, .. } = mode else {
             unreachable!("editing keeps question mode");
         };
@@ -150,7 +153,10 @@ fn free_text_keys_edit_without_submitting() {
         let action = resolve_question_action(&mut mode, key);
 
         // Assert
-        assert!(matches!(action, Some(QuestionAction::Continue)), "{key:?}");
+        assert!(
+            matches!(action, Some(QuestionAction::Continue(_))),
+            "{key:?}"
+        );
         let AppMode::Question { input, .. } = mode else {
             unreachable!("editing keeps question mode");
         };
@@ -174,7 +180,7 @@ fn free_text_undo_restores_text_and_cursor() {
     );
 
     // Assert
-    assert!(matches!(action, Some(QuestionAction::Continue)));
+    assert!(matches!(action, Some(QuestionAction::Continue(_))));
     let AppMode::Question { input, .. } = mode else {
         unreachable!("editing keeps question mode");
     };
@@ -228,7 +234,10 @@ fn option_keys_preserve_selection_and_free_text_boundaries() {
         let action = resolve_question_action(&mut mode, KeyEvent::new(code, KeyModifiers::NONE));
 
         // Assert
-        assert!(matches!(action, Some(QuestionAction::Continue)), "{code:?}");
+        assert!(
+            matches!(action, Some(QuestionAction::Continue(_))),
+            "{code:?}"
+        );
         let AppMode::Question {
             input,
             selected_option_index,
@@ -251,7 +260,7 @@ fn free_text_navigation_without_options_stays_in_input() {
     let action = resolve_question_action(&mut mode, KeyEvent::new(KeyCode::Up, KeyModifiers::NONE));
 
     // Assert
-    assert!(matches!(action, Some(QuestionAction::Continue)));
+    assert!(matches!(action, Some(QuestionAction::Continue(_))));
     assert!(matches!(
         mode,
         AppMode::Question {

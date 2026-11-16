@@ -10,16 +10,16 @@ use super::{
     PendingImagePaste, PromptAttachment, PromptAttachmentState, PromptComposerState,
     PromptGraphState, PromptHistoryState, PromptSlashCommandSet, PromptSlashStage,
     PromptSlashState, PromptSuggestionItem, PromptSuggestionList, PromptSuggestionSelection,
-    build_prompt_slash_suggestion_list, command_description, current_line_delete_range,
-    drain_prompt_submission, image_token_end_index, insert_prompt_local_image,
-    insert_prompt_local_image_at, needs_space_after_image_placeholder, prompt_slash_option_count,
-    resolve_prompt_slash_selection,
+    apply_attachment_input_command, build_prompt_slash_suggestion_list, command_description,
+    current_line_delete_range, drain_prompt_submission, image_token_end_index,
+    insert_prompt_local_image, insert_prompt_local_image_at, needs_space_after_image_placeholder,
+    prompt_slash_option_count, resolve_prompt_slash_selection,
 };
 use crate::domain::agent::{
     AgentKind, AgentModel, AgentSelection, HarnessModelOption, HarnessModelStatus, ModelCost,
     ReasoningLevel, ResponseStyle, ServedModel,
 };
-use crate::domain::input::{INPUT_HISTORY_LIMIT, InputState};
+use crate::domain::input::{INPUT_HISTORY_LIMIT, InputCommand, InputState};
 use crate::domain::permission::PermissionMode;
 
 fn insert_test_attachment(
@@ -207,6 +207,76 @@ fn test_insert_prompt_local_image_at_keeps_cursor_on_its_text() {
         assert_eq!(input.cursor, expected_cursor);
         assert_eq!(attachment_state.attachments.len(), 1);
     }
+}
+
+#[test]
+fn restore_drained_tracks_attachments_whose_placeholders_remain() {
+    // Arrange
+    let mut drained_state = PromptAttachmentState::default();
+    let mut input = InputState::default();
+    insert_test_attachment(
+        &mut drained_state,
+        &mut input,
+        PathBuf::from("/tmp/kept.png"),
+    );
+    input.insert_text(" and ");
+    insert_test_attachment(
+        &mut drained_state,
+        &mut input,
+        PathBuf::from("/tmp/dropped.png"),
+    );
+    let submission = drain_prompt_submission(&mut drained_state, &mut input);
+    let restored_input = InputState::with_text("Use [Image #1] only".to_string());
+    let mut attachment_state = PromptAttachmentState::default();
+
+    // Act
+    let missing = attachment_state.restore_drained(&restored_input, submission.attachments);
+    let mut edited_input = restored_input.clone();
+    edited_input.cursor = 4;
+    let released = apply_attachment_input_command(
+        &mut attachment_state,
+        &mut edited_input,
+        InputCommand::Insert('x'),
+    );
+
+    // Assert
+    assert_eq!(
+        missing
+            .iter()
+            .map(|attachment| attachment.local_image_path.clone())
+            .collect::<Vec<_>>(),
+        vec![PathBuf::from("/tmp/dropped.png")]
+    );
+    assert_eq!(attachment_state.attachments.len(), 1);
+    assert_eq!(attachment_state.next_attachment_number, 2);
+    assert_eq!(released, Some(Vec::new()));
+    assert_eq!(edited_input.text(), "Use x[Image #1] only");
+    assert_eq!(
+        drain_prompt_submission(&mut attachment_state, &mut edited_input)
+            .attachments
+            .len(),
+        1
+    );
+}
+
+#[test]
+fn apply_attachment_input_command_ignores_edits_that_change_no_text() {
+    // Arrange
+    let mut attachment_state = PromptAttachmentState::default();
+    let mut input = InputState::default();
+
+    // Act
+    let delete = apply_attachment_input_command(
+        &mut attachment_state,
+        &mut input,
+        InputCommand::DeleteBackward,
+    );
+    let movement =
+        apply_attachment_input_command(&mut attachment_state, &mut input, InputCommand::MoveLeft);
+
+    // Assert
+    assert_eq!(delete, None);
+    assert_eq!(movement, None);
 }
 
 #[test]

@@ -605,7 +605,10 @@ sends the answers together as a follow-up turn.
 
 <a id="usage-question-options"></a> Use `j` / `k` or arrow keys to choose an option,
 then `Enter`. Move beyond the options to type a free-text answer; a blank answer means
-`no answer`. Type `@` to insert a repository path.
+`no answer`. Type `@` to insert a repository path, or paste a clipboard image as in the
+[prompt](@/docs/usage/workflow.md#usage-prompt-extras); the images are sent with your
+answers. Choosing a predefined option discards images pasted into that question's
+free-text answer.
 
 `Ctrl+C` from the answer input ends the turn without replying; for graph questions it
 only closes the panel. `q` outside free-text input returns to the list and preserves

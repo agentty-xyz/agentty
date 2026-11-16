@@ -24,7 +24,7 @@ use crate::app::session::{SESSION_REFRESH_INTERVAL, SessionDefaults};
 use crate::app::{App, AppEvent, SessionManager, SessionState};
 use crate::domain::agent::AgentKind;
 use crate::domain::input::InputState;
-use crate::domain::question::QuestionItem;
+use crate::domain::question::{QuestionAttachmentState, QuestionItem};
 use crate::domain::selection::SelectionState;
 use crate::domain::session::{Session, SessionSize, SessionStats, Status};
 use crate::domain::transient_message::TransientMessageStore;
@@ -407,6 +407,7 @@ async fn test_process_event_with_key_handler_pastes_into_question_free_text_mode
     let mut app = crate::test_support::new_test_app_without_retained_base_dir().await;
     app.mode = AppMode::Question {
         at_mention_state: None,
+        attachment_state: QuestionAttachmentState::default(),
         current_index: 0,
         focus: ChatFocus::Input,
         input: InputState::default(),

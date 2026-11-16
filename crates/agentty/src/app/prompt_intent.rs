@@ -13,16 +13,19 @@ use crate::app::command_gateway::{
 };
 use crate::app::message_admission::MessageIntent;
 use crate::app::task::{PromptImagePasteTaskInput, TaskService};
-use crate::app::{App, AppError, ReviewCacheEntry};
+use crate::app::{App, AppError, ReviewCacheEntry, SessionManager};
 use crate::domain::agent::{AgentSelection, ReasoningLevel, ResponseStyle, SpeedMode};
 use crate::domain::composer::{PromptAttachment, PromptSlashCommandSet};
 use crate::domain::permission::PermissionMode;
+use crate::domain::question::QuestionAttachmentState;
 use crate::domain::review;
 use crate::domain::session::{Session, SessionId, Status};
 use crate::domain::transcript_notice::TranscriptNotice;
 use crate::domain::turn_prompt::{TurnPrompt, TurnPromptAttachment, TurnPromptTextSource};
 use crate::presentation::app_mode::{AppMode, ReviewCommentSelection};
-use crate::presentation::prompt::{PendingImagePaste, insert_prompt_local_image_at};
+use crate::presentation::prompt::{
+    PendingImagePaste, insert_local_image_at, insert_prompt_local_image_at,
+};
 
 /// Maximum automatic focused-review remediation turns per user prompt.
 pub(crate) const MAX_AUTO_ADDRESS_REVIEW_ITERATIONS: u8 = 3;
@@ -403,46 +406,64 @@ impl App {
         local_image_path: PathBuf,
         anchor: Option<usize>,
     ) -> Vec<PromptAttachment> {
-        let AppMode::Prompt {
-            at_mention_state,
-            attachment_state,
-            history_state,
-            input,
-            slash_state,
-            ..
-        } = &mut self.mode
-        else {
-            return Vec::new();
-        };
+        match &mut self.mode {
+            AppMode::Prompt {
+                at_mention_state,
+                attachment_state,
+                history_state,
+                input,
+                slash_state,
+                ..
+            } => {
+                let anchor = anchor.unwrap_or(input.cursor);
+                insert_prompt_local_image_at(
+                    attachment_state,
+                    history_state,
+                    input,
+                    slash_state,
+                    local_image_path,
+                    anchor,
+                );
+                *at_mention_state = None;
 
-        let anchor = anchor.unwrap_or(input.cursor);
-        insert_prompt_local_image_at(
-            attachment_state,
-            history_state,
-            input,
-            slash_state,
-            local_image_path,
-            anchor,
-        );
-        *at_mention_state = None;
+                attachment_state.prune_unreachable(input)
+            }
+            AppMode::Question {
+                at_mention_state,
+                attachment_state: QuestionAttachmentState { composer, .. },
+                input,
+                ..
+            } => {
+                let anchor = anchor.unwrap_or(input.cursor);
+                insert_local_image_at(composer, input, local_image_path, anchor);
+                *at_mention_state = None;
 
-        attachment_state.prune_unreachable(input)
+                composer.prune_unreachable(input)
+            }
+            _ => Vec::new(),
+        }
     }
 
     /// Clears and returns the composer's pending capture when it matches
-    /// `request_id`, meaning the completion still belongs to that composer.
+    /// `request_id`, meaning the completion still belongs to that prompt
+    /// composer or clarification answer.
     fn take_pending_prompt_image_paste(
         &mut self,
         session_id: &SessionId,
         request_id: u64,
     ) -> Option<PendingImagePaste> {
-        let AppMode::Prompt {
-            attachment_state,
-            session_id: mode_session_id,
-            ..
-        } = &mut self.mode
-        else {
-            return None;
+        let (attachment_state, mode_session_id) = match &mut self.mode {
+            AppMode::Prompt {
+                attachment_state,
+                session_id,
+                ..
+            } => (attachment_state, session_id),
+            AppMode::Question {
+                attachment_state: QuestionAttachmentState { composer, .. },
+                session_id,
+                ..
+            } => (composer, session_id),
+            _ => return None,
         };
         if mode_session_id != session_id
             || attachment_state
@@ -476,6 +497,25 @@ impl App {
         };
 
         self.cleanup_prompt_attachment_files(&prompt).await;
+    }
+
+    /// Removes released attachment files in a tracked background task, for
+    /// synchronous reducers that cannot await the cleanup.
+    pub(crate) fn spawn_prompt_attachment_cleanup(&self, attachments: Vec<PromptAttachment>) {
+        if attachments.is_empty() {
+            return;
+        }
+
+        let attachment_paths = attachments
+            .into_iter()
+            .map(|attachment| attachment.local_image_path)
+            .collect();
+        let cleanup_task = tokio::spawn(SessionManager::cleanup_prompt_attachment_paths(
+            self.services.fs_client(),
+            attachment_paths,
+        ));
+
+        self.services.track_cleanup_task(cleanup_task);
     }
 
     /// Cancels one presentation-owned prompt and returns the requested

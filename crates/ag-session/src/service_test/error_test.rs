@@ -75,6 +75,7 @@ async fn fake_backend_requires_explicit_results() {
             &session_id,
             AnswerQuestionsRequest {
                 answers: Vec::new(),
+                attachments: Vec::new(),
             },
         )
         .await

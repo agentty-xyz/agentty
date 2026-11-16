@@ -57,6 +57,7 @@ async fn service_delegates_mutating_operations_through_clones() {
             answer: "main".to_string(),
             question: "Which branch?".to_string(),
         }],
+        attachments: Vec::new(),
     };
 
     // Act

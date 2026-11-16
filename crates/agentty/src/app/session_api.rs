@@ -807,7 +807,8 @@ impl App {
     }
 
     /// Claims structured question answers against the current persisted
-    /// question set before resuming the session.
+    /// question set before resuming the session with a reply turn that
+    /// carries the answers' image attachments.
     pub(super) async fn answer_api_questions(
         &mut self,
         session_id: &SessionId,
@@ -824,7 +825,10 @@ impl App {
         let persisted_questions = row.questions.unwrap_or_default();
         let questions = api_questions_from_json(Some(&persisted_questions), session_id)?;
         validate_question_answers(&questions, &request.answers)?;
-        let message = question_answer_message(&request.answers);
+        let prompt = TurnPrompt {
+            attachments: request.attachments,
+            ..TurnPrompt::from_text(question_answer_message(&request.answers))
+        };
         let status = self
             .sessions
             .session_for_id(session_id)
@@ -839,7 +843,7 @@ impl App {
             .map_err(|error| ApiSessionError::Operation(error.to_string()))?;
         let send_result = if self
             .sessions
-            .reply_to_question_answers(&self.services, session_id, message)
+            .reply_to_question_answers(&self.services, session_id, prompt)
             .await
         {
             Ok(())

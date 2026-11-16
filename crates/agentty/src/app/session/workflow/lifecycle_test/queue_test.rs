@@ -200,6 +200,7 @@ async fn test_enqueue_reply_command_reports_worker_failure_in_transcript() {
             &prompt,
             command,
             ReplyEnqueueOptions {
+                eligibility: ReplyEligibility::Standard,
                 idempotent: false,
                 report_failure_in_transcript: true,
                 joins_worker_queue: true,

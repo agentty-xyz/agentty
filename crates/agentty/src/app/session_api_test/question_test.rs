@@ -45,6 +45,7 @@ async fn runtime_backend_restores_claimed_questions_when_resume_is_rejected() {
                 answer: "Current answer".to_string(),
                 question: "Current question?".to_string(),
             }],
+            attachments: Vec::new(),
         },
     )
     .await
@@ -119,6 +120,7 @@ async fn question_answers_report_claim_and_restore_persistence_failures() {
                         answer: "Current answer".to_string(),
                         question: "Current question?".to_string(),
                     }],
+                    attachments: Vec::new(),
                 },
             )
             .await
@@ -147,6 +149,7 @@ async fn question_answers_report_session_read_failure() {
             &SessionId::from("missing-session"),
             AnswerQuestionsRequest {
                 answers: Vec::new(),
+                attachments: Vec::new(),
             },
         )
         .await

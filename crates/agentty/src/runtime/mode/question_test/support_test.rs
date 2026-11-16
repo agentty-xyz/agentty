@@ -6,7 +6,7 @@ use ratatui::layout::Rect;
 use super::super::handle_with_cache;
 use crate::app::App;
 use crate::domain::input::InputState;
-use crate::domain::question::QuestionItem;
+use crate::domain::question::{QuestionAttachmentState, QuestionItem};
 use crate::presentation::app_mode::{AppMode, ChatFocus};
 use crate::runtime::EventResult;
 use crate::ui::RenderCacheStore;
@@ -21,6 +21,7 @@ pub(super) const TEST_TERMINAL_SIZE: Rect = Rect::new(0, 0, 80, 24);
 pub(super) fn question_mode_with_options() -> AppMode {
     AppMode::Question {
         at_mention_state: None,
+        attachment_state: QuestionAttachmentState::default(),
         session_id: "session-id".into(),
         questions: vec![QuestionItem {
             options: vec![
@@ -47,6 +48,7 @@ pub(super) fn free_text_question_mode(text: &str, cursor: usize) -> AppMode {
 
     AppMode::Question {
         at_mention_state: None,
+        attachment_state: QuestionAttachmentState::default(),
         session_id: "session-id".into(),
         questions: vec![QuestionItem {
             options: Vec::new(),

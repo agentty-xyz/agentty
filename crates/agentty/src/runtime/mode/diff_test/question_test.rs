@@ -5,7 +5,7 @@ use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
 use super::super::open_line_comment_prompt;
 use super::support::{TEST_TERMINAL_SIZE, handle};
 use crate::domain::input::InputState;
-use crate::domain::question::QuestionItem;
+use crate::domain::question::{QuestionAttachmentState, QuestionItem};
 use crate::presentation::app_mode::{
     AppMode, DiffFocus, DiffLineComments, DiffPreview, DiffRestoreTarget, HelpContext,
     QuestionModeSnapshot,
@@ -69,6 +69,7 @@ async fn test_handle_question_then_help_then_exit_preserves_restore_question() {
     let (mut app, _base_dir) = crate::test_support::new_test_app().await;
     let snapshot = QuestionModeSnapshot {
         at_mention_state: None,
+        attachment_state: QuestionAttachmentState::default(),
         current_index: 1,
         input: InputState::default(),
         questions: vec![
@@ -190,6 +191,7 @@ async fn test_handle_quit_with_question_snapshot_restores_question_mode() {
         restore: Some(Box::new(DiffRestoreTarget::Question(
             QuestionModeSnapshot {
                 at_mention_state: None,
+                attachment_state: QuestionAttachmentState::default(),
                 current_index: 0,
                 input: InputState::default(),
                 questions: vec![QuestionItem {

@@ -3,6 +3,7 @@
 use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
 
 use super::super::handle_key_event;
+use crate::domain::question::QuestionAttachmentState;
 use crate::presentation::app_mode::AppMode;
 use crate::runtime::{EventResult, PresentationState};
 
@@ -12,6 +13,7 @@ async fn test_handle_key_event_routes_question_input_through_terminal_bounds() {
     let mut app = crate::test_support::new_test_app_without_retained_base_dir().await;
     app.mode = AppMode::Question {
         at_mention_state: None,
+        attachment_state: QuestionAttachmentState::default(),
         current_index: 0,
         focus: crate::presentation::app_mode::ChatFocus::Input,
         input: crate::domain::input::InputState::default(),

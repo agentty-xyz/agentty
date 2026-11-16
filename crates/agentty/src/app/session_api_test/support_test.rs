@@ -169,6 +169,7 @@ pub(super) fn current_question_answer(answer: &str) -> AnswerQuestionsRequest {
             answer: answer.to_string(),
             question: "Current question?".to_string(),
         }],
+        attachments: Vec::new(),
     }
 }
 

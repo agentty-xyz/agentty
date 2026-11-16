@@ -7,18 +7,24 @@ use ratatui::layout::Rect;
 use tracing::warn;
 
 use crate::app::graph_question::GraphAnswerOutcome;
+use crate::app::prompt_intent::PromptImagePaste;
 use crate::app::session::SessionTaskService;
 use crate::app::{self, App, AppEvent};
-use crate::domain::input::InputState;
-use crate::domain::question::{QuestionItem, QuestionProgress, default_option_index};
+use crate::domain::input::{InputCommand, InputState};
+use crate::domain::question::{
+    QuestionAttachmentState, QuestionItem, QuestionProgress, default_option_index,
+};
 use crate::domain::session::{SessionId, Status};
+use crate::domain::turn_prompt::TurnPromptAttachment;
 use crate::presentation::app_mode::{
     AppMode, ChatFocus, DiffRestoreTarget, DiffSidebarFocus, QuestionModeSnapshot,
 };
-use crate::presentation::prompt::PromptAtMentionState;
+use crate::presentation::prompt::{
+    PendingImagePaste, PromptAtMentionState, PromptAttachment, apply_attachment_input_command,
+};
 use crate::runtime::EventResult;
 use crate::runtime::mode::chat_scroll::{self, ChatScrollMetrics};
-use crate::runtime::mode::{at_mention, input_key};
+use crate::runtime::mode::{at_mention, input_key, prompt};
 use crate::ui::RenderCacheStore;
 
 /// Default response stored when users skip one model question.
@@ -29,7 +35,9 @@ const NO_ANSWER: &str = "no answer";
 /// `Tab` toggles focus between the question panel and the chat output for
 /// scrolling, unless an open `@` lookup consumes it for file selection. When
 /// chat is focused, scroll keys (`j`/`k`/`Up`/`Down`/`g`/`G`/
-/// `Ctrl+d`/`Ctrl+u`) navigate the session transcript. `Enter` submits the
+/// `Ctrl+d`/`Ctrl+u`) navigate the session transcript. `Ctrl+V`/`Alt+V`
+/// pastes a clipboard image into the free-text answer as an `[Image #n]`
+/// placeholder. `Enter` submits the
 /// typed answer (or `no answer` when blank), `Ctrl+C` ends the entire turn
 /// without sending a reply while the answer input is focused, `Esc` dismisses
 /// an open at-mention dropdown without ending the turn, and `q` returns to the
@@ -71,17 +79,76 @@ pub(crate) async fn handle_with_cache(
         return EventResult::Continue;
     }
 
+    if prompt::is_prompt_image_paste_key(key) {
+        start_question_image_paste(app);
+
+        return EventResult::Continue;
+    }
+
     let Some(action) = resolve_question_action(&mut app.mode, key) else {
         return EventResult::Continue;
     };
     sync_question_at_mention_state(app);
 
     match action {
-        QuestionAction::Submit(response) => submit_response(app, response).await,
-        QuestionAction::Continue => sync_question_at_mention_state(app),
+        QuestionAction::Submit {
+            released_attachments,
+            response,
+        } => {
+            app.cleanup_prompt_attachments(released_attachments).await;
+            submit_response(app, response).await;
+        }
+        QuestionAction::Continue(released_attachments) => {
+            app.cleanup_prompt_attachments(released_attachments).await;
+            sync_question_at_mention_state(app);
+        }
     }
 
     EventResult::Continue
+}
+
+/// Starts a background clipboard-image capture for the free-text answer,
+/// anchored at the answer cursor.
+///
+/// Ignored while navigating predefined options or while another capture for
+/// the answer is still running.
+fn start_question_image_paste(app: &mut App) {
+    let AppMode::Question {
+        attachment_state,
+        selected_option_index: None,
+        session_id,
+        ..
+    } = &app.mode
+    else {
+        return;
+    };
+    if attachment_state.composer.is_pasting_image() {
+        return;
+    }
+
+    let request_id = app.start_prompt_image_paste(PromptImagePaste {
+        attachment_number: attachment_state.composer.next_attachment_number,
+        session_id: session_id.clone(),
+    });
+
+    mark_question_image_paste_pending(&mut app.mode, request_id);
+}
+
+/// Anchors one running clipboard-image capture at the answer cursor.
+///
+/// Other modes are left unchanged.
+fn mark_question_image_paste_pending(mode: &mut AppMode, request_id: u64) {
+    if let AppMode::Question {
+        attachment_state,
+        input,
+        ..
+    } = mode
+    {
+        attachment_state.composer.pending_image_paste = Some(PendingImagePaste {
+            anchor: Some(input.cursor),
+            request_id,
+        });
+    }
 }
 
 /// Returns whether `key` is a plain `Ctrl+C` press.
@@ -135,6 +202,7 @@ fn exit_to_list_saving_progress(app: &mut App) {
     let mode = std::mem::replace(&mut app.mode, AppMode::List);
 
     if let AppMode::Question {
+        mut attachment_state,
         current_index,
         input,
         responses,
@@ -143,10 +211,13 @@ fn exit_to_list_saving_progress(app: &mut App) {
         ..
     } = mode
     {
+        // A capture finishing after the panel closed removes its own image.
+        attachment_state.composer.pending_image_paste = None;
         app.graph_questions.record_progress_target(&session_id);
         app.question_progress.insert(
             session_id,
             QuestionProgress {
+                attachment_state,
                 current_index,
                 input,
                 responses,
@@ -252,6 +323,7 @@ fn take_question_snapshot(app: &mut App) -> Option<QuestionModeSnapshot> {
 
     if let AppMode::Question {
         at_mention_state,
+        mut attachment_state,
         current_index,
         input,
         questions,
@@ -262,8 +334,12 @@ fn take_question_snapshot(app: &mut App) -> Option<QuestionModeSnapshot> {
         ..
     } = mode
     {
+        // A capture finishing during the diff preview removes its own image.
+        attachment_state.composer.pending_image_paste = None;
+
         Some(QuestionModeSnapshot {
             at_mention_state,
+            attachment_state,
             current_index,
             input,
             questions,
@@ -292,6 +368,7 @@ pub(crate) fn handle_paste(app: &mut App, pasted_text: &str) {
     }
 
     if let AppMode::Question {
+        attachment_state,
         input,
         selected_option_index,
         ..
@@ -301,16 +378,28 @@ pub(crate) fn handle_paste(app: &mut App, pasted_text: &str) {
             return;
         }
 
-        input.insert_text(&normalized_text);
+        let released_attachments = apply_attachment_input_command(
+            &mut attachment_state.composer,
+            input,
+            InputCommand::InsertText(normalized_text),
+        )
+        .unwrap_or_default();
+        app.spawn_prompt_attachment_cleanup(released_attachments);
     }
 
     sync_question_at_mention_state(app);
 }
 
 /// Semantic action emitted by one question-mode key event.
+///
+/// Both variants carry pasted images that no answer references anymore and
+/// whose files must be removed.
 enum QuestionAction {
-    Submit(String),
-    Continue,
+    Submit {
+        released_attachments: Vec<PromptAttachment>,
+        response: String,
+    },
+    Continue(Vec<PromptAttachment>),
 }
 
 /// Resolves and applies one key event against question input state.
@@ -323,6 +412,7 @@ enum QuestionAction {
 fn resolve_question_action(mode: &mut AppMode, key: KeyEvent) -> Option<QuestionAction> {
     let action = {
         let AppMode::Question {
+            attachment_state,
             current_index,
             input,
             questions,
@@ -342,23 +432,25 @@ fn resolve_question_action(mode: &mut AppMode, key: KeyEvent) -> Option<Question
             KeyCode::Enter | KeyCode::Char('\r' | '\n')
                 if !is_navigating_options && input_key::should_insert_newline(key) =>
             {
-                input.insert_newline();
-
-                QuestionAction::Continue
+                apply_free_text_command(attachment_state, input, InputCommand::InsertNewline)
             }
-            KeyCode::Enter => {
-                resolve_enter_action(input, questions, *current_index, selected_option_index)
-            }
+            KeyCode::Enter => resolve_enter_action(
+                attachment_state,
+                input,
+                questions,
+                *current_index,
+                *selected_option_index,
+            ),
             KeyCode::Up | KeyCode::Char('k') if is_navigating_options => {
                 *selected_option_index = selected_option_index.and_then(previous_option_index);
 
-                QuestionAction::Continue
+                QuestionAction::Continue(Vec::new())
             }
             KeyCode::Down | KeyCode::Char('j') if is_navigating_options => {
                 *selected_option_index = selected_option_index
                     .and_then(|option_index| next_option_index(option_index, option_count));
 
-                QuestionAction::Continue
+                QuestionAction::Continue(Vec::new())
             }
             KeyCode::Up
                 if !is_navigating_options
@@ -367,7 +459,7 @@ fn resolve_question_action(mode: &mut AppMode, key: KeyEvent) -> Option<Question
             {
                 *selected_option_index = Some(option_count - 1);
 
-                QuestionAction::Continue
+                QuestionAction::Continue(Vec::new())
             }
             KeyCode::Down
                 if !is_navigating_options
@@ -376,10 +468,10 @@ fn resolve_question_action(mode: &mut AppMode, key: KeyEvent) -> Option<Question
             {
                 *selected_option_index = Some(0);
 
-                QuestionAction::Continue
+                QuestionAction::Continue(Vec::new())
             }
-            _ if !is_navigating_options => resolve_free_text_key(input, key),
-            _ => QuestionAction::Continue,
+            _ if !is_navigating_options => resolve_free_text_key(attachment_state, input, key),
+            _ => QuestionAction::Continue(Vec::new()),
         }
     };
 
@@ -388,26 +480,39 @@ fn resolve_question_action(mode: &mut AppMode, key: KeyEvent) -> Option<Question
 
 /// Resolves an `Enter` key press in question mode.
 ///
-/// When navigating options, submits the highlighted predefined option. In
-/// free-text mode, submits the typed text.
+/// When navigating options, submits the highlighted predefined option and
+/// releases images pasted into the hidden free-text answer. In free-text
+/// mode, submits the typed text with the images it references. Nothing is
+/// submitted while a clipboard image capture is still running.
 fn resolve_enter_action(
+    attachment_state: &mut QuestionAttachmentState,
     input: &mut InputState,
     questions: &[QuestionItem],
     current_index: usize,
-    selected_option_index: &mut Option<usize>,
+    selected_option_index: Option<usize>,
 ) -> QuestionAction {
-    if let Some(option_index) = *selected_option_index {
+    if attachment_state.composer.is_pasting_image() {
+        return QuestionAction::Continue(Vec::new());
+    }
+
+    if let Some(option_index) = selected_option_index {
         let selected_text = questions
             .get(current_index)
             .and_then(|item| item.options.get(option_index))
             .cloned()
             .unwrap_or_default();
 
-        QuestionAction::Submit(normalize_response_text(&selected_text))
-    } else {
-        let response_text = input.take_text();
+        return QuestionAction::Submit {
+            released_attachments: attachment_state.discard_answer(),
+            response: normalize_response_text(&selected_text),
+        };
+    }
 
-        QuestionAction::Submit(normalize_response_text(&response_text))
+    let (response_text, released_attachments) = attachment_state.take_answer(input);
+
+    QuestionAction::Submit {
+        released_attachments,
+        response: normalize_response_text(&response_text),
     }
 }
 
@@ -426,13 +531,28 @@ fn next_option_index(option_index: usize, option_count: usize) -> Option<usize> 
 }
 
 /// Resolves a key event in free-text input mode (no option selected).
-fn resolve_free_text_key(input: &mut InputState, key: KeyEvent) -> QuestionAction {
-    if let Some(command) = input_key::command_for_key(key, input_key::InputCapabilities::MULTILINE)
-    {
-        input.apply(command);
+fn resolve_free_text_key(
+    attachment_state: &mut QuestionAttachmentState,
+    input: &mut InputState,
+    key: KeyEvent,
+) -> QuestionAction {
+    match input_key::command_for_key(key, input_key::InputCapabilities::MULTILINE) {
+        Some(command) => apply_free_text_command(attachment_state, input, command),
+        None => QuestionAction::Continue(Vec::new()),
     }
+}
 
-    QuestionAction::Continue
+/// Applies one editing command to the free-text answer while keeping its
+/// `[Image #n]` placeholders whole and their attachments tracked.
+fn apply_free_text_command(
+    attachment_state: &mut QuestionAttachmentState,
+    input: &mut InputState,
+    command: InputCommand,
+) -> QuestionAction {
+    QuestionAction::Continue(
+        apply_attachment_input_command(&mut attachment_state.composer, input, command)
+            .unwrap_or_default(),
+    )
 }
 
 /// Returns whether the question-mode at-mention dropdown is currently visible.
@@ -573,20 +693,31 @@ fn handle_question_at_mention_select(app: &mut App) {
     let inserted_selection = match &mut app.mode {
         AppMode::Question {
             at_mention_state: Some(state),
+            attachment_state,
             input,
             ..
         } => at_mention::selected_replacement(input, state).map(|selection| {
-            input.replace_range(selection.at_start, selection.at_end, &selection.text);
+            apply_attachment_input_command(
+                &mut attachment_state.composer,
+                input,
+                InputCommand::ReplaceRange {
+                    end: selection.at_end,
+                    start: selection.at_start,
+                    text: selection.text,
+                },
+            )
+            .unwrap_or_default()
         }),
         _ => return,
     };
 
-    if inserted_selection.is_none() {
+    let Some(released_attachments) = inserted_selection else {
         dismiss_question_at_mention(app);
 
         return;
-    }
+    };
 
+    app.spawn_prompt_attachment_cleanup(released_attachments);
     sync_question_at_mention_state(app);
 }
 
@@ -604,22 +735,38 @@ async fn submit_response(app: &mut App, response: String) {
     let session_id = completed_response.session_id.clone();
     let answers =
         structured_question_answers(&completed_response.questions, &completed_response.responses);
+    let attachments = turn_prompt_attachments(&completed_response.attachment_state.answered);
     app.mode = AppMode::View {
         session_id: session_id.clone(),
         scroll_offset: None,
     };
     if let Some(target) = app.graph_questions.active_target(&session_id).cloned() {
         let outcome = app
-            .answer_graph_questions(&session_id, &target, &answers)
+            .answer_graph_questions(&session_id, &target, &answers, attachments)
             .await;
-        if outcome == GraphAnswerOutcome::Retry {
-            restore_completed_question_response(app, completed_response);
+        match outcome {
+            GraphAnswerOutcome::Sent => {}
+            GraphAnswerOutcome::Retry => {
+                restore_completed_question_response(app, completed_response);
+            }
+            GraphAnswerOutcome::Stale => {
+                app.cleanup_prompt_attachments(
+                    completed_response.attachment_state.into_attachments(),
+                )
+                .await;
+            }
         }
 
         return;
     }
     let service = app.session_view_service();
-    let request = service.answer_questions(&session_id, AnswerQuestionsRequest { answers });
+    let request = service.answer_questions(
+        &session_id,
+        AnswerQuestionsRequest {
+            answers,
+            attachments,
+        },
+    );
     let reply_enqueued = match app.drive_session_request(request).await {
         Ok(()) => true,
         Err(error) => {
@@ -649,6 +796,7 @@ async fn submit_response(app: &mut App, response: String) {
 }
 
 struct CompletedQuestionResponse {
+    attachment_state: QuestionAttachmentState,
     questions: Vec<QuestionItem>,
     responses: Vec<String>,
     scroll_offset: Option<usize>,
@@ -661,6 +809,7 @@ struct CompletedQuestionResponse {
 /// vectors by this point. Rebuilding the panel at the final question keeps all
 /// earlier answers plus the just-entered final answer visible so pressing
 /// `Enter` retries the same clarification reply instead of discarding input.
+/// Images referenced by the restored final answer become editable again.
 fn restore_completed_question_response(
     app: &mut App,
     mut completed_response: CompletedQuestionResponse,
@@ -691,9 +840,11 @@ fn restore_completed_question_response(
     } else {
         InputState::with_text(final_response)
     };
+    completed_response.attachment_state.reopen_answer(&input);
 
     app.mode = AppMode::Question {
         at_mention_state: None,
+        attachment_state: completed_response.attachment_state,
         current_index,
         focus: ChatFocus::Input,
         input,
@@ -746,14 +897,23 @@ fn mark_session_in_progress(app: &mut App, session_id: &str) {
 /// UI refreshes the focused session snapshot and any aggregate project-list
 /// state. It also updates the shared runtime handle status alongside the
 /// snapshot so the periodic `sync_from_handles` cycle does not revert the
-/// status back to `Question`.
+/// status back to `Question`. Images pasted into the abandoned answers are
+/// removed once the panel closes.
 async fn end_turn_no_answer(app: &mut App) {
-    let AppMode::Question { session_id, .. } = &app.mode else {
+    let AppMode::Question {
+        attachment_state,
+        session_id,
+        ..
+    } = &app.mode
+    else {
         return;
     };
 
+    let attachments = attachment_state.clone().into_attachments();
     let session_id = session_id.clone();
     if app.dismiss_graph_questions(&session_id) {
+        app.cleanup_prompt_attachments(attachments).await;
+
         return;
     }
     let timestamp_seconds =
@@ -803,6 +963,7 @@ async fn end_turn_no_answer(app: &mut App) {
         session_id,
         scroll_offset: None,
     };
+    app.cleanup_prompt_attachments(attachments).await;
 }
 
 /// Writes one response into question mode and returns completion payload when
@@ -810,6 +971,7 @@ async fn end_turn_no_answer(app: &mut App) {
 fn store_question_response(app: &mut App, response: String) -> Option<CompletedQuestionResponse> {
     let AppMode::Question {
         at_mention_state,
+        attachment_state,
         current_index,
         input,
         questions,
@@ -834,6 +996,7 @@ fn store_question_response(app: &mut App, response: String) -> Option<CompletedQ
     }
 
     Some(CompletedQuestionResponse {
+        attachment_state: std::mem::take(attachment_state),
         questions: std::mem::take(questions),
         responses: std::mem::take(responses),
         scroll_offset: *scroll_offset,
@@ -862,6 +1025,18 @@ fn structured_question_answers(
         .map(|(question, answer)| QuestionAnswer {
             answer: answer.clone(),
             question: question.text.clone(),
+        })
+        .collect()
+}
+
+/// Converts the images referenced by submitted answers into reply-turn
+/// attachments, in answer order.
+fn turn_prompt_attachments(attachments: &[PromptAttachment]) -> Vec<TurnPromptAttachment> {
+    attachments
+        .iter()
+        .map(|attachment| TurnPromptAttachment {
+            local_image_path: attachment.local_image_path.clone(),
+            placeholder: attachment.placeholder.clone(),
         })
         .collect()
 }

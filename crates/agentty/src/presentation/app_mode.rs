@@ -10,10 +10,11 @@ use super::help_action::{
     ViewSessionState,
 };
 use super::prompt::{
-    PromptAtMentionState, PromptAttachmentState, PromptHistoryState, PromptSlashState,
+    PromptAtMentionState, PromptAttachment, PromptAttachmentState, PromptHistoryState,
+    PromptSlashState,
 };
 use crate::domain::input::InputState;
-use crate::domain::question::QuestionItem;
+use crate::domain::question::{QuestionAttachmentState, QuestionItem};
 use crate::domain::session::{
     PublishBranchAction, ReviewWatchToggle, Session, SessionId, Status,
     can_reply_to_session_in_stack,
@@ -615,6 +616,8 @@ pub struct ViewportRect {
 pub struct QuestionModeSnapshot {
     /// Restorable file and directory mention dropdown state.
     pub at_mention_state: Option<PromptAtMentionState>,
+    /// Pasted images owned by submitted answers and the current input.
+    pub attachment_state: QuestionAttachmentState,
     /// Active question index.
     pub current_index: usize,
     /// Editable response input and cursor state.
@@ -637,6 +640,7 @@ impl QuestionModeSnapshot {
     pub fn into_question_mode(self) -> AppMode {
         AppMode::Question {
             at_mention_state: self.at_mention_state,
+            attachment_state: self.attachment_state,
             current_index: self.current_index,
             focus: ChatFocus::Input,
             input: self.input,
@@ -931,6 +935,9 @@ pub enum AppMode {
     Question {
         /// File/directory mention dropdown state for the free-text input.
         at_mention_state: Option<PromptAtMentionState>,
+        /// Pasted images referenced by `[Image #n]` placeholders in submitted
+        /// answers and the free-text input.
+        attachment_state: QuestionAttachmentState,
         /// Session receiving the follow-up clarification reply.
         session_id: SessionId,
         /// Ordered clarification prompts emitted by the model.
@@ -961,6 +968,31 @@ pub enum AppMode {
 }
 
 impl AppMode {
+    /// Consumes the mode and returns the pasted images owned by its prompt
+    /// composer or clarification answers, for cleanup.
+    ///
+    /// Diff modes return the images of the composer or question state saved
+    /// in their restore target.
+    #[must_use]
+    pub fn into_input_attachments(self) -> Vec<PromptAttachment> {
+        match self {
+            Self::Prompt {
+                attachment_state, ..
+            } => attachment_state
+                .attachments
+                .into_iter()
+                .chain(attachment_state.archived_attachments)
+                .collect(),
+            Self::Question {
+                attachment_state, ..
+            } => attachment_state.into_attachments(),
+            Self::Diff { restore, .. } | Self::DiffLoading { restore, .. } => {
+                restore.map_or_default(|restore| restore.into_mode().into_input_attachments())
+            }
+            _ => Vec::new(),
+        }
+    }
+
     /// Returns the open `@`-mention lookup of the prompt composer, question
     /// answer, or diff comment currently being edited.
     pub(crate) fn active_at_mention_mut(&mut self) -> Option<ActiveAtMention<'_>> {

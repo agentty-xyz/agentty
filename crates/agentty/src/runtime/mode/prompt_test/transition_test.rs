@@ -6,8 +6,8 @@ use crossterm::event;
 use crossterm::event::{KeyCode, KeyEvent};
 
 use super::super::{
-    PromptEffect, apply_prompt_delete_to_mode, apply_prompt_paste_to_mode,
-    clear_prompt_slash_input, dismiss_at_mention, exit_to_list_saving_progress, is_plain_char_key,
+    PromptEffect, apply_prompt_input_to_mode, apply_prompt_paste_to_mode, clear_prompt_slash_input,
+    dismiss_at_mention, exit_to_list_saving_progress, is_plain_char_key,
     mark_prompt_image_paste_pending, move_at_mention_selection_down, move_at_mention_selection_up,
     move_prompt_slash_selection, open_chatgpt_sign_in, prompt_context, prompt_image_paste_number,
     reduce_prompt_submit, reduce_prompt_vertical_key, restore_prompt_composer, select_at_mention,
@@ -24,7 +24,7 @@ use crate::app::prompt_intent::PromptSessionMode;
 use crate::domain::agent::{AgentKind, AgentModel, AgentSelection};
 use crate::domain::composer::PromptAttachment;
 use crate::domain::file_entry::FileEntry;
-use crate::domain::input::InputState;
+use crate::domain::input::{InputCommand, InputState};
 use crate::infra::fs;
 use crate::presentation::app_mode::{AppMode, ChatFocus};
 use crate::presentation::prompt::{
@@ -487,7 +487,7 @@ fn prompt_reducers_leave_other_modes_unchanged() {
 
     // Act
     let paste_cleanup = apply_prompt_paste_to_mode(&mut mode, "pasted");
-    let delete_cleanup = apply_prompt_delete_to_mode(&mut mode, 0, 1);
+    let delete_cleanup = apply_prompt_input_to_mode(&mut mode, InputCommand::DeleteBackward);
     let slash_cleanup = clear_prompt_slash_input(&mut mode);
     let attachment_cleanup = take_prompt_attachment_cleanup(&mut mode);
     let image_paste_number = prompt_image_paste_number(&mode);

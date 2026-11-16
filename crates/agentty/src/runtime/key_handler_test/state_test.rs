@@ -8,6 +8,7 @@ use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
 use super::super::{handle_key_event, handle_launch_configuration_selector_key};
 use super::support::FailingSizeBackend;
 use crate::domain::input::InputState;
+use crate::domain::question::QuestionAttachmentState;
 use crate::presentation::app_mode::{
     AppMode, ChatFocus, ConfirmationIntent, ConfirmationViewMode, DiffFocus, DiffLineCommentAnchor,
     DiffLineCommentTarget, DiffLineComments, DiffLineSide, DiffPreview, DiffRestoreTarget,
@@ -405,6 +406,7 @@ async fn failed_terminal_queries_surface_without_requesting_redraw() {
     let (mut app, _base_dir) = crate::test_support::new_test_app().await;
     app.mode = AppMode::Question {
         at_mention_state: None,
+        attachment_state: QuestionAttachmentState::default(),
         current_index: 0,
         focus: ChatFocus::Input,
         input: InputState::default(),

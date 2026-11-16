@@ -351,24 +351,25 @@ When predefined options are shown:
 After moving above or below the predefined option list, or when no predefined options
 exist:
 
-| Key                              | Action                               |
-| -------------------------------- | ------------------------------------ |
-| `Enter`                          | Send response; blank means no answer |
-| `Alt+Enter` / `Shift+Enter`      | Insert newline                       |
-| `Ctrl+J` / `Ctrl+M`              | Insert newline (terminal fallback)   |
-| `Ctrl+C`                         | End turn or close graph panel        |
-| `Left` / `Right` / `Up` / `Down` | Move cursor                          |
-| `Backspace` / `Delete`           | Delete character                     |
-| `Home` / `End`                   | Move to start / end                  |
-| `Cmd+Left` / `Cmd+Right`         | Move to start / end of current line  |
-| `Option+Left` / `Option+Right`   | Move to previous / next word         |
-| `Option+Backspace` / `Ctrl+W`    | Delete previous word                 |
-| `Cmd+Backspace`                  | Delete current line                  |
-| `Ctrl+K`                         | Delete to end of current line        |
-| `Ctrl+D`                         | Delete character forward             |
-| `Ctrl+Z`                         | Undo                                 |
-| `Ctrl+Y` / `Ctrl+Shift+Z`        | Redo                                 |
-| `Tab`                            | Focus chat output for scrolling      |
+| Key                                 | Action                               |
+| ----------------------------------- | ------------------------------------ |
+| `Enter`                             | Send response; blank means no answer |
+| `Alt+Enter` / `Shift+Enter`         | Insert newline                       |
+| `Ctrl+J` / `Ctrl+M`                 | Insert newline (terminal fallback)   |
+| `Ctrl+V` / `Ctrl+Shift+V` / `Alt+V` | Paste image as `[Image #n]`          |
+| `Ctrl+C`                            | End turn or close graph panel        |
+| `Left` / `Right` / `Up` / `Down`    | Move cursor                          |
+| `Backspace` / `Delete`              | Delete character                     |
+| `Home` / `End`                      | Move to start / end                  |
+| `Cmd+Left` / `Cmd+Right`            | Move to start / end of current line  |
+| `Option+Left` / `Option+Right`      | Move to previous / next word         |
+| `Option+Backspace` / `Ctrl+W`       | Delete previous word                 |
+| `Cmd+Backspace`                     | Delete current line                  |
+| `Ctrl+K`                            | Delete to end of current line        |
+| `Ctrl+D`                            | Delete character forward             |
+| `Ctrl+Z`                            | Undo                                 |
+| `Ctrl+Y` / `Ctrl+Shift+Z`           | Redo                                 |
+| `Tab`                               | Focus chat output for scrolling      |
 
 Type `@` and a filename fragment to look up files. Arrows select a match; `Tab` /
 `Enter` insert it without sending the answer. With no matches, those keys close the

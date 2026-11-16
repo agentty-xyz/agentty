@@ -16,6 +16,7 @@ use super::{
 use crate::app::App;
 use crate::app::session_state::SessionGitStatus;
 use crate::domain::input::InputState;
+use crate::domain::question::QuestionAttachmentState;
 use crate::domain::session::{SessionId, Status};
 use crate::presentation::app_mode::{AppMode, ChatFocus};
 use crate::presentation::prompt::{
@@ -485,6 +486,7 @@ async fn test_scroll_batch_respects_prompt_and_question_focus() {
     };
     let question = AppMode::Question {
         at_mention_state: None,
+        attachment_state: QuestionAttachmentState::default(),
         current_index: 0,
         focus: ChatFocus::Chat,
         input: InputState::default(),

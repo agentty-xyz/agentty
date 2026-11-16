@@ -18,7 +18,7 @@ use crate::app::graph_proposal_reply::tests::{
     apply_next_command, clarification_state, mark_deciding, pending_app, stored, wait_for_message,
 };
 use crate::domain::input::InputState;
-use crate::domain::question::QuestionProgress;
+use crate::domain::question::{QuestionAttachmentState, QuestionProgress};
 use crate::domain::session::{SessionId, Status};
 use crate::presentation::app_mode::AppMode;
 
@@ -47,7 +47,12 @@ async fn node_questions_open_the_panel_and_answers_reach_the_asking_execution() 
     let active = app.graph_questions.active_target("sess").cloned();
     let panel_questions = question_panel(&app);
     let outcome = app
-        .answer_graph_questions(&session(), &target, &answers("Which update?", "Docs"))
+        .answer_graph_questions(
+            &session(),
+            &target,
+            &answers("Which update?", "Docs"),
+            Vec::new(),
+        )
         .await;
 
     // Assert
@@ -196,10 +201,10 @@ async fn stale_node_answers_release_the_panel_target_and_failed_lookups_keep_it(
 
     // Act
     let answered = app
-        .answer_graph_questions(&session(), &target, &answers)
+        .answer_graph_questions(&session(), &target, &answers, Vec::new())
         .await;
     let failed = failing_app
-        .answer_graph_questions(&session(), &target, &answers)
+        .answer_graph_questions(&session(), &target, &answers, Vec::new())
         .await;
 
     // Assert
@@ -274,10 +279,10 @@ async fn proposal_answers_revise_the_inspected_version_only() {
 
     // Act
     let stale_outcome = app
-        .answer_graph_questions(&session(), &stale, &answers)
+        .answer_graph_questions(&session(), &stale, &answers, Vec::new())
         .await;
     let outcome = app
-        .answer_graph_questions(&session(), &inspected, &answers)
+        .answer_graph_questions(&session(), &inspected, &answers, Vec::new())
         .await;
     apply_next_command(&mut app).await;
     wait_for_message(&app, "Generating graph proposal v2…").await;
@@ -309,7 +314,12 @@ async fn failed_proposal_lookup_rejects_answers() {
 
     // Act
     let outcome = app
-        .answer_graph_questions(&session(), &target, &answers("Which target?", "Local"))
+        .answer_graph_questions(
+            &session(),
+            &target,
+            &answers("Which target?", "Local"),
+            Vec::new(),
+        )
         .await;
 
     // Assert
@@ -388,6 +398,7 @@ fn save_first_answer(app: &mut App, target: Option<GraphQuestionTarget>) {
     app.question_progress.insert(
         session(),
         QuestionProgress {
+            attachment_state: QuestionAttachmentState::default(),
             current_index: 1,
             input: InputState::default(),
             responses: vec!["First answer".into()],
