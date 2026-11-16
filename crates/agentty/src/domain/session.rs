@@ -474,12 +474,13 @@ impl Session {
     /// A started review-request publish replaces its queued notice with a
     /// loading one while the session stays in `Review`, so it counts until it
     /// finishes; pausing the worker for a model switch would otherwise block
-    /// on it.
+    /// on it. Queued setting changes are not worker work: they wait for it.
     pub(crate) fn has_pending_worker_work(&self) -> bool {
         self.queues_chat_messages()
             || !self.queued_messages.is_empty()
             || self.transient_messages.messages().iter().any(|message| {
-                matches!(message.body, TransientMessageBody::Queued(_))
+                (matches!(message.body, TransientMessageBody::Queued(_))
+                    && message.slot != TransientMessageSlot::SettingsQueue)
                     || (message.slot == TransientMessageSlot::BranchPublish
                         && message.body.is_pending_indicator())
             })

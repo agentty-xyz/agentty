@@ -287,9 +287,9 @@ restart.
 While work runs, `/` offers only `/mode`, `/model`, `/reasoning`, `/style`, and `/fast`.
 Applying a setting closes the composer and returns to the session view, like a queued
 message. `/model` and `/fast` changes wait until the active work and every queued
-message and action finish, so the queue runs on the old model. A `[Settings]` line
-confirms the wait; choosing the current value cancels it. Pending changes are not kept
-across an Agentty restart. A failed save keeps the old selection.
+message and action finish, so the queue runs on the old model. The pending change
+appears as the last queued action; choosing the current value cancels it. Pending
+changes are not kept across an Agentty restart. A failed save keeps the old selection.
 
 While composing, press `Tab` to focus and scroll chat; press it again to return. From
 chat focus, `d` previews changes and `q` returns to the list, preserving the draft.

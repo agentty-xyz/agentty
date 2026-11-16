@@ -7,9 +7,9 @@ use ag_forge::{
 use ag_session::test_support as model_fixture;
 
 use super::{
-    MAX_AUTO_ADDRESS_REVIEW_ITERATIONS, PromptApplyOutcome, PromptModelChange, PromptSessionMode,
-    PromptSubmission, PromptWorkflowOutcome, ReviewCommentResolutionOutcome,
-    build_resolve_review_comment_prompt,
+    DeferredSessionSettings, MAX_AUTO_ADDRESS_REVIEW_ITERATIONS, PromptApplyOutcome,
+    PromptModelChange, PromptSessionMode, PromptSubmission, PromptWorkflowOutcome,
+    ReviewCommentResolutionOutcome, build_resolve_review_comment_prompt,
 };
 use crate::app::ReviewCacheEntry;
 use crate::app::message_admission::MessageIntent;
@@ -269,7 +269,7 @@ async fn busy_session_defers_model_switch_until_its_worker_is_idle() {
         .await;
     app.apply_deferred_session_settings().await;
     let agent_while_busy = session_agent(&app, &session_id);
-    let transcript_while_busy = handle_transcript_text(&app, &session_id);
+    let queued_settings_while_busy = queued_settings_label(&app, &session_id);
     set_session_status(&mut app, &session_id, Status::Review);
     app.sessions
         .start_branch_publish(&session_id, "Publishing review request".to_string());
@@ -289,12 +289,20 @@ async fn busy_session_defers_model_switch_until_its_worker_is_idle() {
         agent_while_publishing,
         Some(model_fixture::codex_selection())
     );
-    assert!(transcript_while_busy.contains(&format!(
-        "[Settings] Switching to `{}` after the current turn and queued messages finish.",
-        selected_agent.model().as_str()
-    )));
+    assert_eq!(
+        queued_settings_while_busy,
+        Some(format!(
+            "settings — switch to model {} after queued work",
+            selected_agent.model().as_str()
+        ))
+    );
+    assert!(
+        !handle_transcript_text(&app, &session_id).contains("[Settings]"),
+        "deferred settings belong in the action queue, not the transcript"
+    );
     assert_eq!(session_agent(&app, &session_id), Some(selected_agent));
     assert!(app.deferred_session_settings.is_empty());
+    assert_eq!(queued_settings_label(&app, &session_id), None);
 }
 
 #[tokio::test]
@@ -316,10 +324,7 @@ async fn choosing_current_model_cancels_deferred_model_switch() {
     // Assert
     assert_eq!(model_change, PromptModelChange::Deferred);
     assert!(app.deferred_session_settings.is_empty());
-    assert!(handle_transcript_text(&app, &session_id).contains(&format!(
-        "[Settings] Keeping `{}`.",
-        current_agent.model().as_str()
-    )));
+    assert_eq!(queued_settings_label(&app, &session_id), None);
 }
 
 #[tokio::test]
@@ -333,16 +338,17 @@ async fn toggling_speed_mode_twice_while_busy_cancels_the_deferred_change() {
         .deferred_session_settings
         .get(&session_id)
         .and_then(|settings| settings.speed_mode);
+    let pending_queued_settings = queued_settings_label(&app, &session_id);
     app.toggle_prompt_session_speed_mode(&session_id).await;
-    let transcript = handle_transcript_text(&app, &session_id);
 
     // Assert
     assert_eq!(pending_speed_mode, Some(SpeedMode::Fast));
+    assert_eq!(
+        pending_queued_settings.as_deref(),
+        Some("settings — switch to fast responses after queued work")
+    );
     assert!(app.deferred_session_settings.is_empty());
-    assert!(transcript.contains(
-        "[Settings] Switching to fast responses after the current turn and queued messages finish."
-    ));
-    assert!(transcript.contains("[Settings] Keeping normal responses."));
+    assert_eq!(queued_settings_label(&app, &session_id), None);
 }
 
 /// Ensures a deferred `/fast` on a model without Fast support reports an
@@ -412,6 +418,7 @@ async fn deferred_model_and_fast_mode_apply_in_selection_order() {
         .await;
     app.update_prompt_session_speed_mode(&session_id, SpeedMode::Fast)
         .await;
+    let queued_settings_while_busy = queued_settings_label(&app, &session_id);
     set_session_status(&mut app, &session_id, Status::Review);
 
     // Act
@@ -419,6 +426,14 @@ async fn deferred_model_and_fast_mode_apply_in_selection_order() {
     app.process_pending_app_events().await;
 
     // Assert
+    assert_eq!(
+        queued_settings_while_busy,
+        Some(format!(
+            "settings — switch to model {} and fast responses after queued work",
+            model_fixture::codex_selection().model().as_str()
+        ))
+    );
+    assert_eq!(queued_settings_label(&app, &session_id), None);
     assert_eq!(
         app.sessions
             .session_for_id(&session_id)
@@ -592,10 +607,44 @@ async fn finished_session_discards_deferred_model_switch() {
 
     // Assert
     assert!(app.deferred_session_settings.is_empty());
+    assert_eq!(queued_settings_label(&app, &session_id), None);
     assert_eq!(
         session_agent(&app, &session_id),
         Some(model_fixture::codex_selection())
     );
+}
+
+#[test]
+fn deferred_settings_queued_label_names_each_pending_change() {
+    // Arrange
+    let cases = [
+        (DeferredSessionSettings::default(), None),
+        (
+            DeferredSessionSettings {
+                agent: None,
+                speed_mode: Some(SpeedMode::Normal),
+            },
+            Some("settings — switch to normal responses after queued work".to_string()),
+        ),
+        (
+            DeferredSessionSettings {
+                agent: Some(model_fixture::codex_selection()),
+                speed_mode: None,
+            },
+            Some(format!(
+                "settings — switch to model {} after queued work",
+                model_fixture::codex_selection().model().as_str()
+            )),
+        ),
+    ];
+
+    for (settings, expected_label) in cases {
+        // Act
+        let label = settings.queued_label();
+
+        // Assert
+        assert_eq!(label, expected_label);
+    }
 }
 
 /// Creates one session on `session_agent` whose worker runs a turn.
@@ -631,6 +680,18 @@ fn session_agent(app: &crate::app::App, session_id: &SessionId) -> Option<AgentS
     app.sessions
         .session_for_id(session_id)
         .map(|session| session.agent)
+}
+
+/// Returns the queued-settings row label shown in one session's output.
+fn queued_settings_label(app: &crate::app::App, session_id: &SessionId) -> Option<String> {
+    app.sessions
+        .session_for_id(session_id)
+        .and_then(|session| {
+            session
+                .transient_messages
+                .get(TransientMessageSlot::SettingsQueue)
+        })
+        .map(|message| message.body.text().to_string())
 }
 
 /// Returns the live transcript text held by one session's runtime handles.

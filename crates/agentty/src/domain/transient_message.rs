@@ -25,6 +25,9 @@ pub(crate) enum TransientMessageSlot {
     BranchPublish,
     /// Session sync waiting behind the active worker command.
     SyncQueue,
+    /// Model and response-speed changes waiting until the session worker
+    /// finishes every accepted turn and action.
+    SettingsQueue,
     /// Published-branch auto-push progress replaced by its durable result.
     PublishedBranchSync,
 }
