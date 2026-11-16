@@ -166,7 +166,7 @@ pub(crate) enum Call {
 
 impl Call {
     /// Every method name the server answers.
-    pub(crate) const METHODS: [&'static str; 7] = [
+    pub(crate) const METHODS: [&str; 7] = [
         "session/create",
         "session/resume",
         "run/start",
