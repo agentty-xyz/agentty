@@ -17,7 +17,7 @@ use crate::context::{
 use crate::context_budget_fixture::unbounded_context_budget;
 use crate::error::{ErrorKind, HarnessError};
 use crate::file_system::MockFileSystem;
-use crate::harness::{Harness, HarnessBuildError};
+use crate::harness::{DEFAULT_MAX_HISTORY_BYTES, Harness, HarnessBuildError, HistoryBudget};
 use crate::lifecycle::LifecycleEvent;
 use crate::memory_store::MemoryStore;
 use crate::model::{MockModel, Model, ModelProfile, ModelResponse, ReasoningEffort};
@@ -351,7 +351,7 @@ async fn build_applies_every_configured_option() {
             .expect("configured filesystem"),
         PathBuf::from(SENTINEL_PATH)
     );
-    assert_eq!(config.max_history_bytes, 64);
+    assert_eq!(config.history_budget, HistoryBudget::Fixed(64));
     assert_eq!(config.model_reasoning_effort, Some(ReasoningEffort::High));
     assert_eq!(
         config
@@ -401,6 +401,71 @@ fn sqlite_path_replaces_an_earlier_store() {
         Some(PathBuf::from("sessions.db"))
     );
     assert!(harness.inner.store.is_none());
+}
+
+#[tokio::test]
+async fn declared_context_window_sets_the_history_budget_of_new_sessions() {
+    // Arrange
+    let harness = Harness::builder()
+        .model(Arc::new(profiled_model(Some(declared_profile()))))
+        .store(Arc::new(MemoryStore::new()))
+        .build()
+        .expect("store-backed harness should build");
+
+    // Act
+    let session = harness
+        .session("windowed", object_schema())
+        .system_prompt("be brief")
+        .create()
+        .await
+        .expect("session should be created");
+
+    // Assert
+    // The 10,000-token window keeps 1,000 reserved, 77 request tokens, and 6
+    // for the system prompt; the other 8,917 hold four bytes each.
+    assert_eq!(session.history.max_bytes, 35_668);
+}
+
+#[tokio::test]
+async fn undeclared_context_window_keeps_the_default_history_budget() {
+    // Arrange
+    let harness = Harness::builder()
+        .model(Arc::new(profiled_model(None)))
+        .context_budget(unbounded_context_budget())
+        .store(Arc::new(MemoryStore::new()))
+        .build()
+        .expect("budgeted harness should build");
+
+    // Act
+    let session = harness
+        .session("unprofiled", object_schema())
+        .create()
+        .await
+        .expect("session should be created");
+
+    // Assert
+    assert_eq!(session.history.max_bytes, DEFAULT_MAX_HISTORY_BYTES);
+}
+
+#[tokio::test]
+async fn byte_blind_estimator_keeps_the_default_history_budget() {
+    // Arrange
+    let harness = Harness::builder()
+        .model(Arc::new(profiled_model(Some(declared_profile()))))
+        .context_estimator(HeuristicContextEstimator::DEFAULT.with_messages(0, 4))
+        .store(Arc::new(MemoryStore::new()))
+        .build()
+        .expect("store-backed harness should build");
+
+    // Act
+    let session = harness
+        .session("byte-blind", object_schema())
+        .create()
+        .await
+        .expect("session should be created");
+
+    // Assert
+    assert_eq!(session.history.max_bytes, DEFAULT_MAX_HISTORY_BYTES);
 }
 
 #[cfg(feature = "sqlite")]

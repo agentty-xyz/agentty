@@ -186,7 +186,9 @@ pub(crate) const ELIDED_SOURCE_LIMIT_FACTOR: usize = 8;
 /// it. With [`ContextSummaryPolicy::Enabled`], earlier tool rounds may instead
 /// be replaced by a model-written summary before those steps.
 /// The stored byte-based replay budget still bounds how much history is
-/// loaded. Provider-reported input tokens calibrate the weights against this
+/// loaded; for a model with a declared context window, new sessions derive it
+/// from this budget (see [`crate::Harness::max_history_bytes`]).
+/// Provider-reported input tokens calibrate the weights against this
 /// budget in memory; until a provider reports usage, requests use 90% of the
 /// capacity left after reserved output.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -987,21 +989,14 @@ pub(crate) fn admit_mandatory_content(
     input: &TurnInput,
     options: &TurnOptions,
 ) -> Result<u64, TurnError> {
+    let user_message = input.clone().into_user_message();
     let mut required = budget
         .reserved_output_weight()
-        .saturating_add(estimator.request_weight(options.schema()));
-    if let Some(system_prompt) = system_prompt {
-        let message = ModelMessage::System(system_prompt.to_string());
-        required = required.saturating_add(estimator.message_weight(&message));
-    }
-    let user_message = input.clone().into_user_message();
-    required = required.saturating_add(estimator.message_weight(&user_message));
+        .saturating_add(instruction_weight(estimator, system_prompt, options))
+        .saturating_add(estimator.message_weight(&user_message));
     if let Some(instructions) = options.instructions() {
         let message = ModelMessage::Instructions(instructions.to_string());
         required = required.saturating_add(estimator.message_weight(&message));
-    }
-    for tool in advertised_tools(options) {
-        required = required.saturating_add(estimator.tool_definition_weight(&tool));
     }
     let budget_weight = budget.max_request_weight().get();
     if required > budget_weight {
@@ -1012,6 +1007,64 @@ pub(crate) fn admit_mandatory_content(
     }
 
     Ok(budget_weight - required)
+}
+
+/// Payload bytes of the probe message whose weight measures how much
+/// weight an estimator gives each further byte of history.
+const HISTORY_RATE_PROBE_BYTES: u16 = 10_000;
+
+/// Derives the retained-byte budget of a new session's history from the
+/// model's request budget, or returns `None` when `estimator` gives payload
+/// bytes no weight, so weight cannot convert to bytes.
+///
+/// The history may use the request capacity left after the reserved output,
+/// the fixed request cost, the system prompt, and the tool definitions that
+/// `options` advertise. That weight converts to bytes at the estimator's
+/// marginal message rate, measured on a probe message, and saturates at
+/// `i64::MAX` bytes, the most a store records. Fixed parts that fill the
+/// capacity leave a minimal one-byte budget, which retains no turn; those
+/// turns then fail admission with [`TurnError::ContextBudgetExceeded`].
+pub(crate) fn window_history_bytes(
+    estimator: &dyn ContextEstimator,
+    budget: ContextBudget,
+    system_prompt: Option<&str>,
+    options: &TurnOptions,
+) -> Option<usize> {
+    let empty = estimator.message_weight(&ModelMessage::User(String::new()));
+    let probe = ModelMessage::User("x".repeat(usize::from(HISTORY_RATE_PROBE_BYTES)));
+    let probe_weight = estimator.message_weight(&probe).saturating_sub(empty);
+    if probe_weight == 0 {
+        return None;
+    }
+    let fixed = budget
+        .reserved_output_weight()
+        .saturating_add(instruction_weight(estimator, system_prompt, options));
+    let history_weight = budget.max_request_weight().get().saturating_sub(fixed);
+    let bytes = u128::from(history_weight).saturating_mul(u128::from(HISTORY_RATE_PROBE_BYTES))
+        / u128::from(probe_weight);
+    let bytes = bytes.clamp(1, u128::from(i64::MAX.unsigned_abs()));
+
+    Some(usize::try_from(bytes).unwrap_or(usize::MAX))
+}
+
+/// Weighs what every request carries besides history and the current
+/// input: the fixed request cost, the system prompt, and the tool
+/// definitions `options` advertise.
+fn instruction_weight(
+    estimator: &dyn ContextEstimator,
+    system_prompt: Option<&str>,
+    options: &TurnOptions,
+) -> u64 {
+    let mut weight = estimator.request_weight(options.schema());
+    if let Some(system_prompt) = system_prompt {
+        let message = ModelMessage::System(system_prompt.to_string());
+        weight = weight.saturating_add(estimator.message_weight(&message));
+    }
+    for tool in advertised_tools(options) {
+        weight = weight.saturating_add(estimator.tool_definition_weight(&tool));
+    }
+
+    weight
 }
 
 /// Monotonic record of how earlier requests of one turn were reduced, with

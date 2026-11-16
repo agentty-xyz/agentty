@@ -193,6 +193,9 @@ the cap reset on `switch_model` or estimator replacement. `TurnReport` and
   elides older turns only when they outgrow the byte or budget limits. Boundaries only
   advance, so the next turn's first request usually repeats the previous request's
   prefix. Each `TurnReport` carries a `HistoryActivity` describing what was replayed.
+- Unless the host sets the history byte limit, a session created for a model with a
+  declared context window stores what that window leaves after the fixed request parts,
+  at the estimator's rate and at most 256 KiB; other sessions store 256 KiB.
 
 ## Cancellation and settlement
 

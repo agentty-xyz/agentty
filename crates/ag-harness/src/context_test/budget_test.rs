@@ -5,11 +5,11 @@ use std::time::Duration;
 
 use serde_json::json;
 
-use super::support::{FixedEstimator, budget, read_call, result};
+use super::support::{ByteEstimator, FixedEstimator, budget, read_call, result};
 use crate::bash::{BashConfig, Enforcement};
 use crate::context::{
     ContextBudgetError, ContextEstimator, HeuristicContextEstimator, HistoryTurn, TurnStop,
-    admit_mandatory_content, advertised_tools,
+    admit_mandatory_content, advertised_tools, window_history_bytes,
 };
 use crate::input::{ImageContent, ImageMediaType, InputBlock, TurnInput};
 use crate::model::ModelMessage;
@@ -262,6 +262,73 @@ fn mandatory_content_admission_accounts_for_every_component() {
     // Reserved 5 + system 7 + input message 7 + two tool definitions 4 = 23
     // of 25.
     assert_eq!(remaining.expect("fits"), 2);
+}
+
+#[test]
+fn window_history_bytes_convert_the_weight_left_after_fixed_parts() {
+    // Arrange
+    let estimator = HeuristicContextEstimator::DEFAULT
+        .with_messages(500, 4)
+        .with_request_tokens(3);
+    let budget = budget(1_000).with_reserved_output(100).expect("reserve");
+    let options = options_with(ToolPolicy::default().allow(Tool::Read).allow(Tool::Write));
+    let tools_weight: u64 = advertised_tools(&options)
+        .iter()
+        .map(|tool| estimator.tool_definition_weight(tool))
+        .sum();
+
+    // Act
+    let bytes = window_history_bytes(&estimator, budget, Some("system"), &options);
+
+    // Assert
+    // Reserved 100, request 3, and the six-byte system prompt 3 + 4 leave the
+    // rest for history at two bytes per weight unit.
+    let history_weight = 1_000 - 100 - 3 - 7 - tools_weight;
+    let expected = usize::try_from(history_weight * 2).expect("small budget");
+    assert_eq!(bytes, Some(expected));
+}
+
+#[test]
+fn window_history_bytes_need_an_estimator_that_weighs_bytes() {
+    // Arrange
+    let options = options_with(ToolPolicy::default());
+
+    // Act
+    let bytes = window_history_bytes(&FixedEstimator, budget(1_000), None, &options);
+
+    // Assert
+    assert_eq!(bytes, None);
+}
+
+#[test]
+fn window_history_bytes_stay_minimal_when_fixed_parts_fill_the_window() {
+    // Arrange
+    let budget = budget(10).with_reserved_output(9).expect("reserve");
+    let options = options_with(ToolPolicy::default());
+
+    // Act
+    let bytes = window_history_bytes(
+        &HeuristicContextEstimator::DEFAULT,
+        budget,
+        Some("a system prompt longer than the window"),
+        &options,
+    );
+
+    // Assert
+    assert_eq!(bytes, Some(1));
+}
+
+#[test]
+fn window_history_bytes_saturate_at_the_stored_maximum() {
+    // Arrange
+    let options = options_with(ToolPolicy::default());
+
+    // Act
+    let bytes = window_history_bytes(&ByteEstimator, budget(u64::MAX), None, &options);
+
+    // Assert
+    let expected = usize::try_from(i64::MAX).expect("64-bit usize");
+    assert_eq!(bytes, Some(expected));
 }
 
 #[test]
