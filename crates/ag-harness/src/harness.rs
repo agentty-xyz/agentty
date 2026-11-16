@@ -16,9 +16,9 @@ use std::time::Instant;
 use serde_json::json;
 use sha2::{Digest, Sha256};
 use thiserror::Error;
-use tokio::sync::Semaphore;
 #[cfg(feature = "sqlite")]
 use tokio::sync::OnceCell;
+use tokio::sync::Semaphore;
 
 use crate::budget::{BudgetLedger, Unlimited};
 use crate::calibration::ContextCalibration;
@@ -87,8 +87,9 @@ impl Session {
     /// registration. Historical
     /// provider reasoning is not portable and causes an explicit rejection.
     /// A registered model has no prices, so later runs report no
-    /// [`crate::Cost`] and their turns count as unpriced, and no catalog
-    /// concurrency cap, so later requests no longer take its permits.
+    /// [`crate::Cost`] and their turns count as unpriced, no catalog
+    /// concurrency cap, so later requests no longer take its permits, and
+    /// no cataloged maximum output for budget estimates.
     /// Ordinary completed messages and tool groups remain intact. Recovery
     /// lookup remains usable on stale handles; new execution requires a fresh
     /// handle.
@@ -115,6 +116,7 @@ impl Session {
         .await?;
         let config = self.harness.config_mut();
         config.concurrency = None;
+        config.max_output = None;
         config.model = registration.model();
         config.model_id = None;
         config.pricing = None;
@@ -1669,6 +1671,7 @@ impl Harness {
             events: None,
             file_system: &config.file_system,
             lifecycle: &config.lifecycle,
+            max_output: config.max_output,
             model: &config.model,
             model_reasoning_effort: config.model_reasoning_effort,
             options,
@@ -1742,10 +1745,13 @@ impl HarnessBuilder {
     }
 
     /// Draws every model request of every run, turn, and session of the
-    /// harness from `ledger`, which [`RunRequest::budget`] replaces for one
-    /// run; the default, [`Unlimited`], never refuses. Hand one
-    /// [`crate::budget::SharedBudget`] to several harnesses to cap their
-    /// total spend.
+    /// harness from `ledger`; the default, [`Unlimited`], never refuses.
+    /// Hand one [`crate::budget::SharedBudget`] to several harnesses to cap
+    /// their total spend.
+    ///
+    /// [`RunRequest::budget`] replaces `ledger` for one run: that run never
+    /// consults it, so it is a ceiling only for runs without their own
+    /// ledger. To stack caps, give the run a ledger that reserves from both.
     pub fn budget(mut self, ledger: Arc<dyn BudgetLedger>) -> Self {
         self.budget = Some(ledger);
 
@@ -1869,33 +1875,26 @@ impl HarnessBuilder {
     /// Returns a [`HarnessError`] of kind [`crate::ErrorKind::Config`]
     /// wrapping the failed [`HarnessBuildError`] check.
     pub fn build(self) -> Result<Harness, HarnessError> {
-        let (model, profile, model_id, cataloged_pricing, concurrency) =
-            match (self.model, self.catalog, self.model_selector) {
-                (Some(_), _, Some(_)) => {
-                    return Err(HarnessBuildError::ConflictingModelSelection.into());
-                }
-                (Some(model), _, None) => {
-                    let profile = model.profile();
+        let (model, profile, cataloged) = match (self.model, self.catalog, self.model_selector) {
+            (Some(_), _, Some(_)) => {
+                return Err(HarnessBuildError::ConflictingModelSelection.into());
+            }
+            (Some(model), _, None) => {
+                let profile = model.profile();
 
-                    (model, profile, None, None, None)
-                }
-                (None, Some(catalog), selector) => {
-                    let selector = selector.unwrap_or(ModelSelector::Role(Role::SMART));
-                    let handle = catalog
-                        .resolve(&selector)
-                        .map_err(HarnessBuildError::Catalog)?;
+                (model, profile, None)
+            }
+            (None, Some(catalog), selector) => {
+                let selector = selector.unwrap_or(ModelSelector::Role(Role::SMART));
+                let handle = catalog
+                    .resolve(&selector)
+                    .map_err(HarnessBuildError::Catalog)?;
 
-                    (
-                        handle.model(),
-                        handle.profile(),
-                        Some(handle.id().clone()),
-                        handle.spec().pricing(),
-                        handle.concurrency(),
-                    )
-                }
-                (None, None, Some(_)) => return Err(HarnessBuildError::CatalogRequired.into()),
-                (None, None, None) => return Err(HarnessBuildError::ModelRequired.into()),
-            };
+                (handle.model(), handle.profile(), Some(handle))
+            }
+            (None, None, Some(_)) => return Err(HarnessBuildError::CatalogRequired.into()),
+            (None, None, None) => return Err(HarnessBuildError::ModelRequired.into()),
+        };
         let repository_tool_allowed = [Tool::Bash, Tool::Read, Tool::Write]
             .into_iter()
             .any(|tool| self.policy.allows(tool));
@@ -1924,13 +1923,16 @@ impl HarnessBuilder {
         if let Some(budget) = self.budget {
             config.budget = budget;
         }
-        config.concurrency = concurrency;
+        if let Some(handle) = cataloged {
+            config.concurrency = handle.concurrency();
+            config.max_output = handle.spec().max_output();
+            config.model_id = Some(handle.id().clone());
+            config.pricing = handle.spec().pricing();
+        }
         config.context_summaries = self.context_summaries;
         config.lifecycle = self.lifecycle;
-        config.model_id = model_id;
         config.model_reasoning_effort = self.model_reasoning_effort;
         config.policy = self.policy;
-        config.pricing = cataloged_pricing;
         config.repository = self.repository;
 
         Ok(Harness::from_config(config))
@@ -2020,6 +2022,9 @@ struct HarnessConfig {
     file_system: Arc<dyn FileSystem>,
     lifecycle: LifecycleEmitter,
     max_history_bytes: usize,
+    /// Cataloged maximum output of [`Self::model`], which bounds each
+    /// request's budget estimate; `None` for any other model.
+    max_output: Option<u64>,
     model: Arc<dyn Model>,
     /// Catalog identifier of [`Self::model`] when the builder selected it
     /// from a [`ModelCatalog`].
@@ -2053,6 +2058,7 @@ impl HarnessConfig {
             file_system: Arc::new(LocalFileSystem),
             lifecycle: LifecycleEmitter::default(),
             max_history_bytes: DEFAULT_MAX_HISTORY_BYTES,
+            max_output: None,
             model,
             model_id: None,
             model_reasoning_effort: None,

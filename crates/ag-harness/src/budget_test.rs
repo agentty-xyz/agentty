@@ -1,9 +1,11 @@
 //! Budget ledger unit tests: `SharedBudget` admission against its caps,
-//! commits that replace estimates with actual spend, releases of dropped
-//! reservations, and the `Unlimited` default.
+//! waiting on open reservations, commits that replace estimates with actual
+//! spend, releases of dropped reservations, and the `Unlimited` default.
 
 use std::sync::Arc;
 use std::sync::atomic::{AtomicU64, Ordering};
+
+use tokio::task::{JoinHandle, yield_now};
 
 use crate::budget::{Balance, BudgetLedger, Estimate, Reservation, SharedBudget, Unlimited};
 use crate::catalog::PricingSource;
@@ -28,35 +30,51 @@ fn usage(input: u64, output: u64) -> Usage {
     }
 }
 
-#[tokio::test]
-async fn shared_budget_refuses_an_estimate_that_would_pass_its_cost_cap() {
-    // Arrange
-    let budget = SharedBudget::default().with_max_micro_usd(250);
-    let estimate = Estimate::new(10, 5).with_cost(cost(100));
+/// Starts reserving `estimate` on a clone of `budget` and lets the
+/// reservation run until it waits or finishes.
+async fn spawn_reserve(
+    budget: &SharedBudget,
+    estimate: Estimate,
+) -> JoinHandle<Result<Reservation, LimitKind>> {
+    let budget = budget.clone();
+    let task = tokio::spawn(async move { budget.reserve(estimate).await });
+    yield_now().await;
 
-    // Act
-    let first = budget.reserve(estimate).await;
-    let second = budget.reserve(estimate).await;
-    let third = budget.reserve(estimate).await;
-
-    // Assert
-    assert!(first.is_ok());
-    assert!(second.is_ok());
-    assert_eq!(third.err(), Some(LimitKind::Cost));
-    assert_eq!(budget.balance().reserved_micro_usd, 200);
-    assert_eq!(budget.balance().reserved_tokens, 30);
+    task
 }
 
 #[tokio::test]
-async fn shared_budget_refuses_an_estimate_that_would_pass_its_token_cap() {
+async fn shared_budget_refuses_an_estimate_that_passes_its_cost_cap_beside_spend() {
     // Arrange
-    let budget = SharedBudget::default()
+    let budget = SharedBudget::new().with_max_micro_usd(250);
+    let estimate = Estimate::new(10, 5).with_cost(cost(100));
+    for _ in 0..2 {
+        let reservation = budget.reserve(estimate).await.expect("estimate fits");
+        budget.commit(reservation, &usage(10, 5), Some(cost(100)));
+    }
+
+    // Act
+    let refused = budget.reserve(estimate).await;
+
+    // Assert
+    assert_eq!(refused.err(), Some(LimitKind::Cost));
+    let balance = budget.balance();
+    assert_eq!(
+        (balance.spent_micro_usd, balance.reserved_micro_usd),
+        (200, 0)
+    );
+}
+
+#[tokio::test]
+async fn shared_budget_refuses_an_estimate_that_passes_its_token_cap_alone() {
+    // Arrange
+    let budget = SharedBudget::new()
         .with_max_micro_usd(1_000)
         .with_max_tokens(20);
 
     // Act
     let admitted = budget.reserve(Estimate::new(10, 5)).await;
-    let refused = budget.reserve(Estimate::new(4, 2)).await;
+    let refused = budget.reserve(Estimate::new(15, 6)).await;
 
     // Assert
     assert_eq!(
@@ -69,7 +87,7 @@ async fn shared_budget_refuses_an_estimate_that_would_pass_its_token_cap() {
 #[tokio::test]
 async fn shared_budget_checks_cost_before_tokens() {
     // Arrange
-    let budget = SharedBudget::default()
+    let budget = SharedBudget::new()
         .with_max_micro_usd(50)
         .with_max_tokens(5);
 
@@ -82,10 +100,53 @@ async fn shared_budget_checks_cost_before_tokens() {
     assert_eq!(refused.err(), Some(LimitKind::Cost));
 }
 
+#[tokio::test(start_paused = true)]
+async fn a_reservation_blocked_only_by_open_reservations_waits_and_fits_once_they_settle_below_estimate()
+ {
+    // Arrange
+    let budget = SharedBudget::new().with_max_micro_usd(250);
+    let estimate = Estimate::new(10, 5).with_cost(cost(100));
+    let first = budget.reserve(estimate).await.expect("estimate fits");
+    let second = budget.reserve(estimate).await.expect("estimate fits");
+    let waiting = spawn_reserve(&budget, estimate).await;
+    let blocked = !waiting.is_finished();
+
+    // Act
+    budget.commit(first, &usage(1, 1), Some(cost(10)));
+    budget.commit(second, &usage(1, 1), Some(cost(10)));
+    let admitted = waiting.await.expect("reserve task");
+
+    // Assert
+    assert!(blocked, "open reservations keep the third request waiting");
+    assert!(admitted.is_ok(), "the settled requests left room for it");
+    let balance = budget.balance();
+    assert_eq!(
+        (balance.spent_micro_usd, balance.reserved_micro_usd),
+        (20, 100)
+    );
+}
+
+#[tokio::test(start_paused = true)]
+async fn a_waiting_reservation_is_refused_once_committed_spend_leaves_no_room() {
+    // Arrange
+    let budget = SharedBudget::new().with_max_tokens(20);
+    let open = budget.reserve(Estimate::new(10, 5)).await.expect("fits");
+    let waiting = spawn_reserve(&budget, Estimate::new(10, 0)).await;
+    let blocked = !waiting.is_finished();
+
+    // Act
+    budget.commit(open, &usage(12, 5), None);
+    let refused = waiting.await.expect("reserve task");
+
+    // Assert
+    assert!(blocked);
+    assert_eq!(refused.err(), Some(LimitKind::Tokens));
+}
+
 #[tokio::test]
 async fn commit_replaces_the_estimate_with_actual_spend() {
     // Arrange
-    let budget = SharedBudget::default().with_max_micro_usd(1_000);
+    let budget = SharedBudget::new().with_max_micro_usd(1_000);
     let reservation = budget
         .reserve(Estimate::new(100, 50).with_cost(cost(300)))
         .await
@@ -111,7 +172,7 @@ async fn commit_replaces_the_estimate_with_actual_spend() {
 #[tokio::test]
 async fn commit_without_reported_usage_charges_the_estimate() {
     // Arrange
-    let budget = SharedBudget::default();
+    let budget = SharedBudget::new();
     let reservation = budget
         .reserve(Estimate::new(100, 50).with_cost(cost(300)))
         .await
@@ -132,7 +193,7 @@ async fn commit_without_reported_usage_charges_the_estimate() {
 #[tokio::test]
 async fn unpriced_requests_cost_nothing_against_the_cost_cap() {
     // Arrange
-    let budget = SharedBudget::default().with_max_micro_usd(0);
+    let budget = SharedBudget::new().with_max_micro_usd(0);
 
     // Act
     let reservation = budget
@@ -146,29 +207,45 @@ async fn unpriced_requests_cost_nothing_against_the_cost_cap() {
     assert_eq!((balance.spent_micro_usd, balance.spent_tokens), (0, 150));
 }
 
-#[tokio::test]
-async fn dropping_a_reservation_releases_it() {
+#[tokio::test(start_paused = true)]
+async fn dropping_a_reservation_releases_it_and_wakes_waiting_reservations() {
     // Arrange
-    let budget = SharedBudget::default().with_max_tokens(15);
+    let budget = SharedBudget::new().with_max_tokens(15);
     let reservation = budget
         .reserve(Estimate::new(10, 5))
         .await
         .expect("estimate fits");
-    let refused = budget.reserve(Estimate::new(1, 0)).await;
+    let waiting = spawn_reserve(&budget, Estimate::new(10, 5)).await;
+    let blocked = !waiting.is_finished();
 
     // Act
     drop(reservation);
-    let admitted = budget.reserve(Estimate::new(10, 5)).await;
+    let admitted = waiting.await.expect("reserve task");
 
     // Assert
-    assert_eq!(refused.err(), Some(LimitKind::Tokens));
+    assert!(blocked);
     assert!(admitted.is_ok());
+    assert_eq!(budget.balance().spent_tokens, 0);
+}
+
+#[tokio::test]
+async fn clones_share_one_account() {
+    // Arrange
+    let budget = SharedBudget::new().with_max_tokens(100);
+    let clone = budget.clone();
+
+    // Act
+    let reservation = clone.reserve(Estimate::new(30, 10)).await.expect("fits");
+    clone.commit(reservation, &usage(30, 10), None);
+
+    // Assert
+    assert_eq!(budget.balance().spent_tokens, 40);
 }
 
 #[tokio::test]
 async fn committed_spend_exceeds_the_cap_only_by_overshoot_beyond_estimates() {
     // Arrange
-    let budget = SharedBudget::default().with_max_tokens(100);
+    let budget = SharedBudget::new().with_max_tokens(100);
     let mut overshoot = 0;
 
     // Act
@@ -189,20 +266,18 @@ async fn committed_spend_exceeds_the_cap_only_by_overshoot_beyond_estimates() {
 }
 
 #[tokio::test]
-async fn unlimited_admits_everything_and_records_nothing() {
+async fn unlimited_admits_saturating_estimates_while_others_are_open() {
     // Arrange
     let ledger = Unlimited;
+    let huge = Estimate::new(u64::MAX, u64::MAX).with_cost(cost(u64::MAX));
 
     // Act
-    let reservation = ledger
-        .reserve(Estimate::new(u64::MAX, u64::MAX).with_cost(cost(u64::MAX)))
-        .await
-        .expect("unlimited admits");
-    let estimate = reservation.estimate();
-    ledger.commit(reservation, &usage(1, 1), None);
+    let first = ledger.reserve(huge).await.expect("unlimited admits");
+    let second = ledger.reserve(huge).await.expect("unlimited admits again");
+    ledger.commit(first, &usage(1, 1), None);
 
     // Assert
-    assert_eq!(estimate.tokens(), u64::MAX);
+    assert_eq!(second.estimate().tokens(), u64::MAX);
 }
 
 #[test]

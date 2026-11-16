@@ -1020,6 +1020,14 @@ pub enum TurnError {
         /// The limit the turn reached.
         limit: LimitKind,
     },
+    /// The turn's [`crate::BudgetLedger`] refused its next model request
+    /// at this cap; completed requests keep their usage, and the session
+    /// accepts the next turn.
+    #[error("run stopped at its budget ledger's {limit} cap")]
+    BudgetRefused {
+        /// The ledger cap the next request would pass.
+        limit: LimitKind,
+    },
 }
 
 impl TurnError {
@@ -1038,6 +1046,7 @@ impl TurnError {
             Self::ContextBudgetExceeded { .. } => TurnErrorType::ContextBudget,
             Self::RepeatedToolCalls { .. } => TurnErrorType::RepeatedToolCalls,
             Self::LimitReached { limit } => TurnErrorType::RunLimit(*limit),
+            Self::BudgetRefused { limit } => TurnErrorType::BudgetLedger(*limit),
             Self::MessageJournal { .. } | Self::UsageJournal { .. } => TurnErrorType::Session,
         }
     }
@@ -1045,6 +1054,12 @@ impl TurnError {
     /// Returns the failure of a turn that reached `limit`.
     pub(crate) fn limit_reached(limit: LimitKind) -> Self {
         Self::LimitReached { limit }
+    }
+
+    /// Returns the failure of a turn whose budget ledger refused a request
+    /// at `limit`.
+    pub(crate) fn budget_refused(limit: LimitKind) -> Self {
+        Self::BudgetRefused { limit }
     }
 }
 

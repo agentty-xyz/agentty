@@ -11,6 +11,7 @@ use std::collections::BTreeMap;
 use std::env::VarError;
 #[cfg(any(feature = "providers-compat", feature = "providers-openai"))]
 use std::ffi::OsString;
+use std::num::NonZeroU32;
 #[cfg(any(feature = "providers-compat", feature = "providers-openai"))]
 use std::os::unix::ffi::OsStringExt as _;
 use std::sync::Arc;
@@ -370,12 +371,14 @@ fn build_rejects_duplicates_invalid_profiles_and_unknown_references() {
     }
 }
 
-#[cfg(all(feature = "providers-compat", feature = "providers-openai"))]
 #[test]
-fn handles_of_one_entry_share_its_concurrency_cap_and_zero_is_rejected() {
+fn handles_of_one_entry_share_its_concurrency_cap() {
     // Arrange
     let capped = ModelCatalog::builder()
-        .model(text_spec().with_max_concurrency(2), model())
+        .model(
+            text_spec().with_max_concurrency(NonZeroU32::MIN.saturating_add(1)),
+            model(),
+        )
         .model(vision_spec(), model())
         .build()
         .expect("catalog should build");
@@ -384,9 +387,6 @@ fn handles_of_one_entry_share_its_concurrency_cap_and_zero_is_rejected() {
     let first = capped.resolve(&ModelSelector::Id(ModelId::new(TEXT)));
     let second = capped.resolve(&ModelSelector::Id(ModelId::new(TEXT)));
     let uncapped = capped.resolve(&ModelSelector::Id(ModelId::new(VISION)));
-    let zero = ModelCatalog::builder()
-        .model(text_spec().with_max_concurrency(0), model())
-        .build();
 
     // Assert
     let first = first
@@ -400,13 +400,9 @@ fn handles_of_one_entry_share_its_concurrency_cap_and_zero_is_rejected() {
     assert!(Arc::ptr_eq(&first, &second));
     assert_eq!(first.available_permits(), 2);
     assert!(uncapped.expect("cataloged").concurrency().is_none());
-    let zero = zero.expect_err("zero cap");
-    assert_eq!(
-        zero.to_string(),
-        "model `host/text` declares a concurrency cap of zero"
-    );
 }
 
+#[cfg(all(feature = "providers-compat", feature = "providers-openai"))]
 #[test]
 fn default_roles_keep_only_cataloged_profiled_and_capable_candidates() {
     // Arrange

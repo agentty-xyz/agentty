@@ -381,9 +381,7 @@ impl CatalogBuilder {
     /// request capacity, [`CatalogError::UnknownModel`] for a role
     /// candidate or price override naming an uncataloged model, and
     /// [`CatalogError::IncapableCandidate`] for a role candidate without
-    /// the role's required capabilities, and
-    /// [`CatalogError::ZeroConcurrency`] for a model whose concurrency cap
-    /// is zero.
+    /// the role's required capabilities.
     pub fn build(self) -> Result<ModelCatalog, CatalogError> {
         let mut entries = BTreeMap::new();
         for (mut spec, model) in self.models {
@@ -392,19 +390,13 @@ impl CatalogBuilder {
             {
                 spec = spec.with_profile(profile);
             }
-            let concurrency = match spec.max_concurrency() {
-                Some(0) => {
-                    return Err(CatalogError::ZeroConcurrency {
-                        id: spec.id().clone(),
-                    });
-                }
-                Some(permits) => Some(Arc::new(Semaphore::new(
-                    usize::try_from(permits)
+            let concurrency = spec.max_concurrency().map(|permits| {
+                Arc::new(Semaphore::new(
+                    usize::try_from(permits.get())
                         .unwrap_or(usize::MAX)
                         .min(Semaphore::MAX_PERMITS),
-                ))),
-                None => None,
-            };
+                ))
+            });
             let context_budget = spec
                 .profile()
                 .map(ModelProfile::context_budget)
@@ -576,12 +568,6 @@ pub enum CatalogError {
     #[error("model `{id}` is not cataloged")]
     UnknownModel {
         /// Uncataloged identifier.
-        id: ModelId,
-    },
-    /// A model's concurrency cap is zero, which no request could meet.
-    #[error("model `{id}` declares a concurrency cap of zero")]
-    ZeroConcurrency {
-        /// Model with the zero cap.
         id: ModelId,
     },
 }

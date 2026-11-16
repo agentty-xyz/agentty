@@ -342,9 +342,11 @@ pub enum TurnErrorType {
     ContextBudget,
     /// The model kept repeating an identical tool call after a nudge.
     RepeatedToolCalls,
-    /// The turn reached this limit of its run's [`crate::RunLimits`], or
-    /// its [`crate::budget::BudgetLedger`] refused a request at this cap.
+    /// The turn reached this limit of its run's [`crate::RunLimits`].
     RunLimit(LimitKind),
+    /// The turn's [`crate::budget::BudgetLedger`] refused a request at this
+    /// cap.
+    BudgetLedger(LimitKind),
     /// A repository-scoped tool was enabled without a repository root.
     RepositoryRequired,
     /// The comparison base belongs to a different repository scope.
@@ -368,7 +370,20 @@ impl TurnErrorType {
             Self::RunLimit(LimitKind::ToolCalls) => crate::telemetry::ERROR_RUN_LIMIT_TOOL_CALLS,
             Self::RunLimit(LimitKind::Tokens) => crate::telemetry::ERROR_RUN_LIMIT_TOKENS,
             Self::RunLimit(LimitKind::WallTime) => crate::telemetry::ERROR_RUN_LIMIT_WALL_TIME,
-            Self::RunLimit(LimitKind::Cost) => crate::telemetry::ERROR_RUN_LIMIT_COST,
+            // No run limit caps cost, so only a ledger stops a turn at it.
+            Self::RunLimit(LimitKind::Cost) | Self::BudgetLedger(LimitKind::Cost) => {
+                crate::telemetry::ERROR_BUDGET_LEDGER_COST
+            }
+            Self::BudgetLedger(LimitKind::Tokens) => crate::telemetry::ERROR_BUDGET_LEDGER_TOKENS,
+            Self::BudgetLedger(LimitKind::ModelRequests) => {
+                crate::telemetry::ERROR_BUDGET_LEDGER_MODEL_REQUESTS
+            }
+            Self::BudgetLedger(LimitKind::ToolCalls) => {
+                crate::telemetry::ERROR_BUDGET_LEDGER_TOOL_CALLS
+            }
+            Self::BudgetLedger(LimitKind::WallTime) => {
+                crate::telemetry::ERROR_BUDGET_LEDGER_WALL_TIME
+            }
             Self::RepositoryRequired => crate::telemetry::ERROR_REPOSITORY_REQUIRED,
             Self::ComparisonRepositoryMismatch => {
                 crate::telemetry::ERROR_COMPARISON_REPOSITORY_MISMATCH

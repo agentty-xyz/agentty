@@ -359,7 +359,7 @@ struct TurnErrorKind(TurnErrorType);
 
 impl TurnErrorKind {
     /// Every classification a store may record for a stopped turn.
-    const ALL: [Self; 23] = [
+    const ALL: [Self; 27] = [
         Self(TurnErrorType::Cancelled),
         Self(TurnErrorType::Tool),
         Self(TurnErrorType::ContextBudget),
@@ -371,7 +371,6 @@ impl TurnErrorKind {
         Self(TurnErrorType::RunLimit(LimitKind::ToolCalls)),
         Self(TurnErrorType::RunLimit(LimitKind::Tokens)),
         Self(TurnErrorType::RunLimit(LimitKind::WallTime)),
-        Self(TurnErrorType::RunLimit(LimitKind::Cost)),
         Self(TurnErrorType::Model(ModelErrorType::Request)),
         Self(TurnErrorType::Model(ModelErrorType::Transport)),
         Self(TurnErrorType::Model(ModelErrorType::Provider)),
@@ -385,6 +384,11 @@ impl TurnErrorKind {
         Self(TurnErrorType::Model(ModelErrorType::ResponseTooLarge)),
         Self(TurnErrorType::Model(ModelErrorType::InvalidOutput)),
         Self(TurnErrorType::Model(ModelErrorType::InvalidToolCall)),
+        Self(TurnErrorType::BudgetLedger(LimitKind::Cost)),
+        Self(TurnErrorType::BudgetLedger(LimitKind::Tokens)),
+        Self(TurnErrorType::BudgetLedger(LimitKind::ModelRequests)),
+        Self(TurnErrorType::BudgetLedger(LimitKind::ToolCalls)),
+        Self(TurnErrorType::BudgetLedger(LimitKind::WallTime)),
     ];
 
     /// Returns the kind a live run reports for this classification, as far
@@ -402,7 +406,9 @@ impl TurnErrorKind {
                 ModelErrorType::UnsupportedOutput | ModelErrorType::UnsupportedInput,
             ) => ErrorKind::Config,
             TurnErrorType::Session => ErrorKind::Store,
-            TurnErrorType::RunLimit(limit) => ErrorKind::BudgetExhausted(limit),
+            TurnErrorType::RunLimit(limit) | TurnErrorType::BudgetLedger(limit) => {
+                ErrorKind::BudgetExhausted(limit)
+            }
             TurnErrorType::Model(ModelErrorType::Transport) => ErrorKind::Transport,
             TurnErrorType::Model(ModelErrorType::Request | ModelErrorType::Provider) => {
                 ErrorKind::Other

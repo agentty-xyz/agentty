@@ -2,6 +2,7 @@
 //! prices.
 
 use std::fmt;
+use std::num::NonZeroU32;
 
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
@@ -361,7 +362,7 @@ impl fmt::Display for CostTier {
 pub struct ModelSpec {
     capabilities: Capabilities,
     id: ModelId,
-    max_concurrency: Option<u32>,
+    max_concurrency: Option<NonZeroU32>,
     max_output: Option<u64>,
     pricing: Option<Pricing>,
     profile: Option<ModelProfile>,
@@ -433,13 +434,12 @@ impl ModelSpec {
     /// every session and run of every harness built from one catalog shares
     /// the cap, holding one permit per model request in flight and none
     /// between requests, so it limits in-flight requests, not runs. A
-    /// cancelled request releases its permit. A cap of zero fails
-    /// [`super::CatalogBuilder::build`].
+    /// cancelled request releases its permit.
     ///
     /// The cap is per model. A limit shared by every model of one provider,
     /// such as a `ChatGPT` plan's rate limit, is not expressible here.
     #[must_use]
-    pub fn with_max_concurrency(mut self, max_concurrency: u32) -> Self {
+    pub fn with_max_concurrency(mut self, max_concurrency: NonZeroU32) -> Self {
         self.max_concurrency = Some(max_concurrency);
 
         self
@@ -485,7 +485,7 @@ impl ModelSpec {
 
     /// Returns the most concurrent requests the host should run on this
     /// model, if limited.
-    pub fn max_concurrency(&self) -> Option<u32> {
+    pub fn max_concurrency(&self) -> Option<NonZeroU32> {
         self.max_concurrency
     }
 }

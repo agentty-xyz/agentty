@@ -9,9 +9,11 @@
 //! [`crate::RunRequest::budget`].
 
 use std::fmt;
+use std::pin::pin;
 use std::sync::{Arc, Mutex, MutexGuard, PoisonError};
 
 use async_trait::async_trait;
+use tokio::sync::Notify;
 
 use crate::limit::LimitKind;
 use crate::run::Usage;
@@ -21,12 +23,17 @@ use crate::usage::Cost;
 ///
 /// The harness calls [`Self::reserve`] before every model request of a
 /// run, including context summaries, re-sent invalid outputs, and requests
-/// re-sent after a context-window rejection, and sends the request only
-/// once the reservation is granted. After a provider answered, it passes
-/// the [`Reservation`] back to [`Self::commit`] with the request's actual
-/// [`Usage`] and its [`Cost`] when the model has prices. A request that
-/// fails without an answer, or is dropped by cancellation or a wall-clock
-/// limit, drops its reservation instead, which releases it.
+/// re-sent after a context-window rejection. It reserves once the request
+/// holds its model's concurrency permit, if the model has a cap, and sends
+/// the request only once the reservation is granted. After sending, it
+/// always passes the [`Reservation`] back to [`Self::commit`]: with the
+/// request's actual [`Usage`] and its [`Cost`] when the model has prices
+/// once the provider answered with usage, and otherwise with a `Usage`
+/// whose `unreported_requests` is `1`. The second case covers an answer
+/// without usage, a request that failed after it was sent, and one dropped
+/// in flight by cancellation or a wall-clock limit, since the provider may
+/// have billed any of them. A reservation is released unspent only when it
+/// is dropped before its request was sent.
 ///
 /// A refused reservation ends the run with
 /// [`crate::ErrorKind::BudgetExhausted`] naming the returned [`LimitKind`],
@@ -46,18 +53,20 @@ pub trait BudgetLedger: Send + Sync {
     /// `cost`, or `None` for a model without prices.
     ///
     /// `actual.unreported_requests` is `1` when the provider reported no
-    /// input or output count; the counts it lacks are then zero.
+    /// input or output count, or never answered; the counts it lacks are
+    /// then zero.
     fn commit(&self, reservation: Reservation, actual: &Usage, cost: Option<Cost>);
 }
 
 /// What one model request is expected to use, reserved before it is sent.
 ///
 /// The harness estimates input tokens from the request's estimated weight,
-/// calibrated by the provider's earlier usage reports, and reserves output
+/// calibrated by the provider's earlier usage reports. It reserves output
 /// tokens up to the run's [`crate::GenerationParams::max_output_tokens`],
-/// or else the output the model's context budget reserves. A model with
-/// prices also gets the cost of those tokens at its input and output
-/// prices.
+/// or else the cataloged model's [`crate::catalog::ModelSpec::max_output`],
+/// or else the output the model's context budget reserves, calibrated like
+/// input. A model with prices also gets the cost of those tokens at its
+/// input and output prices.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 #[non_exhaustive]
 pub struct Estimate {
@@ -102,14 +111,13 @@ impl Estimate {
 }
 
 /// Function that returns a dropped [`Reservation`]'s estimate to its ledger.
-type Release = Box<dyn FnOnce(Estimate) + Send + Sync>;
+type Release = Box<dyn FnOnce(Estimate) + Send>;
 
 /// Budget a [`BudgetLedger`] set aside for one model request.
 ///
 /// It is settled exactly once: the ledger's [`BudgetLedger::commit`]
-/// consumes it with [`Self::settle`], and dropping it unsettled, as a
-/// cancelled or failed request does, runs the release function it was
-/// created with, so reserved budget never leaks.
+/// consumes it with [`Self::settle`], and dropping it unsettled runs the
+/// release function it was created with, so reserved budget never leaks.
 #[must_use = "dropping a reservation releases it"]
 pub struct Reservation {
     estimate: Estimate,
@@ -119,7 +127,7 @@ pub struct Reservation {
 impl Reservation {
     /// Reserves `estimate`; dropping the reservation unsettled calls
     /// `release` with it.
-    pub fn new(estimate: Estimate, release: impl FnOnce(Estimate) + Send + Sync + 'static) -> Self {
+    pub fn new(estimate: Estimate, release: impl FnOnce(Estimate) + Send + 'static) -> Self {
         Self {
             estimate,
             release: Some(Box::new(release)),
@@ -173,35 +181,51 @@ impl BudgetLedger for Unlimited {
 /// Built-in [`BudgetLedger`] with optional caps on total micro-USD and
 /// total input plus output tokens, shared by every run given it.
 ///
-/// Wrap it in an [`Arc`] and hand clones of that to harnesses and runs.
-/// Each reservation is admitted only while committed spend, open
-/// reservations, and its own estimate together stay within every cap;
-/// otherwise it is refused with [`LimitKind::Cost`] or
-/// [`LimitKind::Tokens`], cost checked first. A commit replaces the
-/// reservation's estimate with the actual usage and cost, or with the
-/// estimate itself when the provider reported no input or output count.
-/// Requests of a model without prices cost nothing against the cost cap;
-/// cap their tokens instead.
+/// Clones share one account: keep a clone to read [`Self::balance`] and
+/// hand others, as `Arc<dyn BudgetLedger>`, to harnesses and runs.
 ///
-/// Admission is decided under one lock, so the outcome depends only on the
-/// order of reservations and commits, never on timing. Committed spend can
-/// exceed a cap only by what requests actually used beyond their estimates:
-/// at any moment, committed spend is at most the cap plus the sum, over the
-/// committed requests, of `actual - estimate` where positive. A request
-/// whose usage never exceeds its estimate, such as one whose output stays
-/// within the reserved output and whose input matches the calibrated
-/// estimate, therefore never takes the total past the cap.
-#[derive(Debug, Default)]
+/// A reservation is admitted while committed spend, open reservations, and
+/// its own estimate together stay within every cap. When only open
+/// reservations keep it out, it waits for them to be committed or released
+/// and checks again, since they may settle below their estimates. It is
+/// refused, with [`LimitKind::Cost`] or [`LimitKind::Tokens`], cost checked
+/// first, only once committed spend and its estimate alone pass a cap.
+/// Committed spend never shrinks, so a refusal is final: the same estimate
+/// would be refused again. A commit replaces the reservation's estimate
+/// with the actual usage and cost, or with the estimate itself when the
+/// provider reported no input or output count. Requests of a model without
+/// prices cost nothing against the cost cap; cap their tokens instead.
+///
+/// Admission is decided atomically under one lock; with equal per-request
+/// estimates and equal actual costs, the number of admitted requests is
+/// fixed regardless of how parallel runs interleave. Committed spend can
+/// exceed a cap only by what requests actually used beyond their
+/// estimates: at any moment, committed spend is at most the cap plus the
+/// sum, over the committed requests, of `actual - estimate` where positive.
+/// A request whose usage never exceeds its estimate, such as one whose
+/// output stays within the reserved output and whose input matches the
+/// calibrated estimate, therefore never takes the total past the cap. The
+/// bound is only as tight as the output reserve: set
+/// [`crate::GenerationParams::max_output_tokens`] or
+/// [`crate::catalog::ModelSpec::with_max_output`] so estimates cover the
+/// output a response can bring.
+#[derive(Clone, Debug, Default)]
 pub struct SharedBudget {
-    state: Arc<Mutex<Balance>>,
+    account: Arc<Account>,
 }
 
 impl SharedBudget {
+    /// Creates an uncapped budget; add caps with [`Self::with_max_micro_usd`]
+    /// and [`Self::with_max_tokens`].
+    pub fn new() -> Self {
+        Self::default()
+    }
+
     /// Caps the total cost of committed and reserved requests at
     /// `micro_usd`.
     #[must_use]
     pub fn with_max_micro_usd(self, micro_usd: u64) -> Self {
-        self.lock().max_micro_usd = Some(micro_usd);
+        self.account.lock().max_micro_usd = Some(micro_usd);
 
         self
     }
@@ -210,32 +234,36 @@ impl SharedBudget {
     /// requests at `tokens`.
     #[must_use]
     pub fn with_max_tokens(self, tokens: u64) -> Self {
-        self.lock().max_tokens = Some(tokens);
+        self.account.lock().max_tokens = Some(tokens);
 
         self
     }
 
     /// Returns the committed spend and open reservations now.
     pub fn balance(&self) -> Balance {
-        *self.lock()
-    }
-
-    fn lock(&self) -> MutexGuard<'_, Balance> {
-        self.state.lock().unwrap_or_else(PoisonError::into_inner)
+        *self.account.lock()
     }
 }
 
 #[async_trait]
 impl BudgetLedger for SharedBudget {
     async fn reserve(&self, estimate: Estimate) -> Result<Reservation, LimitKind> {
-        self.lock().reserve(estimate)?;
-        let state = Arc::clone(&self.state);
+        loop {
+            // Registered before the check, so a settlement between the
+            // check and the wait still wakes this reservation.
+            let mut settled = pin!(self.account.settled.notified());
+            settled.as_mut().enable();
+            let admission = self.account.lock().admit(estimate);
+            match admission {
+                Admission::Admitted => break,
+                Admission::Refused(limit) => return Err(limit),
+                Admission::Waiting => settled.await,
+            }
+        }
+        let account = Arc::clone(&self.account);
 
         Ok(Reservation::new(estimate, move |estimate| {
-            state
-                .lock()
-                .unwrap_or_else(PoisonError::into_inner)
-                .release(estimate);
+            account.settle(estimate, 0, 0);
         }))
     }
 
@@ -249,10 +277,36 @@ impl BudgetLedger for SharedBudget {
                 actual.input.saturating_add(actual.output),
             )
         };
-        let mut balance = self.lock();
-        balance.release(estimate);
-        balance.spent_micro_usd = balance.spent_micro_usd.saturating_add(micro_usd);
-        balance.spent_tokens = balance.spent_tokens.saturating_add(tokens);
+        self.account.settle(estimate, micro_usd, tokens);
+    }
+}
+
+/// The balance of a [`SharedBudget`] and the signal waiting reservations
+/// watch for settlements.
+#[derive(Debug, Default)]
+struct Account {
+    balance: Mutex<Balance>,
+    settled: Notify,
+}
+
+impl Account {
+    fn lock(&self) -> MutexGuard<'_, Balance> {
+        self.balance.lock().unwrap_or_else(PoisonError::into_inner)
+    }
+
+    /// Returns `estimate`'s reservation, spends `micro_usd` and `tokens`,
+    /// and wakes the waiting reservations to check again.
+    fn settle(&self, estimate: Estimate, micro_usd: u64, tokens: u64) {
+        {
+            let mut balance = self.lock();
+            balance.reserved_micro_usd = balance
+                .reserved_micro_usd
+                .saturating_sub(estimate.micro_usd());
+            balance.reserved_tokens = balance.reserved_tokens.saturating_sub(estimate.tokens());
+            balance.spent_micro_usd = balance.spent_micro_usd.saturating_add(micro_usd);
+            balance.spent_tokens = balance.spent_tokens.saturating_add(tokens);
+        }
+        self.settled.notify_waiters();
     }
 }
 
@@ -275,39 +329,55 @@ pub struct Balance {
     pub spent_tokens: u64,
 }
 
+/// Whether a [`SharedBudget`] admits an estimate now.
+enum Admission {
+    /// The estimate fits beside committed spend and open reservations.
+    Admitted,
+    /// The estimate fits beside committed spend alone, so it may fit once
+    /// open reservations settle.
+    Waiting,
+    /// The estimate passes this cap beside committed spend alone.
+    Refused(LimitKind),
+}
+
 impl Balance {
-    /// Admits `estimate` when it fits every cap beside committed spend and
-    /// open reservations.
-    fn reserve(&mut self, estimate: Estimate) -> Result<(), LimitKind> {
-        let fits = |max: Option<u64>, spent: u64, reserved: u64, more: u64| {
-            max.is_none_or(|max| spent.saturating_add(reserved).saturating_add(more) <= max)
-        };
-        if !fits(
-            self.max_micro_usd,
-            self.spent_micro_usd,
-            self.reserved_micro_usd,
-            estimate.micro_usd(),
-        ) {
-            return Err(LimitKind::Cost);
+    /// Reserves `estimate` when it fits every cap beside committed spend
+    /// and open reservations.
+    fn admit(&mut self, estimate: Estimate) -> Admission {
+        let caps = [
+            (
+                LimitKind::Cost,
+                self.max_micro_usd,
+                self.spent_micro_usd,
+                self.reserved_micro_usd,
+                estimate.micro_usd(),
+            ),
+            (
+                LimitKind::Tokens,
+                self.max_tokens,
+                self.spent_tokens,
+                self.reserved_tokens,
+                estimate.tokens(),
+            ),
+        ];
+        let mut admission = Admission::Admitted;
+        for (limit, max, spent, reserved, more) in caps {
+            let Some(max) = max else {
+                continue;
+            };
+            if spent.saturating_add(more) > max {
+                return Admission::Refused(limit);
+            }
+            if spent.saturating_add(reserved).saturating_add(more) > max {
+                admission = Admission::Waiting;
+            }
         }
-        if !fits(
-            self.max_tokens,
-            self.spent_tokens,
-            self.reserved_tokens,
-            estimate.tokens(),
-        ) {
-            return Err(LimitKind::Tokens);
+        if matches!(admission, Admission::Admitted) {
+            self.reserved_micro_usd = self.reserved_micro_usd.saturating_add(estimate.micro_usd());
+            self.reserved_tokens = self.reserved_tokens.saturating_add(estimate.tokens());
         }
-        self.reserved_micro_usd = self.reserved_micro_usd.saturating_add(estimate.micro_usd());
-        self.reserved_tokens = self.reserved_tokens.saturating_add(estimate.tokens());
 
-        Ok(())
-    }
-
-    /// Returns `estimate`'s reservation.
-    fn release(&mut self, estimate: Estimate) {
-        self.reserved_micro_usd = self.reserved_micro_usd.saturating_sub(estimate.micro_usd());
-        self.reserved_tokens = self.reserved_tokens.saturating_sub(estimate.tokens());
+        admission
     }
 }
 

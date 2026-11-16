@@ -176,16 +176,20 @@ let outcome = session
   pending request or tool call; a stopped tool call leaves its turn interrupted.
 - **Runs can share a budget.** A `BudgetLedger` reserves a `budget::Estimate` before
   every model request, summaries and re-sends included, and commits the actual usage and
-  cost after it; a cancelled request, or one that failed without an answer, releases its
-  reservation. Set one ledger for a harness with `HarnessBuilder::budget` (default
-  `budget::Unlimited`) or for one run with `RunRequest::budget`. The built-in
-  `SharedBudget` caps total micro-USD and tokens across every run given it and admits a
-  request only while committed spend, open reservations, and its estimate fit each cap,
-  so its total exceeds a cap only by what requests used beyond their estimates. The
-  estimate reserves `GenerationParams::max_output_tokens`, or the model's reserved
-  output, so set that to reserve less. A refused request ends the run with
+  cost after it. Once sent, a request that reports no usage, fails, or is dropped in
+  flight is charged its whole estimate, since the provider may have billed it. Set one
+  ledger for a harness with `HarnessBuilder::budget` (default `budget::Unlimited`) or
+  for one run with `RunRequest::budget`, which replaces the harness ledger for that run.
+  The built-in `SharedBudget` caps total micro-USD and tokens across every run given it.
+  A request blocked only by other open reservations waits for them to settle; it is
+  refused only when committed spend and its estimate pass a cap, so a refusal is final.
+  The total exceeds a cap only by what requests used beyond their estimates. The
+  estimate reserves `GenerationParams::max_output_tokens`, else the cataloged
+  `ModelSpec::max_output`, else the model's reserved output; set one so the reserve
+  covers real responses. A refused request ends the run with
   `ErrorKind::BudgetExhausted(LimitKind::Cost)` or `(LimitKind::Tokens)`, settled like a
-  `RunLimits` stop.
+  `RunLimits` stop, and reports `budget_ledger_cost` or `budget_ledger_tokens` in
+  telemetry.
 - **Runs report cost in micro-USD.** A `Cost` is integer micro-USD with its
   `catalog::PricingSource`, from the `Pricing` of the model's catalog entry: built-in
   list prices, `CatalogBuilder::pricing`, or `ModelSpec::with_pricing` for a host model.
@@ -483,16 +487,16 @@ A `ModelCatalog` lets a host select models by identifier, role, or capability. E
 `catalog::ModelSpec` records a model's provider, context profile, output limit,
 `Capabilities`, optional `Pricing`, and optional concurrency limit. Harnesses built with
 `HarnessBuilder::catalog` share each model's `max_concurrency` across all their sessions
-and runs: it limits model requests in flight, not runs, and a cancelled request releases
-its permit. A `Role` is an open set (`Role::SMART`, `CHEAP`, `FAST`, `VISION`, or any
-`Role::new("review")`) mapped to ordered candidates; `CatalogBuilder::require` sets the
-capabilities every candidate of a role must have (`Role::VISION` requires image input),
-and `ModelSelector::Require` picks the first candidate with further needed capabilities.
-`ModelCatalog::from_environment` catalogs every built-in model whose provider the
-environment configures, keyed `provider/model`, except tiers that train on prompts. Its
-default role candidates, documented on `ModelCatalog`, are only models with a declared
-context profile; `into_builder` changes them, and `CatalogBuilder::pricing` sets host
-prices:
+and runs: it limits model requests in flight, not runs, a request reserves budget only
+once it holds a permit, and a cancelled request releases its permit. A `Role` is an open
+set (`Role::SMART`, `CHEAP`, `FAST`, `VISION`, or any `Role::new("review")`) mapped to
+ordered candidates; `CatalogBuilder::require` sets the capabilities every candidate of a
+role must have (`Role::VISION` requires image input), and `ModelSelector::Require` picks
+the first candidate with further needed capabilities. `ModelCatalog::from_environment`
+catalogs every built-in model whose provider the environment configures, keyed
+`provider/model`, except tiers that train on prompts. Its default role candidates,
+documented on `ModelCatalog`, are only models with a declared context profile;
+`into_builder` changes them, and `CatalogBuilder::pricing` sets host prices:
 
 ```rust
 use ag_harness::Harness;

@@ -85,7 +85,9 @@ impl RunRequest {
     }
 
     /// Draws this run's model requests from `ledger` instead of the
-    /// harness's [`crate::HarnessBuilder::budget`]. A ledger that refuses a
+    /// harness's [`crate::HarnessBuilder::budget`]. The harness ledger is not
+    /// consulted for this run, so its caps do not apply; to stack caps,
+    /// pass a ledger that reserves from both. A ledger that refuses a
     /// request ends the run with [`ErrorKind::BudgetExhausted`], settled
     /// like a [`Self::limits`] stop.
     pub fn budget(mut self, ledger: Arc<dyn BudgetLedger>) -> Self {

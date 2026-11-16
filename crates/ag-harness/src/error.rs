@@ -469,7 +469,9 @@ impl Classification {
             | TurnError::UsageJournal { .. } => ErrorKind::Store,
             TurnError::ContextBudgetExceeded { .. } => ErrorKind::ContextOverflow,
             TurnError::RepeatedToolCalls { .. } => ErrorKind::Repetition,
-            TurnError::LimitReached { limit } => ErrorKind::BudgetExhausted(*limit),
+            TurnError::LimitReached { limit } | TurnError::BudgetRefused { limit } => {
+                ErrorKind::BudgetExhausted(*limit)
+            }
         };
 
         Self::kind(kind)

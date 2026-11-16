@@ -10,7 +10,7 @@ use tokio::sync::Semaphore;
 use tokio::time::timeout_at;
 
 use crate::bash::{BashArguments, BashError};
-use crate::budget::{BudgetLedger, Estimate};
+use crate::budget::{BudgetLedger, Estimate, Reservation};
 use crate::calibration::{Calibration, ContextCalibration};
 use crate::cancellation::TurnControl;
 use crate::catalog::Pricing;
@@ -91,6 +91,9 @@ pub(crate) struct Engine<'a> {
     pub(crate) events: Option<Arc<EventSink>>,
     pub(crate) file_system: &'a Arc<dyn FileSystem>,
     pub(crate) lifecycle: &'a LifecycleEmitter,
+    /// Most tokens one response of the model may contain, from its catalog
+    /// entry, which bounds a request's output estimate.
+    pub(crate) max_output: Option<u64>,
     pub(crate) model: &'a Arc<dyn Model>,
     pub(crate) model_reasoning_effort: Option<ReasoningEffort>,
     pub(crate) options: &'a TurnOptions,
@@ -255,7 +258,7 @@ impl Engine<'_> {
                     turn_id,
                 )
                 .await
-                .map_err(TurnError::limit_reached)?;
+                .map_err(TurnError::budget_refused)?;
             state
                 .overflow
                 .retried(self.lifecycle, turn_id, sent.estimated_weight);
@@ -584,7 +587,7 @@ impl Engine<'_> {
     ///
     /// # Errors
     ///
-    /// Returns [`TurnError::LimitReached`] when the budget ledger refused a
+    /// Returns [`TurnError::BudgetRefused`] when the budget ledger refused a
     /// summary request, which ends the turn.
     async fn summarize_rounds(
         &self,
@@ -604,7 +607,7 @@ impl Engine<'_> {
                     lifecycle.failed(ContextSummaryErrorType::BudgetExhausted);
                 }
 
-                return Err(TurnError::limit_reached(limit));
+                return Err(TurnError::budget_refused(limit));
             }
         };
         match installed {
@@ -906,12 +909,14 @@ impl Engine<'_> {
     }
 
     /// Sends `request`, estimated at `estimated_weight` under
-    /// `calibration`, once the budget ledger reserved its [`Estimate`] and
-    /// a permit of the model's concurrency cap is free. The permit is held
-    /// only while the request is in flight. A request the provider answered
-    /// commits its actual usage and cost; one that failed without an answer
-    /// drops its reservation, as dropping this future on cancellation drops
-    /// both the reservation and the permit, which releases them.
+    /// `calibration`, once a permit of the model's concurrency cap is free
+    /// and the budget ledger then reserved its [`Estimate`], so a request
+    /// queued for a permit holds no budget. The permit is held only while
+    /// the request is in flight. Once sent, the request is always charged:
+    /// with its actual usage and cost when the provider answered with
+    /// usage, and with its whole estimate otherwise, including when this
+    /// future is dropped in flight by cancellation or a wall-clock limit.
+    /// Dropping this future releases its permit.
     ///
     /// # Errors
     ///
@@ -923,15 +928,19 @@ impl Engine<'_> {
         model_request_index: u64,
         turn_id: Option<LifecycleId>,
     ) -> Result<Result<CompletedRequest, RequestFailure>, LimitKind> {
-        let reservation = self
-            .budget
-            .reserve(self.estimate(estimated_weight, calibration))
-            .await?;
         // The semaphore is never closed, so acquiring it fails only in
         // theory; a request then runs without a permit.
         let permit = match self.concurrency {
             Some(concurrency) => concurrency.acquire().await.ok(),
             None => None,
+        };
+        let reservation = self
+            .budget
+            .reserve(self.estimate(estimated_weight, calibration))
+            .await?;
+        let charge = SentCharge {
+            budget: self.budget,
+            reservation: Some(reservation),
         };
         let completed = self
             .complete_model_request(request, model_request_index, turn_id)
@@ -944,7 +953,7 @@ impl Engine<'_> {
         if let Some(completion) = activity.completion() {
             let usage = Usage::from_request(completion.usage());
             let cost = self.pricing.map(|pricing| Cost::of(&usage, pricing));
-            self.budget.commit(reservation, &usage, cost);
+            charge.commit(&usage, cost);
         }
 
         Ok(completed)
@@ -952,19 +961,25 @@ impl Engine<'_> {
 
     /// Estimates a request of `estimated_weight`: input tokens calibrated by
     /// `calibration`, or the weight itself before any usage report, and
-    /// output tokens up to the turn's maximum output, or else the output
-    /// the context budget reserves, priced when the model has prices.
+    /// output tokens up to the turn's maximum output, or else the model's
+    /// cataloged maximum output, or else the output weight the context
+    /// budget reserves, calibrated like input; priced when the model has
+    /// prices.
     fn estimate(&self, estimated_weight: u64, calibration: Calibration) -> Estimate {
-        let input = calibration.envelope().map_or(estimated_weight, |envelope| {
-            envelope.tokens(estimated_weight)
-        });
-        let output = self
-            .options
-            .generation()
-            .max_output_tokens
-            .map_or(self.context_budget.reserved_output_weight(), |tokens| {
-                u64::from(tokens.get())
-            });
+        let tokens = |weight: u64| {
+            calibration
+                .envelope()
+                .map_or(weight, |envelope| envelope.tokens(weight))
+        };
+        let input = tokens(estimated_weight);
+        let output = match (self.options.generation().max_output_tokens, self.max_output) {
+            (Some(tokens), _) => u64::from(tokens.get()),
+            (None, Some(max_output)) => max_output,
+            (None, None) => tokens(
+                estimated_weight.saturating_add(self.context_budget.reserved_output_weight()),
+            )
+            .saturating_sub(input),
+        };
         let estimate = Estimate::new(input, output);
         let Some(pricing) = self.pricing else {
             return estimate;
@@ -1148,6 +1163,39 @@ struct SentRequest {
     context: ContextActivity,
     estimated_weight: u64,
     unreduced_weight: u64,
+}
+
+/// The reservation of a sent model request. Committed with the request's
+/// reported usage, or, when dropped first, as a request whose provider
+/// reported nothing, which charges its whole estimate: a request that was
+/// sent may have been billed even if it failed or was dropped in flight.
+struct SentCharge<'a> {
+    budget: &'a dyn BudgetLedger,
+    reservation: Option<Reservation>,
+}
+
+impl SentCharge<'_> {
+    /// Commits the request's reported `usage` and `cost`.
+    fn commit(mut self, usage: &Usage, cost: Option<Cost>) {
+        self.settle(usage, cost);
+    }
+
+    /// Commits the reservation unless it was already committed.
+    fn settle(&mut self, usage: &Usage, cost: Option<Cost>) {
+        if let Some(reservation) = self.reservation.take() {
+            self.budget.commit(reservation, usage, cost);
+        }
+    }
+}
+
+impl Drop for SentCharge<'_> {
+    fn drop(&mut self) {
+        let unreported = Usage {
+            unreported_requests: 1,
+            ..Usage::default()
+        };
+        self.settle(&unreported, None);
+    }
 }
 
 /// An answered model request: its response, its activity, and the
