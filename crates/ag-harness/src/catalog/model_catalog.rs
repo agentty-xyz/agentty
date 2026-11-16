@@ -147,7 +147,10 @@ impl ModelCatalog {
         mut environment: impl FnMut(&str) -> Result<String, env::VarError>,
     ) -> Result<Self, CatalogError> {
         let mut builder = Self::builder();
-        for provider in ModelProvider::all() {
+        for provider in ModelProvider::all()
+            .iter()
+            .filter(|provider| provider.is_enabled())
+        {
             let cataloged = provider
                 .known_models()
                 .iter()
@@ -240,8 +243,7 @@ impl ModelCatalog {
     }
 
     /// Returns whether `error` means the provider is not configured at all,
-    /// as opposed to configured but broken. A provider this build omits is
-    /// not configured.
+    /// as opposed to configured but broken.
     #[cfg(any(feature = "providers-compat", feature = "providers-openai"))]
     fn is_unconfigured(
         error: &ModelConfigurationError,
@@ -254,8 +256,6 @@ impl ModelCatalog {
             ModelConfigurationError::AuthFile(_)
             | ModelConfigurationError::BaseUrl { .. }
             | ModelConfigurationError::SignIn(ChatGptAuthError::NotSignedIn { .. }) => true,
-            #[cfg(not(all(feature = "providers-compat", feature = "providers-openai")))]
-            ModelConfigurationError::ProviderDisabled { .. } => true,
             _ => false,
         }
     }

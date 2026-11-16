@@ -50,20 +50,23 @@ mod qwen;
 #[cfg(feature = "providers-compat")]
 mod test_support;
 
-pub use ag_router::chatgpt::{ChatGptAuth, ChatGptAuthError, ChatGptCredentials, ChatGptLogin};
+pub use ag_router::chatgpt::ChatGptAuthError;
+#[cfg(feature = "providers-openai")]
+pub use ag_router::chatgpt::{ChatGptAuth, ChatGptCredentials, ChatGptLogin};
 pub use ag_router::{LocalInventory, LocalModel, LocalServer, LocalServerError, LocalServerKind};
 pub use catalog::{
     ModelConfiguration, ModelConfigurationError, ModelProvider, ModelProviderParseError,
 };
 #[cfg(feature = "providers-openai")]
-pub use chatgpt::ChatGptConfig;
-#[cfg(feature = "providers-openai")]
 pub(crate) use chatgpt::profile as chatgpt_profile;
 pub use chatgpt::{
     AuthFileUnavailable, CHATGPT_AUTH_FILE_ENV, CHATGPT_GPT_5_6_LUNA, CHATGPT_GPT_5_6_SOL,
     CHATGPT_GPT_5_6_TERRA, CHATGPT_GPT_6_1_SOL, CHATGPT_GPT_6_1_TERRA, CHATGPT_GPT_6_ASTRA,
-    CHATGPT_GPT_6_LUNA, CHATGPT_GPT_6_SOL, auth_file as chatgpt_auth_file,
-    is_signed_in as chatgpt_is_signed_in,
+    CHATGPT_GPT_6_LUNA, CHATGPT_GPT_6_SOL,
+};
+#[cfg(feature = "providers-openai")]
+pub use chatgpt::{
+    ChatGptConfig, auth_file as chatgpt_auth_file, is_signed_in as chatgpt_is_signed_in,
 };
 #[cfg(feature = "providers-openai")]
 pub use chatgpt_sign_in::{
@@ -92,4 +95,5 @@ pub use qwen::QwenConfig;
 pub(crate) use qwen::profile as qwen_profile;
 pub use qwen::{QWEN_PLUS, QWEN3_7_FLASH, QWEN3_8_FLASH, QWEN3_8_MAX};
 
+#[doc(no_inline)]
 pub use crate::catalog::CostTier;

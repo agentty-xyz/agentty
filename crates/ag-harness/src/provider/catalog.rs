@@ -7,7 +7,9 @@ use std::str::FromStr;
 use std::{env, fmt};
 
 use ag_router::LocalServer;
-use ag_router::chatgpt::{ChatGptAuthError, ChatGptCredentials};
+use ag_router::chatgpt::ChatGptAuthError;
+#[cfg(feature = "providers-openai")]
+use ag_router::chatgpt::ChatGptCredentials;
 use thiserror::Error;
 
 use super::{chatgpt, kimi, muse, openai, openai_compatible, qwen};
@@ -200,6 +202,26 @@ impl ModelProvider {
         matches!(self, Self::ChatGpt)
     }
 
+    /// Returns whether this build includes the provider's client family:
+    /// `providers-openai` for [`Self::OpenAi`] and [`Self::ChatGpt`], and
+    /// `providers-compat` for the Chat Completions providers.
+    pub const fn is_enabled(self) -> bool {
+        match self {
+            Self::ChatGpt | Self::OpenAi => cfg!(feature = "providers-openai"),
+            Self::Kimi | Self::Muse | Self::OpenAiCompatible | Self::Qwen => {
+                cfg!(feature = "providers-compat")
+            }
+        }
+    }
+
+    /// Fails with [`ModelConfigurationError::ProviderDisabled`] when this
+    /// build omits the provider's client family.
+    fn ensure_enabled(self) -> Result<(), ModelConfigurationError> {
+        self.is_enabled()
+            .then_some(())
+            .ok_or(ModelConfigurationError::ProviderDisabled { provider: self })
+    }
+
     /// Returns the environment variable containing the provider base URL.
     pub const fn base_url_environment(self) -> &'static str {
         match self {
@@ -313,7 +335,8 @@ impl ModelProvider {
         model: String,
     ) -> Result<ModelClient, ModelConfigurationError> {
         let (api_key, auth_file) = match credential {
-            Credential::ApiKey(api_key) => (api_key, None),
+            Credential::ApiKey(api_key) => (api_key, None::<PathBuf>),
+            #[cfg(feature = "providers-openai")]
             Credential::SignIn(auth_file) => (None, Some(auth_file)),
         };
         let client = match self {
@@ -355,7 +378,8 @@ impl ModelProvider {
                 base_url,
                 model,
             }),
-            // The disabled family's credential and endpoint go unused.
+            // `client_from_environment` rejects a disabled family first; its
+            // credential and endpoint go unused here.
             #[cfg(not(all(feature = "providers-compat", feature = "providers-openai")))]
             provider => {
                 drop((api_key, auth_file, base_url, model));
@@ -437,34 +461,49 @@ impl ModelConfiguration {
     /// the model identifier are unavailable or invalid.
     ///
     /// [`ModelProvider::ChatGpt`] locates its credential file through
-    /// [`chatgpt::auth_file`] and requires the user to have signed in.
+    /// `chatgpt_auth_file` and requires the user to have signed in. A
+    /// provider this build omits fails with
+    /// [`ModelConfigurationError::ProviderDisabled`] before any variable or
+    /// credential file is read.
     pub fn client_from_environment(
         mut self,
         mut environment: impl FnMut(&str) -> Result<String, env::VarError>,
     ) -> Result<ModelClient, ModelConfigurationError> {
+        self.provider.ensure_enabled()?;
+        #[cfg(feature = "providers-openai")]
         let credential = if self.provider.requires_sign_in() {
             let auth_file = chatgpt::auth_file(&mut environment)?;
             ChatGptCredentials::load(&auth_file)?;
             Credential::SignIn(auth_file)
         } else {
-            let api_key_environment = self.provider.api_key_environment();
-            match environment(api_key_environment) {
-                Ok(api_key) if self.provider.requires_api_key() || !api_key.trim().is_empty() => {
-                    Credential::ApiKey(Some(api_key))
-                }
-                Ok(_) | Err(env::VarError::NotPresent) if !self.provider.requires_api_key() => {
-                    Credential::ApiKey(None)
-                }
-                _ => {
-                    return Err(ModelConfigurationError::ApiKey {
-                        name: api_key_environment,
-                    });
-                }
-            }
+            self.api_key_credential(&mut environment)?
         };
+        // Only the disabled `ChatGPT` provider signs in.
+        #[cfg(not(feature = "providers-openai"))]
+        let credential = self.api_key_credential(&mut environment)?;
         let base_url = self.resolve_base_url(environment)?;
 
         self.provider.client(credential, base_url, self.model)
+    }
+
+    /// Returns the provider's API key, or `None` when it is optional and
+    /// unset or blank.
+    fn api_key_credential(
+        &self,
+        mut environment: impl FnMut(&str) -> Result<String, env::VarError>,
+    ) -> Result<Credential, ModelConfigurationError> {
+        let api_key_environment = self.provider.api_key_environment();
+        match environment(api_key_environment) {
+            Ok(api_key) if self.provider.requires_api_key() || !api_key.trim().is_empty() => {
+                Ok(Credential::ApiKey(Some(api_key)))
+            }
+            Ok(_) | Err(env::VarError::NotPresent) if !self.provider.requires_api_key() => {
+                Ok(Credential::ApiKey(None))
+            }
+            _ => Err(ModelConfigurationError::ApiKey {
+                name: api_key_environment,
+            }),
+        }
     }
 
     /// Returns the explicit base URL, else the provider's environment
@@ -500,11 +539,13 @@ enum Credential {
     /// API key read from the provider's variable, or `None` when optional.
     ApiKey(Option<String>),
     /// Credential file of a stored "Sign in with `ChatGPT`" sign-in.
+    #[cfg(feature = "providers-openai")]
     SignIn(PathBuf),
 }
 
 /// Failure returned while configuring a built-in model client.
 #[derive(Debug, Error)]
+#[non_exhaustive]
 pub enum ModelConfigurationError {
     /// The `ChatGPT` credential file location is unknown.
     #[error(transparent)]
@@ -555,10 +596,8 @@ pub enum ModelConfigurationError {
         /// Declared response reservation in tokens.
         max_output_tokens: u64,
     },
-    /// This build omits the provider's client: `providers-openai` serves
-    /// [`ModelProvider::OpenAi`] and [`ModelProvider::ChatGpt`], and
-    /// `providers-compat` the Chat Completions providers.
-    #[cfg(not(all(feature = "providers-compat", feature = "providers-openai")))]
+    /// This build omits the provider's client; see
+    /// [`ModelProvider::is_enabled`].
     #[error("{provider} support is not compiled in; enable its `providers-*` feature")]
     ProviderDisabled {
         /// Provider whose client family is disabled.
@@ -726,3 +765,8 @@ const CATALOGED_MODELS: &[CatalogedModel] = &[
 #[cfg(all(feature = "providers-compat", feature = "providers-openai"))]
 #[path = "catalog_test.rs"]
 mod tests;
+
+#[cfg(test)]
+#[cfg(not(all(feature = "providers-compat", feature = "providers-openai")))]
+#[path = "catalog_disabled_test.rs"]
+mod disabled_tests;

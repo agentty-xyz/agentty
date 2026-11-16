@@ -1555,3 +1555,25 @@ fn clients_declare_the_cataloged_profile_of_their_model() {
     );
     assert!(profiles[..3].iter().all(Option::is_some));
 }
+
+#[cfg(any(feature = "providers-compat", feature = "providers-openai"))]
+#[test]
+fn reasoning_messages_route_with_their_answer_and_reasoning() {
+    // Arrange
+    let message = ModelMessage::AssistantReasoning {
+        content: "answer".to_string(),
+        reasoning_content: "reasoning".to_string(),
+    };
+
+    // Act
+    let routed = super::ModelClient::to_router_message(&message).expect("routed message");
+
+    // Assert
+    assert_eq!(
+        routed,
+        ag_router::ModelMessage::AssistantReasoning {
+            content: "answer".to_string(),
+            reasoning_content: "reasoning".to_string(),
+        }
+    );
+}

@@ -12,8 +12,9 @@ tools, independent of Agentty UI and orchestration.
   private.
 - Keep network access behind the injectable client boundary.
 - Keep SQLite, the native sandbox, OpenTelemetry, and provider clients behind their
-  Cargo features. The build without default features must stay warning-free and fully
-  covered by its own tests; `coverage-ag-harness-no-default-features` checks both.
+  Cargo features, and keep features additive. Builds without default features must stay
+  warning-free and fully covered by their own tests; `clippy-ag-harness-features` and
+  `coverage-ag-harness-features` check them.
 - Keep repository access behind validated `Repository` and injectable `FileSystem`
   boundaries. Hosts own prompts, permissions, database location, and telemetry setup.
 

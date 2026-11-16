@@ -637,3 +637,58 @@ fn process_environment_catalog_delegates_to_the_process_environment() {
     // Assert
     assert_eq!(process, injected);
 }
+
+#[cfg(all(
+    any(feature = "providers-compat", feature = "providers-openai"),
+    not(all(feature = "providers-compat", feature = "providers-openai"))
+))]
+#[test]
+fn environment_skips_a_disabled_family_with_broken_credentials() {
+    use std::env::VarError;
+    use std::ffi::OsString;
+    use std::os::unix::ffi::OsStringExt as _;
+
+    use crate::provider::ModelProvider;
+
+    // Arrange
+    let mut disabled_lookups = Vec::new();
+    let environment = |name: &str| {
+        let provider = ModelProvider::all().iter().find(|provider| {
+            name == provider.api_key_environment() || name == provider.base_url_environment()
+        });
+        match provider {
+            Some(provider) if !provider.is_enabled() => {
+                disabled_lookups.push(name.to_string());
+
+                Err(VarError::NotUnicode(OsString::from_vec(vec![0xff])))
+            }
+            Some(provider) if name == provider.api_key_environment() => {
+                Ok("provider-key".to_string())
+            }
+            Some(_) => Ok("https://provider.example/v1".to_string()),
+            None => Err(VarError::NotPresent),
+        }
+    };
+
+    // Act
+    let catalog = ModelCatalog::from_environment_with(environment)
+        .expect("a disabled family's broken credentials should be skipped");
+
+    // Assert
+    assert!(disabled_lookups.is_empty(), "{disabled_lookups:?}");
+    assert!(catalog.specs().count() > 0);
+    assert!(
+        catalog
+            .specs()
+            .all(|spec| spec.provider().is_some_and(ModelProvider::is_enabled))
+    );
+    let candidates: Vec<_> = [Role::SMART, Role::CHEAP, Role::FAST, Role::VISION]
+        .iter()
+        .flat_map(|role| catalog.candidates(role))
+        .collect();
+    assert_ne!(candidates, Vec::<&ModelId>::new());
+    for id in candidates {
+        let provider = catalog.spec(id).and_then(ModelSpec::provider);
+        assert!(provider.is_some_and(ModelProvider::is_enabled), "{id}");
+    }
+}

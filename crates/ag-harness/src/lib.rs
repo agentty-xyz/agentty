@@ -78,19 +78,14 @@
 //!
 //! # Features
 //!
-//! The default features keep every built-in backend. Disable them to build
-//! only the core with [`store::MemoryStore`], host-implemented [`Model`]s,
-//! and host-selected Bash executors:
-//!
-//! | Feature               | Enables                                                   |
-//! | --------------------- | --------------------------------------------------------- |
-//! | `sqlite`              | `store::SqliteStore` and `Harness::database`              |
-//! | `native-sandbox`      | The default sandboxed Bash executor and its launcher      |
-//! | `otel`                | OpenTelemetry metrics, traces, and context propagation    |
-//! | `providers-openai`    | `OpenAI` Responses API and `ChatGPT` plan clients         |
-//! | `providers-compat`    | Chat Completions clients: Kimi, Qwen, Muse, local servers |
-//! | `providers-anthropic` | Reserved; enables nothing yet                             |
-//! | `unstable-protocol`   | Reserved for the unstable `serve` protocol; nothing yet   |
+//! The default features keep every built-in backend: `sqlite`,
+//! `native-sandbox`, `otel`, `providers-openai`, and `providers-compat`.
+//! Disable them to build only the core with [`store::MemoryStore`],
+//! host-implemented [`Model`]s, and host-selected Bash executors. The crate
+//! README's feature table lists what each feature enables, and each gated
+//! item's documentation names the feature it requires.
+
+#![cfg_attr(docsrs, feature(doc_cfg))]
 
 #[cfg(test)]
 extern crate self as ag_harness;

@@ -131,6 +131,7 @@ impl StoreIdentity {
 
 /// Error returned by persistent session operations.
 #[derive(Debug, Error)]
+#[non_exhaustive]
 pub enum SessionError {
     /// The handle predates a committed model switch, including A-to-B-to-A.
     #[error("session `{id}` model selection changed; resume a fresh handle")]

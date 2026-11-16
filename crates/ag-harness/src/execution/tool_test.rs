@@ -140,16 +140,27 @@ async fn journaled_tool(
     (tool, acquired)
 }
 
+/// Returns the native sandbox configuration, or an unsandboxed one without
+/// the `native-sandbox` feature.
 fn configuration() -> BashConfig {
-    BashConfig::new(
+    #[cfg(feature = "native-sandbox")]
+    let configuration = BashConfig::new(
         "/trusted/launcher".into(),
         "/bin/bash".into(),
         "revision".into(),
         Duration::from_secs(5),
         1024,
-    )
-    .expect("config")
-    .with_host_information()
+    );
+    #[cfg(not(feature = "native-sandbox"))]
+    let configuration = BashConfig::for_executor(
+        Arc::new(crate::bash::UnsandboxedExecutor::without_isolation()),
+        "/bin/bash".into(),
+        "revision".into(),
+        Duration::from_secs(5),
+        1024,
+    );
+
+    configuration.expect("config").with_host_information()
 }
 
 #[test]
@@ -157,9 +168,14 @@ fn construction_rejects_missing_grant_and_missing_runtime() {
     // Arrange
     let mut denied = configuration();
     denied.snapshot.host_information = false;
+    // Only the native sandbox can lack its runtime launcher.
+    #[cfg(feature = "native-sandbox")]
+    let rejected = vec![denied, configuration()];
+    #[cfg(not(feature = "native-sandbox"))]
+    let rejected = vec![denied];
 
     // Act / Assert
-    for configuration in [denied, configuration()] {
+    for configuration in rejected {
         assert!(matches!(
             BashTool::new(
                 configuration,

@@ -826,3 +826,15 @@ fn model_specs_carry_cataloged_profiles_limits_and_prices() {
         Some(None)
     );
 }
+
+#[test]
+fn every_provider_is_enabled_with_both_families() {
+    // Arrange and Act
+    let disabled: Vec<_> = ModelProvider::all()
+        .iter()
+        .filter(|provider| !provider.is_enabled())
+        .collect();
+
+    // Assert
+    assert!(disabled.is_empty(), "{disabled:?}");
+}

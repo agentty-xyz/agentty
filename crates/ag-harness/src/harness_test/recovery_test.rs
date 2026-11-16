@@ -6,7 +6,7 @@ use std::time::Duration;
 
 use serde_json::json;
 
-use crate::bash::BashConfig;
+use crate::bash::{BashConfig, UnsandboxedExecutor};
 use crate::context_budget_fixture::unbounded_context_budget;
 use crate::harness::Harness;
 use crate::harness::tests::support::{model, response_without_metadata};
@@ -58,8 +58,8 @@ async fn recovery_fingerprint_covers_effective_configuration_and_canonicalizes_s
             ToolPolicy::default().allow(Tool::Read),
         ),
         options.clone().with_bash(
-            BashConfig::new(
-                "/trusted/launcher".into(),
+            BashConfig::for_executor(
+                Arc::new(UnsandboxedExecutor::without_isolation()),
                 "/bin/bash".into(),
                 "revision".into(),
                 Duration::from_secs(5),

@@ -225,13 +225,20 @@ through other packages' tests appears uncovered there; the `coverage` gate remai
 authoritative.
 
 `ag-harness` also builds without its default features. When a change touches its feature
-gates, run the minimal-build leg, which lints the crate with no features and with each
-optional feature alone, then requires full coverage of its sources from the tests that
-build without default features:
+gates, lint the crate with no features and with each optional feature that gates code
+alone, then cover the builds without default features, with each provider family alone,
+and with both families but no other backend; one merged report must cover every line
+those builds compile:
 
 ```sh
-prek run coverage-ag-harness-no-default-features --all-files --hook-stage manual
+prek run clippy-ag-harness-features --all-files --hook-stage manual
+prek run coverage-ag-harness-features --all-files --hook-stage manual
 ```
+
+`.cargo/config.toml` unifies features across the workspace, so a plain
+`cargo check -p ag-harness --no-default-features` still builds every feature another
+member enables. Set `CARGO_RESOLVER_FEATURE_UNIFICATION=selected` for a manual check;
+both hooks do.
 
 A focused run rebuilds only the selected packages. Instrumented test binaries that
 unselected dependents left in the coverage build directory still contain a changed
@@ -268,10 +275,14 @@ for `ag-xtask`, whose CLI suites the coverage gate includes.
 execute the cataloged `test-focused`, `coverage`, and `coverage-focused` commands with a
 stub runner to verify selection, required inputs, arguments, stale-report removal,
 isolation of coverage build settings from `check-coverage`, and failure propagation.
-`coverage-ag-harness-sandbox` and `coverage-ag-harness-no-default-features` still lack
-such regression coverage; configuration and instruction checks are not replacements.
-Review changes to coverage commands, compiler wrappers, and native sandbox setup for
-argument quoting, failure propagation, report freshness, and setup ordering.
+`crates/ag-xtask/tests/harness_feature_hooks.rs` checks that
+`clippy-ag-harness-features` and `coverage-ag-harness-features` build every selection
+without default features under selected feature unification, keep it and the coverage
+build settings away from `check-coverage`, and propagate failures.
+`coverage-ag-harness-sandbox` still lacks such regression coverage; configuration and
+instruction checks are not replacements. Review changes to coverage commands, compiler
+wrappers, and native sandbox setup for argument quoting, failure propagation, report
+freshness, and setup ordering.
 
 ## TUI Snapshots
 

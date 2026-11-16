@@ -598,10 +598,14 @@ host-selected Bash executors such as `UnsandboxedExecutor`.
 | `unstable-protocol`   | no      | Reserved for the unstable `serve` protocol types; enables nothing yet                     |
 
 Either provider feature builds the `provider` module, `ModelClient`, and
-`ModelCatalog::from_environment` with every provider's catalog entries; a client whose
-family is off fails with `ModelConfigurationError::ProviderDisabled`. Without
-`native-sandbox`, Bash requires `BashConfig::for_executor`. Without `sqlite`, durable
-sessions require `Harness::store`.
+`ModelCatalog::from_environment` with every provider's catalog entries.
+`ModelProvider::is_enabled` reports whether the build includes a provider's family; a
+client whose family is off fails with `ModelConfigurationError::ProviderDisabled` before
+any credential is read, and `ModelCatalog::from_environment` skips it. Without
+`native-sandbox`, `BashConfig::new` is absent and Bash requires
+`BashConfig::for_executor`. Without `sqlite`, durable sessions require `Harness::store`.
+Features are additive: error enums whose variants depend on them are
+`#[non_exhaustive]`.
 
 ## Where things live
 

@@ -2,12 +2,12 @@
 //!
 //! Bash is the only tool that needs per-turn configuration: enable
 //! `Tool::Bash` in the policy and attach a [`BashConfig`] with
-//! `TurnOptions::with_bash`. [`BashConfig::new`] selects the native sandbox;
-//! [`BashConfig::for_executor`] selects a host [`BashExecutor`] such as
-//! [`UnsandboxedExecutor`], which enforces no isolation. Each executor reports
-//! its [`Enforcement`], and the model-facing tool description states it.
-//! Command intents are journaled before spawning and surface as
-//! [`CommandRecord`]s.
+//! `TurnOptions::with_bash`. `BashConfig::new` selects the native sandbox
+//! with the `native-sandbox` feature; [`BashConfig::for_executor`] selects a
+//! host [`BashExecutor`] such as [`UnsandboxedExecutor`], which enforces no
+//! isolation. Each executor reports its [`Enforcement`], and the model-facing
+//! tool description states it. Command intents are journaled before spawning
+//! and surface as [`CommandRecord`]s.
 
 use std::collections::BTreeMap;
 use std::fmt;
@@ -69,8 +69,12 @@ impl BashConfig {
     /// each command returns, from 1 to [`Self::MAX_CAPTURE_BYTES`]; use
     /// [`Self::DEFAULT_CAPTURE_BYTES`] unless the host needs another bound.
     ///
+    /// Requires the `native-sandbox` feature; without it, select an executor
+    /// with [`Self::for_executor`].
+    ///
     /// # Errors
     /// Rejects invalid identities, paths, deadlines, and capture bounds.
+    #[cfg(feature = "native-sandbox")]
     pub fn new(
         launcher: PathBuf,
         bash: PathBuf,
@@ -82,7 +86,15 @@ impl BashConfig {
             return Err(BashError::InvalidPolicy);
         }
 
-        Self::with_snapshot(Some(launcher), None, bash, revision, timeout, capture_bytes)
+        Self::with_snapshot(
+            Some(launcher),
+            None,
+            NATIVE_EXECUTOR.to_string(),
+            bash,
+            revision,
+            timeout,
+            capture_bytes,
+        )
     }
 
     /// Configures an explicit host-selected executor instead of the default
@@ -114,7 +126,8 @@ impl BashConfig {
 
         Self::with_snapshot(
             None,
-            Some((executor, identity)),
+            Some(executor),
+            identity,
             bash,
             revision,
             timeout,
@@ -122,9 +135,12 @@ impl BashConfig {
         )
     }
 
+    /// Validates the shared policy fields; `executor` is `None` only for the
+    /// native sandbox, whose `launcher` is then set.
     fn with_snapshot(
         launcher: Option<PathBuf>,
-        executor: Option<(Arc<dyn BashExecutor>, String)>,
+        executor: Option<Arc<dyn BashExecutor>>,
+        identity: String,
         bash: PathBuf,
         revision: String,
         timeout: Duration,
@@ -140,10 +156,6 @@ impl BashConfig {
         {
             return Err(BashError::InvalidPolicy);
         }
-        let (executor, identity) = match executor {
-            Some((executor, identity)) => (Some(executor), identity),
-            None => (None, NATIVE_EXECUTOR.to_string()),
-        };
         let enforcement = executor
             .as_ref()
             .map_or(NATIVE_ENFORCEMENT, |executor| executor.enforcement());
@@ -261,8 +273,11 @@ impl BashConfig {
     /// Selects a trusted native Linux Bubblewrap executable. No PATH lookup or
     /// unsandboxed fallback is used.
     ///
+    /// Requires the `native-sandbox` feature.
+    ///
     /// # Errors
     /// Rejects relative paths; preparation validates the executable.
+    #[cfg(feature = "native-sandbox")]
     pub fn with_linux_bubblewrap(mut self, path: PathBuf) -> Result<Self, BashError> {
         if !valid_path(&path, true) {
             return Err(BashError::InvalidPolicy);

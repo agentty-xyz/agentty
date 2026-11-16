@@ -14,7 +14,7 @@ use super::support::{
     model, object_schema, read_call, read_call_with_path, read_harness, response_without_metadata,
     write_call, write_harness,
 };
-use crate::bash::{BashConfig, BashError};
+use crate::bash::{BashConfig, BashError, UnsandboxedExecutor};
 use crate::context_budget_fixture::unbounded_context_budget;
 use crate::file_system::MockFileSystem;
 use crate::harness::Harness;
@@ -460,8 +460,8 @@ async fn bash_permission_requires_host_configuration_and_host_information_grant(
     let harness =
         Harness::new(model, unbounded_context_budget()).repository(Repository::fixture("repo"));
     let options = TurnOptions::new(object_schema(), ToolPolicy::default().allow(Tool::Bash));
-    let configuration = BashConfig::new(
-        "/trusted/launcher".into(),
+    let configuration = BashConfig::for_executor(
+        Arc::new(UnsandboxedExecutor::without_isolation()),
         "/bin/bash".into(),
         "revision".into(),
         Duration::from_secs(1),
