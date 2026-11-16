@@ -407,7 +407,9 @@ resets. The shared conformance suite is in `tests/support/store_conformance.rs`.
 `Harness::with_lifecycle_observer` receives turn, model, and tool events that never
 contain prompts or output. `lifecycle::LifecycleMetrics` and
 `lifecycle::LifecycleTraceObserver` export them to OpenTelemetry. Turn spans nest under
-the caller's OpenTelemetry context, including for `.start()`ed turns. A failed turn's
+the caller's OpenTelemetry context, including for `.start()`ed turns.
+`LifecycleTraceObserver::with_tool_attributes` repeats attributes a host derives from
+the turn's context, such as run identity, on its `execute_tool` spans. A failed turn's
 `LifecycleEventKind::TurnFailed` carries the `TurnReport` of what it did before failing:
 its reported requests, tool calls, and counts. Each fitted request reports the
 calibrated capacity it was fitted into (`budget_weight`) and its weight before

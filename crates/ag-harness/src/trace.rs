@@ -39,6 +39,22 @@ impl LifecycleTraceObserver {
             state: Mutex::new(TraceState::default()),
         }
     }
+
+    /// Repeats the attributes `attributes` derives from each turn's
+    /// context on that turn's `execute_tool` spans, so a host can attribute
+    /// tool calls to the run that owns the turn without joining ancestor
+    /// spans. The context is the turn span's, beneath the caller context
+    /// current when the turn started. Span-specific attributes, such as the
+    /// tool name, take precedence over derived attributes with the same key.
+    #[must_use]
+    pub fn with_tool_attributes(self, attributes: fn(&Context) -> Vec<KeyValue>) -> Self {
+        self.state
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+            .tool_attributes = Some(attributes);
+
+        self
+    }
 }
 
 impl Default for LifecycleTraceObserver {
@@ -83,6 +99,8 @@ struct TraceState {
     pending_tools: HashMap<LifecycleId, PendingTool>,
     /// Open context-summary spans by summary, with their owning turn.
     summary_spans: HashMap<LifecycleId, (Option<LifecycleId>, Context)>,
+    /// Host attributes derived from a turn's context for its tool spans.
+    tool_attributes: Option<fn(&Context) -> Vec<KeyValue>>,
     tool_spans: HashMap<LifecycleId, Context>,
     turn_spans: HashMap<LifecycleId, Context>,
 }
@@ -363,6 +381,17 @@ impl TraceState {
         let Some(parent) = self.turn_spans.get(&turn_id) else {
             return;
         };
+        if let Some(tool_attributes) = self.tool_attributes {
+            let derived = tool_attributes(parent)
+                .into_iter()
+                .filter(|derived| {
+                    attributes
+                        .iter()
+                        .all(|attribute| attribute.key != derived.key)
+                })
+                .collect::<Vec<_>>();
+            attributes.extend(derived);
+        }
         let context = start_span(name, SpanKind::Internal, attributes, Some(parent));
         self.tool_spans.insert(tool_call_id, context);
     }

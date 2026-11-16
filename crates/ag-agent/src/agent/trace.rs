@@ -17,6 +17,11 @@ const MAX_OPERATIONS: usize = 4096;
 /// tool. It matches the item type in Codex's `exec` event stream.
 const CODEX_COMMAND_TOOL_NAME: &str = "command_execution";
 
+/// Tool name for Codex file changes, whose protocol items name no tool. It
+/// matches the item type in Codex's `exec` event stream. Patch content stays
+/// excluded under every capture policy.
+const CODEX_FILE_CHANGE_TOOL_NAME: &str = "file_change";
+
 /// Retains child spans until matching completion or attempt cancellation.
 pub(crate) struct OperationTrace {
     completed: HashSet<String>,
@@ -123,6 +128,12 @@ impl OperationTrace {
         }
         if let Some(exit_code) = item.get("exitCode").and_then(Value::as_i64) {
             attributes.push(KeyValue::new("agentty.provider.exit_code", exit_code));
+        }
+        if category == "file_change" {
+            attributes.push(KeyValue::new(
+                "gen_ai.tool.name",
+                CODEX_FILE_CHANGE_TOOL_NAME,
+            ));
         }
         if matches!(category, "command" | "mcp" | "dynamic_tool") {
             attributes.extend(
