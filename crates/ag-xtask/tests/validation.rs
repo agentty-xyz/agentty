@@ -353,6 +353,50 @@ fn automatic_plan_expands_shared_changes_and_fails_closed_on_invalid_inputs()
 }
 
 #[test]
+fn other_worktree_branch_updates_during_a_check_keep_its_success() -> Result<(), Box<dyn Error>> {
+    // Arrange: the check moves another branch and rewrites one Git setting,
+    // as a concurrent `git push -u` from a worktree sharing `.git` would.
+    let fixture = Fixture::automatic()?;
+    let root = fixture.directory.path();
+    fs::write(
+        root.join("prek"),
+        "#!/bin/sh\nif [ \"$1\" = --version ]; then echo prek-version; else git branch -f \
+         elsewhere && git config \"$CHANGED_SETTING\" changed; fi\n",
+    )?;
+
+    for (setting, preserved) in [
+        ("branch.elsewhere.merge", true),
+        ("branch.change.merge", false),
+        ("remote.origin.url", false),
+    ] {
+        // Act
+        let output = fixture
+            .automatic_command(&["--packages", "core", "--hook", "clippy"])?
+            .env("CHANGED_SETTING", setting)
+            .output()?;
+
+        // Assert
+        let ledger = fs::read_to_string(root.join("target/agentty-validation.json"))?;
+        assert_eq!(
+            output.status.success(),
+            preserved,
+            "{setting}: {}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+        assert_eq!(ledger.contains("clippy"), preserved, "{setting}");
+        if !preserved {
+            assert!(
+                String::from_utf8_lossy(&output.stdout)
+                    .contains("Inputs changed during clippy; rerun validation"),
+                "{setting}"
+            );
+        }
+    }
+
+    Ok(())
+}
+
+#[test]
 fn cargo_configuration_selects_the_directory_for_outputs_coordination_and_reuse()
 -> Result<(), Box<dyn Error>> {
     // Arrange
