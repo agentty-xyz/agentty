@@ -264,6 +264,69 @@ fn test_session_transcript_append_message_preserves_constructor_ordering() {
 }
 
 #[test]
+fn test_session_transcript_incremental_hash_matches_reconstructed_hash() {
+    // Arrange
+    let mut appended = SessionTranscript::default();
+    let mut ephemeral = SessionTranscript::ephemeral(Vec::new());
+    let appends = [
+        (SessionMessageKind::UserPrompt, "\nprompt "),
+        (SessionMessageKind::AssistantAnswer, "  \n"),
+        (SessionMessageKind::AssistantAnswer, " answer\n"),
+        (SessionMessageKind::WorkflowNotice, "   "),
+        (SessionMessageKind::WorkflowNotice, "[Sync] Complete.\n"),
+        (SessionMessageKind::UserPrompt, "\n"),
+    ];
+
+    // Act
+    let mut hashes_after_each_append = Vec::new();
+    for (kind, content) in appends {
+        appended.append_message(kind, content);
+        ephemeral.append_message(kind, content);
+        hashes_after_each_append.push((
+            appended.content_hash(),
+            SessionTranscript::content_hash_for_messages(appended.messages()),
+        ));
+    }
+    let reconstructed = SessionTranscript::new(appended.messages().to_vec());
+
+    // Assert
+    assert_eq!(
+        SessionTranscript::default().content_hash(),
+        SessionTranscript::content_hash_for_messages(&[])
+    );
+    assert_eq!(appended.messages().len(), 3);
+    for (incremental_hash, full_hash) in hashes_after_each_append {
+        assert_eq!(incremental_hash, full_hash);
+    }
+    assert_eq!(appended.content_hash(), reconstructed.content_hash());
+    assert_eq!(appended.content_hash(), ephemeral.content_hash());
+    assert_eq!(appended, reconstructed);
+}
+
+#[test]
+fn test_session_transcript_incremental_hash_extends_constructed_and_cloned_transcripts() {
+    // Arrange
+    let constructed = SessionTranscript::new(vec![
+        SessionMessage::conversation(4, SessionMessageKind::AssistantAnswer, "first answer"),
+        SessionMessage::conversation(1, SessionMessageKind::UserPrompt, "prompt"),
+    ]);
+    let mut cloned = constructed.clone();
+
+    // Act
+    cloned.append_message(SessionMessageKind::UserPrompt, "follow-up");
+    let reconstructed = SessionTranscript::new(cloned.messages().to_vec());
+
+    // Assert
+    assert_eq!(
+        constructed.content_hash(),
+        SessionTranscript::content_hash_for_messages(constructed.messages())
+    );
+    assert_ne!(cloned.content_hash(), constructed.content_hash());
+    assert_eq!(cloned.content_hash(), reconstructed.content_hash());
+    assert_eq!(cloned, reconstructed);
+}
+
+#[test]
 fn test_session_transcript_ignores_empty_messages() {
     // Arrange
     let mut transcript = SessionTranscript::default();
