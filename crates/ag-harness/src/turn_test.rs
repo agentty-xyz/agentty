@@ -9,7 +9,7 @@ use super::{
     ContextActivity, HistoryActivity, ModelRequestActivity, ModelRequestPurpose, ToolActivity,
     TurnError, TurnOutcome, TurnReport,
 };
-use crate::lifecycle::{ModelResponseType, TurnErrorType};
+use crate::lifecycle::{ModelResponseType, ToolUnavailableReason, TurnErrorType};
 use crate::model::{CompletionMetadata, CompletionUsage};
 use crate::tool::ReadAction;
 
@@ -32,6 +32,7 @@ fn unavailable_activity_names_the_called_tool_without_a_path() {
     // Arrange
     let activity = ToolActivity::Unavailable {
         duration: Duration::ZERO,
+        reason: ToolUnavailableReason::Unknown,
         tool: "read_file".to_string(),
     };
 

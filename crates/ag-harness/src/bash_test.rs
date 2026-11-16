@@ -378,7 +378,6 @@ fn capture_budget_accepts_the_default_and_the_maximum() {
     });
 
     // Assert
-    assert_eq!(BashConfig::DEFAULT_CAPTURE_BYTES, 8 * 1024);
     for (configuration, budget) in configurations.into_iter().zip(budgets) {
         assert_eq!(
             configuration

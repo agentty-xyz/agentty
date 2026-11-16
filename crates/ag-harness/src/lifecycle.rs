@@ -148,7 +148,10 @@ pub enum LifecycleEventKind {
         provider_call_id: String,
         /// Identifier shared by this tool operation's lifecycle events.
         tool_call_id: LifecycleId,
-        /// Bounded built-in tool name.
+        /// Function name the model requested: a built-in tool name or, for a
+        /// tool the model invented, any name
+        /// `ag_router::is_valid_function_name` accepts, at most 64 ASCII
+        /// letters, digits, `_`, or `-`.
         tool_name: String,
         /// Owning turn.
         turn_id: LifecycleId,
@@ -175,6 +178,8 @@ pub enum LifecycleEventKind {
     ToolDenied {
         /// Elapsed time before denial.
         duration: Duration,
+        /// Whether policy denied a built-in tool or no such tool exists.
+        reason: ToolUnavailableReason,
         /// Identifier shared by this tool operation's lifecycle events.
         tool_call_id: LifecycleId,
         /// Owning turn.
@@ -192,14 +197,14 @@ pub enum LifecycleEventKind {
         turn_id: LifecycleId,
     },
     /// The model repeated one tool call, with the same arguments and the
-    /// same result, or called one unavailable tool with any arguments, often
-    /// enough that the turn nudged it to stop or, when `stopped`, failed.
+    /// same result, or called unavailable tools under any names and arguments,
+    /// often enough that the turn nudged it to stop or, when `stopped`, failed.
     ToolCallsRepeated {
         /// Identical calls within the recent-call window.
         repeats: usize,
         /// Whether the repetition failed the turn rather than nudging it.
         stopped: bool,
-        /// Bounded name of the tool the model called.
+        /// Bounded name of the tool the latest repeated call named.
         tool_name: String,
         /// Owning turn.
         turn_id: LifecycleId,
@@ -368,6 +373,16 @@ impl ToolErrorType {
             Self::Execution => crate::telemetry::ERROR_TOOL_EXECUTION,
         }
     }
+}
+
+/// Why a requested tool was unavailable to the turn.
+#[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[non_exhaustive]
+pub enum ToolUnavailableReason {
+    /// A built-in tool the turn's policy does not enable.
+    Denied,
+    /// A name that is no built-in tool, such as one the model invented.
+    Unknown,
 }
 
 /// Synchronous destination for ordered harness lifecycle events.
@@ -938,10 +953,11 @@ impl ToolLifecycle {
         });
     }
 
-    pub(crate) fn denied(mut self) {
+    pub(crate) fn denied(mut self, reason: ToolUnavailableReason) {
         self.active = false;
         self.emitter.emit(LifecycleEventKind::ToolDenied {
             duration: self.started_at.elapsed(),
+            reason,
             tool_call_id: self.tool_call_id,
             turn_id: self.turn_id,
         });

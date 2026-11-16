@@ -205,7 +205,7 @@ async fn native_denied_tool_and_unsafe_aliases_never_execute() {
 
     // Assert
     let denied = denied.expect("a denied tool is answered, not fatal");
-    assert_eq!(denied.output()["status"], "rejected");
+    assert_eq!(denied.output()["status"], "unavailable");
     assert_eq!(
         denied.output()["error"],
         "tool `bash` is not available in this turn"

@@ -525,6 +525,7 @@ fn message_decoder_rejects_invalid_json_arguments_and_unknown_tools() {
     let unknown_tool = r#"{"arguments":{},"id":"call","name":"bash","reasoning_content":null}"#;
     let invalid_tool_name =
         r#"{"arguments":"{","id":"call","name":"two words","reasoning_content":null}"#;
+    let blank_raw_id = r#"{"arguments":"{","id":" ","name":"grep","reasoning_content":null}"#;
     let blank_bash_id =
         r#"{"arguments":{"command":"ls"},"id":" ","name":"bash","reasoning_content":null}"#;
     let invalid_write =
@@ -547,6 +548,7 @@ fn message_decoder_rejects_invalid_json_arguments_and_unknown_tools() {
     assert!(matches!(unknown, Err(SessionError::InvalidData { .. })));
     for payload in [
         invalid_tool_name,
+        blank_raw_id,
         blank_bash_id,
         invalid_write,
         decoded_unknown_tool,

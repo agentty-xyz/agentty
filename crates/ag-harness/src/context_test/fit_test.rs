@@ -4,7 +4,7 @@
 use serde_json::json;
 
 use super::support::{
-    ByteEstimator, FixedEstimator, bash_call, bash_command_call, budget, read_call,
+    ByteEstimator, FixedEstimator, bash_call, bash_command_call, budget, read_call, read_call_of,
     reasoned_read_call, record_read_round, request, result_json, sent, tool_result, write_call,
 };
 use crate::context::{
@@ -605,6 +605,49 @@ fn fit_drops_the_oldest_rounds_of_a_long_turn_behind_one_note() {
         *first.messages()
     );
     assert_eq!(second_activity, first_activity);
+}
+
+#[test]
+fn a_dropped_note_never_names_calls_answered_as_unavailable() {
+    // Arrange
+    let mut request = request(Vec::new(), Vec::new(), "loop");
+    let unavailable = json!({
+        "error": "tool `bash` is not available in this turn",
+        "hint": "This call did not run.",
+        "status": "unavailable",
+    })
+    .to_string();
+    let denied_bash = bash_command_call("denied_bash", "rm -rf build");
+    request.record_tool_call(denied_bash.clone());
+    request.record_tool_result(&denied_bash, unavailable.clone());
+    let denied_read = read_call_of("denied_read", "secret.txt");
+    request.record_tool_call(denied_read.clone());
+    request.record_tool_result(&denied_read, unavailable);
+    let bash = bash_command_call("ran_bash", "cargo test");
+    request.record_tool_call(bash.clone());
+    request.record_tool_result(
+        &bash,
+        json!({"exit_code": 0, "stdout": "y".repeat(500)}).to_string(),
+    );
+    for index in 0..40 {
+        let read = read_call(&format!("r{index}"));
+        request.record_tool_call(read.clone());
+        request.record_tool_result(&read, "ok".to_string());
+    }
+    let mut fit = ContextFit::default();
+
+    // Act
+    let (fitted, _) =
+        fit_owned(&mut fit, budget(1000), &request).expect("fits after dropping rounds");
+
+    // Assert
+    let fitted = fitted.expect("reduced copy");
+    let ModelMessage::User(note) = &fitted.messages()[1] else {
+        std::panic::resume_unwind(Box::new("dropped-round note expected"));
+    };
+    assert!(note.contains("Commands run: `cargo test`."));
+    assert!(!note.contains("rm -rf build"));
+    assert!(!note.contains("secret.txt"));
 }
 
 #[test]

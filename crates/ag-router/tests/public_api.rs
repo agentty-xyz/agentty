@@ -963,9 +963,9 @@ async fn rejects_terminal_incomplete_and_unsupported_tool_call_completions()
             "tool_calls",
             json!({"content": null, "tool_calls": [tool_call(
                 "function",
-                &json!({"name": "not a name", "arguments": "{}"}),
+                &json!({"name": "", "arguments": "{}"}),
             )]}),
-            |error| matches!(error, ModelError::UnsupportedToolName { name } if name == "not a name"),
+            |error| matches!(error, ModelError::UnsupportedToolName { name } if name.is_empty()),
         ),
     ];
 

@@ -93,10 +93,10 @@ fn tool_call_from_json_preserves_read_and_write_payloads() {
 }
 
 #[test]
-fn tool_call_from_json_rejects_invalid_names_and_keeps_malformed_arguments() {
+fn tool_call_from_json_rejects_empty_names_and_keeps_malformed_arguments() {
     // Arrange
     let inputs = [
-        ("unknown tool", "{}"),
+        ("", "{}"),
         ("read", "{"),
         ("read", r#"{"path":"name.txt","limit":0}"#),
         ("write", r#"{"path":"../secret","patch":"patch"}"#),

@@ -3,7 +3,7 @@
 use serde_json::json;
 
 use crate::model::ModelError;
-use crate::tool::{ToolCall, ToolDefinition};
+use crate::tool::{ToolCall, ToolDefinition, is_valid_function_name};
 
 #[test]
 fn generic_tool_definition_exposes_wire_fields() {
@@ -69,27 +69,37 @@ fn rejects_invalid_function_calls_before_returning_them() {
 }
 
 #[test]
-fn keeps_any_valid_function_name_and_rejects_names_providers_cannot_replay() {
+fn keeps_valid_function_names_and_replaces_characters_providers_cannot_replay() {
     // Arrange
     let longest = "n".repeat(64);
     let valid = ["delete", "read_file", "str-replace", "A9", longest.as_str()];
     let too_long = "n".repeat(65);
-    let invalid = ["", "files.delete", "two words", "naïve", too_long.as_str()];
+    let replaced = [
+        ("files.delete", "files_delete"),
+        ("two words", "two_words"),
+        ("naïve", "na_ve"),
+        (too_long.as_str(), longest.as_str()),
+    ];
 
     // Act
     let kept = valid.map(|name| ToolCall::from_json("id".to_string(), name, "{}", None));
-    let rejected = invalid.map(|name| ToolCall::from_json("id".to_string(), name, "{}", None));
+    let sanitized =
+        replaced.map(|(name, _)| ToolCall::from_json("id".to_string(), name, "{}", None));
+    let empty = ToolCall::from_json("id".to_string(), "", "{}", None);
 
     // Assert
     for (name, call) in valid.iter().zip(kept) {
         assert_eq!(call.expect("valid name").name(), *name);
     }
-    for (name, error) in invalid.iter().zip(rejected) {
-        assert!(
-            matches!(&error, Err(ModelError::UnsupportedToolName { name: reported }) if reported == name),
-            "{name}: {error:?}"
-        );
+    for ((_, expected), call) in replaced.iter().zip(sanitized) {
+        let name = call.expect("replayable name").name().to_string();
+        assert_eq!(name, *expected);
+        assert!(is_valid_function_name(&name));
     }
+    assert!(matches!(
+        empty,
+        Err(ModelError::UnsupportedToolName { name }) if name.is_empty()
+    ));
 }
 
 #[test]

@@ -1896,6 +1896,14 @@ impl StoredToolCall {
 
     fn into_call_without_text(self) -> Result<ToolCall, SessionError> {
         if let Value::String(raw) = &self.arguments {
+            // Calls are journaled under replayable names; any other name is
+            // corrupt rather than a model call to make replayable.
+            if !ag_router::is_valid_function_name(&self.name) {
+                return Err(SessionError::InvalidData {
+                    reason: "invalid persistent tool name".to_string(),
+                });
+            }
+
             return ToolCall::from_json(self.id, &self.name, raw, self.reasoning_content).map_err(
                 |error| SessionError::InvalidData {
                     reason: error.to_string(),

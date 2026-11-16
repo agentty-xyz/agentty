@@ -866,18 +866,27 @@ fn assert_tool_metric_contract(metrics: &BTreeMap<&str, &ProtoMetric>) {
             .iter()
             .map(|point| point.count)
             .sum::<u64>(),
-        2
+        3
     );
     assert_eq!(
         point_error_counts(tool_duration),
-        [(None, 1), (Some("tool_execution_error"), 1)]
-            .into_iter()
-            .collect()
+        [
+            (None, 1),
+            (Some("tool_execution_error"), 1),
+            (Some("tool_unavailable"), 1),
+        ]
+        .into_iter()
+        .collect()
     );
     for point in &tool_duration.data_points {
+        // The denied write is measured as unavailable; the reads ran.
+        let expected_name = match proto_string_attribute(&point.attributes, "error.type") {
+            Some("tool_unavailable") => "write",
+            _ => "read",
+        };
         assert_eq!(
             proto_string_attribute(&point.attributes, "gen_ai.tool.name"),
-            Some("read")
+            Some(expected_name)
         );
         assert_eq!(
             proto_string_attribute(&point.attributes, "gen_ai.tool.type"),

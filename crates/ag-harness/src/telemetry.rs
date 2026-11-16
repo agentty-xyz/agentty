@@ -46,6 +46,7 @@ pub(crate) const ERROR_REQUEST: &str = "request_error";
 pub(crate) const ERROR_RESPONSE_TOO_LARGE: &str = "response_too_large";
 pub(crate) const ERROR_TRANSPORT: &str = "transport_error";
 pub(crate) const ERROR_TOOL_EXECUTION: &str = "tool_execution_error";
+pub(crate) const ERROR_TOOL_UNAVAILABLE: &str = "tool_unavailable";
 pub(crate) const ERROR_REPOSITORY_REQUIRED: &str = "repository_required";
 pub(crate) const ERROR_COMPARISON_REPOSITORY_MISMATCH: &str = "comparison_repository_mismatch";
 pub(crate) const ERROR_CONTEXT_BUDGET: &str = "context_budget_exceeded";
@@ -275,10 +276,20 @@ impl LifecycleMetricState {
                 tool_call_id,
                 ..
             } => self.complete_tool(*duration, None, *tool_call_id),
-            LifecycleEventKind::ToolDenied { tool_call_id, .. } => {
-                self.tools.remove(tool_call_id);
+            LifecycleEventKind::ToolDenied {
+                duration,
+                tool_call_id,
+                ..
+            } => {
+                // An unavailable tool never starts, but its call is still
+                // measured so repeated unavailable calls stay visible.
+                let pending = self.tools.remove(tool_call_id)?;
 
-                None
+                Some(MetricMeasurement::Tool(ToolMeasurement {
+                    duration: *duration,
+                    error_type: Some(ERROR_TOOL_UNAVAILABLE),
+                    name: pending.name,
+                }))
             }
             LifecycleEventKind::ToolFailed {
                 duration,

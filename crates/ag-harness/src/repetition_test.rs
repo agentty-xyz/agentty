@@ -69,11 +69,13 @@ fn identical_calls_nudge_once_then_stop() {
             Repetition::Nudge {
                 repeats: REPETITION_NUDGE_AT,
                 tool: "read",
+                unavailable: false,
             },
             Repetition::None,
             Repetition::Stop {
                 repeats: REPETITION_STOP_AT,
                 tool: "read",
+                unavailable: false,
             },
         ]
     );
@@ -116,6 +118,7 @@ fn a_differing_write_restarts_the_count() {
             Repetition::Nudge {
                 repeats: REPETITION_NUDGE_AT,
                 tool: "read",
+                unavailable: false,
             },
             Repetition::None,
         ]
@@ -137,6 +140,7 @@ fn an_identical_command_counts_instead_of_restarting() {
         Some(&Repetition::Stop {
             repeats: REPETITION_STOP_AT,
             tool: "bash",
+            unavailable: false,
         })
     );
 }
@@ -183,6 +187,7 @@ fn a_call_that_left_the_window_is_nudged_again_when_it_loops_again() {
         Some(&Repetition::Nudge {
             repeats: REPETITION_NUDGE_AT,
             tool: "read",
+            unavailable: false,
         })
     );
 }
@@ -215,33 +220,36 @@ fn feedback_names_the_tool_and_the_stop_limit() {
 }
 
 #[test]
-fn unavailable_calls_to_one_tool_count_whatever_their_arguments() {
+fn unavailable_calls_count_together_whatever_their_names_and_arguments() {
     // Arrange
     let mut calls = RepeatedCalls::default();
-    let attempts = (0..REPETITION_STOP_AT)
-        .map(|index| write(&format!("file-{index}.txt")))
-        .collect::<Vec<_>>();
+    let attempts = ["read_file", "open_file", "cat", "view_file", "write"]
+        .map(|name| ToolCall::from_json(format!("{name}-call"), name, "{}", None).expect("call"));
 
     // Act
     let outcomes = attempts
         .iter()
-        .map(|call| calls.record_unavailable(call, result_digest("unavailable")))
+        .map(|call| calls.record_unavailable(call))
         .collect::<Vec<_>>();
 
     // Assert
     assert_eq!(
-        outcomes[REPETITION_NUDGE_AT - 1],
-        Repetition::Nudge {
-            repeats: REPETITION_NUDGE_AT,
-            tool: "write",
-        }
-    );
-    assert_eq!(
-        outcomes[REPETITION_STOP_AT - 1],
-        Repetition::Stop {
-            repeats: REPETITION_STOP_AT,
-            tool: "write",
-        }
+        outcomes,
+        [
+            Repetition::None,
+            Repetition::None,
+            Repetition::Nudge {
+                repeats: REPETITION_NUDGE_AT,
+                tool: "cat",
+                unavailable: true,
+            },
+            Repetition::None,
+            Repetition::Stop {
+                repeats: REPETITION_STOP_AT,
+                tool: "write",
+                unavailable: true,
+            },
+        ]
     );
 }
 
@@ -254,7 +262,7 @@ fn an_unavailable_call_does_not_restart_the_count() {
     record_times(&mut calls, &call, "same", REPETITION_NUDGE_AT - 1);
 
     // Act
-    calls.record_unavailable(&denied, result_digest("unavailable"));
+    calls.record_unavailable(&denied);
     let outcome = calls.record(&call, result_digest("same"));
 
     // Assert
@@ -263,6 +271,7 @@ fn an_unavailable_call_does_not_restart_the_count() {
         Repetition::Nudge {
             repeats: REPETITION_NUDGE_AT,
             tool: "read",
+            unavailable: false,
         }
     );
 }
@@ -276,7 +285,11 @@ fn unavailable_feedback_says_the_calls_did_not_run() {
     let feedback = unavailable_repetition_feedback(tool, REPETITION_NUDGE_AT);
 
     // Assert
-    assert!(feedback.starts_with("[harness] You have called `read_file` 3 times"));
-    assert!(feedback.contains("not available in this turn, so none of those calls ran"));
-    assert!(feedback.contains(&format!("reach {REPETITION_STOP_AT} repeats")));
+    assert!(
+        feedback.starts_with("[harness] 3 of your recent tool calls, most recently `read_file`")
+    );
+    assert!(feedback.contains("not available in this turn, so none of them ran"));
+    assert!(feedback.contains(&format!(
+        "reach {REPETITION_STOP_AT} among your recent calls"
+    )));
 }

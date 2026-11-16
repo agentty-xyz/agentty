@@ -1,7 +1,7 @@
 //! Model-aware projection of bounded session history into provider requests.
 
 use std::cmp::Reverse;
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::fmt::Write as _;
 use std::num::NonZeroU64;
 use std::ops::Range;
@@ -98,6 +98,10 @@ pub(crate) const MAX_SUMMARY_FAILURES_PER_TURN: usize = 2;
 /// require reasoning on replayed assistant tool calls still receive a
 /// non-empty value.
 pub(crate) const CLEARED_REASONING: &str = "[reasoning cleared to fit the context window]";
+
+/// `status` of the result that answers a call to a tool the turn does not
+/// make available; such a call never ran.
+pub(crate) const UNAVAILABLE_STATUS: &str = "unavailable";
 
 /// How a notice naming a newer result in `superseded_by` tells the model to
 /// use it. A notice is never rewritten once sent, and the newer result may be
@@ -2508,10 +2512,12 @@ const CAPPED_FLAG: u8 = 1 << 3;
 const SUPERSEDED_FLAG: u8 = 1 << 4;
 
 /// What the calls of one request recorded, by call identifier: each `read`
-/// call's target and each `write` result's `status`.
+/// call's target, each `write` result's `status`, and the calls answered as
+/// unavailable, which never ran.
 #[derive(Debug, Default)]
 struct CallRecords {
     read_targets: HashMap<String, String>,
+    unavailable: HashSet<String>,
     write_outcomes: HashMap<String, String>,
 }
 
@@ -2525,8 +2531,8 @@ impl CallRecords {
         records
     }
 
-    /// Remembers the read targets of a tool-call message and the outcome of
-    /// a `write` result.
+    /// Remembers the read targets of a tool-call message, the outcome of a
+    /// `write` result, and whether a result answered its call as unavailable.
     fn record(&mut self, message: &ModelMessage) {
         for call in tool_calls(message) {
             if let Some(arguments) = call.read_arguments() {
@@ -2536,6 +2542,9 @@ impl CallRecords {
         }
         if let Some((call_id, status)) = write_outcome(message) {
             self.write_outcomes.insert(call_id, status);
+        }
+        if let Some(call_id) = unavailable_call(message) {
+            self.unavailable.insert(call_id.to_string());
         }
     }
 }
@@ -2694,10 +2703,14 @@ impl RoundNote {
 
     /// Counts one dropped round's calls and remembers the paths of its
     /// files read and applied writes, the sources of its commands, and its
-    /// other distinct read targets.
+    /// other distinct read targets. A call answered as unavailable never ran,
+    /// so it is counted but names nothing.
     fn record(&mut self, calls: &[ToolCall], records: &CallRecords) {
         self.calls += calls.len();
         for call in calls {
+            if records.unavailable.contains(call.id()) {
+                continue;
+            }
             match call.arguments() {
                 ToolCallArguments::Bash(arguments) => {
                     self.commands.push(arguments.command().to_string());
@@ -3069,6 +3082,25 @@ fn write_outcome(message: &ModelMessage) -> Option<(String, String)> {
     Some((call_id.clone(), result.get("status")?.as_str()?.to_string()))
 }
 
+/// Returns the call identifier of a result that answered its call as
+/// unavailable, kept when the result was cleared since its `status` is an
+/// outcome key.
+fn unavailable_call(message: &ModelMessage) -> Option<&str> {
+    let ModelMessage::ToolResult {
+        call_id, content, ..
+    } = message
+    else {
+        return None;
+    };
+    // Only results naming the status are parsed; most results are reads.
+    if !content.contains(UNAVAILABLE_STATUS) {
+        return None;
+    }
+    let result = serde_json::from_str::<Value>(content).ok()?;
+
+    (result.get("status")?.as_str()? == UNAVAILABLE_STATUS).then_some(call_id.as_str())
+}
+
 /// Applies `reduce_call` to each call of an assistant tool-call message and
 /// returns the message when any call changed.
 fn reduce_calls(
@@ -3147,7 +3179,9 @@ fn shrunk_write_call(
 
 /// Returns `message` as the notice that stands in for its cleared result,
 /// naming the later call that superseded it, if any; `None` for any other
-/// message, a result already cleared, or one the notice would not shrink.
+/// message, a result already cleared, a short result answering a call as
+/// unavailable, whose notice would wrongly say it ran, or one the notice would
+/// not shrink.
 fn elided_result(
     message: &ModelMessage,
     records: &CallRecords,
@@ -3161,7 +3195,7 @@ fn elided_result(
     else {
         return None;
     };
-    if content.starts_with(CLEARED_RESULT_PREFIX) {
+    if content.starts_with(CLEARED_RESULT_PREFIX) || records.unavailable.contains(call_id) {
         return None;
     }
     let notice = cleared_result_notice(

@@ -15,7 +15,7 @@ use super::{
 };
 use crate::lifecycle::{
     ContextSummaryErrorType, ContextSummaryTrigger, LifecycleEmitter, ModelResponseType,
-    ToolErrorType, TurnErrorType,
+    ToolErrorType, ToolUnavailableReason, TurnErrorType,
 };
 use crate::model::{CompletionMetadata, CompletionUsage, ModelErrorType, ModelMetadata};
 
@@ -87,7 +87,7 @@ fn record_lifecycle_fixtures(lifecycle: &LifecycleEmitter) {
             Some(denied_turn_id),
         )
         .expect("observer should request a denied tool")
-        .denied();
+        .denied(ToolUnavailableReason::Denied);
     denied_turn.failed(TurnErrorType::RepeatedToolCalls);
 
     let failed_turn = lifecycle
@@ -259,7 +259,7 @@ fn assert_tool_duration(metrics: &[&Metric]) {
         tool_duration.data(),
         AggregatedMetrics::F64(MetricData::Histogram(histogram)) if {
             let points = histogram.data_points().collect::<Vec<_>>();
-            assert_eq!(points.len(), 3);
+            assert_eq!(points.len(), 4);
             assert!(points.iter().all(|point| point.count() == 1));
             assert!(points.iter().all(|point| point.bounds().eq(
                 DURATION_BOUNDARIES_SECONDS
@@ -280,6 +280,11 @@ fn assert_tool_duration(metrics: &[&Metric]) {
                     vec![
                         ("error.type", "tool_execution_error".to_string()),
                         ("gen_ai.tool.name", "read".to_string()),
+                        ("gen_ai.tool.type", "function".to_string()),
+                    ],
+                    vec![
+                        ("error.type", "tool_unavailable".to_string()),
+                        ("gen_ai.tool.name", "write".to_string()),
                         ("gen_ai.tool.type", "function".to_string()),
                     ],
                     vec![

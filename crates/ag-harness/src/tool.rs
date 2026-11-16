@@ -251,13 +251,14 @@ impl ToolCall {
     /// corrective tool feedback. The harness separately enforces tool
     /// permissions, repository containment, batch identifiers, and execution
     /// limits. A call naming no built-in tool, such as a tool the model
-    /// invented, is kept verbatim as an [`UnknownToolCall`] so the harness
-    /// answers it with a correctable result listing the available tools.
+    /// invented, is kept as an [`UnknownToolCall`] so the harness answers it
+    /// with a correctable result listing the available tools; a name that
+    /// providers could not replay, such as `container.exec`, is kept with
+    /// each other character replaced by `_` and cut to 64 characters.
     ///
     /// # Errors
-    /// Returns [`crate::ModelError`] for an invalid call identifier, a name
-    /// that is not a valid function name (1 to 64 ASCII letters, digits,
-    /// `_`, or `-`), or oversized content.
+    /// Returns [`crate::ModelError`] for an invalid call identifier, an empty
+    /// name, or oversized content.
     pub fn from_json(
         id: String,
         name: &str,
@@ -277,10 +278,10 @@ impl ToolCall {
             "bash" => Tool::Bash,
             READ_NAME => Tool::Read,
             WRITE_NAME => Tool::Write,
-            _ if ag_router::is_valid_function_name(name) => {
+            _ if let Some(name) = ag_router::replayable_function_name(name) => {
                 return Ok(Self {
                     arguments: ToolArguments::Unknown(UnknownToolCall {
-                        name: name.to_string(),
+                        name,
                         raw: arguments.to_string(),
                     }),
                     assistant_text: None,
@@ -518,9 +519,10 @@ impl MalformedArguments {
 
 /// A call naming no built-in tool, such as one the model invented.
 ///
-/// The name and arguments text are kept verbatim, so the call is journaled
-/// and replayed as the model sent it, and is answered with a correctable
-/// result naming the turn's available tools instead of running.
+/// The arguments text is kept verbatim and the name as the model sent it
+/// when providers can replay it, so the call is journaled and replayed as
+/// sent, and is answered with a correctable result naming the turn's
+/// available tools instead of running.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct UnknownToolCall {
     name: String,
@@ -528,7 +530,8 @@ pub struct UnknownToolCall {
 }
 
 impl UnknownToolCall {
-    /// Returns the function name exactly as the model sent it.
+    /// Returns the function name as the model sent it, with characters
+    /// providers cannot replay replaced by `_`.
     pub fn name(&self) -> &str {
         &self.name
     }
@@ -541,6 +544,7 @@ impl UnknownToolCall {
 
 /// Borrowed typed arguments for one native tool call.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
+#[non_exhaustive]
 pub enum ToolCallArguments<'a> {
     /// Arguments for sandboxed Bash.
     Bash(&'a BashArguments),

@@ -15,7 +15,7 @@ use crate::execution::BashTool;
 use crate::file_system::FileSystem;
 use crate::lifecycle::{
     ContextSummaryErrorType, ContextSummaryTrigger, LifecycleEmitter, LifecycleId,
-    ModelResponseType, ToolErrorType, ToolLifecycle,
+    ModelResponseType, ToolErrorType, ToolLifecycle, ToolUnavailableReason,
 };
 use crate::model::{
     CompletionMetadata, Model, ModelError, ModelMessage, ModelRequest, ModelResponse,
@@ -207,8 +207,11 @@ impl Engine<'_> {
                     (calls, true)
                 }
             };
-            state.malformed_tool_calls +=
-                count_malformed(&calls, &mut state.consecutive_malformed_responses)?;
+            state.malformed_tool_calls += count_malformed(
+                &calls,
+                &state.rounds.tools,
+                &mut state.consecutive_malformed_responses,
+            )?;
             let repetition = self
                 .execute_tool_calls(
                     &calls,
@@ -219,8 +222,7 @@ impl Engine<'_> {
                     &mut state.rounds,
                 )
                 .await?;
-            state.repetition_nudges +=
-                self.act_on_repetition(repetition, &state.rounds.tools, &mut request, turn_id)?;
+            state.repetition_nudges += self.act_on_repetition(repetition, &mut request, turn_id)?;
         }
     }
 
@@ -371,7 +373,7 @@ impl Engine<'_> {
                 repeated.is_some() || deferred || unavailable,
             );
             let counted = if unavailable {
-                rounds.repeated_calls.record_unavailable(call, digest)
+                rounds.repeated_calls.record_unavailable(call)
             } else {
                 rounds.repeated_calls.record(call, digest)
             };
@@ -386,18 +388,25 @@ impl Engine<'_> {
     /// [`repetition::REPETITION_STOP_AT`] identical calls, or appends a
     /// request-only nudge, never journaled, when they first reached
     /// [`repetition::REPETITION_NUDGE_AT`]; returns the nudges added. The
-    /// nudge for a tool `tools` does not offer says it is unavailable.
+    /// nudge for calls to unavailable tools says they did not run.
     fn act_on_repetition(
         &self,
         repetition: Repetition<'_>,
-        tools: &Tools,
         request: &mut ModelRequest,
         turn_id: Option<LifecycleId>,
     ) -> Result<usize, TurnError> {
-        let (repeats, tool, stopped) = match repetition {
+        let (repeats, tool, unavailable, stopped) = match repetition {
             Repetition::None => return Ok(0),
-            Repetition::Nudge { repeats, tool } => (repeats, tool, false),
-            Repetition::Stop { repeats, tool } => (repeats, tool, true),
+            Repetition::Nudge {
+                repeats,
+                tool,
+                unavailable,
+            } => (repeats, tool, unavailable, false),
+            Repetition::Stop {
+                repeats,
+                tool,
+                unavailable,
+            } => (repeats, tool, unavailable, true),
         };
         self.lifecycle
             .repeated_tool_calls(tool, repeats, stopped, turn_id);
@@ -407,10 +416,10 @@ impl Engine<'_> {
                 tool: tool.to_string(),
             });
         }
-        request.record_feedback(if tools.offers(tool) {
-            repetition::repetition_feedback(tool, repeats)
-        } else {
+        request.record_feedback(if unavailable {
             repetition::unavailable_repetition_feedback(tool, repeats)
+        } else {
+            repetition::repetition_feedback(tool, repeats)
         });
 
         Ok(1)
@@ -691,6 +700,7 @@ impl Engine<'_> {
         shortcut: Option<ReadShortcut<'_>>,
         fits: ResultFits<'_>,
     ) -> Result<(String, ToolActivity), TurnError> {
+        let started_at = Instant::now();
         let mut tool_lifecycle =
             self.lifecycle
                 .request_tool(call.id().to_string(), call.name().to_string(), turn_id);
@@ -716,15 +726,21 @@ impl Engine<'_> {
             ToolCallArguments::Unknown(_) => None,
         };
         let Some(execution) = execution else {
+            let reason = if call.unknown_tool().is_some() {
+                ToolUnavailableReason::Unknown
+            } else {
+                ToolUnavailableReason::Denied
+            };
             if let Some(tool_lifecycle) = tool_lifecycle {
-                tool_lifecycle.denied();
+                tool_lifecycle.denied(reason);
             }
 
             return Ok((
                 unavailable_tool_result(call.name(), self.options),
                 ToolActivity::Unavailable {
-                    duration: Duration::ZERO,
-                    tool: sanitize_report_text(call.name()),
+                    duration: started_at.elapsed(),
+                    reason,
+                    tool: call.name().to_string(),
                 },
             ));
         };
@@ -1055,13 +1071,6 @@ impl Tools {
             Tool::Write => self.write.is_some(),
         }
     }
-
-    /// Whether `name` is a built-in tool the turn's policy enabled.
-    fn offers(&self, name: &str) -> bool {
-        [Tool::Bash, Tool::Read, Tool::Write]
-            .into_iter()
-            .any(|tool| tool.name() == name && self.allows(tool))
-    }
 }
 
 /// How a `read` call is answered without running it.
@@ -1366,11 +1375,17 @@ async fn execute_write_tool(
 /// [`MAX_CONSECUTIVE_MALFORMED_TOOL_RESPONSES`]. A malformed call is
 /// journaled and answered with an error result like any other call; only a
 /// model that sends nothing else for several responses in a row fails the
-/// turn, unjournaled.
-fn count_malformed(calls: &[ToolCall], consecutive: &mut usize) -> Result<usize, TurnError> {
+/// turn, unjournaled. A malformed call to a tool `tools` does not enable is
+/// answered as unavailable and bounded by the repetition guard instead.
+fn count_malformed(
+    calls: &[ToolCall],
+    tools: &Tools,
+    consecutive: &mut usize,
+) -> Result<usize, TurnError> {
     let malformed = calls
         .iter()
         .filter_map(ToolCall::malformed_arguments)
+        .filter(|arguments| tools.allows(arguments.tool()))
         .collect::<Vec<_>>();
     if malformed.len() < calls.len() {
         *consecutive = 0;
@@ -1430,7 +1445,7 @@ fn unavailable_tool_result(name: &str, options: &TurnOptions) -> String {
     json!({
         "error": format!("tool `{name}` is not available in this turn"),
         "hint": hint,
-        "status": "rejected",
+        "status": context::UNAVAILABLE_STATUS,
     })
     .to_string()
 }

@@ -95,11 +95,13 @@ impl ToolCall {
     /// Arguments that are not a JSON object are kept verbatim as malformed
     /// rather than rejected; see [`Self::malformed_reason`]. A call to a
     /// function the request did not advertise is kept too, so the caller can
-    /// answer it with a correctable result; only its name must be a valid
-    /// function name (see [`is_valid_function_name`]).
+    /// answer it with a correctable result. A name that is not a valid
+    /// function name (see [`is_valid_function_name`]), such as the dotted
+    /// `container.exec` some models emit, is kept under a replayable name:
+    /// each other character becomes `_` and the name is cut to 64 characters.
     ///
     /// # Errors
-    /// Returns a typed error for an invalid call identifier, an invalid
+    /// Returns a typed error for an invalid call identifier, an empty
     /// function name, or oversized arguments or reasoning.
     pub fn from_json(
         id: String,
@@ -110,11 +112,11 @@ impl ToolCall {
         if id.trim().is_empty() || id.len() > 1024 {
             return Err(ModelError::InvalidToolCallId);
         }
-        if !is_valid_function_name(name) {
+        let Some(name) = replayable_function_name(name) else {
             return Err(ModelError::UnsupportedToolName {
-                name: schema::bounded_diagnostic(name),
+                name: String::new(),
             });
-        }
+        };
         schema::ensure_content_size(arguments).map_err(ModelError::from)?;
         if let Some(reasoning_content) = &reasoning_content {
             schema::ensure_content_size(reasoning_content).map_err(ModelError::from)?;
@@ -135,7 +137,7 @@ impl ToolCall {
             arguments_json,
             assistant_text: None,
             id,
-            name: name.to_string(),
+            name,
             reasoning_content,
         })
     }
@@ -221,6 +223,24 @@ pub fn is_valid_function_name(name: &str) -> bool {
         && name
             .bytes()
             .all(|byte| byte.is_ascii_alphanumeric() || matches!(byte, b'_' | b'-'))
+}
+
+/// Returns `name` as a valid function name (see [`is_valid_function_name`]):
+/// each character that is not an ASCII letter, digit, `_`, or `-` becomes
+/// `_`, cut to 64 characters. Returns `None` for an empty name.
+pub fn replayable_function_name(name: &str) -> Option<String> {
+    (!name.is_empty()).then(|| {
+        name.chars()
+            .take(64)
+            .map(|character| {
+                if character.is_ascii_alphanumeric() || matches!(character, '_' | '-') {
+                    character
+                } else {
+                    '_'
+                }
+            })
+            .collect()
+    })
 }
 
 #[cfg(test)]

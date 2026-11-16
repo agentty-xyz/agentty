@@ -17,7 +17,7 @@ use crate::bash::{BashConfig, BashError};
 pub use crate::cancellation::{ControlledTurn, SettlementError, SettlementPhase, TurnControl};
 use crate::comparison::ComparisonBase;
 pub use crate::harness::{OneShotTurn, SessionTurn};
-use crate::lifecycle::{ModelResponseType, TurnErrorType};
+use crate::lifecycle::{ModelResponseType, ToolUnavailableReason, TurnErrorType};
 use crate::model::{CompletionMetadata, ModelError};
 use crate::policy::ToolPolicy;
 use crate::read::ReadError;
@@ -582,7 +582,8 @@ impl ContextActivity {
     }
 }
 
-/// Sanitized details about one built-in tool operation.
+/// Sanitized details about one tool call: a built-in tool operation, or a
+/// call to a tool the turn does not make available.
 #[derive(Clone, Debug, Eq, PartialEq, Deserialize, Serialize)]
 #[non_exhaustive]
 pub enum ToolActivity {
@@ -676,7 +677,11 @@ pub enum ToolActivity {
     Unavailable {
         /// Elapsed tool-handling time.
         duration: Duration,
-        /// Function name the model called.
+        /// Whether policy denied a built-in tool or no such tool exists.
+        reason: ToolUnavailableReason,
+        /// Function name the model called, as a replayable function name
+        /// (see `ag_router::replayable_function_name`); a deserialized value
+        /// may hold any text, which [`fmt::Display`] still sanitizes.
         tool: String,
     },
     /// A repository file write.
@@ -827,7 +832,7 @@ impl fmt::Display for ToolActivity {
                 sanitize_report_text(reason),
                 format_report_duration(*duration)
             ),
-            Self::Unavailable { duration, tool } => write!(
+            Self::Unavailable { duration, tool, .. } => write!(
                 formatter,
                 "{} (unavailable; {})",
                 sanitize_report_text(tool),
@@ -917,14 +922,14 @@ pub enum TurnError {
         required: u64,
     },
     /// The model kept repeating one tool call, with the same arguments and
-    /// the same result, or kept calling one unavailable tool with any
+    /// the same result, or kept calling unavailable tools under any names and
     /// arguments, after a nudge to stop; the turn stops instead of spending
     /// further requests on it.
-    #[error("tool `{tool}` was called {repeats} times with the same result")]
+    #[error("tool calls repeated {repeats} times without progress, most recently `{tool}`")]
     RepeatedToolCalls {
         /// Identical calls within the recent-call window that stopped the turn.
         repeats: usize,
-        /// Native function name of the repeated call.
+        /// Function name of the latest repeated call.
         tool: String,
     },
 }

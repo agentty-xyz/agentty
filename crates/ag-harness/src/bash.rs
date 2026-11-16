@@ -54,9 +54,12 @@ impl BashConfig {
     /// Suggested `capture_bytes`: the combined stdout and stderr bytes one
     /// command result keeps, split between the start and end of each stream.
     pub const DEFAULT_CAPTURE_BYTES: usize = 8 * 1024;
-    /// Largest accepted `capture_bytes`, matching the bound on one `read`
-    /// result so a single command cannot dominate the context window.
-    pub const MAX_CAPTURE_BYTES: usize = 64 * 1024;
+    /// Largest accepted `capture_bytes`, the same size as the bound on one
+    /// encoded `read` result. It caps captured output bytes only: a `bash`
+    /// result's encoding, with escaping and outcome fields, can exceed it, and
+    /// `bash` results are not deferred by the per-round result share, so a
+    /// larger capture spends more of the context window on each command.
+    pub const MAX_CAPTURE_BYTES: usize = crate::tool::MAX_TOOL_RESULT_BYTES;
 
     /// Configures the default native sandbox executor with trusted launcher
     /// and Bash executables and a nonsecret policy revision. Change the

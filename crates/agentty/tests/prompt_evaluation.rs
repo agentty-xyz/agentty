@@ -823,20 +823,24 @@ fn cases() -> Vec<Case> {
 const UNAVAILABLE_TOOL_PHRASE: &str = "is not available in this turn";
 
 /// Read-only cases for the result that answers a call to a tool the turn
-/// does not offer. The case checks that the model recovers within the turn,
-/// reporting the refusal instead of claiming the write happened.
+/// does not offer. The neutral task only asks for a write; the grade checks
+/// that the model recovers within the turn, saying what is available instead
+/// of claiming the write happened.
 fn unavailable_tool_cases() -> Vec<Case> {
     vec![Case {
         captured_diff: None,
-        forbidden: vec!["i created", "file was created", "has been created"],
+        forbidden: vec![
+            "i created",
+            "i've created",
+            "created notes.txt",
+            "file was created",
+            "has been created",
+        ],
         name: "unavailable-tool-result-is-recovered",
         permission_mode: PermissionMode::ReadOnly,
-        prompt: "Call the write tool to create notes.txt containing `eval-ok`. If that tool is \
-                 unavailable, do not create the file; put `write-unavailable` in answer and name \
-                 the tools you can use instead."
-            .into(),
+        prompt: "Create notes.txt containing `eval-ok`.".into(),
         request_kind: AgentRequestKind::UtilityPrompt,
-        required: vec!["write-unavailable"],
+        required: vec!["available"],
         review_expectations: Vec::new(),
     }]
 }
@@ -2138,9 +2142,9 @@ async fn bash_evaluation_reaches_the_harness_with_the_unsandboxed_description() 
 fn unavailable_tool_grader_rejects_claimed_writes_and_missing_refusals() {
     // Arrange
     let case = unavailable_tool_cases().remove(0);
-    let recovered = "write-unavailable: only the read tool is available in this session.";
-    let claimed = "write-unavailable, but I created notes.txt anyway.";
-    let silent = "Only the read tool is available.";
+    let recovered = "I could not create notes.txt: only the read tool is available here.";
+    let claimed = "The write tool was available: notes.txt has been created.";
+    let silent = "I could not create notes.txt.";
 
     // Act
     let grades =
@@ -2170,15 +2174,15 @@ async fn scripted_unavailable_tool_provider() -> MockServer {
         .and(body_string_contains(UNAVAILABLE_TOOL_PHRASE))
         .respond_with(completion(json!({
             "finish_reason": "stop",
-            "message": {"content": json!({"answer": "write-unavailable: only the read tool is \
-                available in this session."}).to_string()}
+            "message": {"content": json!({"answer": "I could not create notes.txt: only the read \
+                tool is available here."}).to_string()}
         })))
         .with_priority(1)
         .mount(&server)
         .await;
     Mock::given(method("POST"))
         .and(path("/chat/completions"))
-        .and(body_string_contains("Call the write tool"))
+        .and(body_string_contains("Create notes.txt containing"))
         .respond_with(completion(json!({
             "finish_reason": "tool_calls",
             "message": {"content": null, "tool_calls": [{

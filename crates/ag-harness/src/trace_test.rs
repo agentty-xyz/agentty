@@ -27,7 +27,7 @@ use crate::file_system::{FileSystem, MockFileSystem};
 use crate::harness::Harness;
 use crate::lifecycle::{
     ContextSummaryErrorType, ContextSummaryTrigger, LifecycleEmitter, LifecycleEvent,
-    LifecycleEventKind, ModelResponseType, ToolErrorType, TurnErrorType,
+    LifecycleEventKind, ModelResponseType, ToolErrorType, ToolUnavailableReason, TurnErrorType,
 };
 use crate::memory_store::MemoryStore;
 use crate::model::{
@@ -231,7 +231,7 @@ fn project_failures(emitter: &LifecycleEmitter, metadata: &ModelMetadata) {
             Some(denied_turn_id),
         )
         .expect("turn should enable tools")
-        .denied();
+        .denied(ToolUnavailableReason::Denied);
     denied_turn.failed(TurnErrorType::RepeatedToolCalls);
 
     let tool_failure_turn = emitter.start_turn().expect("observer should enable turns");
