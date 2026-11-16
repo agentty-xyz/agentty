@@ -63,10 +63,11 @@ fn test_popup_area_grows_to_fit_title_and_hint() {
     let title_popup = HelpOverlay::popup_area(area, "A very long keybindings title", 4, 1);
     let hint_popup = HelpOverlay::popup_area(area, "Keys", 4, 1);
 
-    // Assert — title needs 29 + 4 columns; " Esc: close " needs 12 + 2 columns,
-    // wider than both the 4 + 4 title columns and the 4 + 6 row columns
+    // Assert — title needs 29 + 4 columns; " Esc/q: close " needs 14 + 2
+    // columns, wider than both the 4 + 4 title columns and the 4 + 6 row
+    // columns
     assert_eq!(title_popup.width, 33);
-    assert_eq!(hint_popup.width, 14);
+    assert_eq!(hint_popup.width, 16);
 }
 
 #[test]
@@ -77,8 +78,8 @@ fn test_popup_area_grows_to_fit_scroll_hint_when_overflowing() {
     // Act
     let popup = HelpOverlay::popup_area(area, "Keys", 4, 47);
 
-    // Assert — " j/k: scroll | Esc: close " needs 26 + 2 columns
-    assert_eq!(popup.width, 28);
+    // Assert — " j/k: scroll | Esc/q: close " needs 28 + 2 columns
+    assert_eq!(popup.width, 30);
     assert_eq!(popup.height, 50);
 }
 
@@ -125,7 +126,7 @@ fn test_help_overlay_has_no_empty_rows_and_shows_close_hint() {
     assert!(popup_rows[0].contains("Keybindings"));
     assert!(popup_rows[2].contains("q: Quit"));
     assert!(popup_rows[3].contains("?: Help"));
-    assert!(popup_rows[5].contains("Esc: close"));
+    assert!(popup_rows[5].contains("Esc/q: close"));
     assert!(!popup_rows[5].contains("j/k: scroll"));
 }
 
@@ -140,7 +141,7 @@ fn test_help_overlay_shows_scroll_hint_only_when_entries_overflow() {
 
         // Assert
         let text = rows.concat();
-        assert_eq!(text.contains("j/k: scroll | Esc: close"), expects_hint);
-        assert!(text.contains("Esc: close"));
+        assert_eq!(text.contains("j/k: scroll | Esc/q: close"), expects_hint);
+        assert!(text.contains("Esc/q: close"));
     }
 }
