@@ -45,8 +45,10 @@ Execution constraints (mandatory):
 - Do not run builds, tests, formatters, linters, package managers, dev servers, static
   analyzers, network commands, or long-running commands. Internet browsing is allowed
   when needed.
-- Limit commands to file reads/searches and read-only Git commands such as `git status`,
-  `git diff`, `git log`, `git show`, and `git blame`.
+- When a shell tool is offered, limit commands to file reads/searches and read-only Git
+  commands such as `git status`, `git diff`, `git log`, `git show`, and `git blame`.
+  Without one, do not attempt commands: the diff under review is supplied below, and the
+  offered file read and search tools cover source inspection.
 - Because the unified diff omits unchanged lines, never infer that something is absent
   from the repository merely because it is absent from the diff. Suggest a missing
   import, declaration, dependency, or registration only after verifying the current

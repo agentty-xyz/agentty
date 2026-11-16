@@ -62,6 +62,11 @@ fn test_prepend_protocol_instructions_adds_session_protocol_instructions() {
     assert!(normalized_prompt.contains("Git commands must be read-only"));
     assert!(normalized_prompt.contains("Never run mutating commands"));
     assert!(rendered_prompt.contains("`git worktree remove`"));
+    assert!(normalized_prompt.contains("Call only tools offered in this session."));
+    assert!(normalized_prompt.contains(
+        "When no shell tool is offered, as in some read-only runs, do not attempt shell or Git \
+         commands"
+    ));
     assert!(rendered_prompt.contains("`cd`, `git -C`"));
     assert!(rendered_prompt.contains("Quality check requirements:"));
     assert!(rendered_prompt.contains("repository-defined checks"));

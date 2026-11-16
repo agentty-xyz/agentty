@@ -7,6 +7,9 @@ File path output requirements:
   `git commit`, `git push`, `git pull`, `git fetch`, `git merge`, `git rebase`,
   `git checkout`, `git switch`, `git restore`, `git reset`, `git clean`,
   `git branch -d`, `git worktree remove`).
+- Call only tools offered in this session. When no shell tool is offered, as in some
+  read-only runs, do not attempt shell or Git commands; use the offered file read and
+  search tools and rely on supplied diffs and evidence.
 
 Workspace isolation requirements:
 

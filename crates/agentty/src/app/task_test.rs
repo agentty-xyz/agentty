@@ -1602,7 +1602,11 @@ fn test_review_assist_prompt_enforces_read_only_constraints() {
     assert!(prompt.contains("do not create, modify, rename, or delete files."));
     assert!(prompt.contains("Do not run builds, tests, formatters, linters"));
     assert!(normalized_prompt.contains("Internet browsing is allowed when needed."));
-    assert!(prompt.contains("Limit commands to file reads/searches"));
+    assert!(normalized_prompt.contains(
+        "When a shell tool is offered, limit commands to file reads/searches and read-only Git \
+         commands"
+    ));
+    assert!(normalized_prompt.contains("Without one, do not attempt commands"));
     assert!(normalized_prompt.contains(
         "never infer that something is absent from the repository merely because it is absent"
     ));
