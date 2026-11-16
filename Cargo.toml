@@ -3,7 +3,7 @@ resolver = "2"
 members = ["crates/*"]
 
 [workspace.package]
-version = "0.19.0"
+version = "0.19.1"
 authors = [
   "Vladimir Minev <minev.dev@gmail.com>",
   "Andrei Agaev <andagaev@gmail.com>",
@@ -18,21 +18,21 @@ repository = "https://github.com/agentty-xyz/agentty"
 # along its dependent chain so those crates cannot publish against vulnerable
 # workspace crates already on crates.io.
 ag-agent = { path = "crates/ag-agent" }
-ag-contracts = { path = "crates/ag-contracts", version = "0.19.0" }
-ag-clipboard = { path = "crates/ag-clipboard", version = "0.19.0" }
-ag-forge = { path = "crates/ag-forge", version = "0.19.0" }
-ag-git = { path = "crates/ag-git", version = "0.19.0" }
+ag-contracts = { path = "crates/ag-contracts", version = "0.19.1" }
+ag-clipboard = { path = "crates/ag-clipboard", version = "0.19.1" }
+ag-forge = { path = "crates/ag-forge", version = "0.19.1" }
+ag-git = { path = "crates/ag-git", version = "0.19.1" }
 ag-harness = { path = "crates/ag-harness" }
-ag-protocol = { path = "crates/ag-protocol", version = "0.19.0" }
+ag-protocol = { path = "crates/ag-protocol", version = "0.19.1" }
 ag-runtime = { path = "crates/ag-runtime" }
-ag-router = { path = "crates/ag-router", version = "0.19.0" }
-ag-scheduler = { path = "crates/ag-scheduler", version = "0.19.0" }
-ag-session = { path = "crates/ag-session", version = "0.19.0" }
-ag-store = { path = "crates/ag-store", version = "0.19.0" }
-ag-telemetry = { path = "crates/ag-telemetry", version = "0.19.0", default-features = false }
-ag-tui-text = { path = "crates/ag-tui-text", version = "0.19.0" }
-ag-worker = { path = "crates/ag-worker", version = "0.19.0" }
-testty = { path = "crates/testty", version = "0.19.0" }
+ag-router = { path = "crates/ag-router", version = "0.19.1" }
+ag-scheduler = { path = "crates/ag-scheduler", version = "0.19.1" }
+ag-session = { path = "crates/ag-session", version = "0.19.1" }
+ag-store = { path = "crates/ag-store", version = "0.19.1" }
+ag-telemetry = { path = "crates/ag-telemetry", version = "0.19.1", default-features = false }
+ag-tui-text = { path = "crates/ag-tui-text", version = "0.19.1" }
+ag-worker = { path = "crates/ag-worker", version = "0.19.1" }
+testty = { path = "crates/testty", version = "0.19.1" }
 async-trait = "0.1"
 anyhow = "1"
 assert_cmd = "2"
