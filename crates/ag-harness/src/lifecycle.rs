@@ -286,12 +286,16 @@ pub enum ContextSummaryErrorType {
     /// [`LifecycleEventKind::ModelRequestFailed`] carries the classification
     /// and HTTP status.
     Model,
+    /// The run's [`crate::budget::BudgetLedger`] refused a summary request,
+    /// which also ends the turn.
+    BudgetExhausted,
 }
 
 impl ContextSummaryErrorType {
     /// Returns the stable value intended for telemetry attributes.
     pub fn as_str(self) -> &'static str {
         match self {
+            Self::BudgetExhausted => crate::telemetry::ERROR_CONTEXT_SUMMARY_BUDGET_EXHAUSTED,
             Self::Cancelled => crate::telemetry::ERROR_CANCELLED,
             Self::InvalidOutput => crate::telemetry::ERROR_CONTEXT_SUMMARY_INVALID_OUTPUT,
             Self::Model => crate::telemetry::ERROR_CONTEXT_SUMMARY_MODEL,
@@ -338,7 +342,8 @@ pub enum TurnErrorType {
     ContextBudget,
     /// The model kept repeating an identical tool call after a nudge.
     RepeatedToolCalls,
-    /// The turn reached this limit of its run's [`crate::RunLimits`].
+    /// The turn reached this limit of its run's [`crate::RunLimits`], or
+    /// its [`crate::budget::BudgetLedger`] refused a request at this cap.
     RunLimit(LimitKind),
     /// A repository-scoped tool was enabled without a repository root.
     RepositoryRequired,
@@ -363,6 +368,7 @@ impl TurnErrorType {
             Self::RunLimit(LimitKind::ToolCalls) => crate::telemetry::ERROR_RUN_LIMIT_TOOL_CALLS,
             Self::RunLimit(LimitKind::Tokens) => crate::telemetry::ERROR_RUN_LIMIT_TOKENS,
             Self::RunLimit(LimitKind::WallTime) => crate::telemetry::ERROR_RUN_LIMIT_WALL_TIME,
+            Self::RunLimit(LimitKind::Cost) => crate::telemetry::ERROR_RUN_LIMIT_COST,
             Self::RepositoryRequired => crate::telemetry::ERROR_REPOSITORY_REQUIRED,
             Self::ComparisonRepositoryMismatch => {
                 crate::telemetry::ERROR_COMPARISON_REPOSITORY_MISMATCH

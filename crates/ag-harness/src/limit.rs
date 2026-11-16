@@ -129,7 +129,8 @@ impl RunLimits {
     }
 }
 
-/// Which [`RunLimits`] limit stopped a run.
+/// Which limit stopped a run: one of its [`RunLimits`], or a cap of the
+/// budget ledger that refused its next model request.
 ///
 /// It serializes as its `snake_case` name.
 #[derive(Clone, Copy, Debug, Deserialize, Eq, Hash, JsonSchema, PartialEq, Serialize)]
@@ -140,10 +141,13 @@ pub enum LimitKind {
     ModelRequests,
     /// [`RunLimits::max_tool_calls`]: tool calls.
     ToolCalls,
-    /// [`RunLimits::max_total_tokens`]: input plus output tokens.
+    /// [`RunLimits::max_total_tokens`] or a ledger's token cap: input plus
+    /// output tokens.
     Tokens,
     /// [`RunLimits::max_wall_time`]: wall-clock time.
     WallTime,
+    /// A ledger's cost cap: micro-USD.
+    Cost,
 }
 
 impl LimitKind {
@@ -154,6 +158,7 @@ impl LimitKind {
             Self::ToolCalls => "tool_calls",
             Self::Tokens => "tokens",
             Self::WallTime => "wall_time",
+            Self::Cost => "cost",
         }
     }
 }

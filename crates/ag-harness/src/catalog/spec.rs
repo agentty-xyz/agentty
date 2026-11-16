@@ -429,6 +429,13 @@ impl ModelSpec {
     /// Declares the most requests the host should run on this one model at
     /// once.
     ///
+    /// Harnesses built with [`crate::HarnessBuilder::catalog`] enforce it:
+    /// every session and run of every harness built from one catalog shares
+    /// the cap, holding one permit per model request in flight and none
+    /// between requests, so it limits in-flight requests, not runs. A
+    /// cancelled request releases its permit. A cap of zero fails
+    /// [`super::CatalogBuilder::build`].
+    ///
     /// The cap is per model. A limit shared by every model of one provider,
     /// such as a `ChatGPT` plan's rate limit, is not expressible here.
     #[must_use]

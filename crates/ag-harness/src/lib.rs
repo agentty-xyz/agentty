@@ -52,6 +52,9 @@
 //!   [`TurnRange`], and `Session::usage` sums their recorded tokens and cost as
 //!   [`UsageTotals`]; `Harness::fork` copies a session's turns through one
 //!   index into a new session with its own prompt-cache key.
+//! - A [`BudgetLedger`], such as a [`SharedBudget`] capping total micro-USD or
+//!   tokens, reserves every model request of the runs it is given, so parallel
+//!   runs share one budget.
 //! - [`Tool`]s are denied until allowed with [`Harness::allow`] or a
 //!   [`ToolPolicy`].
 //! - [`RunError`] and [`HarnessError`] classify any [`TurnError`] or
@@ -66,6 +69,7 @@
 //! | -------------- | ---------------------------------------------------------- |
 //! | [`provider`]   | Built-in Muse, Kimi, and Qwen clients                      |
 //! | [`catalog`]    | Model specs, roles, capabilities, pricing, and selection   |
+//! | [`budget`]     | Budget ledgers, estimates, and reservations                |
 //! | [`model`]      | The [`Model`] trait, requests, registry, context profiles  |
 //! | [`tool`]       | Tool arguments, results, and the [`tool::FileSystem`] seam |
 //! | [`bash`]       | Bash configuration, executors, enforcement, records        |
@@ -115,6 +119,7 @@ mod model_profile_fixture;
 
 mod admission;
 pub mod bash;
+pub mod budget;
 mod calibration;
 mod cancellation;
 pub mod catalog;
@@ -169,6 +174,7 @@ mod usage;
 mod write;
 mod write_journal;
 
+pub use budget::{BudgetLedger, SharedBudget};
 pub use catalog::{ModelCatalog, ModelSelector, Role};
 pub use command_journal::CommandRecord;
 pub use comparison::{ComparisonBase, ComparisonBaseError};

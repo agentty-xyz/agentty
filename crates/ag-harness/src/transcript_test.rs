@@ -330,6 +330,7 @@ fn stored_classifications_read_as_the_kinds_live_runs_report() {
         ErrorKind::BudgetExhausted(LimitKind::ToolCalls),
         ErrorKind::BudgetExhausted(LimitKind::Tokens),
         ErrorKind::BudgetExhausted(LimitKind::WallTime),
+        ErrorKind::BudgetExhausted(LimitKind::Cost),
         ErrorKind::Other,
         ErrorKind::Transport,
         ErrorKind::Other,
@@ -351,7 +352,7 @@ fn stored_classifications_read_as_the_kinds_live_runs_report() {
         "failed turns record the classification's Debug form"
     );
     assert_eq!(
-        TurnErrorKind::ALL[13].0,
+        TurnErrorKind::ALL[14].0,
         TurnErrorType::Model(ModelErrorType::Provider)
     );
     assert_eq!(TurnRecord::stored_error("interrupted"), None);

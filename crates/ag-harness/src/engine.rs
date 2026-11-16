@@ -6,9 +6,11 @@ use std::sync::Arc;
 use std::time::{Duration, Instant};
 
 use serde_json::{Value, json};
+use tokio::sync::Semaphore;
 use tokio::time::timeout_at;
 
 use crate::bash::{BashArguments, BashError};
+use crate::budget::{BudgetLedger, Estimate};
 use crate::calibration::{Calibration, ContextCalibration};
 use crate::cancellation::TurnControl;
 use crate::catalog::Pricing;
@@ -72,6 +74,11 @@ const SUMMARY_TOOL_CALL_FEEDBACK: &str = "[harness] Those tool calls were not ru
 
 /// Shared execution dependencies and the immutable configuration for one turn.
 pub(crate) struct Engine<'a> {
+    /// Ledger that reserves every model request before it is sent.
+    pub(crate) budget: &'a dyn BudgetLedger,
+    /// Permits of the model's concurrency cap, shared by every harness
+    /// built from its catalog; one is held for each request in flight.
+    pub(crate) concurrency: Option<&'a Semaphore>,
     pub(crate) context_budget: context::ContextBudget,
     pub(crate) context_calibration: &'a ContextCalibration,
     pub(crate) context_estimator: &'a dyn context::ContextEstimator,
@@ -224,19 +231,15 @@ impl Engine<'_> {
                         turn_id,
                         (&mut state.model_request_index, &mut state.model_requests),
                     )
-                    .await;
+                    .await?;
 
                     continue;
                 }
             };
+            // A reduced copy is taken out of the fit, whose weights estimate
+            // the request for the budget ledger before it is sent.
+            let fitted = fitted.cloned();
             self.publish_context(context_activity).await;
-            let completed = self
-                .complete_model_request(
-                    fitted.unwrap_or(&request),
-                    state.model_request_index,
-                    turn_id,
-                )
-                .await;
             let sent = SentRequest {
                 budget_weight: budget.max_request_weight().get() - budget.reserved_output_weight(),
                 calibration,
@@ -244,6 +247,15 @@ impl Engine<'_> {
                 estimated_weight: state.context_fit.sent_weight(),
                 unreduced_weight: state.context_fit.unreduced_weight(),
             };
+            let completed = self
+                .metered_request(
+                    fitted.as_ref().unwrap_or(&request),
+                    (sent.estimated_weight, calibration),
+                    state.model_request_index,
+                    turn_id,
+                )
+                .await
+                .map_err(TurnError::limit_reached)?;
             state
                 .overflow
                 .retried(self.lifecycle, turn_id, sent.estimated_weight);
@@ -569,19 +581,31 @@ impl Engine<'_> {
     /// `context_fit`, or records its failure so the turn falls back to
     /// removing the rounds behind a deterministic note. A cancelled turn
     /// drops this future, which reports the summary as cancelled.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`TurnError::LimitReached`] when the budget ledger refused a
+    /// summary request, which ends the turn.
     async fn summarize_rounds(
         &self,
         job: &RoundSummaryJob,
         (request, context_fit): (&ModelRequest, &mut context::ContextFit),
         turn_id: Option<LifecycleId>,
         requests: (&mut u64, &mut Vec<ModelRequestActivity>),
-    ) {
+    ) -> Result<(), TurnError> {
         let lifecycle = self.lifecycle.start_context_summary(job.trigger(), turn_id);
         let installed = match self.request_summary(job, turn_id, requests).await {
             Ok(summary) => context_fit
                 .install_summary(self.context_estimator, request, job, summary)
                 .ok_or(ContextSummaryErrorType::Rejected),
-            Err(error_type) => Err(error_type),
+            Err(SummaryFailure::Failed(error_type)) => Err(error_type),
+            Err(SummaryFailure::Refused(limit)) => {
+                if let Some(lifecycle) = lifecycle {
+                    lifecycle.failed(ContextSummaryErrorType::BudgetExhausted);
+                }
+
+                return Err(TurnError::limit_reached(limit));
+            }
         };
         match installed {
             Ok(summarized_tool_calls) => {
@@ -596,6 +620,8 @@ impl Engine<'_> {
                 }
             }
         }
+
+        Ok(())
     }
 
     /// Sends the job's summary request, re-requesting an invalid output, or
@@ -610,7 +636,7 @@ impl Engine<'_> {
         job: &RoundSummaryJob,
         turn_id: Option<LifecycleId>,
         (model_request_index, model_requests): (&mut u64, &mut Vec<ModelRequestActivity>),
-    ) -> Result<Value, ContextSummaryErrorType> {
+    ) -> Result<Value, SummaryFailure> {
         let mut request = job.request().clone();
         if self.lifecycle.is_enabled() {
             request.mark_lifecycle_observed();
@@ -633,8 +659,14 @@ impl Engine<'_> {
                 weight.saturating_add(self.context_estimator.message_weight(message))
             });
             let completed = self
-                .complete_model_request(&request, *model_request_index, turn_id)
-                .await;
+                .metered_request(
+                    &request,
+                    (estimated_weight, calibration),
+                    *model_request_index,
+                    turn_id,
+                )
+                .await
+                .map_err(SummaryFailure::Refused)?;
             *model_request_index = model_request_index.saturating_add(1);
             let (response, activity, _) = match completed {
                 Ok(completed) => completed,
@@ -653,14 +685,14 @@ impl Engine<'_> {
                         ),
                     );
                     if corrections == MAX_OUTPUT_CORRECTIONS {
-                        return Err(ContextSummaryErrorType::InvalidOutput);
+                        return Err(ContextSummaryErrorType::InvalidOutput.into());
                     }
                     corrections += 1;
                     request.record_feedback(output_feedback(&error));
 
                     continue;
                 }
-                Err(_) => return Err(ContextSummaryErrorType::Model),
+                Err(_) => return Err(ContextSummaryErrorType::Model.into()),
             };
             model_requests.push(self.accepted_request(
                 activity.with_purpose(ModelRequestPurpose::ContextSummary),
@@ -669,7 +701,7 @@ impl Engine<'_> {
             ));
             let ModelResponse::Output(summary) = response else {
                 if corrections == MAX_OUTPUT_CORRECTIONS || request.tools().is_empty() {
-                    return Err(ContextSummaryErrorType::InvalidOutput);
+                    return Err(ContextSummaryErrorType::InvalidOutput.into());
                 }
                 corrections += 1;
                 request.record_feedback(SUMMARY_TOOL_CALL_FEEDBACK.to_string());
@@ -683,7 +715,7 @@ impl Engine<'_> {
                 job.source_bytes(),
             )
             .map(|_| summary)
-            .map_err(|_| ContextSummaryErrorType::Rejected);
+            .map_err(|_| ContextSummaryErrorType::Rejected.into());
         }
     }
 
@@ -873,12 +905,85 @@ impl Engine<'_> {
         ))
     }
 
+    /// Sends `request`, estimated at `estimated_weight` under
+    /// `calibration`, once the budget ledger reserved its [`Estimate`] and
+    /// a permit of the model's concurrency cap is free. The permit is held
+    /// only while the request is in flight. A request the provider answered
+    /// commits its actual usage and cost; one that failed without an answer
+    /// drops its reservation, as dropping this future on cancellation drops
+    /// both the reservation and the permit, which releases them.
+    ///
+    /// # Errors
+    ///
+    /// Returns the cap the ledger refused the request at; nothing is sent.
+    async fn metered_request(
+        &self,
+        request: &ModelRequest,
+        (estimated_weight, calibration): (u64, Calibration),
+        model_request_index: u64,
+        turn_id: Option<LifecycleId>,
+    ) -> Result<Result<CompletedRequest, RequestFailure>, LimitKind> {
+        let reservation = self
+            .budget
+            .reserve(self.estimate(estimated_weight, calibration))
+            .await?;
+        // The semaphore is never closed, so acquiring it fails only in
+        // theory; a request then runs without a permit.
+        let permit = match self.concurrency {
+            Some(concurrency) => concurrency.acquire().await.ok(),
+            None => None,
+        };
+        let completed = self
+            .complete_model_request(request, model_request_index, turn_id)
+            .await;
+        drop(permit);
+        let activity = match &completed {
+            Ok((_, activity, _)) => activity,
+            Err(failure) => &failure.activity,
+        };
+        if let Some(completion) = activity.completion() {
+            let usage = Usage::from_request(completion.usage());
+            let cost = self.pricing.map(|pricing| Cost::of(&usage, pricing));
+            self.budget.commit(reservation, &usage, cost);
+        }
+
+        Ok(completed)
+    }
+
+    /// Estimates a request of `estimated_weight`: input tokens calibrated by
+    /// `calibration`, or the weight itself before any usage report, and
+    /// output tokens up to the turn's maximum output, or else the output
+    /// the context budget reserves, priced when the model has prices.
+    fn estimate(&self, estimated_weight: u64, calibration: Calibration) -> Estimate {
+        let input = calibration.envelope().map_or(estimated_weight, |envelope| {
+            envelope.tokens(estimated_weight)
+        });
+        let output = self
+            .options
+            .generation()
+            .max_output_tokens
+            .map_or(self.context_budget.reserved_output_weight(), |tokens| {
+                u64::from(tokens.get())
+            });
+        let estimate = Estimate::new(input, output);
+        let Some(pricing) = self.pricing else {
+            return estimate;
+        };
+        let usage = Usage {
+            input,
+            output,
+            ..Usage::default()
+        };
+
+        estimate.with_cost(Cost::of(&usage, pricing))
+    }
+
     async fn complete_model_request(
         &self,
         request: &ModelRequest,
         model_request_index: u64,
         turn_id: Option<LifecycleId>,
-    ) -> Result<(ModelResponse, ModelRequestActivity, Option<String>), RequestFailure> {
+    ) -> Result<CompletedRequest, RequestFailure> {
         let started_at = Instant::now();
         let model_lifecycle =
             self.lifecycle
@@ -1043,6 +1148,24 @@ struct SentRequest {
     context: ContextActivity,
     estimated_weight: u64,
     unreduced_weight: u64,
+}
+
+/// An answered model request: its response, its activity, and the
+/// reasoning that came with it.
+type CompletedRequest = (ModelResponse, ModelRequestActivity, Option<String>);
+
+/// Why a context summary produced no summary: the summary failed, so the
+/// turn falls back to removing rounds, or the budget ledger refused a
+/// summary request at a cap, which ends the turn.
+enum SummaryFailure {
+    Failed(ContextSummaryErrorType),
+    Refused(LimitKind),
+}
+
+impl From<ContextSummaryErrorType> for SummaryFailure {
+    fn from(error_type: ContextSummaryErrorType) -> Self {
+        Self::Failed(error_type)
+    }
 }
 
 /// A failed model request's error with its activity: elapsed time and,

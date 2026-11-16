@@ -612,6 +612,7 @@ fn context_summary_kinds_have_stable_telemetry_values() {
         ContextSummaryErrorType::InvalidOutput,
         ContextSummaryErrorType::Model,
         ContextSummaryErrorType::Rejected,
+        ContextSummaryErrorType::BudgetExhausted,
     ];
 
     // Act
@@ -626,7 +627,8 @@ fn context_summary_kinds_have_stable_telemetry_values() {
             "cancelled",
             "context_summary_invalid_output",
             "context_summary_model_error",
-            "context_summary_rejected"
+            "context_summary_rejected",
+            "context_summary_budget_exhausted"
         ]
     );
 }

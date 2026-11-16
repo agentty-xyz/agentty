@@ -912,6 +912,7 @@ fn lifecycle_error_types_are_bounded_and_documentable() {
         TurnErrorType::RunLimit(LimitKind::ToolCalls),
         TurnErrorType::RunLimit(LimitKind::Tokens),
         TurnErrorType::RunLimit(LimitKind::WallTime),
+        TurnErrorType::RunLimit(LimitKind::Cost),
         TurnErrorType::RepositoryRequired,
         TurnErrorType::Session,
     ];
@@ -934,6 +935,7 @@ fn lifecycle_error_types_are_bounded_and_documentable() {
             "run_limit_tool_calls",
             "run_limit_tokens",
             "run_limit_wall_time",
+            "run_limit_cost",
             "repository_required",
             "session_error",
         ]

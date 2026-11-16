@@ -11,6 +11,7 @@ use std::sync::Arc;
 #[cfg(any(feature = "providers-compat", feature = "providers-openai"))]
 use ag_router::chatgpt::ChatGptAuthError;
 use thiserror::Error;
+use tokio::sync::Semaphore;
 
 use super::role::{ModelSelector, Role};
 use super::spec::{Capabilities, ModelId, ModelSpec, Pricing, PricingSource};
@@ -380,7 +381,9 @@ impl CatalogBuilder {
     /// request capacity, [`CatalogError::UnknownModel`] for a role
     /// candidate or price override naming an uncataloged model, and
     /// [`CatalogError::IncapableCandidate`] for a role candidate without
-    /// the role's required capabilities.
+    /// the role's required capabilities, and
+    /// [`CatalogError::ZeroConcurrency`] for a model whose concurrency cap
+    /// is zero.
     pub fn build(self) -> Result<ModelCatalog, CatalogError> {
         let mut entries = BTreeMap::new();
         for (mut spec, model) in self.models {
@@ -389,6 +392,19 @@ impl CatalogBuilder {
             {
                 spec = spec.with_profile(profile);
             }
+            let concurrency = match spec.max_concurrency() {
+                Some(0) => {
+                    return Err(CatalogError::ZeroConcurrency {
+                        id: spec.id().clone(),
+                    });
+                }
+                Some(permits) => Some(Arc::new(Semaphore::new(
+                    usize::try_from(permits)
+                        .unwrap_or(usize::MAX)
+                        .min(Semaphore::MAX_PERMITS),
+                ))),
+                None => None,
+            };
             let context_budget = spec
                 .profile()
                 .map(ModelProfile::context_budget)
@@ -405,6 +421,7 @@ impl CatalogBuilder {
                 }
                 Entry::Vacant(vacant) => {
                     vacant.insert(CatalogEntry {
+                        concurrency,
                         context_budget,
                         model,
                         spec,
@@ -451,6 +468,7 @@ impl CatalogBuilder {
 #[derive(Clone)]
 #[non_exhaustive]
 pub struct ModelHandle {
+    concurrency: Option<Arc<Semaphore>>,
     context_budget: Option<ContextBudget>,
     model: Arc<dyn Model>,
     spec: ModelSpec,
@@ -482,6 +500,12 @@ impl ModelHandle {
     /// declared.
     pub fn context_budget(&self) -> Option<ContextBudget> {
         self.context_budget
+    }
+
+    /// Returns the permits of [`ModelSpec::max_concurrency`], shared by
+    /// every handle of this catalog entry, or `None` without a cap.
+    pub(crate) fn concurrency(&self) -> Option<Arc<Semaphore>> {
+        self.concurrency.clone()
     }
 }
 
@@ -554,10 +578,18 @@ pub enum CatalogError {
         /// Uncataloged identifier.
         id: ModelId,
     },
+    /// A model's concurrency cap is zero, which no request could meet.
+    #[error("model `{id}` declares a concurrency cap of zero")]
+    ZeroConcurrency {
+        /// Model with the zero cap.
+        id: ModelId,
+    },
 }
 
-/// One cataloged model with its validated request budget.
+/// One cataloged model with its validated request budget and the permits
+/// of its concurrency cap.
 struct CatalogEntry {
+    concurrency: Option<Arc<Semaphore>>,
     context_budget: Option<ContextBudget>,
     model: Arc<dyn Model>,
     spec: ModelSpec,
@@ -566,6 +598,7 @@ struct CatalogEntry {
 impl CatalogEntry {
     fn handle(&self) -> ModelHandle {
         ModelHandle {
+            concurrency: self.concurrency.clone(),
             context_budget: self.context_budget,
             model: Arc::clone(&self.model),
             spec: self.spec.clone(),

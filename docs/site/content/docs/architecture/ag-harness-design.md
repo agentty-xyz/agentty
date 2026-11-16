@@ -93,6 +93,14 @@ and is journaled as failed, or as interrupted when the deadline dropped a runnin
 call, so the session continues normally. Limits are never stored in snapshots or session
 defaults.
 
+Budgets shared across runs go through a `BudgetLedger`, which reserves an estimate
+before every model request and commits reported usage and cost afterwards. A refused
+reservation fails the turn with `TurnError::LimitReached` before anything is sent. The
+harness keeps one ledger, default `Unlimited`, and a run may supply its own.
+`SharedBudget` decides admission under one lock. A catalog entry's `max_concurrency`
+becomes one semaphore shared by everything built from that catalog; it bounds requests
+in flight, not runs.
+
 ```mermaid
 flowchart TD
     Prompt["Receive prompt"] --> Pending["Persist running turn"]

@@ -39,8 +39,9 @@ use crate::{OutputSchemaError, RepositoryError, TurnInputError};
 pub enum ErrorKind {
     /// The caller cancelled the run.
     Cancelled,
-    /// The run reached one of its [`crate::RunLimits`]; retrying the same
-    /// run would reach the same limit.
+    /// The run reached one of its [`crate::RunLimits`], or its
+    /// [`crate::budget::BudgetLedger`] refused its next model request;
+    /// retrying the same run would reach the same limit.
     BudgetExhausted(LimitKind),
     /// The provider limited the request rate; retry after
     /// [`RunError::retry_after`] when present.
@@ -144,8 +145,8 @@ impl TryFrom<ErrorKindName> for ErrorKind {
 pub(crate) enum ErrorKindName {
     /// The caller cancelled the run.
     Cancelled,
-    /// The run reached one of its run limits, named beside the kind;
-    /// retrying the same run would reach the same limit.
+    /// The run reached one of its run limits or a budget ledger cap, named
+    /// beside the kind; retrying the same run would reach the same limit.
     BudgetExhausted,
     /// The provider limited the request rate; retry after
     /// [`RunError::retry_after`] when present.

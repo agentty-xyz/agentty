@@ -102,6 +102,7 @@ fn limit_kinds_have_stable_names() {
         LimitKind::ToolCalls,
         LimitKind::Tokens,
         LimitKind::WallTime,
+        LimitKind::Cost,
     ];
 
     // Act
@@ -111,7 +112,13 @@ fn limit_kinds_have_stable_names() {
     // Assert
     assert_eq!(
         names,
-        ["model_requests", "tool_calls", "tokens", "wall_time"]
+        [
+            "model_requests",
+            "tool_calls",
+            "tokens",
+            "wall_time",
+            "cost"
+        ]
     );
     assert_eq!(serialized, json!(names));
 }
