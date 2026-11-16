@@ -42,109 +42,22 @@ flowchart TD
   Draw --> Events
 ```
 
-Session creation reserves an identity and captures project settings before opening the
-composer. Background setup prepares the worktree without changing navigation or input.
-Saved prompts remain recoverable until execution start, transcript persistence, and
-prompt acknowledgment commit together. Failed setup or handoff remains retryable;
-operations that began executing are not automatically replayed.
-
-Before each turn, the host resolves the session's shared local Env after earlier branch
-effects finish. Existing isolation checks validate the worktree and protect the main
-checkout; the resolved folder and main-checkout boundary supply the worker request. The
-session owns the [Env](@/docs/core-components/durable-components/env.md) throughout
-setup and cleanup, including when it has multiple tasks.
-
-Question answers likewise claim the persisted question set before enqueueing a
-continuation. A rejected enqueue restores the claim. Cancellation coordinates setup and
-resource cleanup so a late preparation result cannot revive canceled work.
-
 <a id="architecture-runtime-flow-notes"></a> The foreground loop drains bounded batches
 of application and terminal events, renders an immutable snapshot, and waits for more
-work. It owns presentation state and shared render caches. Event-driven refresh is
-primary; periodic polling provides recovery from missed updates.
+work. It owns presentation state and render caches. Event-driven refresh is primary;
+periodic polling recovers from missed updates.
 
-Terminal session updates leave prompt and question input modes before further input is
-dispatched. The foreground loop also reconciles restored modes before rendering. Unsent
-composer state and its image attachments are discarded on this transition.
+Session creation reserves an identity and captures project settings before opening the
+composer; background setup prepares the worktree without blocking input. Saved prompts
+stay recoverable until execution start, transcript persistence, and prompt
+acknowledgment commit together. Before each turn, the host resolves the session's
+[Env](@/docs/core-components/durable-components/env.md) after earlier branch effects
+finish and validates worktree isolation. Cancellation coordinates setup and cleanup so a
+late preparation result cannot revive canceled work.
 
-Activity snapshots follow the same worker/runtime event path as progress. The session
-host reduces them by attempt and operation identity in first-seen order and publishes
-one replaceable snapshot with at most one unread `AppEvent` notification per turn. The
-foreground formats the latest snapshot when consuming that notification and replaces a
-transient plain-text block with compact status and command/argument rows, preserving all
-invocation counts when events are batched. Failed calls contribute to live totals
-without retaining rows; the renderer clips live rows to the pane width. Provider output
-deltas update the matching call. After the final answer or failure notice, a durable
-usage message replaces the live rows with invocation and outcome counts. These messages
-participate in render-cache invalidation and saved history, but are excluded from
-provider replay. Commit and rebase assistance collect utility activity concurrently and
-save the same usage footer immediately after their displayed answer or attempt failure
-notice, before propagating failures to the overall workflow. Existing session
-rebase-assistance turns clear their live rows before returning success, failure, or
-cancellation.
-
-## Project Access
-
-Startup uses the launch repository and loads saved project rows without validating other
-checkout paths. The one-time discovery suggestion grants access only when the user
-accepts. Project discovery runs through an injected filesystem boundary on a background
-task; `AppEvent` completions update the foreground dialog. Cancellation stops traversal
-cooperatively and invalidates late results. Only selected results are registered. Saved
-checkouts are validated when explicitly opened.
-
-## ChatGPT Sign-In
-
-The sign-in popup runs the browser sign-in on a background task through
-`AgentAvailabilityProbe::sign_in_chatgpt`, which the worker forwards to the harness
-adapter. `AppEvent::ChatGptSignInUpdated` delivers the sign-in URL, opened through
-`BrowserClient`, and the result; the reducer drops updates whose request generation no
-longer matches the popup. Success switches the session model and refreshes the harness
-model list.
-
-## Session Channel Composition
-
-Composition injects `SessionRunFactory`, which returns a worker-owned
-`SessionRunClient`. The worker obtains its adapter from `ag-runtime`; application
-workflows do not retain raw adapters. `SessionWorkerHandle` owns the mailbox, task,
-ordering, and wakeups. Hosts supply command policy and ordered effects. The shared
-`ag-scheduler` admission pool limits concurrent session turns across regular and managed
-sessions without changing their mailbox order.
-
-Role-aware task commands share that mailbox and the session's Env while using separate
-runtime identities, captured models, and durable response histories. Task continuation
-and clarification retain that task's input and responses. Ordinary session questions and
-provider continuation remain unchanged. Admission resolves definitions through the
-injected catalog and persists their complete instructions and restrictions; later
-repository edits affect new tasks, not retained task conversations. Planner execution
-restricts permissions to `ReadOnly` and performs no commit or forge effects. Implementer
-post-processing uses an isolated transcript projection and remains ordered through
-publication. Implementer answers refresh persisted and visible diff stats before commit
-and publishing effects, with another refresh during finalization. Diff inspection
-remains available during active work. A settled task attempt refreshes its owning
-session only after operation bookkeeping finishes, so consumers observe its final
-durable status.
-
-The terminal offers `/graph` only with the launch-time `--experimental-graph` setting;
-the shared task and execution-graph APIs retain their own programmatic contracts.
-
-Role admission invalidates earlier ordinary review work and its durable recovery
-trigger, and the admitted attempt owns review suppression. After its effects, a
-successful Implementer attempt without questions emits `ImplementerAttemptSucceeded`.
-The reducer releases suppression only when that attempt still owns it, then follows the
-ordinary completed-turn review path. Other task completions and stale events start no
-automatic review; explicit review and later ordinary turns retain their existing
-behavior. See [Run Worker](@/docs/core-components/execution-components/run-worker.md)
-for context ownership and cleanup.
-
-Application shutdown closes every session worker's admission and waits for active
-effects, queued-work cancellation, and runtime cleanup within the shared five-second
-deadline. Task ownership survives mailbox removal. When grace expires, stuck session
-tasks are dropped and awaited before the tracing exporter shuts down; unfinished
-operations remain available for startup recovery.
-
-Model changes pause scheduling, wait for active work, and atomically save selection and
-conversation reset. Failed saves preserve pending work. Successful switches retire the
-old runtime and discard pending work before a new channel is composed.
+Startup uses the launch repository and loads saved projects without validating their
+checkouts. Project discovery runs only after the user accepts the suggestion, and saved
+checkouts are validated when opened.
 
 ## Data Channels
 
@@ -165,143 +78,54 @@ not execution ownership.
 
 <a id="architecture-runtime-flow-app-events"></a> `App::apply_app_events()` is the
 single application path for background state changes. It batches updates and orders
-effects around snapshot mutation. Expensive reloads and Git reads stay off the input
+effects around snapshot mutation; expensive reloads and Git reads stay off the input
 path.
 
-Results carry session, operation, or request generations. The reducer rejects stale
-completions after navigation, cancellation, or replacement. Review claims and
-changed-diff identity persist together, so restart can resume pending review without
-reviewing an unchanged diff again. Diff identity covers the session's changed lines and
-file metadata, not hunk positions or context, so a rebase without conflicts retains its
-focused review and `/apply` still accepts it. When Git reports a conflict, the worker
-invalidates review evidence before assistance edits files and signals the reducer to
-remove the displayed review. The reducer clears that review before persisting batched
-results, and generated review writes require their invocation to remain active in
-SQLite. Failed admission preserves the review.
+Results carry session, operation, or request generations, so the reducer rejects stale
+completions after navigation, cancellation, or replacement. Review claims and the
+changed-diff identity persist together, so restart can resume a pending review without
+reviewing an unchanged diff again. A rebase without conflicts keeps the review; a
+conflict invalidates it before assistance edits files.
 
 Terminal session states release workers. Forge updates may mark a session `Merged`, but
 only a successful manual target sync archives it as `Done`.
 
 ## Session Chat Rendering
 
-<a id="architecture-runtime-flow-session-chat"></a> Durable transcript rows contain user
+<a id="architecture-runtime-flow-session-chat"></a> Durable transcript rows hold user
 prompts, final answers, and workflow notices. Typed transient slots hold progress,
-queued actions, and review output with explicit placement and lifetime. Chat messages
-and workflow actions, including selected review-comment batches and watched follow-ups,
-share one submission sequence for both display and execution. Generated turns replace
-their queued row with loading progress only when execution starts. The worker clears
-that row or progress when it skips or finishes the turn. Review-comment commands also
-retain their thread allowlist. Queued review batches wait for clarification answers,
-including after session restoration. A restored question session creates a paused worker
-when accepting the batch. Generated prompts enter durable history when the worker starts
-them, so canceled waiting work cannot be replayed.
+queued actions, live tool activity, and review output. Chat messages and workflow
+actions share one submission sequence for display and execution; generated prompts enter
+durable history only when the worker starts them, so canceled waiting work is never
+replayed.
 
-Completion replaces matching progress with its result in one reducer update. Stale
-results cannot persist notices. Rendering reads snapshots; it does not perform workflow
-side effects. Runtime-owned caches share derived layout between scrolling and painting.
-Transcript layouts retain rendered message segments across updates, while transient rows
-are assembled separately. The bounded layout cache releases removed history and
-invalidates segments when their content, width, or theme changes. Transcript row
-positions are independent of terminal coordinate limits.
+Rendering reads snapshots and performs no workflow side effects. Runtime-owned caches
+share derived layout between scrolling and painting and invalidate on content, width, or
+theme changes.
 
-Graph chat keeps one snapshot for the visible session's latest proposal and execution
-progress. Session updates invalidate it; live proposals and failed reads refresh at most
-once per second. Rendering and transcript scrolling share the same split geometry. The
-graph mode submits its initial task directly through the shared gateway. While the
-latest proposal is pending, composer messages are replies to it instead of turns: a
-read-only utility run on the Run Worker decides whether a reply approves, cancels, or
-revises the inspected version, and the background task admits that exact-version action
-through the gateway. One reply per proposal is decided at a time.
+Live tool activity follows the same worker event path as progress: the host reduces it
+into one replaceable snapshot per turn, and a durable usage summary replaces it when the
+turn finishes. Usage summaries are saved history but excluded from provider replay.
 
-A graph node asks its clarification questions in session chat: saving the node's
-response also saves a workflow notice listing them, after its answer, in the same
-transaction, and the session worker mirrors that notice into live chat. While a node
-awaits answers, the next composer message is its reply; when several wait, the reply
-goes to the node whose question was saved last. The message is shown in chat and
-admitted through the gateway as a continuation of the exact execution that asked;
-storage rejects a second continuation of the same execution.
-
-Otherwise, while a pending node of a live graph waits for a predecessor's output to be
-accepted, the next composer message is a reply to that output in the latest such graph.
-A read-only utility run on the Run Worker decides whether it accepts the exact output
-version or revises it, and the background task admits either acceptance or a
-continuation of the producer's latest execution through the gateway. One reply per
-output is decided at a time. A reply with attachments revises without a decision run,
-because acceptance cannot carry images; for a producer without a task conversation, such
-a reply is rejected before it is echoed.
-
-On each foreground tick the reducer checks the viewed session for pending graph
-questions, following the same precedence as chat routing: a pending proposal's
-clarification first, then the waiting node. It opens the ordinary question panel for
-them and records the asking proposal version or node execution. Completed answers use
-the ordinary clarification reply format and are sent to that exact target, so a reply
-never reaches work that asked later. Answers that target no longer waits for close the
-panel, so the next check can open the questions pending now.
-
-The graph inspector loads an explicit session-scoped snapshot of the latest proposal
-(read-only), saved graphs, authoritative progress, and exact output bodies. Controls
-revalidate that snapshot and enter the shared command gateway; inspector replies never
-enter ordinary chat. Refresh is explicit, and editing retains the execution originally
-inspected. Background session questions update session state without replacing the
-inspector; returning to session chat exposes the pending questions.
-
-Resource sampling runs behind `ResourceClient` and totals the process tree rooted at
-Agentty's own PID, so it needs no per-session runtime PIDs. Samples run in the
-background, so process-table I/O cannot block terminal input.
+With `--experimental-graph`, session chat also routes replies for
+[execution graphs](@/docs/architecture/execution-graphs.md). While a graph proposal is
+pending, a composer message is a reply to it; while a graph node waits for answers or
+for acceptance of a predecessor's output, the message is a reply to that exact execution
+or output version. A read-only utility run on the Run Worker classifies replies that
+need a decision, and the resulting action enters the shared command gateway. Pending
+graph questions open the ordinary question panel bound to the exact asking version or
+execution, so a reply never reaches work that asked later.
 
 ## Session Turn Data Flow
 
 <a id="architecture-runtime-flow-turn"></a> `ag-session::SessionService` provides the
 frontend-neutral lifecycle API. Agentty's bounded session-runtime mailbox executes its
 requests against the foreground session manager without sharing `App` behind a mutex.
-The [Command Gateway](@/docs/core-components/control-plane/command-gateway.md) routes
-terminal and programmatic mutations through shared foreground admission while preserving
-each workflow's queueing and acknowledgement contract. Delivery envelopes own response
-channels separately from application payloads and transfer deferred replies to workspace
-preparation or the publication worker. Ordinary messages pass through a pure planner
-before effects run: terminal composer intent controls staging and first starts, while
-API messages use current session state and start staged drafts automatically. Busy
-messages queue; other follow-ups retain the reply workflow's eligibility checks. Reads
-remain separate queries. Accepted workflows update
-[messages](@/docs/core-components/durable-components/message.md) and operation records
-through persistence adapters; workers retain execution ordering through post-processing.
-
-Explicit [task submissions](@/docs/core-components/durable-components/task.md) use the
-same gateway and durable-turn worker path. Task creation can separately persist an
-outcome through the gateway without worker dispatch; session-scoped listing stays on the
-query path. Storage admits the desired outcome, attempt, and operation atomically.
-Delivery retries acknowledge an existing attempt before live session eligibility checks;
-new attempts retain ordinary durable-turn eligibility. Operation settlement and startup
-recovery supply attempt status. The task remains open until a caller explicitly accepts
-its outcome, independently of session lifecycle.
-
-Execution graphs use the same command gateway and serial worker for task-conversation
-nodes. Accepting an exact output version records evidence and wakes dispatch; the
-executor pins that version when admitting dependents. Duplicate requests acknowledge
-their saved receipt; queries and reopening never start work. Image attachments are
-durable task inputs: continuations retain earlier images and add new ones, and the
-worker submits them as structured turn attachments alongside the explicit task input.
-
-For each continued graph attempt, the worker delivers its explicit reply, clarification,
-or retry as current task input, alongside the original objective and pinned results.
-Earlier replies and responses remain isolated historical replay; the current instruction
-is excluded from that replay so evidence policy cannot demote a new user request.
-
-The host's opt-in tool-content capture policy travels with the execution trace context,
-including independent roots, queued work, and linked operations. Scoped utility clients
-retain an explicit capture policy across background task spawns, even when captured
-outside a span; span inheritance does not replace that policy. Background project sync
-carries the host context into conflict assistance. Provider adapters own field
-selection, credential suppression, and preview bounds; prompt and reasoning content
-never enter this capture path.
-
-`ag-worker::RuntimeConfig` captures each harness's subagent, tool, and MCP policy.
-Workers resolve that policy for session turns and utilities before runtime dispatch;
-adapters preserve it across retries and repairs, reject unsupported explicit controls,
-and restart retained processes when their startup policy differs. Per-turn filesystem
-permissions remain independent. See
-[Execution Policy](@/docs/core-components/execution-components/run-worker.md#execution-policy)
-for controls, defaults, and adapter support.
+The [Command Gateway](@/docs/core-components/control-plane/command-gateway.md) admits
+terminal and programmatic mutations; accepted workflows persist
+[messages](@/docs/core-components/durable-components/message.md) and operations before
+workers execute them. [Tasks](@/docs/core-components/durable-components/task.md) and
+execution graphs use the same gateway and serial session worker.
 
 ```mermaid
 flowchart TD
@@ -319,42 +143,38 @@ flowchart TD
 1. Runtime converts composer state into a typed application request.
 1. The application persists an operation before sending it to the session worker.
 1. The worker checks cancellation, preparation, and isolation, then executes in shared
-   submission order. Active branch actions reuse the existing worker.
-1. Turn preparation resolves current permission, reasoning, style, speed, and agent
-   settings and submits a `TurnRequest` through `SessionRunClient` after acquiring
-   shared session capacity.
+   submission order.
+1. Turn preparation resolves current settings and submits a `TurnRequest` through
+   `SessionRunClient` after acquiring shared session capacity.
 1. Progress remains transient. Post-turn handling persists the answer, questions, usage,
    and provider continuation state before projecting them into the UI.
 1. Ordered post-processing commits changes, coordinates publishing and stacked children,
    refreshes diff metadata, and enters `Review` or `Question`.
 
+The worker applies each harness's configured
+[execution policy](@/docs/core-components/execution-components/run-worker.md#execution-policy)
+before dispatch. Model changes pause scheduling, wait for active work, and save the
+selection and conversation reset atomically before a new channel is composed.
+
 ### Operation Lifecycle and Recovery
 
 <a id="architecture-session-operation-lifecycle"></a> Operations move from `queued` to
 `running`, then `done`, `failed`, or `canceled`. Stable coordinator operation IDs
-prevent duplicate delivery. Persisted cancellation takes precedence at terminal
-settlement.
+prevent duplicate delivery, and persisted cancellation takes precedence at settlement.
 
-Startup updates retired model selections and reconciles unfinished operations before
-admitting sessions. Interrupted rebases are cleaned up, affected sessions return to
-`Review`, and abandoned operations fail with an interruption reason. Missing worktrees
-do not prevent reconciliation; storage or Git failures stop startup for retry.
-Previously executed mutating requests are never blindly replayed.
+Startup reconciles unfinished operations before admitting sessions: interrupted rebases
+are cleaned up, affected sessions return to `Review`, and abandoned operations fail with
+an interruption reason. Storage or Git failures stop startup for retry. Previously
+executed mutating requests are never replayed.
 
 ### Status Transition Rules
 
 <a id="architecture-runtime-flow-status"></a> `Status::can_transition_to()` and workflow
 eligibility policies govern lifecycle changes. See
 [Session Lifecycle](@/docs/usage/workflow.md#session-lifecycle) for visible states.
-Graph proposal generation and graph reply decisions run on the utility worker but hold a
-`Review` session `InProgress` through a lease backed by a running session operation.
-Other statuses keep their own meaning. A turn or rebase that ends while a lease is held
-leaves `Review` to the last lease, and that lease never ends a turn still running.
-Leases and turns persist the latest in-memory status under one lock, so an older write
-never overwrites a newer status. Queued chat wakes the session worker when only a lease
-holds `InProgress` or the session is back in `Review`, so it runs during a lease. Stack
-operations evaluate one shared snapshot of parent, child, and sibling activity before
-starting branch work.
+Graph proposal generation and reply decisions hold a `Review` session `InProgress`
+through a lease backed by a running operation; the last lease or turn to finish returns
+the session to `Review`, and an older status write never overwrites a newer one.
 
 ## Agent Channel Architecture
 
@@ -371,66 +191,40 @@ contracts. Composition selects the adapter; workers own its execution and cleanu
 | `TurnResult`       | Answer, usage, provider identity            |
 | `AgentRequestKind` | Start, resume, account-read, utility intent |
 
-<a id="architecture-provider-conversation-id-flow"></a> Successful turns persist
+<a id="architecture-provider-conversation-id-flow"></a> Successful turns persist the
 provider conversation identity and the applied instruction fingerprint. Matching
-continuations can use compact reminders; changed policy or lost context requires
-bootstrap or replay. Agent changes follow the same successful-persistence boundary.
-Upgrading from session personalities marks existing sessions for one explicit clearing
-instruction, including full bootstraps into retained native history. Failed turns keep
-the marker for retry; successful ordinary-turn persistence replaces it without losing
-chat history or task definitions. CLI command construction preserves that update through
-stdin prompt rendering when resuming a provider conversation.
-
-Explicit transcript replay does not require provider-native resume. Each graph attempt
-starts a fresh provider conversation and supplies only its node's persisted history;
-Claude graph attempts never select the latest worktree conversation with `-c`.
-
-Codex and Antigravity retain resident runtimes between turns. Managed runtime cleanup
-owns provider subprocesses and their descendants.
+continuations can send compact reminders; changed policy or lost context requires a full
+bootstrap or transcript replay. Replay does not require provider-native resume: each
+graph attempt starts a fresh provider conversation with only its node's history. Codex
+and Antigravity keep resident runtimes between turns; runtime cleanup owns their
+subprocesses and descendants.
 
 <a id="architecture-session-isolation-guards"></a> Every turn validates its worktree and
 expected branch. Main-checkout status is compared before and after work, warning on new
-tracked dirt. Base mutations require a clean target. Permissions travel with each
-request, and runtime identity includes permission mode so writable processes cannot be
-reused for read-only work. Provider-specific limits are described in
+tracked changes. Base mutations require a clean target. Permissions travel with each
+request, and runtime identity includes the permission mode so writable processes are
+never reused for read-only work. Provider-specific limits are described in
 [Agents & Models](@/docs/agents/backends.md).
 
 ## Agent Interaction Protocol Flow
 
 <a id="architecture-agent-interaction-protocol"></a> `ag-protocol` defines shared
-responses, schemas, diagnostics, prompt envelopes, and repair requests. Session turns
-return `answer`, `questions`, and `review_comment_outcomes`; utilities and reviews use
-narrower request-specific schemas.
-
-The `GraphProposal` profile returns either clarification or a complete declarative graph
-under `outcome`. Both remain typed JSON in the normalized answer so proposal questions
-stay separate from ordinary chat questions. Schemas, parsing, bootstrap instructions,
-and refresh instructions share this profile. Agentty reserves generation durably before
-submitting a scoped read-only utility through the Run Worker. Resolution captures agent
-definitions, the session model, Env, and limits without executing nodes. Proposal
-queries and clarification stay outside ordinary chat. Exact-version approval atomically
-records its receipt and publishes the executable snapshot before the existing executor
-starts. Duplicate delivery and startup reads never generate or dispatch work. Spent
-generation slots and approval receipts survive restart.
+response schemas, parsing, diagnostics, prompt envelopes, and repair requests. Session
+turns return `answer`, `questions`, and `review_comment_outcomes`; utilities, reviews,
+and graph proposals use narrower request-specific schemas.
 
 Policy is delivered separately from user input and evidence. Workspace paths, history,
-malformed output, and diagnostics are encoded as data; quoted instructions never
-suppress policy. Long-history replay uses bounded excerpts and a complete temporary
-archive, without changing canonical history. Archive cleanup requires trusted ownership
-evidence.
-
-Adapters prefer native schema enforcement and fail closed when output cannot be
-validated. Bounded repair attempts retain the request's schema and permission policy and
-prohibit task execution. Invalid output exposes derived diagnostics rather than raw
-payloads; nonzero CLI exits retain bounded output needed to explain launch failures.
-Provider transport and parsing differences remain inside `ag-agent`.
+malformed output, and diagnostics are encoded as data, so quoted instructions cannot
+override policy. Adapters prefer native schema enforcement and fail closed when output
+cannot be validated; bounded repair attempts keep the request's schema and permissions.
+Provider transport and parsing differences stay inside `ag-agent`.
 
 ## Clarification Question Loop
 
-<a id="architecture-agent-question-loop"></a> Persist questions before entering
-`Question`. Runtime collects answers and submits one continuation through the worker.
-Ending question mode without answering restores `Review` and wakes queued branch work;
-it does not submit an empty generated reply.
+<a id="architecture-agent-question-loop"></a> Questions persist before the session
+enters `Question`. Runtime collects answers and submits one continuation through the
+worker. Ending question mode without answering restores `Review` and wakes queued branch
+work; it does not submit an empty reply.
 
 ## Background Task Catalog
 
@@ -442,205 +236,97 @@ it does not submit an empty generated reply.
 | Agentty update                      | Startup and hourly                        |
 | Agent CLI discovery and update      | Startup                                   |
 | Harness model listing               | Session picker or Harness `/model`        |
+| `ChatGPT` plan sign-in              | Composer sign-in popup                    |
+| Project discovery                   | Accepted discovery suggestion             |
 | Worktree preparation and cleanup    | Session lifecycle                         |
 | File indexing and image capture     | Composer interaction                      |
 | Full diff and Markdown preview      | Inspection request                        |
+| Process resource sampling           | Foreground ticks, rate-limited            |
 | Title and commit-message generation | Session input and changed turns           |
 | Focused review                      | Eligible changed diff or manual request   |
 | Publish, sync, merge                | User request or ordered workflow          |
 
 All model-backed tasks use `RunClient` or `SessionRunClient`. Subprocesses have bounded
-execution and cleanup, and background results retain their original session/project
+execution and cleanup, and background results keep their original session and project
 identity.
 
-Focused review packs captured diffs by file and hunk, independently checks original
-changes for boundary and cross-file risks even for a single batch, then verifies and
-reconciles candidates. Fragmented boundary calls share bounded context from all captured
-changes and initial findings, with condensation disclosed, while retaining each original
-source fragment. Consolidation accounts for every candidate with a retained finding or a
-rejection reason and links every output to an input; incomplete accounting preserves the
-original findings. Project criteria load through the filesystem boundary and are
-selected by changed paths and file types, with bounded rendered criteria. Discovery
-retains original source; final verification retains the captured file scope when context
-is summarized. Diff capture normalizes Git presentation settings so file identities and
-source coordinates remain stable. Host-side citation matching checks typed source
-evidence against the captured old or new source without reading a newer worktree state.
-Repairs reconcile duplicate primary citations while preserving supporting references.
-Processed-file counts and unanchored findings expose coverage limits. Worker-owned
-runtime reuse preserves isolated conversation context. One deadline and provider-call
-budget cover preparation, retries, and repair. Successful calls preserve discovery
-inputs, candidate findings, and group-scoped consolidation decisions in retry
-checkpoints. Completion atomically archives these call records with the review before
-clearing retry state. The latest completed audit survives invalidation, partial retries,
-and cached review restoration until an active review generation completes or its session
-is deleted; generation checks reject stale evidence. Failed coverage remains explicit
-rather than being presented as a completed review. Each generation runs as a static
-execution graph of parallel fragment readers joined by cross-file and consolidation
-nodes; see [details](@/docs/architecture/execution-graphs.md#focused-review-graph).
-
-Commit-message generation summarizes large diffs and has a bounded fallback using
-changed filenames, conversation, and the existing commit message. It never discards
-worktree changes to fit a prompt.
+Focused review checks captured diff fragments, cross-file risks, and consolidation as a
+[static execution graph](@/docs/architecture/execution-graphs.md#focused-review-graph).
+It cites evidence against the captured diff rather than a newer worktree, reports
+coverage limits explicitly, and checkpoints successful calls so retries reuse them.
+Commit-message generation summarizes large diffs and falls back to bounded context; it
+never discards worktree changes to fit a prompt.
 
 ## Sync, Merge, and Rebase Flows
 
 <a id="architecture-runtime-flow-git-workflows"></a> Git and forge effects stay behind
 `GitClient` and `ReviewRequestClient`:
 
-- **Project sync** serializes captured project requests, coalesces duplicates, and gives
-  existing merges priority. Its base-checkout guard blocks conflicting mutations without
-  blocking navigation or isolated session turns.
+- **Project sync** serializes project requests, coalesces duplicates, and blocks
+  conflicting base mutations without blocking navigation or isolated session turns.
 - **Local merge** rebases and squash-merges an unlinked session, preserving its commit
-  message. Linked review requests are ineligible.
+  message.
 - **Session sync** rebases onto the local or remote base. Agent assistance resolves
   conflicts; Agentty owns staging, hook checks, continuation, and bounded repair.
-- **Publishing** shares branch ownership with sync and auto-push. Force-with-lease
-  protects remote changes. Creation, manual refresh, and automatic metadata updates use
-  the same read-only utility through the Run Worker, with cumulative committed evidence
-  from immutable published commits, bounded user intent, and repository PR/MR guidance.
-  Generation compares published commits against the effective review target; updates
-  read the live forge target before acquiring the advertised source and target commits
-  independently of configured fetch refspecs. Existing description content is preserved
-  in the generated section order; code normalizes Agentty attribution after
-  reconciliation. Best-effort concurrent-edit checks precede metadata updates.
-- **Remote merge** marks `Merged`. Successful manual target sync persists archival and
-  child-restack intent before cleanup; failed persistence leaves work retryable.
-- **Review-request watching** is opt-in per session and persisted. For sessions resting
-  in `Watching`, the sync orchestrator's forge refresh also reports head commit,
-  conflicts, check results, and trusted unresolved threads, trusting the review bots
-  named by the project's `.agentty/review-watch.json`. A failed lookup of these facts,
-  or an invalid configuration, is reported without failing the refresh. The foreground
-  reducer picks at most one follow-up per report and starts it through the ordinary
-  session sync, review-comment, or reply workflow, so model work still runs on the
-  session worker. Failed checks that are ready join a review-comment turn, so one turn
-  reports an outcome for every thread it fixes. Checks still failing at the same head
-  after that turn are rerun once through the forge client in a background task, then
-  left to the user. The reducer acts on them only when no auto-push is running and the
-  reported head matches the session worktree's `HEAD`, so a report fetched before the
-  fix commit was pushed is ignored. Rerun checks are left to the user only after a
-  report shows them running again, or after a second report of finished failures, since
-  the first may predate the rerun and a fast rerun can finish between reports. Started
-  follow-ups are persisted to avoid repeating them for unchanged forge state; one that
-  cannot start is retried on the next report. The reducer moves idle sessions between
-  `Review` and `Watching`. The orchestrator starts after startup moves watched sessions
-  to `Watching`, so its first refresh already reports their forge facts.
+- **Publishing** shares branch ownership with sync and auto-push and uses
+  force-with-lease. Review-request descriptions come from a read-only utility run over
+  the published commits, preserving existing description content.
+- **Remote merge** marks `Merged`. A successful manual target sync persists archival and
+  child-restack intent before cleanup.
+- **Review-request watching** is opt-in per session. For sessions in `Watching`, forge
+  refresh reports head commit, conflicts, checks, and unresolved threads from trusted
+  bots configured in `.agentty/review-watch.json`. The reducer starts at most one
+  follow-up per report through the ordinary sync, review-comment, or reply workflow and
+  persists it so unchanged forge state does not repeat it.
 
-Review-comment targets persist before execution and are scoped to the linked open review
-request. Clarification answers and subsequent turns restore unfinished targets and
-re-evaluate prior outcomes. Complete outcome batches persist with the answer and bind to
-the successful fix commit. Queued chat defers automatic publishing, including after
-review turns; follow-ups re-evaluate pending targets before the final turn pushes and
-awaits thread updates. Automatic and manual pushes share the same handler; a changed tip
-retains the batch for re-evaluation. Durable posting markers permit retries without
-duplicate replies. Only `fixed` threads resolve, while `no_change_needed` receives a
-reply and remains open.
-
-Turn cancellation interrupts workspace preparation while waiting for earlier branch
-effects. Awaited review publishing observes the same turn token and drops in-flight Git
-and forge work before releasing the branch lock. Unfinished operations retain their
-posting markers for retry; cancellation does not undo effects already accepted remotely.
+Review-comment targets persist before execution and stay scoped to the linked open
+review request. Outcomes bind to the fix commit; durable posting markers allow retries
+without duplicate replies. Only `fixed` threads resolve; `no_change_needed` receives a
+reply and stays open. Cancellation drops in-flight Git and forge work but does not undo
+effects already accepted remotely.
 
 ## Persistence and Recovery Boundaries
 
 <a id="architecture-runtime-flow-persistence"></a> SQLite is authoritative for restart
 recovery; live handles and immutable snapshots serve rendering. Operation admission,
-turn completion, review evidence, and cleanup intent must persist before their dependent
-side effects. Recoverable failures remain visible instead of claiming terminal success.
-Startup fails abandoned queued operations without dismissing pending clarification.
-Unstarted queued work does not change a session's `Question` status.
+turn completion, review evidence, and cleanup intent persist before their dependent side
+effects. Recoverable failures stay visible instead of claiming success. Startup fails
+abandoned queued operations without dismissing pending clarification.
 
-The native harness has its own store, lease, and effect-settlement contracts. Each
-Harness session keeps its durable history in `harness/<session id>/` under the Agentty
-root, outside the worktree; a turn returns only after its settlement, and failed cleanup
-is retried once and again before the session's next turn. Deleting, canceling, or
-rolling back the session removes that directory. See
-[`ag-harness` Design](@/docs/architecture/ag-harness-design.md).
+Each Harness session keeps its durable history under `harness/<session id>/` in the
+Agentty root, outside the worktree; deleting, canceling, or rolling back the session
+removes it. See [`ag-harness` Design](@/docs/architecture/ag-harness-design.md).
 
 ## Headless execution ownership
 
-`ag-worker` owns shared ordering, execution, heartbeats, cancellation, and operation
-settlement. Hosts supply question policy and ordered Git/forge effects. Closing or
-retiring a mailbox settles or cancels outstanding work and notifies callers, including
-those using retained handle clones.
+`ag-worker` owns ordering, execution, heartbeats, cancellation, and operation
+settlement. Hosts supply question policy and ordered Git and forge effects. Closing a
+mailbox settles or cancels outstanding work and notifies every caller. Operation
+completion includes post-processing, not only model completion.
 
-The static `GraphExecutor` separately drains dependency-ready branches through injected
-worker adapters. Storage admits each node once with pinned inputs and its existing
-execution authority. Shared Env leases and provider budgets constrain parallel branches;
-all prerequisite gates must hold before a join runs. Focused review launches its own
-graph from its background task; an approved `/graph` proposal launches its nodes through
-the same executor. See [Execution Graphs](@/docs/architecture/execution-graphs.md).
+Turn preparation resolves permissions, reasoning level, response style, speed, and agent
+after workspace preparation; the model selection travels with the queued turn. Agent
+application state is saved only after a successful turn.
 
-Explicit graph launches use the same foreground admission gateway. Graph task handoffs
-enter the owning session's ordered mailbox with a completion reply retained through
-operation settlement. The selected graph command publishes active ownership before
-waiting for Env access, so sync queues behind it. Gate waits observe cancellation;
-completion retains acquired leases through settlement. Queued nodes cannot hold a lease
-ahead of earlier commands. Utilities retain their concurrent worker path. Graph writers
-also exclude focused-review readers, which overlap ordinary session work and
-conflict-free sync as background readers. Acceptance and Env release wake active graph
-drivers without polling or startup replay. Each settled graph node also wakes drivers
-after releasing shared capacity and its Env lease, independently of the rest of its
-dispatch wave. Returning capacity or an Env lease from an unclaimed check wakes only
-drivers waiting for that resource, avoiding unconditional broadcasts. Drivers retain
-their launch and remaining budgets while waiting for explicit retry or clarification
-intent. Progress queries do not dispatch work. Cancellation closes durable admission
-before signaling workers, and startup never recreates drivers. Explicit resume uses the
-saved revision; retry and clarification actions append new executions against the exact
-source receipt. Completion requires every node's question-free settlement. Detached
-utilities retain their Env leases in worker-owned scopes through cancellation cleanup.
-Ordinary worker leases release and notify on early returns as well as normal completion.
-
-Channel owners clean up provider processes after cancellation. Operation completion
-includes post-processing, not just model completion. Heartbeat failures are reported
-without abandoning live work; startup recovery requires exclusive application ownership.
-
-Turn preparation groups the current permissions, reasoning level, response style, speed,
-and agent into resolved settings after workspace preparation. The model selection still
-travels with the queued turn; the worker applies its captured execution policy at
-submission. Resolution preserves existing reads and defaults rather than persisting an
-earlier configuration snapshot. Agent application state is saved only after a successful
-turn.
+The static `GraphExecutor` drains dependency-ready graph nodes through the same session
+and utility paths; see [Execution Graphs](@/docs/architecture/execution-graphs.md).
 
 ## Utility run supervision
 
-Utility runs carry purpose, session/project ownership, and inherited cancellation.
-Nested utilities execute directly under worker supervision rather than waiting behind
-the session command that needs them. Caller drop, parent cancellation, and shutdown stop
-owned execution.
-
-Session deletion waits for utilities before removing resources. Durable admission
-closure rejects late submissions. Application shutdown gives workers, setup, and cleanup
-one shared five-second grace period, then forces remaining runtime resources to drop.
-Pending turn telemetry is flushed after background work settles, within the same
-deadline. Unfinished records remain available for startup recovery.
-
-See [Execution](@/docs/core-components/execution-components/execution-boundary.md) for
-the shared contract.
+Utility runs carry purpose, session or project ownership, and inherited cancellation.
+Nested utilities run directly under worker supervision instead of queueing behind the
+session command that awaits them. Session deletion waits for utilities before removing
+resources. Application shutdown gives workers, setup, cleanup, and telemetry flushing
+one shared five-second grace period; unfinished records remain for startup recovery. See
+[Run Worker](@/docs/core-components/execution-components/run-worker.md).
 
 ## Execution Traces
 
-The application owns optional OTLP export. Queue entries retain turn trace ownership
-until worker selection; spawned utilities explicitly capture the initiating trace
-context alongside run ownership. The turn span includes ordered post-processing and
-operation settlement. Provider adapters observe raw structured operations inside each
-`agent.attempt` before reducing them to UI progress. Attempt-owned trackers retain
-bounded operation identities internally and export only allowlisted categories and
-numeric metadata. Workflow roots and worker run spans record their identity in the trace
-context, with inner runs overriding outer values; operation spans repeat it. Host phases
-distinguish diff capture, commit context preparation, message generation, fallback, Git
-execution, and individual commit attempts. Utilities retain captured turn ownership and
-link the active phase from that same trace. Missing provider completion events are
-labeled incomplete; their observed span lifetimes are not exact model execution
-durations. Span guards close canceled or abandoned work when its owner drops. Explicit
-Codex context compaction records its request and completion wait as `agent.compaction`,
-distinguishing proactive, overflow recovery, and provider-native triggers. Codex usage
-uses cumulative-counter deltas for turn totals and the latest request input for context
-pressure. Duplicate updates are ignored; resumed threads establish a new baseline
-without billing retained history. Turns lacking cumulative counters discard stale
-baselines before fallback usage can be counted again. A later complete snapshot
-establishes a fresh baseline; missing counters remain unknown in telemetry. Exporter
-shutdown follows worker cleanup and terminal restoration. See
-[Session Traces](@/docs/usage/workflow.md#session-traces) for enablement and data scope.
-The same export owns an optional event log; the analytics sender emits each usage event
-to it before, and independently of, the `PostHog` request. See
+The application owns optional OTLP export. Turn and utility spans keep their initiating
+trace context across queues and background tasks, and the turn span includes ordered
+post-processing and settlement. Provider adapters export only allowlisted categories and
+numeric metadata; prompt and reasoning content never enter traces, and tool content is
+captured only when the host opts in. Incomplete provider events are labeled rather than
+inferred. The exporter shuts down after worker cleanup and terminal restoration. See
+[Session Traces](@/docs/usage/workflow.md#session-traces) and
 [Local Usage Events](@/docs/usage/workflow.md#local-usage-events).
