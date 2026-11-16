@@ -9,8 +9,10 @@ use ag_forge as forge;
 use ag_git as git;
 use ag_git::{BranchPushOutcome, GitClient, GitError};
 use ag_session::test_support as model_fixture;
+use ag_telemetry::{KeyValue, Span, TraceContextExt as _};
 use ag_worker::MockRunClient;
 use mockall::Sequence;
+use opentelemetry::trace::SpanId;
 use tempfile::tempdir;
 use tokio::sync::{Notify, mpsc};
 
@@ -42,6 +44,7 @@ use crate::domain::session::{PublishedBranchSyncStatus, Status};
 use crate::infra::db::AppRepositories;
 use crate::infra::fs;
 use crate::test_support::enable_tracing_log_fallback;
+use crate::test_support::telemetry::{assert_span_attributes, capture_spans, finished_span};
 
 /// Verifies session and sync assistance abort when the conflicted file
 /// fingerprint repeats across attempts without any file changes.
@@ -157,6 +160,7 @@ fn unchanged_conflict_git_client() -> git::MockGitClient {
 #[tokio::test]
 async fn test_execute_rebase_workflow_aborts_when_assist_loop_fails() {
     // Arrange
+    let (_provider_guard, exporter) = capture_spans().await;
     let mut mock_git_client = git::MockGitClient::new();
     let mut sequence = Sequence::new();
     mock_git_client
@@ -206,9 +210,13 @@ async fn test_execute_rebase_workflow_aborts_when_assist_loop_fails() {
     let (_temp_dir, mut input) =
         build_rebase_assist_input_for_test(Arc::new(mock_git_client)).await;
     input.rebase_plan = RebasePlan::target("origin/main".to_string());
+    let workflow = Span::root("session.sync", Vec::new());
+    let workflow_id = workflow.context().span().span_context().span_id();
 
     // Act
-    let result = SessionManager::execute_rebase_workflow(input).await;
+    let result = workflow
+        .scope(SessionManager::execute_rebase_workflow(input))
+        .await;
 
     // Assert
     let error = result.expect_err("rebase workflow should fail");
@@ -217,6 +225,11 @@ async fn test_execute_rebase_workflow_aborts_when_assist_loop_fails() {
             .to_string()
             .contains("Failed to sync: state query failed"),
         "workflow error should include assist-loop failure reason"
+    );
+    assert_span_attributes(
+        &finished_span(&exporter, "rebase.step", workflow_id),
+        "failed",
+        &[KeyValue::new("agentty.git.rebase.result", "aborted")],
     );
 }
 
@@ -1991,8 +2004,10 @@ async fn test_execute_merge_workflow_reuses_session_head_commit_message() {
 async fn test_run_merge_task_reports_failures_and_restores_review() {
     // Arrange
     enable_tracing_log_fallback();
+    let (_provider_guard, exporter) = capture_spans().await;
 
     for (expected_error, initial_status, configure_git_client) in merge_task_failure_cases() {
+        exporter.reset();
         let mut mock_git_client = git::MockGitClient::new();
         configure_git_client(&mut mock_git_client);
         let (_temp_dir, mut input) =
@@ -2020,9 +2035,14 @@ async fn test_run_merge_task_reports_failures_and_restores_review() {
         let transcript = Arc::clone(&input.transcript);
 
         // Act
-        SessionManager::run_merge_task(input).await;
+        SessionManager::run_merge_task(input, Span::root("session.merge", Vec::new())).await;
 
         // Assert
+        assert_span_attributes(
+            &finished_span(&exporter, "session.merge", SpanId::INVALID),
+            "failed",
+            &[],
+        );
         let transcript_text = transcript
             .lock()
             .expect("transcript lock poisoned")

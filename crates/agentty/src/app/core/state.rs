@@ -8,9 +8,11 @@ use std::time::Instant;
 use ag_forge::{RealReviewRequestClient, ReviewRequestClient};
 use ag_git::{GitClient, GitError, RealGitClient};
 use ag_session::AgentAvailabilityProbe;
+use ag_telemetry::Span;
 use ag_worker::{RealAgentAvailabilityProbe, RuntimeConfig};
 use app::branch_publish::{
-    BranchPublishTaskContext, BranchPublishTaskSession, run_branch_publish_action,
+    BranchPublishTaskContext, BranchPublishTaskFailure, BranchPublishTaskSession,
+    run_branch_publish_action,
 };
 use app::command_gateway::ReviewRequestCommand;
 use app::merge_queue::{MergeQueue, MergeQueueProgress};
@@ -663,7 +665,8 @@ impl App {
             .load_session_detail_into_state(self.services.db(), &session_id)
             .await;
         self.open_session(&session_id);
-        self.retry_workspace_preparation(&session_id).await?;
+        self.retry_workspace_preparation(&session_id, "session.fork")
+            .await?;
 
         Ok(session_id)
     }
@@ -898,7 +901,9 @@ impl App {
                     .is_some()
             })
         {
-            return self.retry_workspace_preparation(session_id).await;
+            return self
+                .retry_workspace_preparation(session_id, "session.create")
+                .await;
         }
         self.ensure_project_checkout_available(self.projects.active_project_id())?;
         let session = self
@@ -924,7 +929,8 @@ impl App {
             .insert_session_preparation(session_id, &base_branch)
             .await?;
         if self.queue_preparation_prompt(session_id, &prompt).await? {
-            self.retry_workspace_preparation(session_id).await?;
+            self.retry_workspace_preparation(session_id, "session.create")
+                .await?;
             return Ok(());
         }
         self.clear_review_output(session_id);
@@ -1542,17 +1548,23 @@ impl App {
             .start_branch_publish(session_id, loading_label);
         self.mode = restore_view.into_view_mode();
 
+        let mut trace = Span::root("session.push", Vec::new());
+        trace.identify("agentty.session.id", event_session_id.to_string());
         tokio::spawn(async move {
-            let result = run_branch_publish_action(
-                publish_branch_action,
-                branch_publish_context,
-                db,
-                clock,
-                git_client,
-                review_request_client,
-                remote_branch_name,
-            )
-            .await;
+            let result = trace
+                .run(
+                    run_branch_publish_action(
+                        publish_branch_action,
+                        branch_publish_context,
+                        db,
+                        clock,
+                        git_client,
+                        review_request_client,
+                        remote_branch_name,
+                    ),
+                    BranchPublishTaskFailure::trace_outcome,
+                )
+                .await;
             // Fire-and-forget: receiver may be dropped during shutdown.
             let _ = event_sender.send(AppEvent::BranchPublishActionCompleted {
                 operation_id: None,

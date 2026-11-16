@@ -7,6 +7,7 @@ use ag_contracts::AgentRequestKind;
 use ag_forge as forge;
 use ag_git as git;
 use ag_protocol::{AgentResponse, parse_agent_response_strict};
+use ag_telemetry::FutureExt as _;
 use ag_worker::RunClient;
 use askama::Template;
 use tokio::sync::mpsc;
@@ -2310,23 +2311,29 @@ impl SessionManager {
 
     /// Deletes the selected session while deferring filesystem cleanup to a
     /// background task.
+    ///
+    /// A `session.delete` root trace spans removal and the deferred cleanup;
+    /// it ends canceled when no session is removed.
     pub async fn delete_selected_session_deferred_cleanup(
         &mut self,
         projects: &ProjectManager,
         services: &AppServices,
     ) {
+        let mut trace = ag_telemetry::Span::root("session.delete", Vec::new());
         let Some(cleanup) = self
             .remove_selected_session_from_state_and_db(projects, services)
+            .with_context(trace.context())
             .await
         else {
             return;
         };
+        trace.identify("agentty.session.id", cleanup.session_id.to_string());
 
         let fs_client = services.fs_client();
         let git_client = services.git_client();
-        services.track_cleanup_task(tokio::spawn(async move {
-            SessionManager::cleanup_deleted_session_resources(fs_client, git_client, cleanup).await;
-        }));
+        services.track_cleanup_task(tokio::spawn(trace.scope(
+            SessionManager::cleanup_deleted_session_resources(fs_client, git_client, cleanup),
+        )));
     }
 
     /// Removes the selected session from app state and persistence, returning

@@ -11,6 +11,7 @@ use crate::infra::db::{SessionPreparationRow, SessionPreparationState, SessionRo
 
 impl SessionManager {
     /// Prepares one reserved workspace and durably records success or failure.
+    /// A canceled reservation returns [`SessionError::StoppedByUser`].
     pub(crate) async fn prepare_reserved_session(
         services: &AppServices,
         session_id: &str,
@@ -24,7 +25,7 @@ impl SessionManager {
         if preparation.state == SessionPreparationState::Canceled {
             Self::cleanup_canceled_preparation(services, session_id);
 
-            return Err(SessionError::Workflow(
+            return Err(SessionError::StoppedByUser(
                 "Workspace setup was canceled".to_string(),
             ));
         }
@@ -58,7 +59,7 @@ impl SessionManager {
         if !applied {
             Self::cleanup_canceled_preparation(services, session_id);
 
-            return Err(SessionError::Workflow(
+            return Err(SessionError::StoppedByUser(
                 "Workspace setup was canceled".to_string(),
             ));
         }

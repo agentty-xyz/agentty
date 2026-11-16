@@ -9,7 +9,9 @@ use std::time::Duration;
 
 use ag_git::{GitError, MockGitClient};
 use ag_session::{CreateSessionMode, CreateSessionRequest, SessionError};
+use ag_telemetry::KeyValue;
 use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
+use opentelemetry::trace::SpanId;
 use ratatui::Terminal;
 use ratatui::backend::TestBackend;
 use tokio::sync::{Notify, oneshot};
@@ -25,6 +27,7 @@ use crate::domain::turn_prompt::{TurnPrompt, TurnPromptAttachment};
 use crate::infra::db::SessionPreparationState;
 use crate::presentation::app_mode::AppMode;
 use crate::runtime::PresentationState;
+use crate::test_support::telemetry::{assert_span_attributes, capture_spans, finished_span};
 use crate::ui::style::ColorSupport;
 
 /// Pauses worktree setup at its injected Git boundary until released.
@@ -1135,6 +1138,85 @@ async fn invalid_saved_prompt_is_retained_with_retry_feedback() {
 }
 
 #[tokio::test]
+async fn background_creation_traces_workspace_preparation_under_a_session_create_root() {
+    // Arrange
+    let (_provider_guard, exporter) = capture_spans().await;
+    let (mut app, _directory) = crate::test_support::new_git_test_app().await;
+    let request = regular_request(&app);
+
+    // Act
+    app.start_session_creation(request, None).await;
+    let session_id = app.sessions.sessions()[0].id.clone();
+    finish_creation(&mut app).await;
+
+    // Assert
+    let root = finished_span(&exporter, "session.create", SpanId::INVALID);
+    assert_span_attributes(
+        &root,
+        "completed",
+        &[
+            KeyValue::new("agentty.session.id", session_id.to_string()),
+            KeyValue::new("agentty.session.stacked", false),
+        ],
+    );
+    let preparation = finished_span(&exporter, "workspace.prepare", root.span_context.span_id());
+    assert_span_attributes(&preparation, "completed", &[]);
+}
+
+#[tokio::test]
+async fn canceled_checkout_ends_its_session_create_root_as_canceled() {
+    // Arrange
+    let (_provider_guard, exporter) = capture_spans().await;
+    let (mut app, _directory, release) = delayed_creation_app(2).await;
+    let request = regular_request(&app);
+    app.start_session_creation(request, None).await;
+    let session_id = app.sessions.sessions()[0].id.clone();
+
+    // Act
+    app.cancel_session(&session_id)
+        .await
+        .expect("cancel preparation");
+    release.notify_one();
+    finish_creation(&mut app).await;
+
+    // Assert
+    let root = finished_span(&exporter, "session.create", SpanId::INVALID);
+    assert_span_attributes(
+        &root,
+        "canceled",
+        &[
+            KeyValue::new("agentty.session.id", session_id.to_string()),
+            KeyValue::new("agentty.session.stacked", false),
+        ],
+    );
+}
+
+#[tokio::test]
+async fn fork_checkout_runs_under_a_session_fork_root() {
+    // Arrange
+    let (_provider_guard, exporter) = capture_spans().await;
+    let (mut app, _directory) = crate::test_support::new_git_test_app().await;
+    let source_id = app.create_session().await.expect("source");
+    crate::test_support::set_session_status_for_test(&mut app, &source_id, Status::Review);
+
+    // Act
+    let fork_id = app.fork_session(&source_id).await.expect("fork");
+    crate::test_support::finish_session_creation_tasks(&mut app).await;
+
+    // Assert
+    let root = finished_span(&exporter, "session.fork", SpanId::INVALID);
+    assert_span_attributes(
+        &root,
+        "completed",
+        &[
+            KeyValue::new("agentty.session.id", fork_id),
+            KeyValue::new("agentty.session.stacked", false),
+        ],
+    );
+    finished_span(&exporter, "workspace.prepare", root.span_context.span_id());
+}
+
+#[tokio::test]
 async fn cancellation_during_checkout_prevents_saved_prompt_dispatch() {
     // Arrange
     let (mut app, _directory, release) = delayed_creation_app(2).await;
@@ -1190,7 +1272,9 @@ async fn canceled_preparation_rejects_retry_and_late_submissions() {
 
     // Act
     let submission = app.queue_preparation_prompt(&session_id, &prompt).await;
-    let retry = app.retry_workspace_preparation(&session_id).await;
+    let retry = app
+        .retry_workspace_preparation(&session_id, "session.create")
+        .await;
     app.refresh_workspace_preparation(&session_id).await;
 
     // Assert

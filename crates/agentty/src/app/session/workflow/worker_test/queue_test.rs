@@ -311,7 +311,9 @@ async fn test_repeat_staged_start_preserves_queued_first_prompt_acceptance() {
     // Act: repeat the public start action and the direct retry while
     // the first command remains queued and the session remains Draft.
     let repeated_start = app.start_staged_session(&child_id).await;
-    let repeated_retry = app.retry_workspace_preparation(&child_id).await;
+    let repeated_retry = app
+        .retry_workspace_preparation(&child_id, "session.create")
+        .await;
     let after_retry = app
         .services
         .db()

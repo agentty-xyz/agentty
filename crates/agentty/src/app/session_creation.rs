@@ -1,13 +1,14 @@
 //! Prepared session creation and foreground completion routing.
 
 use ag_session::{CreateSessionRequest, SessionError, SessionId};
+use ag_telemetry::{KeyValue, Span};
 use tokio::sync::oneshot;
 use uuid::Uuid;
 
-use crate::app::session::SessionCreationSettings;
+use crate::app::session::{self, SessionCreationSettings};
 use crate::app::{App, AppError, AppEvent, SessionManager};
 use crate::domain::input::InputState;
-use crate::domain::session::Status;
+use crate::domain::session::{Session, Status};
 use crate::domain::turn_prompt::TurnPrompt;
 use crate::infra::db::SessionPreparationState;
 use crate::presentation::app_mode::{AppMode, ChatFocus};
@@ -96,7 +97,7 @@ impl App {
         self.pending_session_creations
             .entry(request_id.clone())
             .and_modify(|pending| pending.session_id = Some(session_id.clone()));
-        self.spawn_workspace_preparation(request_id, session_id);
+        self.spawn_workspace_preparation(request_id, session_id, "session.create");
     }
 
     /// Selects the newly reserved conversation once, before accepting input.
@@ -121,11 +122,33 @@ impl App {
     }
 
     /// Runs filesystem work without borrowing the foreground application.
-    fn spawn_workspace_preparation(&self, request_id: String, session_id: String) {
+    ///
+    /// The work runs under an independent `workflow` root trace, such as
+    /// `session.create` or `session.fork`, linked to the initiating
+    /// operation. User cancellation ends it as canceled.
+    fn spawn_workspace_preparation(
+        &self,
+        request_id: String,
+        session_id: String,
+        workflow: &'static str,
+    ) {
         let services = self.services.clone();
         let completion_request_id = request_id.clone();
+        let stacked = self
+            .sessions
+            .session_for_id(&session_id)
+            .is_some_and(Session::is_stacked_child);
+        let mut trace = Span::root(
+            workflow,
+            vec![KeyValue::new("agentty.session.stacked", stacked)],
+        );
+        trace.identify("agentty.session.id", session_id.clone());
         let task = tokio::spawn(async move {
-            let result = SessionManager::prepare_reserved_session(&services, &session_id)
+            let result = trace
+                .run(
+                    SessionManager::prepare_reserved_session(&services, &session_id),
+                    session::SessionError::trace_outcome,
+                )
                 .await
                 .map(|()| session_id)
                 .map_err(|error| error.to_string());
@@ -250,7 +273,8 @@ impl App {
             ));
         }
         if preparation.state == SessionPreparationState::Failed {
-            self.retry_workspace_preparation(session_id).await?;
+            self.retry_workspace_preparation(session_id, "session.create")
+                .await?;
         }
         self.refresh_workspace_preparation(session_id).await;
 
@@ -258,10 +282,11 @@ impl App {
     }
 
     /// Retries failed setup or starts lazy draft preparation, retaining its
-    /// prompt.
+    /// prompt. The setup is traced as the named `workflow` root.
     pub(crate) async fn retry_workspace_preparation(
         &mut self,
         session_id: &str,
+        workflow: &'static str,
     ) -> Result<(), AppError> {
         if !self.sessions.can_retry_workspace_preparation(session_id) {
             return Err(AppError::Workflow(
@@ -303,7 +328,7 @@ impl App {
                 session_id: Some(session_id.to_string()),
             },
         );
-        self.spawn_workspace_preparation(request_id, session_id.to_string());
+        self.spawn_workspace_preparation(request_id, session_id.to_string(), workflow);
         self.refresh_workspace_preparation(session_id).await;
 
         Ok(())

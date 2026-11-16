@@ -375,7 +375,7 @@ pub(super) async fn assert_preparation_publication_failure_is_retryable(trigger:
     sqlx::query(trigger).execute(&pool).await.expect("trigger");
 
     // Act
-    app.retry_workspace_preparation(&session_id)
+    app.retry_workspace_preparation(&session_id, "session.create")
         .await
         .expect("submit");
     crate::test_support::finish_session_creation_tasks(&mut app).await;
@@ -436,7 +436,7 @@ pub(super) async fn assert_preparation_retry_rejects_active_parent(
 ) {
     // Act: retry must still enforce the stack gate after a failed marker.
     crate::test_support::set_session_status_for_test(app, parent_id, Status::InProgress);
-    app.retry_workspace_preparation(session_id)
+    app.retry_workspace_preparation(session_id, "session.create")
         .await
         .expect("retry");
     crate::test_support::finish_session_creation_tasks(app).await;
@@ -506,7 +506,7 @@ pub(super) async fn queue_saved_stacked_prompt(
         ag_worker::test_session_worker_handle(Arc::default(), sender, Arc::default()),
     );
 
-    app.retry_workspace_preparation(&child_id)
+    app.retry_workspace_preparation(&child_id, "session.create")
         .await
         .expect("submit");
     crate::test_support::finish_session_creation_tasks(app).await;
@@ -581,7 +581,7 @@ pub(super) async fn capture_prepared_fork_reply(
         session_id.into(),
         ag_worker::test_session_worker_handle(Arc::default(), sender, Arc::default()),
     );
-    app.retry_workspace_preparation(session_id)
+    app.retry_workspace_preparation(session_id, "session.fork")
         .await
         .expect("retry");
     crate::test_support::finish_session_creation_tasks(app).await;
@@ -854,6 +854,7 @@ pub(super) async fn assert_later_push_skips_review_operations(context: &SessionW
             sync_operation_id: "later-push".to_string(),
             transcript: Arc::clone(&context.transcript),
         },
+        published_branch::auto_push_trace(&context.session_id),
     )
     .await;
     let event = std::iter::from_fn(|| app_event_rx.try_recv().ok())
@@ -905,6 +906,7 @@ pub(super) async fn push_descendant_that_reverted_fix(context: &SessionWorkerCon
             sync_operation_id: "push-after-revert".to_string(),
             transcript: Arc::clone(&context.transcript),
         },
+        published_branch::auto_push_trace(&context.session_id),
     )
     .await;
 }

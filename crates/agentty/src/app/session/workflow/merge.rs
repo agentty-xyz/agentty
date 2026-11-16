@@ -9,6 +9,7 @@ use std::sync::{Arc, Mutex};
 
 use ag_forge as forge;
 use ag_git::{self as git, GitClient};
+use ag_telemetry::{FutureExt as _, Outcome, Span};
 use ag_worker::RunClient;
 use askama::Template;
 use tokio::sync::{OwnedMutexGuard, mpsc};
@@ -802,9 +803,11 @@ impl SessionMergeService {
             status,
             transcript,
         };
+        let mut trace = Span::root("session.merge", Vec::new());
+        trace.identify("agentty.session.id", id.to_string());
         tokio::spawn(async move {
             let _environment = environment;
-            SessionManager::run_merge_task(merge_task_input).await;
+            SessionManager::run_merge_task(merge_task_input, trace).await;
         });
 
         Ok(())
@@ -1195,7 +1198,9 @@ impl SessionManager {
             .await
     }
 
-    async fn run_merge_task(input: MergeTaskInput) {
+    /// Runs and finalizes one merge under its `session.merge` root trace,
+    /// which ends with the merge workflow's outcome.
+    async fn run_merge_task(input: MergeTaskInput, trace: Span) {
         let clock = Arc::clone(&input.clock);
         let db = input.db.clone();
         let app_event_tx = input.app_event_tx.clone();
@@ -1204,7 +1209,13 @@ impl SessionManager {
         let session_update_versions = input.session_update_versions.clone();
         let transcript = Arc::clone(&input.transcript);
 
-        let merge_result = Self::execute_merge_workflow(input).await;
+        let merge_result = Self::execute_merge_workflow(input)
+            .with_context(trace.context())
+            .await;
+        let outcome = match &merge_result {
+            Ok(_) => Outcome::Completed,
+            Err(error) => error.trace_outcome(),
+        };
         let status_transition = StatusTransition::from_parts(
             app_event_tx.clone(),
             Arc::clone(&clock),
@@ -1222,7 +1233,9 @@ impl SessionManager {
             status_transition: &status_transition,
             transcript: &transcript,
         })
+        .with_context(trace.context())
         .await;
+        trace.finish(outcome);
     }
 
     /// Executes the merge workflow for one session branch.
@@ -1259,52 +1272,36 @@ impl SessionManager {
         }
         let parent_commit_hash = git_client.head_hash(folder.clone()).await?;
 
-        let squash_diff = Self::load_squash_diff(
-            git_client.as_ref(),
-            repo_root.clone(),
-            source_branch.clone(),
-            base_branch.clone(),
-        )
-        .await?;
-        let authoritative_commit_message = if squash_diff.trim().is_empty() {
-            None
-        } else {
-            Some(
-                Self::load_authoritative_session_commit_message(
-                    git_client.as_ref(),
-                    folder.clone(),
+        let (authoritative_commit_message, merge_outcome, merged_commit_hash) =
+            Span::child("merge.squash")
+                .run(
+                    Self::squash_merge_session_branch(
+                        git_client.as_ref(),
+                        &folder,
+                        &repo_root,
+                        &source_branch,
+                        &base_branch,
+                    ),
+                    SessionError::trace_outcome,
                 )
-                .await?,
-            )
-        };
-        let merge_outcome = if let Some(commit_message) = authoritative_commit_message.as_ref() {
-            let repo_root = repo_root.clone();
-            let source_branch = source_branch.clone();
-            let base_branch = base_branch.clone();
-            let commit_message = commit_message.clone();
-
-            git_client
-                .squash_merge(repo_root, source_branch, base_branch, commit_message)
-                .await?
-        } else {
-            git::SquashMergeOutcome::AlreadyPresentInTarget
-        };
-        let merged_commit_hash =
-            Self::load_merged_commit_hash(git_client.as_ref(), repo_root.clone(), merge_outcome)
                 .await?;
-        Self::cleanup_merged_session_worktree(
-            folder.clone(),
-            Arc::clone(&fs_client),
-            Arc::clone(&git_client),
-            source_branch.clone(),
-            Some(repo_root),
-        )
-        .await
-        .map_err(|error| {
-            SessionError::Workflow(format!(
-                "Merged successfully but failed to remove worktree: {error}"
-            ))
-        })?;
+        Span::child("workspace.cleanup")
+            .run(
+                Self::cleanup_merged_session_worktree(
+                    folder.clone(),
+                    Arc::clone(&fs_client),
+                    Arc::clone(&git_client),
+                    source_branch.clone(),
+                    Some(repo_root),
+                ),
+                SessionError::trace_outcome,
+            )
+            .await
+            .map_err(|error| {
+                SessionError::Workflow(format!(
+                    "Merged successfully but failed to remove worktree: {error}"
+                ))
+            })?;
 
         let status_transition = StatusTransition::from_parts(
             app_event_tx.clone(),
@@ -1331,6 +1328,59 @@ impl SessionManager {
             &source_branch,
             &base_branch,
             merge_outcome,
+        ))
+    }
+
+    /// Squash-merges the rebased session branch into its base branch with the
+    /// canonical session commit message, returning that message, the merge
+    /// outcome, and the merged commit hash. An empty squash diff is already
+    /// present in the target and creates no commit.
+    ///
+    /// # Errors
+    /// Returns an error when the squash diff, commit message, squash merge, or
+    /// merged commit hash cannot be loaded or applied.
+    async fn squash_merge_session_branch(
+        git_client: &dyn GitClient,
+        folder: &Path,
+        repo_root: &Path,
+        source_branch: &str,
+        base_branch: &str,
+    ) -> Result<(Option<String>, git::SquashMergeOutcome, Option<String>), SessionError> {
+        let squash_diff = Self::load_squash_diff(
+            git_client,
+            repo_root.to_path_buf(),
+            source_branch.to_string(),
+            base_branch.to_string(),
+        )
+        .await?;
+        let authoritative_commit_message = if squash_diff.trim().is_empty() {
+            None
+        } else {
+            Some(
+                Self::load_authoritative_session_commit_message(git_client, folder.to_path_buf())
+                    .await?,
+            )
+        };
+        let merge_outcome = if let Some(commit_message) = authoritative_commit_message.as_ref() {
+            git_client
+                .squash_merge(
+                    repo_root.to_path_buf(),
+                    source_branch.to_string(),
+                    base_branch.to_string(),
+                    commit_message.clone(),
+                )
+                .await?
+        } else {
+            git::SquashMergeOutcome::AlreadyPresentInTarget
+        };
+        let merged_commit_hash =
+            Self::load_merged_commit_hash(git_client, repo_root.to_path_buf(), merge_outcome)
+                .await?;
+
+        Ok((
+            authoritative_commit_message,
+            merge_outcome,
+            merged_commit_hash,
         ))
     }
 
@@ -2137,10 +2187,27 @@ impl SessionManager {
             }
         }
 
-        if let Err(error) = Self::run_rebase_assist_loop(input.clone()).await {
-            Self::abort_rebase_after_assist_failure(&input).await;
+        let rebase_step = Span::child("rebase.step");
+        let rebase_result = Self::run_rebase_assist_loop(input.clone())
+            .with_context(rebase_step.context())
+            .await;
+        match rebase_result {
+            Ok(conflicted) => {
+                rebase_step.attribute(
+                    "agentty.git.rebase.result",
+                    if conflicted { "conflict" } else { "clean" },
+                );
+                rebase_step.finish(Outcome::Completed);
+            }
+            Err(error) => {
+                Self::abort_rebase_after_assist_failure(&input)
+                    .with_context(rebase_step.context())
+                    .await;
+                rebase_step.attribute("agentty.git.rebase.result", "aborted");
+                rebase_step.finish(error.trace_outcome());
 
-            return Err(SessionError::Workflow(format!("Failed to sync: {error}")));
+                return Err(SessionError::Workflow(format!("Failed to sync: {error}")));
+            }
         }
         Self::persist_stack_base_after_successful_rebase(&input).await?;
 
@@ -2361,9 +2428,10 @@ impl SessionManager {
             transcript,
         };
 
+        let trace = published_branch::auto_push_trace(&auto_push_input.session_id);
         tokio::spawn(async move {
             let _branch_operation_guard = branch_operation_guard;
-            published_branch::run_published_branch_auto_push(auto_push_input).await;
+            published_branch::run_published_branch_auto_push(auto_push_input, trace).await;
         });
     }
 
@@ -2410,17 +2478,18 @@ impl SessionManager {
     }
 
     /// Runs a bounded rebase-assistance loop until conflicts are resolved.
+    /// Returns whether the rebase needed conflict assistance.
     ///
     /// # Errors
     /// Returns an error when conflict resolution fails after all attempts or
     /// when git/agent operations fail.
-    async fn run_rebase_assist_loop(input: RebaseAssistInput) -> Result<(), SessionError> {
+    async fn run_rebase_assist_loop(input: RebaseAssistInput) -> Result<bool, SessionError> {
         let rebase_in_progress = Self::is_rebase_in_progress(&input).await?;
         let mut initial_conflict_detail = None;
         if !rebase_in_progress {
             let initial_step = Self::run_rebase_start(&input).await?;
             match initial_step {
-                git::RebaseStepResult::Completed => return Ok(()),
+                git::RebaseStepResult::Completed => return Ok(false),
                 git::RebaseStepResult::Conflict { detail } => {
                     initial_conflict_detail = Some(detail);
                 }
@@ -2446,7 +2515,7 @@ impl SessionManager {
             initial_conflict_detail,
         )
         .await
-        .map(|_| ())
+        .map(|_| true)
     }
 
     /// Executes shared bounded assistance loop for both session rebases and

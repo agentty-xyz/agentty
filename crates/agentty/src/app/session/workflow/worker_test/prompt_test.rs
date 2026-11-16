@@ -98,7 +98,7 @@ async fn test_saved_first_prompt_retries_failed_handoffs_without_losing_attachme
             inject_handoff_failure(&mut app, &pool, &session_id, reject_delivery).await;
 
         // Act
-        app.retry_workspace_preparation(&session_id)
+        app.retry_workspace_preparation(&session_id, "session.create")
             .await
             .expect("first attempt");
         crate::test_support::finish_session_creation_tasks(&mut app).await;
@@ -125,7 +125,7 @@ async fn test_saved_first_prompt_retries_failed_handoffs_without_losing_attachme
             session_id.clone().into(),
             ag_worker::test_session_worker_handle(Arc::default(), sender, Arc::default()),
         );
-        app.retry_workspace_preparation(&session_id)
+        app.retry_workspace_preparation(&session_id, "session.create")
             .await
             .expect("retry");
         crate::test_support::finish_session_creation_tasks(&mut app).await;

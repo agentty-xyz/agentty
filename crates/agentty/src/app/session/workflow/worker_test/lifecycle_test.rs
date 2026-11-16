@@ -210,7 +210,7 @@ async fn test_fork_retry_replays_history_after_insertion_or_delivery_failure() {
             inject_handoff_failure(&mut app, &pool, &session_id, reject_delivery).await;
 
         // Act
-        app.retry_workspace_preparation(&session_id)
+        app.retry_workspace_preparation(&session_id, "session.create")
             .await
             .expect("first attempt");
         crate::test_support::finish_session_creation_tasks(&mut app).await;

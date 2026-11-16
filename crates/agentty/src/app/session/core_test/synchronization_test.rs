@@ -7,6 +7,8 @@ use ag_contracts::{MockAgentChannel, TurnResult};
 use ag_git as git;
 use ag_protocol::{AgentResponse, parse_agent_response_strict};
 use ag_session::session_branch;
+use ag_telemetry::KeyValue;
+use opentelemetry::trace::SpanId;
 use tempfile::tempdir;
 use tokio::sync::Notify;
 
@@ -32,6 +34,9 @@ use crate::domain::transient_message::TransientMessageSlot;
 use crate::infra::db::AppRepositories;
 use crate::infra::fs::FsClient;
 use crate::presentation::app_mode::AppMode;
+use crate::test_support::telemetry::{
+    assert_span_attributes, capture_spans, finished_span, wait_for_finished_span,
+};
 
 /// Verifies sync requested during a running turn stays on the existing
 /// worker, does not cancel that turn, and runs before later queued chat.
@@ -960,6 +965,52 @@ async fn test_merge_session_restacks_stacked_child_after_success() {
         .expect("missing persisted child session");
     assert_eq!(db_child_session.parent_session_id, None);
     assert_eq!(db_child_session.base_branch, "main");
+}
+
+/// Verifies a merge's phases nest beneath one content-free `session.merge`
+/// root instead of starting unparented traces.
+#[tokio::test]
+async fn test_merge_session_traces_rebase_squash_and_cleanup_under_one_root() {
+    // Arrange
+    let (_provider_guard, exporter) = capture_spans().await;
+    let dir = tempdir().expect("failed to create temp dir");
+    let mut app = new_test_app_with_git(dir.path()).await;
+    let session_id = app
+        .create_session()
+        .await
+        .expect("failed to create merge session");
+    crate::test_support::set_session_status_for_test(&mut app, &session_id, Status::Review);
+    let mock_git = create_mock_git_client_for_successful_noop_merges(1, dir.path().to_path_buf());
+    app.sessions.git_client = Arc::new(mock_git);
+
+    // Act
+    app.merge_session(&session_id)
+        .await
+        .expect("merge should enqueue successfully");
+    let root = wait_for_finished_span(&exporter, "session.merge", SpanId::INVALID).await;
+
+    // Assert
+    assert_span_attributes(
+        &root,
+        "completed",
+        &[KeyValue::new("agentty.session.id", session_id)],
+    );
+    let root_id = root.span_context.span_id();
+    assert_span_attributes(
+        &finished_span(&exporter, "rebase.step", root_id),
+        "completed",
+        &[KeyValue::new("agentty.git.rebase.result", "clean")],
+    );
+    assert_span_attributes(
+        &finished_span(&exporter, "merge.squash", root_id),
+        "completed",
+        &[],
+    );
+    assert_span_attributes(
+        &finished_span(&exporter, "workspace.cleanup", root_id),
+        "completed",
+        &[],
+    );
 }
 
 #[tokio::test]

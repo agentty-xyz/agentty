@@ -7,6 +7,7 @@ use std::sync::{Arc, Mutex};
 use ag_forge as forge;
 use ag_git::{self as git, BranchPushOutcome};
 use ag_session::test_support as model_fixture;
+use ag_telemetry::{Span, TraceContextExt as _};
 
 use super::super::session;
 use super::{
@@ -22,6 +23,7 @@ use crate::domain::session::{PublishBranchAction, ReviewRequest, Status};
 use crate::domain::session_message::SessionTranscript;
 use crate::infra::db::AppRepositories;
 use crate::test_support::FixedClock;
+use crate::test_support::telemetry::{assert_span_attributes, capture_spans, finished_span};
 
 #[tokio::test]
 async fn manual_review_request_refresh_reconciles_both_forges_and_propagates_failures() {
@@ -667,6 +669,9 @@ async fn push_session_branch_to_remote_persists_upstream_reference() {
 #[tokio::test]
 async fn publish_pull_request_returns_pushed_upstream_and_persists_review_request() {
     // Arrange
+    let (_provider_guard, exporter) = capture_spans().await;
+    let workflow = Span::root("session.publish", Vec::new());
+    let workflow_id = workflow.context().span().span_context().span_id();
     let database = review_session_database().await;
     let branch_publish_session = BranchPublishTaskSession {
         base_branch: "review/parent".to_string(),
@@ -701,52 +706,42 @@ async fn publish_pull_request_returns_pushed_upstream_and_persists_review_reques
         .returning(|_| Box::pin(async { Ok(Some("Publish changes".to_string())) }));
     expect_published_commit_diff(&mut mock_git_client, "review/parent", "review/topic");
     let run_client = publication_run_client();
-    let mut mock_review_request_client = forge::MockReviewRequestClient::new();
-    mock_review_request_client
-        .expect_detect_remote()
-        .once()
-        .returning(|repo_url| forge::detect_remote(&repo_url));
-    mock_review_request_client
-        .expect_find_by_source_branch()
-        .once()
-        .withf(|_, branch| branch == "review/topic")
-        .returning(|_, _| Box::pin(async { Ok(None) }));
-    let summary = expected_review_request.summary.clone();
-    mock_review_request_client
-        .expect_create_review_request()
-        .once()
-        .withf(|_, input| {
-            input.source_branch == "review/topic"
-                && input.target_branch == "review/parent"
-                && input.title == "Publish changes"
-                && input
-                    .body
-                    .as_ref()
-                    .is_some_and(|body| body.starts_with("## Why?"))
-        })
-        .return_once(move |_, _| Box::pin(async move { Ok(summary) }));
+    let mock_review_request_client =
+        creating_publication_forge_client(expected_review_request.summary.clone());
 
     // Act
     let git_client: Arc<dyn git::GitClient> = Arc::new(mock_git_client);
-    let result = publish_pull_request(
-        &branch_publish_session,
-        Arc::new(FixedClock::unix_epoch()),
-        Arc::new(mock_review_request_client),
-        &ReviewRequestGenerator {
-            db: &database,
-            folder: &branch_publish_session.folder,
-            git_client: &git_client,
-            run_client: &run_client,
-            session_agent: model_fixture::codex_selection(),
-            session_id: "session-id",
-            transcript: &Mutex::new(SessionTranscript::default()),
-        },
-        Some("review/topic"),
-    )
-    .await
-    .expect("review request should publish");
+    let transcript = Mutex::new(SessionTranscript::default());
+    let result = workflow
+        .scope(publish_pull_request(
+            &branch_publish_session,
+            Arc::new(FixedClock::unix_epoch()),
+            Arc::new(mock_review_request_client),
+            &ReviewRequestGenerator {
+                db: &database,
+                folder: &branch_publish_session.folder,
+                git_client: &git_client,
+                run_client: &run_client,
+                session_agent: model_fixture::codex_selection(),
+                session_id: "session-id",
+                transcript: &transcript,
+            },
+            Some("review/topic"),
+        ))
+        .await
+        .expect("review request should publish");
 
     // Assert
+    assert_span_attributes(
+        &finished_span(&exporter, "branch.push", workflow_id),
+        "completed",
+        &[],
+    );
+    assert_span_attributes(
+        &finished_span(&exporter, "review_request.publish", workflow_id),
+        "completed",
+        &[],
+    );
     assert_eq!(
         result,
         BranchPublishTaskSuccess::PullRequestPublished {
@@ -767,6 +762,38 @@ async fn publish_pull_request_returns_pushed_upstream_and_persists_review_reques
         persisted_review_request.web_url,
         expected_review_request.summary.web_url
     );
+}
+
+/// Builds a forge client that finds no existing review request and creates
+/// `summary` from the generated `review/topic` publication.
+fn creating_publication_forge_client(
+    summary: forge::ReviewRequestSummary,
+) -> forge::MockReviewRequestClient {
+    let mut mock_review_request_client = forge::MockReviewRequestClient::new();
+    mock_review_request_client
+        .expect_detect_remote()
+        .once()
+        .returning(|repo_url| forge::detect_remote(&repo_url));
+    mock_review_request_client
+        .expect_find_by_source_branch()
+        .once()
+        .withf(|_, branch| branch == "review/topic")
+        .returning(|_, _| Box::pin(async { Ok(None) }));
+    mock_review_request_client
+        .expect_create_review_request()
+        .once()
+        .withf(|_, input| {
+            input.source_branch == "review/topic"
+                && input.target_branch == "review/parent"
+                && input.title == "Publish changes"
+                && input
+                    .body
+                    .as_ref()
+                    .is_some_and(|body| body.starts_with("## Why?"))
+        })
+        .return_once(move |_, _| Box::pin(async move { Ok(summary) }));
+
+    mock_review_request_client
 }
 
 /// Builds a forge client whose lookup, refresh, or creation step fails for
