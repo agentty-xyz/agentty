@@ -15,6 +15,7 @@ use crate::compaction::summary_schema;
 use crate::context::{
     ContextBudget, ContextEstimator, ContextSummaryPolicy, HeuristicContextEstimator,
 };
+use crate::event::RunEventKind;
 use crate::file_system::MockFileSystem;
 use crate::harness::Harness;
 use crate::lifecycle::{
@@ -25,6 +26,7 @@ use crate::model::{
 };
 use crate::repository::Repository;
 use crate::round_summary::{CONTINUED_SUMMARY_PREFIX, ROUND_SUMMARY_INSTRUCTIONS};
+use crate::run::RunRequest;
 use crate::store::MemoryStore;
 use crate::tool::{Tool, ToolCall};
 use crate::turn::{ModelRequestPurpose, TurnOutcome};
@@ -636,4 +638,43 @@ async fn summaries_still_invalid_after_the_correction_limit_fail() {
         "[harness] Your previous final response was rejected"
     ));
     assert_eq!(outcome.report().context_summary_failures(), 1);
+}
+
+#[tokio::test]
+async fn streamed_runs_report_summary_requests_and_reduced_requests() {
+    // Arrange
+    let (model, requests) = SummarizingModel::new(Vec::new());
+    let harness = harness(model, ContextSummaryPolicy::Enabled);
+    let (mut stream, handle) = harness
+        .run(RunRequest::new("read every file").output(object_schema()))
+        .into_parts();
+    let drain = async {
+        let mut events = Vec::new();
+        while let Some(event) = stream.next().await {
+            events.push(event.kind);
+        }
+
+        events
+    };
+
+    // Act
+    let (events, outcome) = tokio::join!(drain, handle.outcome());
+
+    // Assert
+    let requests_sent = requests.lock().expect("requests lock").len();
+    let requests_streamed = events
+        .iter()
+        .filter(|kind| matches!(kind, RunEventKind::ModelRequestCompleted { .. }))
+        .count();
+    assert_ne!(summary_requests(&requests), Vec::<ModelRequest>::new());
+    assert_eq!(requests_streamed, requests_sent);
+    assert_eq!(requests_streamed, outcome.report.model_requests().len());
+    assert!(events.iter().any(|kind| matches!(
+        kind,
+        RunEventKind::ContextReduced(activity) if activity.summarized_tool_calls() > 0
+    )));
+    assert!(matches!(
+        events.last(),
+        Some(RunEventKind::Completed(summary)) if summary.error.is_none()
+    ));
 }

@@ -8,7 +8,9 @@ use std::pin::Pin;
 use std::sync::Arc;
 use std::time::Instant;
 
+use schemars::JsonSchema;
 use serde::de::DeserializeOwned;
+use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use thiserror::Error;
 
@@ -18,6 +20,7 @@ use crate::cancellation::{
 };
 use crate::comparison::ComparisonBase;
 use crate::error::{ErrorKind, RunError};
+use crate::event::{EventSink, EventStream, RunSummary};
 use crate::input::TurnInput;
 use crate::model::CompletionUsage;
 use crate::policy::ToolPolicy;
@@ -118,15 +121,18 @@ impl RunRequest {
 /// One started run of a [`RunRequest`].
 ///
 /// Await it, or its [`Self::into_handle`], for the [`RunOutcome`]; nothing
-/// executes until then. Dropping it, or cancelling its [`CancelToken`],
-/// cancels the run. The outcome resolves only after the run's persistence,
-/// writes, and commands settle, retrying failed cleanup once; cleanup that
-/// still fails is reported in [`RunOutcome::settlement`], which can retry it.
+/// executes until then. [`Self::into_parts`] also streams the run's typed
+/// events. Dropping it, or cancelling its [`CancelToken`], cancels the run.
+/// The outcome resolves only after the run's persistence, writes, and
+/// commands settle, retrying failed cleanup once; cleanup that still fails
+/// is reported in [`RunOutcome::settlement`], which can retry it.
 #[must_use = "runs do not start until awaited"]
 #[non_exhaustive]
 pub struct Run {
     cancel: CancelToken,
-    future: Pin<Box<dyn Future<Output = RunOutcome> + Send>>,
+    events: Option<Arc<EventSink>>,
+    journal: RunJournal,
+    turn: ControlledTurn<'static, RunError>,
 }
 
 impl Run {
@@ -141,57 +147,87 @@ impl Run {
         RunHandle { run: self }
     }
 
+    /// Splits the run into its ordered [`EventStream`] and a handle that
+    /// cancels it or awaits its outcome.
+    ///
+    /// The run still starts only when the handle's outcome is awaited. Read
+    /// the stream concurrently: the run waits while too many events are
+    /// unread. Dropping the stream discards later events without stalling
+    /// or cancelling the run.
+    pub fn into_parts(mut self) -> (EventStream, RunHandle) {
+        let (sink, stream) = EventSink::channel();
+        self.cancel.control.attach_events(&sink);
+        self.events = Some(sink);
+
+        (stream, self.into_handle())
+    }
+
     /// Wraps a controlled turn whose durable records `journal` locates.
     pub(crate) fn new(turn: ControlledTurn<'static, RunError>, journal: RunJournal) -> Self {
-        let control = turn.control();
-        let cancel = CancelToken {
-            control: control.clone(),
-        };
-        let future = Box::pin(async move {
-            let started_at = Instant::now();
-            let result = turn.await;
-            let settlement = Self::settle(&control)
-                .await
-                .map_err(|error| Unsettled::new(control.clone(), error));
-            let TurnRecord {
-                report,
-                turn_position,
-            } = control.take_record();
-            let (result, report) = match result {
-                Ok(outcome) => {
-                    let (output, report) = outcome.into_parts();
+        Self {
+            cancel: CancelToken {
+                control: turn.control(),
+            },
+            events: None,
+            journal,
+            turn,
+        }
+    }
 
-                    (Ok(RunOutput::Json(output)), report)
-                }
-                Err(error) => {
-                    let report = report.unwrap_or_else(|| {
-                        TurnReport::new(started_at.elapsed(), Vec::new(), Vec::new())
-                    });
+    /// Runs the turn, settles it, and reports its outcome, last to
+    /// `events` when the run streams them.
+    async fn outcome(self) -> RunOutcome {
+        let Self {
+            cancel: CancelToken { control },
+            events,
+            journal,
+            turn,
+        } = self;
+        let started_at = Instant::now();
+        let result = turn.await;
+        let settlement = Self::settle(&control)
+            .await
+            .map_err(|error| Unsettled::new(control.clone(), error));
+        let TurnRecord {
+            report,
+            turn_position,
+        } = control.take_record();
+        let (result, report) = match result {
+            Ok(outcome) => {
+                let (output, report) = outcome.into_parts();
 
-                    (Err(error), report)
-                }
-            };
-            let records = match turn_position {
-                Some(turn_position) => journal.load(turn_position).await,
-                None => Ok((Vec::new(), Vec::new())),
-            };
-            let (files_changed, commands, records_error) = match records {
-                Ok((files_changed, commands)) => (files_changed, commands, None),
-                Err(error) => (Vec::new(), Vec::new(), Some(RunError::from(error))),
-            };
-
-            RunOutcome {
-                commands,
-                files_changed,
-                records_error,
-                result,
-                settlement,
-                usage: Usage::from_report(&report),
-                report,
+                (Ok(RunOutput::Json(output)), report)
             }
-        });
+            Err(error) => {
+                let report = report.unwrap_or_else(|| {
+                    TurnReport::new(started_at.elapsed(), Vec::new(), Vec::new())
+                });
 
-        Self { cancel, future }
+                (Err(error), report)
+            }
+        };
+        let records = match turn_position {
+            Some(turn_position) => journal.load(turn_position).await,
+            None => Ok((Vec::new(), Vec::new())),
+        };
+        let (files_changed, commands, records_error) = match records {
+            Ok((files_changed, commands)) => (files_changed, commands, None),
+            Err(error) => (Vec::new(), Vec::new(), Some(RunError::from(error))),
+        };
+        let outcome = RunOutcome {
+            commands,
+            files_changed,
+            records_error,
+            result,
+            settlement,
+            usage: Usage::from_report(&report),
+            report,
+        };
+        if let Some(events) = events {
+            events.complete(RunSummary::new(&outcome)).await;
+        }
+
+        outcome
     }
 
     /// Waits until the turn's effects settle, retrying failed cleanup once.
@@ -216,7 +252,7 @@ impl IntoFuture for Run {
     type Output = RunOutcome;
 
     fn into_future(self) -> Self::IntoFuture {
-        self.future
+        Box::pin(self.outcome())
     }
 }
 
@@ -316,7 +352,10 @@ impl From<WriteRecord> for FileChange {
 }
 
 /// Validated final output of a successful run.
-#[derive(Clone, Debug, Eq, PartialEq)]
+///
+/// It serializes as `{"type": "json" | "text", "value": ...}`.
+#[derive(Clone, Debug, Deserialize, Eq, JsonSchema, PartialEq, Serialize)]
+#[serde(tag = "type", content = "value", rename_all = "snake_case")]
 #[non_exhaustive]
 pub enum RunOutput {
     /// JSON output validated against the run's output schema; every run
@@ -402,7 +441,7 @@ impl fmt::Debug for Unsettled {
 /// `unreported_requests`, so totals with unreported requests are lower
 /// bounds. Requests the provider rejected as exceeding its context window,
 /// and a request in flight when the run was cancelled, are not counted.
-#[derive(Clone, Copy, Debug, Default, Eq, Hash, PartialEq)]
+#[derive(Clone, Copy, Debug, Default, Deserialize, Eq, Hash, JsonSchema, PartialEq, Serialize)]
 #[non_exhaustive]
 pub struct Usage {
     /// Input tokens, including `cache_read`.
@@ -446,7 +485,7 @@ impl Usage {
     }
 
     /// Converts one request's provider usage, if it reported any.
-    fn from_request(usage: Option<&CompletionUsage>) -> Self {
+    pub(crate) fn from_request(usage: Option<&CompletionUsage>) -> Self {
         let count = |tokens: fn(CompletionUsage) -> Option<u64>| usage.copied().and_then(tokens);
         let input = count(CompletionUsage::input_tokens);
         let output = count(CompletionUsage::output_tokens);

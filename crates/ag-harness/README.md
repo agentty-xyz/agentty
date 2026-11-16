@@ -123,6 +123,16 @@ let outcome = session
   replaces `result`. A cloneable `CancelToken` from `run.cancel_token()`, or
   `into_handle()`, cancels it from any task. `harness.run` keeps its single turn in a
   fresh in-memory session and requires `RunRequest::output`.
+- **Runs stream typed events.** `run.into_parts()` returns an `EventStream` (a
+  `futures::Stream` of `RunEvent`) and a `RunHandle`. Each event has the run ID, a
+  gap-free `seq`, and a timestamp. Events report the admitted turn, assistant messages,
+  reasoning, tool calls with their arguments and results, per-request usage, and context
+  reductions. `Completed` is always the last event, also after a failure or
+  cancellation. Delivery is lossless: the run waits while the stream is full, so read it
+  while awaiting the outcome. Dropping the stream discards events without stalling the
+  run. Events carry session content, so never export them as telemetry. Every type
+  derives `serde` and `schemars::JsonSchema`; the schema is committed in
+  `crates/ag-harness/schema/run_event.json`.
 - **Turns have no tool-call limit.** Cancellation and the `ContextBudget` bound a turn.
   Within a turn, requests only append, so they share one cached prefix, until tool
   traffic grows a request past the budget. That request is sent as a reduced copy

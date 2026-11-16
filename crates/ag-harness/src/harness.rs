@@ -17,7 +17,7 @@ use tokio::sync::OnceCell;
 
 use crate::calibration::ContextCalibration;
 use crate::cancellation::{ControlledTurn, TurnControl};
-use crate::catalog::{CatalogError, ModelCatalog, ModelSelector, Role};
+use crate::catalog::{CatalogError, ModelCatalog, ModelId, ModelSelector, Role};
 use crate::compaction::{self, CompactionSource, MAX_SUMMARY_BYTES, SessionCheckpoint};
 use crate::context::{
     self, ContextBudget, ContextBudgetError, ContextEstimator, ContextSummaryPolicy,
@@ -26,6 +26,7 @@ use crate::context::{
 use crate::effect::Effects;
 use crate::engine::{Engine, EngineFailure, FinishedTurn};
 use crate::error::HarnessError;
+use crate::event::RunEventKind;
 use crate::file_system::{FileSystem, LocalFileSystem};
 use crate::input::{InputBlock, TurnInput};
 use crate::lifecycle::{LifecycleEmitter, LifecycleObserver, TurnErrorType, TurnLifecycle};
@@ -527,9 +528,8 @@ impl Session {
         let (request, retained_messages, history, replayed) =
             self.build_request(input, options, available_history_weight);
         let journal = guard.write_journal();
-        let mut engine = self.harness.engine(options);
-        engine.control = control;
-        engine.effects = effects;
+        let engine = self.harness.controlled_engine(options, control, effects);
+        let started = self.started_event(guard.owner().turn_position);
         let result = tokio::select! {
             biased;
             () = cancelled(control) => return Err(TurnError::Cancelled.into()),
@@ -538,7 +538,11 @@ impl Session {
 
                 return Err(error);
             }
-            result = engine.run(request, turn_id, Some(journal)) => result,
+            result = async {
+                engine.publish(started).await;
+
+                engine.run(request, turn_id, Some(journal)).await
+            } => result,
         };
         let FinishedTurn {
             history: sent_history,
@@ -588,6 +592,15 @@ impl Session {
         }
 
         Ok(outcome)
+    }
+
+    /// Describes the admitted turn at `turn_position` for a streamed run.
+    fn started_event(&self, turn_position: i64) -> RunEventKind {
+        RunEventKind::Started {
+            model: self.harness.model_id(),
+            session: self.id.clone(),
+            turn: u64::try_from(turn_position).unwrap_or_default(),
+        }
     }
 
     /// Projects the checkpoint summary and loaded uncovered history into one
@@ -1451,8 +1464,32 @@ impl Harness {
         Ok(())
     }
 
+    /// Identifies the model as `provider/model` from its metadata.
+    fn model_id(&self) -> Option<ModelId> {
+        self.inner
+            .model
+            .metadata()
+            .map(|metadata| ModelId::new(format!("{}/{}", metadata.provider(), metadata.model())))
+    }
+
     fn default_options(&self, schema: OutputSchema) -> TurnOptions {
         TurnOptions::new(schema, self.inner.policy)
+    }
+
+    /// Returns an engine for a durable turn that reports to `control`, and
+    /// streams events when its run does.
+    fn controlled_engine<'a>(
+        &'a self,
+        options: &'a TurnOptions,
+        control: Option<&'a TurnControl>,
+        effects: Effects,
+    ) -> Engine<'a> {
+        Engine {
+            control,
+            effects,
+            events: control.and_then(TurnControl::events),
+            ..self.engine(options)
+        }
     }
 
     fn engine<'a>(&'a self, options: &'a TurnOptions) -> Engine<'a> {
@@ -1465,6 +1502,7 @@ impl Harness {
             context_summaries: config.context_summaries,
             control: None,
             effects: Effects::default(),
+            events: None,
             file_system: &config.file_system,
             lifecycle: &config.lifecycle,
             model: &config.model,

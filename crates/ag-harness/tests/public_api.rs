@@ -52,6 +52,10 @@ mod shared_harness_test;
 #[path = "support/run.rs"]
 mod run_test;
 
+#[cfg(test)]
+#[path = "support/run_events.rs"]
+mod run_events_test;
+
 use std::error::Error;
 use std::ffi::OsString;
 use std::io::{self, Cursor};

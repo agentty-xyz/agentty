@@ -12,6 +12,7 @@ use crate::calibration::{Calibration, ContextCalibration};
 use crate::cancellation::TurnControl;
 use crate::context::{ContextSummaryPolicy, FitStep, SentHistory};
 use crate::effect::Effects;
+use crate::event::{EventSink, Item, ItemId, ItemKind, RunEventKind, ToolCallItem};
 use crate::execution::BashTool;
 use crate::file_system::FileSystem;
 use crate::lifecycle::{
@@ -27,6 +28,7 @@ use crate::repetition::{self, RepeatedCalls, Repetition};
 use crate::repository::Repository;
 use crate::reservation::WriteJournal;
 use crate::round_summary::RoundSummaryJob;
+use crate::run::{RunOutput, Usage};
 use crate::tool::{
     MalformedArguments, ReadAction, ReadArguments, Tool, ToolCall, ToolCallArguments,
     ToolDefinition, WriteArguments,
@@ -74,6 +76,8 @@ pub(crate) struct Engine<'a> {
     /// finished, such as a cancelled one.
     pub(crate) control: Option<&'a TurnControl>,
     pub(crate) effects: Effects,
+    /// Sink of a run that streams its events.
+    pub(crate) events: Option<Arc<EventSink>>,
     pub(crate) file_system: &'a Arc<dyn FileSystem>,
     pub(crate) lifecycle: &'a LifecycleEmitter,
     pub(crate) model: &'a Arc<dyn Model>,
@@ -125,6 +129,13 @@ impl Engine<'_> {
         }
     }
 
+    /// Emits `kind` when the turn belongs to a run that streams its events.
+    pub(crate) async fn publish(&self, kind: RunEventKind) {
+        if let Some(events) = &self.events {
+            events.emit(kind).await;
+        }
+    }
+
     /// Sends requests and executes tool calls until the model answers with
     /// output, recording what the turn did in `state`.
     async fn drive(
@@ -137,6 +148,9 @@ impl Engine<'_> {
             .then_some(ContextSummaryTrigger::Proactive);
 
         loop {
+            // Summary requests and rejected outputs recorded since the last
+            // round are published before the next request.
+            self.publish_requests(state).await;
             // Tool traffic grows the request between model calls; a grown
             // request that no longer fits the calibrated budget is sent as a
             // reduced copy, possibly after summarizing earlier rounds, and
@@ -171,6 +185,7 @@ impl Engine<'_> {
                     continue;
                 }
             };
+            self.publish_context(context_activity).await;
             let completed = self
                 .complete_model_request(
                     fitted.unwrap_or(&request),
@@ -198,9 +213,14 @@ impl Engine<'_> {
                 }
             };
             self.record_turn_request(state, activity, &sent);
+            self.publish_requests(state).await;
 
             let (calls, batched) = match response {
                 ModelResponse::Output(output) => {
+                    self.publish_message(reasoning_content.as_deref(), || {
+                        Some(RunOutput::Json(output.clone()))
+                    })
+                    .await;
                     request.record_output_with_reasoning(&output, reasoning_content);
 
                     return Ok((output, request));
@@ -215,6 +235,7 @@ impl Engine<'_> {
                     (calls, true)
                 }
             };
+            self.publish_calls_message(&calls).await;
             state.malformed_tool_calls += count_malformed(
                 &calls,
                 &state.rounds.tools,
@@ -345,6 +366,7 @@ impl Engine<'_> {
             let is_read = call.read_arguments().is_some();
             let ran_read = is_read && shortcut.is_none();
             let mut deferred = is_read && matches!(shortcut, Some(ReadShortcut::Defer));
+            let item = self.start_item(ItemKind::ToolCall).await;
             let (mut result, mut activity) = self
                 .execute_tool_call(call, &rounds.tools, turn_id, shortcut, &|content: &str| {
                     share.result_fits(call, content)
@@ -368,11 +390,19 @@ impl Engine<'_> {
             let digest = repeated
                 .as_ref()
                 .map_or_else(|| repetition::result_digest(&result), |(_, digest)| *digest);
+            let item = item.map(|id| (id, ToolCallItem::new(call, &result, &activity)));
             Self::persist(
                 rounds.recorder.as_ref(),
                 request.record_tool_result(call, result),
             )
             .await?;
+            if let Some((id, item)) = item {
+                self.publish(RunEventKind::ItemCompleted {
+                    id,
+                    item: Item::ToolCall(item),
+                })
+                .await;
+            }
             let result_index = request.messages().len() - 1;
             rounds.reads.record(
                 call,
@@ -552,6 +582,78 @@ impl Engine<'_> {
             )
             .map(|_| summary)
             .map_err(|_| ContextSummaryErrorType::Rejected);
+        }
+    }
+
+    /// Emits a [`RunEventKind::ModelRequestCompleted`] for every model
+    /// request `state` recorded since the last call, so the events' usage
+    /// sums to the run outcome's.
+    async fn publish_requests(&self, state: &mut TurnState) {
+        if let Some(events) = &self.events {
+            for activity in &state.model_requests[state.published_requests..] {
+                let usage =
+                    Usage::from_request(activity.completion().and_then(CompletionMetadata::usage));
+                events
+                    .emit(RunEventKind::ModelRequestCompleted { usage })
+                    .await;
+            }
+        }
+        state.published_requests = state.model_requests.len();
+    }
+
+    /// Emits a [`RunEventKind::ContextReduced`] for a request sent with
+    /// `activity`, unless it was sent unchanged.
+    async fn publish_context(&self, activity: ContextActivity) {
+        if activity != ContextActivity::default() {
+            self.publish(RunEventKind::ContextReduced(activity)).await;
+        }
+    }
+
+    /// Emits the reasoning and assistant text of a tool-call response, which
+    /// travel with its first call.
+    async fn publish_calls_message(&self, calls: &[ToolCall]) {
+        let first = calls.first();
+        self.publish_message(first.and_then(ToolCall::reasoning_content), || {
+            first
+                .and_then(ToolCall::assistant_text)
+                .map(str::to_string)
+                .map(RunOutput::Text)
+        })
+        .await;
+    }
+
+    /// Emits a response's `reasoning`, then its `message`, as completed
+    /// items; `message` is built only when the turn streams events.
+    async fn publish_message(
+        &self,
+        reasoning: Option<&str>,
+        message: impl FnOnce() -> Option<RunOutput>,
+    ) {
+        let Some(events) = &self.events else {
+            return;
+        };
+        if let Some(text) = reasoning {
+            let item = Item::Reasoning {
+                text: text.to_string(),
+            };
+            Self::publish_item(events, ItemKind::Reasoning, item).await;
+        }
+        if let Some(content) = message() {
+            Self::publish_item(events, ItemKind::Message, Item::Message { content }).await;
+        }
+    }
+
+    /// Starts and completes one item of `item_kind` holding `item`.
+    async fn publish_item(events: &EventSink, item_kind: ItemKind, item: Item) {
+        let id = events.start_item(item_kind).await;
+        events.emit(RunEventKind::ItemCompleted { id, item }).await;
+    }
+
+    /// Starts an item of `item_kind` when the turn streams events.
+    async fn start_item(&self, item_kind: ItemKind) -> Option<ItemId> {
+        match &self.events {
+            Some(events) => Some(events.start_item(item_kind).await),
+            None => None,
         }
     }
 
@@ -865,6 +967,8 @@ struct TurnState {
     context_fit: context::ContextFit,
     model_request_index: u64,
     model_requests: Vec<ModelRequestActivity>,
+    /// Leading [`Self::model_requests`] already published as run events.
+    published_requests: usize,
     output_corrections: usize,
     consecutive_malformed_responses: usize,
     malformed_tool_calls: usize,
@@ -879,6 +983,7 @@ impl TurnState {
             context_fit,
             model_request_index: 0,
             model_requests: Vec::new(),
+            published_requests: 0,
             output_corrections: 0,
             consecutive_malformed_responses: 0,
             malformed_tool_calls: 0,

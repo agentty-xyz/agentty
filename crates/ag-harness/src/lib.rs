@@ -45,6 +45,8 @@
 //!   [`Harness::run`]. Awaiting it yields a settled [`RunOutcome`] with its
 //!   [`RunOutput`], aggregated [`Usage`], the run's [`FileChange`]s and
 //!   [`CommandRecord`]s, and its [`TurnReport`]; a [`CancelToken`] cancels it.
+//!   [`Run::into_parts`] also streams its ordered [`RunEvent`]s through an
+//!   [`EventStream`], ending with [`RunEventKind::Completed`].
 //! - [`Tool`]s are denied until allowed with [`Harness::allow`] or a
 //!   [`ToolPolicy`].
 //! - [`RunError`] and [`HarnessError`] classify any [`TurnError`] or
@@ -65,6 +67,7 @@
 //! | [`turn`]      | Turn builders, reports, activity, and settlement errors    |
 //! | [`store`]     | Session stores and durable write and checkpoint records    |
 //! | [`recovery`]  | Execution identities and idempotent host request records   |
+//! | [`event`]     | Run events with items, usage, and their wire shape         |
 //! | [`lifecycle`] | Content-free events and OpenTelemetry observers            |
 
 #[cfg(test)]
@@ -106,6 +109,7 @@ mod context_projection_test;
 mod effect;
 mod engine;
 mod error;
+pub mod event;
 mod execution;
 mod file_system;
 mod harness;
@@ -140,6 +144,7 @@ pub use catalog::{ModelCatalog, ModelSelector, Role};
 pub use command_journal::CommandRecord;
 pub use comparison::{ComparisonBase, ComparisonBaseError};
 pub use error::{ErrorKind, HarnessError, RunError};
+pub use event::{EventStream, RunEvent, RunEventKind};
 pub use harness::{Harness, HarnessBuildError, HarnessBuilder, Session, SessionBuilder};
 pub use input::{ImageContent, ImageMediaType, InputBlock, TurnInput, TurnInputError};
 pub use model::{Model, ModelError};

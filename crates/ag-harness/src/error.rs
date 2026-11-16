@@ -11,6 +11,9 @@ use std::error::Error;
 use std::fmt;
 use std::time::Duration;
 
+use schemars::JsonSchema;
+use serde::{Deserialize, Serialize};
+
 use crate::bash::BashError;
 use crate::harness::HarnessBuildError;
 use crate::model::{ModelError, ModelErrorType, ModelRegistryError};
@@ -25,7 +28,8 @@ use crate::{OutputSchemaError, RepositoryError, TurnInputError};
 /// the harness gains failure modes. [`crate::lifecycle::TurnErrorType`]
 /// remains the low-cardinality telemetry label of a failed turn; `ErrorKind`
 /// is the embedder-facing classification and its intended successor.
-#[derive(Clone, Copy, Debug, Eq, Hash, PartialEq)]
+#[derive(Clone, Copy, Debug, Deserialize, Eq, Hash, JsonSchema, PartialEq, Serialize)]
+#[serde(rename_all = "snake_case")]
 #[non_exhaustive]
 pub enum ErrorKind {
     /// The caller cancelled the run.
