@@ -281,6 +281,29 @@ fn test_apply_reports_effect_from_revision_and_cursor_changes() {
 }
 
 #[test]
+fn test_apply_dispatches_deletion_commands_to_input_edits() {
+    // Arrange
+    let mut state = InputState::with_text("first\nsecond".to_string());
+    state.cursor = 0;
+
+    // Act
+    let forward_effect = state.apply(InputCommand::DeleteForward);
+    let forward_text = state.text().to_string();
+    let line_end_effect = state.apply(InputCommand::DeleteToLineEnd);
+    let line_end_text = state.text().to_string();
+    let current_line_effect = state.apply(InputCommand::DeleteCurrentLine);
+
+    // Assert
+    assert_eq!(forward_effect, InputEffect::TextChanged);
+    assert_eq!(forward_text, "irst\nsecond");
+    assert_eq!(line_end_effect, InputEffect::TextChanged);
+    assert_eq!(line_end_text, "\nsecond");
+    assert_eq!(current_line_effect, InputEffect::TextChanged);
+    assert_eq!(state.text(), "second");
+    assert_eq!(state.cursor, 0);
+}
+
+#[test]
 fn test_noop_edit_and_empty_undo_leave_input_unchanged() {
     // Arrange
     let mut state = InputState::with_text("hello".to_string());

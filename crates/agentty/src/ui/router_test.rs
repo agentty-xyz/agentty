@@ -17,7 +17,7 @@ use crate::domain::agent::{AgentKind, ReasoningLevel};
 use crate::domain::harness::HarnessAvailability;
 use crate::domain::input::InputState;
 use crate::domain::project::{Project, ProjectListItem};
-use crate::domain::question::QuestionItem;
+use crate::domain::question::{QuestionAttachmentState, QuestionItem};
 use crate::domain::session::{Session, Status};
 use crate::domain::session_message::{SessionMessage, SessionMessageKind, SessionTranscript};
 use crate::presentation::app_mode::{
@@ -415,6 +415,7 @@ fn surface_for_mode_classifies_primary_page_modes() {
     };
     let question_mode = AppMode::Question {
         at_mention_state: None,
+        attachment_state: QuestionAttachmentState::default(),
         current_index: 0,
         focus: ChatFocus::Input,
         input: InputState::default(),

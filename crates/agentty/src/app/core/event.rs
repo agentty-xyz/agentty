@@ -39,7 +39,7 @@ use crate::domain::file_entry::{
     AT_MENTION_MAX_VISIBLE_ENTRIES, FileEntry, at_mention_lookup_root,
 };
 use crate::domain::input::InputState;
-use crate::domain::question::default_option_index;
+use crate::domain::question::{QuestionAttachmentState, default_option_index};
 use crate::domain::session::{
     PublishBranchAction, PublishedBranchSyncStatus, SessionDiffStats, SessionHandles, SessionId,
     Status,
@@ -1236,7 +1236,8 @@ impl App {
         }
 
         for (session_id, turn_applied_state) in std::mem::take(&mut event_batch.applied_turns) {
-            self.apply_agent_response_received(&session_id, &turn_applied_state);
+            self.apply_agent_response_received(&session_id, &turn_applied_state)
+                .await;
         }
         for (session_id, sync_update) in
             std::mem::take(&mut event_batch.published_branch_sync_updates)
@@ -2029,8 +2030,9 @@ impl App {
     /// The session worker persists clarification questions and the token-usage
     /// delta before sending this
     /// event, so the reducer can apply the exact same projection in memory
-    /// without waiting for a forced reload.
-    fn apply_agent_response_received(
+    /// without waiting for a forced reload. Images pasted into replaced
+    /// partial answers are removed.
+    async fn apply_agent_response_received(
         &mut self,
         session_id: &str,
         turn_applied_state: &TurnAppliedState,
@@ -2046,7 +2048,7 @@ impl App {
 
         self.sessions
             .apply_turn_applied_state(session_id, turn_applied_state);
-        self.question_progress.remove(session_id);
+        self.discard_question_progress(session_id).await;
         let questions = turn_applied_state.questions.clone();
         if questions.is_empty() {
             return;
@@ -2056,17 +2058,23 @@ impl App {
         // Session questions remain available when returning to session chat.
         if self.is_viewing_session(session_id) && !matches!(self.mode, AppMode::ExecutionGraph(_)) {
             self.graph_questions.clear_active();
-            self.mode = AppMode::Question {
-                at_mention_state: None,
-                selected_option_index: default_option_index(&questions, 0),
-                session_id: session_id.into(),
-                questions,
-                responses: Vec::new(),
-                current_index: 0,
-                focus: ChatFocus::Input,
-                input: InputState::default(),
-                scroll_offset: None,
-            };
+            let previous_mode = std::mem::replace(
+                &mut self.mode,
+                AppMode::Question {
+                    at_mention_state: None,
+                    attachment_state: QuestionAttachmentState::default(),
+                    selected_option_index: default_option_index(&questions, 0),
+                    session_id: session_id.into(),
+                    questions,
+                    responses: Vec::new(),
+                    current_index: 0,
+                    focus: ChatFocus::Input,
+                    input: InputState::default(),
+                    scroll_offset: None,
+                },
+            );
+            self.cleanup_prompt_attachments(previous_mode.into_input_attachments())
+                .await;
         }
     }
 

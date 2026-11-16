@@ -10,7 +10,7 @@ use super::super::question_scroll_metrics;
 use super::support::{TEST_TERMINAL_SIZE, handle};
 use crate::domain::agent::AgentModel;
 use crate::domain::input::InputState;
-use crate::domain::question::QuestionItem;
+use crate::domain::question::{QuestionAttachmentState, QuestionItem};
 use crate::domain::session::{Session, SessionHandles, SessionSize, SessionStats, Status};
 use crate::domain::transient_message::TransientMessageStore;
 use crate::presentation::app_mode::{AppMode, ChatFocus};
@@ -61,6 +61,7 @@ async fn test_handle_ctrl_c_sets_in_memory_session_status_to_review() {
     });
     app.mode = AppMode::Question {
         at_mention_state: None,
+        attachment_state: QuestionAttachmentState::default(),
         session_id: session_id.into(),
         questions: vec![QuestionItem {
             options: Vec::new(),
@@ -140,6 +141,7 @@ async fn test_handle_ctrl_c_updates_session_handle_status_to_review() {
     );
     app.mode = AppMode::Question {
         at_mention_state: None,
+        attachment_state: QuestionAttachmentState::default(),
         session_id: session_id.into(),
         questions: vec![QuestionItem {
             options: Vec::new(),
@@ -216,6 +218,7 @@ async fn test_handle_ctrl_c_keeps_question_mode_when_review_status_cannot_persis
     .expect("failure trigger should be installed");
     app.mode = AppMode::Question {
         at_mention_state: None,
+        attachment_state: QuestionAttachmentState::default(),
         session_id: "session-id".into(),
         questions: vec![QuestionItem::new("Q?")],
         responses: Vec::new(),
@@ -274,6 +277,7 @@ async fn test_handle_ctrl_c_closes_open_in_progress_timer_before_review() {
         .expect("failed to open timing window");
     app.mode = AppMode::Question {
         at_mention_state: None,
+        attachment_state: QuestionAttachmentState::default(),
         session_id: session_id.into(),
         questions: vec![QuestionItem {
             options: Vec::new(),
@@ -330,6 +334,7 @@ async fn test_question_scroll_metrics_uses_default_review_model_for_loading_fall
     );
     app.mode = AppMode::Question {
         at_mention_state: None,
+        attachment_state: QuestionAttachmentState::default(),
         current_index: 0,
         focus: ChatFocus::Chat,
         input: InputState::default(),

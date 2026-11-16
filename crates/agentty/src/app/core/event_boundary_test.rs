@@ -10,7 +10,7 @@ use crate::app::core::state::tests::support::{
 use crate::app::session::{SyncSessionStartError, TurnAppliedState};
 use crate::domain::file_entry::FileEntry;
 use crate::domain::input::InputState;
-use crate::domain::question::QuestionItem;
+use crate::domain::question::{QuestionAttachmentState, QuestionItem};
 use crate::domain::session::{
     PublishBranchAction, ReviewRequest, ReviewRequestState, SessionStats, Status,
 };
@@ -38,6 +38,7 @@ async fn session_composers_and_overlays_retain_their_viewed_session() {
         test_prompt_mode_snapshot(restore_view.session_id.clone()).into_prompt_mode(),
         AppMode::Question {
             at_mention_state: None,
+            attachment_state: QuestionAttachmentState::default(),
             current_index: 0,
             focus: ChatFocus::Input,
             input: InputState::default(),
@@ -104,7 +105,7 @@ async fn background_questions_preserve_graph_snapshots_and_bound_drafts() {
             app.mode = AppMode::ExecutionGraph(Box::new(view.clone()));
 
             // Act
-            app.apply_agent_response_received("sess", &turn);
+            app.apply_agent_response_received("sess", &turn).await;
             app.reconcile_open_session_question_mode().await;
 
             // Assert

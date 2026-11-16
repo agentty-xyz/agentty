@@ -1,15 +1,22 @@
 //! App mode tests for diff comments, help keybinding contexts, and view
 //! restoration.
 
+use std::path::PathBuf;
+
 use super::super::help_action::{HelpAction, ViewSessionState};
 use super::{
     AppMode, ChatFocus, ConfirmationViewMode, DiffCommentTarget, DiffFocus, DiffLineCommentAnchor,
     DiffLineCommentTarget, DiffLineComments, DiffLineSide, DiffPreview,
-    DiffPreviewUnavailableReason, DiffReviewComments, HelpContext,
+    DiffPreviewUnavailableReason, DiffRestoreTarget, DiffReviewComments, DiffSidebarFocus,
+    HelpContext, PromptModeSnapshot, QuestionModeSnapshot,
 };
 use crate::domain::input::InputState;
+use crate::domain::question::QuestionAttachmentState;
 use crate::domain::session::PublishBranchAction;
-use crate::presentation::prompt::PromptAtMentionState;
+use crate::presentation::prompt::{
+    PromptAtMentionState, PromptAttachment, PromptAttachmentState, PromptHistoryState,
+    PromptSlashState,
+};
 
 #[test]
 fn test_diff_line_comments_edit_and_build_compact_prompt() {
@@ -502,10 +509,148 @@ fn test_diff_preview_tracks_enabled_state_and_request_generation() {
 }
 
 #[test]
+fn into_input_attachments_returns_composer_and_answer_images() {
+    // Arrange
+    let mut prompt_attachments = PromptAttachmentState::default();
+    prompt_attachments
+        .attachments
+        .push(PromptAttachment::new(1, PathBuf::from("/tmp/active.png")));
+    prompt_attachments
+        .archived_attachments
+        .push(PromptAttachment::new(2, PathBuf::from("/tmp/undo.png")));
+    let prompt_mode = AppMode::Prompt {
+        at_mention_state: None,
+        attachment_state: prompt_attachments,
+        focus: ChatFocus::Input,
+        history_state: PromptHistoryState::new(Vec::new()),
+        input: InputState::default(),
+        scroll_offset: None,
+        session_id: "prompt-session".into(),
+        slash_state: PromptSlashState::default(),
+    };
+    let mut answer_attachments = QuestionAttachmentState::default();
+    answer_attachments
+        .answered
+        .push(PromptAttachment::new(1, PathBuf::from("/tmp/answered.png")));
+    let question_mode = AppMode::Question {
+        at_mention_state: None,
+        attachment_state: answer_attachments,
+        current_index: 0,
+        focus: ChatFocus::Input,
+        input: InputState::default(),
+        questions: Vec::new(),
+        responses: Vec::new(),
+        scroll_offset: None,
+        selected_option_index: None,
+        session_id: "question-session".into(),
+    };
+
+    // Act
+    let paths = [prompt_mode, question_mode, AppMode::List].map(|mode| {
+        mode.into_input_attachments()
+            .into_iter()
+            .map(|attachment| attachment.local_image_path)
+            .collect::<Vec<_>>()
+    });
+
+    // Assert
+    assert_eq!(
+        paths,
+        [
+            vec![
+                PathBuf::from("/tmp/active.png"),
+                PathBuf::from("/tmp/undo.png")
+            ],
+            vec![PathBuf::from("/tmp/answered.png")],
+            Vec::new(),
+        ]
+    );
+}
+
+#[test]
+fn into_input_attachments_returns_images_saved_in_diff_restore_targets() {
+    // Arrange
+    let mut answer_attachments = QuestionAttachmentState::default();
+    answer_attachments
+        .answered
+        .push(PromptAttachment::new(1, PathBuf::from("/tmp/answer.png")));
+    let question_snapshot = QuestionModeSnapshot {
+        at_mention_state: None,
+        attachment_state: answer_attachments,
+        current_index: 0,
+        input: InputState::default(),
+        questions: Vec::new(),
+        responses: Vec::new(),
+        scroll_offset: None,
+        selected_option_index: None,
+        session_id: "question-session".into(),
+    };
+    let diff_mode = AppMode::Diff {
+        diff: String::new(),
+        file_explorer_selected_index: 0,
+        focus: DiffFocus::Files,
+        line_comments: DiffLineComments::default(),
+        preview: DiffPreview::default(),
+        review_comments: None,
+        restore: Some(Box::new(DiffRestoreTarget::Question(question_snapshot))),
+        scroll_cache: None,
+        scroll_offset: 0,
+        selected_diff_line_index: 0,
+        session_id: "question-session".into(),
+    };
+    let mut prompt_attachments = PromptAttachmentState::default();
+    prompt_attachments
+        .attachments
+        .push(PromptAttachment::new(1, PathBuf::from("/tmp/prompt.png")));
+    let prompt_snapshot = PromptModeSnapshot {
+        at_mention_state: None,
+        attachment_state: prompt_attachments,
+        history_state: PromptHistoryState::new(Vec::new()),
+        input: InputState::default(),
+        scroll_offset: None,
+        session_id: "prompt-session".into(),
+        slash_state: PromptSlashState::default(),
+    };
+    let loading_mode = AppMode::DiffLoading {
+        fallback_view_scroll_offset: None,
+        request_id: 1,
+        restore: Some(Box::new(DiffRestoreTarget::Prompt(prompt_snapshot))),
+        session_id: "prompt-session".into(),
+        sidebar_focus: DiffSidebarFocus::Files,
+    };
+    let view_diff_mode = AppMode::DiffLoading {
+        fallback_view_scroll_offset: None,
+        request_id: 2,
+        restore: None,
+        session_id: "view-session".into(),
+        sidebar_focus: DiffSidebarFocus::Files,
+    };
+
+    // Act
+    let paths = [diff_mode, loading_mode, view_diff_mode].map(|mode| {
+        mode.into_input_attachments()
+            .into_iter()
+            .map(|attachment| attachment.local_image_path)
+            .collect::<Vec<_>>()
+    });
+
+    // Assert
+    assert_eq!(
+        paths,
+        [
+            vec![PathBuf::from("/tmp/answer.png")],
+            vec![PathBuf::from("/tmp/prompt.png")],
+            Vec::new(),
+        ]
+    );
+}
+
+#[test]
 fn test_active_at_mention_mut_returns_question_and_editing_diff_lookups() {
     // Arrange
     let mut question_mode = AppMode::Question {
         at_mention_state: Some(PromptAtMentionState::new(Vec::new())),
+        attachment_state: QuestionAttachmentState::default(),
         current_index: 0,
         focus: ChatFocus::Input,
         input: InputState::with_text("@answer".to_string()),

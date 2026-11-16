@@ -278,6 +278,9 @@ impl ReplyEnqueueOutcome {
 
 /// Worker-queue behavior selected after reply preparation.
 struct ReplyEnqueueOptions {
+    /// Reply policy; question answers keep their attachments when the
+    /// enqueue fails because their panel reopens them for a retry.
+    eligibility: ReplyEligibility,
     idempotent: bool,
     joins_worker_queue: bool,
     report_failure_in_transcript: bool,
@@ -2580,10 +2583,7 @@ impl SessionManager {
             )
             .await;
         }
-        let published_upstream_ref = self
-            .session_or_err(&persisted_session_id)
-            .ok()
-            .and_then(|session| session.published_upstream_ref.clone());
+        let published_upstream_ref = self.published_upstream_ref(&persisted_session_id);
         let idempotent = operation_id.is_some();
 
         let command = Self::build_session_command(BuildSessionCommandInput {
@@ -2605,6 +2605,7 @@ impl SessionManager {
                 &prompt,
                 command,
                 ReplyEnqueueOptions {
+                    eligibility,
                     idempotent,
                     report_failure_in_transcript: !defer_prompt_until_enqueued,
                     joins_worker_queue,
@@ -2632,6 +2633,13 @@ impl SessionManager {
         }
 
         enqueued
+    }
+
+    /// Returns the upstream ref the session branch was published to, if any.
+    fn published_upstream_ref(&self, session_id: &str) -> Option<String> {
+        self.session_or_err(session_id)
+            .ok()
+            .and_then(|session| session.published_upstream_ref.clone())
     }
 
     /// Hydrates a restarted session before replay context is captured.
@@ -3055,7 +3063,7 @@ impl SessionManager {
         let newly_enqueued = match enqueue_result {
             Ok(newly_enqueued) => newly_enqueued,
             Err(error) => {
-                if !preparation_owned {
+                if !preparation_owned && options.eligibility != ReplyEligibility::QuestionAnswer {
                     self.cleanup_prompt_attachment_files(services, prompt).await;
                 }
 

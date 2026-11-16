@@ -14,15 +14,15 @@ use super::{
 };
 use crate::domain::agent::ReasoningLevel;
 use crate::domain::input::InputState;
-use crate::domain::question::QuestionItem;
+use crate::domain::question::{QuestionAttachmentState, QuestionItem};
 use crate::domain::session::{Session, Status};
 use crate::domain::session_message::SessionTranscript;
 use crate::presentation::app_mode::{AppMode, ChatFocus};
 use crate::presentation::frame_time::FrameTime;
 use crate::presentation::graph_chat::GraphChatSnapshot;
 use crate::presentation::prompt::{
-    PromptAtMentionState, PromptAttachmentState, PromptGraphState, PromptHistoryState,
-    PromptSlashState,
+    PendingImagePaste, PromptAtMentionState, PromptAttachmentState, PromptGraphState,
+    PromptHistoryState, PromptSlashState,
 };
 use crate::ui::component::session_output::{SessionOutputLayoutCache, SessionOutputLineContext};
 use crate::ui::{Page, layout, markdown, prompt_format, session_format, style};
@@ -348,6 +348,7 @@ fn test_review_text_reads_snapshot_for_question_output() {
     let session = session_fixture();
     let mode = AppMode::Question {
         at_mention_state: None,
+        attachment_state: QuestionAttachmentState::default(),
         session_id: "session-id".into(),
         questions: vec![QuestionItem::new("Need tests?")],
         responses: Vec::new(),
@@ -755,8 +756,10 @@ fn test_render_question_panel_preserves_frame_without_prepared_areas() {
         focus: ChatFocus::Input,
         has_session_diff: false,
         input: &input,
+        is_pasting_image: false,
         questions: &questions,
         selected_option_index: None,
+        spinner_frame: 0,
         timing_label: "",
     };
 
@@ -778,6 +781,7 @@ fn test_render_question_mode_keeps_typed_answer_visible_in_tight_layout() {
     let session = session_fixture();
     let mode = AppMode::Question {
         at_mention_state: None,
+        attachment_state: QuestionAttachmentState::default(),
         session_id: "session-id".into(),
         questions: vec![QuestionItem {
             options: Vec::new(),
@@ -808,12 +812,52 @@ fn test_render_question_mode_keeps_typed_answer_visible_in_tight_layout() {
 }
 
 #[test]
+fn question_mode_footer_advertises_a_running_image_capture() {
+    // Arrange
+    let session = session_fixture();
+    let mut attachment_state = QuestionAttachmentState::default();
+    attachment_state.composer.pending_image_paste = Some(PendingImagePaste {
+        anchor: Some(0),
+        request_id: 1,
+    });
+    let mode = AppMode::Question {
+        at_mention_state: None,
+        attachment_state,
+        session_id: "session-id".into(),
+        questions: vec![QuestionItem::new("Which screen?")],
+        responses: Vec::new(),
+        current_index: 0,
+        focus: ChatFocus::Input,
+        input: InputState::with_text("See ".to_string()),
+        scroll_offset: None,
+        selected_option_index: None,
+    };
+    let mut page = test_session_chat_page(&session, &mode);
+    let backend = ratatui::backend::TestBackend::new(120, 20);
+    let mut terminal = ratatui::Terminal::new(backend).expect("failed to create terminal");
+
+    // Act
+    terminal
+        .draw(|frame| {
+            let area = frame.area();
+            Page::render(&mut page, frame, area);
+        })
+        .expect("failed to draw question mode");
+
+    // Assert
+    let text = buffer_text(terminal.backend().buffer());
+    assert!(text.contains("Pasting image..."));
+    assert!(text.contains("Enter: send"));
+}
+
+#[test]
 fn test_render_question_mode_includes_blank_row_between_question_and_input() {
     // Arrange
     let session = session_fixture();
     let question = "Need a detailed migration plan with rollback guidance?".to_string();
     let mode = AppMode::Question {
         at_mention_state: None,
+        attachment_state: QuestionAttachmentState::default(),
         session_id: "session-id".into(),
         questions: vec![QuestionItem {
             options: Vec::new(),
@@ -862,6 +906,7 @@ fn test_render_question_mode_with_options_shows_option_text() {
     let session = session_fixture();
     let mode = AppMode::Question {
         at_mention_state: None,
+        attachment_state: QuestionAttachmentState::default(),
         session_id: "session-id".into(),
         questions: vec![QuestionItem {
             options: vec!["Yes".to_string(), "No".to_string()],
@@ -906,6 +951,7 @@ fn test_render_question_lookup_shows_file_and_selection_controls() {
                 path: "src/session_chat.rs".to_string(),
             },
         ])),
+        attachment_state: QuestionAttachmentState::default(),
         current_index: 0,
         focus: ChatFocus::Input,
         input: InputState::with_text("@session".to_string()),
@@ -949,8 +995,10 @@ fn test_render_question_lookup_requires_space_for_a_complete_result_row() {
             focus: ChatFocus::Input,
             has_session_diff: false,
             input: &input,
+            is_pasting_image: false,
             questions: &questions,
             selected_option_index: None,
+            spinner_frame: 0,
             timing_label: "",
         };
         let mut terminal = ratatui::Terminal::new(ratatui::backend::TestBackend::new(100, height))
@@ -995,6 +1043,7 @@ fn test_render_question_empty_lookup_shows_only_dismissal_controls() {
         let session = session_fixture();
         let mode = AppMode::Question {
             at_mention_state: Some(PromptAtMentionState::new(entries)),
+            attachment_state: QuestionAttachmentState::default(),
             current_index: 0,
             focus: ChatFocus::Input,
             input: InputState::with_text("@missing".to_string()),
@@ -1030,6 +1079,7 @@ fn test_render_question_mode_with_options_in_small_terminal_does_not_panic() {
     let session = session_fixture();
     let mode = AppMode::Question {
         at_mention_state: None,
+        attachment_state: QuestionAttachmentState::default(),
         session_id: "session-id".into(),
         questions: vec![QuestionItem {
             options: vec![
@@ -1094,6 +1144,7 @@ fn test_render_session_preserves_timer_across_composer_modes_and_widths() {
     };
     let mut question_mode = AppMode::Question {
         at_mention_state: None,
+        attachment_state: QuestionAttachmentState::default(),
         session_id: "session-id".into(),
         questions: vec![QuestionItem::new("Continue?")],
         responses: Vec::new(),

@@ -6,7 +6,7 @@ use super::support::{
     TEST_TERMINAL_SIZE, free_text_question_mode, handle, question_mode_with_options,
 };
 use crate::domain::input::InputState;
-use crate::domain::question::QuestionItem;
+use crate::domain::question::{QuestionAttachmentState, QuestionItem};
 use crate::presentation::app_mode::{AppMode, ChatFocus};
 use crate::presentation::prompt::PromptAtMentionState;
 
@@ -16,6 +16,7 @@ async fn test_handle_escape_preserves_question_turn_and_draft() {
     let mut app = crate::test_support::new_test_app_without_retained_base_dir().await;
     app.mode = AppMode::Question {
         at_mention_state: None,
+        attachment_state: QuestionAttachmentState::default(),
         session_id: "session-esc".into(),
         questions: vec![QuestionItem {
             options: Vec::new(),

@@ -7,7 +7,7 @@ use super::super::{
 };
 use super::support::{TEST_TERMINAL_SIZE, handle};
 use crate::domain::input::InputState;
-use crate::domain::question::QuestionItem;
+use crate::domain::question::{QuestionAttachmentState, QuestionItem};
 use crate::domain::session::Status;
 use crate::presentation::app_mode::{AppMode, ChatFocus};
 
@@ -17,6 +17,7 @@ fn completed_response(
     responses: &[&str],
 ) -> CompletedQuestionResponse {
     CompletedQuestionResponse {
+        attachment_state: QuestionAttachmentState::default(),
         questions,
         responses: responses.iter().map(ToString::to_string).collect(),
         scroll_offset: Some(3),
@@ -104,6 +105,7 @@ async fn submit_response_advances_session_when_reply_is_enqueued() {
         .expect("questions should persist");
     app.mode = AppMode::Question {
         at_mention_state: None,
+        attachment_state: QuestionAttachmentState::default(),
         current_index: 0,
         focus: ChatFocus::Input,
         input: InputState::default(),
@@ -159,6 +161,7 @@ async fn submit_response_keeps_question_status_when_reply_is_not_enqueued() {
     );
     app.mode = AppMode::Question {
         at_mention_state: None,
+        attachment_state: QuestionAttachmentState::default(),
         session_id: session_id.into(),
         questions,
         responses: vec!["Yes".to_string()],
@@ -206,6 +209,7 @@ async fn test_handle_enter_on_last_question_restores_answer_when_reply_is_not_en
     let mut app = crate::test_support::new_test_app_without_retained_base_dir().await;
     app.mode = AppMode::Question {
         at_mention_state: None,
+        attachment_state: QuestionAttachmentState::default(),
         session_id: "missing-session".into(),
         questions: vec![QuestionItem {
             options: vec!["Today".to_string(), "Tomorrow".to_string()],

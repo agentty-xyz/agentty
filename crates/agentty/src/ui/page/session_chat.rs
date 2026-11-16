@@ -336,6 +336,7 @@ impl<'a> SessionChatPage<'a> {
 
         if let AppMode::Question {
             at_mention_state,
+            attachment_state,
             focus,
             questions,
             current_index,
@@ -354,8 +355,10 @@ impl<'a> SessionChatPage<'a> {
                     focus: *focus,
                     has_session_diff: session.stats.should_show_diff(),
                     input,
+                    is_pasting_image: attachment_state.composer.is_pasting_image(),
                     questions,
                     selected_option_index: *selected_option_index,
+                    spinner_frame: Icon::spinner_frame_from_millis(self.frame_time.unix_millis()),
                     timing_label,
                 },
             );
@@ -624,8 +627,10 @@ struct QuestionPanelState<'a> {
     focus: ChatFocus,
     has_session_diff: bool,
     input: &'a input::InputState,
+    is_pasting_image: bool,
     questions: &'a [QuestionItem],
     selected_option_index: Option<usize>,
+    spinner_frame: usize,
     timing_label: &'a str,
 }
 
@@ -643,8 +648,10 @@ fn render_question_panel(
         focus,
         has_session_diff,
         input,
+        is_pasting_image,
         questions,
         selected_option_index,
+        spinner_frame,
         timing_label,
     } = *state;
     let question_item = questions.get(current_index);
@@ -727,11 +734,25 @@ fn render_question_panel(
     render_question_help_footer(
         f,
         panel_areas.help_area,
-        focus,
-        has_session_diff,
-        !is_free_text_mode,
-        lookup_state,
+        &QuestionFooterState {
+            focus,
+            has_session_diff,
+            is_navigating_options: !is_free_text_mode,
+            is_pasting_image,
+            lookup_state,
+            spinner_frame,
+        },
     );
+}
+
+/// Question-mode state that selects the help footer's action hints.
+struct QuestionFooterState {
+    focus: ChatFocus,
+    has_session_diff: bool,
+    is_navigating_options: bool,
+    is_pasting_image: bool,
+    lookup_state: question_format::QuestionLookupState,
+    spinner_frame: usize,
 }
 
 /// Renders the question-mode help footer with context-aware action hints.
@@ -742,27 +763,28 @@ fn render_question_panel(
 /// `is_navigating_options` mirrors the runtime predicate that treats plain `q`
 /// as a sessions-list shortcut, so the footer can surface it whenever the
 /// shortcut is actually wired up. `lookup_state` only advertises selection
-/// and navigation when the prepared suggestion list contains matches.
-fn render_question_help_footer(
-    f: &mut Frame,
-    area: Rect,
-    focus: ChatFocus,
-    has_session_diff: bool,
-    is_navigating_options: bool,
-    lookup_state: question_format::QuestionLookupState,
-) {
+/// and navigation when the prepared suggestion list contains matches. A
+/// leading loader advertises a clipboard image capture that is still running
+/// and animates at `spinner_frame`, like the prompt footer loader.
+fn render_question_help_footer(f: &mut Frame, area: Rect, footer_state: &QuestionFooterState) {
     if area.height == 0 {
         return;
     }
 
-    let help_para = Paragraph::new(question_format::question_help_footer_line(
-        focus,
-        has_session_diff,
-        is_navigating_options,
-        lookup_state,
-    ))
-    .alignment(ratatui::layout::Alignment::Left);
+    let mut footer_line = question_format::question_help_footer_line(
+        footer_state.focus,
+        footer_state.has_session_diff,
+        footer_state.is_navigating_options,
+        footer_state.lookup_state,
+    );
+    if footer_state.is_pasting_image {
+        prompt_format::prepend_pasting_image_indicator(&mut footer_line);
+    }
+    let help_para = Paragraph::new(footer_line).alignment(ratatui::layout::Alignment::Left);
     f.render_widget(help_para, area);
+    if footer_state.is_pasting_image {
+        TachyonLoaderEffect::apply_to_last_glyph(f.buffer_mut(), area, footer_state.spinner_frame);
+    }
 }
 
 /// Renders the at-mention file dropdown as an overlay above the input area.

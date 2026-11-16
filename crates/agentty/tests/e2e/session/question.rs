@@ -11,6 +11,8 @@ use testty::frame::TerminalFrame;
 use testty::proof::report::ProofReport;
 use testty::region::Region;
 
+#[cfg(target_os = "linux")]
+use super::fixture::{CLIPBOARD_IMAGE_FILE, install_clipboard_image_stub};
 use super::fixture::{E2eResult, seed_project_settings};
 use crate::common::{BuilderEnv, FeatureTest, SessionSeed};
 use crate::{common, test_support};
@@ -36,6 +38,18 @@ const SECOND_QUESTION_TEXT: &str = "Which tests should be added?";
 
 /// Clarification question emitted by the delayed stub while help is open.
 const RECONCILE_QUESTION_TEXT: &str = "Should I add a regression test?";
+
+/// Free-text clarification question answered with a pasted image.
+#[cfg(target_os = "linux")]
+const QUESTION_IMAGE_TEXT: &str = "Which screen should I match?";
+
+/// Final answer emitted when the clarification reply delivers the image.
+#[cfg(target_os = "linux")]
+const QUESTION_IMAGE_RECEIVED: &str = "Screenshot received.";
+
+/// Final answer emitted when the clarification reply lacks the image.
+#[cfg(target_os = "linux")]
+const QUESTION_IMAGE_MISSING: &str = "Screenshot missing.";
 
 /// Seeds an unrelated selected row and a prompt-aware agent stub for the
 /// question-refresh regression.
@@ -491,6 +505,137 @@ async fn session_question_reconcile_after_help_overlay() -> E2eResult {
                     assertion::assert_text_in_region(frame, "Yes", &full);
                     assertion::assert_text_in_region(frame, "No", &full);
                     assertion::assert_not_visible(frame, "Keybindings");
+                })
+            },
+        )
+        .await?;
+
+    Ok(())
+}
+
+/// Verify that `Ctrl+V` in a free-text answer reaches clipboard image paste
+/// and reports an unavailable clipboard without leaving the question panel.
+#[tokio::test]
+async fn question_answer_image_paste_unavailable_shows_inline_error() -> E2eResult {
+    // Arrange, Act, Assert
+    FeatureTest::new("question_answer_image_paste_unavailable")
+        .with_git()
+        .env("AGENTTY_DISABLE_CLIPBOARD", "1")
+        .setup(|env| Box::pin(async move { seed_question_at_lookup_session(env).await }))
+        .run(
+            |scenario| {
+                scenario
+                    .compose(&common::wait_for_agentty_startup())
+                    .compose(&common::switch_to_tab("Sessions"))
+                    .wait_for_text("File answer", 5000)
+                    .press_key("Enter")
+                    .wait_for_text("Question 1/2", 5000)
+                    .write_text("See screen")
+                    .wait_for_text("See screen", 5000)
+                    .press_key("ctrl+v")
+                    .wait_for_text("Paste Image Error", 5000)
+                    .capture_labeled(
+                        "paste_error",
+                        "Question answer showing unavailable clipboard paste error",
+                    )
+            },
+            |frame, _report| {
+                Box::pin(async move {
+                    let full = Region::full(frame.cols(), frame.rows());
+                    assertion::assert_text_in_region(frame, "Paste Image Error", &full);
+                    assertion::assert_text_in_region(frame, "Clipboard is unavailable", &full);
+                    assertion::assert_text_in_region(frame, "Question 1/2", &full);
+                    assertion::assert_text_in_region(frame, "See screen", &full);
+                    assertion::assert_not_visible(frame, "[Image #1]");
+                })
+            },
+        )
+        .await?;
+
+    Ok(())
+}
+
+/// Installs a Claude stub that asks one free-text clarification question and
+/// accepts the answer only when it delivers the pasted clipboard PNG with
+/// read access to its directory.
+#[cfg(target_os = "linux")]
+async fn install_question_image_claude_stub(env: &BuilderEnv) -> E2eResult {
+    let claude_path = env.stub_bin.join("claude");
+    let script = format!(
+        r#"#!/bin/sh
+if [ "$1" = "update" ]; then exit 0; fi
+if [ "$1" = "--version" ]; then printf 'claude 0.0.0-test\n'; exit 0; fi
+input=$(cat)
+case "$input" in
+  *"Clarifications:"*)
+    answer='{QUESTION_IMAGE_MISSING}'
+    image_path=$(printf '%s\n' "$input" | grep -o '/[^[:space:]"]*\.png' | head -n 1)
+    if [ -n "$image_path" ] && cmp -s "$image_path" "$(dirname "$0")/{CLIPBOARD_IMAGE_FILE}"; then
+      case " $* " in
+        *" --add-dir $(dirname "$image_path") "*) answer='{QUESTION_IMAGE_RECEIVED}' ;;
+      esac
+    fi
+    result="{{\\\"answer\\\":\\\"$answer\\\",\\\"questions\\\":[],\\\"review_comment_outcomes\\\":[]}}"
+    ;;
+  *)
+    result='{{\"answer\":\"Need a screenshot.\",\"questions\":[{{\"text\":\"{QUESTION_IMAGE_TEXT}\",\"options\":[]}}],\"review_comment_outcomes\":[]}}'
+    ;;
+esac
+printf '%s\n' '{{"type":"system","subtype":"init"}}'
+printf '%s\n' "{{\"type\":\"result\",\"subtype\":\"success\",\"result\":\"$result\",\"usage\":{{\"input_tokens\":5,\"output_tokens\":9}}}}"
+"#
+    );
+    std::fs::write(&claude_path, script)?;
+    std::fs::set_permissions(&claude_path, std::fs::Permissions::from_mode(0o750))?;
+
+    seed_project_settings(env, &[("DefaultSmartModel", "claude-haiku-5-5")]).await
+}
+
+/// A scripted Wayland clipboard exercises real capture without a host
+/// clipboard; the provider stub accepts the clarification reply only when it
+/// carries the pasted PNG with read access.
+#[cfg(target_os = "linux")]
+#[tokio::test]
+async fn question_answer_delivers_pasted_image_to_the_reply_turn() -> E2eResult {
+    // Arrange
+    FeatureTest::new("question_answer_pasted_image")
+        .with_git()
+        .env("WAYLAND_DISPLAY", "agentty-test-wayland")
+        .setup(|env| {
+            Box::pin(async move {
+                install_question_image_claude_stub(env).await?;
+
+                install_clipboard_image_stub(&env.stub_bin)
+            })
+        })
+        .run(
+            |scenario| {
+                // Act
+                scenario
+                    .compose(&common::wait_for_agentty_startup())
+                    .compose(&common::switch_to_tab("Sessions"))
+                    .compose(&common::open_new_session_prompt())
+                    .write_text("Match the design")
+                    .wait_for_text("Match the design", 3000)
+                    .press_key("Enter")
+                    .wait_for_text(QUESTION_IMAGE_TEXT, 30000)
+                    .write_text("Use this screen ")
+                    .press_key("ctrl+v")
+                    .wait_for_text("Use this screen [Image #1]", 5000)
+                    .capture_labeled("pasted", "Pasted image placeholder in the answer")
+                    .press_key("Enter")
+                    .wait_for_text(QUESTION_IMAGE_RECEIVED, 30000)
+            },
+            |frame, report| {
+                Box::pin(async move {
+                    // Assert
+                    let pasted_frame = common::frame_from_capture(&report.captures[0]);
+                    let pasted_full = Region::full(pasted_frame.cols(), pasted_frame.rows());
+                    assertion::assert_text_in_region(&pasted_frame, "Question 1/1", &pasted_full);
+
+                    let full = Region::full(frame.cols(), frame.rows());
+                    assertion::assert_text_in_region(frame, QUESTION_IMAGE_RECEIVED, &full);
+                    assertion::assert_not_visible(frame, QUESTION_IMAGE_MISSING);
                 })
             },
         )

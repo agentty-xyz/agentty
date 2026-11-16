@@ -4,7 +4,7 @@
 use std::sync::Arc;
 
 use ag_contracts::AgentRequestKind;
-use ag_protocol::QuestionItem;
+use ag_protocol::{QuestionItem, TurnPromptAttachment};
 use ag_session::{
     CreateSessionMode, CreateSessionRequest, SessionError as ApiSessionError, SessionStatus,
     test_support as model_fixture,
@@ -121,8 +121,20 @@ async fn runtime_backend_queues_one_question_resume_behind_turn_entering_questio
 }
 
 #[tokio::test]
-async fn runtime_backend_does_not_persist_question_answer_when_worker_enqueue_fails() {
+async fn runtime_backend_keeps_question_answer_and_its_images_when_worker_enqueue_fails() {
     // Arrange
+    let managed_root = crate::app::agentty_home().join("tmp");
+    std::fs::create_dir_all(&managed_root).expect("managed tmp root");
+    let image_directory = tempfile::tempdir_in(managed_root).expect("image directory");
+    let images = image_directory.path().join("images");
+    std::fs::create_dir(&images).expect("images");
+    let image_path = images.join("answer.png");
+    std::fs::write(&image_path, "image").expect("image fixture");
+    let mut request = current_question_answer("Current answer [Image #1]");
+    request.attachments = vec![TurnPromptAttachment {
+        local_image_path: image_path.clone(),
+        placeholder: "[Image #1]".to_string(),
+    }];
     let (mut app, _temp_dir) = crate::test_support::new_git_test_app().await;
     let project_id = app.active_project_id();
     let session_id = request_session_creation(
@@ -151,13 +163,9 @@ async fn runtime_backend_does_not_persist_question_answer_when_worker_enqueue_fa
     );
 
     // Act
-    let answer_error = request_question_answers(
-        &mut app,
-        session_id.clone(),
-        current_question_answer("Current answer"),
-    )
-    .await
-    .expect_err("missing active worker should reject question answers");
+    let answer_error = request_question_answers(&mut app, session_id.clone(), request)
+        .await
+        .expect_err("missing active worker should reject question answers");
     let session = request_session(&mut app, session_id.clone())
         .await
         .expect("session should load")
@@ -172,4 +180,8 @@ async fn runtime_backend_does_not_persist_question_answer_when_worker_enqueue_fa
     );
     assert_eq!(session.questions, [QuestionItem::new("Current question?")]);
     assert_eq!(session.messages, [] as [ag_session::SessionMessage; 0]);
+    assert!(
+        image_path.exists(),
+        "the caller keeps answer images for a retry"
+    );
 }

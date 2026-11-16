@@ -19,7 +19,7 @@ use crate::app::graph_proposal_reply::clarification_questions;
 use crate::app::prompt_intent::PromptWorkflowOutcome;
 use crate::domain::question::{QuestionItem, question_answer_message};
 use crate::domain::session::{SessionId, Status};
-use crate::domain::turn_prompt::TurnPrompt;
+use crate::domain::turn_prompt::{TurnPrompt, TurnPromptAttachment};
 use crate::presentation::app_mode::AppMode;
 
 /// Longest wait before an unchanged viewed session is checked again; node
@@ -244,13 +244,18 @@ impl App {
     /// Only a retryable rejection keeps the panel's target. Sent and stale
     /// answers release it and check again on the next tick, so the questions
     /// pending now open instead of a target that can never accept answers.
+    /// `attachments` carry the images referenced by the answers.
     pub(crate) async fn answer_graph_questions(
         &mut self,
         session_id: &SessionId,
         target: &GraphQuestionTarget,
         answers: &[QuestionAnswer],
+        attachments: Vec<TurnPromptAttachment>,
     ) -> GraphAnswerOutcome {
-        let prompt = TurnPrompt::from_text(question_answer_message(answers));
+        let prompt = TurnPrompt {
+            attachments,
+            ..TurnPrompt::from_text(question_answer_message(answers))
+        };
         let outcome = match target {
             GraphQuestionTarget::Node(execution) => {
                 self.answer_graph_node_questions(session_id, execution, &prompt)

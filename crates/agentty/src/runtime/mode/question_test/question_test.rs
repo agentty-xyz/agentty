@@ -10,7 +10,7 @@ use super::super::{
 use super::support::{TEST_TERMINAL_SIZE, handle, question_mode_with_options};
 use crate::app::AppEvent;
 use crate::domain::input::InputState;
-use crate::domain::question::{QuestionItem, default_option_index};
+use crate::domain::question::{QuestionAttachmentState, QuestionItem, default_option_index};
 use crate::domain::session::{Session, SessionId, SessionSize, SessionStats, Status};
 use crate::domain::transient_message::TransientMessageStore;
 use crate::presentation::app_mode::{AppMode, ChatFocus};
@@ -160,6 +160,7 @@ async fn test_d_key_in_chat_focus_opens_diff_with_question_snapshot() {
 
     app.mode = AppMode::Question {
         at_mention_state: None,
+        attachment_state: QuestionAttachmentState::default(),
         session_id: session_id.into(),
         questions: vec![QuestionItem {
             options: vec!["A".to_string()],
@@ -385,6 +386,7 @@ async fn test_question_at_mention_loads_parent_worktree_entries_for_stacked_sess
     );
     app.mode = AppMode::Question {
         at_mention_state: None,
+        attachment_state: QuestionAttachmentState::default(),
         current_index: 0,
         focus: ChatFocus::Input,
         input: InputState::with_text("@parent".to_string()),
@@ -539,6 +541,7 @@ async fn test_store_question_response_defaults_to_first_option_on_next_question(
     let mut app = crate::test_support::new_test_app_without_retained_base_dir().await;
     app.mode = AppMode::Question {
         at_mention_state: None,
+        attachment_state: QuestionAttachmentState::default(),
         session_id: "missing-session".into(),
         questions: vec![
             QuestionItem {

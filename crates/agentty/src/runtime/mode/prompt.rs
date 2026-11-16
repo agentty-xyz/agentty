@@ -15,7 +15,7 @@ use crate::app::prompt_intent::{
 };
 use crate::domain::agent::{AgentKind, AgentSelection, ReasoningLevel, ResponseStyle};
 use crate::domain::composer::PromptAttachment;
-use crate::domain::input::{InputCommand, InputEffect, InputState};
+use crate::domain::input::{InputCommand, InputState};
 use crate::domain::permission::PermissionMode;
 use crate::domain::session::{Session, SessionId, Status};
 use crate::domain::transcript_notice::TranscriptNotice;
@@ -27,10 +27,8 @@ use crate::presentation::app_mode::{
 use crate::presentation::prompt::{
     PendingImagePaste, PromptAtMentionState, PromptAttachmentState, PromptGraphState,
     PromptSlashCommandSet, PromptSlashStage, PromptSlashState, PromptSuggestionSelection,
-    apply_prompt_delete_range as apply_prompt_delete_range_components,
-    current_line_delete_range as prompt_current_line_delete_range, drain_prompt_submission,
-    insert_prompt_text, needs_space_after_image_placeholder, prompt_slash_option_count,
-    resolve_prompt_slash_selection,
+    apply_attachment_input_command, drain_prompt_submission, insert_prompt_text,
+    prompt_slash_option_count, resolve_prompt_slash_selection,
 };
 use crate::runtime::EventResult;
 use crate::runtime::mode::chat_scroll::{self, ChatScrollMetrics};
@@ -744,130 +742,25 @@ fn reduce_prompt_input_command(
 /// Reduces one editing command and returns attachments that require file
 /// cleanup.
 fn apply_prompt_input_to_mode(mode: &mut AppMode, command: InputCommand) -> Vec<PromptAttachment> {
-    let delete_range = if let AppMode::Prompt { input, .. } = mode {
-        prompt_command_delete_range(input, &command)
-    } else {
-        None
+    let AppMode::Prompt {
+        attachment_state,
+        history_state,
+        input,
+        slash_state,
+        ..
+    } = mode
+    else {
+        return Vec::new();
     };
-
-    if let Some((start, end)) = delete_range {
-        return apply_prompt_delete_to_mode(mode, start, end);
-    }
-
-    let mut unreachable_attachments = Vec::new();
-    if let AppMode::Prompt {
-        attachment_state,
-        history_state,
-        input,
-        slash_state,
-        ..
-    } = mode
-    {
-        attachment_state.remember_current_revision(input);
-        let command = separate_text_from_image_placeholder(input, command);
-        let edit_span = prompt_command_edit_span(input, &command);
-        let effect = input.apply(command);
-        if effect == InputEffect::TextChanged {
-            // Deletions return early above, so `Undo` and `Redo` are the only
-            // text-changing commands without an edit span.
-            if let Some((old_start, old_end, new_end)) = edit_span {
-                attachment_state.sync_after_edit(input, old_start, old_end, new_end);
-            } else {
-                attachment_state.sync_after_history_restore(input);
-            }
-            unreachable_attachments = attachment_state.prune_unreachable(input);
-            history_state.reset_navigation();
-            slash_state.reset();
-        }
-    }
+    let Some(unreachable_attachments) =
+        apply_attachment_input_command(attachment_state, input, command)
+    else {
+        return Vec::new();
+    };
+    history_state.reset_navigation();
+    slash_state.reset();
 
     unreachable_attachments
-}
-
-/// Returns the prompt-aware range for shared deletion commands.
-///
-/// Boundary deletions return `None` without evaluating an out-of-range cursor
-/// position.
-fn prompt_command_delete_range(
-    input: &InputState,
-    command: &InputCommand,
-) -> Option<(usize, usize)> {
-    match command {
-        InputCommand::DeleteBackward => {
-            (input.cursor > 0).then(|| (input.cursor - 1, input.cursor))
-        }
-        InputCommand::DeleteCurrentLine => prompt_current_line_delete_range(input),
-        InputCommand::DeleteForward => (input.cursor < input.text().chars().count())
-            .then_some((input.cursor, input.cursor + 1)),
-        InputCommand::DeleteToLineEnd => input.line_end_delete_range(),
-        InputCommand::DeleteWordBackward => input.word_delete_range(),
-        _ => None,
-    }
-}
-
-/// Applies one prompt deletion range, expanding it to cover full image
-/// placeholder tokens and removing orphaned attachments from prompt state.
-fn apply_prompt_delete_to_mode(
-    mode: &mut AppMode,
-    start: usize,
-    end: usize,
-) -> Vec<PromptAttachment> {
-    let mut unreachable_attachments = Vec::new();
-    if let AppMode::Prompt {
-        attachment_state,
-        history_state,
-        input,
-        slash_state,
-        ..
-    } = mode
-    {
-        apply_prompt_delete_range_components(
-            attachment_state,
-            history_state,
-            input,
-            slash_state,
-            start,
-            end,
-        );
-        unreachable_attachments = attachment_state.prune_unreachable(input);
-    }
-
-    unreachable_attachments
-}
-
-/// Prefixes a typed character with a space when it would otherwise run into
-/// the `[Image #n]` placeholder ending at the cursor.
-fn separate_text_from_image_placeholder(input: &InputState, command: InputCommand) -> InputCommand {
-    match command {
-        InputCommand::Insert(character)
-            if needs_space_after_image_placeholder(input.text(), input.cursor, character) =>
-        {
-            InputCommand::InsertText(format!(" {character}"))
-        }
-        command => command,
-    }
-}
-
-/// Returns the exact character span replaced by one non-deletion text
-/// command before that command mutates the input.
-fn prompt_command_edit_span(
-    input: &InputState,
-    command: &InputCommand,
-) -> Option<(usize, usize, usize)> {
-    match command {
-        InputCommand::Insert(_) | InputCommand::InsertNewline => {
-            Some((input.cursor, input.cursor, input.cursor + 1))
-        }
-        InputCommand::InsertText(text) => Some((
-            input.cursor,
-            input.cursor,
-            input.cursor + text.chars().count(),
-        )),
-        InputCommand::ReplaceRange { start, end, text } => {
-            Some((*start, *end, *start + text.chars().count()))
-        }
-        _ => None,
-    }
 }
 
 /// Requests cleanup for `attachments` unless the composer released none.

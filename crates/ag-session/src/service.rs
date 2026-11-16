@@ -2,7 +2,7 @@
 
 use std::sync::Arc;
 
-use ag_protocol::TurnPrompt;
+use ag_protocol::{TurnPrompt, TurnPromptAttachment};
 use async_trait::async_trait;
 
 use crate::error::SessionError;
@@ -54,6 +54,10 @@ pub struct QuestionAnswer {
 pub struct AnswerQuestionsRequest {
     /// Ordered question and answer pairs for the current question set.
     pub answers: Vec<QuestionAnswer>,
+    /// Local images referenced by `[Image #n]` placeholders in `answers`,
+    /// delivered with the reply turn like prompt attachments. The caller
+    /// keeps the files when the request fails, so it can retry with them.
+    pub attachments: Vec<TurnPromptAttachment>,
 }
 
 /// Idempotent turn submitted to one session.

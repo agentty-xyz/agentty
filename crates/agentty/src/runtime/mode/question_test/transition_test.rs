@@ -7,7 +7,7 @@ use super::support::{
 };
 use crate::domain::file_entry::FileEntry;
 use crate::domain::input::InputState;
-use crate::domain::question::{QuestionItem, default_option_index};
+use crate::domain::question::{QuestionAttachmentState, QuestionItem, default_option_index};
 use crate::presentation::app_mode::{AppMode, ChatFocus};
 use crate::presentation::prompt::PromptAtMentionState;
 use crate::runtime::EventResult;
@@ -83,6 +83,7 @@ async fn test_handle_q_returns_to_sessions_list_in_chat_focus() {
     let mut app = crate::test_support::new_test_app_without_retained_base_dir().await;
     app.mode = AppMode::Question {
         at_mention_state: None,
+        attachment_state: QuestionAttachmentState::default(),
         session_id: "session-q-chat".into(),
         questions: vec![QuestionItem {
             options: Vec::new(),
@@ -115,6 +116,7 @@ async fn test_handle_q_returns_to_sessions_list_when_navigating_options() {
     let mut app = crate::test_support::new_test_app_without_retained_base_dir().await;
     app.mode = AppMode::Question {
         at_mention_state: None,
+        attachment_state: QuestionAttachmentState::default(),
         session_id: "session-q-options".into(),
         questions: vec![QuestionItem {
             options: vec!["Yes".to_string(), "No".to_string()],
@@ -147,6 +149,7 @@ async fn test_handle_q_saves_partial_answers_for_reopen() {
     let mut app = crate::test_support::new_test_app_without_retained_base_dir().await;
     app.mode = AppMode::Question {
         at_mention_state: None,
+        attachment_state: QuestionAttachmentState::default(),
         session_id: "session-q-save".into(),
         questions: vec![
             QuestionItem::with_options("First?", vec!["Yes".to_string(), "No".to_string()]),
@@ -186,6 +189,7 @@ async fn test_handle_q_inserts_character_in_free_text_answer() {
     let mut app = crate::test_support::new_test_app_without_retained_base_dir().await;
     app.mode = AppMode::Question {
         at_mention_state: None,
+        attachment_state: QuestionAttachmentState::default(),
         session_id: "session-q-text".into(),
         questions: vec![QuestionItem {
             options: Vec::new(),
@@ -253,6 +257,7 @@ async fn test_handle_ctrl_c_ends_turn_and_transitions_to_view() {
     );
     app.mode = AppMode::Question {
         at_mention_state: None,
+        attachment_state: QuestionAttachmentState::default(),
         session_id: "session-ctrl-c".into(),
         questions: vec![
             QuestionItem {
@@ -297,6 +302,7 @@ async fn test_handle_ctrl_c_is_swallowed_while_chat_is_focused() {
     let mut app = crate::test_support::new_test_app_without_retained_base_dir().await;
     app.mode = AppMode::Question {
         at_mention_state: None,
+        attachment_state: QuestionAttachmentState::default(),
         session_id: "session-chat-ctrl-c".into(),
         questions: vec![QuestionItem {
             options: Vec::new(),
@@ -407,6 +413,7 @@ async fn test_handle_enter_with_selected_option_submits_option_text() {
     let mut app = crate::test_support::new_test_app_without_retained_base_dir().await;
     app.mode = AppMode::Question {
         at_mention_state: None,
+        attachment_state: QuestionAttachmentState::default(),
         session_id: "missing-session".into(),
         questions: vec![
             QuestionItem {
@@ -521,6 +528,7 @@ async fn test_alt_enter_ignored_while_navigating_options() {
     let mut app = crate::test_support::new_test_app_without_retained_base_dir().await;
     app.mode = AppMode::Question {
         at_mention_state: None,
+        attachment_state: QuestionAttachmentState::default(),
         session_id: "missing-session".into(),
         questions: vec![
             QuestionItem {

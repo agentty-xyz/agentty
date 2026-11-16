@@ -90,22 +90,28 @@ pub fn prompt_footer_line(
     }
 
     if is_pasting_image {
-        let pasting_image_span = Span::styled(
-            format!("{} {PASTING_IMAGE_LABEL}", Icon::current_spinner()),
-            Style::default()
-                .fg(style::palette::accent())
-                .add_modifier(Modifier::BOLD),
-        );
-        footer_line.spans.splice(
-            0..0,
-            [
-                pasting_image_span,
-                crate::ui::help_format::footer_separator_span(),
-            ],
-        );
+        prepend_pasting_image_indicator(&mut footer_line);
     }
 
     footer_line
+}
+
+/// Prepends the loader that advertises a running clipboard image capture to
+/// one composer footer, so narrow terminals cannot clip it.
+pub(crate) fn prepend_pasting_image_indicator(footer_line: &mut Line<'static>) {
+    let pasting_image_span = Span::styled(
+        format!("{} {PASTING_IMAGE_LABEL}", Icon::current_spinner()),
+        Style::default()
+            .fg(style::palette::accent())
+            .add_modifier(Modifier::BOLD),
+    );
+    footer_line.spans.splice(
+        0..0,
+        [
+            pasting_image_span,
+            crate::ui::help_format::footer_separator_span(),
+        ],
+    );
 }
 
 /// Builds the prompt suggestion dropdown for the current input state.

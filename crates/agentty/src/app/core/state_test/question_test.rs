@@ -12,7 +12,7 @@ use crate::app::core::event::AppEvent;
 use crate::app::prompt_intent::PromptImagePasteUpdate;
 use crate::domain::composer::{PendingImagePaste, PromptAttachment};
 use crate::domain::input::InputState;
-use crate::domain::question::{QuestionItem, QuestionProgress};
+use crate::domain::question::{QuestionAttachmentState, QuestionItem, QuestionProgress};
 use crate::domain::session::{SessionDiffState, SessionId, SessionStats, Status};
 use crate::infra::tmux::MockTmuxClient;
 use crate::presentation::app_mode::AppMode;
@@ -79,8 +79,10 @@ async fn terminal_input_reconciliation_discards_partial_question_answers() {
     for status in [Status::Done, Status::Canceled] {
         let mut app =
             test_app_viewing_reconcile_session(status, Vec::new(), "terminal-question").await;
+        let (_images, paths) = managed_images(["answered.png", "draft.png", "saved.png"]);
         app.enter_question_mode("session-1", vec![QuestionItem::new("Continue?")]);
         if let AppMode::Question {
+            attachment_state,
             input,
             scroll_offset,
             ..
@@ -88,10 +90,22 @@ async fn terminal_input_reconciliation_discards_partial_question_answers() {
         {
             *input = InputState::with_text("unfinished answer".into());
             *scroll_offset = Some(4);
+            attachment_state
+                .answered
+                .push(PromptAttachment::new(1, paths[0].clone()));
+            attachment_state
+                .composer
+                .attachments
+                .push(PromptAttachment::new(2, paths[1].clone()));
         }
+        let mut saved_attachments = QuestionAttachmentState::default();
+        saved_attachments
+            .answered
+            .push(PromptAttachment::new(1, paths[2].clone()));
         app.question_progress.insert(
             "session-1".into(),
             QuestionProgress {
+                attachment_state: saved_attachments,
                 current_index: 0,
                 input: InputState::with_text("saved answer".into()),
                 responses: Vec::new(),
@@ -107,7 +121,112 @@ async fn terminal_input_reconciliation_discards_partial_question_answers() {
             matches!(app.mode, AppMode::View { ref session_id, scroll_offset: Some(4) } if session_id == "session-1")
         );
         assert!(!app.question_progress.contains_key("session-1"));
+        assert!(paths.iter().all(|path| !path.exists()));
     }
+}
+
+#[tokio::test]
+async fn reopening_questions_removes_images_saved_with_stale_answers() {
+    // Arrange
+    let mut app =
+        test_app_viewing_reconcile_session(Status::Question, Vec::new(), "stale-images").await;
+    let (_images, paths) = managed_images(["stale.png"]);
+    let mut saved_attachments = QuestionAttachmentState::default();
+    saved_attachments
+        .answered
+        .push(PromptAttachment::new(1, paths[0].clone()));
+    app.question_progress.insert(
+        "session-1".into(),
+        QuestionProgress {
+            attachment_state: saved_attachments,
+            current_index: 1,
+            input: InputState::default(),
+            responses: vec!["Old answer".into()],
+            selected_option_index: None,
+        },
+    );
+
+    // Act
+    app.enter_question_mode("session-1", vec![QuestionItem::new("New question?")]);
+    app.services.wait_for_cleanup_tasks(None).await;
+
+    // Assert
+    assert!(matches!(
+        &app.mode,
+        AppMode::Question { attachment_state, current_index: 0, .. }
+            if *attachment_state == QuestionAttachmentState::default()
+    ));
+    assert!(!paths[0].exists());
+}
+
+#[tokio::test]
+async fn new_turn_questions_remove_images_from_replaced_answers() {
+    // Arrange
+    let mut app =
+        test_app_viewing_reconcile_session(Status::Question, Vec::new(), "replaced-images").await;
+    let (_images, paths) = managed_images(["open.png", "saved.png"]);
+    app.enter_question_mode("session-1", vec![QuestionItem::new("Old question?")]);
+    if let AppMode::Question {
+        attachment_state, ..
+    } = &mut app.mode
+    {
+        attachment_state
+            .answered
+            .push(PromptAttachment::new(1, paths[0].clone()));
+    }
+    let mut saved_attachments = QuestionAttachmentState::default();
+    saved_attachments
+        .answered
+        .push(PromptAttachment::new(1, paths[1].clone()));
+    app.question_progress.insert(
+        "session-1".into(),
+        QuestionProgress {
+            attachment_state: saved_attachments,
+            current_index: 0,
+            input: InputState::default(),
+            responses: Vec::new(),
+            selected_option_index: None,
+        },
+    );
+    let turn_applied_state = test_turn_applied_state(
+        vec![QuestionItem::new("New question?")],
+        Vec::new(),
+        SessionStats::default(),
+    );
+
+    // Act
+    app.apply_app_events(AppEvent::AgentResponseReceived {
+        session_id: "session-1".into(),
+        turn_applied_state,
+    })
+    .await;
+
+    // Assert
+    assert!(matches!(
+        &app.mode,
+        AppMode::Question { attachment_state, questions, .. }
+            if *attachment_state == QuestionAttachmentState::default()
+                && questions[0].text == "New question?"
+    ));
+    assert!(paths.iter().all(|path| !path.exists()));
+}
+
+/// Creates pasted-image files inside Agentty's managed tmp root, where
+/// attachment cleanup may remove them.
+fn managed_images<const COUNT: usize>(
+    file_names: [&str; COUNT],
+) -> (tempfile::TempDir, [PathBuf; COUNT]) {
+    let managed_root = crate::app::agentty_home().join("tmp");
+    fs::create_dir_all(&managed_root).expect("managed tmp root");
+    let temp = tempfile::tempdir_in(managed_root).expect("image fixture");
+    let images = temp.path().join("images");
+    fs::create_dir(&images).expect("images");
+    let paths = file_names.map(|file_name| images.join(file_name));
+    for path in &paths {
+        fs::write(path, "image").expect("image fixture");
+    }
+
+    (temp, paths)
 }
 
 #[tokio::test]
@@ -348,6 +467,7 @@ async fn apply_app_events_agent_response_clears_saved_question_progress() {
     app.question_progress.insert(
         "session-1".into(),
         QuestionProgress {
+            attachment_state: QuestionAttachmentState::default(),
             current_index: 1,
             input: InputState::default(),
             responses: vec!["Old answer".to_string()],
@@ -426,6 +546,7 @@ async fn enter_question_mode_restores_saved_progress() {
     app.question_progress.insert(
         "session-restore".into(),
         QuestionProgress {
+            attachment_state: QuestionAttachmentState::default(),
             current_index: 1,
             input: InputState::with_text("draft answer".to_string()),
             responses: vec!["Yes".to_string()],
@@ -468,6 +589,7 @@ async fn enter_question_mode_discards_progress_for_changed_question_list() {
     app.question_progress.insert(
         "session-stale".into(),
         QuestionProgress {
+            attachment_state: QuestionAttachmentState::default(),
             current_index: 2,
             input: InputState::default(),
             responses: vec!["One".to_string(), "Two".to_string()],

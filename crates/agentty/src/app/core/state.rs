@@ -42,7 +42,9 @@ use crate::app::session_diff::PendingSessionDiffRequest;
 use crate::app::{AppError, session};
 use crate::domain::agent::{AgentKind, ReasoningLevel};
 use crate::domain::input::InputState;
-use crate::domain::question::{QuestionItem, QuestionProgress, default_option_index};
+use crate::domain::question::{
+    QuestionAttachmentState, QuestionItem, QuestionProgress, default_option_index,
+};
 use crate::domain::session::{PublishBranchAction, Session, SessionDiffStats, SessionId, Status};
 use crate::domain::session_message::SessionTranscript;
 use crate::domain::setting::SettingName;
@@ -2150,20 +2152,11 @@ impl App {
                 scroll_offset,
             },
         );
-        if let AppMode::Prompt {
-            attachment_state, ..
-        } = previous_mode
-        {
-            let attachments = attachment_state
-                .attachments
-                .into_iter()
-                .chain(attachment_state.archived_attachments)
-                .collect();
-            self.cleanup_prompt_attachments(attachments).await;
-        }
+        self.cleanup_prompt_attachments(previous_mode.into_input_attachments())
+            .await;
 
         self.discard_prompt_progress(&session_id).await;
-        self.question_progress.remove(&session_id);
+        self.discard_question_progress(&session_id).await;
         self.mark_dirty();
     }
 
@@ -2247,7 +2240,8 @@ impl App {
     /// for the graph work that asked.
     ///
     /// Saved partial answers are restored only for the same turn or graph
-    /// work they were saved for and only while they match `questions`.
+    /// work they were saved for and only while they match `questions`;
+    /// images pasted into stale answers are removed in the background.
     pub(crate) fn open_question_panel(
         &mut self,
         session_id: &str,
@@ -2258,25 +2252,37 @@ impl App {
         let progress = self
             .question_progress
             .remove(session_id)
-            .filter(|progress| progress_target == target && progress.applies_to(&questions));
+            .and_then(|progress| {
+                if progress_target == target && progress.applies_to(&questions) {
+                    return Some(progress);
+                }
+
+                self.spawn_prompt_attachment_cleanup(progress.attachment_state.into_attachments());
+
+                None
+            });
         self.graph_questions.activate(session_id, target);
-        let (current_index, input, responses, selected_option_index) = match progress {
-            Some(progress) => (
-                progress.current_index,
-                progress.input,
-                progress.responses,
-                progress.selected_option_index,
-            ),
-            None => (
-                0,
-                InputState::default(),
-                Vec::new(),
-                default_option_index(&questions, 0),
-            ),
-        };
+        let (attachment_state, current_index, input, responses, selected_option_index) =
+            match progress {
+                Some(progress) => (
+                    progress.attachment_state,
+                    progress.current_index,
+                    progress.input,
+                    progress.responses,
+                    progress.selected_option_index,
+                ),
+                None => (
+                    QuestionAttachmentState::default(),
+                    0,
+                    InputState::default(),
+                    Vec::new(),
+                    default_option_index(&questions, 0),
+                ),
+            };
 
         self.mode = AppMode::Question {
             at_mention_state: None,
+            attachment_state,
             current_index,
             focus: ChatFocus::Input,
             input,
@@ -2309,6 +2315,17 @@ impl App {
             .chain(snapshot.attachment_state.archived_attachments)
             .collect();
         self.cleanup_prompt_attachments(attachments).await;
+    }
+
+    /// Discards saved partial clarification answers and cleans up their
+    /// image files.
+    pub(super) async fn discard_question_progress(&mut self, session_id: &str) {
+        let Some(progress) = self.question_progress.remove(session_id) else {
+            return;
+        };
+
+        self.cleanup_prompt_attachments(progress.attachment_state.into_attachments())
+            .await;
     }
 
     /// Restores and consumes the saved prompt composer for `session_id`.

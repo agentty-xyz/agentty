@@ -3,6 +3,9 @@
 #[path = "question_test/support_test.rs"]
 pub(crate) mod support;
 
+#[path = "question_test/attachment_test.rs"]
+mod attachment;
+
 #[path = "question_test/display_test.rs"]
 mod display;
 
