@@ -5,11 +5,17 @@ use ag_telemetry::otlp::OtlpError;
 use opentelemetry_proto::tonic::collector::trace::v1::ExportTraceServiceRequest;
 use prost::Message as _;
 use tokio::io::BufReader;
+use tokio::sync::Mutex;
 use wiremock::matchers::{method, path};
 use wiremock::{Mock, MockServer, ResponseTemplate};
 
 use super::support::{parse_cli, provider_response};
 use crate::{ChatMode, Cli, CliError, execute_with_telemetry};
+
+/// Serializes tests that install an export: the tracer provider is
+/// process-wide, so concurrent exports in one test process would receive each
+/// other's spans.
+static EXPORT: Mutex<()> = Mutex::const_new(());
 
 async fn model_server() -> MockServer {
     let server = MockServer::start().await;
@@ -41,6 +47,7 @@ fn traced_cli(model_uri: &str, endpoint: &str, database: &std::path::Path) -> Cl
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn traced_chat_exports_the_turn_span() {
     // Arrange
+    let _export = EXPORT.lock().await;
     let model = model_server().await;
     let collector = MockServer::start().await;
     Mock::given(method("POST"))
@@ -87,6 +94,7 @@ async fn traced_chat_exports_the_turn_span() {
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn rejected_export_warns_without_failing_the_chat() {
     // Arrange
+    let _export = EXPORT.lock().await;
     let model = model_server().await;
     let collector = MockServer::start().await;
     Mock::given(method("POST"))

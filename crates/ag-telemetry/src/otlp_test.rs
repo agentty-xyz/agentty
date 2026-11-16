@@ -176,6 +176,39 @@ async fn repeated_install_keeps_counting_failed_exports() {
 }
 
 #[tokio::test]
+async fn rejected_signal_export_is_counted_without_the_diagnostic_subscriber() {
+    for rejected in ["traces", "logs"] {
+        // Arrange
+        let server = MockServer::start().await;
+        for signal in ["traces", "logs"] {
+            // A non-retryable rejection keeps one request per signal.
+            let status = if signal == rejected { 400 } else { 200 };
+            Mock::given(method("POST"))
+                .and(path(format!("/v1/{signal}")))
+                .respond_with(ResponseTemplate::new(status))
+                .expect(1)
+                .mount(&server)
+                .await;
+        }
+        let endpoint = format!("{}/v1/traces", server.uri());
+        let export = OtlpExport::start_with_events(Some(&endpoint), SERVICE)
+            .await
+            .expect("start")
+            .expect("enabled");
+        let event_log = export.event_log().expect("event log");
+
+        // Act
+        event_log.emit("agentty_turn_start", &[]);
+        let mut span = export.provider.tracer("failure-test").start("session.turn");
+        span.end();
+        let warnings = export.shutdown().await;
+
+        // Assert
+        assert_eq!(warnings, 1, "rejected {rejected} export");
+    }
+}
+
+#[tokio::test]
 async fn repeated_shutdown_reports_a_bounded_diagnostic() {
     // Arrange
     let export = OtlpExport::start(Some("http://localhost:4318/v1/traces"), SERVICE)
