@@ -467,8 +467,8 @@ impl ag_worker::WorkerHost for SessionWorkerHost {
                 )
             }
         };
-        trace.attribute("agentty.session.id", self.context.session_id.to_string());
-        let span = trace.selected();
+        let mut span = trace.selected();
+        span.identify("agentty.session.id", self.context.session_id.to_string());
         let result = operation.with_context(span.context()).await;
         let interrupted = is_turn
             && self
@@ -1444,7 +1444,30 @@ impl SessionWorkerService {
     /// bookkeeping. Returns `None` when the command was skipped before
     /// execution (already finished or cancelled) and `Some(result)` when the
     /// turn ran.
+    ///
+    /// The command's purpose and selected harness identify the workflow span
+    /// and every provider operation span the command starts.
     async fn process_session_command(
+        context: &SessionWorkerContext,
+        run_client: &Arc<dyn RunClient>,
+        command: SessionCommand,
+    ) -> Option<Result<(), SessionError>> {
+        let mut identity = vec![KeyValue::new("agentty.purpose", command.kind())];
+        if let SessionCommand::Run { turn_metadata, .. } = &command {
+            identity.push(KeyValue::new(
+                "agentty.harness",
+                turn_metadata.session_agent.kind().to_string(),
+            ));
+        }
+
+        ag_telemetry::identified(
+            identity,
+            Self::run_identified_session_command(context, run_client, command),
+        )
+        .await
+    }
+
+    async fn run_identified_session_command(
         context: &SessionWorkerContext,
         run_client: &Arc<dyn RunClient>,
         command: SessionCommand,
@@ -1456,13 +1479,8 @@ impl SessionWorkerService {
             _ => None,
         };
         ag_telemetry::current_attribute("agentty.operation.id", operation_id.clone());
-        ag_telemetry::current_attribute("agentty.purpose", command.kind());
-        if let SessionCommand::Run { turn_metadata, .. } = &command {
+        if matches!(&command, SessionCommand::Run { .. }) {
             ag_telemetry::current_attribute("agentty.turn.id", operation_id.clone());
-            ag_telemetry::current_attribute(
-                "agentty.harness",
-                turn_metadata.session_agent.kind().to_string(),
-            );
         }
         let should_skip = if Self::should_skip_worker_command(context, &operation_id).await {
             true

@@ -13,6 +13,10 @@ use super::tool_trace::{ToolMetadata, safe_identity};
 /// Bounds provider-controlled operation identities retained by one attempt.
 const MAX_OPERATIONS: usize = 4096;
 
+/// Tool name for Codex command executions, whose protocol items name no
+/// tool. It matches the item type in Codex's `exec` event stream.
+const CODEX_COMMAND_TOOL_NAME: &str = "command_execution";
+
 /// Retains child spans until matching completion or attempt cancellation.
 pub(crate) struct OperationTrace {
     completed: HashSet<String>,
@@ -22,7 +26,8 @@ pub(crate) struct OperationTrace {
 }
 
 impl OperationTrace {
-    /// Captures the attempt context before reading provider events.
+    /// Captures the attempt context before reading provider events. Each
+    /// operation span repeats the run identity inherited by that context.
     pub(crate) fn new() -> Self {
         Self {
             completed: HashSet::new(),
@@ -124,7 +129,10 @@ impl OperationTrace {
                 ToolMetadata {
                     command: item.get("command").and_then(Value::as_str),
                     input: item.get("arguments"),
-                    name: item.get("tool").and_then(Value::as_str),
+                    name: item
+                        .get("tool")
+                        .and_then(Value::as_str)
+                        .or((category == "command").then_some(CODEX_COMMAND_TOOL_NAME)),
                     output: ["aggregatedOutput", "result", "contentItems", "error"]
                         .into_iter()
                         .filter_map(|field| item.get(field))
@@ -296,6 +304,9 @@ impl OperationTrace {
                 _ => "agent.tool",
             };
             let span = Span::child_at(name, start);
+            for attribute in ag_telemetry::run_identity(&self.context) {
+                span.context().span().set_attribute(attribute);
+            }
             span.attribute("agentty.provider.operation.type", category);
             if (name == "agent.tool" || name == "agent.subagent")
                 && let Some(id) = safe_identity(id)

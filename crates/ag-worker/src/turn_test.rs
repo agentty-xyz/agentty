@@ -10,7 +10,7 @@ use ag_contracts::{
     ReasoningLevel, ResponseStyle, SpeedMode, TurnContinuation, TurnRequest, TurnResult,
 };
 use ag_protocol::TurnPrompt;
-use ag_telemetry::{KeyValue, Span, TraceContextExt as _};
+use ag_telemetry::{Context, KeyValue, Span, TraceContextExt as _};
 use opentelemetry::global;
 use opentelemetry_sdk::trace::{InMemorySpanExporter, SdkTracerProvider};
 use tokio::sync::{Notify, mpsc, oneshot};
@@ -96,6 +96,53 @@ fn request() -> TurnRequest {
         request_kind: AgentRequestKind::SessionStart,
         response_style: ResponseStyle::default(),
         speed_mode: SpeedMode::default(),
+    }
+}
+
+#[tokio::test]
+async fn agent_runs_pass_their_identity_to_provider_operations() {
+    // Arrange
+    let observed = Arc::new(std::sync::Mutex::new(Vec::new()));
+    let mut channel = MockAgentChannel::new();
+    channel.expect_run_turn().once().returning({
+        let observed = Arc::clone(&observed);
+        move |_, _, _| {
+            let observed = Arc::clone(&observed);
+            Box::pin(async move {
+                *observed.lock().expect("observed identity") =
+                    ag_telemetry::run_identity(&Context::current());
+
+                Ok(completed_turn())
+            })
+        }
+    });
+    let mut client = SessionRunClient::from_channel("session-1".into(), Arc::new(channel));
+    client.harness = Some(ag_session::AgentKind::Codex);
+
+    // Act
+    ag_telemetry::identified(
+        vec![KeyValue::new("agentty.purpose", "reply")],
+        client.submit(
+            request(),
+            mpsc::unbounded_channel().0,
+            CancellationToken::new(),
+        ),
+    )
+    .await
+    .expect("turn result");
+
+    // Assert
+    let identity = observed.lock().expect("observed identity").clone();
+    for (key, value) in [
+        ("agentty.purpose", "reply"),
+        ("agentty.session.id", "session-1"),
+        ("gen_ai.request.model", "test-model"),
+        ("agentty.harness", "codex"),
+    ] {
+        assert!(
+            identity.contains(&KeyValue::new(key, value)),
+            "{key}: {identity:?}"
+        );
     }
 }
 

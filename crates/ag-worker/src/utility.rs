@@ -369,20 +369,20 @@ impl Execution {
                 .unwrap_or_else(|| format!("{:?}", request.request_kind)),
             session_id: scope.session_id,
         });
-        let span = Span::child("utility.run");
+        let mut span = Span::child("utility.run");
         if let Some(phase) = &context.phase_trace {
             span.link(phase);
         }
-        span.attribute("agentty.harness", request.harness.clone());
-        span.attribute("gen_ai.request.model", request.model.clone());
+        span.identify("agentty.harness", request.harness.clone());
+        span.identify("gen_ai.request.model", request.model.clone());
         if let Some(session_id) = &run.session_id {
-            span.attribute("agentty.session.id", session_id.clone());
+            span.identify("agentty.session.id", session_id.clone());
         }
         if let Some(parent_id) = &run.parent_id {
             span.attribute("agentty.operation.id", parent_id.clone());
         }
-        span.attribute("agentty.run.id", run.id.clone());
-        span.attribute("agentty.purpose", run.purpose.clone());
+        span.identify("agentty.run.id", run.id.clone());
+        span.identify("agentty.purpose", run.purpose.clone());
         let trace = span.context();
         let admitted = if recorded.is_some() {
             self.repository

@@ -32,6 +32,31 @@ pub fn current_attribute(key: &'static str, value: impl Into<opentelemetry::Valu
         .set_attribute(KeyValue::new(key, value));
 }
 
+/// Records content-free run identity on the current execution span and
+/// inherits it into `work`, as [`Span::identify`] does for an owned span.
+/// The current span is the one active when the returned future is first
+/// polled.
+pub async fn identified<T>(attributes: Vec<KeyValue>, work: impl Future<Output = T>) -> T {
+    let context = attributes
+        .into_iter()
+        .fold(Context::current(), |context, attribute| {
+            context.span().set_attribute(attribute.clone());
+
+            RunIdentity::inherit(&context, attribute)
+        });
+
+    work.with_context(context).await
+}
+
+/// Returns the run identity inherited by `context`, with inner values
+/// replacing enclosing ones. Provider operation spans repeat these attributes
+/// so each operation is attributable without joining its ancestors.
+pub fn run_identity(context: &Context) -> Vec<KeyValue> {
+    context
+        .get::<RunIdentity>()
+        .map_or_default(|identity| identity.0.clone())
+}
+
 /// Terminal outcome of an observed operation.
 #[derive(Clone, Copy)]
 pub enum Outcome {
@@ -89,15 +114,20 @@ impl Span {
                         && completion.ended.load(Ordering::Acquire)
                 })
         {
+            let mut detached = Context::new().with_value(
+                parent
+                    .get::<CaptureToolContent>()
+                    .copied()
+                    .unwrap_or_default(),
+            );
+            if let Some(identity) = parent.get::<RunIdentity>() {
+                detached = detached.with_value(identity.clone());
+            }
+
             return Self::start_at(
                 name,
                 Vec::new(),
-                &Context::new().with_value(
-                    parent
-                        .get::<CaptureToolContent>()
-                        .copied()
-                        .unwrap_or_default(),
-                ),
+                &detached,
                 vec![Link::new(span_context, Vec::new(), 0)],
                 start_time,
             );
@@ -115,6 +145,15 @@ impl Span {
     /// opt-in, sanitization and bounds; never pass prompts or reasoning.
     pub fn attribute(&self, key: &'static str, value: impl Into<opentelemetry::Value>) {
         self.context.span().set_attribute(KeyValue::new(key, value));
+    }
+
+    /// Records a content-free run identity, such as the harness, session,
+    /// purpose, or model, and inherits it into work executed in this span's
+    /// context. See [`run_identity`].
+    pub fn identify(&mut self, key: &'static str, value: impl Into<opentelemetry::Value>) {
+        let attribute = KeyValue::new(key, value);
+        self.context.span().set_attribute(attribute.clone());
+        self.context = RunIdentity::inherit(&self.context, attribute);
     }
 
     /// Links an observed workflow phase without changing this span's parent.
@@ -221,6 +260,23 @@ impl Drop for Span {
         span.set_attribute(KeyValue::new("agentty.outcome", outcome));
         span.end();
         self.completion.ended.store(true, Ordering::Release);
+    }
+}
+
+/// Run-identifying attributes inherited through execution contexts.
+/// Independent roots start without them.
+#[derive(Clone, Default)]
+struct RunIdentity(Vec<KeyValue>);
+
+impl RunIdentity {
+    /// Returns `context` with `attribute` replacing any inherited value for
+    /// the same key.
+    fn inherit(context: &Context, attribute: KeyValue) -> Context {
+        let mut identity = context.get::<Self>().cloned().unwrap_or_default();
+        identity.0.retain(|existing| existing.key != attribute.key);
+        identity.0.push(attribute);
+
+        context.with_value(identity)
     }
 }
 

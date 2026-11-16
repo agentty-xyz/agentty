@@ -6,7 +6,7 @@ use std::time::SystemTime;
 
 use ag_telemetry::{
     CaptureToolContent, Context, FutureExt as _, KeyValue, Outcome, QueuedTrace, Span,
-    current_attribute, milestone,
+    current_attribute, identified, milestone, run_identity,
 };
 use opentelemetry::global;
 use opentelemetry::trace::{
@@ -281,6 +281,76 @@ async fn live_unsampled_parents_preserve_sampling_and_finished_owned_parents_det
     assert_eq!(
         child.span_context.trace_id(),
         host_context.span().span_context().trace_id()
+    );
+}
+
+#[tokio::test]
+async fn run_identity_follows_children_and_detached_spans_but_not_roots() {
+    // Arrange
+    let _provider_guard = PROVIDER_LOCK.lock().await;
+    let exporter = InMemorySpanExporter::default();
+    global::set_tracer_provider(
+        SdkTracerProvider::builder()
+            .with_simple_exporter(exporter.clone())
+            .build(),
+    );
+    let mut workflow = QueuedTrace::new("session.turn", Vec::new()).selected();
+    workflow.identify("agentty.session.id", "session-1");
+    let workflow_context = workflow.context();
+
+    // Act
+    let (inherited_identity, root_identity) = workflow
+        .scope(identified(
+            vec![KeyValue::new("agentty.purpose", "reply")],
+            async {
+                let mut run = Span::child("utility.run");
+                run.identify("agentty.purpose", "title");
+                run.identify("agentty.harness", "codex");
+                let identity = run.scope(async { run_identity(&Context::current()) }).await;
+
+                (
+                    identity,
+                    run_identity(&Span::root("independent", Vec::new()).context()),
+                )
+            },
+        ))
+        .await;
+    let detached_identity = async { run_identity(&Span::child("detached").context()) }
+        .with_context(workflow_context)
+        .await;
+
+    // Assert
+    assert_eq!(
+        inherited_identity,
+        [
+            KeyValue::new("agentty.session.id", "session-1"),
+            KeyValue::new("agentty.purpose", "title"),
+            KeyValue::new("agentty.harness", "codex"),
+        ]
+    );
+    assert_eq!(root_identity, []);
+    assert_eq!(
+        detached_identity,
+        [KeyValue::new("agentty.session.id", "session-1")]
+    );
+    let spans = exporter.get_finished_spans().expect("spans");
+    let workflow = spans
+        .iter()
+        .find(|span| span.name == "session.turn")
+        .expect("workflow");
+    for attribute in [
+        KeyValue::new("agentty.session.id", "session-1"),
+        KeyValue::new("agentty.purpose", "reply"),
+    ] {
+        assert!(workflow.attributes.contains(&attribute), "{attribute:?}");
+    }
+    assert!(
+        spans
+            .iter()
+            .find(|span| span.name == "utility.run")
+            .expect("run")
+            .attributes
+            .contains(&KeyValue::new("agentty.harness", "codex"))
     );
 }
 
