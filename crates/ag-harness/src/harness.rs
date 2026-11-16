@@ -914,20 +914,34 @@ impl<'a> IntoFuture for OneShotTurn<'a> {
 /// A harness is a cheap, shareable handle: cloning it shares one immutable
 /// configuration, one lazily opened SQLite pool, and one in-memory context
 /// calibration, so a host can hand clones to many concurrent sessions and
-/// turns across tasks. Prefer [`Harness::builder`] for construction; it
-/// validates the configuration before any turn runs.
+/// turns across tasks. Prefer [`Harness::builder`] for construction; see
+/// [`HarnessBuilder::build`] for what it checks up front.
 #[derive(Clone)]
 pub struct Harness {
     inner: Arc<HarnessConfig>,
 }
 
 impl Harness {
-    /// Starts a validated, model-first harness configuration.
+    /// Starts a model-first harness configuration, checked by
+    /// [`HarnessBuilder::build`].
     ///
     /// This is the preferred construction path; [`Self::new`] and
     /// [`Self::from_registry`] remain available.
     pub fn builder() -> HarnessBuilder {
-        HarnessBuilder::default()
+        HarnessBuilder {
+            context_budget: None,
+            context_estimator: None,
+            context_summaries: ContextSummaryPolicy::Disabled,
+            execution_identity: None,
+            file_system: None,
+            lifecycle: LifecycleEmitter::default(),
+            max_history_bytes: None,
+            model: None,
+            model_reasoning_effort: None,
+            policy: ToolPolicy::default(),
+            repository: None,
+            storage: None,
+        }
     }
 
     /// Creates a deny-by-default harness backed by the local filesystem.
@@ -1033,6 +1047,7 @@ impl Harness {
     /// Sends metadata-only turn, model, and tool events to `observer`.
     ///
     /// This observer owns model events for requests made through the harness.
+    /// [`HarnessBuilder::lifecycle_observer`] is the preferred spelling.
     #[must_use]
     pub fn with_lifecycle_observer(mut self, observer: impl LifecycleObserver + 'static) -> Self {
         self.config_mut().lifecycle = LifecycleEmitter::new(observer);
@@ -1382,14 +1397,13 @@ impl Harness {
     }
 }
 
-/// Model-first, validated configuration of a [`Harness`].
+/// Model-first configuration of a [`Harness`].
 ///
-/// Start with [`Harness::builder`], select a model with [`Self::model`] or
-/// [`Self::registered_model`], and finish with [`Self::build`], which
-/// reports invalid configuration before any turn runs. Each setter replaces
-/// its earlier value; unset options keep the [`Harness::new`] defaults:
-/// deny-by-default tools, the local filesystem, and no store.
-#[derive(Default)]
+/// Start with [`Harness::builder`], select a model with [`Self::model`], and
+/// finish with [`Self::build`]. Each setter replaces its earlier value; unset
+/// options keep the [`Harness::new`] defaults: deny-by-default tools, the
+/// local filesystem, and no store. Registered models still use
+/// [`Harness::from_registry`].
 #[must_use = "a builder does nothing until built"]
 pub struct HarnessBuilder {
     context_budget: Option<ContextBudget>,
@@ -1399,7 +1413,7 @@ pub struct HarnessBuilder {
     file_system: Option<Arc<dyn FileSystem>>,
     lifecycle: LifecycleEmitter,
     max_history_bytes: Option<NonZeroUsize>,
-    model: Option<ModelSource>,
+    model: Option<Arc<dyn Model>>,
     model_reasoning_effort: Option<ReasoningEffort>,
     policy: ToolPolicy,
     repository: Option<Repository>,
@@ -1410,26 +1424,15 @@ impl HarnessBuilder {
     /// Selects the model every turn uses.
     ///
     /// Without [`Self::context_budget`], the request budget and estimator
-    /// come from the model's declared [`Model::profile`]. Replaces an earlier
-    /// [`Self::registered_model`].
+    /// come from the model's declared [`Model::profile`].
     pub fn model(mut self, model: Arc<dyn Model>) -> Self {
-        self.model = Some(ModelSource::Direct(model));
-
-        self
-    }
-
-    /// Selects a registered model, like [`Harness::from_registry`].
-    ///
-    /// Captures the registration immediately; an unregistered key fails
-    /// [`Self::build`]. Replaces an earlier [`Self::model`].
-    pub fn registered_model(mut self, registry: &ModelRegistry, key: &str) -> Self {
-        self.model = Some(ModelSource::Registered(registry.resolve(key).cloned()));
+        self.model = Some(model);
 
         self
     }
 
     /// Bounds every provider request with `context_budget`, overriding the
-    /// budget the model's profile or registration declares.
+    /// budget the model's profile declares.
     pub fn context_budget(mut self, context_budget: ContextBudget) -> Self {
         self.context_budget = Some(context_budget);
 
@@ -1522,23 +1525,29 @@ impl HarnessBuilder {
         self
     }
 
-    /// Validates the configuration and returns a shareable harness.
+    /// Checks the configuration and returns a shareable harness.
+    ///
+    /// `build` checks only that a model is selected, that a budget is set or
+    /// the model declares a valid profile, and that a repository is set when
+    /// the default policy allows a repository tool. Storage is not touched:
+    /// the SQLite database or host store is first opened by a session's
+    /// `create` or `resume`, which reports its failures as [`SessionError`].
     ///
     /// # Errors
     ///
     /// Returns a [`HarnessError`] of kind [`crate::ErrorKind::Config`]
-    /// wrapping a [`HarnessBuildError`] when no model is selected, or when no
-    /// budget is set and the model declares no valid profile, and wrapping a
-    /// [`ModelRegistryError`] for an unregistered key.
+    /// wrapping the failed [`HarnessBuildError`] check.
     pub fn build(self) -> Result<Harness, HarnessError> {
-        let mut config = match self.model {
-            None => return Err(HarnessBuildError::ModelRequired.into()),
-            Some(ModelSource::Registered(registration)) => HarnessConfig::registered(registration?),
-            Some(ModelSource::Direct(model)) => Self::direct_config(model, self.context_budget)?,
+        let Some(model) = self.model else {
+            return Err(HarnessBuildError::ModelRequired.into());
         };
-        if let Some(context_budget) = self.context_budget {
-            config.context_budget = context_budget;
+        let repository_tool_allowed = [Tool::Bash, Tool::Read, Tool::Write]
+            .into_iter()
+            .any(|tool| self.policy.allows(tool));
+        if repository_tool_allowed && self.repository.is_none() {
+            return Err(HarnessBuildError::RepositoryRequired.into());
         }
+        let mut config = Self::direct_config(model, self.context_budget)?;
         if let Some(context_estimator) = self.context_estimator {
             config.context_estimator = context_estimator;
         }
@@ -1591,11 +1600,11 @@ impl HarnessBuilder {
 
 /// Invalid [`HarnessBuilder`] configuration, reported by
 /// [`HarnessBuilder::build`] inside a [`HarnessError`].
-#[derive(Clone, Copy, Debug, Eq, Error, PartialEq)]
+#[derive(Debug, Error)]
 #[non_exhaustive]
 pub enum HarnessBuildError {
     /// No model was selected.
-    #[error("harness requires a model; call `model` or `registered_model`")]
+    #[error("harness requires a model; call `model`")]
     ModelRequired,
     /// No budget was set and the model declares no context profile.
     #[error("model declares no context profile; call `context_budget`")]
@@ -1603,14 +1612,9 @@ pub enum HarnessBuildError {
     /// The model's declared profile leaves no request capacity.
     #[error("model's declared context profile is invalid")]
     InvalidProfile(#[source] ContextBudgetError),
-}
-
-/// Model selected on a [`HarnessBuilder`].
-enum ModelSource {
-    /// Directly supplied model.
-    Direct(Arc<dyn Model>),
-    /// Registration captured from a registry, or the lookup failure.
-    Registered(Result<ModelRegistration, ModelRegistryError>),
+    /// The default policy allows a repository tool but no repository is set.
+    #[error("allowed repository tools require a repository; call `repository`")]
+    RepositoryRequired,
 }
 
 /// Session storage selected on a [`HarnessBuilder`].

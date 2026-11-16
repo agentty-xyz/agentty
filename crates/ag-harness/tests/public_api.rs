@@ -428,11 +428,27 @@ fn builder_requires_a_budget_for_a_model_without_a_declared_profile() {
 
     // Assert
     assert_eq!(error.kind(), ErrorKind::Config);
-    assert_eq!(
+    assert!(matches!(
         error.get_ref().downcast_ref::<HarnessBuildError>(),
-        Some(&HarnessBuildError::ContextBudgetRequired)
-    );
+        Some(HarnessBuildError::ContextBudgetRequired)
+    ));
     assert!(budgeted.is_ok());
+}
+
+#[test]
+fn builder_derives_the_budget_of_a_cataloged_built_in_model() -> Result<(), Box<dyn Error>> {
+    // Arrange
+    let client = ModelConfiguration::new(ModelProvider::Qwen, QWEN3_8_FLASH)
+        .base_url("https://dashscope.test/v1")
+        .client_from_environment(|_| Ok("test-key".to_string()))?;
+
+    // Act
+    let harness = Harness::builder().model(Arc::new(client)).build();
+
+    // Assert
+    assert!(harness.is_ok());
+
+    Ok(())
 }
 
 #[test]

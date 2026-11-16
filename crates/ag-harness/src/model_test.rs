@@ -2,6 +2,7 @@
 //! and responses, and model error classification.
 
 use std::io;
+use std::path::PathBuf;
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
@@ -17,7 +18,10 @@ use super::{
 };
 use crate::input::StoredTurnInput;
 use crate::lifecycle::LifecycleEventKind;
-use crate::provider::{KimiConfig, MuseConfig, QwenConfig};
+use crate::provider::{
+    self, CHATGPT_GPT_6_SOL, ChatGptConfig, GPT_6_LUNA, KIMI_K3, KimiConfig, MuseConfig,
+    OpenAiConfig, QWEN3_8_FLASH, QwenConfig,
+};
 use crate::schema_contract::{OutputSchema, OutputValidationError};
 use crate::store_fixture::image_input;
 use crate::tool::{ReadArguments, ToolCall};
@@ -1335,4 +1339,48 @@ async fn classifies_router_transport_failure() {
 
     // Assert
     assert_eq!(error.error_type(), ModelErrorType::Transport);
+}
+
+#[test]
+fn clients_declare_the_cataloged_profile_of_their_model() {
+    // Arrange
+    let openai = ModelClient::openai(OpenAiConfig {
+        api_key: "test-key".to_string(),
+        base_url: "https://api.openai.test/v1".to_string(),
+        model: GPT_6_LUNA.to_string(),
+    })
+    .expect("valid model identity");
+    let chatgpt = ModelClient::chatgpt(ChatGptConfig {
+        auth_file: PathBuf::from("auth.json"),
+        base_url: "https://chatgpt.test/v1".to_string(),
+        model: CHATGPT_GPT_6_SOL.to_string(),
+    })
+    .expect("valid model identity");
+    let qwen = ModelClient::qwen(QwenConfig {
+        api_key: "test-key".to_string(),
+        base_url: "https://dashscope.test/v1".to_string(),
+        model: QWEN3_8_FLASH.to_string(),
+    })
+    .expect("valid model identity");
+    let kimi = ModelClient::kimi(KimiConfig {
+        api_key: "test-key".to_string(),
+        base_url: "https://kimi.test/v1".to_string(),
+        model: KIMI_K3.to_string(),
+    })
+    .expect("valid model identity");
+
+    // Act
+    let profiles = [&openai, &chatgpt, &qwen, &kimi].map(Model::profile);
+
+    // Assert
+    assert_eq!(
+        profiles,
+        [
+            provider::openai_profile(GPT_6_LUNA),
+            provider::chatgpt_profile(CHATGPT_GPT_6_SOL),
+            provider::qwen_profile(QWEN3_8_FLASH),
+            None,
+        ]
+    );
+    assert!(profiles[..3].iter().all(Option::is_some));
 }

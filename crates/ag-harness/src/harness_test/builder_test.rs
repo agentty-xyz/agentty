@@ -2,7 +2,7 @@
 //! validation failures, applied options, and shared handle configuration.
 
 use std::num::{NonZeroU64, NonZeroUsize};
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};
 
 use serde_json::json;
@@ -17,11 +17,7 @@ use crate::file_system::MockFileSystem;
 use crate::harness::{Harness, HarnessBuildError};
 use crate::lifecycle::LifecycleEvent;
 use crate::memory_store::MemoryStore;
-use crate::model::{
-    MockModel, ModelCapabilities, ModelProfile, ModelRegistration, ModelRegistry,
-    ModelRegistryError, ModelResponse, ReasoningEffort,
-};
-use crate::model_profile_fixture::unbounded_model_profile;
+use crate::model::{MockModel, ModelProfile, ModelResponse, ReasoningEffort};
 use crate::policy::ToolPolicy;
 use crate::recovery::ExecutionIdentity;
 use crate::repository::Repository;
@@ -31,6 +27,9 @@ use crate::tool::Tool;
 /// Request weight declared by the profile estimator, distinguishing it
 /// from the default estimator's zero request cost.
 const PROFILE_REQUEST_TOKENS: u64 = 77;
+
+/// Canonical path the configured filesystem double resolves every path to.
+const SENTINEL_PATH: &str = "/configured/file-system";
 
 fn profiled_model(profile: Option<ModelProfile>) -> MockModel {
     let mut model = model();
@@ -47,15 +46,14 @@ fn declared_profile() -> ModelProfile {
         )
 }
 
-fn build_error(result: Result<Harness, HarnessError>) -> HarnessBuildError {
+/// Returns the configuration error of a failed build after checking its
+/// classification.
+fn build_error(result: Result<Harness, HarnessError>) -> HarnessError {
     let error = result.err().expect("build should fail");
     assert_eq!(error.kind(), ErrorKind::Config);
     assert!(!error.is_retryable());
 
-    *error
-        .get_ref()
-        .downcast_ref::<HarnessBuildError>()
-        .expect("build error")
+    error
 }
 
 #[test]
@@ -67,19 +65,10 @@ fn build_without_a_model_reports_model_required() {
     let error = build_error(builder.build());
 
     // Assert
-    assert_eq!(error, HarnessBuildError::ModelRequired);
-}
-
-#[test]
-fn build_without_a_budget_or_profile_reports_budget_required() {
-    // Arrange
-    let builder = Harness::builder().model(Arc::new(profiled_model(None)));
-
-    // Act
-    let error = build_error(builder.build());
-
-    // Assert
-    assert_eq!(error, HarnessBuildError::ContextBudgetRequired);
+    assert!(matches!(
+        error.get_ref().downcast_ref::<HarnessBuildError>(),
+        Some(HarnessBuildError::ModelRequired)
+    ));
 }
 
 #[test]
@@ -92,13 +81,36 @@ fn build_with_an_invalid_declared_profile_reports_it() {
     let error = build_error(builder.build());
 
     // Assert
-    assert_eq!(
-        error,
-        HarnessBuildError::InvalidProfile(ContextBudgetError::ReservedOutputExceedsBudget {
-            max_request_weight: 100,
-            reserved_output_weight: 100,
-        })
-    );
+    assert!(matches!(
+        error.get_ref().downcast_ref::<HarnessBuildError>(),
+        Some(HarnessBuildError::InvalidProfile(
+            ContextBudgetError::ReservedOutputExceedsBudget {
+                max_request_weight: 100,
+                reserved_output_weight: 100,
+            }
+        ))
+    ));
+}
+
+#[test]
+fn build_with_repository_tools_but_no_repository_reports_it() {
+    // Arrange
+    let builders = [Tool::Bash, Tool::Read, Tool::Write].map(|tool| {
+        Harness::builder()
+            .model(Arc::new(profiled_model(Some(declared_profile()))))
+            .allow(tool)
+    });
+
+    // Act
+    let errors = builders.map(|builder| build_error(builder.build()));
+
+    // Assert
+    for error in errors {
+        assert!(matches!(
+            error.get_ref().downcast_ref::<HarnessBuildError>(),
+            Some(HarnessBuildError::RepositoryRequired)
+        ));
+    }
 }
 
 #[test]
@@ -147,61 +159,15 @@ fn explicit_budget_overrides_the_declared_profile() {
     );
 }
 
-#[test]
-fn registered_model_captures_the_registration_and_accepts_a_budget_override() {
-    // Arrange
-    let identity = ExecutionIdentity::new("primary", "1").expect("identity");
-    let mut registry = ModelRegistry::new();
-    registry
-        .register(
-            identity.clone(),
-            model(),
-            ModelCapabilities::new(unbounded_model_profile()),
-        )
-        .expect("registration");
-    let budget = ContextBudget::new(NonZeroU64::new(500).expect("non-zero"));
-
-    // Act
-    let harness = Harness::builder()
-        .model(Arc::new(profiled_model(None)))
-        .registered_model(&registry, "primary")
-        .context_budget(budget)
-        .build()
-        .expect("registered model should build");
-
-    // Assert
-    assert_eq!(
-        harness
-            .model_registration()
-            .map(ModelRegistration::identity),
-        Some(&identity)
-    );
-    assert_eq!(harness.inner.execution_identity, Some(identity));
-    assert_eq!(harness.inner.context_budget, budget);
-}
-
-#[test]
-fn unregistered_model_key_fails_the_build() {
-    // Arrange
-    let registry = ModelRegistry::new();
-    let builder = Harness::builder().registered_model(&registry, "missing");
-
-    // Act
-    let error = builder.build().err().expect("unknown key should fail");
-
-    // Assert
-    assert_eq!(error.kind(), ErrorKind::Config);
-    assert!(matches!(
-        error.get_ref().downcast_ref::<ModelRegistryError>(),
-        Some(ModelRegistryError::UnknownKey { key }) if key == "missing"
-    ));
-}
-
-#[test]
-fn build_applies_every_configured_option() {
+#[tokio::test]
+async fn build_applies_every_configured_option() {
     // Arrange
     let identity = ExecutionIdentity::new("host", "2").expect("identity");
     let estimator = HeuristicContextEstimator::DEFAULT.with_request_tokens(5);
+    let mut file_system = MockFileSystem::new();
+    file_system
+        .expect_canonicalize()
+        .returning(|_| Ok(PathBuf::from(SENTINEL_PATH)));
 
     // Act
     let harness = Harness::builder()
@@ -211,7 +177,7 @@ fn build_applies_every_configured_option() {
         .repository(Repository::fixture("root"))
         .allow(Tool::Read)
         .allow(Tool::Write)
-        .file_system(MockFileSystem::new())
+        .file_system(file_system)
         .max_history_bytes(NonZeroUsize::new(64).expect("non-zero"))
         .model_reasoning_effort(ReasoningEffort::High)
         .context_estimator(estimator)
@@ -229,11 +195,40 @@ fn build_applies_every_configured_option() {
         config.policy,
         ToolPolicy::default().allow(Tool::Read).allow(Tool::Write)
     );
+    assert_eq!(
+        config
+            .file_system
+            .canonicalize(Path::new("any"))
+            .await
+            .expect("configured filesystem"),
+        PathBuf::from(SENTINEL_PATH)
+    );
     assert_eq!(config.max_history_bytes, 64);
     assert_eq!(config.model_reasoning_effort, Some(ReasoningEffort::High));
     assert_eq!(config.context_estimator.request_weight(&object_schema()), 5);
     assert_eq!(config.context_summaries, ContextSummaryPolicy::Enabled);
     assert_eq!(config.execution_identity, Some(identity));
+}
+
+#[tokio::test]
+async fn built_history_budget_reaches_new_sessions() {
+    // Arrange
+    let harness = Harness::builder()
+        .model(Arc::new(profiled_model(Some(declared_profile()))))
+        .store(Arc::new(MemoryStore::new()))
+        .max_history_bytes(NonZeroUsize::new(64).expect("non-zero"))
+        .build()
+        .expect("store-backed harness should build");
+
+    // Act
+    let session = harness
+        .session("bounded", object_schema())
+        .create()
+        .await
+        .expect("session should be created");
+
+    // Assert
+    assert_eq!(session.history.max_bytes, 64);
 }
 
 #[test]

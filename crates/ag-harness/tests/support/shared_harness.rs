@@ -2,14 +2,18 @@
 //! sessions concurrently against one SQLite file or one `MemoryStore`.
 
 use std::error::Error;
-use std::path::Path;
-use std::sync::Arc;
+use std::path::{Path, PathBuf};
+use std::sync::{Arc, Mutex};
+use std::time::Duration;
 
 use ag_harness::model::{ModelCompletion, ModelMessage, ModelProfile, ModelRequest, ModelResponse};
 use ag_harness::store::MemoryStore;
 use ag_harness::{Harness, HarnessError, Model, ModelError, OutputSchema, Session, SessionError};
 use async_trait::async_trait;
 use serde_json::json;
+use sqlx::Connection;
+use sqlx::sqlite::{SqliteConnectOptions, SqliteConnection};
+use tokio::sync::oneshot;
 use tokio::task::JoinSet;
 
 use crate::model_profile_fixture::unbounded_model_profile;
@@ -40,6 +44,42 @@ impl Model for UserTurnCountingModel {
             json!({ "user_turns": user_turns }),
         )))
     }
+}
+
+/// Takes the database write lock on a separate connection during its first
+/// request and hands that connection to the test, so the harness must
+/// persist the response while another writer holds the lock.
+struct WriteLockingModel {
+    lock_holder: Mutex<Option<oneshot::Sender<SqliteConnection>>>,
+    path: PathBuf,
+}
+
+#[async_trait]
+impl Model for WriteLockingModel {
+    fn profile(&self) -> Option<ModelProfile> {
+        Some(unbounded_model_profile())
+    }
+
+    async fn complete(&self, request: ModelRequest) -> Result<ModelCompletion, ModelError> {
+        let lock_holder = self.lock_holder.lock().expect("lock holder").take();
+        if let Some(lock_holder) = lock_holder {
+            let mut connection = raw_connection(&self.path).await;
+            sqlx::raw_sql("BEGIN IMMEDIATE")
+                .execute(&mut connection)
+                .await
+                .expect("write lock");
+            lock_holder.send(connection).expect("test awaits the lock");
+        }
+
+        UserTurnCountingModel.complete(request).await
+    }
+}
+
+/// Opens a connection to `path` outside every harness pool.
+async fn raw_connection(path: &Path) -> SqliteConnection {
+    SqliteConnection::connect_with(&SqliteConnectOptions::new().filename(path))
+        .await
+        .expect("raw connection")
 }
 
 fn schema() -> Result<OutputSchema, Box<dyn Error>> {
@@ -115,9 +155,9 @@ async fn clones_of_one_harness_run_concurrent_sessions_on_one_sqlite_file()
     let directory = tempfile::tempdir()?;
     let path = directory.path().join("sessions.db");
     // A second harness owns a second connection pool on the same file, so
-    // its writes contend with the shared pool's through WAL and the busy
-    // timeout. It creates the file first: concurrent first opens from
-    // separate pools may race on initialization.
+    // its writes contend with the shared pool's. It creates the file first,
+    // as the README asks of hosts: concurrent first opens of a new file can
+    // race on schema migration.
     let mut independent = sqlite_harness(&path)?
         .session("independent", schema()?)
         .create()
@@ -136,6 +176,65 @@ async fn clones_of_one_harness_run_concurrent_sessions_on_one_sqlite_file()
     assert_eq!(shared_replies, vec![TURNS; SESSIONS]);
     assert_eq!(independent_replies, TURNS);
     assert_eq!(resumed, vec![TURNS + 1; SESSIONS]);
+
+    Ok(())
+}
+
+#[tokio::test]
+async fn turns_commit_while_another_connection_holds_a_read_transaction()
+-> Result<(), Box<dyn Error>> {
+    // Arrange
+    let directory = tempfile::tempdir()?;
+    let path = directory.path().join("sessions.db");
+    let harness = sqlite_harness(&path)?;
+    let mut session = harness.session("read-locked", schema()?).create().await?;
+    let mut reader = raw_connection(&path).await;
+    sqlx::raw_sql("BEGIN; SELECT count(*) FROM sqlite_master;")
+        .execute(&mut reader)
+        .await?;
+
+    // Act
+    // Under a rollback journal the open read transaction blocks every
+    // commit until the busy timeout expires; WAL lets the turn commit.
+    let reply = send_turns(&mut session).await;
+    sqlx::raw_sql("COMMIT").execute(&mut reader).await?;
+
+    // Assert
+    assert_eq!(reply?, TURNS);
+
+    Ok(())
+}
+
+#[tokio::test]
+async fn turn_persistence_waits_for_another_writer_to_release_its_lock()
+-> Result<(), Box<dyn Error>> {
+    // Arrange
+    let directory = tempfile::tempdir()?;
+    let path = directory.path().join("sessions.db");
+    let (lock_holder, locked) = oneshot::channel();
+    let harness = Harness::builder()
+        .model(Arc::new(WriteLockingModel {
+            lock_holder: Mutex::new(Some(lock_holder)),
+            path: path.clone(),
+        }))
+        .sqlite(&path)
+        .build()?;
+    let mut session = harness.session("write-locked", schema()?).create().await?;
+
+    // Act
+    // The model takes the write lock before it answers, so persisting the
+    // answer starts while the lock is held; the delay before releasing it
+    // only keeps the overlap, well inside the harness's busy timeout.
+    let turn = tokio::spawn(async move { session.send("locked").await });
+    let mut writer = locked.await?;
+    tokio::time::sleep(Duration::from_millis(100)).await;
+    sqlx::raw_sql("COMMIT").execute(&mut writer).await?;
+    let outcome = turn.await??;
+    let resumed = harness.resume("write-locked").await?.send("again").await?;
+
+    // Assert
+    assert_eq!(outcome.output()["user_turns"], 1);
+    assert_eq!(resumed.output()["user_turns"], 2);
 
     Ok(())
 }

@@ -7,11 +7,10 @@
 //! # Quickstart
 //!
 //! ```no_run
-//! use std::num::NonZeroU64;
+//! use std::env;
 //! use std::sync::Arc;
 //!
-//! use ag_harness::model::ContextBudget;
-//! use ag_harness::provider::{MUSE_SPARK_1_3, Muse};
+//! use ag_harness::provider::{GPT_6_LUNA, ModelConfiguration, ModelProvider};
 //! use ag_harness::{Harness, OutputSchema};
 //! use serde_json::json;
 //!
@@ -21,12 +20,9 @@
 //!     "properties": { "summary": { "type": "string" } },
 //!     "required": ["summary"],
 //! }))?;
-//! let budget = ContextBudget::new(NonZeroU64::new(128_000).ok_or("budget")?)
-//!     .with_reserved_output(16_384)?;
-//! let harness = Harness::builder()
-//!     .model(Arc::new(Muse::from_env(MUSE_SPARK_1_3)?))
-//!     .context_budget(budget)
-//!     .build()?;
+//! let model = ModelConfiguration::new(ModelProvider::OpenAi, GPT_6_LUNA)
+//!     .client_from_environment(|name| env::var(name))?;
+//! let harness = Harness::builder().model(Arc::new(model)).build()?;
 //!
 //! let outcome = harness.run_once("Summarize Cargo.toml", schema).await?;
 //! println!("{}", outcome.output()["summary"]);
@@ -38,7 +34,7 @@
 //!
 //! - [`Harness`] holds the model, its required context budget, tool defaults,
 //!   repository, and store. It is a cheap `Clone + Send + Sync` handle built
-//!   and validated with [`Harness::builder`].
+//!   with [`Harness::builder`].
 //! - [`Session`] is a durable conversation: `harness.session(id, schema)`
 //!   creates one and `harness.resume(id)` reopens it in any process.
 //! - A turn is one prompt run to a schema-valid answer. `run_once` and

@@ -29,7 +29,7 @@ pub use crate::model_registry::{
     ModelCapabilities, ModelRegistration, ModelRegistry, ModelRegistryError,
 };
 use crate::provider::{
-    ChatGptConfig, KimiConfig, MuseConfig, OpenAiCompatibleConfig, OpenAiConfig, QwenConfig,
+    self, ChatGptConfig, KimiConfig, MuseConfig, OpenAiCompatibleConfig, OpenAiConfig, QwenConfig,
 };
 use crate::schema_contract::{OutputSchema, OutputValidationError, bounded_diagnostic};
 use crate::{telemetry, tool};
@@ -52,6 +52,9 @@ pub trait Model: Send + Sync {
     ///
     /// [`crate::Harness::builder`] derives the request budget and estimator
     /// from this profile unless the host sets an explicit budget.
+    /// [`ModelClient`] declares the cataloged profile of `OpenAI`, `ChatGPT`,
+    /// and Qwen models; Kimi, Muse, OpenAI-compatible, and uncataloged models
+    /// declare none, so hosts set their budget explicitly.
     fn profile(&self) -> Option<ModelProfile> {
         None
     }
@@ -114,6 +117,7 @@ pub struct ModelClient {
     router_model: String,
     lifecycle: LifecycleEmitter,
     metadata: ModelMetadata,
+    profile: Option<ModelProfile>,
 }
 
 impl ModelClient {
@@ -129,6 +133,7 @@ impl ModelClient {
             Some(config.api_key),
             config.base_url,
             &config.model,
+            None,
         )
     }
 
@@ -144,6 +149,7 @@ impl ModelClient {
             Some(config.api_key),
             config.base_url,
             &config.model,
+            None,
         )
     }
 
@@ -157,11 +163,14 @@ impl ModelClient {
     /// Returns [`ModelMetadataError`] when the configured model identifier is
     /// empty or contains only whitespace.
     pub fn openai(config: OpenAiConfig) -> Result<Self, ModelMetadataError> {
+        let profile = provider::openai_profile(&config.model);
+
         Self::routed(
             ag_router::Provider::OpenAi,
             Some(config.api_key),
             config.base_url,
             &config.model,
+            profile,
         )
     }
 
@@ -175,6 +184,8 @@ impl ModelClient {
     /// Returns [`ModelMetadataError`] when the configured model identifier is
     /// empty or contains only whitespace.
     pub fn chatgpt(config: ChatGptConfig) -> Result<Self, ModelMetadataError> {
+        let profile = provider::chatgpt_profile(&config.model);
+
         Self::routed_with_credential(
             ag_router::Provider::ChatGpt,
             None,
@@ -183,6 +194,7 @@ impl ModelClient {
             ))),
             config.base_url,
             &config.model,
+            profile,
         )
     }
 
@@ -202,6 +214,7 @@ impl ModelClient {
             config.api_key,
             config.base_url,
             &config.model,
+            None,
         )
     }
 
@@ -212,11 +225,14 @@ impl ModelClient {
     /// Returns [`ModelMetadataError`] when the configured model identifier is
     /// empty or contains only whitespace.
     pub fn qwen(config: QwenConfig) -> Result<Self, ModelMetadataError> {
+        let profile = provider::qwen_profile(&config.model);
+
         Self::routed(
             ag_router::Provider::Qwen,
             Some(config.api_key),
             config.base_url,
             &config.model,
+            profile,
         )
     }
 
@@ -296,8 +312,9 @@ impl ModelClient {
         api_key: Option<String>,
         base_url: String,
         model: &str,
+        profile: Option<ModelProfile>,
     ) -> Result<Self, ModelMetadataError> {
-        Self::routed_with_credential(provider, api_key, None, base_url, model)
+        Self::routed_with_credential(provider, api_key, None, base_url, model, profile)
     }
 
     fn routed_with_credential(
@@ -306,6 +323,7 @@ impl ModelClient {
         credential: Option<Arc<dyn ag_router::BearerCredential>>,
         base_url: String,
         model: &str,
+        profile: Option<ModelProfile>,
     ) -> Result<Self, ModelMetadataError> {
         let metadata = ModelMetadata::new(provider_telemetry_name(provider), model)?;
         let router_model = format!("{}/{model}", provider.as_str());
@@ -321,6 +339,7 @@ impl ModelClient {
             router_model,
             lifecycle: LifecycleEmitter::default(),
             metadata,
+            profile,
         })
     }
 
@@ -556,6 +575,10 @@ fn provider_telemetry_name(provider: ag_router::Provider) -> &'static str {
 impl Model for ModelClient {
     fn metadata(&self) -> Option<ModelMetadata> {
         Some(self.metadata.clone())
+    }
+
+    fn profile(&self) -> Option<ModelProfile> {
+        self.profile
     }
 
     fn validate_schema(&self, schema: &OutputSchema) -> Result<(), ModelError> {
