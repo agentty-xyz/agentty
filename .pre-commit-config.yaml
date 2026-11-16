@@ -74,11 +74,10 @@ repos:
         stages: [manual]
       - id: rustfmt
         name: rustfmt check
-        description: Verify all Rust workspace code is already formatted with rustfmt.
-        entry: cargo fmt --all --check
+        description: Verify the selected Rust files are already formatted with rustfmt, skipping child modules so each file is checked once.
+        entry: rustfmt --check --config skip_children=true
         language: system
         types: [rust]
-        pass_filenames: false
       - id: cargo-check-ag-harness-benchmark
         name: cargo check ag-harness benchmark
         description: Compile-check the manual ag-harness live benchmark without executing it.
