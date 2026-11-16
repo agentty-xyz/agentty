@@ -29,6 +29,7 @@ use crate::model::{ModelMessage, ModelMetadata};
 use crate::recovery::{HostRequest, HostTurnAcquisition, HostTurnRecord};
 use crate::session::{LoadedSession, NewSession, StoreIdentity, TurnOwner};
 use crate::store::{SessionStore, WriteRecord};
+use crate::usage::TurnUsage;
 use crate::{SessionError, TurnError, TurnOptions, TurnOutcome};
 
 pub(crate) const TURN_LEASE_SECONDS: i64 = 300;
@@ -339,6 +340,10 @@ impl WriteJournal {
         messages: &[ModelMessage],
     ) -> Result<(), SessionError> {
         self.database.append_messages(&self.owner, messages).await
+    }
+
+    pub(crate) async fn record_usage(&self, usage: &TurnUsage) -> Result<(), SessionError> {
+        self.database.record_usage(&self.owner, usage).await
     }
 }
 
@@ -828,6 +833,10 @@ impl SessionStore for AdmittedStore {
         messages: &[ModelMessage],
     ) -> Result<(), SessionError> {
         self.store.append_messages(owner, messages).await
+    }
+
+    async fn record_usage(&self, owner: &TurnOwner, usage: &TurnUsage) -> Result<(), SessionError> {
+        self.store.record_usage(owner, usage).await
     }
 
     async fn renew(&self, owner: &TurnOwner) -> Result<Instant, SessionError> {

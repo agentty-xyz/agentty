@@ -28,6 +28,7 @@ use crate::limit::LimitKind;
 use crate::run::{RunOutcome, RunOutput, Usage};
 use crate::tool::ToolCall;
 use crate::turn::{ContextActivity, ToolActivity};
+use crate::usage::Cost;
 
 /// Events a run may emit before a consumer reads them; a run whose stream
 /// is full waits at its next event until the consumer catches up.
@@ -199,9 +200,12 @@ pub enum RunEventKind {
         item: Item,
     },
     /// A model request completed, with the tokens its provider reported.
-    /// The usage of these events sums to the run outcome's
-    /// [`crate::RunOutcome::usage`].
+    /// The usage and cost of these events sum to the run outcome's
+    /// [`crate::RunOutcome::usage`] and [`crate::RunOutcome::cost`].
     ModelRequestCompleted {
+        /// Price of `usage`, or `None` when the run's model has no
+        /// [`crate::catalog::Pricing`].
+        cost: Option<Cost>,
         /// Tokens of this request.
         usage: Usage,
     },
@@ -347,6 +351,8 @@ impl From<&ToolActivity> for ToolCallStatus {
 #[derive(Clone, Debug, Deserialize, Eq, JsonSchema, PartialEq, Serialize)]
 #[non_exhaustive]
 pub struct RunSummary {
+    /// Price of [`Self::usage`], as in [`crate::RunOutcome::cost`].
+    pub cost: Option<Cost>,
     /// Why the run failed, or `None` when it produced its output.
     pub error: Option<RunFailure>,
     /// Tokens of every model request, as in [`crate::RunOutcome::usage`].
@@ -357,6 +363,7 @@ impl RunSummary {
     /// Summarizes the settled `outcome`.
     pub(crate) fn new(outcome: &RunOutcome) -> Self {
         Self {
+            cost: outcome.cost,
             error: outcome.result.as_ref().err().map(RunFailure::from),
             usage: outcome.usage,
         }

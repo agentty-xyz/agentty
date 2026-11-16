@@ -18,6 +18,7 @@ use crate::store::{
     TurnAdmission, TurnOwner, WriteRecord, WriteStatus,
 };
 use crate::transcript::{TurnRange, TurnStatus};
+use crate::usage::TurnUsage;
 use crate::write_journal::content_hash;
 use crate::{SessionError, TurnError, TurnOutcome};
 
@@ -241,6 +242,32 @@ impl SessionStore for MemoryStore {
         Ok(())
     }
 
+    async fn record_usage(&self, owner: &TurnOwner, usage: &TurnUsage) -> Result<(), SessionError> {
+        self.validate_identity(owner)?;
+        let mut state = self.lock();
+        state.owned_session(owner)?.live_turn(owner)?.usage = Some(*usage);
+
+        Ok(())
+    }
+
+    async fn load_usage(&self, session_id: &str) -> Result<Vec<Option<TurnUsage>>, SessionError> {
+        let mut state = self.lock();
+        let session = state
+            .sessions
+            .get_mut(session_id)
+            .ok_or_else(|| SessionError::NotFound {
+                id: session_id.to_string(),
+            })?;
+        session.recover();
+
+        Ok(session
+            .turns
+            .iter()
+            .filter(|turn| turn.status != Status::Running)
+            .map(|turn| turn.usage)
+            .collect())
+    }
+
     fn identity(&self) -> &StoreIdentity {
         &self.identity
     }
@@ -418,6 +445,7 @@ impl SessionStore for MemoryStore {
             started_at: SystemTime::now(),
             status: Status::Running,
             text_output,
+            usage: None,
         });
         session.next_turn = next_position;
 
@@ -870,6 +898,7 @@ struct TurnRecord {
     started_at: SystemTime,
     status: Status,
     text_output: bool,
+    usage: Option<TurnUsage>,
 }
 
 impl TurnRecord {
@@ -892,7 +921,8 @@ impl TurnRecord {
             )
             .with_error_type(self.error_type.clone())
             .with_outcome(self.outcome.clone())
-            .with_text_output(self.text_output),
+            .with_text_output(self.text_output)
+            .with_usage(self.usage),
         )
     }
 }

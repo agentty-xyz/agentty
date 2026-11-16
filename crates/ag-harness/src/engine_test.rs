@@ -51,6 +51,7 @@ fn preserves_request_reasoning_effort_over_harness_default() {
         model: &model,
         model_reasoning_effort: Some(ReasoningEffort::Low),
         options: &options,
+        pricing: None,
         repository: None,
     };
     let request = ModelRequest::new("reply", object_schema())
@@ -109,6 +110,7 @@ async fn run_scripted(
         model: &model,
         model_reasoning_effort: None,
         options: &options,
+        pricing: None,
         repository: None,
     };
     let outcome = engine

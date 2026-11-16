@@ -320,7 +320,7 @@ async fn tool_turn_streams_ordered_items_and_usage() -> Result<(), Box<dyn Error
     let streamed_output: u64 = events
         .iter()
         .filter_map(|event| match &event.kind {
-            RunEventKind::ModelRequestCompleted { usage } => Some(usage.output),
+            RunEventKind::ModelRequestCompleted { usage, .. } => Some(usage.output),
             _ => None,
         })
         .sum();

@@ -8,7 +8,7 @@ use ag_harness::model::{ModelMessage, ModelMetadata};
 use ag_harness::recovery::HostTurnRecord;
 use ag_harness::store::{
     HistoryProjection, LoadedSession, ModelSwitch, NewSession, Reservation, SessionStore,
-    StoreIdentity, TurnAdmission, TurnOwner, WriteRecord,
+    StoreIdentity, TurnAdmission, TurnOwner, TurnUsage, WriteRecord,
 };
 use ag_harness::{SessionError, TurnError, TurnOutcome};
 use async_trait::async_trait;
@@ -19,6 +19,7 @@ pub(crate) struct Gate {
     pub(crate) after_commit: bool,
     pub(crate) entered: Notify,
     pub(crate) fail_cleanup: AtomicBool,
+    pub(crate) fail_usage: AtomicBool,
     pub(crate) identity: StoreIdentity,
     pub(crate) interrupted: Notify,
     pub(crate) panic_acquire: AtomicBool,
@@ -35,6 +36,7 @@ impl Gate {
             after_commit,
             entered: Notify::new(),
             fail_cleanup: AtomicBool::new(false),
+            fail_usage: AtomicBool::new(false),
             identity: store.identity().clone(),
             interrupted: Notify::new(),
             panic_acquire: AtomicBool::new(false),
@@ -156,6 +158,21 @@ impl SessionStore for Gate {
         messages: &[ModelMessage],
     ) -> Result<(), SessionError> {
         self.store.append_messages(owner, messages).await
+    }
+
+    async fn record_usage(&self, owner: &TurnOwner, usage: &TurnUsage) -> Result<(), SessionError> {
+        if self.fail_usage.load(Ordering::SeqCst) {
+            return Err(SessionError::Store {
+                operation: "record usage",
+                source: Box::new(std::io::Error::other("injected usage failure")),
+            });
+        }
+
+        self.store.record_usage(owner, usage).await
+    }
+
+    async fn load_usage(&self, id: &str) -> Result<Vec<Option<TurnUsage>>, SessionError> {
+        self.store.load_usage(id).await
     }
 
     async fn complete_turn(

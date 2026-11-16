@@ -154,6 +154,10 @@ the cap reset on `switch_model` or estimator replacement. `TurnReport` and
   replayed history, so they never change the cached prompt prefix. They are journaled
   with the turn and sent with each of its requests, but later turns replay it without
   them, so they never steer another turn.
+- Every durable turn records its usage and cost when it starts and after each completed
+  model request, so stopped turns keep what they used, and forks copy it.
+  `Session::usage` sums settled turns; turns stored before usage was recorded count as
+  unknown, never as zero.
 - Each turn records its effective options, comparison identity, and model provenance
   before execution. Write and command intents persist before their effects.
 - `host_id`/`recover` bind host-assigned request IDs to a fingerprint of the effective
@@ -243,11 +247,12 @@ or automatic provider fallback.
   through `LocalServer` before declaring the model's profile.
 - The provider catalog declares each hosted model's list prices (micro-USD per million
   tokens) and capabilities, and derives its price class (`ModelProvider::cost_tier`)
-  from those prices. The optional `ModelCatalog` maps open roles, such as smart or
-  cheap, to ordered candidate models with replaceable defaults and resolves a selector
-  to a model and its request budget. Candidates must have the role's required
-  capabilities, and defaults assign only models with a declared context profile;
-  choosing a model for a task stays the host's decision.
+  from those prices. Runs price each request in integer micro-USD; a model without
+  prices reports no cost rather than a guess. The optional `ModelCatalog` maps open
+  roles, such as smart or cheap, to ordered candidate models with replaceable defaults
+  and resolves a selector to a model and its request budget. Candidates must have the
+  role's required capabilities, and defaults assign only models with a declared context
+  profile; choosing a model for a task stays the host's decision.
 
 Durable sessions send a stable prompt-cache key where the provider policy enables it.
 Requests have bounded timeouts and limited retries for connection failures and `429`

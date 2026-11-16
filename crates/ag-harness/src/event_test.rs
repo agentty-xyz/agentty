@@ -8,13 +8,14 @@ use super::{
     EVENT_BUFFER, EventSink, EventStream, Item, ItemId, ItemKind, RunEvent, RunEventKind,
     RunFailure, RunSummary, SessionId, ToolCallItem, ToolCallStatus, TurnIndex,
 };
-use crate::catalog::ModelId;
+use crate::catalog::{ModelId, Pricing};
 use crate::error::{ErrorKind, RunError};
 use crate::lifecycle::ToolUnavailableReason;
 use crate::limit::LimitKind;
 use crate::run::{RunOutcome, RunOutput, Usage};
 use crate::tool::{ReadAction, Tool, ToolCall};
 use crate::turn::{ContextActivity, ToolActivity, TurnError, TurnReport};
+use crate::usage::Cost;
 
 /// Committed JSON schema of [`RunEvent`]; regenerate it from the failure
 /// message of [`run_event_schema_matches_the_committed_snapshot`].
@@ -24,6 +25,7 @@ const RUN_EVENT_SCHEMA: &str = include_str!("../schema/run_event.json");
 fn outcome(result: Result<RunOutput, RunError>) -> RunOutcome {
     RunOutcome {
         commands: Vec::new(),
+        cost: None,
         files_changed: Vec::new(),
         records_error: None,
         report: TurnReport::new(Duration::ZERO, Vec::new(), Vec::new()),
@@ -39,6 +41,7 @@ fn cancelled() -> Result<RunOutput, RunError> {
 
 fn request_completed() -> RunEventKind {
     RunEventKind::ModelRequestCompleted {
+        cost: None,
         usage: Usage::default(),
     }
 }
@@ -230,11 +233,8 @@ fn run_event_round_trips_through_json_matching_its_schema() -> Result<(), Box<dy
         },
         RunEventKind::ContextReduced(ContextActivity::default()),
         RunEventKind::Completed(RunSummary {
-            error: Some(RunFailure {
-                kind: ErrorKind::Cancelled,
-                message: "turn was cancelled".into(),
-                retryable: false,
-            }),
+            cost: None,
+            error: cancelled().err().as_ref().map(RunFailure::from),
             usage: Usage {
                 cache_write: Some(1),
                 ..Usage::default()
@@ -282,6 +282,57 @@ fn run_event_round_trips_through_json_matching_its_schema() -> Result<(), Box<dy
     assert_eq!(encoded[5]["kind"]["item"]["output"]["type"], "json");
     assert_eq!(encoded[6]["kind"]["item"]["output"]["type"], "text");
     assert_eq!(encoded[8]["kind"]["error"]["kind"], "cancelled");
+
+    Ok(())
+}
+
+#[test]
+fn request_and_run_costs_round_trip_through_json_matching_its_schema() -> Result<(), Box<dyn Error>>
+{
+    // Arrange
+    let usage = Usage {
+        input: 500,
+        ..Usage::default()
+    };
+    let cost = Cost::of(&usage, Pricing::new(2_000_000, 0));
+    let kinds = vec![
+        RunEventKind::ModelRequestCompleted {
+            cost: Some(cost),
+            usage,
+        },
+        RunEventKind::Completed(RunSummary {
+            cost: Some(cost),
+            error: None,
+            usage,
+        }),
+        RunEventKind::ModelRequestCompleted { cost: None, usage },
+    ];
+    let (sink, _stream) = EventSink::channel();
+    let events: Vec<RunEvent> = kinds
+        .into_iter()
+        .zip(0_u64..)
+        .map(|(kind, seq)| RunEvent {
+            at: UNIX_EPOCH,
+            kind,
+            run: sink.run.clone(),
+            seq,
+        })
+        .collect();
+    let validator = Validator::new(&serde_json::to_value(schemars::schema_for!(RunEvent))?)?;
+
+    // Act
+    let encoded = serde_json::to_value(&events)?;
+    let decoded: Vec<RunEvent> = serde_json::from_value(encoded.clone())?;
+
+    // Assert
+    assert_eq!(decoded, events);
+    for event in encoded.as_array().ok_or("an array of events")? {
+        assert!(validator.is_valid(event), "{event} matches the schema");
+    }
+    let priced = json!({"micro_usd": 1000, "pricing": "host"});
+    assert_eq!(encoded[0]["kind"]["cost"], priced);
+    assert_eq!(encoded[1]["kind"]["cost"], priced);
+    assert_eq!(encoded[2]["kind"]["cost"], json!(null));
 
     Ok(())
 }

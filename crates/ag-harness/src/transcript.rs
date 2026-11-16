@@ -24,6 +24,7 @@ use crate::model::{ModelErrorType, ModelMessage};
 use crate::run::{RunOutput, Usage};
 use crate::store::StoredTurn;
 use crate::tool::ToolCall;
+use crate::usage::Cost;
 
 /// Which settled turns a transcript returns, oldest first.
 ///
@@ -147,6 +148,9 @@ pub enum TurnStatus {
 #[derive(Clone, Debug, Deserialize, Eq, JsonSchema, PartialEq, Serialize)]
 #[non_exhaustive]
 pub struct TurnRecord {
+    /// Price of [`Self::usage`], or `None` when the usage is unknown or the
+    /// turn's model had no [`crate::catalog::Pricing`].
+    pub cost: Option<Cost>,
     /// Why a failed or cancelled turn stopped; `None` for a completed turn
     /// and for a turn interrupted because its owner stopped renewing it.
     pub error: Option<TurnFailure>,
@@ -181,8 +185,9 @@ pub struct TurnRecord {
     pub status: TurnStatus,
     /// Durable position of the turn within its session.
     pub turn: TurnIndex,
-    /// Tokens of the turn's model requests, when recorded: only turns run
-    /// with a host request ID keep their usage.
+    /// Tokens of the turn's completed model requests, also for a failed or
+    /// interrupted turn; `None` for a turn recorded before usage was stored,
+    /// or by a store that does not record it.
     pub usage: Option<Usage>,
 }
 
@@ -190,6 +195,7 @@ impl TurnRecord {
     /// Builds the transcript record of the settled `turn`.
     pub(crate) fn from_stored(turn: StoredTurn) -> Self {
         let mut record = Self {
+            cost: turn.usage.and_then(|usage| usage.cost),
             error: turn.error_type.as_deref().and_then(Self::stored_error),
             finished_at: turn.finished_at,
             input: Vec::new(),
@@ -198,10 +204,7 @@ impl TurnRecord {
             started_at: turn.started_at,
             status: turn.status,
             turn: TurnIndex::from_position(turn.position),
-            usage: turn
-                .outcome
-                .as_ref()
-                .map(|outcome| Usage::from_report(outcome.report())),
+            usage: turn.usage.map(|usage| usage.usage),
         };
         for message in turn.messages {
             record.push_message(message, turn.text_output);

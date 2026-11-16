@@ -11,6 +11,7 @@ use tokio::time::timeout_at;
 use crate::bash::{BashArguments, BashError};
 use crate::calibration::{Calibration, ContextCalibration};
 use crate::cancellation::TurnControl;
+use crate::catalog::Pricing;
 use crate::context::{ContextSummaryPolicy, FitStep, SentHistory};
 use crate::effect::Effects;
 use crate::event::{EventSink, Item, ItemId, ItemKind, RunEventKind, ToolCallItem};
@@ -39,6 +40,7 @@ use crate::turn::{
     ContextActivity, ModelRequestActivity, ModelRequestPurpose, ToolActivity, TurnError,
     TurnOptions, TurnOutcome, TurnReport, sanitize_report_text, sanitized_completion_metadata,
 };
+use crate::usage::{Cost, TurnUsage};
 use crate::write::{WriteError, WriteTool};
 use crate::{compaction, context, schema_contract};
 
@@ -85,6 +87,8 @@ pub(crate) struct Engine<'a> {
     pub(crate) model: &'a Arc<dyn Model>,
     pub(crate) model_reasoning_effort: Option<ReasoningEffort>,
     pub(crate) options: &'a TurnOptions,
+    /// Prices of the model, which give every request its cost.
+    pub(crate) pricing: Option<Pricing>,
     pub(crate) repository: Option<&'a Repository>,
 }
 
@@ -120,6 +124,7 @@ impl Engine<'_> {
             state: TurnState::new(
                 ToolRounds::new(tools, recorder),
                 context::ContextFit::new(shared_prefix_summaries),
+                self.pricing,
             ),
         };
         let deadline = self.options.limits().deadline();
@@ -150,8 +155,10 @@ impl Engine<'_> {
             }
             Err(error) => {
                 // Summary requests recorded before the failure still reach
-                // the stream, so its usage matches the outcome's.
-                self.publish_requests(&mut progress.state).await;
+                // the stream and the stored usage, so both match the
+                // outcome's. A store that cannot record the usage keeps what
+                // it recorded before; the turn reports its own failure.
+                let _ = self.publish_requests(&mut progress.state).await;
 
                 Err(EngineFailure {
                     error,
@@ -183,7 +190,7 @@ impl Engine<'_> {
         loop {
             // Summary requests and rejected outputs recorded since the last
             // round are published before the next request.
-            self.publish_requests(state).await;
+            self.publish_requests(state).await?;
             self.options
                 .limits()
                 .check_request(state.model_request_index, state.used_tokens())
@@ -250,7 +257,7 @@ impl Engine<'_> {
                 }
             };
             self.record_turn_request(state, activity, &sent);
-            self.publish_requests(state).await;
+            self.publish_requests(state).await?;
 
             let (calls, batched) = match response {
                 ModelResponse::Output(output) => {
@@ -682,18 +689,40 @@ impl Engine<'_> {
 
     /// Emits a [`RunEventKind::ModelRequestCompleted`] for every model
     /// request `state` recorded since the last call, so the events' usage
-    /// sums to the run outcome's.
-    async fn publish_requests(&self, state: &mut TurnState) {
-        if let Some(events) = &self.events {
-            for activity in &state.model_requests[state.published_requests..] {
-                let usage =
-                    Usage::from_request(activity.completion().and_then(CompletionMetadata::usage));
-                events
-                    .emit(RunEventKind::ModelRequestCompleted { usage })
-                    .await;
-            }
+    /// and cost sum to the run outcome's, then records the turn's usage so
+    /// far on its durable turn. The first call records it before any request
+    /// completes, so a turn stopped before its first response reads as zero
+    /// usage rather than unknown.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`TurnError::MessageJournal`] when the store cannot record
+    /// the usage.
+    async fn publish_requests(&self, state: &mut TurnState) -> Result<(), TurnError> {
+        let completed = state.model_requests.len();
+        if state.usage_recorded && state.published_requests == completed {
+            return Ok(());
         }
-        state.published_requests = state.model_requests.len();
+        for activity in &state.model_requests[state.published_requests..] {
+            let usage =
+                Usage::from_request(activity.completion().and_then(CompletionMetadata::usage));
+            let cost = self.pricing.map(|pricing| Cost::of(&usage, pricing));
+            state.usage = state.usage.add(usage, cost);
+            self.publish(RunEventKind::ModelRequestCompleted { usage, cost })
+                .await;
+        }
+        state.published_requests = completed;
+        state.usage_recorded = true;
+        let Some(recorder) = &state.rounds.recorder else {
+            return Ok(());
+        };
+
+        recorder
+            .record_usage(&state.usage)
+            .await
+            .map_err(|source| TurnError::MessageJournal {
+                source: Box::new(source),
+            })
     }
 
     /// Emits a [`RunEventKind::ContextReduced`] for a request sent with
@@ -1072,6 +1101,10 @@ struct TurnState {
     model_requests: Vec<ModelRequestActivity>,
     /// Leading [`Self::model_requests`] already published as run events.
     published_requests: usize,
+    /// Usage and cost of the published requests.
+    usage: TurnUsage,
+    /// Whether [`Self::usage`] was recorded at least once.
+    usage_recorded: bool,
     output_corrections: usize,
     consecutive_malformed_responses: usize,
     malformed_tool_calls: usize,
@@ -1082,13 +1115,16 @@ struct TurnState {
 }
 
 impl TurnState {
-    fn new(rounds: ToolRounds, context_fit: context::ContextFit) -> Self {
+    /// Starts the state of a turn whose model `pricing` prices its requests.
+    fn new(rounds: ToolRounds, context_fit: context::ContextFit, pricing: Option<Pricing>) -> Self {
         Self {
             rounds,
             context_fit,
             model_request_index: 0,
             model_requests: Vec::new(),
             published_requests: 0,
+            usage: TurnUsage::new(pricing),
+            usage_recorded: false,
             output_corrections: 0,
             consecutive_malformed_responses: 0,
             malformed_tool_calls: 0,

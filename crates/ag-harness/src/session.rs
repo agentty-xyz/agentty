@@ -30,6 +30,7 @@ use crate::store::{SessionStore, StoredTurn};
 use crate::tool::{MalformedArguments, ReadArguments, ToolCall, UnknownToolCall, WriteArguments};
 use crate::transcript::{TurnRange, TurnStatus};
 use crate::turn_options_snapshot::{StoredTurnOptions, StoredTurnOptionsError};
+use crate::usage::TurnUsage;
 use crate::write_journal::{WriteRecord, WriteStatus, content_hash};
 use crate::{OutputSchema, OutputSchemaError, TurnError, TurnOutcome};
 
@@ -169,6 +170,7 @@ struct TranscriptTurnRow {
     turn_options: Option<String>,
     turn_position: i64,
     updated_at: i64,
+    usage: Option<String>,
 }
 
 impl TranscriptTurnRow {
@@ -192,6 +194,7 @@ impl TranscriptTurnRow {
             .as_deref()
             .map(decode_terminal_outcome)
             .transpose()?;
+        let usage = self.usage.as_deref().map(deserialize_payload).transpose()?;
 
         Ok(StoredTurn::new(
             self.turn_position,
@@ -202,7 +205,8 @@ impl TranscriptTurnRow {
         )
         .with_error_type(self.error_type)
         .with_outcome(outcome)
-        .with_text_output(text_output))
+        .with_text_output(text_output)
+        .with_usage(usage))
     }
 }
 
@@ -932,6 +936,57 @@ impl SessionStore for Database {
             .commit()
             .await
             .session_context("fork persistent session")
+    }
+
+    async fn record_usage(&self, owner: &TurnOwner, usage: &TurnUsage) -> Result<(), SessionError> {
+        self.validate_owner(owner)?;
+        let usage = serialize_payload(usage)?;
+        let now = self.timestamp_source.now_timestamp_seconds();
+        let result = sqlx::query!(
+            r"
+UPDATE session_turn SET usage = ?
+WHERE session_id = ? AND turn_position = ? AND owner_token = ? AND status = 'running'
+  AND lease_expires_at > ?
+",
+            usage,
+            owner.session_id,
+            owner.turn_position,
+            owner.token,
+            now
+        )
+        .execute(&self.pool)
+        .await
+        .session_context("record persistent turn usage")?;
+        if result.rows_affected() == 0 {
+            return Err(owner.lost());
+        }
+
+        Ok(())
+    }
+
+    async fn load_usage(&self, session_id: &str) -> Result<Vec<Option<TurnUsage>>, SessionError> {
+        self.recover_stale_turns(session_id).await?;
+        let mut connection = self
+            .pool
+            .acquire()
+            .await
+            .session_context("load session usage")?;
+        require_session(&mut connection, session_id).await?;
+        let rows = sqlx::query_scalar!(
+            r"
+SELECT usage FROM session_turn
+WHERE session_id = ? AND status IN ('completed', 'failed', 'interrupted')
+ORDER BY turn_position
+",
+            session_id
+        )
+        .fetch_all(&mut *connection)
+        .await
+        .session_context("load session usage")?;
+
+        rows.iter()
+            .map(|usage| usage.as_deref().map(deserialize_payload).transpose())
+            .collect()
     }
 
     fn identity(&self) -> &StoreIdentity {
@@ -2194,7 +2249,7 @@ async fn load_transcript_from(
         r#"
 SELECT turn_position AS "turn_position!: i64", status AS "status!: String", error_type,
        turn_options, terminal_outcome, created_at AS "created_at!: i64",
-       updated_at AS "updated_at!: i64"
+       updated_at AS "updated_at!: i64", usage
 FROM session_turn
 WHERE session_id = ? AND status IN ('completed', 'failed', 'interrupted')
   AND turn_position >= ? AND turn_position < ?
@@ -2299,10 +2354,10 @@ ON CONFLICT(id) DO NOTHING
         r"
 INSERT INTO session_turn (
     session_id, turn_position, status, error_type, lease_expires_at, created_at, updated_at,
-    owner_token, turn_options, host_id, host_request, terminal_outcome, model_snapshot
+    owner_token, turn_options, host_id, host_request, terminal_outcome, model_snapshot, usage
 )
 SELECT ?, turn_position, status, error_type, lease_expires_at, created_at, updated_at,
-       owner_token, turn_options, host_id, host_request, terminal_outcome, model_snapshot
+       owner_token, turn_options, host_id, host_request, terminal_outcome, model_snapshot, usage
 FROM session_turn WHERE session_id = ? AND turn_position <= ?
 ",
         r"

@@ -1,5 +1,5 @@
 //! Sessions stored before the default output mode became optional keep
-//! working.
+//! working, and their turns from before migration 015 read as unknown usage.
 //!
 //! `tests/fixtures/session_v13.sqlite` was written by `ag-harness` at
 //! migration 13 (commit `1427a767`, before migration 014) with a scripted
@@ -19,7 +19,9 @@ use std::path::Path;
 use std::sync::{Arc, Mutex};
 
 use ag_harness::model::{ModelCompletion, ModelMessage, ModelRequest, ModelResponse};
-use ag_harness::{Harness, Model, ModelError, OutputMode, OutputSchema, RunOutput, RunRequest};
+use ag_harness::{
+    Harness, Model, ModelError, OutputMode, OutputSchema, RunOutput, RunRequest, TurnRange,
+};
 use async_trait::async_trait;
 use serde_json::json;
 use sqlx::{Connection, SqliteConnection};
@@ -89,7 +91,7 @@ async fn output_schema_required(path: &Path) -> Result<bool, Box<dyn Error>> {
 }
 
 #[tokio::test]
-async fn version_13_sessions_keep_their_schema_history_and_accept_text_runs()
+async fn version_13_sessions_keep_their_schema_history_and_accept_text_runs_with_usage()
 -> Result<(), Box<dyn Error>> {
     // Arrange
     let directory = tempdir()?;
@@ -117,11 +119,24 @@ async fn version_13_sessions_keep_their_schema_history_and_accept_text_runs()
         .await;
     let plain = harness.resume("legacy-plain").await?;
     let other = plain.run(RunRequest::new("again")).await;
+    let totals = legacy.usage().await?;
+    let transcript = legacy.transcript(TurnRange::All).await?;
     drop((legacy, plain));
     drop(harness);
 
     // Assert
     assert_eq!(migration_version(&database).await?, 15);
+    assert_eq!(
+        (totals.turns, totals.unknown_turns),
+        (5, 3),
+        "turns stored before usage was recorded read as unknown"
+    );
+    assert_eq!(totals.usage.unreported_requests, 2);
+    let usage: Vec<bool> = transcript
+        .iter()
+        .map(|record| record.usage.is_some())
+        .collect();
+    assert_eq!(usage, [false, false, false, true, true]);
     assert!(!output_schema_required(&database).await?);
     assert_eq!(
         structured.result?,

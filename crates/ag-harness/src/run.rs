@@ -1,6 +1,6 @@
 //! Run-level API: a [`RunRequest`] starts a cancellable [`Run`] that resolves
-//! to a [`RunOutcome`] with its output, aggregated [`Usage`], and the files
-//! and commands the run left.
+//! to a [`RunOutcome`] with its output, aggregated [`Usage`] and its
+//! [`Cost`], and the files and commands the run left.
 
 use std::fmt;
 use std::future::{Future, IntoFuture};
@@ -18,6 +18,7 @@ use crate::bash::{BashConfig, CommandRecord};
 use crate::cancellation::{
     ControlledTurn, SettlementError, SettlementPhase, TurnControl, TurnRecord,
 };
+use crate::catalog::Pricing;
 use crate::comparison::ComparisonBase;
 use crate::error::{ErrorKind, RunError};
 use crate::event::{EventSink, EventStream};
@@ -29,6 +30,7 @@ use crate::request_option::{GenerationParams, OutputMode};
 use crate::session::SessionError;
 use crate::store::SessionStore;
 use crate::turn::{TurnOptions, TurnReport};
+use crate::usage::Cost;
 use crate::write_journal::{WriteRecord, WriteStatus};
 
 /// Input and per-run options of one [`Run`], started with
@@ -265,6 +267,7 @@ impl Run {
         };
         let outcome = RunOutcome {
             commands,
+            cost: Cost::of_report(&report, journal.pricing),
             files_changed,
             records_error,
             result,
@@ -359,6 +362,10 @@ pub struct RunOutcome {
     /// Command records the run's `bash` tool calls left, in invocation
     /// order; empty unless the request configured `bash`.
     pub commands: Vec<CommandRecord>,
+    /// Price of [`Self::usage`], the sum of each model request's
+    /// [`Cost`], or `None` when the run's model has no
+    /// [`crate::catalog::Pricing`].
+    pub cost: Option<Cost>,
     /// Files the run's `write` tool calls targeted, in order, with each
     /// write's status: applied, failed, or never acknowledged.
     pub files_changed: Vec<FileChange>,
@@ -482,8 +489,9 @@ impl fmt::Debug for Unsettled {
 
 /// Provider-reported tokens, summed over a run's model requests.
 ///
-/// The counts overlap: `cache_read` is part of `input`, and `reasoning` is
-/// part of `output`. A count a provider omitted adds zero; a request whose
+/// The counts overlap: `cache_read` and a known `cache_write` are part of
+/// `input`, and `reasoning` is part of `output`; [`crate::Cost`] prices them
+/// accordingly. A count a provider omitted adds zero; a request whose
 /// provider reported no input or output count is counted in
 /// `unreported_requests`, so totals with unreported requests are lower
 /// bounds. Requests the provider rejected as exceeding its context window,
@@ -497,8 +505,8 @@ pub struct Usage {
     pub output: u64,
     /// Input tokens served from the provider's prompt cache.
     pub cache_read: u64,
-    /// Input tokens written to the provider's prompt cache, or `None` when
-    /// unknown; no supported provider reports them yet.
+    /// Input tokens written to the provider's prompt cache, part of `input`,
+    /// or `None` when unknown; no supported provider reports them yet.
     pub cache_write: Option<u64>,
     /// Reasoning tokens.
     pub reasoning: u64,
@@ -519,16 +527,26 @@ impl Usage {
                         .and_then(|completion| completion.usage()),
                 )
             })
-            .fold(Self::default(), |total, usage| Self {
-                input: total.input.saturating_add(usage.input),
-                output: total.output.saturating_add(usage.output),
-                cache_read: total.cache_read.saturating_add(usage.cache_read),
-                cache_write: None,
-                reasoning: total.reasoning.saturating_add(usage.reasoning),
-                unreported_requests: total
-                    .unreported_requests
-                    .saturating_add(usage.unreported_requests),
-            })
+            .fold(Self::default(), Self::saturating_add)
+    }
+
+    /// Adds `other` to these counts, saturating; `cache_write` stays known
+    /// only when both are known.
+    #[must_use]
+    pub(crate) fn saturating_add(self, other: Self) -> Self {
+        Self {
+            input: self.input.saturating_add(other.input),
+            output: self.output.saturating_add(other.output),
+            cache_read: self.cache_read.saturating_add(other.cache_read),
+            cache_write: self
+                .cache_write
+                .zip(other.cache_write)
+                .map(|(total, tokens)| total.saturating_add(tokens)),
+            reasoning: self.reasoning.saturating_add(other.reasoning),
+            unreported_requests: self
+                .unreported_requests
+                .saturating_add(other.unreported_requests),
+        }
     }
 
     /// Converts one request's provider usage, if it reported any.
@@ -552,6 +570,7 @@ impl Usage {
 /// turn answers in text.
 pub(crate) struct RunJournal {
     bash: bool,
+    pricing: Option<Pricing>,
     session_id: String,
     store: Arc<dyn SessionStore>,
     text: bool,
@@ -560,16 +579,19 @@ pub(crate) struct RunJournal {
 impl RunJournal {
     /// Locates records of `session_id` in `store`; command records are
     /// loaded only when `turn` configured `bash`, since stores without
-    /// command storage support no other run.
+    /// command storage support no other run. The run's model is priced
+    /// with `pricing`.
     pub(crate) fn new(
         store: Arc<dyn SessionStore>,
         session_id: String,
         turn: &Result<(TurnInput, TurnOptions), RunError>,
+        pricing: Option<Pricing>,
     ) -> Self {
         let options = turn.as_ref().ok().map(|(_, options)| options);
 
         Self {
             bash: options.is_some_and(|options| options.bash().is_some()),
+            pricing,
             session_id,
             store,
             text: options.is_some_and(|options| options.output() == &OutputMode::Text),

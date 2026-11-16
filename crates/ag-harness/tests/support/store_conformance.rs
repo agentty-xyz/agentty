@@ -12,7 +12,7 @@ use ag_harness::model::{ModelCompletion, ModelMessage, ModelRequest, ModelRespon
 use ag_harness::store::{
     AcquiredTurn, CompactionSource, HistoryProjection, HistoryTurn, MemoryStore, ModelSwitch,
     NewSession, SessionCheckpoint, SessionStore, SqliteStore, StoreIdentity, StoredTurnOptions,
-    TurnOwner, TurnStop, WriteStatus,
+    TurnOwner, TurnStop, TurnUsage, WriteStatus,
 };
 use ag_harness::tool::ToolCall;
 use ag_harness::transcript::TurnStatus;
@@ -153,7 +153,70 @@ async fn external_store_without_command_support_fails_closed() {
         store.reconcile_command(acquired.owner(), 1).await,
         Err(SessionError::InvalidData { .. })
     ));
+    store
+        .record_usage(acquired.owner(), &TurnUsage::new(None))
+        .await
+        .expect("a store without usage storage records nothing");
+    assert!(matches!(
+        store.load_usage("unsupported").await,
+        Err(SessionError::InvalidData { .. })
+    ));
     store.interrupt(acquired.owner()).await.expect("interrupt");
+}
+
+#[tokio::test]
+async fn backends_record_usage_only_under_a_live_owner() {
+    for store in stores().await.into_iter().skip(1) {
+        // Arrange
+        store
+            .create_session(&NewSession::new("usage", schema()), None, 1024)
+            .await
+            .expect("create");
+        let acquired = AcquiredTurn::begin(
+            Arc::clone(&store),
+            "usage",
+            &TurnInput::from("run"),
+            &options(),
+            0,
+        )
+        .await
+        .expect("owner");
+        let mut recorded = TurnUsage::new(None);
+        recorded.usage.input = 7;
+
+        // Act
+        store
+            .record_usage(acquired.owner(), &recorded)
+            .await
+            .expect("record usage");
+        let while_running = store.load_usage("usage").await.expect("load usage");
+        store
+            .complete_turn(acquired.owner(), &[], HistoryProjection::default())
+            .await
+            .expect("complete");
+        let after_completion = store
+            .record_usage(acquired.owner(), &TurnUsage::new(None))
+            .await;
+
+        // Assert
+        assert_eq!(
+            while_running,
+            Vec::<Option<TurnUsage>>::new(),
+            "a running turn is left out"
+        );
+        assert_eq!(
+            store.load_usage("usage").await.expect("load usage"),
+            [Some(recorded)]
+        );
+        assert!(matches!(
+            after_completion,
+            Err(SessionError::OwnershipLost { .. })
+        ));
+        assert!(matches!(
+            store.load_usage("missing").await,
+            Err(SessionError::NotFound { .. })
+        ));
+    }
 }
 
 #[tokio::test]

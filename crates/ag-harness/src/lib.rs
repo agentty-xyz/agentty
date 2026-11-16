@@ -43,13 +43,15 @@
 //!   cancellation through [`TurnControl`].
 //! - A [`Run`] is a turn started from a [`RunRequest`] with [`Session::run`] or
 //!   [`Harness::run`]. Awaiting it yields a settled [`RunOutcome`] with its
-//!   [`RunOutput`], aggregated [`Usage`], the run's [`FileChange`]s and
-//!   [`CommandRecord`]s, and its [`TurnReport`]; a [`CancelToken`] cancels it.
-//!   [`Run::into_parts`] also streams its ordered [`RunEvent`]s through an
-//!   [`EventStream`], ending with [`RunEventKind::Completed`].
+//!   [`RunOutput`], aggregated [`Usage`] and its [`Cost`] in micro-USD when the
+//!   model has prices, the run's [`FileChange`]s and [`CommandRecord`]s, and
+//!   its [`TurnReport`]; a [`CancelToken`] cancels it. [`Run::into_parts`] also
+//!   streams its ordered [`RunEvent`]s through an [`EventStream`], ending with
+//!   [`RunEventKind::Completed`].
 //! - `Session::transcript` reads settled turns as [`TurnRecord`]s for a
-//!   [`TurnRange`]; `Harness::fork` copies a session's turns through one index
-//!   into a new session with its own prompt-cache key.
+//!   [`TurnRange`], and `Session::usage` sums their recorded tokens and cost as
+//!   [`UsageTotals`]; `Harness::fork` copies a session's turns through one
+//!   index into a new session with its own prompt-cache key.
 //! - [`Tool`]s are denied until allowed with [`Harness::allow`] or a
 //!   [`ToolPolicy`].
 //! - [`RunError`] and [`HarnessError`] classify any [`TurnError`] or
@@ -144,6 +146,7 @@ mod trace;
 pub mod transcript;
 pub mod turn;
 mod turn_options_snapshot;
+mod usage;
 mod write;
 mod write_journal;
 
@@ -167,6 +170,7 @@ pub use session::SessionError;
 pub use tool::Tool;
 pub use transcript::{TurnRange, TurnRecord};
 pub use turn::{TurnControl, TurnError, TurnOptions, TurnOutcome, TurnReport};
+pub use usage::{Cost, UsageTotals};
 pub use write_journal::WriteStatus;
 
 /// Entry point for the matching trusted `ag-harness-sandbox` executable.

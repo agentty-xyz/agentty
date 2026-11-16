@@ -17,7 +17,7 @@ use tokio::sync::OnceCell;
 
 use crate::calibration::ContextCalibration;
 use crate::cancellation::{ControlledTurn, TurnControl};
-use crate::catalog::{CatalogError, ModelCatalog, ModelId, ModelSelector, Role};
+use crate::catalog::{CatalogError, ModelCatalog, ModelId, ModelSelector, Pricing, Role};
 use crate::compaction::{self, CompactionSource, MAX_SUMMARY_BYTES, SessionCheckpoint};
 use crate::context::{
     self, ContextBudget, ContextBudgetError, ContextEstimator, ContextSummaryPolicy,
@@ -46,6 +46,7 @@ use crate::store::{AcquiredTurn, SessionStore};
 use crate::tool::Tool;
 use crate::transcript::{TurnRange, TurnRecord};
 use crate::turn::{HistoryActivity, TurnError, TurnOptions, TurnOutcome};
+use crate::usage::UsageTotals;
 use crate::write_journal::WriteRecord;
 
 const DEFAULT_MAX_HISTORY_BYTES: usize = 256 * 1024;
@@ -104,6 +105,7 @@ impl Session {
         let config = self.harness.config_mut();
         config.model = registration.model();
         config.model_id = None;
+        config.pricing = None;
         config.context_budget = registration.context_budget();
         config.context_calibration = ContextCalibration::default();
         config.context_estimator = Arc::new(registration.capabilities().profile.estimator());
@@ -298,6 +300,25 @@ impl Session {
         Ok(turns.into_iter().map(TurnRecord::from_stored).collect())
     }
 
+    /// Returns the tokens and cost summed over every settled turn: completed,
+    /// failed, including turns stopped by a run limit, and interrupted ones,
+    /// never a turn still running.
+    ///
+    /// Each turn's usage is recorded as its model requests complete, so a
+    /// stopped turn keeps the usage of its completed requests. Turns recorded
+    /// before usage was stored count as [`UsageTotals::unknown_turns`].
+    ///
+    /// # Errors
+    ///
+    /// Returns an [`crate::ErrorKind::NotFound`] failure for a missing
+    /// session, and an [`crate::ErrorKind::Store`] failure when the store
+    /// cannot load the usage or does not support it.
+    pub async fn usage(&self) -> Result<UsageTotals, HarnessError> {
+        let turns = self.database.load_usage(&self.id).await?;
+
+        Ok(UsageTotals::from_turns(&turns))
+    }
+
     /// Runs one turn with the session defaults and records it durably.
     ///
     /// Plain strings are text input; use [`TurnInput`] for ordered text and
@@ -338,7 +359,12 @@ impl Session {
     /// session history that later runs and turns replay.
     pub fn run(&self, request: RunRequest) -> Run {
         let turn = request.into_turn(Some(&self.output), self.harness.inner.policy);
-        let journal = RunJournal::new(Arc::clone(&self.database), self.id.clone(), &turn);
+        let journal = RunJournal::new(
+            Arc::clone(&self.database),
+            self.id.clone(),
+            &turn,
+            self.harness.inner.pricing,
+        );
         let mut session = self.detached();
 
         Run::new(
@@ -1021,6 +1047,7 @@ impl Harness {
             model_reasoning_effort: None,
             model_selector: None,
             policy: ToolPolicy::default(),
+            pricing: None,
             repository: None,
             storage: None,
         }
@@ -1219,7 +1246,7 @@ impl Harness {
         let turn = request.into_turn(None, self.inner.policy);
         let store: Arc<dyn SessionStore> = Arc::new(MemoryStore::new());
         let id = Self::turn_cache_key();
-        let journal = RunJournal::new(Arc::clone(&store), id.clone(), &turn);
+        let journal = RunJournal::new(Arc::clone(&store), id.clone(), &turn, self.inner.pricing);
         // Nothing replays the single turn, so no history budget applies.
         let harness = self
             .clone()
@@ -1597,6 +1624,7 @@ impl Harness {
             model: &config.model,
             model_reasoning_effort: config.model_reasoning_effort,
             options,
+            pricing: config.pricing,
             repository: config.repository.as_ref(),
         }
     }
@@ -1624,6 +1652,7 @@ pub struct HarnessBuilder {
     model_reasoning_effort: Option<ReasoningEffort>,
     model_selector: Option<ModelSelector>,
     policy: ToolPolicy,
+    pricing: Option<Pricing>,
     repository: Option<Repository>,
     storage: Option<StorageSource>,
 }
@@ -1656,6 +1685,21 @@ impl HarnessBuilder {
     /// fails without a catalog or together with an explicit [`Self::model`].
     pub fn model_selector(mut self, selector: impl Into<ModelSelector>) -> Self {
         self.model_selector = Some(selector.into());
+
+        self
+    }
+
+    /// Prices the model's tokens with `pricing`, overriding the prices of
+    /// the model's [`Self::catalog`] entry, and keeping `pricing`'s
+    /// [`crate::catalog::PricingSource`].
+    ///
+    /// Runs report a [`crate::Cost`] only when the model has prices: from
+    /// this setter or from its catalog entry, such as the built-in list
+    /// prices of [`ModelCatalog::from_environment`]. A model supplied with
+    /// [`Self::model`] and no prices, or one switched to later with
+    /// [`Session::switch_model`], reports none.
+    pub fn pricing(mut self, pricing: Pricing) -> Self {
+        self.pricing = Some(pricing);
 
         self
     }
@@ -1768,26 +1812,32 @@ impl HarnessBuilder {
     /// Returns a [`HarnessError`] of kind [`crate::ErrorKind::Config`]
     /// wrapping the failed [`HarnessBuildError`] check.
     pub fn build(self) -> Result<Harness, HarnessError> {
-        let (model, profile, model_id) = match (self.model, self.catalog, self.model_selector) {
-            (Some(_), _, Some(_)) => {
-                return Err(HarnessBuildError::ConflictingModelSelection.into());
-            }
-            (Some(model), _, None) => {
-                let profile = model.profile();
+        let (model, profile, model_id, cataloged_pricing) =
+            match (self.model, self.catalog, self.model_selector) {
+                (Some(_), _, Some(_)) => {
+                    return Err(HarnessBuildError::ConflictingModelSelection.into());
+                }
+                (Some(model), _, None) => {
+                    let profile = model.profile();
 
-                (model, profile, None)
-            }
-            (None, Some(catalog), selector) => {
-                let selector = selector.unwrap_or(ModelSelector::Role(Role::SMART));
-                let handle = catalog
-                    .resolve(&selector)
-                    .map_err(HarnessBuildError::Catalog)?;
+                    (model, profile, None, None)
+                }
+                (None, Some(catalog), selector) => {
+                    let selector = selector.unwrap_or(ModelSelector::Role(Role::SMART));
+                    let handle = catalog
+                        .resolve(&selector)
+                        .map_err(HarnessBuildError::Catalog)?;
 
-                (handle.model(), handle.profile(), Some(handle.id().clone()))
-            }
-            (None, None, Some(_)) => return Err(HarnessBuildError::CatalogRequired.into()),
-            (None, None, None) => return Err(HarnessBuildError::ModelRequired.into()),
-        };
+                    (
+                        handle.model(),
+                        handle.profile(),
+                        Some(handle.id().clone()),
+                        handle.spec().pricing(),
+                    )
+                }
+                (None, None, Some(_)) => return Err(HarnessBuildError::CatalogRequired.into()),
+                (None, None, None) => return Err(HarnessBuildError::ModelRequired.into()),
+            };
         let repository_tool_allowed = [Tool::Bash, Tool::Read, Tool::Write]
             .into_iter()
             .any(|tool| self.policy.allows(tool));
@@ -1817,6 +1867,7 @@ impl HarnessBuilder {
         config.model_id = model_id;
         config.model_reasoning_effort = self.model_reasoning_effort;
         config.policy = self.policy;
+        config.pricing = self.pricing.or(cataloged_pricing);
         config.repository = self.repository;
 
         Ok(Harness::from_config(config))
@@ -1903,6 +1954,9 @@ struct HarnessConfig {
     model_reasoning_effort: Option<ReasoningEffort>,
     model_registration: Option<ModelRegistration>,
     policy: ToolPolicy,
+    /// Prices of [`Self::model`], from [`HarnessBuilder::pricing`] or the
+    /// catalog entry the builder selected.
+    pricing: Option<Pricing>,
     repository: Option<Repository>,
     store: Option<Arc<dyn SessionStore>>,
 }
@@ -1927,6 +1981,7 @@ impl HarnessConfig {
             model_reasoning_effort: None,
             model_registration: None,
             policy: ToolPolicy::default(),
+            pricing: None,
             repository: None,
             store: None,
         }

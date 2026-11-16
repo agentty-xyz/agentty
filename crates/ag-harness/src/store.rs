@@ -31,6 +31,7 @@ pub use crate::session_model::RecordedModel;
 use crate::transcript::{TurnRange, TurnStatus};
 use crate::turn::{TurnError, TurnOutcome};
 pub use crate::turn_options_snapshot::{StoredTurnOptions, StoredTurnOptionsError};
+pub use crate::usage::TurnUsage;
 pub use crate::write_journal::{WriteRecord, WriteStatus};
 
 /// Stores supply atomic record operations; the harness applies admission
@@ -126,6 +127,31 @@ pub trait SessionStore: Send + Sync {
     ) -> Result<(), SessionError> {
         Err(SessionError::InvalidData {
             reason: "session forking unsupported".into(),
+        })
+    }
+
+    /// Replaces the running turn's recorded usage with `usage` under an
+    /// unexpired owner, as [`Self::append_messages`] validates it. The
+    /// harness records a turn's usage when it starts and after each model
+    /// request completes, so a failed or interrupted turn keeps the usage of
+    /// its completed requests. Keep the recorded usage when the turn
+    /// settles, and copy it with forked turns. The default records nothing,
+    /// so such a store's turns read as unknown usage.
+    async fn record_usage(
+        &self,
+        _owner: &TurnOwner,
+        _usage: &TurnUsage,
+    ) -> Result<(), SessionError> {
+        Ok(())
+    }
+
+    /// Returns the recorded usage of every settled turn, oldest first,
+    /// `None` for a turn without recorded usage. Recover expired turns
+    /// first; never include a running turn. Missing sessions return
+    /// `NotFound`; unsupported stores fail closed.
+    async fn load_usage(&self, _session_id: &str) -> Result<Vec<Option<TurnUsage>>, SessionError> {
+        Err(SessionError::InvalidData {
+            reason: "usage storage unsupported".into(),
         })
     }
 
@@ -308,12 +334,15 @@ pub struct StoredTurn {
     /// [`StoredTurnOptions::text_output`] reports; `false` for a turn
     /// recorded without an options snapshot.
     pub text_output: bool,
+    /// Usage last recorded with [`SessionStore::record_usage`], or `None`
+    /// when none was recorded.
+    pub usage: Option<TurnUsage>,
 }
 
 impl StoredTurn {
     /// Returns the turn at `position`, admitted at `started_at` and settled
     /// with `status` at `finished_at`, holding `messages`, without error
-    /// classification or outcome, in JSON output mode.
+    /// classification, outcome, or usage, in JSON output mode.
     pub fn new(
         position: i64,
         status: TurnStatus,
@@ -330,6 +359,7 @@ impl StoredTurn {
             started_at,
             status,
             text_output: false,
+            usage: None,
         }
     }
 
@@ -353,6 +383,14 @@ impl StoredTurn {
     #[must_use]
     pub fn with_text_output(mut self, text_output: bool) -> Self {
         self.text_output = text_output;
+
+        self
+    }
+
+    /// Sets the turn's recorded usage.
+    #[must_use]
+    pub fn with_usage(mut self, usage: Option<TurnUsage>) -> Self {
+        self.usage = usage;
 
         self
     }

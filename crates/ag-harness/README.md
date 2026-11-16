@@ -99,14 +99,18 @@ let retry = harness
 `Session::transcript` returns settled turns as serializable `TurnRecord`s: status, the
 `ErrorKind` a failed or cancelled turn stopped with, input, per-run instructions, the
 same `event::Item`s live runs emit (tool calls report `answered` or `unanswered`), the
-final output, timestamps, and usage for turns run with a host request ID. `TurnRange`
-selects all turns, the newest N, or an index span, and only those turns are read;
-history the replay budget leaves out is still included. `Harness::fork` copies a
-session's settled turns through one index, with their write, command, and host request
-records, into a new session that keeps the source's output mode, system prompt, and
-model. The fork's own ID gives it its own prompt-cache key, and the source is unchanged.
-If the fork cannot be resumed with the harness's model, it stays stored; resume it with
-a matching harness.
+final output, timestamps, and usage and cost. `TurnRange` selects all turns, the newest
+N, or an index span, and only those turns are read; history the replay budget leaves out
+is still included. `Harness::fork` copies a session's settled turns through one index,
+with their write, command, and host request records, into a new session that keeps the
+source's output mode, system prompt, and model. The fork's own ID gives it its own
+prompt-cache key, and the source is unchanged. If the fork cannot be resumed with the
+harness's model, it stays stored; resume it with a matching harness.
+
+`Session::usage` sums the tokens and cost of every settled turn into `UsageTotals`. Each
+turn records its usage as its model requests complete, so failed, limit-stopped, and
+interrupted turns keep the usage of their completed requests. Turns stored before usage
+was recorded count as `unknown_turns`, never as zero.
 
 ## Turns
 
@@ -141,10 +145,10 @@ let outcome = session
   `harness.run(RunRequest)` return a `Run`; awaiting it yields a `RunOutcome` only after
   persistence, writes, and commands settle (cleanup is retried once). The outcome
   carries `result` (`RunOutput` with `parse::<T>()`, or a `RunError`), `usage` summed
-  over every model request the run completed, even when it failed or was cancelled, the
-  run's `files_changed` and `commands`, and its `report`. Cleanup that still fails is
-  reported in `settlement`, whose `Unsettled::retry()` readmits the session; it never
-  replaces `result`. A cloneable `CancelToken` from `run.cancel_token()`, or
+  over every model request the run completed, even when it failed or was cancelled, its
+  `cost`, the run's `files_changed` and `commands`, and its `report`. Cleanup that still
+  fails is reported in `settlement`, whose `Unsettled::retry()` readmits the session; it
+  never replaces `result`. A cloneable `CancelToken` from `run.cancel_token()`, or
   `into_handle()`, cancels it from any task. `harness.run` keeps its single turn in a
   fresh in-memory session and requires `RunRequest::output`.
 - **Run options apply to one run.** `RunRequest::output` selects an `OutputMode` (a JSON
@@ -168,18 +172,28 @@ let outcome = session
   overshoot. Tokens count cached input in full, and requests without reported usage
   count as zero. Wall time starts once the session admits the run and also stops a
   pending request or tool call; a stopped tool call leaves its turn interrupted.
+- **Runs report cost in micro-USD.** A `Cost` is integer micro-USD with its
+  `catalog::PricingSource`, from the model's `Pricing`: the catalog entry's list prices,
+  `CatalogBuilder::pricing`, or `HarnessBuilder::pricing` for any model. `Usage` counts
+  overlap: `cache_read` is part of `input` and `reasoning` part of `output`. Uncached
+  input, cached input, and output bill at their own prices, and cached input falls back
+  to the input price when no cache price is declared, as built-in prices do not yet.
+  Each request's exact cost rounds to the nearest micro-USD, halves up, and sums
+  saturate at `u64::MAX`. Models without prices, such as unpriced host models,
+  OpenAI-compatible servers, and plan-billed ChatGPT models, report no cost.
 - **Runs stream typed events.** `run.into_parts()` returns an `EventStream` (a
   `futures::Stream` of `RunEvent`) and a `RunHandle`. Each event has the run ID, a
   gap-free `seq`, and a timestamp in Unix milliseconds. Events report the admitted turn
   with its session, turn index, and catalog model ID, assistant text, reasoning, tool
-  calls with their arguments and results, per-request usage, context reductions, and a
-  successful run's committed `Output` item. `Completed` is always the last event, also
-  after a failure or cancellation; items still open then were interrupted. Delivery is
-  lossless: the run waits while the stream is full, so read it while awaiting the
-  outcome. Cancelling still resolves a run whose stream is full. Dropping the stream
-  discards events without stalling the run. Events carry session content, so never
-  export them as telemetry. Every type derives `serde` and `schemars::JsonSchema`; the
-  schema is committed in `crates/ag-harness/schema/run_event.json`.
+  calls with their arguments and results, per-request usage and cost, context
+  reductions, and a successful run's committed `Output` item. `Completed` is always the
+  last event, also after a failure or cancellation; items still open then were
+  interrupted. Delivery is lossless: the run waits while the stream is full, so read it
+  while awaiting the outcome. Cancelling still resolves a run whose stream is full.
+  Dropping the stream discards events without stalling the run. Events carry session
+  content, so never export them as telemetry. Every type derives `serde` and
+  `schemars::JsonSchema`; the schema is committed in
+  `crates/ag-harness/schema/run_event.json`.
 - **Turns have no tool-call limit.** Cancellation and the `ContextBudget` bound a turn.
   Within a turn, requests only append, so they share one cached prefix, until tool
   traffic grows a request past the budget. That request is sent as a reduced copy
@@ -544,9 +558,10 @@ atomic record operations: `reserve_turn` and `switch_model` read an `AdmissionSt
 record the decision from `TurnAdmission::admit` or `ModelSwitch::admit`, while the
 harness owns the admission rules and every lease. `complete_turn` also hands the store
 the session's `store::HistoryProjection`, which later loads apply and a model switch
-resets. `load_transcript` and `fork_session` back transcripts and forks; a store that
-does not implement them fails those calls closed. The shared conformance suite is in
-`tests/support/store_conformance.rs`.
+resets. `load_transcript` and `fork_session` back transcripts and forks, and
+`record_usage` and `load_usage` back per-turn usage; a store that does not implement
+them fails those calls closed, except that its turns record no usage. The shared
+conformance suite is in `tests/support/store_conformance.rs`.
 
 ## Observability
 

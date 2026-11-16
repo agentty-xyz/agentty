@@ -72,6 +72,10 @@ mod legacy_store_test;
 #[path = "support/transcript.rs"]
 mod transcript_test;
 
+#[cfg(test)]
+#[path = "support/run_cost.rs"]
+mod run_cost_test;
+
 use std::error::Error;
 use std::ffi::OsString;
 use std::io::{self, Cursor};

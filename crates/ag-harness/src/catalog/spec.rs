@@ -173,7 +173,10 @@ impl fmt::Display for Capabilities {
 }
 
 /// Where a [`Pricing`] came from.
-#[derive(Clone, Copy, Debug, Eq, Hash, PartialEq)]
+///
+/// On the wire it is `built_in` or `host`.
+#[derive(Clone, Copy, Debug, Deserialize, Eq, Hash, JsonSchema, PartialEq, Serialize)]
+#[serde(rename_all = "snake_case")]
 #[non_exhaustive]
 pub enum PricingSource {
     /// The harness's built-in list prices, as the providers published them
@@ -185,13 +188,14 @@ pub enum PricingSource {
 
 /// Token prices of one model in integer micro-USD per million tokens.
 ///
-/// Integer micro-USD keep cost arithmetic exact. Cached input bills at
+/// Integer micro-USD keep cost arithmetic exact; [`crate::Cost::of`] prices
+/// a [`crate::Usage`] with them. Cached input bills at
 /// [`Self::cache_read_per_mtok_micro_usd`] and cache creation at
 /// [`Self::cache_write_per_mtok_micro_usd`]; without a declared cache price,
 /// both fall back to the input price. Built-in prices do not model cache
 /// discounts yet, so they overstate cached input for providers that publish
 /// one; a host can declare those prices through
-/// [`super::CatalogBuilder::pricing`].
+/// [`super::CatalogBuilder::pricing`] or [`crate::HarnessBuilder::pricing`].
 ///
 /// Changing a cache price marks the prices [`PricingSource::Host`].
 #[derive(Clone, Copy, Debug, Eq, Hash, PartialEq)]
