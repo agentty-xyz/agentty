@@ -10,7 +10,8 @@ use crate::chat_completion::{
 use crate::credential::BearerCredential;
 use crate::http::HttpTransport;
 use crate::model::{
-    Completion, GeneratedResponse, ModelError, ModelErrorType, ModelRequest, ReasoningEffort,
+    Completion, GeneratedResponse, GenerationOptions, ModelError, ModelErrorType, ModelRequest,
+    ReasoningEffort,
 };
 use crate::responses::{self, ResponsesBackend, ResponsesProviderPolicy};
 use crate::{OutputSchema, TurnInput, ensure_content_size};
@@ -134,6 +135,20 @@ impl Router {
         self.backend(model)?.validate_input(input)
     }
 
+    /// Validates whether the selected model accepts the generation
+    /// settings, such as the output-token bound, before any request.
+    ///
+    /// # Errors
+    /// Returns a routing error, or [`ModelError::UnsupportedGeneration`]
+    /// for settings the provider rejects.
+    pub fn validate_generation(
+        &self,
+        model: &str,
+        options: &GenerationOptions,
+    ) -> Result<(), ModelError> {
+        self.backend(model)?.validate_generation(options)
+    }
+
     /// Returns whether the selected model is asked for structured output by
     /// a leading prompt message stating the schema, so a request carrying
     /// [`crate::GenerationOptions::prefix_schema`] keeps the cached prefix of
@@ -148,10 +163,11 @@ impl Router {
     }
 
     /// Executes one request and validates terminal JSON against its schema;
-    /// a request without a schema returns bounded terminal text.
+    /// a request without a schema returns bounded, nonblank terminal text.
     ///
     /// # Errors
-    /// Returns a routing, transport, decoding, or output validation error.
+    /// Returns a routing, transport, decoding, or output validation error;
+    /// a blank text answer fails as [`ModelError::InvalidResponse`].
     pub async fn execute(&self, request: ModelRequest) -> Result<Completion, ModelError> {
         let (_, config, _) = self.route(&request.model)?;
         let bearer = match &config.credential {
@@ -170,6 +186,11 @@ impl Router {
             } => {
                 let invalid = |error| ModelError::from(error).with_metadata(metadata.clone());
                 let Some(schema) = request.schema() else {
+                    // An empty answer, such as a thinking model spending its
+                    // whole output on reasoning, is no answer.
+                    if output.trim().is_empty() {
+                        return Err(ModelError::InvalidResponse.with_metadata(metadata.clone()));
+                    }
                     ensure_content_size(&output).map_err(invalid)?;
 
                     return Ok(Completion::Text {
@@ -286,6 +307,15 @@ impl Backend {
         }
     }
 
+    /// Validates generation settings; Chat Completions providers accept any
+    /// positive output-token bound.
+    fn validate_generation(&self, options: &GenerationOptions) -> Result<(), ModelError> {
+        match self {
+            Self::ChatCompletion(_) => Ok(()),
+            Self::Responses(backend) => backend.validate_generation(options),
+        }
+    }
+
     /// Returns whether the schema is stated in a leading prompt message; the
     /// Responses API constrains output natively.
     fn keeps_prefix_across_schemas(&self) -> bool {
@@ -385,8 +415,8 @@ fn policy(provider: Provider, model: &str) -> ProviderPolicy {
             unsupported_schema_reason: "Muse structured output requires an explicit object root \
                                         schema",
         }),
-        Provider::ChatGpt => openai_responses_policy("ChatGPT plan", model),
-        Provider::OpenAi => openai_responses_policy("OpenAI", model),
+        Provider::ChatGpt => openai_responses_policy("ChatGPT plan", false, model),
+        Provider::OpenAi => openai_responses_policy("OpenAI", true, model),
         Provider::OpenAiCompatible => {
             ProviderPolicy::ChatCompletion(ChatCompletionProviderPolicy {
                 context_overflow_markers: &[LLAMA_CPP_CONTEXT_OVERFLOW],
@@ -435,10 +465,15 @@ fn policy(provider: Provider, model: &str) -> ProviderPolicy {
 
 /// Responses API policy shared by the `OpenAI` models, reached with an API key
 /// or billed to a `ChatGPT` plan.
-fn openai_responses_policy(display_name: &'static str, model: &str) -> ProviderPolicy {
+fn openai_responses_policy(
+    display_name: &'static str,
+    max_output_tokens: bool,
+    model: &str,
+) -> ProviderPolicy {
     ProviderPolicy::Responses(ResponsesProviderPolicy {
         context_overflow_markers: &[OPENAI_CONTEXT_OVERFLOW],
         display_name,
+        max_output_tokens,
         reasoning_effort: if OPENAI_MAX_EFFORT_PREFIXES
             .iter()
             .any(|prefix| model.starts_with(prefix))

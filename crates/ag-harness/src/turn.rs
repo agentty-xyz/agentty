@@ -62,9 +62,12 @@ impl TurnOptions {
     ///
     /// They follow the turn's input, after the system prompt and replayed
     /// history, so changing them between turns keeps that prefix cacheable.
-    /// They are journaled with the turn and replayed with it later, like its
-    /// input. Built-in providers send them as a `developer` message to the
-    /// Responses API and as a marked user message to Chat Completions.
+    /// Every model request of the turn carries them, and they are journaled
+    /// with the turn, but later turns replay its history without them, so
+    /// they never steer another turn. Built-in providers send them as a
+    /// `developer` message to the Responses API and append them, marked as
+    /// the application's, to the user message they follow on Chat
+    /// Completions.
     #[must_use]
     pub fn with_instructions(mut self, instructions: impl Into<String>) -> Self {
         self.instructions = Some(instructions.into());

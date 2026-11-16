@@ -19,9 +19,10 @@ use crate::model::{
     MockModel, Model, ModelCompletion, ModelError, ModelMessage, ModelRequest, ModelResponse,
     ReasoningEffort,
 };
-use crate::tool::{ToolCall, ToolDefinition};
+use crate::request_option::OutputMode;
+use crate::tool::{ReadArguments, ToolCall, ToolDefinition};
 use crate::turn::{ModelRequestActivity, TurnError};
-use crate::{OutputSchema, ToolPolicy, TurnOptions};
+use crate::{OutputSchema, ToolPolicy, TurnOptions, schema_contract};
 
 fn object_schema() -> OutputSchema {
     OutputSchema::new(json!({"type": "object"})).expect("valid schema")
@@ -118,6 +119,47 @@ async fn run_scripted(
     let requests = requests.lock().expect("requests lock").clone();
 
     (outcome, requests)
+}
+
+#[test]
+fn final_answers_must_match_the_requests_output_mode() {
+    // Arrange
+    let json_request = ModelRequest::new("reply", object_schema());
+    let text_request = ModelRequest::new("reply", OutputMode::Text);
+    let oversized = "a".repeat(schema_contract::RESPONSE_CONTENT_LIMIT_BYTES + 1);
+    let call = ToolCall::read(
+        "call-1".to_string(),
+        serde_json::from_value::<ReadArguments>(json!({"path": "README.md"}))
+            .expect("read arguments"),
+        None,
+    );
+    let cases = [
+        (&json_request, ModelResponse::Output(json!({})), true),
+        (&json_request, ModelResponse::Output(json!("plain")), false),
+        (
+            &json_request,
+            ModelResponse::Text("plain".to_string()),
+            false,
+        ),
+        (&json_request, ModelResponse::ToolCall(call.clone()), true),
+        (
+            &text_request,
+            ModelResponse::Text("plain".to_string()),
+            true,
+        ),
+        (&text_request, ModelResponse::Text(" \n".to_string()), false),
+        (&text_request, ModelResponse::Text(oversized), false),
+        (&text_request, ModelResponse::Output(json!("plain")), false),
+        (&text_request, ModelResponse::ToolCalls(vec![call]), true),
+    ];
+
+    for (request, response, valid) in cases {
+        // Act
+        let result = Engine::validate_output(request, &response);
+
+        // Assert
+        assert_eq!(result.is_ok(), valid, "{response:?}");
+    }
 }
 
 fn invalid_json() -> ModelError {

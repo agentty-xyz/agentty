@@ -4,13 +4,23 @@
 
 use std::num::NonZeroU32;
 
+use serde::{Deserialize, Serialize};
+
 use crate::model::{Model, ModelError};
 use crate::schema_contract::OutputSchema;
 
 /// Form of a turn's final answer.
 ///
 /// A session stores one mode as its default; a run or turn may select
-/// another without changing it.
+/// another without changing it. Providers that state the output schema in a
+/// leading prompt message (Kimi, Qwen, and OpenAI-compatible servers) change
+/// that message when a run selects a mode other than the session default, so
+/// such a run, and the next run in the default mode, miss the cached prompt
+/// prefix; providers that constrain output natively keep it.
+///
+/// Sessions store a [`Self::Json`] default as its schema and a [`Self::Text`]
+/// default as no schema, so a further variant needs a store migration and a
+/// new turn-options snapshot version.
 #[derive(Clone, Debug, Eq, PartialEq)]
 #[non_exhaustive]
 pub enum OutputMode {
@@ -19,7 +29,7 @@ pub enum OutputMode {
     Json(OutputSchema),
     /// Plain assistant text, returned as [`crate::RunOutput::Text`]. The
     /// model must support it (see [`crate::Model::supports_text_output`]);
-    /// otherwise the turn fails with an unsupported-output error.
+    /// otherwise the turn fails with [`ModelError::UnsupportedOutputMode`].
     Text,
 }
 
@@ -37,33 +47,34 @@ impl OutputMode {
     ///
     /// # Errors
     /// Returns the model's schema rejection, or
-    /// [`ModelError::UnsupportedOutputSchema`] for text output the model
-    /// does not support.
+    /// [`ModelError::UnsupportedOutputMode`] for text output the model does
+    /// not support.
     pub(crate) fn check_model(&self, model: &dyn Model) -> Result<(), ModelError> {
         match self {
             Self::Json(schema) => model.validate_schema(schema),
-            Self::Text => Self::check_text(model),
+            Self::Text => Self::require_text_support(model),
         }
     }
 
-    /// Checks that `model` supports text output when this mode asks for it.
+    /// Checks only that `model` supports text output when this mode asks for
+    /// it; a JSON mode passes without validating its schema.
     ///
     /// # Errors
-    /// Returns [`ModelError::UnsupportedOutputSchema`] for text output the
+    /// Returns [`ModelError::UnsupportedOutputMode`] for text output the
     /// model does not support.
-    pub(crate) fn check_text_support(&self, model: &dyn Model) -> Result<(), ModelError> {
+    pub(crate) fn require_text_support_if_text(&self, model: &dyn Model) -> Result<(), ModelError> {
         match self {
             Self::Json(_) => Ok(()),
-            Self::Text => Self::check_text(model),
+            Self::Text => Self::require_text_support(model),
         }
     }
 
-    fn check_text(model: &dyn Model) -> Result<(), ModelError> {
+    fn require_text_support(model: &dyn Model) -> Result<(), ModelError> {
         if model.supports_text_output() {
             return Ok(());
         }
 
-        Err(ModelError::UnsupportedOutputSchema {
+        Err(ModelError::UnsupportedOutputMode {
             reason: "model does not support plain-text output".to_string(),
         })
     }
@@ -77,14 +88,20 @@ impl From<OutputSchema> for OutputMode {
 
 /// Provider generation settings for one turn's model requests.
 ///
-/// Every unset parameter keeps the provider's default.
-#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
+/// Every unset parameter keeps the provider's default. Turn-options
+/// snapshots and host-request fingerprints record the set parameters as one
+/// object, so a later parameter needs no format change.
+#[derive(Clone, Copy, Debug, Default, Deserialize, Eq, PartialEq, Serialize)]
 #[non_exhaustive]
 pub struct GenerationParams {
     /// Upper bound on the tokens each model request generates, reasoning
     /// included. Built-in providers send it as `max_output_tokens` to the
     /// Responses API and as `max_tokens` or `max_completion_tokens` to Chat
-    /// Completions; a response the bound cuts short fails as incomplete.
+    /// Completions; a response the bound cuts short fails as incomplete. A
+    /// provider that rejects the bound, such as the ChatGPT-plan backend or
+    /// the Responses API below 16 tokens, fails the turn before execution
+    /// with [`ModelError::UnsupportedGeneration`].
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub max_output_tokens: Option<NonZeroU32>,
 }
 
@@ -96,4 +113,13 @@ impl GenerationParams {
 
         self
     }
+
+    /// Returns whether every parameter keeps the provider's default.
+    pub(crate) fn is_default(self) -> bool {
+        self == Self::default()
+    }
 }
+
+#[cfg(test)]
+#[path = "request_option_test.rs"]
+mod tests;

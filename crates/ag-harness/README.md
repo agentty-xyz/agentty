@@ -127,11 +127,13 @@ let outcome = session
   schema, or `Text` for a `RunOutput::Text` answer) over the session's stored default;
   `Harness::session` accepts either as that default. `RunRequest::instructions` adds
   host instructions after the system prompt and replayed history, so the cached prefix
-  survives changing them; they are stored with the turn and replayed with it.
+  survives changing them; they are stored with the turn but not replayed to later runs.
   `RunRequest::generation` sends `GenerationParams`, such as `max_output_tokens`, to the
   provider. Text output needs a model whose `Model::supports_text_output` holds
-  (`ModelClient` does); otherwise the run fails with `ErrorKind::Config` before any
-  request.
+  (`ModelClient` does), and a bound must suit the provider (the ChatGPT plan takes none,
+  the OpenAI API at least 16); otherwise the run fails with `ErrorKind::Config` before
+  any request. Providers that state the schema in a leading prompt message (Kimi, Qwen,
+  OpenAI-compatible) miss the cached prefix when a run changes the output mode.
 - **Runs stream typed events.** `run.into_parts()` returns an `EventStream` (a
   `futures::Stream` of `RunEvent`) and a `RunHandle`. Each event has the run ID, a
   gap-free `seq`, and a timestamp in Unix milliseconds. Events report the admitted turn

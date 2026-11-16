@@ -151,6 +151,31 @@ fn mandatory_admission_includes_the_fixed_request_weight() {
 }
 
 #[test]
+fn turn_instructions_count_toward_mandatory_admission() {
+    // Arrange
+    let estimator = HeuristicContextEstimator::DEFAULT.with_request_tokens(3);
+    let input = TurnInput::text("abcd");
+    let instructed = options_with(ToolPolicy::default()).with_instructions("abcdefgh");
+
+    // Act
+    let plain = admit_mandatory_content(
+        &estimator,
+        budget(10),
+        None,
+        &input,
+        &options_with(ToolPolicy::default()),
+    );
+    let rejected = admit_mandatory_content(&estimator, budget(10), None, &input, &instructed);
+
+    // Assert
+    assert_eq!(plain.expect("fits"), 2);
+    assert!(
+        rejected.is_err(),
+        "the instructions do not fit beside the input"
+    );
+}
+
+#[test]
 fn advertised_tools_follow_the_turn_policy() {
     // Arrange
     let denied = options_with(ToolPolicy::default());

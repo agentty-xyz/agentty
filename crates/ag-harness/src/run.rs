@@ -75,7 +75,8 @@ impl RunRequest {
 
     /// Adds host instructions for this run, like
     /// [`TurnOptions::with_instructions`]: they follow the cached prompt
-    /// prefix and are stored with the run's turn.
+    /// prefix, are stored with the run's turn, and are left out when later
+    /// runs replay that turn.
     pub fn instructions(mut self, instructions: impl Into<String>) -> Self {
         self.instructions = Some(instructions.into());
 

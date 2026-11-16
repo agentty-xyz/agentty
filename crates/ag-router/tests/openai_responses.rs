@@ -3,6 +3,7 @@
 //! replay, usage, and failure classification.
 
 use std::fmt::Write as _;
+use std::num::NonZeroU32;
 
 use ag_router::{
     Completion, ErrorClass, ImageContent, ImageMediaType, InputBlock, JsonSchemaFormat, ModelError,
@@ -281,7 +282,7 @@ async fn streams_a_text_request_with_turn_instructions_and_an_output_bound()
         ],
         Vec::new(),
     );
-    request.options.max_output_tokens = Some(256);
+    request.options.max_output_tokens = NonZeroU32::new(256);
 
     // Act
     let completion = router(&server)?.execute(request).await?;

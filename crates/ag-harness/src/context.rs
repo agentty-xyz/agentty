@@ -454,17 +454,22 @@ pub struct HistoryTurn {
 }
 
 impl HistoryTurn {
-    /// Returns the messages replayed for this turn. A completed turn replays
-    /// verbatim. A stopped turn adds a placeholder result for every tool call
-    /// without a recorded result, in the request only, and ends with its stop
-    /// note.
+    /// Returns the messages replayed for this turn. Its host instructions
+    /// applied to that turn only, so they stay stored but are not replayed.
+    /// A completed turn otherwise replays verbatim. A stopped turn adds a
+    /// placeholder result for every tool call without a recorded result, in
+    /// the request only, and ends with its stop note.
     pub(crate) fn replay(&self) -> Vec<ModelMessage> {
+        let replayed = self
+            .messages
+            .iter()
+            .filter(|message| !matches!(message, ModelMessage::Instructions(_)));
         let Some(stop) = &self.stop else {
-            return self.messages.clone();
+            return replayed.cloned().collect();
         };
         let mut replay = Vec::with_capacity(self.messages.len().saturating_add(1));
         let mut unanswered = Vec::new();
-        for message in &self.messages {
+        for message in replayed {
             if let ModelMessage::ToolResult { call_id, .. } = message {
                 unanswered.retain(|call: &&ToolCall| call.id() != call_id);
             } else {

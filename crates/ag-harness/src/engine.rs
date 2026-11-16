@@ -226,11 +226,16 @@ impl Engine<'_> {
 
             let (calls, batched) = match response {
                 ModelResponse::Output(output) => {
-                    self.publish_message(reasoning_content.as_deref(), None)
-                        .await;
-                    request.record_output_with_reasoning(&output, reasoning_content);
+                    let content = output.to_string();
 
-                    return Ok((output, request));
+                    return Ok(self
+                        .finish(request, output, content, reasoning_content)
+                        .await);
+                }
+                ModelResponse::Text(text) => {
+                    let output = Value::String(text.clone());
+
+                    return Ok(self.finish(request, output, text, reasoning_content).await);
                 }
                 ModelResponse::ToolCall(call) => (vec![call], false),
                 ModelResponse::ToolCalls(calls) => {
@@ -260,6 +265,22 @@ impl Engine<'_> {
                 .await?;
             state.repetition_nudges += self.act_on_repetition(repetition, &mut request, turn_id)?;
         }
+    }
+
+    /// Ends the turn with its validated final `output`, recorded in
+    /// `request` as assistant `content`.
+    async fn finish(
+        &self,
+        mut request: ModelRequest,
+        output: Value,
+        content: String,
+        reasoning_content: Option<String>,
+    ) -> (Value, ModelRequest) {
+        self.publish_message(reasoning_content.as_deref(), None)
+            .await;
+        request.record_output_with_reasoning(content, reasoning_content);
+
+        (output, request)
     }
 
     /// Lets the turn send its next request after `failure`, or fails it. An
@@ -775,9 +796,7 @@ impl Engine<'_> {
                 return Err(RequestFailure::new(error, None, started_at));
             }
         };
-        if let Some(output) = response.output()
-            && let Err(error) = Self::validate_output(request, output)
-        {
+        if let Err(error) = Self::validate_output(request, &response) {
             if let Some(model_lifecycle) = model_lifecycle {
                 model_lifecycle.failed(error.error_type(), error.http_status());
             }
@@ -797,15 +816,19 @@ impl Engine<'_> {
         Ok((response, activity, reasoning_content))
     }
 
-    /// Validates a final output against the request's schema, or, for a
-    /// text request, requires bounded text held in a JSON string.
-    fn validate_output(request: &ModelRequest, output: &Value) -> Result<(), ModelError> {
-        match (request.schema(), output) {
-            (Some(schema), output) => schema.validate_value(output).map_err(ModelError::from),
-            (None, Value::String(text)) => {
+    /// Validates a final answer against the request's output mode:
+    /// structured output against its schema, text as nonblank and bounded.
+    /// An answer in the other mode is invalid; tool calls pass.
+    fn validate_output(request: &ModelRequest, response: &ModelResponse) -> Result<(), ModelError> {
+        match (request.schema(), response) {
+            (Some(schema), ModelResponse::Output(output)) => {
+                schema.validate_value(output).map_err(ModelError::from)
+            }
+            (None, ModelResponse::Text(text)) if !text.trim().is_empty() => {
                 schema_contract::ensure_content_size(text).map_err(ModelError::from)
             }
-            (None, _) => Err(ModelError::InvalidResponse),
+            (_, ModelResponse::ToolCall(_) | ModelResponse::ToolCalls(_)) => Ok(()),
+            _ => Err(ModelError::InvalidResponse),
         }
     }
 

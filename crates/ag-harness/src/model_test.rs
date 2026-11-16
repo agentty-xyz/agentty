@@ -199,27 +199,12 @@ async fn client_observes_success_unless_request_is_already_observed() {
     ));
 }
 
-#[tokio::test]
-async fn client_answers_text_requests_with_turn_instructions_and_an_output_bound() {
+#[test]
+fn text_requests_route_without_a_format_with_instructions_and_bound() {
     // Arrange
-    let server = MockServer::start().await;
-    Mock::given(method("POST"))
-        .and(path("/chat/completions"))
-        .and(wiremock::matchers::body_partial_json(json!({
-            "max_completion_tokens": 64
-        })))
-        .respond_with(ResponseTemplate::new(200).set_body_json(json!({
-            "choices": [{
-                "finish_reason": "stop",
-                "message": {"content": "Ada wrote it."}
-            }]
-        })))
-        .expect(1)
-        .mount(&server)
-        .await;
     let client = ModelClient::muse(MuseConfig {
         api_key: "test-key".to_string(),
-        base_url: server.uri(),
+        base_url: "https://example.com/v1".to_string(),
         model: "muse-spark-1.3".to_string(),
     })
     .expect("valid model identity");
@@ -229,36 +214,75 @@ async fn client_answers_text_requests_with_turn_instructions_and_an_output_bound
         .with_generation(GenerationParams::default().with_max_output_tokens(tokens));
 
     // Act
-    let completion = client
-        .complete(request.clone())
-        .await
-        .expect("text request completes");
-    let body: serde_json::Value = serde_json::from_slice(
-        &server.received_requests().await.expect("recorded requests")[0].body,
-    )
-    .expect("request body");
+    let routed = client
+        .to_router_request(&request)
+        .expect("text request routes");
+    let completion = ModelClient::from_router_completion(ag_router::Completion::Text {
+        text: "Ada wrote it.".to_string(),
+        metadata: CompletionMetadata::new("stop".to_string(), None, None, None, None),
+        reasoning_content: None,
+    })
+    .expect("text completion maps");
 
     // Assert
     assert!(Model::supports_text_output(&client));
     assert!(!Model::supports_text_output(&ResponseOnlyModel));
+    assert!(routed.response_format.is_none());
+    assert_eq!(routed.options.max_output_tokens, Some(tokens));
     assert_eq!(
-        completion.response().output(),
-        Some(&json!("Ada wrote it."))
+        routed.messages()[1],
+        ag_router::ModelMessage::Instructions("Answer in one sentence.".to_string())
     );
-    assert!(body.get("response_format").is_none());
-    assert_eq!(body["messages"][1]["role"], "user");
-    assert!(
-        body["messages"][1]["content"]
-            .as_str()
-            .is_some_and(|content| content.ends_with("Answer in one sentence."))
-    );
-    assert_eq!(request.rounds_start(), 2);
+    assert_eq!(completion.response().text(), Some("Ada wrote it."));
+    assert_eq!(completion.response().output(), None);
+    assert_eq!(ModelResponse::Output(json!({})).text(), None);
+    assert_eq!(completion.response().calls(), []);
+    assert!(completion.response().call().is_none());
+}
+
+#[test]
+fn instructions_mark_where_the_turns_tool_rounds_start() {
+    // Arrange
+    let plain = ModelRequest::new("Who wrote it?", OutputMode::Text);
+
+    // Act
+    let instructed = plain
+        .clone()
+        .with_instructions(Some("Answer in one sentence."));
+
+    // Assert
+    assert_eq!(plain.rounds_start(), 1);
+    assert_eq!(plain.instructions_message(), None);
+    assert_eq!(instructed.rounds_start(), 2);
     assert_eq!(
-        request.instructions_message(),
+        instructed.instructions_message(),
         Some(&ModelMessage::Instructions(
             "Answer in one sentence.".to_string()
         ))
     );
+}
+
+#[test]
+fn clients_reject_output_bounds_their_provider_rejects() {
+    // Arrange
+    let chatgpt = ModelClient::chatgpt(ChatGptConfig {
+        auth_file: PathBuf::from("auth.json"),
+        base_url: "https://chatgpt.test/v1".to_string(),
+        model: CHATGPT_GPT_6_SOL.to_string(),
+    })
+    .expect("valid model identity");
+    let bounded = GenerationParams::default()
+        .with_max_output_tokens(NonZeroU32::new(512).expect("nonzero tokens"));
+
+    // Act
+    let rejected = Model::validate_generation(&chatgpt, &bounded);
+    let accepted = Model::validate_generation(&ResponseOnlyModel, &bounded);
+
+    // Assert
+    let error = rejected.expect_err("the ChatGPT plan takes no output bound");
+    assert!(matches!(error, ModelError::UnsupportedGeneration { .. }));
+    assert_eq!(error.error_type(), ModelErrorType::UnsupportedOutput);
+    assert!(accepted.is_ok());
 }
 
 #[tokio::test]

@@ -4,6 +4,7 @@
 
 use std::error::Error;
 use std::fmt::Write as _;
+use std::num::NonZeroU32;
 use std::sync::{Arc, Mutex};
 
 use ag_router::{
@@ -152,6 +153,31 @@ async fn reports_a_credential_failure_without_sending_a_request() -> Result<(), 
     assert_eq!(error.error_class(), ErrorClass::Provider);
     assert_eq!(error.http_status(), None);
     assert!(error.to_string().contains("the ChatGPT sign-in expired"));
+    let requests = server
+        .received_requests()
+        .await
+        .ok_or("request recording disabled")?;
+    assert!(requests.is_empty());
+
+    Ok(())
+}
+
+#[tokio::test]
+async fn rejects_an_output_bound_without_sending_a_request() -> Result<(), Box<dyn Error>> {
+    // Arrange
+    let server = MockServer::start().await;
+    let router = router(&server, ScriptedCredential::new(&["plan-token-1"]))?;
+    let mut bounded = request()?;
+    bounded.options.max_output_tokens = NonZeroU32::new(512);
+
+    // Act
+    let Err(error) = router.execute(bounded).await else {
+        return Err("the request must fail".into());
+    };
+
+    // Assert
+    assert!(matches!(error, ModelError::UnsupportedGeneration { .. }));
+    assert_eq!(error.error_class(), ErrorClass::UnsupportedOutput);
     let requests = server
         .received_requests()
         .await

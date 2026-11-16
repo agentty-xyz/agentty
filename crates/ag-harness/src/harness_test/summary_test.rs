@@ -27,6 +27,7 @@ use crate::model::{
     Model, ModelCompletion, ModelError, ModelMessage, ModelRequest, ModelResponse, ReasoningEffort,
 };
 use crate::repository::Repository;
+use crate::request_option::OutputMode;
 use crate::round_summary::{CONTINUED_SUMMARY_PREFIX, ROUND_SUMMARY_INSTRUCTIONS};
 use crate::run::RunRequest;
 use crate::store::MemoryStore;
@@ -85,6 +86,10 @@ impl Model for SummarizingModel {
         self.keeps_prefix
     }
 
+    fn supports_text_output(&self) -> bool {
+        true
+    }
+
     async fn complete(&self, request: ModelRequest) -> Result<ModelCompletion, ModelError> {
         let mut requests = self.requests.lock().expect("requests lock");
         requests.push(request.clone());
@@ -109,6 +114,8 @@ impl Model for SummarizingModel {
                 arguments,
                 None,
             ))
+        } else if request.output() == &OutputMode::Text {
+            ModelResponse::Text("read everything".to_string())
         } else {
             ModelResponse::Output(json!({"summary": "read everything"}))
         };
@@ -342,6 +349,35 @@ async fn summaries_continue_the_last_turn_request_for_a_model_that_keeps_its_pre
         .find(|request| request.purpose() == ModelRequestPurpose::ContextSummary)
         .expect("a reported summary request");
     assert_eq!(reported.estimated_weight(), weight);
+}
+
+#[tokio::test]
+async fn text_turns_request_summaries_of_their_own_for_a_model_that_keeps_its_prefix() {
+    // Arrange
+    let (model, requests) = SummarizingModel::keeping_prefix(Vec::new());
+    let harness = budgeted_harness(model, ContextSummaryPolicy::Enabled, ROOMY_BUDGET);
+
+    // Act
+    let outcome = harness
+        .run_once("read every file", OutputMode::Text)
+        .await
+        .expect("turn succeeds");
+
+    // Assert
+    assert_eq!(outcome.output(), &json!("read everything"));
+    let summaries = summary_requests(&requests);
+    assert_ne!(summaries, Vec::<ModelRequest>::new());
+    for summary in summaries {
+        assert_eq!(summary.prefix_schema(), None);
+        assert_eq!(
+            summary.messages().first(),
+            Some(&ModelMessage::System(
+                ROUND_SUMMARY_INSTRUCTIONS.to_string()
+            ))
+        );
+        assert_eq!(summary.tools(), []);
+    }
+    assert!(carries(&last_turn_request(&requests), "cobalt-41"));
 }
 
 #[tokio::test]

@@ -1,6 +1,7 @@
 //! Shared structured-output backend and provider policy for
 //! `OpenAI`-compatible Chat Completions APIs.
 
+use std::num::NonZeroU32;
 use std::sync::Arc;
 use std::time::Duration;
 
@@ -30,10 +31,16 @@ pub(crate) const TOOL_AWARE_STRUCTURED_OUTPUT_INSTRUCTION: &str = concat!(
     "fences or other text.\n\nJSON Schema:\n",
 );
 
-/// Heading of a user message carrying [`model::ModelMessage::Instructions`],
-/// which marks the host's instructions apart from the user's own input.
-pub(crate) const TURN_INSTRUCTIONS_PREFIX: &str =
-    "[harness] Instructions from the application for this turn:\n\n";
+/// Heading of the block carrying [`model::ModelMessage::Instructions`],
+/// which marks the application's instructions apart from the user's input
+/// and from the harness's own `[harness]` notes. Chat Completions has no
+/// host-only role that every provider template accepts mid-conversation, so
+/// the block joins the user message it follows: as its own text part, or
+/// after [`TURN_INSTRUCTIONS_SEPARATOR`] in plain text.
+pub(crate) const TURN_INSTRUCTIONS_HEADING: &str = "[application instructions for this turn]\n";
+/// Separator between a plain-text user message and the instructions block
+/// appended to it.
+pub(crate) const TURN_INSTRUCTIONS_SEPARATOR: &str = "\n\n";
 
 /// Structured-output representation selected by one Chat Completions provider.
 #[derive(Clone, Copy)]
@@ -177,7 +184,7 @@ impl ChatCompletionBackend {
             .as_ref()
             .filter(|_| tools.is_empty() || self.policy.response_format_with_tools)
             .map(|format| self.response_format(format));
-        let max_output_tokens = request.options.max_output_tokens;
+        let max_output_tokens = request.options.max_output_tokens.map(NonZeroU32::get);
         let (max_completion_tokens, max_tokens) = match self.policy.max_tokens_field {
             MaxTokensField::MaxCompletionTokens => (max_output_tokens, None),
             MaxTokensField::MaxTokens => (None, max_output_tokens),
@@ -309,10 +316,7 @@ impl ChatCompletionBackend {
                     });
                 }
                 model::ModelMessage::Instructions(content) => {
-                    messages.push(ChatCompletionMessagePayload::Text {
-                        content: format!("{TURN_INSTRUCTIONS_PREFIX}{content}"),
-                        role: "user",
-                    });
+                    Self::push_instructions(&mut messages, content);
                 }
                 model::ModelMessage::System(content) => {
                     messages.push(ChatCompletionMessagePayload::Text {
@@ -355,6 +359,33 @@ impl ChatCompletionBackend {
         }
 
         Ok(messages)
+    }
+
+    /// Appends turn `instructions` to the user message they follow, so
+    /// templates that require alternating roles never see two user messages
+    /// in a row; without a preceding user message they form their own.
+    fn push_instructions(messages: &mut Vec<ChatCompletionMessagePayload>, instructions: &str) {
+        let block = format!("{TURN_INSTRUCTIONS_HEADING}{instructions}");
+        match messages.last_mut() {
+            Some(ChatCompletionMessagePayload::Text {
+                content,
+                role: "user",
+            }) => {
+                content.push_str(TURN_INSTRUCTIONS_SEPARATOR);
+                content.push_str(&block);
+            }
+            Some(ChatCompletionMessagePayload::Parts {
+                content,
+                role: "user",
+            }) => content.push(ChatCompletionContentPart::Text {
+                kind: "text",
+                text: block,
+            }),
+            _ => messages.push(ChatCompletionMessagePayload::Text {
+                content: block,
+                role: "user",
+            }),
+        }
     }
 
     fn user_input_message(

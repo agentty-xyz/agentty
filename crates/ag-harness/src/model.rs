@@ -8,7 +8,6 @@
 
 use std::collections::HashSet;
 use std::error::Error;
-use std::num::NonZeroU32;
 use std::ops::Deref;
 use std::sync::Arc;
 use std::time::Duration;
@@ -102,12 +101,25 @@ pub trait Model: Send + Sync {
     }
 
     /// Returns whether the implementation answers requests in
-    /// [`OutputMode::Text`] with plain text, returned as a
-    /// [`ModelResponse::Output`] holding a JSON string. The default, `false`,
-    /// makes text-mode turns fail before execution with
-    /// [`ModelError::UnsupportedOutputSchema`]; [`ModelClient`] supports it.
+    /// [`OutputMode::Text`] with plain text, returned as
+    /// [`ModelResponse::Text`]. The default, `false`, makes text-mode turns
+    /// fail before execution with [`ModelError::UnsupportedOutputMode`];
+    /// [`ModelClient`] supports it.
     fn supports_text_output(&self) -> bool {
         false
+    }
+
+    /// Checks adapter-specific generation requirements, such as an
+    /// output-token bound the provider rejects, without execution.
+    /// Implementations accepting every bound may use the default.
+    ///
+    /// # Errors
+    /// Returns [`ModelError::UnsupportedGeneration`] before turn acquisition
+    /// for settings the adapter cannot apply.
+    fn validate_generation(&self, generation: &GenerationParams) -> Result<(), ModelError> {
+        let _ = generation;
+
+        Ok(())
     }
 
     /// Completes one model request with optional provider metadata.
@@ -386,8 +398,7 @@ impl ModelClient {
             ),
             None => ag_router::ModelRequest::text_chat(&self.router_model, messages, tools),
         };
-        routed.options.max_output_tokens =
-            request.generation().max_output_tokens.map(NonZeroU32::get);
+        routed.options.max_output_tokens = request.generation().max_output_tokens;
         routed.options.reasoning_effort =
             request.model_reasoning_effort().map(|effort| match effort {
                 ReasoningEffort::Low => ag_router::ReasoningEffort::Low,
@@ -493,7 +504,7 @@ impl ModelClient {
                 text,
                 metadata,
                 reasoning_content,
-            } => ModelCompletion::new(metadata, ModelResponse::Output(Value::String(text)))
+            } => ModelCompletion::new(metadata, ModelResponse::Text(text))
                 .with_reasoning_content(reasoning_content),
             ag_router::Completion::ToolCalls { calls, metadata } => {
                 let mut calls = Self::from_router_calls(calls)?;
@@ -558,6 +569,9 @@ impl ModelClient {
             ag_router::ModelError::ResponseBodyTooLarge => ModelError::ResponseBodyTooLarge,
             ag_router::ModelError::UnsupportedOutputSchema { reason } => {
                 ModelError::UnsupportedOutputSchema { reason }
+            }
+            ag_router::ModelError::UnsupportedGeneration { reason } => {
+                ModelError::UnsupportedGeneration { reason }
             }
             ag_router::ModelError::UnsupportedImageInput { reason } => {
                 ModelError::UnsupportedImageInput { reason }
@@ -631,6 +645,17 @@ impl Model for ModelClient {
 
     fn supports_text_output(&self) -> bool {
         true
+    }
+
+    fn validate_generation(&self, generation: &GenerationParams) -> Result<(), ModelError> {
+        let options = ag_router::GenerationOptions {
+            max_output_tokens: generation.max_output_tokens,
+            ..ag_router::GenerationOptions::default()
+        };
+
+        self.router
+            .validate_generation(&self.router_model, &options)
+            .map_err(Self::from_router_error)
     }
 
     async fn complete(&self, request: ModelRequest) -> Result<ModelCompletion, ModelError> {
@@ -768,7 +793,7 @@ impl ModelRequest {
     /// Returns the form the final response must take.
     ///
     /// For [`OutputMode::Text`], adapters ask for plain text and return it
-    /// as a [`ModelResponse::Output`] holding a JSON string.
+    /// as [`ModelResponse::Text`].
     pub fn output(&self) -> &OutputMode {
         &self.output
     }
@@ -960,17 +985,13 @@ impl ModelRequest {
         self.record(ModelMessage::User(feedback))
     }
 
-    /// Appends the final output as assistant content: a text request's
-    /// output as its text, any other as JSON text.
+    /// Appends a final answer as assistant `content`: a text answer as its
+    /// text, structured output as JSON text.
     pub(crate) fn record_output_with_reasoning(
         &mut self,
-        output: &Value,
+        content: String,
         reasoning_content: Option<String>,
     ) {
-        let content = match output {
-            Value::String(text) if self.output == OutputMode::Text => text.clone(),
-            output => output.to_string(),
-        };
         self.messages.push(match reasoning_content {
             Some(reasoning_content) => ModelMessage::AssistantReasoning {
                 content,
@@ -1188,11 +1209,18 @@ impl Deref for ModelCompletion {
 /// Provider-neutral output from one model request.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub enum ModelResponse {
-    /// Terminal structured model output.
+    /// Terminal structured model output answering a request in
+    /// [`OutputMode::Json`].
     ///
     /// [`ModelClient`] and [`crate::Harness`] validate this value locally
-    /// against the request schema before returning it to applications.
+    /// against the request schema before returning it to applications; the
+    /// harness rejects it for a text request.
     Output(Value),
+    /// Terminal plain-text answer to a request in [`OutputMode::Text`].
+    ///
+    /// The harness requires nonblank text within the output size bound and
+    /// rejects it for a JSON request.
+    Text(String),
     /// One validated native function call requiring application handling.
     ToolCall(tool::ToolCall),
     /// Multiple validated native function calls from one model response.
@@ -1206,7 +1234,15 @@ impl ModelResponse {
     pub fn output(&self) -> Option<&Value> {
         match self {
             Self::Output(output) => Some(output),
-            Self::ToolCall(_) | Self::ToolCalls(_) => None,
+            Self::Text(_) | Self::ToolCall(_) | Self::ToolCalls(_) => None,
+        }
+    }
+
+    /// Returns the terminal plain-text answer, when present.
+    pub fn text(&self) -> Option<&str> {
+        match self {
+            Self::Text(text) => Some(text),
+            Self::Output(_) | Self::ToolCall(_) | Self::ToolCalls(_) => None,
         }
     }
 
@@ -1214,14 +1250,14 @@ impl ModelResponse {
     pub fn call(&self) -> Option<&tool::ToolCall> {
         match self {
             Self::ToolCall(call) => Some(call),
-            Self::Output(_) | Self::ToolCalls(_) => None,
+            Self::Output(_) | Self::Text(_) | Self::ToolCalls(_) => None,
         }
     }
 
     /// Returns every intermediate native function call in this response.
     pub fn calls(&self) -> &[tool::ToolCall] {
         match self {
-            Self::Output(_) => &[],
+            Self::Output(_) | Self::Text(_) => &[],
             Self::ToolCall(call) => std::slice::from_ref(call),
             Self::ToolCalls(calls) => calls,
         }
@@ -1229,7 +1265,7 @@ impl ModelResponse {
 
     pub(crate) fn response_type(&self) -> ModelResponseType {
         match self {
-            Self::Output(_) => ModelResponseType::Output,
+            Self::Output(_) | Self::Text(_) => ModelResponseType::Output,
             Self::ToolCall(_) | Self::ToolCalls(_) => ModelResponseType::ToolCall,
         }
     }
@@ -1241,6 +1277,13 @@ ag_router::define_model_response_error! {
         /// The provider returned more than the single supported call.
         #[error("model returned multiple tool calls")]
         MultipleToolCalls,
+        /// The model cannot answer in the requested output mode, such as
+        /// plain text.
+        #[error("model does not support this output mode: {reason}")]
+        UnsupportedOutputMode {
+            /// Model limitation.
+            reason: String,
+        },
     }
 }
 
@@ -1313,7 +1356,9 @@ impl ModelError {
             Self::ResponseBodyTooLarge | Self::ResponseContentTooLarge => {
                 ModelErrorType::ResponseTooLarge
             }
-            Self::UnsupportedOutputSchema { .. } => ModelErrorType::UnsupportedOutput,
+            Self::UnsupportedOutputSchema { .. }
+            | Self::UnsupportedOutputMode { .. }
+            | Self::UnsupportedGeneration { .. } => ModelErrorType::UnsupportedOutput,
             Self::UnsupportedImageInput { .. } => ModelErrorType::UnsupportedInput,
             Self::InvalidJson { .. } | Self::SchemaViolation { .. } => {
                 ModelErrorType::InvalidOutput

@@ -5,21 +5,18 @@ use std::error::Error;
 use std::num::NonZeroU32;
 use std::sync::{Arc, Mutex};
 
-use ag_harness::model::{
-    ModelCapabilities, ModelCompletion, ModelMessage, ModelRegistry, ModelRequest, ModelResponse,
-};
+use ag_harness::model::{ModelCompletion, ModelMessage, ModelRequest, ModelResponse};
 use ag_harness::recovery::ExecutionIdentity;
 use ag_harness::store::MemoryStore;
 use ag_harness::{
     ErrorKind, GenerationParams, Harness, Model, ModelError, OutputMode, OutputSchema, RunOutput,
-    RunRequest, SessionError, ToolPolicy, TurnError, TurnOptions,
+    RunRequest, SessionError, ToolPolicy, TurnOptions,
 };
 use async_trait::async_trait;
-use serde_json::{Value, json};
+use serde_json::json;
 use tempfile::tempdir;
 
 use crate::context_budget_fixture::unbounded_context_budget;
-use crate::model_profile_fixture::unbounded_model_profile;
 
 type Requests = Arc<Mutex<Vec<ModelRequest>>>;
 
@@ -36,34 +33,41 @@ impl Model for TextModel {
     }
 
     async fn complete(&self, request: ModelRequest) -> Result<ModelCompletion, ModelError> {
-        let output = match request.output() {
-            OutputMode::Text => Value::String(format!("plain answer to {}", request.prompt())),
-            _ => json!({"name": "Ada"}),
+        let response = match request.output() {
+            OutputMode::Text => {
+                ModelResponse::Text(format!("plain answer to {}", request.prompt()))
+            }
+            _ => ModelResponse::Output(json!({"name": "Ada"})),
         };
         self.requests
             .lock()
             .map_err(|_| ModelError::InvalidResponse)?
             .push(request);
 
-        Ok(ModelCompletion::from_response(ModelResponse::Output(
-            output,
-        )))
+        Ok(ModelCompletion::from_response(response))
     }
 }
 
-/// Answers every request, text requests included, with a JSON object, and
-/// supports text output only when `text` is set.
-struct ObjectModel {
-    text: bool,
+/// Answers in JSON only and rejects every output-token bound, recording
+/// each request.
+struct JsonOnlyModel {
+    requests: Requests,
 }
 
 #[async_trait]
-impl Model for ObjectModel {
-    fn supports_text_output(&self) -> bool {
-        self.text
+impl Model for JsonOnlyModel {
+    fn validate_generation(&self, _generation: &GenerationParams) -> Result<(), ModelError> {
+        Err(ModelError::UnsupportedGeneration {
+            reason: "no output-token bound".to_string(),
+        })
     }
 
-    async fn complete(&self, _request: ModelRequest) -> Result<ModelCompletion, ModelError> {
+    async fn complete(&self, request: ModelRequest) -> Result<ModelCompletion, ModelError> {
+        self.requests
+            .lock()
+            .map_err(|_| ModelError::InvalidResponse)?
+            .push(request);
+
         Ok(ModelCompletion::from_response(ModelResponse::Output(
             json!({"name": "Ada"}),
         )))
@@ -92,7 +96,7 @@ fn recorded(requests: &Requests) -> Result<Vec<ModelRequest>, Box<dyn Error>> {
 }
 
 #[tokio::test]
-async fn instructions_follow_the_cached_prefix_and_replay_with_their_turn_after_resume()
+async fn instructions_follow_the_cached_prefix_and_steer_only_their_own_run()
 -> Result<(), Box<dyn Error>> {
     // Arrange
     let directory = tempdir()?;
@@ -120,6 +124,7 @@ async fn instructions_follow_the_cached_prefix_and_replay_with_their_turn_after_
         assert_eq!(outcome.result?, RunOutput::Json(json!({"name": "Ada"})));
     }
     let requests = recorded(&requests)?;
+    let answer = ModelMessage::Assistant(r#"{"name":"Ada"}"#.into());
     assert_eq!(
         requests[0].messages(),
         [
@@ -129,21 +134,27 @@ async fn instructions_follow_the_cached_prefix_and_replay_with_their_turn_after_
         ]
     );
     assert_eq!(
-        requests[1].messages().last(),
-        Some(&ModelMessage::Instructions("Answer in French.".into()))
+        requests[1].messages(),
+        [
+            ModelMessage::System("policy".into()),
+            ModelMessage::User("first".into()),
+            answer.clone(),
+            ModelMessage::User("second".into()),
+            ModelMessage::Instructions("Answer in French.".into()),
+        ],
+        "the first run's instructions are not replayed"
     );
-    for pair in requests.windows(2) {
-        let (earlier, later) = (&pair[0], &pair[1]);
-        assert_eq!(
-            later.messages()[..earlier.messages().len()],
-            *earlier.messages(),
-            "each run continues the prefix the previous run sent"
-        );
-        assert_eq!(later.cache_key(), earlier.cache_key());
-    }
     assert_eq!(
-        requests[2].messages().last(),
-        Some(&ModelMessage::User("third".into()))
+        requests[2].messages(),
+        [
+            ModelMessage::System("policy".into()),
+            ModelMessage::User("first".into()),
+            answer.clone(),
+            ModelMessage::User("second".into()),
+            answer,
+            ModelMessage::User("third".into()),
+        ],
+        "after resume, no earlier run's instructions apply"
     );
 
     Ok(())
@@ -215,52 +226,43 @@ async fn text_default_sessions_answer_in_text_after_resume() -> Result<(), Box<d
 }
 
 #[tokio::test]
-async fn text_output_fails_as_config_before_execution_without_model_support()
--> Result<(), Box<dyn Error>> {
+async fn unsupported_request_options_fail_as_config_before_execution() -> Result<(), Box<dyn Error>>
+{
     // Arrange
-    let harness = Harness::new(ObjectModel { text: false }, unbounded_context_budget())
-        .store(Arc::new(MemoryStore::new()));
+    let requests = Requests::default();
+    let harness = Harness::new(
+        JsonOnlyModel {
+            requests: Arc::clone(&requests),
+        },
+        unbounded_context_budget(),
+    )
+    .store(Arc::new(MemoryStore::new()));
     let session = harness
         .session("json-only", name_schema()?)
         .create()
         .await?;
+    let tokens = NonZeroU32::new(64).ok_or("tokens")?;
 
     // Act
-    let one_shot = harness
+    let text = session
         .run(RunRequest::new("first").output(OutputMode::Text))
         .await;
-    let durable = session
-        .run(RunRequest::new("second").output(OutputMode::Text))
+    let bounded = session
+        .run(
+            RunRequest::new("second")
+                .generation(GenerationParams::default().with_max_output_tokens(tokens)),
+        )
         .await;
-    let turn = harness.run_once("third", OutputMode::Text).await;
 
     // Assert
-    for outcome in [one_shot, durable] {
-        let error = outcome.result.expect_err("text output is unsupported");
+    for outcome in [text, bounded] {
+        let error = outcome.result.expect_err("the option is unsupported");
         assert_eq!(error.kind(), ErrorKind::Config);
         assert_eq!(outcome.report.model_requests(), []);
     }
-    assert!(matches!(
-        turn,
-        Err(TurnError::Model(ModelError::UnsupportedOutputSchema { .. }))
-    ));
+    assert_eq!(recorded(&requests)?, []);
 
     Ok(())
-}
-
-#[tokio::test]
-async fn text_output_rejects_a_structured_answer() {
-    // Arrange
-    let harness = Harness::new(ObjectModel { text: true }, unbounded_context_budget());
-
-    // Act
-    let outcome = harness
-        .run(RunRequest::new("first").output(OutputMode::Text))
-        .await;
-
-    // Assert
-    let error = outcome.result.expect_err("a text run needs text");
-    assert_eq!(error.kind(), ErrorKind::InvalidOutput);
 }
 
 #[tokio::test]
@@ -356,40 +358,6 @@ async fn host_requests_fingerprint_instructions_and_generation() -> Result<(), B
     assert_eq!(retried.output(), original.output());
     assert!(matches!(changed, Err(SessionError::HostTurnConflict)));
     assert_eq!(recorded(&requests)?.len(), 1);
-
-    Ok(())
-}
-
-#[tokio::test]
-async fn switching_a_text_session_requires_text_support() -> Result<(), Box<dyn Error>> {
-    // Arrange
-    let mut registry = ModelRegistry::new();
-    for (key, text) in [("text", true), ("json", false)] {
-        registry.register(
-            ExecutionIdentity::new(key, "1")?,
-            ObjectModel { text },
-            ModelCapabilities {
-                image_input: false,
-                profile: unbounded_model_profile(),
-                tool_calls: true,
-            },
-        )?;
-    }
-    let harness = Harness::from_registry(&registry, "text")?.store(Arc::new(MemoryStore::new()));
-    let mut session = harness.session("plain", OutputMode::Text).create().await?;
-
-    // Act
-    let rejected = session.switch_model(&registry, "json").await;
-    let accepted = session.switch_model(&registry, "text").await;
-
-    // Assert
-    assert!(matches!(
-        rejected,
-        Err(SessionError::Turn(TurnError::Model(
-            ModelError::UnsupportedOutputSchema { .. }
-        )))
-    ));
-    assert!(accepted.is_ok());
 
     Ok(())
 }

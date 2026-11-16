@@ -2,6 +2,7 @@
 
 use std::collections::HashSet;
 use std::error::Error;
+use std::num::NonZeroU32;
 use std::time::Duration;
 
 use serde::{Deserialize, Serialize};
@@ -58,9 +59,11 @@ pub enum ModelMessage {
     AssistantToolCalls(Vec<ToolCall>),
     /// Host instructions for one turn, placed after the conversation prefix
     /// so changing them keeps that prefix cacheable. The Responses API
-    /// receives them as a `developer` message; Chat Completions receives a
-    /// `user` message, since many chat templates accept system messages only
-    /// first.
+    /// receives them as a `developer` message. Chat Completions appends them,
+    /// under an `[application instructions for this turn]` heading, to the
+    /// user message they follow, since many chat templates accept system
+    /// messages only first and require user and assistant turns to
+    /// alternate.
     Instructions(String),
     /// System instructions.
     System(String),
@@ -133,8 +136,12 @@ impl JsonSchemaFormat {
 pub struct GenerationOptions {
     /// Upper bound on generated tokens, reasoning included, sent as
     /// `max_output_tokens` to the Responses API and as the provider's
-    /// `max_tokens` or `max_completion_tokens` to Chat Completions.
-    pub max_output_tokens: Option<u32>,
+    /// `max_tokens` or `max_completion_tokens` to Chat Completions. A
+    /// provider that rejects the bound, such as the ChatGPT-plan backend or
+    /// the Responses API below its minimum of 16, fails the request with
+    /// [`ModelError::UnsupportedGeneration`] before sending it (see
+    /// [`crate::Router::validate_generation`]).
+    pub max_output_tokens: Option<NonZeroU32>,
     /// Output schema of the conversation this request continues, when the
     /// request asks for a different one. Providers that state the output
     /// schema in a leading prompt message (see
@@ -420,7 +427,9 @@ impl ModelError {
             Self::ResponseBodyTooLarge | Self::ResponseContentTooLarge => {
                 ErrorClass::ResponseTooLarge
             }
-            Self::UnsupportedOutputSchema { .. } => ErrorClass::UnsupportedOutput,
+            Self::UnsupportedOutputSchema { .. } | Self::UnsupportedGeneration { .. } => {
+                ErrorClass::UnsupportedOutput
+            }
             Self::UnsupportedImageInput { .. } => ErrorClass::UnsupportedInput,
             Self::InvalidJson { .. } | Self::SchemaViolation { .. } => ErrorClass::InvalidOutput,
             Self::MissingToolCall

@@ -2,6 +2,7 @@
 //! validation tests.
 
 use std::error::Error;
+use std::num::NonZeroU32;
 use std::sync::Arc;
 
 use async_trait::async_trait;
@@ -11,7 +12,7 @@ use super::{Provider, ProviderConfig, ProviderPolicy, Router, policy};
 use crate::chat_completion::{ChatCompletionProviderPolicy, ReasoningFormat, StructuredOutputMode};
 use crate::credential::BearerCredential;
 use crate::input::{ImageContent, ImageMediaType, InputBlock, TurnInput};
-use crate::model::{ModelError, ReasoningEffort};
+use crate::model::{ErrorClass, GenerationOptions, ModelError, ReasoningEffort};
 use crate::responses::ResponsesProviderPolicy;
 use crate::schema::OutputSchema;
 
@@ -442,4 +443,54 @@ fn chatgpt_policy_names_the_plan_and_maps_effort_like_openai() {
     assert_eq!(chatgpt.display_name, "ChatGPT plan");
     assert_eq!(openai.display_name, "OpenAI");
     assert_eq!((chatgpt.reasoning_effort)(ReasoningEffort::Max), "max");
+}
+
+#[test]
+fn validates_the_output_bound_each_provider_accepts() {
+    // Arrange
+    let bound = |tokens| GenerationOptions {
+        max_output_tokens: NonZeroU32::new(tokens),
+        ..GenerationOptions::default()
+    };
+    let routers = [
+        (
+            "chatgpt/gpt-6-luna",
+            Router::new([credential_config(
+                Provider::ChatGpt,
+                "https://chatgpt.com/backend-api/codex",
+            )])
+            .expect("valid provider config"),
+        ),
+        ("openai/gpt-6-luna", router(Provider::OpenAi)),
+        ("kimi/kimi-k3", router(Provider::Kimi)),
+    ];
+    let cases = [
+        ("chatgpt/gpt-6-luna", 0, true),
+        ("chatgpt/gpt-6-luna", 512, false),
+        ("openai/gpt-6-luna", 0, true),
+        ("openai/gpt-6-luna", 15, false),
+        ("openai/gpt-6-luna", 16, true),
+        ("kimi/kimi-k3", 1, true),
+    ];
+
+    for (model, tokens, accepted) in cases {
+        let router = routers
+            .iter()
+            .find(|(id, _)| *id == model)
+            .map(|(_, router)| router)
+            .expect("router for the model");
+
+        // Act
+        let result = router.validate_generation(model, &bound(tokens));
+
+        // Assert
+        assert_eq!(result.is_ok(), accepted, "{model} with {tokens}");
+        if let Err(error) = result {
+            assert!(
+                matches!(error, ModelError::UnsupportedGeneration { .. }),
+                "{model} with {tokens}: {error}"
+            );
+            assert_eq!(error.error_class(), ErrorClass::UnsupportedOutput);
+        }
+    }
 }

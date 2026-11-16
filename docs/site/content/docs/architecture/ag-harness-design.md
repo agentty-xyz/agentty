@@ -140,7 +140,8 @@ the cap reset on `switch_model` or estimator replacement. `TurnReport` and
   or turn may select another mode without changing it.
 - Per-turn host instructions follow the turn's input, after the system prompt and
   replayed history, so they never change the cached prompt prefix. They are journaled
-  with the turn and replay with it.
+  with the turn and sent with each of its requests, but later turns replay it without
+  them, so they never steer another turn.
 - Each turn records its effective options, comparison identity, and model provenance
   before execution. Write and command intents persist before their effects.
 - `host_id`/`recover` bind host-assigned request IDs to a fingerprint of the effective

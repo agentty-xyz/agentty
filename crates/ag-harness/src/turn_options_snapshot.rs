@@ -1,6 +1,6 @@
 //! Versioned turn-options snapshots independent of persistence backends.
 
-use std::num::{NonZeroU32, NonZeroUsize};
+use std::num::NonZeroUsize;
 
 use serde::Deserialize;
 use serde_json::{Value, json};
@@ -8,6 +8,7 @@ use sha2::{Digest, Sha256};
 use thiserror::Error;
 
 use crate::comparison::ComparisonIdentity;
+use crate::request_option::GenerationParams;
 use crate::{OutputSchema, OutputSchemaError, ToolPolicy, TurnOptions};
 
 /// Versioned durable metadata, independent of live repository validation.
@@ -20,12 +21,13 @@ pub struct StoredTurnOptions {
     comparison_base: Option<ComparisonIdentity>,
     #[serde(default)]
     fingerprint: Option<String>,
+    /// Provider generation parameters of the turn, recorded from version 6
+    /// as one object holding only the set parameters.
+    #[serde(default)]
+    generation: Option<GenerationParams>,
     /// Host instructions of the turn, recorded from version 6.
     #[serde(default)]
     instructions: Option<String>,
-    /// Output-token bound of the turn, recorded from version 6.
-    #[serde(default)]
-    max_output_tokens: Option<NonZeroU32>,
     /// Removed per-turn tool-call limit, retained only so legacy v1-v4
     /// snapshots keep validating against their recorded fingerprints.
     #[serde(default)]
@@ -45,8 +47,8 @@ impl StoredTurnOptions {
                 .comparison_base()
                 .map(|base| base.identity().clone()),
             fingerprint: None,
+            generation: Some(options.generation()),
             instructions: options.instructions().map(str::to_string),
-            max_output_tokens: options.generation().max_output_tokens,
             max_tool_calls: None,
             output_schema: options
                 .schema()
@@ -72,9 +74,7 @@ impl StoredTurnOptions {
             || (stored.version < 4 && stored.bash.is_some())
             || (stored.version < 5) != stored.max_tool_calls.is_some()
             || (stored.version < 6
-                && (text_output
-                    || stored.instructions.is_some()
-                    || stored.max_output_tokens.is_some()))
+                && (text_output || stored.instructions.is_some() || stored.generation.is_some()))
         {
             return Err(StoredTurnOptionsError::InvalidData {
                 reason: format!("unsupported turn options version {}", stored.version),
@@ -125,7 +125,7 @@ impl StoredTurnOptions {
         }
         if self.version >= 6 {
             value["instructions"] = json!(self.instructions);
-            value["max_output_tokens"] = json!(self.max_output_tokens);
+            value["generation"] = json!(self.generation);
         }
 
         value

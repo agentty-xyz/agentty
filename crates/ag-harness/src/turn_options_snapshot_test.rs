@@ -356,7 +356,13 @@ fn version_six_records_text_output_instructions_and_output_bounds() {
     // Assert
     assert_eq!(decoded.output_schema, Value::Null);
     assert_eq!(decoded.instructions.as_deref(), Some("Answer tersely."));
-    assert_eq!(decoded.max_output_tokens, Some(tokens));
+    assert_eq!(snapshot["generation"], json!({"max_output_tokens": 256}));
+    assert_eq!(
+        decoded
+            .generation
+            .and_then(|generation| generation.max_output_tokens),
+        Some(tokens)
+    );
     assert_ne!(
         decoded.fingerprint(),
         StoredTurnOptions::decode(&StoredTurnOptions::encode(&turn_options()))
@@ -378,7 +384,7 @@ fn versioned_snapshot(options: &TurnOptions, version: u8) -> Value {
     if version < 6 {
         let fields = snapshot.as_object_mut().expect("object");
         fields.remove("instructions");
-        fields.remove("max_output_tokens");
+        fields.remove("generation");
     }
     if version < 5 {
         snapshot["max_tool_calls"] = json!(8);

@@ -437,8 +437,8 @@ impl Session {
         if let Some(instructions) = options.instructions() {
             configuration["options"]["instructions"] = json!(instructions);
         }
-        if let Some(max_output_tokens) = options.generation().max_output_tokens {
-            configuration["options"]["max_output_tokens"] = json!(max_output_tokens);
+        if !options.generation().is_default() {
+            configuration["options"]["generation"] = json!(options.generation());
         }
 
         HostRequest::from_configuration(id, configuration)
@@ -1481,13 +1481,17 @@ impl Harness {
         Ok(())
     }
 
-    /// Rejects a text-mode turn before execution when the model cannot
-    /// answer in plain text.
+    /// Rejects a turn before execution when the model cannot answer in its
+    /// output mode or apply its generation settings.
     fn check_output_capability(&self, options: &TurnOptions) -> Result<(), TurnError> {
-        options
-            .output()
-            .check_text_support(self.inner.model.as_ref())
-            .map_err(TurnError::from)
+        let model = self.inner.model.as_ref();
+        options.output().require_text_support_if_text(model)?;
+        let generation = options.generation();
+        if !generation.is_default() {
+            model.validate_generation(&generation)?;
+        }
+
+        Ok(())
     }
 
     fn default_options(&self, output: OutputMode) -> TurnOptions {
