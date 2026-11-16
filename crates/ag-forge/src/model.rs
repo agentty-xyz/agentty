@@ -463,6 +463,10 @@ pub struct ReviewCheckFailure {
     pub name: String,
     /// Normalized failure label such as `Failure` or `Timed out`.
     pub outcome: String,
+    /// Forge id of the workflow run or pipeline whose failed jobs
+    /// [`ReviewRequestClient::rerun_failed_checks`](crate::ReviewRequestClient::rerun_failed_checks)
+    /// can rerun, or `None` when the forge cannot rerun this check that way.
+    pub rerun_id: Option<String>,
     /// Browser-openable details URL, when the forge reports one.
     pub web_url: Option<String>,
 }

@@ -6,6 +6,7 @@ with the `{{ forge_cli }}` CLI when it is available, or reproduce it locally. Th
 the root cause. A failed check and a review comment may report the same problem: fix it
 once, and still return one `review_comment_outcomes` item for every thread ID. When a
 failure is unrelated to this branch or cannot be fixed here, leave the worktree
-unchanged for it and explain why.
+unchanged for it and explain why. Do not rerun checks: Agentty reruns the failures that
+this turn leaves unfixed.
 
 {{ fenced_failed_checks }}

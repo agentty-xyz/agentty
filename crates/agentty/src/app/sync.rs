@@ -936,7 +936,7 @@ async fn sync_review_request_status(
 /// their stored web URL when the worktree has already disappeared or no longer
 /// resolves as a repository, allowing terminal PR/MR state to still be
 /// observed.
-async fn review_request_remote(
+pub(crate) async fn review_request_remote(
     folder: PathBuf,
     git_client: &dyn GitClient,
     linked_review_request: Option<&crate::domain::session::ReviewRequest>,

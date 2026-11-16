@@ -126,6 +126,23 @@ pub trait ReviewRequestClient: Send + Sync {
         trusted_bots: Vec<String>,
     ) -> ForgeFuture<Result<ReviewRequestAttention, ReviewRequestError>>;
 
+    /// Reruns the failed jobs of each workflow run or pipeline named by
+    /// `rerun_ids`, taken from
+    /// [`ReviewCheckFailure::rerun_id`](crate::ReviewCheckFailure::rerun_id).
+    ///
+    /// Each distinct id is rerun once, in order, so several failed checks
+    /// from one workflow run or pipeline request one rerun.
+    ///
+    /// # Errors
+    /// Returns a provider-specific review-request error when an id is
+    /// malformed or the forge rejects a rerun. Reruns requested before the
+    /// failing one are not reverted.
+    fn rerun_failed_checks(
+        &self,
+        remote: ForgeRemote,
+        rerun_ids: Vec<String>,
+    ) -> ForgeFuture<Result<(), ReviewRequestError>>;
+
     /// Adds one reply to an existing review thread.
     ///
     /// # Errors
@@ -296,6 +313,23 @@ impl ReviewRequestClient for RealReviewRequestClient {
         })
     }
 
+    fn rerun_failed_checks(
+        &self,
+        remote: ForgeRemote,
+        rerun_ids: Vec<String>,
+    ) -> ForgeFuture<Result<(), ReviewRequestError>> {
+        let mut distinct_rerun_ids = Vec::with_capacity(rerun_ids.len());
+        for rerun_id in rerun_ids {
+            if !distinct_rerun_ids.contains(&rerun_id) {
+                distinct_rerun_ids.push(rerun_id);
+            }
+        }
+
+        self.call_with_authenticated_adapter(remote, move |adapter, remote| {
+            adapter.rerun_authenticated_failed_checks(remote, distinct_rerun_ids)
+        })
+    }
+
     fn reply_to_thread(
         &self,
         remote: ForgeRemote,
@@ -389,6 +423,14 @@ pub(crate) trait ReviewRequestAdapter: Send + Sync {
         display_id: String,
         trusted_bots: Vec<String>,
     ) -> ForgeFuture<Result<ReviewRequestAttention, ReviewRequestError>>;
+
+    /// Reruns the failed jobs of each distinct workflow run or pipeline in
+    /// `rerun_ids` after authentication.
+    fn rerun_authenticated_failed_checks(
+        &self,
+        remote: ForgeRemote,
+        rerun_ids: Vec<String>,
+    ) -> ForgeFuture<Result<(), ReviewRequestError>>;
 
     /// Adds one reply after authentication.
     fn reply_to_authenticated_thread(

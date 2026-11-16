@@ -9,17 +9,20 @@
 
 use std::collections::{HashMap, HashSet};
 use std::fmt::Write as _;
+use std::path::PathBuf;
+use std::sync::Arc;
 
 use ag_forge::{
     ReviewCheckFailure, ReviewCommentSnapshot, ReviewCommentThread, ReviewRequestAttention,
 };
 use tracing::warn;
 
-use crate::app::App;
 use crate::app::prompt_intent::{
     ReviewCommentResolutionOutcome, build_resolve_review_comment_prompt,
 };
 use crate::app::session::{SessionTaskService, StatusTransition};
+use crate::app::sync::review_request_remote;
+use crate::app::{App, AppEvent};
 use crate::domain::session::{ReviewRequest, ReviewRequestState, SessionId, Status};
 use crate::domain::transcript_notice::TranscriptNotice;
 use crate::domain::transient_message::GeneratedTurnLabels;
@@ -59,6 +62,8 @@ pub(crate) struct ReviewWatchState {
     handled_keys: HashMap<SessionId, Vec<String>>,
     /// Review-request publication held while its watch question is open.
     pending_publish: Option<PendingReviewRequestPublish>,
+    /// Watched sessions whose forge rerun requests are still being sent.
+    reruns_in_flight: HashSet<SessionId>,
     /// Worker operation ids of admitted review-request publications that
     /// start watching their session once the review request is linked.
     watch_on_publish: HashSet<String>,
@@ -75,6 +80,7 @@ impl ReviewWatchState {
                 .map(|row| (SessionId::from(row.session_id), row.handled_keys))
                 .collect(),
             pending_publish: None,
+            reruns_in_flight: HashSet::new(),
             watch_on_publish: HashSet::new(),
         }
     }
@@ -95,6 +101,12 @@ impl ReviewWatchState {
     /// Returns whether automatic follow-up is enabled for `session_id`.
     pub(crate) fn is_watched(&self, session_id: &str) -> bool {
         self.handled_keys.contains_key(session_id)
+    }
+
+    /// Records that the forge rerun requests of `session_id` finished, so
+    /// later reports can count toward the rerun's result.
+    pub(crate) fn finish_rerun(&mut self, session_id: &str) {
+        self.reruns_in_flight.remove(session_id);
     }
 }
 
@@ -129,6 +141,22 @@ pub(crate) enum ReviewWatchAction {
         /// Commit the checks ran against.
         head_commit: String,
     },
+    /// Reports checks that still fail after every automatic attempt, so the
+    /// user knows review watch stopped acting on them.
+    LeaveChecks {
+        /// Checks that still fail for `head_commit`.
+        failed_checks: Vec<ReviewCheckFailure>,
+        /// Commit the checks ran against.
+        head_commit: String,
+    },
+    /// Asks the forge to rerun checks that still fail after an agent turn
+    /// left the head commit unchanged, such as flaky or unrelated failures.
+    RerunChecks {
+        /// Failed checks the forge can rerun.
+        failed_checks: Vec<ReviewCheckFailure>,
+        /// Commit the checks ran against.
+        head_commit: String,
+    },
     /// Syncs the session branch to resolve conflicts with its target.
     ResolveConflicts {
         /// Conflicting source-branch head commit.
@@ -146,6 +174,11 @@ impl ReviewWatchAction {
     /// Each conflict or check result is attempted once per head commit and
     /// each thread once per comment count, so an unsuccessful attempt is not
     /// repeated until the forge state changes.
+    ///
+    /// Checks that still fail at the same head commit after that turn were
+    /// not fixed by a new commit, so the forge reruns the rerunnable ones
+    /// once. Checks that fail after that rerun has run, or that cannot be
+    /// rerun, are left to the user with one notice.
     pub(crate) fn plan(
         attention: &ReviewRequestAttention,
         handled_keys: &[String],
@@ -156,12 +189,13 @@ impl ReviewWatchAction {
             return Some(Self::ResolveConflicts { head_commit });
         }
 
-        let failed_checks =
-            if !attention.has_pending_checks && is_unhandled(&checks_key(&head_commit)) {
-                attention.failed_checks.clone()
-            } else {
-                Vec::new()
-            };
+        let has_finished_failures =
+            !attention.has_pending_checks && !attention.failed_checks.is_empty();
+        let failed_checks = if has_finished_failures && is_unhandled(&checks_key(&head_commit)) {
+            attention.failed_checks.clone()
+        } else {
+            Vec::new()
+        };
         let threads = attention
             .review_threads
             .iter()
@@ -176,10 +210,47 @@ impl ReviewWatchAction {
             });
         }
 
-        (!failed_checks.is_empty()).then_some(Self::FixChecks {
-            failed_checks,
+        if !failed_checks.is_empty() {
+            return Some(Self::FixChecks {
+                failed_checks,
+                head_commit,
+            });
+        }
+        if !has_finished_failures {
+            return None;
+        }
+
+        let rerunnable_checks = attention
+            .failed_checks
+            .iter()
+            .filter(|check| check.rerun_id.is_some())
+            .cloned()
+            .collect::<Vec<_>>();
+        if !rerunnable_checks.is_empty() {
+            if is_unhandled(&rerun_key(&head_commit)) {
+                return Some(Self::RerunChecks {
+                    failed_checks: rerunnable_checks,
+                    head_commit,
+                });
+            }
+            // Until the rerun is known to have run, a report may predate
+            // it, so its failures are not yet its result.
+            if is_unhandled(&rerun_started_key(&head_commit)) {
+                return None;
+            }
+        }
+
+        is_unhandled(&checks_left_key(&head_commit)).then(|| Self::LeaveChecks {
+            failed_checks: attention.failed_checks.clone(),
             head_commit,
         })
+    }
+
+    /// Returns whether this follow-up acts on checks that an earlier attempt
+    /// already tried to fix, and so must wait until the forge reports that
+    /// attempt's commit.
+    fn follows_up_attempted_checks(&self) -> bool {
+        matches!(self, Self::LeaveChecks { .. } | Self::RerunChecks { .. })
     }
 
     /// Returns the keys that mark this follow-up as attempted.
@@ -195,6 +266,8 @@ impl ReviewWatchAction {
                 .chain((!failed_checks.is_empty()).then(|| checks_key(head_commit)))
                 .collect(),
             Self::FixChecks { head_commit, .. } => vec![checks_key(head_commit)],
+            Self::LeaveChecks { head_commit, .. } => vec![checks_left_key(head_commit)],
+            Self::RerunChecks { head_commit, .. } => vec![rerun_key(head_commit)],
             Self::ResolveConflicts { head_commit } => vec![conflict_key(head_commit)],
         }
     }
@@ -220,6 +293,14 @@ impl ReviewWatchAction {
             ),
             Self::FixChecks { failed_checks, .. } => {
                 format!("Fixing {}", failed_checks_summary(failed_checks))
+            }
+            Self::LeaveChecks { failed_checks, .. } => format!(
+                "Leaving {} to you after automatic attempts: {}",
+                counted(failed_checks.len(), "failing check"),
+                failed_check_names(failed_checks)
+            ),
+            Self::RerunChecks { failed_checks, .. } => {
+                format!("Rerunning {}", failed_checks_summary(failed_checks))
             }
             Self::ResolveConflicts { .. } => format!(
                 "Resolving merge conflicts with `{}`",
@@ -450,12 +531,27 @@ impl App {
             return;
         };
         let mut current_keys = retain_current_keys(handled_keys, &attention);
-        let is_watching = self
+        // A report fetched while rerun requests are still being sent cannot
+        // show their result, so it does not count toward leaving the checks.
+        if !self.review_watch.reruns_in_flight.contains(session_id) {
+            record_rerun_progress(&mut current_keys, &attention);
+        }
+        let watched_folder = self
             .sessions
             .session_for_id(session_id)
-            .is_some_and(|session| session.status == Status::Watching);
-        let follow_up = ReviewWatchAction::plan(&attention, &current_keys)
-            .filter(|_| is_watching)
+            .filter(|session| session.status == Status::Watching)
+            .map(|session| session.folder.clone());
+        let mut follow_up = ReviewWatchAction::plan(&attention, &current_keys).zip(watched_folder);
+        if let Some((action, folder)) = &follow_up
+            && action.follows_up_attempted_checks()
+            && !self
+                .is_reporting_session_head(session_id, folder.clone(), &attention.head_commit)
+                .await
+        {
+            follow_up = None;
+        }
+        let follow_up = follow_up
+            .map(|(action, _)| action)
             .zip(self.open_review_request(session_id));
         let Some((action, review_request)) = follow_up else {
             self.review_watch.failed_starts.remove(session_id);
@@ -492,6 +588,27 @@ impl App {
             }
         }
         self.store_review_watch_keys(session_id, current_keys).await;
+    }
+
+    /// Returns whether a forge report about `head_commit` describes the
+    /// latest commit of the session worktree in `folder`.
+    ///
+    /// A finished turn's commit is pushed after the turn ends. A report
+    /// fetched before that push lands, even one applied after it, still
+    /// names the previous head, so its failed checks only look unfixed.
+    async fn is_reporting_session_head(
+        &self,
+        session_id: &SessionId,
+        folder: PathBuf,
+        head_commit: &str,
+    ) -> bool {
+        !self.sessions.is_published_branch_syncing(session_id)
+            && self
+                .services
+                .git_client()
+                .head_hash(folder)
+                .await
+                .is_ok_and(|session_head| session_head == head_commit)
     }
 
     /// Reports that the forge facts of a watched session could not be loaded.
@@ -568,6 +685,10 @@ impl App {
                     Err("the session did not accept the prompt".to_string())
                 }
             }
+            ReviewWatchAction::LeaveChecks { .. } => Ok(()),
+            ReviewWatchAction::RerunChecks { failed_checks, .. } => {
+                self.start_failed_checks_rerun(session_id, review_request, &failed_checks)
+            }
             ReviewWatchAction::ResolveConflicts { .. } => {
                 // Session sync rebases onto the branch the session would
                 // publish against. A review request retargeted on the forge
@@ -590,6 +711,78 @@ impl App {
                     .map_err(|error| error.to_string())
             }
         }
+    }
+
+    /// Requests a forge rerun of `failed_checks` in the background, so the
+    /// reducer never waits on the forge.
+    ///
+    /// A rejected rerun is reported with one notice. Its checks keep failing,
+    /// so a later report leaves them to the user. Reports do not count
+    /// toward that until every request has finished and
+    /// [`AppEvent::ReviewWatchRerunFinished`] arrives.
+    fn start_failed_checks_rerun(
+        &mut self,
+        session_id: &SessionId,
+        review_request: &ReviewRequest,
+        failed_checks: &[ReviewCheckFailure],
+    ) -> Result<(), String> {
+        let folder = self
+            .sessions
+            .session_for_id(session_id)
+            .map(|session| session.folder.clone())
+            .ok_or("the session is no longer loaded")?;
+        let transcript = self
+            .sessions
+            .session_handles()
+            .get(session_id)
+            .map(|handles| Arc::clone(&handles.transcript))
+            .ok_or("the session has no runtime handles")?;
+        let rerun_ids = failed_checks
+            .iter()
+            .filter_map(|check| check.rerun_id.clone())
+            .collect::<Vec<_>>();
+        let db = self.services.db().clone();
+        let event_sender = self.services.event_sender();
+        let git_client = self.services.git_client();
+        let review_request = review_request.clone();
+        let review_request_client = self.services.review_request_client();
+        let session_update_versions = self.services.session_update_versions();
+        self.review_watch
+            .reruns_in_flight
+            .insert(session_id.clone());
+        let session_id = session_id.clone();
+
+        tokio::spawn(async move {
+            let rerun_result = match review_request_remote(
+                folder,
+                git_client.as_ref(),
+                Some(&review_request),
+                review_request_client.as_ref(),
+            )
+            .await
+            {
+                Ok(remote) => review_request_client
+                    .rerun_failed_checks(remote, rerun_ids)
+                    .await
+                    .map_err(|error| error.detail_message()),
+                Err(error) => Err(error),
+            };
+            if let Err(error) = rerun_result {
+                SessionTaskService::append_workflow_notice(
+                    &transcript,
+                    &db,
+                    &event_sender,
+                    &session_update_versions,
+                    &session_id,
+                    &TranscriptNotice::ReviewWatch
+                        .format(format!("Could not rerun the failing checks: {error}")),
+                )
+                .await;
+            }
+            let _ = event_sender.send(AppEvent::ReviewWatchRerunFinished { session_id });
+        });
+
+        Ok(())
     }
 
     /// Replaces the remembered follow-up keys of one watched session in
@@ -784,12 +977,17 @@ fn failed_checks_summary(failed_checks: &[ReviewCheckFailure]) -> String {
     format!(
         "{}: {}",
         counted(failed_checks.len(), "failing check"),
-        failed_checks
-            .iter()
-            .map(|check| check.name.as_str())
-            .collect::<Vec<_>>()
-            .join(", ")
+        failed_check_names(failed_checks)
     )
+}
+
+/// Joins failed check names for notices, such as `lint, test`.
+fn failed_check_names(failed_checks: &[ReviewCheckFailure]) -> String {
+    failed_checks
+        .iter()
+        .map(|check| check.name.as_str())
+        .collect::<Vec<_>>()
+        .join(", ")
 }
 
 /// Formats a count with a singular or plural noun.
@@ -811,6 +1009,10 @@ fn retain_current_keys(handled_keys: &[String], attention: &ReviewRequestAttenti
     let current_keys = [
         conflict_key(&attention.head_commit),
         checks_key(&attention.head_commit),
+        rerun_key(&attention.head_commit),
+        rerun_awaited_key(&attention.head_commit),
+        rerun_started_key(&attention.head_commit),
+        checks_left_key(&attention.head_commit),
     ]
     .into_iter()
     .chain(attention.review_threads.iter().map(thread_key))
@@ -823,6 +1025,36 @@ fn retain_current_keys(handled_keys: &[String], attention: &ReviewRequestAttenti
         .collect()
 }
 
+/// Remembers how far a rerun requested at `attention`'s head has progressed,
+/// so later failures count as that rerun's result rather than a report that
+/// predates it.
+///
+/// The forge showing checks running marks the rerun started. The first
+/// report of finished failures after the request may predate the rerun, so
+/// it only marks the rerun awaited. A later one marks it started, because a
+/// fast rerun can run and fail between two reports without ever being
+/// reported as running. Callers skip reports applied while the rerun
+/// requests are still being sent.
+fn record_rerun_progress(handled_keys: &mut Vec<String>, attention: &ReviewRequestAttention) {
+    let head_commit = &attention.head_commit;
+    let started_key = rerun_started_key(head_commit);
+    if !handled_keys.contains(&rerun_key(head_commit)) || handled_keys.contains(&started_key) {
+        return;
+    }
+
+    let awaited_key = rerun_awaited_key(head_commit);
+    if attention.has_pending_checks {
+        handled_keys.push(started_key);
+    } else if !attention.failed_checks.is_empty() {
+        let progress_key = if handled_keys.contains(&awaited_key) {
+            started_key
+        } else {
+            awaited_key
+        };
+        handled_keys.push(progress_key);
+    }
+}
+
 /// Key for one conflict-resolution attempt at `head_commit`.
 fn conflict_key(head_commit: &str) -> String {
     format!("conflict:{head_commit}")
@@ -831,6 +1063,27 @@ fn conflict_key(head_commit: &str) -> String {
 /// Key for one failed-check attempt at `head_commit`.
 fn checks_key(head_commit: &str) -> String {
     format!("checks:{head_commit}")
+}
+
+/// Key for one forge rerun of failed checks at `head_commit`.
+fn rerun_key(head_commit: &str) -> String {
+    format!("rerun:{head_commit}")
+}
+
+/// Key for the first report of finished failures after a rerun was
+/// requested at `head_commit`, which may predate that rerun.
+fn rerun_awaited_key(head_commit: &str) -> String {
+    format!("rerun-awaited:{head_commit}")
+}
+
+/// Key for the forge having run checks again after a rerun at `head_commit`.
+fn rerun_started_key(head_commit: &str) -> String {
+    format!("rerun-started:{head_commit}")
+}
+
+/// Key for the notice that leaves failed checks at `head_commit` to the user.
+fn checks_left_key(head_commit: &str) -> String {
+    format!("checks-left:{head_commit}")
 }
 
 /// Key for one attempt at a thread in its current conversation state.

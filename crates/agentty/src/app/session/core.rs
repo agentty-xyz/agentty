@@ -794,6 +794,14 @@ impl SessionManager {
         session.transient_messages.upsert(review_message);
     }
 
+    /// Returns whether a completed turn is still auto-pushing the published
+    /// branch of `session_id`.
+    pub(crate) fn is_published_branch_syncing(&self, session_id: &str) -> bool {
+        self.workflow_state
+            .published_branch_sync_operations
+            .contains_key(session_id)
+    }
+
     /// Marks one session branch as currently auto-syncing to its published
     /// upstream reference.
     pub(crate) fn start_published_branch_sync(

@@ -7,7 +7,8 @@ use mockall::Sequence;
 
 use super::support_test::{
     ReviewThreadFixture, associated_review_comment_node, current_user_review_comment_node,
-    github_remote, review_comment_node, review_threads_page, success_output, thread_comments_page,
+    failure_output, github_remote, review_comment_node, review_threads_page, success_output,
+    thread_comments_page,
 };
 use crate::client::ReviewRequestAdapter;
 use crate::command::MockForgeCommandRunner;
@@ -65,36 +66,7 @@ async fn fetch_authenticated_review_request_attention_reports_checks_conflicts_a
         .expect("GitHub attention fetch should succeed");
 
     // Assert
-    assert_eq!(
-        attention.failed_checks,
-        vec![
-            ReviewCheckFailure {
-                name: "test".to_string(),
-                outcome: "Failure".to_string(),
-                web_url: Some("https://github.com/agentty-xyz/agentty/runs/1".to_string()),
-            },
-            ReviewCheckFailure {
-                name: "slow".to_string(),
-                outcome: "Timed out".to_string(),
-                web_url: None,
-            },
-            ReviewCheckFailure {
-                name: "boot".to_string(),
-                outcome: "Startup failure".to_string(),
-                web_url: None,
-            },
-            ReviewCheckFailure {
-                name: "ci/legacy".to_string(),
-                outcome: "Error".to_string(),
-                web_url: Some("https://ci.example.com/build/7".to_string()),
-            },
-            ReviewCheckFailure {
-                name: String::new(),
-                outcome: "Failure".to_string(),
-                web_url: None,
-            },
-        ]
-    );
+    assert_eq!(attention.failed_checks, mixed_check_failures());
     assert!(attention.has_merge_conflict);
     assert!(attention.has_pending_checks);
     assert_eq!(attention.head_commit, HEAD_COMMIT);
@@ -318,6 +290,7 @@ fn parse_attention_pages_combines_checks_beyond_the_first_page() {
             vec![ReviewCheckFailure {
                 name: "late-test".to_string(),
                 outcome: "Failure".to_string(),
+                rerun_id: None,
                 web_url: None,
             }],
         ),
@@ -342,6 +315,66 @@ fn parse_attention_pages_combines_checks_beyond_the_first_page() {
         );
         assert_eq!(attention.head_commit, HEAD_COMMIT);
     }
+}
+
+#[test]
+fn parse_attention_pages_reads_rerun_ids_only_from_github_actions_run_urls() {
+    // Arrange
+    let mut other_app_run = check_run(
+        "other-app",
+        "COMPLETED",
+        Some("FAILURE"),
+        Some("https://github.com/agentty-xyz/agentty/actions/runs/5/job/1"),
+    );
+    other_app_run["checkSuite"] = serde_json::json!({"app": {"slug": "other-ci"}});
+    let contexts = [
+        actions_check_run(
+            "job-url",
+            Some("https://github.com/agentty-xyz/agentty/actions/runs/101/job/9"),
+        ),
+        actions_check_run(
+            "run-url",
+            Some("https://github.com/agentty-xyz/agentty/actions/runs/202?pr=1"),
+        ),
+        actions_check_run(
+            "plain-url",
+            Some("https://github.com/agentty-xyz/agentty/runs/3"),
+        ),
+        actions_check_run(
+            "non-numeric",
+            Some("https://github.com/agentty-xyz/agentty/actions/runs/latest"),
+        ),
+        actions_check_run(
+            "empty-id",
+            Some("https://github.com/agentty-xyz/agentty/actions/runs/"),
+        ),
+        actions_check_run("no-url", None),
+        other_app_run,
+    ];
+    let stdout = attention_json("MERGEABLE", &contexts);
+
+    // Act
+    let attention = GitHubReviewRequestAdapter::parse_attention_pages(&stdout, &[])
+        .expect("attention response should parse");
+
+    // Assert
+    let rerun_ids = attention
+        .failed_checks
+        .iter()
+        .map(|failure| (failure.name.as_str(), failure.rerun_id.as_deref()))
+        .collect::<Vec<_>>();
+    assert_eq!(
+        rerun_ids,
+        [
+            ("job-url", Some("101")),
+            ("run-url", Some("202")),
+            ("plain-url", None),
+            ("non-numeric", None),
+            ("empty-id", None),
+            ("no-url", None),
+            ("other-app", None),
+        ]
+    );
 }
 
 #[test]
@@ -542,6 +575,105 @@ async fn fetch_authenticated_review_request_attention_trusts_only_listed_bot_acc
     );
 }
 
+#[tokio::test]
+async fn rerun_authenticated_failed_checks_reruns_the_failed_jobs_of_each_workflow_run() {
+    // Arrange
+    let remote = github_remote();
+    let mut sequence = Sequence::new();
+    let mut command_runner = MockForgeCommandRunner::new();
+    for workflow_run_id in ["101", "202"] {
+        command_runner
+            .expect_run()
+            .once()
+            .in_sequence(&mut sequence)
+            .withf({
+                let remote = remote.clone();
+
+                move |command| {
+                    command
+                        == &GitHubReviewRequestAdapter::rerun_failed_jobs_command(
+                            &remote,
+                            workflow_run_id,
+                        )
+                }
+            })
+            .returning(|_| Box::pin(async { Ok(success_output(String::new())) }));
+    }
+    let adapter = GitHubReviewRequestAdapter::new(Arc::new(command_runner));
+
+    // Act
+    let result = adapter
+        .rerun_authenticated_failed_checks(
+            remote.clone(),
+            vec!["101".to_string(), "202".to_string()],
+        )
+        .await;
+
+    // Assert
+    assert_eq!(result, Ok(()));
+    assert_eq!(
+        GitHubReviewRequestAdapter::rerun_failed_jobs_command(&remote, "101").arguments,
+        [
+            "api",
+            "--hostname",
+            "github.com",
+            "--method",
+            "POST",
+            "repos/agentty-xyz/agentty/actions/runs/101/rerun-failed-jobs"
+        ]
+    );
+}
+
+#[tokio::test]
+async fn rerun_authenticated_failed_checks_rejects_malformed_ids_before_any_request() {
+    // Arrange
+    let mut command_runner = MockForgeCommandRunner::new();
+    command_runner.expect_run().never();
+    let adapter = GitHubReviewRequestAdapter::new(Arc::new(command_runner));
+
+    // Act
+    let result = adapter
+        .rerun_authenticated_failed_checks(
+            github_remote(),
+            vec!["101".to_string(), "../pulls".to_string()],
+        )
+        .await;
+
+    // Assert
+    assert_eq!(
+        result,
+        Err(ReviewRequestError::OperationFailed {
+            forge_kind: ForgeKind::GitHub,
+            message: "rerun failed workflow-run jobs: invalid rerun id `../pulls`".to_string(),
+        })
+    );
+}
+
+#[tokio::test]
+async fn rerun_authenticated_failed_checks_reports_a_rejected_rerun() {
+    // Arrange
+    let mut command_runner = MockForgeCommandRunner::new();
+    command_runner
+        .expect_run()
+        .once()
+        .returning(|_| Box::pin(async { Ok(failure_output("HTTP 403: Forbidden".to_string())) }));
+    let adapter = GitHubReviewRequestAdapter::new(Arc::new(command_runner));
+
+    // Act
+    let result = adapter
+        .rerun_authenticated_failed_checks(github_remote(), vec!["101".to_string()])
+        .await;
+
+    // Assert
+    let error = result.expect_err("a rejected rerun should fail");
+    assert!(
+        error
+            .detail_message()
+            .contains("rerun failed workflow-run jobs: HTTP 403: Forbidden"),
+        "unexpected error: {error:?}"
+    );
+}
+
 #[test]
 fn attention_command_paginates_every_check_context_page() {
     // Arrange
@@ -609,14 +741,51 @@ fn attention_page(
     })
 }
 
+/// Returns the failures normalized from [`mixed_check_contexts`]; only the
+/// GitHub Actions check run with a workflow run id carries a rerun id.
+fn mixed_check_failures() -> Vec<ReviewCheckFailure> {
+    vec![
+        ReviewCheckFailure {
+            name: "test".to_string(),
+            outcome: "Failure".to_string(),
+            rerun_id: Some("101".to_string()),
+            web_url: Some(
+                "https://github.com/agentty-xyz/agentty/actions/runs/101/job/1".to_string(),
+            ),
+        },
+        ReviewCheckFailure {
+            name: "slow".to_string(),
+            outcome: "Timed out".to_string(),
+            rerun_id: None,
+            web_url: None,
+        },
+        ReviewCheckFailure {
+            name: "boot".to_string(),
+            outcome: "Startup failure".to_string(),
+            rerun_id: None,
+            web_url: None,
+        },
+        ReviewCheckFailure {
+            name: "ci/legacy".to_string(),
+            outcome: "Error".to_string(),
+            rerun_id: None,
+            web_url: Some("https://ci.example.com/build/7".to_string()),
+        },
+        ReviewCheckFailure {
+            name: String::new(),
+            outcome: "Failure".to_string(),
+            rerun_id: None,
+            web_url: None,
+        },
+    ]
+}
+
 /// Returns check runs and commit statuses covering every normalized outcome.
 fn mixed_check_contexts() -> Vec<serde_json::Value> {
     vec![
-        check_run(
+        actions_check_run(
             "test",
-            "COMPLETED",
-            Some("FAILURE"),
-            Some("https://github.com/agentty-xyz/agentty/runs/1"),
+            Some("https://github.com/agentty-xyz/agentty/actions/runs/101/job/1"),
         ),
         check_run("slow", "COMPLETED", Some("TIMED_OUT"), Some("")),
         check_run("boot", "COMPLETED", Some("STARTUP_FAILURE"), None),
@@ -651,6 +820,15 @@ fn check_run(
         "conclusion": conclusion,
         "detailsUrl": details_url
     })
+}
+
+/// Builds one failed GraphQL check-run context node reported by GitHub
+/// Actions.
+fn actions_check_run(name: &str, details_url: Option<&str>) -> serde_json::Value {
+    let mut node = check_run(name, "COMPLETED", Some("FAILURE"), details_url);
+    node["checkSuite"] = serde_json::json!({"app": {"slug": "github-actions"}});
+
+    node
 }
 
 /// Builds one GraphQL check-run context node reported by the app `app_slug`.

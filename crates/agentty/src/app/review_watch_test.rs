@@ -1,10 +1,11 @@
 //! Review-request watch tests.
 
 use std::sync::Arc;
+use std::time::Duration;
 
 use ag_forge::{
-    ReviewCheckFailure, ReviewComment, ReviewCommentAnchorSide, ReviewCommentThread,
-    ReviewRequestAttention,
+    ForgeRemote, MockReviewRequestClient, ReviewCheckFailure, ReviewComment,
+    ReviewCommentAnchorSide, ReviewCommentThread, ReviewRequestAttention, ReviewRequestError,
 };
 
 use super::{
@@ -67,12 +68,23 @@ fn review_thread(id: &str, comment_count: usize) -> ReviewCommentThread {
     }
 }
 
-/// Builds one failed check with an optional details URL.
+/// Builds one failed check with an optional details URL that the forge
+/// cannot rerun.
 fn failed_check(name: &str, web_url: Option<&str>) -> ReviewCheckFailure {
     ReviewCheckFailure {
         name: name.to_string(),
         outcome: "Failure".to_string(),
+        rerun_id: None,
         web_url: web_url.map(str::to_string),
+    }
+}
+
+/// Builds one failed check the forge can rerun through workflow run
+/// `rerun_id`.
+fn rerunnable_check(name: &str, rerun_id: &str) -> ReviewCheckFailure {
+    ReviewCheckFailure {
+        rerun_id: Some(rerun_id.to_string()),
+        ..failed_check(name, None)
     }
 }
 
@@ -102,6 +114,23 @@ async fn seed_review_session(
     );
 
     session_id
+}
+
+/// Returns the commit at the head of one session worktree, which follow-ups
+/// on already attempted checks require the forge to report.
+async fn session_head(app: &App, session_id: &str) -> String {
+    let folder = app
+        .sessions
+        .session_for_id(session_id)
+        .expect("session")
+        .folder
+        .clone();
+
+    app.services
+        .git_client()
+        .head_hash(folder)
+        .await
+        .expect("session head")
 }
 
 /// Returns the rendered live transcript of one session.
@@ -136,16 +165,22 @@ fn plan_prefers_conflicts_then_threads_with_completed_failed_checks() {
         "conflict:abc123".to_string(),
         "thread:thread-1:1".to_string(),
     ];
-    let everything_handled = vec![
+    let checks_handled = vec![
         "conflict:abc123".to_string(),
         "thread:thread-1:1".to_string(),
         "checks:abc123".to_string(),
     ];
+    let everything_handled = [
+        checks_handled.clone(),
+        vec!["checks-left:abc123".to_string()],
+    ]
+    .concat();
 
     // Act
     let conflict = ReviewWatchAction::plan(&attention, &[]);
     let comments = ReviewWatchAction::plan(&attention, &conflict_handled);
     let checks = ReviewWatchAction::plan(&attention, &comments_handled);
+    let left = ReviewWatchAction::plan(&attention, &checks_handled);
     let nothing = ReviewWatchAction::plan(&attention, &everything_handled);
 
     // Assert
@@ -170,7 +205,65 @@ fn plan_prefers_conflicts_then_threads_with_completed_failed_checks() {
             head_commit: "abc123".to_string(),
         })
     );
+    assert_eq!(
+        left,
+        Some(ReviewWatchAction::LeaveChecks {
+            failed_checks: vec![failed_check("test", None)],
+            head_commit: "abc123".to_string(),
+        })
+    );
     assert_eq!(nothing, None);
+}
+
+#[test]
+fn plan_reruns_rerunnable_checks_once_before_leaving_unfixed_checks_to_the_user() {
+    // Arrange
+    let attention = ReviewRequestAttention {
+        failed_checks: vec![rerunnable_check("test", "101"), failed_check("sonar", None)],
+        head_commit: "abc123".to_string(),
+        ..ReviewRequestAttention::default()
+    };
+    let pending = ReviewRequestAttention {
+        has_pending_checks: true,
+        ..attention.clone()
+    };
+    let passing = ReviewRequestAttention {
+        failed_checks: Vec::new(),
+        ..attention.clone()
+    };
+    let fix_attempted = vec!["checks:abc123".to_string()];
+    let rerun_requested = vec!["checks:abc123".to_string(), "rerun:abc123".to_string()];
+    let rerun_started = [
+        rerun_requested.clone(),
+        vec!["rerun-started:abc123".to_string()],
+    ]
+    .concat();
+
+    // Act
+    let rerun = ReviewWatchAction::plan(&attention, &fix_attempted);
+    let rerun_not_yet_started = ReviewWatchAction::plan(&attention, &rerun_requested);
+    let rerun_pending = ReviewWatchAction::plan(&pending, &rerun_started);
+    let rerun_passed = ReviewWatchAction::plan(&passing, &rerun_started);
+    let left = ReviewWatchAction::plan(&attention, &rerun_started);
+
+    // Assert
+    assert_eq!(
+        rerun,
+        Some(ReviewWatchAction::RerunChecks {
+            failed_checks: vec![rerunnable_check("test", "101")],
+            head_commit: "abc123".to_string(),
+        })
+    );
+    assert_eq!(rerun_not_yet_started, None);
+    assert_eq!(rerun_pending, None);
+    assert_eq!(rerun_passed, None);
+    assert_eq!(
+        left,
+        Some(ReviewWatchAction::LeaveChecks {
+            failed_checks: vec![rerunnable_check("test", "101"), failed_check("sonar", None)],
+            head_commit: "abc123".to_string(),
+        })
+    );
 }
 
 #[test]
@@ -289,6 +382,22 @@ fn actions_describe_their_follow_up_and_handled_keys() {
             "Fixing 1 failing check: test",
             vec!["checks:abc123".to_string()],
         ),
+        (
+            ReviewWatchAction::RerunChecks {
+                failed_checks: vec![rerunnable_check("test", "101")],
+                head_commit: "abc123".to_string(),
+            },
+            "Rerunning 1 failing check: test",
+            vec!["rerun:abc123".to_string()],
+        ),
+        (
+            ReviewWatchAction::LeaveChecks {
+                failed_checks: vec![failed_check("test", None), failed_check("lint", None)],
+                head_commit: "abc123".to_string(),
+            },
+            "Leaving 2 failing checks to you after automatic attempts: test, lint",
+            vec!["checks-left:abc123".to_string()],
+        ),
     ];
 
     for (action, expected_notice, expected_keys) in cases {
@@ -326,6 +435,11 @@ fn failed_checks_prompt_fences_forge_data_and_names_the_forge_cli() {
         prompt
             .text
             .contains("Do not create commits and do not push.")
+    );
+    assert!(
+        prompt
+            .text
+            .contains("Do not rerun checks: Agentty reruns the failures")
     );
     assert!(
         prompt.text.ends_with(
@@ -829,9 +943,10 @@ async fn attention_starts_one_follow_up_and_remembers_it() {
     let (mut app, _base_dir) = new_git_test_app().await;
     let session_id = seed_review_session(&mut app, Status::Review, ReviewRequestState::Open).await;
     app.enable_review_watch(&session_id).await;
+    let head = session_head(&app, &session_id).await;
     let failed_checks = ReviewRequestAttention {
         failed_checks: vec![failed_check("test", None), failed_check("lint", None)],
-        head_commit: "abc123".to_string(),
+        head_commit: head.clone(),
         ..ReviewRequestAttention::default()
     };
 
@@ -852,7 +967,7 @@ async fn attention_starts_one_follow_up_and_remembers_it() {
         .expect("watch rows");
     assert_eq!(
         persisted_rows[0].handled_keys,
-        vec!["checks:abc123".to_string()]
+        vec![format!("checks:{head}"), format!("checks-left:{head}")]
     );
     let transcript = transcript(&app, &session_id);
     assert_eq!(
@@ -862,6 +977,433 @@ async fn attention_starts_one_follow_up_and_remembers_it() {
         1,
         "{transcript}"
     );
+    assert_eq!(
+        transcript
+            .matches(
+                "[Review Watch] Leaving 2 failing checks to you after automatic attempts: test, \
+                 lint"
+            )
+            .count(),
+        1,
+        "{transcript}"
+    );
+}
+
+#[tokio::test]
+async fn unfixed_checks_are_rerun_in_the_background_and_a_rejected_rerun_is_reported() {
+    // Arrange
+    let (mut app, _base_dir) = new_git_test_app().await;
+    let session_id = seed_review_session(&mut app, Status::Review, ReviewRequestState::Open).await;
+    app.enable_review_watch(&session_id).await;
+    let head = session_head(&app, &session_id).await;
+    app.review_watch
+        .handled_keys
+        .insert(session_id.clone(), vec![format!("checks:{head}")]);
+    let mut review_request_client = MockReviewRequestClient::new();
+    review_request_client
+        .expect_detect_remote()
+        .once()
+        .returning(|_| Ok(github_remote()));
+    review_request_client
+        .expect_rerun_failed_checks()
+        .once()
+        .withf(|remote, rerun_ids| remote.project == "agentty" && rerun_ids == &["101".to_string()])
+        .returning(|_, _| {
+            Box::pin(async {
+                Err(ReviewRequestError::OperationFailed {
+                    forge_kind: ForgeKind::GitHub,
+                    message: "HTTP 403".to_string(),
+                })
+            })
+        });
+    app.services
+        .set_review_request_client(Arc::new(review_request_client));
+    let unfixed_checks = ReviewRequestAttention {
+        failed_checks: vec![rerunnable_check("test", "101"), failed_check("sonar", None)],
+        head_commit: head.clone(),
+        ..ReviewRequestAttention::default()
+    };
+
+    // Act
+    app.apply_review_request_attention(&session_id, unfixed_checks.clone())
+        .await;
+    let rejected_rerun_notice = wait_for_transcript_text(
+        &app,
+        &session_id,
+        "[Review Watch] Could not rerun the failing checks: GitHub review-request operation \
+         failed: HTTP 403",
+    )
+    .await;
+    let keys_after_rerun = app.review_watch.handled_keys.get(&session_id).cloned();
+    app.apply_review_request_attention(&session_id, unfixed_checks.clone())
+        .await;
+    app.apply_review_request_attention(&session_id, unfixed_checks.clone())
+        .await;
+    let keys_while_rerun_in_flight = app.review_watch.handled_keys.get(&session_id).cloned();
+    let transcript_while_rerun_in_flight = transcript(&app, &session_id);
+    let rerun_finished = wait_for_rerun_finished(&mut app, &session_id).await;
+    app.apply_review_request_attention(&session_id, unfixed_checks.clone())
+        .await;
+    app.apply_review_request_attention(&session_id, unfixed_checks)
+        .await;
+
+    // Assert
+    assert_eq!(
+        keys_after_rerun,
+        Some(vec![format!("checks:{head}"), format!("rerun:{head}")])
+    );
+    assert_eq!(keys_while_rerun_in_flight, keys_after_rerun);
+    assert!(
+        !transcript_while_rerun_in_flight.contains("Leaving"),
+        "{transcript_while_rerun_in_flight}"
+    );
+    assert!(rerun_finished);
+    assert_eq!(handle_status(&app, &session_id), Status::Watching);
+    assert!(rejected_rerun_notice, "{}", transcript(&app, &session_id));
+    let transcript = transcript(&app, &session_id);
+    assert!(
+        transcript.contains("[Review Watch] Rerunning 1 failing check: test"),
+        "{transcript}"
+    );
+    assert_eq!(
+        transcript
+            .matches("[Review Watch] Leaving 2 failing checks to you after automatic attempts")
+            .count(),
+        1,
+        "{transcript}"
+    );
+}
+
+#[tokio::test]
+async fn rerun_reports_a_forge_remote_that_cannot_be_resolved() {
+    // Arrange
+    let (mut app, _base_dir) = new_git_test_app().await;
+    let session_id = seed_review_session(&mut app, Status::Review, ReviewRequestState::Open).await;
+    app.enable_review_watch(&session_id).await;
+    let head = session_head(&app, &session_id).await;
+    app.review_watch
+        .handled_keys
+        .insert(session_id.clone(), vec![format!("checks:{head}")]);
+    let mut review_request_client = MockReviewRequestClient::new();
+    review_request_client
+        .expect_detect_remote()
+        .once()
+        .returning(|repo_url| Err(ReviewRequestError::UnsupportedRemote { repo_url }));
+    review_request_client.expect_rerun_failed_checks().never();
+    app.services
+        .set_review_request_client(Arc::new(review_request_client));
+    let unfixed_checks = ReviewRequestAttention {
+        failed_checks: vec![rerunnable_check("test", "101")],
+        head_commit: head,
+        ..ReviewRequestAttention::default()
+    };
+
+    // Act
+    app.apply_review_request_attention(&session_id, unfixed_checks)
+        .await;
+    let unresolved_remote_notice = wait_for_transcript_text(
+        &app,
+        &session_id,
+        "[Review Watch] Could not rerun the failing checks: Review requests are only supported",
+    )
+    .await;
+
+    // Assert
+    assert!(
+        unresolved_remote_notice,
+        "{}",
+        transcript(&app, &session_id)
+    );
+}
+
+#[tokio::test]
+async fn accepted_rerun_finishes_without_a_rejection_notice() {
+    // Arrange
+    let (mut app, _base_dir) = new_git_test_app().await;
+    let session_id = seed_review_session(&mut app, Status::Review, ReviewRequestState::Open).await;
+    app.enable_review_watch(&session_id).await;
+    let head = session_head(&app, &session_id).await;
+    app.review_watch
+        .handled_keys
+        .insert(session_id.clone(), vec![format!("checks:{head}")]);
+    let mut review_request_client = MockReviewRequestClient::new();
+    review_request_client
+        .expect_detect_remote()
+        .once()
+        .returning(|_| Ok(github_remote()));
+    review_request_client
+        .expect_rerun_failed_checks()
+        .once()
+        .withf(|_, rerun_ids| rerun_ids == &["101".to_string()])
+        .returning(|_, _| Box::pin(async { Ok(()) }));
+    app.services
+        .set_review_request_client(Arc::new(review_request_client));
+    let unfixed_checks = ReviewRequestAttention {
+        failed_checks: vec![rerunnable_check("test", "101")],
+        head_commit: head.clone(),
+        ..ReviewRequestAttention::default()
+    };
+
+    // Act
+    app.apply_review_request_attention(&session_id, unfixed_checks)
+        .await;
+    let rerun_finished = wait_for_rerun_finished(&mut app, &session_id).await;
+
+    // Assert
+    assert!(rerun_finished);
+    assert_eq!(
+        app.review_watch.handled_keys.get(&session_id),
+        Some(&vec![format!("checks:{head}"), format!("rerun:{head}")])
+    );
+    let transcript = transcript(&app, &session_id);
+    assert!(
+        transcript.contains("[Review Watch] Rerunning 1 failing check: test"),
+        "{transcript}"
+    );
+    assert!(!transcript.contains("Could not rerun"), "{transcript}");
+    assert!(!transcript.contains("Leaving"), "{transcript}");
+}
+
+#[tokio::test]
+async fn unfixed_checks_wait_until_the_finished_turn_is_pushed() {
+    // Arrange
+    let (mut app, _base_dir) = new_git_test_app().await;
+    let session_id = seed_review_session(&mut app, Status::Review, ReviewRequestState::Open).await;
+    app.enable_review_watch(&session_id).await;
+    let head = session_head(&app, &session_id).await;
+    app.review_watch
+        .handled_keys
+        .insert(session_id.clone(), vec![format!("checks:{head}")]);
+    let unfixed_checks = ReviewRequestAttention {
+        failed_checks: vec![failed_check("sonar", None)],
+        head_commit: head.clone(),
+        ..ReviewRequestAttention::default()
+    };
+    app.sessions
+        .start_published_branch_sync(&session_id, "push-1".to_string());
+
+    // Act
+    app.apply_review_request_attention(&session_id, unfixed_checks.clone())
+        .await;
+    let keys_while_pushing = app.review_watch.handled_keys.get(&session_id).cloned();
+    app.sessions
+        .finish_published_branch_sync(&session_id, "push-1", None);
+    app.apply_review_request_attention(&session_id, unfixed_checks)
+        .await;
+
+    // Assert
+    assert_eq!(keys_while_pushing, Some(vec![format!("checks:{head}")]));
+    assert_eq!(
+        app.review_watch.handled_keys.get(&session_id),
+        Some(&vec![
+            format!("checks:{head}"),
+            format!("checks-left:{head}")
+        ])
+    );
+    let transcript = transcript(&app, &session_id);
+    assert_eq!(
+        transcript
+            .matches(
+                "[Review Watch] Leaving 1 failing check to you after automatic attempts: sonar"
+            )
+            .count(),
+        1,
+        "{transcript}"
+    );
+}
+
+#[tokio::test]
+async fn reports_fetched_before_the_fix_commit_was_pushed_leave_its_checks_alone() {
+    // Arrange
+    let (mut app, _base_dir) = new_git_test_app().await;
+    let session_id = seed_review_session(&mut app, Status::Review, ReviewRequestState::Open).await;
+    app.enable_review_watch(&session_id).await;
+    app.review_watch
+        .handled_keys
+        .insert(session_id.clone(), vec!["checks:abc123".to_string()]);
+    let replaced_head_checks = ReviewRequestAttention {
+        failed_checks: vec![rerunnable_check("test", "101"), failed_check("sonar", None)],
+        head_commit: "abc123".to_string(),
+        ..ReviewRequestAttention::default()
+    };
+    let mut review_request_client = MockReviewRequestClient::new();
+    review_request_client.expect_detect_remote().never();
+    review_request_client.expect_rerun_failed_checks().never();
+    app.services
+        .set_review_request_client(Arc::new(review_request_client));
+
+    // Act
+    app.apply_review_request_attention(&session_id, replaced_head_checks)
+        .await;
+
+    // Assert
+    assert_eq!(
+        app.review_watch.handled_keys.get(&session_id),
+        Some(&vec!["checks:abc123".to_string()])
+    );
+    let transcript = transcript(&app, &session_id);
+    assert!(!transcript.contains("Rerunning"), "{transcript}");
+    assert!(!transcript.contains("Leaving"), "{transcript}");
+}
+
+#[tokio::test]
+async fn rerun_checks_reported_running_are_left_to_the_user_once_they_finish_failing() {
+    // Arrange
+    let (mut app, _base_dir) = new_git_test_app().await;
+    let session_id = seed_review_session(&mut app, Status::Review, ReviewRequestState::Open).await;
+    app.enable_review_watch(&session_id).await;
+    let head = session_head(&app, &session_id).await;
+    app.review_watch.handled_keys.insert(
+        session_id.clone(),
+        vec![format!("checks:{head}"), format!("rerun:{head}")],
+    );
+    let finished_failures = ReviewRequestAttention {
+        failed_checks: vec![rerunnable_check("test", "101")],
+        head_commit: head.clone(),
+        ..ReviewRequestAttention::default()
+    };
+    let rerun_running = ReviewRequestAttention {
+        has_pending_checks: true,
+        ..finished_failures.clone()
+    };
+
+    // Act
+    app.apply_review_request_attention(&session_id, finished_failures.clone())
+        .await;
+    let transcript_before_rerun_started = transcript(&app, &session_id);
+    app.apply_review_request_attention(&session_id, rerun_running.clone())
+        .await;
+    app.apply_review_request_attention(&session_id, rerun_running)
+        .await;
+    let keys_after_rerun_started = app.review_watch.handled_keys.get(&session_id).cloned();
+    app.apply_review_request_attention(&session_id, finished_failures)
+        .await;
+
+    // Assert
+    assert!(
+        !transcript_before_rerun_started.contains("Leaving"),
+        "{transcript_before_rerun_started}"
+    );
+    assert_eq!(
+        keys_after_rerun_started,
+        Some(vec![
+            format!("checks:{head}"),
+            format!("rerun:{head}"),
+            format!("rerun-awaited:{head}"),
+            format!("rerun-started:{head}"),
+        ])
+    );
+    let transcript = transcript(&app, &session_id);
+    assert_eq!(
+        transcript
+            .matches("[Review Watch] Leaving 1 failing check to you after automatic attempts: test")
+            .count(),
+        1,
+        "{transcript}"
+    );
+}
+
+#[tokio::test]
+async fn rerun_checks_never_reported_running_are_left_to_the_user_after_a_later_report() {
+    // Arrange
+    let (mut app, _base_dir) = new_git_test_app().await;
+    let session_id = seed_review_session(&mut app, Status::Review, ReviewRequestState::Open).await;
+    app.enable_review_watch(&session_id).await;
+    let head = session_head(&app, &session_id).await;
+    app.review_watch.handled_keys.insert(
+        session_id.clone(),
+        vec![format!("checks:{head}"), format!("rerun:{head}")],
+    );
+    let finished_failures = ReviewRequestAttention {
+        failed_checks: vec![rerunnable_check("test", "101")],
+        head_commit: head.clone(),
+        ..ReviewRequestAttention::default()
+    };
+    let passing = ReviewRequestAttention {
+        failed_checks: Vec::new(),
+        ..finished_failures.clone()
+    };
+
+    // Act
+    app.apply_review_request_attention(&session_id, passing)
+        .await;
+    let keys_after_passing = app.review_watch.handled_keys.get(&session_id).cloned();
+    app.apply_review_request_attention(&session_id, finished_failures.clone())
+        .await;
+    let transcript_after_awaited_report = transcript(&app, &session_id);
+    let keys_after_awaited_report = app.review_watch.handled_keys.get(&session_id).cloned();
+    app.apply_review_request_attention(&session_id, finished_failures.clone())
+        .await;
+    app.apply_review_request_attention(&session_id, finished_failures)
+        .await;
+
+    // Assert
+    assert_eq!(
+        keys_after_passing,
+        Some(vec![format!("checks:{head}"), format!("rerun:{head}")])
+    );
+    assert_eq!(
+        keys_after_awaited_report,
+        Some(vec![
+            format!("checks:{head}"),
+            format!("rerun:{head}"),
+            format!("rerun-awaited:{head}"),
+        ])
+    );
+    assert!(
+        !transcript_after_awaited_report.contains("Leaving"),
+        "{transcript_after_awaited_report}"
+    );
+    let transcript = transcript(&app, &session_id);
+    assert_eq!(
+        transcript
+            .matches("[Review Watch] Leaving 1 failing check to you after automatic attempts: test")
+            .count(),
+        1,
+        "{transcript}"
+    );
+}
+
+/// Builds the GitHub remote returned by mocked remote detection.
+fn github_remote() -> ForgeRemote {
+    ForgeRemote {
+        command_working_directory: None,
+        forge_kind: ForgeKind::GitHub,
+        host: "github.com".to_string(),
+        namespace: "agentty-xyz".to_string(),
+        project: "agentty".to_string(),
+        repo_url: "https://github.com/agentty-xyz/agentty.git".to_string(),
+        web_url: "https://github.com/agentty-xyz/agentty".to_string(),
+    }
+}
+
+/// Waits up to five seconds for background work to append `text` to the
+/// session transcript, returning whether it appeared.
+async fn wait_for_transcript_text(app: &App, session_id: &str, text: &str) -> bool {
+    for _ in 0..500 {
+        if transcript(app, session_id).contains(text) {
+            return true;
+        }
+
+        tokio::time::sleep(Duration::from_millis(10)).await;
+    }
+
+    false
+}
+
+/// Applies queued app events for up to five seconds until the rerun requests
+/// of `session_id` are reported finished, returning whether they were.
+async fn wait_for_rerun_finished(app: &mut App, session_id: &SessionId) -> bool {
+    for _ in 0..500 {
+        app.process_pending_app_events().await;
+        if !app.review_watch.reruns_in_flight.contains(session_id) {
+            return true;
+        }
+
+        tokio::time::sleep(Duration::from_millis(10)).await;
+    }
+
+    false
 }
 
 #[tokio::test]
@@ -925,6 +1467,14 @@ fn retained_keys_match_the_current_head_commit_and_thread_states() {
         "thread:thread-gone:1",
         "thread:thread-2:1",
         "checks:abc123",
+        "rerun:old456",
+        "rerun:abc123",
+        "rerun-awaited:old456",
+        "rerun-awaited:abc123",
+        "rerun-started:old456",
+        "rerun-started:abc123",
+        "checks-left:old456",
+        "checks-left:abc123",
         "conflict:abc123",
     ]
     .map(str::to_string);
@@ -935,7 +1485,15 @@ fn retained_keys_match_the_current_head_commit_and_thread_states() {
     // Assert
     assert_eq!(
         retained_keys,
-        ["thread:thread-2:1", "checks:abc123", "conflict:abc123"]
+        [
+            "thread:thread-2:1",
+            "checks:abc123",
+            "rerun:abc123",
+            "rerun-awaited:abc123",
+            "rerun-started:abc123",
+            "checks-left:abc123",
+            "conflict:abc123"
+        ]
     );
 }
 
@@ -945,7 +1503,11 @@ async fn attention_drops_stale_keys_without_repeating_handled_follow_ups() {
     let (mut app, _base_dir) = new_git_test_app().await;
     let session_id = seed_review_session(&mut app, Status::Review, ReviewRequestState::Open).await;
     app.enable_review_watch(&session_id).await;
-    let current_keys = vec!["thread:thread-1:1".to_string(), "checks:abc123".to_string()];
+    let current_keys = vec![
+        "thread:thread-1:1".to_string(),
+        "checks:abc123".to_string(),
+        "checks-left:abc123".to_string(),
+    ];
     let stale_keys = (0..200).flat_map(|index| {
         [
             format!("checks:old{index}"),
@@ -986,6 +1548,7 @@ async fn attention_drops_stale_keys_without_repeating_handled_follow_ups() {
     let transcript = transcript(&app, &session_id);
     assert!(!transcript.contains("Addressing"), "{transcript}");
     assert!(!transcript.contains("Fixing"), "{transcript}");
+    assert!(!transcript.contains("Leaving"), "{transcript}");
 }
 
 /// Builds forge facts reporting only a merge conflict at `abc123`.
@@ -1039,8 +1602,10 @@ async fn attention_addresses_threads_and_failed_checks_in_one_turn() {
     let (mut app, _base_dir) = new_git_test_app().await;
     let session_id = seed_review_session(&mut app, Status::Review, ReviewRequestState::Open).await;
     app.enable_review_watch(&session_id).await;
+    let head = session_head(&app, &session_id).await;
     let attention = ReviewRequestAttention {
         failed_checks: vec![failed_check("test", None)],
+        head_commit: head.clone(),
         ..comment_attention()
     };
 
@@ -1056,7 +1621,8 @@ async fn attention_addresses_threads_and_failed_checks_in_one_turn() {
         app.review_watch.handled_keys.get(&session_id),
         Some(&vec![
             "thread:thread-1:1".to_string(),
-            "checks:abc123".to_string(),
+            format!("checks:{head}"),
+            format!("checks-left:{head}"),
         ])
     );
     let transcript = transcript(&app, &session_id);
@@ -1068,6 +1634,11 @@ async fn attention_addresses_threads_and_failed_checks_in_one_turn() {
         "{transcript}"
     );
     assert!(!transcript.contains("Fixing"), "{transcript}");
+    assert!(
+        transcript
+            .contains("[Review Watch] Leaving 1 failing check to you after automatic attempts"),
+        "{transcript}"
+    );
 }
 
 #[tokio::test]

@@ -324,6 +324,9 @@ pub(crate) enum AppEvent {
         result: Result<SyncReviewRequestTaskResult, String>,
         session_id: SessionId,
     },
+    /// Indicates that review watch finished sending one session's forge
+    /// rerun requests, whether or not the forge accepted them.
+    ReviewWatchRerunFinished { session_id: SessionId },
 }
 
 /// Ordered external effects planned before an app-event batch mutates state.
@@ -429,6 +432,9 @@ pub(super) struct AppEventBatch {
         Vec<(SessionId, u64, uuid::Uuid, app::review::ReviewProgress)>,
     pub(super) review_request_status_updates: Vec<ReviewRequestStatusUpdate>,
     pub(super) review_updates: Vec<(SessionId, ReviewUpdate)>,
+    /// Sessions whose review-watch rerun requests finished, applied before
+    /// review-request reports so the same batch's report can count.
+    pub(super) review_watch_reruns_finished: HashSet<SessionId>,
     pub(super) session_activity_updates: HashMap<SessionId, Option<String>>,
     pub(super) session_creations: Vec<(String, Result<String, String>)>,
     pub(super) session_diff_stats_updates: HashMap<SessionId, SessionDiffStats>,
@@ -739,7 +745,8 @@ impl AppEventBatch {
             | AppEvent::StackedParentSyncCompleted { .. }
             | AppEvent::StackedParentMergeCompleted { .. }
             | AppEvent::PublishedBranchSyncUpdated { .. }
-            | AppEvent::ReviewRequestStatusUpdated { .. }) => self.collect_workflow_event(event),
+            | AppEvent::ReviewRequestStatusUpdated { .. }
+            | AppEvent::ReviewWatchRerunFinished { .. }) => self.collect_workflow_event(event),
             AppEvent::ImplementerAttemptSucceeded { .. }
             | AppEvent::ProjectDiscoveryCompleted { .. }
             | AppEvent::ReviewProgressUpdated { .. }
@@ -913,6 +920,9 @@ impl AppEventBatch {
                 result,
                 session_id,
             } => self.collect_review_request_status_updated(generation, result, session_id),
+            AppEvent::ReviewWatchRerunFinished { session_id } => {
+                self.review_watch_reruns_finished.insert(session_id);
+            }
             // The exhaustive runtime dispatcher handles other event categories
             // before calling this collector.
             _ => unreachable!("event was already collected"),
@@ -1420,6 +1430,9 @@ impl App {
         event_batch: &mut AppEventBatch,
         sync_generation: u64,
     ) {
+        for session_id in std::mem::take(&mut event_batch.review_watch_reruns_finished) {
+            self.review_watch.finish_rerun(&session_id);
+        }
         let review_request_status_updates =
             std::mem::take(&mut event_batch.review_request_status_updates);
         let applied_review_request_status_update = review_request_status_updates
