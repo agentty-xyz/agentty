@@ -107,7 +107,7 @@ async fn legacy_history_keeps_its_schema_after_dropping_native_continuation() {
         .expect("session columns");
 
     // Assert
-    assert_eq!(loaded.schema, schema());
+    assert_eq!(loaded.output.schema(), Some(&schema()));
     assert_eq!(acquired.turns.len(), 2);
     assert!(!columns.iter().any(|column| column == "provider_session_id"));
 }
@@ -136,7 +136,7 @@ async fn corrupt_snapshots_are_rejected_on_reopen_and_before_reservation() {
     first.guard.disarm();
     let encoded = StoredTurnOptions::encode(&turn_options());
     let mut unsupported: Value = serde_json::from_str(&encoded).expect("snapshot");
-    unsupported["version"] = json!(6);
+    unsupported["version"] = json!(7);
     let invalid_schema = json!({"type": "invalid"});
     let schema_error = OutputSchema::new(invalid_schema.clone()).expect_err("invalid schema");
     let mut invalid: Value = serde_json::from_str(&encoded).expect("snapshot");
@@ -144,7 +144,7 @@ async fn corrupt_snapshots_are_rejected_on_reopen_and_before_reservation() {
     let cases = [
         (
             unsupported.to_string(),
-            "invalid persistent session data: unsupported turn options version 6".to_string(),
+            "invalid persistent session data: unsupported turn options version 7".to_string(),
             false,
         ),
         (
@@ -203,7 +203,7 @@ async fn version_two_snapshots_keep_their_fingerprint_rules() {
     let mut legacy = json!({
         "comparison_base": null,
         "max_tool_calls": 8,
-        "output_schema": options.schema().value(),
+        "output_schema": schema().value(),
         "tool_policy": options.tool_policy(),
         "version": 2,
     });
@@ -264,6 +264,6 @@ async fn version_two_snapshots_keep_their_fingerprint_rules() {
     assert!(stored.is_ok());
     assert_eq!(
         serde_json::from_str::<Value>(&snapshot).expect("new metadata")["version"],
-        5
+        6
     );
 }

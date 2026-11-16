@@ -56,6 +56,14 @@ mod run_test;
 #[path = "support/run_events.rs"]
 mod run_events_test;
 
+#[cfg(test)]
+#[path = "support/run_options.rs"]
+mod run_options_test;
+
+#[cfg(test)]
+#[path = "support/legacy_store.rs"]
+mod legacy_store_test;
+
 use std::error::Error;
 use std::ffi::OsString;
 use std::io::{self, Cursor};
@@ -238,7 +246,7 @@ async fn external_model_reads_tool_results_and_retains_chat_history() -> Result<
                 .file_system(NameFileSystem)
                 .allow(Tool::Read);
             let mut chat = harness
-                .session(format!("external-{batched}"), request()?.schema().clone())
+                .session(format!("external-{batched}"), extraction_schema()?)
                 .system_prompt("Extract names")
                 .create()
                 .await?;
@@ -387,7 +395,7 @@ async fn external_tool_call_still_requires_harness_permission() -> Result<(), Bo
 
     // Act
     let outcome = harness
-        .run_once("Read the name", request()?.schema().clone())
+        .run_once("Read the name", extraction_schema()?)
         .await?;
 
     // Assert
@@ -714,14 +722,15 @@ fn external_consumer_constructs_lifecycle_trace_observer() {
 }
 
 fn request() -> Result<ModelRequest, OutputSchemaError> {
-    Ok(ModelRequest::new(
-        "extract the name",
-        OutputSchema::new(json!({
-            "type": "object",
-            "properties": {"name": {"type": "string"}},
-            "required": ["name"]
-        }))?,
-    ))
+    Ok(ModelRequest::new("extract the name", extraction_schema()?))
+}
+
+fn extraction_schema() -> Result<OutputSchema, OutputSchemaError> {
+    OutputSchema::new(json!({
+        "type": "object",
+        "properties": {"name": {"type": "string"}},
+        "required": ["name"]
+    }))
 }
 
 #[tokio::test]
@@ -749,7 +758,7 @@ async fn external_consumer_creates_and_reopens_persistent_session() -> Result<()
         .database(directory.path().join("harness.db"));
 
     let builder: SessionBuilder = harness
-        .session("external-session", request()?.schema().clone())
+        .session("external-session", extraction_schema()?)
         .system_prompt("Extract names");
 
     // Act
@@ -782,7 +791,7 @@ async fn durable_session_requires_explicit_storage() -> Result<(), Box<dyn Error
 
     // Act
     let error = harness
-        .session("external-session", request()?.schema().clone())
+        .session("external-session", extraction_schema()?)
         .create()
         .await
         .err()
@@ -838,7 +847,7 @@ async fn session_info_exposes_stored_model_identity() -> Result<(), Box<dyn Erro
     let harness =
         Harness::new(ExternalMetadataModel, unbounded_context_budget()).database(&database);
     let session = harness
-        .session("external-session", request()?.schema().clone())
+        .session("external-session", extraction_schema()?)
         .create()
         .await?;
     drop(session);
@@ -908,7 +917,7 @@ async fn external_metadata_provider_reaches_harness_lifecycle() -> Result<(), Bo
 
     // Act
     let output = harness
-        .run_once("extract the name", request()?.schema().clone())
+        .run_once("extract the name", extraction_schema()?)
         .await?;
 
     // Assert
@@ -960,7 +969,7 @@ async fn external_observer_set_fans_out_lifecycle_events() -> Result<(), Box<dyn
 
     // Act
     let output = harness
-        .run_once("extract the name", request()?.schema().clone())
+        .run_once("extract the name", extraction_schema()?)
         .await?;
 
     // Assert
@@ -1023,7 +1032,7 @@ async fn external_consumer_observes_a_repeated_call_nudge_then_stop() -> Result<
 
     // Act
     let result = harness
-        .run_once("Read the name", request()?.schema().clone())
+        .run_once("Read the name", extraction_schema()?)
         .await;
 
     // Assert
@@ -1123,7 +1132,7 @@ async fn applied_write_survives_model_failure_and_session_reopen() -> Result<(),
             harness
         };
         let mut session = harness
-            .session("write-failure", request()?.schema().clone())
+            .session("write-failure", extraction_schema()?)
             .create()
             .await?;
 
@@ -1182,7 +1191,7 @@ async fn explicit_options_support_both_entry_points_and_retain_history_after_rev
             directory.path(),
         ))
         .file_system(NameFileSystem);
-    let schema = request()?.schema().clone();
+    let schema = extraction_schema()?;
     let policy = ToolPolicy::default().allow(Tool::Read);
     let options = TurnOptions::new(schema.clone(), policy);
 
@@ -1247,7 +1256,7 @@ async fn explicit_options_support_both_entry_points_and_retain_history_after_rev
         summary: "name.txt".to_string(),
     };
     assert_eq!((repeated.name(), repeated.path()), ("read", "name.txt"));
-    assert_eq!(options.schema(), &schema);
+    assert_eq!(options.schema(), Some(&schema));
     assert!(options.tool_policy().allows(Tool::Read));
     let requests = requests
         .lock()
@@ -1307,19 +1316,19 @@ async fn host_comparison_api_supports_both_entry_points_and_nested_scope()
         .repository(repository)
         .database(directory.path().join("comparison.db"));
     let options = TurnOptions::new(
-        request()?.schema().clone(),
+        extraction_schema()?,
         ToolPolicy::default().allow(Tool::Read),
     )
     .with_comparison_base(base.clone());
     let run_request = RunRequest::new("inspect base")
-        .output(request()?.schema().clone())
+        .output(extraction_schema()?)
         .tool_policy(ToolPolicy::default().allow(Tool::Read))
         .comparison_base(base.clone());
 
     // Act
     let once = harness.turn("inspect base", options.clone()).await?;
     let mut session = harness
-        .session("comparison", request()?.schema().clone())
+        .session("comparison", extraction_schema()?)
         .create()
         .await?;
     let durable = session.turn("inspect base").options(options).await?;
@@ -1393,7 +1402,7 @@ async fn ordered_image_input_round_trips_through_sqlite_reopen() -> Result<(), B
     )
     .database(directory.path().join("images.db"));
     let mut session = harness
-        .session("images", request()?.schema().clone())
+        .session("images", extraction_schema()?)
         .create()
         .await?;
     let input = external_image_input(b"payload")?;
@@ -1446,7 +1455,7 @@ async fn image_input_beyond_the_context_budget_is_rejected_before_acquisition()
     )
     .store(Arc::new(store.clone()));
     let mut session = harness
-        .session("budget", request()?.schema().clone())
+        .session("budget", extraction_schema()?)
         .create()
         .await?;
     let oversized = external_image_input(&[0; 512])?;
@@ -1499,7 +1508,7 @@ async fn image_input_beyond_the_history_budget_is_rejected_before_acquisition()
     .store(Arc::new(store.clone()))
     .max_history_bytes(NonZeroUsize::new(512).ok_or("budget")?);
     let mut session = harness
-        .session("history", request()?.schema().clone())
+        .session("history", extraction_schema()?)
         .create()
         .await?;
     let oversized = external_image_input(&[0; 512])?;
@@ -1561,17 +1570,14 @@ async fn registered_models_reject_image_input_without_capability() -> Result<(),
     let text_registry = registry(false);
     let harness = Harness::from_registry(&text_registry, "echo")?.store(Arc::new(store.clone()));
     let mut session = harness
-        .session("no-images", request()?.schema().clone())
+        .session("no-images", extraction_schema()?)
         .create()
         .await?;
 
     // Act
     let durable = session.send(external_image_input(b"payload")?).await;
     let ephemeral = harness
-        .run_once(
-            external_image_input(b"payload")?,
-            request()?.schema().clone(),
-        )
+        .run_once(external_image_input(b"payload")?, extraction_schema()?)
         .await;
 
     // Assert
@@ -1593,10 +1599,7 @@ async fn registered_models_reject_image_input_without_capability() -> Result<(),
     let vision_registry = registry(true);
     let capable = Harness::from_registry(&vision_registry, "echo")?;
     capable
-        .run_once(
-            external_image_input(b"payload")?,
-            request()?.schema().clone(),
-        )
+        .run_once(external_image_input(b"payload")?, extraction_schema()?)
         .await?;
 
     Ok(())
@@ -1609,7 +1612,7 @@ async fn models_without_image_opt_in_reject_image_input() -> Result<(), Box<dyn 
     let harness =
         Harness::new(ExternalModel, unbounded_context_budget()).store(Arc::new(store.clone()));
     let mut session = harness
-        .session("unregistered", request()?.schema().clone())
+        .session("unregistered", extraction_schema()?)
         .create()
         .await?;
     let mut registry = ModelRegistry::new();
@@ -1627,16 +1630,10 @@ async fn models_without_image_opt_in_reject_image_input() -> Result<(), Box<dyn 
     // Act
     let durable = session.send(external_image_input(b"payload")?).await;
     let ephemeral = harness
-        .run_once(
-            external_image_input(b"payload")?,
-            request()?.schema().clone(),
-        )
+        .run_once(external_image_input(b"payload")?, extraction_schema()?)
         .await;
     let declared = registered
-        .run_once(
-            external_image_input(b"payload")?,
-            request()?.schema().clone(),
-        )
+        .run_once(external_image_input(b"payload")?, extraction_schema()?)
         .await;
 
     // Assert
@@ -1680,7 +1677,7 @@ async fn image_host_requests_conflict_on_changed_content() -> Result<(), Box<dyn
     )
     .store(Arc::new(MemoryStore::new()))
     .execution_identity(ExecutionIdentity::new("echo", "1").expect("identity"));
-    let schema = request()?.schema().clone();
+    let schema = extraction_schema()?;
     let options = || TurnOptions::new(schema.clone(), ToolPolicy::default());
     let mut session = harness
         .session("host-images", schema.clone())
@@ -1906,10 +1903,7 @@ async fn session_and_turn_failures_classify_through_the_crate_root() -> Result<(
         Ok(_) => return Err("a missing session should not resume".into()),
         Err(error) => HarnessError::from(error),
     };
-    let rate_limited = match rate_limited
-        .run_once("extract", request()?.schema().clone())
-        .await
-    {
+    let rate_limited = match rate_limited.run_once("extract", extraction_schema()?).await {
         Ok(_) => return Err("a rate-limited model should fail the turn".into()),
         Err(error) => RunError::from(error),
     };

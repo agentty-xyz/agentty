@@ -609,10 +609,10 @@ fn a_shared_prefix_summary_continues_the_canonical_request_last_sent() {
         )
     );
     assert!(!instruction.contains("Carry forward"));
-    assert_eq!(job.request().prefix_schema(), Some(request.schema()));
+    assert_eq!(job.request().prefix_schema(), request.schema());
     assert_eq!(
         job.request().schema(),
-        &summary_schema().expect("summary schema")
+        Some(&summary_schema().expect("summary schema"))
     );
     assert_eq!(
         u64::try_from(job.source_bytes()).expect("bytes fit u64"),

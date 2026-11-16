@@ -26,7 +26,8 @@ tools, independent of Agentty UI and orchestration.
 
 ## Invariants
 
-- Require an output schema for every request and validate every response locally.
+- Validate every final response locally: against the request's output schema, or as
+  bounded text for a request in text output mode.
 - Return explicit errors for unsupported capabilities; never weaken the shared contract.
 - Validate and retain provider metadata at construction.
 - Keep response bodies and diagnostics bounded, and apply duration telemetry uniformly.

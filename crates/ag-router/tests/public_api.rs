@@ -1063,3 +1063,108 @@ async fn replays_assistant_system_reasoning_and_single_tool_call_history()
 
     Ok(())
 }
+
+#[tokio::test]
+async fn sends_the_output_bound_in_each_providers_field() -> Result<(), Box<dyn std::error::Error>>
+{
+    // Arrange
+    let cases = [
+        (
+            "muse/muse-spark-1.3",
+            Provider::Muse,
+            "max_completion_tokens",
+        ),
+        ("kimi/kimi-k3", Provider::Kimi, "max_tokens"),
+        ("qwen/qwen3.8-max", Provider::Qwen, "max_tokens"),
+        (
+            "openai-compatible/qwen3:8b",
+            Provider::OpenAiCompatible,
+            "max_tokens",
+        ),
+    ];
+
+    for (model, provider, field) in cases {
+        let server = MockServer::start().await;
+        Mock::given(method("POST"))
+            .and(path("/v1/chat/completions"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(completion(r#"{"name":"Ada"}"#)))
+            .expect(2)
+            .mount(&server)
+            .await;
+        let router = router(provider, &server)?;
+        let mut bounded = request(model)?;
+        bounded.options.max_output_tokens = Some(512);
+
+        // Act
+        router.execute(bounded).await?;
+        router.execute(request(model)?).await?;
+        let bounded_body = received_body(&server, 0).await?;
+        let unbounded_body = received_body(&server, 1).await?;
+
+        // Assert
+        assert_eq!(bounded_body[field], 512, "{model}");
+        let bound_fields = ["max_tokens", "max_completion_tokens"];
+        assert_eq!(
+            bound_fields
+                .iter()
+                .filter(|name| bounded_body.get(**name).is_some())
+                .count(),
+            1,
+            "{model}"
+        );
+        assert!(
+            bound_fields
+                .iter()
+                .all(|name| unbounded_body.get(*name).is_none()),
+            "{model}"
+        );
+    }
+
+    Ok(())
+}
+
+#[tokio::test]
+async fn answers_text_requests_with_unvalidated_text_and_marked_instructions()
+-> Result<(), Box<dyn std::error::Error>> {
+    // Arrange
+    let server = MockServer::start().await;
+    Mock::given(method("POST"))
+        .and(path("/v1/chat/completions"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(completion("Ada wrote it.")))
+        .expect(1)
+        .mount(&server)
+        .await;
+    let request = ModelRequest::text_chat(
+        "kimi/kimi-k3",
+        vec![
+            ModelMessage::User("Who wrote it?".to_string()),
+            ModelMessage::Instructions("Answer in one sentence.".to_string()),
+        ],
+        Vec::new(),
+    );
+
+    // Act
+    let completion = router(Provider::Kimi, &server)?.execute(request).await?;
+    let body = received_body(&server, 0).await?;
+
+    // Assert
+    let Completion::Text { text, metadata, .. } = completion else {
+        return Err("terminal text expected".into());
+    };
+    assert_eq!(text, "Ada wrote it.");
+    assert_eq!(metadata.finish_reason(), "stop");
+    assert!(body.get("response_format").is_none());
+    assert_eq!(
+        body["messages"],
+        json!([
+            {"content": "Who wrote it?", "role": "user"},
+            {
+                "content": "[harness] Instructions from the application for this turn:\n\nAnswer \
+                            in one sentence.",
+                "role": "user"
+            }
+        ])
+    );
+
+    Ok(())
+}

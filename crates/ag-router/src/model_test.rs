@@ -53,11 +53,25 @@ fn chat_request_exposes_required_schema_messages_and_tools() {
     // Assert
     assert_eq!(request.messages().len(), 1);
     assert_eq!(request.tools()[0].name(), "lookup");
-    assert!(request.schema().has_object_root());
+    assert!(request.schema().is_some_and(OutputSchema::has_object_root));
     assert_eq!(
         request.model_reasoning_effort(),
         Some(ReasoningEffort::High)
     );
+}
+
+#[test]
+fn text_chat_request_has_no_schema() {
+    // Arrange
+    let messages = vec![ModelMessage::User("hello".to_string())];
+
+    // Act
+    let request = ModelRequest::text_chat("openai/gpt-5.5", messages, Vec::new());
+
+    // Assert
+    assert!(request.schema().is_none());
+    assert!(request.response_format.is_none());
+    assert_eq!(request.messages().len(), 1);
 }
 
 #[test]

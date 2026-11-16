@@ -86,15 +86,19 @@ impl ResponsesBackend {
         Ok(())
     }
 
-    /// Generates raw structured output from one streamed response.
+    /// Generates raw structured output, or plain text for a request without
+    /// a response format, from one streamed response.
     pub(crate) async fn generate(
         &self,
         request: &model::ModelRequest,
     ) -> Result<GeneratedResponse, model::ModelError> {
-        self.validate_schema(request.schema())?;
+        if let Some(schema) = request.schema() {
+            self.validate_schema(schema)?;
+        }
         let payload = ResponsesPayload {
             include: ["reasoning.encrypted_content"],
             input: Self::input(request),
+            max_output_tokens: request.options.max_output_tokens,
             model: &self.model,
             parallel_tool_calls: true,
             prompt_cache_key: request.options.prompt_cache_key.as_deref(),
@@ -105,14 +109,14 @@ impl ResponsesBackend {
                 }),
             store: false,
             stream: true,
-            text: TextPayload {
+            text: request.response_format.as_ref().map(|format| TextPayload {
                 format: TextFormat {
                     kind: "json_schema",
-                    name: request.response_format.name(),
-                    schema: request.schema().value(),
+                    name: format.name(),
+                    schema: format.schema().value(),
                     strict: false,
                 },
-            },
+            }),
             tools: request.tools().iter().map(FunctionTool::from).collect(),
         };
         let payload = serde_json::to_value(payload).map_err(model::ModelError::request)?;
@@ -163,7 +167,8 @@ impl ResponsesBackend {
                 model::ModelMessage::AssistantToolCalls(calls) => {
                     items.extend(Self::tool_call_items(calls));
                 }
-                model::ModelMessage::System(content) => {
+                model::ModelMessage::Instructions(content)
+                | model::ModelMessage::System(content) => {
                     items.push(InputItem::message("developer", content));
                 }
                 model::ModelMessage::ToolResult {
@@ -536,6 +541,8 @@ struct StreamedFailure {
 struct ResponsesPayload<'a> {
     include: [&'static str; 1],
     input: Vec<InputItem>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    max_output_tokens: Option<u32>,
     model: &'a str,
     parallel_tool_calls: bool,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -544,7 +551,8 @@ struct ResponsesPayload<'a> {
     reasoning: Option<ReasoningPayload>,
     store: bool,
     stream: bool,
-    text: TextPayload<'a>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    text: Option<TextPayload<'a>>,
     #[serde(skip_serializing_if = "Vec::is_empty")]
     tools: Vec<FunctionTool<'a>>,
 }

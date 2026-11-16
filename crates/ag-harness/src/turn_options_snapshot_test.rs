@@ -1,13 +1,15 @@
 //! Turn options snapshot tests: round trips, versioned fingerprints, and
 //! comparison metadata validation.
 
-use std::num::NonZeroUsize;
+use std::num::{NonZeroU32, NonZeroUsize};
 
 use serde_json::{Value, json};
 use sha2::{Digest as _, Sha256};
 
 use super::{StoredTurnOptions, StoredTurnOptionsError};
-use crate::{ComparisonBase, OutputSchema, Tool, ToolPolicy, TurnOptions};
+use crate::{
+    ComparisonBase, GenerationParams, OutputMode, OutputSchema, Tool, ToolPolicy, TurnOptions,
+};
 
 #[test]
 fn snapshots_round_trip_and_reject_unknown_or_invalid_configuration() {
@@ -17,7 +19,7 @@ fn snapshots_round_trip_and_reject_unknown_or_invalid_configuration() {
     let snapshot: Value = serde_json::from_str(&encoded).expect("snapshot JSON");
     let mut invalid = Vec::new();
     for (key, value) in [
-        ("version", json!(6)),
+        ("version", json!(7)),
         ("max_tool_calls", json!(0)),
         ("max_tool_calls", json!(8)),
         ("output_schema", json!({"type":"invalid"})),
@@ -38,9 +40,9 @@ fn snapshots_round_trip_and_reject_unknown_or_invalid_configuration() {
         .collect();
 
     // Assert
-    assert_eq!(decoded.output_schema, *options.schema().value());
+    assert_eq!(decoded.output_schema, *schema().value());
     assert_eq!(decoded.tool_policy, options.tool_policy());
-    assert_eq!(decoded.version, 5);
+    assert_eq!(decoded.version, 6);
     assert_eq!(decoded.max_tool_calls, None);
     assert!(snapshot.get("max_tool_calls").is_none());
     assert!(errors.iter().all(Result::is_err));
@@ -57,7 +59,7 @@ fn comparison_snapshots_preserve_identity_and_fingerprint_all_effective_options(
         .clone()
         .with_comparison_base(ComparisonBase::fixture("other-repository"));
     let permissions = TurnOptions::new(
-        plain.schema().clone(),
+        plain.output().clone(),
         plain.tool_policy().allow(Tool::Read),
     );
 
@@ -113,7 +115,7 @@ fn version_three_fingerprints_sort_nested_object_keys_and_preserve_array_order()
         })
         .collect();
     let mut reordered = versioned_snapshot(&options[0], 3);
-    reordered["output_schema"] = options[1].schema().value().clone();
+    reordered["output_schema"] = serde_json::from_str(schemas[1]).expect("schema JSON");
     let restored = StoredTurnOptions::decode(&reordered.to_string()).expect("reordered snapshot");
 
     // Assert
@@ -132,7 +134,7 @@ fn version_three_fingerprints_sort_nested_object_keys_and_preserve_array_order()
 fn version_one_options_remain_readable_but_never_imply_a_known_base() {
     // Arrange
     let options = turn_options();
-    let legacy = json!({"version":1, "output_schema":options.schema().value(), "tool_policy":options.tool_policy(), "max_tool_calls":8});
+    let legacy = json!({"version":1, "output_schema":schema().value(), "tool_policy":options.tool_policy(), "max_tool_calls":8});
     let mut conflicting = legacy.clone();
     conflicting["comparison_base"] = json!(ComparisonBase::fixture("repo").identity());
 
@@ -303,7 +305,7 @@ fn tool_call_limits_are_required_before_version_five_and_rejected_after() {
 }
 
 #[test]
-fn version_five_fingerprints_sort_object_keys_without_a_tool_call_limit() {
+fn current_fingerprints_sort_object_keys_without_a_tool_call_limit() {
     // Arrange
     let ordered =
         OutputSchema::new(json!({"type": "object", "required": ["name"]})).expect("ordered schema");
@@ -323,7 +325,7 @@ fn version_five_fingerprints_sort_object_keys_without_a_tool_call_limit() {
         .collect();
 
     // Assert
-    assert_eq!(snapshots[0].version, 5);
+    assert_eq!(snapshots[0].version, 6);
     assert!(
         !snapshots[0]
             .effective_options()
@@ -334,12 +336,50 @@ fn version_five_fingerprints_sort_object_keys_without_a_tool_call_limit() {
     assert_eq!(snapshots[0].fingerprint(), snapshots[1].fingerprint());
 }
 
+#[test]
+fn version_six_records_text_output_instructions_and_output_bounds() {
+    // Arrange
+    let tokens = NonZeroU32::new(256).expect("nonzero tokens");
+    let text = TurnOptions::new(OutputMode::Text, ToolPolicy::default())
+        .with_instructions("Answer tersely.")
+        .with_generation(GenerationParams::default().with_max_output_tokens(tokens));
+    let snapshot: Value =
+        serde_json::from_str(&StoredTurnOptions::encode(&text)).expect("snapshot JSON");
+    let mut downgraded = snapshot.clone();
+    downgraded["version"] = json!(5);
+    sign_snapshot(&mut downgraded);
+
+    // Act
+    let decoded = StoredTurnOptions::decode(&snapshot.to_string()).expect("text snapshot");
+    let legacy = StoredTurnOptions::decode(&downgraded.to_string());
+
+    // Assert
+    assert_eq!(decoded.output_schema, Value::Null);
+    assert_eq!(decoded.instructions.as_deref(), Some("Answer tersely."));
+    assert_eq!(decoded.max_output_tokens, Some(tokens));
+    assert_ne!(
+        decoded.fingerprint(),
+        StoredTurnOptions::decode(&StoredTurnOptions::encode(&turn_options()))
+            .expect("plain snapshot")
+            .fingerprint()
+    );
+    assert!(matches!(
+        legacy,
+        Err(StoredTurnOptionsError::InvalidData { .. })
+    ));
+}
+
 /// Rewrites a current snapshot as `version`, adding the default legacy
 /// tool-call limit and dropping fields that version did not record.
 fn versioned_snapshot(options: &TurnOptions, version: u8) -> Value {
     let mut snapshot: Value =
         serde_json::from_str(&StoredTurnOptions::encode(options)).expect("snapshot");
     snapshot["version"] = json!(version);
+    if version < 6 {
+        let fields = snapshot.as_object_mut().expect("object");
+        fields.remove("instructions");
+        fields.remove("max_output_tokens");
+    }
     if version < 5 {
         snapshot["max_tool_calls"] = json!(8);
     }

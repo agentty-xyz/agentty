@@ -2,6 +2,7 @@
 //! and responses, and model error classification.
 
 use std::io;
+use std::num::NonZeroU32;
 use std::path::PathBuf;
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
@@ -22,6 +23,7 @@ use crate::provider::{
     self, CHATGPT_GPT_6_SOL, ChatGptConfig, GPT_6_LUNA, KIMI_K3, KimiConfig, MuseConfig,
     OpenAiConfig, QWEN3_8_FLASH, QwenConfig,
 };
+use crate::request_option::{GenerationParams, OutputMode};
 use crate::schema_contract::{OutputSchema, OutputValidationError};
 use crate::store_fixture::image_input;
 use crate::tool::{ReadArguments, ToolCall};
@@ -195,6 +197,68 @@ async fn client_observes_success_unless_request_is_already_observed() {
         events[1].kind(),
         LifecycleEventKind::ModelRequestCompleted { .. }
     ));
+}
+
+#[tokio::test]
+async fn client_answers_text_requests_with_turn_instructions_and_an_output_bound() {
+    // Arrange
+    let server = MockServer::start().await;
+    Mock::given(method("POST"))
+        .and(path("/chat/completions"))
+        .and(wiremock::matchers::body_partial_json(json!({
+            "max_completion_tokens": 64
+        })))
+        .respond_with(ResponseTemplate::new(200).set_body_json(json!({
+            "choices": [{
+                "finish_reason": "stop",
+                "message": {"content": "Ada wrote it."}
+            }]
+        })))
+        .expect(1)
+        .mount(&server)
+        .await;
+    let client = ModelClient::muse(MuseConfig {
+        api_key: "test-key".to_string(),
+        base_url: server.uri(),
+        model: "muse-spark-1.3".to_string(),
+    })
+    .expect("valid model identity");
+    let tokens = NonZeroU32::new(64).expect("nonzero tokens");
+    let request = ModelRequest::new("Who wrote it?", OutputMode::Text)
+        .with_instructions(Some("Answer in one sentence."))
+        .with_generation(GenerationParams::default().with_max_output_tokens(tokens));
+
+    // Act
+    let completion = client
+        .complete(request.clone())
+        .await
+        .expect("text request completes");
+    let body: serde_json::Value = serde_json::from_slice(
+        &server.received_requests().await.expect("recorded requests")[0].body,
+    )
+    .expect("request body");
+
+    // Assert
+    assert!(Model::supports_text_output(&client));
+    assert!(!Model::supports_text_output(&ResponseOnlyModel));
+    assert_eq!(
+        completion.response().output(),
+        Some(&json!("Ada wrote it."))
+    );
+    assert!(body.get("response_format").is_none());
+    assert_eq!(body["messages"][1]["role"], "user");
+    assert!(
+        body["messages"][1]["content"]
+            .as_str()
+            .is_some_and(|content| content.ends_with("Answer in one sentence."))
+    );
+    assert_eq!(request.rounds_start(), 2);
+    assert_eq!(
+        request.instructions_message(),
+        Some(&ModelMessage::Instructions(
+            "Answer in one sentence.".to_string()
+        ))
+    );
 }
 
 #[tokio::test]
@@ -579,7 +643,7 @@ fn request_contains_prompt_and_schema() {
 
     // Assert
     assert_eq!(request.prompt(), "hello");
-    assert_eq!(request.schema(), &schema);
+    assert_eq!(request.schema(), Some(&schema));
     assert_eq!(request.tools(), []);
 }
 
@@ -1176,7 +1240,7 @@ fn continued_requests_route_the_schema_their_conversation_used() {
     assert_eq!(again.prefix_schema(), Some(&turn_schema));
     assert_eq!(again.messages().len(), 3);
     assert_eq!(routed.options.prefix_schema, Some(turn_schema));
-    assert_eq!(routed.schema(), &summary_schema);
+    assert_eq!(routed.schema(), Some(&summary_schema));
     assert_eq!(plain.options.prefix_schema, None);
 }
 

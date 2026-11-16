@@ -306,8 +306,8 @@ pub trait ContextEstimator: Send + Sync {
     /// Approximates the fixed cost a provider adds to every request beyond
     /// its messages and tool definitions, such as chat-template framing, the
     /// tool-calling preamble, and an output `schema` rendered into the
-    /// prompt.
-    fn request_weight(&self, schema: &OutputSchema) -> u64;
+    /// prompt; a plain-text request has no schema.
+    fn request_weight(&self, schema: Option<&OutputSchema>) -> u64;
 }
 
 /// Byte-rate estimator with per-model parameters: payload bytes at a rate of
@@ -430,15 +430,14 @@ impl ContextEstimator for HeuristicContextEstimator {
         Self::weigh(bytes, self.tool_tokens_per_kilobyte, self.tool_tokens)
     }
 
-    fn request_weight(&self, schema: &OutputSchema) -> u64 {
-        let schema_weight = if self.output_schema_in_prompt {
-            Self::weigh(
+    fn request_weight(&self, schema: Option<&OutputSchema>) -> u64 {
+        let schema_weight = match schema {
+            Some(schema) if self.output_schema_in_prompt => Self::weigh(
                 schema.value().to_string().len(),
                 self.message_tokens_per_kilobyte,
                 self.message_tokens,
-            )
-        } else {
-            0
+            ),
+            _ => 0,
         };
 
         self.request_tokens.saturating_add(schema_weight)
@@ -958,6 +957,10 @@ pub(crate) fn admit_mandatory_content(
     }
     let user_message = input.clone().into_user_message();
     required = required.saturating_add(estimator.message_weight(&user_message));
+    if let Some(instructions) = options.instructions() {
+        let message = ModelMessage::Instructions(instructions.to_string());
+        required = required.saturating_add(estimator.message_weight(&message));
+    }
     for tool in advertised_tools(options) {
         required = required.saturating_add(estimator.tool_definition_weight(&tool));
     }
@@ -1477,7 +1480,7 @@ impl ContextFit {
         }
         let messages = request.messages();
         let capacity = Self::capacity(budget);
-        let start = self.dropped_rounds.end.max(layout.input_index + 1);
+        let start = self.dropped_rounds.end.max(layout.rounds_start);
         let mut round_starts: Vec<usize> = (start..layout.latest_round)
             .filter(|index| is_tool_call_message(&messages[*index]))
             .collect();
@@ -1764,7 +1767,7 @@ impl ContextFit {
     /// round, and each round before it, newest first, until together they
     /// hold [`KEEP_RECENT_RESULTS`] tool results.
     fn recent_start(&self, messages: &[ModelMessage], layout: &Layout<'_>) -> usize {
-        let floor = self.dropped_rounds.end.max(layout.input_index + 1);
+        let floor = self.dropped_rounds.end.max(layout.rounds_start);
         let results = |range: Range<usize>| {
             messages[range]
                 .iter()
@@ -1807,7 +1810,7 @@ impl ContextFit {
         let floor = self
             .dropped_rounds
             .end
-            .max(layout.input_index + 1)
+            .max(layout.rounds_start)
             .max(self.cleared_calls_before);
         let share = capacity.saturating_mul(KEEP_REASONING_PERCENT) / 100;
         let mut start = layout.latest_round;
@@ -2192,7 +2195,7 @@ impl ContextFit {
         before: usize,
     ) -> bool {
         let messages = request.messages();
-        let start = self.dropped_rounds.end.max(layout.input_index + 1);
+        let start = self.dropped_rounds.end.max(layout.rounds_start);
         let Some(call_index) = messages
             .get(start..before)
             .and_then(|earlier| earlier.iter().position(is_tool_call_message))
@@ -2270,7 +2273,7 @@ impl ContextFit {
             .get(self.dropped_history_turns)
             .copied()
             .unwrap_or(layout.input_index);
-        let rounds_start = layout.input_index + 1;
+        let rounds_start = layout.rounds_start;
         let rounds_end = self.dropped_rounds.end.max(rounds_start);
         let mut messages = Vec::with_capacity(request.messages().len());
         for (index, message) in request.messages().iter().enumerate() {
@@ -2811,6 +2814,9 @@ struct Layout<'a> {
     /// count when the turn has none. Request-only messages, such as output
     /// feedback, may follow it.
     latest_round: usize,
+    /// Index after the current turn's input and host instructions, where
+    /// its tool rounds start; fitting never leaves out what precedes it.
+    rounds_start: usize,
 }
 
 impl<'a> Layout<'a> {
@@ -2826,6 +2832,7 @@ impl<'a> Layout<'a> {
             history_turn_starts: request.history_turn_starts(),
             input_index,
             latest_round,
+            rounds_start: request.rounds_start(),
         }
     }
 }

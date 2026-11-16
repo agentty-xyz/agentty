@@ -125,6 +125,7 @@ mod read;
 pub mod recovery;
 mod repetition;
 mod repository;
+mod request_option;
 mod reservation;
 mod round_summary;
 mod run;
@@ -150,6 +151,7 @@ pub use input::{ImageContent, ImageMediaType, InputBlock, TurnInput, TurnInputEr
 pub use model::{Model, ModelError};
 pub use policy::ToolPolicy;
 pub use repository::{Repository, RepositoryError};
+pub use request_option::{GenerationParams, OutputMode};
 pub use run::{
     CancelToken, FileChange, Run, RunHandle, RunOutcome, RunOutput, RunRequest, Unsettled, Usage,
 };

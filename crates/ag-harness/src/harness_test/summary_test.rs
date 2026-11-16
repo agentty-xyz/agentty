@@ -315,8 +315,11 @@ async fn summaries_continue_the_last_turn_request_for_a_model_that_keeps_its_pre
         summary.model_reasoning_effort(),
         Some(ReasoningEffort::High)
     );
-    assert_eq!(summary.prefix_schema(), Some(previous.schema()));
-    assert_eq!(summary.schema(), &summary_schema().expect("summary schema"));
+    assert_eq!(summary.prefix_schema(), previous.schema());
+    assert_eq!(
+        summary.schema(),
+        Some(&summary_schema().expect("summary schema"))
+    );
     assert!(carries(&last_turn_request(&requests), "cobalt-41"));
     assert_eq!(outcome.report().context_summary_failures(), 0);
     // The estimate that calibrates later requests weighs the turn's tools.

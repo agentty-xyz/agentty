@@ -369,7 +369,7 @@ impl ContextEstimator for ToolNameEstimator {
         0
     }
 
-    fn request_weight(&self, _schema: &OutputSchema) -> u64 {
+    fn request_weight(&self, _schema: Option<&OutputSchema>) -> u64 {
         0
     }
 }

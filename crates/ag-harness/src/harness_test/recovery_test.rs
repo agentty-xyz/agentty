@@ -52,7 +52,7 @@ async fn recovery_fingerprint_covers_effective_configuration_and_canonicalizes_s
             ToolPolicy::default(),
         ),
         TurnOptions::new(
-            options.schema().clone(),
+            options.output().clone(),
             ToolPolicy::default().allow(Tool::Read),
         ),
     ] {

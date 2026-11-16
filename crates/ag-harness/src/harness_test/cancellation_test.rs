@@ -22,6 +22,7 @@ use crate::file_system::FileSystem as _;
 use crate::harness::{DEFAULT_MAX_HISTORY_BYTES, Harness, Session, SessionHistory};
 use crate::model::ModelResponse;
 use crate::repository::Repository;
+use crate::request_option::OutputMode;
 use crate::reservation::{TURN_LEASE_RENEWAL_INTERVAL_SECONDS, TURN_LEASE_SECONDS};
 use crate::session::{Database, NewSession, SessionError, TimestampSource};
 use crate::store::SessionStore as _;
@@ -190,7 +191,7 @@ async fn active_session_turn_renews_its_lease_during_a_long_model_request() {
         harness: harness.clone(),
         history: SessionHistory::new(DEFAULT_MAX_HISTORY_BYTES),
         id: "session-a".to_string(),
-        schema: object_schema(),
+        output: OutputMode::Json(object_schema()),
         system_prompt: None,
     };
     let mut second = Session {
@@ -200,7 +201,7 @@ async fn active_session_turn_renews_its_lease_during_a_long_model_request() {
         harness,
         history: SessionHistory::new(DEFAULT_MAX_HISTORY_BYTES),
         id: "session-a".to_string(),
-        schema: object_schema(),
+        output: OutputMode::Json(object_schema()),
         system_prompt: None,
     };
 
@@ -293,7 +294,7 @@ async fn recovered_lease_cancels_the_original_model_request() {
         harness: harness.clone(),
         history: SessionHistory::new(DEFAULT_MAX_HISTORY_BYTES),
         id: "session-a".to_string(),
-        schema: object_schema(),
+        output: OutputMode::Json(object_schema()),
         system_prompt: None,
     };
     let mut second = Session {
@@ -303,7 +304,7 @@ async fn recovered_lease_cancels_the_original_model_request() {
         harness,
         history: SessionHistory::new(DEFAULT_MAX_HISTORY_BYTES),
         id: "session-a".to_string(),
-        schema: object_schema(),
+        output: OutputMode::Json(object_schema()),
         system_prompt: None,
     };
 
@@ -384,7 +385,7 @@ END
         harness,
         history: SessionHistory::new(DEFAULT_MAX_HISTORY_BYTES),
         id: "session-a".to_string(),
-        schema: object_schema(),
+        output: OutputMode::Json(object_schema()),
         system_prompt: None,
     };
 

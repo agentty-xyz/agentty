@@ -38,7 +38,10 @@ fn schema_recording_model(requests: Arc<Mutex<Vec<ModelRequest>>>, calls: usize)
         .expect_complete()
         .times(calls)
         .returning(move |request| {
-            let output = if request.schema().value()["type"] == "integer" {
+            let output = if request
+                .schema()
+                .is_some_and(|schema| schema.value()["type"] == "integer")
+            {
                 json!(42)
             } else {
                 json!({"summary": "done"})
@@ -55,17 +58,20 @@ fn assert_captured_turn_options(requests: &[ModelRequest], snapshots: &[Value]) 
     assert!(
         matches!(&requests[0].messages()[0], ModelMessage::System(prompt) if prompt == "captured")
     );
-    assert_eq!(requests[1].schema().value(), &json!({"type": "integer"}));
+    assert_eq!(
+        requests[1].schema().map(OutputSchema::value),
+        Some(&json!({"type": "integer"}))
+    );
     assert_eq!(requests[1].tools(), []);
     for index in [0, 2, 3] {
-        assert_eq!(requests[index].schema(), &object_schema());
+        assert_eq!(requests[index].schema(), Some(&object_schema()));
         assert_eq!(requests[index].tools().len(), 1);
     }
     for request in &requests[..4] {
         assert_eq!(request.model_reasoning_effort(), Some(ReasoningEffort::Low));
     }
     for request in &requests[4..] {
-        assert_eq!(request.schema(), &object_schema());
+        assert_eq!(request.schema(), Some(&object_schema()));
         assert_eq!(request.tools().len(), 2);
         assert_eq!(
             request.model_reasoning_effort(),
@@ -267,7 +273,10 @@ async fn changing_options_uses_canonical_state_without_changing_session_defaults
     let recorded = Arc::clone(&requests);
     let mut model = model();
     model.expect_complete().times(6).returning(move |request| {
-        let output = if request.schema().value()["type"] == "integer" {
+        let output = if request
+            .schema()
+            .is_some_and(|schema| schema.value()["type"] == "integer")
+        {
             json!(42)
         } else {
             json!({"summary": "done"})
@@ -332,8 +341,11 @@ async fn changing_options_uses_canonical_state_without_changing_session_defaults
     let requests = requests.lock().expect("requests lock");
     assert_eq!(requests[0].tools().len(), 0);
     assert_eq!(requests[1].tools().len(), 1);
-    assert_eq!(requests[2].schema().value(), &json!({"type":"integer"}));
-    assert_eq!(requests[4].schema(), &object_schema());
+    assert_eq!(
+        requests[2].schema().map(OutputSchema::value),
+        Some(&json!({"type":"integer"}))
+    );
+    assert_eq!(requests[4].schema(), Some(&object_schema()));
     assert_eq!(requests[4].tools().len(), 0);
     assert_eq!(requests[4].messages().len(), 9);
     let snapshots: Vec<Value> = snapshots
@@ -582,7 +594,7 @@ async fn reopening_keeps_comparison_fingerprints_across_key_order_changes() {
         let harness = new_harness();
         let mut session = if index == 0 {
             harness
-                .session("session", options.schema().clone())
+                .session("session", options.output().clone())
                 .create()
                 .await
                 .expect("new session")
@@ -611,7 +623,7 @@ async fn reopening_keeps_comparison_fingerprints_across_key_order_changes() {
     for (index, request) in requests.iter().enumerate() {
         assert_eq!(request.messages().len(), index * 2 + 1);
         assert!(request.tools()[0].description().contains(base.oid()));
-        assert_eq!(snapshots[index]["version"], 5);
+        assert_eq!(snapshots[index]["version"], 6);
         assert_eq!(snapshots[index]["comparison_base"], json!(base.identity()));
     }
     assert_eq!(snapshots[0]["fingerprint"], snapshots[1]["fingerprint"]);

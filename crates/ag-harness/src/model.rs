@@ -8,6 +8,7 @@
 
 use std::collections::HashSet;
 use std::error::Error;
+use std::num::NonZeroU32;
 use std::ops::Deref;
 use std::sync::Arc;
 use std::time::Duration;
@@ -32,6 +33,7 @@ pub use crate::model_registry::{
 use crate::provider::{
     self, ChatGptConfig, KimiConfig, MuseConfig, OpenAiCompatibleConfig, OpenAiConfig, QwenConfig,
 };
+use crate::request_option::{GenerationParams, OutputMode};
 use crate::schema_contract::{OutputSchema, OutputValidationError, bounded_diagnostic};
 use crate::{telemetry, tool};
 
@@ -96,6 +98,15 @@ pub trait Model: Send + Sync {
     /// last request and an appended instruction; otherwise, as by default,
     /// with a compact request of their own.
     fn keeps_prefix_across_schemas(&self) -> bool {
+        false
+    }
+
+    /// Returns whether the implementation answers requests in
+    /// [`OutputMode::Text`] with plain text, returned as a
+    /// [`ModelResponse::Output`] holding a JSON string. The default, `false`,
+    /// makes text-mode turns fail before execution with
+    /// [`ModelError::UnsupportedOutputSchema`]; [`ModelClient`] supports it.
+    fn supports_text_output(&self) -> bool {
         false
     }
 
@@ -283,6 +294,7 @@ impl ModelClient {
             Ok(completion) => {
                 let metadata = match &completion {
                     ag_router::Completion::Output { metadata, .. }
+                    | ag_router::Completion::Text { metadata, .. }
                     | ag_router::Completion::ToolCalls { metadata, .. } => metadata.clone(),
                 };
                 (Self::from_router_completion(completion), Some(metadata))
@@ -348,9 +360,6 @@ impl ModelClient {
         &self,
         request: &ModelRequest,
     ) -> Result<ag_router::ModelRequest, ModelError> {
-        let format =
-            ag_router::JsonSchemaFormat::new("ag_harness_output", request.schema().clone())
-                .map_err(Self::from_router_error)?;
         let messages = request
             .messages()
             .iter()
@@ -367,7 +376,18 @@ impl ModelClient {
                 )
             })
             .collect();
-        let mut routed = ag_router::ModelRequest::chat(&self.router_model, messages, tools, format);
+        let mut routed = match request.schema() {
+            Some(schema) => ag_router::ModelRequest::chat(
+                &self.router_model,
+                messages,
+                tools,
+                ag_router::JsonSchemaFormat::new("ag_harness_output", schema.clone())
+                    .map_err(Self::from_router_error)?,
+            ),
+            None => ag_router::ModelRequest::text_chat(&self.router_model, messages, tools),
+        };
+        routed.options.max_output_tokens =
+            request.generation().max_output_tokens.map(NonZeroU32::get);
         routed.options.reasoning_effort =
             request.model_reasoning_effort().map(|effort| match effort {
                 ReasoningEffort::Low => ag_router::ReasoningEffort::Low,
@@ -406,6 +426,7 @@ impl ModelClient {
                     .map(Self::to_router_call)
                     .collect::<Result<_, _>>()?,
             ),
+            ModelMessage::Instructions(content) => RoutedMessage::Instructions(content.clone()),
             ModelMessage::System(content) => RoutedMessage::System(content.clone()),
             ModelMessage::ToolResult {
                 call_id,
@@ -467,6 +488,12 @@ impl ModelClient {
                 metadata,
                 reasoning_content,
             } => ModelCompletion::new(metadata, ModelResponse::Output(value))
+                .with_reasoning_content(reasoning_content),
+            ag_router::Completion::Text {
+                text,
+                metadata,
+                reasoning_content,
+            } => ModelCompletion::new(metadata, ModelResponse::Output(Value::String(text)))
                 .with_reasoning_content(reasoning_content),
             ag_router::Completion::ToolCalls { calls, metadata } => {
                 let mut calls = Self::from_router_calls(calls)?;
@@ -602,6 +629,10 @@ impl Model for ModelClient {
             .unwrap_or(false)
     }
 
+    fn supports_text_output(&self) -> bool {
+        true
+    }
+
     async fn complete(&self, request: ModelRequest) -> Result<ModelCompletion, ModelError> {
         ModelClient::complete(self, request).await
     }
@@ -662,31 +693,34 @@ pub enum ModelMetadataError {
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct ModelRequest {
     cache_key: Option<String>,
+    generation: GenerationParams,
     history_turn_starts: Vec<usize>,
     input_index: usize,
     lifecycle_observed: bool,
     messages: Vec<ModelMessage>,
     model_reasoning_effort: Option<ReasoningEffort>,
+    output: OutputMode,
     prefix_schema: Option<OutputSchema>,
     prompt: String,
-    schema: OutputSchema,
     tools: Vec<tool::ToolDefinition>,
 }
 
 impl ModelRequest {
-    /// Creates a model request whose response must match `schema`.
+    /// Creates a model request whose final response takes the form of
+    /// `output`, usually a JSON [`OutputSchema`].
     ///
     /// Plain strings remain the text-only construction path; ordered
     /// text/image content uses an explicit [`TurnInput`].
-    pub fn new(input: impl Into<TurnInput>, schema: OutputSchema) -> Self {
-        Self::with_history(Vec::new(), input, schema)
+    pub fn new(input: impl Into<TurnInput>, output: impl Into<OutputMode>) -> Self {
+        Self::with_history(Vec::new(), input, output)
     }
 
     pub(crate) fn with_history(
         messages: Vec<ModelMessage>,
         input: impl Into<TurnInput>,
-        schema: OutputSchema,
+        output: impl Into<OutputMode>,
     ) -> Self {
+        let output = output.into();
         let input = input.into();
         let prompt = input.joined_text();
         let mut messages = messages;
@@ -695,14 +729,15 @@ impl ModelRequest {
 
         Self {
             cache_key: None,
+            generation: GenerationParams::default(),
             history_turn_starts: Vec::new(),
             input_index,
             lifecycle_observed: false,
             messages,
             model_reasoning_effort: None,
+            output,
             prefix_schema: None,
             prompt,
-            schema,
             tools: Vec::new(),
         }
     }
@@ -730,9 +765,23 @@ impl ModelRequest {
         &self.prompt
     }
 
-    /// Returns the schema that the response must match.
-    pub fn schema(&self) -> &OutputSchema {
-        &self.schema
+    /// Returns the form the final response must take.
+    ///
+    /// For [`OutputMode::Text`], adapters ask for plain text and return it
+    /// as a [`ModelResponse::Output`] holding a JSON string.
+    pub fn output(&self) -> &OutputMode {
+        &self.output
+    }
+
+    /// Returns the schema that the response must match, or `None` when the
+    /// final response is plain text.
+    pub fn schema(&self) -> Option<&OutputSchema> {
+        self.output.schema()
+    }
+
+    /// Returns the provider generation parameters of this completion.
+    pub fn generation(&self) -> GenerationParams {
+        self.generation
     }
 
     /// Returns the schema of the conversation this request continues when it
@@ -780,6 +829,39 @@ impl ModelRequest {
         self
     }
 
+    /// Sets provider generation parameters for this completion.
+    pub(crate) fn with_generation(mut self, generation: GenerationParams) -> Self {
+        self.generation = generation;
+
+        self
+    }
+
+    /// Places the turn's host `instructions`, if any, right after its input
+    /// and before any tool round, so they follow the cached prompt prefix.
+    pub(crate) fn with_instructions(mut self, instructions: Option<&str>) -> Self {
+        if let Some(instructions) = instructions {
+            self.messages.insert(
+                self.input_index + 1,
+                ModelMessage::Instructions(instructions.to_string()),
+            );
+        }
+
+        self
+    }
+
+    /// Returns the turn's host instructions message, if it carries one.
+    pub(crate) fn instructions_message(&self) -> Option<&ModelMessage> {
+        self.messages
+            .get(self.input_index + 1)
+            .filter(|message| matches!(message, ModelMessage::Instructions(_)))
+    }
+
+    /// Returns where the current turn's tool rounds start: after its input
+    /// and its host instructions, if any.
+    pub(crate) fn rounds_start(&self) -> usize {
+        self.input_index + 1 + usize::from(self.instructions_message().is_some())
+    }
+
     /// Marks where each projected history turn starts among the leading
     /// messages, so context fitting can drop the oldest turns whole.
     pub(crate) fn with_history_turn_starts(mut self, history_turn_starts: Vec<usize>) -> Self {
@@ -804,14 +886,15 @@ impl ModelRequest {
     pub(crate) fn with_fitted_messages(&self, messages: Vec<ModelMessage>) -> Self {
         Self {
             cache_key: self.cache_key.clone(),
+            generation: self.generation,
             history_turn_starts: Vec::new(),
             input_index: self.input_index,
             lifecycle_observed: self.lifecycle_observed,
             messages,
             model_reasoning_effort: self.model_reasoning_effort,
+            output: self.output.clone(),
             prefix_schema: self.prefix_schema.clone(),
             prompt: self.prompt.clone(),
-            schema: self.schema.clone(),
             tools: self.tools.clone(),
         }
     }
@@ -819,16 +902,16 @@ impl ModelRequest {
     /// Returns a copy of this request that appends `message` and asks for
     /// `schema`, keeping its tools, reasoning depth, and cache key, and
     /// naming its own schema as [`Self::prefix_schema`], so a provider can
-    /// serve the copy from this request's cached prefix.
+    /// serve the copy from this request's cached prefix. The harness
+    /// continues only requests for JSON output this way.
     pub(crate) fn continued_with(&self, message: ModelMessage, schema: OutputSchema) -> Self {
         let mut continued = self.with_fitted_messages(self.messages.clone());
         continued.messages.push(message);
-        continued.prefix_schema = Some(
-            self.prefix_schema
-                .clone()
-                .unwrap_or_else(|| self.schema.clone()),
-        );
-        continued.schema = schema;
+        continued.prefix_schema = self
+            .prefix_schema
+            .clone()
+            .or_else(|| self.schema().cloned());
+        continued.output = OutputMode::Json(schema);
 
         continued
     }
@@ -877,12 +960,17 @@ impl ModelRequest {
         self.record(ModelMessage::User(feedback))
     }
 
+    /// Appends the final output as assistant content: a text request's
+    /// output as its text, any other as JSON text.
     pub(crate) fn record_output_with_reasoning(
         &mut self,
         output: &Value,
         reasoning_content: Option<String>,
     ) {
-        let content = output.to_string();
+        let content = match output {
+            Value::String(text) if self.output == OutputMode::Text => text.clone(),
+            output => output.to_string(),
+        };
         self.messages.push(match reasoning_content {
             Some(reasoning_content) => ModelMessage::AssistantReasoning {
                 content,
@@ -960,6 +1048,12 @@ pub enum ModelMessage {
     AssistantToolCall(tool::ToolCall),
     /// An ordered assistant tool-call batch, followed by its ordered results.
     AssistantToolCalls(Vec<tool::ToolCall>),
+    /// Host instructions for one turn, placed right after its input (see
+    /// [`crate::TurnOptions::with_instructions`]). Adapters send them as
+    /// native developer or system instructions where the provider accepts
+    /// them mid-conversation, and otherwise as a user message marked as the
+    /// application's.
+    Instructions(String),
     /// Application-provided instructions for the conversation.
     System(String),
     /// Harness-produced feedback for one assistant tool call.
@@ -985,7 +1079,10 @@ impl ModelMessage {
     /// encoding. Images count their base64 data-URL length.
     pub fn retained_bytes(&self) -> usize {
         match self {
-            Self::Assistant(content) | Self::System(content) | Self::User(content) => content.len(),
+            Self::Assistant(content)
+            | Self::Instructions(content)
+            | Self::System(content)
+            | Self::User(content) => content.len(),
             Self::AssistantReasoning {
                 content,
                 reasoning_content,

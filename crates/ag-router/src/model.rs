@@ -56,6 +56,12 @@ pub enum ModelMessage {
     AssistantToolCall(ToolCall),
     /// Assistant function calls in one response.
     AssistantToolCalls(Vec<ToolCall>),
+    /// Host instructions for one turn, placed after the conversation prefix
+    /// so changing them keeps that prefix cacheable. The Responses API
+    /// receives them as a `developer` message; Chat Completions receives a
+    /// `user` message, since many chat templates accept system messages only
+    /// first.
+    Instructions(String),
     /// System instructions.
     System(String),
     /// Result of one prior function call.
@@ -90,7 +96,7 @@ pub enum Task {
     Chat(ChatRequest),
 }
 
-/// Validated JSON Schema output contract. This is the only response format.
+/// Validated JSON Schema output contract of a structured request.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct JsonSchemaFormat {
     name: String,
@@ -125,6 +131,10 @@ impl JsonSchemaFormat {
 /// Optional generation settings.
 #[derive(Clone, Debug, Default, Eq, PartialEq)]
 pub struct GenerationOptions {
+    /// Upper bound on generated tokens, reasoning included, sent as
+    /// `max_output_tokens` to the Responses API and as the provider's
+    /// `max_tokens` or `max_completion_tokens` to Chat Completions.
+    pub max_output_tokens: Option<u32>,
     /// Output schema of the conversation this request continues, when the
     /// request asks for a different one. Providers that state the output
     /// schema in a leading prompt message (see
@@ -149,14 +159,14 @@ pub struct ModelRequest {
     pub model: String,
     /// Model operation.
     pub task: Task,
-    /// Required JSON Schema output contract.
-    pub response_format: JsonSchemaFormat,
+    /// JSON Schema output contract, or `None` for a plain-text final answer.
+    pub response_format: Option<JsonSchemaFormat>,
     /// Generation settings.
     pub options: GenerationOptions,
 }
 
 impl ModelRequest {
-    /// Creates a chat request with a required JSON Schema format.
+    /// Creates a chat request whose final answer must match a JSON Schema.
     pub fn chat(
         model: impl Into<String>,
         messages: Vec<ModelMessage>,
@@ -166,7 +176,22 @@ impl ModelRequest {
         Self {
             model: model.into(),
             task: Task::Chat(ChatRequest { messages, tools }),
-            response_format,
+            response_format: Some(response_format),
+            options: GenerationOptions::default(),
+        }
+    }
+
+    /// Creates a chat request whose final answer is plain text, returned as
+    /// [`Completion::Text`].
+    pub fn text_chat(
+        model: impl Into<String>,
+        messages: Vec<ModelMessage>,
+        tools: Vec<ToolDefinition>,
+    ) -> Self {
+        Self {
+            model: model.into(),
+            task: Task::Chat(ChatRequest { messages, tools }),
+            response_format: None,
             options: GenerationOptions::default(),
         }
     }
@@ -185,9 +210,10 @@ impl ModelRequest {
         }
     }
 
-    /// Returns the required JSON Schema.
-    pub fn schema(&self) -> &OutputSchema {
-        self.response_format.schema()
+    /// Returns the JSON Schema of a structured request, or `None` when the
+    /// final answer is plain text.
+    pub fn schema(&self) -> Option<&OutputSchema> {
+        self.response_format.as_ref().map(JsonSchemaFormat::schema)
     }
 
     /// Returns requested reasoning effort.
@@ -312,13 +338,22 @@ impl CompletionUsage {
     }
 }
 
-/// Final JSON output or intermediate function calls.
+/// Final output or intermediate function calls.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub enum Completion {
     /// Schema-validated terminal output.
     Output {
         /// Validated JSON value.
         value: Value,
+        /// Provider response metadata.
+        metadata: CompletionMetadata,
+        /// Provider reasoning required for continuation.
+        reasoning_content: Option<String>,
+    },
+    /// Plain-text terminal output of a request without a response format.
+    Text {
+        /// Assistant text, bounded like structured output.
+        text: String,
         /// Provider response metadata.
         metadata: CompletionMetadata,
         /// Provider reasoning required for continuation.

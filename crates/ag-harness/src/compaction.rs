@@ -359,6 +359,9 @@ pub(crate) fn render_messages(messages: &[ModelMessage], max_text_bytes: usize) 
             ModelMessage::AssistantToolCalls(calls) => {
                 render_calls(calls, &mut call_numbers, max_text_bytes)
             }
+            ModelMessage::Instructions(content) => {
+                json!({ "role": "instructions", "text": bounded_text(content, max_text_bytes) })
+            }
             ModelMessage::System(content) => {
                 json!({ "role": "system", "text": bounded_text(content, max_text_bytes) })
             }

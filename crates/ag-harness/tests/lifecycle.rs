@@ -112,16 +112,17 @@ fn client(
 }
 
 fn request() -> ag_harness::model::ModelRequest {
-    ag_harness::model::ModelRequest::new(
-        "SECRET_PROMPT",
-        ag_harness::OutputSchema::new(json!({
-            "type": "object",
-            "properties": {"name": {"type": "string"}},
-            "required": ["name"],
-            "additionalProperties": false
-        }))
-        .expect("fixture schema should be valid"),
-    )
+    ag_harness::model::ModelRequest::new("SECRET_PROMPT", schema())
+}
+
+fn schema() -> ag_harness::OutputSchema {
+    ag_harness::OutputSchema::new(json!({
+        "type": "object",
+        "properties": {"name": {"type": "string"}},
+        "required": ["name"],
+        "additionalProperties": false
+    }))
+    .expect("fixture schema should be valid")
 }
 
 async fn wait_for_provider<Output: Debug>(
@@ -301,7 +302,7 @@ async fn harness_owns_model_events_without_duplicate_model_observation() {
 
     // Act
     let output = harness
-        .run_once("SECRET_PROMPT", request().schema().clone())
+        .run_once("SECRET_PROMPT", schema())
         .await
         .expect("harness request should complete");
 
@@ -376,11 +377,7 @@ async fn cancelling_harness_turn_closes_model_and_turn_lifecycles_once() {
     .with_lifecycle_observer(harness_events.clone());
 
     // Act
-    let mut turn = tokio::spawn(async move {
-        harness
-            .run_once("SECRET_PROMPT", request().schema().clone())
-            .await
-    });
+    let mut turn = tokio::spawn(async move { harness.run_once("SECRET_PROMPT", schema()).await });
     wait_for_provider(&request_started, &mut turn)
         .await
         .expect("pending request should reach the provider");
@@ -449,7 +446,7 @@ async fn durable_lifecycle_and_duration_include_completion_persistence() {
             }),
         );
         harness
-            .session("durable", request().schema().clone())
+            .session("durable", schema())
             .create()
             .await
             .expect("session should be created");

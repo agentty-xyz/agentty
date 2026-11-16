@@ -101,8 +101,9 @@ fn declared_heuristic_weights_use_their_rates_and_fixed_tokens() {
     let message = estimator.message_weight(&ModelMessage::User("x".repeat(1_000)));
     let tool =
         estimator.tool_definition_weight(&ToolDefinition::bash(Enforcement::FileSystemAndNetwork));
-    let request = estimator.request_weight(&schema);
-    let request_with_schema = in_prompt.request_weight(&schema);
+    let request = estimator.request_weight(Some(&schema));
+    let request_with_schema = in_prompt.request_weight(Some(&schema));
+    let text_request = in_prompt.request_weight(None);
 
     // Assert
     assert_eq!(message, 265);
@@ -118,8 +119,10 @@ fn declared_heuristic_weights_use_their_rates_and_fixed_tokens() {
     // `{"type":"object"}` is 17 bytes: 4 tokens at 225 per 1,000, plus the
     // 40 every message carries.
     assert_eq!(request_with_schema, 464);
+    // A plain-text request states no schema.
+    assert_eq!(text_request, 420);
     assert_eq!(
-        HeuristicContextEstimator::DEFAULT.request_weight(&schema),
+        HeuristicContextEstimator::DEFAULT.request_weight(Some(&schema)),
         0
     );
     assert_eq!(

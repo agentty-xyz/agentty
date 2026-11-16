@@ -30,6 +30,11 @@ pub(crate) const TOOL_AWARE_STRUCTURED_OUTPUT_INSTRUCTION: &str = concat!(
     "fences or other text.\n\nJSON Schema:\n",
 );
 
+/// Heading of a user message carrying [`model::ModelMessage::Instructions`],
+/// which marks the host's instructions apart from the user's own input.
+pub(crate) const TURN_INSTRUCTIONS_PREFIX: &str =
+    "[harness] Instructions from the application for this turn:\n\n";
+
 /// Structured-output representation selected by one Chat Completions provider.
 #[derive(Clone, Copy)]
 pub(crate) enum StructuredOutputMode {
@@ -75,6 +80,8 @@ pub(crate) struct ChatCompletionProviderPolicy {
     pub(crate) context_overflow_markers: &'static [&'static str],
     pub(crate) display_name: &'static str,
     pub(crate) image_input: bool,
+    /// Body field that carries [`model::GenerationOptions::max_output_tokens`].
+    pub(crate) max_tokens_field: MaxTokensField,
     /// Whether the provider accepts `prompt_cache_key`; providers that
     /// reject unknown body fields must leave it off.
     pub(crate) prompt_cache_key: bool,
@@ -82,6 +89,15 @@ pub(crate) struct ChatCompletionProviderPolicy {
     pub(crate) response_format_with_tools: bool,
     pub(crate) structured_output: StructuredOutputMode,
     pub(crate) unsupported_schema_reason: &'static str,
+}
+
+/// Chat Completions body field a provider reads as its output-token bound.
+#[derive(Clone, Copy)]
+pub(crate) enum MaxTokensField {
+    /// The current `OpenAI` name, `max_completion_tokens`.
+    MaxCompletionTokens,
+    /// The original `max_tokens`, which most compatible servers read.
+    MaxTokens,
 }
 
 /// Provider wire representation for a requested reasoning depth.
@@ -142,21 +158,34 @@ impl ChatCompletionBackend {
         Ok(())
     }
 
-    /// Generates raw structured output through the shared wire lifecycle.
+    /// Generates raw structured output, or plain text for a request without
+    /// a response format, through the shared wire lifecycle.
     pub(crate) async fn generate(
         &self,
         request: &model::ModelRequest,
     ) -> Result<GeneratedResponse, model::ModelError> {
-        self.validate_schema(request.schema())?;
+        if let Some(schema) = request.schema() {
+            self.validate_schema(schema)?;
+        }
         let tools: Vec<_> = request
             .tools()
             .iter()
             .map(ChatCompletionTool::from)
             .collect();
-        let response_format = (tools.is_empty() || self.policy.response_format_with_tools)
-            .then(|| self.response_format(&request.response_format));
+        let response_format = request
+            .response_format
+            .as_ref()
+            .filter(|_| tools.is_empty() || self.policy.response_format_with_tools)
+            .map(|format| self.response_format(format));
+        let max_output_tokens = request.options.max_output_tokens;
+        let (max_completion_tokens, max_tokens) = match self.policy.max_tokens_field {
+            MaxTokensField::MaxCompletionTokens => (max_output_tokens, None),
+            MaxTokensField::MaxTokens => (None, max_output_tokens),
+        };
         let payload = ChatCompletionPayload {
             enable_thinking: self.enable_thinking(request),
+            max_completion_tokens,
+            max_tokens,
             messages: self.messages(request)?,
             model: &self.model,
             prompt_cache_key: self
@@ -242,12 +271,14 @@ impl ChatCompletionBackend {
         request: &model::ModelRequest,
     ) -> Result<Vec<ChatCompletionMessagePayload>, model::ModelError> {
         let mut messages = Vec::with_capacity(request.messages().len() + 1);
-        if self.keeps_prefix_across_schemas() {
-            let schema = request
-                .options
-                .prefix_schema
-                .as_ref()
-                .unwrap_or_else(|| request.schema());
+        let prompt_schema = request
+            .options
+            .prefix_schema
+            .as_ref()
+            .or_else(|| request.schema());
+        if self.keeps_prefix_across_schemas()
+            && let Some(schema) = prompt_schema
+        {
             let instruction = match self.policy.structured_output {
                 StructuredOutputMode::SchemaPrompt => TOOL_AWARE_STRUCTURED_OUTPUT_INSTRUCTION,
                 StructuredOutputMode::JsonObject { .. } | StructuredOutputMode::JsonSchema => {
@@ -275,6 +306,12 @@ impl ChatCompletionBackend {
                         content: content.clone(),
                         reasoning_content: reasoning_content.clone(),
                         role: "assistant",
+                    });
+                }
+                model::ModelMessage::Instructions(content) => {
+                    messages.push(ChatCompletionMessagePayload::Text {
+                        content: format!("{TURN_INSTRUCTIONS_PREFIX}{content}"),
+                        role: "user",
                     });
                 }
                 model::ModelMessage::System(content) => {
@@ -607,6 +644,10 @@ impl ChatCompletionClient for ReqwestChatCompletionClient {
 struct ChatCompletionPayload<'a> {
     #[serde(skip_serializing_if = "Option::is_none")]
     enable_thinking: Option<bool>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    max_completion_tokens: Option<u32>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    max_tokens: Option<u32>,
     messages: Vec<ChatCompletionMessagePayload>,
     model: &'a str,
     #[serde(skip_serializing_if = "Option::is_none")]

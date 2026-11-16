@@ -285,7 +285,7 @@
       "description": "Validated final output of a successful run.\n\nIt serializes as `{\"type\": \"json\" | \"text\", \"value\": ...}`.",
       "oneOf": [
         {
-          "description": "JSON output validated against the run's output schema; every run\nproduces this while runs require an output schema.",
+          "description": "JSON output validated against the run's output schema.",
           "type": "object",
           "properties": {
             "type": {
@@ -300,7 +300,7 @@
           ]
         },
         {
-          "description": "Plain text output, reserved for a text output mode that a later\nrequest option selects.",
+          "description": "The final assistant text of a run in text output mode.",
           "type": "object",
           "properties": {
             "type": {
