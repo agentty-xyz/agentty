@@ -200,7 +200,6 @@ impl ChatCompletionBackend {
                 None => GeneratedResponse::failed(model::ModelError::InvalidResponse, metadata),
             }),
             "tool_calls" => Ok(Self::decode_tool_call(
-                request,
                 content.as_deref(),
                 self.policy
                     .structured_output
@@ -458,20 +457,18 @@ impl ChatCompletionBackend {
     }
 
     fn decode_tool_call(
-        request: &model::ModelRequest,
         content: Option<&str>,
         reasoning_content: Option<&str>,
         calls: Vec<ChatCompletionToolCall>,
         metadata: model::CompletionMetadata,
     ) -> GeneratedResponse {
-        match Self::decode_tool_call_parts(request, content, reasoning_content, calls) {
+        match Self::decode_tool_call_parts(content, reasoning_content, calls) {
             Ok(calls) => GeneratedResponse::tool_calls(calls, metadata),
             Err(error) => GeneratedResponse::failed(error, metadata),
         }
     }
 
     fn decode_tool_call_parts(
-        request: &model::ModelRequest,
         content: Option<&str>,
         reasoning_content: Option<&str>,
         calls: Vec<ChatCompletionToolCall>,
@@ -486,12 +483,8 @@ impl ChatCompletionBackend {
         for (index, call) in calls.into_iter().enumerate() {
             let first = index == 0;
             decoded.push(
-                Self::decode_one_tool_call(
-                    request,
-                    call,
-                    first.then_some(reasoning_content).flatten(),
-                )?
-                .with_assistant_text(first.then_some(content).flatten().map(str::to_string))?,
+                Self::decode_one_tool_call(call, first.then_some(reasoning_content).flatten())?
+                    .with_assistant_text(first.then_some(content).flatten().map(str::to_string))?,
             );
         }
         model::ensure_unique_tool_call_ids(&decoded)?;
@@ -500,7 +493,6 @@ impl ChatCompletionBackend {
     }
 
     fn decode_one_tool_call(
-        request: &model::ModelRequest,
         call: ChatCompletionToolCall,
         reasoning_content: Option<&str>,
     ) -> Result<tool::ToolCall, model::ModelError> {
@@ -513,11 +505,6 @@ impl ChatCompletionBackend {
             .map_err(|error| model::ModelError::InvalidToolArguments {
                 reason: schema_contract::bounded_diagnostic(error),
             })?;
-        if !request.advertises_tool(&function.name) {
-            return Err(model::ModelError::UnsupportedToolName {
-                name: schema_contract::bounded_diagnostic(function.name),
-            });
-        }
         tool::ToolCall::from_json(
             call.id,
             &function.name,

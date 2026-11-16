@@ -16,6 +16,7 @@ use super::{
     ExecutionPolicy, ExecutionResult, Executor, Grants, Limits, MainExit, Output, OutputStream,
     PreparedExecution, RetainedStream, Termination, ValidationError,
 };
+use crate::bash::BashConfig;
 
 #[test]
 fn command_preserves_literal_argv_and_workspace_relative_directory() {
@@ -391,6 +392,20 @@ fn output_within_the_shared_budget_is_retained_whole_and_binary() {
     // Assert
     assert_eq!(output.stderr(), retained(&[0, 255], 0, b""));
     assert_eq!(output.stdout(), retained(b"abcd", 0, b""));
+    assert!(!output.truncated());
+}
+
+#[test]
+fn a_budget_above_the_default_keeps_more_than_the_default_output_whole() {
+    // Arrange
+    let mut output = Output::new(limits(BashConfig::MAX_CAPTURE_BYTES));
+    let long = vec![b'x'; BashConfig::DEFAULT_CAPTURE_BYTES * 2];
+
+    // Act
+    output.capture(OutputStream::Stdout, &long);
+
+    // Assert
+    assert_eq!(output.stdout(), retained(&long, 0, b""));
     assert!(!output.truncated());
 }
 

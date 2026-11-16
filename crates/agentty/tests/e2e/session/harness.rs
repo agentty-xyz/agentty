@@ -209,6 +209,109 @@ async fn test_harness_session_runs_with_flag_and_provider_key() -> E2eResult {
     Ok(())
 }
 
+/// Answer the scripted provider returns after its invented tool call is
+/// answered as unavailable.
+const UNAVAILABLE_TOOL_ANSWER: &str = "Answered without the missing tool.";
+
+/// Scripts a provider that first calls `read_file`, a tool the harness does
+/// not have, then answers once the harness returns that call's result.
+async fn unavailable_tool_provider() -> MockServer {
+    let server = MockServer::start().await;
+    Mock::given(method("POST"))
+        .and(path("/chat/completions"))
+        .and(body_string_contains(r#""tool_call_id":"call-invented""#))
+        .respond_with(answer(UNAVAILABLE_TOOL_ANSWER))
+        .with_priority(1)
+        .mount(&server)
+        .await;
+    Mock::given(method("POST"))
+        .and(path("/chat/completions"))
+        .and(body_string_contains("Inspect the notes"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(json!({
+            "choices": [{
+                "finish_reason": "tool_calls",
+                "message": {
+                    "content": null,
+                    "tool_calls": [{
+                        "id": "call-invented",
+                        "type": "function",
+                        "function": {
+                            "name": "read_file",
+                            "arguments": json!({"file": "notes.txt"}).to_string()
+                        }
+                    }]
+                }
+            }],
+            "usage": {"prompt_tokens": 10, "completion_tokens": 2, "total_tokens": 12}
+        })))
+        .with_priority(2)
+        .mount(&server)
+        .await;
+
+    server
+}
+
+#[tokio::test]
+async fn test_harness_session_continues_after_an_unavailable_tool_call() -> E2eResult {
+    // Arrange
+    let server = unavailable_tool_provider().await;
+
+    // Act, Assert
+    FeatureTest::new("harness_unavailable_tool")
+        .with_git()
+        .args(["--experimental-harness".to_string()])
+        .env("OPENAI_COMPATIBLE_BASE_URL", NO_LOCAL_SERVER)
+        .env("MODEL_API_KEY", "test-key")
+        .env("MODEL_API_BASE_URL", server.uri())
+        .run(
+            |scenario| {
+                scenario
+                    .compose(&common::wait_for_agentty_startup())
+                    .compose(&common::switch_to_tab("Sessions"))
+                    .press_key("a")
+                    .wait_for_text("[Preview] Built-in agent", 5000)
+                    .press_key("j")
+                    .press_key("j")
+                    .press_key("j")
+                    .press_key("Enter")
+                    .step(common::wait_for_prompt_composer())
+                    .write_text("Inspect the notes")
+                    .wait_for_text("Inspect the notes", 3000)
+                    .press_key("Enter")
+                    .eventually(
+                        Duration::from_secs(30),
+                        Duration::from_millis(100),
+                        |frame| {
+                            let full = Region::full(frame.cols(), frame.rows());
+
+                            assertion::match_text_in_region(frame, UNAVAILABLE_TOOL_ANSWER, &full)
+                        },
+                    )
+                    .capture_labeled(
+                        "harness_unavailable_tool_answer",
+                        "Harness session answered after an unavailable tool",
+                    )
+            },
+            |frame, _report| {
+                Box::pin(async move {
+                    let full = Region::full(frame.cols(), frame.rows());
+                    assertion::assert_text_in_region(frame, UNAVAILABLE_TOOL_ANSWER, &full);
+                })
+            },
+        )
+        .await?;
+
+    let requests = server.received_requests().await.unwrap_or_default();
+    let answered = requests
+        .iter()
+        .map(|request| String::from_utf8_lossy(&request.body).into_owned())
+        .find(|body| body.contains(r#""tool_call_id":"call-invented""#))
+        .expect("the unavailable call's result should reach the provider");
+    assert!(answered.contains("is not available in this turn"));
+
+    Ok(())
+}
+
 #[tokio::test]
 async fn test_harness_row_is_hidden_without_flag() -> E2eResult {
     // Arrange, Act, Assert

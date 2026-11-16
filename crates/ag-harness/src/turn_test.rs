@@ -9,7 +9,7 @@ use super::{
     ContextActivity, HistoryActivity, ModelRequestActivity, ModelRequestPurpose, ToolActivity,
     TurnError, TurnOutcome, TurnReport,
 };
-use crate::lifecycle::{ModelResponseType, TurnErrorType};
+use crate::lifecycle::{ModelResponseType, ToolUnavailableReason, TurnErrorType};
 use crate::model::{CompletionMetadata, CompletionUsage};
 use crate::tool::ReadAction;
 
@@ -25,6 +25,22 @@ fn bash_activity_exposes_only_its_name_and_duration() {
     assert_eq!(activity.path(), "");
     assert_eq!(activity.duration(), Duration::from_millis(12));
     assert_eq!(activity.to_string(), "bash (12 ms)");
+}
+
+#[test]
+fn unavailable_activity_names_the_called_tool_without_a_path() {
+    // Arrange
+    let activity = ToolActivity::Unavailable {
+        duration: Duration::ZERO,
+        reason: ToolUnavailableReason::Unknown,
+        tool: "read_file".to_string(),
+    };
+
+    // Act / Assert
+    assert_eq!(activity.name(), "read_file");
+    assert_eq!(activity.path(), "");
+    assert_eq!(activity.duration(), Duration::ZERO);
+    assert_eq!(activity.to_string(), "read_file (unavailable; <1 ms)");
 }
 
 #[test]

@@ -660,10 +660,45 @@ async fn reports_incomplete_refused_and_empty_responses() -> Result<(), Box<dyn 
 }
 
 #[tokio::test]
-async fn rejects_unusable_function_calls() -> Result<(), Box<dyn std::error::Error>> {
+async fn returns_unadvertised_and_unreplayable_names_for_the_caller_to_answer()
+-> Result<(), Box<dyn std::error::Error>> {
     // Arrange
+    let server = MockServer::start().await;
     let mut unadvertised = function_call_item("call_x", "Cargo.toml");
     unadvertised["name"] = json!("delete");
+    let mut dotted = function_call_item("call_y", "Cargo.toml");
+    dotted["name"] = json!("files.delete");
+    mount_stream(
+        &server,
+        &[
+            item_done(unadvertised),
+            item_done(dotted),
+            completed(json!(null)),
+        ],
+    )
+    .await;
+    let router = router(&server)?;
+
+    // Act
+    let completion = router.execute(user_request("openai/gpt-6.1-sol")?).await?;
+
+    // Assert
+    let Completion::ToolCalls { calls, .. } = completion else {
+        return Err("tool calls expected".into());
+    };
+    assert_eq!(
+        calls.iter().map(ToolCall::name).collect::<Vec<_>>(),
+        ["delete", "files_delete"]
+    );
+
+    Ok(())
+}
+
+#[tokio::test]
+async fn rejects_unusable_function_calls() -> Result<(), Box<dyn std::error::Error>> {
+    // Arrange
+    let mut empty_name = function_call_item("call_x", "Cargo.toml");
+    empty_name["name"] = json!("");
     let mut missing_call_id = function_call_item("call_y", "Cargo.toml");
     missing_call_id
         .as_object_mut()
@@ -671,9 +706,9 @@ async fn rejects_unusable_function_calls() -> Result<(), Box<dyn std::error::Err
         .remove("call_id");
     let cases = [
         (
-            vec![item_done(unadvertised)],
+            vec![item_done(empty_name)],
             ErrorClass::InvalidToolCall,
-            "unsupported tool: delete",
+            "unsupported tool: ",
         ),
         (
             vec![item_done(missing_call_id)],

@@ -718,9 +718,16 @@ async fn edit_mode_turn_reads_writes_and_runs_bash_without_provider_secrets() {
 }
 
 #[tokio::test]
-async fn read_only_turn_denies_writes() {
+async fn read_only_turn_answers_writes_as_unavailable_and_continues() {
     // Arrange
     let server = MockServer::start().await;
+    respond(
+        &server,
+        r#""tool_call_id":"call-write""#,
+        answer("Left the notes unchanged"),
+        1,
+    )
+    .await;
     respond(
         &server,
         "Edit something",
@@ -729,7 +736,7 @@ async fn read_only_turn_denies_writes() {
             "write",
             &json!({"path": "notes.txt", "patch": "--- /dev/null\n+++ b/notes.txt\n"}),
         ),
-        1,
+        2,
     )
     .await;
     let data_root = tempfile::tempdir().expect("data root");
@@ -743,13 +750,29 @@ async fn read_only_turn_denies_writes() {
     let (result, events) = run_turn(&channel, "session-read-only", request).await;
 
     // Assert
-    let error = result.expect_err("denied write should fail the turn");
-    assert!(error.contains("unsupported tool: write"), "{error}");
+    let result = result.expect("a denied write is answered and the turn continues");
+    assert_eq!(result.assistant_message.answer, "Left the notes unchanged");
     assert!(!worktree.path().join("notes.txt").exists());
+    let bodies = request_bodies(&server).await;
     assert!(
-        !events
+        bodies
             .iter()
-            .any(|event| matches!(event, TurnEvent::Activity(_)))
+            .any(|body| body.contains("tool `write` is not available in this turn")),
+        "{bodies:?}"
+    );
+    let activity = events
+        .iter()
+        .filter_map(|event| match event {
+            TurnEvent::Activity(activity) => Some((activity.name.as_str(), activity.status)),
+            _ => None,
+        })
+        .collect::<Vec<_>>();
+    assert_eq!(
+        activity,
+        [
+            ("write", ActivityStatus::Running),
+            ("write", ActivityStatus::Failed)
+        ]
     );
 }
 

@@ -26,7 +26,7 @@ use crate::model::{ModelMessage, ModelMetadata};
 use crate::recovery::{ExecutionIdentity, HostRequest, HostTurnRecord, HostTurnStatus};
 use crate::reservation::{TURN_LEASE_SECONDS, lease_deadline};
 use crate::store::SessionStore;
-use crate::tool::{ReadArguments, ToolCall, WriteArguments};
+use crate::tool::{MalformedArguments, ReadArguments, ToolCall, UnknownToolCall, WriteArguments};
 use crate::turn_options_snapshot::{StoredTurnOptions, StoredTurnOptionsError};
 use crate::write_journal::{WriteRecord, WriteStatus, content_hash};
 use crate::{OutputSchema, OutputSchemaError, TurnError, TurnOutcome};
@@ -1859,11 +1859,12 @@ struct StoredToolCall {
 
 impl StoredToolCall {
     fn from_call(call: &ToolCall) -> Result<Self, SessionError> {
-        if let Some(malformed) = call.malformed_arguments() {
-            return Ok(Self::with_arguments(
-                call,
-                Value::String(malformed.raw().to_string()),
-            ));
+        let raw = call
+            .malformed_arguments()
+            .map(MalformedArguments::raw)
+            .or_else(|| call.unknown_tool().map(UnknownToolCall::raw));
+        if let Some(raw) = raw {
+            return Ok(Self::with_arguments(call, Value::String(raw.to_string())));
         }
         // Decoded arguments serialize to JSON and parse back without failure;
         // the shared error mapping is exercised by stored-payload decoding.
@@ -1895,6 +1896,14 @@ impl StoredToolCall {
 
     fn into_call_without_text(self) -> Result<ToolCall, SessionError> {
         if let Value::String(raw) = &self.arguments {
+            // Calls are journaled under replayable names; any other name is
+            // corrupt rather than a model call to make replayable.
+            if !ag_router::is_valid_function_name(&self.name) {
+                return Err(SessionError::InvalidData {
+                    reason: "invalid persistent tool name".to_string(),
+                });
+            }
+
             return ToolCall::from_json(self.id, &self.name, raw, self.reasoning_content).map_err(
                 |error| SessionError::InvalidData {
                     reason: error.to_string(),

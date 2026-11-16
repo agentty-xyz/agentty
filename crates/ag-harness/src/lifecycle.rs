@@ -148,7 +148,10 @@ pub enum LifecycleEventKind {
         provider_call_id: String,
         /// Identifier shared by this tool operation's lifecycle events.
         tool_call_id: LifecycleId,
-        /// Bounded built-in tool name.
+        /// Function name the model requested: a built-in tool name or, for a
+        /// tool the model invented, any name
+        /// `ag_router::is_valid_function_name` accepts, at most 64 ASCII
+        /// letters, digits, `_`, or `-`.
         tool_name: String,
         /// Owning turn.
         turn_id: LifecycleId,
@@ -169,10 +172,14 @@ pub enum LifecycleEventKind {
         /// Owning turn.
         turn_id: LifecycleId,
     },
-    /// One requested tool was denied by policy.
+    /// One requested tool was unavailable to the turn, because its policy
+    /// denies it or no such tool exists; the model receives an error result
+    /// and the turn continues.
     ToolDenied {
         /// Elapsed time before denial.
         duration: Duration,
+        /// Whether policy denied a built-in tool or no such tool exists.
+        reason: ToolUnavailableReason,
         /// Identifier shared by this tool operation's lifecycle events.
         tool_call_id: LifecycleId,
         /// Owning turn.
@@ -190,14 +197,14 @@ pub enum LifecycleEventKind {
         turn_id: LifecycleId,
     },
     /// The model repeated one tool call, with the same arguments and the
-    /// same result, often enough that the turn nudged it to stop or, when
-    /// `stopped`, failed.
+    /// same result, or called unavailable tools under any names and arguments,
+    /// often enough that the turn nudged it to stop or, when `stopped`, failed.
     ToolCallsRepeated {
         /// Identical calls within the recent-call window.
         repeats: usize,
         /// Whether the repetition failed the turn rather than nudging it.
         stopped: bool,
-        /// Bounded built-in tool name.
+        /// Bounded name of the tool the latest repeated call named.
         tool_name: String,
         /// Owning turn.
         turn_id: LifecycleId,
@@ -318,8 +325,6 @@ pub enum TurnErrorType {
     Model(ModelErrorType),
     /// A repository-scoped tool failed.
     Tool,
-    /// A requested tool was denied by policy.
-    ToolDenied,
     /// Mandatory request content exceeded the model's context budget.
     ContextBudget,
     /// The model kept repeating an identical tool call after a nudge.
@@ -339,7 +344,6 @@ impl TurnErrorType {
             Self::Cancelled => crate::telemetry::ERROR_CANCELLED,
             Self::Model(error_type) => error_type.as_str(),
             Self::Tool => crate::telemetry::ERROR_TOOL_EXECUTION,
-            Self::ToolDenied => crate::telemetry::ERROR_TOOL_DENIED,
             Self::ContextBudget => crate::telemetry::ERROR_CONTEXT_BUDGET,
             Self::RepeatedToolCalls => crate::telemetry::ERROR_REPEATED_TOOL_CALLS,
             Self::RepositoryRequired => crate::telemetry::ERROR_REPOSITORY_REQUIRED,
@@ -369,6 +373,16 @@ impl ToolErrorType {
             Self::Execution => crate::telemetry::ERROR_TOOL_EXECUTION,
         }
     }
+}
+
+/// Why a requested tool was unavailable to the turn.
+#[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[non_exhaustive]
+pub enum ToolUnavailableReason {
+    /// A built-in tool the turn's policy does not enable.
+    Denied,
+    /// A name that is no built-in tool, such as one the model invented.
+    Unknown,
 }
 
 /// Synchronous destination for ordered harness lifecycle events.
@@ -939,10 +953,11 @@ impl ToolLifecycle {
         });
     }
 
-    pub(crate) fn denied(mut self) {
+    pub(crate) fn denied(mut self, reason: ToolUnavailableReason) {
         self.active = false;
         self.emitter.emit(LifecycleEventKind::ToolDenied {
             duration: self.started_at.elapsed(),
+            reason,
             tool_call_id: self.tool_call_id,
             turn_id: self.turn_id,
         });

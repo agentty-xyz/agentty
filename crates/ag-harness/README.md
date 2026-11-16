@@ -206,12 +206,21 @@ let outcome = session
   while the other calls of the same response still run.
   `TurnReport::malformed_tool_calls` counts them and each is listed as
   `ToolActivity::MalformedArguments`. A third consecutive response made only of
-  malformed calls fails the turn; any decodable call resets the count.
+  malformed calls to enabled tools fails the turn; any other call resets the count.
+- **Unavailable tools get error results.** A call to a tool the turn does not enable, or
+  to a tool that does not exist, does not run and does not fail the turn: it is
+  journaled and answered with a `"status": "unavailable"` error result listing the
+  available tools, emits `LifecycleEventKind::ToolDenied` with a
+  `ToolUnavailableReason`, and is listed as `ToolActivity::Unavailable`. A name
+  providers could not replay, such as `container.exec`, is kept with each other
+  character replaced by `_`; only an empty name fails the response. Tool metrics record
+  these calls with `error.type` `tool_unavailable`.
 - **Repeated tool calls are nudged, then stopped.** A call that matches an earlier one
   in tool, arguments, and result is counted within the turn's last 12 calls, including
-  reads answered from the earlier result; a `write` or `bash` call unlike any in that
-  window restarts the count. At three identical calls the next request carries
-  request-only feedback asking the model to stop, counted by
+  reads answered from the earlier result; every call to an unavailable tool counts as
+  identical, whatever its name and arguments. A `write` or `bash` call that ran unlike
+  any in that window restarts the count. At three identical calls the next request
+  carries request-only feedback asking the model to stop, counted by
   `TurnReport::repetition_nudges`; at five the turn fails with
   `TurnError::RepeatedToolCalls`. Both emit `LifecycleEventKind::ToolCallsRepeated`.
 
@@ -256,9 +265,13 @@ The workspace is read-only unless you grant `with_write`. External reads (`with_
 environment values (`with_environment`), and host details (`with_host_information`) are
 explicit too. Networking is never granted; enforcing that, like every grant, is the
 selected executor's job. Long output keeps each stream's start and end within the
-capture budget, with the omitted byte counts on the `CommandOutcome`. Command intents
-are recorded before spawning; await `settled()` (and `retry_settlement()` after
-failures) so unresolved commands never block new turns silently.
+capture budget (`capture_bytes`, up to `BashConfig::MAX_CAPTURE_BYTES`; hosts usually
+pass `BashConfig::DEFAULT_CAPTURE_BYTES`). The budget caps captured bytes only: `bash`
+results are not deferred by the per-round result share, so a larger budget spends more
+of the context window per command. The omitted byte counts are on the `CommandOutcome`.
+Command intents are recorded before spawning; await `settled()` (and
+`retry_settlement()` after failures) so unresolved commands never block new turns
+silently.
 
 ## Models
 

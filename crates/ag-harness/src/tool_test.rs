@@ -93,10 +93,10 @@ fn tool_call_from_json_preserves_read_and_write_payloads() {
 }
 
 #[test]
-fn tool_call_from_json_rejects_unsupported_names_and_keeps_malformed_arguments() {
+fn tool_call_from_json_rejects_empty_names_and_keeps_malformed_arguments() {
     // Arrange
     let inputs = [
-        ("unknown-tool", "{}"),
+        ("", "{}"),
         ("read", "{"),
         ("read", r#"{"path":"name.txt","limit":0}"#),
         ("write", r#"{"path":"../secret","patch":"patch"}"#),
@@ -830,4 +830,32 @@ fn keeps_bounded_assistant_text_and_drops_blank_text() {
         error,
         Err(model::ModelError::ResponseContentTooLarge)
     ));
+}
+
+#[test]
+fn tool_call_from_json_keeps_unknown_tools_verbatim() {
+    // Arrange
+    let raw = r#"{"file": "name.txt""#;
+
+    // Act
+    let call = ToolCall::from_json("call-id".to_string(), "read_file", raw, None)
+        .expect("unknown tool call is kept");
+
+    // Assert
+    let unknown = call.unknown_tool().expect("unknown tool");
+    assert_eq!((unknown.name(), unknown.raw()), ("read_file", raw));
+    assert_eq!(call.name(), "read_file");
+    assert_eq!(call.arguments_json().expect("raw"), raw);
+    assert!(matches!(call.arguments(), ToolCallArguments::Unknown(_)));
+    assert!(
+        call.malformed_arguments().is_none()
+            && call.read_arguments().is_none()
+            && call.write_arguments().is_none()
+    );
+    assert!(
+        ToolCall::from_json("call-id".to_string(), "read", r#"{"path":"a"}"#, None)
+            .expect("read call")
+            .unknown_tool()
+            .is_none()
+    );
 }

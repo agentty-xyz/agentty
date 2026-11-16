@@ -343,14 +343,20 @@ async fn changing_options_uses_canonical_state_without_changing_session_defaults
 }
 
 #[tokio::test]
-async fn empty_explicit_policy_denies_calls_despite_allowed_harness_defaults() {
+async fn empty_explicit_policy_answers_calls_as_unavailable_despite_allowed_harness_defaults() {
     // Arrange
     let mut model = model();
-    model.expect_complete().times(2).returning(|request| {
+    model.expect_complete().times(4).returning(|request| {
         assert_eq!(request.tools().len(), 0);
-        Ok(response_without_metadata(ModelResponse::ToolCall(
-            read_call("denied"),
-        )))
+        let response = match request.messages().last() {
+            Some(ModelMessage::ToolResult { content, .. }) => {
+                let result: Value = serde_json::from_str(content).expect("JSON result");
+                ModelResponse::Output(json!({"summary": result["error"]}))
+            }
+            _ => ModelResponse::ToolCall(read_call("denied")),
+        };
+
+        Ok(response_without_metadata(response))
     });
     let directory = tempdir().expect("temporary directory");
     let harness = Harness::new(model, unbounded_context_budget())
@@ -369,11 +375,9 @@ async fn empty_explicit_policy_denies_calls_despite_allowed_harness_defaults() {
     let durable = session.turn("denied").options(denied).await;
 
     // Assert
-    assert!(matches!(once, Err(TurnError::ToolDenied { .. })));
-    assert!(matches!(
-        durable,
-        Err(SessionError::Turn(TurnError::ToolDenied { .. }))
-    ));
+    let expected = json!({"summary": "tool `read` is not available in this turn"});
+    assert_eq!(once.expect("one-shot turn continues").output(), &expected);
+    assert_eq!(durable.expect("durable turn continues").output(), &expected);
 }
 
 #[tokio::test]

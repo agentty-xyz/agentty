@@ -32,4 +32,4 @@ pub use schema::{
     OutputSchema, OutputSchemaError, OutputValidationError, RESPONSE_CONTENT_LIMIT_BYTES,
     bounded_diagnostic, ensure_content_size,
 };
-pub use tool::{ToolCall, ToolDefinition};
+pub use tool::{ToolCall, ToolDefinition, is_valid_function_name, replayable_function_name};

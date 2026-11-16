@@ -5,7 +5,7 @@ use serde_json::json;
 
 use crate::repetition::{
     REPETITION_NUDGE_AT, REPETITION_STOP_AT, REPETITION_WINDOW, RepeatedCalls, Repetition,
-    repetition_feedback, result_digest,
+    repetition_feedback, result_digest, unavailable_repetition_feedback,
 };
 use crate::tool::ToolCall;
 
@@ -40,12 +40,12 @@ fn write(path: &str) -> ToolCall {
 }
 
 /// Records `call` returning `result` `times` times and returns each outcome.
-fn record_times(
+fn record_times<'a>(
     calls: &mut RepeatedCalls,
-    call: &ToolCall,
+    call: &'a ToolCall,
     result: &str,
     times: usize,
-) -> Vec<Repetition> {
+) -> Vec<Repetition<'a>> {
     (0..times)
         .map(|_| calls.record(call, result_digest(result)))
         .collect()
@@ -69,11 +69,13 @@ fn identical_calls_nudge_once_then_stop() {
             Repetition::Nudge {
                 repeats: REPETITION_NUDGE_AT,
                 tool: "read",
+                unavailable: false,
             },
             Repetition::None,
             Repetition::Stop {
                 repeats: REPETITION_STOP_AT,
                 tool: "read",
+                unavailable: false,
             },
         ]
     );
@@ -99,10 +101,11 @@ fn a_differing_write_restarts_the_count() {
     // Arrange
     let mut calls = RepeatedCalls::default();
     let call = read("src/lib.rs");
+    let write = write("src/lib.rs");
     record_times(&mut calls, &call, "before", REPETITION_NUDGE_AT);
 
     // Act
-    let after_write = calls.record(&write("src/lib.rs"), result_digest("applied"));
+    let after_write = calls.record(&write, result_digest("applied"));
     let outcomes = record_times(&mut calls, &call, "before", REPETITION_STOP_AT - 1);
 
     // Assert
@@ -115,6 +118,7 @@ fn a_differing_write_restarts_the_count() {
             Repetition::Nudge {
                 repeats: REPETITION_NUDGE_AT,
                 tool: "read",
+                unavailable: false,
             },
             Repetition::None,
         ]
@@ -136,6 +140,7 @@ fn an_identical_command_counts_instead_of_restarting() {
         Some(&Repetition::Stop {
             repeats: REPETITION_STOP_AT,
             tool: "bash",
+            unavailable: false,
         })
     );
 }
@@ -182,6 +187,7 @@ fn a_call_that_left_the_window_is_nudged_again_when_it_loops_again() {
         Some(&Repetition::Nudge {
             repeats: REPETITION_NUDGE_AT,
             tool: "read",
+            unavailable: false,
         })
     );
 }
@@ -211,4 +217,79 @@ fn feedback_names_the_tool_and_the_stop_limit() {
     // Assert
     assert!(feedback.starts_with("[harness] You have called `read` 3 times"));
     assert!(feedback.contains(&format!("reaches {REPETITION_STOP_AT} repeats")));
+}
+
+#[test]
+fn unavailable_calls_count_together_whatever_their_names_and_arguments() {
+    // Arrange
+    let mut calls = RepeatedCalls::default();
+    let attempts = ["read_file", "open_file", "cat", "view_file", "write"]
+        .map(|name| ToolCall::from_json(format!("{name}-call"), name, "{}", None).expect("call"));
+
+    // Act
+    let outcomes = attempts
+        .iter()
+        .map(|call| calls.record_unavailable(call))
+        .collect::<Vec<_>>();
+
+    // Assert
+    assert_eq!(
+        outcomes,
+        [
+            Repetition::None,
+            Repetition::None,
+            Repetition::Nudge {
+                repeats: REPETITION_NUDGE_AT,
+                tool: "cat",
+                unavailable: true,
+            },
+            Repetition::None,
+            Repetition::Stop {
+                repeats: REPETITION_STOP_AT,
+                tool: "write",
+                unavailable: true,
+            },
+        ]
+    );
+}
+
+#[test]
+fn an_unavailable_call_does_not_restart_the_count() {
+    // Arrange
+    let mut calls = RepeatedCalls::default();
+    let call = read("src/lib.rs");
+    let denied = bash("rm -rf target");
+    record_times(&mut calls, &call, "same", REPETITION_NUDGE_AT - 1);
+
+    // Act
+    calls.record_unavailable(&denied);
+    let outcome = calls.record(&call, result_digest("same"));
+
+    // Assert
+    assert_eq!(
+        outcome,
+        Repetition::Nudge {
+            repeats: REPETITION_NUDGE_AT,
+            tool: "read",
+            unavailable: false,
+        }
+    );
+}
+
+#[test]
+fn unavailable_feedback_says_the_calls_did_not_run() {
+    // Arrange
+    let tool = "read_file";
+
+    // Act
+    let feedback = unavailable_repetition_feedback(tool, REPETITION_NUDGE_AT);
+
+    // Assert
+    assert!(
+        feedback.starts_with("[harness] 3 of your recent tool calls, most recently `read_file`")
+    );
+    assert!(feedback.contains("not available in this turn, so none of them ran"));
+    assert!(feedback.contains(&format!(
+        "reach {REPETITION_STOP_AT} among your recent calls"
+    )));
 }

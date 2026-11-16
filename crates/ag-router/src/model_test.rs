@@ -58,8 +58,6 @@ fn chat_request_exposes_required_schema_messages_and_tools() {
         request.model_reasoning_effort(),
         Some(ReasoningEffort::High)
     );
-    assert!(request.advertises_tool("lookup"));
-    assert!(!request.advertises_tool("other"));
 }
 
 #[test]

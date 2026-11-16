@@ -9,7 +9,8 @@ use std::time::{Duration, Instant};
 use super::{
     ContextSummaryErrorType, ContextSummaryTrigger, LifecycleEmitter, LifecycleEvent,
     LifecycleEventKind, LifecycleId, LifecycleObserver, LifecycleObserverSet,
-    LifecycleOperationGuard, ModelResponseType, ToolErrorType, TurnErrorType,
+    LifecycleOperationGuard, ModelResponseType, ToolErrorType, ToolUnavailableReason,
+    TurnErrorType,
 };
 use crate::model::{CompletionMetadata, ModelErrorType};
 
@@ -34,7 +35,7 @@ fn emit_tool_terminal_events(emitter: &LifecycleEmitter, turn_id: LifecycleId) {
             Some(turn_id),
         )
         .expect("tool should be observed")
-        .denied();
+        .denied(ToolUnavailableReason::Denied);
     emitter
         .request_tool(
             "provider-failed".to_string(),
@@ -350,7 +351,10 @@ fn emits_ordered_terminal_events_for_every_operation() {
     ));
     assert!(matches!(
         events[16].kind(),
-        LifecycleEventKind::ToolDenied { .. }
+        LifecycleEventKind::ToolDenied {
+            reason: ToolUnavailableReason::Denied,
+            ..
+        }
     ));
     assert!(matches!(
         events[18].kind(),

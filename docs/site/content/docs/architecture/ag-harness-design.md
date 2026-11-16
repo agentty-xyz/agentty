@@ -215,16 +215,20 @@ returned, and the turn report lists it as `ToolActivity::ReadRepeated`. `write` 
 
 After each response's calls, the engine counts identical calls among the turn's last 12
 handled calls: the same tool, the same canonical arguments, and the same result digest.
-Keying on the result keeps polling a changing command from counting, and a `read`
-answered by the repeated-read note counts with the result it pointed to, so a model that
-keeps re-reading still converges on a stop. A `write` or `bash` call unlike any call in
-the window may change what later calls return, so it restarts the count; malformed calls
-have their own bound and are not counted. The third identical call appends request-only
-`[harness]` feedback, never journaled, that asks the model to use what it has, change
-approach, or answer, and `TurnReport::repetition_nudges` counts it. The fifth fails the
-turn with `TurnError::RepeatedToolCalls` after its results are journaled, so replayed
-history stays well-formed. Both emit `LifecycleEventKind::ToolCallsRepeated`, which the
-trace projection records as a turn-span event.
+A call to a tool the turn does not make available never runs, so every such call shares
+one key, whatever its name and arguments, and never restarts the count; a model that
+keeps calling invented or denied tools, even under changing names, still reaches the
+stop, and the nudge says those calls did not run. Keying on the result keeps polling a
+changing command from counting, and a `read` answered by the repeated-read note counts
+with the result it pointed to, so a model that keeps re-reading still converges on a
+stop. A `write` or `bash` call unlike any call in the window may change what later calls
+return, so it restarts the count; malformed calls to enabled tools have their own bound
+and are not counted. The third identical call appends request-only `[harness]` feedback,
+never journaled, that asks the model to use what it has, change approach, or answer, and
+`TurnReport::repetition_nudges` counts it. The fifth fails the turn with
+`TurnError::RepeatedToolCalls` after its results are journaled, so replayed history
+stays well-formed. Both emit `LifecycleEventKind::ToolCallsRepeated`, which the trace
+projection records as a turn-span event.
 
 The estimator weighs payload bytes at per-model rates plus fixed tokens per message,
 tool definition, and request, and the output schema where the provider renders it into
@@ -378,7 +382,11 @@ workspace fencing.
 
 ## Permissions and tools
 
-All tools are denied by default; per-turn policy enables them explicitly.
+All tools are denied by default; per-turn policy enables them explicitly. A call to a
+denied or nonexistent tool is answered with a correctable `"status": "unavailable"`
+result that lists the available tools, and the turn continues. Such a result is never
+cleared to fit the context window, and a dropped-round note never names its call, since
+it did not run.
 
 - `read` — bounded file, list, search, and `show(head)` inspection. A `file` or `show`
   result names its line window before the content and, when cut, the file's line count

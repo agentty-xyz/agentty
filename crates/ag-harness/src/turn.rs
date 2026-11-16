@@ -17,7 +17,7 @@ use crate::bash::{BashConfig, BashError};
 pub use crate::cancellation::{ControlledTurn, SettlementError, SettlementPhase, TurnControl};
 use crate::comparison::ComparisonBase;
 pub use crate::harness::{OneShotTurn, SessionTurn};
-use crate::lifecycle::{ModelResponseType, TurnErrorType};
+use crate::lifecycle::{ModelResponseType, ToolUnavailableReason, TurnErrorType};
 use crate::model::{CompletionMetadata, ModelError};
 use crate::policy::ToolPolicy;
 use crate::read::ReadError;
@@ -582,7 +582,8 @@ impl ContextActivity {
     }
 }
 
-/// Sanitized details about one built-in tool operation.
+/// Sanitized details about one tool call: a built-in tool operation, or a
+/// call to a tool the turn does not make available.
 #[derive(Clone, Debug, Eq, PartialEq, Deserialize, Serialize)]
 #[non_exhaustive]
 pub enum ToolActivity {
@@ -670,6 +671,19 @@ pub enum ToolActivity {
         /// Tool the model called.
         tool: Tool,
     },
+    /// A call to a tool the turn does not make available, such as one its
+    /// policy denies or one the model invented, answered with an error result
+    /// listing the available tools instead of running.
+    Unavailable {
+        /// Elapsed tool-handling time.
+        duration: Duration,
+        /// Whether policy denied a built-in tool or no such tool exists.
+        reason: ToolUnavailableReason,
+        /// Function name the model called, as a replayable function name
+        /// (see `ag_router::replayable_function_name`); a deserialized value
+        /// may hold any text, which [`fmt::Display`] still sanitizes.
+        tool: String,
+    },
     /// A repository file write.
     Write {
         /// Number of bytes in the resulting file.
@@ -700,13 +714,14 @@ impl ToolActivity {
             | Self::ReadRepeated { duration, .. }
             | Self::ReadDeferred { duration, .. }
             | Self::MalformedArguments { duration, .. }
+            | Self::Unavailable { duration, .. }
             | Self::Write { duration, .. }
             | Self::WriteRejected { duration, .. } => *duration,
         }
     }
 
-    /// Returns the bounded built-in tool name.
-    pub fn name(&self) -> &'static str {
+    /// Returns the bounded name of the tool the model called.
+    pub fn name(&self) -> &str {
         match self {
             Self::Read { .. }
             | Self::ReadInspection { .. }
@@ -717,14 +732,15 @@ impl ToolActivity {
             Self::Write { .. } | Self::WriteRejected { .. } => "write",
             Self::Bash { .. } => "bash",
             Self::MalformedArguments { tool, .. } => tool.name(),
+            Self::Unavailable { tool, .. } => tool,
         }
     }
 
     /// Returns the repository-relative target or bounded inspection summary;
-    /// empty for `bash` and malformed calls.
+    /// empty for `bash`, malformed, and unavailable calls.
     pub fn path(&self) -> &str {
         match self {
-            Self::Bash { .. } | Self::MalformedArguments { .. } => "",
+            Self::Bash { .. } | Self::MalformedArguments { .. } | Self::Unavailable { .. } => "",
             Self::Read { path, .. }
             | Self::ReadRejected { path, .. }
             | Self::Write { path, .. }
@@ -816,6 +832,12 @@ impl fmt::Display for ToolActivity {
                 sanitize_report_text(reason),
                 format_report_duration(*duration)
             ),
+            Self::Unavailable { duration, tool, .. } => write!(
+                formatter,
+                "{} (unavailable; {})",
+                sanitize_report_text(tool),
+                format_report_duration(*duration)
+            ),
             Self::Write {
                 bytes_written,
                 duration,
@@ -873,12 +895,6 @@ pub enum TurnError {
     /// Provider request, response decoding, or terminal validation failed.
     #[error(transparent)]
     Model(#[from] ModelError),
-    /// The model requested a tool unavailable under the configured policy.
-    #[error("tool `{name}` is denied by policy")]
-    ToolDenied {
-        /// Denied native function name.
-        name: String,
-    },
     /// A repository read failed.
     #[error(transparent)]
     Read(#[from] ReadError),
@@ -906,13 +922,14 @@ pub enum TurnError {
         required: u64,
     },
     /// The model kept repeating one tool call, with the same arguments and
-    /// the same result, after a nudge to stop; the turn stops instead of
-    /// spending further requests on it.
-    #[error("tool `{tool}` was called {repeats} times with the same arguments and result")]
+    /// the same result, or kept calling unavailable tools under any names and
+    /// arguments, after a nudge to stop; the turn stops instead of spending
+    /// further requests on it.
+    #[error("tool calls repeated {repeats} times without progress, most recently `{tool}`")]
     RepeatedToolCalls {
         /// Identical calls within the recent-call window that stopped the turn.
         repeats: usize,
-        /// Native function name of the repeated call.
+        /// Function name of the latest repeated call.
         tool: String,
     },
 }
@@ -923,7 +940,6 @@ impl TurnError {
         match self {
             Self::Cancelled => TurnErrorType::Cancelled,
             Self::Model(error) => TurnErrorType::Model(error.error_type()),
-            Self::ToolDenied { .. } => TurnErrorType::ToolDenied,
             Self::Read(_)
             | Self::Write(_)
             | Self::Bash(_)

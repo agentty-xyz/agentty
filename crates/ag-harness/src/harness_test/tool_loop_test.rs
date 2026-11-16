@@ -17,11 +17,12 @@ use crate::context::{
 use crate::context_budget_fixture::unbounded_context_budget;
 use crate::file_system::MockFileSystem;
 use crate::harness::Harness;
-use crate::lifecycle::{LifecycleEvent, LifecycleEventKind, TurnErrorType};
+use crate::lifecycle::{LifecycleEvent, LifecycleEventKind, ToolUnavailableReason, TurnErrorType};
 use crate::model::{ModelError, ModelMessage, ModelRequest, ModelResponse};
 use crate::model_profile::ModelProfile;
 use crate::model_registry::{ModelCapabilities, ModelRegistry};
 use crate::recovery::ExecutionIdentity;
+use crate::repetition::REPETITION_STOP_AT;
 use crate::repository::Repository;
 use crate::session::SessionError;
 use crate::store::MemoryStore;
@@ -265,11 +266,13 @@ async fn superseded_reads_are_cleared_first_and_reported() {
     assert_eq!(notice["superseded_by"], json!("all_lines"));
 }
 
-/// Returns a read-only harness for `model` whose registered profile declares
-/// a window of `budget` tokens, serving every file from `file_system`.
+/// Returns a harness for `model` that allows only `tool`, whose registered
+/// profile declares a window of `budget` tokens, serving every file from
+/// `file_system`.
 fn budgeted_harness(
     model: crate::model::MockModel,
     budget: u64,
+    tool: Tool,
     file_system: MockFileSystem,
 ) -> Harness {
     let mut registry = ModelRegistry::new();
@@ -288,7 +291,7 @@ fn budgeted_harness(
     Harness::from_registry(&registry, "budgeted")
         .expect("harness")
         .repository(Repository::fixture("repo"))
-        .allow(Tool::Read)
+        .allow(tool)
         .file_system(file_system)
 }
 
@@ -311,7 +314,12 @@ async fn read_results_enter_the_request_as_whole_line_pages_within_one_result_sh
         .collect();
     let budget = 6_000;
     let opened = Arc::new(AtomicUsize::new(0));
-    let harness = budgeted_harness(model, budget, counting_file_system(content, &opened));
+    let harness = budgeted_harness(
+        model,
+        budget,
+        Tool::Read,
+        counting_file_system(content, &opened),
+    );
 
     // Act
     let outcome = harness
@@ -373,7 +381,12 @@ async fn an_oversized_batch_keeps_its_first_whole_results_and_defers_the_rest() 
         Ok(output()),
     ]);
     let opened = Arc::new(AtomicUsize::new(0));
-    let harness = budgeted_harness(model, 2_200, counting_file_system(file_content(), &opened));
+    let harness = budgeted_harness(
+        model,
+        2_200,
+        Tool::Read,
+        counting_file_system(file_content(), &opened),
+    );
 
     // Act
     let outcome = harness
@@ -583,24 +596,278 @@ async fn malformed_call_results_mark_required_fields() {
 }
 
 #[tokio::test]
-async fn malformed_calls_to_disallowed_tools_are_denied() {
+async fn denied_unknown_and_malformed_denied_calls_get_unavailable_results() {
     // Arrange
-    let (model, _requests) = scripted(vec![Ok(ModelResponse::ToolCall(malformed(
-        "bad_bash", "bash", "{",
-    )))]);
+    let (model, requests) = scripted(vec![
+        Ok(ModelResponse::ToolCalls(vec![
+            malformed("denied_bash", "bash", r#"{"command":"ls"}"#),
+            malformed("bad_bash", "bash", "{"),
+            malformed("invented", "read_file", r#"{"file":"notes.txt"}"#),
+            malformed("dotted", "container.exec", r#"{"cmd":["ls"]}"#),
+        ])),
+        Ok(output()),
+    ]);
+    let events = Arc::new(Mutex::new(Vec::new()));
+    let recorded = Arc::clone(&events);
     let harness = Harness::new(model, unbounded_context_budget())
         .repository(Repository::fixture("repo"))
         .allow(Tool::Read)
-        .file_system(MockFileSystem::new());
+        .file_system(MockFileSystem::new())
+        .with_lifecycle_observer(move |event: LifecycleEvent| {
+            recorded.lock().expect("events lock").push(event);
+        });
+
+    // Act
+    let outcome = harness
+        .run_once("run something", object_schema())
+        .await
+        .expect("the turn continues after unavailable calls");
+
+    // Assert
+    let requests = requests.lock().expect("requests lock");
+    for (call_id, tool) in [
+        ("denied_bash", "bash"),
+        ("bad_bash", "bash"),
+        ("invented", "read_file"),
+        ("dotted", "container_exec"),
+    ] {
+        let result = result_for(&requests[1], call_id);
+        assert_eq!(result["status"], "unavailable");
+        assert_eq!(
+            result["error"],
+            format!("tool `{tool}` is not available in this turn")
+        );
+        assert!(
+            result["hint"]
+                .as_str()
+                .is_some_and(|hint| hint.contains("available tools (`read`)"))
+        );
+    }
+    let reasons = [
+        ToolUnavailableReason::Denied,
+        ToolUnavailableReason::Denied,
+        ToolUnavailableReason::Unknown,
+        ToolUnavailableReason::Unknown,
+    ];
+    let activity = outcome.report().tool_calls();
+    assert_eq!(
+        activity.iter().map(ToolActivity::name).collect::<Vec<_>>(),
+        ["bash", "bash", "read_file", "container_exec"]
+    );
+    assert_eq!(
+        activity
+            .iter()
+            .map(|activity| match activity {
+                ToolActivity::Unavailable { reason, .. } => Some(*reason),
+                _ => None,
+            })
+            .collect::<Vec<_>>(),
+        reasons.map(Some)
+    );
+    let denied = events
+        .lock()
+        .expect("events lock")
+        .iter()
+        .filter_map(|event| match event.kind() {
+            LifecycleEventKind::ToolDenied { reason, .. } => Some(*reason),
+            _ => None,
+        })
+        .collect::<Vec<_>>();
+    assert_eq!(denied, reasons);
+}
+
+#[tokio::test]
+async fn an_unavailable_call_without_any_enabled_tool_asks_for_the_final_response() {
+    // Arrange
+    let (model, requests) = scripted(vec![
+        Ok(ModelResponse::ToolCall(malformed(
+            "invented",
+            "search",
+            r#"{"query":"x"}"#,
+        ))),
+        Ok(output()),
+    ]);
+    let harness = Harness::new(model, unbounded_context_budget());
+
+    // Act
+    harness
+        .run_once("answer", object_schema())
+        .await
+        .expect("the turn continues after an unavailable call");
+
+    // Assert
+    let requests = requests.lock().expect("requests lock");
+    let result = result_for(&requests[1], "invented");
+    assert_eq!(
+        result["hint"],
+        "This call did not run. No tools are available in this turn; give your final response."
+    );
+}
+
+#[tokio::test]
+async fn unavailable_calls_under_rotating_names_are_nudged_then_stop_the_turn() {
+    // Arrange
+    let names = ["read_file", "open_file", "cat", "view_file", "search"];
+    let (model, requests) = scripted(
+        names
+            .iter()
+            .enumerate()
+            .map(|(index, name)| {
+                Ok(ModelResponse::ToolCall(malformed(
+                    &format!("invented_{index}"),
+                    name,
+                    &json!({"file": format!("file-{index}.txt")}).to_string(),
+                )))
+            })
+            .collect(),
+    );
+    let events = Arc::new(Mutex::new(Vec::new()));
+    let harness = repetition_harness(model, &events);
+
+    // Act
+    let error = harness
+        .run_once("read the notes", object_schema())
+        .await
+        .expect_err("the fifth unavailable call fails the turn");
+
+    // Assert
+    assert!(matches!(
+        &error,
+        crate::TurnError::RepeatedToolCalls { repeats: 5, tool } if tool == "search"
+    ));
+    let requests = requests.lock().expect("requests lock");
+    let nudges = harness_feedback(&requests[3]);
+    assert_eq!(nudges.len(), 1);
+    assert!(nudges[0].contains("3 of your recent tool calls, most recently `cat`"));
+    assert!(nudges[0].contains("not available in this turn"));
+    assert_eq!(
+        repetition_events(&events),
+        [
+            (3, false, "cat".to_string()),
+            (5, true, "search".to_string())
+        ]
+    );
+}
+
+#[tokio::test]
+async fn malformed_calls_to_a_denied_tool_stop_by_repetition_not_as_invalid_arguments() {
+    // Arrange
+    let (model, _requests) = scripted(
+        (0..REPETITION_STOP_AT)
+            .map(|index| {
+                Ok(ModelResponse::ToolCall(malformed(
+                    &format!("bad_{index}"),
+                    "bash",
+                    "{",
+                )))
+            })
+            .collect(),
+    );
+    let events = Arc::new(Mutex::new(Vec::new()));
+    let harness = repetition_harness(model, &events);
 
     // Act
     let error = harness
         .run_once("run something", object_schema())
         .await
-        .expect_err("bash is not allowed");
+        .expect_err("repeated unavailable calls fail the turn");
 
     // Assert
-    assert!(matches!(error, crate::TurnError::ToolDenied { ref name } if name == "bash"));
+    assert!(matches!(
+        &error,
+        crate::TurnError::RepeatedToolCalls { repeats, tool }
+            if *repeats == REPETITION_STOP_AT && tool == "bash"
+    ));
+}
+
+#[tokio::test]
+async fn an_unavailable_call_between_identical_reads_keeps_the_repeat() {
+    // Arrange
+    let (model, _requests) = scripted(vec![
+        Ok(ModelResponse::ToolCall(read_of(
+            "read_0",
+            &json!({"path": "notes.txt"}),
+        ))),
+        Ok(ModelResponse::ToolCalls(vec![
+            malformed("denied_bash", "bash", r#"{"command":"touch notes.txt"}"#),
+            malformed("invented", "read_file", r#"{"file":"notes.txt"}"#),
+        ])),
+        Ok(ModelResponse::ToolCall(read_of(
+            "read_1",
+            &json!({"path": "notes.txt"}),
+        ))),
+        Ok(output()),
+    ]);
+    let opened = Arc::new(AtomicUsize::new(0));
+    let harness = Harness::new(model, unbounded_context_budget())
+        .repository(Repository::fixture("repo"))
+        .allow(Tool::Read)
+        .file_system(counting_file_system(
+            b"line one of a longer manifest\n".repeat(20),
+            &opened,
+        ));
+
+    // Act
+    let outcome = harness
+        .run_once("read the notes twice", object_schema())
+        .await
+        .expect("turn succeeds");
+
+    // Assert
+    let activities = outcome.report().tool_calls();
+    assert!(matches!(activities[1], ToolActivity::Unavailable { .. }));
+    assert!(matches!(activities[2], ToolActivity::Unavailable { .. }));
+    assert!(matches!(activities[3], ToolActivity::ReadRepeated { .. }));
+    assert_eq!(opened.load(Ordering::SeqCst), 1);
+}
+
+#[tokio::test]
+async fn a_denied_read_past_the_round_share_is_answered_as_unavailable_not_deferred() {
+    // Arrange
+    let long_path = vec!["d".repeat(200); 18].join("/");
+    let long_write = ToolCall::from_json(
+        "long_write".to_string(),
+        "write",
+        &json!({"path": long_path, "patch": "not a unified diff"}).to_string(),
+        None,
+    )
+    .expect("write call");
+    let (model, requests) = scripted(vec![
+        Ok(ModelResponse::ToolCalls(vec![
+            long_write,
+            read_of("denied_read", &json!({"path": "notes.txt"})),
+        ])),
+        Ok(output()),
+    ]);
+    let opened = Arc::new(AtomicUsize::new(0));
+    let harness = budgeted_harness(
+        model,
+        2_200,
+        Tool::Write,
+        counting_file_system(file_content(), &opened),
+    );
+
+    // Act
+    let outcome = harness
+        .run_once("write, then read", object_schema())
+        .await
+        .expect("turn succeeds");
+
+    // Assert
+    let activities = outcome.report().tool_calls();
+    assert!(matches!(activities[0], ToolActivity::WriteRejected { .. }));
+    assert!(matches!(
+        activities[1],
+        ToolActivity::Unavailable {
+            reason: ToolUnavailableReason::Denied,
+            ..
+        }
+    ));
+    let requests = requests.lock().expect("requests lock");
+    assert_eq!(
+        result_for(&requests[1], "denied_read")["status"],
+        "unavailable"
+    );
 }
 
 /// Responds with the same `read` call `times` times, each with its own call
@@ -1180,7 +1447,12 @@ async fn requests_only_append_between_rare_context_reductions() {
         .flat_map(|line| format!("line {line} of the notes\n").into_bytes())
         .collect();
     let opened = Arc::new(AtomicUsize::new(0));
-    let harness = budgeted_harness(model, 12_000, counting_file_system(content, &opened));
+    let harness = budgeted_harness(
+        model,
+        12_000,
+        Tool::Read,
+        counting_file_system(content, &opened),
+    );
 
     // Act
     let outcome = harness
@@ -1276,7 +1548,12 @@ async fn notes_in_reasoning_outlive_the_results_they_describe() {
         .flat_map(|line| format!("line {line} of the notes\n").into_bytes())
         .collect();
     let opened = Arc::new(AtomicUsize::new(0));
-    let harness = budgeted_harness(model, 12_000, counting_file_system(content, &opened));
+    let harness = budgeted_harness(
+        model,
+        12_000,
+        Tool::Read,
+        counting_file_system(content, &opened),
+    );
 
     // Act
     let outcome = harness
