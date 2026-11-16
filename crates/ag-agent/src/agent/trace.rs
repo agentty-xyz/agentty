@@ -303,10 +303,7 @@ impl OperationTrace {
                 "subagent" => "agent.subagent",
                 _ => "agent.tool",
             };
-            let span = Span::child_at(name, start);
-            for attribute in ag_telemetry::run_identity(&self.context) {
-                span.context().span().set_attribute(attribute);
-            }
+            let span = Span::operation_at(name, start);
             span.attribute("agentty.provider.operation.type", category);
             if (name == "agent.tool" || name == "agent.subagent")
                 && let Some(id) = safe_identity(id)

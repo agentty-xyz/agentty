@@ -306,7 +306,13 @@ async fn run_identity_follows_children_and_detached_spans_but_not_roots() {
                 let mut run = Span::child("utility.run");
                 run.identify("agentty.purpose", "title");
                 run.identify("agentty.harness", "codex");
-                let identity = run.scope(async { run_identity(&Context::current()) }).await;
+                let identity = run
+                    .scope(async {
+                        Span::operation("provider.operation").scope(async {}).await;
+
+                        run_identity(&Context::current())
+                    })
+                    .await;
 
                 (
                     identity,
@@ -352,6 +358,13 @@ async fn run_identity_follows_children_and_detached_spans_but_not_roots() {
             .attributes
             .contains(&KeyValue::new("agentty.harness", "codex"))
     );
+    let operation = spans
+        .iter()
+        .find(|span| span.name == "provider.operation")
+        .expect("operation");
+    for attribute in &inherited_identity {
+        assert!(operation.attributes.contains(attribute), "{attribute:?}");
+    }
 }
 
 async fn abandon_and_unwind_operations() {

@@ -49,8 +49,8 @@ pub async fn identified<T>(attributes: Vec<KeyValue>, work: impl Future<Output =
 }
 
 /// Returns the run identity inherited by `context`, with inner values
-/// replacing enclosing ones. Provider operation spans repeat these attributes
-/// so each operation is attributable without joining its ancestors.
+/// replacing enclosing ones. [`Span::operation`] repeats these attributes on
+/// provider operation spans.
 pub fn run_identity(context: &Context) -> Vec<KeyValue> {
     context
         .get::<RunIdentity>()
@@ -134,6 +134,24 @@ impl Span {
         }
 
         Self::start_at(name, Vec::new(), &parent, Vec::new(), start_time)
+    }
+
+    /// Starts a provider operation, such as a tool call or compaction,
+    /// beneath the current operation. See [`Span::operation_at`].
+    pub fn operation(name: &'static str) -> Self {
+        Self::operation_at(name, SystemTime::now())
+    }
+
+    /// Starts a provider operation at an observed or provider-reported time,
+    /// repeating the inherited [`run_identity`] so the operation is
+    /// attributable without joining its ancestors.
+    pub fn operation_at(name: &'static str, start_time: SystemTime) -> Self {
+        let span = Self::child_at(name, start_time);
+        span.context
+            .span()
+            .set_attributes(run_identity(&span.context));
+
+        span
     }
 
     /// Returns a context that can be carried across a queue or task spawn.
