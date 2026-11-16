@@ -19,6 +19,7 @@ use crate::app::{App, AppRuntimeEvent};
 use crate::domain::input::InputCommand;
 use crate::infra::clock::Clock;
 use crate::presentation::app_mode::AppMode;
+use crate::runtime::latency::CycleTiming;
 use crate::runtime::mode::chat_scroll::ChatScrollBatch;
 use crate::runtime::{EventResult, FRAME_INTERVAL, PresentationState, key_handler, mode};
 use crate::ui::RenderCacheStore;
@@ -144,6 +145,7 @@ pub(crate) async fn process_events<B: Backend, Message: TerminalEventMessage>(
     terminal: &mut Terminal<B>,
     event_rx: &mut mpsc::UnboundedReceiver<Message>,
     tick: &mut tokio::time::Interval,
+    timing: &mut CycleTiming,
 ) -> io::Result<EventResult>
 where
     B::Error: std::error::Error + Send + Sync + 'static,
@@ -154,6 +156,7 @@ where
         terminal,
         event_rx,
         tick,
+        timing,
         ChatScrollBatch::handle,
     )
     .await
@@ -167,6 +170,7 @@ async fn process_events_with_scroll_handler<B: Backend, Message: TerminalEventMe
     terminal: &mut Terminal<B>,
     event_rx: &mut mpsc::UnboundedReceiver<Message>,
     tick: &mut tokio::time::Interval,
+    timing: &mut CycleTiming,
     mut handle_scroll: impl FnMut(
         &mut ChatScrollBatch,
         &mut App,
@@ -186,6 +190,7 @@ where
         terminal,
         event_rx,
         tick,
+        timing,
         |app, terminal, event| {
             if let Some(Event::Key(key)) = event.as_ref()
                 && is_press_key_event(*key)
@@ -213,12 +218,16 @@ where
 
 /// Processes one event/tick cycle with an injected event handler so loop exit
 /// branches can be tested without a real terminal.
+///
+/// Work after the wait is added to `timing`, with tick-driven session
+/// refreshes kept apart from event handling, when the cycle continues.
 async fn process_events_with_handler<Terminal, Message, EventHandler>(
     clock: &dyn Clock,
     app: &mut App,
     terminal: &mut Terminal,
     event_rx: &mut mpsc::UnboundedReceiver<Message>,
     tick: &mut tokio::time::Interval,
+    timing: &mut CycleTiming,
     mut handle_event: EventHandler,
 ) -> io::Result<EventResult>
 where
@@ -243,6 +252,7 @@ where
     };
     let batch_started_at = clock.now_instant();
     let mut handled_terminal_events = 0;
+    let mut reload_elapsed = Duration::ZERO;
     let maybe_event = match signal {
         LoopSignal::Runtime(runtime_event) => {
             match runtime_event {
@@ -264,9 +274,11 @@ where
         LoopSignal::Event(Some(Err(error))) => return Err(error),
         LoopSignal::Event(None) => return Err(terminal_event_channel_closed_error()),
         LoopSignal::Tick => {
+            let reload_started_at = clock.now_instant();
             if app.refresh_sessions_if_needed().await {
                 app.mark_dirty();
             }
+            reload_elapsed = CycleTiming::elapsed_since(clock, reload_started_at);
 
             None
         }
@@ -317,6 +329,11 @@ where
             "terminal event drain budget exhausted with queued events remaining"
         );
     }
+    timing.record_reload(reload_elapsed);
+    timing.record_events(
+        handled_terminal_events,
+        CycleTiming::elapsed_since(clock, batch_started_at).saturating_sub(reload_elapsed),
+    );
 
     Ok(EventResult::Continue)
 }

@@ -15,6 +15,7 @@ use tokio::sync::mpsc;
 
 use crate::app::{App, AppError};
 use crate::infra::clock::{self, Clock};
+use crate::runtime::latency::CycleTiming;
 use crate::runtime::{FRAME_INTERVAL, PresentationState, event, terminal};
 use crate::ui::component::nerpa_greeting::NerpaGreeting;
 use crate::ui::style;
@@ -172,6 +173,7 @@ where
         presentation: Rc::new(PresentationState::default()),
         terminal,
         tick,
+        timing: CycleTiming::default(),
     };
     // Draw before applying queued background results so the first screen
     // appears immediately and never depends on how quickly startup work, such
@@ -216,6 +218,7 @@ struct MainLoopState<'a, B: Backend, Message> {
     presentation: Rc<PresentationState>,
     terminal: &'a mut Terminal<B>,
     tick: &'a mut tokio::time::Interval,
+    timing: CycleTiming,
 }
 
 impl<B: Backend, Message: event::TerminalEventMessage> MainLoopState<'_, B, Message>
@@ -232,13 +235,23 @@ where
     /// `AgentResponseReceived` projection did not flip the view. Visible `@`
     /// lookup rows then request their file descriptions so drawing never reads
     /// files.
+    ///
+    /// The drawn frame ends the latency measurement that began when the
+    /// previous cycle's wait returned, so a slow wake-up-to-frame interval is
+    /// traced once, after its frame is visible.
     async fn run_cycle(&mut self) -> io::Result<EventResult> {
+        let reduce_started_at = self.clock.now_instant();
         self.app.process_pending_app_events().await;
         self.app.reconcile_terminal_session_input_mode().await;
         self.app.reconcile_open_session_question_mode().await;
         self.app.request_visible_at_mention_descriptions();
         self.app
             .expire_project_sync_status(self.clock.now_instant());
+        self.timing.record_reduce(CycleTiming::elapsed_since(
+            self.clock.as_ref(),
+            reduce_started_at,
+        ));
+        let render_started_at = self.clock.now_instant();
         render_frame(
             self.app,
             self.terminal,
@@ -246,6 +259,11 @@ where
             &mut self.last_draw,
             self.presentation.as_ref(),
         )?;
+        self.timing.record_render(CycleTiming::elapsed_since(
+            self.clock.as_ref(),
+            render_started_at,
+        ));
+        self.timing.report(self.clock.as_ref());
 
         event::process_events(
             self.app,
@@ -253,6 +271,7 @@ where
             self.terminal,
             self.event_rx,
             self.tick,
+            &mut self.timing,
         )
         .await
     }

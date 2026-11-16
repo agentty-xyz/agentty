@@ -5,10 +5,12 @@ use std::convert::Infallible;
 use std::io;
 use std::rc::Rc;
 use std::sync::Arc;
-use std::sync::atomic::{AtomicBool, AtomicI64, AtomicUsize, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicI64, AtomicU32, AtomicUsize, Ordering};
 use std::time::{Duration, SystemTime};
 
 use crossterm::event::{Event, KeyCode, KeyEvent, KeyModifiers};
+use opentelemetry::global;
+use opentelemetry_sdk::trace::{InMemorySpanExporter, SdkTracerProvider};
 use ratatui::Terminal;
 use ratatui::backend::{Backend, ClearType, TestBackend, WindowSize};
 use ratatui::buffer::Cell;
@@ -28,8 +30,9 @@ use crate::domain::session::{SessionHandles, Status};
 use crate::domain::session_message::{SessionMessage, SessionMessageKind, SessionTranscript};
 use crate::infra::clock::Clock;
 use crate::presentation::app_mode::AppMode;
+use crate::runtime::latency::{CycleTiming, SLOW_CYCLE_THRESHOLD};
 use crate::runtime::{FRAME_INTERVAL, PresentationState};
-use crate::test_support::telemetry::capture_events;
+use crate::test_support::telemetry::{TRACER_PROVIDER_LOCK, capture_events};
 use crate::test_support::{FixedClock, SessionFixtureBuilder};
 
 /// Environment marker used to distinguish the nested PTY test process.
@@ -826,6 +829,7 @@ async fn run_cycle_skips_idle_redraws_without_tick_driven_ui() {
         presentation: Rc::new(PresentationState::default()),
         terminal: &mut terminal,
         tick: &mut tick,
+        timing: CycleTiming::default(),
     };
 
     // Act
@@ -930,6 +934,7 @@ async fn run_cycle_renders_pending_session_update_before_waiting_for_events() {
         presentation: Rc::new(PresentationState::default()),
         terminal: &mut terminal,
         tick: &mut tick,
+        timing: CycleTiming::default(),
     };
 
     // Act
@@ -942,6 +947,82 @@ async fn run_cycle_renders_pending_session_update_before_waiting_for_events() {
         rendered_text.contains("synced output"),
         "expected rendered session output to contain synced handle text: {rendered_text}"
     );
+}
+
+/// Clock whose monotonic time advances by a fixed step on every reading, so
+/// each measured foreground phase takes a known, nonzero duration.
+struct SteppingClock {
+    origin: std::time::Instant,
+    readings: AtomicU32,
+    step: Duration,
+}
+
+impl Clock for SteppingClock {
+    fn now_instant(&self) -> std::time::Instant {
+        self.origin + self.step * self.readings.fetch_add(1, Ordering::Relaxed)
+    }
+
+    fn now_system_time(&self) -> SystemTime {
+        SystemTime::UNIX_EPOCH + Duration::from_secs(1_000)
+    }
+}
+
+#[tokio::test]
+/// Verifies a cycle exports one `ui.slow_cycle` root only when its measured
+/// work reaches the threshold on the injected clock.
+async fn run_cycle_traces_only_cycles_at_or_above_the_slow_threshold() {
+    // Arrange
+    let _provider_guard = TRACER_PROVIDER_LOCK.lock().await;
+    let exporter = InMemorySpanExporter::default();
+    global::set_tracer_provider(
+        SdkTracerProvider::builder()
+            .with_simple_exporter(exporter.clone())
+            .build(),
+    );
+    let (mut app, _base_dir) = crate::test_support::new_test_app().await;
+    let (_event_tx, mut event_rx) = mpsc::unbounded_channel::<Event>();
+    let mut terminal = Terminal::new(TestBackend::new(80, 24)).expect("test terminal");
+    let mut tick = tokio::time::interval(Duration::from_millis(1));
+    let fast_clock: Arc<dyn Clock> = Arc::new(FixedClock::unix_epoch());
+    let mut main_loop_state = MainLoopState {
+        app: &mut app,
+        last_draw: DrawStamp::now(fast_clock.as_ref()),
+        clock: fast_clock,
+        event_rx: &mut event_rx,
+        presentation: Rc::new(PresentationState::default()),
+        terminal: &mut terminal,
+        tick: &mut tick,
+        timing: CycleTiming::default(),
+    };
+
+    // Act
+    let fast_result = main_loop_state.run_cycle().await;
+    let fast_spans = exporter.get_finished_spans().expect("finished spans");
+    main_loop_state.clock = Arc::new(SteppingClock {
+        origin: std::time::Instant::now(),
+        readings: AtomicU32::new(0),
+        step: SLOW_CYCLE_THRESHOLD,
+    });
+    let slow_result = main_loop_state.run_cycle().await;
+
+    // Assert
+    assert!(matches!(fast_result, Ok(EventResult::Continue)));
+    assert!(matches!(slow_result, Ok(EventResult::Continue)));
+    assert!(
+        !fast_spans.iter().any(|span| span.name == "ui.slow_cycle"),
+        "an unmeasurably fast cycle must not be traced"
+    );
+    let slow_spans = exporter
+        .get_finished_spans()
+        .expect("finished spans")
+        .into_iter()
+        .filter(|span| span.name == "ui.slow_cycle")
+        .collect::<Vec<_>>();
+    assert_eq!(slow_spans.len(), 1);
+    assert!(slow_spans[0].attributes.iter().any(|attribute| {
+        attribute.key.as_str() == "agentty.ui.reduce_ms"
+            && matches!(attribute.value, opentelemetry::Value::I64(elapsed) if elapsed >= 50)
+    }));
 }
 
 /// Stationary clock whose `now_instant()` value never advances.

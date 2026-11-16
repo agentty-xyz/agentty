@@ -4,6 +4,7 @@ use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
 use ag_git::GitClient;
+use ag_telemetry::{FutureExt as _, Outcome, Span};
 use tokio::sync::mpsc;
 
 use super::event::AppEvent;
@@ -90,6 +91,10 @@ impl App {
     }
 
     /// Core constructor with all options explicit.
+    ///
+    /// The expensive phases record child spans of the caller's trace:
+    /// `project.load`, `agents.detect`, `runs.recover`, `sessions.load`, and
+    /// `review_watch.resume`.
     ///
     /// # Errors
     /// Returns an error if startup project metadata cannot be persisted,
@@ -215,7 +220,9 @@ impl App {
         sync_task: sync::SyncOrchestrator,
     ) -> Self {
         self.recover_startup_focused_reviews(recoverable_review_sessions);
-        self.reconcile_review_watch_statuses().await;
+        Span::child("review_watch.resume")
+            .scope(self.reconcile_review_watch_statuses())
+            .await;
         // Resuming watches changes polling targets. The orchestrator's first
         // pass runs at once and its next forge refresh only a minute later,
         // so it starts after them to report the resumed watches right away.
@@ -245,17 +252,36 @@ impl App {
         ),
         AppError,
     > {
+        let phase = Span::child("sessions.load");
         let mut sessions =
             Self::load_and_restack_startup_sessions(services, active_project_id, working_dir)
+                .with_context(phase.context())
                 .await
                 .with_resource_client(resource_client);
+        phase.attribute(
+            "agentty.sessions.loaded",
+            i64::try_from(sessions.sessions().len()).unwrap_or(i64::MAX),
+        );
         let repositories = services.db();
-        let review_cache = Self::load_focused_review_cache(repositories, active_project_id).await;
-        let recoverable_session_ids =
-            Self::load_recoverable_focused_review_session_ids(repositories, active_project_id)
-                .await?;
+        let (review_cache, recoverable_session_ids, review_watch) = phase
+            .run(
+                async {
+                    let review_cache =
+                        Self::load_focused_review_cache(repositories, active_project_id).await;
+                    let recoverable_session_ids =
+                        Self::load_recoverable_focused_review_session_ids(
+                            repositories,
+                            active_project_id,
+                        )
+                        .await?;
+                    let review_watch = ReviewWatchState::load(repositories).await;
+
+                    Ok((review_cache, recoverable_session_ids, review_watch))
+                },
+                Self::failed_startup_phase,
+            )
+            .await?;
         review::hydrate_review_transients(&review_cache, sessions.state_mut());
-        let review_watch = ReviewWatchState::load(repositories).await;
 
         Ok((
             sessions,
@@ -394,26 +420,34 @@ impl App {
         repositories: &AppRepositories,
         clients: &AppClients,
     ) -> Result<StartupProjectContext, AppError> {
-        clients
-            .fs_client
-            .cleanup_agent_artifacts(base_path.to_owned())
-            .await
-            .map_err(Self::startup_recovery_error)?;
-        migrate_active_sessions_off_retired_models(repositories).await;
-        let current_project_id =
-            AppStartup::persist_startup_project(repositories, working_dir, git_branch.as_deref())
-                .await?;
-        let startup_project_context = AppStartup::load_startup_project_context(
-            repositories,
-            &clients.git_client,
-            clients.fs_client.as_ref(),
-            working_dir,
-            git_branch,
-            current_project_id,
-        )
-        .await?;
+        let load = async {
+            clients
+                .fs_client
+                .cleanup_agent_artifacts(base_path.to_owned())
+                .await
+                .map_err(Self::startup_recovery_error)?;
+            migrate_active_sessions_off_retired_models(repositories).await;
+            let current_project_id = AppStartup::persist_startup_project(
+                repositories,
+                working_dir,
+                git_branch.as_deref(),
+            )
+            .await?;
 
-        Ok(startup_project_context)
+            AppStartup::load_startup_project_context(
+                repositories,
+                &clients.git_client,
+                clients.fs_client.as_ref(),
+                working_dir,
+                git_branch,
+                current_project_id,
+            )
+            .await
+        };
+
+        Span::child("project.load")
+            .run(load, Self::failed_startup_phase)
+            .await
     }
 
     /// Builds the shared app services after validating startup agent
@@ -428,10 +462,11 @@ impl App {
         repositories: AppRepositories,
         clients: &AppClients,
     ) -> Result<AppServices, AppError> {
-        let available_agent_kinds = task::TaskService::load_agent_availability(Arc::clone(
-            &clients.agent_availability_probe,
-        ))
-        .await;
+        let available_agent_kinds = Span::child("agents.detect")
+            .scope(task::TaskService::load_agent_availability(Arc::clone(
+                &clients.agent_availability_probe,
+            )))
+            .await;
         let harness_models = Self::load_harness_models(clients, &repositories).await;
         AppStartup::validate_startup_agent_availability(
             &available_agent_kinds,
@@ -503,20 +538,32 @@ impl App {
         git_client: Arc<dyn GitClient>,
         clock: Arc<dyn Clock>,
     ) -> Result<(), AppError> {
-        repositories.runs().recover().await?;
-        repositories
-            .sessions()
-            .recover_session_preparations()
+        let recover = async {
+            repositories.runs().recover().await?;
+            repositories
+                .sessions()
+                .recover_session_preparations()
+                .await
+                .map_err(Self::startup_recovery_error)?;
+            SessionManager::fail_unfinished_operations_from_previous_run(
+                repositories,
+                base_path,
+                git_client,
+                clock,
+            )
             .await
-            .map_err(Self::startup_recovery_error)?;
-        SessionManager::fail_unfinished_operations_from_previous_run(
-            repositories,
-            base_path,
-            git_client,
-            clock,
-        )
-        .await
-        .map_err(Self::startup_recovery_error)
+            .map_err(Self::startup_recovery_error)
+        };
+
+        Span::child("runs.recover")
+            .run(recover, Self::failed_startup_phase)
+            .await
+    }
+
+    /// Classifies every startup phase error as a failure of that phase's
+    /// span, without exporting the error.
+    fn failed_startup_phase(_error: &AppError) -> Outcome {
+        Outcome::Failed
     }
 
     /// Converts a failed startup recovery into an actionable application error.

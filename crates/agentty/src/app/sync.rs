@@ -19,7 +19,7 @@ use std::time::Duration;
 
 use ag_forge::ReviewRequestClient;
 use ag_git::GitClient;
-use ag_telemetry::{Context, FutureExt as _};
+use ag_telemetry::{Context, FutureExt as _, KeyValue, Outcome, Span};
 use tokio::sync::{mpsc, watch};
 use tokio::time::MissedTickBehavior;
 
@@ -483,24 +483,47 @@ impl SyncOrchestrator {
         }
     }
 
-    /// Runs one read-only status pass over the current context snapshot.
+    /// Runs one read-only status pass over the current context snapshot as
+    /// one independent `sync.refresh` trace.
     ///
-    /// Skips entirely when the active project has no git branch.
+    /// Skips entirely, without a trace, when the active project has no git
+    /// branch. The trace fails when any phase failed and is canceled when
+    /// newer polling targets superseded the pass.
     async fn run_refresh_pass(&mut self, include_review_pass: bool) {
         let context = self.context_rx.borrow().clone();
         if context.project_branch_name.is_none() {
             return;
         }
 
-        self.run_git_status_pass(&context).await;
+        let refresh = Span::root(
+            "sync.refresh",
+            vec![KeyValue::new(
+                "agentty.sync.review_pass",
+                include_review_pass,
+            )],
+        );
+        let trace = refresh.context();
+        let mut outcome = self
+            .run_git_status_pass(&context)
+            .with_context(trace.clone())
+            .await;
         if include_review_pass {
-            self.run_review_request_pass(&context).await;
+            let review_outcome = self
+                .run_review_request_pass(&context)
+                .with_context(trace)
+                .await;
+            outcome = combined_outcome(outcome, review_outcome);
         }
+        refresh.finish(outcome);
     }
 
     /// Fetches the remote and emits one combined ahead/behind snapshot for
     /// the project branch plus all active session branches.
-    async fn run_git_status_pass(&self, context: &SyncContext) {
+    ///
+    /// A failed fetch or tracking-status query still emits the snapshot
+    /// computed from the remaining data, but fails its `git.fetch` or
+    /// `sync.branch_status` phase and the returned outcome.
+    async fn run_git_status_pass(&self, context: &SyncContext) -> Outcome {
         let working_dir = context.working_dir.clone();
         let repo_root = context
             .git_client
@@ -508,35 +531,55 @@ impl SyncOrchestrator {
             .await
             .unwrap_or(working_dir);
 
-        {
-            let repo_root = repo_root.clone();
-            // Best-effort: background fetch failure is non-critical.
-            let _ = context.git_client.fetch_remote(repo_root).await;
-        }
+        // Background fetch failure is non-critical: tracking statuses still
+        // compare against the last fetched remote refs.
+        let fetched = Span::child("git.fetch")
+            .run(context.git_client.fetch_remote(repo_root.clone()), |_| {
+                Outcome::Failed
+            })
+            .await
+            .is_ok();
 
-        let branch_tracking_statuses = {
-            let repo_root = repo_root.clone();
-            context
+        let branch_status = Span::child("sync.branch_status");
+        branch_status.attribute(
+            "agentty.sync.targets",
+            attribute_count(context.session_git_status_targets.len()),
+        );
+        let (branch_tracking_statuses, session_statuses, status_outcome) = async {
+            let (branch_tracking_statuses, status_outcome) = match context
                 .git_client
-                .branch_tracking_statuses(repo_root)
+                .branch_tracking_statuses(repo_root.clone())
                 .await
-                .unwrap_or_default()
-        };
+            {
+                Ok(branch_tracking_statuses) => (branch_tracking_statuses, Outcome::Completed),
+                Err(_) => (HashMap::new(), Outcome::Failed),
+            };
+            let session_statuses = session_git_statuses(
+                &branch_tracking_statuses,
+                &repo_root,
+                &context.session_git_status_targets,
+                context.git_client.as_ref(),
+            )
+            .await;
+
+            (branch_tracking_statuses, session_statuses, status_outcome)
+        }
+        .with_context(branch_status.context())
+        .await;
+        branch_status.finish(status_outcome);
         let project_branch_name = context.project_branch_name.as_deref().unwrap_or_default();
         let status = branch_tracking_statuses
             .get(project_branch_name)
             .copied()
             .flatten();
-        let session_statuses = session_git_statuses(
-            &branch_tracking_statuses,
-            &repo_root,
-            &context.session_git_status_targets,
-            context.git_client.as_ref(),
-        )
-        .await;
 
+        let outcome = if fetched {
+            status_outcome
+        } else {
+            Outcome::Failed
+        };
         if self.context_is_stale(context) {
-            return;
+            return combined_outcome(outcome, Outcome::Canceled);
         }
 
         // Fire-and-forget: receiver may be dropped during shutdown.
@@ -545,6 +588,8 @@ impl SyncOrchestrator {
             session_statuses,
             status,
         });
+
+        outcome
     }
 
     /// Refreshes linked or published review-request state for all targets in
@@ -553,21 +598,73 @@ impl SyncOrchestrator {
     /// Emits one [`AppEvent::ReviewRequestStatusUpdated`] per target so the
     /// reducer can persist refreshed summaries and transition externally
     /// merged or closed sessions. Targets in failure backoff are skipped
-    /// until their retry pass.
-    async fn run_review_request_pass(&mut self, context: &SyncContext) {
+    /// until their retry pass. Returns the outcome of the
+    /// `sync.review_requests` phase.
+    async fn run_review_request_pass(&mut self, context: &SyncContext) -> Outcome {
         let updates = self
             .collect_review_request_pass_updates(context, true)
             .await;
+        let outcome = self.review_request_pass_outcome(context, true, &updates);
 
         self.emit_review_request_pass_updates(context, updates);
+
+        outcome
     }
 
-    /// Refreshes review-request status for all eligible targets and returns
-    /// reducer-ready updates without emitting them yet.
+    /// Refreshes review-request status for all eligible targets in one
+    /// `sync.review_requests` phase and returns reducer-ready updates without
+    /// emitting them yet.
     ///
     /// Manual main sync uses this to defer merged/closed session transitions
     /// until after the local default branch has been updated successfully.
     async fn collect_review_request_pass_updates(
+        &mut self,
+        context: &SyncContext,
+        reject_stale_context: bool,
+    ) -> Vec<ReviewRequestPassUpdate> {
+        let phase = Span::child("sync.review_requests");
+        phase.attribute(
+            "agentty.sync.targets",
+            attribute_count(context.review_request_sync_targets.len()),
+        );
+        let updates = self
+            .collect_review_request_updates(context, reject_stale_context)
+            .with_context(phase.context())
+            .await;
+        phase.attribute(
+            "agentty.sync.failures",
+            attribute_count(
+                updates
+                    .iter()
+                    .filter(|update| update.result.is_err())
+                    .count(),
+            ),
+        );
+        phase.finish(self.review_request_pass_outcome(context, reject_stale_context, &updates));
+
+        updates
+    }
+
+    /// Classifies one review-request pass: canceled when newer polling
+    /// targets superseded it, failed when any target failed to refresh.
+    fn review_request_pass_outcome(
+        &self,
+        context: &SyncContext,
+        reject_stale_context: bool,
+        updates: &[ReviewRequestPassUpdate],
+    ) -> Outcome {
+        if reject_stale_context && self.context_is_stale(context) {
+            Outcome::Canceled
+        } else if updates.iter().any(|update| update.result.is_err()) {
+            Outcome::Failed
+        } else {
+            Outcome::Completed
+        }
+    }
+
+    /// Refreshes review-request status for every eligible target, stopping
+    /// early when `reject_stale_context` is set and newer targets arrive.
+    async fn collect_review_request_updates(
         &mut self,
         context: &SyncContext,
         reject_stale_context: bool,
@@ -643,6 +740,9 @@ impl SyncOrchestrator {
     /// successful terminal updates are emitted only after the main branch
     /// sync succeeds. That keeps externally merged child restacking behind the
     /// updated local default branch for the manual `s` workflow.
+    ///
+    /// Both phases and any conflict-assistance utilities nest beneath one
+    /// independent `project.sync_main` trace, which fails with the sync.
     async fn run_sync_main(&mut self, request: SyncMainRequest) {
         let SyncMainRequest {
             app_event_tx,
@@ -650,21 +750,14 @@ impl SyncOrchestrator {
             session_model,
             sync_context,
         } = request;
+        let trace = Span::root("project.sync_main", Vec::new());
 
-        let review_request_updates = self
-            .collect_review_request_pass_updates(&sync_context, false)
-            .await;
-
-        let result = session::SessionManager::sync_main_for_project(
-            sync_context.project_branch_name.clone(),
-            sync_context.working_dir.clone(),
-            Some(SyncMainEventContext {
-                app_event_tx: app_event_tx.clone(),
-                operation: operation.clone(),
-            }),
-            Arc::clone(&sync_context.git_client),
-            session_model,
-            ag_worker::scoped_client(
+        let (review_request_updates, result) = async {
+            let review_request_updates = self
+                .collect_review_request_pass_updates(&sync_context, false)
+                .await;
+            // Scoping inside the trace parents conflict assistance beneath it.
+            let run_client = ag_worker::scoped_client(
                 Arc::clone(&sync_context.run_client),
                 ag_worker::RunScope {
                     project_id: Some(sync_context.project_id),
@@ -675,9 +768,29 @@ impl SyncOrchestrator {
                     purpose: Some("sync conflict assistance".to_string()),
                     ..ag_worker::RunScope::default()
                 },
-            ),
-        )
+            );
+            let result = session::SessionManager::sync_main_for_project(
+                sync_context.project_branch_name.clone(),
+                sync_context.working_dir.clone(),
+                Some(SyncMainEventContext {
+                    app_event_tx: app_event_tx.clone(),
+                    operation: operation.clone(),
+                }),
+                Arc::clone(&sync_context.git_client),
+                session_model,
+                run_client,
+            )
+            .await;
+
+            (review_request_updates, result)
+        }
+        .with_context(trace.context())
         .await;
+        trace.finish(if result.is_ok() {
+            Outcome::Completed
+        } else {
+            Outcome::Failed
+        });
         let review_request_updates = result.is_ok().then(|| {
             review_request_updates
                 .into_iter()
@@ -793,6 +906,21 @@ struct ReviewRequestPassUpdate {
     result: Result<SyncReviewRequestTaskResult, String>,
     /// Polling target that produced this result.
     target: ReviewRequestSyncTarget,
+}
+
+/// Returns the more severe of two phase outcomes: any failure fails the
+/// pass, otherwise any cancellation cancels it.
+fn combined_outcome(first: Outcome, second: Outcome) -> Outcome {
+    match (first, second) {
+        (Outcome::Failed, _) | (_, Outcome::Failed) => Outcome::Failed,
+        (Outcome::Canceled, _) | (_, Outcome::Canceled) => Outcome::Canceled,
+        (Outcome::Completed, Outcome::Completed) => Outcome::Completed,
+    }
+}
+
+/// Converts one collection size to an integer span attribute.
+fn attribute_count(count: usize) -> i64 {
+    i64::try_from(count).unwrap_or(i64::MAX)
 }
 
 /// Returns how many review passes a failing target is skipped before retry.

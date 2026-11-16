@@ -5,6 +5,9 @@ use std::os::unix::fs::PermissionsExt;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
+use ag_telemetry::{FutureExt as _, KeyValue, Outcome, Span, TraceContextExt as _};
+use opentelemetry::global;
+use opentelemetry_sdk::trace::{InMemorySpanExporter, SdkTracerProvider};
 use tempfile::tempdir;
 use tokio::process::Command;
 
@@ -18,6 +21,7 @@ use crate::domain::session::Status;
 use crate::domain::session_message::SessionMessageKind;
 use crate::infra::db;
 use crate::infra::db::{AppRepositories, Database};
+use crate::test_support::telemetry::TRACER_PROVIDER_LOCK;
 
 const PUBLIC_CONSTRUCTOR_COVERAGE_ENV: &str = "AGENTTY_PUBLIC_CONSTRUCTOR_COVERAGE";
 
@@ -64,6 +68,64 @@ async fn startup_preserves_unregistered_replay_history() {
         fs::read_to_string(archive.join("history.md")).expect("preserved history"),
         "private history"
     );
+}
+
+#[tokio::test]
+async fn startup_traces_its_expensive_phases_beneath_the_callers_trace() {
+    // Arrange
+    let _provider_guard = TRACER_PROVIDER_LOCK.lock().await;
+    let exporter = InMemorySpanExporter::default();
+    global::set_tracer_provider(
+        SdkTracerProvider::builder()
+            .with_simple_exporter(exporter.clone())
+            .build(),
+    );
+    let root = tempdir().expect("worktrees");
+    let db = AppRepositories::in_memory().await.expect("database");
+    let startup = Span::root("app.startup", Vec::new());
+    let startup_id = startup.context().span().span_context().span_id();
+
+    // Act
+    let result = App::new_with_clients(
+        root.path().to_owned(),
+        root.path().to_owned(),
+        None,
+        db,
+        crate::test_support::test_app_clients(),
+    )
+    .with_context(startup.context())
+    .await;
+    startup.finish(Outcome::Completed);
+
+    // Assert
+    assert!(result.is_ok());
+    let spans = exporter.get_finished_spans().expect("finished spans");
+    for name in [
+        "project.load",
+        "agents.detect",
+        "runs.recover",
+        "sessions.load",
+        "review_watch.resume",
+    ] {
+        let phase = spans
+            .iter()
+            .find(|span| span.name == name)
+            .expect("startup phase span");
+        assert_eq!(phase.parent_span_id, startup_id, "`{name}` parent");
+        assert!(
+            phase
+                .attributes
+                .contains(&KeyValue::new("agentty.outcome", "completed")),
+            "`{name}` outcome: {:?}",
+            phase.attributes
+        );
+    }
+    assert!(spans.iter().any(|span| {
+        span.name == "sessions.load"
+            && span
+                .attributes
+                .contains(&KeyValue::new("agentty.sessions.loaded", 0_i64))
+    }));
 }
 
 #[tokio::test]

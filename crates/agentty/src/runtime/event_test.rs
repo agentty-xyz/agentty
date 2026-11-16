@@ -38,6 +38,7 @@ use crate::presentation::execution_graph::tests::graph_view;
 use crate::presentation::execution_graph::{GraphEditKind, GraphEditor};
 use crate::presentation::prompt::{PromptAttachmentState, PromptHistoryState, PromptSlashState};
 use crate::presentation::setting::SettingsAction;
+use crate::runtime::latency::CycleTiming;
 use crate::runtime::{EventResult, FRAME_INTERVAL, PresentationState};
 
 /// Continues a test cycle while asserting no terminal event was produced.
@@ -658,6 +659,7 @@ async fn test_process_events_with_handler_returns_handler_error() {
         &mut terminal,
         &mut event_rx,
         &mut tick,
+        &mut CycleTiming::default(),
         |_, (), _| Box::pin(async { Err(io::Error::other("handler failed")) }),
     )
     .await;
@@ -685,6 +687,7 @@ async fn test_process_events_with_handler_returns_reader_error() {
         &mut terminal,
         &mut event_rx,
         &mut tick,
+        &mut CycleTiming::default(),
         continue_without_terminal_event,
     )
     .await;
@@ -699,6 +702,7 @@ async fn test_process_events_with_handler_returns_reader_error() {
         &mut terminal,
         &mut event_rx,
         &mut tick,
+        &mut CycleTiming::default(),
         continue_without_terminal_event,
     )
     .await;
@@ -727,6 +731,7 @@ async fn test_process_events_with_handler_returns_error_when_reader_channel_clos
         &mut terminal,
         &mut event_rx,
         &mut tick,
+        &mut CycleTiming::default(),
         continue_without_terminal_event,
     )
     .await;
@@ -739,6 +744,7 @@ async fn test_process_events_with_handler_returns_error_when_reader_channel_clos
         &mut terminal,
         &mut event_rx,
         &mut tick,
+        &mut CycleTiming::default(),
         continue_without_terminal_event,
     )
     .await;
@@ -777,6 +783,7 @@ async fn test_process_events_with_handler_drives_session_runtime_commands() {
                 &mut terminal,
                 &mut event_rx,
                 &mut tick,
+                &mut CycleTiming::default(),
                 |_, (), event| {
                     assert!(event.is_none());
 
@@ -821,6 +828,7 @@ async fn test_process_events_with_handler_drives_app_runtime_events() {
         &mut terminal,
         &mut event_rx,
         &mut tick,
+        &mut CycleTiming::default(),
         |_, (), event| {
             assert!(event.is_none());
 
@@ -860,6 +868,7 @@ async fn test_process_events_with_handler_keeps_events_over_budget_queued() {
         &mut terminal,
         &mut event_rx,
         &mut tick,
+        &mut CycleTiming::default(),
         {
             let handled_events = Arc::clone(&handled_events);
 
@@ -909,6 +918,7 @@ async fn test_process_events_with_handler_returns_error_when_channel_closes_duri
         &mut terminal,
         &mut event_rx,
         &mut tick,
+        &mut CycleTiming::default(),
         {
             let handled_events = Arc::clone(&handled_events);
 
@@ -1001,6 +1011,7 @@ async fn idle_tick_marks_the_frame_dirty_after_a_session_refresh() {
         &mut (),
         &mut event_rx,
         &mut tick,
+        &mut CycleTiming::default(),
         |_, (), event| {
             assert!(event.is_none());
 
@@ -1043,6 +1054,7 @@ async fn test_event_batch_yields_when_elapsed_budget_is_reached() {
         &mut (),
         &mut event_rx,
         &mut tick,
+        &mut CycleTiming::default(),
         |_, (), event| {
             if event.is_some() {
                 handled += 1;
@@ -1106,6 +1118,7 @@ async fn test_production_event_batch_scrolls_then_leaves_mermaid_session() {
             &mut terminal,
             &mut event_rx,
             &mut tick,
+            &mut CycleTiming::default(),
         )
         .await
         .expect("dispatch input");
@@ -1143,6 +1156,7 @@ async fn test_event_batch_propagates_scroll_measurement_error() {
         &mut terminal,
         &mut event_rx,
         &mut tick,
+        &mut CycleTiming::default(),
         |_, _, _, _, received_key| {
             assert_eq!(received_key, key);
 

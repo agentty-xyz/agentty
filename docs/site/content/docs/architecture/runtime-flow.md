@@ -330,3 +330,16 @@ captured only when the host opts in. Incomplete provider events are labeled rath
 inferred. The exporter shuts down after worker cleanup and terminal restoration. See
 [Session Traces](@/docs/usage/workflow.md#session-traces) and
 [Local Usage Events](@/docs/usage/workflow.md#local-usage-events).
+
+Host work outside turns has its own roots. Export starts after the database opens, so
+`app.startup` is backdated to the launch, records the database open and migration time
+as `agentty.db.open_ms`, and ends once the `App` is assembled, before the runtime loop;
+its phases are `project.load`, `agents.detect`, `runs.recover`, `sessions.load`, and
+`review_watch.resume`. Each sync orchestrator pass is one `sync.refresh` with
+`git.fetch`, `sync.branch_status`, and `sync.review_requests` phases; failed fetches and
+tracking queries fail their phase while the best-effort snapshot is still emitted, and
+superseded passes end canceled. Manual sync runs under `project.sync_main`, which
+parents its review refresh and conflict-assistance utilities. The foreground loop
+measures busy time from each wake-up through the following draw with the injected clock
+and exports `ui.slow_cycle` only when it reaches 50 ms, recording per-phase
+milliseconds, the handled event count, and the dominant `agentty.ui.phase`.

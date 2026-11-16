@@ -79,6 +79,12 @@ impl Span {
     /// Starts an independent workflow trace, linking the initiating operation
     /// when called from another trace.
     pub fn root(name: &'static str, attributes: Vec<KeyValue>) -> Self {
+        Self::root_at(name, attributes, SystemTime::now())
+    }
+
+    /// Starts an independent trace at an observed time, as [`Span::root`]
+    /// does, for work measured before deciding to record it.
+    pub fn root_at(name: &'static str, attributes: Vec<KeyValue>, start_time: SystemTime) -> Self {
         let current = Context::current();
         let context = current.span().span_context().clone();
         let links = context
@@ -92,7 +98,13 @@ impl Span {
             .copied()
             .unwrap_or_default();
 
-        Self::start(name, attributes, &Context::new().with_value(policy), links)
+        Self::start_at(
+            name,
+            attributes,
+            &Context::new().with_value(policy),
+            links,
+            start_time,
+        )
     }
 
     /// Starts an interval beneath the currently executing operation. A
