@@ -18,7 +18,7 @@ use ag_contracts::{
 };
 use ag_protocol::{TurnPrompt, TurnPromptAttachment};
 use ag_session::AgentKind;
-use ag_telemetry::Span;
+use ag_telemetry::{KeyValue, Span};
 use opentelemetry::global;
 use opentelemetry_sdk::trace::{InMemorySpanExporter, SdkTracerProvider};
 use serde_json::{Value, json};
@@ -282,8 +282,21 @@ async fn traced_session_turn_exports_harness_spans_beneath_the_run() {
             .build(),
     );
     let server = MockServer::start().await;
-    respond(&server, "Traced question", answer("Traced answer"), 1).await;
-    respond(&server, "Untraced question", answer("Untraced answer"), 2).await;
+    respond(
+        &server,
+        r#""tool_call_id":"call-read""#,
+        answer("Traced answer"),
+        1,
+    )
+    .await;
+    respond(
+        &server,
+        "Traced question",
+        tool_call("call-read", "read", &json!({"path": "missing.txt"})),
+        2,
+    )
+    .await;
+    respond(&server, "Untraced question", answer("Untraced answer"), 3).await;
     let data_root = tempfile::tempdir().expect("data root");
     let worktree = tempfile::tempdir().expect("worktree");
     let config = config(data_root.path(), environment(&server));
@@ -297,7 +310,10 @@ async fn traced_session_turn_exports_harness_spans_beneath_the_run() {
     )
     .await;
     let untraced_spans = exporter.get_finished_spans().expect("spans").len();
-    let run = Span::root("agent.run", Vec::new());
+    let mut run = Span::root("agent.run", Vec::new());
+    run.identify("agentty.session.id", "session-traced");
+    run.identify("gen_ai.request.model", MUSE_MODEL);
+    run.identify("agentty.harness", "harness");
     let (traced, _) = run
         .scope(run_turn(
             &channel,
@@ -325,6 +341,19 @@ async fn traced_session_turn_exports_harness_spans_beneath_the_run() {
         .find(|span| span.name == format!("chat {MUSE_MODEL}"))
         .expect("model request span");
     assert_eq!(chat.parent_span_id, turn.span_context.span_id());
+    let tool = spans
+        .iter()
+        .find(|span| span.name == "execute_tool read")
+        .expect("tool span");
+    assert_eq!(tool.parent_span_id, turn.span_context.span_id());
+    for attribute in [
+        KeyValue::new("agentty.session.id", "session-traced"),
+        KeyValue::new("gen_ai.request.model", MUSE_MODEL),
+        KeyValue::new("agentty.harness", "harness"),
+        KeyValue::new("gen_ai.tool.name", "read"),
+    ] {
+        assert!(tool.attributes.contains(&attribute), "{attribute:?}");
+    }
 }
 
 #[tokio::test]

@@ -800,14 +800,17 @@ fn reasoning_effort(reasoning_level: ReasoningLevel) -> ReasoningEffort {
 }
 
 /// Adds the harness's OpenTelemetry span projection after `observer` when
-/// the current execution span is recording.
+/// the current execution span is recording. Its `execute_tool` spans repeat
+/// the run identity the turn inherits, like other harnesses' tool spans.
 fn traced(observer: impl LifecycleObserver + 'static) -> LifecycleObserverSet {
     let observers = LifecycleObserverSet::new(observer);
     if !Context::current().span().is_recording() {
         return observers;
     }
 
-    observers.with_observer(LifecycleTraceObserver::new())
+    observers.with_observer(
+        LifecycleTraceObserver::new().with_tool_attributes(ag_telemetry::run_identity),
+    )
 }
 
 /// Model wrapper that charges one provider call before every request.

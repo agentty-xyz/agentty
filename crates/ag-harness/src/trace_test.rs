@@ -759,6 +759,65 @@ async fn omits_oversized_tool_call_id_attribute() {
     provider.shutdown().expect("test provider should shut down");
 }
 
+/// Derives a run attribute from the turn's baggage, plus a tool name the
+/// span's own attribute must override.
+fn run_attributes(context: &Context) -> Vec<KeyValue> {
+    let mut attributes = vec![KeyValue::new(telemetry::ATTRIBUTE_TOOL_NAME, "derived")];
+    if let Some(run_id) = context.baggage().get("run.id") {
+        attributes.push(KeyValue::new("agentty.run.id", run_id.to_string()));
+    }
+
+    attributes
+}
+
+#[tokio::test]
+async fn tool_spans_repeat_attributes_derived_from_the_turn_context() {
+    // Arrange
+    let _trace_provider_guard = TRACE_PROVIDER_LOCK.lock().await;
+    let exporter = InMemorySpanExporter::default();
+    let provider = SdkTracerProvider::builder()
+        .with_simple_exporter(exporter.clone())
+        .build();
+    global::set_tracer_provider(provider.clone());
+    let emitter =
+        LifecycleEmitter::new(LifecycleTraceObserver::new().with_tool_attributes(run_attributes));
+    let caller = Context::current_with_baggage([KeyValue::new("run.id", "run-1")]).attach();
+    let turn = emitter.start_turn().expect("observer should enable turns");
+    drop(caller);
+    let turn_id = turn.id();
+
+    // Act
+    let mut tool = emitter
+        .request_tool("call-1".to_string(), "read".to_string(), Some(turn_id))
+        .expect("turn should enable tools");
+    tool.started();
+    tool.completed();
+    turn.completed();
+    provider
+        .force_flush()
+        .expect("finished spans should flush to memory");
+    let spans = exporter
+        .get_finished_spans()
+        .expect("finished spans should be readable");
+
+    // Assert
+    let tool_span = attributes(find_span(&spans, "execute_tool read", None));
+    assert_eq!(
+        tool_span.get("agentty.run.id").map(String::as_str),
+        Some("run-1")
+    );
+    assert_eq!(
+        tool_span
+            .get(telemetry::ATTRIBUTE_TOOL_NAME)
+            .map(String::as_str),
+        Some("read")
+    );
+    let turn_span = find_span(&spans, telemetry::OPERATION_INVOKE_AGENT, None);
+    assert!(!attributes(turn_span).contains_key("agentty.run.id"));
+
+    provider.shutdown().expect("test provider should shut down");
+}
+
 #[tokio::test]
 async fn records_repeated_tool_calls_as_turn_span_events() {
     // Arrange

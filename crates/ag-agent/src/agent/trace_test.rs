@@ -311,6 +311,35 @@ async fn codex_operations_keep_attempt_parentage_outcomes_and_numeric_metadata()
 }
 
 #[tokio::test]
+async fn codex_file_changes_are_named_without_exporting_patches() {
+    // Arrange
+    let changes =
+        json!([{"path": "src/private.rs", "kind": {"type": "update"}, "diff": "+private patch"}]);
+    let events = vec![
+        json!({"method": "item/started", "params": {"item": {"id": "patch-1", "type": "fileChange", "changes": changes, "status": "inProgress"}}}),
+        json!({"method": "item/completed", "params": {"item": {"id": "patch-1", "type": "fileChange", "changes": changes, "status": "completed"}}}),
+        json!({"method": "item/completed", "params": {"item": {"id": "patch-2", "type": "file_change", "changes": changes, "status": "failed"}}}),
+    ];
+
+    // Act / Assert
+    for capture in [false, true] {
+        let spans = capture_with_policy(AgentKind::Codex, events.clone(), capture).await;
+        let tools = spans
+            .iter()
+            .filter(|span| span.name == "agent.tool")
+            .collect::<Vec<_>>();
+        assert_eq!(tools.len(), 2);
+        for tool in tools {
+            assert!(
+                tool.attributes
+                    .contains(&KeyValue::new("gen_ai.tool.name", "file_change"))
+            );
+        }
+        assert!(!format!("{spans:?}").contains("private"));
+    }
+}
+
+#[tokio::test]
 async fn antigravity_steps_preserve_reported_durations_and_usage_without_content() {
     // Arrange
     let mut events = Vec::new();
