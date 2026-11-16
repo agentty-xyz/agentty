@@ -216,13 +216,69 @@ pub(crate) fn review_progress_message(
 /// Stable manual-review result shown when the session has no diff changes.
 pub(crate) const REVIEW_NO_DIFF_MESSAGE: &str = "No diff changes found for review.";
 
-/// Computes a deterministic `FNV-1a` hash of diff text for focused-review
-/// cache invalidation.
+/// `FNV-1a` offset basis shared by review hashes.
+const FNV_OFFSET_BASIS: u64 = 0xcbf2_9ce4_8422_2325;
+
+/// Computes a deterministic `FNV-1a` hash of the session's own changes for
+/// focused-review freshness.
+///
+/// A conflict-free rebase moves hunk positions, `index` blob ids, rename
+/// similarity, and context lines without changing what the session changed,
+/// so those are excluded. Changed lines, file headers, mode and rename
+/// metadata, and binary blob ids remain. Text outside a file section is
+/// hashed verbatim, so non-diff text hashes like [`text_hash`].
 pub(crate) fn diff_content_hash(diff: &str) -> u64 {
-    const FNV_OFFSET_BASIS: u64 = 0xcbf2_9ce4_8422_2325;
+    let mut hash = FNV_OFFSET_BASIS;
+    let mut in_hunk = false;
+    let mut in_file = false;
+    let mut index_line = None;
+    let mut follows_change = false;
+
+    for line in diff.split_inclusive('\n') {
+        if line.starts_with("diff --git ") {
+            in_file = true;
+            in_hunk = false;
+            index_line = None;
+        }
+        let included = if !in_file {
+            true
+        } else if in_hunk || line.starts_with("@@") {
+            in_hunk = true;
+
+            line.starts_with(['+', '-']) || (line.starts_with('\\') && follows_change)
+        } else if line.starts_with("index ") {
+            index_line = Some(line);
+
+            false
+        } else if line.starts_with("Binary files ") {
+            if let Some(index_line) = index_line {
+                hash = fnv1a_extend(hash, index_line);
+            }
+
+            true
+        } else {
+            !line.starts_with("similarity index ") && !line.starts_with("dissimilarity index ")
+        };
+        follows_change = in_hunk && line.starts_with(['+', '-']);
+
+        if included {
+            hash = fnv1a_extend(hash, line);
+        }
+    }
+
+    hash
+}
+
+/// Computes a deterministic `FNV-1a` hash of exact text.
+pub(crate) fn text_hash(text: &str) -> u64 {
+    fnv1a_extend(FNV_OFFSET_BASIS, text)
+}
+
+/// Folds `text` bytes into one running `FNV-1a` hash.
+fn fnv1a_extend(hash: u64, text: &str) -> u64 {
     const FNV_PRIME: u64 = 0x0000_0100_0000_01b3;
 
-    diff.as_bytes().iter().fold(FNV_OFFSET_BASIS, |hash, byte| {
+    text.as_bytes().iter().fold(hash, |hash, byte| {
         (hash ^ u64::from(*byte)).wrapping_mul(FNV_PRIME)
     })
 }

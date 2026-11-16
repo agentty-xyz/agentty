@@ -171,12 +171,13 @@ path.
 Results carry session, operation, or request generations. The reducer rejects stale
 completions after navigation, cancellation, or replacement. Review claims and
 changed-diff identity persist together, so restart can resume pending review without
-reviewing an unchanged diff again. A rebase without conflicts retains its focused
-review. When Git reports a conflict, the worker invalidates review evidence before
-assistance edits files and signals the reducer to remove the displayed review. The
-reducer clears that review before persisting batched results, and generated review
-writes require their invocation to remain active in SQLite. Failed admission preserves
-the review.
+reviewing an unchanged diff again. Diff identity covers the session's changed lines and
+file metadata, not hunk positions or context, so a rebase without conflicts retains its
+focused review and `/apply` still accepts it. When Git reports a conflict, the worker
+invalidates review evidence before assistance edits files and signals the reducer to
+remove the displayed review. The reducer clears that review before persisting batched
+results, and generated review writes require their invocation to remain active in
+SQLite. Failed admission preserves the review.
 
 Terminal session states release workers. Forge updates may mark a session `Merged`, but
 only a successful manual target sync archives it as `Done`.

@@ -1320,6 +1320,60 @@ async fn automatic_apply_completion_counts_enqueued_remediation_turn() {
 }
 
 #[tokio::test]
+async fn automatic_apply_completion_accepts_rebased_diff_and_rejects_changed_diff() {
+    // Arrange
+    let reviewed_diff = "diff --git a/src/lib.rs b/src/lib.rs\nindex 1111111..2222222 100644\n--- \
+                         a/src/lib.rs\n+++ b/src/lib.rs\n@@ -10,3 +10,4 @@ fn old_context()\n \
+                         context\n+added\n context\n";
+    let rebased_diff = "diff --git a/src/lib.rs b/src/lib.rs\nindex 3333333..4444444 100644\n--- \
+                        a/src/lib.rs\n+++ b/src/lib.rs\n@@ -14,3 +14,4 @@ fn new_context()\n \
+                        moved context\n+added\n moved context\n";
+    let changed_diff = rebased_diff.replace("+added", "+edited");
+
+    for (current_diff, expected_iterations) in
+        [(rebased_diff.to_string(), Some(&1)), (changed_diff, None)]
+    {
+        let (mut app, _base_dir, session_id) = review_app().await;
+        crate::test_support::set_session_status_for_test(&mut app, &session_id, Status::Review);
+        app.sessions.sessions_mut()[0].permission_mode =
+            crate::domain::permission::PermissionMode::AutoEditAddressComments;
+        let diff_hash = review::diff_content_hash(reviewed_diff);
+        app.review_cache.insert(
+            session_id.clone(),
+            ReviewCacheEntry::Ready {
+                request_id: uuid::Uuid::nil(),
+                diff_hash,
+                text: "## Review\n### Suggestions\n- Fix the issue.".to_string(),
+            },
+        );
+        assert!(app.start_auto_apply_review_diff_load(
+            &session_id,
+            diff_hash,
+            "- Fix the issue.".to_string(),
+        ));
+        let request_id = *app
+            .pending_session_diff_requests
+            .keys()
+            .next()
+            .expect("automatic apply diff request should be pending");
+
+        // Act
+        app.apply_session_diff_update(SessionDiffUpdate {
+            request_id,
+            result: Ok(current_diff),
+            session_id: session_id.clone(),
+        })
+        .await;
+
+        // Assert
+        assert_eq!(
+            app.auto_address_review_iterations.get(&session_id),
+            expected_iterations
+        );
+    }
+}
+
+#[tokio::test]
 async fn automatic_apply_completion_does_not_count_failed_remediation_enqueue() {
     // Arrange
     let (mut app, _base_dir, session_id) = review_app().await;

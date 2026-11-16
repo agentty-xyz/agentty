@@ -12,7 +12,7 @@ use ag_worker::RunClient;
 use async_trait::async_trait;
 use serde::Deserialize;
 
-use super::review::diff_content_hash;
+use super::review::text_hash;
 
 /// Size rejections retain the partition plan so retries do not spend their
 /// entire budget rediscovering smaller provider limits for completed batches.
@@ -45,7 +45,7 @@ impl ReviewResumeClient {
         request_id: uuid::Uuid,
     ) -> Result<Self, OneShotError> {
         let request_id = request_id.to_string();
-        let generation = format!("{diff_hash}:{}", diff_content_hash(history));
+        let generation = format!("{diff_hash}:{}", text_hash(history));
         repositories
             .sessions()
             .begin_review_generation(session_id, &generation, &request_id)

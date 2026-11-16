@@ -649,11 +649,13 @@ impl TaskService {
             speed_mode,
         } = input;
 
+        // Replayed evidence cites diff positions, so bind it to the exact
+        // diff rather than the rebase-tolerant freshness hash.
         let client = crate::app::review_resume::ReviewResumeClient::new(
             run_client,
             &graph_host.repositories,
             &session_id,
-            diff_hash,
+            crate::app::review::text_hash(&review_diff),
             session_chat_history.as_deref().unwrap_or_default(),
             request_id,
         )
