@@ -219,7 +219,7 @@ impl AppStartup {
         let (sessions_row_count, sessions_updated_at_max) = services
             .db()
             .sessions()
-            .load_sessions_metadata()
+            .load_sessions_metadata(active_project_id)
             .await
             .unwrap_or((0, 0));
         table_state.select(session_order::preferred_initial_session_index(&sessions));

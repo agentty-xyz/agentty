@@ -10,7 +10,7 @@ use crate::test_support::review_request_fixture;
 use crate::{PersistedSessionCreation, SessionFocusedReviewRow, SessionReviewAuditRow};
 
 #[tokio::test]
-async fn session_archived_diff_round_trips_empty_and_nonempty_values() {
+async fn session_archived_diff_round_trips_nonempty_values_and_clears_blank_ones() {
     // Arrange
     let database = Database::in_memory()
         .await
@@ -39,18 +39,18 @@ async fn session_archived_diff_round_trips_empty_and_nonempty_values() {
         .expect("failed to load archived diff");
     database
         .sessions()
-        .update_session_archived_diff("session-a", Some(String::new()))
+        .update_session_archived_diff("session-a", Some(" \t\r\n".to_string()))
         .await
-        .expect("failed to store empty archived diff");
-    let empty_diff = database
+        .expect("failed to store blank archived diff");
+    let blank_diff = database
         .sessions()
         .load_session_archived_diff("session-a")
         .await
-        .expect("failed to load empty archived diff");
+        .expect("failed to load blank archived diff");
 
     // Assert
     assert_eq!(stored_diff.as_deref(), Some("diff --git a/a b/a"));
-    assert_eq!(empty_diff.as_deref(), Some(""));
+    assert_eq!(blank_diff, None);
 }
 
 #[tokio::test]

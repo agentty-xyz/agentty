@@ -426,7 +426,11 @@ pub trait SessionRepository: crate::SessionPreparationRepository + Send + Sync {
     ) -> Result<Vec<SessionFocusedReviewRow>, DbError>;
 
     /// Loads lightweight session metadata used for cheap change detection.
-    async fn load_sessions_metadata(&self) -> Result<(i64, i64), DbError>;
+    ///
+    /// Returns the session count across every project, which changes when any
+    /// project creates or deletes a session, and the latest `updated_at` among
+    /// `project_id` sessions, so updates elsewhere do not signal a change.
+    async fn load_sessions_metadata(&self, project_id: i64) -> Result<(i64, i64), DbError>;
 
     /// Loads the project identifier associated with one session.
     async fn load_session_project_id(&self, session_id: &str) -> Result<Option<i64>, DbError>;
@@ -570,6 +574,9 @@ pub trait SessionRepository: crate::SessionPreparationRepository + Send + Sync {
     ) -> Result<(), DbError>;
 
     /// Persists or clears the immutable diff retained for archived sessions.
+    ///
+    /// A blank or whitespace-only diff is stored as `NULL`, so session loaders
+    /// report its availability without reading the stored text.
     async fn update_session_archived_diff(
         &self,
         id: &str,
@@ -800,6 +807,10 @@ pub(crate) struct SqliteSessionRepository(
 );
 
 impl SqliteSessionRepository {
+    /// Characters that make an archived diff blank, matching the `trim()` set
+    /// used by migration `117_clear_blank_archived_diff.sql`.
+    const ARCHIVED_DIFF_BLANK_CHARS: [char; 4] = ['\t', '\n', '\r', ' '];
+
     /// Creates a session repository backed by the provided pool.
     pub(crate) fn new(pool: SqlitePool, timestamp_source: Arc<dyn TimestampSource>) -> Self {
         Self(
@@ -1271,7 +1282,7 @@ SELECT session.base_branch AS base_branch,
        session.created_at AS created_at,
        session.deleted_lines AS deleted_lines,
        session.draft_attachments,
-       COALESCE(length(trim(session.archived_diff, char(9) || char(10) || char(13) || ' ')) > 0, 0) AS has_archived_diff,
+       session.archived_diff IS NOT NULL AS has_archived_diff,
        session.has_diff AS has_diff,
        session.id AS id,
        session.in_progress_started_at,
@@ -1348,7 +1359,7 @@ SELECT session.base_branch AS base_branch,
        session.created_at AS created_at,
        session.deleted_lines AS deleted_lines,
        session.draft_attachments,
-       COALESCE(length(trim(session.archived_diff, char(9) || char(10) || char(13) || ' ')) > 0, 0) AS "has_archived_diff!: bool",
+       session.archived_diff IS NOT NULL AS "has_archived_diff!: bool",
        session.has_diff AS "has_diff: bool",
        session.id AS id,
        session.in_progress_started_at,
@@ -1410,7 +1421,7 @@ SELECT session.base_branch AS base_branch,
        session.created_at AS created_at,
        session.deleted_lines AS deleted_lines,
        NULL AS "draft_attachments: String",
-       COALESCE(length(trim(session.archived_diff, char(9) || char(10) || char(13) || ' ')) > 0, 0) AS "has_archived_diff!: bool",
+       session.archived_diff IS NOT NULL AS "has_archived_diff!: bool",
        session.has_diff AS "has_diff: bool",
        session.id AS id,
        session.in_progress_started_at,
@@ -1484,7 +1495,7 @@ SELECT session.base_branch AS base_branch,
        session.created_at AS created_at,
        session.deleted_lines AS deleted_lines,
        NULL AS draft_attachments,
-       COALESCE(length(trim(session.archived_diff, char(9) || char(10) || char(13) || ' ')) > 0, 0) AS has_archived_diff,
+       session.archived_diff IS NOT NULL AS has_archived_diff,
        session.has_diff AS has_diff,
        session.id AS id,
        session.in_progress_started_at,
@@ -1635,7 +1646,7 @@ ORDER BY updated_at DESC, id
         Ok(rows)
     }
 
-    async fn load_sessions_metadata(&self) -> Result<(i64, i64), DbError> {
+    async fn load_sessions_metadata(&self, project_id: i64) -> Result<(i64, i64), DbError> {
         let row = sqlx::query_as!(
             SessionStatsMetadataRow,
             r#"
@@ -1644,12 +1655,14 @@ SELECT (SELECT COUNT(*) FROM session) AS "session_count!: _",
            (
                SELECT updated_at
                FROM session
-               ORDER BY updated_at DESC, id
+               WHERE project_id = ?
+               ORDER BY updated_at DESC, created_at DESC, id
                LIMIT 1
            ),
            0
        ) AS "max_updated_at!: _"
-"#
+"#,
+            project_id
         )
         .fetch_one(&self.0)
         .await?;
@@ -2234,6 +2247,11 @@ WHERE id = ?
         archived_diff: Option<String>,
     ) -> Result<(), DbError> {
         let now = self.now();
+        let archived_diff = archived_diff.filter(|diff| {
+            !diff
+                .trim_matches(Self::ARCHIVED_DIFF_BLANK_CHARS)
+                .is_empty()
+        });
 
         sqlx::query!(
             r"

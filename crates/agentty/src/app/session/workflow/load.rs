@@ -80,6 +80,7 @@ struct LoadSessionContext<'a> {
     fs_client: &'a dyn FsClient,
     handles: &'a mut HashMap<SessionId, SessionHandles>,
     preparations: &'a HashMap<String, SessionPreparationRow>,
+    previous_transcripts: &'a mut HashMap<SessionId, SessionTranscript>,
     project_name: &'a str,
     session_worktree_availability: &'a mut HashMap<SessionId, bool>,
     sessions: &'a mut Vec<Session>,
@@ -204,6 +205,7 @@ impl SessionManager {
                 fs_client: fs_client.as_ref(),
                 handles: self.state.handles_mut(),
                 preparations: &preparations,
+                previous_transcripts: &mut HashMap::new(),
                 project_name: working_dir
                     .file_name()
                     .and_then(std::ffi::OsStr::to_str)
@@ -284,7 +286,9 @@ impl SessionManager {
     /// New handles are inserted for sessions that don't have entries yet.
     ///
     /// Transcript-scale fields are loaded only for `active_session_id`; other
-    /// rows receive empty detail fields until the session is opened.
+    /// rows receive empty detail fields until the session is opened. Saved
+    /// messages are read only while that session's handle is unhydrated,
+    /// because a hydrated handle's live transcript is authoritative.
     ///
     /// Rows with unsupported permission modes are logged and skipped so one
     /// corrupt session cannot hide valid siblings or appear write-capable.
@@ -296,7 +300,7 @@ impl SessionManager {
         input: SessionLoadInput<'_>,
         handles: &mut HashMap<SessionId, SessionHandles>,
     ) -> LoadedSessionPage {
-        Self::try_load_sessions_with_fs_client(input, handles)
+        Self::try_load_sessions_with_fs_client(input, handles, &mut HashMap::new())
             .await
             .unwrap_or_default()
     }
@@ -306,11 +310,17 @@ impl SessionManager {
     /// Refresh callers use this fallible path so a transient database error
     /// cannot be mistaken for an empty project and tear down live workers.
     ///
+    /// `previous_transcripts` holds render transcripts taken from the
+    /// snapshots being replaced. A loaded session whose live handle
+    /// transcript still equals its previous one reuses it instead of cloning
+    /// the handle; consumed entries are removed from the map.
+    ///
     /// # Errors
     /// Returns an error when the project's session rows cannot be loaded.
     pub(crate) async fn try_load_sessions_with_fs_client(
         input: SessionLoadInput<'_>,
         handles: &mut HashMap<SessionId, SessionHandles>,
+        previous_transcripts: &mut HashMap<SessionId, SessionTranscript>,
     ) -> Result<LoadedSessionPage, DbError> {
         let SessionLoadInput {
             active_project_id,
@@ -358,6 +368,7 @@ impl SessionManager {
             .collect();
         let mut load_context = LoadSessionContext {
             preparations: &preparations,
+            previous_transcripts,
             base,
             db,
             project_name: &project_name,
@@ -432,6 +443,7 @@ impl SessionManager {
             sessions,
             session_worktree_availability,
             preparations,
+            previous_transcripts,
         } = load_context;
         let session_id = SessionId::from(row.id.clone());
         let folder = session_folder(base, &session_id);
@@ -463,8 +475,8 @@ impl SessionManager {
                 *active_session_id,
                 handles,
                 &session_id,
-                &row.id,
                 persisted_status,
+                previous_transcripts.remove(&session_id),
             )
             .await;
         let session_agent =
@@ -521,17 +533,26 @@ impl SessionManager {
         active_session_id: Option<&str>,
         handles: &mut HashMap<SessionId, SessionHandles>,
         session_id: &SessionId,
-        row_id: &str,
         persisted_status: Status,
+        previous_transcript: Option<SessionTranscript>,
     ) -> (Option<SessionDetailRow>, Status, Option<SessionTranscript>) {
-        let (session_detail, loaded_transcript) =
-            load_active_session_detail(db, active_session_id, row_id).await;
+        let needs_saved_transcript = handles
+            .get(session_id)
+            .is_none_or(SessionHandles::needs_transcript_hydration);
+        let (session_detail, loaded_transcript) = load_active_session_detail(
+            db,
+            active_session_id,
+            session_id.as_str(),
+            needs_saved_transcript,
+        )
+        .await;
         let (session_status, session_transcript) =
             if let Some(existing_handle) = handles.get(session_id) {
                 status_and_transcript_from_existing_handle(
                     existing_handle,
                     persisted_status,
                     loaded_transcript.as_ref(),
+                    previous_transcript,
                 )
             } else {
                 let transcript = insert_loaded_session_handle(
@@ -683,7 +704,7 @@ impl SessionManager {
         let session_transcript = self
             .state
             .handle(session_id)
-            .and_then(|handles| sync_handle_transcript_with_loaded(handles, Some(&transcript)))
+            .and_then(|handles| handles.transcript_snapshot_with_loaded(Some(&transcript), None))
             .or_else(|| Some(transcript).filter(|transcript| !transcript.is_empty()));
 
         let Some(session) = self.state.session_mut_for_id(session_id) else {
@@ -700,12 +721,17 @@ impl SessionManager {
     }
 }
 
-/// Loads active-session detail metadata and transcript text for the selected
-/// row only.
+/// Loads active-session detail metadata for the selected row only, plus its
+/// saved transcript when `needs_saved_transcript` is set.
+///
+/// Detail fields are read on every reload because other writers can change
+/// them, while a hydrated handle never replaces its live transcript with saved
+/// messages, so reading them again would be discarded work.
 async fn load_active_session_detail(
     db: &AppRepositories,
     active_session_id: Option<&str>,
     row_id: &str,
+    needs_saved_transcript: bool,
 ) -> (Option<SessionDetailRow>, Option<SessionTranscript>) {
     if active_session_id.is_none_or(|active_id| active_id != row_id) {
         return (None, None);
@@ -720,17 +746,25 @@ async fn load_active_session_detail(
     else {
         return (None, None);
     };
-    let transcript = load_session_transcript(db, row_id).await.ok();
+    let transcript = if needs_saved_transcript {
+        load_session_transcript(db, row_id).await.ok()
+    } else {
+        None
+    };
 
     (Some(detail), transcript)
 }
 
 /// Reads status/transcript from an existing handle while hydrating an empty
 /// transcript from lazily loaded detail when the session has become active.
+///
+/// `previous_transcript` is reused when it still equals the handle
+/// transcript, avoiding a deep clone of unchanged history.
 fn status_and_transcript_from_existing_handle(
     existing_handle: &SessionHandles,
     persisted_status: Status,
     loaded_transcript: Option<&SessionTranscript>,
+    previous_transcript: Option<SessionTranscript>,
 ) -> (Status, Option<SessionTranscript>) {
     let status_from_handle = existing_handle
         .status
@@ -743,7 +777,7 @@ fn status_and_transcript_from_existing_handle(
         *handle_status = merged_status;
     }
     let transcript_from_handle =
-        sync_handle_transcript_with_loaded(existing_handle, loaded_transcript);
+        existing_handle.transcript_snapshot_with_loaded(loaded_transcript, previous_transcript);
 
     (merged_status, transcript_from_handle)
 }
@@ -775,15 +809,6 @@ pub(crate) async fn load_session_transcript(
     let messages = db.sessions().load_session_messages(session_id).await?;
 
     Ok(SessionTranscript::new(session_messages_from_rows(messages)))
-}
-
-/// Synchronizes a handle from loaded rows while preserving complete live
-/// transcripts and replacing partial unhydrated snapshots.
-fn sync_handle_transcript_with_loaded(
-    handles: &SessionHandles,
-    loaded_transcript: Option<&SessionTranscript>,
-) -> Option<SessionTranscript> {
-    handles.transcript_snapshot_with_loaded(loaded_transcript)
 }
 
 /// Converts database message rows into domain messages, skipping unknown

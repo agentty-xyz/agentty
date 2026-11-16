@@ -8,10 +8,10 @@ use crate::SessionTurnMetadata;
 use crate::connection::Database;
 use crate::error::DbError;
 
-/// Verifies `load_sessions_metadata()` returns session count and max
-/// `updated_at`.
+/// Verifies `load_sessions_metadata()` counts sessions in every project while
+/// taking the latest `updated_at` from the requested project only.
 #[tokio::test]
-async fn test_load_sessions_metadata_returns_count_and_latest_timestamp() {
+async fn test_load_sessions_metadata_returns_count_and_latest_project_timestamp() {
     // Arrange
     let database = Database::in_memory()
         .await
@@ -21,29 +21,43 @@ async fn test_load_sessions_metadata_returns_count_and_latest_timestamp() {
         .upsert_project("/tmp/project", Some("main".to_string()))
         .await
         .expect("failed to insert project");
+    let other_project_id = database
+        .projects()
+        .upsert_project("/tmp/other-project", Some("main".to_string()))
+        .await
+        .expect("failed to insert other project");
+    let empty_project_id = database
+        .projects()
+        .upsert_project("/tmp/empty-project", Some("main".to_string()))
+        .await
+        .expect("failed to insert empty project");
 
     insert_session_fixture(&database, "session-a", "main", "Review", project_id).await;
     insert_session_fixture(&database, "session-b", "main", "Done", project_id).await;
-    database
-        .sessions()
-        .update_session_updated_at("session-a", 200)
-        .await
-        .expect("failed to update session-a updated_at");
-    database
-        .sessions()
-        .update_session_updated_at("session-b", 300)
-        .await
-        .expect("failed to update session-b updated_at");
+    insert_session_fixture(&database, "session-c", "main", "Review", other_project_id).await;
+    for (session_id, updated_at) in [("session-a", 200), ("session-b", 300), ("session-c", 900)] {
+        database
+            .sessions()
+            .update_session_updated_at(session_id, updated_at)
+            .await
+            .expect("failed to update session updated_at");
+    }
 
     // Act
     let session_metadata = database
         .sessions()
-        .load_sessions_metadata()
+        .load_sessions_metadata(project_id)
         .await
         .expect("failed to load session metadata");
+    let empty_project_metadata = database
+        .sessions()
+        .load_sessions_metadata(empty_project_id)
+        .await
+        .expect("failed to load empty project metadata");
 
     // Assert
-    assert_eq!(session_metadata, (2, 300));
+    assert_eq!(session_metadata, (3, 300));
+    assert_eq!(empty_project_metadata, (3, 0));
 }
 
 #[tokio::test]

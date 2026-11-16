@@ -26,7 +26,7 @@ use crate::domain::session::{
     ForgeKind, PublishBranchAction, ReviewRequest, ReviewRequestState, ReviewRequestSummary,
     Session, SessionHandles, SessionId, Status,
 };
-use crate::domain::session_message::SessionMessageKind;
+use crate::domain::session_message::{SessionMessage, SessionMessageKind, SessionTranscript};
 use crate::domain::session_order::ArchiveAction;
 use crate::infra::db::AppRepositories;
 use crate::infra::fs;
@@ -914,7 +914,7 @@ async fn session_metadata_failures_keep_cached_counts() {
         .refresh_sessions_if_needed(&mut mode, &projects, &services)
         .await;
     session_manager
-        .update_sessions_metadata_cache(&services)
+        .update_sessions_metadata_cache(&services, projects.active_project_id())
         .await;
 
     // Assert
@@ -1020,6 +1020,116 @@ async fn refresh_selected_list_session_defers_detail_until_viewed() {
     let viewed = session_manager.selected_session().expect("viewed session");
     assert_eq!(viewed.prompt, "persisted prompt");
     assert!(viewed.transcript.is_some());
+}
+
+#[tokio::test]
+async fn refresh_sessions_if_needed_ignores_updates_in_other_projects() {
+    // Arrange
+    let session = test_session(PathBuf::from("/tmp/session"), None, Status::Done);
+    let database = database_with_session(&session).await;
+    let other_project_id = database
+        .projects()
+        .upsert_project("/tmp/other-project", Some("main".to_string()))
+        .await
+        .expect("failed to upsert other project");
+    database
+        .sessions()
+        .insert_session(
+            "other-session",
+            "gpt-5.6-sol",
+            "main",
+            "Done",
+            other_project_id,
+        )
+        .await
+        .expect("failed to insert other session");
+    for (session_id, updated_at) in [(session.id.as_str(), 100), ("other-session", 200)] {
+        database
+            .sessions()
+            .update_session_updated_at(session_id, updated_at)
+            .await
+            .expect("failed to seed updated_at");
+    }
+    let now = Instant::now();
+    let fake_clock = Arc::new(FakeClock::new(now, SystemTime::UNIX_EPOCH));
+    let clock: Arc<dyn Clock> = fake_clock.clone();
+    let mut session_manager = session_manager_fixture(clock);
+    let services = test_services(
+        &database,
+        Arc::new(git::MockGitClient::new()),
+        Arc::new(forge::MockReviewRequestClient::new()),
+    );
+    let temp_dir = tempdir().expect("temp dir should be created");
+    let projects = empty_project_manager(temp_dir.path().to_path_buf());
+    let mut mode = AppMode::List;
+    session_manager
+        .refresh_sessions_now(&mut mode, &projects, &services)
+        .await;
+    database
+        .sessions()
+        .update_session_updated_at("other-session", 10_000)
+        .await
+        .expect("failed to update other session");
+    fake_clock.set_now_instant(now + SESSION_REFRESH_INTERVAL);
+
+    // Act
+    let refreshed_for_other_project = session_manager
+        .refresh_sessions_if_needed(&mut mode, &projects, &services)
+        .await;
+    database
+        .sessions()
+        .update_session_updated_at(&session.id, 20_000)
+        .await
+        .expect("failed to update active project session");
+    fake_clock.set_now_instant(now + SESSION_REFRESH_INTERVAL * 2);
+    let refreshed_for_active_project = session_manager
+        .refresh_sessions_if_needed(&mut mode, &projects, &services)
+        .await;
+
+    // Assert
+    assert!(!refreshed_for_other_project);
+    assert!(refreshed_for_active_project);
+    assert_eq!(session_manager.state.row_count, 2);
+    assert_eq!(session_manager.state.updated_at_max, 20_000);
+    assert_eq!(session_manager.state.sessions[0].updated_at, 20_000);
+}
+
+#[tokio::test]
+async fn refresh_failure_restores_loaded_session_transcripts() {
+    // Arrange
+    let (database, pool) = AppRepositories::in_memory_with_pool()
+        .await
+        .expect("db should open");
+    let mut session = test_session(PathBuf::from("/tmp/session"), None, Status::Review);
+    let transcript = SessionTranscript::new(vec![SessionMessage::conversation(
+        0,
+        SessionMessageKind::AssistantAnswer,
+        "live output",
+    )]);
+    session.transcript = Some(transcript.clone());
+    let clock: Arc<dyn Clock> = Arc::new(FakeClock::new(Instant::now(), SystemTime::UNIX_EPOCH));
+    let mut session_manager = session_manager_with_session(clock, session);
+    let services = test_services(
+        &database,
+        Arc::new(git::MockGitClient::new()),
+        Arc::new(forge::MockReviewRequestClient::new()),
+    );
+    let temp_dir = tempdir().expect("temp dir should be created");
+    let projects = empty_project_manager(temp_dir.path().to_path_buf());
+    let mut mode = AppMode::List;
+    pool.close().await;
+
+    // Act
+    session_manager
+        .refresh_sessions_now(&mut mode, &projects, &services)
+        .await;
+
+    // Assert
+    assert_eq!(session_manager.state.sessions.len(), 1);
+    assert_eq!(
+        session_manager.state.sessions[0].transcript,
+        Some(transcript)
+    );
 }
 
 /// Test clock implementation with mutable `Instant` and `SystemTime`.
