@@ -342,6 +342,65 @@ async fn send_compact_request_traces_request_acknowledgment_and_completion_failu
 }
 
 #[tokio::test]
+async fn explicit_compaction_span_repeats_the_inherited_run_identity() {
+    // Arrange
+    let _guard = TRACER_PROVIDER_LOCK.lock().await;
+    let exporter = install_provider();
+    let identity = vec![
+        KeyValue::new("agentty.harness", "codex"),
+        KeyValue::new("agentty.session.id", "session-1"),
+        KeyValue::new("agentty.purpose", "reply"),
+        KeyValue::new("gen_ai.request.model", "model-1"),
+    ];
+    let mut latest_input_tokens = 450_000;
+    let mut transport = MockCodexRuntimeTransport::new();
+    transport
+        .expect_write_json_line()
+        .times(1)
+        .returning(|_| Box::pin(async { Ok(()) }));
+    transport
+        .expect_wait_for_response_line()
+        .times(1)
+        .returning(|_| Box::pin(async { Ok("{}".to_string()) }));
+    transport.expect_next_stdout().times(1).returning(|| {
+        Box::pin(async {
+            Ok(Some(
+                serde_json::json!({
+                    "method": "turn/completed",
+                    "params": {"turn": {"status": "completed"}}
+                })
+                .to_string(),
+            ))
+        })
+    });
+
+    // Act
+    let result = Span::root("agent.attempt", Vec::new())
+        .scope(ag_telemetry::identified(
+            identity.clone(),
+            lifecycle::send_compact_request_with_timeout(
+                &mut transport,
+                "thread-1",
+                &mut latest_input_tokens,
+                Duration::from_secs(5),
+            ),
+        ))
+        .await;
+
+    // Assert
+    result.expect("compaction should succeed");
+    assert_compaction_span(&exporter, "completed");
+    let spans = exporter.get_finished_spans().expect("spans");
+    let compaction = spans
+        .iter()
+        .find(|span| span.name == "agent.compaction")
+        .expect("compaction");
+    for attribute in &identity {
+        assert!(compaction.attributes.contains(attribute), "{attribute:?}");
+    }
+}
+
+#[tokio::test]
 async fn send_compact_request_traces_completion_timeout_as_failed() {
     // Arrange
     let _guard = TRACER_PROVIDER_LOCK.lock().await;

@@ -617,19 +617,21 @@ context alongside run ownership. The turn span includes ordered post-processing 
 operation settlement. Provider adapters observe raw structured operations inside each
 `agent.attempt` before reducing them to UI progress. Attempt-owned trackers retain
 bounded operation identities internally and export only allowlisted categories and
-numeric metadata. Host phases distinguish diff capture, commit context preparation,
-message generation, fallback, Git execution, and individual commit attempts. Utilities
-retain captured turn ownership and link the active phase from that same trace. Missing
-provider completion events are labeled incomplete; their observed span lifetimes are not
-exact model execution durations. Span guards close canceled or abandoned work when its
-owner drops. Explicit Codex context compaction records its request and completion wait
-as `agent.compaction`, distinguishing proactive, overflow recovery, and provider-native
-triggers. Codex usage uses cumulative-counter deltas for turn totals and the latest
-request input for context pressure. Duplicate updates are ignored; resumed threads
-establish a new baseline without billing retained history. Turns lacking cumulative
-counters discard stale baselines before fallback usage can be counted again. A later
-complete snapshot establishes a fresh baseline; missing counters remain unknown in
-telemetry. Exporter shutdown follows worker cleanup and terminal restoration. See
+numeric metadata. Workflow roots and worker run spans record their identity in the trace
+context, with inner runs overriding outer values; operation spans repeat it. Host phases
+distinguish diff capture, commit context preparation, message generation, fallback, Git
+execution, and individual commit attempts. Utilities retain captured turn ownership and
+link the active phase from that same trace. Missing provider completion events are
+labeled incomplete; their observed span lifetimes are not exact model execution
+durations. Span guards close canceled or abandoned work when its owner drops. Explicit
+Codex context compaction records its request and completion wait as `agent.compaction`,
+distinguishing proactive, overflow recovery, and provider-native triggers. Codex usage
+uses cumulative-counter deltas for turn totals and the latest request input for context
+pressure. Duplicate updates are ignored; resumed threads establish a new baseline
+without billing retained history. Turns lacking cumulative counters discard stale
+baselines before fallback usage can be counted again. A later complete snapshot
+establishes a fresh baseline; missing counters remain unknown in telemetry. Exporter
+shutdown follows worker cleanup and terminal restoration. See
 [Session Traces](@/docs/usage/workflow.md#session-traces) for enablement and data scope.
 The same export owns an optional event log; the analytics sender emits each usage event
 to it before, and independently of, the `PostHog` request. See

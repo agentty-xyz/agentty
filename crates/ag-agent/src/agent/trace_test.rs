@@ -25,7 +25,7 @@ async fn provider_tool_metadata_and_content_follow_the_host_policy() {
                 json!({"method": "item/started", "params": {"item": {"id": "call-1", "type": "commandExecution", "command": "cargo test"}}}),
                 json!({"method": "item/completed", "params": {"item": {"id": "call-1", "type": "commandExecution", "aggregatedOutput": "test failed", "exitCode": 1}}}),
             ],
-            None,
+            "command_execution",
         ),
         (
             AgentKind::Claude,
@@ -33,7 +33,7 @@ async fn provider_tool_metadata_and_content_follow_the_host_policy() {
                 json!({"type": "message", "content": [{"type": "tool_use", "id": "call-1", "name": "Bash", "input": {"command": "cargo test"}}]}),
                 json!({"type": "message", "content": [{"type": "tool_result", "tool_use_id": "call-1", "content": "test failed", "is_error": true}]}),
             ],
-            Some("Bash"),
+            "Bash",
         ),
     ];
 
@@ -47,6 +47,7 @@ async fn provider_tool_metadata_and_content_follow_the_host_policy() {
                 .find(|span| span.name == "agent.tool")
                 .expect("tool");
             for attribute in [
+                KeyValue::new("gen_ai.tool.name", name),
                 KeyValue::new("gen_ai.tool.call.id", "call-1"),
                 KeyValue::new("process.executable.name", "cargo"),
                 KeyValue::new("agentty.tool.output.bytes", 11_i64),
@@ -55,19 +56,6 @@ async fn provider_tool_metadata_and_content_follow_the_host_policy() {
                 assert!(
                     tool.attributes.contains(&attribute),
                     "{kind:?}: {attribute:?}"
-                );
-            }
-            if let Some(name) = name {
-                assert!(
-                    tool.attributes
-                        .contains(&KeyValue::new("gen_ai.tool.name", name))
-                );
-            } else {
-                assert!(
-                    !tool
-                        .attributes
-                        .iter()
-                        .any(|attribute| attribute.key.as_str() == "gen_ai.tool.name")
                 );
             }
             assert_eq!(
@@ -89,6 +77,50 @@ async fn provider_tool_metadata_and_content_follow_the_host_policy() {
                     capture
                 );
             }
+        }
+    }
+}
+
+#[tokio::test]
+async fn operation_spans_repeat_the_inherited_run_identity() {
+    // Arrange
+    let _guard = TRACER_PROVIDER_LOCK.lock().await;
+    let exporter = install_provider();
+    let identity = vec![
+        KeyValue::new("agentty.harness", "codex"),
+        KeyValue::new("agentty.session.id", "session-1"),
+        KeyValue::new("agentty.purpose", "reply"),
+        KeyValue::new("gen_ai.request.model", "model-1"),
+    ];
+    let events = [
+        json!({"method": "item/started", "params": {"item": {"id": "call-1", "type": "commandExecution", "command": "cargo test"}}}),
+        json!({"method": "item/completed", "params": {"item": {"id": "call-1", "type": "commandExecution", "exitCode": 0}}}),
+        json!({"method": "item/completed", "params": {"item": {"id": "response", "type": "agentMessage"}}}),
+    ];
+
+    // Act
+    Span::root("agent.attempt", Vec::new())
+        .scope(async {
+            ag_telemetry::identified(identity.clone(), async {
+                let mut trace = OperationTrace::new();
+                for event in &events {
+                    trace.observe(AgentKind::Codex, event);
+                }
+            })
+            .await;
+        })
+        .await;
+
+    // Assert
+    let spans = exporter.get_finished_spans().expect("spans");
+    assert_children(&spans, 2);
+    for span in spans.iter().filter(|span| span.name != "agent.attempt") {
+        for attribute in &identity {
+            assert!(
+                span.attributes.contains(attribute),
+                "{}: {attribute:?}",
+                span.name
+            );
         }
     }
 }

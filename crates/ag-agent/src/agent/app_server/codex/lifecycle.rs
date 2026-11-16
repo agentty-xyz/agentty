@@ -477,7 +477,7 @@ pub(super) async fn send_compact_request_with_timeout<Transport: AppServerRuntim
     latest_input_tokens: &mut u64,
     turn_timeout: Duration,
 ) -> Result<(), AppServerError> {
-    let span = ag_telemetry::Span::child("agent.compaction");
+    let span = ag_telemetry::Span::operation("agent.compaction");
     span.attribute(
         "agentty.compaction.trigger",
         Context::current()

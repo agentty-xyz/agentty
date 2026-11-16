@@ -121,6 +121,13 @@ async fn run_sync_assistance_scenario(capture: bool) -> Result<(), Box<dyn std::
         .lock()
         .map_err(|_| io::Error::other("trace receiver poisoned"))?;
     assert_tool_content(&spans, capture)?;
+    assert_tool_identity(
+        &spans,
+        &[(
+            "utility.run",
+            &["agentty.harness", "agentty.purpose", "gen_ai.request.model"],
+        )],
+    )?;
     assert!(spans.iter().all(|span| span.name != "session.turn"));
 
     Ok(())
@@ -255,6 +262,20 @@ async fn run_timing_scenario(capture: bool) -> Result<(), Box<dyn std::error::Er
         .clone();
     assert_timing_spans(&spans)?;
     assert_tool_content(&spans, capture)?;
+    assert_tool_identity(
+        &spans,
+        &[
+            (
+                "agent.run",
+                &[
+                    "agentty.harness",
+                    "agentty.session.id",
+                    "gen_ai.request.model",
+                ],
+            ),
+            ("session.turn", &["agentty.purpose"]),
+        ],
+    )?;
     let events = events
         .lock()
         .map_err(|_| io::Error::other("event receiver poisoned"))?
@@ -431,6 +452,45 @@ fn assert_tool_content(spans: &[Span], capture: bool) -> io::Result<()> {
     );
 
     assert_structured_previews(spans, capture)
+}
+
+/// Checks that a tool span repeats each listed identity of its named
+/// ancestors, so it is attributable without joining them. The first owner
+/// selects the tool call made by that run among same-named calls.
+fn assert_tool_identity(spans: &[Span], owners: &[(&str, &[&str])]) -> io::Result<()> {
+    let run = owners.first().map_or("", |(name, _)| *name);
+    let tool = spans
+        .iter()
+        .filter(|span| string_attribute(span, "gen_ai.tool.call.id") == Some("trace-tool"))
+        .find(|span| ancestor(spans, span, run).is_some())
+        .ok_or_else(|| io::Error::other(format!("missing tool span beneath {run}")))?;
+    assert_eq!(string_attribute(tool, "agentty.harness"), Some("claude"));
+    for (name, keys) in owners {
+        let owner = ancestor(spans, tool, name)
+            .ok_or_else(|| io::Error::other(format!("missing {name} above tool span")))?;
+        for key in *keys {
+            let value = string_attribute(owner, key);
+            assert!(value.is_some(), "{name} lacks {key}");
+            assert_eq!(string_attribute(tool, key), value, "{key}");
+        }
+    }
+
+    Ok(())
+}
+
+fn ancestor<'a>(spans: &'a [Span], span: &Span, name: &str) -> Option<&'a Span> {
+    let mut parent_id = &span.parent_span_id;
+    while let Some(parent) = spans
+        .iter()
+        .find(|candidate| candidate.trace_id == span.trace_id && &candidate.span_id == parent_id)
+    {
+        if parent.name == name {
+            return Some(parent);
+        }
+        parent_id = &parent.parent_span_id;
+    }
+
+    None
 }
 
 fn assert_structured_previews(spans: &[Span], capture: bool) -> io::Result<()> {

@@ -12,7 +12,7 @@ use ag_contracts::{
     PermissionMode, ReasoningLevel, SessionStats, SpeedMode,
 };
 use ag_protocol::AgentResponse;
-use ag_telemetry::{Span, TraceContextExt as _};
+use ag_telemetry::{Context, KeyValue, Span, TraceContextExt as _};
 use async_trait::async_trait;
 use opentelemetry::global;
 use opentelemetry_sdk::trace::{InMemorySpanExporter, SdkTracerProvider};
@@ -1125,5 +1125,68 @@ async fn utility_phase_links_preserve_captured_turn_ownership() {
     assert_eq!(
         utilities[1].links.links,
         [] as [opentelemetry::trace::Link; 0]
+    );
+}
+
+#[tokio::test]
+async fn utility_runs_pass_their_identity_to_provider_operations() {
+    // Arrange
+    let observed = Arc::new(Mutex::new(Vec::new()));
+    let mut runtime = ag_contracts::MockOneShotClient::new();
+    runtime.expect_submit_cancellable().once().returning({
+        let observed = Arc::clone(&observed);
+        move |_, _| {
+            *observed.lock().expect("observed identity") =
+                ag_telemetry::run_identity(&Context::current());
+
+            Ok(result())
+        }
+    });
+    runtime.expect_close().once().return_const(());
+    let worker = RunWorker::with_client(
+        Arc::new(runtime),
+        Arc::new(Repository::default()),
+        Arc::new(HeartbeatClock),
+        NonZeroUsize::MIN,
+    );
+    let scope = RunScope {
+        purpose: Some("title".into()),
+        session_id: Some("session-1".into()),
+        ..RunScope::default()
+    };
+
+    // Act
+    ag_telemetry::identified(
+        vec![KeyValue::new("agentty.purpose", "reply")],
+        in_scope(scope, worker.submit(request())),
+    )
+    .await
+    .expect("utility submission");
+    worker.shutdown().await;
+
+    // Assert
+    let identity = observed.lock().expect("observed identity").clone();
+    for (key, value) in [
+        ("agentty.harness", "test"),
+        ("gen_ai.request.model", "model"),
+        ("agentty.session.id", "session-1"),
+        ("agentty.purpose", "title"),
+    ] {
+        assert!(
+            identity.contains(&KeyValue::new(key, value)),
+            "{key}: {identity:?}"
+        );
+    }
+    assert!(
+        identity
+            .iter()
+            .any(|attribute| attribute.key.as_str() == "agentty.run.id")
+    );
+    assert_eq!(
+        identity
+            .iter()
+            .filter(|attribute| attribute.key.as_str() == "agentty.purpose")
+            .count(),
+        1
     );
 }

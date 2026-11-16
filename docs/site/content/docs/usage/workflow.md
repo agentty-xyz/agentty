@@ -855,7 +855,9 @@ beneath `agent.run` and time each model request exactly.
 Traces contain execution identifiers, provider/model selections, token counts, bounded
 outcomes, and available tool names, call identifiers, executable basenames, exit codes,
 and output byte counts. Command arguments, tool output, and project paths are excluded
-by default.
+by default. Provider operation spans such as `agent.tool` repeat the owning run's
+available `agentty.harness`, `agentty.session.id`, `agentty.purpose`, `agentty.run.id`,
+and `gen_ai.request.model`, so they can be grouped without joining ancestor spans.
 
 Add `--otlp-capture-content` alongside `--otlp-endpoint` to export tool commands,
 arguments, and results as previews of at most 4 KiB per attribute. Longer values keep
@@ -876,10 +878,11 @@ prompts remain excluded.
 Content previews are supported for Codex command, MCP, and dynamic-tool items and Claude
 tool messages. Antigravity exports tool identities; its input/output fields are not
 captured. Missing fields are omitted; tool categories and titles are not treated as
-provider-reported tool names. All observed spans are sampled while enabled. Export is
-asynchronous and best effort: a full queue or unavailable receiver may lose spans.
-Agentty reports a coalesced diagnostic summary after restoring the terminal and limits
-final export flushing to three seconds.
+provider-reported tool names. Codex command executions name no tool, so they report
+`gen_ai.tool.name` as `command_execution`. All observed spans are sampled while enabled.
+Export is asynchronous and best effort: a full queue or unavailable receiver may lose
+spans. Agentty reports a coalesced diagnostic summary after restoring the terminal and
+limits final export flushing to three seconds.
 
 ## Auto-Update
 

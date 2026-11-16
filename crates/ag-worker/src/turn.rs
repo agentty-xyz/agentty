@@ -18,6 +18,7 @@ use uuid::Uuid;
 #[derive(Clone)]
 pub struct SessionRunClient {
     execution_policy: ag_contracts::ExecutionPolicy,
+    harness: Option<ag_session::AgentKind>,
     runtime: ag_runtime::SessionRuntime,
     runtime_id: String,
     session_admission: SessionAdmission,
@@ -31,12 +32,15 @@ impl SessionRunClient {
         kind: ag_session::AgentKind,
         config: &crate::RuntimeConfig,
     ) -> Self {
-        Self::from_runtime(
+        let mut client = Self::from_runtime(
             session_id,
             config.factory.session(kind),
             config.execution_policy(kind),
             config.session_admission.clone(),
-        )
+        );
+        client.harness = Some(kind);
+
+        client
     }
 
     /// Creates a task-owned runtime while retaining session admission and
@@ -142,10 +146,13 @@ impl SessionRunClient {
             }
         };
         admission.finish(Outcome::Completed);
-        let span = Span::child("agent.run");
-        span.attribute("agentty.session.id", session_id.clone());
+        let mut span = Span::child("agent.run");
+        span.identify("agentty.session.id", session_id.clone());
         span.attribute("agentty.context.id", runtime_id.clone());
-        span.attribute("gen_ai.request.model", request.model.clone());
+        span.identify("gen_ai.request.model", request.model.clone());
+        if let Some(harness) = self.harness {
+            span.identify("agentty.harness", harness.to_string());
+        }
         let mut turn = Box::pin(
             runtime
                 .run_turn(runtime_id.clone(), request, events)
@@ -212,6 +219,7 @@ impl SessionRunClient {
     ) -> Self {
         Self {
             execution_policy,
+            harness: None,
             runtime,
             runtime_id: session_id.clone(),
             session_admission,
