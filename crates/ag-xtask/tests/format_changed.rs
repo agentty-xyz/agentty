@@ -86,10 +86,19 @@ impl Fixture {
     }
 
     fn run(&self, arguments: &[&str], exit_code: i32) -> std::io::Result<Output> {
+        self.run_in("", arguments, exit_code)
+    }
+
+    fn run_in(
+        &self,
+        directory: &str,
+        arguments: &[&str],
+        exit_code: i32,
+    ) -> std::io::Result<Output> {
         Command::new(env!("CARGO_BIN_EXE_ag-xtask"))
             .arg("fmt")
             .args(arguments)
-            .current_dir(self.repository.path())
+            .current_dir(self.repository.path().join(directory))
             .env("FORMAT_CALLS", self.calls_path())
             .env("FORMAT_EXIT", exit_code.to_string())
             .env("GIT_CONFIG_GLOBAL", "/dev/null")
@@ -140,7 +149,26 @@ fn committed_staged_and_untracked_rust_files_are_formatted_and_deleted_ones_skip
     assert!(output.status.success(), "{}", combined_output(&output));
     assert_eq!(
         fixture.calls(),
-        ["rustfmt src/lib.rs src/new.rs src/staged.rs"]
+        ["rustfmt --config skip_children=true src/lib.rs src/new.rs src/staged.rs"]
+    );
+
+    Ok(())
+}
+
+#[test]
+fn subdirectory_runs_select_untracked_files_across_the_repository() -> Result<(), Box<dyn Error>> {
+    // Arrange
+    let fixture = Fixture::new()?;
+    fs::create_dir(fixture.repository.path().join("tests"))?;
+    fixture.write("src/new.rs", "untracked")?;
+    fixture.write("tests/extra.rs", "untracked")?;
+    // Act
+    let output = fixture.run_in("src", &[], 0)?;
+    // Assert
+    assert!(output.status.success(), "{}", combined_output(&output));
+    assert_eq!(
+        fixture.calls(),
+        ["rustfmt --config skip_children=true src/new.rs tests/extra.rs"]
     );
 
     Ok(())
@@ -192,7 +220,10 @@ fn formatter_failures_missing_formatters_and_unknown_bases_fail() -> Result<(), 
     assert!(!unknown_base.status.success());
     assert!(!missing_formatter.status.success());
     assert!(combined_output(&missing_formatter).contains("Could not execute rustfmt"));
-    assert_eq!(fixture.calls(), ["rustfmt src/lib.rs"]);
+    assert_eq!(
+        fixture.calls(),
+        ["rustfmt --config skip_children=true src/lib.rs"]
+    );
 
     Ok(())
 }

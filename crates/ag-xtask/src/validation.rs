@@ -91,11 +91,16 @@ impl Changes {
             arguments.push("--");
             files.extend(ProcessHost::git_paths(&ProcessHost::git_text(&arguments)?)?);
         }
+        // Untracked paths match the root-relative diff paths even when run
+        // from a subdirectory.
         files.extend(ProcessHost::git_paths(&ProcessHost::git_text(&[
             "ls-files",
             "--others",
             "--exclude-standard",
+            "--full-name",
             "-z",
+            "--",
+            ":/",
         ])?)?);
 
         Ok(Self {

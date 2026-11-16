@@ -35,6 +35,8 @@ fn existing_changed_rust_files_are_formatted_and_other_paths_are_skipped() {
         Some((
             "rustfmt",
             vec![
+                "--config".to_string(),
+                "skip_children=true".to_string(),
                 "crates/core/src/lib.rs".to_string(),
                 "crates/core/src/new_test.rs".to_string()
             ]

@@ -87,14 +87,15 @@ impl Selection {
     }
 
     /// Returns the formatter program and arguments, or `None` when nothing
-    /// needs formatting.
+    /// needs formatting. Changed files skip their child modules, which are
+    /// either unchanged or selected themselves.
     fn command(&self) -> Option<(&'static str, Vec<String>)> {
         match self {
             Self::Files(files) => Some((
                 "rustfmt",
-                files
-                    .iter()
-                    .map(|path| path.display().to_string())
+                ["--config".to_string(), "skip_children=true".to_string()]
+                    .into_iter()
+                    .chain(files.iter().map(|path| path.display().to_string()))
                     .collect(),
             )),
             Self::Nothing => None,
