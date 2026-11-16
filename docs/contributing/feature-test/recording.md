@@ -53,10 +53,12 @@ a usable artifact.
 
 Every local run shares that cache and the Podman machine, so the hook holds an OS lock
 in the cache directory until its container exits. A concurrent run from any checkout or
-session reports that it is waiting and starts after the lock is released. Run the hook
-as one foreground command, or as a harness background task and wait for its completion
-notice. Do not poll its output, `podman ps`, or processes, wrap it in wait loops, or
-start the container by hand.
+session reports that it is waiting and starts after the lock is released. The hook
+labels its containers, and after taking the lock it also waits, without stopping them,
+for labeled containers left running by a killed invocation. Run the hook as one
+foreground command, or as a harness background task and wait for its completion notice.
+Do not poll its output, `podman ps`, or processes, wrap it in wait loops, or start the
+container by hand.
 
 The reusable CI workflow instead overrides the image's unprivileged default user with
 root so `actions/checkout` can populate the job's writable workspace; `check` mode

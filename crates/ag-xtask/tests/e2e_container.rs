@@ -29,9 +29,30 @@ impl Fixture {
                 "if [ \"$1\" = -u ]; then echo \"${ID_USER:-501}\"; else echo 20; fi; exit \
                  \"${ID_EXIT:-0}\"",
             ),
+            // `RUN_BLOCKS` keeps a labeled container listed by `ps` until the
+            // test creates `release`; `wait` blocks while it is listed.
             (
                 "podman",
-                "echo \"$*\" >> calls; if [ \"$1\" = run ]; then exit \"${RUN_EXIT:-0}\"; fi",
+                r#"case "$1" in
+    ps) if [ -e running ]; then cat running; fi ;;
+    wait)
+        echo "$*" >> calls
+        echo waiting-for-orphan
+        while [ -e running ]; do sleep 0.05; done
+        ;;
+    run)
+        if [ -e running ]; then echo overlap >> calls; fi
+        echo "$*" >> calls
+        if [ -n "${RUN_BLOCKS:-}" ]; then
+            echo orphan > running
+            echo container-started
+            while [ ! -e release ]; do sleep 0.05; done
+            rm running
+        fi
+        exit "${RUN_EXIT:-0}"
+        ;;
+    *) echo "$*" >> calls ;;
+esac"#,
             ),
         ] {
             let executable = path.join(name);
@@ -121,7 +142,9 @@ fn pinned_runs_pull_the_native_variant_and_mount_the_workspace() -> Result<(), B
         });
     assert!(matches!(platform, Some("linux/amd64" | "linux/arm64")));
     let run = &calls[1];
-    assert!(run.starts_with("run --rm --pull=never --platform linux/"));
+    assert!(
+        run.starts_with("run --rm --pull=never --label agentty.e2e-container=1 --platform linux/")
+    );
     assert!(run.contains(" --user 501:20 "));
     assert!(run.contains(&format!(
         "type=bind,source={},target=/workspace",
@@ -171,6 +194,66 @@ fn a_second_run_waits_for_the_lock_holder() -> Result<(), Box<dyn Error>> {
     let calls = fixture.calls()?;
     assert_eq!(calls.len(), 1);
     assert!(calls[0].contains(" --env TESTTY_GIF_MODE=generate sha256:candidate cargo "));
+
+    Ok(())
+}
+
+/// Lets a blocked stub container exit, including when an assertion fails.
+struct Release(PathBuf);
+
+impl Drop for Release {
+    fn drop(&mut self) {
+        let _ = fs::write(&self.0, "");
+    }
+}
+
+#[test]
+fn a_killed_run_keeps_later_runs_waiting_for_its_container() -> Result<(), Box<dyn Error>> {
+    // Arrange
+    let fixture = Fixture::new()?;
+    let release = Release(fixture.directory.path().join("release"));
+    let mut first = fixture
+        .command()
+        .env("AGENTTY_E2E_IMAGE", "sha256:first")
+        .env("RUN_BLOCKS", "1")
+        .stdout(Stdio::piped())
+        // The orphaned stub outlives this child; keep it off the test's
+        // own output streams.
+        .stderr(Stdio::null())
+        .spawn()?;
+    let mut started = String::new();
+    BufReader::new(first.stdout.take().ok_or("missing stdout")?).read_line(&mut started)?;
+
+    // Act
+    first.kill()?;
+    first.wait()?;
+    let mut second = fixture
+        .command()
+        .env("AGENTTY_E2E_IMAGE", "sha256:second")
+        .stdout(Stdio::piped())
+        .spawn()?;
+    let mut waiting = String::new();
+    BufReader::new(second.stdout.take().ok_or("missing stdout")?).read_line(&mut waiting)?;
+    let started_while_orphaned = fixture
+        .calls()?
+        .iter()
+        .any(|call| call.contains("sha256:second"));
+    drop(release);
+    let status = second.wait()?;
+
+    // Assert
+    assert_eq!(started.trim(), "container-started");
+    assert_eq!(waiting.trim(), "waiting-for-orphan");
+    assert!(!started_while_orphaned);
+    assert!(status.success());
+    let calls = fixture.calls()?;
+    assert!(calls.iter().any(|call| call == "wait --ignore orphan"));
+    assert!(!calls.iter().any(|call| call == "overlap"));
+    assert!(
+        calls
+            .last()
+            .is_some_and(|call| call.contains("sha256:second"))
+    );
 
     Ok(())
 }

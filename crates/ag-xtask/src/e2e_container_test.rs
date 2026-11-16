@@ -16,6 +16,7 @@ struct ScriptedHost {
     calls: RefCell<Vec<String>>,
     empty: Vec<&'static str>,
     error: &'static str,
+    running: &'static str,
 }
 
 impl ScriptedHost {
@@ -24,6 +25,7 @@ impl ScriptedHost {
             calls: RefCell::default(),
             empty: Vec::new(),
             error: "",
+            running: "",
         }
     }
 
@@ -42,7 +44,12 @@ impl Host for ScriptedHost {
     fn output(&self, program: &str, arguments: &[&str]) -> Result<String, String> {
         self.record(format!("{program} {}", arguments.join(" ")))?;
 
-        Ok(if arguments == ["-u"] { "501\n" } else { "20\n" }.into())
+        Ok(match arguments.first() {
+            Some(&"-u") => "501\n",
+            Some(&"ps") => self.running,
+            _ => "20\n",
+        }
+        .into())
     }
 
     fn lock(&self, cache: &Path, target: &str) -> Result<Box<dyn Guard>, String> {
@@ -101,11 +108,12 @@ fn pinned_runs_pull_inside_the_lock_and_run_the_filtered_target() {
             "id -u".to_string(),
             "id -g".into(),
             "lock /cache-root target-c52ddf65".into(),
+            "podman ps --quiet --filter label=agentty.e2e-container=1".into(),
             format!("podman pull --platform linux/arm64 {PINNED}"),
             format!(
-                "podman run --rm --pull=never --platform linux/arm64 --user 501:20 --mount \
-                 type=bind,source=/workspace,target=/workspace --mount \
-                 type=bind,source=/cache-root,target=/cache --env HOME=/cache/home --env \
+                "podman run --rm --pull=never --label agentty.e2e-container=1 --platform \
+                 linux/arm64 --user 501:20 --mount type=bind,source=/workspace,target=/workspace \
+                 --mount type=bind,source=/cache-root,target=/cache --env HOME=/cache/home --env \
                  CARGO_HOME=/cache/cargo --env PREK_HOME=/cache/prek --env \
                  CARGO_TARGET_DIR=/cache/target-c52ddf65 --env CARGO_BUILD_JOBS=1 --env \
                  CARGO_PROFILE_DEV_DEBUG=0 --env TESTTY_GIF_MODE=generate {PINNED} cargo nextest \
@@ -134,10 +142,29 @@ fn candidate_images_run_without_pulling_or_filtering() {
     assert_eq!(result, Ok(()));
     let calls = host.calls();
     assert!(!calls.iter().any(|call| call.starts_with("podman pull")));
-    assert!(calls[3].starts_with("podman run --rm --pull=never --platform linux/amd64 "));
-    assert!(calls[3].ends_with(
+    assert!(calls[4].starts_with(
+        "podman run --rm --pull=never --label agentty.e2e-container=1 --platform linux/amd64 "
+    ));
+    assert!(calls[4].ends_with(
         " sha256:candidate cargo nextest run --locked --profile ci -p agentty --test e2e"
     ));
+}
+
+#[test]
+fn labeled_containers_still_running_after_the_lock_are_awaited_before_starting() {
+    // Arrange
+    let mut host = ScriptedHost::new();
+    host.running = "orphan-a\norphan-b\n";
+
+    // Act
+    let result = Runner { host: &host }.run(&settings());
+
+    // Assert
+    assert_eq!(result, Ok(()));
+    let calls = host.calls();
+    assert_eq!(calls[4], "podman wait --ignore orphan-a orphan-b");
+    assert!(calls[5].starts_with("podman pull "));
+    assert!(calls[6].starts_with("podman run "));
 }
 
 #[test]
@@ -146,13 +173,16 @@ fn each_failure_stops_the_remaining_steps() {
         ("id -u", 1),
         ("id -g", 2),
         ("lock", 3),
-        ("podman pull", 4),
-        ("podman run", 5),
-        ("pages", 6),
+        ("podman ps", 4),
+        ("podman wait", 5),
+        ("podman pull", 6),
+        ("podman run", 7),
+        ("pages", 8),
     ] {
         // Arrange
         let mut host = ScriptedHost::new();
         host.error = error;
+        host.running = "orphan\n";
 
         // Act
         let result = Runner { host: &host }.run(&settings());

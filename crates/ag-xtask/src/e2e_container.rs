@@ -19,6 +19,9 @@ const FEATURE_PAGES: &str = "docs/site/content/features";
 /// Published feature GIFs.
 const FEATURE_GIFS: &str = "docs/site/static/features";
 
+/// Label on every container this command starts.
+const LABEL: &str = "agentty.e2e-container=1";
+
 /// Runs the Agentty `e2e` target inside the pinned image.
 ///
 /// `TESTTY_GIF_MODE` selects the freshness mode (default `check`),
@@ -114,6 +117,7 @@ impl Runner<'_> {
         // The caches and the Podman machine are shared by every local run,
         // so hold the lock until the container exits.
         let _guard = self.host.lock(&settings.cache, &target)?;
+        self.wait_for_orphans()?;
         let image = if let Some(candidate) = &settings.candidate {
             candidate
         } else {
@@ -139,6 +143,8 @@ impl Runner<'_> {
             "run",
             "--rm",
             "--pull=never",
+            "--label",
+            LABEL,
             "--platform",
             platform,
             "--user",
@@ -203,6 +209,30 @@ impl Runner<'_> {
             "aarch64" => Ok("linux/arm64"),
             other => Err(format!("Unsupported E2E container architecture: {other}")),
         }
+    }
+
+    /// Waits for labeled containers that a killed invocation left running
+    /// after releasing the lock. They may belong to another session, so they
+    /// are never stopped.
+    fn wait_for_orphans(&self) -> Result<(), String> {
+        let filter = format!("label={LABEL}");
+        let running = self
+            .host
+            .output("podman", &["ps", "--quiet", "--filter", &filter])?;
+        let orphans = running.split_whitespace().collect::<Vec<_>>();
+        if orphans.is_empty() {
+            return Ok(());
+        }
+        writeln!(
+            io::stderr(),
+            "Waiting for an earlier Agentty E2E container to exit: {}",
+            orphans.join(" ")
+        )
+        .map_err(error_text)?;
+        let mut arguments = vec!["wait", "--ignore"];
+        arguments.extend(orphans);
+
+        self.host.status("podman", &arguments)
     }
 
     /// Returns the GIF file name a feature page declares.
