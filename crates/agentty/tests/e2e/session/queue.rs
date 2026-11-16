@@ -597,7 +597,7 @@ async fn session_slash_setting_deferred_during_rebase() -> E2eResult {
                     .write_text("fast")
                     .wait_for_text("Toggle between normal and fast", 3000)
                     .press_key("Enter")
-                    .wait_for_text("[Settings] Switching to fast responses", 5000)
+                    .wait_for_text("settings — switch to fast responses", 5000)
                     .viewing_pause_ms(500)
                     .capture_labeled(
                         "fast_toggle_deferred_during_rebase",
@@ -606,13 +606,13 @@ async fn session_slash_setting_deferred_during_rebase() -> E2eResult {
             },
             |frame, _report| {
                 Box::pin(async move {
-                    let full = Region::full(frame.cols(), frame.rows());
-                    assertion::assert_text_in_region(frame, "Rebasing...", &full);
-                    assertion::assert_text_in_region(
-                        frame,
-                        "[Settings] Switching to fast responses after the current turn",
-                        &full,
-                    );
+                    let status_row = frame.find_text("Rebasing...")[0].rect.row;
+                    let settings_row = frame
+                        .find_text("≡ settings — switch to fast responses after queued work")[0]
+                        .rect
+                        .row;
+                    assert_eq!(settings_row, status_row + 2);
+                    assertion::assert_not_visible(frame, "[Settings]");
                     assertion::assert_not_visible(frame, "≡ queued ›");
                     assertion::assert_not_visible(frame, "Slash Command");
                     assertion::assert_not_visible(frame, "Type your message");

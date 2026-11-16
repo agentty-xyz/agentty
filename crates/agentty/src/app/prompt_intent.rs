@@ -75,9 +75,28 @@ pub(crate) struct DeferredSessionSettings {
 }
 
 impl DeferredSessionSettings {
-    /// Returns whether no setting change remains pending.
-    fn is_empty(&self) -> bool {
-        self.agent.is_none() && self.speed_mode.is_none()
+    /// Returns the queued-action label describing the pending changes, or
+    /// `None` when nothing remains pending.
+    fn queued_label(&self) -> Option<String> {
+        let model_change = self
+            .agent
+            .map(|agent| format!("model {}", agent.model().as_str()));
+        let speed_change = self.speed_mode.map(|speed_mode| match speed_mode {
+            SpeedMode::Normal => "normal responses".to_string(),
+            SpeedMode::Fast => "fast responses".to_string(),
+        });
+        let changes = model_change
+            .into_iter()
+            .chain(speed_change)
+            .collect::<Vec<_>>();
+        if changes.is_empty() {
+            return None;
+        }
+
+        Some(format!(
+            "settings — switch to {} after queued work",
+            changes.join(" and ")
+        ))
     }
 
     /// Returns the response speed the session will use once the pending
@@ -514,8 +533,7 @@ impl App {
     ) -> PromptModelChange {
         if let Some(busy_session) = self.busy_session(session_id) {
             let current_agent = busy_session.agent;
-            self.defer_prompt_session_model(session_id, current_agent, selected_agent)
-                .await;
+            self.defer_prompt_session_model(session_id, current_agent, selected_agent);
 
             return PromptModelChange::Deferred;
         }
@@ -580,6 +598,7 @@ impl App {
                 .deferred_session_settings
                 .remove(&session_id)
                 .unwrap_or_default();
+            self.sessions.resolve_queued_session_settings(&session_id);
             if matches!(status, Status::Done | Status::Canceled) {
                 continue;
             }
@@ -605,12 +624,12 @@ impl App {
     }
 
     /// Records a model change for when the session worker becomes idle and
-    /// reports it in the session transcript.
+    /// shows it in the session's action queue.
     ///
     /// Choosing the current model cancels a pending switch. A pending fast
     /// mode is dropped when the chosen model cannot run it, so the later
     /// choice wins.
-    async fn defer_prompt_session_model(
+    fn defer_prompt_session_model(
         &mut self,
         session_id: &SessionId,
         current_agent: AgentSelection,
@@ -624,22 +643,12 @@ impl App {
         if settings.speed_mode == Some(SpeedMode::Fast) && !selected_agent.supports_fast_mode() {
             settings.speed_mode = None;
         }
-        let notice = if settings.agent.is_some() {
-            format!(
-                "Switching to `{}` after the current turn and queued messages finish.",
-                selected_agent.model().as_str()
-            )
-        } else {
-            format!("Keeping `{}`.", current_agent.model().as_str())
-        };
-        self.discard_empty_deferred_session_settings(session_id);
 
-        self.append_prompt_status_line(session_id, TranscriptNotice::Settings, &notice)
-            .await;
+        self.sync_queued_session_settings(session_id);
     }
 
     /// Records a response-speed change for when the session worker becomes
-    /// idle and reports it in the session transcript.
+    /// idle and shows it in the session's action queue.
     ///
     /// Choosing the speed the session will have after any pending model
     /// change cancels a pending speed change. Like an immediate change, fast
@@ -658,7 +667,7 @@ impl App {
             .or_default();
         let effective_agent = settings.agent.unwrap_or(current_agent);
         if speed_mode == SpeedMode::Fast && !effective_agent.supports_fast_mode() {
-            self.discard_empty_deferred_session_settings(session_id);
+            self.sync_queued_session_settings(session_id);
 
             self.append_unsupported_fast_mode_notice(session_id, effective_agent)
                 .await;
@@ -668,22 +677,8 @@ impl App {
 
         let baseline_speed_mode = settings.speed_mode_after_model_change(current_speed_mode);
         settings.speed_mode = (speed_mode != baseline_speed_mode).then_some(speed_mode);
-        let speed_label = match speed_mode {
-            SpeedMode::Normal => "normal",
-            SpeedMode::Fast => "fast",
-        };
-        let notice = if settings.speed_mode.is_some() {
-            format!(
-                "Switching to {speed_label} responses after the current turn and queued messages \
-                 finish."
-            )
-        } else {
-            format!("Keeping {speed_label} responses.")
-        };
-        self.discard_empty_deferred_session_settings(session_id);
 
-        self.append_prompt_status_line(session_id, TranscriptNotice::Settings, &notice)
-            .await;
+        self.sync_queued_session_settings(session_id);
     }
 
     /// Reports that `agent` cannot run fast mode and points to `/model`.
@@ -701,15 +696,21 @@ impl App {
             .await;
     }
 
-    /// Removes a deferred-settings entry that no longer changes anything.
-    fn discard_empty_deferred_session_settings(&mut self, session_id: &SessionId) {
-        if self
+    /// Mirrors the pending changes into the session's queued-settings row,
+    /// removing both the row and the deferred entry once nothing changes.
+    fn sync_queued_session_settings(&mut self, session_id: &SessionId) {
+        if let Some(label) = self
             .deferred_session_settings
             .get(session_id)
-            .is_some_and(DeferredSessionSettings::is_empty)
+            .and_then(DeferredSessionSettings::queued_label)
         {
-            self.deferred_session_settings.remove(session_id);
+            self.sessions.queue_session_settings(session_id, label);
+
+            return;
         }
+
+        self.deferred_session_settings.remove(session_id);
+        self.sessions.resolve_queued_session_settings(session_id);
     }
 
     /// Persists one model change, first disabling fast mode when the model

@@ -613,6 +613,31 @@ impl SessionManager {
         );
     }
 
+    /// Shows pending model and speed changes as the last queued action.
+    ///
+    /// Deferred settings apply only once the worker is idle, so the row
+    /// stays after every queued message and action, including ones queued
+    /// later.
+    pub(crate) fn queue_session_settings(&mut self, session_id: &str, label: String) {
+        self.state.upsert_queued_action(
+            session_id,
+            TransientMessage {
+                anchor: TransientMessageAnchor::Tail,
+                body: TransientMessageBody::Queued(QueuedAction::new(u64::MAX, label)),
+                lifecycle: TransientMessageLifecycle::UntilResolved,
+                slot: TransientMessageSlot::SettingsQueue,
+                turn_position: None,
+            },
+        );
+    }
+
+    /// Removes the queued settings row after its changes apply or are
+    /// discarded.
+    pub(crate) fn resolve_queued_session_settings(&mut self, session_id: &str) {
+        self.state
+            .resolve_queued_action(session_id, TransientMessageSlot::SettingsQueue);
+    }
+
     /// Shows one Agentty-generated turn at its shared submission order.
     pub(crate) fn queue_generated_turn(&mut self, session_id: &str, order: u64, label: String) {
         self.state.upsert_queued_action(
