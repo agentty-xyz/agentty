@@ -36,6 +36,11 @@ worktree; review the session diff and use `Read Only` for inspection-only work.
 Codex `Read Only` turns, including read-only graph nodes, allow shell network requests
 for external research while keeping filesystem writes and permission escalation denied.
 
+Claude `Read Only` turns, including read-only graph nodes, reviews, and review-request
+metadata, run without a shell. They inspect the workspace with `Read`, `Glob`, and
+`Grep`, research with `WebSearch` and `WebFetch`, and Agentty's instructions tell the
+model not to attempt shell or Git commands when no shell tool is offered.
+
 Claude turns also allow Claude Code's `WebSearch` and `WebFetch` tools, so prompts that
 need current external information can use the web without an interactive permission
 grant. Claude's file-edit tool still cannot edit the main checkout.
