@@ -28,7 +28,7 @@ use crate::repetition::{self, RepeatedCalls, Repetition};
 use crate::repository::Repository;
 use crate::reservation::WriteJournal;
 use crate::round_summary::RoundSummaryJob;
-use crate::run::{RunOutput, Usage};
+use crate::run::Usage;
 use crate::tool::{
     MalformedArguments, ReadAction, ReadArguments, Tool, ToolCall, ToolCallArguments,
     ToolDefinition, WriteArguments,
@@ -217,10 +217,8 @@ impl Engine<'_> {
 
             let (calls, batched) = match response {
                 ModelResponse::Output(output) => {
-                    self.publish_message(reasoning_content.as_deref(), || {
-                        Some(RunOutput::Json(output.clone()))
-                    })
-                    .await;
+                    self.publish_message(reasoning_content.as_deref(), None)
+                        .await;
                     request.record_output_with_reasoning(&output, reasoning_content);
 
                     return Ok((output, request));
@@ -613,22 +611,17 @@ impl Engine<'_> {
     /// travel with its first call.
     async fn publish_calls_message(&self, calls: &[ToolCall]) {
         let first = calls.first();
-        self.publish_message(first.and_then(ToolCall::reasoning_content), || {
-            first
-                .and_then(ToolCall::assistant_text)
-                .map(str::to_string)
-                .map(RunOutput::Text)
-        })
+        self.publish_message(
+            first.and_then(ToolCall::reasoning_content),
+            first.and_then(ToolCall::assistant_text),
+        )
         .await;
     }
 
-    /// Emits a response's `reasoning`, then its `message`, as completed
-    /// items; `message` is built only when the turn streams events.
-    async fn publish_message(
-        &self,
-        reasoning: Option<&str>,
-        message: impl FnOnce() -> Option<RunOutput>,
-    ) {
+    /// Emits a response's `reasoning`, then its assistant `text`, as
+    /// completed items. The run's final output is emitted only after its
+    /// turn commits, by [`EventSink::complete`].
+    async fn publish_message(&self, reasoning: Option<&str>, text: Option<&str>) {
         let Some(events) = &self.events else {
             return;
         };
@@ -636,17 +629,14 @@ impl Engine<'_> {
             let item = Item::Reasoning {
                 text: text.to_string(),
             };
-            Self::publish_item(events, ItemKind::Reasoning, item).await;
+            events.publish_item(ItemKind::Reasoning, item).await;
         }
-        if let Some(content) = message() {
-            Self::publish_item(events, ItemKind::Message, Item::Message { content }).await;
+        if let Some(text) = text {
+            let item = Item::Message {
+                text: text.to_string(),
+            };
+            events.publish_item(ItemKind::Message, item).await;
         }
-    }
-
-    /// Starts and completes one item of `item_kind` holding `item`.
-    async fn publish_item(events: &EventSink, item_kind: ItemKind, item: Item) {
-        let id = events.start_item(item_kind).await;
-        events.emit(RunEventKind::ItemCompleted { id, item }).await;
     }
 
     /// Starts an item of `item_kind` when the turn streams events.

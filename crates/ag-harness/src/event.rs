@@ -13,11 +13,13 @@
 use std::pin::Pin;
 use std::sync::Arc;
 use std::task::{Context, Poll};
-use std::time::SystemTime;
+use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 use futures_core::Stream;
 use schemars::JsonSchema;
-use serde::{Deserialize, Serialize};
+use serde::de::Error as _;
+use serde::ser::Error as _;
+use serde::{Deserialize, Deserializer, Serialize, Serializer};
 use tokio::sync::{Mutex, mpsc};
 
 use crate::catalog::ModelId;
@@ -30,10 +32,18 @@ use crate::turn::{ContextActivity, ToolActivity};
 /// is full waits at its next event until the consumer catches up.
 const EVENT_BUFFER: usize = 64;
 
+/// Slots held back from [`EVENT_BUFFER`] traffic for the events that end a
+/// run: the started and completed [`Item::Output`], and
+/// [`RunEventKind::Completed`]. A run therefore always finishes, even when
+/// its stream is full and unread.
+const FINAL_EVENTS: usize = 3;
+
 /// Identifier of one run, unique across processes.
+///
+/// Only a run split with [`crate::Run::into_parts`] has one; every event of
+/// its stream carries it.
 #[derive(Clone, Debug, Deserialize, Eq, Hash, JsonSchema, PartialEq, Serialize)]
 #[serde(transparent)]
-#[non_exhaustive]
 pub struct RunId(String);
 
 impl RunId {
@@ -47,7 +57,6 @@ impl RunId {
 /// start.
 #[derive(Clone, Copy, Debug, Deserialize, Eq, Hash, JsonSchema, PartialEq, Serialize)]
 #[serde(transparent)]
-#[non_exhaustive]
 pub struct ItemId(u64);
 
 impl ItemId {
@@ -57,11 +66,53 @@ impl ItemId {
     }
 }
 
+/// Identifier of the session a run's turn belongs to.
+#[derive(Clone, Debug, Deserialize, Eq, Hash, JsonSchema, PartialEq, Serialize)]
+#[serde(transparent)]
+pub struct SessionId(String);
+
+impl SessionId {
+    /// Returns the identifier text.
+    pub fn as_str(&self) -> &str {
+        &self.0
+    }
+
+    /// Wraps the session identifier `id`.
+    pub(crate) fn new(id: String) -> Self {
+        Self(id)
+    }
+}
+
+/// Durable position of a turn within its session.
+#[derive(Clone, Copy, Debug, Deserialize, Eq, Hash, JsonSchema, PartialEq, Serialize)]
+#[serde(transparent)]
+pub struct TurnIndex(u64);
+
+impl TurnIndex {
+    /// Returns the position.
+    pub fn get(self) -> u64 {
+        self.0
+    }
+
+    /// Wraps a durable turn position, which the store keeps non-negative.
+    pub(crate) fn from_position(position: i64) -> Self {
+        debug_assert!(position >= 0, "durable turn positions are non-negative");
+
+        Self(position.unsigned_abs())
+    }
+}
+
 /// One event of a run, in the order the run produced it.
 #[derive(Clone, Debug, Deserialize, Eq, JsonSchema, PartialEq, Serialize)]
 #[non_exhaustive]
 pub struct RunEvent {
-    /// Wall-clock time the event was produced.
+    /// Wall-clock time the event was produced, to the millisecond; on the
+    /// wire, milliseconds since the Unix epoch.
+    #[schemars(with = "u64")]
+    #[serde(
+        deserialize_with = "RunEvent::deserialize_at",
+        serialize_with = "RunEvent::serialize_at"
+    )]
     pub at: SystemTime,
     /// What happened.
     pub kind: RunEventKind,
@@ -70,6 +121,28 @@ pub struct RunEvent {
     /// Zero-based position of the event in its run's stream; consecutive
     /// events differ by one.
     pub seq: u64,
+}
+
+impl RunEvent {
+    /// Encodes `at` as milliseconds since the Unix epoch.
+    fn serialize_at<S: Serializer>(at: &SystemTime, serializer: S) -> Result<S::Ok, S::Error> {
+        let millis = at
+            .duration_since(UNIX_EPOCH)
+            .ok()
+            .and_then(|elapsed| u64::try_from(elapsed.as_millis()).ok())
+            .ok_or(S::Error::custom("event time precedes the Unix epoch"))?;
+
+        serializer.serialize_u64(millis)
+    }
+
+    /// Decodes `at` from milliseconds since the Unix epoch.
+    fn deserialize_at<'de, D: Deserializer<'de>>(deserializer: D) -> Result<SystemTime, D::Error> {
+        let millis = u64::deserialize(deserializer)?;
+
+        UNIX_EPOCH
+            .checked_add(Duration::from_millis(millis))
+            .ok_or(D::Error::custom("event time exceeds the platform clock"))
+    }
 }
 
 /// What a [`RunEvent`] reports.
@@ -86,17 +159,20 @@ pub enum RunEventKind {
     /// first model request. A run that fails before admission, such as one
     /// whose session is busy, emits only [`Self::Completed`].
     Started {
-        /// Model as `provider/model` from its metadata, or `None` when the
-        /// model reports no metadata.
+        /// Catalog identifier of the model, when the harness selected it
+        /// from a [`crate::ModelCatalog`]; `None` for a model the host
+        /// supplied directly.
         model: Option<ModelId>,
         /// Session the turn belongs to; a one-shot run reports its
         /// in-memory session.
-        session: String,
+        session: SessionId,
         /// Durable position of the run's turn within its session.
-        turn: u64,
+        turn: TurnIndex,
     },
     /// An item started. Its content arrives with [`Self::ItemCompleted`]
-    /// for the same `id`.
+    /// for the same `id`, unless the run fails or is cancelled first: an
+    /// item still open when [`Self::Completed`] arrives was interrupted
+    /// and never completes.
     ItemStarted {
         /// Identifier of the item.
         id: ItemId,
@@ -130,8 +206,10 @@ pub enum RunEventKind {
 #[serde(rename_all = "snake_case")]
 #[non_exhaustive]
 pub enum ItemKind {
-    /// An assistant message.
+    /// Assistant text written beside tool calls.
     Message,
+    /// The run's final output.
+    Output,
     /// Provider reasoning the model returned.
     Reasoning,
     /// A tool call and its result.
@@ -143,11 +221,18 @@ pub enum ItemKind {
 #[serde(tag = "type", rename_all = "snake_case")]
 #[non_exhaustive]
 pub enum Item {
-    /// An assistant message: the run's validated final output, or text the
-    /// model wrote beside its tool calls as [`RunOutput::Text`].
+    /// Assistant text the model wrote beside its tool calls; never the
+    /// run's final output.
     Message {
-        /// The message content.
-        content: RunOutput,
+        /// The assistant text.
+        text: String,
+    },
+    /// The validated final output of a successful run, emitted after the
+    /// turn committed and directly before [`RunEventKind::Completed`]; a
+    /// failed or cancelled run has none.
+    Output {
+        /// The run's output, as in [`crate::RunOutcome::result`].
+        output: RunOutput,
     },
     /// Provider reasoning returned with a model response.
     Reasoning {
@@ -267,24 +352,19 @@ impl From<&RunError> for RunFailure {
     }
 }
 
-/// Ordered events of one run, from [`crate::Run::into_parts`].
+/// Ordered events of one run, from [`crate::Run::into_parts`], read as a
+/// [`Stream`], for example with `futures::StreamExt::next`.
 ///
-/// Delivery is lossless: the run waits at its next event while 64 events
-/// are unread, so read the stream concurrently with
-/// awaiting the run's outcome. Dropping the stream never stalls or cancels
-/// the run; later events are discarded. The stream ends after
-/// [`RunEventKind::Completed`].
+/// Delivery is lossless: the run waits at its next event while the stream's
+/// bounded buffer is full, so read the stream concurrently with awaiting
+/// the run's outcome. The events that end the run never wait, so
+/// cancelling a run whose stream is full and unread still resolves its
+/// outcome. Dropping the stream never stalls or cancels the run; later
+/// events are discarded. The stream ends after [`RunEventKind::Completed`].
 #[must_use = "a run waits for its events to be read; drop the stream to discard them"]
 #[non_exhaustive]
 pub struct EventStream {
     receiver: mpsc::Receiver<RunEvent>,
-}
-
-impl EventStream {
-    /// Waits for the next event, or `None` once the stream ended.
-    pub async fn next(&mut self) -> Option<RunEvent> {
-        self.receiver.recv().await
-    }
 }
 
 impl Stream for EventStream {
@@ -304,10 +384,14 @@ pub(crate) struct EventSink {
 impl EventSink {
     /// Creates a sink for a new run and the stream that reads it.
     pub(crate) fn channel() -> (Arc<Self>, EventStream) {
-        let (sender, receiver) = mpsc::channel(EVENT_BUFFER);
+        let (sender, receiver) = mpsc::channel(EVENT_BUFFER + FINAL_EVENTS);
+        let final_permits = (0..FINAL_EVENTS)
+            .filter_map(|_| sender.clone().try_reserve_owned().ok())
+            .collect();
         let sink = Self {
             run: RunId(uuid::Uuid::new_v4().to_string()),
             state: Mutex::new(SinkState {
+                final_permits,
                 next_item: 0,
                 next_seq: 0,
                 sender: Some(sender),
@@ -327,46 +411,98 @@ impl EventSink {
     /// Starts an item of `item_kind` and returns its identifier.
     pub(crate) async fn start_item(&self, item_kind: ItemKind) -> ItemId {
         let mut state = self.state.lock().await;
-        let id = ItemId(state.next_item);
-        state.next_item += 1;
+        let id = state.next_item();
         self.send(&mut state, RunEventKind::ItemStarted { id, item_kind })
             .await;
 
         id
     }
 
-    /// Sends the run's last event and ends the stream.
-    pub(crate) async fn complete(&self, summary: RunSummary) {
+    /// Starts and completes one item of `item_kind` holding `item`.
+    pub(crate) async fn publish_item(&self, item_kind: ItemKind, item: Item) {
+        let id = self.start_item(item_kind).await;
+        self.emit(RunEventKind::ItemCompleted { id, item }).await;
+    }
+
+    /// Sends the settled `outcome`'s output item, when it succeeded, and
+    /// [`RunEventKind::Completed`] through the slots reserved for them, so
+    /// a full stream never holds the run back; then ends the stream.
+    pub(crate) async fn complete(&self, outcome: &RunOutcome) {
         let mut state = self.state.lock().await;
-        self.send(&mut state, RunEventKind::Completed(summary))
-            .await;
         state.sender = None;
+        let mut kinds = Vec::with_capacity(FINAL_EVENTS);
+        if let Ok(output) = &outcome.result {
+            let id = state.next_item();
+            kinds.push(RunEventKind::ItemStarted {
+                id,
+                item_kind: ItemKind::Output,
+            });
+            kinds.push(RunEventKind::ItemCompleted {
+                id,
+                item: Item::Output {
+                    output: output.clone(),
+                },
+            });
+        }
+        kinds.push(RunEventKind::Completed(RunSummary::new(outcome)));
+        let permits = std::mem::take(&mut state.final_permits);
+        for (permit, kind) in permits.into_iter().zip(kinds) {
+            let event = self.event(&mut state, kind);
+            permit.send(event);
+        }
     }
 
     /// Sends one event under the held `state`, so sequence numbers follow
-    /// delivery order.
+    /// delivery order. The event is numbered only once the stream has room,
+    /// so a run dropped while waiting leaves no gap.
     async fn send(&self, state: &mut SinkState, kind: RunEventKind) {
         let Some(sender) = state.sender.clone() else {
             return;
         };
-        let event = RunEvent {
-            at: SystemTime::now(),
+        // A dropped stream discards the event; the run continues.
+        let Ok(permit) = sender.reserve().await else {
+            return;
+        };
+        let event = self.event(state, kind);
+        permit.send(event);
+    }
+
+    /// Numbers `kind` as the run's next event, timestamped now.
+    fn event(&self, state: &mut SinkState, kind: RunEventKind) -> RunEvent {
+        let now = SystemTime::now();
+        let at = now.duration_since(UNIX_EPOCH).map_or(now, |elapsed| {
+            UNIX_EPOCH + Duration::new(elapsed.as_secs(), elapsed.subsec_millis() * 1_000_000)
+        });
+        let seq = state.next_seq;
+        state.next_seq += 1;
+
+        RunEvent {
+            at,
             kind,
             run: self.run.clone(),
-            seq: state.next_seq,
-        };
-        state.next_seq += 1;
-        // A dropped stream discards the event; the run continues.
-        let _ = sender.send(event).await;
+            seq,
+        }
     }
 }
 
 /// Sequence counters and the sender of one run's events.
 struct SinkState {
+    /// Reserved slots for the events that end the run.
+    final_permits: Vec<mpsc::OwnedPermit<RunEvent>>,
     next_item: u64,
     next_seq: u64,
     /// `None` once the run completed.
     sender: Option<mpsc::Sender<RunEvent>>,
+}
+
+impl SinkState {
+    /// Assigns the next item identifier.
+    fn next_item(&mut self) -> ItemId {
+        let id = ItemId(self.next_item);
+        self.next_item += 1;
+
+        id
+    }
 }
 
 #[cfg(test)]

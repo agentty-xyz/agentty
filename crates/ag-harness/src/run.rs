@@ -20,7 +20,7 @@ use crate::cancellation::{
 };
 use crate::comparison::ComparisonBase;
 use crate::error::{ErrorKind, RunError};
-use crate::event::{EventSink, EventStream, RunSummary};
+use crate::event::{EventSink, EventStream};
 use crate::input::TurnInput;
 use crate::model::CompletionUsage;
 use crate::policy::ToolPolicy;
@@ -152,8 +152,10 @@ impl Run {
     ///
     /// The run still starts only when the handle's outcome is awaited. Read
     /// the stream concurrently: the run waits while too many events are
-    /// unread. Dropping the stream discards later events without stalling
-    /// or cancelling the run.
+    /// unread, although cancelling it still resolves its outcome. Dropping
+    /// the stream discards later events without stalling or cancelling the
+    /// run. Only a split run has a [`crate::event::RunId`], carried by its
+    /// events.
     pub fn into_parts(mut self) -> (EventStream, RunHandle) {
         let (sink, stream) = EventSink::channel();
         self.cancel.control.attach_events(&sink);
@@ -224,7 +226,7 @@ impl Run {
             report,
         };
         if let Some(events) = events {
-            events.complete(RunSummary::new(&outcome)).await;
+            events.complete(&outcome).await;
         }
 
         outcome

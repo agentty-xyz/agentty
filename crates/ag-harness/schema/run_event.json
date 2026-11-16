@@ -5,8 +5,10 @@
   "type": "object",
   "properties": {
     "at": {
-      "description": "Wall-clock time the event was produced.",
-      "$ref": "#/$defs/SystemTime"
+      "description": "Wall-clock time the event was produced, to the millisecond; on the\nwire, milliseconds since the Unix epoch.",
+      "type": "integer",
+      "format": "uint64",
+      "minimum": 0
     },
     "kind": {
       "description": "What happened.",
@@ -30,25 +32,6 @@
     "seq"
   ],
   "$defs": {
-    "SystemTime": {
-      "type": "object",
-      "properties": {
-        "secs_since_epoch": {
-          "type": "integer",
-          "format": "uint64",
-          "minimum": 0
-        },
-        "nanos_since_epoch": {
-          "type": "integer",
-          "format": "uint32",
-          "minimum": 0
-        }
-      },
-      "required": [
-        "secs_since_epoch",
-        "nanos_since_epoch"
-      ]
-    },
     "RunEventKind": {
       "description": "What a [`RunEvent`] reports.\n\n[`Self::Completed`] is always the last event, including for a run that\nfailed or was cancelled, unless the run itself was dropped before it\nfinished; then the stream ends without it. New kinds, such as\nstreamed deltas, retries, and approval requests, may be added.",
       "oneOf": [
@@ -61,7 +44,7 @@
               "const": "started"
             },
             "model": {
-              "description": "Model as `provider/model` from its metadata, or `None` when the\nmodel reports no metadata.",
+              "description": "Catalog identifier of the model, when the harness selected it\nfrom a [`crate::ModelCatalog`]; `None` for a model the host\nsupplied directly.",
               "anyOf": [
                 {
                   "$ref": "#/$defs/ModelId"
@@ -73,13 +56,11 @@
             },
             "session": {
               "description": "Session the turn belongs to; a one-shot run reports its\nin-memory session.",
-              "type": "string"
+              "$ref": "#/$defs/SessionId"
             },
             "turn": {
               "description": "Durable position of the run's turn within its session.",
-              "type": "integer",
-              "format": "uint64",
-              "minimum": 0
+              "$ref": "#/$defs/TurnIndex"
             }
           },
           "required": [
@@ -89,7 +70,7 @@
           ]
         },
         {
-          "description": "An item started. Its content arrives with [`Self::ItemCompleted`]\nfor the same `id`.",
+          "description": "An item started. Its content arrives with [`Self::ItemCompleted`]\nfor the same `id`, unless the run fails or is cancelled first: an\nitem still open when [`Self::Completed`] arrives was interrupted\nand never completes.",
           "type": "object",
           "properties": {
             "type": {
@@ -186,6 +167,16 @@
       "description": "Catalog key of one model, unique within a [`super::ModelCatalog`].\n\nBuilt-in entries use `provider/model`, such as `openai/gpt-6-luna`, so a\nmodel served by two providers, such as an `OpenAI` model reached with an\nAPI key or through a `ChatGPT` plan, has two distinct identifiers.",
       "type": "string"
     },
+    "SessionId": {
+      "description": "Identifier of the session a run's turn belongs to.",
+      "type": "string"
+    },
+    "TurnIndex": {
+      "description": "Durable position of a turn within its session.",
+      "type": "integer",
+      "format": "uint64",
+      "minimum": 0
+    },
     "ItemId": {
       "description": "Identifier of one item within its run, assigned in the order items\nstart.",
       "type": "integer",
@@ -196,9 +187,14 @@
       "description": "What an item is, known when it starts.",
       "oneOf": [
         {
-          "description": "An assistant message.",
+          "description": "Assistant text written beside tool calls.",
           "type": "string",
           "const": "message"
+        },
+        {
+          "description": "The run's final output.",
+          "type": "string",
+          "const": "output"
         },
         {
           "description": "Provider reasoning the model returned.",
@@ -216,21 +212,39 @@
       "description": "Content of a finished item.",
       "oneOf": [
         {
-          "description": "An assistant message: the run's validated final output, or text the\nmodel wrote beside its tool calls as [`RunOutput::Text`].",
+          "description": "Assistant text the model wrote beside its tool calls; never the\nrun's final output.",
           "type": "object",
           "properties": {
             "type": {
               "type": "string",
               "const": "message"
             },
-            "content": {
-              "description": "The message content.",
+            "text": {
+              "description": "The assistant text.",
+              "type": "string"
+            }
+          },
+          "required": [
+            "type",
+            "text"
+          ]
+        },
+        {
+          "description": "The validated final output of a successful run, emitted after the\nturn committed and directly before [`RunEventKind::Completed`]; a\nfailed or cancelled run has none.",
+          "type": "object",
+          "properties": {
+            "type": {
+              "type": "string",
+              "const": "output"
+            },
+            "output": {
+              "description": "The run's output, as in [`crate::RunOutcome::result`].",
               "$ref": "#/$defs/RunOutput"
             }
           },
           "required": [
             "type",
-            "content"
+            "output"
           ]
         },
         {
@@ -614,7 +628,7 @@
       ]
     },
     "RunId": {
-      "description": "Identifier of one run, unique across processes.",
+      "description": "Identifier of one run, unique across processes.\n\nOnly a run split with [`crate::Run::into_parts`] has one; every event of\nits stream carries it.",
       "type": "string"
     }
   }

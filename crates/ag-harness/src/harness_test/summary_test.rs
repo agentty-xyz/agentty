@@ -4,10 +4,12 @@
 use std::collections::VecDeque;
 use std::io::Cursor;
 use std::num::NonZeroU64;
+use std::pin::Pin;
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
 use async_trait::async_trait;
+use futures_core::Stream;
 use serde_json::{Value, json};
 
 use super::support::object_schema;
@@ -650,7 +652,9 @@ async fn streamed_runs_report_summary_requests_and_reduced_requests() {
         .into_parts();
     let drain = async {
         let mut events = Vec::new();
-        while let Some(event) = stream.next().await {
+        while let Some(event) =
+            std::future::poll_fn(|context| Pin::new(&mut stream).poll_next(context)).await
+        {
             events.push(event.kind);
         }
 
