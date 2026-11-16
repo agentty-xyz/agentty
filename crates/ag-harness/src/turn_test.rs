@@ -44,6 +44,41 @@ fn unavailable_activity_names_the_called_tool_without_a_path() {
 }
 
 #[test]
+fn host_tool_activity_names_its_tool_and_outcome_without_a_path() {
+    // Arrange
+    let completed = ToolActivity::Custom {
+        duration: Duration::from_millis(4),
+        rejected: false,
+        tool: "fetch".to_string(),
+    };
+    let rejected = ToolActivity::Custom {
+        duration: Duration::ZERO,
+        rejected: true,
+        tool: "fe\ntch".to_string(),
+    };
+
+    // Act / Assert
+    assert_eq!(completed.name(), "fetch");
+    assert_eq!(completed.path(), "");
+    assert_eq!(completed.duration(), Duration::from_millis(4));
+    assert_eq!(completed.to_string(), "fetch (completed; 4 ms)");
+    assert_eq!(rejected.to_string(), "fe\u{fffd}tch (rejected; <1 ms)");
+}
+
+#[test]
+fn a_host_tool_failure_is_a_tool_error() {
+    // Arrange
+    let error = TurnError::ToolFailed {
+        source: "connection refused".into(),
+        tool: "fetch".to_string(),
+    };
+
+    // Act / Assert
+    assert_eq!(error.error_type(), TurnErrorType::Tool);
+    assert_eq!(error.to_string(), "tool `fetch` failed: connection refused");
+}
+
+#[test]
 fn outcome_exposes_output_and_report() {
     // Arrange
     let completion = CompletionMetadata::new(

@@ -463,7 +463,8 @@ impl Classification {
             TurnError::CommandFailed { .. }
             | TurnError::Bash(_)
             | TurnError::Read(_)
-            | TurnError::Write(_) => ErrorKind::ToolFailed,
+            | TurnError::Write(_)
+            | TurnError::ToolFailed { .. } => ErrorKind::ToolFailed,
             TurnError::CommandJournal { .. }
             | TurnError::MessageJournal { .. }
             | TurnError::UsageJournal { .. } => ErrorKind::Store,

@@ -19,6 +19,7 @@ use crate::round_summary::{self, CoveredCalls, RoundSummaryJob, SOURCE_TEXT_LEVE
 use crate::schema_contract::OutputSchema;
 use crate::session_model::{self, RecordedModel, ReplayTarget};
 use crate::tool::{ReadAction, ReadArguments, Tool, ToolCall, ToolCallArguments, ToolDefinition};
+use crate::tool_handler::ToolEntry;
 use crate::turn::{ContextActivity, TurnError, TurnOptions};
 use crate::{compaction, read};
 
@@ -2561,25 +2562,33 @@ pub(crate) fn fit_oldest_history_bytes(
 
 /// Returns the definitions the engine advertises for these options, in order.
 pub(crate) fn advertised_tools(options: &TurnOptions) -> Vec<ToolDefinition> {
-    let mut tools = Vec::new();
-    if options.tool_policy().allows(Tool::Read) {
-        tools.push(ToolDefinition::read_with_comparison_base(
-            options.comparison_base(),
-        ));
-    }
-    if options.tool_policy().allows(Tool::Write) {
-        tools.push(ToolDefinition::write());
-    }
-    if options.tool_policy().allows(Tool::Bash) {
+    options
+        .tools()
+        .entries()
+        .iter()
+        .filter_map(|entry| match entry {
+            ToolEntry::Builtin(tool) => options
+                .tool_policy()
+                .allows(*tool)
+                .then(|| builtin_definition(*tool, options)),
+            ToolEntry::Handler { handler, .. } => Some(handler.definition()),
+        })
+        .collect()
+}
+
+/// Returns the definition of the built-in `tool` under `options`.
+pub(crate) fn builtin_definition(tool: Tool, options: &TurnOptions) -> ToolDefinition {
+    match tool {
+        Tool::Read => ToolDefinition::read_with_comparison_base(options.comparison_base()),
+        Tool::Write => ToolDefinition::write(),
         // Without a configuration the turn fails before any command runs;
         // still claim no isolation rather than one nothing provides.
-        let enforcement = options
-            .bash()
-            .map_or(Enforcement::None, BashConfig::enforcement);
-        tools.push(ToolDefinition::bash(enforcement));
+        Tool::Bash => ToolDefinition::bash(
+            options
+                .bash()
+                .map_or(Enforcement::None, BashConfig::enforcement),
+        ),
     }
-
-    tools
 }
 
 /// One message reduction, in the order an over-budget request applies them.

@@ -10,6 +10,8 @@ mod calibration;
 mod cancellation;
 #[path = "harness_test/fault_test.rs"]
 mod fault;
+#[path = "harness_test/handler_test.rs"]
+mod handler;
 #[path = "harness_test/history_test.rs"]
 mod history;
 #[cfg(feature = "sqlite")]

@@ -39,12 +39,13 @@ fn preserves_request_reasoning_effort_over_harness_default() {
     let options = TurnOptions::new(object_schema(), ToolPolicy::default());
     let lifecycle = LifecycleEmitter::default();
     let context_calibration = ContextCalibration::default();
+    let context_estimator = heuristic_estimator();
     let engine = Engine {
         budget: &Unlimited,
         concurrency: None,
         context_budget: unbounded_context_budget(),
         context_calibration: &context_calibration,
-        context_estimator: &HeuristicContextEstimator::DEFAULT,
+        context_estimator: &context_estimator,
         context_summaries: ContextSummaryPolicy::Disabled,
         control: None,
         effects: Effects::default(),
@@ -57,6 +58,7 @@ fn preserves_request_reasoning_effort_over_harness_default() {
         options: &options,
         pricing: None,
         repository: None,
+        session: None,
     };
     let request = ModelRequest::new("reply", object_schema())
         .with_model_reasoning_effort(ReasoningEffort::High);
@@ -71,9 +73,12 @@ fn preserves_request_reasoning_effort_over_harness_default() {
         request.model_reasoning_effort(),
         Some(ReasoningEffort::High)
     );
-    assert!(tools.read.is_none());
-    assert!(tools.write.is_none());
-    assert!(tools.bash.is_none());
+    assert!(tools.handlers.is_empty());
+}
+
+/// Returns the default estimator as the engine shares it.
+fn heuristic_estimator() -> Arc<dyn ContextEstimator> {
+    Arc::new(HeuristicContextEstimator::DEFAULT)
 }
 
 /// Runs one tool-free turn within `context_budget` against `responses`, in
@@ -101,12 +106,13 @@ async fn run_scripted(
     let options = TurnOptions::new(object_schema(), ToolPolicy::default());
     let lifecycle = LifecycleEmitter::default();
     let context_calibration = ContextCalibration::default();
+    let context_estimator = heuristic_estimator();
     let engine = Engine {
         budget: &Unlimited,
         concurrency: None,
         context_budget,
         context_calibration: &context_calibration,
-        context_estimator: &HeuristicContextEstimator::DEFAULT,
+        context_estimator: &context_estimator,
         context_summaries: ContextSummaryPolicy::Disabled,
         control: None,
         effects: Effects::default(),
@@ -119,6 +125,7 @@ async fn run_scripted(
         options: &options,
         pricing: None,
         repository: None,
+        session: None,
     };
     let outcome = engine
         .run(ModelRequest::new("reply", object_schema()), None, None)
@@ -443,7 +450,7 @@ fn round_share_weighs_each_result_under_its_own_tool() {
         None,
     )
     .expect("read call");
-    let mut share = RoundShare::new(&ToolNameEstimator, budget);
+    let mut share = RoundShare::new(Arc::new(ToolNameEstimator), budget);
 
     // Act
     let kept_bash = share.keeps(&bash, "{}", false);

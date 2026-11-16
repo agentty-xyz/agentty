@@ -167,6 +167,22 @@ fn tool_activity_maps_to_how_the_call_was_answered() {
             },
             ToolCallStatus::Unavailable,
         ),
+        (
+            ToolActivity::Custom {
+                duration,
+                rejected: false,
+                tool: "fetch".into(),
+            },
+            ToolCallStatus::Completed,
+        ),
+        (
+            ToolActivity::Custom {
+                duration,
+                rejected: true,
+                tool: "fetch".into(),
+            },
+            ToolCallStatus::Rejected,
+        ),
     ];
 
     // Act

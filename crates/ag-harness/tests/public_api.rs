@@ -457,7 +457,66 @@ struct ExternalMetadataModel;
 const _: fn() = || {
     fn assert_shareable<T: Clone + Send + Sync + 'static>() {}
     assert_shareable::<Harness>();
+    assert_shareable::<ag_harness::ToolSet>();
+    assert_shareable::<ag_harness::tool::ToolContext>();
 };
+
+/// A host tool an external crate defines.
+struct Clock(ag_harness::tool::ToolDefinition);
+
+#[async_trait]
+impl ag_harness::ToolHandler for Clock {
+    fn definition(&self) -> ag_harness::tool::ToolDefinition {
+        self.0.clone()
+    }
+
+    fn effects(&self) -> ag_harness::tool::ToolEffects {
+        ag_harness::tool::ToolEffects::ReadOnly
+    }
+
+    async fn call(
+        &self,
+        _arguments: serde_json::Value,
+        context: ag_harness::tool::ToolContext,
+    ) -> Result<ag_harness::tool::ToolOutput, ag_harness::tool::ToolError> {
+        Ok(ag_harness::tool::ToolOutput::new(
+            json!({"call": context.call_id()}).to_string(),
+        ))
+    }
+}
+
+#[tokio::test]
+async fn external_consumer_adds_a_tool_handler_beside_the_built_ins() -> Result<(), Box<dyn Error>>
+{
+    // Arrange
+    let definition = ag_harness::tool::ToolDefinition::new(
+        "clock",
+        "Read the clock.",
+        json!({"type": "object"}),
+    )?;
+    let clock: Arc<dyn ag_harness::ToolHandler> = Arc::new(Clock(definition));
+    let tools = ag_harness::ToolSet::builder()
+        .builtin(Tool::Read)
+        .handler(Arc::clone(&clock))
+        .build()?;
+
+    // Act
+    let output = clock
+        .call(json!({}), ag_harness::tool::ToolContext::new("call_1"))
+        .await?;
+    let harness = Harness::builder()
+        .model(Arc::new(ExternalModel))
+        .context_budget(unbounded_context_budget())
+        .tools(tools.clone())
+        .build()?;
+
+    // Assert
+    assert_eq!(output.content(), r#"{"call":"call_1"}"#);
+    assert_eq!(tools.names().collect::<Vec<_>>(), ["read", "clock"]);
+    drop(harness);
+
+    Ok(())
+}
 
 #[test]
 fn builder_requires_a_budget_for_a_model_without_a_declared_profile() {

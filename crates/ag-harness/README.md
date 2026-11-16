@@ -5,7 +5,8 @@ Structured LLM turns with deny-by-default tools and durable sessions.
 - **Every answer is typed.** Each turn ends in JSON validated locally against your
   schema, or, in `OutputMode::Text`, in plain text.
 - **Tools are off until you allow them.** Read, write, and sandboxed Bash each need an
-  explicit grant.
+  explicit grant; your own `ToolHandler`s run only when you add them to the turn's
+  `ToolSet`.
 - **Your store owns the conversation.** Sessions resume from SQLite (or your own store)
   in any process; the provider never holds the only copy.
 
@@ -117,6 +118,49 @@ limit-stopped, and interrupted turns keep the usage of their completed requests;
 failed usage write stops the turn. Turns stored before usage was recorded take unpriced
 usage from their stored outcome when run with a host request ID, and otherwise count as
 `unknown_turns`, never as zero.
+
+## Custom tools
+
+Every tool is a `ToolHandler`: it returns its `ToolDefinition`, declares its
+`ToolEffects`, and answers each call's JSON arguments with a `ToolOutput`. A `ToolSet`
+lists handlers in the order the model sees them; names are unique, and `read`, `write`,
+and `bash` are reserved for the built-ins.
+
+```rust
+use ag_harness::tool::{ToolContext, ToolDefinition, ToolEffects, ToolError, ToolOutput};
+use ag_harness::{Tool, ToolHandler, ToolSet};
+
+struct Clock;
+
+#[async_trait::async_trait]
+impl ToolHandler for Clock {
+    fn definition(&self) -> ToolDefinition {
+        ToolDefinition::new("clock", "Read the clock.", json!({"type": "object"})).unwrap()
+    }
+
+    fn effects(&self) -> ToolEffects {
+        ToolEffects::ReadOnly
+    }
+
+    async fn call(&self, _args: Value, _ctx: ToolContext) -> Result<ToolOutput, ToolError> {
+        Ok(ToolOutput::new(r#"{"time":"12:00"}"#))
+    }
+}
+
+let tools = ToolSet::builder().builtin(Tool::Read).handler(Arc::new(Clock)).build()?;
+let harness = Harness::builder().model(model).tools(tools).build()?;
+```
+
+- `HarnessBuilder::tools` sets the default set, `RunRequest::tools` replaces it for one
+  run, and `TurnOptions::with_tools` for one turn. The default is `ToolSet::builtins()`.
+- A host handler is offered whenever it is in the set and needs no repository. A
+  built-in is offered only while the `ToolPolicy` also allows it.
+- `ToolError::rejected` sends feedback to the model and the turn continues, as do
+  arguments that are not JSON and results over 64 KiB. `ToolError::failed` fails the
+  turn with `ErrorKind::ToolFailed`. Reports list host calls as `ToolActivity::Custom`.
+- `ToolContext` names the call, its session and run, and the workspace;
+  `ToolContext::cancelled` resolves when the turn is cancelled, which also drops the
+  call's future.
 
 ## Turns
 

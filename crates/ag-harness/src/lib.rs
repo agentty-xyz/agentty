@@ -55,8 +55,9 @@
 //! - A [`BudgetLedger`], such as a [`SharedBudget`] capping total micro-USD or
 //!   tokens, reserves every model request of the runs it is given, so parallel
 //!   runs share one budget.
-//! - [`Tool`]s are denied until allowed with [`Harness::allow`] or a
-//!   [`ToolPolicy`].
+//! - A turn offers the tools of its [`ToolSet`]: host [`ToolHandler`]s and the
+//!   built-in [`Tool`]s, which stay denied until allowed with
+//!   [`Harness::allow`] or a [`ToolPolicy`].
 //! - [`RunError`] and [`HarnessError`] classify any [`TurnError`] or
 //!   [`SessionError`] by [`ErrorKind`] and whether a retry may succeed.
 //!
@@ -71,7 +72,7 @@
 //! | [`catalog`]    | Model specs, roles, capabilities, pricing, and selection   |
 //! | [`budget`]     | Budget ledgers, estimates, and reservations                |
 //! | [`model`]      | The [`Model`] trait, requests, registry, context profiles  |
-//! | [`tool`]       | Tool arguments, results, and the [`tool::FileSystem`] seam |
+//! | [`tool`]       | Tool handlers and sets, built-in arguments, file system    |
 //! | [`bash`]       | Bash configuration, executors, enforcement, records        |
 //! | [`turn`]       | Turn builders, reports, activity, and settlement errors    |
 //! | [`store`]      | Session stores and durable write and checkpoint records    |
@@ -120,6 +121,7 @@ mod model_profile_fixture;
 mod admission;
 pub mod bash;
 pub mod budget;
+mod builtin_tool;
 mod calibration;
 mod cancellation;
 pub mod catalog;
@@ -165,6 +167,7 @@ mod sqlite_store;
 pub mod store;
 mod telemetry;
 pub mod tool;
+mod tool_handler;
 #[cfg(feature = "otel")]
 mod trace;
 pub mod transcript;
@@ -192,7 +195,7 @@ pub use run::{
 };
 pub use schema_contract::{OutputSchema, OutputSchemaError};
 pub use session::SessionError;
-pub use tool::Tool;
+pub use tool::{Tool, ToolHandler, ToolSet};
 pub use transcript::{TurnRange, TurnRecord};
 pub use turn::{TurnControl, TurnError, TurnOptions, TurnOutcome, TurnReport};
 pub use usage::{Cost, UsageTotals};

@@ -338,8 +338,12 @@ impl From<&ToolActivity> for ToolCallStatus {
             ToolActivity::Bash { .. }
             | ToolActivity::Read { .. }
             | ToolActivity::ReadInspection { .. }
-            | ToolActivity::Write { .. } => Self::Completed,
+            | ToolActivity::Write { .. }
+            | ToolActivity::Custom {
+                rejected: false, ..
+            } => Self::Completed,
             ToolActivity::MalformedArguments { .. }
+            | ToolActivity::Custom { rejected: true, .. }
             | ToolActivity::ReadInspectionRejected { .. }
             | ToolActivity::ReadRejected { .. }
             | ToolActivity::WriteRejected { .. } => Self::Rejected,
@@ -500,6 +504,11 @@ impl EventSink {
         };
 
         (Arc::new(sink), stream)
+    }
+
+    /// Returns the identifier of the run this sink streams.
+    pub(crate) fn run_id(&self) -> &RunId {
+        &self.run
     }
 
     /// Sends `kind`, waiting while the stream is full; does nothing once the

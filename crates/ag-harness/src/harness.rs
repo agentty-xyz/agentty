@@ -51,7 +51,7 @@ use crate::session_model::ReplayTarget;
 #[cfg(feature = "sqlite")]
 use crate::sqlite_store::Database;
 use crate::store::{AcquiredTurn, SessionStore};
-use crate::tool::Tool;
+use crate::tool::{Tool, ToolSet};
 use crate::transcript::{TurnRange, TurnRecord};
 use crate::turn::{HistoryActivity, TurnError, TurnOptions, TurnOutcome};
 use crate::usage::{TurnUsage, UsageTotals};
@@ -392,12 +392,13 @@ impl Session {
     /// session history that later runs and turns replay.
     pub fn run(&self, request: RunRequest) -> Run {
         let budget = request.ledger();
-        let turn = request.into_turn(Some(&self.output), self.harness.inner.policy);
+        let config = &self.harness.inner;
+        let turn = request.into_turn(Some(&self.output), config.policy, &config.tools);
         let journal = RunJournal::new(
             Arc::clone(&self.database),
             self.id.clone(),
             &turn,
-            self.harness.inner.pricing,
+            config.pricing,
         );
         let mut session = self.detached();
         if let Some(budget) = budget {
@@ -624,7 +625,7 @@ impl Session {
             .record_admitted_usage(TurnUsage::new(self.harness.inner.pricing))
             .await?;
         let journal = guard.write_journal();
-        let engine = self.harness.controlled_engine(options, control, effects);
+        let engine = Harness::controlled_engine(&self.harness, options, control, effects, &self.id);
         let started = self.started_event(guard.owner().turn_position);
         let result = tokio::select! {
             biased;
@@ -1100,6 +1101,7 @@ impl Harness {
             policy: ToolPolicy::default(),
             repository: None,
             storage: None,
+            tools: ToolSet::builtins(),
         }
     }
 
@@ -1313,7 +1315,7 @@ impl Harness {
     /// outcome lists the run's files and commands like a durable session's.
     pub fn run(&self, request: RunRequest) -> Run {
         let budget = request.ledger();
-        let turn = request.into_turn(None, self.inner.policy);
+        let turn = request.into_turn(None, self.inner.policy, &self.inner.tools);
         let store: Arc<dyn SessionStore> = Arc::new(MemoryStore::new());
         let id = Self::turn_cache_key();
         let journal = RunJournal::new(Arc::clone(&store), id.clone(), &turn, self.inner.pricing);
@@ -1677,21 +1679,23 @@ impl Harness {
     }
 
     fn default_options(&self, output: OutputMode) -> TurnOptions {
-        TurnOptions::new(output, self.inner.policy)
+        TurnOptions::new(output, self.inner.policy).with_tools(self.inner.tools.clone())
     }
 
-    /// Returns an engine for a durable turn that reports to `control`, and
-    /// streams events when its run does.
+    /// Returns an engine for a durable turn of session `session` that
+    /// reports to `control`, and streams events when its run does.
     fn controlled_engine<'a>(
         &'a self,
         options: &'a TurnOptions,
         control: Option<&'a TurnControl>,
         effects: Effects,
+        session: &str,
     ) -> Engine<'a> {
         Engine {
             control,
             effects,
             events: control.and_then(TurnControl::events),
+            session: Some(SessionId::new(session.to_string())),
             ..self.engine(options)
         }
     }
@@ -1704,7 +1708,7 @@ impl Harness {
             concurrency: config.concurrency.as_deref(),
             context_budget: config.context_budget,
             context_calibration: &config.context_calibration,
-            context_estimator: config.context_estimator.as_ref(),
+            context_estimator: &config.context_estimator,
             context_summaries: config.context_summaries,
             control: None,
             effects: Effects::default(),
@@ -1717,6 +1721,7 @@ impl Harness {
             options,
             pricing: config.pricing,
             repository: config.repository.as_ref(),
+            session: None,
         }
     }
 }
@@ -1746,6 +1751,7 @@ pub struct HarnessBuilder {
     policy: ToolPolicy,
     repository: Option<Repository>,
     storage: Option<StorageSource>,
+    tools: ToolSet,
 }
 
 impl HarnessBuilder {
@@ -1847,6 +1853,16 @@ impl HarnessBuilder {
         self
     }
 
+    /// Offers `tools` by default instead of [`ToolSet::builtins`]. Host
+    /// handlers in the set are offered in every turn that uses the
+    /// defaults; built-ins still need [`Self::allow`]. A
+    /// [`RunRequest::tools`] or explicit [`TurnOptions`] replace the set.
+    pub fn tools(mut self, tools: ToolSet) -> Self {
+        self.tools = tools;
+
+        self
+    }
+
     /// Replaces the local filesystem, like [`Harness::file_system`].
     pub fn file_system(mut self, file_system: impl FileSystem + 'static) -> Self {
         self.file_system = Some(Arc::new(file_system));
@@ -1938,7 +1954,7 @@ impl HarnessBuilder {
         };
         let repository_tool_allowed = [Tool::Bash, Tool::Read, Tool::Write]
             .into_iter()
-            .any(|tool| self.policy.allows(tool));
+            .any(|tool| self.policy.allows(tool) && self.tools.includes(tool));
         if repository_tool_allowed && self.repository.is_none() {
             return Err(HarnessBuildError::RepositoryRequired.into());
         }
@@ -1975,6 +1991,7 @@ impl HarnessBuilder {
         config.model_reasoning_effort = self.model_reasoning_effort;
         config.policy = self.policy;
         config.repository = self.repository;
+        config.tools = self.tools;
 
         Ok(Harness::from_config(config))
     }
@@ -2085,6 +2102,7 @@ struct HarnessConfig {
     pricing: Option<Pricing>,
     repository: Option<Repository>,
     store: Option<Arc<dyn SessionStore>>,
+    tools: ToolSet,
 }
 
 impl HarnessConfig {
@@ -2115,6 +2133,7 @@ impl HarnessConfig {
             pricing: None,
             repository: None,
             store: None,
+            tools: ToolSet::builtins(),
         }
     }
 

@@ -1,18 +1,26 @@
-//! Built-in repository tools and their typed arguments.
+//! Tool handlers, the built-in repository tools, and their typed arguments.
 //!
-//! Tools are denied by default; enable them with `Harness::allow` or a
-//! `ToolPolicy` in `TurnOptions`. Repository access goes through a validated
-//! `Repository` and an injectable [`FileSystem`].
+//! A turn offers the tools of its [`ToolSet`]: host [`ToolHandler`]s and
+//! the built-in `read`, `write`, and `bash` handlers. Built-ins stay denied
+//! until `Harness::allow` or a `ToolPolicy` in `TurnOptions` enables them.
+//! Repository access goes through a validated `Repository` and an injectable
+//! [`FileSystem`].
 
+use std::borrow::Cow;
 use std::fmt;
 use std::num::NonZeroU64;
 
 use serde::{Deserialize, Deserializer, Serialize, de};
 use serde_json::{Number, Value, json};
+use thiserror::Error;
 
 use crate::bash::{BashArguments, Enforcement};
 pub use crate::file_system::{FileSystem, LocalFileSystem};
 pub use crate::read::{ReadError, ReadOutput};
+pub use crate::tool_handler::{
+    ToolContext, ToolEffects, ToolError, ToolHandler, ToolOutput, ToolSet, ToolSetBuilder,
+    ToolSetError,
+};
 pub use crate::write::{WriteError, WriteOutput};
 use crate::{ComparisonBase, model, schema_contract};
 
@@ -85,15 +93,64 @@ impl Tool {
 /// Provider-neutral definition of a native model tool.
 ///
 /// Definitions describe only the wire contract advertised to a model. They do
-/// not execute tools or access the filesystem.
+/// not execute tools or access the filesystem; a [`ToolHandler`] pairs one
+/// with its execution.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct ToolDefinition {
     description: String,
-    name: &'static str,
+    name: Cow<'static, str>,
     parameters: Value,
 }
 
+/// Why [`ToolDefinition::new`] rejected a definition.
+#[derive(Clone, Debug, Eq, Error, PartialEq)]
+#[non_exhaustive]
+pub enum ToolDefinitionError {
+    /// The name is not 1 to 64 ASCII letters, digits, `_`, or `-`, the
+    /// function names every supported provider accepts and replays.
+    #[error("tool name `{name}` must be 1 to 64 ASCII letters, digits, `_`, or `-`")]
+    InvalidName {
+        /// The rejected name, bounded.
+        name: String,
+    },
+    /// The parameters are not a JSON Schema object with `"type": "object"`.
+    #[error("tool parameters must be a JSON Schema object with \"type\": \"object\"")]
+    InvalidParameters,
+}
+
 impl ToolDefinition {
+    /// Defines a host-provided function tool named `name`, described to the
+    /// model by `description`, whose arguments follow the JSON Schema
+    /// `parameters`.
+    ///
+    /// The harness sends the definition as given and does not validate
+    /// call arguments against `parameters`; the handler decodes them.
+    ///
+    /// # Errors
+    /// Returns [`ToolDefinitionError`] for a name providers cannot replay or
+    /// parameters that are not an object schema.
+    pub fn new(
+        name: impl Into<String>,
+        description: impl Into<String>,
+        parameters: Value,
+    ) -> Result<Self, ToolDefinitionError> {
+        let name = name.into();
+        if !ag_router::is_valid_function_name(&name) {
+            return Err(ToolDefinitionError::InvalidName {
+                name: schema_contract::bounded_diagnostic(name),
+            });
+        }
+        if parameters.get("type") != Some(&json!("object")) {
+            return Err(ToolDefinitionError::InvalidParameters);
+        }
+
+        Ok(Self {
+            description: description.into(),
+            name: Cow::Owned(name),
+            parameters,
+        })
+    }
+
     /// Defines shell source; the host fixes executable, grants, and limits.
     /// The description states exactly the isolation `enforcement` provides.
     pub fn bash(enforcement: Enforcement) -> Self {
@@ -105,7 +162,7 @@ impl ToolDefinition {
 
         Self {
             description: format!("{isolation} {BASH_LIMITS}"),
-            name: "bash",
+            name: Cow::Borrowed("bash"),
             parameters: json!({"type":"object", "properties":{"command":{"type":"string","minLength":1,"maxLength":65536}}, "required":["command"], "additionalProperties":false}),
         }
     }
@@ -114,7 +171,7 @@ impl ToolDefinition {
     pub fn read() -> Self {
         Self {
             description: READ_DESCRIPTION.to_string(),
-            name: READ_NAME,
+            name: Cow::Borrowed(READ_NAME),
             parameters: json!({
                 "type": "object",
                 "properties": {
@@ -176,7 +233,7 @@ impl ToolDefinition {
     pub fn write() -> Self {
         Self {
             description: WRITE_DESCRIPTION.to_string(),
-            name: WRITE_NAME,
+            name: Cow::Borrowed(WRITE_NAME),
             parameters: json!({
                 "type": "object",
                 "properties": {
@@ -199,8 +256,8 @@ impl ToolDefinition {
     }
 
     /// Returns the native function name.
-    pub fn name(&self) -> &'static str {
-        self.name
+    pub fn name(&self) -> &str {
+        &self.name
     }
 
     /// Returns the JSON Schema for the native function arguments.
@@ -418,6 +475,20 @@ impl ToolCall {
             ToolArguments::Write(arguments) => serde_json::to_string(arguments),
             ToolArguments::Malformed(arguments) => Ok(arguments.raw.clone()),
             ToolArguments::Unknown(call) => Ok(call.raw.clone()),
+        }
+    }
+
+    /// Returns the arguments as the JSON value a [`ToolHandler`] receives.
+    ///
+    /// # Errors
+    /// Returns an error when verbatim arguments are not JSON.
+    pub(crate) fn arguments_value(&self) -> Result<Value, serde_json::Error> {
+        match &self.arguments {
+            ToolArguments::Bash(arguments) => serde_json::to_value(arguments),
+            ToolArguments::Read(arguments) => serde_json::to_value(arguments),
+            ToolArguments::Write(arguments) => serde_json::to_value(arguments),
+            ToolArguments::Malformed(arguments) => serde_json::from_str(&arguments.raw),
+            ToolArguments::Unknown(call) => serde_json::from_str(&call.raw),
         }
     }
 
