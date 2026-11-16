@@ -9,7 +9,8 @@ use std::time::Duration;
 
 use ag_harness::lifecycle::TurnErrorType;
 use ag_harness::model::{
-    ModelCompletion, ModelMessage, ModelMetadata, ModelRequest, ModelResponse,
+    CompletionMetadata, CompletionUsage, ModelCompletion, ModelMessage, ModelMetadata,
+    ModelRequest, ModelResponse,
 };
 use ag_harness::recovery::HostTurnRecord;
 use ag_harness::store::{
@@ -19,7 +20,7 @@ use ag_harness::store::{
 use ag_harness::tool::{FileSystem, LocalFileSystem, ToolCall};
 use ag_harness::turn::{SettlementError, SettlementPhase};
 use ag_harness::{
-    ErrorKind, Harness, Model, ModelError, OutputSchema, RunRequest, SessionError, Tool,
+    ErrorKind, Harness, Model, ModelError, OutputSchema, RunOutput, RunRequest, SessionError, Tool,
     ToolPolicy, TurnControl, TurnError, TurnOptions, TurnOutcome,
 };
 use async_trait::async_trait;
@@ -102,19 +103,35 @@ impl Model for TestModel {
         match request.prompt() {
             "wait" => pending().await,
             "panic" => std::panic::resume_unwind(Box::new("injected model panic")),
-            "write" => Ok(ModelCompletion::from_response(ModelResponse::ToolCall(
-                ToolCall::from_json(
-                    "write".into(),
-                    "write",
-                    &json!({
-                        "path":"file.txt",
-                        "patch":"--- /dev/null\n+++ b/file.txt\n@@ -0,0 +1 @@\n+new\n"
-                    })
-                    .to_string(),
+            "write" => Ok(ModelCompletion::new(
+                CompletionMetadata::new(
+                    "tool_calls".into(),
                     None,
-                )
-                .expect("write call"),
-            ))),
+                    None,
+                    None,
+                    Some(CompletionUsage::new(
+                        None,
+                        None,
+                        Some(30),
+                        Some(5),
+                        None,
+                        None,
+                    )),
+                ),
+                ModelResponse::ToolCall(
+                    ToolCall::from_json(
+                        "write".into(),
+                        "write",
+                        &json!({
+                            "path":"file.txt",
+                            "patch":"--- /dev/null\n+++ b/file.txt\n@@ -0,0 +1 @@\n+new\n"
+                        })
+                        .to_string(),
+                        None,
+                    )
+                    .expect("write call"),
+                ),
+            )),
             "fail" => Err(ModelError::InvalidResponse),
             _ => Ok(ModelCompletion::from_response(ModelResponse::Output(
                 json!({}),
@@ -139,6 +156,7 @@ enum Phase {
 }
 
 struct Gate {
+    cleanup_attempts: AtomicUsize,
     entered: Notify,
     fail_append: AtomicBool,
     fail_cleanup: AtomicBool,
@@ -153,6 +171,7 @@ struct Gate {
 impl Gate {
     fn new(store: Arc<dyn SessionStore>, phase: Phase) -> Self {
         Self {
+            cleanup_attempts: AtomicUsize::new(0),
             entered: Notify::new(),
             fail_append: AtomicBool::new(false),
             fail_cleanup: AtomicBool::new(false),
@@ -297,6 +316,8 @@ impl SessionStore for Gate {
     async fn interrupt(&self, owner: &TurnOwner) -> Result<(), SessionError> {
         self.pause(Phase::Cleanup).await;
         if self.fail_cleanup.load(Ordering::SeqCst) {
+            self.cleanup_attempts.fetch_add(1, Ordering::SeqCst);
+
             return Err(SessionError::Store {
                 operation: "cleanup",
                 source: Box::new(std::io::Error::other("injected cleanup failure")),
@@ -1637,6 +1658,9 @@ async fn run_cancelled_during_a_write_settles_it_before_reporting() {
     // Assert
     let error = outcome.result.expect_err("cancelled");
     assert_eq!(error.kind(), ErrorKind::Cancelled);
+    assert_eq!(outcome.report.model_requests().len(), 1);
+    assert_eq!((outcome.usage.input, outcome.usage.output), (30, 5));
+    assert!(outcome.settlement.is_ok());
     assert_eq!(outcome.files_changed.len(), 1);
     assert_eq!(outcome.files_changed[0].path, "file.txt");
     assert_eq!(outcome.files_changed[0].status, WriteStatus::Applied);
@@ -1649,7 +1673,7 @@ async fn run_cancelled_during_a_write_settles_it_before_reporting() {
 }
 
 #[tokio::test]
-async fn run_reports_cleanup_that_still_fails_after_one_retry() {
+async fn run_reports_persistence_that_fails_after_one_retry_as_retryable() {
     // Arrange
     let gate = Arc::new(Gate::new(Arc::new(MemoryStore::new()), Phase::None));
     gate.fail_cleanup.store(true, Ordering::SeqCst);
@@ -1669,16 +1693,36 @@ async fn run_reports_cleanup_that_still_fails_after_one_retry() {
     // Act
     token.cancel();
     let outcome = bounded(outcome).await.expect("run task");
+    let attempts = gate.cleanup_attempts.load(Ordering::SeqCst);
+    let unsettled = outcome.settlement.expect_err("persistence failed");
+    let blocked = session.run(RunRequest::new("ok")).await.result;
+    let still_failing = bounded(unsettled.retry())
+        .await
+        .expect_err("persistence still fails");
+    let kind = still_failing.error().kind();
+    let phase = still_failing
+        .error()
+        .get_ref()
+        .downcast_ref::<SettlementError>()
+        .map(SettlementError::phase);
+    let debug = format!("{still_failing:?}");
+    gate.fail_cleanup.store(false, Ordering::SeqCst);
+    let retried = bounded(still_failing.retry()).await;
 
     // Assert
-    let error = outcome.result.expect_err("cleanup failed");
-    assert_eq!(error.kind(), ErrorKind::Store);
+    assert_eq!(attempts, 2, "settlement retried exactly once");
     assert_eq!(
-        error
-            .get_ref()
-            .downcast_ref::<SettlementError>()
-            .map(SettlementError::phase),
-        Some(SettlementPhase::Persistence)
+        outcome.result.map_err(|error| error.kind()).err(),
+        Some(ErrorKind::Cancelled)
+    );
+    assert!(blocked.is_err(), "unsettled cleanup blocks new runs");
+    assert_eq!(kind, ErrorKind::Store);
+    assert_eq!(phase, Some(SettlementPhase::Persistence));
+    assert!(debug.starts_with("Unsettled"), "{debug}");
+    assert!(retried.is_ok(), "{retried:?}");
+    assert!(
+        session.run(RunRequest::new("ok")).await.result.is_ok(),
+        "a successful retry readmits the session"
     );
 }
 
@@ -1719,7 +1763,7 @@ async fn run_retries_failed_cleanup_before_reporting_cancellation() {
 }
 
 #[tokio::test]
-async fn run_reports_a_journal_failure_instead_of_its_output() {
+async fn run_keeps_its_output_when_its_records_cannot_be_read() {
     // Arrange
     let gate = Arc::new(Gate::new(Arc::new(MemoryStore::new()), Phase::None));
     gate.fail_writes.store(true, Ordering::SeqCst);
@@ -1738,7 +1782,56 @@ async fn run_reports_a_journal_failure_instead_of_its_output() {
     let outcome = bounded(session.run(RunRequest::new("ok")).into_future()).await;
 
     // Assert
-    let error = outcome.result.expect_err("journal failed");
-    assert_eq!(error.kind(), ErrorKind::Store);
+    assert_eq!(outcome.result.ok(), Some(RunOutput::Json(json!({}))));
+    assert_eq!(
+        outcome.records_error.map(|error| error.kind()),
+        Some(ErrorKind::Store)
+    );
+    assert_eq!(outcome.files_changed, []);
     assert_eq!(outcome.report.model_requests().len(), 1);
+}
+
+#[tokio::test]
+async fn run_reports_an_unsettled_write_beside_its_own_result() {
+    // Arrange
+    let root = tempfile::tempdir().expect("repository");
+    let gate = Arc::new(Gate::new(Arc::new(MemoryStore::new()), Phase::Outcome));
+    gate.fail_outcome.store(true, Ordering::SeqCst);
+    let harness = Harness::new(
+        TestModel(Arc::new(Probe::default())),
+        unbounded_context_budget(),
+    )
+    .store(gate.clone())
+    .repository(repository_with_host_git(root.path()));
+    let session = harness
+        .session("outcome", schema())
+        .create()
+        .await
+        .expect("session");
+    let run =
+        session.run(RunRequest::new("write").tool_policy(ToolPolicy::default().allow(Tool::Write)));
+    let token = run.cancel_token();
+    let outcome = tokio::spawn(run.into_future());
+    bounded(gate.entered.notified()).await;
+
+    // Act
+    token.cancel();
+    gate.release.notify_one();
+    let outcome = bounded(outcome).await.expect("run task");
+
+    // Assert
+    assert_eq!(
+        outcome.result.map_err(|error| error.kind()).err(),
+        Some(ErrorKind::Cancelled)
+    );
+    let unsettled = outcome.settlement.expect_err("write outcome failed");
+    assert_eq!(unsettled.error().kind(), ErrorKind::ToolFailed);
+    assert_eq!(
+        unsettled
+            .error()
+            .get_ref()
+            .downcast_ref::<SettlementError>()
+            .map(SettlementError::phase),
+        Some(SettlementPhase::Writes)
+    );
 }

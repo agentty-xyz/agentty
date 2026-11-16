@@ -9,6 +9,7 @@ use serde_json::{Value, json};
 
 use crate::bash::{BashArguments, BashError};
 use crate::calibration::{Calibration, ContextCalibration};
+use crate::cancellation::TurnControl;
 use crate::context::{ContextSummaryPolicy, FitStep, SentHistory};
 use crate::effect::Effects;
 use crate::execution::BashTool;
@@ -69,6 +70,9 @@ pub(crate) struct Engine<'a> {
     pub(crate) context_calibration: &'a ContextCalibration,
     pub(crate) context_estimator: &'a dyn context::ContextEstimator,
     pub(crate) context_summaries: ContextSummaryPolicy,
+    /// Control that receives the report of a turn dropped before it
+    /// finished, such as a cancelled one.
+    pub(crate) control: Option<&'a TurnControl>,
     pub(crate) effects: Effects,
     pub(crate) file_system: &'a Arc<dyn FileSystem>,
     pub(crate) lifecycle: &'a LifecycleEmitter,
@@ -95,14 +99,18 @@ impl Engine<'_> {
         // Only a turn that may summarize asks the model how to.
         let shared_prefix_summaries = self.context_summaries == ContextSummaryPolicy::Enabled
             && self.model.keeps_prefix_across_schemas();
-        let mut state = TurnState::new(
-            ToolRounds::new(tools, recorder),
-            context::ContextFit::new(shared_prefix_summaries),
-        );
-        match self.drive(request, turn_id, &mut state).await {
+        let mut progress = Progress {
+            control: self.control,
+            started_at,
+            state: TurnState::new(
+                ToolRounds::new(tools, recorder),
+                context::ContextFit::new(shared_prefix_summaries),
+            ),
+        };
+        match self.drive(request, turn_id, &mut progress.state).await {
             Ok((output, request)) => {
-                let history = state.context_fit.sent_history(&request);
-                let report = state.into_report(started_at.elapsed());
+                let history = progress.state.context_fit.sent_history(&request);
+                let report = progress.finish();
 
                 Ok(FinishedTurn {
                     history,
@@ -112,7 +120,7 @@ impl Engine<'_> {
             }
             Err(error) => Err(EngineFailure {
                 error,
-                report: Some(Box::new(state.into_report(started_at.elapsed()))),
+                report: Some(Box::new(progress.finish())),
             }),
         }
     }
@@ -879,13 +887,43 @@ impl TurnState {
         }
     }
 
-    /// Reports the turn's activity over its elapsed `duration`.
-    fn into_report(self, duration: Duration) -> TurnReport {
-        TurnReport::new(duration, self.model_requests, self.rounds.activity)
-            .with_corrections(self.output_corrections, self.malformed_tool_calls)
-            .with_repetition_nudges(self.repetition_nudges)
-            .with_context_overflow_recoveries(self.overflow.recoveries)
-            .with_context_summary_failures(self.context_fit.summary_failures())
+    /// Moves the turn's recorded activity into a report over its elapsed
+    /// `duration`.
+    fn take_report(&mut self, duration: Duration) -> TurnReport {
+        TurnReport::new(
+            duration,
+            std::mem::take(&mut self.model_requests),
+            std::mem::take(&mut self.rounds.activity),
+        )
+        .with_corrections(self.output_corrections, self.malformed_tool_calls)
+        .with_repetition_nudges(self.repetition_nudges)
+        .with_context_overflow_recoveries(self.overflow.recoveries)
+        .with_context_summary_failures(self.context_fit.summary_failures())
+    }
+}
+
+/// A running turn's state; dropping it unfinished, as cancellation,
+/// interruption, or a panic does, records its report on the turn's control.
+struct Progress<'a> {
+    control: Option<&'a TurnControl>,
+    started_at: Instant,
+    state: TurnState,
+}
+
+impl Progress<'_> {
+    /// Reports the finished turn's activity; nothing is recorded on drop.
+    fn finish(&mut self) -> TurnReport {
+        self.control = None;
+
+        self.state.take_report(self.started_at.elapsed())
+    }
+}
+
+impl Drop for Progress<'_> {
+    fn drop(&mut self) {
+        if let Some(control) = self.control {
+            control.record_report(&self.finish());
+        }
     }
 }
 

@@ -310,8 +310,10 @@ impl Session {
     /// its [`crate::RunOutcome`].
     ///
     /// Unset request options use the stored session schema and the captured
-    /// default tool policy. The run executes on its own task with a copy of
-    /// this handle, like [`SessionTurn::start`], and owns its cancellation.
+    /// default tool policy; request options never change the stored ones.
+    /// The run executes on its own task with a copy of this handle, like
+    /// [`SessionTurn::start`], and owns its cancellation. Its turn joins the
+    /// session history that later runs and turns replay.
     pub fn run(&self, request: RunRequest) -> Run {
         let turn = request.into_turn(Some(&self.schema), self.harness.inner.policy);
         let journal = RunJournal::new(Arc::clone(&self.database), self.id.clone(), &turn);
@@ -526,6 +528,7 @@ impl Session {
             self.build_request(input, options, available_history_weight);
         let journal = guard.write_journal();
         let mut engine = self.harness.engine(options);
+        engine.control = control;
         engine.effects = effects;
         let result = tokio::select! {
             biased;
@@ -544,8 +547,8 @@ impl Session {
         } = match result {
             Ok(result) => result,
             Err(EngineFailure { error, report }) => {
-                if let Some(control) = control {
-                    control.record_failure_report(report.as_deref());
+                if let (Some(control), Some(report)) = (control, report.as_deref()) {
+                    control.record_report(report);
                 }
                 if let Some(turn) = turn.as_mut() {
                     turn.set_failure_report(report);
@@ -577,6 +580,9 @@ impl Session {
         };
         if let Err(error) = persistence {
             guard.mark_interrupted();
+            if let Some(control) = control {
+                control.record_report(outcome.report());
+            }
 
             return Err(error);
         }
@@ -1159,13 +1165,15 @@ impl Harness {
         self.turn(input, self.default_options(schema)).await
     }
 
-    /// Starts one run of `request` without stored history; await the
-    /// returned [`Run`] for its [`crate::RunOutcome`].
+    /// Starts one stateless run of `request`, the run-level counterpart of
+    /// [`Self::run_once`]; await the returned [`Run`] for its
+    /// [`crate::RunOutcome`].
     ///
-    /// The run records its turn in a fresh in-memory session, never in the
-    /// configured store, so its outcome lists the run's writes and commands
-    /// like a durable session's. The request must set
-    /// [`RunRequest::output`]; unset tool options use the harness defaults.
+    /// Unlike [`Session::run`], nothing is stored or replayed and no schema
+    /// is inherited: the request must set [`RunRequest::output`], and unset
+    /// tool options use the harness defaults. The run records its turn in a
+    /// fresh in-memory session, never in the configured store, so its
+    /// outcome lists the run's files and commands like a durable session's.
     pub fn run(&self, request: RunRequest) -> Run {
         let turn = request.into_turn(None, self.inner.policy);
         let store: Arc<dyn SessionStore> = Arc::new(MemoryStore::new());
@@ -1455,6 +1463,7 @@ impl Harness {
             context_calibration: &config.context_calibration,
             context_estimator: config.context_estimator.as_ref(),
             context_summaries: config.context_summaries,
+            control: None,
             effects: Effects::default(),
             file_system: &config.file_system,
             lifecycle: &config.lifecycle,

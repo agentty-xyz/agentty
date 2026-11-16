@@ -43,8 +43,8 @@
 //!   cancellation through [`TurnControl`].
 //! - A [`Run`] is a turn started from a [`RunRequest`] with [`Session::run`] or
 //!   [`Harness::run`]. Awaiting it yields a settled [`RunOutcome`] with its
-//!   [`RunOutput`], aggregated [`Usage`], and the run's write and command
-//!   records; a [`CancelToken`] cancels it.
+//!   [`RunOutput`], aggregated [`Usage`], the run's [`FileChange`]s and
+//!   [`CommandRecord`]s, and its [`TurnReport`]; a [`CancelToken`] cancels it.
 //! - [`Tool`]s are denied until allowed with [`Harness::allow`] or a
 //!   [`ToolPolicy`].
 //! - [`RunError`] and [`HarnessError`] classify any [`TurnError`] or
@@ -137,6 +137,7 @@ mod write;
 mod write_journal;
 
 pub use catalog::{ModelCatalog, ModelSelector, Role};
+pub use command_journal::CommandRecord;
 pub use comparison::{ComparisonBase, ComparisonBaseError};
 pub use error::{ErrorKind, HarnessError, RunError};
 pub use harness::{Harness, HarnessBuildError, HarnessBuilder, Session, SessionBuilder};
@@ -144,11 +145,14 @@ pub use input::{ImageContent, ImageMediaType, InputBlock, TurnInput, TurnInputEr
 pub use model::{Model, ModelError};
 pub use policy::ToolPolicy;
 pub use repository::{Repository, RepositoryError};
-pub use run::{CancelToken, Run, RunHandle, RunOutcome, RunOutput, RunRequest, Usage};
+pub use run::{
+    CancelToken, FileChange, Run, RunHandle, RunOutcome, RunOutput, RunRequest, Unsettled, Usage,
+};
 pub use schema_contract::{OutputSchema, OutputSchemaError};
 pub use session::SessionError;
 pub use tool::Tool;
-pub use turn::{TurnControl, TurnError, TurnOptions, TurnOutcome};
+pub use turn::{TurnControl, TurnError, TurnOptions, TurnOutcome, TurnReport};
+pub use write_journal::WriteStatus;
 
 /// Entry point for the matching trusted `ag-harness-sandbox` executable.
 /// Run only in a dedicated process, before creating any runtime or threads.

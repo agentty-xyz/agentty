@@ -201,9 +201,9 @@ impl TurnControl {
         self.lock_record().turn_position = Some(turn_position);
     }
 
-    /// Records what a failed turn did before failing.
-    pub(crate) fn record_failure_report(&self, report: Option<&TurnReport>) {
-        self.lock_record().failure_report = report.cloned();
+    /// Records what a turn that ended without an outcome did before ending.
+    pub(crate) fn record_report(&self, report: &TurnReport) {
+        self.lock_record().report = Some(report.clone());
     }
 
     /// Takes what the turn recorded for its run outcome.
@@ -219,8 +219,9 @@ impl TurnControl {
 /// What a controlled turn recorded for the outcome of its run.
 #[derive(Default)]
 pub(crate) struct TurnRecord {
-    /// Report of a turn that failed after preparing a model request.
-    pub(crate) failure_report: Option<TurnReport>,
+    /// Report of a turn that failed, was cancelled, or was interrupted after
+    /// preparing a model request.
+    pub(crate) report: Option<TurnReport>,
     /// Durable turn position, once the turn was acquired.
     pub(crate) turn_position: Option<i64>,
 }

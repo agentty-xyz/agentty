@@ -117,10 +117,12 @@ let outcome = session
   `harness.run(RunRequest)` return a `Run`; awaiting it yields a `RunOutcome` only after
   persistence, writes, and commands settle (cleanup is retried once). The outcome
   carries `result` (`RunOutput` with `parse::<T>()`, or a `RunError`), `usage` summed
-  over every model request, the run's `files_changed` and `commands` records, and its
-  `report`. A cloneable `CancelToken` from `run.cancel_token()`, or `into_handle()`,
-  cancels it from any task. `harness.run` keeps its single turn in a fresh in-memory
-  session and requires `RunRequest::output`.
+  over every model request the run completed, even when it failed or was cancelled, the
+  run's `files_changed` and `commands`, and its `report`. Cleanup that still fails is
+  reported in `settlement`, whose `Unsettled::retry()` readmits the session; it never
+  replaces `result`. A cloneable `CancelToken` from `run.cancel_token()`, or
+  `into_handle()`, cancels it from any task. `harness.run` keeps its single turn in a
+  fresh in-memory session and requires `RunRequest::output`.
 - **Turns have no tool-call limit.** Cancellation and the `ContextBudget` bound a turn.
   Within a turn, requests only append, so they share one cached prefix, until tool
   traffic grows a request past the budget. That request is sent as a reduced copy

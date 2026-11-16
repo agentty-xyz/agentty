@@ -1,5 +1,6 @@
-//! Public run contract through the crate root: requests, outcomes, usage,
-//! parsing, failure classification, and handles.
+//! Public run contract: requests, outcomes, usage, parsing, failure
+//! classification, and handles. Model and store fixtures use submodules;
+//! [`root_only`] shows that an embedder needs only crate-root imports.
 
 use std::error::Error;
 use std::io;
@@ -35,14 +36,46 @@ const _: fn() = || {
     assert_shareable::<RunRequest>();
 };
 
+/// The common embedder flow, naming every type it uses from the crate root.
+mod root_only {
+    use ag_harness::{
+        CommandRecord, FileChange, Harness, OutputSchema, RunError, RunOutput, RunRequest,
+        TurnReport, Unsettled, Usage,
+    };
+    use serde::Deserialize;
+
+    #[derive(Deserialize)]
+    struct Answer {
+        name: String,
+    }
+
+    /// Runs `prompt` once and returns the parsed name with the run's usage.
+    pub(super) async fn name_and_usage(
+        harness: &Harness,
+        prompt: &str,
+        schema: OutputSchema,
+    ) -> Result<(String, Usage), RunError> {
+        let outcome = harness.run(RunRequest::new(prompt).output(schema)).await;
+        let files: &[FileChange] = &outcome.files_changed;
+        let commands: &[CommandRecord] = &outcome.commands;
+        let report: &TurnReport = &outcome.report;
+        let settlement: &Result<(), Unsettled> = &outcome.settlement;
+        assert!(files.is_empty() && commands.is_empty() && settlement.is_ok());
+        assert_eq!(report.model_requests().len(), 2);
+        let output: RunOutput = outcome.result?;
+
+        Ok((output.parse::<Answer>()?.name, outcome.usage))
+    }
+}
+
 #[derive(Debug, Deserialize, PartialEq)]
 struct Named {
     name: String,
 }
 
-/// Answers the first request with a denied `read` call and the next with
-/// output, or with a rate limit for the prompt `fail`, reporting usage on
-/// every completion.
+/// Answers the first request with a denied `read` call, whose usage lacks
+/// an input count, and the next with output, or with a rate limit for the
+/// prompt `fail`.
 struct ToolRoundModel;
 
 #[async_trait]
@@ -57,7 +90,7 @@ impl Model for ToolRoundModel {
 
             return Ok(completion(
                 ModelResponse::ToolCall(call),
-                CompletionUsage::new(Some(40), Some(60), Some(100), Some(10), Some(4), Some(110)),
+                CompletionUsage::new(None, None, None, Some(10), None, None),
             ));
         }
         if request.prompt() == "fail" {
@@ -72,6 +105,31 @@ impl Model for ToolRoundModel {
             ModelResponse::Output(json!({"name": "Ada"})),
             CompletionUsage::new(Some(90), Some(60), Some(150), Some(20), Some(6), Some(170)),
         ))
+    }
+}
+
+/// Answers `count` with a count and every other prompt with a name,
+/// recording each request.
+struct PromptModel {
+    requests: Arc<Mutex<Vec<ModelRequest>>>,
+}
+
+#[async_trait]
+impl Model for PromptModel {
+    async fn complete(&self, request: ModelRequest) -> Result<ModelCompletion, ModelError> {
+        let output = if request.prompt() == "count" {
+            json!({"count": 1})
+        } else {
+            json!({"name": "Ada"})
+        };
+        self.requests
+            .lock()
+            .map_err(|_| ModelError::InvalidResponse)?
+            .push(request);
+
+        Ok(ModelCompletion::from_response(ModelResponse::Output(
+            output,
+        )))
     }
 }
 
@@ -90,14 +148,8 @@ fn name_schema() -> Result<OutputSchema, Box<dyn Error>> {
     }))?)
 }
 
-fn usage_counts(usage: Usage) -> [u64; 5] {
-    [
-        usage.input,
-        usage.output,
-        usage.cache_read,
-        usage.cache_write,
-        usage.reasoning,
-    ]
+fn usage_counts(usage: Usage) -> [u64; 4] {
+    [usage.input, usage.output, usage.cache_read, usage.reasoning]
 }
 
 #[tokio::test]
@@ -114,9 +166,27 @@ async fn one_shot_run_sums_usage_over_every_model_request() -> Result<(), Box<dy
     assert_eq!(output, RunOutput::Json(json!({"name": "Ada"})));
     assert_eq!(output.parse::<Named>()?, Named { name: "Ada".into() });
     assert_eq!(outcome.report.model_requests().len(), 2);
-    assert_eq!(usage_counts(outcome.usage), [250, 30, 130, 0, 10]);
+    assert_eq!(usage_counts(outcome.usage), [150, 30, 90, 6]);
+    assert_eq!(outcome.usage.cache_write, None);
+    assert_eq!(outcome.usage.unreported_requests, 1);
     assert_eq!(outcome.files_changed, []);
     assert_eq!(outcome.commands, []);
+    assert!(outcome.records_error.is_none());
+
+    Ok(())
+}
+
+#[tokio::test]
+async fn root_only_embedder_runs_and_parses_output() -> Result<(), Box<dyn Error>> {
+    // Arrange
+    let harness = Harness::new(ToolRoundModel, unbounded_context_budget());
+
+    // Act
+    let (name, usage) = root_only::name_and_usage(&harness, "Read", name_schema()?).await?;
+
+    // Assert
+    assert_eq!(name, "Ada");
+    assert_eq!(usage.output, 30);
 
     Ok(())
 }
@@ -171,13 +241,57 @@ async fn failed_session_run_classifies_the_error_and_keeps_earlier_usage()
     assert_eq!(error.kind(), ErrorKind::RateLimited);
     assert!(error.is_retryable());
     assert_eq!(outcome.report.model_requests().len(), 1);
-    assert_eq!(usage_counts(outcome.usage), [100, 10, 40, 0, 4]);
+    assert_eq!(usage_counts(outcome.usage), [0, 10, 0, 0]);
+    assert_eq!(outcome.usage.unreported_requests, 1);
 
     Ok(())
 }
 
 #[tokio::test]
-async fn cancelled_handle_reports_a_cancelled_run() -> Result<(), Box<dyn Error>> {
+async fn session_run_options_keep_stored_defaults_and_share_history() -> Result<(), Box<dyn Error>>
+{
+    // Arrange
+    let requests = Arc::new(Mutex::new(Vec::new()));
+    let model = PromptModel {
+        requests: Arc::clone(&requests),
+    };
+    let harness =
+        Harness::new(model, unbounded_context_budget()).store(Arc::new(MemoryStore::new()));
+    let session = harness.session("history", name_schema()?).create().await?;
+    let count_schema = OutputSchema::new(json!({
+        "type": "object",
+        "properties": {"count": {"type": "integer"}},
+        "required": ["count"]
+    }))?;
+
+    // Act
+    let overridden = session
+        .run(RunRequest::new("count").output(count_schema))
+        .await;
+    let stored = session.run(RunRequest::new("name")).await;
+    let violating = session.run(RunRequest::new("count")).await;
+
+    // Assert
+    assert_eq!(overridden.result?, RunOutput::Json(json!({"count": 1})));
+    assert_eq!(stored.result?, RunOutput::Json(json!({"name": "Ada"})));
+    assert_eq!(
+        violating.result.map_err(|error| error.kind()).err(),
+        Some(ErrorKind::InvalidOutput)
+    );
+    let requests = requests.lock().map_err(|_| "requests")?;
+    assert!(
+        requests[1]
+            .messages()
+            .contains(&ModelMessage::User("count".into())),
+        "the second run replays the first run's turn"
+    );
+
+    Ok(())
+}
+
+#[tokio::test]
+async fn pre_start_cancellation_through_a_handle_reports_a_cancelled_run()
+-> Result<(), Box<dyn Error>> {
     // Arrange
     let harness = Harness::new(ToolRoundModel, unbounded_context_budget());
     let handle = harness
@@ -185,6 +299,7 @@ async fn cancelled_handle_reports_a_cancelled_run() -> Result<(), Box<dyn Error>
         .into_handle();
 
     // Act
+    handle.cancel_token().cancel();
     handle.cancel();
     let outcome = handle.outcome().await;
 
