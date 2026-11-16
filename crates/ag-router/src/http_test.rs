@@ -11,7 +11,7 @@ use serde_json::Value;
 use super::{
     ERROR_BODY_LIMIT_BYTES, HttpTransport, MAX_PROVIDER_RETRY_DELAY, MAX_RATE_LIMIT_RETRIES,
     MAX_RETRY_DELAY, ProviderRequest, RETRY_DELAY, SUCCESS_BODY_LIMIT_BYTES, TransportError,
-    append_success_chunk, has_context_overflow_marker, rate_limit_retry_delay,
+    append_success_chunk, has_context_overflow_marker, is_quota_exceeded, rate_limit_retry_delay,
 };
 use crate::model;
 
@@ -98,6 +98,97 @@ fn normalizes_transport_error_classification() {
         invalid.error_class(),
         model::ErrorClass::InvalidProviderResponse
     );
+    assert_eq!(error.retry_after(), None);
+    assert!(!error.is_quota_exceeded());
+    assert_eq!(oversized.retry_after(), None);
+}
+
+#[test]
+fn recognizes_a_spent_quota_by_status_and_rate_limit_body() {
+    // Arrange
+    let cases = [
+        (reqwest::StatusCode::PAYMENT_REQUIRED, "", true),
+        (
+            reqwest::StatusCode::TOO_MANY_REQUESTS,
+            r#"{"error":{"code":"insufficient_quota"}}"#,
+            true,
+        ),
+        (
+            reqwest::StatusCode::TOO_MANY_REQUESTS,
+            "You Exceeded Your Current Quota, please check your plan",
+            true,
+        ),
+        (reqwest::StatusCode::TOO_MANY_REQUESTS, "slow down", false),
+        (
+            reqwest::StatusCode::FORBIDDEN,
+            r#"{"error":{"code":"insufficient_quota"}}"#,
+            false,
+        ),
+    ];
+
+    for (status, body, expected) in cases {
+        // Act
+        let quota_exceeded = is_quota_exceeded(status, body);
+
+        // Assert
+        assert_eq!(quota_exceeded, expected, "{status} {body}");
+    }
+}
+
+#[tokio::test]
+async fn keeps_the_retry_after_of_an_unsuccessful_response() {
+    // Arrange
+    let response = b"HTTP/1.1 503 Service Unavailable\r\n\
+                     Content-Length: 4\r\n\
+                     Retry-After: 7\r\n\
+                     Connection: close\r\n\r\n\
+                     busy"
+        .to_vec();
+    let (address, server) = serve_once(response);
+    let client = transport(REQUEST_TIMEOUT);
+
+    // Act
+    let result = client.post_json::<Value>(&request(address)).await;
+    server.await.expect("server should finish");
+    let error = result
+        .expect_err("HTTP error should fail")
+        .into_model_error("Provider", &[]);
+    let wrapped = error.with_metadata(model::CompletionMetadata::new(
+        "stop".to_string(),
+        None,
+        None,
+        None,
+        None,
+    ));
+
+    // Assert
+    assert_eq!(wrapped.http_status(), Some(503));
+    assert_eq!(wrapped.retry_after(), Some(Duration::from_secs(7)));
+    assert!(!wrapped.is_quota_exceeded());
+}
+
+#[tokio::test]
+async fn classifies_a_payment_required_response_as_a_spent_quota() {
+    // Arrange
+    let response = b"HTTP/1.1 402 Payment Required\r\n\
+                     Content-Length: 7\r\n\
+                     Connection: close\r\n\r\n\
+                     no fund"
+        .to_vec();
+    let (address, server) = serve_once(response);
+    let client = transport(REQUEST_TIMEOUT);
+
+    // Act
+    let result = client.post_json::<Value>(&request(address)).await;
+    server.await.expect("server should finish");
+    let error = result
+        .expect_err("HTTP error should fail")
+        .into_model_error("Provider", &[]);
+
+    // Assert
+    assert_eq!(error.error_class(), model::ErrorClass::Provider);
+    assert!(error.is_quota_exceeded());
+    assert_eq!(error.retry_after(), None);
 }
 
 /// Serves one raw HTTP response to the first request on a local listener.

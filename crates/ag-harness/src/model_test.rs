@@ -3,6 +3,7 @@
 
 use std::io;
 use std::sync::{Arc, Mutex};
+use std::time::Duration;
 
 use async_trait::async_trait;
 use serde_json::json;
@@ -12,7 +13,7 @@ use wiremock::{Mock, MockServer, ResponseTemplate};
 use super::{
     CompletionMetadata, CompletionUsage, Model, ModelClient, ModelCompletion, ModelError,
     ModelErrorType, ModelMessage, ModelMetadata, ModelMetadataError, ModelRequest, ModelResponse,
-    ReasoningEffort,
+    ProviderStatus, ReasoningEffort,
 };
 use crate::input::StoredTurnInput;
 use crate::lifecycle::LifecycleEventKind;
@@ -386,7 +387,11 @@ async fn client_observes_classified_failure() {
     let server = MockServer::start().await;
     Mock::given(method("POST"))
         .and(path("/chat/completions"))
-        .respond_with(ResponseTemplate::new(503).set_body_string("offline"))
+        .respond_with(
+            ResponseTemplate::new(503)
+                .insert_header("Retry-After", "7")
+                .set_body_string("offline"),
+        )
         .expect(1)
         .mount(&server)
         .await;
@@ -415,6 +420,8 @@ async fn client_observes_classified_failure() {
 
     // Assert
     assert_eq!(error.error_type(), ModelErrorType::Provider);
+    assert_eq!(error.retry_after(), Some(Duration::from_secs(7)));
+    assert!(!error.is_quota_exceeded());
     let events = events
         .lock()
         .expect("event recorder should not be poisoned");
@@ -427,6 +434,37 @@ async fn client_observes_classified_failure() {
             ..
         }
     ));
+}
+
+#[tokio::test]
+async fn client_reports_a_spent_quota() {
+    // Arrange
+    let server = MockServer::start().await;
+    Mock::given(method("POST"))
+        .and(path("/chat/completions"))
+        .respond_with(ResponseTemplate::new(402).set_body_string("no credit"))
+        .expect(1)
+        .mount(&server)
+        .await;
+    let client = ModelClient::qwen(QwenConfig {
+        api_key: "test-key".to_string(),
+        base_url: server.uri(),
+        model: "qwen-plus".to_string(),
+    })
+    .expect("fixture configuration should be valid");
+    let schema =
+        OutputSchema::new(json!({ "type": "object" })).expect("fixture schema should be valid");
+
+    // Act
+    let error = client
+        .complete(ModelRequest::new("prompt", schema))
+        .await
+        .expect_err("provider failure should be returned");
+
+    // Assert
+    assert!(error.is_quota_exceeded());
+    assert_eq!(error.retry_after(), None);
+    assert_eq!(error.http_status(), Some(402));
 }
 
 #[tokio::test]
@@ -913,7 +951,10 @@ fn classified_request_retains_source_type_and_status() {
     // Arrange
     let error = ModelError::classified_request(
         ModelErrorType::Transport,
-        Some(503),
+        ProviderStatus {
+            http_status: Some(503),
+            ..ProviderStatus::default()
+        },
         io::Error::other("connection reset").into(),
     );
 

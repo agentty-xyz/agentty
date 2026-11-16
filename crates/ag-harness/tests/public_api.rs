@@ -72,9 +72,10 @@ use ag_harness::recovery::ExecutionIdentity;
 use ag_harness::store::{MemoryStore, SessionInfo, SessionStore, WriteStatus};
 use ag_harness::tool::{FileSystem, LocalFileSystem, ToolCall, ToolDefinition};
 use ag_harness::{
-    ComparisonBase, Harness, ImageContent, ImageMediaType, InputBlock, Model, ModelError,
-    OutputSchema, OutputSchemaError, Repository, RepositoryError, Session, SessionBuilder,
-    SessionError, Tool, ToolPolicy, TurnError, TurnInput, TurnInputError, TurnOptions,
+    ComparisonBase, ErrorKind, Harness, HarnessError, ImageContent, ImageMediaType, InputBlock,
+    Model, ModelError, OutputSchema, OutputSchemaError, Repository, RepositoryError, RunError,
+    Session, SessionBuilder, SessionError, Tool, ToolPolicy, TurnError, TurnInput, TurnInputError,
+    TurnOptions,
 };
 use async_trait::async_trait;
 use serde_json::json;
@@ -1733,6 +1734,32 @@ async fn external_executor_runs_bash_through_the_public_contract() -> Result<(),
         "the bash description states the executor's enforcement"
     );
     let _explicit: Arc<dyn BashExecutor> = Arc::new(UnsandboxedExecutor::without_isolation());
+
+    Ok(())
+}
+
+#[tokio::test]
+async fn session_and_turn_failures_classify_through_the_crate_root() -> Result<(), Box<dyn Error>> {
+    // Arrange
+    let harness =
+        Harness::new(ExternalModel, unbounded_context_budget()).store(Arc::new(MemoryStore::new()));
+
+    // Act
+    let missing = match harness.resume("missing").await {
+        Ok(_) => return Err("a missing session should not resume".into()),
+        Err(error) => HarnessError::from(error),
+    };
+    let cancelled = RunError::from(TurnError::Cancelled);
+
+    // Assert
+    assert_eq!(missing.kind(), ErrorKind::NotFound);
+    assert!(!missing.is_retryable());
+    assert_eq!(
+        missing.to_string(),
+        "persistent session `missing` does not exist"
+    );
+    assert_eq!(cancelled.kind(), ErrorKind::Cancelled);
+    assert_eq!(cancelled.retry_after(), None);
 
     Ok(())
 }

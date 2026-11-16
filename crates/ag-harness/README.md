@@ -407,6 +407,15 @@ provider rejection of input beyond the model's window reports
 `ModelErrorType::ContextOverflow` (`ModelError::is_context_overflow`); custom models
 report it with `ModelError::context_overflow`.
 
+## Errors
+
+`RunError::from` classifies any `TurnError`, `SessionError`, or `ModelError`, and
+`HarnessError::from` any `SessionError`, by one `ErrorKind` and `is_retryable()`, while
+keeping the original message and source chain. Only `RateLimited` (`429`), `Overloaded`
+(`5xx`), `Transport`, and `Busy` are retryable; a retryable provider failure also
+carries its `Retry-After` as `retry_after()`. A spent quota (`402`, or a `429` with
+`insufficient_quota`) is `QuotaExceeded` and not retryable, and `401`/`403` are `Auth`.
+
 ## Stores
 
 SQLite is the default (`Harness::database`, or `store::SqliteStore` explicitly).
@@ -434,8 +443,9 @@ calibrated capacity it was fitted into (`budget_weight`) and its weight before
 ## Where things live
 
 The crate root holds what a typical host needs: `Harness`, `Session`, `TurnOptions`,
-`TurnOutcome`, `TurnError`, `SessionError`, `OutputSchema`, `Tool`, `ToolPolicy`,
-`Repository`, `TurnInput`, and `Model`. Everything else is grouped by topic:
+`TurnOutcome`, `TurnError`, `SessionError`, `RunError`, `HarnessError`, `ErrorKind`,
+`OutputSchema`, `Tool`, `ToolPolicy`, `Repository`, `TurnInput`, and `Model`. Everything
+else is grouped by topic:
 
 | Module      | Contents                                                 |
 | ----------- | -------------------------------------------------------- |

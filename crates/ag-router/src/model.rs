@@ -2,6 +2,7 @@
 
 use std::collections::HashSet;
 use std::error::Error;
+use std::time::Duration;
 
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
@@ -369,7 +370,7 @@ impl ModelError {
             Self::WithMetadata { source, .. } => source.error_class(),
             Self::Request(source) => {
                 if let Some(error) = source.downcast_ref::<ProviderRequestError>() {
-                    if error.context_overflow {
+                    if error.rejection.context_overflow {
                         ErrorClass::ContextOverflow
                     } else {
                         ErrorClass::Provider
@@ -424,6 +425,21 @@ impl ModelError {
         }
     }
 
+    /// Returns the provider-declared `Retry-After` delay of an unsuccessful
+    /// HTTP response, read as whole seconds, when one was sent.
+    pub fn retry_after(&self) -> Option<Duration> {
+        self.provider_rejection()
+            .and_then(|rejection| rejection.retry_after)
+    }
+
+    /// Returns whether the provider reported a spent quota or credit
+    /// balance, which waiting does not fix: an HTTP `402`, or a `429` whose
+    /// body carries a known quota marker.
+    pub fn is_quota_exceeded(&self) -> bool {
+        self.provider_rejection()
+            .is_some_and(|rejection| rejection.quota_exceeded)
+    }
+
     /// Consumes the error, preserving its underlying request source when
     /// present.
     pub fn into_source(self) -> Box<dyn Error + Send + Sync> {
@@ -466,12 +482,12 @@ impl ModelError {
         body: String,
         source: reqwest::Error,
         status: reqwest::StatusCode,
-        context_overflow: bool,
+        rejection: ProviderRejection,
     ) -> Self {
         Self::Request(Box::new(ProviderRequestError {
             provider,
             body,
-            context_overflow,
+            rejection,
             source,
             status,
         }))
@@ -493,6 +509,16 @@ impl ModelError {
             http_status,
             source,
         }))
+    }
+
+    fn provider_rejection(&self) -> Option<&ProviderRejection> {
+        match self {
+            Self::WithMetadata { source, .. } => source.provider_rejection(),
+            Self::Request(source) => source
+                .downcast_ref::<ProviderRequestError>()
+                .map(|error| &error.rejection),
+            _ => None,
+        }
     }
 }
 
@@ -574,12 +600,24 @@ impl GeneratedResponse {
     }
 }
 
+/// Classification of an unsuccessful provider HTTP response, read from its
+/// status, headers, and bounded body.
+#[derive(Debug)]
+pub(crate) struct ProviderRejection {
+    /// The input exceeded the model's context window.
+    pub(crate) context_overflow: bool,
+    /// The account's quota or credit balance is spent.
+    pub(crate) quota_exceeded: bool,
+    /// Provider-declared `Retry-After` delay.
+    pub(crate) retry_after: Option<Duration>,
+}
+
 #[derive(Debug, Error)]
 #[error("{provider} returned HTTP {status}: {body}")]
 struct ProviderRequestError {
     provider: &'static str,
     body: String,
-    context_overflow: bool,
+    rejection: ProviderRejection,
     #[source]
     source: reqwest::Error,
     status: reqwest::StatusCode,

@@ -10,6 +10,7 @@ use std::collections::HashSet;
 use std::error::Error;
 use std::ops::Deref;
 use std::sync::Arc;
+use std::time::Duration;
 
 pub use ag_router::{CompletionMetadata, CompletionUsage};
 use async_trait::async_trait;
@@ -486,7 +487,11 @@ impl ModelClient {
             ag_router::ErrorClass::InvalidOutput => ModelErrorType::InvalidOutput,
             ag_router::ErrorClass::InvalidToolCall => ModelErrorType::InvalidToolCall,
         };
-        let http_status = error.http_status();
+        let status = ProviderStatus {
+            http_status: error.http_status(),
+            quota_exceeded: error.is_quota_exceeded(),
+            retry_after: error.retry_after(),
+        };
         match error {
             ag_router::ModelError::WithMetadata { source, .. } => Self::from_router_error(*source),
             ag_router::ModelError::InvalidResponse => ModelError::InvalidResponse,
@@ -522,7 +527,7 @@ impl ModelClient {
             ag_router::ModelError::InvalidToolArguments { reason } => {
                 ModelError::InvalidToolArguments { reason }
             }
-            error => ModelError::classified_request(error_type, http_status, error.into_source()),
+            error => ModelError::classified_request(error_type, status, error.into_source()),
         }
     }
 }
@@ -1118,7 +1123,11 @@ impl ModelError {
     /// exceeds the model's context window, so custom [`Model`]s report the
     /// same [`ModelErrorType::ContextOverflow`] as built-in providers.
     pub fn context_overflow(error: impl Error + Send + Sync + 'static) -> Self {
-        Self::classified_request(ModelErrorType::ContextOverflow, None, Box::new(error))
+        Self::classified_request(
+            ModelErrorType::ContextOverflow,
+            ProviderStatus::default(),
+            Box::new(error),
+        )
     }
 
     /// Returns whether the provider rejected the request because its input
@@ -1158,25 +1167,53 @@ impl ModelError {
     /// Returns the provider HTTP status associated with this failure, when
     /// available.
     pub fn http_status(&self) -> Option<u16> {
-        match self {
-            Self::Request(source) => source
-                .downcast_ref::<ClassifiedRequestError>()
-                .and_then(|error| error.http_status),
-            _ => None,
-        }
+        self.provider_status().and_then(|status| status.http_status)
+    }
+
+    /// Returns the provider-declared `Retry-After` delay of an unsuccessful
+    /// HTTP response, when a built-in provider received one.
+    pub fn retry_after(&self) -> Option<Duration> {
+        self.provider_status().and_then(|status| status.retry_after)
+    }
+
+    /// Returns whether a built-in provider reported a spent quota or credit
+    /// balance, which waiting does not fix.
+    pub fn is_quota_exceeded(&self) -> bool {
+        self.provider_status()
+            .is_some_and(|status| status.quota_exceeded)
     }
 
     pub(crate) fn classified_request(
         error_type: ModelErrorType,
-        http_status: Option<u16>,
+        status: ProviderStatus,
         source: Box<dyn Error + Send + Sync>,
     ) -> Self {
         Self::Request(Box::new(ClassifiedRequestError {
             error_type,
-            http_status,
             source,
+            status,
         }))
     }
+
+    fn provider_status(&self) -> Option<&ProviderStatus> {
+        match self {
+            Self::Request(source) => source
+                .downcast_ref::<ClassifiedRequestError>()
+                .map(|error| &error.status),
+            _ => None,
+        }
+    }
+}
+
+/// Provider response details retained with a classified request failure.
+#[derive(Debug, Default)]
+pub(crate) struct ProviderStatus {
+    /// HTTP status of the unsuccessful provider response.
+    pub(crate) http_status: Option<u16>,
+    /// The provider reported a spent quota or credit balance.
+    pub(crate) quota_exceeded: bool,
+    /// Provider-declared `Retry-After` delay.
+    pub(crate) retry_after: Option<Duration>,
 }
 
 /// Stable, low-cardinality classification for a [`ModelError`].
@@ -1231,9 +1268,9 @@ impl ModelErrorType {
 #[error("{source}")]
 struct ClassifiedRequestError {
     error_type: ModelErrorType,
-    http_status: Option<u16>,
     #[source]
     source: Box<dyn Error + Send + Sync>,
+    status: ProviderStatus,
 }
 
 pub(crate) fn ensure_unique_tool_call_ids(calls: &[tool::ToolCall]) -> Result<(), ModelError> {
