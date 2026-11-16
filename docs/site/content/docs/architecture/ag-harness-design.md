@@ -155,6 +155,13 @@ command cleanup, reporting the `SettlementPhase` that failed, and `retry_settlem
 retries. Retained work survives caller drop, and unresolved effects block new durable
 turns. Settlement provides neither rollback nor distributed workspace fencing.
 
+`Session::run` and `Harness::run` wrap the same controlled turn in a `Run`. Its
+`RunOutcome` resolves only after settlement, retrying failed cleanup once and reporting
+a cleanup that still fails as the run's error, so embedders need no `TurnControl`. The
+outcome sums provider usage over the turn's model requests and reads the run's write and
+command records from the store by turn position; `Harness::run` uses a fresh in-memory
+store for that.
+
 ## Permissions and tools
 
 All tools are denied by default; per-turn policy enables them explicitly. A call to a

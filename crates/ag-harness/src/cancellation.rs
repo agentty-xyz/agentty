@@ -3,6 +3,7 @@
 
 use std::future::Future;
 use std::pin::Pin;
+use std::sync::{Arc, Mutex, MutexGuard, PoisonError};
 use std::task::{Context, Poll};
 
 use opentelemetry::context::FutureExt as _;
@@ -11,6 +12,7 @@ use tokio::sync::watch;
 
 use crate::effect::Effects;
 use crate::session::{SessionError, TurnOwner};
+use crate::turn::TurnReport;
 use crate::{ModelError, TurnError, TurnOutcome, reservation};
 
 /// A lazy turn future with a separately retainable cancellation control.
@@ -39,6 +41,7 @@ impl<'a, E: From<TurnError> + Send + 'static> ControlledTurn<'a, E> {
         let control = TurnControl {
             cancellation: watch::Sender::new(false),
             effects: Effects::default(),
+            record: Arc::default(),
             settlement: Settlement(watch::Sender::new(State::default())),
         };
         let lease = control.settlement.retain();
@@ -99,6 +102,7 @@ pub struct TurnControl {
     pub(crate) effects: Effects,
     pub(crate) settlement: Settlement,
     cancellation: watch::Sender<bool>,
+    record: Arc<Mutex<TurnRecord>>,
 }
 
 impl TurnControl {
@@ -190,6 +194,35 @@ impl TurnControl {
         let mut receiver = self.cancellation.subscribe();
         let _ = receiver.wait_for(|cancelled| *cancelled).await;
     }
+
+    /// Records the durable turn position the turn acquired, which scopes its
+    /// write and command journal records.
+    pub(crate) fn record_turn_position(&self, turn_position: i64) {
+        self.lock_record().turn_position = Some(turn_position);
+    }
+
+    /// Records what a failed turn did before failing.
+    pub(crate) fn record_failure_report(&self, report: Option<&TurnReport>) {
+        self.lock_record().failure_report = report.cloned();
+    }
+
+    /// Takes what the turn recorded for its run outcome.
+    pub(crate) fn take_record(&self) -> TurnRecord {
+        std::mem::take(&mut *self.lock_record())
+    }
+
+    fn lock_record(&self) -> MutexGuard<'_, TurnRecord> {
+        self.record.lock().unwrap_or_else(PoisonError::into_inner)
+    }
+}
+
+/// What a controlled turn recorded for the outcome of its run.
+#[derive(Default)]
+pub(crate) struct TurnRecord {
+    /// Report of a turn that failed after preparing a model request.
+    pub(crate) failure_report: Option<TurnReport>,
+    /// Durable turn position, once the turn was acquired.
+    pub(crate) turn_position: Option<i64>,
 }
 
 /// A settlement phase that failed, observed independently of the turn's

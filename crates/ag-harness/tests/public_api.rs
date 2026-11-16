@@ -48,6 +48,10 @@ mod compaction_test;
 #[path = "support/shared_harness.rs"]
 mod shared_harness_test;
 
+#[cfg(test)]
+#[path = "support/run.rs"]
+mod run_test;
+
 use std::error::Error;
 use std::ffi::OsString;
 use std::io::{self, Cursor};
@@ -79,8 +83,9 @@ use ag_harness::tool::{FileSystem, LocalFileSystem, ToolCall, ToolDefinition};
 use ag_harness::{
     ComparisonBase, ErrorKind, Harness, HarnessBuildError, HarnessError, ImageContent,
     ImageMediaType, InputBlock, Model, ModelCatalog, ModelError, ModelSelector, OutputSchema,
-    OutputSchemaError, Repository, RepositoryError, Role, RunError, Session, SessionBuilder,
-    SessionError, Tool, ToolPolicy, TurnError, TurnInput, TurnInputError, TurnOptions,
+    OutputSchemaError, Repository, RepositoryError, Role, RunError, RunOutput, RunRequest, Session,
+    SessionBuilder, SessionError, Tool, ToolPolicy, TurnError, TurnInput, TurnInputError,
+    TurnOptions,
 };
 use async_trait::async_trait;
 use serde_json::json;
@@ -1302,6 +1307,10 @@ async fn host_comparison_api_supports_both_entry_points_and_nested_scope()
         ToolPolicy::default().allow(Tool::Read),
     )
     .with_comparison_base(base.clone());
+    let run_request = RunRequest::new("inspect base")
+        .output(request()?.schema().clone())
+        .tool_policy(ToolPolicy::default().allow(Tool::Read))
+        .comparison_base(base.clone());
 
     // Act
     let once = harness.turn("inspect base", options.clone()).await?;
@@ -1310,11 +1319,13 @@ async fn host_comparison_api_supports_both_entry_points_and_nested_scope()
         .create()
         .await?;
     let durable = session.turn("inspect base").options(options).await?;
+    let run = harness.run(run_request).await.result?;
 
     // Assert
     assert_eq!(base, validated);
     assert_eq!(once.output(), &json!({"name":base.oid()}));
     assert_eq!(durable.output(), once.output());
+    assert_eq!(run, RunOutput::Json(once.output().clone()));
 
     Ok(())
 }

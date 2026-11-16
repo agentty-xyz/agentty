@@ -1,6 +1,6 @@
 //! Public cancellation contract, also run as a source coverage suite.
 
-use std::future::{Future, pending};
+use std::future::{Future, IntoFuture as _, pending};
 use std::io;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
@@ -17,10 +17,10 @@ use ag_harness::store::{
     SessionStore, SqliteStore, StoreIdentity, TurnAdmission, TurnOwner, WriteRecord, WriteStatus,
 };
 use ag_harness::tool::{FileSystem, LocalFileSystem, ToolCall};
-use ag_harness::turn::SettlementPhase;
+use ag_harness::turn::{SettlementError, SettlementPhase};
 use ag_harness::{
-    Harness, Model, ModelError, OutputSchema, SessionError, Tool, ToolPolicy, TurnControl,
-    TurnError, TurnOptions, TurnOutcome,
+    ErrorKind, Harness, Model, ModelError, OutputSchema, RunRequest, SessionError, Tool,
+    ToolPolicy, TurnControl, TurnError, TurnOptions, TurnOutcome,
 };
 use async_trait::async_trait;
 use serde_json::json;
@@ -143,6 +143,7 @@ struct Gate {
     fail_append: AtomicBool,
     fail_cleanup: AtomicBool,
     fail_outcome: AtomicBool,
+    fail_writes: AtomicBool,
     lookup: Notify,
     phase: Phase,
     release: Notify,
@@ -156,6 +157,7 @@ impl Gate {
             fail_append: AtomicBool::new(false),
             fail_cleanup: AtomicBool::new(false),
             fail_outcome: AtomicBool::new(false),
+            fail_writes: AtomicBool::new(false),
             lookup: Notify::new(),
             phase,
             release: Notify::new(),
@@ -304,6 +306,12 @@ impl SessionStore for Gate {
     }
 
     async fn load_writes(&self, id: &str) -> Result<Vec<WriteRecord>, SessionError> {
+        if self.fail_writes.load(Ordering::SeqCst) {
+            return Err(SessionError::Store {
+                operation: "load writes",
+                source: Box::new(io::Error::other("injected write journal failure")),
+            });
+        }
         self.store.load_writes(id).await
     }
 
@@ -1590,4 +1598,147 @@ async fn host_acquisition_panic_releases_admission_without_execution() {
         assert!(recovered.is_none());
         assert_eq!(probe.calls.load(Ordering::SeqCst), 0);
     }
+}
+
+#[tokio::test]
+async fn run_cancelled_during_a_write_settles_it_before_reporting() {
+    // Arrange
+    let root = tempfile::tempdir().expect("repository");
+    let entered = Arc::new(Notify::new());
+    let finished = Arc::new(Notify::new());
+    let release = Arc::new(Notify::new());
+    let harness = Harness::new(
+        TestModel(Arc::new(Probe::default())),
+        unbounded_context_budget(),
+    )
+    .store(Arc::new(MemoryStore::new()))
+    .repository(repository_with_host_git(root.path()))
+    .file_system(DeferredReplacement {
+        entered: Arc::clone(&entered),
+        finished: Arc::clone(&finished),
+        release: Arc::clone(&release),
+    });
+    let session = harness
+        .session("write", schema())
+        .create()
+        .await
+        .expect("session");
+    let run =
+        session.run(RunRequest::new("write").tool_policy(ToolPolicy::default().allow(Tool::Write)));
+    let token = run.cancel_token();
+    let outcome = tokio::spawn(run.into_future());
+    bounded(entered.notified()).await;
+
+    // Act
+    token.cancel();
+    release.notify_one();
+    let outcome = bounded(outcome).await.expect("run task");
+
+    // Assert
+    let error = outcome.result.expect_err("cancelled");
+    assert_eq!(error.kind(), ErrorKind::Cancelled);
+    assert_eq!(outcome.files_changed.len(), 1);
+    assert_eq!(outcome.files_changed[0].path, "file.txt");
+    assert_eq!(outcome.files_changed[0].status, WriteStatus::Applied);
+    assert_eq!(
+        tokio::fs::read(root.path().join("file.txt"))
+            .await
+            .expect("settled replacement"),
+        b"new\n"
+    );
+}
+
+#[tokio::test]
+async fn run_reports_cleanup_that_still_fails_after_one_retry() {
+    // Arrange
+    let gate = Arc::new(Gate::new(Arc::new(MemoryStore::new()), Phase::None));
+    gate.fail_cleanup.store(true, Ordering::SeqCst);
+    let probe = Arc::new(Probe::default());
+    let harness =
+        Harness::new(TestModel(Arc::clone(&probe)), unbounded_context_budget()).store(gate.clone());
+    let session = harness
+        .session("session", schema())
+        .create()
+        .await
+        .expect("session");
+    let run = session.run(RunRequest::new("wait"));
+    let token = run.cancel_token();
+    let outcome = tokio::spawn(run.into_future());
+    bounded(probe.entered.notified()).await;
+
+    // Act
+    token.cancel();
+    let outcome = bounded(outcome).await.expect("run task");
+
+    // Assert
+    let error = outcome.result.expect_err("cleanup failed");
+    assert_eq!(error.kind(), ErrorKind::Store);
+    assert_eq!(
+        error
+            .get_ref()
+            .downcast_ref::<SettlementError>()
+            .map(SettlementError::phase),
+        Some(SettlementPhase::Persistence)
+    );
+}
+
+#[tokio::test]
+async fn run_retries_failed_cleanup_before_reporting_cancellation() {
+    // Arrange
+    let gate = Arc::new(Gate::new(Arc::new(MemoryStore::new()), Phase::Cleanup));
+    gate.fail_cleanup.store(true, Ordering::SeqCst);
+    let probe = Arc::new(Probe::default());
+    let harness =
+        Harness::new(TestModel(Arc::clone(&probe)), unbounded_context_budget()).store(gate.clone());
+    let session = harness
+        .session("session", schema())
+        .create()
+        .await
+        .expect("session");
+    let run = session.run(RunRequest::new("wait"));
+    let token = run.cancel_token();
+    let outcome = tokio::spawn(run.into_future());
+    bounded(probe.entered.notified()).await;
+
+    // Act
+    token.cancel();
+    bounded(gate.entered.notified()).await;
+    gate.release.notify_one();
+    bounded(gate.entered.notified()).await;
+    gate.fail_cleanup.store(false, Ordering::SeqCst);
+    gate.release.notify_one();
+    let outcome = bounded(outcome).await.expect("run task");
+
+    // Assert
+    let error = outcome.result.expect_err("cancelled");
+    assert_eq!(error.kind(), ErrorKind::Cancelled);
+    assert!(
+        session.run(RunRequest::new("ok")).await.result.is_ok(),
+        "the retried cleanup readmits the session"
+    );
+}
+
+#[tokio::test]
+async fn run_reports_a_journal_failure_instead_of_its_output() {
+    // Arrange
+    let gate = Arc::new(Gate::new(Arc::new(MemoryStore::new()), Phase::None));
+    gate.fail_writes.store(true, Ordering::SeqCst);
+    let harness = Harness::new(
+        TestModel(Arc::new(Probe::default())),
+        unbounded_context_budget(),
+    )
+    .store(gate.clone());
+    let session = harness
+        .session("session", schema())
+        .create()
+        .await
+        .expect("session");
+
+    // Act
+    let outcome = bounded(session.run(RunRequest::new("ok")).into_future()).await;
+
+    // Assert
+    let error = outcome.result.expect_err("journal failed");
+    assert_eq!(error.kind(), ErrorKind::Store);
+    assert_eq!(outcome.report.model_requests().len(), 1);
 }

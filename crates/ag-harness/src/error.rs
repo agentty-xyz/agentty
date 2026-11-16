@@ -176,6 +176,16 @@ classified_error_accessors!(
     "Returns the converted error, such as a [`TurnError`], for downcasting."
 );
 
+impl RunError {
+    /// Classifies a run failure that has no detailed harness error type,
+    /// such as an unparsable output or an unsettled effect, as `kind`.
+    pub(crate) fn with_kind(kind: ErrorKind, error: impl Error + Send + Sync + 'static) -> Self {
+        Self {
+            classified: Classified::new(Classification::kind(kind), Box::new(error)),
+        }
+    }
+}
+
 impl From<TurnError> for RunError {
     fn from(error: TurnError) -> Self {
         Self {

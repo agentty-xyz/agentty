@@ -113,6 +113,14 @@ let outcome = session
   then wait on `settled()`, independently of the caller's future, until persistence,
   writes, and command cleanup have finished. A failure names its `SettlementPhase`;
   `retry_settlement()` retries persistence and command cleanup.
+- **Runs settle before they report.** `session.run(RunRequest)` and
+  `harness.run(RunRequest)` return a `Run`; awaiting it yields a `RunOutcome` only after
+  persistence, writes, and commands settle (cleanup is retried once). The outcome
+  carries `result` (`RunOutput` with `parse::<T>()`, or a `RunError`), `usage` summed
+  over every model request, the run's `files_changed` and `commands` records, and its
+  `report`. A cloneable `CancelToken` from `run.cancel_token()`, or `into_handle()`,
+  cancels it from any task. `harness.run` keeps its single turn in a fresh in-memory
+  session and requires `RunRequest::output`.
 - **Turns have no tool-call limit.** Cancellation and the `ContextBudget` bound a turn.
   Within a turn, requests only append, so they share one cached prefix, until tool
   traffic grows a request past the budget. That request is sent as a reduced copy

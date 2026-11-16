@@ -41,6 +41,10 @@
 //!   `Session::send` cover the common case; `Harness::turn` and `Session::turn`
 //!   return a builder for per-turn [`TurnOptions`], host request IDs, and
 //!   cancellation through [`TurnControl`].
+//! - A [`Run`] is a turn started from a [`RunRequest`] with [`Session::run`] or
+//!   [`Harness::run`]. Awaiting it yields a settled [`RunOutcome`] with its
+//!   [`RunOutput`], aggregated [`Usage`], and the run's write and command
+//!   records; a [`CancelToken`] cancels it.
 //! - [`Tool`]s are denied until allowed with [`Harness::allow`] or a
 //!   [`ToolPolicy`].
 //! - [`RunError`] and [`HarnessError`] classify any [`TurnError`] or
@@ -119,6 +123,7 @@ mod repetition;
 mod repository;
 mod reservation;
 mod round_summary;
+mod run;
 mod schema_contract;
 mod session;
 mod session_model;
@@ -139,6 +144,7 @@ pub use input::{ImageContent, ImageMediaType, InputBlock, TurnInput, TurnInputEr
 pub use model::{Model, ModelError};
 pub use policy::ToolPolicy;
 pub use repository::{Repository, RepositoryError};
+pub use run::{CancelToken, Run, RunHandle, RunOutcome, RunOutput, RunRequest, Usage};
 pub use schema_contract::{OutputSchema, OutputSchemaError};
 pub use session::SessionError;
 pub use tool::Tool;

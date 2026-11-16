@@ -29,6 +29,7 @@ use crate::error::HarnessError;
 use crate::file_system::{FileSystem, LocalFileSystem};
 use crate::input::{InputBlock, TurnInput};
 use crate::lifecycle::{LifecycleEmitter, LifecycleObserver, TurnErrorType, TurnLifecycle};
+use crate::memory_store::MemoryStore;
 use crate::model::{Model, ModelError, ModelMessage, ModelRequest, ReasoningEffort};
 use crate::model_profile::ModelProfile;
 use crate::model_registry::{ModelRegistration, ModelRegistry, ModelRegistryError};
@@ -36,6 +37,7 @@ use crate::policy::ToolPolicy;
 use crate::recovery::{ExecutionIdentity, HostRequest, HostTurnAcquisition, HostTurnRecord};
 use crate::repository::Repository;
 use crate::reservation;
+use crate::run::{Run, RunJournal, RunRequest};
 use crate::schema_contract::OutputSchema;
 use crate::session::{Database, LoadedSession, NewSession, SessionError};
 use crate::store::{AcquiredTurn, SessionStore};
@@ -304,6 +306,29 @@ impl Session {
         }
     }
 
+    /// Starts one durable run of `request`; await the returned [`Run`] for
+    /// its [`crate::RunOutcome`].
+    ///
+    /// Unset request options use the stored session schema and the captured
+    /// default tool policy. The run executes on its own task with a copy of
+    /// this handle, like [`SessionTurn::start`], and owns its cancellation.
+    pub fn run(&self, request: RunRequest) -> Run {
+        let turn = request.into_turn(Some(&self.schema), self.harness.inner.policy);
+        let journal = RunJournal::new(Arc::clone(&self.database), self.id.clone(), &turn);
+        let mut session = self.detached();
+
+        Run::new(
+            ControlledTurn::new(move |control| async move {
+                let (input, options) = turn?;
+
+                Ok(session
+                    .send_observed(input, options, Some(control), None)
+                    .await?)
+            }),
+            journal,
+        )
+    }
+
     /// Loads recorded status, complete output, and known writes without model
     /// or tool execution. This does not establish that pending effects stopped.
     ///
@@ -488,6 +513,9 @@ impl Session {
             HostTurnAcquisition::Recorded(record) => return record.into_outcome(),
         };
         self.checkpoint = checkpoint;
+        if let Some(control) = control {
+            control.record_turn_position(guard.owner().turn_position);
+        }
         let host_request = request.is_some();
         if host_request {
             *turn = self.harness.inner.lifecycle.start_turn();
@@ -516,6 +544,9 @@ impl Session {
         } = match result {
             Ok(result) => result,
             Err(EngineFailure { error, report }) => {
+                if let Some(control) = control {
+                    control.record_failure_report(report.as_deref());
+                }
                 if let Some(turn) = turn.as_mut() {
                     turn.set_failure_report(report);
                 }
@@ -1126,6 +1157,40 @@ impl Harness {
         schema: OutputSchema,
     ) -> Result<TurnOutcome, TurnError> {
         self.turn(input, self.default_options(schema)).await
+    }
+
+    /// Starts one run of `request` without stored history; await the
+    /// returned [`Run`] for its [`crate::RunOutcome`].
+    ///
+    /// The run records its turn in a fresh in-memory session, never in the
+    /// configured store, so its outcome lists the run's writes and commands
+    /// like a durable session's. The request must set
+    /// [`RunRequest::output`]; unset tool options use the harness defaults.
+    pub fn run(&self, request: RunRequest) -> Run {
+        let turn = request.into_turn(None, self.inner.policy);
+        let store: Arc<dyn SessionStore> = Arc::new(MemoryStore::new());
+        let id = Self::turn_cache_key();
+        let journal = RunJournal::new(Arc::clone(&store), id.clone(), &turn);
+        // Nothing replays the single turn, so no history budget applies.
+        let harness = self
+            .clone()
+            .store(store)
+            .max_history_bytes(NonZeroUsize::MAX);
+
+        Run::new(
+            ControlledTurn::new(move |control| async move {
+                let (input, options) = turn?;
+                let mut session = harness
+                    .session(id, options.schema().clone())
+                    .create()
+                    .await?;
+
+                Ok(session
+                    .send_observed(input, options, Some(control), None)
+                    .await?)
+            }),
+            journal,
+        )
     }
 
     /// Configures one turn with exactly `options` and no stored history.
