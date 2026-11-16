@@ -62,9 +62,47 @@ trait Host {
     fn save(&self, target: &Path, ledger: &Ledger) -> Result<(), String>;
 }
 
-struct Changes {
-    files: Vec<PathBuf>,
-    root: PathBuf,
+/// Paths changed since a base revision's fork point, relative to the
+/// repository root.
+pub(crate) struct Changes {
+    pub(crate) files: Vec<PathBuf>,
+    pub(crate) root: PathBuf,
+}
+
+impl Changes {
+    /// Collects committed changes since the fork from `base`, staged and
+    /// unstaged changes, deleted and renamed paths, and untracked files.
+    pub(crate) fn collect(base: &str) -> Result<Self, String> {
+        let revision = ProcessHost::git_text(&[
+            "rev-parse",
+            "--verify",
+            "--end-of-options",
+            &format!("{base}^{{commit}}"),
+        ])?;
+        let fork = ProcessHost::git_text(&["merge-base", "HEAD", revision.trim()])?;
+        let root = ProcessHost::git_text(&["rev-parse", "--show-toplevel"])?;
+        let mut files = BTreeSet::new();
+        // Collect each transition so staged reversions and cross-package
+        // renames cannot hide an affected package. Disable external
+        // diff drivers.
+        for endpoints in [vec![fork.trim(), "HEAD"], vec!["--cached", "HEAD"], vec![]] {
+            let mut arguments = vec!["diff", "--no-ext-diff", "--no-renames", "--name-only", "-z"];
+            arguments.extend(endpoints);
+            arguments.push("--");
+            files.extend(ProcessHost::git_paths(&ProcessHost::git_text(&arguments)?)?);
+        }
+        files.extend(ProcessHost::git_paths(&ProcessHost::git_text(&[
+            "ls-files",
+            "--others",
+            "--exclude-standard",
+            "-z",
+        ])?)?);
+
+        Ok(Self {
+            files: files.into_iter().collect(),
+            root: PathBuf::from(root.trim_end_matches('\n')),
+        })
+    }
 }
 
 struct Runner<'host> {
@@ -465,35 +503,7 @@ impl Host for ProcessHost {
     }
 
     fn changes(&self, base: &str) -> Result<Changes, String> {
-        let revision = Self::git_text(&[
-            "rev-parse",
-            "--verify",
-            "--end-of-options",
-            &format!("{base}^{{commit}}"),
-        ])?;
-        let fork = Self::git_text(&["merge-base", "HEAD", revision.trim()])?;
-        let root = Self::git_text(&["rev-parse", "--show-toplevel"])?;
-        let mut files = BTreeSet::new();
-        // Collect each transition so staged reversions and cross-package
-        // renames cannot hide an affected package. Disable external
-        // diff drivers.
-        for endpoints in [vec![fork.trim(), "HEAD"], vec!["--cached", "HEAD"], vec![]] {
-            let mut arguments = vec!["diff", "--no-ext-diff", "--no-renames", "--name-only", "-z"];
-            arguments.extend(endpoints);
-            arguments.push("--");
-            files.extend(Self::git_paths(&Self::git_text(&arguments)?)?);
-        }
-        files.extend(Self::git_paths(&Self::git_text(&[
-            "ls-files",
-            "--others",
-            "--exclude-standard",
-            "-z",
-        ])?)?);
-
-        Ok(Changes {
-            files: files.into_iter().collect(),
-            root: PathBuf::from(root.trim_end_matches('\n')),
-        })
+        Changes::collect(base)
     }
 
     fn metadata(&self) -> Result<Metadata, String> {

@@ -7,8 +7,13 @@ Select required gates from the root `AGENTS.md` and invoke their definitions thr
 
 During iteration, run the relevant formatter or fixer on touched paths, inspect its
 diff, then run focused tests for the changed behavior. Use `test-focused` with an
-explicit `AGENTTY_TEST_FILTER`. Run mutating fixers one at a time; if a fixer modifies
-files, rerun only that hook rather than the entire hook set.
+explicit `AGENTTY_TEST_FILTER`. Run mutating fixers one at a time. A fixer that rewrites
+files reports `Failed`; that is its result, not an error, so review the diff instead of
+rerunning it.
+
+`rustfmt-fix` formats only Rust files changed since the fork from `origin/main`, so it
+needs no `--files` list. Formatter configuration or toolchain changes format the whole
+workspace. Unchanged files already match `main`, which CI keeps formatted.
 
 Before handoff, choose one validation rung covering every touched file and all affected
 dependents. Handoff means the task's final state, not each reply in a multi-turn

@@ -6,6 +6,7 @@ mod check_coverage;
 mod check_execution_boundary;
 mod check_instruction;
 mod check_migration;
+mod format_changed;
 mod slow_test;
 mod timing;
 mod validation;
@@ -41,6 +42,8 @@ enum Command {
     Migrations,
     /// Compares repeated CI timing artifacts with matching provenance.
     CompareTimings(timing::Options),
+    /// Formats Rust files changed since the branch fork point.
+    Fmt(format_changed::Options),
     /// Reports slow tests in a nextest `JUnit` report and checks a duration
     /// threshold against an allowlist.
     SlowTests(slow_test::Options),
@@ -60,6 +63,7 @@ fn main() -> ExitCode {
         Some(Command::Instructions) => check_instruction::run(),
         None | Some(Command::Migrations) => check_migration::run(),
         Some(Command::CompareTimings(options)) => timing::run(&options),
+        Some(Command::Fmt(options)) => format_changed::run(&options),
         Some(Command::SlowTests(options)) => slow_test::run(&options),
         Some(Command::Validate(options)) => validation::run(options),
     };

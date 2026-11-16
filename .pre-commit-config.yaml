@@ -44,10 +44,10 @@ repos:
         files: \.html?$
       - id: rustfmt-fix
         name: rustfmt fix
-        description: Format all Rust workspace code with rustfmt before review.
-        entry: cargo fmt --all
+        description: Format Rust files changed since the fork from `origin/main`, or the whole workspace when formatter configuration or the toolchain changes.
+        entry: cargo run -q --locked -p ag-xtask -- fmt
         language: system
-        types: [rust]
+        always_run: true
         pass_filenames: false
         stages: [manual]
       - id: test-timing-action
