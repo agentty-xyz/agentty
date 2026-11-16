@@ -133,5 +133,5 @@ fn test_update_active_project_context_replaces_upstream_reference() {
     assert_eq!(manager.git_branch(), Some("feature/footer"));
     assert_eq!(manager.git_upstream_ref(), Some("origin/feature/footer"));
     assert_eq!(manager.working_dir(), Path::new("/tmp/service"));
-    assert_eq!(manager.git_status(), None);
+    assert_eq!(manager.render_parts().git_status, None);
 }

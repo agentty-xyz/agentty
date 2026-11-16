@@ -178,15 +178,6 @@ fn consolidation_requires_an_explicit_nullable_disposition_in_every_schema_and_p
             serde_json::json!(["integer", "null"])
         );
     }
-    let prompt_schema: serde_json::Value =
-        serde_json::from_str(&ag_protocol::focused_review_json_schema_json())
-            .expect("prompt schema");
-    assert!(
-        prompt_schema["$defs"]["FocusedReviewDecision"]["required"]
-            .as_array()
-            .expect("prompt required fields")
-            .contains(&serde_json::json!("suggestion_index"))
-    );
     raw["candidate_decisions"][0]["suggestion_index"] = serde_json::Value::Null;
     let response =
         parse_protocol_response_strict(&raw.to_string(), ProtocolRequestProfile::FocusedReview)

@@ -367,7 +367,7 @@ async fn test_continue_terminal_session_rejects_non_terminal_source_session() {
 }
 
 #[tokio::test]
-async fn open_session_worktree_in_tmux_runs_configured_launch_configuration_when_window_opens() {
+async fn open_session_worktree_in_tmux_with_command_runs_trimmed_command_when_window_opens() {
     // Arrange
     let session_folder = PathBuf::from("/tmp/session-launch-configuration");
     let mut mock_tmux_client = MockTmuxClient::new();
@@ -383,14 +383,15 @@ async fn open_session_worktree_in_tmux_runs_configured_launch_configuration_when
         .returning(|_, _| Box::pin(async {}));
     let mut app = new_test_app_with_selected_session(
         PathBuf::from("/tmp/session-launch-configuration"),
-        "  npm run dev  ",
+        "",
         Arc::new(mock_tmux_client),
     )
     .await;
     seed_selected_session_empty_diff_state(&mut app).await;
 
     // Act
-    app.open_session_worktree_in_tmux().await;
+    app.open_session_worktree_in_tmux_with_command(Some("  npm run dev  "))
+        .await;
 
     // Assert
     let persisted_sessions = app
@@ -412,7 +413,7 @@ async fn open_session_worktree_in_tmux_runs_configured_launch_configuration_when
 }
 
 #[tokio::test]
-async fn open_session_worktree_in_tmux_keeps_invalidation_when_window_open_fails() {
+async fn open_session_worktree_in_tmux_with_command_keeps_invalidation_when_window_open_fails() {
     // Arrange
     let session_folder = PathBuf::from("/tmp/session-window-open-failure");
     let mut mock_tmux_client = MockTmuxClient::new();
@@ -422,16 +423,13 @@ async fn open_session_worktree_in_tmux_keeps_invalidation_when_window_open_fails
         .times(1)
         .returning(|_| Box::pin(async { None }));
     mock_tmux_client.expect_run_command_in_window().times(0);
-    let mut app = new_test_app_with_selected_session(
-        session_folder,
-        "npm run dev",
-        Arc::new(mock_tmux_client),
-    )
-    .await;
+    let mut app =
+        new_test_app_with_selected_session(session_folder, "", Arc::new(mock_tmux_client)).await;
     seed_selected_session_empty_diff_state(&mut app).await;
 
     // Act
-    app.open_session_worktree_in_tmux().await;
+    app.open_session_worktree_in_tmux_with_command(Some("npm run dev"))
+        .await;
 
     // Assert
     let persisted_sessions = app
@@ -453,24 +451,21 @@ async fn open_session_worktree_in_tmux_keeps_invalidation_when_window_open_fails
 }
 
 #[tokio::test]
-async fn open_session_worktree_in_tmux_is_disabled_outside_tmux() {
+async fn open_session_worktree_in_tmux_with_command_is_disabled_outside_tmux() {
     // Arrange
     let temp_dir = tempfile::tempdir().expect("failed to create temp dir");
     let session_folder = temp_dir.path().join("session-worktree");
     let mut mock_tmux_client = MockTmuxClient::new();
     mock_tmux_client.expect_open_window_for_folder().times(0);
     mock_tmux_client.expect_run_command_in_window().times(0);
-    let mut app = new_test_app_with_selected_session(
-        session_folder,
-        "cargo test",
-        Arc::new(mock_tmux_client),
-    )
-    .await;
+    let mut app =
+        new_test_app_with_selected_session(session_folder, "", Arc::new(mock_tmux_client)).await;
     app.is_tmux_session = false;
     app.sessions.sessions_mut()[0].stats.diff_state = SessionDiffState::Empty;
 
     // Act
-    app.open_session_worktree_in_tmux().await;
+    app.open_session_worktree_in_tmux_with_command(Some("cargo test"))
+        .await;
 
     // Assert
     assert_eq!(
@@ -480,7 +475,7 @@ async fn open_session_worktree_in_tmux_is_disabled_outside_tmux() {
 }
 
 #[tokio::test]
-async fn open_session_worktree_in_tmux_skips_missing_worktree_folder() {
+async fn open_session_worktree_in_tmux_with_command_skips_missing_worktree_folder() {
     // Arrange
     let temp_dir = tempfile::tempdir().expect("failed to create temp dir");
     let missing_session_folder = temp_dir.path().join("missing-session-worktree");
@@ -491,7 +486,6 @@ async fn open_session_worktree_in_tmux_skips_missing_worktree_folder() {
         Arc::new(mock_tmux_client),
     )
     .await;
-    app.settings.launch_configuration = "npm run dev".to_string();
     app.sessions
         .push_session(crate::test_support::session_fixture_with_folder(
             missing_session_folder,
@@ -499,36 +493,8 @@ async fn open_session_worktree_in_tmux_skips_missing_worktree_folder() {
     app.sessions.select_session_index(Some(0));
 
     // Act
-    app.open_session_worktree_in_tmux().await;
-
-    // Assert
-    // Expectations are validated by `mockall`.
-}
-
-#[tokio::test]
-async fn open_session_worktree_in_tmux_uses_first_configured_command() {
-    // Arrange
-    let session_folder = PathBuf::from("/tmp/session-multiple-launch-configurations");
-    let mut mock_tmux_client = MockTmuxClient::new();
-    mock_tmux_client
-        .expect_open_window_for_folder()
-        .with(eq(session_folder))
-        .times(1)
-        .returning(|_| Box::pin(async { Some("@42".to_string()) }));
-    mock_tmux_client
-        .expect_run_command_in_window()
-        .with(eq("@42".to_string()), eq("cargo test".to_string()))
-        .times(1)
-        .returning(|_, _| Box::pin(async {}));
-    let mut app = new_test_app_with_selected_session(
-        PathBuf::from("/tmp/session-multiple-launch-configurations"),
-        " cargo test \n npm run dev ",
-        Arc::new(mock_tmux_client),
-    )
-    .await;
-
-    // Act
-    app.open_session_worktree_in_tmux().await;
+    app.open_session_worktree_in_tmux_with_command(Some("npm run dev"))
+        .await;
 
     // Assert
     // Expectations are validated by `mockall`.

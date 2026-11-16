@@ -668,24 +668,6 @@ fn legacy_agent_kind_for_model_value(model_value: &str, model: AgentModel) -> Ag
     model.owner_kind()
 }
 
-/// Returns all selectable models owned by the provided agent kinds in stable
-/// settings and slash-menu order.
-#[must_use]
-pub fn selectable_models_for_agent_kinds(agent_kinds: &[AgentKind]) -> Vec<AgentModel> {
-    let mut models = Vec::new();
-    for model in agent_kinds
-        .iter()
-        .flat_map(|agent_kind| agent_kind.models())
-        .copied()
-    {
-        if !models.contains(&model) {
-            models.push(model);
-        }
-    }
-
-    models
-}
-
 /// Resolves one model against the currently available agent kinds.
 ///
 /// When `model` is unsupported by every available provider, this prefers
@@ -849,15 +831,6 @@ impl AgentKind {
             Self::Codex => AgentModel::Gpt61Sol,
             Self::Harness => AgentModel::MuseSpark13,
         }
-    }
-
-    /// Returns the model string when it belongs to this agent kind.
-    pub fn model_str(self, model: AgentModel) -> Option<&'static str> {
-        if !self.supports_model(model) {
-            return None;
-        }
-
-        Some(model.as_str())
     }
 
     /// Parses a provider-specific model string for this agent kind.

@@ -39,7 +39,7 @@ fn max_concurrent_subagents_caps_every_harness_that_enforces_a_limit() {
 }
 
 #[tokio::test]
-async fn open_session_worktree_in_tmux_skips_launch_configuration_when_setting_is_blank() {
+async fn open_session_worktree_in_tmux_with_command_skips_blank_command() {
     // Arrange
     let session_folder = PathBuf::from("/tmp/session-empty-launch-configuration");
     let mut mock_tmux_client = MockTmuxClient::new();
@@ -51,13 +51,14 @@ async fn open_session_worktree_in_tmux_skips_launch_configuration_when_setting_i
     mock_tmux_client.expect_run_command_in_window().times(0);
     let mut app = new_test_app_with_selected_session(
         PathBuf::from("/tmp/session-empty-launch-configuration"),
-        "   ",
+        "",
         Arc::new(mock_tmux_client),
     )
     .await;
 
     // Act
-    app.open_session_worktree_in_tmux().await;
+    app.open_session_worktree_in_tmux_with_command(Some("   "))
+        .await;
 
     // Assert
     // Expectations are validated by `mockall`.

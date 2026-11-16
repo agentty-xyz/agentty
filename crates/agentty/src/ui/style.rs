@@ -7,7 +7,6 @@ use ag_tui_text::{TextPalette, TextRenderSettings};
 use ratatui::buffer::Buffer;
 use ratatui::style::{Color, Modifier, Style};
 
-use super::icon::Icon;
 use crate::domain::session::{ReviewRequestState, SessionSize, Status};
 use crate::domain::theme::ColorTheme;
 
@@ -349,14 +348,6 @@ const DARK_HORIZON_PALETTE: ThemePalette = ThemePalette {
     warning_soft: Color::Rgb(252, 215, 188),
 };
 
-/// Sets the process-wide active color theme used by semantic palette tokens.
-pub fn set_active_theme(theme: ColorTheme) {
-    let _lock_guard = ACTIVE_THEME_SCOPE_LOCK
-        .lock()
-        .unwrap_or_else(std::sync::PoisonError::into_inner);
-    set_active_theme_unlocked(theme);
-}
-
 /// Temporarily sets the process-wide active theme until the returned guard is
 /// dropped.
 ///
@@ -478,20 +469,6 @@ pub fn size_color(size: SessionSize) -> Color {
         SessionSize::L => palette::warning_soft(),
         SessionSize::Xl => palette::danger_soft(),
         SessionSize::Xxl => palette::danger(),
-    }
-}
-
-/// Returns the icon used for one session status indicator.
-#[must_use]
-pub fn status_icon(status: Status) -> Icon {
-    match status {
-        Status::Draft | Status::Review | Status::Question | Status::Queued => Icon::Pending,
-        Status::Watching => Icon::Watch,
-        Status::InProgress | Status::AgentReview | Status::Rebasing | Status::Merging => {
-            Icon::current_spinner()
-        }
-        Status::Merged | Status::Done => Icon::Check,
-        Status::Canceled => Icon::Cross,
     }
 }
 

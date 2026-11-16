@@ -29,11 +29,6 @@ impl App {
         self.projects.git_upstream_ref()
     }
 
-    /// Returns the latest ahead/behind snapshot from reducer-applied events.
-    pub fn git_status_info(&self) -> Option<(u32, u32)> {
-        self.projects.git_status()
-    }
-
     /// Builds prompt slash-menu state for one session.
     ///
     /// Harness sessions offer only the cached Harness models; other sessions

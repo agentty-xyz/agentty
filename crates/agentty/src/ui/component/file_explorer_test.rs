@@ -595,7 +595,7 @@ fn test_file_tree_items_returns_folders_and_files() {
     }];
 
     // Act
-    let items = FileExplorer::file_tree_items(&parsed_lines);
+    let (_, items) = FileExplorer::file_tree(&parsed_lines);
 
     // Assert
     assert_eq!(items.len(), 2);
@@ -628,11 +628,10 @@ fn test_file_tree_items_nested_structure() {
     ];
 
     // Act
-    let items = FileExplorer::file_tree_items(&parsed_lines);
-    let item_count = FileExplorer::count_items(&parsed_lines);
+    let (lines, items) = FileExplorer::file_tree(&parsed_lines);
 
     // Assert
-    assert_eq!(item_count, items.len());
+    assert_eq!(lines.len(), items.len());
     assert_eq!(
         items,
         vec![
@@ -656,7 +655,7 @@ fn test_file_tree_items_with_rename() {
     }];
 
     // Act
-    let items = FileExplorer::file_tree_items(&parsed_lines);
+    let (_, items) = FileExplorer::file_tree(&parsed_lines);
 
     // Assert
     assert_eq!(items.len(), 2);
@@ -675,7 +674,7 @@ fn test_file_tree_items_decode_git_quoted_paths() {
     }];
 
     // Act
-    let items = FileExplorer::file_tree_items(&parsed_lines);
+    let (_, items) = FileExplorer::file_tree(&parsed_lines);
 
     // Assert
     assert_eq!(
@@ -698,7 +697,7 @@ fn test_file_tree_items_ignore_empty_new_path() {
     }];
 
     // Act
-    let items = FileExplorer::file_tree_items(&parsed_lines);
+    let (_, items) = FileExplorer::file_tree(&parsed_lines);
 
     // Assert
     assert_eq!(items, [] as [crate::ui::diff_util::FileTreeItem; 0]);

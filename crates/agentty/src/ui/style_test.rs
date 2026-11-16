@@ -5,11 +5,10 @@ use ratatui::buffer::Buffer;
 use ratatui::layout::Rect;
 use ratatui::style::{Color, Modifier};
 
-use super::super::icon::Icon;
 use super::{
     CURRENT_PALETTE, ColorSupport, DARK_HORIZON_PALETTE, GREEN_PALETTE, border_style,
     forge_indicator_color, palette, prepare_terminal_frame, row_selection_style,
-    scoped_active_theme, selection_style, set_active_theme, size_color, status_color, status_icon,
+    scoped_active_theme, selection_style, size_color, status_color,
 };
 use crate::domain::session::{ReviewRequestState, SessionSize, Status};
 use crate::domain::theme::ColorTheme;
@@ -108,7 +107,7 @@ fn green_selection_remains_visible_on_charcoal_terminal_backgrounds() {
 }
 
 #[test]
-fn set_active_theme_switches_semantic_tokens_and_restores_default_last() {
+fn scoped_active_theme_switches_semantic_tokens() {
     // Arrange
     let theme_cases = [
         (ColorTheme::Green, GREEN_PALETTE),
@@ -118,7 +117,7 @@ fn set_active_theme_switches_semantic_tokens_and_restores_default_last() {
 
     for (theme, expected_palette) in theme_cases {
         // Act
-        set_active_theme(theme);
+        let _theme_scope = scoped_active_theme(theme);
         let clarification_surface = palette::surface_clarification();
 
         // Assert
@@ -419,63 +418,15 @@ fn border_style_uses_active_palette_border_color() {
 }
 
 #[test]
-fn status_icon_returns_check_for_merged_and_done() {
-    // Arrange, Act
-    let merged_icon = status_icon(Status::Merged);
-    let done_icon = status_icon(Status::Done);
-
-    // Assert
-    assert!(matches!(merged_icon, Icon::Check));
-    assert!(matches!(done_icon, Icon::Check));
-}
-
-#[test]
-fn watching_status_uses_review_color_and_watch_icon() {
+fn watching_status_uses_review_color() {
     // Arrange
     let _theme_scope = scoped_active_theme(ColorTheme::Current);
 
     // Act
     let color = status_color(Status::Watching);
-    let icon = status_icon(Status::Watching);
 
     // Assert
     assert_eq!(color, palette::info());
-    assert!(matches!(icon, Icon::Watch));
-}
-
-#[test]
-fn status_icon_returns_cross_for_canceled() {
-    // Arrange / Act
-    let icon = status_icon(Status::Canceled);
-
-    // Assert
-    assert!(matches!(icon, Icon::Cross));
-}
-
-#[test]
-fn status_icon_returns_pending_for_new() {
-    // Arrange / Act
-    let icon = status_icon(Status::Draft);
-
-    // Assert
-    assert!(matches!(icon, Icon::Pending));
-}
-
-#[test]
-fn status_icon_returns_spinner_for_active_work() {
-    // Arrange
-    let active_statuses = [
-        Status::InProgress,
-        Status::AgentReview,
-        Status::Rebasing,
-        Status::Merging,
-    ];
-
-    // Act
-    let icons = active_statuses.map(status_icon);
-
-    // Assert
-    assert!(icons.iter().all(|icon| matches!(icon, Icon::Spinner)));
 }
 
 #[test]

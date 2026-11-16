@@ -39,48 +39,6 @@ pub fn agent_response_output_schema(required_policy: SchemaRequiredPolicy) -> Va
     value
 }
 
-/// Returns a pretty-printed JSON Schema string for prompt instruction
-/// templating.
-///
-/// This keeps the raw `schemars` metadata intact so inline prompt guidance can
-/// show a fully self-descriptive schema document.
-pub fn agent_response_json_schema_json() -> String {
-    let schema = agent_response_json_schema();
-
-    stringify_schema_json(&schema)
-}
-
-/// Returns a pretty-printed, transport-normalized JSON Schema string.
-///
-/// Provider adapters use this serialized schema document when their native
-/// structured-output API accepts JSON text. `required_policy` selects the
-/// provider-compatible `required` field normalization.
-pub fn agent_response_output_schema_json(required_policy: SchemaRequiredPolicy) -> String {
-    let schema = agent_response_output_schema(required_policy);
-
-    stringify_schema_json(&schema)
-}
-
-/// Returns a pretty-printed JSON Schema string for focused-review prompt
-/// instructions.
-///
-/// Focused review uses a direct request-specific object so native structured
-/// output transports can enforce every review field.
-pub fn focused_review_json_schema_json() -> String {
-    let schema_value = focused_review_json_schema();
-
-    stringify_schema_json(&schema_value)
-}
-
-/// Returns the transport-normalized JSON Schema for direct focused-review
-/// output.
-pub fn focused_review_output_schema() -> Value {
-    let mut value = focused_review_json_schema();
-    normalize_schema_for_transport(&mut value, SchemaRequiredPolicy::AllProperties);
-
-    value
-}
-
 /// Returns the output schema selected for one protocol request profile.
 pub fn protocol_output_schema(
     profile: super::model::ProtocolRequestProfile,

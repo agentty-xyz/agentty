@@ -1,7 +1,7 @@
 //! Shared page and popup layout calculations.
 
 use ag_tui_text::text_util;
-use ratatui::layout::{Constraint, Direction, Layout, Rect};
+use ratatui::layout::{Constraint, Layout, Rect};
 
 use crate::ui::input_layout;
 
@@ -71,31 +71,6 @@ pub struct AppFrameAreas {
     pub footer_bar_area: Rect,
     /// Area used for the top status bar.
     pub status_bar_area: Rect,
-}
-
-/// Split an area into a centered content column with side gutters.
-pub fn centered_horizontal_layout(area: Rect) -> std::rc::Rc<[Rect]> {
-    Layout::default()
-        .direction(Direction::Horizontal)
-        .constraints([
-            Constraint::Min(2),
-            Constraint::Percentage(80),
-            Constraint::Min(2),
-        ])
-        .split(area)
-}
-
-/// Returns a fixed-size content area centered within the available `area`.
-///
-/// The returned rectangle is clamped to the bounds of `area` so callers can
-/// safely request a preferred content size even when the terminal is smaller.
-pub fn centered_content_rect(area: Rect, width: u16, height: u16) -> Rect {
-    let width = width.min(area.width);
-    let height = height.min(area.height);
-    let origin_x = area.x + area.width.saturating_sub(width) / 2;
-    let origin_y = area.y + area.height.saturating_sub(height) / 2;
-
-    Rect::new(origin_x, origin_y, width, height)
 }
 
 /// Splits the terminal frame into status bar, page content, and footer bar.

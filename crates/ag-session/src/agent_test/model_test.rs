@@ -297,8 +297,11 @@ fn test_model_strings_respect_provider_ownership() {
     let model = AgentModel::ClaudeOpus55;
 
     // Act / Assert
-    assert_eq!(AgentKind::Claude.model_str(model), Some("claude-opus-5-5"));
-    assert_eq!(AgentKind::Codex.model_str(model), None);
+    assert_eq!(
+        AgentKind::Claude.parse_model("claude-opus-5-5"),
+        Some(model)
+    );
+    assert_eq!(AgentKind::Codex.parse_model("claude-opus-5-5"), None);
     assert!("custom-harness".parse::<AgentKind>().is_err());
 }
 

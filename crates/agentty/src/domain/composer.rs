@@ -225,14 +225,6 @@ impl PromptAttachmentState {
         placeholder
     }
 
-    /// Returns attachment metadata for the given inline placeholder token.
-    #[must_use]
-    pub fn attachment_for_placeholder(&self, placeholder: &str) -> Option<&PromptAttachment> {
-        self.attachments
-            .iter()
-            .find(|attachment| attachment.placeholder == placeholder)
-    }
-
     /// Recomputes the next placeholder number after all active and archived
     /// attachment numbers.
     pub fn refresh_next_attachment_number(&mut self) {
@@ -565,24 +557,6 @@ impl PromptSlashState {
         }
     }
 
-    /// Replaces the locally available agent kinds while keeping prompt slash
-    /// selection state coherent.
-    pub fn replace_available_agent_kinds(&mut self, available_agent_kinds: Vec<AgentKind>) {
-        self.available_agent_kinds = available_agent_kinds;
-
-        if self
-            .selected_agent
-            .is_some_and(|selected_agent| !self.available_agent_kinds.contains(&selected_agent))
-        {
-            self.selected_agent = None;
-            self.selected_index = 0;
-
-            if matches!(self.stage, PromptSlashStage::Model) {
-                self.stage = PromptSlashStage::Agent;
-            }
-        }
-    }
-
     /// Opens `/model` on its agent list, or, in a Harness session, which
     /// offers only Harness models, straight on the harness model list.
     ///
@@ -657,21 +631,6 @@ impl PromptComposerState {
     #[must_use]
     pub fn is_slash_command(&self) -> bool {
         self.input.text().starts_with('/')
-    }
-
-    /// Builds the render-ready prompt slash suggestion list for the current
-    /// input and slash stage.
-    #[must_use]
-    pub fn slash_suggestion_list(
-        &self,
-        session_agent_kind: AgentKind,
-    ) -> Option<PromptSuggestionList> {
-        build_prompt_slash_suggestion_list(
-            self.input.text(),
-            &self.slash_state,
-            session_agent_kind,
-            PromptSlashCommandSet::WithApply,
-        )
     }
 
     /// Resolves the semantic action behind the currently highlighted prompt
@@ -752,13 +711,6 @@ impl PromptComposerState {
             start,
             end,
         );
-    }
-
-    /// Drains the prompt composer by delegating to the canonical field-level
-    /// helper, returning text plus attachment metadata suitable for runtime
-    /// turn submission.
-    pub fn take_submission(&mut self) -> PromptComposerSubmission {
-        drain_prompt_submission(&mut self.attachment_state, &mut self.input)
     }
 }
 
@@ -1116,8 +1068,6 @@ fn command_edit_span(input: &InputState, command: &InputCommand) -> Option<(usiz
 /// runtime turn submission.
 ///
 /// This is the canonical field-level mutation path used by runtime code.
-/// [`PromptComposerState::take_submission`] delegates here to keep behavior
-/// centralized.
 pub fn drain_prompt_submission(
     attachment_state: &mut PromptAttachmentState,
     input: &mut InputState,

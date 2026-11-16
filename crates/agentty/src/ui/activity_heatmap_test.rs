@@ -2,9 +2,8 @@
 //! tests.
 
 use super::{
-    build_activity_heatmap_grid, build_heatmap_month_row, build_recent_activity_stats,
-    build_visible_heatmap_month_row, heatmap_intensity_level, heatmap_max_count,
-    heatmap_month_markers, visible_heatmap_week_count,
+    build_activity_heatmap_grid, build_recent_activity_stats, build_visible_heatmap_month_row,
+    heatmap_intensity_level, heatmap_max_count, heatmap_month_markers, visible_heatmap_week_count,
 };
 use crate::domain::session::DailyActivity;
 
@@ -98,19 +97,6 @@ fn test_heatmap_month_markers_start_on_month_changes() {
 }
 
 #[test]
-fn test_build_heatmap_month_row_places_labels_on_week_columns() {
-    // Arrange
-    let end_day_key = 0_i64;
-
-    // Act
-    let month_row = build_heatmap_month_row(end_day_key, 4, 2);
-
-    // Assert
-    assert!(month_row.starts_with("    Dec"));
-    assert_eq!(month_row.chars().count(), 110);
-}
-
-#[test]
 fn test_visible_heatmap_week_count_clamps_to_available_width() {
     // Arrange
     let available_width = 26_usize;
@@ -184,13 +170,10 @@ fn test_month_rows_clip_a_label_that_starts_in_the_last_week() {
 
     // Act
     let markers = heatmap_month_markers(end_day_key);
-    let month_row = build_heatmap_month_row(end_day_key, 4, 1);
     let visible_month_row = build_visible_heatmap_month_row(end_day_key, 4, 1, 1);
 
     // Assert
     assert_eq!(markers.last(), Some(&(52, "Jun")));
-    assert_eq!(month_row.chars().count(), 57);
-    assert!(month_row.ends_with('J'));
     assert_eq!(visible_month_row, "    J");
 }
 

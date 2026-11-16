@@ -60,9 +60,7 @@ fn test_prompt_attachment_state_registers_images_in_placeholder_order() {
     assert_eq!(first_placeholder, "[Image #1]");
     assert_eq!(second_placeholder, "[Image #2]");
     assert_eq!(attachment_state.attachments.len(), 2);
-    let attachment = attachment_state
-        .attachment_for_placeholder("[Image #2]")
-        .expect("second attachment should exist");
+    let attachment = &attachment_state.attachments[1];
     assert_eq!(attachment.attachment_number, 2);
     assert_eq!(
         attachment.local_image_path,
@@ -507,58 +505,13 @@ fn test_prompt_attachment_state_prunes_attachment_after_revision_eviction() {
 }
 
 #[test]
-fn test_prompt_slash_state_replace_available_agent_kinds_clears_unavailable_selection() {
-    // Arrange
-    let mut slash_state =
-        PromptSlashState::with_available_agent_kinds(vec![AgentKind::Claude, AgentKind::Codex]);
-    slash_state.selected_agent = Some(AgentKind::Claude);
-    slash_state.selected_index = 2;
-    slash_state.stage = PromptSlashStage::Model;
-
-    // Act
-    slash_state.replace_available_agent_kinds(vec![AgentKind::Codex]);
-
-    // Assert
-    assert_eq!(slash_state.available_agent_kinds, vec![AgentKind::Codex]);
-    assert_eq!(slash_state.selected_agent, None);
-    assert_eq!(slash_state.selected_index, 0);
-    assert_eq!(slash_state.stage, PromptSlashStage::Agent);
-}
-
-#[test]
-fn test_prompt_slash_state_replace_available_agent_kinds_keeps_valid_or_non_model_state() {
-    // Arrange
-    let mut available_selection =
-        PromptSlashState::with_available_agent_kinds(vec![AgentKind::Claude, AgentKind::Codex]);
-    available_selection.selected_agent = Some(AgentKind::Codex);
-    available_selection.selected_index = 1;
-    available_selection.stage = PromptSlashStage::Model;
-    let mut agent_stage_selection =
-        PromptSlashState::with_available_agent_kinds(vec![AgentKind::Claude, AgentKind::Codex]);
-    agent_stage_selection.selected_agent = Some(AgentKind::Claude);
-    agent_stage_selection.selected_index = 2;
-    agent_stage_selection.stage = PromptSlashStage::Agent;
-
-    // Act
-    available_selection.replace_available_agent_kinds(vec![AgentKind::Codex]);
-    agent_stage_selection.replace_available_agent_kinds(vec![AgentKind::Codex]);
-
-    // Assert
-    assert_eq!(available_selection.selected_agent, Some(AgentKind::Codex));
-    assert_eq!(available_selection.selected_index, 1);
-    assert_eq!(available_selection.stage, PromptSlashStage::Model);
-    assert_eq!(agent_stage_selection.selected_agent, None);
-    assert_eq!(agent_stage_selection.selected_index, 0);
-    assert_eq!(agent_stage_selection.stage, PromptSlashStage::Agent);
-}
-
-#[test]
 fn test_prompt_composer_default_reports_slash_input_and_empty_submission() {
     // Arrange
     let mut composer = PromptComposerState::default();
     let empty_slash_state = composer.is_slash_command();
     composer.input.insert_text("  ");
-    let whitespace_submission = composer.take_submission();
+    let whitespace_submission =
+        drain_prompt_submission(&mut composer.attachment_state, &mut composer.input);
     composer.input.insert_text("/model");
 
     // Act
@@ -569,7 +522,8 @@ fn test_prompt_composer_default_reports_slash_input_and_empty_submission() {
         AgentKind::Codex,
         PromptSlashCommandSet::WithoutApply,
     );
-    let slash_submission = composer.take_submission();
+    let slash_submission =
+        drain_prompt_submission(&mut composer.attachment_state, &mut composer.input);
 
     // Assert
     assert_eq!(
@@ -606,9 +560,13 @@ fn test_slash_suggestion_list_for_command_stage_has_description() {
     );
 
     // Act
-    let suggestion_list = composer
-        .slash_suggestion_list(AgentKind::Codex)
-        .expect("expected suggestion list");
+    let suggestion_list = build_prompt_slash_suggestion_list(
+        composer.input.text(),
+        &composer.slash_state,
+        AgentKind::Codex,
+        PromptSlashCommandSet::WithApply,
+    )
+    .expect("expected suggestion list");
 
     // Assert
     assert_eq!(
@@ -636,9 +594,13 @@ fn test_slash_suggestion_list_for_command_stage_contains_matches_non_prefix_inpu
     );
 
     // Act
-    let suggestion_list = composer
-        .slash_suggestion_list(AgentKind::Codex)
-        .expect("expected suggestion list");
+    let suggestion_list = build_prompt_slash_suggestion_list(
+        composer.input.text(),
+        &composer.slash_state,
+        AgentKind::Codex,
+        PromptSlashCommandSet::WithApply,
+    )
+    .expect("expected suggestion list");
 
     // Assert
     let labels = suggestion_list
@@ -711,9 +673,13 @@ fn test_slash_suggestion_list_for_agent_stage_uses_available_agent_kinds() {
     composer.slash_state.stage = PromptSlashStage::Agent;
 
     // Act
-    let suggestion_list = composer
-        .slash_suggestion_list(AgentKind::Codex)
-        .expect("expected suggestion list");
+    let suggestion_list = build_prompt_slash_suggestion_list(
+        composer.input.text(),
+        &composer.slash_state,
+        AgentKind::Codex,
+        PromptSlashCommandSet::WithApply,
+    )
+    .expect("expected suggestion list");
 
     // Assert
     assert_eq!(suggestion_list.items.len(), 1);
@@ -879,9 +845,13 @@ fn test_model_stage_suggestion_list_prefers_available_session_agent_when_unset()
     composer.slash_state.stage = PromptSlashStage::Model;
 
     // Act
-    let suggestion_list = composer
-        .slash_suggestion_list(AgentKind::Codex)
-        .expect("expected suggestion list");
+    let suggestion_list = build_prompt_slash_suggestion_list(
+        composer.input.text(),
+        &composer.slash_state,
+        AgentKind::Codex,
+        PromptSlashCommandSet::WithApply,
+    )
+    .expect("expected suggestion list");
 
     // Assert
     let labels = suggestion_list
@@ -912,9 +882,13 @@ fn test_reasoning_stage_suggestion_list_omits_default_option() {
     composer.slash_state.stage = PromptSlashStage::Reasoning;
 
     // Act
-    let suggestion_list = composer
-        .slash_suggestion_list(AgentKind::Codex)
-        .expect("expected suggestion list");
+    let suggestion_list = build_prompt_slash_suggestion_list(
+        composer.input.text(),
+        &composer.slash_state,
+        AgentKind::Codex,
+        PromptSlashCommandSet::WithApply,
+    )
+    .expect("expected suggestion list");
     let labels = suggestion_list
         .items
         .into_iter()
@@ -970,7 +944,7 @@ fn test_prompt_composer_insert_char_keeps_attachment_position_synchronized() {
 
     // Act
     composer.insert_char('x');
-    let submission = composer.take_submission();
+    let submission = drain_prompt_submission(&mut composer.attachment_state, &mut composer.input);
 
     // Assert
     assert_eq!(submission.text, "x[Image #1]");
@@ -979,7 +953,7 @@ fn test_prompt_composer_insert_char_keeps_attachment_position_synchronized() {
 }
 
 #[test]
-fn test_take_submission_filters_deleted_attachment_placeholders() {
+fn test_drain_prompt_submission_filters_deleted_attachment_placeholders() {
     // Arrange
     let mut composer = PromptComposerState::new(AgentKind::ALL.to_vec());
     composer.insert_text("One ");
@@ -989,7 +963,7 @@ fn test_take_submission_filters_deleted_attachment_placeholders() {
     composer.delete_range(4, 15);
 
     // Act
-    let submission = composer.take_submission();
+    let submission = drain_prompt_submission(&mut composer.attachment_state, &mut composer.input);
 
     // Assert
     assert_eq!(submission.text, "One two [Image #2]");
@@ -1005,7 +979,7 @@ fn test_drain_prompt_submission_keeps_raw_at_lookup_text() {
         InputState::with_text("Check @src/main.rs and @docs/guide.md before @".to_string());
 
     // Act
-    let submission = composer.take_submission();
+    let submission = drain_prompt_submission(&mut composer.attachment_state, &mut composer.input);
 
     // Assert
     assert_eq!(
@@ -1022,7 +996,7 @@ fn test_drain_prompt_submission_preserves_email_lookalikes() {
     composer.input = InputState::with_text("Notify user@example.com and @!".to_string());
 
     // Act
-    let submission = composer.take_submission();
+    let submission = drain_prompt_submission(&mut composer.attachment_state, &mut composer.input);
 
     // Assert
     assert_eq!(submission.text, "Notify user@example.com and @!");
@@ -1140,9 +1114,13 @@ fn test_slash_suggestion_list_includes_apply_command() {
     );
 
     // Act
-    let suggestion_list = composer
-        .slash_suggestion_list(AgentKind::Codex)
-        .expect("expected suggestion list");
+    let suggestion_list = build_prompt_slash_suggestion_list(
+        composer.input.text(),
+        &composer.slash_state,
+        AgentKind::Codex,
+        PromptSlashCommandSet::WithApply,
+    )
+    .expect("expected suggestion list");
 
     // Assert
     assert_eq!(suggestion_list.items[0].label, "/apply");

@@ -336,12 +336,6 @@ fn push_styled_character(spans: &mut Vec<Span<'static>>, style: Style, character
     spans.push(Span::styled(character.to_string(), style));
 }
 
-/// Builds short-lived paint lines that borrow span text from cached owned
-/// `Line<'static>` entries.
-pub fn borrowed_paint_lines<'line>(lines: &'line [Line<'static>]) -> Vec<Line<'line>> {
-    lines.iter().map(borrowed_paint_line).collect()
-}
-
 /// Paints one already-wrapped row directly from its cached spans.
 ///
 /// Matches an unwrapped, unscrolled `Paragraph` row, including its clipping,

@@ -11,7 +11,6 @@ use std::path::PathBuf;
 #[cfg(any(test, feature = "test-utils"))]
 pub use backend::ClipboardBackend;
 pub use error::ClipboardError;
-use image::ImageFormat;
 pub use image_data::{ClipboardImage, RgbaImageData};
 
 const DISABLE_CLIPBOARD_ENV: &str = "AGENTTY_DISABLE_CLIPBOARD";
@@ -72,20 +71,6 @@ impl Clipboard {
     /// complete the read.
     pub fn read_image(&mut self) -> Result<ClipboardImage, ClipboardError> {
         self.backend.read_image()
-    }
-
-    /// Reads clipboard image data as RGBA pixels, decoding PNG payloads.
-    ///
-    /// # Errors
-    /// Returns a [`ClipboardError`] when the clipboard has no image payload,
-    /// image decoding fails, or the backend cannot complete the read.
-    pub fn read_image_rgba(&mut self) -> Result<RgbaImageData, ClipboardError> {
-        match self.read_image()? {
-            ClipboardImage::Png(png_bytes) => {
-                format::decode_image_rgba(&png_bytes, ImageFormat::Png)
-            }
-            ClipboardImage::Rgba(image_data) => Ok(image_data),
-        }
     }
 
     fn new_with_backend<B>(

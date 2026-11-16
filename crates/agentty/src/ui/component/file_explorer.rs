@@ -229,25 +229,11 @@ impl FileExplorer {
         u16::try_from(selected_index.min(last_visual_row)).ok()
     }
 
-    /// Returns the number of items (files and folders) in the explorer list.
-    pub fn count_items(parsed_lines: &[DiffLine<'_>]) -> usize {
-        let (lines, _) = Self::file_tree(parsed_lines);
-
-        lines.len()
-    }
-
-    /// Returns the [`FileTreeItem`] list for the given parsed diff lines.
-    ///
-    /// Each entry corresponds one-to-one to a rendered tree line so the
-    /// selected index can be used to look up the matching item.
-    pub fn file_tree_items(parsed_lines: &[DiffLine<'_>]) -> Vec<FileTreeItem> {
-        let (_, items) = Self::file_tree(parsed_lines);
-
-        items
-    }
-
     /// Builds the rendered file tree lines and matching selection items for
     /// one parsed diff snapshot.
+    ///
+    /// Each item corresponds one-to-one to a rendered tree line so the
+    /// selected index can be used to look up the matching item.
     pub(crate) fn file_tree(
         parsed_lines: &[DiffLine<'_>],
     ) -> (Vec<Line<'static>>, Vec<FileTreeItem>) {
