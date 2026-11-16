@@ -1,18 +1,25 @@
 //! Diff markdown preview, review-comment focus, and review-output restore
 //! tests.
 
+use std::sync::Arc;
+use std::time::Duration;
+
 use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
+use image::codecs::png::PngEncoder;
+use image::{ExtendedColorType, ImageEncoder};
+use tokio::sync::Semaphore;
 
 use super::super::{selected_preview_is_visible, viewport_rect};
 use super::support::{
     TEST_TERMINAL_SIZE, diff_mode_fixture, handle, navigate, next_diff_preview_event,
     preview_test_app,
 };
-use crate::app::AppEvent;
+use crate::app::{AppEvent, DiffPreviewContent};
 use crate::presentation::app_mode::{
     AppMode, DiffFocus, DiffLineComments, DiffPreview, DiffPreviewUnavailableReason,
     DiffReviewComments, DiffScrollCache, DiffSidebarFocus,
 };
+use crate::presentation::diff_image::{DiffImagePair, DiffImageSide};
 use crate::runtime::EventResult;
 use crate::ui::page;
 
@@ -259,10 +266,252 @@ async fn test_handle_preview_key_reports_worktree_read_failures() {
     assert!(matches!(
         event,
         AppEvent::DiffPreviewLoaded {
-            result: Err(ref error),
+            content: DiffPreviewContent::Markdown(Err(ref error)),
             ..
         } if error.contains("unreadable")
     ));
+}
+
+/// Returns the image sides and path of a first-request image preview event.
+fn image_preview_parts(event: AppEvent) -> Option<(Box<DiffImagePair>, String)> {
+    match event {
+        AppEvent::DiffPreviewLoaded {
+            content: DiffPreviewContent::Image(images),
+            path,
+            request_id: 1,
+            ..
+        } => Some((images, path)),
+        _ => None,
+    }
+}
+
+/// Encodes a 1×1 opaque PNG of one color.
+fn one_pixel_png(color: [u8; 4]) -> Vec<u8> {
+    let mut bytes = Vec::new();
+    PngEncoder::new(&mut bytes)
+        .write_image(&color, 1, 1, ExtendedColorType::Rgba8)
+        .expect("PNG fixture should encode");
+
+    bytes
+}
+
+#[tokio::test]
+async fn test_handle_preview_key_loads_both_sides_of_a_modified_image() {
+    // Arrange
+    let mut mock_git_client = ag_git::MockGitClient::new();
+    mock_git_client
+        .expect_read_worktree_file_bytes()
+        .withf(|_, path| path == "assets/logo.png")
+        .times(1)
+        .returning(|_, _| {
+            Box::pin(async { Ok(ag_git::FileBytes::Bytes(one_pixel_png([9, 8, 7, 255]))) })
+        });
+    mock_git_client
+        .expect_read_blob_bytes()
+        .withf(|_, object_id| object_id == "3ece5bf")
+        .times(1)
+        .returning(|_, _| {
+            Box::pin(async { Err(ag_git::GitError::OutputParse("no blob".to_string())) })
+        });
+    let (mut app, _base_dir) = preview_test_app(mock_git_client).await;
+    app.mode = diff_mode_fixture(
+        concat!(
+            "diff --git a/assets/logo.png b/assets/logo.png\n",
+            "index 3ece5bf..f2220e6 100644\n",
+            "Binary files a/assets/logo.png and b/assets/logo.png differ",
+        ),
+        1,
+        DiffFocus::Files,
+        DiffPreview::default(),
+    );
+
+    // Act
+    handle(
+        &mut app,
+        TEST_TERMINAL_SIZE,
+        KeyEvent::new(KeyCode::Char('p'), KeyModifiers::NONE),
+    );
+    let loading = matches!(
+        &app.mode,
+        AppMode::Diff {
+            preview: DiffPreview::Loading { path, request_id: 1 },
+            ..
+        } if path == "assets/logo.png"
+    );
+    let event = next_diff_preview_event(&mut app).await;
+
+    // Assert
+    assert!(loading);
+    let (images, path) = image_preview_parts(event).expect("expected an image preview event");
+    assert_eq!(path, "assets/logo.png");
+    assert!(matches!(
+        &images.after,
+        DiffImageSide::Image(image) if image.pixel(0, 0) == [9, 8, 7, 255]
+    ));
+    assert!(matches!(
+        &images.before,
+        DiffImageSide::Unavailable(reason) if reason.contains("no blob")
+    ));
+}
+
+#[tokio::test]
+async fn test_handle_preview_key_skips_old_side_of_an_added_image() {
+    // Arrange
+    let mut mock_git_client = ag_git::MockGitClient::new();
+    mock_git_client
+        .expect_read_worktree_file_bytes()
+        .times(1)
+        .returning(|_, _| {
+            Box::pin(async { Err(ag_git::GitError::OutputParse("unreadable".to_string())) })
+        });
+    mock_git_client.expect_read_blob_bytes().times(0);
+    let (mut app, _base_dir) = preview_test_app(mock_git_client).await;
+    app.mode = diff_mode_fixture(
+        concat!(
+            "diff --git a/new.gif b/new.gif\n",
+            "new file mode 100644\n",
+            "index 0000000..f2220e6\n",
+            "Binary files /dev/null and b/new.gif differ",
+        ),
+        0,
+        DiffFocus::Files,
+        DiffPreview::default(),
+    );
+
+    // Act
+    handle(
+        &mut app,
+        TEST_TERMINAL_SIZE,
+        KeyEvent::new(KeyCode::Char('p'), KeyModifiers::NONE),
+    );
+    let event = next_diff_preview_event(&mut app).await;
+
+    // Assert
+    let (images, _) = image_preview_parts(event).expect("expected an image preview event");
+    assert!(matches!(
+        &images.after,
+        DiffImageSide::Unavailable(reason) if reason.contains("unreadable")
+    ));
+    assert_eq!(images.before, DiffImageSide::Absent);
+}
+
+#[tokio::test]
+async fn test_handle_preview_key_reuses_new_side_for_a_renamed_image() {
+    // Arrange
+    let mut mock_git_client = ag_git::MockGitClient::new();
+    mock_git_client
+        .expect_read_worktree_file_bytes()
+        .withf(|_, path| path == "renamed.png")
+        .times(1)
+        .returning(|_, _| {
+            Box::pin(async { Ok(ag_git::FileBytes::Bytes(one_pixel_png([1, 2, 3, 255]))) })
+        });
+    mock_git_client.expect_read_blob_bytes().times(0);
+    let (mut app, _base_dir) = preview_test_app(mock_git_client).await;
+    app.mode = diff_mode_fixture(
+        concat!(
+            "diff --git a/logo.png b/renamed.png\n",
+            "similarity index 100%\n",
+            "rename from logo.png\n",
+            "rename to renamed.png",
+        ),
+        0,
+        DiffFocus::Files,
+        DiffPreview::default(),
+    );
+
+    // Act
+    handle(
+        &mut app,
+        TEST_TERMINAL_SIZE,
+        KeyEvent::new(KeyCode::Char('p'), KeyModifiers::NONE),
+    );
+    let event = next_diff_preview_event(&mut app).await;
+
+    // Assert
+    let (images, path) = image_preview_parts(event).expect("expected an image preview event");
+    assert_eq!(path, "renamed.png");
+    assert!(matches!(
+        &images.after,
+        DiffImageSide::Image(image) if image.pixel(0, 0) == [1, 2, 3, 255]
+    ));
+    assert_eq!(images.before, images.after);
+}
+
+#[tokio::test]
+async fn test_superseded_image_load_publishes_no_preview() {
+    // Arrange
+    let stale_read_gate = Arc::new(Semaphore::new(0));
+    let mut mock_git_client = ag_git::MockGitClient::new();
+    let gate = Arc::clone(&stale_read_gate);
+    mock_git_client
+        .expect_read_worktree_file_bytes()
+        .withf(|_, path| path == "a.png")
+        .times(1)
+        .returning(move |_, _| {
+            let gate = Arc::clone(&gate);
+            Box::pin(async move {
+                let _released = gate.acquire().await;
+
+                Ok(ag_git::FileBytes::Bytes(one_pixel_png([1, 1, 1, 255])))
+            })
+        });
+    mock_git_client
+        .expect_read_worktree_file_bytes()
+        .withf(|_, path| path == "b.png")
+        .times(1)
+        .returning(|_, _| {
+            Box::pin(async { Ok(ag_git::FileBytes::Bytes(one_pixel_png([2, 2, 2, 255]))) })
+        });
+    let (mut app, _base_dir) = preview_test_app(mock_git_client).await;
+    app.mode = diff_mode_fixture(
+        concat!(
+            "diff --git a/a.png b/a.png\n",
+            "new file mode 100644\n",
+            "index 0000000..1111111\n",
+            "Binary files /dev/null and b/a.png differ\n",
+            "diff --git a/b.png b/b.png\n",
+            "new file mode 100644\n",
+            "index 0000000..2222222\n",
+            "Binary files /dev/null and b/b.png differ",
+        ),
+        0,
+        DiffFocus::Files,
+        DiffPreview::default(),
+    );
+
+    // Act
+    handle(
+        &mut app,
+        TEST_TERMINAL_SIZE,
+        KeyEvent::new(KeyCode::Char('p'), KeyModifiers::NONE),
+    );
+    handle(
+        &mut app,
+        TEST_TERMINAL_SIZE,
+        KeyEvent::new(KeyCode::Char('j'), KeyModifiers::NONE),
+    );
+    let current_event = next_diff_preview_event(&mut app).await;
+    stale_read_gate.add_permits(1);
+    let stale_event = tokio::time::timeout(Duration::from_millis(200), async {
+        loop {
+            let event = app.next_app_event().await;
+            if matches!(event, Some(AppEvent::DiffPreviewLoaded { .. }) | None) {
+                return event;
+            }
+        }
+    })
+    .await;
+
+    // Assert
+    assert!(matches!(
+        current_event,
+        AppEvent::DiffPreviewLoaded { ref path, request_id: 2, .. } if path == "b.png"
+    ));
+    assert!(
+        stale_event.is_err(),
+        "superseded load should publish nothing"
+    );
 }
 
 #[tokio::test]

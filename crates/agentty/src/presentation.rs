@@ -4,6 +4,8 @@
 pub mod app_mode;
 /// `ChatGPT` plan sign-in popup opened from the prompt composer.
 pub mod chatgpt_sign_in;
+/// Decoded before/after rasters for image diff previews.
+pub mod diff_image;
 /// Snapshot-bound generic execution graph inspection and controls.
 pub mod execution_graph;
 /// Deterministic wall-clock snapshot shared by one rendered frame.

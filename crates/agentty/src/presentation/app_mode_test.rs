@@ -3,6 +3,7 @@
 
 use std::path::PathBuf;
 
+use super::super::diff_image::{DiffImagePair, DiffImageSide};
 use super::super::help_action::{HelpAction, ViewSessionState};
 use super::{
     AppMode, ChatFocus, ConfirmationViewMode, DiffCommentTarget, DiffFocus, DiffLineCommentAnchor,
@@ -476,6 +477,14 @@ fn test_diff_preview_tracks_enabled_state_and_request_generation() {
             reason: DiffPreviewUnavailableReason::Deleted,
             request_id: 4,
         },
+        DiffPreview::Image {
+            images: Box::new(DiffImagePair {
+                after: DiffImageSide::Absent,
+                before: DiffImageSide::Absent,
+            }),
+            path: "logo.png".to_string(),
+            request_id: 5,
+        },
     ];
 
     // Act
@@ -492,8 +501,8 @@ fn test_diff_preview_tracks_enabled_state_and_request_generation() {
     let disabled = states[3].disabled();
 
     // Assert
-    assert_eq!(enabled, [false, true, true, true, true]);
-    assert_eq!(request_ids, [0, 1, 2, 3, 4]);
+    assert_eq!(enabled, [false, true, true, true, true, true]);
+    assert_eq!(request_ids, [0, 1, 2, 3, 4, 5]);
     assert_eq!(
         paths,
         [
@@ -501,7 +510,8 @@ fn test_diff_preview_tracks_enabled_state_and_request_generation() {
             None,
             Some("README.md"),
             Some("README.md"),
-            Some("README.md")
+            Some("README.md"),
+            Some("logo.png")
         ]
     );
     assert_eq!(next_request_id, 5);

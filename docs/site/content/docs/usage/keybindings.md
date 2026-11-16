@@ -187,7 +187,7 @@ submit all comments with `s`.
 | `l`                         | Focus the selected file's changes              |
 | `Up` / `Down`               | Scroll file/preview, or select a diff row      |
 | `Left` / `h` / `f`          | Return to Files                                |
-| `p`                         | Toggle markdown preview                        |
+| `p`                         | Toggle markdown or image preview               |
 | `c`                         | Focus linked review comments                   |
 | `s`                         | Submit all diff comments                       |
 | `?`                         | Help                                           |
@@ -203,7 +203,9 @@ totals, hidden when names need the space. `A`, `M`, `D`, and `R` mark added, mod
 deleted, and renamed files; binary files show `Binary`.
 
 For Markdown files, `p` previews the complete post-change file and stays on while you
-switch files; other files keep showing diffs.
+switch files. For `.png` and `.gif` files, it shows the old and new images with their
+pixel sizes; GIFs show their first frame. Other files keep showing diffs; unavailable
+files show a notice.
 
 ## Shared Text Editing
 

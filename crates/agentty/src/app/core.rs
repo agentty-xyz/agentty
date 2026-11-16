@@ -9,7 +9,7 @@ mod event;
 mod new;
 mod state;
 
-pub(crate) use event::{AppEvent, AppRuntimeEvent};
+pub(crate) use event::{AppEvent, AppRuntimeEvent, DiffPreviewContent};
 #[cfg(test)]
 #[path = "core_test_support_test.rs"]
 pub(crate) mod test_support;

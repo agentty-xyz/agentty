@@ -6,6 +6,8 @@ pub mod chat_input;
 pub mod confirmation_overlay;
 /// Leave-diff comment submission popup with a comment preview.
 pub mod diff_comment_submit_overlay;
+/// Half-block before/after image diff preview.
+pub mod diff_image_view;
 /// Hierarchical changed-file explorer.
 pub mod file_explorer;
 /// Context-sensitive footer keybindings.

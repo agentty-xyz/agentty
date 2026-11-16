@@ -20,7 +20,7 @@ use crate::app::prompt_intent::PromptImagePasteUpdate;
 use crate::app::service::{AppServices, RealSessionRunFactory, SessionRunFactory};
 use crate::app::session::{SyncSessionStartError, TurnAppliedState};
 use crate::app::sync::{ProjectSyncContext, SyncMainCompletion};
-use crate::app::{AppEvent, UpdateStatus};
+use crate::app::{AppEvent, DiffPreviewContent, UpdateStatus};
 use crate::domain::agent::{AgentCliInfo, AgentKind, AgentModel, AgentSelection};
 use crate::domain::session::{PublishedBranchSyncStatus, SessionId, SessionStats};
 use crate::domain::transient_message::GeneratedTurnUpdate;
@@ -118,9 +118,9 @@ fn app_event_label_names_chatgpt_sign_in_progress() {
 fn app_event_label_names_diff_preview_loads() {
     // Arrange
     let event = AppEvent::DiffPreviewLoaded {
+        content: DiffPreviewContent::Markdown(Ok(ag_git::WorktreeFileContent::Missing)),
         path: "README.md".to_string(),
         request_id: 1,
-        result: Ok(ag_git::WorktreeFileContent::Missing),
         session_id: "session-id".into(),
     };
 

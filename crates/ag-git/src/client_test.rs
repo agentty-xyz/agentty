@@ -13,7 +13,7 @@ use crate::merge::{SquashMergeOutcome, squash_merge};
 use crate::rebase::{RebaseStepResult, abort_rebase, rebase_onto_start};
 use crate::repo::main_repo_root;
 use crate::sync::{
-    DiffStats, PullRebaseResult, SingleCommitMessageStrategy, WorktreeFileContent,
+    DiffStats, FileBytes, PullRebaseResult, SingleCommitMessageStrategy, WorktreeFileContent,
     commit_all_preserving_single_commit, diff, is_worktree_clean, list_local_commit_titles,
     list_upstream_commit_titles, pull_rebase, push_current_branch,
     push_current_branch_to_remote_branch, ref_hash, tracked_worktree_status, worktree_status,
@@ -146,6 +146,41 @@ async fn test_real_git_client_reads_worktree_file() {
 
     // Assert
     assert_eq!(result, WorktreeFileContent::Text("# Preview".to_string()));
+}
+
+#[tokio::test]
+async fn test_real_git_client_reads_worktree_file_and_blob_bytes() {
+    // Arrange
+    let dir = tempdir().expect("failed to create temp dir");
+    setup_test_git_repo(dir.path());
+    fs::write(dir.path().join("image.png"), [0x89, b'P', 0x00])
+        .expect("failed to write binary file");
+    run_git_command(dir.path(), &["add", "image.png"]);
+    run_git_command(dir.path(), &["commit", "-m", "Add image"]);
+    let blob_id_output = Command::new("git")
+        .args(["rev-parse", "HEAD:image.png"])
+        .current_dir(dir.path())
+        .output()
+        .expect("failed to resolve blob id");
+    let blob_id = String::from_utf8_lossy(&blob_id_output.stdout)
+        .trim()
+        .to_string();
+    fs::write(dir.path().join("image.png"), [0x89, b'Q']).expect("failed to rewrite file");
+    let client = RealGitClient;
+
+    // Act
+    let worktree_bytes = client
+        .read_worktree_file_bytes(dir.path().to_path_buf(), "image.png".to_string())
+        .await
+        .expect("failed to read worktree bytes");
+    let blob_bytes = client
+        .read_blob_bytes(dir.path().to_path_buf(), blob_id[..7].to_string())
+        .await
+        .expect("failed to read blob bytes");
+
+    // Assert
+    assert_eq!(worktree_bytes, FileBytes::Bytes(vec![0x89, b'Q']));
+    assert_eq!(blob_bytes, FileBytes::Bytes(vec![0x89, b'P', 0x00]));
 }
 
 #[tokio::test]

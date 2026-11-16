@@ -9,6 +9,7 @@ mod branch_publish;
 mod chatgpt_sign_in;
 mod command_gateway;
 mod core;
+mod diff_preview_load;
 mod diff_prompt;
 mod error;
 mod execution_graph;
@@ -55,7 +56,7 @@ mod task;
 mod view;
 
 pub use core::{AGENTTY_HARNESS_DIR, AGENTTY_WT_DIR, App, UpdateStatus, agentty_home};
-pub(crate) use core::{AppEvent, AppRuntimeEvent};
+pub(crate) use core::{AppEvent, AppRuntimeEvent, DiffPreviewContent};
 
 pub use error::AppError;
 pub use project::ProjectManager;

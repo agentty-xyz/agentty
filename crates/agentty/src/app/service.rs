@@ -17,6 +17,7 @@ use tracing::{debug, warn};
 
 use crate::analytics::{Analytics, SessionType, TurnOutcome, TurnSelection};
 use crate::app::AppEvent;
+use crate::app::diff_preview_load::DiffPreviewLoads;
 use crate::app::prompt_intent::PromptImagePasteUpdate;
 use crate::app::session::SessionManager;
 use crate::db::AppRepositories;
@@ -56,6 +57,7 @@ pub struct AppServices {
     clipboard_image_client: Arc<dyn ClipboardImageClient>,
     clock: Arc<dyn Clock>,
     creation_task_handles: Arc<Mutex<HashMap<String, JoinHandle<()>>>>,
+    diff_preview_loads: DiffPreviewLoads,
     event_tx: mpsc::UnboundedSender<AppEvent>,
     fs_client: Arc<dyn FsClient>,
     git_client: Arc<dyn GitClient>,
@@ -130,6 +132,7 @@ impl AppServices {
             creation_task_handles: Arc::default(),
             clipboard_image_client,
             clock,
+            diff_preview_loads: DiffPreviewLoads::default(),
             event_tx,
             fs_client,
             git_client,
@@ -528,6 +531,11 @@ impl AppServices {
         }
 
         Self::wait_for_cleanup_task_handles(self.telemetry_task_handles.as_ref(), deadline).await;
+    }
+
+    /// Returns the shared tracker that supersedes stale diff preview loads.
+    pub(crate) fn diff_preview_loads(&self) -> &DiffPreviewLoads {
+        &self.diff_preview_loads
     }
 
     /// Returns a clone of the app event sender.

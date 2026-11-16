@@ -1,10 +1,10 @@
 //! Key handling for the unified diff workspace: file and line navigation,
-//! inline comments, markdown previews, and exit restoration.
+//! inline comments, markdown and image previews, and exit restoration.
 
 use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
 use ratatui::layout::Rect;
 
-use crate::app::{App, AppEvent};
+use crate::app::{App, AppEvent, DiffPreviewContent};
 use crate::domain::input::InputState;
 use crate::domain::session::{Session, SessionId};
 use crate::presentation::app_mode::{
@@ -13,6 +13,7 @@ use crate::presentation::app_mode::{
     DiffSidebarFocus, HelpContext, PromptModeSnapshot, ViewportRect,
     allows_diff_line_comment_reply,
 };
+use crate::presentation::diff_image::{self, DiffImageBefore, DiffImagePair, DiffImageSide};
 use crate::presentation::prompt::{
     PromptAtMentionState, PromptAttachmentState, PromptHistoryState,
 };
@@ -479,6 +480,7 @@ fn start_line_comment_edit(
     let editing_index = line_comments.start_editing_target(target);
     *focus = DiffFocus::Content;
     *preview = preview.disabled();
+    app.services.diff_preview_loads().supersede();
     *scroll_cache = None;
     if select_changed_line {
         *selected_diff_line_index = comment_changed_line_index;
@@ -1064,8 +1066,8 @@ fn scroll_content_by_row(
     };
 }
 
-/// Returns whether the active selection is currently showing markdown preview
-/// content or an availability notice instead of raw diff lines.
+/// Returns whether the active selection is currently showing markdown or
+/// image preview content or an availability notice instead of raw diff lines.
 fn selected_preview_is_visible(
     diff: &str,
     selected_file_index: usize,
@@ -1077,7 +1079,7 @@ fn selected_preview_is_visible(
     };
     let content = diff_layout_cache.content(diff);
 
-    content.selected_markdown_path(selected_file_index) == Some(preview_path)
+    content.selected_preview_path(selected_file_index) == Some(preview_path)
 }
 
 fn focus_review_comments(
@@ -1127,9 +1129,11 @@ fn toggle_selected_preview(
     session_id: &str,
 ) -> Option<DiffPreview> {
     if preview.is_enabled() {
+        app.services.diff_preview_loads().supersede();
+
         return Some(preview.disabled());
     }
-    selected_markdown_path(diff, selected_index, diff_layout_cache)?;
+    selected_preview_path(diff, selected_index, diff_layout_cache)?;
 
     Some(start_selected_preview_load(
         app,
@@ -1141,19 +1145,20 @@ fn toggle_selected_preview(
     ))
 }
 
-/// Returns the selected markdown path from the cached diff tree.
-fn selected_markdown_path(
+/// Returns the selected markdown or image path from the cached diff tree.
+fn selected_preview_path(
     diff: &str,
     selected_index: usize,
     diff_layout_cache: &page::diff::DiffLayoutCache,
 ) -> Option<String> {
     diff_layout_cache
         .content(diff)
-        .selected_markdown_path(selected_index)
+        .selected_preview_path(selected_index)
         .map(str::to_string)
 }
 
-/// Starts a bounded background read for the active markdown selection.
+/// Starts a bounded background read for the active markdown or image
+/// selection.
 fn start_selected_preview_load(
     app: &App,
     diff_layout_cache: &page::diff::DiffLayoutCache,
@@ -1163,7 +1168,8 @@ fn start_selected_preview_load(
     session_id: &str,
 ) -> DiffPreview {
     let request_id = preview.next_request_id();
-    let Some(path) = selected_markdown_path(diff, selected_index, diff_layout_cache) else {
+    let load_ticket = app.services.diff_preview_loads().begin();
+    let Some(path) = selected_preview_path(diff, selected_index, diff_layout_cache) else {
         return DiffPreview::Unsupported { request_id };
     };
     let Some(session_folder) = app
@@ -1186,15 +1192,62 @@ fn start_selected_preview_load(
     let git_client = app.services.git_client();
     let loaded_path = path.clone();
     let loaded_session_id = session_id.into();
+    if diff_image::is_image_path(&path) {
+        let image_before = diff_layout_cache
+            .content(diff)
+            .selected_image_before(selected_index)
+            .unwrap_or(DiffImageBefore::Absent);
+        tokio::spawn(async move {
+            let after_read = git_client
+                .read_worktree_file_bytes(session_folder.clone(), loaded_path.clone())
+                .await
+                .map_err(|error| error.to_string());
+            let before_read = match &image_before {
+                DiffImageBefore::Blob(object_id) => Some(
+                    git_client
+                        .read_blob_bytes(session_folder, object_id.clone())
+                        .await
+                        .map_err(|error| error.to_string()),
+                ),
+                DiffImageBefore::Absent | DiffImageBefore::Unchanged => None,
+            };
+            // Superseded loads stop here, and admitted decodes run one at a
+            // time so stale selections cannot stack decoder allocations.
+            let Some(decode_permit) = load_ticket.admit_decode().await else {
+                return;
+            };
+            // Decoding is CPU-bound, so it runs and publishes off the async
+            // workers.
+            tokio::task::spawn_blocking(move || {
+                let _decode_permit = decode_permit;
+                let after = DiffImageSide::from_read(after_read);
+                let before = match before_read {
+                    Some(read) => DiffImageSide::from_read(read),
+                    None if image_before == DiffImageBefore::Unchanged => after.clone(),
+                    None => DiffImageSide::Absent,
+                };
+                let images = DiffImagePair { after, before };
+                let _ = event_sender.send(AppEvent::DiffPreviewLoaded {
+                    content: DiffPreviewContent::Image(Box::new(images)),
+                    path: loaded_path,
+                    request_id,
+                    session_id: loaded_session_id,
+                });
+            });
+        });
+
+        return DiffPreview::Loading { path, request_id };
+    }
+
     tokio::spawn(async move {
         let result = git_client
             .read_worktree_file(session_folder, loaded_path.clone())
             .await
             .map_err(|error| error.to_string());
         let _ = event_sender.send(AppEvent::DiffPreviewLoaded {
+            content: DiffPreviewContent::Markdown(result),
             path: loaded_path,
             request_id,
-            result,
             session_id: loaded_session_id,
         });
     });

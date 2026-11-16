@@ -51,6 +51,7 @@ use crate::presentation::app_mode::{
     AppMode, ChatFocus, ConfirmationViewMode, DiffPreview, DiffPreviewUnavailableReason,
     DiffReviewComments, HelpContext,
 };
+use crate::presentation::diff_image::DiffImagePair;
 use crate::presentation::prompt::PromptAtMentionState;
 use crate::presentation::review_comment as review_comment_selection;
 
@@ -93,14 +94,15 @@ pub(crate) enum AppEvent {
     /// Indicates completion of one background clipboard-image capture for a
     /// prompt composer.
     PromptImagePasted { update: PromptImagePasteUpdate },
-    /// Indicates completion of one bounded diff-preview worktree read.
+    /// Indicates completion of one bounded markdown or image diff-preview
+    /// load.
     DiffPreviewLoaded {
-        /// Selected repository-relative markdown path.
+        /// Loaded markdown read or decoded image sides.
+        content: DiffPreviewContent,
+        /// Selected repository-relative markdown or image path.
         path: String,
         /// Request generation used to reject stale completions.
         request_id: u64,
-        /// Bounded worktree-file result.
-        result: Result<ag_git::WorktreeFileContent, String>,
         /// Session whose diff preview requested the file.
         session_id: SessionId,
     },
@@ -353,11 +355,20 @@ struct AppEventReductionPlan {
     changes_observable_state: bool,
 }
 
-/// Completed diff-preview file read ready for stale-safe reducer application.
+/// Loaded content carried by one diff-preview completion.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub(crate) enum DiffPreviewContent {
+    /// Decoded before/after sides of a changed image.
+    Image(Box<DiffImagePair>),
+    /// Bounded worktree read of a markdown file.
+    Markdown(Result<ag_git::WorktreeFileContent, String>),
+}
+
+/// Completed diff-preview load ready for stale-safe reducer application.
 pub(super) struct DiffPreviewUpdate {
+    pub(super) content: DiffPreviewContent,
     pub(super) path: String,
     pub(super) request_id: u64,
-    pub(super) result: Result<ag_git::WorktreeFileContent, String>,
     pub(super) session_id: SessionId,
 }
 
@@ -683,11 +694,11 @@ impl AppEventBatch {
                 self.session_model_updates.insert(session_id, session_agent);
             }
             AppEvent::DiffPreviewLoaded {
+                content,
                 path,
                 request_id,
-                result,
                 session_id,
-            } => self.collect_diff_preview_loaded(path, request_id, result, session_id),
+            } => self.collect_diff_preview_loaded(content, path, request_id, session_id),
             AppEvent::SessionDiffLoaded {
                 request_id,
                 result,
@@ -796,15 +807,15 @@ impl AppEventBatch {
     /// Retains a completed file preview for stale-safe foreground application.
     fn collect_diff_preview_loaded(
         &mut self,
+        content: DiffPreviewContent,
         path: String,
         request_id: u64,
-        result: Result<ag_git::WorktreeFileContent, String>,
         session_id: SessionId,
     ) {
         self.diff_preview_updates.push(DiffPreviewUpdate {
+            content,
             path,
             request_id,
-            result,
             session_id,
         });
     }
@@ -1819,22 +1830,31 @@ impl App {
             reason,
             request_id: update.request_id,
         };
-        *preview = match &update.result {
-            Ok(ag_git::WorktreeFileContent::Text(content)) => DiffPreview::Ready {
-                content: content.clone(),
+        *preview = match &update.content {
+            DiffPreviewContent::Image(images) => DiffPreview::Image {
+                images: images.clone(),
                 path: update.path.clone(),
                 request_id: update.request_id,
             },
-            Ok(ag_git::WorktreeFileContent::Missing) => {
+            DiffPreviewContent::Markdown(Ok(ag_git::WorktreeFileContent::Text(content))) => {
+                DiffPreview::Ready {
+                    content: content.clone(),
+                    path: update.path.clone(),
+                    request_id: update.request_id,
+                }
+            }
+            DiffPreviewContent::Markdown(Ok(ag_git::WorktreeFileContent::Missing)) => {
                 unavailable(DiffPreviewUnavailableReason::Deleted)
             }
-            Ok(ag_git::WorktreeFileContent::Binary) => {
+            DiffPreviewContent::Markdown(Ok(ag_git::WorktreeFileContent::Binary)) => {
                 unavailable(DiffPreviewUnavailableReason::Binary)
             }
-            Ok(ag_git::WorktreeFileContent::TooLarge) => {
+            DiffPreviewContent::Markdown(Ok(ag_git::WorktreeFileContent::TooLarge)) => {
                 unavailable(DiffPreviewUnavailableReason::TooLarge)
             }
-            Err(error) => unavailable(DiffPreviewUnavailableReason::LoadFailed(error.clone())),
+            DiffPreviewContent::Markdown(Err(error)) => {
+                unavailable(DiffPreviewUnavailableReason::LoadFailed(error.clone()))
+            }
         };
 
         true

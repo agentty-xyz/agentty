@@ -8,8 +8,8 @@ use super::error::GitError;
 use super::merge::SquashMergeOutcome;
 use super::rebase::{InProgressGitOperation, RebaseStepResult};
 use super::sync::{
-    BranchPushOutcome, BranchTrackingMap, DiffStats, PullRebaseResult, SingleCommitMessageStrategy,
-    WorktreeFileContent,
+    BranchPushOutcome, BranchTrackingMap, DiffStats, FileBytes, PullRebaseResult,
+    SingleCommitMessageStrategy, WorktreeFileContent,
 };
 use super::{
     abort_rebase, branch_tracking_statuses, check_pre_commit_hook_ready, commit_all,
@@ -329,6 +329,29 @@ pub trait GitClient: Send + Sync {
         repo_path: PathBuf,
         relative_path: String,
     ) -> GitFuture<Result<WorktreeFileContent, GitError>>;
+
+    /// Reads one repository-relative worktree file as raw bytes for a
+    /// bounded binary preview, such as an image.
+    ///
+    /// # Errors
+    /// Returns an error when the path is unsafe or the file cannot be read.
+    fn read_worktree_file_bytes(
+        &self,
+        repo_path: PathBuf,
+        relative_path: String,
+    ) -> GitFuture<Result<FileBytes, GitError>>;
+
+    /// Reads one blob by full or abbreviated hexadecimal object id as raw
+    /// bytes for a bounded binary preview.
+    ///
+    /// # Errors
+    /// Returns an error when the id is not hexadecimal or Git cannot resolve
+    /// or read the blob.
+    fn read_blob_bytes(
+        &self,
+        repo_path: PathBuf,
+        object_id: String,
+    ) -> GitFuture<Result<FileBytes, GitError>>;
 
     /// Returns whether the worktree in `repo_path` has no local changes.
     ///
@@ -744,6 +767,22 @@ impl GitClient for RealGitClient {
         relative_path: String,
     ) -> GitFuture<Result<WorktreeFileContent, GitError>> {
         Box::pin(async move { sync::read_worktree_file(repo_path, relative_path).await })
+    }
+
+    fn read_worktree_file_bytes(
+        &self,
+        repo_path: PathBuf,
+        relative_path: String,
+    ) -> GitFuture<Result<FileBytes, GitError>> {
+        Box::pin(async move { sync::read_worktree_file_bytes(repo_path, relative_path).await })
+    }
+
+    fn read_blob_bytes(
+        &self,
+        repo_path: PathBuf,
+        object_id: String,
+    ) -> GitFuture<Result<FileBytes, GitError>> {
+        Box::pin(async move { sync::read_blob_bytes(repo_path, object_id).await })
     }
 
     fn is_worktree_clean(&self, repo_path: PathBuf) -> GitFuture<Result<bool, GitError>> {

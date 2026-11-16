@@ -6,6 +6,8 @@ use ag_session::SettingName;
 #[cfg(unix)]
 use ag_session::test_support as model_fixture;
 use agentty::domain::theme::ColorTheme;
+use image::codecs::png::PngEncoder;
+use image::{ExtendedColorType, ImageEncoder};
 use testty::assertion;
 use testty::frame::{CellStyle, TerminalFrame};
 use testty::proof::report::ProofReport;
@@ -415,6 +417,46 @@ async fn seed_markdown_diff_preview(env: &BuilderEnv) -> Result<(), Box<dyn std:
     )?;
 
     Ok(())
+}
+
+/// Seeds a review-ready worktree whose only change recolors a committed PNG.
+async fn seed_image_diff_preview(env: &BuilderEnv) -> Result<(), Box<dyn std::error::Error>> {
+    seed_review_ready_session(env).await?;
+
+    let session_worktree = env.agentty_root.join("wt").join("review-s");
+    run_git(&session_worktree, &["init", "-b", "main"])?;
+    run_git(
+        &session_worktree,
+        &["config", "user.email", "test@test.com"],
+    )?;
+    run_git(&session_worktree, &["config", "user.name", "Test"])?;
+    std::fs::create_dir_all(session_worktree.join("assets"))?;
+    std::fs::write(
+        session_worktree.join("assets/logo.png"),
+        solid_png(16, 8, [220, 40, 40, 255])?,
+    )?;
+    run_git(&session_worktree, &["add", "."])?;
+    run_git(&session_worktree, &["commit", "-m", "init"])?;
+    std::fs::write(
+        session_worktree.join("assets/logo.png"),
+        solid_png(16, 8, [40, 80, 220, 255])?,
+    )?;
+
+    Ok(())
+}
+
+/// Encodes one solid-color RGBA PNG.
+fn solid_png(width: u32, height: u32, color: [u8; 4]) -> Result<Vec<u8>, image::ImageError> {
+    let raster = image::RgbaImage::from_pixel(width, height, image::Rgba(color));
+    let mut bytes = Vec::new();
+    PngEncoder::new(&mut bytes).write_image(
+        raster.as_raw(),
+        width,
+        height,
+        ExtendedColorType::Rgba8,
+    )?;
+
+    Ok(bytes)
 }
 
 /// Seeds a review-ready session whose only worktree change is binary and
@@ -1306,6 +1348,68 @@ async fn test_markdown_diff_preview() -> E2eResult {
                     let full = Region::full(frame.cols(), frame.rows());
                     assertion::assert_text_in_region(frame, "# Rendered Markdown Preview", &full);
                     assertion::assert_text_in_region(frame, DIFF_PANEL_TITLE_MARKER, &full);
+                })
+            },
+        )
+        .await?;
+
+    Ok(())
+}
+
+/// Verify that `p` toggles a changed PNG between its binary patch and
+/// half-block before/after images.
+#[tokio::test]
+async fn test_image_diff_preview() -> E2eResult {
+    // Arrange, Act, Assert
+    FeatureTest::new("image_diff_preview")
+        .with_git()
+        .setup(|env| Box::pin(async move { seed_image_diff_preview(env).await }))
+        .run(
+            |scenario| {
+                scenario
+                    .compose(&common::wait_for_agentty_startup())
+                    .compose(&common::switch_to_tab("Sessions"))
+                    .compose(&common::open_selected_session_view())
+                    .press_key("d")
+                    .wait_for_text("Binary files", 5000)
+                    .press_key("j")
+                    .press_key("p")
+                    .wait_for_text("Preview — assets/logo.png", 5000)
+                    .wait_for_text("After · 16×8", 5000)
+                    .wait_for_stable_frame(300, 5000)
+                    .capture_labeled(
+                        "image_preview",
+                        "Before and after images of a changed PNG in the diff view",
+                    )
+                    .press_key("p")
+                    .wait_for_text("Binary files", 5000)
+                    .wait_for_stable_frame(300, 5000)
+                    .capture_labeled(
+                        "raw_diff",
+                        "Binary patch restored after toggling preview off",
+                    )
+            },
+            |frame, report| {
+                Box::pin(async move {
+                    let preview_frame = common::frame_from_capture(&report.captures[0]);
+                    let preview_full = Region::full(preview_frame.cols(), preview_frame.rows());
+                    assertion::assert_text_in_region(
+                        &preview_frame,
+                        "Preview — assets/logo.png",
+                        &preview_full,
+                    );
+                    assertion::assert_text_in_region(
+                        &preview_frame,
+                        "Before · 16×8",
+                        &preview_full,
+                    );
+                    assertion::assert_text_in_region(&preview_frame, "After · 16×8", &preview_full);
+                    assert!(preview_frame.text_in_region(&preview_full).contains('▀'));
+                    assertion::assert_not_visible(&preview_frame, "Binary files");
+
+                    let full = Region::full(frame.cols(), frame.rows());
+                    assertion::assert_text_in_region(frame, "Binary files", &full);
+                    assertion::assert_not_visible(frame, "Preview — assets/logo.png");
                 })
             },
         )

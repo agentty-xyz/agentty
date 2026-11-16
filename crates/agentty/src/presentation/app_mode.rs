@@ -5,6 +5,7 @@ use std::fmt::Write as _;
 
 use ag_forge::ReviewCommentSnapshot;
 
+use super::diff_image::DiffImagePair;
 use super::help_action::{
     self, DiffReviewCommentHelp, HelpAction, ViewActionAvailability, ViewHelpState,
     ViewSessionState,
@@ -488,7 +489,8 @@ pub struct DiffScrollCache {
     pub max_scroll_offset: u16,
 }
 
-/// Rendered markdown preview state for the active diff-tree selection.
+/// Rendered markdown or image preview state for the active diff-tree
+/// selection.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub enum DiffPreview {
     /// Preview mode is disabled while retaining the last request generation.
@@ -496,16 +498,26 @@ pub enum DiffPreview {
         /// Last request generation, retained to invalidate older completions.
         request_id: u64,
     },
-    /// Preview mode is enabled, but the current tree item is not markdown.
+    /// Preview mode is enabled, but the current tree item is neither markdown
+    /// nor a previewable image.
     Unsupported {
         /// Request generation that invalidated the prior selection load.
         request_id: u64,
     },
-    /// Markdown content is loading from the session worktree.
+    /// Markdown content or image sides are loading in the background.
     Loading {
-        /// Repository-relative markdown path being loaded.
+        /// Repository-relative markdown or image path being loaded.
         path: String,
         /// Generation assigned to this background read.
+        request_id: u64,
+    },
+    /// Decoded before/after sides of a changed image are ready.
+    Image {
+        /// Old and new image sides, boxed to keep other states small.
+        images: Box<DiffImagePair>,
+        /// Repository-relative image path represented by `images`.
+        path: String,
+        /// Generation completed by these images.
         request_id: u64,
     },
     /// Renderable post-change markdown content is ready.
@@ -542,6 +554,7 @@ impl DiffPreview {
             Self::Off { request_id }
             | Self::Unsupported { request_id }
             | Self::Loading { request_id, .. }
+            | Self::Image { request_id, .. }
             | Self::Ready { request_id, .. }
             | Self::Unavailable { request_id, .. } => *request_id,
         }
@@ -553,6 +566,7 @@ impl DiffPreview {
     pub fn path(&self) -> Option<&str> {
         match self {
             Self::Loading { path, .. }
+            | Self::Image { path, .. }
             | Self::Ready { path, .. }
             | Self::Unavailable { path, .. } => Some(path),
             Self::Off { .. } | Self::Unsupported { .. } => None,
@@ -913,7 +927,7 @@ pub enum AppMode {
         focus: DiffFocus,
         /// File and inline comments accumulated for the next turn.
         line_comments: DiffLineComments,
-        /// Sticky rendered-markdown preview state for the selected file.
+        /// Sticky markdown or image preview state for the selected file.
         preview: DiffPreview,
         /// Optional linked review-request comments rendered below the files.
         review_comments: Option<DiffReviewComments>,
@@ -1096,7 +1110,7 @@ pub enum HelpContext {
         focus: DiffFocus,
         /// File and inline comments accumulated before help opened.
         line_comments: DiffLineComments,
-        /// Rendered-markdown preview state to restore.
+        /// Markdown or image preview state to restore.
         preview: DiffPreview,
         /// Optional linked review-request comments to restore.
         review_comments: Option<Box<DiffReviewComments>>,

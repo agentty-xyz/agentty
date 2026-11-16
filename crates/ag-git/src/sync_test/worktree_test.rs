@@ -7,7 +7,8 @@ use tempfile::tempdir;
 
 use crate::error::GitError;
 use crate::sync::{
-    MAX_WORKTREE_FILE_BYTE_COUNT, WorktreeFileContent, copy_git_index_to_temp, read_worktree_file,
+    FileBytes, MAX_FILE_BYTES_BYTE_COUNT, MAX_WORKTREE_FILE_BYTE_COUNT, WorktreeFileContent,
+    copy_git_index_to_temp, read_blob_bytes, read_worktree_file, read_worktree_file_bytes,
     run_git_command_with_index_sync,
 };
 
@@ -60,6 +61,100 @@ async fn read_worktree_file_classifies_missing_binary_and_oversize_files() {
         too_large.expect("oversize read should succeed"),
         WorktreeFileContent::TooLarge
     );
+}
+
+#[tokio::test]
+async fn read_worktree_file_bytes_classifies_present_missing_and_oversize_files() {
+    // Arrange
+    let temp_dir = tempdir().expect("failed to create temp dir");
+    fs::write(temp_dir.path().join("image.gif"), [0xff, 0xfe])
+        .expect("failed to write binary file");
+    fs::write(
+        temp_dir.path().join("large.gif"),
+        vec![0_u8; MAX_FILE_BYTES_BYTE_COUNT + 1],
+    )
+    .expect("failed to write oversize file");
+
+    // Act
+    let present =
+        read_worktree_file_bytes(temp_dir.path().to_path_buf(), "image.gif".to_string()).await;
+    let missing =
+        read_worktree_file_bytes(temp_dir.path().to_path_buf(), "missing.gif".to_string()).await;
+    let too_large =
+        read_worktree_file_bytes(temp_dir.path().to_path_buf(), "large.gif".to_string()).await;
+    let unsafe_path =
+        read_worktree_file_bytes(temp_dir.path().to_path_buf(), "../image.gif".to_string()).await;
+
+    // Assert
+    assert_eq!(
+        present.expect("binary read should succeed"),
+        FileBytes::Bytes(vec![0xff, 0xfe])
+    );
+    assert_eq!(
+        missing.expect("missing read should succeed"),
+        FileBytes::Missing
+    );
+    assert_eq!(
+        too_large.expect("oversize read should succeed"),
+        FileBytes::TooLarge
+    );
+    assert!(matches!(unsafe_path, Err(GitError::OutputParse(_))));
+}
+
+#[tokio::test]
+async fn read_blob_bytes_rejects_invalid_ids_and_reports_unknown_objects() {
+    // Arrange
+    let temp_dir = tempdir().expect("failed to create temp dir");
+    run_git(temp_dir.path(), &["init", "-b", "main"]);
+
+    // Act
+    let short = read_blob_bytes(temp_dir.path().to_path_buf(), "abc".to_string()).await;
+    let option_like = read_blob_bytes(temp_dir.path().to_path_buf(), "--all".to_string()).await;
+    let unknown = read_blob_bytes(temp_dir.path().to_path_buf(), "deadbeef".to_string()).await;
+
+    // Assert
+    for result in [short, option_like] {
+        assert!(
+            matches!(result, Err(GitError::OutputParse(message)) if message.contains("Invalid blob object id"))
+        );
+    }
+    assert!(
+        matches!(unknown, Err(GitError::CommandFailed { command, .. }) if command.starts_with("git cat-file -s"))
+    );
+}
+
+#[tokio::test]
+async fn read_blob_bytes_reports_oversize_blob_without_reading_it() {
+    // Arrange
+    let temp_dir = tempdir().expect("failed to create temp dir");
+    run_git(temp_dir.path(), &["init", "-b", "main"]);
+    fs::write(
+        temp_dir.path().join("large.gif"),
+        vec![0_u8; MAX_FILE_BYTES_BYTE_COUNT + 1],
+    )
+    .expect("failed to write oversize file");
+    let blob_id = run_git(temp_dir.path(), &["hash-object", "-w", "large.gif"]);
+
+    // Act
+    let result = read_blob_bytes(temp_dir.path().to_path_buf(), blob_id).await;
+
+    // Assert
+    assert_eq!(
+        result.expect("oversize blob lookup should succeed"),
+        FileBytes::TooLarge
+    );
+}
+
+/// Runs one Git command in `repo_path` and returns its trimmed stdout.
+fn run_git(repo_path: &Path, args: &[&str]) -> String {
+    let output = std::process::Command::new("git")
+        .args(args)
+        .current_dir(repo_path)
+        .output()
+        .expect("failed to run git");
+    assert!(output.status.success(), "git {args:?} failed");
+
+    String::from_utf8_lossy(&output.stdout).trim().to_string()
 }
 
 #[tokio::test]

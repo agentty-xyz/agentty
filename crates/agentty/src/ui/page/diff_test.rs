@@ -22,6 +22,7 @@ use crate::presentation::app_mode::{
     DiffCommentTarget, DiffFocus, DiffLineComment, DiffLineCommentAnchor, DiffLineCommentTarget,
     DiffLineComments, DiffLineSide, DiffPreview, DiffPreviewUnavailableReason, DiffSidebarFocus,
 };
+use crate::presentation::diff_image::{DiffImage, DiffImageBefore, DiffImagePair, DiffImageSide};
 use crate::test_support::SessionFixtureBuilder;
 use crate::ui::component::file_explorer::FileExplorer;
 use crate::ui::component::vertical_scrollbar::{SCROLLBAR_THUMB_SYMBOL, SCROLLBAR_TRACK_SYMBOL};
@@ -1572,25 +1573,81 @@ fn test_content_border_style_uses_accent_only_for_diff_focus() {
 }
 
 #[test]
-fn test_selected_markdown_path_accepts_case_insensitive_file_extension_only() {
+fn test_selected_preview_path_accepts_markdown_and_image_extensions_only() {
     // Arrange
     let cache = DiffLayoutCache::default();
     let content = cache.content(concat!(
         "diff --git a/docs/GUIDE.MD b/docs/GUIDE.MD\n+guide\n",
+        "diff --git a/docs/demo.gif b/docs/demo.gif\nBinary files differ\n",
         "diff --git a/src/main.rs b/src/main.rs\n+code\n",
+        "diff --git a/Makefile b/Makefile\n+all:\n",
     ));
 
     // Act
-    let folder = content.selected_markdown_path(0);
-    let markdown = content.selected_markdown_path(1);
-    let rust = content.selected_markdown_path(3);
-    let stale = content.selected_markdown_path(usize::MAX);
+    let preview_paths = (0..content.item_count())
+        .filter_map(|index| content.selected_preview_path(index))
+        .collect::<Vec<_>>();
+    let selected_files = (0..content.item_count())
+        .filter_map(|index| content.selected_file_path(index))
+        .count();
+    let stale = content.selected_preview_path(usize::MAX);
 
     // Assert
-    assert_eq!(folder, None);
-    assert_eq!(markdown, Some("docs/GUIDE.MD"));
-    assert_eq!(rust, None);
+    assert_eq!(preview_paths.len(), 2);
+    assert!(preview_paths.contains(&"docs/GUIDE.MD"));
+    assert!(preview_paths.contains(&"docs/demo.gif"));
+    assert_eq!(selected_files, 4);
     assert_eq!(stale, None);
+}
+
+#[test]
+fn test_selected_image_before_classifies_diff_headers() {
+    // Arrange
+    let cache = DiffLayoutCache::default();
+    let content = cache.content(concat!(
+        "diff --git a/assets/added.png b/assets/added.png\n",
+        "new file mode 100644\n",
+        "index 0000000..1111111\n",
+        "Binary files /dev/null and b/assets/added.png differ\n",
+        "diff --git a/assets/changed.png b/assets/changed.png\n",
+        "index 3ece5bf6f..f2220e67e 100644\n",
+        "Binary files a/assets/changed.png and b/assets/changed.png differ\n",
+        "diff --git a/assets/mode.png b/assets/mode.png\n",
+        "old mode 100644\n",
+        "new mode 100755\n",
+        "diff --git a/assets/new.png b/assets/new.png\n",
+        "new file mode 100644\n",
+        "diff --git a/assets/odd.png b/assets/odd.png\n",
+        "index malformed\n",
+        "diff --git a/assets/logo.png b/assets/renamed.png\n",
+        "similarity index 100%\n",
+        "rename from assets/logo.png\n",
+        "rename to assets/renamed.png\n",
+    ));
+
+    // Act
+    let image_befores = (0..content.item_count())
+        .map(|index| {
+            (
+                content.selected_file_path(index),
+                content.selected_image_before(index),
+            )
+        })
+        .collect::<Vec<_>>();
+
+    // Assert
+    assert!(image_befores.contains(&(None, None)));
+    assert!(image_befores.contains(&(Some("assets/added.png"), Some(DiffImageBefore::Absent))));
+    assert!(image_befores.contains(&(
+        Some("assets/changed.png"),
+        Some(DiffImageBefore::Blob("3ece5bf6f".to_string()))
+    )));
+    assert!(image_befores.contains(&(Some("assets/mode.png"), Some(DiffImageBefore::Unchanged))));
+    assert!(image_befores.contains(&(Some("assets/new.png"), Some(DiffImageBefore::Absent))));
+    assert!(image_befores.contains(&(Some("assets/odd.png"), Some(DiffImageBefore::Absent))));
+    assert!(
+        image_befores.contains(&(Some("assets/renamed.png"), Some(DiffImageBefore::Unchanged)))
+    );
 }
 
 #[test]
@@ -1608,7 +1665,7 @@ fn test_selected_markdown_preview_path_decodes_git_quoted_filename() {
     };
 
     // Act
-    let selected_path = content.selected_markdown_path(1);
+    let selected_path = content.selected_preview_path(1);
     let preview_path = preview_path_for_selection(&preview, &content, 1);
 
     // Assert
@@ -1892,6 +1949,60 @@ fn test_render_ready_preview_uses_shared_markdown_and_mermaid_renderer() {
     assert!(text.contains("Input"));
     assert!(text.contains("Rendered"));
     assert!(!text.contains("+preview"));
+}
+
+#[test]
+fn test_render_image_preview_draws_both_sides_without_scrolling() {
+    // Arrange
+    let session = session_fixture();
+    let diff =
+        "diff --git a/logo.png b/logo.png\nindex 3ece5bf..f2220e6 100644\nBinary files differ";
+    let side = |color| {
+        DiffImageSide::Image(DiffImage {
+            height: 2,
+            original_height: 2,
+            original_width: 2,
+            pixels: Arc::from(vec![color; 4]),
+            width: 2,
+        })
+    };
+    let preview = DiffPreview::Image {
+        images: Box::new(DiffImagePair {
+            after: side([0, 0, 255, 255]),
+            before: side([255, 0, 0, 255]),
+        }),
+        path: "logo.png".to_string(),
+        request_id: 1,
+    };
+    let mut diff_page = new_diff_page_with_preview(&session, diff, 0, 0, &preview);
+    let backend = ratatui::backend::TestBackend::new(120, 30);
+    let mut terminal = ratatui::Terminal::new(backend).expect("failed to create terminal");
+
+    // Act
+    terminal
+        .draw(|frame| {
+            let area = frame.area();
+            Page::render(&mut diff_page, frame, area);
+        })
+        .expect("failed to draw image preview");
+    let max_scroll_offset = diff_view_max_scroll_offset(
+        diff,
+        test_line_comments(),
+        0,
+        Rect::new(0, 0, 120, 30),
+        test_diff_layout_cache(),
+        test_markdown_render_cache(),
+        &preview,
+    );
+
+    // Assert
+    let text = buffer_text(terminal.backend().buffer());
+    assert!(text.contains("Preview — logo.png"));
+    assert!(text.contains("Before · 2×2"));
+    assert!(text.contains("After · 2×2"));
+    assert!(text.contains('▀'));
+    assert!(!text.contains("Binary files differ"));
+    assert_eq!(max_scroll_offset, 0);
 }
 
 #[test]

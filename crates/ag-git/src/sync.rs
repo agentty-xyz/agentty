@@ -83,6 +83,7 @@ impl DiffStats {
 }
 
 const COMMIT_ALL_HOOK_RETRY_ATTEMPTS: usize = 5;
+const MAX_FILE_BYTES_BYTE_COUNT: usize = 16 * 1024 * 1024;
 const MAX_WORKTREE_FILE_BYTE_COUNT: usize = 1024 * 1024;
 const PRE_COMMIT_CONFIG_FILES: [&str; 2] = [".pre-commit-config.yaml", ".pre-commit-config.yml"];
 
@@ -96,6 +97,17 @@ pub enum WorktreeFileContent {
     /// The file is not valid UTF-8 text.
     Binary,
     /// The file exceeds the preview byte limit.
+    TooLarge,
+}
+
+/// Bounded raw bytes returned when reading a file or blob for presentation.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub enum FileBytes {
+    /// The complete content within the 16 MiB byte limit.
+    Bytes(Vec<u8>),
+    /// The file does not exist in the current worktree.
+    Missing,
+    /// The content exceeds the 16 MiB byte limit.
     TooLarge,
 }
 
@@ -685,14 +697,109 @@ pub(crate) async fn read_worktree_file(
     repo_path: PathBuf,
     relative_path: String,
 ) -> Result<WorktreeFileContent, GitError> {
-    spawn_blocking_in_context(move || read_worktree_file_sync(&repo_path, &relative_path)).await?
+    spawn_blocking_in_context(move || {
+        let bytes = read_bounded_worktree_file_sync(
+            &repo_path,
+            &relative_path,
+            MAX_WORKTREE_FILE_BYTE_COUNT,
+        )?;
+
+        Ok(bytes.map_or(WorktreeFileContent::Missing, worktree_file_content))
+    })
+    .await?
 }
 
-/// Performs the bounded worktree read on a blocking worker thread.
-fn read_worktree_file_sync(
+/// Reads one repository-relative worktree file as raw bytes, bounded by
+/// [`MAX_FILE_BYTES_BYTE_COUNT`].
+///
+/// Path validation matches [`read_worktree_file`].
+///
+/// # Errors
+/// Returns a [`GitError`] when the path is unsafe, repository path resolution
+/// fails, or the selected file cannot be read.
+pub(crate) async fn read_worktree_file_bytes(
+    repo_path: PathBuf,
+    relative_path: String,
+) -> Result<FileBytes, GitError> {
+    spawn_blocking_in_context(move || {
+        let bytes =
+            read_bounded_worktree_file_sync(&repo_path, &relative_path, MAX_FILE_BYTES_BYTE_COUNT)?;
+
+        Ok(bytes.map_or(FileBytes::Missing, bounded_file_bytes))
+    })
+    .await?
+}
+
+/// Reads one blob object by hexadecimal object id as raw bytes, bounded by
+/// [`MAX_FILE_BYTES_BYTE_COUNT`].
+///
+/// Abbreviated ids, such as those in a patch `index` header, are accepted.
+///
+/// # Errors
+/// Returns a [`GitError`] when the id is not hexadecimal, or Git cannot
+/// resolve or read the blob.
+pub(crate) async fn read_blob_bytes(
+    repo_path: PathBuf,
+    object_id: String,
+) -> Result<FileBytes, GitError> {
+    spawn_blocking_in_context(move || read_blob_bytes_sync(&repo_path, &object_id)).await?
+}
+
+/// Checks the blob size before reading its content on a blocking thread.
+fn read_blob_bytes_sync(repo_path: &Path, object_id: &str) -> Result<FileBytes, GitError> {
+    if !(4..=64).contains(&object_id.len())
+        || !object_id.bytes().all(|byte| byte.is_ascii_hexdigit())
+    {
+        return Err(GitError::OutputParse(format!(
+            "Invalid blob object id: {object_id}"
+        )));
+    }
+
+    let blob_spec = format!("{object_id}^{{blob}}");
+    let size_output = git_stdout_bytes_sync(repo_path, &["cat-file", "-s", &blob_spec])?;
+    let blob_size = String::from_utf8_lossy(&size_output)
+        .trim()
+        .parse::<usize>()
+        .unwrap_or(usize::MAX);
+    if blob_size > MAX_FILE_BYTES_BYTE_COUNT {
+        return Ok(FileBytes::TooLarge);
+    }
+
+    let content = git_stdout_bytes_sync(repo_path, &["cat-file", "blob", &blob_spec])?;
+
+    Ok(bounded_file_bytes(content))
+}
+
+/// Runs one Git command and returns its raw stdout, failing on a non-zero
+/// exit status.
+fn git_stdout_bytes_sync(repo_path: &Path, args: &[&str]) -> Result<Vec<u8>, GitError> {
+    let output = run_git_command_output_sync(repo_path, args)?;
+    if !output.status.success() {
+        return Err(GitError::CommandFailed {
+            command: format!("git {}", args.join(" ")),
+            stderr: command_output_detail(&output.stdout, &output.stderr),
+        });
+    }
+
+    Ok(output.stdout)
+}
+
+/// Classifies bytes read with a limit-plus-one bound as complete or too large.
+fn bounded_file_bytes(bytes: Vec<u8>) -> FileBytes {
+    if bytes.len() > MAX_FILE_BYTES_BYTE_COUNT {
+        return FileBytes::TooLarge;
+    }
+
+    FileBytes::Bytes(bytes)
+}
+
+/// Reads at most `max_byte_count + 1` bytes from one safe worktree path,
+/// returning `None` when the file does not exist.
+fn read_bounded_worktree_file_sync(
     repo_path: &Path,
     relative_path: &str,
-) -> Result<WorktreeFileContent, GitError> {
+    max_byte_count: usize,
+) -> Result<Option<Vec<u8>>, GitError> {
     let relative_file_path = Path::new(relative_path);
     if relative_path.is_empty()
         || relative_file_path
@@ -709,7 +816,7 @@ fn read_worktree_file_sync(
     let canonical_file_path = match std::fs::canonicalize(candidate_path) {
         Ok(path) => path,
         Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
-            return Ok(WorktreeFileContent::Missing);
+            return Ok(None);
         }
         Err(error) => return Err(error.into()),
     };
@@ -720,11 +827,11 @@ fn read_worktree_file_sync(
     }
 
     let file = std::fs::File::open(canonical_file_path)?;
-    let mut bytes = Vec::with_capacity(MAX_WORKTREE_FILE_BYTE_COUNT.min(8192));
-    file.take((MAX_WORKTREE_FILE_BYTE_COUNT as u64).saturating_add(1))
+    let mut bytes = Vec::with_capacity(max_byte_count.min(8192));
+    file.take((max_byte_count as u64).saturating_add(1))
         .read_to_end(&mut bytes)?;
 
-    Ok(worktree_file_content(bytes))
+    Ok(Some(bytes))
 }
 
 /// Classifies bytes read through the bounded worktree-file reader.

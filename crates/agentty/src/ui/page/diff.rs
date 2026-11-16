@@ -22,8 +22,10 @@ use crate::presentation::app_mode::{
     DiffCommentTarget, DiffFocus, DiffLineComment, DiffLineCommentAnchor, DiffLineComments,
     DiffLineSide, DiffPreview, DiffPreviewUnavailableReason, DiffReviewComments, DiffSidebarFocus,
 };
+use crate::presentation::diff_image::{self, DiffImageBefore};
 use crate::presentation::review_comment as review_comment_selection;
 use crate::ui::component::chat_input::ChatInput;
+use crate::ui::component::diff_image_view::DiffImageView;
 use crate::ui::component::file_explorer::FileExplorer;
 use crate::ui::component::vertical_scrollbar::VerticalScrollbar;
 use crate::ui::diff_util::{
@@ -268,15 +270,57 @@ impl DiffContentSnapshot {
             .collect()
     }
 
-    /// Returns the selected repository-relative markdown file path.
-    pub(crate) fn selected_markdown_path(&self, selected_index: usize) -> Option<&str> {
+    /// Returns the selected repository-relative markdown or image file path.
+    pub(crate) fn selected_preview_path(&self, selected_index: usize) -> Option<&str> {
         let path = self.selected_file_path(selected_index)?;
+        if diff_image::is_image_path(path) {
+            return Some(path);
+        }
         let extension = Path::new(path).extension()?.to_str()?;
         if !extension.eq_ignore_ascii_case("md") {
             return None;
         }
 
         Some(path)
+    }
+
+    /// Returns where the selected file's pre-change image comes from, or
+    /// `None` when the selection is not a file.
+    ///
+    /// Git omits the `index` header only when content is unchanged, such as
+    /// for a pure rename or a mode-only change.
+    pub(crate) fn selected_image_before(&self, selected_index: usize) -> Option<DiffImageBefore> {
+        let path = self.selected_file_path(selected_index)?;
+        let range = self.file_line_ranges.get(path)?.first()?;
+        let mut is_new_file = false;
+        for line in self.parsed_lines[range.clone()]
+            .iter()
+            .take_while(|line| line.kind != DiffLineKind::HunkHeader)
+        {
+            if let Some(index_header) = line.content.strip_prefix("index ") {
+                return Some(Self::image_before_from_index(index_header));
+            }
+            is_new_file |= line.content.starts_with("new file mode");
+        }
+
+        if is_new_file {
+            return Some(DiffImageBefore::Absent);
+        }
+
+        Some(DiffImageBefore::Unchanged)
+    }
+
+    /// Classifies an `index <old>..<new>` header value, treating an all-zero
+    /// or malformed old id as an absent pre-change side.
+    fn image_before_from_index(index_header: &str) -> DiffImageBefore {
+        let Some((old_object_id, _)) = index_header.split_once("..") else {
+            return DiffImageBefore::Absent;
+        };
+        if old_object_id.bytes().all(|byte| byte == b'0') {
+            return DiffImageBefore::Absent;
+        }
+
+        DiffImageBefore::Blob(old_object_id.to_string())
     }
 
     /// Returns the repository-relative path for the selected file row.
@@ -1375,7 +1419,7 @@ pub struct DiffPageInput<'a> {
     pub line_comments: &'a DiffLineComments,
     /// Shared cache for rendered markdown preview rows.
     pub markdown_render_cache: &'a markdown::MarkdownRenderCache,
-    /// Rendered-markdown preview state for the selected file.
+    /// Markdown or image preview state for the selected file.
     pub preview: &'a DiffPreview,
     /// Optional linked review-request comments shown below changed files.
     pub review_comments: Option<&'a DiffReviewComments>,
@@ -1405,7 +1449,7 @@ pub struct DiffPage<'a> {
     pub line_comments: &'a DiffLineComments,
     /// Shared cache for rendered markdown preview rows.
     pub markdown_render_cache: &'a markdown::MarkdownRenderCache,
-    /// Rendered-markdown preview state for the selected file.
+    /// Markdown or image preview state for the selected file.
     pub preview: &'a DiffPreview,
     /// Optional linked review-request comments shown below changed files.
     pub review_comments: Option<&'a DiffReviewComments>,
@@ -1755,7 +1799,8 @@ impl<'a> DiffPage<'a> {
         Line::from(spans)
     }
 
-    /// Renders ready markdown content or a preview availability notice.
+    /// Renders ready markdown content, image sides, or a preview availability
+    /// notice.
     fn render_preview_content(&self, frame: &mut Frame, area: Rect, path: &str) {
         let title = Line::from(Span::styled(
             format!(" Preview — {} ", inline_text(path)),
@@ -1789,6 +1834,15 @@ impl<'a> DiffPage<'a> {
                     VerticalScrollbar::new(usize::from(scroll_offset), layout.lines.len())
                         .render(frame, scrollbar_area);
                 }
+            }
+            DiffPreview::Image { images, .. } => {
+                let block = Block::default()
+                    .borders(Borders::ALL)
+                    .title(title)
+                    .border_style(self.content_border_style());
+                let inner_area = block.inner(area);
+                frame.render_widget(block, area);
+                DiffImageView::new(images).render(frame, inner_area);
             }
             DiffPreview::Loading { .. } => {
                 render_preview_notice(
@@ -2202,13 +2256,14 @@ fn comment_lookup_area(
     ))
 }
 
-/// Returns the preview path when it still matches the active markdown row.
+/// Returns the preview path when it still matches the active markdown or
+/// image row.
 fn preview_path_for_selection<'a>(
     preview: &'a DiffPreview,
     content: &DiffContentSnapshot,
     selected_index: usize,
 ) -> Option<&'a str> {
-    let selected_path = content.selected_markdown_path(selected_index)?;
+    let selected_path = content.selected_preview_path(selected_index)?;
     let preview_path = preview.path()?;
     if preview_path != selected_path {
         return None;

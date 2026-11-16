@@ -13,7 +13,7 @@ use app::review::{
 };
 
 use super::super::state::App;
-use super::{AppEvent, AppEventBatch, AppEventEffect, AppEventReductionPlan};
+use super::{AppEvent, AppEventBatch, AppEventEffect, AppEventReductionPlan, DiffPreviewContent};
 use crate::app;
 use crate::app::branch_publish::BranchPublishTaskFailure;
 use crate::app::session::TurnAppliedState;
@@ -29,6 +29,7 @@ use crate::presentation::app_mode::{
     AppMode, DiffFocus, DiffLineComments, DiffPreview, DiffPreviewUnavailableReason,
     DiffReviewComments, DiffSidebarFocus, HelpContext, ReviewCommentSelection,
 };
+use crate::presentation::diff_image::{DiffImagePair, DiffImageSide};
 use crate::presentation::review_comment as review_comment_selection;
 
 /// Captures the `log` fallback emitted before tracing is initialized.
@@ -1198,9 +1199,9 @@ async fn test_diff_preview_events_map_all_worktree_results() {
             session_id: "session-id".into(),
         };
         app.apply_app_events(AppEvent::DiffPreviewLoaded {
+            content: DiffPreviewContent::Markdown(result),
             path: "README.md".to_string(),
             request_id,
-            result,
             session_id: "session-id".into(),
         })
         .await;
@@ -1258,7 +1259,9 @@ async fn test_diff_preview_event_ignores_stale_mode_session_path_and_request() {
     let event = |path: &str, request_id: u64, session_id: &str| AppEvent::DiffPreviewLoaded {
         path: path.to_string(),
         request_id,
-        result: Ok(ag_git::WorktreeFileContent::Text("stale".to_string())),
+        content: DiffPreviewContent::Markdown(Ok(ag_git::WorktreeFileContent::Text(
+            "stale".to_string(),
+        ))),
         session_id: session_id.into(),
     };
     let diff_mode = |preview| AppMode::Diff {
@@ -1318,6 +1321,63 @@ async fn test_diff_preview_event_ignores_stale_mode_session_path_and_request() {
 }
 
 #[tokio::test]
+async fn test_diff_image_preview_event_resolves_matching_load_only() {
+    // Arrange
+    let (mut app, _base_dir) = crate::test_support::new_test_app().await;
+    let images = DiffImagePair {
+        after: DiffImageSide::Unavailable("Image too large to preview".to_string()),
+        before: DiffImageSide::Absent,
+    };
+    let image_event = |request_id| AppEvent::DiffPreviewLoaded {
+        content: DiffPreviewContent::Image(Box::new(images.clone())),
+        path: "assets/demo.gif".to_string(),
+        request_id,
+        session_id: "session-id".into(),
+    };
+    app.mode = AppMode::Diff {
+        diff: "diff --git a/assets/demo.gif b/assets/demo.gif\nBinary files differ".to_string(),
+        file_explorer_selected_index: 0,
+        focus: DiffFocus::Files,
+        line_comments: DiffLineComments::default(),
+        preview: DiffPreview::Loading {
+            path: "assets/demo.gif".to_string(),
+            request_id: 3,
+        },
+        review_comments: None,
+        restore: None,
+        scroll_cache: None,
+        scroll_offset: 0,
+        selected_diff_line_index: 0,
+        session_id: "session-id".into(),
+    };
+
+    // Act
+    app.apply_app_events(image_event(2)).await;
+    let stale_request_ignored = matches!(
+        app.mode,
+        AppMode::Diff {
+            preview: DiffPreview::Loading { .. },
+            ..
+        }
+    );
+    app.apply_app_events(image_event(3)).await;
+
+    // Assert
+    assert!(stale_request_ignored);
+    assert!(matches!(
+        &app.mode,
+        AppMode::Diff {
+            preview: DiffPreview::Image {
+                images: resolved_images,
+                path,
+                request_id: 3,
+            },
+            ..
+        } if **resolved_images == images && path == "assets/demo.gif"
+    ));
+}
+
+#[tokio::test]
 async fn test_diff_preview_event_resolves_while_help_is_open() {
     // Arrange
     let (mut app, _base_dir) = crate::test_support::new_test_app().await;
@@ -1346,7 +1406,9 @@ async fn test_diff_preview_event_resolves_while_help_is_open() {
     app.apply_app_events(AppEvent::DiffPreviewLoaded {
         path: "README.md".to_string(),
         request_id: 8,
-        result: Ok(ag_git::WorktreeFileContent::Text("# Ready".to_string())),
+        content: DiffPreviewContent::Markdown(Ok(ag_git::WorktreeFileContent::Text(
+            "# Ready".to_string(),
+        ))),
         session_id: "session-id".into(),
     })
     .await;

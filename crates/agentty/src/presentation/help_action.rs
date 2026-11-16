@@ -693,7 +693,7 @@ pub(crate) fn diff_actions(
         actions.push(HelpAction::new("comments", "c", "Focus review comments"));
     }
     actions.extend([
-        HelpAction::new("preview", "p", "Toggle selected markdown preview"),
+        HelpAction::new("preview", "p", "Toggle selected markdown or image preview"),
         HelpAction::new(
             "scroll/select row",
             "J/K/Up/Down",
