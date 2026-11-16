@@ -1,27 +1,26 @@
 # Validation Recipes
 
 Select required gates from the root `AGENTS.md` and invoke their definitions through
-`prek`. Do not copy hook implementations into ad hoc commands.
+`prek`; do not copy hook implementations into ad hoc commands.
 
 ## Required Validation Procedure
 
-During iteration, run the relevant formatter or fixer on touched paths, inspect its
-diff, then run focused tests for the changed behavior. Use `test-focused` with an
-explicit `AGENTTY_TEST_FILTER`. Run mutating fixers one at a time. A fixer that rewrites
-files reports `Failed`; that is its result, not an error, so review the diff instead of
-rerunning it.
+During iteration:
 
-`rustfmt-fix` formats only Rust files changed since the fork from `origin/main`, so it
-needs no `--files` list. Formatter configuration or toolchain changes format the whole
-workspace. Unchanged files already match `main`, which CI keeps formatted.
+1. Run the relevant formatter or fixer on touched paths and inspect its diff. Run
+   mutating fixers one at a time. A fixer that rewrites files reports `Failed`; that is
+   its result, not an error, so review the diff instead of rerunning it. `rustfmt-fix`
+   needs no `--files` list: it formats Rust files changed since the fork from
+   `origin/main`, or the whole workspace when formatter configuration or the toolchain
+   changes.
+1. Catch compile errors with
+   `prek run cargo-check --hook-stage manual --files <changed paths>`. It compile-checks
+   the packages `clippy` would select for those paths, without linting.
+1. Run focused tests for the changed behavior with `test-focused` and an explicit
+   `AGENTTY_TEST_FILTER`.
 
-Before `test-focused`, catch compile errors with
-`prek run cargo-check --hook-stage manual --files <changed paths>`. It compile-checks
-the packages `clippy` would select for those paths, without linting.
-
-Before handoff, choose one validation rung covering every touched file and all affected
-dependents. Handoff means the task's final state, not each reply in a multi-turn
-session.
+Before handoff (the task's final state, not each reply in a multi-turn session), choose
+one validation rung covering every touched file and all affected dependents:
 
 | Impact                              | Required final checks                                                                        |
 | ----------------------------------- | -------------------------------------------------------------------------------------------- |
@@ -30,25 +29,23 @@ session.
 | Rust                                | `rustfmt-fix`, `clippy`, and unrestricted `test-focused` for changed packages and dependents |
 | Manifests, migrations, hook catalog | Add their dedicated checks from `.pre-commit-config.yaml`                                    |
 
-Final Rust selection must retain public-contract integration tests. Source-only hooks do
-not replace them: remove test-name restrictions for affected packages, or use
+Final Rust selection must retain public-contract integration tests; source-only hooks do
+not replace them. Remove test-name restrictions for affected packages, or use
 `test-workspace`. For cross-cutting changes, run `prek run --all-files` plus affected
-package tests after touched paths pass formatting and focused tests. If impact cannot be
-bounded confidently, run `test-workspace` locally. Reuse passing checks under the root
-guide's invalidation rule; record the command, scope, and result.
+package tests after touched paths pass formatting and focused tests.
 
 ### Diagnosing Failures and Long Checks
 
 Let the runner's configured timeouts govern individual tests. Run long checks in the
 foreground, redirect large output to a log, and read its summary after the command
-exits. Do not poll with repeated `tail`, `ps`, or sleep loops. After five minutes
+exits; do not poll with repeated `tail`, `ps`, or sleep loops. After five minutes
 without output, inspect build and process activity once; terminate and report a
 confirmed stall, not silence alone.
 
-Diagnose a CI failure with its single failing hook, using `--hook-stage manual` where
-required. Do not rerun every gate after each edit. After three failed repair attempts,
-stop and report the test, output, and attempted fixes; never skip, ignore, or delete the
-test.
+Diagnose a CI failure with its failing hook alone, adding `--hook-stage manual` where
+required, rather than rerunning every gate after each edit. After three failed repair
+attempts, stop and report the test, output, and attempted fixes; never skip, ignore, or
+delete the test.
 
 ## Focused and Affected-Package Tests
 
@@ -60,11 +57,10 @@ AGENTTY_TEST_PACKAGES='ag-git' \
   prek run test-focused --all-files --hook-stage manual
 ```
 
-For final affected-package validation, run the changed package and its dependents
-without a test-name restriction. `rdeps(=ag-git)` selects `ag-git` and every package
+For final affected-package validation, drop the test-name restriction and select the
+changed package with its dependents: `rdeps(=ag-git)` selects `ag-git` and every package
 that depends on it. Dependencies are compiled but not retested, because their sources
-did not change. Replace `ag-git` with the changed package, combining selections with
-`or` when several packages change:
+did not change. Combine selections with `or` when several packages change:
 
 ```sh
 AGENTTY_TEST_FILTER='rdeps(=ag-git)' \
@@ -72,37 +68,37 @@ AGENTTY_TEST_FILTER='rdeps(=ag-git)' \
 ```
 
 `AGENTTY_TEST_PACKAGES` optionally limits compilation to a whitespace-separated list of
-Cargo package names. Without it, the hook builds the workspace. Cargo still builds
-dependencies required by the selected packages. For final validation, select every
-changed package and dependent, or omit the build limit and use the `rdeps` filter above.
-An execution filter does not select compilation packages.
+Cargo package names; without it, the hook builds the workspace. Cargo still builds
+dependencies the selected packages require. An execution filter does not select
+compilation packages, so for final validation either list every changed package and
+dependent, or omit the build limit and use the `rdeps` filter.
 
-`test-focused` requires a nonempty filter and fails when no tests match. Both it and
+`test-focused` requires a nonempty filter and fails when no tests match. It and
 `test-workspace` retain public integration tests. Only the Agentty PTY suites are left
 out: their `test = false` manifest entries reserve them for the separate
-`test-agentty-e2e` gate, so other runs do not compile them. A filter narrows execution,
-not necessarily compilation. Use `test-workspace` when impact is uncertain.
+`test-agentty-e2e` gate, so other runs do not compile them.
 
-`test-focused` uses the `local` nextest profile: after the first failure it stops
-scheduling tests and waits for running tests to finish. It inherits CI's resource
-groups, timeouts, and retry policy. CI hooks keep the exhaustive `ci` profile, so one
-failure does not prevent collection of other failures. A failing local run never
-satisfies final validation or creates a reusable success stamp.
+`test-focused` uses the `local` nextest profile, which inherits CI's resource groups,
+timeouts, and retry policy but stops scheduling tests after the first failure and waits
+for running tests to finish. CI hooks keep the exhaustive `ci` profile, so one failure
+does not prevent collection of others. A failing local run never satisfies final
+validation or creates a reusable success stamp.
 
 ## Coordinated Validation
 
 For final Rust validation, the coordinator automatically selects changed packages and
-their workspace dependents:
+their workspace dependents, then runs `clippy` and unrestricted `test-focused` through
+`prek`:
 
 ```sh
 prek run validate --all-files --hook-stage manual
 ```
 
-Selection includes committed changes since the fork from `origin/main`, staged and
+Selection covers committed changes since the fork from `origin/main`, staged and
 unstaged changes, deleted and renamed paths, and untracked files. Shared or unowned
 paths conservatively select the whole workspace. A missing base or empty change set
-fails with an error; select packages explicitly for a clean checkout. The command prints
-the selected packages, hooks, paths, and reason before running checks.
+fails; select packages explicitly for a clean checkout. The command prints the selected
+packages, hooks, paths, and reason before running checks.
 
 Preview that plan without running checks or writing reuse stamps:
 
@@ -110,7 +106,7 @@ Preview that plan without running checks or writing reuse stamps:
 cargo run --locked -q -p ag-xtask -- validate --plan
 ```
 
-Use `--base` with an existing ref when comparing against a different branch. Explicit
+Use `--base` with an existing ref to compare against a different branch. Explicit
 `--packages` or `AGENTTY_TEST_PACKAGES` replaces automatic path selection; dependents
 are still included:
 
@@ -119,50 +115,40 @@ AGENTTY_TEST_PACKAGES='ag-git ag-agent' \
   prek run validate --all-files --hook-stage manual
 ```
 
-The coordinator executes `clippy` and unrestricted `test-focused` selections through
-`prek`. Its Clippy and `cargo-check` subprocesses receive the affected package selection
-in `AGENTTY_CLIPPY_PACKAGES`, so the hook's full file inventory cannot widen that
-selection. Ordinary Clippy hook invocations continue to select owners and dependents
-from their changed files, with root configuration changes selecting the whole workspace.
+The coordinator passes the affected selection to its Clippy and `cargo-check`
+subprocesses in `AGENTTY_CLIPPY_PACKAGES`, so the hook's full file inventory cannot
+widen it. Ordinary `clippy` invocations select owners and dependents from their changed
+files, and root configuration changes select the whole workspace. `clippy` also lints
+Agentty's explicit PTY targets, with unchanged feature selection, when the dependency
+graph (including development dependencies) says Agentty is affected, or when shared
+files or an unspecified scope apply. The manual `clippy-agentty-e2e` hook runs just
+those targets for diagnosis; default validation already includes them through `clippy`.
 
-`clippy` also lints Agentty's explicit PTY targets when its dependency graph, including
-development dependencies, says Agentty is affected. Shared files and an unspecified
-scope still run those targets. Their feature selection is unchanged. The manual
-`clippy-agentty-e2e` hook runs just those targets for diagnosis; default validation
-includes them through `clippy` without repeating the dependency lookup.
-
-The coordinator holds an OS lock in Cargo's effective target directory, resolved from
-metadata and pinned for each check. Cargo configuration and target-directory environment
-overrides are honored. The check subprocesses clear `SKIP` and `PREK_SKIP` so requested
-checks execute before their successes are recorded. Other invocations of the coordinator
-using that directory wait; direct Cargo commands still use Cargo's own build lock. Keep
-target directories inside the checkout, with downloaded registry and compiler caches
-left in their default shared locations. The target must not contain tracked source
-files. Target artifacts, including paths linked into that directory, are excluded from
-input fingerprints even when the target is not Git-ignored.
+Concurrent coordinator runs wait on an OS lock in Cargo's effective target directory;
+direct Cargo commands use only Cargo's own build lock. Check subprocesses clear `SKIP`
+and `PREK_SKIP`, so requested checks always execute. Keep target directories inside the
+checkout and free of tracked source files, with downloaded registry and compiler caches
+in their default shared locations; target artifacts are excluded from input
+fingerprints.
 
 Direct `ag-xtask validate` invocation accepts ordered `--hook` IDs and optional
-`--reuse`. Fresh execution is the default. Reuse applies only to allowlisted
-deterministic hooks with matching package selection, tracked and untracked source, Git
-state/configuration, tool versions, and environment. Git configuration keeps only the
-checked-out branch's `branch.<name>.*` section, because worktrees sharing the repository
-change their own branches' sections at any time. Changes or failures invalidate success;
-inputs changing during execution cannot produce a successful stamp. Coverage always runs
-fresh. Repository-required hooks still apply.
+`--reuse`; fresh execution is the default. Reuse applies only to allowlisted
+deterministic hooks whose package selection, tracked and untracked source, Git state and
+configuration (only the checked-out branch's `branch.<name>.*` section), tool versions,
+and environment all match. Changes or failures invalidate success, and inputs changing
+during execution cannot produce a successful stamp. Coverage always runs fresh.
+Repository-required hooks still apply.
 
 ## Test Timings
 
-The focused hook writes test execution durations to `target/nextest/local/junit.xml`; CI
-hooks use `target/nextest/ci/junit.xml`. Cargo writes compilation timings to the build
-directory's `cargo-timings/cargo-timing.html`. CI retains both as artifacts for 14 days
-for workspace, source, coverage, native sandbox, and E2E jobs, including reports
-available after failures. Each artifact name includes the run ID, attempt, and job. Its
-`metadata.json` identifies the source SHA, suite, runner image, CPU models,
-available-parallelism estimate, toolchain, container, exact cache-hit flag, hook
-outcome, elapsed hook time, and report hashes. Preparation deletes old reports after
-cache restoration; finalization accepts reports only from that prepared invocation.
-Missing preparation or reports remain explicit. Cancelled jobs may have no artifact at
-all.
+The focused hook writes test durations to `target/nextest/local/junit.xml`; CI hooks use
+`target/nextest/ci/junit.xml`. Cargo writes compilation timings to the build directory's
+`cargo-timings/cargo-timing.html`. CI retains both as artifacts for 14 days for
+workspace, source, coverage, native sandbox, and E2E jobs, including after failures.
+Artifact names include the run ID, attempt, and job; each `metadata.json` identifies the
+source SHA, suite, runner environment, cache-hit status, hook outcome and time, and
+report hashes. Only reports from the prepared invocation are accepted, and missing ones
+stay explicit. Cancelled jobs may have no artifact.
 
 Download at least three samples per revision and compare matching suites and
 environments:
@@ -175,11 +161,24 @@ cargo run --locked -q -p ag-xtask -- compare-timings \
 
 The JSON comparison reports medians, ranges, and percentage changes separately for hook,
 compilation, execution, and summed test-process time. It rejects failed, incomplete,
-duplicate, corrupt, or mixed-environment samples. Keep those rejected samples in the
+duplicate, corrupt, or mixed-environment samples. Keep rejected samples in the
 experiment record and report failures alongside successful timings; do not select only
 favorable runs. Warm up both revisions equally and retain raw artifacts. A percentage
 alone does not establish a reliable improvement when ranges overlap. Summed process time
 is work across concurrent tests, not elapsed time.
+
+Interpret the metadata conservatively. `exact_cache_hit: false` may mean a partial
+restore or a miss, and `null` means unknown; neither proves a cold build. Hook time
+excludes setup and queueing, which come from Actions job and step timestamps, and can
+include scheduling between the collector steps. Cargo's rounded timing report cannot
+resolve subsecond warm-build differences. E2E caches remain isolated by their pinned
+container and Rust environment.
+
+Compare timings from the same final head and completed run attempt. A new PR push
+cancels that PR's obsolete Presubmit and Native Harness Sandbox runs, and a new `main`
+push cancels an obsolete Native Harness Sandbox run on `main`; cancelled samples measure
+superseded work, not suite speed. Postsubmit, merge-group, and manual runs remain
+independent. Default-setup CodeQL runs are managed separately.
 
 `ag-xtask slow-tests <junit.xml>` lists the slowest tests, per-binary and per-module
 totals (`--module-depth`, `--top`), and a duration histogram for one report. After the
@@ -189,28 +188,10 @@ tests that are now fast or gone only warn; remove their entries. The threshold l
 headroom above the slowest unlisted coverage-run tests (about 3.3 s on loaded runners),
 so it does not flake. The PTY E2E suite is not checked.
 
-`exact_cache_hit: false` may mean a partial restore or a miss; `null` means unknown.
-Neither proves a cold build. Hook time excludes setup and queueing; obtain those phases
-from Actions job/step timestamps. The hook interval can include scheduling between the
-collector steps. Cargo's rounded timing report cannot resolve subsecond warm-build
-differences. E2E caches remain isolated by their pinned container and Rust environment.
-The collector's lifecycle and failure paths are checked by `test-timing-action`,
-including 100% JavaScript line coverage; Rust report parsing and comparison are covered
-by the ordinary `ag-xtask` suites and coverage gate. The collector hook writes a fresh
-`timing-action.lcov` for SonarCloud; the coverage job runs that hook before scanning so
-JavaScript coverage is imported alongside Rust.
-
-A new PR push cancels that PR's obsolete Presubmit and Native Harness Sandbox runs, and
-a new `main` push cancels an obsolete Native Harness Sandbox run on `main`. Compare
-timings from the same final head and completed run attempt; cancelled samples measure
-superseded work, not suite speed. Postsubmit, merge-group, and manual runs remain
-independent. Default-setup CodeQL runs are managed separately.
-
-Native Harness Sandbox qualifies only the macOS launcher, and pull requests run it only
-when they touch `ag-harness`, its workspace dependencies, or shared build and CI
-configuration. `crates/ag-xtask/tests/harness_sandbox_filter.rs` fails when the filter's
-crate list drifts from Cargo's dependency graph. The coverage job installs Bubblewrap
-and runs every `ag-harness` sandbox suite, so it is the Linux qualification.
+`test-timing-action` checks the collector's lifecycle and failure paths with 100%
+JavaScript line coverage and writes a fresh `timing-action.lcov`; the coverage job runs
+it before scanning so SonarCloud imports JavaScript coverage alongside Rust. Rust report
+parsing and comparison are covered by the ordinary `ag-xtask` suites and coverage gate.
 
 ## Coverage
 
@@ -218,16 +199,13 @@ and runs every `ag-harness` sandbox suite, so it is the Linux qualification.
 prek run coverage --all-files --hook-stage manual
 ```
 
-Pull-request CI runs this gate; run it locally to diagnose a failure. The hook runs the
-`test-workspace` selection, so CI does not run that suite separately. It generates a
-fresh `coverage.lcov`, then `ag-xtask check-coverage` fails unless every coverable
-production line and function is covered. Failed or empty generation fails the gate; an
-old report cannot satisfy it. CI retains `coverage.lcov` as an artifact, including after
-a failed gate, so platform-specific gaps can be checked locally.
+The hook runs the `test-workspace` selection, so CI does not run that suite separately.
+It generates a fresh `coverage.lcov`, then `ag-xtask check-coverage` fails unless every
+coverable production line and function is covered. Failed or empty generation fails the
+gate; an old report cannot satisfy it. CI retains `coverage.lcov` as an artifact, even
+after a failed gate, so platform-specific gaps can be checked locally.
 
-The gap report lists each file's uncovered line ranges and uncovered functions by start
-line and demangled name. The gate reads per-line `DA` records, the same line data
-SonarCloud and Codecov import, plus function records and per-file totals; a file record
+The gap report lists each file's uncovered line ranges and functions. A file record
 without `DA` lines or any `FNF`, `FNH`, `LF`, or `LH` total fails.
 
 To work on one package's gaps, run its tests with coverage and check only its sources:
@@ -245,44 +223,45 @@ otherwise every reported file is checked. The hook writes a fresh
 through other packages' tests appears uncovered there; the `coverage` gate remains
 authoritative.
 
-A focused run rebuilds only the selected packages. Instrumented test binaries left in
-the coverage build directory by unselected dependents still contain a changed crate's
-old code, and the report can then list gaps at line numbers that no longer match the
+A focused run rebuilds only the selected packages. Instrumented test binaries that
+unselected dependents left in the coverage build directory still contain a changed
+crate's old code, so the report can list gaps at line numbers that no longer match the
 source. Add those dependents to `AGENTTY_TEST_PACKAGES` and keep execution narrow with
 `AGENTTY_TEST_FILTER='package(=<package>)'` to rebuild them.
+
+Native Harness Sandbox qualifies only the macOS launcher, and pull requests run it only
+when they touch `ag-harness`, its workspace dependencies, or shared build and CI
+configuration. `crates/ag-xtask/tests/harness_sandbox_filter.rs` fails when the filter's
+crate list drifts from Cargo's dependency graph. The coverage job installs Bubblewrap
+and runs every `ag-harness` sandbox suite, so it is the Linux qualification.
 
 ## SonarQube Issues
 
 Pull-request CI fails on any open SonarQube issue in the changed code. The built-in
-quality gate grades new code by rating, which passes a pull request that still adds
-issues. The coverage job therefore makes the scan wait for the gate, reads the
-analysis's `new_violations` count, and annotates each issue. Fix the reported code. Add
-a rule exception to `sonar-project.properties` only with a comment explaining why the
-rule does not apply. Pull requests from forks are not scanned.
-
-`crates/ag-xtask/tests/sonar_issue_gate.rs` runs that step with a stub `curl` and saved
-responses: no issue, counted issues, and a failed or unusable count.
+quality gate grades new code by rating and can pass a pull request that still adds
+issues, so the coverage job waits for the gate, reads the analysis's `new_violations`
+count, and annotates each issue. Fix the reported code. Add a rule exception to
+`sonar-project.properties` only with a comment explaining why the rule does not apply.
+Pull requests from forks are not scanned. `crates/ag-xtask/tests/sonar_issue_gate.rs`
+runs that step with a stub `curl` and saved responses.
 
 ## Instruction and Hook Maintenance
 
 `check-instructions` validates instruction aliases, literal repository paths, local
-Markdown link targets, and hook IDs used in `prek run` commands. It runs on every
-default check invocation, including when referenced files are moved or deleted, through
-the `ag-xtask check-instructions` Rust command.
+Markdown link targets, and hook IDs used in `prek run` commands. It runs through
+`ag-xtask check-instructions` on every default check invocation, including when
+referenced files are moved or deleted. Its unit and public CLI tests cover valid and
+broken instruction fixtures; validate checker changes with the affected-package recipe
+for `ag-xtask`, whose CLI suites the coverage gate includes.
 
-The `ag-xtask` unit and public CLI tests cover valid and broken instruction fixtures.
-Use the affected-package recipe above with `ag-xtask`; the standard Rust coverage gate
-includes its CLI suites to cover dispatch and process exit paths as well as the checker.
-
-`crates/ag-xtask/tests/test_focused.rs` executes the cataloged focused-test command with
-a stub runner to verify build selection, literal filters, required inputs, and failure
-propagation. `crates/ag-xtask/tests/coverage_hook.rs` does the same for `coverage` and
-`coverage-focused`: required inputs, package, filter, and path arguments, stale-report
-removal, coverage build settings kept away from `check-coverage`, and failure
-propagation from generation and the check. `coverage-ag-harness-sandbox` still lacks
-such regression coverage. Configuration and instruction checks are not replacements.
-Review changes to coverage commands, compiler wrappers, and native sandbox setup for
-argument quoting, failure propagation, report freshness, and setup ordering.
+`crates/ag-xtask/tests/test_focused.rs` and `crates/ag-xtask/tests/coverage_hook.rs`
+execute the cataloged `test-focused`, `coverage`, and `coverage-focused` commands with a
+stub runner to verify selection, required inputs, arguments, stale-report removal,
+isolation of coverage build settings from `check-coverage`, and failure propagation.
+`coverage-ag-harness-sandbox` still lacks such regression coverage; configuration and
+instruction checks are not replacements. Review changes to coverage commands, compiler
+wrappers, and native sandbox setup for argument quoting, failure propagation, report
+freshness, and setup ordering.
 
 ## TUI Snapshots
 
