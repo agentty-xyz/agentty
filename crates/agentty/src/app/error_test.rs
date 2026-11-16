@@ -21,10 +21,27 @@ fn session_error_converts_via_from() {
 #[test]
 fn workflow_display_shows_contextual_message() {
     // Arrange
-    let error = AppError::Workflow("Failed to run terminal UI: broken pipe".to_string());
+    let error = AppError::Workflow("Session project is missing".to_string());
 
     // Act / Assert
-    assert_eq!(error.to_string(), "Failed to run terminal UI: broken pipe");
+    assert_eq!(error.to_string(), "Session project is missing");
+}
+
+#[test]
+fn terminal_errors_name_the_failed_terminal_phase() {
+    // Arrange
+    let setup = AppError::TerminalSetup(std::io::Error::other("not a terminal"));
+    let running = AppError::Terminal(std::io::Error::other("broken pipe"));
+
+    // Act / Assert
+    assert_eq!(
+        setup.to_string(),
+        "Failed to start terminal UI: not a terminal"
+    );
+    assert_eq!(
+        running.to_string(),
+        "Failed to run terminal UI: broken pipe"
+    );
 }
 
 #[test]

@@ -1,12 +1,17 @@
-//! Analytics destinations, installation identity, install-method detection,
-//! and model reporting unit tests.
+//! Analytics destinations, installation identity, install-method and
+//! launch-environment detection, failure classification, and model reporting
+//! unit tests.
 
 use std::collections::BTreeMap;
+use std::ffi::OsString;
 use std::fs;
+use std::io::{self, IsTerminal as _};
 #[cfg(unix)]
 use std::os::unix::fs::symlink;
 use std::path::PathBuf;
 
+use ag_contracts::OneShotError;
+use ag_git::GitError;
 use ag_telemetry::otlp::{OtlpExport, Service};
 use opentelemetry_proto::tonic::collector::logs::v1::ExportLogsServiceRequest;
 use opentelemetry_proto::tonic::common::v1::any_value;
@@ -14,16 +19,20 @@ use prost::Message as _;
 use tempfile::Builder;
 use uuid::Uuid;
 use wiremock::matchers::method;
-use wiremock::{Mock, MockServer, ResponseTemplate};
+use wiremock::{Mock, MockServer, Request, ResponseTemplate};
 
-use super::{Analytics, InstallMethod, SessionType, TurnOutcome, TurnSelection, reported_model};
+use super::{
+    Analytics, InstallMethod, LaunchEnvironment, SessionType, TurnOutcome, TurnSelection,
+    reported_model,
+};
 use crate::app::AppError;
+use crate::app::session::SessionError;
 use crate::domain::agent::{
     AgentKind, AgentModel, AgentSelection, AgentSelectionMetadata as _, ServedModel,
 };
 use crate::domain::permission::PermissionMode;
 use crate::domain::setting::SettingName;
-use crate::infra::db::AppRepositories;
+use crate::infra::db::{AppRepositories, DbError};
 
 const SERVICE: Service = Service {
     name: "agentty-test",
@@ -68,7 +77,13 @@ async fn mirror_without_posthog_exports_every_event_with_posthog_properties() {
         .await
         .expect("start")
         .expect("enabled");
-    let analytics = Analytics::mirror(None, export.event_log()).expect("mirror-only sender");
+    let analytics = Analytics {
+        environment: LaunchEnvironment {
+            ci: true,
+            interactive: false,
+        },
+        ..Analytics::mirror(None, export.event_log()).expect("mirror-only sender")
+    };
     let agent = AgentSelection::new(AgentKind::Codex, AgentModel::Gpt61Sol);
     let turn = TurnSelection {
         agent,
@@ -93,31 +108,7 @@ async fn mirror_without_posthog_exports_every_event_with_posthog_properties() {
     // Assert
     assert_eq!(warnings, 0);
     assert!(analytics.posthog.is_none());
-    let requests = server.received_requests().await.expect("requests");
-    assert!(
-        requests
-            .iter()
-            .all(|request| request.url.path() == "/v1/logs")
-    );
-    let records: Vec<_> = requests
-        .iter()
-        .flat_map(|request| {
-            ExportLogsServiceRequest::decode(request.body.as_slice())
-                .expect("OTLP logs")
-                .resource_logs
-        })
-        .flat_map(|resource| resource.scope_logs)
-        .flat_map(|scope| scope.log_records)
-        .map(|record| {
-            let attributes: BTreeMap<String, Option<any_value::Value>> = record
-                .attributes
-                .into_iter()
-                .map(|attribute| (attribute.key, attribute.value.and_then(|value| value.value)))
-                .collect();
-
-            (record.event_name, attributes)
-        })
-        .collect();
+    let records = exported_log_records(&server.received_requests().await.expect("requests"));
     let common = [
         ("app_source", "cli"),
         ("app_version", env!("CARGO_PKG_VERSION")),
@@ -142,10 +133,11 @@ async fn mirror_without_posthog_exports_every_event_with_posthog_properties() {
         ("model", agent.model().as_str()),
         ("permission_mode", "auto_edit_address_comments"),
     ];
+    let environment = [("ci", "true"), ("interactive", "false")];
     assert_eq!(
         records,
         vec![
-            expected_event("agentty_launch", &[]),
+            expected_event("agentty_launch", &environment),
             expected_event(
                 "agentty_session_start",
                 &[
@@ -157,8 +149,145 @@ async fn mirror_without_posthog_exports_every_event_with_posthog_properties() {
             expected_event("agentty_turn_start", &selection),
             expected_event("agentty_turn_finish", &selection),
             expected_event("agentty_turn_interrupt", &selection),
-            expected_event("agentty_failure", &[("failure_category", "application")]),
+            expected_event(
+                "agentty_failure",
+                &[
+                    ("failure_category", "workflow"),
+                    ("stage", "startup"),
+                    environment[0],
+                    environment[1],
+                ],
+            ),
         ]
+    );
+}
+
+/// Decodes the OTLP log records sent to `/v1/logs` as event names with their
+/// attributes, asserting that no request targeted another path.
+fn exported_log_records(
+    requests: &[Request],
+) -> Vec<(String, BTreeMap<String, Option<any_value::Value>>)> {
+    assert!(
+        requests
+            .iter()
+            .all(|request| request.url.path() == "/v1/logs")
+    );
+
+    requests
+        .iter()
+        .flat_map(|request| {
+            ExportLogsServiceRequest::decode(request.body.as_slice())
+                .expect("OTLP logs")
+                .resource_logs
+        })
+        .flat_map(|resource| resource.scope_logs)
+        .flat_map(|scope| scope.log_records)
+        .map(|record| {
+            let attributes = record
+                .attributes
+                .into_iter()
+                .map(|attribute| (attribute.key, attribute.value.and_then(|value| value.value)))
+                .collect();
+
+            (record.event_name, attributes)
+        })
+        .collect()
+}
+
+#[test]
+fn every_error_kind_has_a_fixed_failure_category_and_stage() {
+    // Arrange
+    let errors = [
+        (
+            AppError::Session(SessionError::NotFound),
+            "session",
+            "startup",
+        ),
+        (
+            AppError::Db(DbError::Io(io::Error::other("private database path"))),
+            "database",
+            "startup",
+        ),
+        (
+            AppError::Git(GitError::CommandFailed {
+                command: "git status".to_string(),
+                stderr: "private repository path".to_string(),
+            }),
+            "git",
+            "startup",
+        ),
+        (
+            AppError::OneShot(OneShotError::new("private prompt")),
+            "one_shot",
+            "startup",
+        ),
+        (AppError::NoAgentAvailable, "no_agent", "startup"),
+        (
+            AppError::TerminalSetup(io::Error::other("not a terminal")),
+            "terminal",
+            "startup",
+        ),
+        (
+            AppError::Terminal(io::Error::other("broken pipe")),
+            "terminal",
+            "runtime",
+        ),
+        (
+            AppError::Workflow("private workflow detail".to_string()),
+            "workflow",
+            "startup",
+        ),
+    ];
+
+    for (error, category, stage) in errors {
+        // Act
+        let classification = Analytics::failure_classification(&error);
+
+        // Assert
+        assert_eq!(classification, (category, stage), "{error:?}");
+    }
+}
+
+#[test]
+fn launch_environment_reports_ci_variables_and_interactive_terminals() {
+    // Arrange
+    let lookup = |set: &'static [(&'static str, &'static str)]| {
+        move |name: &str| {
+            set.iter()
+                .find(|(key, _)| *key == name)
+                .map(|(_, value)| OsString::from(value))
+        }
+    };
+
+    // Act
+    let person = LaunchEnvironment::from_signals(true, lookup(&[]));
+    let github_actions =
+        LaunchEnvironment::from_signals(false, lookup(&[("GITHUB_ACTIONS", "true")]));
+    let jenkins = LaunchEnvironment::from_signals(false, lookup(&[("JENKINS_URL", "https://ci")]));
+    let opted_out = LaunchEnvironment::from_signals(
+        true,
+        lookup(&[
+            ("CI", "FALSE"),
+            ("TF_BUILD", "0"),
+            ("CODEBUILD_BUILD_ID", ""),
+        ]),
+    );
+    let detected = LaunchEnvironment::detect();
+
+    // Assert
+    assert_eq!(
+        person.properties(),
+        [("ci", "false"), ("interactive", "true")]
+    );
+    assert_eq!(
+        github_actions.properties(),
+        [("ci", "true"), ("interactive", "false")]
+    );
+    assert!(jenkins.ci);
+    assert!(!opted_out.ci);
+    assert_eq!(
+        detected.interactive,
+        io::stdin().is_terminal() && io::stdout().is_terminal()
     );
 }
 

@@ -632,12 +632,15 @@ async fn test_new_with_clients_fails_when_no_backend_cli_is_available() {
     let result = App::new_with_clients(base_path.clone(), base_path, None, database, clients).await;
 
     // Assert
-    assert!(matches!(
-        result,
-        Err(AppError::Workflow(message))
-            if message
-                == "No supported backend CLI found on `PATH`. Install `codex`, `claude`, or Antigravity CLI 1.1.7 or newer. For an older `agy`, run `agy update`, then restart `agentty`."
-    ));
+    let error = result
+        .err()
+        .expect("startup should reject a missing backend");
+    assert!(matches!(error, AppError::NoAgentAvailable));
+    assert_eq!(
+        error.to_string(),
+        "No supported backend CLI found on `PATH`. Install `codex`, `claude`, or Antigravity CLI \
+         1.1.7 or newer. For an older `agy`, run `agy update`, then restart `agentty`."
+    );
 }
 
 #[tokio::test]

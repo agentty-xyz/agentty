@@ -17,6 +17,9 @@ type TestResult<T> = Result<T, Box<dyn std::error::Error + Send + Sync>>;
 
 const INSTALLATION_ID: &str = "4f1c2e8a-5b6d-4c3e-9f0a-1b2c3d4e5f60";
 
+/// Launch-environment properties sent with launch and failure events.
+const ENVIRONMENT_FLAGS: [&str; 2] = ["ci", "interactive"];
+
 #[test]
 fn telemetry_is_enabled_unless_environment_opts_out() {
     // Arrange / Act / Assert
@@ -47,12 +50,19 @@ async fn outbound_events_contain_only_allowlisted_properties() -> TestResult<()>
         .map_err(|_| io::Error::other("receiver thread panicked"))??;
 
     // Assert
-    assert_event(&launch, "test-token", "agentty_launch", &[]);
+    assert_event(
+        &launch,
+        "test-token",
+        "agentty_launch",
+        &[],
+        &ENVIRONMENT_FLAGS,
+    );
     assert_event(
         &failure,
         "test-token",
         "agentty_failure",
-        &[("failure_category", "application")],
+        &[("failure_category", "workflow"), ("stage", "startup")],
+        &ENVIRONMENT_FLAGS,
     );
     assert!(!failure.to_string().contains("private path"));
     assert!(!failure.to_string().contains("prompt text"));
@@ -61,29 +71,54 @@ async fn outbound_events_contain_only_allowlisted_properties() -> TestResult<()>
 }
 
 #[tokio::test]
-async fn database_failures_use_a_fixed_category() -> TestResult<()> {
+async fn failures_report_fixed_categories_and_stages_without_messages() -> TestResult<()> {
     // Arrange
+    let failures = [
+        (
+            AppError::Db(DbError::Io(io::Error::other("secret database path"))),
+            "database",
+            "startup",
+        ),
+        (AppError::NoAgentAvailable, "no_agent", "startup"),
+        (
+            AppError::TerminalSetup(io::Error::other("secret terminal device")),
+            "terminal",
+            "startup",
+        ),
+        (
+            AppError::Terminal(io::Error::other("secret terminal device")),
+            "terminal",
+            "runtime",
+        ),
+    ];
+    let event_count = failures.len();
     let listener = TcpListener::bind("127.0.0.1:0")?;
     let host = format!("http://{}", listener.local_addr()?);
-    let receiver = std::thread::spawn(move || receive_event(&listener));
+    let receiver = std::thread::spawn(move || -> TestResult<Vec<Value>> {
+        (0..event_count).map(|_| receive_event(&listener)).collect()
+    });
     let analytics = Analytics::new("token", &host, INSTALLATION_ID)
         .ok_or_else(|| io::Error::other("enabled sender should be configured"))?;
-    let error = AppError::Db(DbError::Io(std::io::Error::other("secret database path")));
 
     // Act
-    analytics.record_failure(&error).await;
-    let event = receiver
+    for (error, _, _) in &failures {
+        analytics.record_failure(error).await;
+    }
+    let events = receiver
         .join()
         .map_err(|_| io::Error::other("receiver thread panicked"))??;
 
     // Assert
-    assert_event(
-        &event,
-        "token",
-        "agentty_failure",
-        &[("failure_category", "database")],
-    );
-    assert!(!event.to_string().contains("secret database path"));
+    for (event, (_, category, stage)) in events.iter().zip(failures) {
+        assert_event(
+            event,
+            "token",
+            "agentty_failure",
+            &[("failure_category", category), ("stage", stage)],
+            &ENVIRONMENT_FLAGS,
+        );
+        assert!(!event.to_string().contains("secret"));
+    }
 
     Ok(())
 }
@@ -143,6 +178,7 @@ async fn session_and_turn_lifecycle_events_report_only_bounded_metadata() -> Tes
                 ("agent", agents[0].kind().name()),
                 ("model", agents[0].model().as_str()),
             ],
+            &[],
         );
     }
     for (turn_events, turn) in events[session_types.len()..]
@@ -165,6 +201,7 @@ async fn session_and_turn_lifecycle_events_report_only_bounded_metadata() -> Tes
                     ("model", turn.agent.model().as_str()),
                     ("permission_mode", turn.permission_mode.label()),
                 ],
+                &[],
             );
         }
     }
@@ -227,7 +264,16 @@ fn receive_event(listener: &TcpListener) -> TestResult<Value> {
     }
 }
 
-fn assert_event(event: &Value, token: &str, name: &str, event_properties: &[(&str, &str)]) {
+/// Checks an event's envelope and that its properties are exactly the
+/// common properties, `event_properties`, and the boolean-like `flags`,
+/// whose values depend on the test process environment.
+fn assert_event(
+    event: &Value,
+    token: &str,
+    name: &str,
+    event_properties: &[(&str, &str)],
+    flags: &[&str],
+) {
     assert_eq!(event.as_object().map(serde_json::Map::len), Some(4));
     assert_eq!(event["api_key"], token);
     assert_eq!(event["event"], name);
@@ -241,9 +287,15 @@ fn assert_event(event: &Value, token: &str, name: &str, event_properties: &[(&st
     for &(key, value) in event_properties {
         assert_eq!(properties[key], value);
     }
+    for &key in flags {
+        assert!(
+            properties[key] == "true" || properties[key] == "false",
+            "{key} is boolean-like"
+        );
+    }
     assert_eq!(
         properties.as_object().map(serde_json::Map::len),
-        Some(4 + event_properties.len())
+        Some(4 + event_properties.len() + flags.len())
     );
 }
 

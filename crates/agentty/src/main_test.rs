@@ -12,10 +12,11 @@ use agentty::infra::db::{DB_DIR, DB_FILE, acquire_instance_lock};
 use clap::Parser;
 use clap::error::ErrorKind;
 use opentelemetry_proto::tonic::collector::logs::v1::ExportLogsServiceRequest;
+use opentelemetry_proto::tonic::common::v1::any_value;
 use prost::Message as _;
-use wiremock::{Mock, MockServer, ResponseTemplate};
+use wiremock::{Mock, MockServer, Request, ResponseTemplate};
 
-use super::{Cli, ExperimentalFeatures, map_runtime_result, run, run_with_analytics};
+use super::{Cli, ExperimentalFeatures, run, run_with_analytics};
 
 const LOCK_FAILURE_CHILD_ENV: &str = "AGENTTY_LOCK_FAILURE_CHILD";
 const TRACED_STARTUP_CHILD_ENV: &str = "AGENTTY_TRACED_STARTUP_CHILD";
@@ -24,22 +25,22 @@ const DATABASE_FAILURE_CHILD_ENV: &str = "AGENTTY_DATABASE_FAILURE_CHILD";
 const TELEMETRY_STARTUP_CHILD_ENV: &str = "AGENTTY_TELEMETRY_STARTUP_CHILD";
 const DELETED_CWD_CHILD_ENV: &str = "AGENTTY_DELETED_CWD_CHILD";
 
-async fn closed_runtime(_app: &mut App) -> std::io::Result<()> {
-    Err(std::io::Error::other("terminal closed"))
+async fn closed_runtime(_app: &mut App) -> Result<(), AppError> {
+    Err(AppError::Terminal(std::io::Error::other("terminal closed")))
 }
 
-async fn root_working_dir_runtime(app: &mut App) -> std::io::Result<()> {
+async fn root_working_dir_runtime(app: &mut App) -> Result<(), AppError> {
     if app.working_dir() == std::path::Path::new("/") {
         return Ok(());
     }
 
-    Err(std::io::Error::other(format!(
+    Err(AppError::Workflow(format!(
         "unexpected working directory: {}",
         app.working_dir().display()
     )))
 }
 
-async fn traced_closed_runtime(app: &mut App) -> std::io::Result<()> {
+async fn traced_closed_runtime(app: &mut App) -> Result<(), AppError> {
     assert_eq!(
         ag_telemetry::Context::current()
             .get::<ag_telemetry::CaptureToolContent>()
@@ -158,24 +159,6 @@ fn content_capture_requires_an_explicit_export_destination() {
     // Assert
     assert_eq!(missing.kind(), ErrorKind::MissingRequiredArgument);
     assert!(enabled.otlp_capture_content);
-}
-
-#[test]
-fn runtime_errors_keep_the_terminal_context() {
-    // Arrange
-    let error = std::io::Error::other("terminal closed");
-
-    // Act
-    let result = map_runtime_result(Err(error));
-
-    // Assert
-    assert!(matches!(&result, Err(AppError::Workflow(_))));
-    assert!(
-        result
-            .expect_err("terminal failure")
-            .to_string()
-            .contains("Failed to run terminal UI: terminal closed")
-    );
 }
 
 #[tokio::test]
@@ -545,6 +528,7 @@ async fn startup_runs_application_through_telemetry_wrapper() {
             ])
             .env(TELEMETRY_STARTUP_CHILD_ENV, "1")
             .env("AGENTTY_ROOT", root.path())
+            .env("CI", "true")
             .env("HOME", root.path())
             .env("PATH", &child_path);
         if capture {
@@ -573,26 +557,79 @@ async fn startup_runs_application_through_telemetry_wrapper() {
         );
         let requests = server.received_requests().await.expect("requests");
         assert_eq!(requests.is_empty(), response_status.is_none());
-        let mut events: Vec<String> = requests
-            .iter()
-            .filter(|request| request.url.path() == "/v1/logs")
-            .flat_map(|request| {
-                ExportLogsServiceRequest::decode(request.body.as_slice())
-                    .expect("OTLP logs")
-                    .resource_logs
-            })
-            .flat_map(|resource| resource.scope_logs)
-            .flat_map(|scope| scope.log_records)
-            .map(|record| record.event_name)
-            .collect();
-        // Rejected exports are retried, so compare the distinct event names.
-        events.sort();
-        events.dedup();
         let expected_events = if response_status.is_some() {
-            vec!["agentty_failure", "agentty_launch"]
+            vec![
+                exported_event(
+                    "agentty_failure",
+                    &[
+                        ("ci", "true"),
+                        ("failure_category", "terminal"),
+                        ("interactive", "false"),
+                        ("stage", "runtime"),
+                    ],
+                ),
+                exported_event(
+                    "agentty_launch",
+                    &[("ci", "true"), ("interactive", "false")],
+                ),
+            ]
         } else {
             Vec::new()
         };
-        assert_eq!(events, expected_events);
+        assert_eq!(exported_events(&requests), expected_events);
     }
+}
+
+/// An exported event name with its sorted event-specific attributes.
+type ExportedEvent = (String, Vec<(String, String)>);
+
+/// Returns the distinct exported usage events, without the properties shared
+/// by every event. Rejected exports are retried, so duplicates are dropped.
+fn exported_events(requests: &[Request]) -> Vec<ExportedEvent> {
+    let mut events: Vec<ExportedEvent> = requests
+        .iter()
+        .filter(|request| request.url.path() == "/v1/logs")
+        .flat_map(|request| {
+            ExportLogsServiceRequest::decode(request.body.as_slice())
+                .expect("OTLP logs")
+                .resource_logs
+        })
+        .flat_map(|resource| resource.scope_logs)
+        .flat_map(|scope| scope.log_records)
+        .map(|record| {
+            let mut attributes: Vec<(String, String)> = record
+                .attributes
+                .into_iter()
+                .filter(|attribute| {
+                    !["app_source", "app_version", "install_method"]
+                        .contains(&attribute.key.as_str())
+                })
+                .map(|attribute| {
+                    let value = match attribute.value.and_then(|value| value.value) {
+                        Some(any_value::Value::StringValue(value)) => value,
+                        value => format!("{value:?}"),
+                    };
+
+                    (attribute.key, value)
+                })
+                .collect();
+            attributes.sort();
+
+            (record.event_name, attributes)
+        })
+        .collect();
+    events.sort();
+    events.dedup();
+
+    events
+}
+
+fn exported_event(name: &str, attributes: &[(&str, &str)]) -> ExportedEvent {
+    (
+        name.to_string(),
+        attributes
+            .iter()
+            .map(|&(key, value)| (key.to_string(), value.to_string()))
+            .collect(),
+    )
 }
