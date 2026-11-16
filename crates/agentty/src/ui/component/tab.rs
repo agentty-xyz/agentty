@@ -5,7 +5,7 @@ use ratatui::Frame;
 use ratatui::layout::Rect;
 use ratatui::style::Style;
 use ratatui::text::{Line, Span};
-use ratatui::widgets::{Block, Borders, Paragraph};
+use ratatui::widgets::{Block, Borders, Padding, Paragraph};
 
 use crate::app::Tab;
 use crate::domain::resource::SessionResources;
@@ -14,19 +14,20 @@ use crate::ui::{Component, style};
 /// Minimum blank columns kept between the tabs and the process stats.
 const PROCESS_STATS_GAP: usize = 2;
 
-/// Header tabs rendered directly below the status bar on list mode pages,
-/// with Agentty process-tree stats right-aligned on the same row.
+/// Header tabs rendered below the status bar on list mode pages, with
+/// Agentty process-tree stats right-aligned on the tab row.
 ///
-/// The component occupies [`Tabs::HEIGHT`] rows: the tab row and its bottom
-/// rule.
+/// The component occupies [`Tabs::HEIGHT`] rows: a blank spacer row, the tab
+/// row, and its bottom rule.
 pub struct Tabs {
     current_tab: Tab,
     process_resources: Option<SessionResources>,
 }
 
 impl Tabs {
-    /// Rows the tab header occupies: the tab row and its bottom rule.
-    pub const HEIGHT: u16 = 2;
+    /// Rows the tab header occupies: a blank spacer row, the tab row, and its
+    /// bottom rule.
+    pub const HEIGHT: u16 = 3;
 
     /// Creates a tabs component with the provided active tab.
     pub fn new(current_tab: Tab) -> Self {
@@ -53,7 +54,8 @@ impl Component for Tabs {
         let line = Line::from(tab_spans(self.current_tab));
         let block = Block::default()
             .borders(Borders::BOTTOM)
-            .border_style(style::border_style());
+            .border_style(style::border_style())
+            .padding(Padding::top(1));
         let inner_area = block.inner(area);
         let stats_width =
             usize::from(inner_area.width).saturating_sub(line.width() + PROCESS_STATS_GAP);

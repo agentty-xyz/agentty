@@ -53,8 +53,8 @@ printf '%s 1 12.5 2048 S\n2147483640 %s 2.5 1024 S\n2147483639 1 90.0 8192 S\n' 
             },
             |frame, _report| {
                 Box::pin(async move {
-                    // The tab row sits directly below the status bar.
-                    let tab_row = Region::new(0, 1, frame.cols(), 1);
+                    // The tab row sits one blank row below the status bar.
+                    let tab_row = Region::new(0, 2, frame.cols(), 1);
                     assertion::assert_text_in_region(frame, PROCESS_STATS, &tab_row);
                     assertion::assert_text_in_region(frame, "Sessions", &tab_row);
                 })
