@@ -290,6 +290,14 @@ repos:
         always_run: true
         pass_filenames: false
         stages: [manual]
+      - id: e2e-container
+        name: agentty e2e in the pinned container
+        description: Run or record Agentty feature tests in the pinned E2E image with Podman; concurrent local runs wait for the host lock.
+        entry: cargo run -q --locked -p ag-xtask -- e2e-container
+        language: system
+        always_run: true
+        pass_filenames: false
+        stages: [manual]
       - id: coverage
         name: coverage
         description: Generate coverage once from the `test-workspace` selection, write the CI LCOV report, and list every uncovered line and function; anything uncovered fails.

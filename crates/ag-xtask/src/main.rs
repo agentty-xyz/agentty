@@ -6,6 +6,7 @@ mod check_coverage;
 mod check_execution_boundary;
 mod check_instruction;
 mod check_migration;
+mod e2e_container;
 mod format_changed;
 mod slow_test;
 mod timing;
@@ -43,6 +44,8 @@ enum Command {
     Migrations,
     /// Compares repeated CI timing artifacts with matching provenance.
     CompareTimings(timing::Options),
+    /// Runs Agentty E2E tests in the pinned image, one local run at a time.
+    E2eContainer,
     /// Formats Rust files changed since the branch fork point.
     Fmt(format_changed::Options),
     /// Reports slow tests in a nextest `JUnit` report and checks a duration
@@ -64,6 +67,7 @@ fn main() -> ExitCode {
         Some(Command::Instructions) => check_instruction::run(),
         None | Some(Command::Migrations) => check_migration::run(),
         Some(Command::CompareTimings(options)) => timing::run(&options),
+        Some(Command::E2eContainer) => e2e_container::run(),
         Some(Command::Fmt(options)) => format_changed::run(&options),
         Some(Command::SlowTests(options)) => slow_test::run(&options),
         Some(Command::Validate(options)) => validation::run(options),
