@@ -21,7 +21,7 @@ const TITLE_CHROME_WIDTH: usize = 4;
 const HORIZONTAL_CHROME_WIDTH: usize = 6;
 
 /// Bottom-border shortcut that dismisses the overlay.
-const CLOSE_ACTION: HelpAction = HelpAction::new("close", "Esc", "Close");
+const CLOSE_ACTION: HelpAction = HelpAction::new("close", "Esc/q", "Close");
 
 /// Bottom-border shortcut shown when the shortcut list overflows the popup.
 const SCROLL_ACTION: HelpAction = HelpAction::new("scroll", "j/k", "Scroll");
