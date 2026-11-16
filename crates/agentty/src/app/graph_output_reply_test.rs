@@ -9,7 +9,7 @@ use ag_contracts::{
     AgentRequestKind, MockAgentChannel, OneShotError, OneShotRequest, OneShotSubmission,
     SessionStats, TurnRequest, TurnResult,
 };
-use ag_git::MockGitClient;
+use ag_git::{DiffStats, MockGitClient};
 use ag_protocol::{AgentResponse, TurnPrompt};
 use ag_session::{
     ExecutionGraph, ExecutionGraphProgress, ExecutionGraphStatus, GraphContext, GraphNode,
@@ -654,6 +654,8 @@ async fn reader_graph_app() -> (App, TempDir, mpsc::UnboundedReceiver<TurnReques
         .returning(|_| Box::pin(async { Ok(None) }));
     git.expect_diff()
         .returning(|_, _| Box::pin(async { Ok(String::new()) }));
+    git.expect_diff_stats()
+        .returning(|_, _| Box::pin(async { Ok(DiffStats::default()) }));
     app.services.set_git_client(Arc::new(git));
     seed_session(&mut app.sessions, app.services.db()).await;
     let mut client = MockRunClient::new();

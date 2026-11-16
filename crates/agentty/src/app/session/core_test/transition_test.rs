@@ -78,8 +78,12 @@ async fn test_spawn_session_task_auto_commits_changes() {
     expect_pre_commit_hook_ready(&mut mock_git_client);
     mock_git_client
         .expect_diff()
-        .times(3)
+        .times(2)
         .returning(|_, _| Box::pin(async { Ok(String::new()) }));
+    mock_git_client
+        .expect_diff_stats()
+        .times(1)
+        .returning(|_, _| Box::pin(async { Ok(git::DiffStats::default()) }));
     mock_git_client
         .expect_fetch_remote()
         .times(0..)
@@ -165,6 +169,10 @@ async fn test_spawn_session_task_skips_commit_when_nothing_to_commit() {
         .expect_diff()
         .times(0..)
         .returning(|_, _| Box::pin(async { Ok(String::new()) }));
+    mock_git_client
+        .expect_diff_stats()
+        .times(0..)
+        .returning(|_, _| Box::pin(async { Ok(git::DiffStats::default()) }));
     mock_git_client
         .expect_fetch_remote()
         .times(0..)

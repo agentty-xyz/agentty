@@ -46,7 +46,7 @@ async fn refresh_diff_stats_marks_git_failures_unknown_without_erasing_totals() 
     let mut fs_client = fs::MockFsClient::new();
     fs_client.expect_is_dir().times(1).return_const(true);
     let mut git_client = MockGitClient::new();
-    git_client.expect_diff().times(1).returning(|_, _| {
+    git_client.expect_diff_stats().times(1).returning(|_, _| {
         Box::pin(async { Err(GitError::OutputParse("diff failed".to_string())) })
     });
 
@@ -87,16 +87,19 @@ async fn refresh_diff_stats_returns_none_when_persistence_fails() {
         if is_base_branch_lookup_failure {
             pool.close().await;
             fs_client.expect_is_dir().never();
-            git_client.expect_diff().never();
+            git_client.expect_diff_stats().never();
         } else {
             fs_client.expect_is_dir().times(1).return_const(true);
-            git_client.expect_diff().times(1).return_once(move |_, _| {
-                Box::pin(async move {
-                    pool.close().await;
+            git_client
+                .expect_diff_stats()
+                .times(1)
+                .return_once(move |_, _| {
+                    Box::pin(async move {
+                        pool.close().await;
 
-                    Err(GitError::OutputParse("diff failed".to_string()))
-                })
-            });
+                        Err(GitError::OutputParse("diff failed".to_string()))
+                    })
+                });
         }
 
         // Act

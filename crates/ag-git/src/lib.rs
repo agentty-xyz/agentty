@@ -36,15 +36,15 @@ pub(crate) use rebase::{
 pub(crate) use repo::{main_checkout_working_tree, main_repo_root, repo_url};
 pub(crate) use sleeper::{Sleeper, ThreadSleeper};
 pub use sync::{
-    BranchPushOutcome, BranchTrackingMap, PullRebaseResult, SingleCommitMessageStrategy,
+    BranchPushOutcome, BranchTrackingMap, DiffStats, PullRebaseResult, SingleCommitMessageStrategy,
     WorktreeFileContent,
 };
 pub(crate) use sync::{
     branch_tracking_statuses, check_pre_commit_hook_ready, commit_all,
     commit_all_preserving_single_commit, current_upstream_reference, delete_branch, diff,
-    diff_changed_files, fetch_remote, get_ahead_behind, get_ref_ahead_behind, has_commits_since,
-    head_commit_message, head_hash, head_short_hash, is_worktree_clean, list_local_commit_titles,
-    list_upstream_commit_titles, pull_rebase, push_current_branch,
+    diff_changed_files, diff_stats, fetch_remote, get_ahead_behind, get_ref_ahead_behind,
+    has_commits_since, head_commit_message, head_hash, head_short_hash, is_worktree_clean,
+    list_local_commit_titles, list_upstream_commit_titles, pull_rebase, push_current_branch,
     push_current_branch_to_new_remote_branch, push_current_branch_to_remote_branch, ref_hash,
     remote_branch_exists, run_pre_commit_hook, stage_all, tracked_worktree_status, worktree_status,
 };

@@ -8,21 +8,22 @@ use super::error::GitError;
 use super::merge::SquashMergeOutcome;
 use super::rebase::{InProgressGitOperation, RebaseStepResult};
 use super::sync::{
-    BranchPushOutcome, BranchTrackingMap, PullRebaseResult, SingleCommitMessageStrategy,
+    BranchPushOutcome, BranchTrackingMap, DiffStats, PullRebaseResult, SingleCommitMessageStrategy,
     WorktreeFileContent,
 };
 use super::{
     abort_rebase, branch_tracking_statuses, check_pre_commit_hook_ready, commit_all,
     commit_all_preserving_single_commit, create_worktree, current_upstream_reference,
-    delete_branch, detect_git_info, diff, diff_changed_files, fetch_remote, find_git_repo_root,
-    get_ahead_behind, get_ref_ahead_behind, has_commits_since, has_merge_conflicts,
-    has_unmerged_paths, head_commit_message, head_hash, head_short_hash, in_progress_operation,
-    is_rebase_in_progress, is_worktree_clean, list_conflicted_files, list_local_commit_titles,
-    list_staged_conflict_marker_files, list_upstream_commit_titles, main_checkout_working_tree,
-    main_repo_root, pull_rebase, push_current_branch, push_current_branch_to_new_remote_branch,
-    push_current_branch_to_remote_branch, rebase, rebase_continue, rebase_onto_start, rebase_start,
-    ref_hash, remote_branch_exists, remove_worktree, repo_url, run_pre_commit_hook, squash_merge,
-    squash_merge_diff, stage_all, sync, tracked_worktree_status, worktree_status,
+    delete_branch, detect_git_info, diff, diff_changed_files, diff_stats, fetch_remote,
+    find_git_repo_root, get_ahead_behind, get_ref_ahead_behind, has_commits_since,
+    has_merge_conflicts, has_unmerged_paths, head_commit_message, head_hash, head_short_hash,
+    in_progress_operation, is_rebase_in_progress, is_worktree_clean, list_conflicted_files,
+    list_local_commit_titles, list_staged_conflict_marker_files, list_upstream_commit_titles,
+    main_checkout_working_tree, main_repo_root, pull_rebase, push_current_branch,
+    push_current_branch_to_new_remote_branch, push_current_branch_to_remote_branch, rebase,
+    rebase_continue, rebase_onto_start, rebase_start, ref_hash, remote_branch_exists,
+    remove_worktree, repo_url, run_pre_commit_hook, squash_merge, squash_merge_diff, stage_all,
+    sync, tracked_worktree_status, worktree_status,
 };
 
 /// Boxed async result used by [`GitClient`] trait methods.
@@ -305,6 +306,19 @@ pub trait GitClient: Send + Sync {
         repo_path: PathBuf,
         base_branch: String,
     ) -> GitFuture<Result<Vec<String>, GitError>>;
+
+    /// Returns added and deleted line totals for the same cumulative change
+    /// set as [`GitClient::diff`] without generating patch text. Binary files
+    /// count as changed with zero lines.
+    ///
+    /// # Errors
+    /// Returns an error when refs are invalid, numstat generation fails, or
+    /// its output cannot be parsed.
+    fn diff_stats(
+        &self,
+        repo_path: PathBuf,
+        base_branch: String,
+    ) -> GitFuture<Result<DiffStats, GitError>>;
 
     /// Reads one repository-relative worktree file for a bounded text preview.
     ///
@@ -714,6 +728,14 @@ impl GitClient for RealGitClient {
         base_branch: String,
     ) -> GitFuture<Result<Vec<String>, GitError>> {
         Box::pin(async move { diff_changed_files(repo_path, base_branch).await })
+    }
+
+    fn diff_stats(
+        &self,
+        repo_path: PathBuf,
+        base_branch: String,
+    ) -> GitFuture<Result<DiffStats, GitError>> {
+        Box::pin(async move { diff_stats(repo_path, base_branch).await })
     }
 
     fn read_worktree_file(

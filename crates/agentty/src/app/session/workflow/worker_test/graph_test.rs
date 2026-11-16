@@ -5,7 +5,7 @@ use std::collections::VecDeque;
 use std::sync::{Arc, Mutex};
 
 use ag_contracts::{AgentError, MockAgentChannel, PermissionMode, ProviderCallBudget};
-use ag_git::{GitError, MockGitClient};
+use ag_git::{DiffStats, GitError, MockGitClient};
 use ag_protocol::QuestionItem;
 use ag_session::{ExecutionGraph, GraphPostProcessing, GraphWorkspaceAccess, TaskAttemptStatus};
 use ag_store::SessionMessageRow;
@@ -440,8 +440,8 @@ async fn graph_context(scenario: &'static str) -> SessionWorkerContext {
     });
     git.expect_main_checkout_working_tree()
         .returning(|_| Box::pin(async { Ok(None) }));
-    git.expect_diff()
-        .returning(|_, _| Box::pin(async { Ok(String::new()) }));
+    git.expect_diff_stats()
+        .returning(|_, _| Box::pin(async { Ok(DiffStats::default()) }));
     if [
         "empty-answer",
         "whitespace-answer",

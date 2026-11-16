@@ -313,16 +313,15 @@ fn test_stacked_child_creation_accepts_stacked_drafts_and_rejects_root_drafts_or
 }
 
 #[test]
-fn test_session_size_from_diff_counts_added_and_deleted_lines() {
+fn test_session_size_from_line_counts_sums_added_and_deleted_lines() {
     // Arrange
-    let diff = "\
-diff --git a/src/lib.rs b/src/lib.rs\n@@ -1 +1,2 @@\n-old line\n+new line\n+another line\n";
+    let (added_lines, deleted_lines) = (6, 5);
 
     // Act
-    let session_size = SessionSize::from_diff(diff);
+    let session_size = SessionSize::from_line_counts(added_lines, deleted_lines);
 
     // Assert
-    assert_eq!(session_size, SessionSize::Xs);
+    assert_eq!(session_size, SessionSize::S);
 }
 
 #[test]
