@@ -20,6 +20,8 @@ tokio.workspace = true
 
 [dev-dependencies]
 mockall.workspace = true
+opentelemetry.workspace = true
+opentelemetry_sdk = { workspace = true, features = ["testing"] }
 
 [lints]
 workspace = true

@@ -7,12 +7,10 @@ use std::path::{Path, PathBuf};
 use std::process::Output;
 use std::time::Duration;
 
-use tokio::task::spawn_blocking;
-
 use super::error::GitError;
 use super::repo::{
     command_output_detail, resolve_git_dir, run_git_command_output_sync,
-    run_git_command_output_with_env_sync, run_git_command_sync,
+    run_git_command_output_with_env_sync, run_git_command_sync, spawn_blocking_in_context,
 };
 use crate::{Sleeper, ThreadSleeper};
 
@@ -160,7 +158,7 @@ pub(crate) async fn rebase_start(
     repo_path: PathBuf,
     target_branch: String,
 ) -> Result<RebaseStepResult, GitError> {
-    spawn_blocking(move || {
+    spawn_blocking_in_context(move || {
         let rebase_args = ["rebase", target_branch.as_str()];
         run_rebase_step(&repo_path, &rebase_args, "git rebase", |detail| {
             format!("Failed to rebase onto {target_branch}: {detail}.")
@@ -190,7 +188,7 @@ pub(crate) async fn rebase_onto_start(
     new_base: String,
     old_base: String,
 ) -> Result<RebaseStepResult, GitError> {
-    spawn_blocking(move || {
+    spawn_blocking_in_context(move || {
         let rebase_args = ["rebase", "--onto", new_base.as_str(), old_base.as_str()];
         run_rebase_step(&repo_path, &rebase_args, "git rebase --onto", |detail| {
             format!("Failed to rebase onto {new_base} after {old_base}: {detail}.")
@@ -211,7 +209,7 @@ pub(crate) async fn rebase_onto_start(
 /// # Errors
 /// Returns a [`GitError`] for non-conflict git failures.
 pub(crate) async fn rebase_continue(repo_path: PathBuf) -> Result<RebaseStepResult, GitError> {
-    spawn_blocking(move || {
+    spawn_blocking_in_context(move || {
         let output = run_git_command_with_index_lock_retry(
             &repo_path,
             &["rebase", "--continue"],
@@ -250,7 +248,7 @@ pub(crate) async fn rebase_continue(repo_path: PathBuf) -> Result<RebaseStepResu
 /// # Errors
 /// Returns a [`GitError`] when `git rebase --abort` cannot be executed.
 pub(crate) async fn abort_rebase(repo_path: PathBuf) -> Result<(), GitError> {
-    spawn_blocking(move || {
+    spawn_blocking_in_context(move || {
         let command_runner = ProcessGitCommandRunner;
         let metadata_cleaner = FilesystemRebaseMetadataCleaner;
         let sleeper = ThreadSleeper;
@@ -274,7 +272,7 @@ pub(crate) async fn abort_rebase(repo_path: PathBuf) -> Result<(), GitError> {
 /// Returns [`GitError::RepositoryUnavailable`] when the repository folder is
 /// missing, or another [`GitError`] when its git directory cannot be resolved.
 pub(crate) async fn is_rebase_in_progress(repo_path: PathBuf) -> Result<bool, GitError> {
-    spawn_blocking(move || -> Result<bool, GitError> {
+    spawn_blocking_in_context(move || -> Result<bool, GitError> {
         match fs::metadata(&repo_path) {
             Ok(_) => {}
             Err(error) if error.kind() == ErrorKind::NotFound => {
@@ -309,7 +307,7 @@ pub(crate) async fn is_rebase_in_progress(repo_path: PathBuf) -> Result<bool, Gi
 pub(crate) async fn in_progress_operation(
     repo_path: PathBuf,
 ) -> Result<Option<InProgressGitOperation>, GitError> {
-    spawn_blocking(move || in_progress_operation_sync(&repo_path)).await?
+    spawn_blocking_in_context(move || in_progress_operation_sync(&repo_path)).await?
 }
 
 fn in_progress_operation_sync(
@@ -387,7 +385,7 @@ pub(crate) async fn list_staged_conflict_marker_files(
         return Ok(vec![]);
     }
 
-    spawn_blocking(move || -> Result<Vec<String>, GitError> {
+    spawn_blocking_in_context(move || -> Result<Vec<String>, GitError> {
         let mut grep_arguments = vec!["grep", "--cached", "-l", "^<<<<<<<", "--"];
         let path_arguments: Vec<&str> = paths.iter().map(String::as_str).collect();
         grep_arguments.extend(path_arguments);
@@ -428,7 +426,7 @@ pub(crate) async fn list_staged_conflict_marker_files(
 /// Returns a [`GitError`] if invoking `git diff --name-only --diff-filter=U`
 /// fails.
 pub(crate) async fn list_conflicted_files(repo_path: PathBuf) -> Result<Vec<String>, GitError> {
-    spawn_blocking(move || -> Result<Vec<String>, GitError> {
+    spawn_blocking_in_context(move || -> Result<Vec<String>, GitError> {
         let output = run_git_command_sync(
             &repo_path,
             &["diff", "--name-only", "--diff-filter=U"],

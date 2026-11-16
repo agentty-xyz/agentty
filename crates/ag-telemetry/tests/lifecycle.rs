@@ -152,6 +152,7 @@ async fn spans_preserve_context_results_and_terminal_outcomes() {
             .run(async { Err::<(), _>(()) }, |()| Outcome::Canceled)
             .await;
         assert!(canceled.is_err());
+        Span::child("classified").fail("timeout");
     })
     .await;
     async { Span::child("detached").scope(async {}).await }
@@ -506,12 +507,25 @@ fn assert_terminal_metadata(spans: &[SpanData]) {
                     .contains(&KeyValue::new("agentty.outcome", "canceled"))
         }));
     }
-    assert!(spans.iter().any(|span| {
-        span.name == "panic"
-            && span
-                .attributes
-                .contains(&KeyValue::new("error.type", "panic"))
-    }));
+    for (name, error_type) in [
+        ("panic", "panic"),
+        ("failed", "execution"),
+        ("classified", "timeout"),
+    ] {
+        let expected = KeyValue::new("error.type", error_type);
+        assert!(
+            spans.iter().any(|span| {
+                span.name == name
+                    && matches!(span.status, Status::Error { .. })
+                    && span
+                        .attributes
+                        .iter()
+                        .filter(|attribute| attribute.key.as_str() == "error.type")
+                        .eq([&expected])
+            }),
+            "{name}"
+        );
+    }
     for (name, event) in [
         ("utility.run", "first_activity"),
         ("session.turn", "accepted"),

@@ -134,5 +134,7 @@ required gates.
 Hosts compose OTLP export from the `ag-telemetry` `otlp` feature and choose the
 destination; execution crates use its span guards with default features disabled. Local
 HTTP receivers verify protobuf payloads and exporter failure, while in-memory exporters
-verify span ownership and asynchronous context. Trace boundaries report observable
-backend activity without inferring hidden model or tool timings.
+verify span ownership and asynchronous context. `git.command` spans are verified against
+real isolated `git` processes; `forge.command` spans use mocked forge command runners.
+Trace boundaries report observable backend activity without inferring hidden model or
+tool timings.

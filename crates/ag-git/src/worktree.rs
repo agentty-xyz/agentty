@@ -4,15 +4,16 @@
 use std::fs;
 use std::path::{Path, PathBuf};
 
-use tokio::task::spawn_blocking;
-
 use super::error::GitError;
-use super::repo::{main_repo_root, resolve_git_dir, run_git_command, run_git_command_sync};
+use super::repo::{
+    main_repo_root, resolve_git_dir, run_git_command, run_git_command_sync,
+    spawn_blocking_in_context,
+};
 
 /// Detects git repository information for the given directory.
 /// Returns the current branch name if in a git repository, None otherwise.
 pub(crate) async fn detect_git_info(dir: PathBuf) -> Option<String> {
-    spawn_blocking(move || detect_git_info_sync(&dir))
+    spawn_blocking_in_context(move || detect_git_info_sync(&dir))
         .await
         .ok()
         .flatten()
@@ -21,7 +22,7 @@ pub(crate) async fn detect_git_info(dir: PathBuf) -> Option<String> {
 /// Walks upward to find a `.git` directory or a file pointing to one.
 /// Invalid `.git` files stop discovery without selecting a parent checkout.
 pub(crate) async fn find_git_repo_root(dir: PathBuf) -> Option<PathBuf> {
-    spawn_blocking(move || find_git_repo_root_sync(&dir))
+    spawn_blocking_in_context(move || find_git_repo_root_sync(&dir))
         .await
         .ok()
         .flatten()
@@ -47,7 +48,7 @@ pub(crate) async fn create_worktree(
     branch_name: String,
     start_ref: String,
 ) -> Result<(), GitError> {
-    spawn_blocking(move || {
+    spawn_blocking_in_context(move || {
         let worktree_path = worktree_path.to_string_lossy().to_string();
         run_git_command_sync(
             &repo_path,

@@ -683,6 +683,20 @@ intervals reconstructed from a reported duration, or `completion` for observatio
 without a start. Harness `invoke_agent`, `chat <model>`, and `execute_tool <tool>` spans
 nest beneath `agent.run` and time each model request exactly.
 
+Git and forge CLI work inside a traced workflow appears as content-free spans:
+
+- `git.command`: one per Git subprocess, with an allowlisted `git.subcommand` (others
+  are `other`), `process.exit.code`, `agentty.timed_out`, and `agentty.output.bytes`.
+- `git.commit.attempt`: `agentty.git.commit.result` is `committed`, `hook_modified`,
+  `nothing_to_commit`, or `failed`; only `failed` marks the attempt failed.
+- `forge.command`: one per `gh` or `glab` subprocess, with `agentty.forge.kind`, the
+  client `agentty.forge.operation`, `process.exit.code`, and `agentty.timed_out`. The
+  authentication check before each client call nests its command in `forge.auth_check`.
+
+Nonzero exits complete their command span; spawn failures and timeouts fail it with
+`error.type` `not_found`, `spawn`, or `timeout`. Arguments, branch names, commit
+messages, paths, and command output are never exported.
+
 The trace resource carries the installation ID as `user.id`. By default, traces contain
 execution identifiers, provider and model selections, token counts, outcomes, tool
 names, call identifiers, executable basenames, exit codes, and output byte counts, but

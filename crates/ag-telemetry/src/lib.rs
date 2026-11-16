@@ -72,6 +72,7 @@ pub enum Outcome {
 pub struct Span {
     completion: OwnedSpanCompletion,
     context: Context,
+    error_type: &'static str,
     outcome: Outcome,
 }
 
@@ -204,6 +205,13 @@ impl Span {
         self.outcome = outcome;
     }
 
+    /// Ends this interval as failed, recording `error_type` as its bounded,
+    /// content-free `error.type` instead of the default `execution`.
+    pub fn fail(mut self, error_type: &'static str) {
+        self.error_type = error_type;
+        self.outcome = Outcome::Failed;
+    }
+
     /// Executes asynchronous work with this span's context.
     pub async fn scope<T>(mut self, work: impl Future<Output = T>) -> T {
         let result = work.with_context(self.context()).await;
@@ -264,6 +272,7 @@ impl Span {
         Self {
             context: context.with_value(completion.clone()),
             completion,
+            error_type: "execution",
             outcome: Outcome::Canceled,
         }
     }
@@ -281,7 +290,7 @@ impl Drop for Span {
                 Outcome::Completed => "completed",
                 Outcome::Failed => {
                     span.set_status(Status::error(""));
-                    span.set_attribute(KeyValue::new("error.type", "execution"));
+                    span.set_attribute(KeyValue::new("error.type", self.error_type));
                     "failed"
                 }
                 Outcome::Canceled => "canceled",

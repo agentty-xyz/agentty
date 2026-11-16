@@ -8,9 +8,9 @@
 use std::sync::Arc;
 
 use super::{
-    ForgeCommand, ForgeCommandError, ForgeCommandOutput, ForgeCommandRunner, ForgeFuture,
-    ForgeKind, ForgeRemote, ReviewRequestError, ReviewRequestMetadata, ReviewRequestSummary,
-    UpdateReviewRequestInput, command_output_detail,
+    ForgeCommand, ForgeCommandError, ForgeCommandOutput, ForgeCommandRunner, ForgeCommandSpan,
+    ForgeFuture, ForgeKind, ForgeRemote, ReviewRequestError, ReviewRequestMetadata,
+    ReviewRequestSummary, UpdateReviewRequestInput, command_output_detail,
 };
 
 /// Provider-neutral partial edit produced after a best-effort recheck that the
@@ -40,8 +40,7 @@ impl ReviewRequestOperations {
         command: ForgeCommand,
     ) -> Result<(), ReviewRequestError> {
         let output = self
-            .command_runner
-            .run(command)
+            .run_command(remote, command)
             .await
             .map_err(|error| Self::map_spawn_error(remote, error))?;
         if output.success() {
@@ -87,8 +86,7 @@ impl ReviewRequestOperations {
         operation: &str,
     ) -> Result<ForgeCommandOutput, ReviewRequestError> {
         let output = self
-            .command_runner
-            .run(command)
+            .run_command(remote, command)
             .await
             .map_err(|error| Self::map_spawn_error(remote, error))?;
         if output.success() {
@@ -294,6 +292,20 @@ impl ReviewRequestOperations {
 
             refresh_review_request(remote, display_id).await
         })
+    }
+
+    /// Runs one forge CLI command through the injected runner inside a
+    /// content-free `forge.command` span.
+    async fn run_command(
+        &self,
+        remote: &ForgeRemote,
+        command: ForgeCommand,
+    ) -> Result<ForgeCommandOutput, ForgeCommandError> {
+        let span = ForgeCommandSpan::start(remote.forge_kind);
+        let result = self.command_runner.run(command).await;
+        span.finish(&result);
+
+        result
     }
 
     /// Maps one spawn-time failure into a normalized review-request error for

@@ -19,6 +19,11 @@ mod sync;
 /// Worktree and branch-detection workflows.
 mod worktree;
 
+/// Crate-wide span capture for telemetry tests.
+#[cfg(test)]
+#[path = "telemetry_support_test.rs"]
+mod telemetry_support;
+
 #[cfg(any(test, feature = "test-utils"))]
 pub use client::MockGitClient;
 pub use client::{GitClient, GitFuture, RealGitClient};

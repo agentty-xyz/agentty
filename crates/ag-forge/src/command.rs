@@ -4,10 +4,11 @@ use std::io::ErrorKind;
 use std::path::PathBuf;
 use std::time::Duration;
 
+use ag_telemetry::{Context, Outcome, Span, TraceContextExt};
 use tokio::process::Command;
 use tokio::time;
 
-use super::ForgeFuture;
+use super::{ForgeFuture, ForgeKind};
 
 /// Maximum time one forge CLI command may run before it is canceled.
 const FORGE_COMMAND_TIMEOUT: Duration = Duration::from_secs(30);
@@ -99,6 +100,72 @@ pub(crate) enum ForgeCommandError {
         /// Configured command timeout.
         timeout: Duration,
     },
+}
+
+impl ForgeCommandError {
+    /// Returns the bounded `error.type` exported for this failure.
+    fn error_type(&self) -> &'static str {
+        match self {
+            Self::ExecutableNotFound { .. } => "not_found",
+            Self::SpawnFailed { .. } => "spawn",
+            Self::TimedOut { .. } => "timeout",
+        }
+    }
+}
+
+/// Public review-request operation that issues forge CLI commands, carried
+/// in the execution context so `forge.command` spans can name it.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) struct ForgeOperation(pub(crate) &'static str);
+
+/// Content-free `forge.command` span for one forge CLI invocation.
+///
+/// Records only beneath an active trace, so untraced background polling
+/// starts no traces. Arguments, paths, and output text are never exported.
+pub(crate) struct ForgeCommandSpan(Option<Span>);
+
+impl ForgeCommandSpan {
+    /// Starts a span for one `forge_kind` command when the current context
+    /// is traced.
+    pub(crate) fn start(forge_kind: ForgeKind) -> Self {
+        let context = Context::current();
+        if !context.has_active_span() {
+            return Self(None);
+        }
+
+        let span = Span::child("forge.command");
+        span.attribute("agentty.forge.kind", forge_kind.as_str());
+        if let Some(ForgeOperation(operation)) = context.get::<ForgeOperation>() {
+            span.attribute("agentty.forge.operation", *operation);
+        }
+
+        Self(Some(span))
+    }
+
+    /// Ends the span from the runner result. A nonzero exit still
+    /// completes, because adapters decide whether it is a failure.
+    pub(crate) fn finish(self, result: &Result<ForgeCommandOutput, ForgeCommandError>) {
+        let Some(span) = self.0 else {
+            return;
+        };
+
+        match result {
+            Ok(output) => {
+                if let Some(exit_code) = output.exit_code {
+                    span.attribute("process.exit.code", i64::from(exit_code));
+                }
+                span.attribute("agentty.timed_out", false);
+                span.finish(Outcome::Completed);
+            }
+            Err(error) => {
+                span.attribute(
+                    "agentty.timed_out",
+                    matches!(error, ForgeCommandError::TimedOut { .. }),
+                );
+                span.fail(error.error_type());
+            }
+        }
+    }
 }
 
 /// Async command boundary used by forge adapters.
