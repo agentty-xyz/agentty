@@ -25,6 +25,11 @@ use testty::session::PtySessionBuilder;
 use testty::step::Step;
 use tokio::sync::{Mutex, MutexGuard};
 
+pub(crate) use crate::clock::{
+    PINNED_CLOCK_ENV_VAR, PINNED_CLOCK_UNIX_SECONDS, PINNED_CLOCK_UTC_OFFSET_ENV_VAR,
+    PINNED_CLOCK_UTC_OFFSET_SECONDS,
+};
+
 /// CLI executable names stubbed into every [`BuilderEnv`] `PATH`.
 ///
 /// Mirrors `AgentKind::ALL` executable names in `ag-agent`. All supported
@@ -754,16 +759,6 @@ pub(crate) const VHS_REPLAY_ENV_VAR: &str = "AGENTTY_E2E_VHS_REPLAY";
 /// restoring the post-setup database, and stops on failure.
 pub(crate) const VHS_SETUP_SCRIPT_NAME: &str = "agentty-vhs-setup";
 
-/// Environment variable that pins the agentty wall clock for feature runs.
-///
-/// Mirrors `agentty::infra::clock::CLOCK_UNIX_ENV_VAR`, which is private to
-/// the binary crate and therefore not importable from this integration test.
-pub(crate) const PINNED_CLOCK_ENV_VAR: &str = "AGENTTY_CLOCK_UNIX";
-/// Environment variable that pins the UTC offset paired with the feature clock.
-///
-/// Mirrors `agentty::infra::clock::CLOCK_UTC_OFFSET_SECONDS_ENV_VAR`, which is
-/// private to the binary crate and therefore not importable from this test.
-pub(crate) const PINNED_CLOCK_UTC_OFFSET_ENV_VAR: &str = "AGENTTY_CLOCK_UTC_OFFSET_SECONDS";
 /// Environment flag that pins the status-bar version during feature runs.
 pub(crate) const PINNED_DISPLAY_VERSION_ENV_VAR: &str = "AGENTTY_E2E_PIN_DISPLAY_VERSION";
 /// Stable version label used by feature runs and freshness redaction.
@@ -776,14 +771,6 @@ pub(crate) const PINNED_DISPLAY_VERSION: &str = "v<test>";
 const NO_COLOR_ENV_VAR: &str = "NO_COLOR";
 /// Value used to disable terminal color detection for feature runs.
 const NO_COLOR_ENV_VALUE: &str = "1";
-/// Wall-clock time every feature run is pinned to: `2026-07-01T00:00:00Z`.
-///
-/// Captured frames are hashed to decide whether a GIF needs re-recording, so
-/// anything derived from the wall clock, such as session timers and dashboard
-/// activity, must not drift between runs.
-pub(crate) const PINNED_CLOCK_UNIX_SECONDS: i64 = 1_782_864_000;
-/// UTC offset used by every feature run so host timezones cannot alter frames.
-pub(crate) const PINNED_CLOCK_UTC_OFFSET_SECONDS: i64 = 0;
 /// Prefix agentty prints in front of a session's generated worktree hash.
 ///
 /// Mirrors `agentty::app::session::SESSION_BRANCH_PREFIX`, which is private to

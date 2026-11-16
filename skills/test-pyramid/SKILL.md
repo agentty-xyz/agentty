@@ -52,8 +52,10 @@ decision: follow root `AGENTS.md` and the required procedure in
 Gated suites hold only tests that need their environment; place everything else at one
 of the levels. The native sandbox suite (`crates/ag-harness/tests/sandbox.rs`) runs in
 its own serialized test group, `crates/agentty/tests/prompt_evaluation.rs` calls live
-providers as an ignored manual check, and `showcase` and `protocol_compliance_e2e` run
-with the PTY suite. Their hooks are defined in `.pre-commit-config.yaml`.
+providers as an ignored manual check, and `protocol_compliance_e2e` runs with the PTY
+suite. Their hooks are defined in `.pre-commit-config.yaml`. Asset generators are not
+tests: the marketing GIFs come from the `showcase` binary, which only the
+`e2e-container` hook runs.
 
 ## Compile Cost
 

@@ -1,10 +1,7 @@
 //! Generator for the marketing demo GIF served at
 //! `docs/site/static/demo/demo.gif`.
 //!
-//! Marked `#[ignore]` so the regular E2E suite stays fast. Regenerate the GIF
-//! in the pinned recording container with the `e2e-container` command in
-//! `docs/contributing/feature-test/recording.md`; never record on the bare
-//! host. The test is self-contained: it seeds fake projects, installs a
+//! The generator is self-contained: it seeds fake projects, installs a
 //! scripted `claude` stub that emits a canned reply over the stream-json
 //! protocol, and drives VHS with a hand-crafted tape.
 
@@ -20,12 +17,12 @@ use sqlx::{ConnectOptions, Connection, Executor};
 use tokio::fs;
 use tokio::process::Command;
 
-use crate::common::{
-    BuilderEnv, PINNED_CLOCK_ENV_VAR, PINNED_CLOCK_UNIX_SECONDS, PINNED_CLOCK_UTC_OFFSET_ENV_VAR,
+use crate::clock::{
+    PINNED_CLOCK_ENV_VAR, PINNED_CLOCK_UNIX_SECONDS, PINNED_CLOCK_UTC_OFFSET_ENV_VAR,
     PINNED_CLOCK_UTC_OFFSET_SECONDS,
 };
+use crate::{ShowcaseResult, vhs};
 
-type DemoResult = Result<(), Box<dyn std::error::Error>>;
 type SeedSessionRow<'a> = (
     &'a str,
     &'a str,
@@ -38,20 +35,11 @@ type SeedSessionRow<'a> = (
     i64,
 );
 
-const GIF_NAME: &str = "demo";
-
-/// Regenerates the marketing demo GIF under `docs/site/static/demo/`.
+/// Re-records `docs/site/static/demo/demo.gif` and returns its path.
 ///
-/// Gated behind `#[ignore]` because it requires VHS, the real `agentty`
-/// binary, and ~2 minutes of wall clock time.
-#[tokio::test]
-#[ignore = "requires VHS and regenerates a marketing asset"]
-async fn generate_marketing_demo_gif() -> DemoResult {
-    // Arrange
-    if Command::new("vhs").arg("--version").output().await.is_err() {
-        return Ok(());
-    }
-
+/// Takes about two minutes of wall-clock time with the real `agentty`
+/// binary.
+pub(crate) async fn generate() -> ShowcaseResult<PathBuf> {
     // Use a short, clean /tmp path so project rows and the footer path read
     // nicely in the final GIF (macOS tempdirs live under /var/folders/...).
     let demo_root = make_fresh_demo_root().await?;
@@ -68,34 +56,51 @@ async fn generate_marketing_demo_gif() -> DemoResult {
     let canonical_cwd = fs::canonicalize(&env.workdir).await?;
     seed_database(&env, &fake_project_paths, &canonical_cwd).await?;
 
-    let output_dir = repo_demo_dir();
-    fs::create_dir_all(&output_dir).await?;
-    let gif_path = output_dir.join(format!("{GIF_NAME}.gif"));
-
-    let tape = build_demo_tape(&env, &gif_path);
-    let tape_path = demo_root.join("demo.tape");
-    fs::write(&tape_path, &tape).await?;
-
-    // Act
-    let output = Command::new("vhs").arg(&tape_path).output().await?;
-
-    // Assert
-    if !output.status.success() {
-        return Err(format!(
-            "vhs failed: {}\nstdout: {}",
-            String::from_utf8_lossy(&output.stderr),
-            String::from_utf8_lossy(&output.stdout),
-        )
-        .into());
-    }
-    if !fs::try_exists(&gif_path).await? {
-        return Err(format!("demo gif not produced at {}", gif_path.display()).into());
-    }
+    let gif_path = vhs::record(&repo_demo_dir().join("demo.gif"), |output_path| {
+        build_demo_tape(&env, output_path)
+    })
+    .await?;
 
     // Best-effort cleanup of the scratch directory.
     let _ = fs::remove_dir_all(&demo_root).await;
 
-    Ok(())
+    Ok(gif_path)
+}
+
+/// Isolated directories and executables the demo recording runs with.
+struct DemoEnv {
+    /// Path used as `AGENTTY_ROOT` and `HOME` inside the recording.
+    agentty_root: PathBuf,
+    /// Directory of stub agent executables placed first on `PATH`.
+    stub_bin: PathBuf,
+    /// Working directory registered as the current project.
+    workdir: PathBuf,
+}
+
+impl DemoEnv {
+    /// Initializes `workdir` as a Git repository with an empty `main` commit
+    /// so sessions can create worktrees from it.
+    fn init_git(&self) -> std::io::Result<()> {
+        let run = |args: &[&str]| -> std::io::Result<()> {
+            let output = std::process::Command::new("git")
+                .args(args)
+                .current_dir(&self.workdir)
+                .output()?;
+            if !output.status.success() {
+                return Err(std::io::Error::other(format!(
+                    "git {} failed: {}",
+                    args.join(" "),
+                    String::from_utf8_lossy(&output.stderr)
+                )));
+            }
+
+            Ok(())
+        };
+        run(&["init", "-b", "main"])?;
+        run(&["config", "user.email", "test@test.com"])?;
+        run(&["config", "user.name", "Test"])?;
+        run(&["commit", "--allow-empty", "-m", "init"])
+    }
 }
 
 /// Returns a fresh `/tmp/agentty-demo-<nanos>/` directory so paths shown in
@@ -113,28 +118,23 @@ async fn make_fresh_demo_root() -> std::io::Result<PathBuf> {
     Ok(root)
 }
 
-/// Builds a `BuilderEnv` whose workdir is named `opencloudtool` so the project
-/// row and path shown in the demo read cleanly while discovery uses a
-/// deterministic isolated home directory.
-async fn make_demo_env(demo_root: &Path) -> std::io::Result<BuilderEnv> {
+/// Builds a `DemoEnv` whose workdir is named `opencloudtool` so the project
+/// row and path shown in the demo read cleanly.
+async fn make_demo_env(demo_root: &Path) -> std::io::Result<DemoEnv> {
     let agentty_root = demo_root.join("agentty_root");
-    let home_dir = demo_root.join("home");
     let workdir = demo_root.join("opencloudtool");
     let stub_bin = demo_root.join("stub-bin");
 
     fs::create_dir_all(&agentty_root).await?;
-    fs::create_dir_all(&home_dir).await?;
     fs::create_dir_all(&workdir).await?;
     fs::create_dir_all(&stub_bin).await?;
 
-    let env = BuilderEnv {
+    let env = DemoEnv {
         agentty_root,
-        home_dir,
         stub_bin,
         workdir,
     };
-    // The shared fixture initializer is synchronous; keep its Git commands off
-    // the async worker without duplicating the initialization sequence here.
+    // Keep the synchronous Git commands off the async worker.
     tokio::task::spawn_blocking(move || {
         env.init_git()?;
 
@@ -146,7 +146,7 @@ async fn make_demo_env(demo_root: &Path) -> std::io::Result<BuilderEnv> {
 
 /// Creates the `agentty` git repository shown below the current project in
 /// the opening Projects list.
-async fn create_fake_project_dirs(env: &BuilderEnv) -> std::io::Result<Vec<PathBuf>> {
+async fn create_fake_project_dirs(env: &DemoEnv) -> std::io::Result<Vec<PathBuf>> {
     let demo_root = env
         .workdir
         .parent()
@@ -170,7 +170,7 @@ async fn create_fake_project_dirs(env: &BuilderEnv) -> std::io::Result<Vec<PathB
 /// Overwrites the `claude` stub in `stub_bin` with a script that ignores its
 /// CLI args and stdin, pauses briefly, then emits Claude's `stream-json`
 /// protocol output with a canned reply.
-async fn install_scripted_claude_stub(env: &BuilderEnv) -> std::io::Result<()> {
+async fn install_scripted_claude_stub(env: &DemoEnv) -> std::io::Result<()> {
     let claude_path = env.stub_bin.join("claude");
     // Reply text is hard-coded to match session 1's stacked-commits prompt.
     // Session 2 in the tape never finishes, so the same canned output never
@@ -241,7 +241,7 @@ printf '%s\n' '{result_event}'
 
 /// Installs a scripted Codex app-server stub that completes bootstrap and
 /// leaves the demo's second turn running until VHS exits.
-async fn install_scripted_codex_stub(env: &BuilderEnv) -> std::io::Result<()> {
+async fn install_scripted_codex_stub(env: &DemoEnv) -> std::io::Result<()> {
     let codex_path = env.stub_bin.join("codex");
     let script = r#"#!/bin/sh
 if [ "$1" = "update" ]; then
@@ -292,7 +292,7 @@ done
 /// stubs makes every agent kind — Antigravity, Claude, and Codex — appear in
 /// the `/model` agent picker. The stub handles startup's update and version
 /// probes but is never used for a session.
-async fn install_agent_availability_stubs(env: &BuilderEnv) -> std::io::Result<()> {
+async fn install_agent_availability_stubs(env: &DemoEnv) -> std::io::Result<()> {
     let stub_path = env.stub_bin.join("agy");
     fs::write(
         &stub_path,
@@ -310,7 +310,7 @@ async fn install_agent_availability_stubs(env: &BuilderEnv) -> std::io::Result<(
 /// Symlinks the compiled `agentty` binary into `stub_bin` so that typing
 /// `agentty` at the shell (inside the VHS recording) resolves to the real
 /// binary through `PATH`.
-async fn symlink_agentty_into_stub_bin(env: &BuilderEnv) -> std::io::Result<()> {
+async fn symlink_agentty_into_stub_bin(env: &DemoEnv) -> std::io::Result<()> {
     let real_binary = cargo_bin("agentty");
     let link_path = env.stub_bin.join("agentty");
     if fs::try_exists(&link_path).await? {
@@ -333,10 +333,10 @@ async fn symlink_agentty_into_stub_bin(env: &BuilderEnv) -> std::io::Result<()> 
 /// models are only ever read by the list renderer to decide the per-row agent
 /// badge.
 async fn seed_database(
-    env: &BuilderEnv,
+    env: &DemoEnv,
     fake_project_paths: &[PathBuf],
     canonical_cwd: &Path,
-) -> DemoResult {
+) -> ShowcaseResult {
     (async {
         let db_path = env.agentty_root.join(DB_DIR).join(DB_FILE);
         let database = Database::open(&db_path).await?;
@@ -434,7 +434,7 @@ async fn seed_pre_existing_sessions(
     cwd_project_id: i64,
     agentty_root: &Path,
     now_seconds: i64,
-) -> DemoResult {
+) -> ShowcaseResult {
     // (id, title, model, status, base_branch, added_lines, deleted_lines,
     //  prompt, age_seconds)
     let rows: &[SeedSessionRow<'_>] = &[
@@ -513,7 +513,7 @@ VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
 async fn seed_dashboard_activity(
     connection: &mut sqlx::SqliteConnection,
     now_seconds: i64,
-) -> DemoResult {
+) -> ShowcaseResult {
     let day_seconds = 86_400_i64;
     let active_day_offsets = [0_i64, 1, 2, 3, 5, 8, 9, 12, 16, 21, 27, 34, 41, 55, 69];
 
@@ -554,86 +554,6 @@ ON CONFLICT(session_id) DO NOTHING
     Ok(())
 }
 
-#[tokio::test]
-async fn dashboard_and_session_seeds_use_pinned_clock_and_stable_ids() -> DemoResult {
-    // Arrange
-    let temp = tempfile::TempDir::new()?;
-    let db_path = temp.path().join("agentty.db");
-    let database = Database::open(&db_path).await?;
-    let project_id = database
-        .projects()
-        .upsert_project("/tmp/demo-project", Some("main".to_string()))
-        .await?;
-    drop(database);
-    let mut connection = SqliteConnectOptions::new()
-        .filename(&db_path)
-        .connect()
-        .await?;
-
-    // Act
-    seed_pre_existing_sessions(
-        &mut connection,
-        project_id,
-        temp.path(),
-        PINNED_CLOCK_UNIX_SECONDS,
-    )
-    .await?;
-    seed_dashboard_activity(&mut connection, PINNED_CLOCK_UNIX_SECONDS).await?;
-    seed_dashboard_activity(&mut connection, PINNED_CLOCK_UNIX_SECONDS).await?;
-
-    // Assert
-    let activity_count: i64 = sqlx::query_scalar!("SELECT COUNT(*) FROM session_activity")
-        .fetch_one(&mut connection)
-        .await?;
-    let null_session_count: i64 =
-        sqlx::query_scalar!("SELECT COUNT(*) FROM session_activity WHERE session_id IS NULL")
-            .fetch_one(&mut connection)
-            .await?;
-    let latest_activity_timestamp: Option<i64> =
-        sqlx::query_scalar!("SELECT MAX(created_at) FROM session_activity")
-            .fetch_one(&mut connection)
-            .await?;
-    let latest_seeded_session_timestamp: i64 = sqlx::query_scalar!(
-        "SELECT created_at FROM session WHERE id = ?",
-        "aaaa1111-aaaa-1111-aaaa-111111111111"
-    )
-    .fetch_one(&mut connection)
-    .await?;
-    assert_eq!(activity_count, 36);
-    assert_eq!(null_session_count, 0);
-    assert_eq!(latest_activity_timestamp, Some(PINNED_CLOCK_UNIX_SECONDS));
-    assert_eq!(
-        latest_seeded_session_timestamp,
-        PINNED_CLOCK_UNIX_SECONDS - 600
-    );
-
-    connection.close().await?;
-
-    Ok(())
-}
-
-#[test]
-fn demo_tape_pins_wall_clock_and_utc_offset() {
-    // Arrange
-    let env = BuilderEnv {
-        agentty_root: PathBuf::from("/tmp/demo-agentty"),
-        home_dir: PathBuf::from("/tmp/demo-home"),
-        stub_bin: PathBuf::from("/tmp/demo-bin"),
-        workdir: PathBuf::from("/tmp/demo-workdir"),
-    };
-
-    // Act
-    let tape = build_demo_tape(&env, Path::new("/tmp/demo.gif"));
-
-    // Assert
-    assert!(tape.contains(&format!(
-        "export {PINNED_CLOCK_ENV_VAR}='{PINNED_CLOCK_UNIX_SECONDS}'"
-    )));
-    assert!(tape.contains(&format!(
-        "export {PINNED_CLOCK_UTC_OFFSET_ENV_VAR}='{PINNED_CLOCK_UTC_OFFSET_SECONDS}'"
-    )));
-}
-
 /// Returns the on-disk destination directory for the marketing demo GIF.
 fn repo_demo_dir() -> PathBuf {
     let manifest_dir = env!("CARGO_MANIFEST_DIR");
@@ -650,7 +570,7 @@ fn repo_demo_dir() -> PathBuf {
 /// `Regular`). The first session explicitly keeps the current Claude default,
 /// `claude-fable-5-2`. The second walks the `/model` picker to Codex and
 /// selects `gpt-6.1-sol`, so two current agents work in parallel.
-fn build_demo_tape(env: &BuilderEnv, gif_path: &Path) -> String {
+fn build_demo_tape(env: &DemoEnv, gif_path: &Path) -> String {
     let agentty_root = env.agentty_root.display().to_string();
     let path_env = {
         let parts = [

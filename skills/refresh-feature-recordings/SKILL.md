@@ -40,9 +40,10 @@ identify missing or stale artifacts without regenerating them.
    actual test functions. Let the recorder produce GIFs and hash sidecars together;
    never edit a sidecar to accept a stale GIF. Verify generation succeeded and each GIF
    and sidecar is nonempty. Keep feature-page metadata owned by `.zola(...)` in sync
-   when that metadata changes. The marketing `demo` and the `sessions` and `tab_tour`
-   showcase GIFs come from ignored generators without sidecars; regenerate them with the
-   "Regenerate Marketing Assets" commands in
+   when that metadata changes. The marketing `demo`, `sessions`, and `tab_tour` GIFs
+   come from the `showcase` generator target without sidecars, so no freshness check
+   flags them; when their captured UI changes, regenerate them with the
+   `AGENTTY_MARKETING_ASSETS` command in "Regenerate Marketing Assets" in
    `docs/contributing/feature-test/recording.md`.
 1. Refresh the same-named PNG for every regenerated GIF. Successful generation removes
    the old poster intentionally. Inspect the GIF, choose a representative stable frame,

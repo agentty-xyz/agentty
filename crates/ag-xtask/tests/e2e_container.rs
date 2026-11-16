@@ -166,7 +166,7 @@ fn pinned_runs_pull_the_native_variant_and_mount_the_workspace() -> Result<(), B
 }
 
 #[test]
-fn ignored_generators_run_in_the_selected_target() -> Result<(), Box<dyn Error>> {
+fn marketing_assets_run_the_showcase_generators() -> Result<(), Box<dyn Error>> {
     // Arrange
     let fixture = Fixture::new()?;
 
@@ -174,9 +174,7 @@ fn ignored_generators_run_in_the_selected_target() -> Result<(), Box<dyn Error>>
     let output = fixture
         .command()
         .env("AGENTTY_E2E_IMAGE", "sha256:candidate")
-        .env("AGENTTY_RUN_IGNORED", "only")
-        .env("AGENTTY_TEST_FILTER", "test(=feature_tab_tour)")
-        .env("AGENTTY_TEST_TARGET", "showcase")
+        .env("AGENTTY_MARKETING_ASSETS", "sessions tab_tour")
         .output()?;
 
     // Assert
@@ -184,7 +182,9 @@ fn ignored_generators_run_in_the_selected_target() -> Result<(), Box<dyn Error>>
     let calls = fixture.calls()?;
     assert_eq!(calls.len(), 1);
     assert!(
-        calls[0].ends_with(" --test showcase --run-ignored only -E test(=feature_tab_tour)"),
+        calls[0].ends_with(
+            " sha256:candidate cargo test --locked -p agentty --test showcase -- sessions tab_tour"
+        ),
         "{}",
         calls[0]
     );
@@ -193,25 +193,26 @@ fn ignored_generators_run_in_the_selected_target() -> Result<(), Box<dyn Error>>
 }
 
 #[test]
-fn invalid_selections_fail_before_any_container_runs() -> Result<(), Box<dyn Error>> {
+fn invalid_asset_selections_fail_before_any_container_runs() -> Result<(), Box<dyn Error>> {
     // Arrange
     let fixture = Fixture::new()?;
 
     // Act
-    let target = fixture
+    let unknown = fixture
         .command()
-        .env("AGENTTY_TEST_TARGET", "prompt_evaluation")
+        .env("AGENTTY_MARKETING_ASSETS", "hero")
         .output()?;
-    let ignored = fixture
+    let filtered = fixture
         .command()
-        .env("AGENTTY_RUN_IGNORED", "all")
+        .env("AGENTTY_MARKETING_ASSETS", "demo")
+        .env("AGENTTY_TEST_FILTER", "test(help)")
         .output()?;
 
     // Assert
-    assert!(!target.status.success());
-    assert!(logged(&target).contains("AGENTTY_TEST_TARGET must be one of e2e, showcase"));
-    assert!(!ignored.status.success());
-    assert!(logged(&ignored).contains("AGENTTY_RUN_IGNORED must be `only`"));
+    assert!(!unknown.status.success());
+    assert!(logged(&unknown).contains("AGENTTY_MARKETING_ASSETS names `hero`"));
+    assert!(!filtered.status.success());
+    assert!(logged(&filtered).contains("cannot be combined with AGENTTY_TEST_FILTER"));
     assert!(!fixture.directory.path().join("calls").exists());
 
     Ok(())

@@ -35,18 +35,15 @@ TESTTY_GIF_MODE=generate AGENTTY_TEST_FILTER='test(<test_function>)' \
   prek run e2e-container --all-files --hook-stage manual
 ```
 
-The hook runs an Agentty test target in the native variant of the image pinned by
+The hook runs the Agentty `e2e` target in the native variant of the image pinned by
 `.github/workflows/e2e.yml`:
 
-- `AGENTTY_TEST_TARGET` selects `e2e` (the default) or `showcase`.
 - `TESTTY_GIF_MODE` defaults to `check`.
 - `AGENTTY_TEST_FILTER` optionally narrows the run with a nextest filterset.
-- `AGENTTY_RUN_IGNORED=only` runs only the target's ignored tests, which are the asset
-  generators below.
+- `AGENTTY_MARKETING_ASSETS` runs the marketing asset generators below instead.
 - `AGENTTY_E2E_IMAGE` replaces the pinned image with a local candidate; see
   `docs/contributing/feature-test/image-maintenance.md`.
 
-Any other `AGENTTY_RUN_IGNORED` value or test target fails before a container starts.
 The container runs as the host user so the bind-mounted workspace remains writable, with
 one build job and no development debug symbols to bound linker memory in smaller Podman
 machines while retaining runtime debug assertions. The hook then fails if a GIF declared
@@ -81,31 +78,30 @@ last valid GIF, hash sidecar, and poster.
 
 ## Regenerate Marketing Assets
 
-The marketing demo and the `sessions` and `tab_tour` showcase recordings come from
-ignored generators that always re-record and write no hash sidecar. Run each one alone
-through the hook, then refresh its PNG poster with the procedure below. A rewritten GIF
-makes `prek` report the hook as failed with `files were modified by this hook`; the
-nextest summary above that message shows whether the generator passed.
+Three hand-scripted recordings are not `FeatureTest` scenarios and have no hash sidecar:
 
-`docs/site/static/demo/demo.gif` comes from `generate_marketing_demo_gif` in the `e2e`
-target:
+| Asset      | Published GIF                            |
+| ---------- | ---------------------------------------- |
+| `demo`     | `docs/site/static/demo/demo.gif`         |
+| `sessions` | `docs/site/static/features/sessions.gif` |
+| `tab_tour` | `docs/site/static/features/tab_tour.gif` |
+
+They come from the `showcase` target in `crates/agentty/tests/showcase/`, a plain binary
+without the test harness, so no test run records them. Name one or more assets in
+`AGENTTY_MARKETING_ASSETS` to re-record them in order:
 
 ```sh
-AGENTTY_RUN_IGNORED=only AGENTTY_TEST_FILTER='test(=demo::generate_marketing_demo_gif)' \
+AGENTTY_MARKETING_ASSETS='demo sessions tab_tour' \
   prek run e2e-container --all-files --hook-stage manual
 ```
 
-`docs/site/static/features/sessions.gif` and `tab_tour.gif` come from the `showcase`
-target:
-
-```sh
-AGENTTY_TEST_TARGET=showcase AGENTTY_RUN_IGNORED=only \
-  AGENTTY_TEST_FILTER='test(=feature_sessions_tab)' \
-  prek run e2e-container --all-files --hook-stage manual
-AGENTTY_TEST_TARGET=showcase AGENTTY_RUN_IGNORED=only \
-  AGENTTY_TEST_FILTER='test(=feature_tab_tour)' \
-  prek run e2e-container --all-files --hook-stage manual
-```
+An unknown name, or a combination with `AGENTTY_TEST_FILTER`, fails before a container
+starts. The generator always re-records and fails when VHS is missing or writes no GIF.
+Like testty, it records to a hidden staging file, replaces the GIF only after a nonempty
+recording, and then removes the same-named PNG poster; refresh that poster with the
+procedure below. A rewritten GIF makes `prek` report the hook as failed with
+`files were modified by this hook`; the generator's `Recorded` lines above that message
+show which assets succeeded.
 
 ## Create or Refresh the PNG Poster
 
@@ -161,7 +157,7 @@ done
 ## Recording Boundary
 
 Do not run VHS recording directly in the developer host's operating-system environment,
-including direct `vhs` commands and ignored tests that regenerate demo assets. Running
+including direct `vhs` commands and the `showcase` marketing asset generators. Running
 the pinned recording container on that host with Podman is the supported workflow above.
 Bare-host VHS records through localhost sockets (`ttyd` plus the Chrome DevTools
 protocol), which sandboxed agent shells can deny, crashing `vhs` before Chrome launches.

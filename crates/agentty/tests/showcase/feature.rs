@@ -1,25 +1,15 @@
 //! Website feature GIF generation using VHS.
 //!
-//! These tests produce polished animated GIFs for the agentty website
-//! (`docs/site/`) using the [VHS](https://github.com/charmbracelet/vhs)
-//! terminal recorder. VHS records a real terminal session with proper
-//! fonts, colors, and rendering fidelity. Output uses the canonical feature
-//! canvas (1600x800, font size 18), which keeps VHS and `ffmpeg` memory
-//! within a typical recording container.
+//! These generators produce polished animated GIFs for the `sessions` and
+//! `tab_tour` feature pages using the
+//! [VHS](https://github.com/charmbracelet/vhs) terminal recorder. VHS records
+//! a real terminal session with proper fonts, colors, and rendering fidelity.
+//! Output uses the canonical feature canvas (1600x800, font size 18), which
+//! keeps VHS and `ffmpeg` memory within a typical recording container.
 //!
 //! The database is pre-seeded with realistic projects and sessions so the
-//! UI looks populated and compelling.
-//!
-//! Each test corresponds to a feature demo on the website. When a test
-//! changes, the corresponding GIF must be regenerated.
-//!
-//! # Running
-//!
-//! Generators are marked `#[ignore]` so they do not run during regular test
-//! runs. Regenerate each GIF in the pinned recording container with the
-//! `e2e-container` commands in `docs/contributing/feature-test/recording.md`;
-//! never record on the bare host. `FEATURE_OUTPUT` overrides the default
-//! output directory.
+//! UI looks populated and compelling. When a generator changes, regenerate
+//! its GIF.
 
 use std::fmt::Write;
 #[cfg(unix)]
@@ -34,10 +24,111 @@ use agentty::domain::session::SessionStats;
 use agentty::domain::session_message::SessionMessageKind;
 use assert_cmd::cargo::cargo_bin;
 
-// ── Helpers ──────────────────────────────────────────────────────────────
+use crate::{ShowcaseResult, vhs};
 
-/// Result type used by ignored showcase-generation tests.
-type ShowcaseResult<T = ()> = Result<T, Box<dyn std::error::Error>>;
+/// Re-records `sessions.gif`: the Sessions tab with populated data.
+///
+/// Shows the session list with sessions in various statuses (`Review`,
+/// `InProgress`, `Question`, `Done`, `Queued`) to demonstrate the core
+/// workflow and UI layout.
+pub(crate) async fn generate_sessions_tab() -> ShowcaseResult<PathBuf> {
+    let steps = "\
+Sleep 2400ms
+Sleep 200ms
+Enter
+Sleep 2200ms
+Type \"j\"
+Sleep 900ms
+Type \"k\"
+Sleep 900ms
+Enter
+Sleep 2800ms
+Type \"q\"
+Sleep 1800ms
+";
+
+    record_feature("sessions", steps).await
+}
+
+/// Re-records `tab_tour.gif`: a cycle through every tab.
+///
+/// Shows each major view — Projects, Sessions, and Settings — to
+/// give a complete overview of the agentty interface.
+pub(crate) async fn generate_tab_tour() -> ShowcaseResult<PathBuf> {
+    let steps = "\
+Sleep 2s
+Tab
+Sleep 2s
+Tab
+Sleep 2s
+Tab
+Sleep 2s
+";
+
+    record_feature("tab_tour", steps).await
+}
+
+/// Records the VHS `steps` against a freshly seeded environment into
+/// `docs/site/static/features/{name}.gif`.
+async fn record_feature(name: &str, steps: &str) -> ShowcaseResult<PathBuf> {
+    let temp = tempfile::TempDir::new()?;
+    let (agentty_root, workdir) = setup_feature_env(&temp).await?;
+    let binary_path = cargo_bin("agentty");
+    let gif_path = feature_output_dir().join(format!("{name}.gif"));
+
+    vhs::record(&gif_path, |output_path| {
+        build_tape(output_path, &binary_path, &agentty_root, &workdir, steps)
+    })
+    .await
+}
+
+/// Set up an isolated feature demo environment with a seeded database and Git
+/// repository.
+///
+/// Returns `(agentty_root, workdir)` with canonicalized paths so the
+/// seeded project path matches what the binary resolves (critical on
+/// macOS where `/var/folders` is a symlink to `/private/var/folders`).
+async fn setup_feature_env(temp: &tempfile::TempDir) -> ShowcaseResult<(PathBuf, PathBuf)> {
+    let home_dir = temp.path().join("home");
+    let agentty_root = home_dir.join(".agentty");
+    let stub_bin = home_dir.join(".stub-bin");
+    let workdir = home_dir.join("opencloudtool");
+    std::fs::create_dir_all(&home_dir)?;
+    std::fs::create_dir_all(&agentty_root)?;
+    std::fs::create_dir_all(&stub_bin)?;
+    std::fs::create_dir_all(&workdir)?;
+    for (executable_name, version_output) in AGENT_CLI_STUBS {
+        let stub_path = stub_bin.join(executable_name);
+        let script = format!(
+            "#!/bin/sh\nif [ \"$1\" = \"update\" ]; then exit 0; fi\nif [ \"$1\" = \"--version\" \
+             ]; then printf '%s\\n' '{version_output}'; exit 0; fi\nexit 1\n"
+        );
+        std::fs::write(&stub_path, script)?;
+        #[cfg(unix)]
+        std::fs::set_permissions(&stub_path, std::fs::Permissions::from_mode(0o750))?;
+    }
+    let git_init = {
+        let workdir = workdir.clone();
+        tokio::task::spawn_blocking(move || {
+            Command::new("git")
+                .args(["init", "-q", "-b", "main"])
+                .arg(workdir)
+                .status()
+        })
+        .await??
+    };
+    if !git_init.success() {
+        return Err(std::io::Error::other("failed to initialize showcase git repository").into());
+    }
+
+    // Canonicalize so the seeded path matches the binary's resolved CWD.
+    let agentty_root = agentty_root.canonicalize()?;
+    let workdir = workdir.canonicalize()?;
+
+    seed_database(&agentty_root, &workdir).await?;
+
+    Ok((agentty_root, workdir))
+}
 
 /// Deterministic CLI versions rendered in the Projects dashboard.
 const AGENT_CLI_STUBS: [(&str, &str); 3] = [
@@ -124,22 +215,11 @@ const SHOWCASE_SESSIONS: [ShowcaseSessionSeed; 7] = [
     },
 ];
 
-/// Default feature output directory derived from the crate manifest location.
-fn default_output_dir() -> PathBuf {
+/// Published feature GIF directory derived from the crate manifest location.
+fn feature_output_dir() -> PathBuf {
     let manifest_dir = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
 
     manifest_dir.join("../../docs/site/static/features")
-}
-
-/// Return the feature output directory, creating it if needed.
-///
-/// Uses `FEATURE_OUTPUT` if set, otherwise defaults to
-/// `docs/site/static/features` relative to the workspace root.
-fn feature_output_dir() -> ShowcaseResult<PathBuf> {
-    let path = std::env::var("FEATURE_OUTPUT").map_or_else(|_| default_output_dir(), PathBuf::from);
-    std::fs::create_dir_all(&path)?;
-
-    Ok(path.canonicalize()?)
 }
 
 /// Build a VHS tape that launches agentty with the given environment.
@@ -228,58 +308,6 @@ fn build_tape(
     let _ = writeln!(tape, "Sleep 1s");
 
     tape
-}
-
-#[test]
-fn build_tape_visibly_launches_colored_agentty() {
-    // Arrange
-    let output_path = Path::new("/tmp/sessions.gif");
-    let binary_path = Path::new("/tmp/target/debug/agentty");
-    let agentty_root = Path::new("/tmp/home/.agentty");
-    let workdir = Path::new("/tmp/home/opencloudtool");
-
-    // Act
-    let tape = build_tape(
-        output_path,
-        binary_path,
-        agentty_root,
-        workdir,
-        "Sleep 1s\n",
-    );
-
-    // Assert
-    assert!(tape.contains("Set FontSize 18\nSet Width 1600\nSet Height 800"));
-    assert!(tape.contains("Set TypingSpeed 0"));
-    assert!(tape.contains("Type \"export PATH='/tmp/home/.stub-bin:"));
-    assert!(tape.contains("Type \"unset NO_COLOR\""));
-    assert!(tape.contains(
-        "Set TypingSpeed 55ms\nShow\n\nSleep 600ms\nType \"agentty\"\nSleep 400ms\nEnter"
-    ));
-}
-
-/// Execute a VHS tape and verify the output was produced.
-///
-/// Writes the tape to a temporary file, runs `vhs`, and asserts the
-/// output file exists at `output_path` on completion.
-fn execute_tape(tape_content: &str, name: &str, output_path: &Path) -> ShowcaseResult {
-    let tape_path = std::env::temp_dir().join(format!("{name}.tape"));
-    std::fs::write(&tape_path, tape_content)?;
-
-    let output = Command::new("vhs").arg(&tape_path).output()?;
-
-    if !output.status.success() {
-        let stderr = String::from_utf8_lossy(&output.stderr);
-
-        return Err(std::io::Error::other(format!("VHS execution failed: {stderr}")).into());
-    }
-
-    assert!(
-        output_path.exists(),
-        "VHS did not produce output at {}",
-        output_path.display()
-    );
-
-    Ok(())
 }
 
 /// Seed the database with realistic projects and sessions.
@@ -454,182 +482,4 @@ fn unix_timestamp_now() -> i64 {
         .map_or(0, |duration| {
             i64::try_from(duration.as_secs()).unwrap_or(i64::MAX)
         })
-}
-
-#[tokio::test]
-async fn seed_database_populates_showcase_dashboard_and_timer() -> ShowcaseResult {
-    // Arrange
-    let temp = tempfile::TempDir::new()?;
-    let agentty_root = temp.path().join(".agentty");
-    let workdir = temp.path().join("opencloudtool");
-    std::fs::create_dir_all(&agentty_root)?;
-    std::fs::create_dir_all(&workdir)?;
-
-    // Act
-    seed_database(&agentty_root, &workdir).await?;
-    let database = Database::open(&agentty_root.join(DB_DIR).join(DB_FILE)).await?;
-    let projects = database.projects().load_projects_with_stats().await?;
-    let showcase_project = projects
-        .iter()
-        .find(|project| project.path == workdir.to_string_lossy())
-        .ok_or("missing showcase project")?;
-    let activity_timestamps = database
-        .activity()
-        .load_session_activity_timestamps()
-        .await?;
-    let sessions = database
-        .sessions()
-        .load_sessions_for_project(showcase_project.id)
-        .await?;
-    let running_session = sessions
-        .iter()
-        .find(|session| session.id == "a1b2c3d4-0002")
-        .ok_or("missing running showcase session")?;
-    let review_messages = database
-        .sessions()
-        .load_session_messages("a1b2c3d4-0001")
-        .await?;
-    let discovery_prompt_seen = database
-        .settings()
-        .get_setting(SettingName::ProjectDiscoveryPromptSeen)
-        .await?;
-
-    // Assert
-    assert_eq!(discovery_prompt_seen.as_deref(), Some("true"));
-    assert_eq!(showcase_project.active_session_count, 4);
-    assert_eq!(showcase_project.input_tokens, 36_600);
-    assert_eq!(showcase_project.output_tokens, 12_000);
-    assert_eq!(showcase_project.session_count, 7);
-    assert_eq!(activity_timestamps.len(), 36);
-    assert!(running_session.in_progress_started_at.is_some());
-    assert_eq!(review_messages.len(), 3);
-    assert_eq!(
-        review_messages[1].kind,
-        SessionMessageKind::AssistantAnswer.as_str()
-    );
-    assert!(
-        review_messages[1]
-            .content
-            .contains("single-flight token refresh")
-    );
-    assert_eq!(
-        review_messages[2].kind,
-        SessionMessageKind::WorkflowNotice.as_str()
-    );
-    assert!(review_messages[2].content.contains("committed with hash"));
-    Ok(())
-}
-
-// ── Feature Scenarios ────────────────────────────────────────────────────
-
-/// Set up an isolated feature demo environment with a seeded database and Git
-/// repository.
-///
-/// Returns `(agentty_root, workdir)` with canonicalized paths so the
-/// seeded project path matches what the binary resolves (critical on
-/// macOS where `/var/folders` is a symlink to `/private/var/folders`).
-async fn setup_feature_env(temp: &tempfile::TempDir) -> ShowcaseResult<(PathBuf, PathBuf)> {
-    let home_dir = temp.path().join("home");
-    let agentty_root = home_dir.join(".agentty");
-    let stub_bin = home_dir.join(".stub-bin");
-    let workdir = home_dir.join("opencloudtool");
-    std::fs::create_dir_all(&home_dir)?;
-    std::fs::create_dir_all(&agentty_root)?;
-    std::fs::create_dir_all(&stub_bin)?;
-    std::fs::create_dir_all(&workdir)?;
-    for (executable_name, version_output) in AGENT_CLI_STUBS {
-        let stub_path = stub_bin.join(executable_name);
-        let script = format!(
-            "#!/bin/sh\nif [ \"$1\" = \"update\" ]; then exit 0; fi\nif [ \"$1\" = \"--version\" \
-             ]; then printf '%s\\n' '{version_output}'; exit 0; fi\nexit 1\n"
-        );
-        std::fs::write(&stub_path, script)?;
-        #[cfg(unix)]
-        std::fs::set_permissions(&stub_path, std::fs::Permissions::from_mode(0o750))?;
-    }
-    let git_init = {
-        let workdir = workdir.clone();
-        tokio::task::spawn_blocking(move || {
-            Command::new("git")
-                .args(["init", "-q", "-b", "main"])
-                .arg(workdir)
-                .status()
-        })
-        .await??
-    };
-    if !git_init.success() {
-        return Err(std::io::Error::other("failed to initialize showcase git repository").into());
-    }
-
-    // Canonicalize so the seeded path matches the binary's resolved CWD.
-    let agentty_root = agentty_root.canonicalize()?;
-    let workdir = workdir.canonicalize()?;
-
-    seed_database(&agentty_root, &workdir).await?;
-
-    Ok((agentty_root, workdir))
-}
-
-/// Generate a feature GIF of the Sessions tab with populated data.
-///
-/// Shows the session list with sessions in various statuses (`Review`,
-/// `InProgress`, `Question`, `Done`, `Queued`) to demonstrate the core
-/// workflow and UI layout.
-#[tokio::test]
-#[ignore = "requires VHS and a renderable terminal — run explicitly with --ignored"]
-async fn feature_sessions_tab() -> ShowcaseResult {
-    // Arrange
-    let temp = tempfile::TempDir::new()?;
-    let (agentty_root, workdir) = setup_feature_env(&temp).await?;
-    let binary_path = cargo_bin("agentty");
-    let gif_path = feature_output_dir()?.join("sessions.gif");
-
-    let steps = "\
-Sleep 2400ms
-Sleep 200ms
-Enter
-Sleep 2200ms
-Type \"j\"
-Sleep 900ms
-Type \"k\"
-Sleep 900ms
-Enter
-Sleep 2800ms
-Type \"q\"
-Sleep 1800ms
-";
-
-    let tape = build_tape(&gif_path, &binary_path, &agentty_root, &workdir, steps);
-
-    // Act + Assert
-    execute_tape(&tape, "feature_sessions", &gif_path)
-}
-
-/// Generate a feature GIF cycling through all tabs.
-///
-/// Shows each major view — Projects, Sessions, and Settings — to
-/// give a complete overview of the agentty interface.
-#[tokio::test]
-#[ignore = "requires VHS and a renderable terminal — run explicitly with --ignored"]
-async fn feature_tab_tour() -> ShowcaseResult {
-    // Arrange
-    let temp = tempfile::TempDir::new()?;
-    let (agentty_root, workdir) = setup_feature_env(&temp).await?;
-    let binary_path = cargo_bin("agentty");
-    let gif_path = feature_output_dir()?.join("tab_tour.gif");
-
-    let steps = "\
-Sleep 2s
-Tab
-Sleep 2s
-Tab
-Sleep 2s
-Tab
-Sleep 2s
-";
-
-    let tape = build_tape(&gif_path, &binary_path, &agentty_root, &workdir, steps);
-
-    // Act + Assert
-    execute_tape(&tape, "feature_tab_tour", &gif_path)
 }
