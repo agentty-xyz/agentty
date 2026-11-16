@@ -433,20 +433,19 @@ impl ToolCall {
         self.assistant_text.as_deref()
     }
 
-    /// Returns this call without provider reasoning, with `note` placed
-    /// ahead of its assistant text, for replay to a model of another
-    /// provider.
-    pub(crate) fn without_reasoning(&self, note: Option<String>) -> Self {
-        let assistant_text = match (note, &self.assistant_text) {
-            (Some(note), Some(text)) => Some(format!("{note}\n\n{text}")),
-            (note, text) => note.or_else(|| text.clone()),
-        };
-
+    /// Returns this call with its identifier and arguments, replayed with
+    /// `reasoning_content` and `assistant_text` instead of its own, as a
+    /// request to a model of another reasoning family replays it.
+    pub(crate) fn replayed_as(
+        &self,
+        reasoning_content: Option<String>,
+        assistant_text: Option<String>,
+    ) -> Self {
         Self {
             arguments: self.arguments.clone(),
             assistant_text,
             id: self.id.clone(),
-            reasoning_content: None,
+            reasoning_content,
         }
     }
 

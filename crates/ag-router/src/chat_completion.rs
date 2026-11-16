@@ -151,6 +151,12 @@ impl ChatCompletionBackend {
         )
     }
 
+    /// Returns whether replayed assistant messages carry their plain-text
+    /// reasoning as `reasoning_content`.
+    pub(crate) fn replays_reasoning_text(&self) -> bool {
+        self.policy.structured_output.assistant_reasoning_content()
+    }
+
     /// Rejects image content unless this configuration documents support.
     pub(crate) fn validate_input(&self, input: &input::TurnInput) -> Result<(), model::ModelError> {
         if input.has_images() && !self.policy.image_input {

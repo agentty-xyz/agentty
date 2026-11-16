@@ -2,32 +2,46 @@
 
 use std::borrow::Cow;
 
+use ag_router::ReasoningView;
 #[cfg(feature = "sqlite")]
 use serde::Deserialize;
 use serde_json::Value;
 
-use crate::SessionError;
 use crate::context::{CLEARED_REASONING, HistoryTurn};
-use crate::model::{ModelCapabilities, ModelMessage};
+use crate::model::{ModelCapabilities, ModelMessage, ModelMetadata};
 use crate::recovery::ExecutionIdentity;
 use crate::tool::ToolCall;
+use crate::{SessionError, telemetry};
 
-/// Leads reasoning that another provider's model wrote, replayed as an
-/// assistant note.
-const CARRIED_REASONING_HEADING: &str =
-    "[harness] Reasoning an earlier model wrote at this step, kept as a note:\n";
+/// Leads plain-text reasoning that a model of another reasoning family
+/// wrote, carried as one JSON string so the text cannot pass for harness
+/// notes or end the note early.
+const CARRIED_TEXT_HEADING: &str =
+    "[harness] Reasoning an earlier model wrote at this step (JSON string):\n";
 
-/// Replaces reasoning that another provider's model wrote but that has no
-/// readable text, such as encrypted reasoning.
+/// Leads the summary of encrypted `Responses` reasoning, carried like
+/// [`CARRIED_TEXT_HEADING`].
+const CARRIED_SUMMARY_HEADING: &str =
+    "[harness] Summary of reasoning an earlier model wrote at this step (JSON string):\n";
+
+/// Replaces encrypted reasoning without a summary.
 const OMITTED_REASONING_NOTE: &str =
-    "[harness] An earlier model reasoned at this step; that reasoning is not readable here.";
+    "[harness] An earlier model reasoned at this step; that reasoning is encrypted and not shown.";
 
-/// Most reasoning bytes one note carries, so carried reasoning stays a short
-/// note rather than replaying a whole reasoning trace as visible text.
-const MAX_NOTE_REASONING_BYTES: usize = 4_096;
+/// Replaces a reasoning note the context window had no room for.
+const CLEARED_REASONING_NOTE: &str = "[harness] An earlier model reasoned at this step; that \
+                                      reasoning was cleared to fit the context window.";
 
-/// Ends a note whose reasoning was cut to [`MAX_NOTE_REASONING_BYTES`].
+/// Most reasoning bytes one note carries, so a note stays short rather than
+/// replaying a whole reasoning trace.
+const MAX_NOTE_REASONING_BYTES: usize = 1_024;
+
+/// Follows the JSON string of a note whose reasoning was cut to
+/// [`MAX_NOTE_REASONING_BYTES`].
 const CUT_REASONING_SUFFIX: &str = "\n[harness] The rest of this reasoning was cut.";
+
+/// Separates a projected note from the assistant text of its tool call.
+const NOTE_SEPARATOR: &str = "\n\n";
 
 /// Model selected when a turn was reserved. Legacy turns have no snapshot.
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -71,6 +85,87 @@ impl RecordedModel {
             provider: snapshot.provider,
         })
     }
+
+    /// Returns the reasoning family of the recorded model, or `None` for a
+    /// model without metadata.
+    fn family(&self) -> Option<ReasoningFamily> {
+        Some(ReasoningFamily::of(
+            self.provider.as_deref()?,
+            self.model.as_deref()?,
+        ))
+    }
+}
+
+/// How a provider encodes the reasoning its models return. A turn's
+/// reasoning replays natively only to a model of the same family.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub(crate) enum ReasoningFamily {
+    /// Encrypted `Responses` reasoning items, shared by `OpenAI` models
+    /// reached with an API key or billed to a `ChatGPT` plan.
+    Responses,
+    /// One model of an OpenAI-compatible server. Unrelated servers share
+    /// one provider name, so each model is its own family.
+    CompatibleModel(String),
+    /// Every model of one other provider, by provider name.
+    Provider(String),
+}
+
+impl ReasoningFamily {
+    /// Returns the family of `model` from the provider named `provider`, as
+    /// [`ModelMetadata`] and recorded snapshots name them.
+    fn of(provider: &str, model: &str) -> Self {
+        match provider {
+            telemetry::PROVIDER_OPENAI | telemetry::PROVIDER_OPENAI_CHATGPT => Self::Responses,
+            telemetry::PROVIDER_OPENAI_COMPATIBLE => Self::CompatibleModel(model.to_string()),
+            provider => Self::Provider(provider.to_string()),
+        }
+    }
+}
+
+/// The model a request replays history to, as [`project_turn`] needs it.
+#[derive(Clone, Debug, Default, Eq, PartialEq)]
+pub(crate) struct ReplayTarget {
+    /// Reasoning family of the request's model; `None` without metadata.
+    family: Option<ReasoningFamily>,
+    /// Whether the model replays plain-text reasoning natively, so projected
+    /// reasoning stays reasoning instead of becoming assistant text.
+    reasoning_text: bool,
+    /// Whether the session switched models since it was created; until then
+    /// a turn without a model snapshot is the current model's own.
+    switched: bool,
+}
+
+impl ReplayTarget {
+    /// Describes a request to the model of `metadata`, in a session at model
+    /// selection `generation`, that drops plain-text reasoning (see
+    /// [`Self::with_reasoning_text`]).
+    pub(crate) fn new(metadata: Option<&ModelMetadata>, generation: i64) -> Self {
+        Self {
+            family: metadata
+                .map(|metadata| ReasoningFamily::of(metadata.provider(), metadata.model())),
+            reasoning_text: false,
+            switched: generation != 0,
+        }
+    }
+
+    /// Returns this target replaying plain-text reasoning natively when
+    /// `reasoning_text` holds.
+    #[must_use]
+    pub(crate) fn with_reasoning_text(mut self, reasoning_text: bool) -> Self {
+        self.reasoning_text = reasoning_text;
+        self
+    }
+
+    /// Returns whether `turn` replays its reasoning natively: a turn of the
+    /// same reasoning family, or a turn without a snapshot before any switch.
+    /// After a switch, a turn without a snapshot may hold any provider's
+    /// reasoning, so it is projected.
+    pub(crate) fn replays_natively(&self, turn: &HistoryTurn) -> bool {
+        match &turn.model {
+            Some(model) => model.family() == self.family,
+            None => !self.switched,
+        }
+    }
 }
 
 pub(crate) fn check_generation(id: &str, actual: i64, expected: i64) -> Result<(), SessionError> {
@@ -112,29 +207,29 @@ pub(crate) fn check_history<'a>(
     Ok(())
 }
 
-/// Returns finished `turn` as a request to a model of `target_provider`
-/// replays it.
+/// Returns finished `turn` as a request to `target` replays it.
 ///
-/// A turn recorded under the same provider name, or without a model
-/// snapshot, keeps its provider reasoning for native replay. A turn another
-/// provider produced, or a model without metadata when the target has it,
-/// is projected deterministically: each final answer's reasoning becomes an
-/// assistant note before the answer, and each tool call loses its reasoning,
-/// which leads its assistant text as a note instead, while its identifier,
-/// name, arguments, and result stay unchanged. Readable reasoning, plain text
-/// or a `Responses` reasoning summary, is carried as bounded text; encrypted
-/// or cleared reasoning becomes a placeholder note. Projection happens only
-/// while building requests; stored turns stay native, so switching back
-/// replays their reasoning natively again.
+/// A turn of the target's reasoning family keeps its provider reasoning for
+/// native replay (see [`ReplayTarget`]). Another turn is projected
+/// deterministically, and its tool calls keep their identifiers, arguments,
+/// and results. Each reasoning becomes a note: readable reasoning, plain text
+/// or a `Responses` summary, is carried as a JSON string of at most
+/// [`MAX_NOTE_REASONING_BYTES`]; encrypted reasoning becomes a placeholder.
+/// A target that replays plain-text reasoning receives the note as the
+/// message's reasoning, as its own reasoning would replay. For any other
+/// target, a final answer's note becomes an assistant message before the
+/// answer, and a tool call's note leads its assistant text.
+///
+/// Projection commutes with clearing reasoning (see [`clears_reasoning`]
+/// and [`cleared_note_text`]): projecting an elided turn equals eliding the
+/// projected turn, so an elided prefix replays identically on later turns.
+/// Projection happens only while building requests; stored turns stay
+/// native, so switching back replays their reasoning natively again.
 pub(crate) fn project_turn<'turn>(
     turn: &'turn HistoryTurn,
-    target_provider: Option<&str>,
+    target: &ReplayTarget,
 ) -> Cow<'turn, HistoryTurn> {
-    let native = turn
-        .model
-        .as_ref()
-        .is_none_or(|model| model.provider.as_deref() == target_provider);
-    if native {
+    if target.replays_natively(turn) {
         return Cow::Borrowed(turn);
     }
     let mut messages = Vec::with_capacity(turn.messages.len());
@@ -143,16 +238,31 @@ pub(crate) fn project_turn<'turn>(
             ModelMessage::AssistantReasoning {
                 content,
                 reasoning_content,
+            } if target.reasoning_text => messages.push(ModelMessage::AssistantReasoning {
+                content: content.clone(),
+                reasoning_content: reasoning_note(reasoning_content, true),
+            }),
+            ModelMessage::AssistantReasoning {
+                content,
+                reasoning_content,
             } => {
-                messages.push(ModelMessage::Assistant(reasoning_note(reasoning_content)));
+                messages.push(ModelMessage::Assistant(reasoning_note(
+                    reasoning_content,
+                    false,
+                )));
                 messages.push(ModelMessage::Assistant(content.clone()));
             }
             ModelMessage::AssistantToolCall(call) => {
-                messages.push(ModelMessage::AssistantToolCall(projected_call(call)));
+                messages.push(ModelMessage::AssistantToolCall(projected_call(
+                    call, target,
+                )));
             }
             ModelMessage::AssistantToolCalls(calls) => {
                 messages.push(ModelMessage::AssistantToolCalls(
-                    calls.iter().map(projected_call).collect(),
+                    calls
+                        .iter()
+                        .map(|call| projected_call(call, target))
+                        .collect(),
                 ));
             }
             other => messages.push(other.clone()),
@@ -164,6 +274,32 @@ pub(crate) fn project_turn<'turn>(
         model: turn.model.clone(),
         stop: turn.stop.clone(),
     })
+}
+
+/// Returns whether clearing `reasoning` to fit the context window shortens
+/// it: native reasoning longer than [`CLEARED_REASONING`], or a projected
+/// note whose source reasoning was, so clearing a projected turn matches
+/// projecting a cleared one.
+pub(crate) fn clears_reasoning(reasoning: &str) -> bool {
+    match parse_note(reasoning) {
+        Some((clearable, "")) => clearable,
+        _ => reasoning.len() > CLEARED_REASONING.len(),
+    }
+}
+
+/// Returns `text` with the projected reasoning note it starts with cleared,
+/// keeping any assistant text after it, or `None` when `text` does not start
+/// with a clearable note. `whole` requires the note to be all of `text`, as
+/// for the assistant message a projected final answer's note becomes.
+pub(crate) fn cleared_note_text(text: &str, whole: bool) -> Option<String> {
+    let (clearable, rest) = parse_note(text)?;
+    let fits = if whole {
+        rest.is_empty()
+    } else {
+        rest.is_empty() || rest.starts_with(NOTE_SEPARATOR)
+    };
+
+    (clearable && fits).then(|| format!("{CLEARED_REASONING_NOTE}{rest}"))
 }
 
 #[cfg(feature = "sqlite")]
@@ -182,57 +318,91 @@ fn invalid_snapshot() -> SessionError {
     }
 }
 
-/// Returns the note that replaces `reasoning` for another provider: its
-/// readable text under a heading, cut to [`MAX_NOTE_REASONING_BYTES`], or a
-/// placeholder when nothing readable remains.
-fn reasoning_note(reasoning: &str) -> String {
-    let readable = readable_reasoning(reasoning);
-    let text = readable.trim();
-    if text.is_empty() {
-        return OMITTED_REASONING_NOTE.to_string();
-    }
-    if text.len() <= MAX_NOTE_REASONING_BYTES {
-        return format!("{CARRIED_REASONING_HEADING}{text}");
-    }
-    let end = text.floor_char_boundary(MAX_NOTE_REASONING_BYTES);
-
-    format!(
-        "{CARRIED_REASONING_HEADING}{}{CUT_REASONING_SUFFIX}",
-        &text[..end]
-    )
-}
-
-/// Returns the readable text of stored reasoning: the summaries of
-/// `Responses` reasoning items, which otherwise carry only encrypted
-/// content, or plain text as written. Reasoning cleared to fit the context
-/// window has no readable text.
-fn readable_reasoning(reasoning: &str) -> String {
+/// Returns the note that replaces `reasoning` for a model of another
+/// family, as reasoning when `as_reasoning` holds or as assistant text
+/// otherwise. Reasoning already cleared stays cleared. Reasoning no longer
+/// than [`CLEARED_REASONING`], which clearing keeps, is read as plain text
+/// whatever its form, so it is carried in either order of projecting and
+/// clearing.
+fn reasoning_note(reasoning: &str, as_reasoning: bool) -> String {
     if reasoning == CLEARED_REASONING {
-        return String::new();
+        let cleared = if as_reasoning {
+            CLEARED_REASONING
+        } else {
+            CLEARED_REASONING_NOTE
+        };
+        return cleared.to_string();
     }
-    let Some(items) = serde_json::from_str::<Vec<Value>>(reasoning)
-        .ok()
-        .filter(|items| {
-            !items.is_empty()
-                && items
-                    .iter()
-                    .all(|item| item.get("type").and_then(Value::as_str) == Some("reasoning"))
-        })
-    else {
-        return reasoning.to_string();
+    let view = if reasoning.len() > CLEARED_REASONING.len() {
+        ag_router::reasoning_view(reasoning)
+    } else {
+        ReasoningView::Text(reasoning)
     };
-    let summaries: Vec<&str> = items
-        .iter()
-        .filter_map(|item| item.get("summary").and_then(Value::as_array))
-        .flatten()
-        .filter_map(|part| part.get("text").and_then(Value::as_str))
-        .collect();
-
-    summaries.join("\n\n")
+    match view {
+        ReasoningView::Text(text) => carried_note(CARRIED_TEXT_HEADING, text),
+        ReasoningView::Summary(summary) => carried_note(CARRIED_SUMMARY_HEADING, &summary),
+        ReasoningView::Opaque => OMITTED_REASONING_NOTE.to_string(),
+    }
 }
 
-fn projected_call(call: &ToolCall) -> ToolCall {
-    call.without_reasoning(call.reasoning_content().map(reasoning_note))
+/// Returns `text` under `heading` as one JSON string of at most
+/// [`MAX_NOTE_REASONING_BYTES`] of it, followed by
+/// [`CUT_REASONING_SUFFIX`] when cut.
+fn carried_note(heading: &str, text: &str) -> String {
+    let end = text.floor_char_boundary(MAX_NOTE_REASONING_BYTES);
+    let carried = Value::String(text[..end].to_string());
+    let suffix = if end < text.len() {
+        CUT_REASONING_SUFFIX
+    } else {
+        ""
+    };
+
+    format!("{heading}{carried}{suffix}")
+}
+
+/// Reads the projected reasoning note `text` starts with and returns
+/// whether clearing it matches clearing its source reasoning, with the text
+/// after the note; `None` when `text` starts with no such note. Summaries
+/// and placeholders stand for reasoning items longer than
+/// [`CLEARED_REASONING`]; carried plain text, cut or not, is as long as its
+/// source at least.
+fn parse_note(text: &str) -> Option<(bool, &str)> {
+    if let Some(rest) = text.strip_prefix(OMITTED_REASONING_NOTE) {
+        return Some((true, rest));
+    }
+    if let Some(rest) = text.strip_prefix(CLEARED_REASONING_NOTE) {
+        return Some((false, rest));
+    }
+    let (summary, rest) = match text.strip_prefix(CARRIED_SUMMARY_HEADING) {
+        Some(rest) => (true, rest),
+        None => (false, text.strip_prefix(CARRIED_TEXT_HEADING)?),
+    };
+    let mut strings = serde_json::Deserializer::from_str(rest).into_iter::<String>();
+    let carried = strings.next()?.ok()?;
+    let rest = &rest[strings.byte_offset()..];
+    let rest = rest.strip_prefix(CUT_REASONING_SUFFIX).unwrap_or(rest);
+
+    Some((summary || carried.len() > CLEARED_REASONING.len(), rest))
+}
+
+/// Returns `call` as a request to `target` replays it when another family
+/// wrote it: its reasoning becomes a note, kept as reasoning for a target
+/// that replays plain-text reasoning, or leading its assistant text.
+fn projected_call(call: &ToolCall, target: &ReplayTarget) -> ToolCall {
+    let Some(reasoning) = call.reasoning_content() else {
+        return call.clone();
+    };
+    let text = call.assistant_text().map(str::to_string);
+    if target.reasoning_text {
+        return call.replayed_as(Some(reasoning_note(reasoning, true)), text);
+    }
+    let note = reasoning_note(reasoning, false);
+    let text = match text {
+        Some(text) => format!("{note}{NOTE_SEPARATOR}{text}"),
+        None => note,
+    };
+
+    call.replayed_as(None, Some(text))
 }
 
 #[cfg(test)]

@@ -835,6 +835,10 @@ impl Model for BudgetedModel {
         Model::keeps_prefix_across_schemas(&self.inner)
     }
 
+    fn replays_reasoning_text(&self) -> bool {
+        Model::replays_reasoning_text(&self.inner)
+    }
+
     async fn complete(&self, request: ModelRequest) -> Result<ModelCompletion, ModelError> {
         self.budget.consume().map_err(ModelError::request)?;
 

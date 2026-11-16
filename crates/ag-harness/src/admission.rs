@@ -232,7 +232,7 @@ impl ModelSwitch {
 
     /// Validates canonical messages for the target model: tool history needs
     /// tool calls and image history needs image input. Provider reasoning is
-    /// accepted; requests to another provider replay it as text notes.
+    /// accepted; requests to another reasoning family replay it as notes.
     ///
     /// # Errors
     /// Returns [`SessionError::UnsupportedModelHistory`] for content the

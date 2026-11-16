@@ -107,6 +107,15 @@ pub trait Model: Send + Sync {
         false
     }
 
+    /// Returns whether the provider replays the plain-text reasoning of
+    /// replayed assistant messages, as thinking-mode Kimi and Qwen models
+    /// require on replayed tool calls. History another reasoning family
+    /// wrote then replays its reasoning notes as reasoning; otherwise, as by
+    /// default, as assistant text.
+    fn replays_reasoning_text(&self) -> bool {
+        false
+    }
+
     /// Returns whether the implementation answers requests in
     /// [`OutputMode::Text`] with plain text, returned as
     /// [`ModelResponse::Text`]. The default, `false`, makes text-mode turns
@@ -662,6 +671,12 @@ impl Model for ModelClient {
     fn keeps_prefix_across_schemas(&self) -> bool {
         self.router
             .keeps_prefix_across_schemas(&self.router_model)
+            .unwrap_or(false)
+    }
+
+    fn replays_reasoning_text(&self) -> bool {
+        self.router
+            .replays_reasoning_text(&self.router_model)
             .unwrap_or(false)
     }
 

@@ -61,10 +61,7 @@ pub(crate) fn unselected_model() -> RecordedModel {
 /// Returns the completed turn of `messages` as a store loads it for a
 /// session created without a model selection.
 pub(crate) fn loaded_turn(messages: Vec<ModelMessage>) -> HistoryTurn {
-    HistoryTurn {
-        model: Some(unselected_model()),
-        ..HistoryTurn::from(messages)
-    }
+    HistoryTurn::new(messages).with_model(unselected_model())
 }
 
 /// Returns one empty store of each backend this build includes.

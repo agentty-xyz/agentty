@@ -274,6 +274,39 @@ fn openai_compatible_accepts_a_missing_but_not_a_blank_api_key() {
 }
 
 #[test]
+fn reports_which_models_replay_plain_text_reasoning() {
+    // Arrange
+    let cases = [
+        (Provider::Kimi, "kimi/kimi-k2.6", true),
+        (Provider::Kimi, "kimi/kimi-k3", true),
+        (Provider::Kimi, "kimi/kimi-legacy", false),
+        (Provider::Qwen, "qwen/qwen3.8-max", true),
+        (Provider::Qwen, "qwen/qwen-plus", false),
+        (Provider::Muse, "muse/muse-spark-1.3", false),
+        (
+            Provider::OpenAiCompatible,
+            "openai-compatible/qwen3:latest",
+            false,
+        ),
+        (Provider::OpenAi, "openai/gpt-6.1-sol", false),
+    ];
+
+    // Act / Assert
+    for (provider, model, replays) in cases {
+        assert_eq!(
+            router(provider).replays_reasoning_text(model).ok(),
+            Some(replays),
+            "{model}"
+        );
+    }
+    assert!(
+        router(Provider::Kimi)
+            .replays_reasoning_text("muse/muse-spark-1.3")
+            .is_err()
+    );
+}
+
+#[test]
 fn qualifies_image_input_by_model_name() {
     // Arrange
     let cases = [

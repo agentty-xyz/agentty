@@ -29,7 +29,6 @@ use crate::context_budget_fixture::unbounded_context_budget;
 use crate::model_profile_fixture::unbounded_model_profile;
 use crate::store_fixture::{
     Echo, ExternalStore, harness, image_input, lifecycle, loaded_turn, options, schema, stores,
-    unselected_model,
 };
 use crate::store_gate::Gate;
 
@@ -478,18 +477,15 @@ async fn journaled_backends_replay_stopped_turn_messages_and_unfinished_effects(
             loaded.turns,
             vec![(
                 0,
-                HistoryTurn {
-                    messages: vec![
-                        ModelMessage::User("work".to_string()),
-                        ModelMessage::AssistantToolCall(write_call("work-call")),
-                    ],
-                    model: Some(unselected_model()),
-                    stop: Some(TurnStop {
-                        unfinished_commands: vec!["cargo test".to_string()],
-                        unfinished_writes: vec!["src/lib.rs".to_string()],
-                        ..failed_stop()
-                    }),
-                }
+                loaded_turn(vec![
+                    ModelMessage::User("work".to_string()),
+                    ModelMessage::AssistantToolCall(write_call("work-call")),
+                ])
+                .with_stop(TurnStop {
+                    unfinished_commands: vec!["cargo test".to_string()],
+                    unfinished_writes: vec!["src/lib.rs".to_string()],
+                    ..failed_stop()
+                })
             )]
         );
     }
@@ -562,11 +558,7 @@ async fn journaled_backends_keep_running_turn_effects_out_of_stopped_turn_notes(
             loaded.turns,
             vec![(
                 0,
-                HistoryTurn {
-                    messages: vec![ModelMessage::User("work".to_string())],
-                    model: Some(unselected_model()),
-                    stop: Some(failed_stop()),
-                }
+                loaded_turn(vec![ModelMessage::User("work".to_string())]).with_stop(failed_stop())
             )]
         );
     }
@@ -627,11 +619,7 @@ async fn journaled_backends_keep_only_the_input_of_a_stopped_turn_over_the_byte_
             loaded.turns,
             vec![(
                 1,
-                HistoryTurn {
-                    messages: vec![ModelMessage::User("work".to_string())],
-                    model: Some(unselected_model()),
-                    stop: Some(failed_stop()),
-                }
+                loaded_turn(vec![ModelMessage::User("work".to_string())]).with_stop(failed_stop())
             )]
         );
     }
@@ -1641,14 +1629,10 @@ async fn expired_renewal_acknowledgment_cancels_a_short_lease_turn() {
         store.load_session("expired").await.expect("history").turns,
         vec![(
             0,
-            HistoryTurn {
-                messages: vec![ModelMessage::User("work".to_string())],
-                model: Some(unselected_model()),
-                stop: Some(TurnStop {
-                    error_type: "interrupted".to_string(),
-                    ..TurnStop::default()
-                }),
-            }
+            loaded_turn(vec![ModelMessage::User("work".to_string())]).with_stop(TurnStop {
+                error_type: "interrupted".to_string(),
+                ..TurnStop::default()
+            })
         )]
     );
 }

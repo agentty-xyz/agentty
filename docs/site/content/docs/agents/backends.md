@@ -240,7 +240,7 @@ disabling the other session types.
   corrections, and tool activity) is kept in the `harness_turn_report` database table,
   including after the session is deleted.
 - A session can switch models between turns. A model from another provider sees earlier
-  reasoning as short notes, and switching back restores it.
+  reasoning as short notes of at most 1 KiB each, and switching back restores it.
 
 <a id="backends-harness-fast-model"></a> With the flag, **Settings → Default Fast
 Model** also lists every ready harness model with its price class, such as

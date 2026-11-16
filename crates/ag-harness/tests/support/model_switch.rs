@@ -9,7 +9,9 @@ use ag_harness::model::{
 use ag_harness::recovery::ExecutionIdentity;
 #[cfg(feature = "sqlite")]
 use ag_harness::store::SqliteStore;
-use ag_harness::store::{AcquiredTurn, HistoryProjection, ModelSwitch, NewSession, SessionStore};
+use ag_harness::store::{
+    AcquiredTurn, HistoryProjection, MemoryStore, ModelSwitch, NewSession, SessionStore,
+};
 use ag_harness::tool::ToolCall;
 use ag_harness::{Harness, Model, ModelError, SessionError, TurnInput};
 use async_trait::async_trait;
@@ -40,6 +42,10 @@ impl Model for RecordingModel {
         Ok(())
     }
 
+    fn replays_reasoning_text(&self) -> bool {
+        self.name == "thinking"
+    }
+
     async fn complete(&self, request: ModelRequest) -> Result<ModelCompletion, ModelError> {
         self.requests.lock().expect("requests").push(request);
         Ok(ModelCompletion::from_response(ModelResponse::Output(
@@ -57,6 +63,7 @@ fn registry(requests: &Arc<Mutex<Vec<ModelRequest>>>) -> ModelRegistry {
         "kimi",
         "no-tools",
         "openai",
+        "thinking",
         "vision",
     ] {
         registry
@@ -571,12 +578,28 @@ async fn switching_survives_sqlite_reopen() {
     );
 }
 
-/// Heading of a note carrying another provider's readable reasoning.
-const CARRIED: &str = "[harness] Reasoning an earlier model wrote at this step, kept as a note:\n";
+/// Heading of a note carrying another family's plain-text reasoning.
+const CARRIED: &str = "[harness] Reasoning an earlier model wrote at this step (JSON string):\n";
 
-/// Note replacing another provider's unreadable reasoning.
+/// Heading of a note carrying another family's reasoning summary.
+const SUMMARY: &str =
+    "[harness] Summary of reasoning an earlier model wrote at this step (JSON string):\n";
+
+/// Note replacing another family's encrypted reasoning.
 const OMITTED: &str =
-    "[harness] An earlier model reasoned at this step; that reasoning is not readable here.";
+    "[harness] An earlier model reasoned at this step; that reasoning is encrypted and not shown.";
+
+/// The projected tool call of [`openai_turn`] for a model of another family
+/// that does not replay reasoning text.
+fn projected_openai_call() -> ToolCall {
+    reasoning_call(
+        None,
+        Some(&format!(
+            r#"{SUMMARY}"Read a.txt."{}Reading a.txt."#,
+            "\n\n"
+        )),
+    )
+}
 
 /// Encrypted `Responses` reasoning, summarized as `summary` when given.
 fn responses_reasoning(summary: Option<&str>) -> String {
@@ -705,10 +728,7 @@ async fn switches_replay_foreign_reasoning_as_notes_and_restore_it_natively() {
             requests[0].messages(),
             [
                 ModelMessage::User("inspect".into()),
-                ModelMessage::AssistantToolCall(reasoning_call(
-                    None,
-                    Some(&format!("{CARRIED}Read a.txt.\n\nReading a.txt.")),
-                )),
+                ModelMessage::AssistantToolCall(projected_openai_call()),
                 ModelMessage::ToolResult {
                     call_id: "read-1".into(),
                     content: "text".into(),
@@ -725,7 +745,7 @@ async fn switches_replay_foreign_reasoning_as_notes_and_restore_it_natively() {
         native.extend(openai_turn());
         native.extend([
             ModelMessage::User("think".into()),
-            ModelMessage::Assistant(format!("{CARRIED}Plain kimi reasoning.")),
+            ModelMessage::Assistant(format!(r#"{CARRIED}"Plain kimi reasoning.""#)),
             ModelMessage::Assistant(r#"{"answer":"thought"}"#.into()),
             ModelMessage::User("next".into()),
             ModelMessage::Assistant(r#"{"answer":"kimi"}"#.into()),
@@ -780,10 +800,7 @@ async fn projected_history_survives_sqlite_reopen_after_a_switch() {
     assert_eq!(
         requests[0].messages()[1..5],
         [
-            ModelMessage::AssistantToolCall(reasoning_call(
-                None,
-                Some(&format!("{CARRIED}Read a.txt.\n\nReading a.txt.")),
-            )),
+            ModelMessage::AssistantToolCall(projected_openai_call()),
             ModelMessage::ToolResult {
                 call_id: "read-1".into(),
                 content: "text".into(),
@@ -792,6 +809,167 @@ async fn projected_history_survives_sqlite_reopen_after_a_switch() {
             ModelMessage::Assistant(OMITTED.into()),
             ModelMessage::Assistant(r#"{"answer":"seen"}"#.into()),
         ]
+    );
+}
+
+#[tokio::test]
+async fn notes_stay_reasoning_for_a_target_that_replays_reasoning_text() {
+    // Arrange
+    let store: Arc<dyn SessionStore> = Arc::new(MemoryStore::default());
+    let requests = Arc::new(Mutex::new(Vec::new()));
+    let registry = registry(&requests);
+    create_openai_session(&store, "thinking").await;
+    let mut session = Harness::from_registry(&registry, "openai")
+        .expect("harness")
+        .store(Arc::clone(&store))
+        .resume("thinking")
+        .await
+        .expect("resume");
+
+    // Act
+    session
+        .switch_model(&registry, "thinking")
+        .await
+        .expect("switch to a thinking model");
+    session.send("next").await.expect("thinking turn");
+
+    // Assert
+    assert_eq!(
+        requests.lock().expect("requests")[0].messages()[1..4],
+        [
+            ModelMessage::AssistantToolCall(reasoning_call(
+                Some(format!(r#"{SUMMARY}"Read a.txt.""#)),
+                Some("Reading a.txt."),
+            )),
+            ModelMessage::ToolResult {
+                call_id: "read-1".into(),
+                content: "text".into(),
+                name: "read".into(),
+            },
+            ModelMessage::AssistantReasoning {
+                content: r#"{"answer":"seen"}"#.into(),
+                reasoning_content: OMITTED.into(),
+            },
+        ]
+    );
+}
+
+#[tokio::test]
+async fn turns_without_a_snapshot_replay_natively_only_until_a_switch() {
+    // Arrange
+    let directory = tempfile::tempdir().expect("directory");
+    let path = directory.path().join("legacy.sqlite");
+    let requests = Arc::new(Mutex::new(Vec::new()));
+    let registry = registry(&requests);
+    let store: Arc<dyn SessionStore> = Arc::new(SqliteStore::open(&path).await.expect("open"));
+    create_openai_session(&store, "legacy").await;
+    // Forget the snapshot, as for a turn stored before snapshots existed.
+    let pool =
+        sqlx::SqlitePool::connect_with(sqlx::sqlite::SqliteConnectOptions::new().filename(&path))
+            .await
+            .expect("connect");
+    sqlx::query("UPDATE session_turn SET model_snapshot = NULL")
+        .execute(&pool)
+        .await
+        .expect("forget snapshots");
+    pool.close().await;
+    let mut session = Harness::from_registry(&registry, "openai")
+        .expect("harness")
+        .store(Arc::clone(&store))
+        .resume("legacy")
+        .await
+        .expect("resume");
+
+    // Act
+    session.send("before").await.expect("unswitched turn");
+    session
+        .switch_model(&registry, "kimi")
+        .await
+        .expect("switch to kimi");
+    session.send("after").await.expect("switched turn");
+
+    // Assert
+    let loaded = store.load_session("legacy").await.expect("load");
+    assert_eq!(loaded.turns[0].1.model, None);
+    let requests = requests.lock().expect("requests");
+    assert_eq!(requests[0].messages()[1..4], openai_turn());
+    assert_eq!(
+        requests[1].messages()[1..5],
+        [
+            ModelMessage::AssistantToolCall(projected_openai_call()),
+            ModelMessage::ToolResult {
+                call_id: "read-1".into(),
+                content: "text".into(),
+                name: "read".into(),
+            },
+            ModelMessage::Assistant(OMITTED.into()),
+            ModelMessage::Assistant(r#"{"answer":"seen"}"#.into()),
+        ]
+    );
+}
+
+#[tokio::test]
+async fn a_small_window_clears_projected_notes_and_keeps_the_prefix_stable() {
+    // Arrange
+    let store: Arc<dyn SessionStore> = Arc::new(MemoryStore::default());
+    let requests = Arc::new(Mutex::new(Vec::new()));
+    let registry = windowed_registry(&requests);
+    let mut session = Harness::from_registry(&registry, "a")
+        .expect("harness")
+        .store(Arc::clone(&store))
+        .session("window", schema())
+        .create()
+        .await
+        .expect("session");
+    let reasoning = "Plan the read carefully. ".repeat(40);
+    let call = ToolCall::from_json(
+        "read-1".into(),
+        "read",
+        r#"{"path":"a.txt"}"#,
+        Some(reasoning.clone()),
+    )
+    .expect("call");
+    complete_stored_turn(
+        &store,
+        "window",
+        "inspect",
+        0,
+        &[
+            ModelMessage::AssistantToolCall(call),
+            ModelMessage::ToolResult {
+                call_id: "read-1".into(),
+                content: "text ".repeat(2_000),
+                name: "read".into(),
+            },
+            ModelMessage::AssistantReasoning {
+                content: r#"{"answer":"seen"}"#.into(),
+                reasoning_content: reasoning,
+            },
+        ],
+    )
+    .await;
+    session
+        .switch_model(&registry, "b")
+        .await
+        .expect("switch to the small window");
+
+    // Act
+    session.send("next").await.expect("first small turn");
+    session.send("again").await.expect("second small turn");
+
+    // Assert
+    let requests = requests.lock().expect("requests");
+    let first = requests[0].messages();
+    let cleared = "[harness] An earlier model reasoned at this step; that reasoning was cleared \
+                   to fit the context window."
+        .to_string();
+    assert_eq!(first[3], ModelMessage::Assistant(cleared.clone()));
+    assert!(matches!(&first[1], ModelMessage::AssistantToolCall(call)
+            if call.reasoning_content().is_none() && call.assistant_text() == Some(cleared.as_str())));
+    assert_eq!(
+        requests[1].messages()[..first.len() - 1],
+        first[..first.len() - 1],
+        "the next turn repeats the elided projected prefix"
     );
 }
 
@@ -808,7 +986,11 @@ fn windowed_registry(requests: &Arc<Mutex<Vec<ModelRequest>>>) -> ModelRegistry 
                     name,
                     requests: Arc::clone(requests),
                 },
-                ModelCapabilities::new(profile),
+                ModelCapabilities {
+                    image_input: false,
+                    profile,
+                    tool_calls: true,
+                },
             )
             .expect("register");
     }

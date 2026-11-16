@@ -28,6 +28,7 @@ pub use model::{
     JsonSchemaFormat, ModelError, ModelMessage, ModelRequest, ReasoningEffort, Task,
 };
 pub use provider::{Provider, ProviderConfig, Router};
+pub use responses::{ReasoningView, reasoning_view};
 pub use schema::{
     OutputSchema, OutputSchemaError, OutputValidationError, RESPONSE_CONTENT_LIMIT_BYTES,
     bounded_diagnostic, ensure_content_size,

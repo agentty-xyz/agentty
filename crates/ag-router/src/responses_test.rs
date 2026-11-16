@@ -3,7 +3,7 @@
 
 use serde_json::json;
 
-use super::{EventStream, endpoint, replayed_reasoning};
+use super::{EventStream, ReasoningView, endpoint, reasoning_view, replayed_reasoning};
 use crate::http::{SUCCESS_BODY_LIMIT_BYTES, TransportError};
 
 #[test]
@@ -137,6 +137,32 @@ fn replays_only_nonempty_arrays_of_reasoning_items() {
     assert!(replayed_reasoning(Some(&mixed.to_string())).is_empty());
     assert!(replayed_reasoning(Some("plain reasoning text")).is_empty());
     assert!(replayed_reasoning(None).is_empty());
+}
+
+#[test]
+fn reasoning_view_reads_summaries_of_exactly_the_replayed_items() {
+    // Arrange
+    let summarized = json!([
+        {"type": "reasoning", "encrypted_content": "gAAAA", "summary": [
+            {"type": "summary_text", "text": "Check a.txt."},
+            {"type": "summary_text", "text": "  "}
+        ]},
+        {"type": "reasoning", "summary": [{"type": "summary_text", "text": "Then b.txt."}]}
+    ])
+    .to_string();
+    let encrypted =
+        json!([{"type": "reasoning", "encrypted_content": "gAAAA", "summary": []}]).to_string();
+    let mixed = json!([{"type": "reasoning"}, {"type": "message"}]).to_string();
+
+    // Act / Assert
+    assert_eq!(
+        reasoning_view(&summarized),
+        ReasoningView::Summary("Check a.txt.\n\nThen b.txt.".to_string())
+    );
+    assert_eq!(reasoning_view(&encrypted), ReasoningView::Opaque);
+    assert_eq!(reasoning_view(&mixed), ReasoningView::Text(&mixed));
+    assert_eq!(reasoning_view("[]"), ReasoningView::Text("[]"));
+    assert_eq!(reasoning_view("plain"), ReasoningView::Text("plain"));
 }
 
 #[test]

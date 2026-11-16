@@ -162,6 +162,16 @@ impl Router {
         Ok(self.backend(model)?.keeps_prefix_across_schemas())
     }
 
+    /// Returns whether the selected model's replayed assistant messages
+    /// carry plain-text reasoning natively, as thinking-mode Kimi and Qwen
+    /// models require on replayed tool calls. Other models drop such text.
+    ///
+    /// # Errors
+    /// Returns a routing error for an unknown or unconfigured model.
+    pub fn replays_reasoning_text(&self, model: &str) -> Result<bool, ModelError> {
+        Ok(self.backend(model)?.replays_reasoning_text())
+    }
+
     /// Executes one request and validates terminal JSON against its schema;
     /// a request without a schema returns bounded, nonblank terminal text.
     ///
@@ -321,6 +331,15 @@ impl Backend {
     fn keeps_prefix_across_schemas(&self) -> bool {
         match self {
             Self::ChatCompletion(backend) => backend.keeps_prefix_across_schemas(),
+            Self::Responses(_) => false,
+        }
+    }
+
+    /// Returns whether replayed history carries plain-text reasoning; the
+    /// Responses API replays only its own encrypted reasoning items.
+    fn replays_reasoning_text(&self) -> bool {
+        match self {
+            Self::ChatCompletion(backend) => backend.replays_reasoning_text(),
             Self::Responses(_) => false,
         }
     }
