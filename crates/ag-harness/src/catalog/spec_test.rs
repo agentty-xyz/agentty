@@ -42,7 +42,6 @@ fn capabilities_satisfy_only_needs_they_include() {
     ];
 
     // Assert
-    assert_eq!(Capabilities::default(), Capabilities::NONE);
     assert!(Capabilities::NONE.satisfies(Capabilities::NONE));
     assert!(vision.satisfies(vision));
     assert_eq!(
@@ -92,6 +91,21 @@ fn host_pricing_falls_back_to_the_input_price_for_cache_tokens() {
     assert_eq!(cached.cache_read_per_mtok_micro_usd(), 500_000);
     assert_eq!(cached.cache_write_per_mtok_micro_usd(), 2_500_000);
     assert_eq!(Pricing::built_in(1, 2).source(), PricingSource::BuiltIn);
+}
+
+#[test]
+fn changing_a_built_in_cache_price_marks_the_prices_host_supplied() {
+    // Arrange
+    let built_in = Pricing::built_in(2_000_000, 8_000_000);
+
+    // Act
+    let cache_read = built_in.with_cache_read(200_000);
+    let cache_write = built_in.with_cache_write(2_500_000);
+
+    // Assert
+    assert_eq!(cache_read.source(), PricingSource::Host);
+    assert_eq!(cache_write.source(), PricingSource::Host);
+    assert_eq!(cache_read.input_per_mtok_micro_usd(), 2_000_000);
 }
 
 #[test]

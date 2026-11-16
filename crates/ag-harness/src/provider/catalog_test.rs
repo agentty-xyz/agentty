@@ -3,13 +3,14 @@
 
 use std::env;
 
-use ag_router::chatgpt::{ChatGptAuthError, ChatGptCredentials};
+use ag_router::chatgpt::ChatGptAuthError;
 
 use super::{
     CostTier, ModelConfiguration, ModelConfigurationError, ModelProvider, ModelProviderParseError,
     chatgpt, kimi, muse, openai, openai_compatible, qwen,
 };
 use crate::catalog::{Capabilities, ModelId, PricingSource};
+use crate::chatgpt_sign_in_fixture::save_chatgpt_sign_in;
 use crate::input::TurnInput;
 use crate::model::{Model, ModelMetadataError, ModelProfile};
 
@@ -291,15 +292,7 @@ fn declares_profiles_for_openai_models_and_from_the_compatible_environment() {
 #[test]
 fn declares_a_cost_tier_for_every_cataloged_model() {
     // Arrange
-    let cataloged = ModelProvider::all()
-        .iter()
-        .flat_map(|provider| {
-            provider
-                .known_models()
-                .iter()
-                .map(move |model| (*provider, *model))
-        })
-        .collect::<Vec<_>>();
+    let cataloged = cataloged_models();
 
     // Act
     let cheap = cataloged
@@ -420,18 +413,7 @@ fn chatgpt_configuration_requires_a_stored_sign_in() {
     // Act
     let missing = ModelConfiguration::new(ModelProvider::ChatGpt, "gpt-6-luna")
         .client_from_environment(environment);
-    ChatGptCredentials {
-        access_token: "access".to_string(),
-        client_id: "oaiapp_test".to_string(),
-        email: None,
-        expires_at: u64::MAX,
-        ext_agent_host_id: "urn:uuid:host".to_string(),
-        id_token: String::new(),
-        refresh_token: "refresh".to_string(),
-        scopes: vec!["chatgpt.tokens.use.direct".to_string()],
-    }
-    .save(&auth_file)
-    .expect("credentials should save");
+    save_chatgpt_sign_in(&auth_file);
     let client = ModelConfiguration::new(ModelProvider::ChatGpt, "gpt-6-luna")
         .client_from_environment(environment)
         .expect("a stored sign-in should configure a client");
@@ -664,18 +646,8 @@ fn every_per_token_model_has_sane_built_in_pricing() {
         .collect::<Vec<_>>();
 
     // Assert
-    assert_eq!(priced.len(), 13);
-    for (provider, model, pricing) in &priced {
-        assert_ne!(*provider, ModelProvider::ChatGpt, "{model} is plan billed");
-        assert_eq!(pricing.source(), PricingSource::BuiltIn);
-        assert!(
-            pricing.input_per_mtok_micro_usd() > 0,
-            "{model} input price"
-        );
-        assert!(
-            pricing.output_per_mtok_micro_usd() >= pricing.input_per_mtok_micro_usd(),
-            "{model} output price"
-        );
+    for (_, model, pricing) in &priced {
+        assert_eq!(pricing.source(), PricingSource::BuiltIn, "{model}");
         assert_eq!(
             pricing.cache_read_per_mtok_micro_usd(),
             pricing.input_per_mtok_micro_usd()
@@ -684,13 +656,63 @@ fn every_per_token_model_has_sane_built_in_pricing() {
             pricing.cache_write_per_mtok_micro_usd(),
             pricing.input_per_mtok_micro_usd()
         );
-        assert_eq!(provider.cost_tier(model), Some(pricing.cost_tier()));
     }
-    let muse = ModelProvider::Muse
-        .pricing(muse::MUSE_SPARK_1_3)
-        .expect("Muse is priced");
-    assert_eq!(muse.input_per_mtok_micro_usd(), 1_250_000);
-    assert_eq!(muse.output_per_mtok_micro_usd(), 4_250_000);
+    assert_eq!(
+        priced
+            .iter()
+            .map(|(provider, model, pricing)| (
+                *provider,
+                *model,
+                pricing.input_per_mtok_micro_usd(),
+                pricing.output_per_mtok_micro_usd()
+            ))
+            .collect::<Vec<_>>(),
+        [
+            (
+                ModelProvider::Muse,
+                muse::MUSE_SPARK_1_3,
+                1_250_000,
+                4_250_000
+            ),
+            (
+                ModelProvider::Muse,
+                muse::MUSE_SPARK_1_3_CONTRIBUTOR,
+                100_000,
+                200_000
+            ),
+            (ModelProvider::Kimi, kimi::KIMI_K3, 3_000_000, 15_000_000),
+            (ModelProvider::Kimi, kimi::KIMI_K2_6, 950_000, 4_000_000),
+            (ModelProvider::Qwen, qwen::QWEN3_8_MAX, 2_000_000, 6_000_000),
+            (ModelProvider::Qwen, qwen::QWEN_PLUS, 400_000, 1_200_000),
+            (ModelProvider::Qwen, qwen::QWEN3_8_FLASH, 150_000, 470_000),
+            (ModelProvider::Qwen, qwen::QWEN3_7_FLASH, 30_000, 130_000),
+            (
+                ModelProvider::OpenAi,
+                openai::GPT_6_1_SOL,
+                2_000_000,
+                10_000_000
+            ),
+            (
+                ModelProvider::OpenAi,
+                openai::GPT_6_ASTRA,
+                10_000_000,
+                50_000_000
+            ),
+            (ModelProvider::OpenAi, openai::GPT_6_LUNA, 100_000, 500_000),
+            (
+                ModelProvider::OpenAi,
+                openai::GPT_5_6_TERRA,
+                2_000_000,
+                12_000_000
+            ),
+            (
+                ModelProvider::OpenAi,
+                openai::GPT_5_3_CODEX,
+                1_750_000,
+                14_000_000
+            ),
+        ]
+    );
     assert_eq!(
         ModelProvider::ChatGpt.pricing(chatgpt::CHATGPT_GPT_6_LUNA),
         None
@@ -707,18 +729,7 @@ fn declared_capabilities_match_each_client_wire_policy() {
     // Arrange
     let directory = tempfile::tempdir().expect("temporary directory");
     let auth_file = directory.path().join("chatgpt.json");
-    ChatGptCredentials {
-        access_token: "access".to_string(),
-        client_id: "oaiapp_test".to_string(),
-        email: None,
-        expires_at: u64::MAX,
-        ext_agent_host_id: "urn:uuid:host".to_string(),
-        id_token: String::new(),
-        refresh_token: "refresh".to_string(),
-        scopes: vec!["chatgpt.tokens.use.direct".to_string()],
-    }
-    .save(&auth_file)
-    .expect("credentials should save");
+    save_chatgpt_sign_in(&auth_file);
     let auth_file = auth_file.to_string_lossy().into_owned();
     let image = TurnInput::image_probe();
 

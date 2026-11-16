@@ -600,8 +600,9 @@ const MULTIMODAL_REASONING: Capabilities = Capabilities::NONE
 /// input and output tokens at the lowest input tier, are as published on
 /// 2026-10-29 by Meta's Model API pricing, Alibaba Cloud Model Studio's
 /// international (Singapore) pricing, Moonshot AI's Kimi pricing, and
-/// `OpenAI`'s API pricing; no cataloged provider publishes separate cache
-/// prices. `ChatGPT` plan models carry no per-token price.
+/// `OpenAI`'s API pricing. Cache discounts that some of these providers
+/// publish are not modeled yet, so cached input falls back to the input
+/// price. `ChatGPT` plan models carry no per-token price.
 const CATALOGED_MODELS: &[CatalogedModel] = &[
     CatalogedModel {
         model: muse::MUSE_SPARK_1_3,

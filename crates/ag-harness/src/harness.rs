@@ -1429,7 +1429,8 @@ pub struct HarnessBuilder {
 
 impl HarnessBuilder {
     /// Selects the model every turn uses, taking precedence over a
-    /// [`Self::catalog`] selection.
+    /// [`Self::catalog`]. Setting both this and [`Self::model_selector`]
+    /// fails the build.
     ///
     /// Without [`Self::context_budget`], the request budget and estimator
     /// come from the model's declared [`Model::profile`].
@@ -1443,15 +1444,15 @@ impl HarnessBuilder {
     /// through [`Self::model_selector`] or else [`Role::SMART`].
     ///
     /// Without [`Self::context_budget`], the request budget and estimator
-    /// come from the cataloged [`crate::catalog::ModelSpec::profile`], else
-    /// from the model's declared [`Model::profile`].
+    /// come from the resolved [`crate::catalog::ModelHandle::profile`].
     pub fn catalog(mut self, catalog: Arc<ModelCatalog>) -> Self {
         self.catalog = Some(catalog);
 
         self
     }
 
-    /// Chooses which [`Self::catalog`] model every turn uses.
+    /// Chooses which [`Self::catalog`] model every turn uses. Building
+    /// fails without a catalog or together with an explicit [`Self::model`].
     pub fn model_selector(mut self, selector: impl Into<ModelSelector>) -> Self {
         self.model_selector = Some(selector.into());
 
@@ -1567,7 +1568,10 @@ impl HarnessBuilder {
     /// wrapping the failed [`HarnessBuildError`] check.
     pub fn build(self) -> Result<Harness, HarnessError> {
         let (model, profile) = match (self.model, self.catalog, self.model_selector) {
-            (Some(model), _, _) => {
+            (Some(_), _, Some(_)) => {
+                return Err(HarnessBuildError::ConflictingModelSelection.into());
+            }
+            (Some(model), _, None) => {
                 let profile = model.profile();
 
                 (model, profile)
@@ -1577,10 +1581,8 @@ impl HarnessBuilder {
                 let handle = catalog
                     .resolve(&selector)
                     .map_err(HarnessBuildError::Catalog)?;
-                let model = handle.model();
-                let profile = handle.profile().or_else(|| model.profile());
 
-                (model, profile)
+                (handle.model(), handle.profile())
             }
             (None, None, Some(_)) => return Err(HarnessBuildError::CatalogRequired.into()),
             (None, None, None) => return Err(HarnessBuildError::ModelRequired.into()),
@@ -1656,6 +1658,9 @@ pub enum HarnessBuildError {
     /// The catalog could not resolve the model selector.
     #[error("cannot select the model from the catalog")]
     Catalog(#[source] CatalogError),
+    /// Both an explicit model and a model selector were set.
+    #[error("set either `model` or `model_selector`, not both")]
+    ConflictingModelSelection,
     /// No budget was set and the model declares no context profile.
     #[error("model declares no context profile; call `context_budget`")]
     ContextBudgetRequired,

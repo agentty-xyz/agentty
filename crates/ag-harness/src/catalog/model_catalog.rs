@@ -6,10 +6,11 @@ use std::collections::btree_map::Entry;
 use std::sync::Arc;
 use std::{env, fmt};
 
+use ag_router::chatgpt::ChatGptAuthError;
 use thiserror::Error;
 
 use super::role::{ModelSelector, Role};
-use super::spec::{Capabilities, ModelId, ModelSpec, Pricing};
+use super::spec::{Capabilities, ModelId, ModelSpec, Pricing, PricingSource};
 use crate::context::{ContextBudget, ContextBudgetError};
 use crate::model::Model;
 use crate::model_profile::ModelProfile;
@@ -46,17 +47,12 @@ const FAST_CANDIDATES: Candidates = &[
     (ModelProvider::Qwen, QWEN3_8_FLASH),
     (ModelProvider::Qwen, QWEN3_7_FLASH),
 ];
-/// Default role assignments of the environment catalog: each role, the
-/// capabilities its candidates need, and its candidates in order.
-const DEFAULT_ROLES: &[(Role, Capabilities, Candidates)] = &[
-    (Role::SMART, Capabilities::NONE, SMART_CANDIDATES),
-    (Role::CHEAP, Capabilities::NONE, CHEAP_CANDIDATES),
-    (Role::FAST, Capabilities::NONE, FAST_CANDIDATES),
-    (
-        Role::VISION,
-        Capabilities::NONE.with_image_input(true),
-        SMART_CANDIDATES,
-    ),
+/// Default role candidates of the environment catalog, in order.
+const DEFAULT_ROLES: &[(Role, Candidates)] = &[
+    (Role::SMART, SMART_CANDIDATES),
+    (Role::CHEAP, CHEAP_CANDIDATES),
+    (Role::FAST, FAST_CANDIDATES),
+    (Role::VISION, SMART_CANDIDATES),
 ];
 
 /// Models a host can select by identifier, role, or required capability.
@@ -65,13 +61,13 @@ const DEFAULT_ROLES: &[(Role, Capabilities, Candidates)] = &[
 /// [`ModelSelector`] to a [`ModelHandle`] and hand its model to
 /// [`crate::HarnessBuilder::model`], or give the catalog to
 /// [`crate::HarnessBuilder::catalog`]. Each role maps to ordered candidate
-/// models; resolving a role picks its first candidate, and
-/// [`ModelSelector::Require`] its first candidate with the needed
-/// capabilities.
+/// models, every one of which has the capabilities the role requires (see
+/// [`CatalogBuilder::require`]); resolving a role picks its first
+/// candidate, and [`ModelSelector::Require`] its first candidate with the
+/// additionally needed capabilities.
 ///
 /// [`Self::from_environment`] catalogs every built-in model whose provider
-/// the environment configures, with these default role candidates, keeping
-/// those cataloged:
+/// the environment configures, with these default role candidates:
 ///
 /// | Role             | Candidates, in order                                                                                       |
 /// | ---------------- | ---------------------------------------------------------------------------------------------------------- |
@@ -80,21 +76,31 @@ const DEFAULT_ROLES: &[(Role, Capabilities, Candidates)] = &[
 /// | [`Role::FAST`]   | `chatgpt/gpt-6-luna`, `openai/gpt-6-luna`, `qwen/qwen3.8-flash`, `qwen/qwen3.7-flash`                      |
 /// | [`Role::VISION`] | the [`Role::SMART`] candidates that read images                                                            |
 ///
-/// Plan-billed `ChatGPT` models come first because they have no per-token
-/// charge. No default selects Muse's contributor tier, whose prompts Meta
-/// trains on. Change any assignment with [`Self::into_builder`] and
-/// [`CatalogBuilder::assign`].
+/// A role keeps only the candidates that are cataloged, declare a context
+/// profile, and have the role's required capabilities, so every default
+/// resolves to a model a harness can run without an explicit
+/// [`crate::HarnessBuilder::context_budget`]. The Muse, Kimi, and
+/// `qwen/qwen3.8-max` entries declare no profile yet, so they are cataloged
+/// but not assigned. Plan-billed `ChatGPT` models come first because they
+/// have no per-token charge. Change any assignment with
+/// [`Self::into_builder`] and [`CatalogBuilder::assign`].
 pub struct ModelCatalog {
     entries: BTreeMap<ModelId, CatalogEntry>,
+    requirements: BTreeMap<Role, Capabilities>,
     roles: BTreeMap<Role, Vec<ModelId>>,
 }
 
 impl ModelCatalog {
-    /// Starts an empty catalog.
+    /// Starts an empty catalog whose [`Role::VISION`] candidates must read
+    /// image input.
     pub fn builder() -> CatalogBuilder {
         CatalogBuilder {
             models: Vec::new(),
             pricing: Vec::new(),
+            requirements: BTreeMap::from([(
+                Role::VISION,
+                Capabilities::NONE.with_image_input(true),
+            )]),
             roles: BTreeMap::new(),
         }
     }
@@ -113,15 +119,17 @@ impl ModelCatalog {
     /// `environment` configures, under its [`ModelId::cataloged`] key, with
     /// the default role candidates documented on [`ModelCatalog`].
     ///
-    /// A provider whose API key, base URL, or `ChatGPT` sign-in is missing
-    /// is skipped. OpenAI-compatible servers name their own models, so hosts
-    /// add those with [`CatalogBuilder::model`].
+    /// A provider whose API key, base URL, or `ChatGPT` sign-in is absent is
+    /// skipped. Tiers whose prompts the provider trains on, such as Muse's
+    /// contributor tier, are never cataloged here; a host that accepts that
+    /// adds them with [`CatalogBuilder::model`]. OpenAI-compatible servers
+    /// name their own models, so hosts add those the same way.
     ///
     /// # Errors
     ///
-    /// Returns [`CatalogError::Configuration`] when a configured provider's
-    /// environment is otherwise invalid, such as a base URL that is not
-    /// valid Unicode.
+    /// Returns [`CatalogError::Configuration`] when a provider is configured
+    /// but broken, such as an API key or base URL that is not valid Unicode,
+    /// or a `ChatGPT` credential file that exists but cannot be read.
     pub fn from_environment_with(
         mut environment: impl FnMut(&str) -> Result<String, env::VarError>,
     ) -> Result<Self, CatalogError> {
@@ -130,18 +138,14 @@ impl ModelCatalog {
             let cataloged = provider
                 .known_models()
                 .iter()
+                .filter(|model| !provider.trains_on_prompts(model))
                 .filter_map(|model| Some((*model, provider.model_spec(model)?)));
             for (model, spec) in cataloged {
                 match ModelConfiguration::new(*provider, model)
                     .client_from_environment(&mut environment)
                 {
                     Ok(client) => builder = builder.model(spec, Arc::new(client)),
-                    Err(
-                        ModelConfigurationError::ApiKey { .. }
-                        | ModelConfigurationError::AuthFile(_)
-                        | ModelConfigurationError::BaseUrl { .. }
-                        | ModelConfigurationError::SignIn(_),
-                    ) => break,
+                    Err(source) if Self::is_unconfigured(&source, &mut environment) => break,
                     Err(source) => {
                         return Err(CatalogError::Configuration {
                             provider: *provider,
@@ -151,23 +155,8 @@ impl ModelCatalog {
                 }
             }
         }
-        for (role, needs, candidates) in DEFAULT_ROLES {
-            let candidates = candidates
-                .iter()
-                .map(|(provider, model)| ModelId::cataloged(*provider, model))
-                .filter(|id| {
-                    builder
-                        .models
-                        .iter()
-                        .any(|(spec, _)| spec.id() == id && spec.capabilities().satisfies(*needs))
-                })
-                .collect::<Vec<_>>();
-            if !candidates.is_empty() {
-                builder = builder.assign(role.clone(), candidates);
-            }
-        }
 
-        builder.build()
+        Self::assign_default_roles(builder.build()?, DEFAULT_ROLES).build()
     }
 
     /// Resolves `selector` to a cataloged model.
@@ -214,8 +203,16 @@ impl ModelCatalog {
         self.roles.get(role).map_or(&[], Vec::as_slice)
     }
 
-    /// Returns a builder holding this catalog's models and role
-    /// assignments, so a host can adjust them.
+    /// Returns the capabilities every candidate of `role` has.
+    pub fn requirement(&self, role: &Role) -> Capabilities {
+        self.requirements
+            .get(role)
+            .copied()
+            .unwrap_or(Capabilities::NONE)
+    }
+
+    /// Returns a builder holding this catalog's models, role requirements,
+    /// and role assignments, so a host can adjust them.
     pub fn into_builder(self) -> CatalogBuilder {
         CatalogBuilder {
             models: self
@@ -224,8 +221,55 @@ impl ModelCatalog {
                 .map(|entry| (entry.spec, entry.model))
                 .collect(),
             pricing: Vec::new(),
+            requirements: self.requirements,
             roles: self.roles,
         }
+    }
+
+    /// Returns whether `error` means the provider is not configured at all,
+    /// as opposed to configured but broken.
+    fn is_unconfigured(
+        error: &ModelConfigurationError,
+        environment: &mut impl FnMut(&str) -> Result<String, env::VarError>,
+    ) -> bool {
+        match error {
+            ModelConfigurationError::ApiKey { name } => {
+                matches!(environment(name), Err(env::VarError::NotPresent))
+            }
+            ModelConfigurationError::AuthFile(_)
+            | ModelConfigurationError::BaseUrl { .. }
+            | ModelConfigurationError::SignIn(ChatGptAuthError::NotSignedIn { .. }) => true,
+            _ => false,
+        }
+    }
+
+    /// Returns a builder of `catalog` assigning each role of `roles` its
+    /// candidates that `catalog` holds with a context profile and the
+    /// role's required capabilities.
+    fn assign_default_roles(catalog: Self, roles: &[(Role, Candidates)]) -> CatalogBuilder {
+        let assignments = roles
+            .iter()
+            .map(|(role, candidates)| {
+                let needs = catalog.requirement(role);
+                let usable = candidates
+                    .iter()
+                    .map(|(provider, model)| ModelId::cataloged(*provider, model))
+                    .filter(|id| {
+                        catalog.spec(id).is_some_and(|spec| {
+                            spec.profile().is_some() && spec.capabilities().satisfies(needs)
+                        })
+                    })
+                    .collect::<Vec<_>>();
+
+                (role.clone(), usable)
+            })
+            .collect::<Vec<_>>();
+
+        assignments
+            .into_iter()
+            .fold(catalog.into_builder(), |builder, (role, usable)| {
+                builder.assign(role, usable)
+            })
     }
 
     /// Returns the candidates of `role`, never empty because
@@ -243,6 +287,7 @@ impl fmt::Debug for ModelCatalog {
         formatter
             .debug_struct("ModelCatalog")
             .field("models", &self.entries.keys().collect::<Vec<_>>())
+            .field("requirements", &self.requirements)
             .field("roles", &self.roles)
             .finish()
     }
@@ -253,11 +298,15 @@ impl fmt::Debug for ModelCatalog {
 pub struct CatalogBuilder {
     models: Vec<(ModelSpec, Arc<dyn Model>)>,
     pricing: Vec<(ModelId, Pricing)>,
+    requirements: BTreeMap<Role, Capabilities>,
     roles: BTreeMap<Role, Vec<ModelId>>,
 }
 
 impl CatalogBuilder {
     /// Catalogs `model` under its specification's identifier.
+    ///
+    /// A specification without a profile adopts the model's declared
+    /// [`Model::profile`], if any.
     pub fn model(mut self, spec: ModelSpec, model: Arc<dyn Model>) -> Self {
         self.models.push((spec, model));
 
@@ -281,10 +330,25 @@ impl CatalogBuilder {
         self
     }
 
+    /// Requires every candidate of `role` to have `needs`, replacing an
+    /// earlier requirement; [`Capabilities::NONE`] removes it.
+    /// [`ModelCatalog::builder`] starts with [`Role::VISION`] requiring
+    /// image input.
+    pub fn require(mut self, role: Role, needs: Capabilities) -> Self {
+        if needs == Capabilities::NONE {
+            self.requirements.remove(&role);
+        } else {
+            self.requirements.insert(role, needs);
+        }
+
+        self
+    }
+
     /// Replaces the prices of the model `id`, such as with a negotiated
-    /// rate.
+    /// rate, attributing them to [`PricingSource::Host`].
     pub fn pricing(mut self, id: impl Into<ModelId>, pricing: Pricing) -> Self {
-        self.pricing.push((id.into(), pricing));
+        self.pricing
+            .push((id.into(), pricing.with_source(PricingSource::Host)));
 
         self
     }
@@ -295,11 +359,18 @@ impl CatalogBuilder {
     ///
     /// Returns [`CatalogError::DuplicateModel`] for an identifier cataloged
     /// twice, [`CatalogError::InvalidProfile`] for a profile that leaves no
-    /// request capacity, and [`CatalogError::UnknownModel`] for a role
-    /// candidate or price override naming an uncataloged model.
+    /// request capacity, [`CatalogError::UnknownModel`] for a role
+    /// candidate or price override naming an uncataloged model, and
+    /// [`CatalogError::IncapableCandidate`] for a role candidate without
+    /// the role's required capabilities.
     pub fn build(self) -> Result<ModelCatalog, CatalogError> {
         let mut entries = BTreeMap::new();
-        for (spec, model) in self.models {
+        for (mut spec, model) in self.models {
+            if spec.profile().is_none()
+                && let Some(profile) = model.profile()
+            {
+                spec = spec.with_profile(profile);
+            }
             let context_budget = spec
                 .profile()
                 .map(ModelProfile::context_budget)
@@ -329,17 +400,29 @@ impl CatalogBuilder {
                 .ok_or(CatalogError::UnknownModel { id })?;
             entry.spec = entry.spec.clone().with_pricing(pricing);
         }
-        if let Some(id) = self
-            .roles
-            .values()
-            .flatten()
-            .find(|id| !entries.contains_key(*id))
-        {
-            return Err(CatalogError::UnknownModel { id: id.clone() });
+        for (role, candidates) in &self.roles {
+            let needs = self
+                .requirements
+                .get(role)
+                .copied()
+                .unwrap_or(Capabilities::NONE);
+            for id in candidates {
+                let entry = entries
+                    .get(id)
+                    .ok_or_else(|| CatalogError::UnknownModel { id: id.clone() })?;
+                if !entry.spec.capabilities().satisfies(needs) {
+                    return Err(CatalogError::IncapableCandidate {
+                        id: id.clone(),
+                        needs,
+                        role: role.clone(),
+                    });
+                }
+            }
         }
 
         Ok(ModelCatalog {
             entries,
+            requirements: self.requirements,
             roles: self.roles,
         })
     }
@@ -371,12 +454,14 @@ impl ModelHandle {
         self.spec.id()
     }
 
-    /// Returns the declared context profile, if known.
+    /// Returns the effective context profile, from the specification or
+    /// else the model's declared [`Model::profile`], if known.
     pub fn profile(&self) -> Option<ModelProfile> {
         self.spec.profile()
     }
 
-    /// Returns the request budget derived from the profile, if declared.
+    /// Returns the request budget derived from [`Self::profile`], if
+    /// declared.
     pub fn context_budget(&self) -> Option<ContextBudget> {
         self.context_budget
     }
@@ -410,6 +495,16 @@ pub enum CatalogError {
     DuplicateModel {
         /// Repeated identifier.
         id: ModelId,
+    },
+    /// A role candidate lacks capabilities the role requires.
+    #[error("model `{id}` lacks the capabilities {needs} the `{role}` role requires")]
+    IncapableCandidate {
+        /// Candidate without the capabilities.
+        id: ModelId,
+        /// Capabilities the role requires.
+        needs: Capabilities,
+        /// Role the candidate was assigned.
+        role: Role,
     },
     /// A model's declared profile leaves no request capacity.
     #[error("model `{id}` declares an invalid context profile")]

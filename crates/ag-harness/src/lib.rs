@@ -74,6 +74,10 @@ mod store_fixture;
 mod gated_store_test;
 
 #[cfg(test)]
+#[path = "../tests/support/chatgpt_sign_in.rs"]
+mod chatgpt_sign_in_fixture;
+
+#[cfg(test)]
 #[path = "../tests/support/context_budget.rs"]
 mod context_budget_fixture;
 

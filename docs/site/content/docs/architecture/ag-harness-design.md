@@ -207,8 +207,9 @@ or automatic provider fallback.
   tokens) and capabilities, and derives its price class (`ModelProvider::cost_tier`)
   from those prices. The optional `ModelCatalog` maps open roles, such as smart or
   cheap, to ordered candidate models with replaceable defaults and resolves a selector
-  to a model and its request budget; choosing a model for a task stays the host's
-  decision.
+  to a model and its request budget. Candidates must have the role's required
+  capabilities, and defaults assign only models with a declared context profile;
+  choosing a model for a task stays the host's decision.
 
 Durable sessions send a stable prompt-cache key where the provider policy enables it.
 Requests have bounded timeouts and limited retries for connection failures and `429`

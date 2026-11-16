@@ -62,7 +62,7 @@ impl From<String> for ModelId {
 ///
 /// Capabilities describe the model; they do not enable tools or features.
 /// Start from [`Self::NONE`] and add each capability with its `with_` method.
-#[derive(Clone, Copy, Debug, Default, Eq, Hash, PartialEq)]
+#[derive(Clone, Copy, Debug, Eq, Hash, PartialEq)]
 #[non_exhaustive]
 pub struct Capabilities {
     flags: u8,
@@ -180,8 +180,14 @@ pub enum PricingSource {
 /// Token prices of one model in integer micro-USD per million tokens.
 ///
 /// Integer micro-USD keep cost arithmetic exact. Cached input bills at
-/// [`Self::cache_read`] and cache creation at [`Self::cache_write`]; when a
-/// provider publishes no separate price, both fall back to the input price.
+/// [`Self::cache_read_per_mtok_micro_usd`] and cache creation at
+/// [`Self::cache_write_per_mtok_micro_usd`]; without a declared cache price,
+/// both fall back to the input price. Built-in prices do not model cache
+/// discounts yet, so they overstate cached input for providers that publish
+/// one; a host can declare those prices through
+/// [`super::CatalogBuilder::pricing`].
+///
+/// Changing a cache price marks the prices [`PricingSource::Host`].
 #[derive(Clone, Copy, Debug, Eq, Hash, PartialEq)]
 #[non_exhaustive]
 pub struct Pricing {
@@ -205,18 +211,22 @@ impl Pricing {
         }
     }
 
-    /// Sets the price of cached input tokens.
+    /// Sets the price of cached input tokens, marking the prices
+    /// [`PricingSource::Host`].
     #[must_use]
     pub const fn with_cache_read(mut self, cache_read_per_mtok_micro_usd: u64) -> Self {
         self.cache_read = Some(cache_read_per_mtok_micro_usd);
+        self.source = PricingSource::Host;
 
         self
     }
 
-    /// Sets the price of input tokens written to the provider's cache.
+    /// Sets the price of input tokens written to the provider's cache,
+    /// marking the prices [`PricingSource::Host`].
     #[must_use]
     pub const fn with_cache_write(mut self, cache_write_per_mtok_micro_usd: u64) -> Self {
         self.cache_write = Some(cache_write_per_mtok_micro_usd);
+        self.source = PricingSource::Host;
 
         self
     }
@@ -273,10 +283,15 @@ impl Pricing {
         input_per_mtok_micro_usd: u64,
         output_per_mtok_micro_usd: u64,
     ) -> Self {
-        let mut pricing = Self::new(input_per_mtok_micro_usd, output_per_mtok_micro_usd);
-        pricing.source = PricingSource::BuiltIn;
+        Self::new(input_per_mtok_micro_usd, output_per_mtok_micro_usd)
+            .with_source(PricingSource::BuiltIn)
+    }
 
-        pricing
+    /// Returns these prices attributed to `source`.
+    pub(crate) const fn with_source(mut self, source: PricingSource) -> Self {
+        self.source = source;
+
+        self
     }
 }
 
@@ -352,7 +367,11 @@ impl ModelSpec {
         self
     }
 
-    /// Declares the most requests the host should run on the model at once.
+    /// Declares the most requests the host should run on this one model at
+    /// once.
+    ///
+    /// The cap is per model. A limit shared by every model of one provider,
+    /// such as a `ChatGPT` plan's rate limit, is not expressible here.
     #[must_use]
     pub fn with_max_concurrency(mut self, max_concurrency: u32) -> Self {
         self.max_concurrency = Some(max_concurrency);
@@ -397,7 +416,8 @@ impl ModelSpec {
         self.pricing
     }
 
-    /// Returns the most concurrent requests the host should run, if limited.
+    /// Returns the most concurrent requests the host should run on this
+    /// model, if limited.
     pub fn max_concurrency(&self) -> Option<u32> {
         self.max_concurrency
     }

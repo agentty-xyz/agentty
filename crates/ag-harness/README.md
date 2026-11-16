@@ -386,15 +386,17 @@ A `ModelCatalog` lets a host select models by identifier, role, or capability. E
 `catalog::ModelSpec` records a model's provider, context profile, output limit,
 `Capabilities`, optional `Pricing`, and optional concurrency limit. A `Role` is an open
 set (`Role::SMART`, `CHEAP`, `FAST`, `VISION`, or any `Role::new("review")`) mapped to
-ordered candidates; `ModelSelector::Require` picks the first candidate with the needed
-capabilities. `ModelCatalog::from_environment` catalogs every built-in model whose
-provider the environment configures, keyed `provider/model`, with default role
-candidates documented on `ModelCatalog`; `into_builder` changes them, and
-`CatalogBuilder::pricing` sets host prices:
+ordered candidates; `CatalogBuilder::require` sets the capabilities every candidate of a
+role must have (`Role::VISION` requires image input), and `ModelSelector::Require` picks
+the first candidate with further needed capabilities. `ModelCatalog::from_environment`
+catalogs every built-in model whose provider the environment configures, keyed
+`provider/model`, except tiers that train on prompts. Its default role candidates,
+documented on `ModelCatalog`, are only models with a declared context profile;
+`into_builder` changes them, and `CatalogBuilder::pricing` sets host prices:
 
 ```rust
-use ag_harness::catalog::{Capabilities, ModelSelector, Role};
-use ag_harness::ModelCatalog;
+use ag_harness::Harness;
+use ag_harness::catalog::{Capabilities, ModelCatalog, ModelSelector, Role};
 
 let catalog = ModelCatalog::from_environment()?;
 let vision = catalog.resolve(&ModelSelector::Require {
@@ -405,8 +407,8 @@ let harness = Harness::builder().model(vision.model()).build()?;
 ```
 
 The catalog is optional. `HarnessBuilder::catalog` with `model_selector` (default
-`Role::SMART`) resolves the model at build time, and an explicit `model` takes
-precedence.
+`Role::SMART`) resolves the model at build time; an explicit `model` replaces the
+catalog, and setting both `model` and `model_selector` fails the build.
 
 Built-in clients call `ag-router` for provider transport and schema validation. Hosts
 can also use `ag-router` directly for structured chat calls without a harness. Implement

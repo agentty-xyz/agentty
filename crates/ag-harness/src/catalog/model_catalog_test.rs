@@ -1,19 +1,20 @@
-//! Model catalog unit tests for building, selector resolution, price
-//! overrides, and environment-derived models and role defaults.
+//! Model catalog unit tests for building, role requirements, selector
+//! resolution, price overrides, and environment-derived models and role
+//! defaults.
 
 use std::collections::BTreeMap;
-use std::env;
 use std::ffi::OsString;
 use std::os::unix::ffi::OsStringExt as _;
-use std::path::Path;
 use std::sync::Arc;
+use std::{env, fs};
 
-use ag_router::chatgpt::ChatGptCredentials;
+use ag_router::chatgpt::ChatGptAuthError;
 
 use crate::catalog::{
     Capabilities, CatalogError, ModelCatalog, ModelId, ModelSelector, ModelSpec, Pricing,
     PricingSource, Role,
 };
+use crate::chatgpt_sign_in_fixture::save_chatgpt_sign_in;
 use crate::context::ContextBudgetError;
 use crate::model::{MockModel, Model, ModelProfile};
 use crate::provider::{ModelConfigurationError, ModelProvider};
@@ -21,8 +22,47 @@ use crate::provider::{ModelConfigurationError, ModelProvider};
 const TEXT: &str = "host/text";
 const VISION: &str = "host/vision";
 
+/// Default-role table over host models: a text-only profiled model, an
+/// unprofiled vision model, an uncataloged model, and a profiled vision
+/// model.
+const HOST_ROLES: &[(Role, &[(ModelProvider, &str)])] = &[
+    (
+        Role::VISION,
+        &[
+            (ModelProvider::OpenAiCompatible, "text"),
+            (ModelProvider::OpenAiCompatible, "unprofiled-vision"),
+            (ModelProvider::OpenAiCompatible, "missing"),
+            (ModelProvider::OpenAiCompatible, "vision"),
+        ],
+    ),
+    (
+        Role::SMART,
+        &[
+            (ModelProvider::OpenAiCompatible, "missing"),
+            (ModelProvider::OpenAiCompatible, "text"),
+        ],
+    ),
+];
+
+/// Returns a model that declares `profile`.
+fn profiled(profile: Option<ModelProfile>) -> Arc<dyn Model> {
+    let mut model = MockModel::new();
+    model.expect_profile().return_const(profile);
+
+    Arc::new(model)
+}
+
+/// Returns a model that declares no profile.
 fn model() -> Arc<dyn Model> {
-    Arc::new(MockModel::new())
+    profiled(None)
+}
+
+fn host_profile() -> ModelProfile {
+    ModelProfile::new(100_000).with_reserved_tokens(10_000)
+}
+
+fn image_input() -> Capabilities {
+    Capabilities::NONE.with_image_input(true)
 }
 
 fn text_spec() -> ModelSpec {
@@ -31,12 +71,8 @@ fn text_spec() -> ModelSpec {
 
 fn vision_spec() -> ModelSpec {
     ModelSpec::new(VISION)
-        .with_capabilities(
-            Capabilities::NONE
-                .with_image_input(true)
-                .with_tool_calls(true),
-        )
-        .with_profile(ModelProfile::new(100_000).with_reserved_tokens(10_000))
+        .with_capabilities(image_input().with_tool_calls(true))
+        .with_profile(host_profile())
 }
 
 /// Returns a catalog of a text model and a vision model, with the text
@@ -69,19 +105,8 @@ fn ids(candidates: &[ModelId]) -> Vec<&str> {
     candidates.iter().map(ModelId::as_str).collect()
 }
 
-fn save_sign_in(auth_file: &Path) {
-    ChatGptCredentials {
-        access_token: "access".to_string(),
-        client_id: "oaiapp_test".to_string(),
-        email: None,
-        expires_at: u64::MAX,
-        ext_agent_host_id: "urn:uuid:host".to_string(),
-        id_token: String::new(),
-        refresh_token: "refresh".to_string(),
-        scopes: vec!["chatgpt.tokens.use.direct".to_string()],
-    }
-    .save(auth_file)
-    .expect("credentials should save");
+fn spec_ids(catalog: &ModelCatalog) -> Vec<&str> {
+    catalog.specs().map(|spec| spec.id().as_str()).collect()
 }
 
 #[test]
@@ -89,7 +114,7 @@ fn resolves_models_by_identifier_role_and_required_capability() {
     // Arrange
     let catalog = catalog();
     let needs_images = ModelSelector::Require {
-        needs: Capabilities::NONE.with_image_input(true),
+        needs: image_input(),
         role: Role::SMART,
     };
 
@@ -109,12 +134,10 @@ fn resolves_models_by_identifier_role_and_required_capability() {
     assert_eq!(by_role.profile(), None);
     assert_eq!(by_role.context_budget(), None);
     assert_eq!(by_capability.id().as_str(), VISION);
-    assert_eq!(by_capability.profile(), vision_spec().profile());
+    assert_eq!(by_capability.profile(), Some(host_profile()));
     assert_eq!(
         by_capability.context_budget(),
-        vision_spec()
-            .profile()
-            .map(|profile| profile.context_budget().expect("valid profile"))
+        Some(host_profile().context_budget().expect("valid profile"))
     );
     assert!(Arc::ptr_eq(&by_id.model(), &by_capability.model()));
     assert!(format!("{by_id:?}").contains("host/vision"));
@@ -174,13 +197,7 @@ fn assignments_replace_earlier_ones_and_an_empty_assignment_removes_the_role() {
     // Assert
     assert_eq!(ids(catalog.candidates(&Role::SMART)), [VISION]);
     assert_eq!(catalog.candidates(&Role::CHEAP), []);
-    assert_eq!(
-        catalog
-            .specs()
-            .map(|spec| spec.id().as_str())
-            .collect::<Vec<_>>(),
-        [TEXT, VISION]
-    );
+    assert_eq!(spec_ids(&catalog), [TEXT, VISION]);
     assert_eq!(
         catalog.spec(&ModelId::new(TEXT)).map(ModelSpec::id),
         Some(&ModelId::new(TEXT))
@@ -188,15 +205,90 @@ fn assignments_replace_earlier_ones_and_an_empty_assignment_removes_the_role() {
     assert!(catalog.spec(&ModelId::new("host/missing")).is_none());
     assert_eq!(
         format!("{catalog:?}"),
-        "ModelCatalog { models: [ModelId(\"host/text\"), ModelId(\"host/vision\")], roles: \
-         {Role(\"smart\"): [ModelId(\"host/vision\")]} }"
+        "ModelCatalog { models: [ModelId(\"host/text\"), ModelId(\"host/vision\")], requirements: \
+         {Role(\"vision\"): Capabilities { flags: 1 }}, roles: {Role(\"smart\"): \
+         [ModelId(\"host/vision\")]} }"
     );
 }
 
 #[test]
-fn host_pricing_replaces_the_declared_prices() {
+fn role_requirements_reject_incapable_candidates_and_are_replaceable() {
     // Arrange
-    let negotiated = Pricing::new(500_000, 1_500_000);
+    let builder = || {
+        ModelCatalog::builder()
+            .model(text_spec(), model())
+            .model(vision_spec(), model())
+    };
+
+    // Act
+    let text_vision = builder().assign(Role::VISION, [TEXT]).build();
+    let text_review = builder()
+        .require(Role::new("review"), Capabilities::NONE.with_reasoning(true))
+        .assign(Role::new("review"), [TEXT])
+        .build();
+    let relaxed = builder()
+        .require(Role::VISION, Capabilities::NONE)
+        .assign(Role::VISION, [TEXT])
+        .build()
+        .expect("vision requirement removed");
+    let vision = builder()
+        .assign(Role::VISION, [VISION])
+        .build()
+        .expect("vision candidate reads images");
+
+    // Assert
+    let text_vision = text_vision.expect_err("text model cannot be a vision candidate");
+    assert_eq!(
+        text_vision.to_string(),
+        "model `host/text` lacks the capabilities image_input the `vision` role requires"
+    );
+    assert!(matches!(
+        text_review,
+        Err(CatalogError::IncapableCandidate { id, needs, role })
+            if id.as_str() == TEXT
+                && needs == Capabilities::NONE.with_reasoning(true)
+                && role == Role::new("review")
+    ));
+    assert_eq!(relaxed.requirement(&Role::VISION), Capabilities::NONE);
+    assert_eq!(vision.requirement(&Role::VISION), image_input());
+    assert_eq!(
+        vision
+            .into_builder()
+            .build()
+            .map(|catalog| catalog.requirement(&Role::VISION))
+            .ok(),
+        Some(image_input())
+    );
+    assert_eq!(catalog().requirement(&Role::SMART), Capabilities::NONE);
+}
+
+#[test]
+fn specifications_without_a_profile_adopt_the_model_profile() {
+    // Arrange
+    let catalog = ModelCatalog::builder()
+        .model(ModelSpec::new(TEXT), profiled(Some(host_profile())))
+        .assign(Role::SMART, [TEXT])
+        .build()
+        .expect("catalog should build");
+
+    // Act
+    let handle = catalog
+        .resolve(&ModelSelector::Role(Role::SMART))
+        .expect("assigned role");
+
+    // Assert
+    assert_eq!(handle.profile(), Some(host_profile()));
+    assert_eq!(handle.spec().context_window(), Some(100_000));
+    assert_eq!(
+        handle.context_budget(),
+        Some(host_profile().context_budget().expect("valid profile"))
+    );
+}
+
+#[test]
+fn host_pricing_replaces_the_declared_prices_as_host_prices() {
+    // Arrange
+    let negotiated = Pricing::built_in(500_000, 1_500_000);
 
     // Act
     let catalog = ModelCatalog::builder()
@@ -210,7 +302,8 @@ fn host_pricing_replaces_the_declared_prices() {
         .spec(&ModelId::new(TEXT))
         .and_then(ModelSpec::pricing)
         .expect("priced model");
-    assert_eq!(pricing, negotiated);
+    assert_eq!(pricing.input_per_mtok_micro_usd(), 500_000);
+    assert_eq!(pricing.output_per_mtok_micro_usd(), 1_500_000);
     assert_eq!(pricing.source(), PricingSource::Host);
 }
 
@@ -262,6 +355,39 @@ fn build_rejects_duplicates_invalid_profiles_and_unknown_references() {
 }
 
 #[test]
+fn default_roles_keep_only_cataloged_profiled_and_capable_candidates() {
+    // Arrange
+    let host = |model: &str| ModelId::cataloged(ModelProvider::OpenAiCompatible, model);
+    let catalog = ModelCatalog::builder()
+        .model(ModelSpec::new(host("text")), profiled(Some(host_profile())))
+        .model(
+            ModelSpec::new(host("unprofiled-vision")).with_capabilities(image_input()),
+            model(),
+        )
+        .model(
+            ModelSpec::new(host("vision")).with_capabilities(image_input()),
+            profiled(Some(host_profile())),
+        )
+        .build()
+        .expect("catalog should build");
+
+    // Act
+    let catalog = ModelCatalog::assign_default_roles(catalog, HOST_ROLES)
+        .build()
+        .expect("default roles should build");
+
+    // Assert
+    assert_eq!(
+        ids(catalog.candidates(&Role::VISION)),
+        ["openai-compatible/vision"]
+    );
+    assert_eq!(
+        ids(catalog.candidates(&Role::SMART)),
+        ["openai-compatible/text"]
+    );
+}
+
+#[test]
 fn environment_catalogs_configured_providers_with_default_roles() {
     // Arrange
     let environment = lookup(&[
@@ -269,6 +395,7 @@ fn environment_catalogs_configured_providers_with_default_roles() {
         ("DASHSCOPE_API_KEY", "qwen-key"),
         ("DASHSCOPE_BASE_URL", "https://dashscope.test/v1"),
         ("KIMI_API_KEY", "kimi-key"),
+        ("KIMI_BASE_URL", "https://kimi.test/v1"),
     ]);
 
     // Act
@@ -276,11 +403,10 @@ fn environment_catalogs_configured_providers_with_default_roles() {
 
     // Assert
     assert_eq!(
-        catalog
-            .specs()
-            .map(|spec| spec.id().as_str())
-            .collect::<Vec<_>>(),
+        spec_ids(&catalog),
         [
+            "kimi/kimi-k2.6",
+            "kimi/kimi-k3",
             "openai/gpt-5.3-codex",
             "openai/gpt-5.6-terra",
             "openai/gpt-6-astra",
@@ -294,7 +420,7 @@ fn environment_catalogs_configured_providers_with_default_roles() {
     );
     assert_eq!(
         ids(catalog.candidates(&Role::SMART)),
-        ["openai/gpt-6.1-sol", "qwen/qwen3.8-max"]
+        ["openai/gpt-6.1-sol"]
     );
     assert_eq!(
         ids(catalog.candidates(&Role::CHEAP)),
@@ -314,14 +440,21 @@ fn environment_catalogs_configured_providers_with_default_roles() {
     );
     assert_eq!(
         ids(catalog.candidates(&Role::VISION)),
-        ["openai/gpt-6.1-sol", "qwen/qwen3.8-max"]
+        ["openai/gpt-6.1-sol"]
     );
+    for role in [Role::SMART, Role::CHEAP, Role::FAST, Role::VISION] {
+        for id in catalog.candidates(&role) {
+            let handle = catalog
+                .resolve(&ModelSelector::Id(id.clone()))
+                .expect("cataloged candidate");
+            assert!(handle.context_budget().is_some(), "{role} candidate {id}");
+        }
+    }
     let smart = catalog
         .resolve(&ModelSelector::Role(Role::SMART))
         .expect("default smart model");
     assert_eq!(smart.spec().provider(), Some(ModelProvider::OpenAi));
     assert_eq!(smart.spec().context_window(), Some(1_050_000));
-    assert!(smart.context_budget().is_some());
     assert_eq!(
         smart
             .model()
@@ -332,11 +465,23 @@ fn environment_catalogs_configured_providers_with_default_roles() {
 }
 
 #[test]
+fn environment_skips_a_provider_whose_required_base_url_is_absent() {
+    // Arrange
+    let environment = lookup(&[("KIMI_API_KEY", "kimi-key")]);
+
+    // Act
+    let catalog = ModelCatalog::from_environment_with(environment).expect("valid environment");
+
+    // Assert
+    assert_eq!(catalog.specs().count(), 0);
+}
+
+#[test]
 fn environment_prefers_plan_billed_chatgpt_models_when_signed_in() {
     // Arrange
     let directory = tempfile::tempdir().expect("temporary directory");
     let auth_file = directory.path().join("chatgpt.json");
-    save_sign_in(&auth_file);
+    save_chatgpt_sign_in(&auth_file);
     let auth_file = auth_file.to_string_lossy().into_owned();
     let environment = lookup(&[
         ("CHATGPT_AUTH_FILE", auth_file.as_str()),
@@ -347,10 +492,10 @@ fn environment_prefers_plan_billed_chatgpt_models_when_signed_in() {
     let catalog = ModelCatalog::from_environment_with(environment).expect("valid environment");
 
     // Assert
-    assert_eq!(catalog.specs().count(), 10);
+    assert_eq!(catalog.specs().count(), 9);
     assert_eq!(
         ids(catalog.candidates(&Role::SMART)),
-        ["chatgpt/gpt-6.1-sol", "muse/muse-spark-1.3"]
+        ["chatgpt/gpt-6.1-sol"]
     );
     assert_eq!(
         ids(catalog.candidates(&Role::CHEAP)),
@@ -362,11 +507,49 @@ fn environment_prefers_plan_billed_chatgpt_models_when_signed_in() {
             .and_then(ModelSpec::pricing),
         None
     );
+    assert!(catalog.spec(&ModelId::new("muse/muse-spark-1.3")).is_some());
     assert!(
         catalog
             .spec(&ModelId::new("muse/muse-spark-1.3-contributor"))
-            .is_some()
+            .is_none()
     );
+}
+
+#[test]
+fn environment_skips_chatgpt_without_a_stored_sign_in() {
+    // Arrange
+    let directory = tempfile::tempdir().expect("temporary directory");
+    let auth_file = directory.path().join("missing.json");
+    let auth_file = auth_file.to_string_lossy().into_owned();
+    let environment = lookup(&[("CHATGPT_AUTH_FILE", auth_file.as_str())]);
+
+    // Act
+    let catalog = ModelCatalog::from_environment_with(environment).expect("not signed in");
+
+    // Assert
+    assert_eq!(catalog.specs().count(), 0);
+}
+
+#[test]
+fn environment_reports_a_broken_chatgpt_sign_in() {
+    // Arrange
+    let directory = tempfile::tempdir().expect("temporary directory");
+    let auth_file = directory.path().join("chatgpt.json");
+    fs::write(&auth_file, "not json").expect("corrupt credentials should save");
+    let auth_file = auth_file.to_string_lossy().into_owned();
+    let environment = lookup(&[("CHATGPT_AUTH_FILE", auth_file.as_str())]);
+
+    // Act
+    let error = ModelCatalog::from_environment_with(environment).expect_err("corrupt sign-in");
+
+    // Assert
+    assert!(matches!(
+        error,
+        CatalogError::Configuration {
+            provider: ModelProvider::ChatGpt,
+            source: ModelConfigurationError::SignIn(ChatGptAuthError::InvalidCredentials { .. }),
+        }
+    ));
 }
 
 #[test]
@@ -388,33 +571,51 @@ fn empty_environment_catalogs_nothing() {
 #[test]
 fn environment_reports_an_invalid_configured_provider() {
     // Arrange
-    let environment = |name: &str| match name {
+    let invalid_base_url = |name: &str| match name {
         "OPENAI_API_KEY" => Ok("openai-key".to_string()),
         "OPENAI_BASE_URL" => Err(env::VarError::NotUnicode(OsString::from_vec(vec![0xff]))),
         _ => Err(env::VarError::NotPresent),
     };
+    let invalid_api_key = |name: &str| match name {
+        "OPENAI_API_KEY" => Err(env::VarError::NotUnicode(OsString::from_vec(vec![0xff]))),
+        _ => Err(env::VarError::NotPresent),
+    };
 
     // Act
-    let error = ModelCatalog::from_environment_with(environment).expect_err("invalid base URL");
+    let base_url = ModelCatalog::from_environment_with(invalid_base_url).expect_err("base URL");
+    let api_key = ModelCatalog::from_environment_with(invalid_api_key).expect_err("API key");
 
     // Assert
-    assert_eq!(error.to_string(), "cannot catalog openai models");
+    assert_eq!(base_url.to_string(), "cannot catalog openai models");
     assert!(matches!(
-        error,
+        base_url,
         CatalogError::Configuration {
             provider: ModelProvider::OpenAi,
             source: ModelConfigurationError::Environment { .. },
         }
     ));
+    assert!(matches!(
+        api_key,
+        CatalogError::Configuration {
+            provider: ModelProvider::OpenAi,
+            source: ModelConfigurationError::ApiKey { .. },
+        }
+    ));
 }
 
 #[test]
-fn process_environment_catalog_reads_the_process_environment() {
-    // Arrange and Act
-    let catalog = ModelCatalog::from_environment();
+fn process_environment_catalog_delegates_to_the_process_environment() {
+    // Arrange
+    let catalog_ids = |catalog: Result<ModelCatalog, CatalogError>| -> Result<Vec<String>, String> {
+        catalog
+            .map(|catalog| catalog.specs().map(|spec| spec.id().to_string()).collect())
+            .map_err(|error| error.to_string())
+    };
+
+    // Act
+    let process = catalog_ids(ModelCatalog::from_environment());
+    let injected = catalog_ids(ModelCatalog::from_environment_with(|name| env::var(name)));
 
     // Assert
-    if let Ok(catalog) = catalog {
-        assert!(catalog.specs().all(|spec| spec.provider().is_some()));
-    }
+    assert_eq!(process, injected);
 }

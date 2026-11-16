@@ -21,7 +21,9 @@ impl Role {
     pub const FAST: Self = Self(Cow::Borrowed("fast"));
     /// Most capable model for demanding work.
     pub const SMART: Self = Self(Cow::Borrowed("smart"));
-    /// Capable model that reads image input.
+    /// Capable model that reads image input. A new catalog requires every
+    /// candidate of this role to declare image input; see
+    /// [`super::CatalogBuilder::require`].
     pub const VISION: Self = Self(Cow::Borrowed("vision"));
 
     /// Creates a host-defined role.

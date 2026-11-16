@@ -1,6 +1,7 @@
 //! `HarnessBuilder` unit tests for model selection, budget derivation,
 //! validation failures, applied options, and shared handle configuration.
 
+use std::env;
 use std::num::{NonZeroU64, NonZeroUsize};
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};
@@ -164,7 +165,7 @@ fn explicit_budget_overrides_the_declared_profile() {
 fn build_resolves_the_catalog_selector_under_the_cataloged_profile() {
     // Arrange
     let profile = declared_profile();
-    let smart: Arc<dyn Model> = Arc::new(model());
+    let smart: Arc<dyn Model> = Arc::new(profiled_model(None));
     let cheap: Arc<dyn Model> = Arc::new(model());
     let catalog = ModelCatalog::builder()
         .model(ModelSpec::new("host/smart"), Arc::clone(&smart))
@@ -225,21 +226,58 @@ fn build_defaults_the_catalog_selector_to_the_smart_role_and_model_profile() {
 }
 
 #[test]
-fn explicit_model_takes_precedence_over_the_catalog() {
+fn explicit_model_takes_precedence_over_the_catalog_but_not_a_selector() {
     // Arrange
     let explicit: Arc<dyn Model> = Arc::new(profiled_model(Some(declared_profile())));
-    let empty = ModelCatalog::builder().build().expect("empty catalog");
+    let empty = Arc::new(ModelCatalog::builder().build().expect("empty catalog"));
 
     // Act
     let harness = Harness::builder()
-        .catalog(Arc::new(empty))
-        .model_selector(Role::VISION)
+        .catalog(Arc::clone(&empty))
         .model(Arc::clone(&explicit))
         .build()
         .expect("explicit model should build");
+    let conflicting = build_error(
+        Harness::builder()
+            .catalog(empty)
+            .model_selector(Role::VISION)
+            .model(Arc::clone(&explicit))
+            .build(),
+    );
 
     // Assert
     assert!(Arc::ptr_eq(&harness.inner.model, &explicit));
+    assert!(matches!(
+        conflicting.get_ref().downcast_ref::<HarnessBuildError>(),
+        Some(HarnessBuildError::ConflictingModelSelection)
+    ));
+}
+
+#[test]
+fn environment_catalog_defaults_build_without_an_explicit_budget() {
+    // Arrange
+    let environment = |name: &str| match name {
+        "DASHSCOPE_API_KEY" => Ok("qwen-key".to_string()),
+        "DASHSCOPE_BASE_URL" => Ok("https://dashscope.test/v1".to_string()),
+        _ => Err(env::VarError::NotPresent),
+    };
+    let catalog =
+        Arc::new(ModelCatalog::from_environment_with(environment).expect("valid Qwen environment"));
+
+    // Act
+    let cheap = Harness::builder()
+        .catalog(Arc::clone(&catalog))
+        .model_selector(Role::CHEAP)
+        .build();
+    let smart = build_error(Harness::builder().catalog(catalog).build());
+
+    // Assert
+    assert!(cheap.is_ok());
+    assert!(matches!(
+        smart.get_ref().downcast_ref::<HarnessBuildError>(),
+        Some(HarnessBuildError::Catalog(CatalogError::UnassignedRole { role }))
+            if *role == Role::SMART
+    ));
 }
 
 #[test]
