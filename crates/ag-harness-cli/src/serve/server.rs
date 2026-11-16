@@ -1,17 +1,19 @@
 //! Request dispatch, open sessions, and runs in flight of `ag-harness serve`.
 
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::error::Error;
 use std::future::poll_fn;
+use std::ops::ControlFlow;
 use std::pin::Pin;
 use std::sync::Arc;
+use std::time::UNIX_EPOCH;
 use std::{env, io};
 
 use ag_harness::catalog::{ModelCatalog, ModelId, ModelSelector, Role};
-use ag_harness::event::RunId;
+use ag_harness::event::{RunEvent, RunId};
 use ag_harness::model::ReasoningEffort;
 use ag_harness::provider::{ModelConfiguration, ModelProvider};
-use ag_harness::store::MemoryStore;
+use ag_harness::store::{MemoryStore, SessionInfo};
 use ag_harness::{
     CancelToken, ErrorKind, EventStream, Harness, HarnessBuilder, HarnessError, RunHandle,
     RunRequest, Session, SessionError,
@@ -25,11 +27,12 @@ use tokio::sync::mpsc;
 use tokio::task::JoinHandle;
 
 use super::protocol::{
-    Call, Envelope, ErrorData, ErrorObject, ErrorResponse, MethodResult, ModelChoice, Notification,
-    PARSE_ERROR, RequestId, Response, RunStartParams, SERVER_ERROR, SessionCreateParams,
-    SessionResumeParams, SessionTranscriptParams, StoreChoice, line,
+    Call, Empty, Envelope, ErrorData, ErrorObject, ErrorResponse, MethodResult, ModelChoice,
+    Notification, PARSE_ERROR, RequestId, Response, RunStartParams, RunStarted, SERVER_ERROR,
+    SessionCreateParams, SessionOpened, SessionResumeParams, SessionTranscriptParams, SessionUsage,
+    StoreChoice, Transcript, line,
 };
-use crate::MODEL_PROFILE;
+use crate::{MODEL_PROFILE, stored_model_identity_parts};
 
 /// Event lines runs may queue before the next one waits for the server to
 /// write them.
@@ -40,8 +43,9 @@ const EVENT_LINE_BUFFER: usize = 64;
 /// events; a `shutdown` request is answered last.
 ///
 /// Requests are answered in order, and a run's identifier is answered
-/// before its first event. Runs execute concurrently; their events are
-/// written between responses, one whole line at a time.
+/// before its first event. Client notifications are executed but never
+/// answered. Runs execute concurrently; their events are written between
+/// responses, one whole line at a time.
 ///
 /// # Errors
 /// Returns a failure to read `input` or to write to `output`.
@@ -60,6 +64,7 @@ where
         environment,
         event_lines,
         event_sender,
+        finished_runs: HashSet::new(),
         memory: MemoryStore::new(),
         output,
         reasoning_effort,
@@ -72,7 +77,7 @@ where
     match (answered, stopped) {
         (Err(error), _) | (Ok(_), Err(error)) => Err(error),
         (Ok(Some(id)), Ok(())) => {
-            let response = line(&Response::new(id, MethodResult::Done {}))?;
+            let response = line(&Response::new(id, MethodResult::Empty(Empty {})))?;
 
             write_line(&mut output, &response).await
         }
@@ -87,6 +92,22 @@ async fn write_line(output: &mut (impl AsyncWrite + Unpin), line: &str) -> io::R
     output.flush().await
 }
 
+/// Encodes `event` of a run in `session` as a `run/event` notification
+/// line. An event time the wire cannot carry, such as one before the Unix
+/// epoch after a clock step, is sent as the epoch, so no event, and in
+/// particular no `completed` event, is ever dropped.
+fn event_line(session: String, event: RunEvent) -> String {
+    let mut notification = Notification::run_event(session, event);
+    if let Ok(line) = line(&notification) {
+        return line;
+    }
+    notification.params.event.at = UNIX_EPOCH;
+
+    // The event time is the only part of a notification that can fail to
+    // encode.
+    line(&notification).unwrap_or_default()
+}
+
 /// State of one `serve` process.
 struct Server<Environment, Output> {
     environment: Environment,
@@ -94,6 +115,9 @@ struct Server<Environment, Output> {
     event_lines: mpsc::Receiver<String>,
     /// Sender cloned into each run.
     event_sender: mpsc::Sender<String>,
+    /// Runs this server started that finished and left `runs`, so
+    /// cancelling them still succeeds.
+    finished_runs: HashSet<RunId>,
     /// Store of every session opened with [`StoreChoice::Memory`].
     memory: MemoryStore,
     output: Output,
@@ -108,8 +132,9 @@ where
     Output: AsyncWrite + Unpin,
 {
     /// Answers each line of `input`, writing run events as they arrive,
-    /// until the end of input or a `shutdown` request, whose identifier is
-    /// returned unanswered.
+    /// until the end of input or a `shutdown`, whose identifier is returned
+    /// unanswered; a `shutdown` notification returns none, as the end of
+    /// input does.
     async fn serve_lines(
         &mut self,
         input: &mut (impl AsyncBufRead + Unpin),
@@ -125,9 +150,9 @@ where
                     if read? == 0 {
                         return Ok(None);
                     }
-                    let shutdown = self.answer(&line).await?;
+                    let next = self.answer(&line).await?;
                     line.clear();
-                    if shutdown.is_some() {
+                    if let ControlFlow::Break(shutdown) = next {
                         return Ok(shutdown);
                     }
                 }
@@ -135,57 +160,66 @@ where
         }
     }
 
-    /// Answers one input line; returns the identifier of a `shutdown`
+    /// Answers one input line; breaks with the identifier of a `shutdown`
     /// request instead of answering it.
-    async fn answer(&mut self, line: &[u8]) -> io::Result<Option<RequestId>> {
+    async fn answer(&mut self, line: &[u8]) -> io::Result<ControlFlow<Option<RequestId>>> {
         if line.iter().all(u8::is_ascii_whitespace) {
-            return Ok(None);
+            return Ok(ControlFlow::Continue(()));
         }
         let message = match serde_json::from_slice::<Value>(line) {
             Ok(message) => message,
             Err(error) => {
                 let error = ErrorObject::new(PARSE_ERROR, format!("parse error: {error}"));
+                self.write(&ErrorResponse::new(None, error)).await?;
 
-                return self
-                    .write(&ErrorResponse::new(None, error))
-                    .await
-                    .map(|()| None);
+                return Ok(ControlFlow::Continue(()));
             }
         };
         let envelope = match Envelope::parse(message) {
             Ok(envelope) => envelope,
-            Err(response) => return self.write(&response).await.map(|()| None),
-        };
-        // A client notification needs no answer, and the server accepts none.
-        let Some(id) = envelope.id else {
-            return Ok(None);
-        };
-        let call = match Call::parse(&envelope.method, envelope.params) {
-            Ok(call) => call,
-            Err(error) => {
-                return self
-                    .write(&ErrorResponse::new(Some(id), error))
-                    .await
-                    .map(|()| None);
+            Err(response) => {
+                self.write(&response).await?;
+
+                return Ok(ControlFlow::Continue(()));
             }
         };
-        match self.dispatch(call).await {
-            Ok(Reply::Shutdown) => return Ok(Some(id)),
-            Ok(Reply::Result(result)) => self.write(&Response::new(id, result)).await?,
+        let id = envelope.id;
+        let reply = match Call::parse(&envelope.method, envelope.params) {
+            Ok(call) => self.dispatch(call).await.map_err(ServeError::into_object),
+            Err(error) => Err(error),
+        };
+        match reply {
+            Ok(Reply::Shutdown) => return Ok(ControlFlow::Break(id)),
+            Ok(Reply::Result(result)) => self.respond(id, Ok(result)).await?,
             Ok(Reply::Run(run)) => {
-                let started = MethodResult::RunStarted {
+                let started = RunStarted {
                     run: run.events.run_id().clone(),
                 };
-                self.write(&Response::new(id, started)).await?;
+                self.respond(id, Ok(MethodResult::RunStarted(started)))
+                    .await?;
                 self.spawn(run);
             }
-            Err(error) => {
-                let error = ErrorResponse::new(Some(id), error.into_object());
-                self.write(&error).await?;
-            }
+            Err(error) => self.respond(id, Err(error)).await?,
         }
 
-        Ok(None)
+        Ok(ControlFlow::Continue(()))
+    }
+
+    /// Answers request `id` with `reply`; a client notification, which has
+    /// no `id`, is never answered, not even with an error.
+    async fn respond(
+        &mut self,
+        id: Option<RequestId>,
+        reply: Result<MethodResult, ErrorObject>,
+    ) -> io::Result<()> {
+        let Some(id) = id else {
+            return Ok(());
+        };
+
+        match reply {
+            Ok(result) => self.write(&Response::new(id, result)).await,
+            Err(error) => self.write(&ErrorResponse::new(Some(id), error)).await,
+        }
     }
 
     /// Executes one request.
@@ -194,18 +228,10 @@ where
             Call::SessionCreate(params) => self.create(params).await?,
             Call::SessionResume(params) => self.resume(params).await?,
             Call::RunStart(params) => return self.start(params).map(Reply::Run),
-            Call::RunCancel(params) => {
-                let run = self
-                    .runs
-                    .get(&params.run)
-                    .ok_or_else(|| ServeError::UnknownRun(params.run.as_str().to_string()))?;
-                run.cancel.cancel();
-
-                MethodResult::Done {}
-            }
+            Call::RunCancel(params) => self.cancel(&params.run)?,
             Call::SessionTranscript(params) => self.transcript(params).await?,
             Call::SessionUsage(params) => {
-                MethodResult::Usage(self.session(&params.session)?.usage().await?)
+                MethodResult::Usage(SessionUsage(self.session(&params.session)?.usage().await?))
             }
             Call::Shutdown(_) => return Ok(Reply::Shutdown),
         };
@@ -231,10 +257,33 @@ where
 
     async fn resume(&mut self, params: SessionResumeParams) -> Result<MethodResult, ServeError> {
         self.ensure_closed(&params.session)?;
-        let harness = self.harness(&params.model, params.store)?;
+        let model = match params.model {
+            Some(model) => model,
+            None => Self::stored_model(&params.session, &params.store).await?,
+        };
+        let harness = self.harness(&model, params.store)?;
         let session = harness.resume(&params.session).await?;
 
         Ok(self.open(params.session, session))
+    }
+
+    /// Reads the model `session` was created with from `store`.
+    async fn stored_model(session: &str, store: &StoreChoice) -> Result<ModelChoice, ServeError> {
+        let StoreChoice::Sqlite { path } = store else {
+            // A memory session lives only on the server that created it,
+            // where it stays open, so there is none to resume.
+            return Err(SessionError::NotFound {
+                id: session.to_string(),
+            }
+            .into());
+        };
+        let info = SessionInfo::load(path, session).await?;
+        let (provider, model) = stored_model_identity_parts(info.provider(), info.model())
+            .map_err(ServeError::config)?;
+
+        Ok(ModelChoice::Id(
+            ModelId::cataloged(provider, &model).to_string(),
+        ))
     }
 
     fn start(&self, params: RunStartParams) -> Result<PendingRun, ServeError> {
@@ -257,6 +306,18 @@ where
         })
     }
 
+    /// Cancels `run`; a run that already finished is left as it is, so the
+    /// answer does not race with the run's end.
+    fn cancel(&self, run: &RunId) -> Result<MethodResult, ServeError> {
+        match self.runs.get(run) {
+            Some(task) => task.cancel.cancel(),
+            None if self.finished_runs.contains(run) => {}
+            None => return Err(ServeError::UnknownRun(run.as_str().to_string())),
+        }
+
+        Ok(MethodResult::Empty(Empty {}))
+    }
+
     async fn transcript(
         &self,
         params: SessionTranscriptParams,
@@ -266,7 +327,7 @@ where
             .transcript(params.range)
             .await?;
 
-        Ok(MethodResult::Transcript { turns })
+        Ok(MethodResult::Transcript(Transcript { turns }))
     }
 
     /// Builds the harness of one session: `model` stored in `store`, with
@@ -338,7 +399,7 @@ where
     fn open(&mut self, id: String, session: Session) -> MethodResult {
         self.sessions.insert(id.clone(), session);
 
-        MethodResult::SessionOpened { session: id }
+        MethodResult::SessionOpened(SessionOpened { session: id })
     }
 
     fn session(&self, id: &str) -> Result<&Session, ServeError> {
@@ -348,9 +409,17 @@ where
     }
 
     /// Runs `run` on its own task, which queues its events as notification
-    /// lines, and forgets runs that already finished.
+    /// lines, and moves runs that already finished to `finished_runs`.
     fn spawn(&mut self, run: PendingRun) {
-        self.runs.retain(|_, run| !run.task.is_finished());
+        let finished_runs = &mut self.finished_runs;
+        self.runs.retain(|id, run| {
+            let running = !run.task.is_finished();
+            if !running {
+                finished_runs.insert(id.clone());
+            }
+
+            running
+        });
         let PendingRun {
             mut events,
             handle,
@@ -365,11 +434,7 @@ where
             while let Some(event) =
                 poll_fn(|context| Pin::new(&mut events).poll_next(context)).await
             {
-                let notification = Notification::run_event(session.clone(), event);
-                // An event that cannot be encoded is written as an empty
-                // line, which writes nothing; the stream is still drained so
-                // the run ends.
-                let _ = sender.send(line(&notification).unwrap_or_default()).await;
+                let _ = sender.send(event_line(session.clone(), event)).await;
             }
         };
         let task = tokio::spawn(async move {
@@ -447,8 +512,8 @@ enum ServeError {
     /// The model is neither cataloged nor a known provider's model.
     #[error("model `{0}` is not cataloged and does not name a known provider as `provider/model`")]
     UnknownModel(String),
-    /// The run is not in flight on this server.
-    #[error("run `{0}` is not in flight")]
+    /// The run was not started by this server.
+    #[error("run `{0}` was not started by this server")]
     UnknownRun(String),
     /// The session is not open on this server.
     #[error("session `{0}` is not open; create or resume it first")]

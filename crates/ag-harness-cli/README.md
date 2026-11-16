@@ -84,16 +84,21 @@ cargo run --locked -p ag-harness-cli -- serve
   `session/transcript`, `session/usage`, and `shutdown`.
 - Models are selected by catalog role (`{"role": "smart"}`), catalog ID, or
   `{"id": "provider/model"}`, with credentials from the environment as for `run`.
-  Sessions live in the server's memory unless `store` names a SQLite file.
+  Sessions live in the server's memory unless `store` names a SQLite file;
+  `session/resume` reads the model from that file when `model` is omitted. Of the global
+  options only `--reasoning-effort` applies; the others are rejected.
 - `run/start` answers with a run ID at once. The run's events follow as `run/event`
   notifications and end with a `completed` event that carries its usage, cost, and any
-  failure.
+  failure. `run/cancel` succeeds for any run the server started, even a finished one.
 - Errors are JSON-RPC errors; harness failures carry `data.kind` and `data.retryable`.
-  Malformed lines are answered with an error and the server keeps running.
+  Malformed lines are answered with an error and the server keeps running. A message
+  without `id` is executed but never answered.
 - Tools are denied. `shutdown` or closing standard input cancels runs in flight, writes
   their last events, and exits.
 
-[`schema/serve_protocol.json`](schema/serve_protocol.json) describes every message.
+`serve --print-schema` prints the JSON Schema of every message, committed as
+[`schema/serve_protocol.json`](schema/serve_protocol.json); its `x-method-results` names
+each method's result.
 
 ## Defaults
 

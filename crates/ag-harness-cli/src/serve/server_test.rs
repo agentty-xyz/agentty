@@ -5,10 +5,11 @@
 use std::fmt::Write as _;
 use std::pin::Pin;
 use std::task::{Context, Poll};
-use std::time::Duration;
+use std::time::{Duration, UNIX_EPOCH};
 use std::{env, io};
 
 use ag_harness::catalog::ModelId;
+use ag_harness::event::RunEvent;
 use ag_harness::model::ReasoningEffort;
 use ag_harness::provider::{GPT_6_LUNA, ModelProvider};
 use serde_json::{Value, json};
@@ -16,13 +17,17 @@ use tokio::io::{
     AsyncBufReadExt as _, AsyncWrite, AsyncWriteExt as _, BufReader, DuplexStream, Lines,
 };
 use tokio::task::{JoinHandle, LocalSet};
-use wiremock::matchers::{method, path};
+use wiremock::matchers::{body_string_contains, method, path};
 use wiremock::{Mock, MockServer, ResponseTemplate};
 
-use super::serve;
+use super::{event_line, serve};
 use crate::serve::protocol::{
     INVALID_PARAMS, INVALID_REQUEST, METHOD_NOT_FOUND, PARSE_ERROR, SERVER_ERROR,
 };
+
+/// Longest wait for a message the server should write, so a regression
+/// fails with its assertion instead of hanging on a delayed provider.
+const READ_TIMEOUT: Duration = Duration::from_secs(5);
 
 type Environment = Box<dyn FnMut(&str) -> Result<String, env::VarError> + Send>;
 
@@ -69,6 +74,26 @@ fn answer(message: &str) -> ResponseTemplate {
 /// Starts a provider that answers every request with `response`.
 async fn provider(response: ResponseTemplate) -> MockServer {
     let server = MockServer::start().await;
+    Mock::given(method("POST"))
+        .and(path("/chat/completions"))
+        .respond_with(response)
+        .mount(&server)
+        .await;
+
+    server
+}
+
+/// Starts a provider that answers prompts containing `Wait` only after the
+/// test ends, and every other prompt with `response` at once.
+async fn waiting_provider(response: ResponseTemplate) -> MockServer {
+    let server = MockServer::start().await;
+    Mock::given(method("POST"))
+        .and(path("/chat/completions"))
+        .and(body_string_contains("Wait"))
+        .respond_with(answer("late").set_delay(Duration::from_secs(600)))
+        .with_priority(1)
+        .mount(&server)
+        .await;
     Mock::given(method("POST"))
         .and(path("/chat/completions"))
         .respond_with(response)
@@ -151,18 +176,22 @@ impl Client {
     }
 
     async fn send(&mut self, message: &Value) {
+        self.send_raw(&format!("{message}\n")).await;
+    }
+
+    /// Writes `text` as is, which may end mid-line.
+    async fn send_raw(&mut self, text: &str) {
         let input = self.input.as_mut().expect("input should be open");
         input
-            .write_all(format!("{message}\n").as_bytes())
+            .write_all(text.as_bytes())
             .await
             .expect("server should read input");
     }
 
     async fn read(&mut self) -> Option<Value> {
-        let line = self
-            .output
-            .next_line()
+        let line = tokio::time::timeout(READ_TIMEOUT, self.output.next_line())
             .await
+            .expect("server should write within the read timeout")
             .expect("output should be readable")?;
 
         Some(serde_json::from_str(&line).expect("output lines should be JSON"))
@@ -205,21 +234,31 @@ impl Client {
 
         (
             messages,
-            self.server.await.expect("server task should not panic"),
+            tokio::time::timeout(READ_TIMEOUT, self.server)
+                .await
+                .expect("server should stop within the read timeout")
+                .expect("server task should not panic"),
         )
     }
 }
 
-/// Output that rejects every write.
-struct ClosedOutput;
+/// Output that accepts `writes` writes, then rejects every later one.
+struct ClosedOutput {
+    writes: usize,
+}
 
 impl AsyncWrite for ClosedOutput {
     fn poll_write(
-        self: Pin<&mut Self>,
+        mut self: Pin<&mut Self>,
         _context: &mut Context<'_>,
-        _buffer: &[u8],
+        buffer: &[u8],
     ) -> Poll<io::Result<usize>> {
-        Poll::Ready(Err(io::Error::from(io::ErrorKind::BrokenPipe)))
+        if self.writes == 0 {
+            return Poll::Ready(Err(io::Error::from(io::ErrorKind::BrokenPipe)));
+        }
+        self.writes -= 1;
+
+        Poll::Ready(Ok(buffer.len()))
     }
 
     fn poll_flush(self: Pin<&mut Self>, _context: &mut Context<'_>) -> Poll<io::Result<()>> {
@@ -271,7 +310,7 @@ async fn malformed_lines_are_answered_without_stopping_the_server() {
 }
 
 #[tokio::test]
-async fn sessions_run_concurrently_and_report_transcripts_and_usage() {
+async fn sessions_report_transcripts_and_usage() {
     LocalSet::new()
         .run_until(async {
             // Arrange
@@ -351,6 +390,14 @@ async fn sessions_run_concurrently_and_report_transcripts_and_usage() {
                 assert_eq!(completed["params"]["event"]["kind"]["error"], Value::Null);
             }
             assert_eq!(first_completed["params"]["session"], json!("first"));
+            assert_eq!(
+                first_completed["params"]["event"]["kind"]["usage"]["input"],
+                json!(5)
+            );
+            assert_eq!(
+                first_completed["params"]["event"]["kind"]["cost"],
+                Value::Null
+            );
             let turns = transcript["result"]["turns"]
                 .as_array()
                 .expect("transcript should list turns");
@@ -448,6 +495,7 @@ async fn cancel_and_end_of_input_stop_runs_in_flight() {
                     json!({"session": "s", "input": "Wait again"}),
                 )
                 .await;
+            let cancel_finished = client.call(6, "run/cancel", json!({"run": run})).await;
             let (rest, served) = client.finish().await;
 
             // Assert
@@ -457,6 +505,7 @@ async fn cancel_and_end_of_input_stop_runs_in_flight() {
                 json!("cancelled")
             );
             assert_eq!(error_kind(&unknown), &json!("not_found"));
+            assert_eq!(cancel_finished["result"], json!({}));
             let stopped = rest
                 .iter()
                 .find(|message| is_completed(message))
@@ -466,6 +515,151 @@ async fn cancel_and_end_of_input_stop_runs_in_flight() {
                 stopped["params"]["event"]["kind"]["error"]["kind"],
                 json!("cancelled")
             );
+            assert!(served.is_ok());
+        })
+        .await;
+}
+
+#[tokio::test]
+async fn client_notifications_are_executed_without_answers() {
+    LocalSet::new()
+        .run_until(async {
+            // Arrange
+            let provider = waiting_provider(answer("unused")).await;
+            let mut client = Client::start(environment(&provider.uri(), &[]));
+            let output = json!({"type": "json", "schema": message_schema()});
+            client
+                .call(
+                    1,
+                    "session/create",
+                    json!({"session": "s", "model": local_model(), "output": output}),
+                )
+                .await;
+            let started = client
+                .call(2, "run/start", json!({"session": "s", "input": "Wait"}))
+                .await;
+            let run = started["result"]["run"].clone();
+
+            // Act
+            client
+                .send(&json!({"jsonrpc": "2.0", "method": "session/delete"}))
+                .await;
+            client
+                .send(&json!({"jsonrpc": "2.0", "method": "run/cancel", "params": {"run": run}}))
+                .await;
+            let cancelled = client.completed(&run).await;
+            client
+                .send(&json!({"jsonrpc": "2.0", "method": "shutdown"}))
+                .await;
+            let (rest, served) = client.finish().await;
+
+            // Assert
+            assert_eq!(
+                cancelled["params"]["event"]["kind"]["error"]["kind"],
+                json!("cancelled")
+            );
+            assert!(
+                rest.iter().all(|message| message.get("id").is_none()),
+                "notifications should get no answer: {rest:?}"
+            );
+            assert!(served.is_ok());
+        })
+        .await;
+}
+
+#[tokio::test]
+async fn a_second_run_on_a_busy_session_completes_as_busy() {
+    LocalSet::new()
+        .run_until(async {
+            // Arrange
+            let provider = waiting_provider(answer("unused")).await;
+            let mut client = Client::start(environment(&provider.uri(), &[]));
+            let output = json!({"type": "json", "schema": message_schema()});
+            client
+                .call(
+                    1,
+                    "session/create",
+                    json!({"session": "s", "model": local_model(), "output": output}),
+                )
+                .await;
+            let waiting = client
+                .call(2, "run/start", json!({"session": "s", "input": "Wait"}))
+                .await;
+            client
+                .wait(|message| {
+                    message["params"]["event"]["run"] == waiting["result"]["run"]
+                        && message["params"]["event"]["kind"]["type"] == "started"
+                })
+                .await;
+
+            // Act
+            let second = client
+                .call(3, "run/start", json!({"session": "s", "input": "Hello"}))
+                .await;
+            let second_completed = client.completed(&second["result"]["run"]).await;
+            let (_, served) = client.finish().await;
+
+            // Assert
+            assert_eq!(
+                second_completed["params"]["event"]["kind"]["error"]["kind"],
+                json!("busy")
+            );
+            assert_eq!(
+                second_completed["params"]["event"]["kind"]["error"]["retryable"],
+                json!(true)
+            );
+            assert!(served.is_ok());
+        })
+        .await;
+}
+
+#[tokio::test]
+async fn a_request_split_by_run_events_is_answered_whole() {
+    LocalSet::new()
+        .run_until(async {
+            // Arrange
+            let provider = waiting_provider(answer("unused")).await;
+            let mut client = Client::start(environment(&provider.uri(), &[]));
+            let output = json!({"type": "json", "schema": message_schema()});
+            client
+                .call(
+                    1,
+                    "session/create",
+                    json!({"session": "s", "model": local_model(), "output": output}),
+                )
+                .await;
+            let started = client
+                .call(
+                    2,
+                    "run/start",
+                    json!({"session": "s", "input": "Wait", "limits": {"max_wall_time_ms": 200}}),
+                )
+                .await;
+            let run = started["result"]["run"].clone();
+            client
+                .wait(|message| {
+                    message["params"]["event"]["run"] == run
+                        && message["params"]["event"]["kind"]["type"] == "started"
+                })
+                .await;
+
+            // Act
+            client
+                .send_raw("{\"jsonrpc\":\"2.0\",\"id\":3,\"method\":")
+                .await;
+            let completed = client.completed(&run).await;
+            client
+                .send_raw("\"session/usage\",\"params\":{\"session\":\"s\"}}\n")
+                .await;
+            let usage = client.wait(|message| message["id"] == 3).await;
+            let (_, served) = client.finish().await;
+
+            // Assert
+            assert_eq!(
+                completed["params"]["event"]["kind"]["error"]["kind"],
+                json!("budget_exhausted")
+            );
+            assert_eq!(usage["result"]["turns"], json!(1));
             assert!(served.is_ok());
         })
         .await;
@@ -532,6 +726,7 @@ async fn model_and_output_failures_map_to_classified_errors() {
         ),
         request(6, "run/start", json!({"session": "missing", "input": "Hi"})),
         request(7, "session/transcript", json!({"session": "missing"})),
+        request(8, "session/resume", json!({"session": "missing"})),
     ]);
 
     // Act
@@ -547,6 +742,7 @@ async fn model_and_output_failures_map_to_classified_errors() {
             &json!("config"),
             &json!("config"),
             &json!("config"),
+            &json!("not_found"),
             &json!("not_found"),
             &json!("not_found"),
             &json!("not_found"),
@@ -622,6 +818,13 @@ async fn sqlite_sessions_resume_in_a_later_server() {
             json!({"session": "kept", "model": local_model(), "store": store}),
         )
     };
+    let resume_stored = |session: &str| {
+        request(
+            1,
+            "session/resume",
+            json!({"session": session, "store": store}),
+        )
+    };
 
     // Act
     let (created, created_served) = exchange(&create, environment("http://127.0.0.1:9", &[])).await;
@@ -630,12 +833,25 @@ async fn sqlite_sessions_resume_in_a_later_server() {
         environment("http://127.0.0.1:9", &[]),
     )
     .await;
+    let (stored, stored_served) = exchange(
+        &lines(&[resume_stored("kept")]),
+        environment("http://127.0.0.1:9", &[]),
+    )
+    .await;
+    let (missing, missing_served) = exchange(
+        &lines(&[resume_stored("missing")]),
+        environment("http://127.0.0.1:9", &[]),
+    )
+    .await;
 
     // Assert
     assert!(created_served.is_ok() && resumed_served.is_ok());
+    assert!(stored_served.is_ok() && missing_served.is_ok());
     assert_eq!(created[0]["result"], json!({"session": "kept"}));
     assert_eq!(resumed[0]["result"], json!({"session": "kept"}));
     assert_eq!(error_kind(&resumed[1]), &json!("conflict"));
+    assert_eq!(stored[0]["result"], json!({"session": "kept"}));
+    assert_eq!(error_kind(&missing[0]), &json!("not_found"));
 }
 
 #[tokio::test]
@@ -646,7 +862,7 @@ async fn a_failed_write_stops_the_server_with_its_error() {
     // Act
     let served = serve(
         input.as_bytes(),
-        ClosedOutput,
+        ClosedOutput { writes: 0 },
         environment("http://127.0.0.1:9", &[]),
         ReasoningEffort::Low,
     )
@@ -657,4 +873,74 @@ async fn a_failed_write_stops_the_server_with_its_error() {
         served.map_err(|error| error.kind()),
         Err(io::ErrorKind::BrokenPipe)
     );
+}
+
+#[tokio::test]
+async fn a_failed_event_write_still_stops_every_run() {
+    // Arrange
+    let provider = waiting_provider(answer("unused")).await;
+    let output = json!({"type": "json", "schema": message_schema()});
+    let input = lines(&[
+        request(
+            1,
+            "session/create",
+            json!({"session": "s", "model": local_model(), "output": output}),
+        ),
+        request(2, "run/start", json!({"session": "s", "input": "Wait"})),
+    ]);
+
+    // Act
+    let served = tokio::time::timeout(
+        READ_TIMEOUT,
+        serve(
+            input.as_bytes(),
+            ClosedOutput { writes: 2 },
+            environment(&provider.uri(), &[]),
+            ReasoningEffort::Low,
+        ),
+    )
+    .await
+    .expect("a failed write should not leave a run hanging");
+
+    // Assert
+    assert_eq!(
+        served.map_err(|error| error.kind()),
+        Err(io::ErrorKind::BrokenPipe)
+    );
+}
+
+#[test]
+fn an_event_time_before_the_epoch_is_sent_as_the_epoch() {
+    // Arrange
+    let mut event: RunEvent = serde_json::from_value(json!({
+        "at": 1_700_000_000_000_u64,
+        "kind": {
+            "type": "completed",
+            "cost": null,
+            "error": null,
+            "usage": {
+                "input": 1, "output": 1, "cache_read": 0, "cache_write": null,
+                "reasoning": 0, "unreported_requests": 0
+            }
+        },
+        "run": "run-1",
+        "seq": 3
+    }))
+    .expect("completed event should decode");
+    let on_time = event_line("s".to_string(), event.clone());
+    event.at = UNIX_EPOCH - Duration::from_secs(1);
+
+    // Act
+    let early = event_line("s".to_string(), event);
+
+    // Assert
+    let on_time: Value = serde_json::from_str(&on_time).expect("event line should be JSON");
+    let early: Value = serde_json::from_str(&early).expect("event line should be JSON");
+    assert_eq!(
+        on_time["params"]["event"]["at"],
+        json!(1_700_000_000_000_u64)
+    );
+    assert_eq!(early["params"]["event"]["at"], json!(0));
+    assert_eq!(early["params"]["event"]["kind"]["type"], json!("completed"));
+    assert_eq!(early["params"]["event"]["seq"], json!(3));
 }

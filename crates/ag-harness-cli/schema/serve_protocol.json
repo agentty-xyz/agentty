@@ -16,6 +16,29 @@
       "$ref": "#/$defs/Notification"
     }
   ],
+  "x-method-results": {
+    "session/create": {
+      "$ref": "#/$defs/SessionOpened"
+    },
+    "session/resume": {
+      "$ref": "#/$defs/SessionOpened"
+    },
+    "run/start": {
+      "$ref": "#/$defs/RunStarted"
+    },
+    "run/cancel": {
+      "$ref": "#/$defs/Empty"
+    },
+    "session/transcript": {
+      "$ref": "#/$defs/Transcript"
+    },
+    "session/usage": {
+      "$ref": "#/$defs/SessionUsage"
+    },
+    "shutdown": {
+      "$ref": "#/$defs/Empty"
+    }
+  },
   "$defs": {
     "Call": {
       "oneOf": [
@@ -85,7 +108,7 @@
             "method",
             "params"
           ],
-          "description": "Cancels a run in flight."
+          "description": "Cancels a run this server started; a run that already finished is\nleft as it is."
         },
         {
           "type": "object",
@@ -133,8 +156,7 @@
             }
           },
           "required": [
-            "method",
-            "params"
+            "method"
           ],
           "description": "Cancels every run in flight, waits for their last events, answers,\nand exits."
         }
@@ -291,8 +313,15 @@
       "additionalProperties": false,
       "properties": {
         "model": {
-          "$ref": "#/$defs/ModelChoice",
-          "description": "Model the session was created with."
+          "anyOf": [
+            {
+              "$ref": "#/$defs/ModelChoice"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "description": "Model the session was created with; read from a SQLite store when\nomitted. A model that differs from the stored one is rejected."
         },
         "session": {
           "type": "string",
@@ -304,7 +333,6 @@
         }
       },
       "required": [
-        "model",
         "session"
       ],
       "description": "Parameters of `session/resume`."
@@ -587,57 +615,72 @@
     "MethodResult": {
       "anyOf": [
         {
-          "type": "object",
-          "properties": {
-            "session": {
-              "type": "string",
-              "description": "Identifier of the open session."
-            }
-          },
-          "required": [
-            "session"
-          ],
-          "description": "`session/create` and `session/resume`: the opened session."
+          "$ref": "#/$defs/SessionOpened",
+          "description": "`session/create` and `session/resume`."
         },
         {
-          "type": "object",
-          "properties": {
-            "run": {
-              "$ref": "#/$defs/RunId",
-              "description": "Identifier every event of the run carries."
-            }
-          },
-          "required": [
-            "run"
-          ],
-          "description": "`run/start`: the started run, whose events follow as `run/event`\nnotifications."
+          "$ref": "#/$defs/RunStarted",
+          "description": "`run/start`."
         },
         {
-          "type": "object",
-          "properties": {
-            "turns": {
-              "type": "array",
-              "items": {
-                "$ref": "#/$defs/TurnRecord"
-              },
-              "description": "Settled turns."
-            }
-          },
-          "required": [
-            "turns"
-          ],
-          "description": "`session/transcript`: the selected settled turns, oldest first."
+          "$ref": "#/$defs/Transcript",
+          "description": "`session/transcript`."
         },
         {
-          "$ref": "#/$defs/UsageTotals",
-          "description": "`session/usage`: summed tokens and cost of the settled turns."
+          "$ref": "#/$defs/SessionUsage",
+          "description": "`session/usage`."
         },
         {
-          "type": "object",
-          "description": "`run/cancel` and `shutdown`: an empty object."
+          "$ref": "#/$defs/Empty",
+          "description": "`run/cancel` and `shutdown`."
         }
       ],
-      "description": "Result of a successful request."
+      "description": "Result of a successful request: one closed object per method, so no\nresult shape validates as another."
+    },
+    "SessionOpened": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "session": {
+          "type": "string",
+          "description": "Identifier of the open session."
+        }
+      },
+      "required": [
+        "session"
+      ],
+      "description": "Result of `session/create` and `session/resume`: the opened session."
+    },
+    "RunStarted": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "run": {
+          "$ref": "#/$defs/RunId",
+          "description": "Identifier every event of the run carries."
+        }
+      },
+      "required": [
+        "run"
+      ],
+      "description": "Result of `run/start`: the started run, whose events follow as\n`run/event` notifications."
+    },
+    "Transcript": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "turns": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/TurnRecord"
+          },
+          "description": "Settled turns."
+        }
+      },
+      "required": [
+        "turns"
+      ],
+      "description": "Result of `session/transcript`: the selected settled turns, oldest\nfirst."
     },
     "TurnRecord": {
       "type": "object",
@@ -1207,7 +1250,7 @@
       ],
       "description": "Provider-reported tokens, summed over a run's model requests.\n\nThe counts overlap: `cache_read` and a known `cache_write` are part of\n`input`, and `reasoning` is part of `output`; [`crate::Cost`] prices them\naccordingly. A count a provider omitted adds zero; a request whose\nprovider reported no input or output count is counted in\n`unreported_requests`, so totals with unreported requests are lower\nbounds. Requests the provider rejected as exceeding its context window,\nand a request in flight when the run was cancelled, are not counted."
     },
-    "UsageTotals": {
+    "SessionUsage": {
       "type": "object",
       "properties": {
         "cost": {
@@ -1250,7 +1293,13 @@
         "unpriced_turns",
         "usage"
       ],
-      "description": "Usage summed over a session's settled turns, returned by\n[`crate::Session::usage`].\n\nTurns without recorded usage or a stored outcome to derive it from, such\nas turns recorded before this harness version stored usage without a\nhost request ID, are counted in [`Self::unknown_turns`] and add nothing,\nso totals with unknown turns are lower bounds. Turns whose model had no\n[`Pricing`], and older turns whose usage comes from their stored outcome,\nadd their tokens but no cost and are counted in [`Self::unpriced_turns`]."
+      "description": "Result of `session/usage`: summed tokens and cost of the settled turns.",
+      "additionalProperties": false
+    },
+    "Empty": {
+      "type": "object",
+      "additionalProperties": false,
+      "description": "Result of `run/cancel` and `shutdown`: an empty object."
     },
     "ErrorResponse": {
       "type": "object",
@@ -1736,7 +1785,7 @@
       "description": "How a run finished, carried by [`RunEventKind::Completed`]."
     },
     "Request": {
-      "description": "Client request: `jsonrpc`, `id`, `method`, and the method's `params`. A message without `id` is a client notification, which the server ignores.",
+      "description": "Client request: `jsonrpc`, `id`, `method`, and the method's `params`, which may be omitted when every parameter has a default. A message without `id` is a client notification, which the server executes but never answers.",
       "type": "object",
       "properties": {
         "id": {
@@ -1747,7 +1796,6 @@
         }
       },
       "required": [
-        "id",
         "jsonrpc"
       ],
       "allOf": [

@@ -1,5 +1,7 @@
 //! Process-level coverage for the `ag-harness` command-line interface.
 
+mod serve;
+
 use std::os::unix::fs::PermissionsExt as _;
 use std::path::Path;
 use std::process::{Command, Stdio};

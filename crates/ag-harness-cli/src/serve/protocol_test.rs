@@ -11,15 +11,26 @@ use schemars::generate::SchemaSettings;
 use serde_json::{Value, json};
 
 use super::{
-    Call, Envelope, ErrorData, ErrorObject, ErrorResponse, GenerationChoice, INVALID_PARAMS,
+    Call, Empty, Envelope, ErrorData, ErrorObject, ErrorResponse, GenerationChoice, INVALID_PARAMS,
     INVALID_REQUEST, JsonRpcVersion, LimitsChoice, METHOD_NOT_FOUND, MethodResult, ModelChoice,
-    Notification, OutputChoice, RequestId, Response, SERVER_ERROR, StoreChoice, line,
+    Notification, OutputChoice, PROTOCOL_SCHEMA, RequestId, Response, SERVER_ERROR, SessionOpened,
+    StoreChoice, line,
 };
 
-const PROTOCOL_SCHEMA: &str = include_str!("../../schema/serve_protocol.json");
+/// Result definition of each method, in [`Call::METHODS`] order.
+const METHOD_RESULTS: [(&str, &str); 7] = [
+    ("session/create", "SessionOpened"),
+    ("session/resume", "SessionOpened"),
+    ("run/start", "RunStarted"),
+    ("run/cancel", "Empty"),
+    ("session/transcript", "Transcript"),
+    ("session/usage", "SessionUsage"),
+    ("shutdown", "Empty"),
+];
 
 /// Assembles the protocol schema: every message is a request, a response,
-/// an error response, or a notification.
+/// an error response, or a notification, and `x-method-results` names each
+/// method's result.
 fn protocol_schema() -> Value {
     let mut generator = SchemaSettings::draft2020_12().into_generator();
     let call = generator.subschema_for::<Call>();
@@ -29,18 +40,29 @@ fn protocol_schema() -> Value {
     let error = generator.subschema_for::<ErrorResponse>();
     let notification = generator.subschema_for::<Notification>();
     let mut definitions = generator.take_definitions(true);
+    make_default_params_optional(&mut definitions);
     definitions.insert(
         "Request".to_string(),
         json!({
             "description": "Client request: `jsonrpc`, `id`, `method`, and the method's \
-                            `params`. A message without `id` is a client notification, which \
-                            the server ignores.",
+                            `params`, which may be omitted when every parameter has a default. \
+                            A message without `id` is a client notification, which the server \
+                            executes but never answers.",
             "type": "object",
             "properties": {"id": id, "jsonrpc": version},
-            "required": ["id", "jsonrpc"],
+            "required": ["jsonrpc"],
             "allOf": [call]
         }),
     );
+    let results: serde_json::Map<String, Value> = METHOD_RESULTS
+        .iter()
+        .map(|(method, result)| {
+            (
+                (*method).to_string(),
+                json!({"$ref": format!("#/$defs/{result}")}),
+            )
+        })
+        .collect();
 
     json!({
         "$schema": "https://json-schema.org/draft/2020-12/schema",
@@ -49,8 +71,33 @@ fn protocol_schema() -> Value {
                         client request, or a server response, error response, or `run/event` \
                         notification. The protocol may change in any release.",
         "anyOf": [{"$ref": "#/$defs/Request"}, response, error, notification],
+        "x-method-results": results,
         "$defs": definitions
     })
+}
+
+/// Lets requests omit `params` for methods whose parameters all have
+/// defaults, as the server accepts.
+fn make_default_params_optional(definitions: &mut serde_json::Map<String, Value>) {
+    let defaulted: Vec<String> = definitions
+        .iter()
+        .filter(|(_, definition)| definition.get("required").is_none())
+        .map(|(name, _)| format!("#/$defs/{name}"))
+        .collect();
+    let Some(Value::Array(arms)) = definitions
+        .get_mut("Call")
+        .and_then(|call| call.get_mut("oneOf"))
+    else {
+        return;
+    };
+    for arm in arms {
+        let params = arm["properties"]["params"]["$ref"].as_str().unwrap_or("");
+        if defaulted.iter().any(|name| name == params)
+            && let Some(Value::Array(required)) = arm.get_mut("required")
+        {
+            required.retain(|field| field != "params");
+        }
+    }
 }
 
 fn validator() -> Validator {
@@ -310,11 +357,14 @@ fn server_messages_encode_as_schema_valid_lines() -> Result<(), serde_json::Erro
     let messages = [
         line(&Response::new(
             RequestId(json!(1)),
-            MethodResult::SessionOpened {
+            MethodResult::SessionOpened(SessionOpened {
                 session: "s".to_string(),
-            },
+            }),
         ))?,
-        line(&Response::new(RequestId(json!("x")), MethodResult::Done {}))?,
+        line(&Response::new(
+            RequestId(json!("x")),
+            MethodResult::Empty(Empty {}),
+        ))?,
         line(&ErrorResponse::new(Some(RequestId(json!(2))), error))?,
         line(&ErrorResponse::new(
             None,
@@ -349,19 +399,86 @@ fn server_messages_encode_as_schema_valid_lines() -> Result<(), serde_json::Erro
 fn schema_accepts_requests_and_rejects_unknown_methods() {
     // Arrange
     let validator = validator();
-    let request = json!({
-        "jsonrpc": "2.0",
-        "id": 1,
-        "method": "run/start",
-        "params": {"session": "s", "input": "hi", "limits": {"max_wall_time_ms": 10}}
-    });
-    let unknown = json!({"jsonrpc": "2.0", "id": 1, "method": "run/pause", "params": {}});
+    let accepted = [
+        json!({
+            "jsonrpc": "2.0",
+            "id": 1,
+            "method": "run/start",
+            "params": {"session": "s", "input": "hi", "limits": {"max_wall_time_ms": 10}}
+        }),
+        json!({"jsonrpc": "2.0", "id": 2, "method": "shutdown"}),
+        json!({"jsonrpc": "2.0", "method": "run/cancel", "params": {"run": "r"}}),
+    ];
+    let rejected = [
+        json!({"jsonrpc": "2.0", "id": 1, "method": "run/pause", "params": {}}),
+        json!({"jsonrpc": "2.0", "id": 3, "method": "session/usage"}),
+    ];
 
     // Act
-    let accepted = validator.is_valid(&request);
-    let rejected = validator.is_valid(&unknown);
+    let accepted: Vec<bool> = accepted
+        .iter()
+        .map(|message| validator.is_valid(message))
+        .collect();
+    let rejected: Vec<bool> = rejected
+        .iter()
+        .map(|message| validator.is_valid(message))
+        .collect();
 
     // Assert
-    assert!(accepted);
-    assert!(!rejected);
+    assert_eq!(accepted, [true, true, true]);
+    assert_eq!(rejected, [false, false]);
+}
+
+#[test]
+fn schema_rejects_result_shapes_no_method_returns() {
+    // Arrange
+    let validator = validator();
+    let response = |result: Value| json!({"jsonrpc": "2.0", "id": 1, "result": result});
+    let results = [
+        json!({"bogus": 1}),
+        json!({"session": "s", "run": "r"}),
+        json!({"run": 5}),
+        json!({}),
+    ];
+
+    // Act
+    let valid: Vec<bool> = results
+        .into_iter()
+        .map(|result| validator.is_valid(&response(result)))
+        .collect();
+
+    // Assert
+    assert_eq!(valid, [false, false, false, true]);
+}
+
+#[test]
+fn schema_names_a_result_definition_for_every_method() -> Result<(), serde_json::Error> {
+    // Arrange
+    let schema: Value = serde_json::from_str(PROTOCOL_SCHEMA)?;
+
+    // Act
+    let results = schema["x-method-results"]
+        .as_object()
+        .cloned()
+        .unwrap_or_default();
+
+    // Assert
+    let mut methods: Vec<&str> = results.keys().map(String::as_str).collect();
+    methods.sort_unstable();
+    let mut expected = Call::METHODS.to_vec();
+    expected.sort_unstable();
+    assert_eq!(methods, expected);
+    for reference in results.values() {
+        let name = reference["$ref"]
+            .as_str()
+            .and_then(|reference| reference.strip_prefix("#/$defs/"))
+            .unwrap_or_default();
+        assert_eq!(
+            schema["$defs"][name]["additionalProperties"],
+            json!(false),
+            "{name} should be a closed object"
+        );
+    }
+
+    Ok(())
 }

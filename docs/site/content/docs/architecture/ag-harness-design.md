@@ -309,12 +309,14 @@ of it yet.
   slow reader holds runs back instead of dropping events.
 - Failures become JSON-RPC errors: unreadable lines, invalid envelopes, unknown methods,
   and invalid parameters use the standard codes without stopping the server; harness
-  failures use `-32000` with the `ErrorKind` name and retry flag as `data`.
+  failures use `-32000` with the `ErrorKind` name and retry flag as `data`. Client
+  notifications are executed but never answered.
 - `shutdown` and the end of input cancel runs in flight and wait for their `Completed`
   events before exiting.
 
 `crates/ag-harness-cli/schema/serve_protocol.json` is the generated schema of every
-message, and a unit test fails when it is stale.
+message, printed by `serve --print-schema`; each method's result is a closed object
+named in `x-method-results`, and a unit test fails when the file is stale.
 
 ## Agentty integration
 

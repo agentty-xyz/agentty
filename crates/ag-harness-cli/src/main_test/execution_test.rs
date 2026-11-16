@@ -4,13 +4,15 @@
 use std::env;
 
 use ag_harness::provider::ModelConfigurationError;
+use clap::Parser as _;
 use serde_json::json;
 use tokio::io::BufReader;
 use wiremock::matchers::{body_string_contains, method, path};
 use wiremock::{Mock, MockServer, ResponseTemplate};
 
 use super::support::{parse_cli, provider_response, with_repository_controlled_git};
-use crate::{ChatMode, CliError, READ_WRITE_SYSTEM_PROMPT, execute};
+use crate::serve::PROTOCOL_SCHEMA;
+use crate::{ChatMode, Cli, CliError, READ_WRITE_SYSTEM_PROMPT, execute};
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn execute_advertises_repository_reads_by_default() {
@@ -352,4 +354,79 @@ async fn execute_advertises_read_only_with_an_explicit_directory() {
     let output = String::from_utf8(output).expect("chat output should be UTF-8");
     assert!(output.contains("assistant> hello\n---\n"));
     assert!(output.contains("tools:\n  read input.txt (lines 1-1;"));
+}
+
+#[tokio::test]
+async fn execute_serves_the_protocol_and_prints_its_schema() {
+    // Arrange
+    let serve = Cli::try_parse_from(["ag-harness", "serve"]).expect("serve should parse");
+    let print_schema =
+        Cli::try_parse_from(["ag-harness", "serve", "--print-schema"]).expect("serve should parse");
+    let input = BufReader::new(&b"{\"jsonrpc\":\"2.0\",\"id\":1,\"method\":\"shutdown\"}\n"[..]);
+    let mut served = Vec::new();
+    let mut schema = Vec::new();
+
+    // Act
+    let serve_result = execute(
+        serve,
+        |_| Err(env::VarError::NotPresent),
+        input,
+        &mut served,
+        ChatMode::NonInteractive,
+    )
+    .await;
+    let schema_result = execute(
+        print_schema,
+        |_| Err(env::VarError::NotPresent),
+        BufReader::new(&b""[..]),
+        &mut schema,
+        ChatMode::NonInteractive,
+    )
+    .await;
+
+    // Assert
+    assert!(serve_result.is_ok() && schema_result.is_ok());
+    assert_eq!(
+        String::from_utf8(served).expect("serve output should be UTF-8"),
+        "{\"id\":1,\"jsonrpc\":\"2.0\",\"result\":{}}\n"
+    );
+    assert_eq!(
+        String::from_utf8(schema).expect("schema should be UTF-8"),
+        PROTOCOL_SCHEMA
+    );
+}
+
+#[tokio::test]
+async fn execute_rejects_global_options_serve_ignores() {
+    // Arrange
+    let options = [
+        ("--comparison-base", "HEAD"),
+        ("--database", "harness.db"),
+        ("--git-executable", "/usr/bin/git"),
+        ("--otlp-endpoint", "http://127.0.0.1:9/v1/traces"),
+    ];
+
+    // Act
+    let mut rejected = Vec::new();
+    for (option, value) in options {
+        let cli = Cli::try_parse_from(["ag-harness", option, value, "serve"])
+            .expect("serve with a global option should parse");
+        let result = execute(
+            cli,
+            |_| Err(env::VarError::NotPresent),
+            BufReader::new(&b""[..]),
+            Vec::new(),
+            ChatMode::NonInteractive,
+        )
+        .await;
+        rejected.push(result.err().map(|error| error.to_string()));
+    }
+
+    // Assert
+    for ((option, _), error) in options.iter().zip(rejected) {
+        assert!(
+            matches!(error, Some(ref message) if message.starts_with(option)),
+            "{option} should be rejected: {error:?}"
+        );
+    }
 }

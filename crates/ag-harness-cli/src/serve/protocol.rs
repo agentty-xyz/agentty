@@ -5,6 +5,9 @@
 //! parameters, so each failure maps to its JSON-RPC error code. Every
 //! message the server writes is a [`Response`], an [`ErrorResponse`], or a
 //! [`Notification`].
+//!
+//! A message without `id` is a client notification: the server executes it
+//! like a request but never answers it, not even with an error.
 
 use std::borrow::Cow;
 use std::num::{NonZeroU32, NonZeroU64};
@@ -19,6 +22,10 @@ use ag_harness::{
 use schemars::{JsonSchema, Schema, SchemaGenerator, json_schema};
 use serde::{Deserialize, Serialize};
 use serde_json::{Map, Value};
+
+/// JSON Schema of every protocol message, as committed beside the crate and
+/// printed by `serve --print-schema`.
+pub(crate) const PROTOCOL_SCHEMA: &str = include_str!("../../schema/serve_protocol.json");
 
 /// JSON-RPC code of a line that is not valid JSON.
 pub(crate) const PARSE_ERROR: i64 = -32_700;
@@ -141,7 +148,8 @@ pub(crate) enum Call {
     /// its events follow as `run/event` notifications.
     #[serde(rename = "run/start")]
     RunStart(RunStartParams),
-    /// Cancels a run in flight.
+    /// Cancels a run this server started; a run that already finished is
+    /// left as it is.
     #[serde(rename = "run/cancel")]
     RunCancel(RunCancelParams),
     /// Reads settled turns of an open session.
@@ -217,8 +225,10 @@ pub(crate) struct SessionCreateParams {
 #[derive(Debug, Deserialize, JsonSchema)]
 #[serde(deny_unknown_fields)]
 pub(crate) struct SessionResumeParams {
-    /// Model the session was created with.
-    pub(crate) model: ModelChoice,
+    /// Model the session was created with; read from a SQLite store when
+    /// omitted. A model that differs from the stored one is rejected.
+    #[serde(default)]
+    pub(crate) model: Option<ModelChoice>,
     /// Session identifier.
     pub(crate) session: String,
     /// Where the session is stored; in this server's memory when omitted.
@@ -399,31 +409,78 @@ impl From<LimitsChoice> for RunLimits {
     }
 }
 
-/// Result of a successful request.
+/// Result of a successful request: one closed object per method, so no
+/// result shape validates as another.
 #[derive(Debug, JsonSchema, Serialize)]
 #[serde(untagged)]
 pub(crate) enum MethodResult {
-    /// `session/create` and `session/resume`: the opened session.
-    SessionOpened {
-        /// Identifier of the open session.
-        session: String,
-    },
-    /// `run/start`: the started run, whose events follow as `run/event`
-    /// notifications.
-    RunStarted {
-        /// Identifier every event of the run carries.
-        run: RunId,
-    },
-    /// `session/transcript`: the selected settled turns, oldest first.
-    Transcript {
-        /// Settled turns.
-        turns: Vec<TurnRecord>,
-    },
-    /// `session/usage`: summed tokens and cost of the settled turns.
-    Usage(UsageTotals),
-    /// `run/cancel` and `shutdown`: an empty object.
-    Done {},
+    /// `session/create` and `session/resume`.
+    SessionOpened(SessionOpened),
+    /// `run/start`.
+    RunStarted(RunStarted),
+    /// `session/transcript`.
+    Transcript(Transcript),
+    /// `session/usage`.
+    Usage(SessionUsage),
+    /// `run/cancel` and `shutdown`.
+    Empty(Empty),
 }
+
+/// Result of `session/create` and `session/resume`: the opened session.
+#[derive(Debug, JsonSchema, Serialize)]
+#[schemars(deny_unknown_fields)]
+pub(crate) struct SessionOpened {
+    /// Identifier of the open session.
+    pub(crate) session: String,
+}
+
+/// Result of `run/start`: the started run, whose events follow as
+/// `run/event` notifications.
+#[derive(Debug, JsonSchema, Serialize)]
+#[schemars(deny_unknown_fields)]
+pub(crate) struct RunStarted {
+    /// Identifier every event of the run carries.
+    pub(crate) run: RunId,
+}
+
+/// Result of `session/transcript`: the selected settled turns, oldest
+/// first.
+#[derive(Debug, JsonSchema, Serialize)]
+#[schemars(deny_unknown_fields)]
+pub(crate) struct Transcript {
+    /// Settled turns.
+    pub(crate) turns: Vec<TurnRecord>,
+}
+
+/// Result of `session/usage`: summed tokens and cost of the settled turns.
+#[derive(Debug, Serialize)]
+#[serde(transparent)]
+pub(crate) struct SessionUsage(pub(crate) UsageTotals);
+
+impl JsonSchema for SessionUsage {
+    fn schema_name() -> Cow<'static, str> {
+        "SessionUsage".into()
+    }
+
+    fn json_schema(generator: &mut SchemaGenerator) -> Schema {
+        let mut schema = UsageTotals::json_schema(generator);
+        schema.insert(
+            "description".to_string(),
+            Value::String(
+                "Result of `session/usage`: summed tokens and cost of the settled turns."
+                    .to_string(),
+            ),
+        );
+        schema.insert("additionalProperties".to_string(), Value::Bool(false));
+
+        schema
+    }
+}
+
+/// Result of `run/cancel` and `shutdown`: an empty object.
+#[derive(Debug, JsonSchema, Serialize)]
+#[schemars(deny_unknown_fields)]
+pub(crate) struct Empty {}
 
 /// Successful response to a request.
 #[derive(Debug, JsonSchema, Serialize)]
