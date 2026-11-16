@@ -21,6 +21,7 @@ use crate::harness::{DEFAULT_MAX_HISTORY_BYTES, Harness, HarnessBuildError, Hist
 use crate::lifecycle::LifecycleEvent;
 use crate::memory_store::MemoryStore;
 use crate::model::{MockModel, Model, ModelProfile, ModelResponse, ReasoningEffort};
+use crate::model_registry::{ModelCapabilities, ModelRegistry};
 use crate::policy::ToolPolicy;
 use crate::recovery::ExecutionIdentity;
 use crate::repository::Repository;
@@ -404,13 +405,21 @@ fn sqlite_path_replaces_an_earlier_store() {
 }
 
 #[tokio::test]
-async fn declared_context_window_sets_the_history_budget_of_new_sessions() {
+async fn declared_context_window_sets_the_stored_history_budget_of_new_sessions() {
     // Arrange
+    let store = Arc::new(MemoryStore::new());
     let harness = Harness::builder()
         .model(Arc::new(profiled_model(Some(declared_profile()))))
-        .store(Arc::new(MemoryStore::new()))
+        .store(Arc::clone(&store) as Arc<dyn SessionStore>)
         .build()
         .expect("store-backed harness should build");
+    let revised = Harness::builder()
+        .model(Arc::new(profiled_model(Some(
+            ModelProfile::new(100_000).with_reserved_tokens(1_000),
+        ))))
+        .store(Arc::clone(&store) as Arc<dyn SessionStore>)
+        .build()
+        .expect("revised harness should build");
 
     // Act
     let session = harness
@@ -419,11 +428,123 @@ async fn declared_context_window_sets_the_history_budget_of_new_sessions() {
         .create()
         .await
         .expect("session should be created");
+    let resumed = revised
+        .resume("windowed")
+        .await
+        .expect("session should resume");
 
     // Assert
-    // The 10,000-token window keeps 1,000 reserved, 77 request tokens, and 6
-    // for the system prompt; the other 8,917 hold four bytes each.
-    assert_eq!(session.history.max_bytes, 35_668);
+    // Of the 9,000 tokens left after 1,000 reserved, uncalibrated requests
+    // fill 8,100; 900 stay for the input, 77 for the request, and 6 for the
+    // system prompt, and the other 7,117 hold four bytes each.
+    assert_eq!(session.history.max_bytes, 28_468);
+    let stored = store
+        .load_session("windowed")
+        .await
+        .expect("stored session");
+    assert_eq!(stored.max_history_bytes, 28_468);
+    assert_eq!(resumed.history.max_bytes, 28_468);
+}
+
+#[tokio::test]
+async fn large_context_window_stops_at_the_safety_cap() {
+    // Arrange
+    let harness = Harness::builder()
+        .model(Arc::new(profiled_model(Some(ModelProfile::new(1_000_000)))))
+        .store(Arc::new(MemoryStore::new()))
+        .build()
+        .expect("store-backed harness should build");
+
+    // Act
+    let session = harness
+        .session("large", object_schema())
+        .create()
+        .await
+        .expect("session should be created");
+
+    // Assert
+    assert_eq!(session.history.max_bytes, DEFAULT_MAX_HISTORY_BYTES);
+}
+
+#[tokio::test]
+async fn context_window_without_room_for_history_keeps_the_default_budget() {
+    // Arrange
+    let harness = Harness::builder()
+        .model(Arc::new(profiled_model(Some(
+            ModelProfile::new(1_000).with_reserved_tokens(500),
+        ))))
+        .store(Arc::new(MemoryStore::new()))
+        .build()
+        .expect("store-backed harness should build");
+
+    // Act
+    let session = harness
+        .session("crowded", object_schema())
+        .system_prompt("be brief ".repeat(400))
+        .create()
+        .await
+        .expect("session should be created");
+
+    // Assert
+    assert_eq!(session.history.max_bytes, DEFAULT_MAX_HISTORY_BYTES);
+}
+
+#[tokio::test]
+async fn explicit_context_budget_keeps_the_default_history_budget() {
+    // Arrange
+    let harness = Harness::builder()
+        .model(Arc::new(profiled_model(Some(declared_profile()))))
+        .context_budget(declared_profile().context_budget().expect("budget"))
+        .store(Arc::new(MemoryStore::new()))
+        .build()
+        .expect("budgeted harness should build");
+
+    // Act
+    let session = harness
+        .session("explicit", object_schema())
+        .create()
+        .await
+        .expect("session should be created");
+
+    // Assert
+    assert_eq!(session.history.max_bytes, DEFAULT_MAX_HISTORY_BYTES);
+}
+
+#[tokio::test]
+async fn registered_context_window_sets_the_history_budget_unless_overridden() {
+    // Arrange
+    let mut registry = ModelRegistry::new();
+    registry
+        .register(
+            ExecutionIdentity::new("windowed", "1").expect("identity"),
+            model(),
+            ModelCapabilities::new(declared_profile()),
+        )
+        .expect("register");
+    let derived = Harness::from_registry(&registry, "windowed")
+        .expect("registered harness")
+        .store(Arc::new(MemoryStore::new()));
+    let overridden = Harness::from_registry(&registry, "windowed")
+        .expect("registered harness")
+        .max_history_bytes(NonZeroUsize::new(64).expect("history budget"))
+        .store(Arc::new(MemoryStore::new()));
+
+    // Act
+    let derived = derived
+        .session("derived", object_schema())
+        .create()
+        .await
+        .expect("session should be created");
+    let overridden = overridden
+        .session("overridden", object_schema())
+        .create()
+        .await
+        .expect("session should be created");
+
+    // Assert
+    // 7,200 left for history less 77 request tokens, at four bytes each.
+    assert_eq!(derived.history.max_bytes, 28_492);
+    assert_eq!(overridden.history.max_bytes, 64);
 }
 
 #[tokio::test]

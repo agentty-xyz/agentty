@@ -107,8 +107,9 @@ use ag_harness::lifecycle::{LifecycleMetrics, LifecycleObserverSet, LifecycleTra
 #[cfg(feature = "sqlite")]
 use ag_harness::model::ContextSummaryPolicy;
 use ag_harness::model::{
-    CompletionMetadata, CompletionUsage, ContextBudget, ModelCapabilities, ModelCompletion,
-    ModelMessage, ModelMetadata, ModelRegistry, ModelRequest, ModelResponse,
+    CompletionMetadata, CompletionUsage, ContextBudget, ContextSummaryPolicy, ModelCapabilities,
+    ModelCompletion, ModelMessage, ModelMetadata, ModelProfile, ModelRegistry, ModelRequest,
+    ModelResponse,
 };
 #[cfg(all(feature = "providers-compat", feature = "providers-openai"))]
 use ag_harness::provider::{
@@ -818,6 +819,68 @@ async fn external_consumer_creates_and_reopens_persistent_session() -> Result<()
     assert_eq!(first.output(), &json!({ "name": "Ada" }));
     assert_eq!(id, "external-session");
     assert_eq!(second.output(), first.output());
+
+    Ok(())
+}
+
+/// [`ExternalModel`] declaring a 20,000-token context window.
+struct WindowedModel;
+
+#[async_trait]
+impl Model for WindowedModel {
+    async fn complete(&self, request: ModelRequest) -> Result<ModelCompletion, ModelError> {
+        ExternalModel.complete(request).await
+    }
+
+    fn profile(&self) -> Option<ModelProfile> {
+        Some(ModelProfile::new(20_000).with_reserved_tokens(1_000))
+    }
+}
+
+/// Sends `turns` 4,000-byte inputs and returns the history activity of each.
+async fn send_large_turns(
+    harness: Harness,
+    turns: usize,
+) -> Result<Vec<ag_harness::turn::HistoryActivity>, Box<dyn Error>> {
+    let mut session = harness
+        .store(Arc::new(MemoryStore::new()))
+        .session("history", request()?.schema().clone())
+        .create()
+        .await?;
+    let mut activity = Vec::with_capacity(turns);
+    for turn in 0..turns {
+        let input = format!("{turn:04}{}", "a".repeat(3_996));
+        activity.push(session.send(input).await?.report().history());
+    }
+
+    Ok(activity)
+}
+
+#[tokio::test]
+async fn declared_context_window_bounds_replayed_history_within_each_request()
+-> Result<(), Box<dyn Error>> {
+    // Arrange
+    let windowed = Harness::builder().model(Arc::new(WindowedModel)).build()?;
+    let unprofiled = Harness::new(ExternalModel, unbounded_context_budget());
+
+    // Act
+    let windowed = send_large_turns(windowed, 20).await?;
+    let unprofiled = send_large_turns(unprofiled, 20).await?;
+
+    // Assert
+    // The window's byte limit drops older turns before the history outgrows
+    // a request, so no turn needs weight-based eviction; without a window,
+    // the 256 KiB default replays every earlier turn.
+    assert!(windowed.iter().all(|history| history.evicted_turns() == 0));
+    let last = windowed.last().expect("windowed turns").replayed_turns();
+    assert!((1..19).contains(&last), "{last}");
+    assert_eq!(
+        unprofiled
+            .last()
+            .expect("unprofiled turns")
+            .replayed_turns(),
+        19
+    );
 
     Ok(())
 }
