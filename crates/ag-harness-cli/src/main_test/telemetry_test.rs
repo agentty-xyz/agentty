@@ -14,7 +14,8 @@ use crate::{ChatMode, Cli, CliError, execute_with_telemetry};
 
 /// Serializes tests that install an export: the tracer provider is
 /// process-wide, so concurrent exports in one test process would receive each
-/// other's spans.
+/// other's spans. Every test that calls `execute_with_telemetry` with an
+/// endpoint must hold this lock for its whole run.
 static EXPORT: Mutex<()> = Mutex::const_new(());
 
 async fn model_server() -> MockServer {
@@ -125,10 +126,9 @@ async fn rejected_export_warns_without_failing_the_chat() {
             .expect("chat output should be UTF-8")
             .contains("assistant> hello\n")
     );
-    assert!(
-        String::from_utf8(warnings)
-            .expect("warning output should be UTF-8")
-            .contains("some traces may be missing.")
+    assert_eq!(
+        String::from_utf8(warnings).expect("warning output should be UTF-8"),
+        "OTLP export reported 1 warnings or failures; some traces may be missing.\n"
     );
 }
 

@@ -1,14 +1,21 @@
 //! OTLP export tests for initialization, endpoint handling, trace and event
 //! log export, and diagnostics.
 
-use std::sync::Arc;
+use std::future;
 use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::{Arc, Mutex};
+use std::time::Duration;
 
+use opentelemetry::logs::Severity;
 use opentelemetry::trace::{Span as _, Tracer as _, TracerProvider as _};
 use opentelemetry_proto::tonic::collector::logs::v1::ExportLogsServiceRequest;
 use opentelemetry_proto::tonic::collector::trace::v1::ExportTraceServiceRequest;
 use opentelemetry_proto::tonic::common::v1::{KeyValue, any_value};
 use opentelemetry_proto::tonic::logs::v1::SeverityNumber;
+use opentelemetry_sdk::Resource;
+use opentelemetry_sdk::error::{OTelSdkError, OTelSdkResult};
+use opentelemetry_sdk::logs::{LogBatch, LogExporter as SdkLogExporter};
+use opentelemetry_sdk::trace::{SpanData, SpanExporter as SdkSpanExporter};
 use prost::Message as _;
 use tracing_subscriber::Registry;
 use tracing_subscriber::layer::SubscriberExt as _;
@@ -16,7 +23,7 @@ use url::Url;
 use wiremock::matchers::{method, path, query_param};
 use wiremock::{Mock, MockServer, ResponseTemplate};
 
-use super::{Diagnostics, OtlpError, OtlpExport, Service};
+use super::{CountedExporter, Diagnostics, OtlpError, OtlpExport, Service};
 
 const SERVICE: Service = Service {
     name: "otlp-test",
@@ -176,7 +183,10 @@ async fn repeated_install_keeps_counting_failed_exports() {
 }
 
 #[tokio::test]
-async fn rejected_signal_export_is_counted_without_the_diagnostic_subscriber() {
+async fn rejected_exports_are_counted_once_per_export_sharing_the_subscriber() {
+    // The first installed export binds the process-wide diagnostic subscriber;
+    // the second shares the process but not the subscriber's counter. Each
+    // must report its one rejected batch exactly once.
     for rejected in ["traces", "logs"] {
         // Arrange
         let server = MockServer::start().await;
@@ -196,6 +206,7 @@ async fn rejected_signal_export_is_counted_without_the_diagnostic_subscriber() {
             .expect("start")
             .expect("enabled");
         let event_log = export.event_log().expect("event log");
+        export.install();
 
         // Act
         event_log.emit("agentty_turn_start", &[]);
@@ -420,7 +431,7 @@ async fn event_shutdown_failure_is_counted() {
 }
 
 #[test]
-fn diagnostics_count_only_sdk_warnings_and_errors() {
+fn diagnostics_count_sdk_warnings_and_errors_except_export_results() {
     // Arrange
     let count = Arc::new(AtomicU64::new(0));
     let subscriber = Registry::default().with(Diagnostics(Arc::clone(&count)));
@@ -431,6 +442,8 @@ fn diagnostics_count_only_sdk_warnings_and_errors() {
         tracing::error!(target: "opentelemetry_otlp", "private diagnostic");
         tracing::info!(target: "opentelemetry_sdk", "information");
         tracing::warn!(target: "ag_telemetry", "application warning");
+        tracing::warn!(name: "Export.Failed.NonRetryable", target: "opentelemetry_otlp", "counted");
+        tracing::error!(name: "BatchSpanProcessor.ExportError", target: "opentelemetry_sdk", "counted");
     });
 
     // Assert
@@ -494,4 +507,112 @@ async fn cli_endpoint_and_protocol_override_environment_and_use_trace_headers() 
     assert_eq!(requests.len(), 1);
     assert_eq!(requests[0].headers["authorization"], "Bearer test-token");
     assert!(!requests[0].headers.contains_key("x-ignored"));
+}
+
+/// Records which exporter methods the wrapper forwarded, answering each with
+/// a value that differs from the trait default.
+#[derive(Debug, Default)]
+struct RecordingExporter {
+    calls: Mutex<Vec<&'static str>>,
+}
+
+impl RecordingExporter {
+    fn record(&self, call: &'static str) -> OTelSdkResult {
+        self.calls.lock().expect("calls").push(call);
+
+        Err(OTelSdkError::InternalFailure(call.to_string()))
+    }
+}
+
+impl SdkSpanExporter for RecordingExporter {
+    fn export(&self, _batch: Vec<SpanData>) -> impl Future<Output = OTelSdkResult> + Send {
+        future::ready(self.record("span export"))
+    }
+
+    fn shutdown_with_timeout(&self, _timeout: Duration) -> OTelSdkResult {
+        self.record("span shutdown_with_timeout")
+    }
+
+    fn shutdown(&self) -> OTelSdkResult {
+        self.record("span shutdown")
+    }
+
+    fn force_flush(&self) -> OTelSdkResult {
+        self.record("span force_flush")
+    }
+
+    fn set_resource(&mut self, _resource: &Resource) {
+        let _ = self.record("span set_resource");
+    }
+}
+
+impl SdkLogExporter for RecordingExporter {
+    fn export(&self, _batch: LogBatch<'_>) -> impl Future<Output = OTelSdkResult> + Send {
+        future::ready(self.record("log export"))
+    }
+
+    fn shutdown_with_timeout(&self, _timeout: Duration) -> OTelSdkResult {
+        self.record("log shutdown_with_timeout")
+    }
+
+    fn shutdown(&self) -> OTelSdkResult {
+        self.record("log shutdown")
+    }
+
+    fn event_enabled(&self, _level: Severity, _target: &str, _name: Option<&str>) -> bool {
+        let _ = self.record("log event_enabled");
+
+        false
+    }
+
+    fn set_resource(&mut self, _resource: &Resource) {
+        let _ = self.record("log set_resource");
+    }
+}
+
+#[tokio::test]
+async fn counted_exporter_forwards_every_method_and_counts_only_rejected_exports() {
+    // Arrange
+    let failures = Arc::new(AtomicU64::new(0));
+    let mut exporter = CountedExporter {
+        exporter: RecordingExporter::default(),
+        failures: Arc::clone(&failures),
+    };
+    let resource = Resource::builder_empty().build();
+
+    // Act
+    let span_results = [
+        SdkSpanExporter::export(&exporter, Vec::new()).await,
+        SdkSpanExporter::shutdown_with_timeout(&exporter, Duration::from_secs(1)),
+        SdkSpanExporter::shutdown(&exporter),
+        SdkSpanExporter::force_flush(&exporter),
+    ];
+    SdkSpanExporter::set_resource(&mut exporter, &resource);
+    let log_results = [
+        SdkLogExporter::export(&exporter, LogBatch::new(&[])).await,
+        SdkLogExporter::shutdown_with_timeout(&exporter, Duration::from_secs(1)),
+        SdkLogExporter::shutdown(&exporter),
+    ];
+    let event_enabled = SdkLogExporter::event_enabled(&exporter, Severity::Info, "target", None);
+    SdkLogExporter::set_resource(&mut exporter, &resource);
+
+    // Assert
+    assert!(span_results.iter().chain(&log_results).all(Result::is_err));
+    assert!(!event_enabled);
+    assert_eq!(failures.load(Ordering::Relaxed), 2);
+    assert_eq!(
+        *exporter.exporter.calls.lock().expect("calls"),
+        [
+            "span export",
+            "span shutdown_with_timeout",
+            "span shutdown",
+            "span force_flush",
+            "span set_resource",
+            "log export",
+            "log shutdown_with_timeout",
+            "log shutdown",
+            "log event_enabled",
+            "log set_resource",
+        ]
+    );
 }

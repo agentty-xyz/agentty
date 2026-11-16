@@ -10,10 +10,12 @@ use opentelemetry::{KeyValue, global};
 use opentelemetry_otlp::{LogExporter, Protocol, SpanExporter, WithExportConfig};
 use opentelemetry_sdk::Resource;
 use opentelemetry_sdk::error::OTelSdkResult;
-use opentelemetry_sdk::logs::{LogBatch, LogExporter as LogExport, SdkLogger, SdkLoggerProvider};
+use opentelemetry_sdk::logs::{
+    LogBatch, LogExporter as SdkLogExporter, SdkLogger, SdkLoggerProvider,
+};
 use opentelemetry_sdk::trace::{
     BatchConfigBuilder, BatchSpanProcessor, Sampler, SdkTracerProvider, SpanData,
-    SpanExporter as SpanExport,
+    SpanExporter as SdkSpanExporter,
 };
 use thiserror::Error;
 use tracing::{Event, Level, Subscriber};
@@ -116,8 +118,10 @@ impl OtlpExport {
     /// Installs the process-wide provider and, when no subscriber exists yet,
     /// a diagnostic subscriber that counts exporter warnings without retaining
     /// their text. Repeated installs replace the provider and never fail.
-    /// Rejected exports and shutdown failures are counted by this export
-    /// itself, with or without the subscriber.
+    /// Rejected export batches and shutdown failures are always counted by
+    /// this export itself. The subscriber adds only other SDK warnings and
+    /// errors, such as dropped spans, and only for the first export installed
+    /// in the process.
     pub fn install(&self) {
         let _ = Registry::default()
             .with(Diagnostics(Arc::clone(&self.diagnostics)))
@@ -126,8 +130,10 @@ impl OtlpExport {
     }
 
     /// Flushes finished spans and events concurrently. Export failure never
-    /// changes the host result. Returns a coalesced diagnostic count that is
-    /// nonzero whenever any export was rejected or shutdown failed.
+    /// changes the host result. Returns the number of rejected export batches,
+    /// plus one per signal provider whose shutdown failed, plus the other SDK
+    /// warnings and errors described on [`Self::install`]. Each failure is
+    /// counted once; zero means every export succeeded.
     pub async fn shutdown(self) -> u64 {
         let provider = self.provider;
         let traces = tokio::task::spawn_blocking(move || {
@@ -272,11 +278,21 @@ impl OtlpExport {
 
 struct Diagnostics(Arc<AtomicU64>);
 
+impl Diagnostics {
+    /// Matches SDK events that report a failed export result, such as
+    /// `Export.Failed.NonRetryable` and `BatchSpanProcessor.ExportError`.
+    /// [`CountedExporter`] already counts those failures once per batch.
+    fn reports_export_result(name: &str) -> bool {
+        name.starts_with("Export.Failed.") || name.ends_with(".ExportError")
+    }
+}
+
 impl<S: Subscriber> Layer<S> for Diagnostics {
     fn on_event(&self, event: &Event<'_>, _context: Context<'_, S>) {
         let metadata = event.metadata();
         if metadata.target().starts_with("opentelemetry")
             && matches!(*metadata.level(), Level::WARN | Level::ERROR)
+            && !Self::reports_export_result(metadata.name())
         {
             self.0.fetch_add(1, Ordering::Relaxed);
         }
@@ -286,7 +302,8 @@ impl<S: Subscriber> Layer<S> for Diagnostics {
 /// Counts rejected exports from the exporter's own result. The batch
 /// processors discard export results during flush and shutdown, and the
 /// diagnostic subscriber only sees them when it is the process-wide subscriber
-/// bound to this export, so this keeps failure reporting deterministic.
+/// bound to this export, so this keeps failure reporting deterministic. Every
+/// other exporter method is forwarded unchanged.
 #[derive(Debug)]
 struct CountedExporter<Exporter> {
     exporter: Exporter,
@@ -303,7 +320,7 @@ impl<Exporter> CountedExporter<Exporter> {
     }
 }
 
-impl<Exporter: SpanExport> SpanExport for CountedExporter<Exporter> {
+impl<Exporter: SdkSpanExporter> SdkSpanExporter for CountedExporter<Exporter> {
     async fn export(&self, batch: Vec<SpanData>) -> OTelSdkResult {
         self.count(self.exporter.export(batch).await)
     }
@@ -312,18 +329,34 @@ impl<Exporter: SpanExport> SpanExport for CountedExporter<Exporter> {
         self.exporter.shutdown_with_timeout(timeout)
     }
 
+    fn shutdown(&self) -> OTelSdkResult {
+        self.exporter.shutdown()
+    }
+
+    fn force_flush(&self) -> OTelSdkResult {
+        self.exporter.force_flush()
+    }
+
     fn set_resource(&mut self, resource: &Resource) {
         self.exporter.set_resource(resource);
     }
 }
 
-impl<Exporter: LogExport> LogExport for CountedExporter<Exporter> {
+impl<Exporter: SdkLogExporter> SdkLogExporter for CountedExporter<Exporter> {
     async fn export(&self, batch: LogBatch<'_>) -> OTelSdkResult {
         self.count(self.exporter.export(batch).await)
     }
 
     fn shutdown_with_timeout(&self, timeout: Duration) -> OTelSdkResult {
         self.exporter.shutdown_with_timeout(timeout)
+    }
+
+    fn shutdown(&self) -> OTelSdkResult {
+        self.exporter.shutdown()
+    }
+
+    fn event_enabled(&self, level: Severity, target: &str, name: Option<&str>) -> bool {
+        self.exporter.event_enabled(level, target, name)
     }
 
     fn set_resource(&mut self, resource: &Resource) {
