@@ -227,7 +227,7 @@ fn test_diff_view_max_scroll_offset_returns_zero_without_viewport_rows() {
         SAMPLE_DIFF,
         &empty_comments,
         1,
-        Rect::new(0, 0, 120, 3),
+        Rect::new(0, 0, 120, 2),
         &cache,
         &markdown_cache,
         &DiffPreview::default(),
@@ -1495,7 +1495,7 @@ fn test_inline_comment_overflow_reserves_scrollbar_layout_everywhere() {
         "x".repeat(line_width),
     );
     let tall_layout = diff_changed_line_layout(&diff, &empty_comments, 0, tall_area, &cache);
-    let fitting_height = u16::try_from(tall_layout.line_count.saturating_add(5))
+    let fitting_height = u16::try_from(tall_layout.line_count.saturating_add(4))
         .expect("short diff height should fit in a terminal");
     let fitting_area = Rect::new(0, 0, 50, fitting_height);
     let fitting_layout = diff_changed_line_layout(&diff, &empty_comments, 0, fitting_area, &cache);

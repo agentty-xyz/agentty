@@ -1643,8 +1643,8 @@ pub(crate) fn open_help_overlay() -> Journey {
 const SESSION_LIST_TAB_MARKER: &str = " Sessions ";
 
 /// Number of top rows scanned for the list tab bar: the status bar plus the
-/// bordered three-row tab bar below it.
-const SESSION_LIST_TAB_ROWS: u16 = 4;
+/// tab row and its bottom rule directly below it.
+const SESSION_LIST_TAB_ROWS: u16 = 3;
 
 /// Wait budget for predicate-driven session-view transitions.
 ///

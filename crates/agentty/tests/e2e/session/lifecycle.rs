@@ -1374,6 +1374,9 @@ async fn session_open_and_return_to_list() -> E2eResult {
                     let view_full =
                         Region::full(session_view_frame.cols(), session_view_frame.rows());
                     assertion::assert_text_in_region(&session_view_frame, "› test", &view_full);
+                    // The session header sits directly below the status bar.
+                    let header_row = Region::new(0, 1, session_view_frame.cols(), 1);
+                    assertion::assert_text_in_region(&session_view_frame, "[XS] test", &header_row);
                     assertion::assert_not_visible(&session_view_frame, "Working...");
                     assertion::assert_not_visible(&session_view_frame, "| Settings");
 

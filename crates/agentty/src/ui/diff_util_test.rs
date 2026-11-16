@@ -397,7 +397,7 @@ fn test_wrap_diff_content_exact() {
 }
 
 #[test]
-fn test_diff_page_areas_fill_height_to_page_bottom() {
+fn test_diff_page_areas_fill_height_from_page_top_to_bottom() {
     // Arrange
     let area = Rect::new(5, 3, 42, 10);
 
@@ -405,8 +405,9 @@ fn test_diff_page_areas_fill_height_to_page_bottom() {
     let areas = diff_page_areas(area, 12);
 
     // Assert
-    assert_eq!(areas.file_list_area, Rect::new(6, 4, 12, 9));
-    assert_eq!(areas.diff_area, Rect::new(18, 4, 28, 9));
+    assert_eq!(areas.file_list_area, Rect::new(6, 3, 12, 10));
+    assert_eq!(areas.diff_area, Rect::new(18, 3, 28, 10));
+    assert_eq!(areas.diff_area.top(), area.top());
     assert_eq!(areas.diff_area.bottom(), area.bottom());
 }
 
@@ -460,7 +461,8 @@ fn test_diff_view_max_scroll_offset_returns_zero_without_viewport_rows() {
     // Arrange
     let diff = "+line\n".repeat(40);
     let parsed_lines = parse_diff_lines(&diff);
-    let terminal_area = Rect::new(0, 0, 120, 3);
+    // Two rows hold only the panel's top and bottom borders.
+    let terminal_area = Rect::new(0, 0, 120, 2);
 
     // Act
     let max_scroll_offset = diff_view_max_scroll_offset(&parsed_lines, terminal_area, 18);

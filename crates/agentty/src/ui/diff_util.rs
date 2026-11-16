@@ -310,17 +310,11 @@ pub fn wrap_diff_content(content: &str, max_width: usize) -> Vec<&str> {
     chunks
 }
 
-/// Returns the shared diff-page areas with top and side margins, filling the
-/// remaining height down to the page bottom. The preferred file-list width
-/// includes borders and is capped at 30% of available width and 60 columns.
+/// Returns the shared diff-page areas with side margins, filling the full
+/// height from the page top down to the page bottom. The preferred file-list
+/// width includes borders and is capped at 30% of available width and 60
+/// columns.
 pub fn diff_page_areas(terminal_area: Rect, preferred_file_list_width: u16) -> DiffPageAreas {
-    let terminal_area = Rect {
-        y: terminal_area
-            .y
-            .saturating_add(LAYOUT_MARGIN.min(terminal_area.height)),
-        height: terminal_area.height.saturating_sub(LAYOUT_MARGIN),
-        ..terminal_area
-    };
     let page_area = terminal_area.inner(Margin::new(LAYOUT_MARGIN, 0));
     let content_layout = Layout::default()
         .direction(Direction::Horizontal)

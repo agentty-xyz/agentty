@@ -3,9 +3,9 @@
 //! These tests produce polished animated GIFs for the agentty website
 //! (`docs/site/`) using the [VHS](https://github.com/charmbracelet/vhs)
 //! terminal recorder. VHS records a real terminal session with proper
-//! fonts, colors, and rendering fidelity. Output is rendered at high
-//! resolution (3200x1600) for sharp display when downscaled in the
-//! browser.
+//! fonts, colors, and rendering fidelity. Output uses the canonical feature
+//! canvas (1600x800, font size 18), which keeps VHS and `ffmpeg` memory
+//! within a typical recording container.
 //!
 //! The database is pre-seeded with realistic projects and sessions so the
 //! UI looks populated and compelling.
@@ -42,7 +42,7 @@ use std::path::{Path, PathBuf};
 use std::process::Command;
 use std::time::{SystemTime, UNIX_EPOCH};
 
-use ag_session::test_support as model_fixture;
+use ag_session::{SettingName, test_support as model_fixture};
 use agentty::db::{DB_DIR, DB_FILE, Database};
 use agentty::domain::session::SessionStats;
 use agentty::domain::session_message::SessionMessageKind;
@@ -55,7 +55,7 @@ type ShowcaseResult<T = ()> = Result<T, Box<dyn std::error::Error>>;
 
 /// Deterministic CLI versions rendered in the Projects dashboard.
 const AGENT_CLI_STUBS: [(&str, &str); 3] = [
-    ("agy", "agy 0.42.0"),
+    ("agy", "agy 1.2.0"),
     ("claude", "claude 2.1.7"),
     ("codex", "codex-cli 0.114.0"),
 ];
@@ -160,9 +160,8 @@ fn feature_output_dir() -> ShowcaseResult<PathBuf> {
 ///
 /// The tape exports `AGENTTY_ROOT`, `HOME`, and the deterministic showcase
 /// `PATH` in a hidden preamble, changes to `workdir`, visibly types `agentty`,
-/// executes the provided VHS `steps` block, then quits. Output is rendered at
-/// high resolution (3200x1600, font size 36) for sharp downscaling in the
-/// browser.
+/// executes the provided VHS `steps` block, then quits. Output uses the
+/// canonical feature canvas (1600x800, font size 18).
 fn build_tape(
     output_path: &Path,
     binary_path: &Path,
@@ -185,11 +184,11 @@ fn build_tape(
         |value| value.to_string_lossy().into_owned(),
     );
 
-    // Header settings — high resolution for sharp downscaling.
+    // Header settings — the canonical feature canvas.
     let _ = writeln!(tape, "Set Shell \"bash\"");
-    let _ = writeln!(tape, "Set FontSize 36");
-    let _ = writeln!(tape, "Set Width 3200");
-    let _ = writeln!(tape, "Set Height 1600");
+    let _ = writeln!(tape, "Set FontSize 18");
+    let _ = writeln!(tape, "Set Width 1600");
+    let _ = writeln!(tape, "Set Height 800");
     let _ = writeln!(tape, "Set Padding 0");
     let _ = writeln!(tape, "Set Framerate 30");
     let _ = writeln!(tape, "Set TypingSpeed 0");
@@ -263,6 +262,7 @@ fn build_tape_visibly_launches_colored_agentty() {
     );
 
     // Assert
+    assert!(tape.contains("Set FontSize 18\nSet Width 1600\nSet Height 800"));
     assert!(tape.contains("Set TypingSpeed 0"));
     assert!(tape.contains("Type \"export PATH='/tmp/home/.stub-bin:"));
     assert!(tape.contains("Type \"unset NO_COLOR\""));
@@ -303,6 +303,13 @@ fn execute_tape(tape_content: &str, name: &str, output_path: &Path) -> ShowcaseR
 async fn seed_database(agentty_root: &Path, workdir: &Path) -> ShowcaseResult {
     let db_path = agentty_root.join(DB_DIR).join(DB_FILE);
     let database = Database::open(&db_path).await?;
+
+    // Skip the first-launch discovery prompt so it does not swallow the
+    // tape's opening keystrokes.
+    database
+        .settings()
+        .upsert_setting(SettingName::ProjectDiscoveryPromptSeen, "true")
+        .await?;
 
     // Register the project (mirrors what agentty does on startup).
     let project_id = database
@@ -496,8 +503,13 @@ async fn seed_database_populates_showcase_dashboard_and_timer() -> ShowcaseResul
         .sessions()
         .load_session_messages("a1b2c3d4-0001")
         .await?;
+    let discovery_prompt_seen = database
+        .settings()
+        .get_setting(SettingName::ProjectDiscoveryPromptSeen)
+        .await?;
 
     // Assert
+    assert_eq!(discovery_prompt_seen.as_deref(), Some("true"));
     assert_eq!(showcase_project.active_session_count, 4);
     assert_eq!(showcase_project.input_tokens, 36_600);
     assert_eq!(showcase_project.output_tokens, 12_000);
