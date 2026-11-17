@@ -338,8 +338,7 @@ untraced background polling starts no traces. Provider adapters export only allo
 categories and numeric metadata; prompt and reasoning content never enter traces, and
 tool content is captured only when the host opts in. Incomplete provider events are
 labeled rather than inferred. The exporter shuts down after worker cleanup and terminal
-restoration. See
-[Session Traces](@/docs/usage/workflow.md#session-traces) and
+restoration. See [Session Traces](@/docs/usage/workflow.md#session-traces) and
 [Local Usage Events](@/docs/usage/workflow.md#local-usage-events).
 
 Host work outside turns has its own roots. Export starts after the database opens, so
