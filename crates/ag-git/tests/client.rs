@@ -907,16 +907,19 @@ const REMOTE_CASES: &[ContractCase] = &[
 
 #[tokio::test]
 async fn real_git_client_inspects_and_changes_local_history() -> TestResult<()> {
+    // Act & Assert
     run_contract_cases(LOCAL_HISTORY_CASES).await
 }
 
 #[tokio::test]
 async fn real_git_client_manages_worktrees_and_rebases() -> TestResult<()> {
+    // Act & Assert
     run_contract_cases(WORKTREE_AND_REBASE_CASES).await
 }
 
 #[tokio::test]
 async fn real_git_client_synchronizes_with_remote() -> TestResult<()> {
+    // Act & Assert
     run_contract_cases(REMOTE_CASES).await
 }
 

@@ -4,8 +4,7 @@ Published Rust-native TUI E2E framework and language-agnostic `testty` CLI.
 
 ## Public API
 
-- Keep public items module-qualified; do not add crate-root re-exports. Keep renderer
-  plumbing private.
+- Keep renderer plumbing private.
 - Treat `crates/testty/tests/public_api.rs` as the compatibility tripwire. Update it
   deliberately with public-surface changes; an intentional break requires a workspace
   major version.

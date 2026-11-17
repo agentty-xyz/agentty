@@ -1,0 +1,13 @@
+id: agentty-layer-host-access
+valid:
+  - 'fn now(clock: &dyn Clock) -> Instant { clock.now() }'
+  - 'use std::path::Path;'
+invalid:
+  - 'fn wait() { std::thread::sleep(DURATION); }'
+  - 'fn start() -> Instant { Instant::now() }'
+  - 'fn stamp() -> SystemTime { std::time::SystemTime::now() }'
+  - 'fn launch() { tokio::process::Command::new("git"); }'
+  - 'fn read() { std::fs::read_to_string(PATH); }'
+  - 'use std::fs;'
+  - 'use tokio::process::Command;'
+  - 'use std::{fs, path::Path};'

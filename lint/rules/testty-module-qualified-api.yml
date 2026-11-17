@@ -1,0 +1,14 @@
+id: testty-module-qualified-api
+language: rust
+severity: error
+message: Keep `testty` public items module-qualified; do not re-export them from the crate root.
+note: |
+  Callers import `testty::<module>::<Item>`. A root re-export widens the published API that
+  `crates/testty/tests/public_api.rs` guards.
+files:
+  - crates/testty/src/lib.rs
+rule:
+  kind: use_declaration
+  regex: "^pub(\\([^)]*\\))?\\s+use\\b"
+  not:
+    regex: "^pub\\((crate|super|self)\\)"

@@ -1,0 +1,7 @@
+id: tests-in-test-files
+valid:
+  - "#[cfg(test)]\n#[path = \"clock_test.rs\"]\nmod tests;"
+  - "#[cfg_attr(test, mockall::automock)]\ntrait Clock {}"
+invalid:
+  - "#[test]\nfn adds() {}"
+  - "#[tokio::test]\nasync fn runs() {}"

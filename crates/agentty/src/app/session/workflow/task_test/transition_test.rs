@@ -257,11 +257,12 @@ async fn test_handle_auto_commit_stops_on_index_lock() {
     }));
 }
 
-#[tokio::test]
 /// Verifies a missing configured hook emits an advisory after a successful
 /// normal commit instead of turning the commit into a failure, while other
 /// hook-inspection failures stay out of the transcript.
+#[tokio::test]
 async fn test_handle_auto_commit_warns_when_pre_commit_hook_is_missing() {
+    // Act & Assert
     for is_hook_missing in [true, false] {
         assert_auto_commit_pre_commit_hook_outcome(is_hook_missing).await;
     }

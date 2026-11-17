@@ -1,0 +1,22 @@
+id: agentty-ui-imports
+language: rust
+severity: error
+message: Agentty UI code renders app snapshots and must not reach infrastructure, the runtime layer, or persistence.
+note: |
+  Pass the data a page needs through its render context, built by `app`. See
+  `crates/agentty/src/ui/AGENTS.md`.
+files:
+  - crates/agentty/src/ui/**/*.rs
+  - crates/agentty/src/ui.rs
+ignores:
+  - "**/*_test.rs"
+  - "**/*_test/**"
+rule:
+  any:
+    - kind: use_declaration
+    - kind: scoped_identifier
+      not:
+        inside:
+          kind: use_declaration
+          stopBy: end
+  regex: "^(use\\s+)?(::)?(sqlx|ag_store|tokio::(fs|process|net)|crate::(infra|runtime))\\b"

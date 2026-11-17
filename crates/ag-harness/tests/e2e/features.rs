@@ -320,8 +320,11 @@ async fn switch_roundtrip(from: Provider, to: Provider) -> Result<String, DynErr
 #[tokio::test]
 #[ignore = "requires live provider credentials"]
 async fn test_model_switch_roundtrip() -> Result<(), DynError> {
+    // Arrange
     let providers = Provider::selected();
     let mut report = Report::new("model_switch");
+
+    // Act
     for round in 1..=rounds() {
         for &from in &providers {
             for &to in &providers {
@@ -335,6 +338,7 @@ async fn test_model_switch_roundtrip() -> Result<(), DynError> {
         }
     }
 
+    // Assert
     report.finish()
 }
 
@@ -517,7 +521,10 @@ async fn context_budget_projection(provider: Provider) -> Result<String, DynErro
 #[tokio::test]
 #[ignore = "requires live provider credentials"]
 async fn test_context_budget_projection() -> Result<(), DynError> {
+    // Arrange
     let mut report = Report::new("context_budget");
+
+    // Act
     for round in 1..=rounds() {
         for provider in Provider::selected() {
             let started = Instant::now();
@@ -530,6 +537,7 @@ async fn test_context_budget_projection() -> Result<(), DynError> {
         }
     }
 
+    // Assert
     report.finish()
 }
 
@@ -671,7 +679,10 @@ async fn compaction_checkpoint(provider: Provider) -> Result<String, DynError> {
 #[tokio::test]
 #[ignore = "requires live provider credentials"]
 async fn test_compaction_checkpoint() -> Result<(), DynError> {
+    // Arrange
     let mut report = Report::new("compaction");
+
+    // Act
     for round in 1..=rounds() {
         for provider in Provider::selected() {
             let started = Instant::now();
@@ -684,6 +695,7 @@ async fn test_compaction_checkpoint() -> Result<(), DynError> {
         }
     }
 
+    // Assert
     report.finish()
 }
 
@@ -805,7 +817,10 @@ async fn long_tool_loop(provider: Provider) -> Result<String, DynError> {
 #[tokio::test]
 #[ignore = "requires live provider credentials"]
 async fn test_long_tool_loop_refit() -> Result<(), DynError> {
+    // Arrange
     let mut report = Report::new("long_tool_loop");
+
+    // Act
     for round in 1..=rounds() {
         for provider in Provider::selected() {
             let started = Instant::now();
@@ -818,6 +833,7 @@ async fn test_long_tool_loop_refit() -> Result<(), DynError> {
         }
     }
 
+    // Assert
     report.finish()
 }
 
@@ -936,11 +952,14 @@ async fn malformed_tool_arguments(
 #[tokio::test]
 #[ignore = "requires live provider credentials"]
 async fn test_malformed_tool_arguments() -> Result<(), DynError> {
+    // Arrange
     let mut report = Report::new("malformed_tool_arguments");
     let cases = [
         ("not_json", r#"{"path src/": "notes.txt""#),
         ("unknown_field", r#"{"path src/": "notes.txt"}"#),
     ];
+
+    // Act
     for round in 1..=rounds() {
         for provider in Provider::selected() {
             for (case, raw) in cases {
@@ -955,6 +974,7 @@ async fn test_malformed_tool_arguments() -> Result<(), DynError> {
         }
     }
 
+    // Assert
     report.finish()
 }
 
@@ -1016,7 +1036,10 @@ async fn context_overflow(provider: Provider) -> Result<String, DynError> {
 #[tokio::test]
 #[ignore = "requires live provider credentials"]
 async fn test_context_overflow_classification() -> Result<(), DynError> {
+    // Arrange
     let mut report = Report::new("context_overflow_classification");
+
+    // Act
     for round in 1..=rounds() {
         for provider in Provider::selected() {
             let started = Instant::now();
@@ -1029,6 +1052,7 @@ async fn test_context_overflow_classification() -> Result<(), DynError> {
         }
     }
 
+    // Assert
     report.finish()
 }
 
@@ -1167,7 +1191,10 @@ async fn requested_repetition(provider: Provider) -> Result<String, DynError> {
 #[tokio::test]
 #[ignore = "requires live provider credentials"]
 async fn test_repeated_tool_calls() -> Result<(), DynError> {
+    // Arrange
     let mut report = Report::new("repeated_tool_calls");
+
+    // Act
     for round in 1..=rounds() {
         for provider in Provider::selected() {
             let started = Instant::now();
@@ -1187,6 +1214,7 @@ async fn test_repeated_tool_calls() -> Result<(), DynError> {
         }
     }
 
+    // Assert
     report.finish()
 }
 
@@ -1356,7 +1384,10 @@ async fn context_overflow_recovery(provider: Provider) -> Result<String, DynErro
 #[tokio::test]
 #[ignore = "requires live provider credentials"]
 async fn test_context_overflow_recovery() -> Result<(), DynError> {
+    // Arrange
     let mut report = Report::new("context_overflow_recovery");
+
+    // Act
     for round in 1..=rounds() {
         for provider in Provider::selected() {
             let started = Instant::now();
@@ -1369,6 +1400,7 @@ async fn test_context_overflow_recovery() -> Result<(), DynError> {
         }
     }
 
+    // Assert
     report.finish()
 }
 
@@ -1519,7 +1551,10 @@ async fn estimate_margin_near_window(provider: Provider) -> Result<String, DynEr
 #[tokio::test]
 #[ignore = "requires live provider credentials"]
 async fn test_estimate_margin_near_window() -> Result<(), DynError> {
+    // Arrange
     let mut report = Report::new("estimate_margin_near_window");
+
+    // Act
     for round in 1..=rounds() {
         for provider in Provider::selected() {
             let started = Instant::now();
@@ -1532,6 +1567,7 @@ async fn test_estimate_margin_near_window() -> Result<(), DynError> {
         }
     }
 
+    // Assert
     report.finish()
 }
 
@@ -1757,7 +1793,10 @@ async fn bash_workspace(provider: Provider, executor: Executor) -> Result<String
 #[tokio::test]
 #[ignore = "requires live provider credentials"]
 async fn test_bash_native_sandbox() -> Result<(), DynError> {
+    // Arrange
     let mut report = Report::new("bash_native");
+
+    // Act
     for round in 1..=rounds() {
         for provider in Provider::selected() {
             let started = Instant::now();
@@ -1770,13 +1809,17 @@ async fn test_bash_native_sandbox() -> Result<(), DynError> {
         }
     }
 
+    // Assert
     report.finish()
 }
 
 #[tokio::test]
 #[ignore = "requires live provider credentials"]
 async fn test_bash_unsandboxed_executor() -> Result<(), DynError> {
+    // Arrange
     let mut report = Report::new("bash_unsandboxed");
+
+    // Act
     for round in 1..=rounds() {
         for provider in Provider::selected() {
             let started = Instant::now();
@@ -1789,6 +1832,7 @@ async fn test_bash_unsandboxed_executor() -> Result<(), DynError> {
         }
     }
 
+    // Assert
     report.finish()
 }
 
@@ -1868,7 +1912,10 @@ async fn image_host_request(provider: Provider) -> Result<String, DynError> {
 #[tokio::test]
 #[ignore = "requires live provider credentials"]
 async fn test_image_host_request_recovery() -> Result<(), DynError> {
+    // Arrange
     let mut report = Report::new("image_recovery");
+
+    // Act
     for round in 1..=rounds() {
         for provider in Provider::selected() {
             let started = Instant::now();
@@ -1881,5 +1928,6 @@ async fn test_image_host_request_recovery() -> Result<(), DynError> {
         }
     }
 
+    // Assert
     report.finish()
 }

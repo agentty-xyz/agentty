@@ -1,0 +1,19 @@
+id: agentty-ui-palette-tokens
+language: rust
+severity: error
+message: Use a semantic palette helper from `ui/style.rs` instead of a raw `Color`.
+note: |
+  `crates/agentty/src/ui/style.rs` owns every theme color and approved
+  data-visualization scale. `Color::Reset` stays available for comparisons with the
+  terminal default.
+files:
+  - crates/agentty/src/ui/**/*.rs
+ignores:
+  - crates/agentty/src/ui/style.rs
+  - "**/*_test.rs"
+  - "**/*_test/**"
+rule:
+  kind: scoped_identifier
+  regex: "^(ratatui::style::)?Color::[A-Z]"
+  not:
+    regex: "^(ratatui::style::)?Color::Reset$"

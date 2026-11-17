@@ -1,0 +1,22 @@
+id: test-sections
+language: rust
+severity: error
+message: Mark the test's `// Arrange`, `// Act`, and `// Assert` sections.
+note: |
+  Combine labels, such as `// Act & Assert`, only when that improves a very small test.
+rule:
+  kind: function_item
+  follows:
+    kind: attribute_item
+    regex: "^#\\[\\s*(tokio::)?test\\b"
+    stopBy:
+      not:
+        any:
+          - kind: attribute_item
+          - kind: line_comment
+          - kind: block_comment
+  not:
+    has:
+      kind: line_comment
+      regex: "^//\\s*(Arrange|Act|Assert)\\b"
+      stopBy: end

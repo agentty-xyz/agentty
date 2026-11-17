@@ -8,9 +8,7 @@ Ratatui pages, components, layout, and formatting.
   implement `Component` for shared widgets.
 - Keep render functions focused. Move reusable or nontrivial layout and formatting into
   the narrowest pure helper module; put host-independent terminal text in `ag-tui-text`.
-- Use semantic palette tokens from `style.rs`; direct `Color` values are reserved for
-  approved data-visualization scales.
-- Keep workflow decisions and external I/O out of UI code.
+- Keep workflow decisions out of UI code.
 
 ## Render Performance
 

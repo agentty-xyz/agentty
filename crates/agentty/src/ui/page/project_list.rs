@@ -7,7 +7,7 @@ use std::path::Path;
 use ag_tui_text::text_util;
 use ratatui::Frame;
 use ratatui::layout::{Alignment, Constraint, Layout, Rect};
-use ratatui::style::{Color, Modifier, Style};
+use ratatui::style::{Modifier, Style};
 use ratatui::text::{Line, Span};
 use ratatui::widgets::{Block, Borders, Cell, Paragraph, Row, Table, TableState, Wrap};
 
@@ -190,7 +190,7 @@ impl ProjectListPage<'_> {
                 let intensity = heatmap_intensity_level(*cell_count, max_count);
                 spans.push(Span::styled(
                     "  ",
-                    Style::default().bg(Self::heatmap_color(intensity)),
+                    Style::default().bg(style::heatmap_color(intensity)),
                 ));
             }
 
@@ -206,17 +206,6 @@ impl ProjectListPage<'_> {
         let content_width = usize::from(available_width);
 
         visible_heatmap_week_count(content_width, HEATMAP_DAY_LABEL_WIDTH, HEATMAP_CELL_WIDTH)
-    }
-
-    /// Returns the color used for one projects-page heatmap intensity.
-    fn heatmap_color(intensity: u8) -> Color {
-        match intensity {
-            1 => Color::Rgb(14, 68, 41),
-            2 => Color::Rgb(0, 109, 50),
-            3 => Color::Rgb(38, 166, 65),
-            4 => Color::Rgb(57, 211, 83),
-            _ => Color::Rgb(33, 38, 45),
-        }
     }
 }
 

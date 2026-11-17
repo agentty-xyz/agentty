@@ -486,6 +486,22 @@ pub fn forge_indicator_color(state: Option<ReviewRequestState>) -> Color {
     }
 }
 
+/// Returns the projects-page activity heatmap color for one intensity level.
+///
+/// This fixed green scale is an approved data-visualization exception to the
+/// theme palette: level `0` is an empty cell and levels `1` to `4` grow
+/// brighter with activity.
+#[must_use]
+pub fn heatmap_color(intensity: u8) -> Color {
+    match intensity {
+        1 => Color::Rgb(14, 68, 41),
+        2 => Color::Rgb(0, 109, 50),
+        3 => Color::Rgb(38, 166, 65),
+        4 => Color::Rgb(57, 211, 83),
+        _ => Color::Rgb(33, 38, 45),
+    }
+}
+
 /// Returns the complete color palette for the active theme.
 #[must_use]
 fn active_palette() -> ThemePalette {

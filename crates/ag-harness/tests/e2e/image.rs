@@ -52,18 +52,21 @@ fn qwen(model: &str) -> Result<ModelClient, DynError> {
 #[tokio::test]
 #[ignore = "requires live Kimi credentials"]
 async fn test_kimi_k2_6_images() -> Result<(), DynError> {
+    // Act & Assert
     vision::describes_images(kimi(KIMI_K2_6)?, KIMI_K2_6).await
 }
 
 #[tokio::test]
 #[ignore = "requires live Kimi credentials"]
 async fn test_kimi_k2_7_code_images() -> Result<(), DynError> {
+    // Act & Assert
     vision::describes_images(kimi("kimi-k2.7-code")?, "kimi-k2.7-code").await
 }
 
 #[tokio::test]
 #[ignore = "requires live Kimi credentials"]
 async fn test_kimi_k2_7_code_highspeed_images() -> Result<(), DynError> {
+    // Act & Assert
     vision::describes_images(
         kimi("kimi-k2.7-code-highspeed")?,
         "kimi-k2.7-code-highspeed",
@@ -74,12 +77,14 @@ async fn test_kimi_k2_7_code_highspeed_images() -> Result<(), DynError> {
 #[tokio::test]
 #[ignore = "requires live Kimi credentials"]
 async fn test_kimi_k3_images() -> Result<(), DynError> {
+    // Act & Assert
     vision::describes_images(kimi(KIMI_K3)?, KIMI_K3).await
 }
 
 #[tokio::test]
 #[ignore = "requires live Muse credentials"]
 async fn test_muse_images() -> Result<(), DynError> {
+    // Act & Assert
     for model in [MUSE_SPARK_1_3, MUSE_SPARK_1_3_CONTRIBUTOR] {
         vision::describes_images(muse(model)?, model).await?;
     }
@@ -90,6 +95,7 @@ async fn test_muse_images() -> Result<(), DynError> {
 #[tokio::test]
 #[ignore = "requires live Qwen credentials"]
 async fn test_qwen_images() -> Result<(), DynError> {
+    // Act & Assert
     for model in [
         QWEN_PLUS,
         "qwen3.8-27b",
@@ -111,6 +117,7 @@ async fn test_qwen_images() -> Result<(), DynError> {
 #[tokio::test]
 #[ignore = "requires live Qwen credentials"]
 async fn test_qwen_text_model_rejects_images() -> Result<(), DynError> {
+    // Act & Assert
     vision::rejects_images(qwen(QWEN_TEXT_MODEL)?, QWEN_TEXT_MODEL).await
 }
 

@@ -1,0 +1,12 @@
+id: no-rule-suppression
+language: rust
+severity: error
+message: Do not suppress ast-grep rules with inline comments.
+note: |
+  Fix the reported code. When a rule is wrong for a whole file, narrow the rule's `files`
+  or `ignores` in `lint/rules/` and explain the exception in its `note`.
+rule:
+  any:
+    - kind: line_comment
+    - kind: block_comment
+  regex: "^/[/*]!?\\s*ast-grep-ignore"

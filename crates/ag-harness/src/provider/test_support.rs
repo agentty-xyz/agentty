@@ -24,12 +24,5 @@ pub(crate) fn reqwest_source<'a>(
 }
 
 #[cfg(test)]
-mod tests {
-    use super::reqwest_source;
-
-    #[test]
-    fn returns_none_without_reqwest_in_source_chain() {
-        let error = std::io::Error::other("plain error");
-        assert!(reqwest_source(&error).is_none());
-    }
-}
+#[path = "test_support_test.rs"]
+mod tests;

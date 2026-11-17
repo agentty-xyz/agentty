@@ -1,0 +1,29 @@
+id: agentty-layer-host-access
+language: rust
+severity: error
+message: Agentty app, domain, runtime, presentation, and UI code must not touch the host directly.
+note: |
+  Route filesystem, process, clock, and sleep access through an injected `infra` trait
+  (see `crates/agentty/src/infra/`) so orchestration stays deterministic under test.
+files:
+  - crates/agentty/src/app/**/*.rs
+  - crates/agentty/src/app.rs
+  - crates/agentty/src/domain/**/*.rs
+  - crates/agentty/src/domain.rs
+  - crates/agentty/src/presentation/**/*.rs
+  - crates/agentty/src/presentation.rs
+  - crates/agentty/src/runtime/**/*.rs
+  - crates/agentty/src/runtime.rs
+  - crates/agentty/src/ui/**/*.rs
+  - crates/agentty/src/ui.rs
+ignores:
+  - "**/*_test.rs"
+  - "**/*_test/**"
+rule:
+  any:
+    - kind: call_expression
+      has:
+        field: function
+        regex: "(^|::)(Instant|SystemTime|Utc|Local)::now$|(^|::)Command::new$|(^|::)thread::sleep$|^(std|tokio)::fs::"
+    - kind: use_declaration
+      regex: "^use (std|tokio)::(fs|process)\\b|^use (std|tokio)::\\{[^}]*\\b(fs|process)\\b"

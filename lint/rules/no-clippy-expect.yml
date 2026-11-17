@@ -1,0 +1,12 @@
+id: no-clippy-expect
+language: rust
+severity: error
+message: Do not silence Clippy; fix the code the lint reports.
+note: |
+  Clippy's `allow_attributes` lint already rejects `#[allow(...)]`. `#[expect(...)]` stays
+  available for rustc lints such as `unsafe_code`, with a `reason`.
+rule:
+  any:
+    - kind: attribute_item
+    - kind: inner_attribute_item
+  regex: "^#!?\\[\\s*(cfg_attr\\s*\\([^,]*,\\s*)?expect\\s*\\([^)]*\\bclippy::"

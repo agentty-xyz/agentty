@@ -1,0 +1,15 @@
+id: tests-in-test-files
+language: rust
+severity: error
+message: Keep unit tests in a sibling `*_test.rs` file.
+note: |
+  Load the suite from the production module with `#[cfg(test)]`,
+  `#[path = "<module>_test.rs"]`, and `mod tests;`.
+files:
+  - crates/*/src/**/*.rs
+ignores:
+  - "**/*_test.rs"
+  - "**/*_test/**"
+rule:
+  kind: attribute_item
+  regex: "^#\\[\\s*(tokio::)?test\\b"

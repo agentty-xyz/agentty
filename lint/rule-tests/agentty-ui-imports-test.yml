@@ -1,0 +1,10 @@
+id: agentty-ui-imports
+valid:
+  - 'use crate::app::Tab;'
+  - 'use ratatui::text::Line;'
+  - 'use crate::domain::session::Session;'
+invalid:
+  - 'use crate::infra::db::Database;'
+  - 'use crate::runtime::mode::diff;'
+  - 'use ag_store::Database;'
+  - 'fn load() { sqlx::query("SELECT 1"); }'

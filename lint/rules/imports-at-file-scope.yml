@@ -1,0 +1,12 @@
+id: imports-at-file-scope
+language: rust
+severity: error
+message: Declare imports at file or module scope, not inside a function.
+note: |
+  Gate a platform-specific import with the same `#[cfg(...)]` as the function that uses
+  it.
+rule:
+  kind: use_declaration
+  inside:
+    kind: function_item
+    stopBy: end

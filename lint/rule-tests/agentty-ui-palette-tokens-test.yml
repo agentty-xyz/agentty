@@ -1,0 +1,7 @@
+id: agentty-ui-palette-tokens
+valid:
+  - 'fn draw() -> Color { style::palette::accent() }'
+  - 'fn plain(background: Color) -> bool { background == Color::Reset }'
+invalid:
+  - 'fn draw() -> Color { Color::Rgb(1, 2, 3) }'
+  - 'fn draw() -> Color { ratatui::style::Color::Red }'

@@ -3,8 +3,12 @@
 
 #[cfg(target_os = "macos")]
 use std::fmt::Write as _;
+#[cfg(target_os = "linux")]
+use std::io::Seek;
 use std::io::{self, BufRead, Read, Write};
 use std::os::fd::AsFd;
+#[cfg(target_os = "linux")]
+use std::os::fd::AsRawFd;
 #[cfg(target_os = "macos")]
 use std::os::fd::OwnedFd;
 #[cfg(target_os = "macos")]
@@ -13,8 +17,18 @@ use std::os::unix::process::CommandExt;
 use std::process::{Command, ExitCode, Stdio};
 use std::time::Duration;
 
+#[cfg(target_os = "macos")]
+use libproc::bsd_info::BSDInfo;
+#[cfg(target_os = "macos")]
+use libproc::proc_pid::pidinfo;
+#[cfg(target_os = "macos")]
+use libproc::processes::{ProcFilter, pids_by_type};
+#[cfg(target_os = "linux")]
+use rustix::fs::{MemfdFlags, memfd_create};
 use rustix::fs::{OFlags, fcntl_getfl, fcntl_setfl};
 use rustix::io::{Errno, read, write};
+#[cfg(target_os = "linux")]
+use rustix::io::{FdFlags, fcntl_setfd};
 use rustix::process::{Pid, WaitOptions, WaitStatus, wait};
 use rustix::stdio::stdin;
 
@@ -231,10 +245,6 @@ fn write_notice(
 
 #[cfg(target_os = "macos")]
 fn group_finished() -> io::Result<bool> {
-    use libproc::bsd_info::BSDInfo;
-    use libproc::proc_pid::pidinfo;
-    use libproc::processes::{ProcFilter, pids_by_type};
-
     let own = std::process::id();
     for pid in pids_by_type(ProcFilter::ByProgramGroup { pgrpid: own })? {
         if pid == own {
@@ -309,12 +319,6 @@ fn seatbelt(configuration: &Launch) -> io::Result<String> {
 
 #[cfg(target_os = "linux")]
 fn bubblewrap(configuration: &Launch) -> io::Result<()> {
-    use std::io::Seek;
-    use std::os::fd::AsRawFd;
-
-    use rustix::fs::{MemfdFlags, memfd_create};
-    use rustix::io::{FdFlags, fcntl_setfd};
-
     let bubblewrap = configuration
         .linux_bubblewrap
         .as_ref()

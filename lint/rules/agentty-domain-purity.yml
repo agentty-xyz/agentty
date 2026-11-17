@@ -1,0 +1,23 @@
+id: agentty-domain-purity
+language: rust
+severity: error
+message: Keep the Agentty domain layer free of other layers, rendering, persistence, and host I/O.
+note: |
+  Domain types are pure entities and policies. Move rendering to `ui`, persistence to
+  `infra` or `ag-store`, and host access behind an `infra` trait. See
+  `crates/agentty/src/domain/AGENTS.md`.
+files:
+  - crates/agentty/src/domain/**/*.rs
+  - crates/agentty/src/domain.rs
+ignores:
+  - "**/*_test.rs"
+  - "**/*_test/**"
+rule:
+  any:
+    - kind: use_declaration
+    - kind: scoped_identifier
+      not:
+        inside:
+          kind: use_declaration
+          stopBy: end
+  regex: "^(use\\s+)?(::)?(ratatui|crossterm|sqlx|ag_store|tokio::(fs|process|net)|crate::(app|infra|runtime|ui))\\b"

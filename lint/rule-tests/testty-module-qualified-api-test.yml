@@ -1,0 +1,8 @@
+id: testty-module-qualified-api
+valid:
+  - 'pub mod session;'
+  - 'use std::path::Path;'
+  - 'pub(crate) use renderer::Frame;'
+invalid:
+  - 'pub use session::PtySession;'
+  - 'pub use crate::assertion::{assert_text, match_text};'

@@ -1,0 +1,9 @@
+id: test-sections
+valid:
+  - "#[test]\nfn adds() {\n    // Arrange\n    let left = 1;\n    // Act\n    let sum = left + 1;\n    // Assert\n    assert_eq!(sum, 2);\n}"
+  - "#[tokio::test]\n/// Docs.\nasync fn runs() {\n    // Act & Assert\n    run_cases().await;\n}"
+  - 'fn helper() { run_cases(); }'
+invalid:
+  - "#[test]\nfn adds() { assert_eq!(1 + 1, 2); }"
+  - "#[tokio::test]\n#[ignore = \"live\"]\nasync fn runs() { run_cases().await; }"
+  - "#[test]\n/// Docs.\nfn adds() { assert_eq!(1 + 1, 2); }"
