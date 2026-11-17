@@ -6,9 +6,8 @@ weight = 3
 
 <a id="architecture-module-map-introduction"></a> This guide maps the workspace crates
 and the `agentty` application layers to their responsibilities so contributors can
-quickly choose the correct module when implementing changes.
-
-For file-level detail, read the module docstrings directly.
+quickly choose the correct module when implementing changes. For file-level detail, read
+the module docstrings directly.
 
 <!-- more -->
 
@@ -55,35 +54,20 @@ contracts.
 ## Layer Rules
 
 - Keep workflow changes and shared command admission in `app/`, with external effects
-  behind `infra/` traits. The session command gateway owns admission. A pure message
-  planner selects existing workflows from submission intent and session state; the
-  worker owns execution ordering and settlement.
-- Keep frontend-neutral session and task models in `ag-session` and persistence in
-  `ag-store`. Task attempts project execution state from worker-owned operations; task
-  completion is explicit outcome acceptance.
-- `ag-session` owns portable agent definitions and bundled defaults. The injected
-  infrastructure catalog overlays repository definitions. Workflows own stage contracts
-  and acceptance; execution consumes captured definitions independently of their IDs.
-- Generic [execution graph contracts](@/docs/architecture/execution-graphs.md) also
-  belong to `ag-session`: pure graph validation, node requirements, and exact result
-  bindings. `ag-protocol` owns model-authored proposal responses, using logical agent,
-  node, and output references without runtime identities or approval evidence.
-  `ag-session` resolves proposals against captured host definitions and limits;
-  `ag-store` retains proposal versions separately and atomically publishes approved
-  snapshots. Agentty owns scoped worker generation and exact-version approval policy.
-  `ag-store` owns immutable revision snapshots, execution links, output bodies,
-  validation/acceptance evidence, and atomic static-node admission. `ag-worker` owns
-  deterministic graph dispatch, shared resource leases, and worker adapters behind
-  `GraphNodeRunner`. The application owns explicit graph launch, wakeups, and the
-  adapter into ordered session workers. Focused review owns its graph construction and
-  phase runner; phase semantics stay in the review prompt module.
-- Environment identity and resolved location contracts belong to `ag-session`. The host
-  resolves the shared local Env through existing worktree isolation checks; session
-  workflows retain provisioning and cleanup ownership. Conversations and permissions
-  remain separate from environment identity.
-- Workflow role contracts belong to `ag-session`: context requirements, expected output,
-  and permission limits. Markdown definitions supply instructions; workflow execution
-  and runtime permission enforcement remain with their existing owners.
+  behind `infra/` traits. The command gateway owns admission; the worker owns execution
+  ordering and settlement.
+- Keep frontend-neutral session, task, Env, and workflow role contracts in `ag-session`
+  and persistence in `ag-store`. Task attempts project execution state from worker-owned
+  operations; task completion is explicit outcome acceptance.
+- `ag-session` owns portable agent definitions and bundled defaults; the injected
+  infrastructure catalog overlays repository definitions. Execution consumes captured
+  definitions independently of their IDs.
+- [Execution graph](@/docs/architecture/execution-graphs.md) ownership is split:
+  `ag-protocol` owns model-authored proposals, `ag-session` pure validation, resolution,
+  and result bindings, `ag-store` versions, evidence, and atomic admission, and
+  `ag-worker` dispatch and resource leases. Agentty owns proposal approval, explicit
+  launch, wakeups, and adapters into session workers; focused review owns its own graph
+  construction.
 - Runtime converts presentation state into typed app requests and applies returned
   navigation effects. `app/` does not import runtime handlers or mutate `AppMode`.
 - `App::view_snapshot()` supplies an immutable frontend view. UI projection cannot
@@ -92,7 +76,6 @@ contracts.
   apply the clock's UTC offset when grouping events, avoiding host-timezone dependence.
 - Share semantic interaction calculations in `domain/` or `presentation/`; keep these
   independent of Ratatui rendering.
-- Keep paired `module.rs` routers free of implementation details.
 
 For example, resource accounting puts host sampling in `infra/`, scheduling and cache
 invalidation in `app/`, totals in `domain/`, and display formatting in `ui/`.
@@ -104,10 +87,7 @@ paths.
 ## Worker-owned model execution
 
 Application workflows submit session turns through `SessionRunClient` and isolated
-utilities through `RunClient`. Only `ag-worker` depends on `ag-runtime`; only
-`ag-runtime` depends on `ag-agent`; only `ag-agent` launches agent CLIs. Shared
-execution contracts live in `ag-contracts`. The worker owns runtime lifecycle and
-cancellation; applications configure workers rather than construct adapters.
-
-See [Execution](@/docs/core-components/execution-components/execution-boundary.md) for
-the execution contract.
+utilities through `RunClient`; applications configure workers rather than construct
+adapters. See
+[Execution](@/docs/core-components/execution-components/execution-boundary.md) for the
+dependency rule and execution contract.

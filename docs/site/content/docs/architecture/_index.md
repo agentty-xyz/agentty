@@ -11,13 +11,15 @@ boundaries, orchestration, and change paths.
 
 ## Architecture Topics
 
-- [Runtime Flow](@/docs/architecture/runtime-flow.md) explains runtime goals, the
-  workspace map, the event loop, and agent channel routing.
-- [Module Map](@/docs/architecture/module-map.md) maps source paths to responsibilities
-  across `app`, `domain`, `infra`, `runtime`, and `ui`.
+- [Runtime Flow](@/docs/architecture/runtime-flow.md) explains the event loop, session
+  execution, background work, and recovery.
+- [Module Map](@/docs/architecture/module-map.md) maps crates and `agentty` layers to
+  their responsibilities.
 - [Change Recipes](@/docs/architecture/change-recipes.md) gives architecture-safe change
   paths for common contribution scenarios.
 - [Testability Boundaries](@/docs/architecture/testability-boundaries.md) documents
   trait boundaries and deterministic testing guidance for external integrations.
-- [`ag-harness` Design](@/docs/architecture/ag-harness-design.md) documents the model
-  contract, durable session lifecycle, concurrency, and local observability workflow.
+- [`ag-harness` Design](@/docs/architecture/ag-harness-design.md) documents the native
+  model loop, durable sessions, tools, and provider transports.
+- [Execution Graphs](@/docs/architecture/execution-graphs.md) documents static graph
+  snapshots, dispatch, exact result handoffs, and recovery.

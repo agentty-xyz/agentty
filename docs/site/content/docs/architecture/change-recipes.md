@@ -5,85 +5,63 @@ weight = 4
 +++
 
 <a id="architecture-change-recipes-introduction"></a> Use these recipes to route changes
-through the correct modules without crossing layer boundaries.
+through the correct modules without crossing layer boundaries. Module routers and doc
+comments identify the exact files.
 
 <!-- more -->
 
 ## Add or Modify a Session Workflow
 
 1. Keep frontend-neutral request/result models and programmatic operations in
-   `crates/ag-session/`.
+   `ag-session`.
 1. Update Agentty orchestration in `crates/agentty/src/app/session/` and adapt it
    through `crates/agentty/src/app/session_api.rs`.
 1. Route background-callable operations through the bounded actor in
    `crates/agentty/src/app/session_runtime.rs`; do not share `App` behind an async
    mutex.
-1. Keep persistence in `crates/ag-store/src/` domain modules. Use `repository.rs` for
-   repository bundle composition and `connection.rs` for pool wiring; keep Agentty's
-   `crates/agentty/src/infra/db.rs` limited to database-location and clock composition.
-1. Keep git operations behind `GitClient` in `crates/ag-git/src/client.rs`.
-1. Preserve the session-branch invariant: one evolving commit per session branch, with
-   the first file-changing turn creating it and later file-changing turns updating it by
-   amending `HEAD`.
-1. Update docs when lifecycle/status behavior changes:
-   `docs/site/content/docs/usage/workflow.md`.
+1. Keep persistence in `ag-store` domain modules and Git operations behind `GitClient`.
+1. Preserve the session-branch invariant: one evolving commit per session branch,
+   created by the first file-changing turn and amended by later ones.
+1. Update `docs/site/content/docs/usage/workflow.md` when lifecycle or status behavior
+   changes.
 
 ## Add an Agent Definition
 
 Add a repository definition under `.agents/agents/<id>/agent.md`, or a bundled
-definition under `crates/ag-session/src/agents/` and register it in the bundled catalog.
-Both use the same parser. Keep host workflow contracts separate from definition identity
-and preserve task snapshots when changing admission or continuation.
+definition under `crates/ag-session/src/agents/`. Both use the same parser. Keep host
+workflow contracts separate from definition identity and preserve task snapshots when
+changing admission or continuation.
 
 ## Define a Generic Execution Graph
 
-For model-generated graphs, keep wire proposals in `ag-protocol`, pure resolution in
-`ag-session`, durable versions and atomic approval in `ag-store`, and scoped worker
-generation and approval policy in Agentty. Preserve exact-version inspection and
-captured limits; neither restoration nor duplicate approval may launch work.
-
-Keep pure graph shapes, node requirements, and exact result bindings in `ag-session`.
-Follow the [execution graph contracts](@/docs/architecture/execution-graphs.md), and
-test structural rules without storage or workers. Focused review and `/graph` proposals
-build their own graphs and retain workflow-specific policy around the shared executor.
-Use `GraphRepository` in `ag-store` for revision snapshots, exact results, and execution
-links; keep operation and utility-run lifecycle authority with their existing owners.
-Use `GraphDispatchRepository` for atomic admission and `GraphExecutor` to drain ready
-nodes. Inject worker adapters through `GraphNodeRunner`, reject unsupported profiles,
-and share `GraphResources` Env leases with other host work. Exercise storage invariants
-with SQLite and worker dispatch through the public API.
+Follow the [execution graph contracts](@/docs/architecture/execution-graphs.md). Keep
+model-authored proposals in `ag-protocol`, pure graph shapes and resolution in
+`ag-session`, durable snapshots, results, and atomic admission in `ag-store`, and
+dispatch in the `ag-worker` `GraphExecutor`. Inject worker adapters through
+`GraphNodeRunner` and share `GraphResources` Env leases with other host work. Test
+structural rules without storage or workers, storage invariants with SQLite, and
+dispatch through the public API.
 
 ## Add a New Agent Backend or Model
 
-1. Declare model ids, descriptions, provider order, speed support, and known context
-   budgets together in the catalog in `crates/ag-session/src/agent.rs`. Keep provider
-   defaults and retired-id mappings explicit; removing a public enum variant is a Rust
-   API change even when saved ids remain compatible.
+1. Declare model IDs, descriptions, provider order, speed support, and known context
+   budgets together in the `ag-session` model catalog. Keep provider defaults and
+   retired-ID mappings explicit; removing a public enum variant is a Rust API change.
 1. For a new backend, add behavior in `crates/ag-agent/src/agent/` and register it in
-   `crates/ag-agent/src/agent/provider.rs`. Existing backends consume catalog
-   capabilities instead of maintaining their own model lists.
-1. Keep transport selection, parsing, streaming, and provider setup in the provider
-   registry; application workflows continue through worker clients.
-1. Update `docs/site/content/docs/agents/backends.md` with backend/model documentation.
-1. Keep explicit expectations in model, default, and retirement tests. Use the
-   `ag-session` `test-utils` fixtures for unrelated workflows so model replacements do
-   not require editing each test.
+   the provider registry. Backends consume catalog capabilities instead of keeping their
+   own model lists.
+1. Keep transport selection, parsing, streaming, and provider setup in `ag-agent`;
+   application workflows continue through worker clients.
+1. Update `docs/site/content/docs/agents/backends.md`.
 
 ## Add a Built-in `ag-router` Model
 
-1. Add the model's wire capabilities and reasoning mapping in
-   `crates/ag-router/src/provider.rs`; keep provider HTTP and response decoding in
-   `ag-router`.
-1. Add local HTTP tests for the schema format, image and tool capabilities, reasoning
-   fields, and error mapping. Keep harness tool execution and permissions in
-   `ag-harness`.
-1. Expose the built-in model through `ag-harness` configuration only if the harness
-   supports its capabilities; Agentty product integration still follows the worker and
-   runtime boundary.
+1. Add the model's wire capabilities and reasoning mapping in `ag-router`, with local
+   HTTP tests for schema format, capabilities, reasoning fields, and error mapping.
+1. Expose it through `ag-harness` configuration only if the harness supports its
+   capabilities.
 1. To offer it in Agentty Harness sessions, add it to the `Harness` entries of the
-   `ag-session` model catalog and declare its `ModelProfile` in
-   `crates/ag-agent/src/agent/model_profile.rs`; an `ag-agent` test rejects ids the
-   harness catalog does not know.
+   `ag-session` model catalog and declare its `ModelProfile` in `ag-agent`.
 
 ## Add or Change a Utility Agent Prompt
 
@@ -91,57 +69,41 @@ with SQLite and worker dispatch through the public API.
    app-server, backend, or protocol-repair helper from application orchestration.
 1. Inject `&dyn RunClient` into the smallest workflow helper that needs deterministic
    coverage and test it with `MockRunClient`.
+1. Background work captures purpose and ownership with `ag-worker::scoped_client`;
+   nested utilities keep parent cancellation and never queue behind the session command
+   awaiting them.
 1. Keep provider routing, protocol repair, usage aggregation, and runtime cleanup in
-   `crates/ag-agent/src/agent/submission.rs`.
+   `ag-agent`.
 
 ## Add a Keybinding or Mode Interaction
 
-1. For basic text editing, add or update the semantic command in
-   `crates/agentty/src/domain/input.rs`, then map terminal keys once in
-   `crates/agentty/src/runtime/mode/input_key.rs`.
-1. Let prompt, question, branch-publish, and settings input modes intercept only their
-   context-specific actions before falling back to the shared input command mapping.
-1. For prompt mode, change composer state in the pure `reduce_prompt_key` step of
-   `crates/agentty/src/runtime/mode/prompt.rs` and request app work as a `PromptEffect`,
-   so unit tests prove state changes without starting an `App`.
-1. For other interactions, update the handler in `crates/agentty/src/runtime/mode/`, or
-   in `crates/agentty/src/runtime/key_handler.rs` when the interaction is a cross-mode
-   overlay dispatch.
-1. If a new mode/state is needed, extend `crates/agentty/src/presentation/app_mode.rs`.
-1. If help content changes, update `crates/agentty/src/presentation/help_action.rs` as
-   needed.
+1. For text editing, add the semantic command in `crates/agentty/src/domain/input.rs`
+   and map terminal keys once in `crates/agentty/src/runtime/mode/input_key.rs`.
+1. Let context-specific input modes intercept only their own actions before falling back
+   to the shared mapping.
+1. Change prompt composer state in the pure reducer of
+   `crates/agentty/src/runtime/mode/prompt.rs` and request app work as an effect, so
+   unit tests need no `App`.
+1. Update other handlers in `crates/agentty/src/runtime/mode/`, or the cross-mode
+   overlay dispatch in `crates/agentty/src/runtime/key_handler.rs`.
+1. Extend `crates/agentty/src/presentation/app_mode.rs` for a new mode and
+   `crates/agentty/src/presentation/help_action.rs` for help content.
 1. Update `docs/site/content/docs/usage/keybindings.md`.
 
 ## Add or Change Database Schema
 
-1. Add a new migration file in `crates/ag-store/migrations/` (`NNN_description.sql`).
-1. Never modify existing migration files.
-1. Keep query changes in the matching `crates/ag-store/src/*.rs` domain module instead
-   of expanding Agentty's composition facade.
-1. Ensure any status/model behavior changes are reflected in docs pages affected by
-   user-facing behavior.
+1. Add a new migration in `crates/ag-store/migrations/` (`NNN_description.sql`); never
+   modify existing migrations.
+1. Keep query changes in the matching `ag-store` domain module.
+1. Update user-facing docs affected by status or model behavior changes.
 
 ## Add a New UI Page or Component
 
 1. Add the page in `crates/agentty/src/ui/page/` or component in
-   `crates/agentty/src/ui/component/`.
-1. Wire the page into `crates/agentty/src/ui/router.rs`.
-1. If a new `AppMode` is needed, extend the shared presentation contract implemented in
-   `crates/agentty/src/presentation/app_mode.rs` and exported through
-   `crates/agentty/src/presentation.rs`, then add a key handler in
-   `crates/agentty/src/runtime/mode/`.
-
-## Contributor Checklist for Architecture-Safe Changes
-
-1. Follow [Module Map](@/docs/architecture/module-map.md#layer-rules) for layer
-   ownership and [Testability Boundaries](@/docs/architecture/testability-boundaries.md)
-   for external-system injection.
-1. Update the relevant user guide for visible changes and the canonical architecture
-   page when its contracts change. Keep durable scope instructions aligned.
-1. Reuse cached derived data on render hot paths; measurement and painting must agree.
-1. Keep the runtime key-types table current when execution contracts change, and the
-   boundary reference current when external traits change.
-1. Run the required gates in root `AGENTS.md`.
+   `crates/agentty/src/ui/component/`, and wire pages into
+   `crates/agentty/src/ui/router.rs`.
+1. For a new `AppMode`, extend `crates/agentty/src/presentation/app_mode.rs` and add a
+   key handler in `crates/agentty/src/runtime/mode/`.
 
 ## Change run execution
 
@@ -149,10 +111,8 @@ with SQLite and worker dispatch through the public API.
    `ag-agent`.
 1. Keep mailboxes, session runtime ownership, scheduling, cancellation, and recovery in
    `ag-worker`; implement product-specific question, Git, forge, and UI policy in the
-   host adapter. Submit session turns through `SessionRunClient` and utilities through
-   `RunClient`.
-1. Import execution contracts from `ag-contracts` and selections from `ag-session`.
-   Construct `ag-agent` adapters only inside `ag-runtime`; applications configure
+   host adapter.
+1. Construct `ag-agent` adapters only inside `ag-runtime`; applications configure
    workers.
 1. Extend headless contract tests and the affected Agentty workflow tests. Changes to
    operation persistence also need `ag-store` adapter tests.
@@ -160,10 +120,17 @@ with SQLite and worker dispatch through the public API.
 ## Adding model-assisted work
 
 Use the
-[utility prompt recipe](@/docs/architecture/change-recipes.md#add-or-change-a-utility-agent-prompt).
-Background work must capture purpose and session/project ownership with
-`ag-worker::scoped_client`. Nested utilities retain parent cancellation and run directly
-under worker supervision, without enqueueing behind the session command awaiting them.
+[utility prompt recipe](@/docs/architecture/change-recipes.md#add-or-change-a-utility-agent-prompt)
+and the [Execution](@/docs/core-components/execution-components/execution-boundary.md)
+contract.
 
-See [Execution](@/docs/core-components/execution-components/execution-boundary.md) for
-the execution contract.
+## Contributor Checklist for Architecture-Safe Changes
+
+1. Follow [Module Map](@/docs/architecture/module-map.md#layer-rules) for layer
+   ownership and [Testability Boundaries](@/docs/architecture/testability-boundaries.md)
+   for external-system injection.
+1. Update the relevant user guide for visible changes and the canonical architecture
+   page when its contracts change, including the runtime key-types table and the
+   boundary table.
+1. Reuse cached derived data on render hot paths; measurement and painting must agree.
+1. Run the required gates in root `AGENTS.md`.
