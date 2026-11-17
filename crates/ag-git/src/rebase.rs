@@ -272,26 +272,27 @@ pub(crate) async fn abort_rebase(repo_path: PathBuf) -> Result<(), GitError> {
 /// Returns [`GitError::RepositoryUnavailable`] when the repository folder is
 /// missing, or another [`GitError`] when its git directory cannot be resolved.
 pub(crate) async fn is_rebase_in_progress(repo_path: PathBuf) -> Result<bool, GitError> {
-    spawn_blocking_in_context(move || -> Result<bool, GitError> {
-        match fs::metadata(&repo_path) {
-            Ok(_) => {}
-            Err(error) if error.kind() == ErrorKind::NotFound => {
-                return Err(GitError::RepositoryUnavailable {
-                    detail: format!("Repository folder is missing: {}", repo_path.display()),
-                });
-            }
-            Err(error) => return Err(error.into()),
-        }
-        let git_dir = resolve_git_dir(&repo_path).ok_or_else(|| {
-            GitError::OutputParse(format!(
-                "Failed to resolve git directory for `{}`",
-                repo_path.display()
-            ))
-        })?;
+    spawn_blocking_in_context(move || is_rebase_in_progress_sync(&repo_path)).await?
+}
 
-        Ok(has_rebase_metadata(&git_dir))
-    })
-    .await?
+fn is_rebase_in_progress_sync(repo_path: &Path) -> Result<bool, GitError> {
+    match fs::metadata(repo_path) {
+        Ok(_) => {}
+        Err(error) if error.kind() == ErrorKind::NotFound => {
+            return Err(GitError::RepositoryUnavailable {
+                detail: format!("Repository folder is missing: {}", repo_path.display()),
+            });
+        }
+        Err(error) => return Err(error.into()),
+    }
+    let git_dir = resolve_git_dir(repo_path).ok_or_else(|| {
+        GitError::OutputParse(format!(
+            "Failed to resolve git directory for `{}`",
+            repo_path.display()
+        ))
+    })?;
+
+    Ok(has_rebase_metadata(&git_dir))
 }
 
 /// Returns the first detected in-progress git operation in `repo_path`.
