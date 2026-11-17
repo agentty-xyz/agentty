@@ -110,6 +110,12 @@ pub(crate) fn profile(model: &str) -> Option<ModelProfile> {
     }
 }
 
+/// Returns the output limit of a cataloged plan model, or `None` for a
+/// model this catalog does not list.
+pub(crate) fn max_output_tokens(model: &str) -> Option<u64> {
+    profile(model).map(|_| MAX_OUTPUT_TOKENS)
+}
+
 #[cfg(test)]
 #[path = "chatgpt_test.rs"]
 mod tests;

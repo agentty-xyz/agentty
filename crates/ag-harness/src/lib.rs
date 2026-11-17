@@ -54,6 +54,7 @@
 //! | Module        | Contents                                                   |
 //! | ------------- | ---------------------------------------------------------- |
 //! | [`provider`]  | Built-in Muse, Kimi, and Qwen clients                      |
+//! | [`catalog`]   | Model specs, roles, capabilities, pricing, and selection   |
 //! | [`model`]     | The [`Model`] trait, requests, registry, context profiles  |
 //! | [`tool`]      | Tool arguments, results, and the [`tool::FileSystem`] seam |
 //! | [`bash`]      | Bash configuration, executors, enforcement, records        |
@@ -73,6 +74,10 @@ mod store_fixture;
 mod gated_store_test;
 
 #[cfg(test)]
+#[path = "../tests/support/chatgpt_sign_in.rs"]
+mod chatgpt_sign_in_fixture;
+
+#[cfg(test)]
 #[path = "../tests/support/context_budget.rs"]
 mod context_budget_fixture;
 
@@ -84,6 +89,7 @@ mod admission;
 pub mod bash;
 mod calibration;
 mod cancellation;
+pub mod catalog;
 
 mod command_journal;
 mod command_settlement;
@@ -125,6 +131,7 @@ mod turn_options_snapshot;
 mod write;
 mod write_journal;
 
+pub use catalog::{ModelCatalog, ModelSelector, Role};
 pub use comparison::{ComparisonBase, ComparisonBaseError};
 pub use error::{ErrorKind, HarnessError, RunError};
 pub use harness::{Harness, HarnessBuildError, HarnessBuilder, Session, SessionBuilder};

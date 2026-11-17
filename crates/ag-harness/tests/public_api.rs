@@ -61,6 +61,7 @@ use ag_harness::bash::{
     Enforcement, ExecutionAccess, ExecutionCommand, ExecutionError, ExecutionPolicy, MainExit,
     OutputStream, ProcessEvent, UnsandboxedExecutor,
 };
+use ag_harness::catalog::{Capabilities, CatalogError, ModelId, ModelSpec, Pricing, PricingSource};
 use ag_harness::lifecycle::{
     ContextSummaryErrorType, ContextSummaryTrigger, LifecycleEventKind, LifecycleMetrics,
     LifecycleObserverSet, LifecycleTraceObserver,
@@ -77,9 +78,9 @@ use ag_harness::store::{MemoryStore, SessionInfo, SessionStore, WriteStatus};
 use ag_harness::tool::{FileSystem, LocalFileSystem, ToolCall, ToolDefinition};
 use ag_harness::{
     ComparisonBase, ErrorKind, Harness, HarnessBuildError, HarnessError, ImageContent,
-    ImageMediaType, InputBlock, Model, ModelError, OutputSchema, OutputSchemaError, Repository,
-    RepositoryError, RunError, Session, SessionBuilder, SessionError, Tool, ToolPolicy, TurnError,
-    TurnInput, TurnInputError, TurnOptions,
+    ImageMediaType, InputBlock, Model, ModelCatalog, ModelError, ModelSelector, OutputSchema,
+    OutputSchemaError, Repository, RepositoryError, Role, RunError, Session, SessionBuilder,
+    SessionError, Tool, ToolPolicy, TurnError, TurnInput, TurnInputError, TurnOptions,
 };
 use async_trait::async_trait;
 use serde_json::json;
@@ -449,6 +450,81 @@ fn builder_derives_the_budget_of_a_cataloged_built_in_model() -> Result<(), Box<
     assert!(harness.is_ok());
 
     Ok(())
+}
+
+#[test]
+fn external_consumer_selects_a_harness_model_from_a_host_catalog() -> Result<(), Box<dyn Error>> {
+    // Arrange
+    let vision = Capabilities::NONE
+        .with_image_input(true)
+        .with_tool_calls(true);
+    let catalog = ModelCatalog::builder()
+        .model(
+            ModelSpec::new("host/text").with_profile(unbounded_model_profile()),
+            Arc::new(ExternalModel),
+        )
+        .model(
+            ModelSpec::new(ModelId::new("host/vision"))
+                .with_profile(unbounded_model_profile())
+                .with_capabilities(vision)
+                .with_pricing(Pricing::new(1_000_000, 4_000_000).with_cache_read(100_000)),
+            Arc::new(ExternalModel),
+        )
+        .assign(Role::SMART, ["host/text", "host/vision"])
+        .assign(Role::new("review"), ["host/text"])
+        .build()?;
+    let selector = ModelSelector::Require {
+        needs: Capabilities::NONE.with_image_input(true),
+        role: Role::SMART,
+    };
+
+    // Act
+    let handle = catalog.resolve(&selector)?;
+    let harness = Harness::builder()
+        .catalog(Arc::new(catalog))
+        .model_selector(selector)
+        .build();
+
+    // Assert
+    assert_eq!(handle.id().as_str(), "host/vision");
+    assert!(handle.context_budget().is_some());
+    let pricing = handle.spec().pricing().ok_or("priced model")?;
+    assert_eq!(pricing.source(), PricingSource::Host);
+    assert_eq!(pricing.cost_tier(), CostTier::Standard);
+    assert!(harness.is_ok());
+
+    Ok(())
+}
+
+#[test]
+fn external_consumer_reads_built_in_specs_by_role_defaults() {
+    // Arrange
+    let environment = |name: &str| match name {
+        "DASHSCOPE_API_KEY" => Ok("test-key".to_string()),
+        "DASHSCOPE_BASE_URL" => Ok("https://dashscope.test/v1".to_string()),
+        _ => Err(std::env::VarError::NotPresent),
+    };
+
+    // Act
+    let catalog = ModelCatalog::from_environment_with(environment);
+
+    // Assert
+    let catalog = catalog.expect("Qwen environment should catalog");
+    let cheap = catalog
+        .resolve(&ModelSelector::Role(Role::CHEAP))
+        .expect("Qwen serves the cheap role");
+    assert_eq!(
+        cheap.id(),
+        &ModelId::cataloged(ModelProvider::Qwen, QWEN3_8_FLASH)
+    );
+    assert_eq!(
+        cheap.spec().pricing().map(Pricing::cost_tier),
+        Some(CostTier::Cheap)
+    );
+    assert!(matches!(
+        catalog.resolve(&ModelSelector::Id(ModelId::new("openai/gpt-6-luna"))),
+        Err(CatalogError::UnknownModel { .. })
+    ));
 }
 
 #[test]

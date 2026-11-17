@@ -17,6 +17,7 @@ use tokio::sync::OnceCell;
 
 use crate::calibration::ContextCalibration;
 use crate::cancellation::{ControlledTurn, TurnControl};
+use crate::catalog::{CatalogError, ModelCatalog, ModelSelector, Role};
 use crate::compaction::{self, CompactionSource, MAX_SUMMARY_BYTES, SessionCheckpoint};
 use crate::context::{
     self, ContextBudget, ContextBudgetError, ContextEstimator, ContextSummaryPolicy,
@@ -29,6 +30,7 @@ use crate::file_system::{FileSystem, LocalFileSystem};
 use crate::input::{InputBlock, TurnInput};
 use crate::lifecycle::{LifecycleEmitter, LifecycleObserver, TurnErrorType, TurnLifecycle};
 use crate::model::{Model, ModelError, ModelMessage, ModelRequest, ReasoningEffort};
+use crate::model_profile::ModelProfile;
 use crate::model_registry::{ModelRegistration, ModelRegistry, ModelRegistryError};
 use crate::policy::ToolPolicy;
 use crate::recovery::{ExecutionIdentity, HostRequest, HostTurnAcquisition, HostTurnRecord};
@@ -929,6 +931,7 @@ impl Harness {
     /// [`Self::from_registry`] remain available.
     pub fn builder() -> HarnessBuilder {
         HarnessBuilder {
+            catalog: None,
             context_budget: None,
             context_estimator: None,
             context_summaries: ContextSummaryPolicy::Disabled,
@@ -938,6 +941,7 @@ impl Harness {
             max_history_bytes: None,
             model: None,
             model_reasoning_effort: None,
+            model_selector: None,
             policy: ToolPolicy::default(),
             repository: None,
             storage: None,
@@ -1403,9 +1407,11 @@ impl Harness {
 /// finish with [`Self::build`]. Each setter replaces its earlier value; unset
 /// options keep the [`Harness::new`] defaults: deny-by-default tools, the
 /// local filesystem, and no store. Registered models still use
-/// [`Harness::from_registry`].
+/// [`Harness::from_registry`]. Instead of a model, a host may give a
+/// [`ModelCatalog`] and a [`ModelSelector`].
 #[must_use = "a builder does nothing until built"]
 pub struct HarnessBuilder {
+    catalog: Option<Arc<ModelCatalog>>,
     context_budget: Option<ContextBudget>,
     context_estimator: Option<Arc<dyn ContextEstimator>>,
     context_summaries: ContextSummaryPolicy,
@@ -1415,18 +1421,40 @@ pub struct HarnessBuilder {
     max_history_bytes: Option<NonZeroUsize>,
     model: Option<Arc<dyn Model>>,
     model_reasoning_effort: Option<ReasoningEffort>,
+    model_selector: Option<ModelSelector>,
     policy: ToolPolicy,
     repository: Option<Repository>,
     storage: Option<StorageSource>,
 }
 
 impl HarnessBuilder {
-    /// Selects the model every turn uses.
+    /// Selects the model every turn uses, taking precedence over a
+    /// [`Self::catalog`]. Setting both this and [`Self::model_selector`]
+    /// fails the build.
     ///
     /// Without [`Self::context_budget`], the request budget and estimator
     /// come from the model's declared [`Model::profile`].
     pub fn model(mut self, model: Arc<dyn Model>) -> Self {
         self.model = Some(model);
+
+        self
+    }
+
+    /// Selects the model from `catalog` when no [`Self::model`] is set,
+    /// through [`Self::model_selector`] or else [`Role::SMART`].
+    ///
+    /// Without [`Self::context_budget`], the request budget and estimator
+    /// come from the resolved [`crate::catalog::ModelHandle::profile`].
+    pub fn catalog(mut self, catalog: Arc<ModelCatalog>) -> Self {
+        self.catalog = Some(catalog);
+
+        self
+    }
+
+    /// Chooses which [`Self::catalog`] model every turn uses. Building
+    /// fails without a catalog or together with an explicit [`Self::model`].
+    pub fn model_selector(mut self, selector: impl Into<ModelSelector>) -> Self {
+        self.model_selector = Some(selector.into());
 
         self
     }
@@ -1527,19 +1555,37 @@ impl HarnessBuilder {
 
     /// Checks the configuration and returns a shareable harness.
     ///
-    /// `build` checks only that a model is selected, that a budget is set or
-    /// the model declares a valid profile, and that a repository is set when
-    /// the default policy allows a repository tool. Storage is not touched:
-    /// the SQLite database or host store is first opened by a session's
-    /// `create` or `resume`, which reports its failures as [`SessionError`].
+    /// `build` checks only that a model is selected or resolves from the
+    /// catalog, that a budget is set or the model declares a valid profile,
+    /// and that a repository is set when the default policy allows a
+    /// repository tool. Storage is not touched: the SQLite database or host
+    /// store is first opened by a session's `create` or `resume`, which
+    /// reports its failures as [`SessionError`].
     ///
     /// # Errors
     ///
     /// Returns a [`HarnessError`] of kind [`crate::ErrorKind::Config`]
     /// wrapping the failed [`HarnessBuildError`] check.
     pub fn build(self) -> Result<Harness, HarnessError> {
-        let Some(model) = self.model else {
-            return Err(HarnessBuildError::ModelRequired.into());
+        let (model, profile) = match (self.model, self.catalog, self.model_selector) {
+            (Some(_), _, Some(_)) => {
+                return Err(HarnessBuildError::ConflictingModelSelection.into());
+            }
+            (Some(model), _, None) => {
+                let profile = model.profile();
+
+                (model, profile)
+            }
+            (None, Some(catalog), selector) => {
+                let selector = selector.unwrap_or(ModelSelector::Role(Role::SMART));
+                let handle = catalog
+                    .resolve(&selector)
+                    .map_err(HarnessBuildError::Catalog)?;
+
+                (handle.model(), handle.profile())
+            }
+            (None, None, Some(_)) => return Err(HarnessBuildError::CatalogRequired.into()),
+            (None, None, None) => return Err(HarnessBuildError::ModelRequired.into()),
         };
         let repository_tool_allowed = [Tool::Bash, Tool::Read, Tool::Write]
             .into_iter()
@@ -1547,7 +1593,7 @@ impl HarnessBuilder {
         if repository_tool_allowed && self.repository.is_none() {
             return Err(HarnessBuildError::RepositoryRequired.into());
         }
-        let mut config = Self::direct_config(model, self.context_budget)?;
+        let mut config = Self::direct_config(model, profile, self.context_budget)?;
         if let Some(context_estimator) = self.context_estimator {
             config.context_estimator = context_estimator;
         }
@@ -1575,13 +1621,13 @@ impl HarnessBuilder {
     }
 
     /// Returns the configuration of a directly supplied model, bounded by
-    /// `context_budget` or else by its declared profile, whose estimator it
-    /// adopts.
+    /// `context_budget` or else by its declared `profile`, whose estimator
+    /// it adopts.
     fn direct_config(
         model: Arc<dyn Model>,
+        profile: Option<ModelProfile>,
         context_budget: Option<ContextBudget>,
     ) -> Result<HarnessConfig, HarnessBuildError> {
-        let profile = model.profile();
         let context_budget = match (context_budget, profile) {
             (Some(context_budget), _) => context_budget,
             (None, Some(profile)) => profile
@@ -1604,8 +1650,17 @@ impl HarnessBuilder {
 #[non_exhaustive]
 pub enum HarnessBuildError {
     /// No model was selected.
-    #[error("harness requires a model; call `model`")]
+    #[error("harness requires a model; call `model` or `catalog`")]
     ModelRequired,
+    /// A model selector was set without a catalog to resolve it.
+    #[error("model selector requires a catalog; call `catalog`")]
+    CatalogRequired,
+    /// The catalog could not resolve the model selector.
+    #[error("cannot select the model from the catalog")]
+    Catalog(#[source] CatalogError),
+    /// Both an explicit model and a model selector were set.
+    #[error("set either `model` or `model_selector`, not both")]
+    ConflictingModelSelection,
     /// No budget was set and the model declares no context profile.
     #[error("model declares no context profile; call `context_budget`")]
     ContextBudgetRequired,

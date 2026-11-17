@@ -21,8 +21,12 @@
 //! profile declared through [`ModelProvider::declared_profile`] or sized to
 //! the window the server runs through [`ModelProvider::running_profile`].
 //! [`ModelProvider::local_server`] lists that server's models through
-//! [`LocalServer`]. [`ModelProvider::cost_tier`] declares each cataloged
-//! model's [`CostTier`], so hosts can route simple tasks to cheap models.
+//! [`LocalServer`]. [`ModelProvider::pricing`] and
+//! [`ModelProvider::capabilities`] declare each cataloged model's list
+//! prices and capabilities, and [`ModelProvider::cost_tier`] derives its
+//! [`CostTier`], so hosts can route simple tasks to cheap models.
+//! [`crate::catalog::ModelCatalog::from_environment`] catalogs these models
+//! by role.
 
 mod catalog;
 mod chatgpt;
