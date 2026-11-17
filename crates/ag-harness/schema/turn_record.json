@@ -1,0 +1,527 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "TurnRecord",
+  "description": "One settled turn of a session transcript.",
+  "type": "object",
+  "properties": {
+    "error": {
+      "description": "Why a failed or cancelled turn stopped; `None` for a completed turn\nand for a turn interrupted because its owner stopped renewing it.",
+      "anyOf": [
+        {
+          "$ref": "#/$defs/TurnFailure"
+        },
+        {
+          "type": "null"
+        }
+      ]
+    },
+    "finished_at": {
+      "description": "When the turn settled, to the second for SQLite sessions; on the\nwire, milliseconds since the Unix epoch.",
+      "type": "integer",
+      "format": "uint64",
+      "minimum": 0
+    },
+    "input": {
+      "description": "The turn's input blocks in order.",
+      "type": "array",
+      "items": {
+        "$ref": "#/$defs/TranscriptInput"
+      }
+    },
+    "instructions": {
+      "description": "Host instructions given for this turn only.",
+      "type": [
+        "string",
+        "null"
+      ]
+    },
+    "items": {
+      "description": "What the model produced, in order: reasoning, assistant text, tool\ncalls with their results, and, for a completed turn, the final\noutput last. A tool call reports\n[`ToolCallStatus::Answered`] with its result, or\n[`ToolCallStatus::Unanswered`] with empty output when\nthe turn stopped before answering it, and an empty summary.",
+      "type": "array",
+      "items": {
+        "$ref": "#/$defs/Item"
+      }
+    },
+    "started_at": {
+      "description": "When the turn was admitted, to the second for SQLite sessions; on the\nwire, milliseconds since the Unix epoch.",
+      "type": "integer",
+      "format": "uint64",
+      "minimum": 0
+    },
+    "status": {
+      "description": "How the turn ended.",
+      "$ref": "#/$defs/TurnStatus"
+    },
+    "turn": {
+      "description": "Durable position of the turn within its session.",
+      "$ref": "#/$defs/TurnIndex"
+    },
+    "usage": {
+      "description": "Tokens of the turn's model requests, when recorded: only turns run\nwith a host request ID keep their usage.",
+      "anyOf": [
+        {
+          "$ref": "#/$defs/Usage"
+        },
+        {
+          "type": "null"
+        }
+      ]
+    }
+  },
+  "required": [
+    "finished_at",
+    "input",
+    "items",
+    "started_at",
+    "status",
+    "turn"
+  ],
+  "$defs": {
+    "TurnFailure": {
+      "description": "Why a settled turn stopped, as [`crate::event::RunFailure`] reports a\nlive run's failure without its message.\n\nOn the wire it is an object with `kind` and, for `budget_exhausted`, the\n`limit` it reached.",
+      "type": "object",
+      "properties": {
+        "kind": {
+          "description": "Failure classification; `cancelled` for a cancelled turn.",
+          "$ref": "#/$defs/ErrorKind"
+        },
+        "limit": {
+          "description": "The run limit a `budget_exhausted` turn reached.",
+          "anyOf": [
+            {
+              "$ref": "#/$defs/LimitKind"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        }
+      },
+      "required": [
+        "kind"
+      ]
+    },
+    "ErrorKind": {
+      "description": "Stable reason that a run or harness operation failed, for embedder retry\nand recovery policy, by its wire name.\n\nEvery harness failure maps to exactly one kind. New kinds may be added as\nthe harness gains failure modes. Data a kind carries travels beside it.",
+      "oneOf": [
+        {
+          "description": "The caller cancelled the run.",
+          "type": "string",
+          "const": "cancelled"
+        },
+        {
+          "description": "The run reached one of its run limits, named beside the kind;\nretrying the same run would reach the same limit.",
+          "type": "string",
+          "const": "budget_exhausted"
+        },
+        {
+          "description": "The provider limited the request rate; retry after\n[`RunError::retry_after`] when present.",
+          "type": "string",
+          "const": "rate_limited"
+        },
+        {
+          "description": "The provider was temporarily unavailable (HTTP `500`, `502`, `503`,\n`504`, or `529`).",
+          "type": "string",
+          "const": "overloaded"
+        },
+        {
+          "description": "The provider rejected the credentials (HTTP `401` or `403`).",
+          "type": "string",
+          "const": "auth"
+        },
+        {
+          "description": "The provider account's quota or credit balance is spent.",
+          "type": "string",
+          "const": "quota_exceeded"
+        },
+        {
+          "description": "The request exceeds the model's context window or budget, even after\nevery allowed reduction.",
+          "type": "string",
+          "const": "context_overflow"
+        },
+        {
+          "description": "The model or provider returned output that is unusable: invalid JSON,\na schema violation, a malformed tool call, an undecodable response\nenvelope, or an oversized or incomplete response.",
+          "type": "string",
+          "const": "invalid_output"
+        },
+        {
+          "description": "The network failed or the provider timed out the request.",
+          "type": "string",
+          "const": "transport"
+        },
+        {
+          "description": "A model request failed for a reason without a finer classification,\nsuch as another provider rejection or a failure a custom\n[`crate::Model`] reports through [`ModelError::request`].",
+          "type": "string",
+          "const": "other"
+        },
+        {
+          "description": "A repository or sandbox tool failed in a way that ends the turn.",
+          "type": "string",
+          "const": "tool_failed"
+        },
+        {
+          "description": "The model kept repeating tool calls without progress after a nudge.",
+          "type": "string",
+          "const": "repetition"
+        },
+        {
+          "description": "The session already has an active turn or matching host request, or\nthe session store is temporarily locked or saturated.",
+          "type": "string",
+          "const": "busy"
+        },
+        {
+          "description": "The request conflicts with the session's recorded state, such as an\nexisting identifier, a reused host turn ID, or a stale handle.",
+          "type": "string",
+          "const": "conflict"
+        },
+        {
+          "description": "The requested session does not exist.",
+          "type": "string",
+          "const": "not_found"
+        },
+        {
+          "description": "The session store failed or holds invalid data, so the session's\ndurable state may be incomplete.",
+          "type": "string",
+          "const": "store"
+        },
+        {
+          "description": "The harness, session, sandbox, or request configuration cannot be\nsatisfied, including capabilities the model does not support.",
+          "type": "string",
+          "const": "config"
+        }
+      ]
+    },
+    "LimitKind": {
+      "description": "Which [`RunLimits`] limit stopped a run.\n\nIt serializes as its `snake_case` name.",
+      "oneOf": [
+        {
+          "description": "[`RunLimits::max_model_requests`]: model requests.",
+          "type": "string",
+          "const": "model_requests"
+        },
+        {
+          "description": "[`RunLimits::max_tool_calls`]: tool calls.",
+          "type": "string",
+          "const": "tool_calls"
+        },
+        {
+          "description": "[`RunLimits::max_total_tokens`]: input plus output tokens.",
+          "type": "string",
+          "const": "tokens"
+        },
+        {
+          "description": "[`RunLimits::max_wall_time`]: wall-clock time.",
+          "type": "string",
+          "const": "wall_time"
+        }
+      ]
+    },
+    "TranscriptInput": {
+      "description": "One input block of a transcript turn.",
+      "oneOf": [
+        {
+          "description": "An image.",
+          "type": "object",
+          "properties": {
+            "type": {
+              "type": "string",
+              "const": "image"
+            },
+            "data": {
+              "description": "Standard base64 encoding of the image bytes.",
+              "type": "string"
+            },
+            "media_type": {
+              "description": "IANA media type, such as `image/png`.",
+              "type": "string"
+            }
+          },
+          "required": [
+            "type",
+            "data",
+            "media_type"
+          ]
+        },
+        {
+          "description": "A text segment.",
+          "type": "object",
+          "properties": {
+            "type": {
+              "type": "string",
+              "const": "text"
+            },
+            "text": {
+              "description": "The text.",
+              "type": "string"
+            }
+          },
+          "required": [
+            "type",
+            "text"
+          ]
+        }
+      ]
+    },
+    "Item": {
+      "description": "Content of a finished item.",
+      "oneOf": [
+        {
+          "description": "Assistant text the model wrote beside its tool calls; never the\nrun's final output.",
+          "type": "object",
+          "properties": {
+            "type": {
+              "type": "string",
+              "const": "message"
+            },
+            "text": {
+              "description": "The assistant text.",
+              "type": "string"
+            }
+          },
+          "required": [
+            "type",
+            "text"
+          ]
+        },
+        {
+          "description": "The validated final output of a successful run, emitted after the\nturn committed and directly before [`RunEventKind::Completed`]; a\nfailed or cancelled run has none.",
+          "type": "object",
+          "properties": {
+            "type": {
+              "type": "string",
+              "const": "output"
+            },
+            "output": {
+              "description": "The run's output, as in [`crate::RunOutcome::result`].",
+              "$ref": "#/$defs/RunOutput"
+            }
+          },
+          "required": [
+            "type",
+            "output"
+          ]
+        },
+        {
+          "description": "Provider reasoning returned with a model response.",
+          "type": "object",
+          "properties": {
+            "type": {
+              "type": "string",
+              "const": "reasoning"
+            },
+            "text": {
+              "description": "The reasoning text.",
+              "type": "string"
+            }
+          },
+          "required": [
+            "type",
+            "text"
+          ]
+        },
+        {
+          "description": "A tool call and its result.",
+          "type": "object",
+          "properties": {
+            "type": {
+              "type": "string",
+              "const": "tool_call"
+            }
+          },
+          "$ref": "#/$defs/ToolCallItem",
+          "required": [
+            "type"
+          ]
+        }
+      ]
+    },
+    "RunOutput": {
+      "description": "Validated final output of a successful run.\n\nIt serializes as `{\"type\": \"json\" | \"text\", \"value\": ...}`.",
+      "oneOf": [
+        {
+          "description": "JSON output validated against the run's output schema.",
+          "type": "object",
+          "properties": {
+            "type": {
+              "type": "string",
+              "const": "json"
+            },
+            "value": true
+          },
+          "required": [
+            "type",
+            "value"
+          ]
+        },
+        {
+          "description": "The final assistant text of a run in text output mode.",
+          "type": "object",
+          "properties": {
+            "type": {
+              "type": "string",
+              "const": "text"
+            },
+            "value": {
+              "type": "string"
+            }
+          },
+          "required": [
+            "type",
+            "value"
+          ]
+        }
+      ]
+    },
+    "ToolCallStatus": {
+      "description": "How a tool call was answered.",
+      "oneOf": [
+        {
+          "description": "The tool ran; a `bash` result reports the command's own exit status.",
+          "type": "string",
+          "const": "completed"
+        },
+        {
+          "description": "The tool rejected the call, such as malformed arguments or a path\noutside the repository, and the model was told why.",
+          "type": "string",
+          "const": "rejected"
+        },
+        {
+          "description": "The call was answered without running: a repeat of an earlier read,\nor a read deferred to a later response.",
+          "type": "string",
+          "const": "skipped"
+        },
+        {
+          "description": "The tool is denied by policy or does not exist.",
+          "type": "string",
+          "const": "unavailable"
+        },
+        {
+          "description": "The call was answered, as a [`crate::TurnRecord`] reports every\nanswered call: sessions store the result text but not which of the\nstatuses above the live run reported.",
+          "type": "string",
+          "const": "answered"
+        },
+        {
+          "description": "The turn stopped before the call was answered, as a\n[`crate::TurnRecord`] reports it; the output is empty.",
+          "type": "string",
+          "const": "unanswered"
+        }
+      ]
+    },
+    "ToolCallItem": {
+      "description": "A tool call the model made and the result it was answered with.",
+      "type": "object",
+      "properties": {
+        "arguments": {
+          "description": "Arguments as the model sent them, as JSON text; arguments the tool\ncould not decode are kept verbatim and may not be valid JSON.",
+          "type": "string"
+        },
+        "call_id": {
+          "description": "Provider identifier of the call.",
+          "type": "string"
+        },
+        "name": {
+          "description": "Function name the model called.",
+          "type": "string"
+        },
+        "output": {
+          "description": "Result text the model received; empty for a call that was never\nanswered.",
+          "type": "string"
+        },
+        "status": {
+          "description": "How the call was answered.",
+          "$ref": "#/$defs/ToolCallStatus"
+        },
+        "summary": {
+          "description": "Bounded one-line description of what the call did; empty in a\n[`crate::TurnRecord`], since sessions do not store it.",
+          "type": "string"
+        }
+      },
+      "required": [
+        "arguments",
+        "call_id",
+        "name",
+        "output",
+        "status",
+        "summary"
+      ]
+    },
+    "TurnStatus": {
+      "description": "How a settled turn ended.",
+      "oneOf": [
+        {
+          "description": "The turn committed its final output.",
+          "type": "string",
+          "const": "completed"
+        },
+        {
+          "description": "The turn failed, for example on a model error or a run limit.",
+          "type": "string",
+          "const": "failed"
+        },
+        {
+          "description": "The turn was cancelled or its owner stopped renewing it.",
+          "type": "string",
+          "const": "interrupted"
+        }
+      ]
+    },
+    "TurnIndex": {
+      "description": "Durable position of a turn within its session.",
+      "type": "integer",
+      "format": "uint64",
+      "minimum": 0
+    },
+    "Usage": {
+      "description": "Provider-reported tokens, summed over a run's model requests.\n\nThe counts overlap: `cache_read` is part of `input`, and `reasoning` is\npart of `output`. A count a provider omitted adds zero; a request whose\nprovider reported no input or output count is counted in\n`unreported_requests`, so totals with unreported requests are lower\nbounds. Requests the provider rejected as exceeding its context window,\nand a request in flight when the run was cancelled, are not counted.",
+      "type": "object",
+      "properties": {
+        "input": {
+          "description": "Input tokens, including `cache_read`.",
+          "type": "integer",
+          "format": "uint64",
+          "minimum": 0
+        },
+        "output": {
+          "description": "Output tokens, including `reasoning`.",
+          "type": "integer",
+          "format": "uint64",
+          "minimum": 0
+        },
+        "cache_read": {
+          "description": "Input tokens served from the provider's prompt cache.",
+          "type": "integer",
+          "format": "uint64",
+          "minimum": 0
+        },
+        "cache_write": {
+          "description": "Input tokens written to the provider's prompt cache, or `None` when\nunknown; no supported provider reports them yet.",
+          "type": [
+            "integer",
+            "null"
+          ],
+          "format": "uint64",
+          "minimum": 0
+        },
+        "reasoning": {
+          "description": "Reasoning tokens.",
+          "type": "integer",
+          "format": "uint64",
+          "minimum": 0
+        },
+        "unreported_requests": {
+          "description": "Model requests whose provider reported no input or output count.",
+          "type": "integer",
+          "format": "uint32",
+          "minimum": 0
+        }
+      },
+      "required": [
+        "input",
+        "output",
+        "cache_read",
+        "reasoning",
+        "unreported_requests"
+      ]
+    }
+  }
+}

@@ -79,8 +79,8 @@ impl SessionId {
     }
 
     /// Wraps the session identifier `id`.
-    pub(crate) fn new(id: String) -> Self {
-        Self(id)
+    pub fn new(id: impl Into<String>) -> Self {
+        Self(id.into())
     }
 }
 
@@ -90,6 +90,11 @@ impl SessionId {
 pub struct TurnIndex(u64);
 
 impl TurnIndex {
+    /// Wraps the zero-based durable turn position `position`.
+    pub fn new(position: u64) -> Self {
+        Self(position)
+    }
+
     /// Returns the position.
     pub fn get(self) -> u64 {
         self.0
@@ -125,8 +130,12 @@ pub struct RunEvent {
 }
 
 impl RunEvent {
-    /// Encodes `at` as milliseconds since the Unix epoch.
-    fn serialize_at<S: Serializer>(at: &SystemTime, serializer: S) -> Result<S::Ok, S::Error> {
+    /// Encodes `at` as milliseconds since the Unix epoch; transcript turn
+    /// times share this encoding.
+    pub(crate) fn serialize_at<S: Serializer>(
+        at: &SystemTime,
+        serializer: S,
+    ) -> Result<S::Ok, S::Error> {
         let millis = at
             .duration_since(UNIX_EPOCH)
             .ok()
@@ -137,7 +146,9 @@ impl RunEvent {
     }
 
     /// Decodes `at` from milliseconds since the Unix epoch.
-    fn deserialize_at<'de, D: Deserializer<'de>>(deserializer: D) -> Result<SystemTime, D::Error> {
+    pub(crate) fn deserialize_at<'de, D: Deserializer<'de>>(
+        deserializer: D,
+    ) -> Result<SystemTime, D::Error> {
         let millis = u64::deserialize(deserializer)?;
 
         UNIX_EPOCH
@@ -255,11 +266,13 @@ pub struct ToolCallItem {
     pub call_id: String,
     /// Function name the model called.
     pub name: String,
-    /// Result text the model received.
+    /// Result text the model received; empty for a call that was never
+    /// answered.
     pub output: String,
     /// How the call was answered.
     pub status: ToolCallStatus,
-    /// Bounded one-line description of what the call did.
+    /// Bounded one-line description of what the call did; empty in a
+    /// [`crate::TurnRecord`], since sessions do not store it.
     pub summary: String,
 }
 
@@ -273,6 +286,18 @@ impl ToolCallItem {
             output: output.to_string(),
             status: ToolCallStatus::from(activity),
             summary: activity.to_string(),
+        }
+    }
+
+    /// Describes `call` as a session recorded it, not yet answered.
+    pub(crate) fn unanswered(call: &ToolCall) -> Self {
+        Self {
+            arguments: call.arguments_json().unwrap_or_default(),
+            call_id: call.id().to_string(),
+            name: call.name().to_string(),
+            output: String::new(),
+            status: ToolCallStatus::Unanswered,
+            summary: String::new(),
         }
     }
 }
@@ -292,6 +317,13 @@ pub enum ToolCallStatus {
     Skipped,
     /// The tool is denied by policy or does not exist.
     Unavailable,
+    /// The call was answered, as a [`crate::TurnRecord`] reports every
+    /// answered call: sessions store the result text but not which of the
+    /// statuses above the live run reported.
+    Answered,
+    /// The turn stopped before the call was answered, as a
+    /// [`crate::TurnRecord`] reports it; the output is empty.
+    Unanswered,
 }
 
 impl From<&ToolActivity> for ToolCallStatus {

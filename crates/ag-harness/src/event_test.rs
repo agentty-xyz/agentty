@@ -188,7 +188,7 @@ fn run_event_round_trips_through_json_matching_its_schema() -> Result<(), Box<dy
         truncated: false,
     };
     let (sink, _stream) = EventSink::channel();
-    let session = SessionId::new("s".into());
+    let session = SessionId::new("s");
     let turn = TurnIndex::from_position(2);
     let kinds = vec![
         RunEventKind::Started {

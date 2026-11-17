@@ -508,7 +508,7 @@ pub struct Usage {
 
 impl Usage {
     /// Sums the usage of every model request in `report`.
-    fn from_report(report: &TurnReport) -> Self {
+    pub(crate) fn from_report(report: &TurnReport) -> Self {
         report
             .model_requests()
             .iter()

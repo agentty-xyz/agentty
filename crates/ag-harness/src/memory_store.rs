@@ -3,7 +3,7 @@
 use std::collections::HashMap;
 use std::path::Path;
 use std::sync::{Arc, Mutex, MutexGuard};
-use std::time::Duration;
+use std::time::{Duration, SystemTime};
 
 use async_trait::async_trait;
 use tokio::time::Instant;
@@ -14,9 +14,10 @@ use crate::recovery::{HostRequest, HostTurnRecord, HostTurnStatus};
 use crate::reservation::TURN_LEASE_SECONDS;
 use crate::store::{
     Admission, AdmissionState, CompactionSource, LoadedSession, ModelSwitch, NewSession,
-    Reservation, ReservedTurn, SessionStore, StoreIdentity, TurnAdmission, TurnOwner, WriteRecord,
-    WriteStatus,
+    Reservation, ReservedTurn, SessionStore, StoreIdentity, StoredTurn, StoredTurnOptions,
+    TurnAdmission, TurnOwner, WriteRecord, WriteStatus,
 };
+use crate::transcript::{TurnRange, TurnStatus};
 use crate::write_journal::content_hash;
 use crate::{SessionError, TurnError, TurnOutcome};
 
@@ -61,6 +62,7 @@ impl MemoryStore {
         turn.outcome = outcome.cloned();
         turn.messages.extend_from_slice(messages);
         turn.status = Status::Completed;
+        turn.finished_at = Some(SystemTime::now());
         session.configuration.projection = projection;
 
         Ok(())
@@ -169,6 +171,72 @@ impl SessionStore for MemoryStore {
             .find(|command| command.id == id && command.owner == *owner)
             .ok_or_else(|| lost(owner))?;
         command.reconciled = true;
+
+        Ok(())
+    }
+
+    async fn load_transcript(
+        &self,
+        session_id: &str,
+        range: &TurnRange,
+    ) -> Result<Vec<StoredTurn>, SessionError> {
+        let mut state = self.lock();
+        let session = state
+            .sessions
+            .get_mut(session_id)
+            .ok_or_else(|| SessionError::NotFound {
+                id: session_id.to_string(),
+            })?;
+        session.recover();
+        let (start, end, newest) = range.stored_bounds();
+        let mut turns: Vec<StoredTurn> = session
+            .turns
+            .iter()
+            .rev()
+            .filter(|turn| (start..end).contains(&turn.owner.turn_position()))
+            .filter_map(TurnRecord::stored)
+            .take(usize::try_from(newest).unwrap_or(usize::MAX))
+            .collect();
+        turns.reverse();
+
+        Ok(turns)
+    }
+
+    async fn fork_session(
+        &self,
+        source: &str,
+        through: i64,
+        target: &str,
+    ) -> Result<(), SessionError> {
+        let mut state = self.lock();
+        let State {
+            next_command,
+            next_write,
+            sessions,
+        } = &mut *state;
+        let session = sessions
+            .get_mut(source)
+            .ok_or_else(|| SessionError::NotFound {
+                id: source.to_string(),
+            })?;
+        session.recover();
+        if !session
+            .turns
+            .iter()
+            .any(|turn| turn.owner.turn_position() == through && turn.status != Status::Running)
+        {
+            return Err(SessionError::TurnNotFound {
+                id: source.to_string(),
+                turn: through.unsigned_abs(),
+            });
+        }
+        if sessions.contains_key(target) {
+            return Err(SessionError::AlreadyExists {
+                id: target.to_string(),
+            });
+        }
+        let fork = sessions[source].fork(&self.identity, through, target, next_command, next_write);
+        sessions.insert(target.to_string(), fork);
 
         Ok(())
     }
@@ -323,6 +391,7 @@ impl SessionStore for MemoryStore {
                 Admission::Recorded(record) => return Ok(Reservation::Recorded(record)),
                 Admission::Reserve(turn) => turn,
             };
+        let text_output = StoredTurnOptions::decode(turn.options())?.text_output();
         let position = session.next_turn;
         let next_position = position
             .checked_add(1)
@@ -341,11 +410,14 @@ impl SessionStore for MemoryStore {
             model: session.configuration.recorded_model(),
             deadline,
             error_type: None,
+            finished_at: None,
             messages: vec![turn.message().clone()],
             outcome: None,
             owner: owner.clone(),
             request: turn.request().cloned(),
+            started_at: SystemTime::now(),
             status: Status::Running,
+            text_output,
         });
         session.next_turn = next_position;
 
@@ -424,6 +496,7 @@ impl SessionStore for MemoryStore {
         let turn = session.live_turn(owner)?;
         turn.status = Status::Failed;
         turn.error_type = Some(format!("{:?}", error.error_type()));
+        turn.finished_at = Some(SystemTime::now());
 
         Ok(())
     }
@@ -438,6 +511,7 @@ impl SessionStore for MemoryStore {
         {
             turn.status = Status::Interrupted;
             turn.error_type = Some(owner.interruption_error_type().to_string());
+            turn.finished_at = Some(SystemTime::now());
         }
 
         Ok(())
@@ -596,6 +670,75 @@ impl Record {
         })
     }
 
+    /// Returns session `target`, a copy of this session's configuration and
+    /// of its turns through position `through` with their command and write
+    /// records, under owners of `target` and newly assigned record IDs.
+    fn fork(
+        &self,
+        identity: &StoreIdentity,
+        through: i64,
+        target: &str,
+        next_command: &mut i64,
+        next_write: &mut i64,
+    ) -> Self {
+        let owner = |owner: &TurnOwner| {
+            TurnOwner::new(
+                identity.clone(),
+                target.to_string(),
+                owner.turn_position(),
+                owner.token().to_vec(),
+            )
+        };
+        let mut configuration = self.configuration.clone();
+        configuration
+            .checkpoint
+            .take_if(|checkpoint| checkpoint.covered_through() > through);
+        configuration.projection = HistoryProjection::default();
+        let commands = self
+            .commands
+            .iter()
+            .filter(|command| command.owner.turn_position() <= through)
+            .map(|command| {
+                *next_command = next_command.saturating_add(1);
+                let mut copy = command.clone();
+                copy.id = *next_command;
+                copy.owner = owner(&command.owner);
+
+                copy
+            })
+            .collect();
+        let turns = self
+            .turns
+            .iter()
+            .filter(|turn| turn.owner.turn_position() <= through)
+            .map(|turn| TurnRecord {
+                owner: owner(&turn.owner),
+                ..turn.clone()
+            })
+            .collect();
+        let writes = self
+            .writes
+            .iter()
+            .filter(|write| write.turn_position <= through)
+            .map(|write| {
+                *next_write = next_write.saturating_add(1);
+
+                WriteRecord {
+                    id: *next_write,
+                    ..write.clone()
+                }
+            })
+            .collect();
+
+        Self {
+            commands,
+            configuration,
+            next_turn: through.saturating_add(1),
+            turns,
+            writes,
+        }
+    }
+
     fn recover(&mut self) {
         if let Some(turn) = self.turns.last_mut()
             && turn.status == Status::Running
@@ -603,6 +746,7 @@ impl Record {
         {
             turn.status = Status::Interrupted;
             turn.error_type = Some("interrupted".to_string());
+            turn.finished_at = Some(SystemTime::now());
         }
     }
 
@@ -713,18 +857,47 @@ impl Record {
     }
 }
 
+#[derive(Clone)]
 struct TurnRecord {
     deadline: Instant,
     error_type: Option<String>,
+    finished_at: Option<SystemTime>,
     messages: Vec<ModelMessage>,
     model: crate::store::RecordedModel,
     outcome: Option<TurnOutcome>,
     owner: TurnOwner,
     request: Option<HostRequest>,
+    started_at: SystemTime,
     status: Status,
+    text_output: bool,
 }
 
-#[derive(Eq, PartialEq)]
+impl TurnRecord {
+    /// Returns the transcript record of this turn, or `None` while it runs.
+    fn stored(&self) -> Option<StoredTurn> {
+        let status = match self.status {
+            Status::Running => return None,
+            Status::Completed => TurnStatus::Completed,
+            Status::Failed => TurnStatus::Failed,
+            Status::Interrupted => TurnStatus::Interrupted,
+        };
+
+        Some(
+            StoredTurn::new(
+                self.owner.turn_position(),
+                status,
+                self.started_at,
+                self.finished_at.unwrap_or(self.started_at),
+                self.messages.clone(),
+            )
+            .with_error_type(self.error_type.clone())
+            .with_outcome(self.outcome.clone())
+            .with_text_output(self.text_output),
+        )
+    }
+}
+
+#[derive(Clone, Copy, Eq, PartialEq)]
 enum Status {
     Running,
     Completed,
