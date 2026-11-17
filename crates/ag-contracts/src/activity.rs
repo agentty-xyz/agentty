@@ -5,9 +5,10 @@ use std::time::SystemTime;
 /// A bounded display snapshot of one observed provider operation.
 ///
 /// Match updates by `(attempt_id, id)`. Retries use new attempt identities.
-/// Names describe tools or explicitly invoked skills, never inferred file
-/// reads. Optional input and output previews are display-only: they must not
-/// be replayed to providers or implicitly exported as telemetry.
+/// Names describe tools, MCP `server/tool` pairs, or explicitly invoked
+/// skills, never inferred file reads. Optional input and output previews are
+/// display-only: they must not be replayed to providers or implicitly exported
+/// as telemetry.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct ActivityEvent {
     /// Unique provider attempt identity, including retries and repairs.
@@ -20,7 +21,7 @@ pub struct ActivityEvent {
     pub input: Option<String>,
     /// Provider-independent operation category.
     pub kind: ActivityKind,
-    /// Bounded tool or skill identity suitable for display.
+    /// Bounded tool, MCP `server/tool`, or skill identity suitable for display.
     pub name: String,
     /// Time this snapshot was observed by the adapter.
     pub observed_at: SystemTime,
@@ -39,9 +40,11 @@ pub enum ActivityKind {
     Command,
     /// File modification.
     FileChange,
+    /// Model Context Protocol server tool invocation, named `server/tool`.
+    Mcp,
     /// Named skill invocation.
     Skill,
-    /// Built-in, dynamic, MCP, or subagent tool invocation.
+    /// Built-in, dynamic, or subagent tool invocation.
     Tool,
     /// Provider web search.
     WebSearch,

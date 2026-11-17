@@ -411,12 +411,12 @@ repository files; Rust and Python files show their module documentation summary.
 Unstarted stacked drafts look up files in the nearest available ancestor worktree. See
 [Prompt Input](@/docs/usage/keybindings.md#prompt-input) for editing keys.
 
-During a turn, the output shows live tool and skill counts with succeeded, failed,
+During a turn, the output shows live tool, MCP, and skill counts with succeeded, failed,
 running, and interrupted totals, plus the latest successful, running, and interrupted
 calls with shortened command previews. Completed responses keep a usage footer: `Tools`
-lists invocation counts and `Skills` lists explicit Claude skill invocations. Codex,
-Claude, and Antigravity report this activity. Provider failures show a short error and
-captured output where available.
+lists invocation counts, `MCP` lists Codex and Claude MCP calls as `server/tool`, and
+`Skills` lists explicit Claude skill invocations. Codex, Claude, and Antigravity report
+this activity. Provider failures show a short error and captured output where available.
 
 ## Session Sizes
 

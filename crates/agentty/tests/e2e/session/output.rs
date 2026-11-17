@@ -1263,6 +1263,8 @@ case "$input" in
   *"Stream activity demo"*)
     printf '%s\n' '{"type":"assistant","message":{"content":[{"type":"tool_use","id":"old","name":"Bash","input":{"command":"obsolete-command"}}]}}'
     printf '%s\n' '{"type":"user","message":{"content":[{"type":"tool_result","tool_use_id":"old","content":"done"}]}}'
+    printf '%s\n' '{"type":"assistant","message":{"content":[{"type":"tool_use","id":"mcp","name":"mcp__posthog__query","input":{"query":"SELECT 1"}}]}}'
+    printf '%s\n' '{"type":"user","message":{"content":[{"type":"tool_result","tool_use_id":"mcp","content":"ok"}]}}'
     printf '%s\n' '{"type":"assistant","message":{"content":[{"type":"tool_use","id":"read","name":"Bash","input":{"command":"printf activity-details-with-a-long-literal-xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx-hidden-command-tail"}},{"type":"tool_use","id":"skill","name":"Skill","input":{"skill":"review"}}]}}'
     printf '%s\n' '{"type":"assistant","message":{"content":[{"type":"tool_use","id":"group","name":"Bash","input":{"command":"{ cargo fmt; cargo test; }"}}]}}'
     __RUNNING_GATE__
@@ -1297,11 +1299,12 @@ printf '{"type":"result","subtype":"success","result":"%s","usage":{"input_token
                 .write_text("Stream activity demo")
                 .press_key("Enter")
                 .wait_for_text("printf activity-details", 15000)
+                .wait_for_text("✓ mcp posthog/query · SELECT 1", 15000)
                 .wait_for_text("… skill review", 15000)
                 .wait_for_text("… Bash · { cargo fmt; cargo test; }", 15000)
                 .capture_labeled("running", "Invocations before the answer")
                 .compose(&running.release())
-                .wait_for_text("Status: 2 succeeded · 2 failed · 1 running", 10000)
+                .wait_for_text("Status: 3 succeeded · 2 failed · 1 running", 10000)
                 .wait_for_text("… Edit · src/example.rs", 10000)
                 .capture_labeled("settled", "Statuses update in place")
                 .compose(&settled.release())
@@ -1345,6 +1348,7 @@ fn assert_live_activity_report(frame: &TerminalFrame, report: &ProofReport) {
     let expected_labels: [&[&str]; 2] = [
         &[
             "… Bash · printf activity-details",
+            "✓ mcp posthog/query · SELECT 1",
             "… skill review",
             "… Bash · { cargo fmt; cargo test; }",
         ],
@@ -1359,13 +1363,14 @@ fn assert_live_activity_report(frame: &TerminalFrame, report: &ProofReport) {
         }
         assertion::assert_text_in_region(&capture, "printf activity-details", &full);
         assertion::assert_text_in_region(&capture, "Tools: Bash ×3", &full);
+        assertion::assert_text_in_region(&capture, "MCP: posthog/query ×1", &full);
         assertion::assert_text_in_region(&capture, "Skills: review ×1", &full);
         assertion::assert_text_in_region(
             &capture,
             if index == 0 {
-                "Status: 1 succeeded · 0 failed · 3 running"
+                "Status: 2 succeeded · 0 failed · 3 running"
             } else {
-                "Status: 2 succeeded · 2 failed · 1 running"
+                "Status: 3 succeeded · 2 failed · 1 running"
             },
             &full,
         );
@@ -1394,7 +1399,7 @@ fn assert_live_activity_report(frame: &TerminalFrame, report: &ProofReport) {
     let thinking_full = Region::full(thinking.cols(), thinking.rows());
     assertion::assert_text_in_region(
         &thinking,
-        "Status: 3 succeeded · 2 failed · 0 running",
+        "Status: 4 succeeded · 2 failed · 0 running",
         &thinking_full,
     );
     assertion::assert_text_in_region(&thinking, "✓ Edit · src/example.rs", &thinking_full);
@@ -1405,7 +1410,13 @@ fn assert_live_activity_report(frame: &TerminalFrame, report: &ProofReport) {
     let full = Region::full(frame.cols(), frame.rows());
     assertion::assert_text_in_region(frame, "Activity demo finished", &full);
     assertion::assert_text_in_region(frame, "Tools: Bash ×3 (1 failed), Edit ×1", &full);
+    assertion::assert_text_in_region(frame, "MCP: posthog/query ×1", &full);
     assertion::assert_text_in_region(frame, "Skills: review ×1 (1 failed)", &full);
+    let text = frame.all_text();
+    let footer =
+        ["Tools: Bash", "MCP: posthog/query", "Skills: review"].map(|label| text.find(label));
+    assert!(footer.iter().all(Option::is_some));
+    assert!(footer.windows(2).all(|pair| pair[0] < pair[1]));
     assert!(!frame.all_text().contains("… Bash"));
     assert!(!frame.all_text().contains("✓ Bash"));
     assert!(!frame.all_text().contains("✗"));

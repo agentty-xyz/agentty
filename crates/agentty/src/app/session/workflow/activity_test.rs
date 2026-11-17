@@ -53,6 +53,67 @@ fn summary_counts_invocations_not_updates_and_separates_attempts_and_skills() {
 }
 
 #[test]
+fn mcp_calls_group_by_server_tool_between_tools_and_skills() {
+    // Arrange
+    let mut activity = TurnActivity::default();
+    let event = ActivityEvent {
+        attempt_id: "attempt".into(),
+        exit_code: None,
+        id: "query-1".into(),
+        input: Some(r#"{"query":"SELECT 1"}"#.into()),
+        kind: ActivityKind::Mcp,
+        name: "posthog/query".into(),
+        observed_at: SystemTime::UNIX_EPOCH,
+        output: None,
+        parent_id: None,
+        status: ActivityStatus::Completed,
+    };
+
+    // Act
+    activity.observe(ActivityEvent {
+        id: "skill".into(),
+        input: None,
+        kind: ActivityKind::Skill,
+        name: "review".into(),
+        ..event.clone()
+    });
+    activity.observe(ActivityEvent {
+        id: "read".into(),
+        input: None,
+        kind: ActivityKind::Tool,
+        name: "Read".into(),
+        ..event.clone()
+    });
+    activity.observe(ActivityEvent {
+        id: "docs".into(),
+        name: "posthog/docs-search".into(),
+        status: ActivityStatus::Failed,
+        ..event.clone()
+    });
+    activity.observe(ActivityEvent {
+        id: "query-2".into(),
+        status: ActivityStatus::Running,
+        ..event.clone()
+    });
+    activity.observe(event);
+    let summary = activity.summary();
+    let live = activity.live.snapshot();
+
+    // Assert
+    assert_eq!(
+        summary,
+        "Tools: Read ×1\nMCP: posthog/docs-search ×1 (1 failed), posthog/query ×2 (1 \
+         interrupted)\nSkills: review ×1\n"
+    );
+    assert_eq!(
+        live,
+        "Tools: Read ×1\nMCP: posthog/docs-search ×1, posthog/query ×2\nSkills: review \
+         ×1\nStatus: 3 succeeded · 1 failed · 1 running\n\n✓ mcp posthog/query · SELECT 1\n… mcp \
+         posthog/query · SELECT 1\n"
+    );
+}
+
+#[test]
 fn summary_retains_failed_command_count_after_live_rows_clear() {
     // Arrange
     let mut activity = TurnActivity::default();

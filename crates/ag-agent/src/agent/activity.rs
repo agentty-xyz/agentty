@@ -72,7 +72,11 @@ impl ActivityObserver {
             Some("commandExecution" | "command_execution") => (ActivityKind::Command, "shell"),
             Some("fileChange" | "file_change") => (ActivityKind::FileChange, "apply_patch"),
             Some("webSearch" | "web_search") => (ActivityKind::WebSearch, "web_search"),
-            Some("mcpToolCall" | "mcp_tool_call" | "dynamicToolCall" | "dynamic_tool_call") => (
+            Some("mcpToolCall" | "mcp_tool_call") => (
+                ActivityKind::Mcp,
+                item.get("tool").and_then(Value::as_str).unwrap_or("tool"),
+            ),
+            Some("dynamicToolCall" | "dynamic_tool_call") => (
                 ActivityKind::Tool,
                 item.get("tool").and_then(Value::as_str).unwrap_or("tool"),
             ),
@@ -244,6 +248,7 @@ impl ActivityObserver {
                         }
                         continue;
                     }
+                    let mcp_name;
                     let (kind, name) = if name == "Skill" {
                         (
                             ActivityKind::Skill,
@@ -254,6 +259,15 @@ impl ActivityObserver {
                         )
                     } else if name == "Bash" {
                         (ActivityKind::Command, name)
+                    } else if let Some((server, tool)) = name
+                        .strip_prefix("mcp__")
+                        .and_then(|qualified| qualified.split_once("__"))
+                    {
+                        // Claude qualifies MCP tools as
+                        // `mcp__<server>__<tool>`.
+                        mcp_name = format!("{server}/{tool}");
+
+                        (ActivityKind::Mcp, mcp_name.as_str())
                     } else {
                         (ActivityKind::Tool, name)
                     };
