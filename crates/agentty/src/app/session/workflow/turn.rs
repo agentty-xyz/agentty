@@ -8,7 +8,7 @@ use ag_contracts::{
     TurnEvent, TurnRequest, TurnResult,
 };
 use ag_session::ResolvedEnv;
-use ag_telemetry::{FutureExt as _, Outcome, Span};
+use ag_telemetry::{Outcome, Span};
 use ag_worker::RunClient;
 use tokio::sync::mpsc;
 use tokio_util::sync::CancellationToken;
@@ -20,7 +20,7 @@ use super::worker::{SessionWorkerContext, SessionWorkerService, TurnMetadata};
 use super::{SessionTaskService, StatusTransition, isolation, post_turn};
 use crate::app::service::HarnessModels;
 use crate::app::session::SessionError;
-use crate::app::{AppEvent, SessionManager, setting};
+use crate::app::{AppEvent, SessionManager, setting, spawn};
 use crate::domain::agent::{AgentKind, AgentSelection, ReasoningLevel, ResponseStyle, SpeedMode};
 use crate::domain::permission::PermissionMode;
 use crate::domain::session::{SessionId, Status};
@@ -244,15 +244,12 @@ pub(super) async fn run_channel_turn(
         }
     };
     let (event_tx, event_rx) = mpsc::unbounded_channel::<TurnEvent>();
-    let consumer = tokio::spawn(
-        consume_turn_events(
-            event_rx,
-            context.app_event_tx.clone(),
-            context.session_id.clone(),
-            Arc::clone(&context.child_pid),
-        )
-        .with_context(ag_telemetry::Context::current()),
-    );
+    let consumer = spawn::spawn_traced(consume_turn_events(
+        event_rx,
+        context.app_event_tx.clone(),
+        context.session_id.clone(),
+        Arc::clone(&context.child_pid),
+    ));
 
     spawn_request_title_generation(
         RequestTitleInput::from_worker(

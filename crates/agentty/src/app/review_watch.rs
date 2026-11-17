@@ -22,7 +22,7 @@ use crate::app::prompt_intent::{
 };
 use crate::app::session::{SessionTaskService, StatusTransition};
 use crate::app::sync::review_request_remote;
-use crate::app::{App, AppEvent};
+use crate::app::{App, AppEvent, spawn};
 use crate::domain::session::{ReviewRequest, ReviewRequestState, SessionId, Status};
 use crate::domain::transcript_notice::TranscriptNotice;
 use crate::domain::transient_message::GeneratedTurnLabels;
@@ -752,7 +752,7 @@ impl App {
             .insert(session_id.clone());
         let session_id = session_id.clone();
 
-        tokio::spawn(async move {
+        spawn::spawn_detached(async move {
             let rerun_result = match review_request_remote(
                 folder,
                 git_client.as_ref(),

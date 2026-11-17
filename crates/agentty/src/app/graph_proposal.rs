@@ -14,10 +14,10 @@ use ag_session::{
 use askama::Template;
 use tokio_util::sync::CancellationToken;
 
-use crate::app::App;
 use crate::app::command_gateway::GraphProposalCommand;
 use crate::app::service::AppServices;
 use crate::app::session::SessionTaskService;
+use crate::app::{App, spawn};
 use crate::domain::session::{SessionId, Status};
 use crate::domain::session_message::SessionTranscript;
 
@@ -384,21 +384,22 @@ impl App {
             .ok();
         let status = handles.map(|handles| Arc::clone(&handles.status));
         let transcript = handles.map(|handles| Arc::clone(&handles.transcript));
-        self.services.track_cleanup_task(tokio::spawn(async move {
-            let activity = services
-                .begin_graph_activity(&state.input.session_id, status)
+        self.services
+            .track_cleanup_task(spawn::spawn_detached(async move {
+                let activity = services
+                    .begin_graph_activity(&state.input.session_id, status)
+                    .await;
+                run_graph_proposal_generation(
+                    &services,
+                    &state,
+                    folder,
+                    client.as_ref(),
+                    &cancellation,
+                    transcript,
+                )
                 .await;
-            run_graph_proposal_generation(
-                &services,
-                &state,
-                folder,
-                client.as_ref(),
-                &cancellation,
-                transcript,
-            )
-            .await;
-            activity.finish(&services).await;
-        }));
+                activity.finish(&services).await;
+            }));
     }
 }
 

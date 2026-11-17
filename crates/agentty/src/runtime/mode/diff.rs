@@ -4,7 +4,7 @@
 use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
 use ratatui::layout::Rect;
 
-use crate::app::{App, AppEvent};
+use crate::app::{App, AppEvent, spawn};
 use crate::domain::input::InputState;
 use crate::domain::session::{Session, SessionId};
 use crate::presentation::app_mode::{
@@ -1186,7 +1186,7 @@ fn start_selected_preview_load(
     let git_client = app.services.git_client();
     let loaded_path = path.clone();
     let loaded_session_id = session_id.into();
-    tokio::spawn(async move {
+    spawn::spawn_detached(async move {
         let result = git_client
             .read_worktree_file(session_folder, loaded_path.clone())
             .await

@@ -26,7 +26,7 @@ use crate::app::review::FocusedReviewPersistenceRetry;
 use crate::app::review_graph::{ReviewGraphHost, ReviewGraphRequest};
 use crate::app::review_prompt::MAX_REVIEW_PROVIDER_CALLS;
 use crate::app::session_diff::DeferredAutoReviewPersistenceRetry;
-use crate::app::{AppEvent, UpdateStatus, at_mention_task};
+use crate::app::{AppEvent, UpdateStatus, at_mention_task, spawn};
 use crate::domain::agent::{AgentCliInfo, AgentKind, AgentSelection, ReasoningLevel};
 use crate::domain::file_description::{FILE_DESCRIPTION_PREFIX_BYTES, FileDescriptionSyntax};
 use crate::domain::file_entry::FileEntry;
@@ -193,7 +193,7 @@ impl TaskService {
     /// generation without waiting for Git or persistence I/O.
     pub(super) fn spawn_session_diff_task(input: SessionDiffTaskInput) -> u64 {
         let request_id = NEXT_SESSION_DIFF_REQUEST_ID.fetch_add(1, Ordering::Relaxed);
-        tokio::spawn(async move {
+        spawn::spawn_detached(async move {
             let result = match input.source {
                 SessionDiffTaskSource::Archived { repositories } => repositories
                     .sessions()
@@ -241,7 +241,7 @@ impl TaskService {
         input: PromptImagePasteTaskInput,
     ) -> (u64, JoinHandle<()>) {
         let request_id = NEXT_PROMPT_IMAGE_PASTE_REQUEST_ID.fetch_add(1, Ordering::Relaxed);
-        let capture_task = tokio::spawn(async move {
+        let capture_task = spawn::spawn_detached(async move {
             let result = input
                 .clipboard_image_client
                 .persist_clipboard_image(
@@ -280,11 +280,11 @@ impl TaskService {
         let request_id = NEXT_AT_MENTION_REQUEST_ID.fetch_add(1, Ordering::Relaxed);
         let tracked_session_id = session_id.clone();
         let task_session_id = session_id.clone();
-        let handle = tokio::spawn(async move {
+        let handle = spawn::spawn_detached(async move {
             tokio::time::sleep(AT_MENTION_LOAD_DEBOUNCE).await;
 
             let load_handle =
-                tokio::task::spawn_blocking(move || file_index::list_files(&lookup_root));
+                spawn::spawn_blocking_detached(move || file_index::list_files(&lookup_root));
             let entries = Self::join_at_mention_entries(load_handle, &session_id).await;
 
             Self::publish_at_mention_entries(&app_event_tx, entries, &session_id, "loaded");
@@ -348,7 +348,7 @@ impl TaskService {
         session_id: SessionId,
         paths: Vec<String>,
     ) -> JoinHandle<()> {
-        tokio::spawn(async move {
+        spawn::spawn_detached(async move {
             let mut descriptions = Vec::with_capacity(paths.len());
             for path in paths {
                 let description =
@@ -385,7 +385,7 @@ impl TaskService {
     pub(super) async fn load_agent_availability(
         availability_probe: Arc<dyn ag_session::AgentAvailabilityProbe>,
     ) -> Vec<AgentKind> {
-        tokio::task::spawn_blocking(move || availability_probe.available_agent_kinds())
+        spawn::spawn_blocking_detached(move || availability_probe.available_agent_kinds())
             .await
             .unwrap_or_else(|_| AgentKind::ALL.to_vec())
     }
@@ -397,7 +397,7 @@ impl TaskService {
         availability_probe: Arc<dyn ag_session::AgentAvailabilityProbe>,
         fallback_agent_kinds: Vec<AgentKind>,
     ) -> Vec<AgentCliInfo> {
-        tokio::task::spawn_blocking(move || availability_probe.available_agent_clis())
+        spawn::spawn_blocking_detached(move || availability_probe.available_agent_clis())
             .await
             .unwrap_or_else(|_| AgentCliInfo::from_kinds(&fallback_agent_kinds))
     }
@@ -410,7 +410,7 @@ impl TaskService {
         fallback_agent_kinds: Vec<AgentKind>,
     ) {
         let app_event_tx = app_event_tx.clone();
-        tokio::spawn(async move {
+        spawn::spawn_detached(async move {
             let agent_clis =
                 Self::load_agent_cli_availability(availability_probe, fallback_agent_kinds).await;
             let _ = app_event_tx.send(AppEvent::AgentCliVersionsUpdated { agent_clis });
@@ -426,7 +426,7 @@ impl TaskService {
         review_request_client: Arc<dyn ReviewRequestClient>,
     ) -> u64 {
         let request_id = NEXT_REVIEW_COMMENT_REQUEST_ID.fetch_add(1, Ordering::Relaxed);
-        tokio::spawn(async move {
+        spawn::spawn_detached(async move {
             let result = Self::load_session_review_comment_snapshot(
                 task.working_dir,
                 task.fallback_repo_url,
@@ -521,7 +521,7 @@ impl TaskService {
         version_task_runner: Arc<dyn VersionTaskRunner>,
     ) -> JoinHandle<()> {
         let app_event_tx = app_event_tx.clone();
-        tokio::spawn(async move {
+        spawn::spawn_detached(async move {
             let mut completed_update_version = None;
             let mut tick = tokio::time::interval(check_interval);
             tick.set_missed_tick_behavior(MissedTickBehavior::Delay);
@@ -598,7 +598,7 @@ impl TaskService {
         app_event_tx: mpsc::UnboundedSender<AppEvent>,
         retry: FocusedReviewPersistenceRetry,
     ) {
-        tokio::spawn(async move {
+        spawn::spawn_detached(async move {
             tokio::time::sleep(Self::focused_review_persistence_retry_delay(retry.attempt)).await;
 
             // Fire-and-forget: receiver may be dropped during shutdown.
@@ -612,7 +612,7 @@ impl TaskService {
         app_event_tx: mpsc::UnboundedSender<AppEvent>,
         retry: DeferredAutoReviewPersistenceRetry,
     ) {
-        tokio::spawn(async move {
+        spawn::spawn_detached(async move {
             tokio::time::sleep(Self::focused_review_persistence_retry_delay(retry.attempt)).await;
 
             // Fire-and-forget: receiver may be dropped during shutdown.
@@ -661,7 +661,7 @@ impl TaskService {
         )
         .await;
 
-        tokio::spawn(async move {
+        spawn::spawn_detached(async move {
             let rules =
                 super::review_rules::ReviewRules::load(fs_client.as_ref(), &session_folder).await;
             let review_result = match (client, rules) {

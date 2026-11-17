@@ -13,7 +13,7 @@ use crate::app::command_gateway::{
 };
 use crate::app::message_admission::MessageIntent;
 use crate::app::task::{PromptImagePasteTaskInput, TaskService};
-use crate::app::{App, AppError, ReviewCacheEntry, SessionManager};
+use crate::app::{App, AppError, ReviewCacheEntry, SessionManager, spawn};
 use crate::domain::agent::{AgentSelection, ReasoningLevel, ResponseStyle, SpeedMode};
 use crate::domain::composer::{PromptAttachment, PromptSlashCommandSet};
 use crate::domain::permission::PermissionMode;
@@ -510,7 +510,7 @@ impl App {
             .into_iter()
             .map(|attachment| attachment.local_image_path)
             .collect();
-        let cleanup_task = tokio::spawn(SessionManager::cleanup_prompt_attachment_paths(
+        let cleanup_task = spawn::spawn_detached(SessionManager::cleanup_prompt_attachment_paths(
             self.services.fs_client(),
             attachment_paths,
         ));

@@ -4,7 +4,7 @@ use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
 
-use crate::app::{App, AppError, AppEvent, Tab};
+use crate::app::{App, AppError, AppEvent, Tab, spawn};
 use crate::domain::input::InputState;
 use crate::domain::setting::SettingName;
 use crate::infra::fs::FsError;
@@ -178,7 +178,7 @@ impl App {
         };
         let client = Arc::clone(&self.project_catalog.client);
         let event_tx = self.services.event_sender();
-        tokio::spawn(async move {
+        spawn::spawn_detached(async move {
             let result = client
                 .discover_project_paths(root, session_worktree_root, Arc::clone(&cancelled))
                 .await

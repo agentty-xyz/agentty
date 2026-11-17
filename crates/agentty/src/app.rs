@@ -48,6 +48,7 @@ mod session_diff;
 mod session_runtime;
 pub mod session_state;
 pub(crate) mod setting;
+pub(crate) mod spawn;
 mod startup;
 mod sync;
 pub(crate) mod tab;

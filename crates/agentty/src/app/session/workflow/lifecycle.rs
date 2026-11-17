@@ -22,7 +22,9 @@ use super::{
 };
 use crate::analytics::SessionType;
 use crate::app::session::{SessionCreationSettings, SessionError};
-use crate::app::{AppEvent, AppServices, ProjectManager, SessionManager, agentty_home, setting};
+use crate::app::{
+    AppEvent, AppServices, ProjectManager, SessionManager, agentty_home, setting, spawn,
+};
 use crate::domain::agent::{AgentKind, AgentSelection, ReasoningLevel, ResponseStyle, SpeedMode};
 use crate::domain::permission::PermissionMode;
 use crate::domain::session::{
@@ -2331,7 +2333,7 @@ impl SessionManager {
 
         let fs_client = services.fs_client();
         let git_client = services.git_client();
-        services.track_cleanup_task(tokio::spawn(trace.scope(
+        services.track_cleanup_task(spawn::spawn_detached(trace.scope(
             SessionManager::cleanup_deleted_session_resources(fs_client, git_client, cleanup),
         )));
     }
@@ -3168,7 +3170,7 @@ impl SessionManager {
                 ..ag_worker::RunScope::default()
             },
         );
-        Some(tokio::spawn(
+        Some(spawn::spawn_detached(
             Self::run_claimed_session_title_generation_task(
                 ClaimedSessionTitleGenerationTaskInput {
                     app_event_tx,
@@ -3927,7 +3929,7 @@ impl SessionManager {
         let fs_client = services.fs_client();
         let git_client = services.git_client();
         let cleanup_services = services.clone();
-        let cleanup_task_handle = tokio::spawn(async move {
+        let cleanup_task_handle = spawn::spawn_detached(async move {
             cleanup_services
                 .finish_session_agent_runs(&session_id)
                 .await;

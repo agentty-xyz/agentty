@@ -29,7 +29,7 @@ use crate::app::graph_proposal_decision::GraphProposalReplyDecision;
 use crate::app::graph_question::GraphAnswerOutcome;
 use crate::app::prompt_intent::PromptWorkflowOutcome;
 use crate::app::session::SessionTaskService;
-use crate::app::{App, AppServices, SessionRuntimeHandle};
+use crate::app::{App, AppServices, SessionRuntimeHandle, spawn};
 use crate::domain::session::SessionId;
 use crate::domain::session_message::SessionTranscript;
 use crate::domain::transcript_notice::TranscriptNotice;
@@ -325,44 +325,46 @@ impl App {
             .session_handles_or_err(&session_id)
             .ok()
             .map(|handles| Arc::clone(&handles.status));
-        self.services.track_cleanup_task(tokio::spawn(async move {
-            let activity = services.begin_graph_activity(&session_id, status).await;
-            let outcome = match reply.outcome {
-                Some(outcome) => outcome,
-                None => match decision.decide(run_client.as_ref()).await {
-                    GraphProposalReplyOutcome::Approve if revises_to_keep_images => {
-                        GraphProposalReplyOutcome::Revise
-                    }
-                    decided => decided,
-                },
-            };
-            let notice = if !cancellation.is_cancelled() {
-                services
-                    .apply_proposal_reply(&handle, &cancellation, &reply, images, outcome)
-                    .await
-            } else if is_abandoned.load(Ordering::Acquire) {
-                // A failed write leaves the reply for restart recovery.
-                let _ = services.settle_proposal_reply(&reply.id).await;
+        self.services
+            .track_cleanup_task(spawn::spawn_detached(async move {
+                let activity = services.begin_graph_activity(&session_id, status).await;
+                let outcome = match reply.outcome {
+                    Some(outcome) => outcome,
+                    None => match decision.decide(run_client.as_ref()).await {
+                        GraphProposalReplyOutcome::Approve if revises_to_keep_images => {
+                            GraphProposalReplyOutcome::Revise
+                        }
+                        decided => decided,
+                    },
+                };
+                let notice = if !cancellation.is_cancelled() {
+                    services
+                        .apply_proposal_reply(&handle, &cancellation, &reply, images, outcome)
+                        .await
+                } else if is_abandoned.load(Ordering::Acquire) {
+                    // A failed write leaves the reply for restart recovery.
+                    let _ = services.settle_proposal_reply(&reply.id).await;
 
-                Some(DECISION_CANCELED.to_string())
-            } else {
-                None
-            };
-            services.finish_proposal_reply_decision(&reply.proposal_id);
-            // A reply left for recovery reports once its action is attempted.
-            if let Some(notice) = notice {
-                SessionTaskService::append_workflow_notice(
-                    &transcript,
-                    services.db(),
-                    &services.event_sender(),
-                    &services.session_update_versions(),
-                    &session_id,
-                    &notice,
-                )
-                .await;
-            }
-            activity.finish(&services).await;
-        }));
+                    Some(DECISION_CANCELED.to_string())
+                } else {
+                    None
+                };
+                services.finish_proposal_reply_decision(&reply.proposal_id);
+                // A reply left for recovery reports once its action is
+                // attempted.
+                if let Some(notice) = notice {
+                    SessionTaskService::append_workflow_notice(
+                        &transcript,
+                        services.db(),
+                        &services.event_sender(),
+                        &services.session_update_versions(),
+                        &session_id,
+                        &notice,
+                    )
+                    .await;
+                }
+                activity.finish(&services).await;
+            }));
     }
 }
 

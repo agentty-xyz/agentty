@@ -19,14 +19,14 @@ use std::time::Duration;
 
 use ag_forge::ReviewRequestClient;
 use ag_git::GitClient;
-use ag_telemetry::{Context, FutureExt as _, KeyValue, Outcome, Span};
+use ag_telemetry::{FutureExt as _, KeyValue, Outcome, Span};
 use tokio::sync::{mpsc, watch};
 use tokio::time::MissedTickBehavior;
 
 use crate::app::core::SyncReviewRequestTaskResult;
 use crate::app::review_watch_config::ReviewWatchConfig;
 use crate::app::session_state::SessionGitStatus;
-use crate::app::{AppEvent, session};
+use crate::app::{AppEvent, session, spawn};
 use crate::domain::agent::AgentModel;
 use crate::domain::session::{ReviewRequestState, SessionId};
 use crate::infra::fs::FsClient;
@@ -448,7 +448,7 @@ impl SyncOrchestrator {
     /// app drops its [`SyncHandle`] at shutdown. The host execution context
     /// follows the task so conflict assistance retains its capture policy.
     pub(crate) fn spawn(self) {
-        tokio::spawn(self.run().with_context(Context::current()));
+        spawn::spawn_traced(self.run());
     }
 
     /// Runs the command/tick loop until the command channel closes.

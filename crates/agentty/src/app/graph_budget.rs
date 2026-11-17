@@ -12,7 +12,7 @@ use ag_contracts::{ProviderCallBudget, ProviderCallLedger};
 use tokio::sync::watch;
 use tracing::warn;
 
-use crate::app::AppServices;
+use crate::app::{AppServices, spawn};
 use crate::infra::db::AppRepositories;
 
 /// Writes one flush attempts before leaving its spending pending.
@@ -49,7 +49,7 @@ impl GraphBudgetLedger {
         let writers = services.graph_budget_writers.clone();
         let (graph_id, budget_id) = (graph_id.to_string(), budget_id.to_string());
         writers.open(&graph_id);
-        services.track_cleanup_task(tokio::spawn(async move {
+        services.track_cleanup_task(spawn::spawn_detached(async move {
             loop {
                 let is_open = receiver.changed().await.is_ok();
                 Self::flush(&repositories, &graph_id, &budget_id, &pending_calls).await;

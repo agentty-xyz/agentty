@@ -16,7 +16,7 @@ use super::SessionTaskService;
 use crate::app::session::{
     Clock, SessionError, remote_branch_name_from_upstream_ref, unix_timestamp_from_system_time,
 };
-use crate::app::{AppEvent, branch_publish};
+use crate::app::{AppEvent, branch_publish, spawn};
 use crate::domain::agent::AgentSelection;
 use crate::domain::session::{
     PublishBranchAction, PublishedBranchSyncStatus, ReviewRequest, ReviewRequestState, SessionId,
@@ -128,7 +128,7 @@ fn start_published_branch_auto_push_inner(
         transcript: input.transcript,
     };
     let trace = auto_push_trace(&auto_push_input.session_id);
-    tokio::spawn(async move {
+    spawn::spawn_detached(async move {
         let _branch_operation_guard = branch_operation_guard;
         // Drop in-flight Git/forge futures before releasing serialization.
         // Their command runners kill child processes on drop; persisted posting
