@@ -488,6 +488,7 @@ where
         cli.otlp_endpoint.as_deref(),
         Service {
             name: "ag-harness",
+            user_id: None,
             version: env!("CARGO_PKG_VERSION"),
         },
     )

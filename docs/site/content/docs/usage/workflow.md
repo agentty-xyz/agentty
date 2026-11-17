@@ -799,18 +799,18 @@ the turn was queued. `permission_mode` is the session's `/mode` when the turn be
 execution: `auto_edit`, `auto_edit_address_comments`, or `read_only`.
 
 Each event carries a random installation ID that Agentty creates on the first launch
-with telemetry enabled and stores in its database, so events from one Agentty root share
-an ID. Events set `$process_person_profile=false`. PostHog receives the request's source
-IP address and derives an approximate location from it. Agentty does not send error
-messages, stack traces, project paths, session IDs, or prompts. Session-start events
-count metadata reservations even if workspace preparation later fails. Turn-start events
-count messages that begin execution, including queued messages, rather than messages
-discarded before execution. Queued messages discarded by cancellation do not produce
-turn-interruption events. Failed turns do not produce turn-finish events. The install
-method is inferred from the npm package path, the shell install receipt, or Cargo
-install metadata. It is `unknown` when no signal is available. These values describe
-launches, not installation counts; metadata left behind after replacing a binary can
-report an older method.
+with telemetry or `--otlp-endpoint` enabled and stores in its database, so events from
+one Agentty root share an ID. Events set `$process_person_profile=false`. PostHog
+receives the request's source IP address and derives an approximate location from it.
+Agentty does not send error messages, stack traces, project paths, session IDs, or
+prompts. Session-start events count metadata reservations even if workspace preparation
+later fails. Turn-start events count messages that begin execution, including queued
+messages, rather than messages discarded before execution. Queued messages discarded by
+cancellation do not produce turn-interruption events. Failed turns do not produce
+turn-finish events. The install method is inferred from the npm package path, the shell
+install receipt, or Cargo install metadata. It is `unknown` when no signal is available.
+These values describe launches, not installation counts; metadata left behind after
+replacing a binary can report an older method.
 
 ### Local Usage Events
 
@@ -822,10 +822,11 @@ independent of PostHog: it runs in debug builds and with `AGENTTY_TELEMETRY_ENAB
 
 Each record uses the event name as its body and OTLP event name, `INFO` severity, and
 the same properties as the PostHog event, plus the trace resource's `service.name`,
-`service.version`, and per-launch `service.instance.id`. It omits the installation ID
-and `$process_person_profile`. Collectors without a logs pipeline reject these records,
-which counts toward the export diagnostic summary. For authenticated endpoints, set
-`OTEL_EXPORTER_OTLP_LOGS_HEADERS`, falling back to `OTEL_EXPORTER_OTLP_HEADERS`.
+`service.version`, per-launch `service.instance.id`, and the installation ID as
+`user.id`. It omits `$process_person_profile`. Collectors without a logs pipeline reject
+these records, which counts toward the export diagnostic summary. For authenticated
+endpoints, set `OTEL_EXPORTER_OTLP_LOGS_HEADERS`, falling back to
+`OTEL_EXPORTER_OTLP_HEADERS`.
 
 With a collector that forwards logs to Loki, count turns by model in Grafana with:
 
@@ -873,13 +874,14 @@ First activity is not a time-to-first-token measurement. Harness sessions run in
 process, so their `invoke_agent`, `chat <model>`, and `execute_tool <tool>` spans nest
 beneath `agent.run` and time each model request exactly.
 
-Traces contain execution identifiers, provider/model selections, token counts, bounded
-outcomes, and available tool names, call identifiers, executable basenames, exit codes,
-and output byte counts. Command arguments, tool output, and project paths are excluded
-by default. Provider operation spans such as `agent.tool`, and Harness `execute_tool`
-spans, repeat the owning run's available `agentty.harness`, `agentty.session.id`,
-`agentty.purpose`, `agentty.run.id`, and `gen_ai.request.model`, so they can be grouped
-without joining ancestor spans.
+The trace resource carries the installation ID as `user.id`. Traces contain execution
+identifiers, provider/model selections, token counts, bounded outcomes, and available
+tool names, call identifiers, executable basenames, exit codes, and output byte counts.
+Command arguments, tool output, and project paths are excluded by default. Provider
+operation spans such as `agent.tool`, and Harness `execute_tool` spans, repeat the
+owning run's available `agentty.harness`, `agentty.session.id`, `agentty.purpose`,
+`agentty.run.id`, and `gen_ai.request.model`, so they can be grouped without joining
+ancestor spans.
 
 Add `--otlp-capture-content` alongside `--otlp-endpoint` to export tool commands,
 arguments, and results as previews of at most 4 KiB per attribute. Longer values keep

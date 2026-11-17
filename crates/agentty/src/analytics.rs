@@ -274,15 +274,15 @@ impl Analytics {
     }
 
     /// Builds a sender for the bundled Agentty `PostHog` project, identified
-    /// by this installation's stored ID.
-    pub async fn posthog(repositories: &AppRepositories) -> Option<Self> {
-        let installation_id = Self::installation_id(repositories).await;
-
-        Self::new(POSTHOG_PROJECT_TOKEN, POSTHOG_API_HOST, &installation_id)
+    /// by this installation's [`Self::installation_id`].
+    pub fn posthog(installation_id: &str) -> Option<Self> {
+        Self::new(POSTHOG_PROJECT_TOKEN, POSTHOG_API_HOST, installation_id)
     }
 
     /// Returns the random installation ID, creating and saving it on first
     /// use. A failed save leaves the new ID in use for this launch only.
+    /// `PostHog` events use it as their distinct ID and OTLP export as its
+    /// `user.id` resource attribute.
     pub async fn installation_id(repositories: &AppRepositories) -> String {
         let settings = repositories.settings();
         let stored_id = settings

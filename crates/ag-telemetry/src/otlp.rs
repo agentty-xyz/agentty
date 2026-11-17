@@ -24,17 +24,20 @@ use tracing_subscriber::util::SubscriberInitExt;
 use tracing_subscriber::{Layer, Registry};
 use url::Url;
 
-/// Resource identity attached to every exported span.
-#[derive(Clone, Copy, Debug)]
+/// Resource identity attached to every exported span and event.
+#[derive(Clone, Debug)]
 pub struct Service {
     /// Exported as `service.name`.
     pub name: &'static str,
+    /// Exported as `user.id` when present, such as a pseudonymous
+    /// installation ID shared with the host's product analytics.
+    pub user_id: Option<String>,
     /// Exported as `service.version`.
     pub version: &'static str,
 }
 
 /// Bounded export setup failures that never echo the endpoint or credentials.
-#[derive(Debug, Eq, Error, PartialEq)]
+#[derive(Clone, Copy, Debug, Eq, Error, PartialEq)]
 pub enum OtlpError {
     /// The exporter rejected the validated endpoint.
     #[error("Could not configure OTLP HTTP/protobuf export")]
@@ -106,6 +109,16 @@ impl OtlpExport {
         service: Service,
     ) -> Result<Option<Self>, OtlpError> {
         Self::start_signals(endpoint, service, true).await
+    }
+
+    /// Validates `endpoint` like [`Self::start`] without constructing an
+    /// exporter, so hosts can reject it before startup work that must precede
+    /// export, such as loading the [`Service`] identity.
+    ///
+    /// # Errors
+    /// Returns [`OtlpError::Endpoint`] for an incomplete or credentialed URL.
+    pub fn validate(endpoint: &str) -> Result<(), OtlpError> {
+        Self::validate_endpoint(endpoint).map(|_| ())
     }
 
     /// Returns the event log when this export includes one.
@@ -242,6 +255,11 @@ impl OtlpExport {
                 KeyValue::new("service.version", service.version),
                 KeyValue::new("service.instance.id", uuid::Uuid::new_v4().to_string()),
             ])
+            .with_attributes(
+                service
+                    .user_id
+                    .map(|user_id| KeyValue::new("user.id", user_id)),
+            )
             .build();
         let events = events_endpoint
             .map(|events_endpoint| {

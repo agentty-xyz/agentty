@@ -36,6 +36,7 @@ use crate::infra::db::{AppRepositories, DbError};
 
 const SERVICE: Service = Service {
     name: "agentty-test",
+    user_id: None,
     version: "0.0.0",
 };
 
@@ -45,9 +46,8 @@ async fn posthog_sender_uses_bundled_destination_and_stored_installation_id() {
     let repositories = AppRepositories::in_memory().await.expect("repositories");
 
     // Act
-    let analytics = Analytics::posthog(&repositories)
-        .await
-        .expect("bundled destination");
+    let installation_id = Analytics::installation_id(&repositories).await;
+    let analytics = Analytics::posthog(&installation_id).expect("bundled destination");
 
     // Assert
     let posthog = analytics.posthog.expect("PostHog destination");
