@@ -17,7 +17,7 @@ use tokio::sync::OnceCell;
 
 use crate::calibration::ContextCalibration;
 use crate::cancellation::{ControlledTurn, TurnControl};
-use crate::catalog::{CatalogError, ModelCatalog, ModelSelector, Role};
+use crate::catalog::{CatalogError, ModelCatalog, ModelId, ModelSelector, Role};
 use crate::compaction::{self, CompactionSource, MAX_SUMMARY_BYTES, SessionCheckpoint};
 use crate::context::{
     self, ContextBudget, ContextBudgetError, ContextEstimator, ContextSummaryPolicy,
@@ -26,6 +26,7 @@ use crate::context::{
 use crate::effect::Effects;
 use crate::engine::{Engine, EngineFailure, FinishedTurn};
 use crate::error::HarnessError;
+use crate::event::{RunEventKind, SessionId, TurnIndex};
 use crate::file_system::{FileSystem, LocalFileSystem};
 use crate::input::{InputBlock, TurnInput};
 use crate::lifecycle::{LifecycleEmitter, LifecycleObserver, TurnErrorType, TurnLifecycle};
@@ -101,6 +102,7 @@ impl Session {
         .await?;
         let config = self.harness.config_mut();
         config.model = registration.model();
+        config.model_id = None;
         config.context_budget = registration.context_budget();
         config.context_calibration = ContextCalibration::default();
         config.context_estimator = Arc::new(registration.capabilities().profile.estimator());
@@ -527,9 +529,8 @@ impl Session {
         let (request, retained_messages, history, replayed) =
             self.build_request(input, options, available_history_weight);
         let journal = guard.write_journal();
-        let mut engine = self.harness.engine(options);
-        engine.control = control;
-        engine.effects = effects;
+        let engine = self.harness.controlled_engine(options, control, effects);
+        let started = self.started_event(guard.owner().turn_position);
         let result = tokio::select! {
             biased;
             () = cancelled(control) => return Err(TurnError::Cancelled.into()),
@@ -538,7 +539,11 @@ impl Session {
 
                 return Err(error);
             }
-            result = engine.run(request, turn_id, Some(journal)) => result,
+            result = async {
+                engine.publish(started).await;
+
+                engine.run(request, turn_id, Some(journal)).await
+            } => result,
         };
         let FinishedTurn {
             history: sent_history,
@@ -588,6 +593,15 @@ impl Session {
         }
 
         Ok(outcome)
+    }
+
+    /// Describes the admitted turn at `turn_position` for a streamed run.
+    fn started_event(&self, turn_position: i64) -> RunEventKind {
+        RunEventKind::Started {
+            model: self.harness.inner.model_id.clone(),
+            session: SessionId::new(self.id.clone()),
+            turn: TurnIndex::from_position(turn_position),
+        }
     }
 
     /// Projects the checkpoint summary and loaded uncovered history into one
@@ -1455,6 +1469,22 @@ impl Harness {
         TurnOptions::new(schema, self.inner.policy)
     }
 
+    /// Returns an engine for a durable turn that reports to `control`, and
+    /// streams events when its run does.
+    fn controlled_engine<'a>(
+        &'a self,
+        options: &'a TurnOptions,
+        control: Option<&'a TurnControl>,
+        effects: Effects,
+    ) -> Engine<'a> {
+        Engine {
+            control,
+            effects,
+            events: control.and_then(TurnControl::events),
+            ..self.engine(options)
+        }
+    }
+
     fn engine<'a>(&'a self, options: &'a TurnOptions) -> Engine<'a> {
         let config = &self.inner;
 
@@ -1465,6 +1495,7 @@ impl Harness {
             context_summaries: config.context_summaries,
             control: None,
             effects: Effects::default(),
+            events: None,
             file_system: &config.file_system,
             lifecycle: &config.lifecycle,
             model: &config.model,
@@ -1641,14 +1672,14 @@ impl HarnessBuilder {
     /// Returns a [`HarnessError`] of kind [`crate::ErrorKind::Config`]
     /// wrapping the failed [`HarnessBuildError`] check.
     pub fn build(self) -> Result<Harness, HarnessError> {
-        let (model, profile) = match (self.model, self.catalog, self.model_selector) {
+        let (model, profile, model_id) = match (self.model, self.catalog, self.model_selector) {
             (Some(_), _, Some(_)) => {
                 return Err(HarnessBuildError::ConflictingModelSelection.into());
             }
             (Some(model), _, None) => {
                 let profile = model.profile();
 
-                (model, profile)
+                (model, profile, None)
             }
             (None, Some(catalog), selector) => {
                 let selector = selector.unwrap_or(ModelSelector::Role(Role::SMART));
@@ -1656,7 +1687,7 @@ impl HarnessBuilder {
                     .resolve(&selector)
                     .map_err(HarnessBuildError::Catalog)?;
 
-                (handle.model(), handle.profile())
+                (handle.model(), handle.profile(), Some(handle.id().clone()))
             }
             (None, None, Some(_)) => return Err(HarnessBuildError::CatalogRequired.into()),
             (None, None, None) => return Err(HarnessBuildError::ModelRequired.into()),
@@ -1687,6 +1718,7 @@ impl HarnessBuilder {
         }
         config.context_summaries = self.context_summaries;
         config.lifecycle = self.lifecycle;
+        config.model_id = model_id;
         config.model_reasoning_effort = self.model_reasoning_effort;
         config.policy = self.policy;
         config.repository = self.repository;
@@ -1769,6 +1801,9 @@ struct HarnessConfig {
     lifecycle: LifecycleEmitter,
     max_history_bytes: usize,
     model: Arc<dyn Model>,
+    /// Catalog identifier of [`Self::model`] when the builder selected it
+    /// from a [`ModelCatalog`].
+    model_id: Option<ModelId>,
     model_reasoning_effort: Option<ReasoningEffort>,
     model_registration: Option<ModelRegistration>,
     policy: ToolPolicy,
@@ -1792,6 +1827,7 @@ impl HarnessConfig {
             lifecycle: LifecycleEmitter::default(),
             max_history_bytes: DEFAULT_MAX_HISTORY_BYTES,
             model,
+            model_id: None,
             model_reasoning_effort: None,
             model_registration: None,
             policy: ToolPolicy::default(),

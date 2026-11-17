@@ -9,6 +9,7 @@
 use std::fmt;
 use std::time::Duration;
 
+use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use thiserror::Error;
@@ -474,7 +475,7 @@ pub enum ModelRequestPurpose {
 /// content. Counts describe the whole sent request, so a reduction carried
 /// over from an earlier request of the same turn is counted again. All counts
 /// are zero when the request was sent unchanged.
-#[derive(Clone, Copy, Debug, Default, Eq, PartialEq, Deserialize, Serialize)]
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq, Deserialize, JsonSchema, Serialize)]
 pub struct ContextActivity {
     cleared_reasoning: usize,
     dropped_history_turns: usize,

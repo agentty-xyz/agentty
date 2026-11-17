@@ -3,7 +3,7 @@
 
 use std::future::Future;
 use std::pin::Pin;
-use std::sync::{Arc, Mutex, MutexGuard, PoisonError};
+use std::sync::{Arc, Mutex, MutexGuard, OnceLock, PoisonError, Weak};
 use std::task::{Context, Poll};
 
 use opentelemetry::context::FutureExt as _;
@@ -11,6 +11,7 @@ use thiserror::Error;
 use tokio::sync::watch;
 
 use crate::effect::Effects;
+use crate::event::EventSink;
 use crate::session::{SessionError, TurnOwner};
 use crate::turn::TurnReport;
 use crate::{ModelError, TurnError, TurnOutcome, reservation};
@@ -41,6 +42,7 @@ impl<'a, E: From<TurnError> + Send + 'static> ControlledTurn<'a, E> {
         let control = TurnControl {
             cancellation: watch::Sender::new(false),
             effects: Effects::default(),
+            events: Arc::default(),
             record: Arc::default(),
             settlement: Settlement(watch::Sender::new(State::default())),
         };
@@ -102,6 +104,9 @@ pub struct TurnControl {
     pub(crate) effects: Effects,
     pub(crate) settlement: Settlement,
     cancellation: watch::Sender<bool>,
+    /// Event sink of a run that streams its events. The run's outcome
+    /// future owns the sink, so dropping the run ends the stream.
+    events: Arc<OnceLock<Weak<EventSink>>>,
     record: Arc<Mutex<TurnRecord>>,
 }
 
@@ -193,6 +198,18 @@ impl TurnControl {
     pub(crate) async fn cancelled(&self) {
         let mut receiver = self.cancellation.subscribe();
         let _ = receiver.wait_for(|cancelled| *cancelled).await;
+    }
+
+    /// Streams this turn's run events to `events`; only the first sink
+    /// attached to a turn is kept.
+    pub(crate) fn attach_events(&self, events: &Arc<EventSink>) {
+        let _ = self.events.set(Arc::downgrade(events));
+    }
+
+    /// Returns the event sink of a run that streams its events and has not
+    /// been dropped.
+    pub(crate) fn events(&self) -> Option<Arc<EventSink>> {
+        self.events.get().and_then(Weak::upgrade)
     }
 
     /// Records the durable turn position the turn acquired, which scopes its

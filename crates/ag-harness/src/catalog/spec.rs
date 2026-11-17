@@ -3,6 +3,9 @@
 
 use std::fmt;
 
+use schemars::JsonSchema;
+use serde::{Deserialize, Serialize};
+
 use crate::model_profile::ModelProfile;
 use crate::provider::{CostTier, ModelProvider};
 
@@ -18,7 +21,10 @@ const PREMIUM_MIN_OUTPUT_MICRO_USD: u64 = 15 * MICRO_USD_PER_USD;
 /// Built-in entries use `provider/model`, such as `openai/gpt-6-luna`, so a
 /// model served by two providers, such as an `OpenAI` model reached with an
 /// API key or through a `ChatGPT` plan, has two distinct identifiers.
-#[derive(Clone, Debug, Eq, Hash, Ord, PartialEq, PartialOrd)]
+#[derive(
+    Clone, Debug, Deserialize, Eq, Hash, JsonSchema, Ord, PartialEq, PartialOrd, Serialize,
+)]
+#[serde(transparent)]
 pub struct ModelId(String);
 
 impl ModelId {

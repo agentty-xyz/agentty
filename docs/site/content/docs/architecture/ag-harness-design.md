@@ -164,6 +164,17 @@ completed model request, including those of cancelled and interrupted turns. It 
 the run's write and command records from the store by turn position; `Harness::run` uses
 a fresh in-memory store for that.
 
+`Run::into_parts` attaches an event sink to the turn's control. The engine sends events
+from its existing await points into a bounded channel, numbering an event only once it
+has a slot, so a dropped engine leaves no sequence gap. A full channel holds the turn
+back, and a dropped stream makes sends no-ops. The outcome future owns the sink, and the
+control only holds a weak reference to it, so dropping the run ends the stream. After
+settlement the run sends a successful run's committed `Output` item and `Completed`
+through slots reserved when the channel was created, so cancellation resolves a run
+whose stream is full and unread, and then closes the sink, so no engine event can follow
+it. Run events carry content. The content-free `LifecycleObserver` and its OpenTelemetry
+projections are unchanged.
+
 ## Permissions and tools
 
 All tools are denied by default; per-turn policy enables them explicitly. A call to a
