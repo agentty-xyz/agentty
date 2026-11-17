@@ -419,9 +419,16 @@ repos:
         language: system
         files: (^|/)(Cargo\.toml|Cargo\.lock|.*\.rs)$
         pass_filenames: false
+      - id: check-manifests
+        name: check manifests
+        description: Verify member manifests inherit every dependency from `[workspace.dependencies]` and never enable Tokio's `full` feature.
+        entry: cargo run -q --locked -p ag-xtask -- check-manifests
+        language: system
+        files: (^|/)Cargo\.toml$
+        pass_filenames: false
       - id: check-migrations
         name: check migrations
-        description: Verify SQL migration files have unique prefix numbers.
+        description: Verify SQL migration files have unique prefix numbers and that migrations existing at the fork point from `origin/main` (or `AGENTTY_MIGRATION_BASE`) are unchanged.
         entry: cargo run -q --locked -p ag-xtask -- check-migrations
         language: system
         types: [sql]

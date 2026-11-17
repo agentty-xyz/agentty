@@ -5,6 +5,7 @@ mod cargo_environment;
 mod check_coverage;
 mod check_execution_boundary;
 mod check_instruction;
+mod check_manifest;
 mod check_migration;
 mod e2e_container;
 mod format_changed;
@@ -39,7 +40,12 @@ enum Command {
     /// Validates instruction references, aliases, and documented hook names.
     #[command(name = "check-instructions")]
     Instructions,
-    /// Validates SQL migration numbering across workspace crates.
+    /// Validates that member manifests inherit workspace dependencies and do
+    /// not enable Tokio's `full` feature.
+    #[command(name = "check-manifests")]
+    Manifests,
+    /// Validates SQL migration numbering across workspace crates and rejects
+    /// edits to migrations that exist at the branch fork point.
     #[command(name = "check-migrations")]
     Migrations,
     /// Compares repeated CI timing artifacts with matching provenance.
@@ -65,6 +71,7 @@ fn main() -> ExitCode {
         Some(Command::Coverage(options)) => check_coverage::run(&options),
         Some(Command::ExecutionBoundary) => check_execution_boundary::run(),
         Some(Command::Instructions) => check_instruction::run(),
+        Some(Command::Manifests) => check_manifest::run(),
         None | Some(Command::Migrations) => check_migration::run(),
         Some(Command::CompareTimings(options)) => timing::run(&options),
         Some(Command::E2eContainer) => e2e_container::run(),
