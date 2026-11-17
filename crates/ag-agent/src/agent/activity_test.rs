@@ -368,6 +368,29 @@ fn codex_tool_arguments_results_and_errors_are_projected() {
         Some(r#"{"content":"ok"}"#)
     );
     assert_eq!(observer.calls["search"].input.as_deref(), Some("Rust"));
+    assert_eq!(observer.calls["mcp"].kind, ActivityKind::Mcp);
+    assert_eq!(observer.calls["mcp"].name, "docs/search");
+    assert_eq!(observer.calls["dynamic"].kind, ActivityKind::Tool);
+}
+
+#[test]
+fn claude_mcp_tools_are_classified_by_server_and_tool() {
+    // Arrange
+    let mut observer = ActivityObserver::new(|_| {});
+
+    // Act
+    observer.observe(AgentKind::Claude, &json!({"type":"assistant","message":{"content":[{"type":"tool_use","id":"mcp","name":"mcp__posthog__query","input":{"query":"SELECT 1"}},{"type":"tool_use","id":"plain","name":"mcp__unqualified","input":{}}]}}));
+    observer.observe(
+        AgentKind::Claude,
+        &json!({"message":{"content":[{"type":"tool_result","tool_use_id":"mcp","content":"ok"}]}}),
+    );
+
+    // Assert
+    assert_eq!(observer.calls["mcp"].kind, ActivityKind::Mcp);
+    assert_eq!(observer.calls["mcp"].name, "posthog/query");
+    assert_eq!(observer.calls["mcp"].status, ActivityStatus::Completed);
+    assert_eq!(observer.calls["plain"].kind, ActivityKind::Tool);
+    assert_eq!(observer.calls["plain"].name, "mcp__unqualified");
 }
 
 #[test]

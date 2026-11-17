@@ -13,6 +13,9 @@ use crate::domain::session::SessionId;
 
 const LIVE_RUNNING_LIMIT: usize = 3;
 const LIVE_INTERRUPTED_LIMIT: usize = 3;
+/// Usage footer line labels in display order, indexed by
+/// `ActivityState::usage_section`.
+const USAGE_SECTIONS: [&str; 3] = ["Tools: ", "MCP: ", "Skills: "];
 
 /// Reduces snapshots without counting lifecycle updates as additional calls.
 #[derive(Default)]
@@ -206,10 +209,10 @@ impl ActivityState {
     /// Groups invocations without treating running calls as interrupted in
     /// the live view. Durable summaries retain missing terminal results.
     fn usage_text(&self, include_outcomes: bool) -> String {
-        let mut groups = BTreeMap::<(bool, &str), (usize, usize, usize)>::new();
+        let mut groups = BTreeMap::<(usize, &str), (usize, usize, usize)>::new();
         for event in &self.calls {
             let counts = groups
-                .entry((event.kind == ActivityKind::Skill, event.name.as_str()))
+                .entry((Self::usage_section(event.kind), event.name.as_str()))
                 .or_default();
             counts.0 += 1;
             counts.1 += usize::from(Self::status(event) == ActivityStatus::Failed);
@@ -219,10 +222,10 @@ impl ActivityState {
             ));
         }
         let mut summary = String::new();
-        for skill in [false, true] {
-            let mut separator = if skill { "Skills: " } else { "Tools: " };
-            for ((is_skill, name), (count, failed, interrupted)) in &groups {
-                if *is_skill != skill {
+        for (section, label) in USAGE_SECTIONS.iter().enumerate() {
+            let mut separator = *label;
+            for ((group_section, name), (count, failed, interrupted)) in &groups {
+                if *group_section != section {
                     continue;
                 }
                 let _ = write!(summary, "{separator}{name} ×{count}");
@@ -239,6 +242,18 @@ impl ActivityState {
             }
         }
         summary
+    }
+
+    /// Maps an activity kind to its `USAGE_SECTIONS` line.
+    fn usage_section(kind: ActivityKind) -> usize {
+        match kind {
+            ActivityKind::Mcp => 1,
+            ActivityKind::Skill => 2,
+            ActivityKind::Command
+            | ActivityKind::FileChange
+            | ActivityKind::Tool
+            | ActivityKind::WebSearch => 0,
+        }
     }
 
     /// Shows rolling totals, recent interruptions, the last successful call,
@@ -316,10 +331,13 @@ impl ActivityState {
     /// render: interrupted (`!`), last completed (`✓`), or running (`…`).
     /// Failed calls only contribute to the status counts.
     fn append_call(text: &mut String, event: &ActivityEvent, marker: &str) {
-        let kind = if event.kind == ActivityKind::Skill {
-            "skill "
-        } else {
-            ""
+        let kind = match event.kind {
+            ActivityKind::Mcp => "mcp ",
+            ActivityKind::Skill => "skill ",
+            ActivityKind::Command
+            | ActivityKind::FileChange
+            | ActivityKind::Tool
+            | ActivityKind::WebSearch => "",
         };
         let _ = write!(text, "{marker} {kind}{}", Self::single_line(&event.name));
         if event.status == ActivityStatus::Interrupted {
