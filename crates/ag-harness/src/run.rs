@@ -22,6 +22,7 @@ use crate::comparison::ComparisonBase;
 use crate::error::{ErrorKind, RunError};
 use crate::event::{EventSink, EventStream};
 use crate::input::TurnInput;
+use crate::limit::RunLimits;
 use crate::model::CompletionUsage;
 use crate::policy::ToolPolicy;
 use crate::request_option::{GenerationParams, OutputMode};
@@ -45,6 +46,7 @@ pub struct RunRequest {
     generation: GenerationParams,
     input: TurnInput,
     instructions: Option<String>,
+    limits: RunLimits,
     output: Option<OutputMode>,
     tool_policy: Option<ToolPolicy>,
 }
@@ -58,9 +60,23 @@ impl RunRequest {
             generation: GenerationParams::default(),
             input: input.into(),
             instructions: None,
+            limits: RunLimits::default(),
             output: None,
             tool_policy: None,
         }
+    }
+
+    /// Bounds this run's model requests, tool calls, tokens, and wall-clock
+    /// time; a run without limits is bounded only by cancellation and the
+    /// model's context budget. A run that reaches a limit fails with
+    /// [`ErrorKind::BudgetExhausted`]. Wall-clock time starts once the
+    /// session admits the run, so it excludes waiting for the session to
+    /// become free; a zero wall-clock limit fails with [`ErrorKind::Config`]
+    /// before the run starts.
+    pub fn limits(mut self, limits: RunLimits) -> Self {
+        self.limits = limits;
+
+        self
     }
 
     /// Selects the form of the run's final answer instead of the session's
@@ -119,18 +135,22 @@ impl RunRequest {
     ///
     /// # Errors
     /// Returns a [`ErrorKind::Config`] failure when neither the request nor
-    /// the caller supplies an output mode.
+    /// the caller supplies an output mode, or when a limit cannot be met.
     pub(crate) fn into_turn(
         self,
         default_output: Option<&OutputMode>,
         default_policy: ToolPolicy,
     ) -> Result<(TurnInput, TurnOptions), RunError> {
+        if self.limits.is_unsatisfiable() {
+            return Err(RunError::with_kind(ErrorKind::Config, ZeroWallTime));
+        }
         let output = self
             .output
             .or_else(|| default_output.cloned())
             .ok_or_else(|| RunError::with_kind(ErrorKind::Config, OutputRequired))?;
         let mut options = TurnOptions::new(output, self.tool_policy.unwrap_or(default_policy))
-            .with_generation(self.generation);
+            .with_generation(self.generation)
+            .with_limits(self.limits);
         if let Some(configuration) = self.bash {
             options = options.with_bash(configuration);
         }
@@ -592,3 +612,8 @@ impl RunJournal {
 #[derive(Debug, Error)]
 #[error("run requires an output mode; call `RunRequest::output`")]
 struct OutputRequired;
+
+/// A run whose wall-clock limit is zero.
+#[derive(Debug, Error)]
+#[error("run wall-clock limit must be greater than zero")]
+struct ZeroWallTime;

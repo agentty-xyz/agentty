@@ -3,7 +3,7 @@
 
 use std::collections::VecDeque;
 use std::io::Cursor;
-use std::num::NonZeroU64;
+use std::num::{NonZeroU32, NonZeroU64};
 use std::pin::Pin;
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
@@ -17,19 +17,21 @@ use crate::compaction::summary_schema;
 use crate::context::{
     ContextBudget, ContextEstimator, ContextSummaryPolicy, HeuristicContextEstimator,
 };
+use crate::error::{ErrorKind, RunError};
 use crate::event::RunEventKind;
 use crate::file_system::MockFileSystem;
 use crate::harness::Harness;
 use crate::lifecycle::{
     ContextSummaryErrorType, ContextSummaryTrigger, LifecycleEvent, LifecycleEventKind,
 };
+use crate::limit::{LimitKind, RunLimits};
 use crate::model::{
     Model, ModelCompletion, ModelError, ModelMessage, ModelRequest, ModelResponse, ReasoningEffort,
 };
 use crate::repository::Repository;
 use crate::request_option::OutputMode;
 use crate::round_summary::{CONTINUED_SUMMARY_PREFIX, ROUND_SUMMARY_INSTRUCTIONS};
-use crate::run::RunRequest;
+use crate::run::{RunOutcome, RunRequest};
 use crate::store::MemoryStore;
 use crate::tool::{Tool, ToolCall};
 use crate::turn::{ModelRequestPurpose, TurnOutcome};
@@ -720,4 +722,128 @@ async fn streamed_runs_report_summary_requests_and_reduced_requests() {
         events.last(),
         Some(RunEventKind::Completed(summary)) if summary.error.is_none()
     ));
+}
+
+/// Runs "read every file" on `harness` under `limits`, returning its events
+/// and outcome.
+async fn limited_run(harness: &Harness, limits: RunLimits) -> (Vec<RunEventKind>, RunOutcome) {
+    let (mut stream, handle) = harness
+        .run(
+            RunRequest::new("read every file")
+                .output(object_schema())
+                .limits(limits),
+        )
+        .into_parts();
+    let drain = async {
+        let mut events = Vec::new();
+        while let Some(event) =
+            std::future::poll_fn(|context| Pin::new(&mut stream).poll_next(context)).await
+        {
+            events.push(event.kind);
+        }
+
+        events
+    };
+
+    tokio::join!(drain, handle.outcome())
+}
+
+#[tokio::test]
+async fn summary_requests_count_toward_the_model_request_limit() {
+    // Arrange
+    let (model, requests) = SummarizingModel::new(Vec::new());
+    let (_, unlimited) = limited_run(
+        &harness(model, ContextSummaryPolicy::Enabled),
+        RunLimits::default(),
+    )
+    .await;
+    let sent = requests.lock().expect("requests lock").len();
+    let turn_requests = READS + 1;
+    let limit = u32::try_from(sent - 1).expect("request count fits");
+    let (model, requests) = SummarizingModel::new(Vec::new());
+    let harness = harness(model, ContextSummaryPolicy::Enabled);
+
+    // Act
+    let (_, limited) = limited_run(
+        &harness,
+        RunLimits::default()
+            .with_max_model_requests(NonZeroU32::new(limit).expect("nonzero limit")),
+    )
+    .await;
+
+    // Assert
+    assert!(unlimited.result.is_ok());
+    assert!(
+        sent > turn_requests,
+        "the unlimited turn summarized at least once"
+    );
+    assert_eq!(
+        limited.result.err().map(|error| error.kind()),
+        Some(ErrorKind::BudgetExhausted(LimitKind::ModelRequests)),
+        "a limit above the turn's own requests still stops it"
+    );
+    assert_eq!(requests.lock().expect("requests lock").len(), sent - 1);
+}
+
+/// Answers summary requests that carry correction feedback only after an
+/// hour, so a wall-clock limit stops the turn during a re-requested summary.
+struct StalledCorrectionModel {
+    inner: SummarizingModel,
+}
+
+#[async_trait]
+impl Model for StalledCorrectionModel {
+    async fn complete(&self, request: ModelRequest) -> Result<ModelCompletion, ModelError> {
+        if is_summary_request(&request)
+            && carries(
+                &request,
+                "[harness] Your previous final response was rejected",
+            )
+        {
+            tokio::time::sleep(Duration::from_secs(3600)).await;
+        }
+
+        self.inner.complete(request).await
+    }
+}
+
+#[tokio::test(start_paused = true)]
+async fn wall_time_stop_during_a_summary_still_streams_its_earlier_requests() {
+    // Arrange
+    let invalid = Ok(ModelResponse::Output(json!({"context": "missing fields"})));
+    let (inner, _requests) = SummarizingModel::new(vec![invalid]);
+    let harness = Harness::new(
+        StalledCorrectionModel { inner },
+        ContextBudget::new(NonZeroU64::new(BUDGET).expect("nonzero budget")),
+    )
+    .repository(Repository::fixture("repo"))
+    .allow(Tool::Read)
+    .file_system(files())
+    .context_summaries(ContextSummaryPolicy::Enabled);
+
+    // Act
+    let (events, outcome) = limited_run(
+        &harness,
+        RunLimits::default().with_max_wall_time(Duration::from_secs(60)),
+    )
+    .await;
+
+    // Assert
+    let requests_streamed = events
+        .iter()
+        .filter(|kind| matches!(kind, RunEventKind::ModelRequestCompleted { .. }))
+        .count();
+    assert_eq!(
+        outcome.result.as_ref().err().map(RunError::kind),
+        Some(ErrorKind::BudgetExhausted(LimitKind::WallTime))
+    );
+    assert_eq!(requests_streamed, outcome.report.model_requests().len());
+    assert!(
+        outcome
+            .report
+            .model_requests()
+            .iter()
+            .any(|request| request.purpose() == ModelRequestPurpose::ContextSummary),
+        "the rejected summary request is part of the outcome"
+    );
 }

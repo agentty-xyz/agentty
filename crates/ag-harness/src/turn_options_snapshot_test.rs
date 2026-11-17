@@ -1,12 +1,14 @@
 //! Turn options snapshot tests: round trips, versioned fingerprints, and
 //! comparison metadata validation.
 
-use std::num::{NonZeroU32, NonZeroUsize};
+use std::num::{NonZeroU32, NonZeroU64, NonZeroUsize};
+use std::time::Duration;
 
 use serde_json::{Value, json};
 use sha2::{Digest as _, Sha256};
 
 use super::{StoredTurnOptions, StoredTurnOptionsError};
+use crate::limit::RunLimits;
 use crate::{
     ComparisonBase, GenerationParams, OutputMode, OutputSchema, Tool, ToolPolicy, TurnOptions,
 };
@@ -46,6 +48,26 @@ fn snapshots_round_trip_and_reject_unknown_or_invalid_configuration() {
     assert_eq!(decoded.max_tool_calls, None);
     assert!(snapshot.get("max_tool_calls").is_none());
     assert!(errors.iter().all(Result::is_err));
+}
+
+#[test]
+fn run_limits_never_reach_the_snapshot_or_its_fingerprint() {
+    // Arrange
+    let options = TurnOptions::new(schema(), ToolPolicy::default().allow(Tool::Write));
+    let limited = options.clone().with_limits(
+        RunLimits::default()
+            .with_max_model_requests(NonZeroU32::MIN)
+            .with_max_tool_calls(NonZeroU32::MIN)
+            .with_max_total_tokens(NonZeroU64::MIN)
+            .with_max_wall_time(Duration::from_secs(1)),
+    );
+
+    // Act
+    let snapshot = StoredTurnOptions::encode(&options);
+    let limited_snapshot = StoredTurnOptions::encode(&limited);
+
+    // Assert
+    assert_eq!(limited_snapshot, snapshot);
 }
 
 #[test]

@@ -16,6 +16,7 @@ use serde::{Deserialize, Serialize};
 
 use crate::bash::BashError;
 use crate::harness::HarnessBuildError;
+use crate::limit::LimitKind;
 use crate::model::{ModelError, ModelErrorType, ModelRegistryError};
 use crate::session::SessionError;
 use crate::turn::TurnError;
@@ -28,12 +29,19 @@ use crate::{OutputSchemaError, RepositoryError, TurnInputError};
 /// the harness gains failure modes. [`crate::lifecycle::TurnErrorType`]
 /// remains the low-cardinality telemetry label of a failed turn; `ErrorKind`
 /// is the embedder-facing classification and its intended successor.
+///
+/// It serializes as its [`Self::as_str`] name, so a wire `kind` is always a
+/// string; [`crate::event::RunFailure`] carries the limit of
+/// [`Self::BudgetExhausted`] beside it.
 #[derive(Clone, Copy, Debug, Deserialize, Eq, Hash, JsonSchema, PartialEq, Serialize)]
-#[serde(rename_all = "snake_case")]
+#[serde(into = "ErrorKindName", try_from = "ErrorKindName")]
 #[non_exhaustive]
 pub enum ErrorKind {
     /// The caller cancelled the run.
     Cancelled,
+    /// The run reached one of its [`crate::RunLimits`]; retrying the same
+    /// run would reach the same limit.
+    BudgetExhausted(LimitKind),
     /// The provider limited the request rate; retry after
     /// [`RunError::retry_after`] when present.
     RateLimited,
@@ -82,6 +90,7 @@ impl ErrorKind {
     pub fn as_str(self) -> &'static str {
         match self {
             Self::Cancelled => "cancelled",
+            Self::BudgetExhausted(_) => "budget_exhausted",
             Self::RateLimited => "rate_limited",
             Self::Overloaded => "overloaded",
             Self::Auth => "auth",
@@ -114,6 +123,142 @@ impl fmt::Display for ErrorKind {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
         formatter.write_str(self.as_str())
     }
+}
+
+impl TryFrom<ErrorKindName> for ErrorKind {
+    type Error = ErrorKindWireError;
+
+    fn try_from(name: ErrorKindName) -> Result<Self, Self::Error> {
+        name.with_limit(None)
+    }
+}
+
+/// Stable reason that a run or harness operation failed, for embedder retry
+/// and recovery policy, by its wire name.
+///
+/// Every harness failure maps to exactly one kind. New kinds may be added as
+/// the harness gains failure modes. Data a kind carries travels beside it.
+#[derive(Clone, Copy, Debug, Deserialize, Eq, JsonSchema, PartialEq, Serialize)]
+#[serde(rename_all = "snake_case")]
+#[schemars(rename = "ErrorKind")]
+pub(crate) enum ErrorKindName {
+    /// The caller cancelled the run.
+    Cancelled,
+    /// The run reached one of its run limits, named beside the kind;
+    /// retrying the same run would reach the same limit.
+    BudgetExhausted,
+    /// The provider limited the request rate; retry after
+    /// [`RunError::retry_after`] when present.
+    RateLimited,
+    /// The provider was temporarily unavailable (HTTP `500`, `502`, `503`,
+    /// `504`, or `529`).
+    Overloaded,
+    /// The provider rejected the credentials (HTTP `401` or `403`).
+    Auth,
+    /// The provider account's quota or credit balance is spent.
+    QuotaExceeded,
+    /// The request exceeds the model's context window or budget, even after
+    /// every allowed reduction.
+    ContextOverflow,
+    /// The model or provider returned output that is unusable: invalid JSON,
+    /// a schema violation, a malformed tool call, an undecodable response
+    /// envelope, or an oversized or incomplete response.
+    InvalidOutput,
+    /// The network failed or the provider timed out the request.
+    Transport,
+    /// A model request failed for a reason without a finer classification,
+    /// such as another provider rejection or a failure a custom
+    /// [`crate::Model`] reports through [`ModelError::request`].
+    Other,
+    /// A repository or sandbox tool failed in a way that ends the turn.
+    ToolFailed,
+    /// The model kept repeating tool calls without progress after a nudge.
+    Repetition,
+    /// The session already has an active turn or matching host request, or
+    /// the session store is temporarily locked or saturated.
+    Busy,
+    /// The request conflicts with the session's recorded state, such as an
+    /// existing identifier, a reused host turn ID, or a stale handle.
+    Conflict,
+    /// The requested session does not exist.
+    NotFound,
+    /// The session store failed or holds invalid data, so the session's
+    /// durable state may be incomplete.
+    Store,
+    /// The harness, session, sandbox, or request configuration cannot be
+    /// satisfied, including capabilities the model does not support.
+    Config,
+}
+
+impl ErrorKindName {
+    /// Returns the kind this name and `limit` describe.
+    ///
+    /// # Errors
+    /// Returns an error when `limit` is missing for
+    /// [`Self::BudgetExhausted`] or present for another kind.
+    pub(crate) fn with_limit(
+        self,
+        limit: Option<LimitKind>,
+    ) -> Result<ErrorKind, ErrorKindWireError> {
+        let kind = match (self, limit) {
+            (Self::BudgetExhausted, Some(limit)) => ErrorKind::BudgetExhausted(limit),
+            (Self::BudgetExhausted, None) => return Err(ErrorKindWireError::MissingLimit),
+            (_, Some(_)) => return Err(ErrorKindWireError::UnexpectedLimit),
+            (Self::Cancelled, None) => ErrorKind::Cancelled,
+            (Self::RateLimited, None) => ErrorKind::RateLimited,
+            (Self::Overloaded, None) => ErrorKind::Overloaded,
+            (Self::Auth, None) => ErrorKind::Auth,
+            (Self::QuotaExceeded, None) => ErrorKind::QuotaExceeded,
+            (Self::ContextOverflow, None) => ErrorKind::ContextOverflow,
+            (Self::InvalidOutput, None) => ErrorKind::InvalidOutput,
+            (Self::Transport, None) => ErrorKind::Transport,
+            (Self::Other, None) => ErrorKind::Other,
+            (Self::ToolFailed, None) => ErrorKind::ToolFailed,
+            (Self::Repetition, None) => ErrorKind::Repetition,
+            (Self::Busy, None) => ErrorKind::Busy,
+            (Self::Conflict, None) => ErrorKind::Conflict,
+            (Self::NotFound, None) => ErrorKind::NotFound,
+            (Self::Store, None) => ErrorKind::Store,
+            (Self::Config, None) => ErrorKind::Config,
+        };
+
+        Ok(kind)
+    }
+}
+
+impl From<ErrorKind> for ErrorKindName {
+    fn from(kind: ErrorKind) -> Self {
+        match kind {
+            ErrorKind::Cancelled => Self::Cancelled,
+            ErrorKind::BudgetExhausted(_) => Self::BudgetExhausted,
+            ErrorKind::RateLimited => Self::RateLimited,
+            ErrorKind::Overloaded => Self::Overloaded,
+            ErrorKind::Auth => Self::Auth,
+            ErrorKind::QuotaExceeded => Self::QuotaExceeded,
+            ErrorKind::ContextOverflow => Self::ContextOverflow,
+            ErrorKind::InvalidOutput => Self::InvalidOutput,
+            ErrorKind::Transport => Self::Transport,
+            ErrorKind::Other => Self::Other,
+            ErrorKind::ToolFailed => Self::ToolFailed,
+            ErrorKind::Repetition => Self::Repetition,
+            ErrorKind::Busy => Self::Busy,
+            ErrorKind::Conflict => Self::Conflict,
+            ErrorKind::NotFound => Self::NotFound,
+            ErrorKind::Store => Self::Store,
+            ErrorKind::Config => Self::Config,
+        }
+    }
+}
+
+/// A wire error kind whose limit does not match its name.
+#[derive(Debug, Eq, PartialEq, thiserror::Error)]
+pub(crate) enum ErrorKindWireError {
+    /// `budget_exhausted` arrived without the limit it reached.
+    #[error("`budget_exhausted` requires its `limit`")]
+    MissingLimit,
+    /// A `limit` arrived with a kind other than `budget_exhausted`.
+    #[error("only `budget_exhausted` carries a `limit`")]
+    UnexpectedLimit,
 }
 
 /// Implements the shared accessors, `Display`, and [`Error`] of a public
@@ -320,6 +465,7 @@ impl Classification {
             TurnError::CommandJournal { .. } | TurnError::MessageJournal { .. } => ErrorKind::Store,
             TurnError::ContextBudgetExceeded { .. } => ErrorKind::ContextOverflow,
             TurnError::RepeatedToolCalls { .. } => ErrorKind::Repetition,
+            TurnError::LimitReached { limit } => ErrorKind::BudgetExhausted(*limit),
         };
 
         Self::kind(kind)

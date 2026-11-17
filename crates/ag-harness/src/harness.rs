@@ -561,24 +561,19 @@ impl Session {
             mut outcome,
         } = match result {
             Ok(result) => result,
-            Err(EngineFailure { error, report }) => {
+            Err(EngineFailure {
+                error,
+                interrupted,
+                report,
+            }) => {
                 if let (Some(control), Some(report)) = (control, report.as_deref()) {
                     control.record_report(report);
                 }
                 if let Some(turn) = turn.as_mut() {
                     turn.set_failure_report(report);
                 }
-                let persistence = guard.fail(&error).await;
-                if let Err(persistence) = persistence {
-                    guard.mark_interrupted();
 
-                    return Err(SessionError::TurnPersistence {
-                        turn: error,
-                        persistence: Box::new(persistence),
-                    });
-                }
-
-                return Err(error.into());
+                return Err(guard.settle_failure(error, interrupted).await);
             }
         };
         outcome.set_history(history);
@@ -1397,7 +1392,7 @@ impl Harness {
 
                 Ok(outcome)
             }
-            Err(EngineFailure { error, report }) => {
+            Err(EngineFailure { error, report, .. }) => {
                 if let Some(mut turn) = turn {
                     turn.set_failure_report(report);
                     turn.failed(error.error_type());

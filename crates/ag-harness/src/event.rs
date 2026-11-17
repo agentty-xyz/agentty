@@ -23,7 +23,8 @@ use serde::{Deserialize, Deserializer, Serialize, Serializer};
 use tokio::sync::{Mutex, mpsc};
 
 use crate::catalog::ModelId;
-use crate::error::{ErrorKind, RunError};
+use crate::error::{ErrorKind, ErrorKindName, ErrorKindWireError, RunError};
+use crate::limit::LimitKind;
 use crate::run::{RunOutcome, RunOutput, Usage};
 use crate::tool::ToolCall;
 use crate::turn::{ContextActivity, ToolActivity};
@@ -331,7 +332,11 @@ impl RunSummary {
 }
 
 /// A run's failure as plain data.
+///
+/// On the wire its `kind` is the [`ErrorKind::as_str`] name, and a
+/// [`ErrorKind::BudgetExhausted`] failure adds the reached `limit`.
 #[derive(Clone, Debug, Deserialize, Eq, JsonSchema, PartialEq, Serialize)]
+#[serde(into = "RunFailureFields", try_from = "RunFailureFields")]
 #[non_exhaustive]
 pub struct RunFailure {
     /// Failure classification; [`ErrorKind::Cancelled`] for a cancelled run.
@@ -348,6 +353,47 @@ impl From<&RunError> for RunFailure {
             kind: error.kind(),
             message: error.to_string(),
             retryable: error.is_retryable(),
+        }
+    }
+}
+
+impl TryFrom<RunFailureFields> for RunFailure {
+    type Error = ErrorKindWireError;
+
+    fn try_from(fields: RunFailureFields) -> Result<Self, Self::Error> {
+        Ok(Self {
+            kind: fields.kind.with_limit(fields.limit)?,
+            message: fields.message,
+            retryable: fields.retryable,
+        })
+    }
+}
+
+/// Wire form of a [`RunFailure`].
+#[derive(Deserialize, JsonSchema, Serialize)]
+#[schemars(rename = "RunFailure")]
+struct RunFailureFields {
+    /// Failure classification; `cancelled` for a cancelled run.
+    kind: ErrorKindName,
+    /// The run limit a `budget_exhausted` failure reached.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    limit: Option<LimitKind>,
+    /// Bounded failure description.
+    message: String,
+    /// Whether retrying the run may succeed.
+    retryable: bool,
+}
+
+impl From<RunFailure> for RunFailureFields {
+    fn from(failure: RunFailure) -> Self {
+        Self {
+            kind: failure.kind.into(),
+            limit: match failure.kind {
+                ErrorKind::BudgetExhausted(limit) => Some(limit),
+                _ => None,
+            },
+            message: failure.message,
+            retryable: failure.retryable,
         }
     }
 }

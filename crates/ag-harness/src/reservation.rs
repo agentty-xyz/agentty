@@ -486,6 +486,32 @@ impl TurnGuard {
         self.finalize(database.fail_turn(&owner, error)).await
     }
 
+    /// Settles a turn that failed with `error` and returns the failure to
+    /// report. An `interrupted` turn stopped while a tool call ran, so its
+    /// effects are unknown: like a cancelled turn, it is recorded as
+    /// interrupted, naming its error type, when this armed guard drops.
+    pub(crate) async fn settle_failure(
+        &mut self,
+        error: TurnError,
+        interrupted: bool,
+    ) -> SessionError {
+        if interrupted {
+            self.owner.interruption_error_type = error.error_type().as_str();
+
+            return error.into();
+        }
+        if let Err(persistence) = self.fail(&error).await {
+            self.mark_interrupted();
+
+            return SessionError::TurnPersistence {
+                turn: error,
+                persistence: Box::new(persistence),
+            };
+        }
+
+        error.into()
+    }
+
     async fn finalize(
         &mut self,
         persistence: impl Future<Output = Result<(), SessionError>>,

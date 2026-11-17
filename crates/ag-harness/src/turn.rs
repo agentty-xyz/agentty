@@ -19,6 +19,7 @@ pub use crate::cancellation::{ControlledTurn, SettlementError, SettlementPhase, 
 use crate::comparison::ComparisonBase;
 pub use crate::harness::{OneShotTurn, SessionTurn};
 use crate::lifecycle::{ModelResponseType, ToolUnavailableReason, TurnErrorType};
+use crate::limit::{LimitKind, RunLimits};
 use crate::model::{CompletionMetadata, ModelError};
 use crate::policy::ToolPolicy;
 use crate::read::ReadError;
@@ -32,14 +33,16 @@ use crate::write::WriteError;
 /// Construct a new value for each turn. Explicit options never inherit
 /// permissions or schema changes from an earlier turn. Cancellation and
 /// conversation history belong to execution state, not this snapshot. A turn
-/// has no tool-call limit: cancellation and, when declared, the effective
-/// model's context budget bound it.
+/// is unlimited unless its run's [`crate::RunRequest::limits`] bound it;
+/// cancellation and, when declared, the effective model's context budget
+/// bound it either way.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct TurnOptions {
     bash: Option<BashConfig>,
     comparison_base: Option<ComparisonBase>,
     generation: GenerationParams,
     instructions: Option<String>,
+    limits: RunLimits,
     output: OutputMode,
     tool_policy: ToolPolicy,
 }
@@ -53,9 +56,24 @@ impl TurnOptions {
             comparison_base: None,
             generation: GenerationParams::default(),
             instructions: None,
+            limits: RunLimits::default(),
             output: output.into(),
             tool_policy,
         }
+    }
+
+    /// Bounds this turn's model requests, tool calls, tokens, and wall-clock
+    /// time. Limits are never stored with the turn or the session.
+    #[must_use]
+    pub(crate) fn with_limits(mut self, limits: RunLimits) -> Self {
+        self.limits = limits;
+
+        self
+    }
+
+    /// Returns this turn's limits.
+    pub(crate) fn limits(&self) -> RunLimits {
+        self.limits
     }
 
     /// Adds host instructions for this turn only.
@@ -913,6 +931,7 @@ impl fmt::Display for ToolActivity {
 
 /// Failure returned by a complete harness turn.
 #[derive(Debug, Error)]
+#[non_exhaustive]
 pub enum TurnError {
     /// Sandbox preparation, execution, or cleanup failed. Retains all observed
     /// diagnostics, including simultaneous execution and cleanup failures.
@@ -985,6 +1004,13 @@ pub enum TurnError {
         /// Function name of the latest repeated call.
         tool: String,
     },
+    /// The turn reached one of the [`RunLimits`] set for it; completed
+    /// requests keep their usage, and the session accepts the next turn.
+    #[error("run stopped at its {limit} limit")]
+    LimitReached {
+        /// The limit the turn reached.
+        limit: LimitKind,
+    },
 }
 
 impl TurnError {
@@ -1002,8 +1028,14 @@ impl TurnError {
             Self::ComparisonRepositoryMismatch => TurnErrorType::ComparisonRepositoryMismatch,
             Self::ContextBudgetExceeded { .. } => TurnErrorType::ContextBudget,
             Self::RepeatedToolCalls { .. } => TurnErrorType::RepeatedToolCalls,
+            Self::LimitReached { limit } => TurnErrorType::RunLimit(*limit),
             Self::MessageJournal { .. } => TurnErrorType::Session,
         }
+    }
+
+    /// Returns the failure of a turn that reached `limit`.
+    pub(crate) fn limit_reached(limit: LimitKind) -> Self {
+        Self::LimitReached { limit }
     }
 }
 

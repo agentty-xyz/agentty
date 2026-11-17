@@ -496,12 +496,23 @@
       ]
     },
     "RunFailure": {
-      "description": "A run's failure as plain data.",
+      "description": "A run's failure as plain data.\n\nOn the wire its `kind` is the [`ErrorKind::as_str`] name, and a\n[`ErrorKind::BudgetExhausted`] failure adds the reached `limit`.",
       "type": "object",
       "properties": {
         "kind": {
-          "description": "Failure classification; [`ErrorKind::Cancelled`] for a cancelled run.",
+          "description": "Failure classification; `cancelled` for a cancelled run.",
           "$ref": "#/$defs/ErrorKind"
+        },
+        "limit": {
+          "description": "The run limit a `budget_exhausted` failure reached.",
+          "anyOf": [
+            {
+              "$ref": "#/$defs/LimitKind"
+            },
+            {
+              "type": "null"
+            }
+          ]
         },
         "message": {
           "description": "Bounded failure description.",
@@ -519,12 +530,17 @@
       ]
     },
     "ErrorKind": {
-      "description": "Stable reason that a run or harness operation failed, for embedder retry\nand recovery policy.\n\nEvery harness failure maps to exactly one kind. New kinds may be added as\nthe harness gains failure modes. [`crate::lifecycle::TurnErrorType`]\nremains the low-cardinality telemetry label of a failed turn; `ErrorKind`\nis the embedder-facing classification and its intended successor.",
+      "description": "Stable reason that a run or harness operation failed, for embedder retry\nand recovery policy, by its wire name.\n\nEvery harness failure maps to exactly one kind. New kinds may be added as\nthe harness gains failure modes. Data a kind carries travels beside it.",
       "oneOf": [
         {
           "description": "The caller cancelled the run.",
           "type": "string",
           "const": "cancelled"
+        },
+        {
+          "description": "The run reached one of its run limits, named beside the kind;\nretrying the same run would reach the same limit.",
+          "type": "string",
+          "const": "budget_exhausted"
         },
         {
           "description": "The provider limited the request rate; retry after\n[`RunError::retry_after`] when present.",
@@ -600,6 +616,31 @@
           "description": "The harness, session, sandbox, or request configuration cannot be\nsatisfied, including capabilities the model does not support.",
           "type": "string",
           "const": "config"
+        }
+      ]
+    },
+    "LimitKind": {
+      "description": "Which [`RunLimits`] limit stopped a run.\n\nIt serializes as its `snake_case` name.",
+      "oneOf": [
+        {
+          "description": "[`RunLimits::max_model_requests`]: model requests.",
+          "type": "string",
+          "const": "model_requests"
+        },
+        {
+          "description": "[`RunLimits::max_tool_calls`]: tool calls.",
+          "type": "string",
+          "const": "tool_calls"
+        },
+        {
+          "description": "[`RunLimits::max_total_tokens`]: input plus output tokens.",
+          "type": "string",
+          "const": "tokens"
+        },
+        {
+          "description": "[`RunLimits::max_wall_time`]: wall-clock time.",
+          "type": "string",
+          "const": "wall_time"
         }
       ]
     },

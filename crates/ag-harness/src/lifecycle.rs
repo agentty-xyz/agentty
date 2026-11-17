@@ -18,6 +18,7 @@ use std::time::{Duration, Instant};
 
 use serde::{Deserialize, Serialize};
 
+use crate::limit::LimitKind;
 use crate::model::{CompletionMetadata, ModelErrorType, ModelMetadata};
 pub use crate::telemetry::LifecycleMetrics;
 pub use crate::trace::LifecycleTraceObserver;
@@ -334,6 +335,8 @@ pub enum TurnErrorType {
     ContextBudget,
     /// The model kept repeating an identical tool call after a nudge.
     RepeatedToolCalls,
+    /// The turn reached this limit of its run's [`crate::RunLimits`].
+    RunLimit(LimitKind),
     /// A repository-scoped tool was enabled without a repository root.
     RepositoryRequired,
     /// The comparison base belongs to a different repository scope.
@@ -351,6 +354,12 @@ impl TurnErrorType {
             Self::Tool => crate::telemetry::ERROR_TOOL_EXECUTION,
             Self::ContextBudget => crate::telemetry::ERROR_CONTEXT_BUDGET,
             Self::RepeatedToolCalls => crate::telemetry::ERROR_REPEATED_TOOL_CALLS,
+            Self::RunLimit(LimitKind::ModelRequests) => {
+                crate::telemetry::ERROR_RUN_LIMIT_MODEL_REQUESTS
+            }
+            Self::RunLimit(LimitKind::ToolCalls) => crate::telemetry::ERROR_RUN_LIMIT_TOOL_CALLS,
+            Self::RunLimit(LimitKind::Tokens) => crate::telemetry::ERROR_RUN_LIMIT_TOKENS,
+            Self::RunLimit(LimitKind::WallTime) => crate::telemetry::ERROR_RUN_LIMIT_WALL_TIME,
             Self::RepositoryRequired => crate::telemetry::ERROR_REPOSITORY_REQUIRED,
             Self::ComparisonRepositoryMismatch => {
                 crate::telemetry::ERROR_COMPARISON_REPOSITORY_MISMATCH
