@@ -3,7 +3,7 @@
 Structured LLM turns with deny-by-default tools and durable sessions.
 
 - **Every answer is typed.** Each turn ends in JSON validated locally against your
-  schema.
+  schema, or, in `OutputMode::Text`, in plain text.
 - **Tools are off until you allow them.** Read, write, and sandboxed Bash each need an
   explicit grant.
 - **Your store owns the conversation.** Sessions resume from SQLite (or your own store)
@@ -123,6 +123,17 @@ let outcome = session
   replaces `result`. A cloneable `CancelToken` from `run.cancel_token()`, or
   `into_handle()`, cancels it from any task. `harness.run` keeps its single turn in a
   fresh in-memory session and requires `RunRequest::output`.
+- **Run options apply to one run.** `RunRequest::output` selects an `OutputMode` (a JSON
+  schema, or `Text` for a `RunOutput::Text` answer) over the session's stored default;
+  `Harness::session` accepts either as that default. `RunRequest::instructions` adds
+  host instructions after the system prompt and replayed history, so the cached prefix
+  survives changing them; they are stored with the turn but not replayed to later runs.
+  `RunRequest::generation` sends `GenerationParams`, such as `max_output_tokens`, to the
+  provider. Text output needs a model whose `Model::supports_text_output` holds
+  (`ModelClient` does), and a bound must suit the provider (the ChatGPT plan takes none,
+  the OpenAI API at least 16); otherwise the run fails with `ErrorKind::Config` before
+  any request. Providers that state the schema in a leading prompt message (Kimi, Qwen,
+  OpenAI-compatible) miss the cached prefix when a run changes the output mode.
 - **Runs stream typed events.** `run.into_parts()` returns an `EventStream` (a
   `futures::Stream` of `RunEvent`) and a `RunHandle`. Each event has the run ID, a
   gap-free `seq`, and a timestamp in Unix milliseconds. Events report the admitted turn

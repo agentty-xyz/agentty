@@ -136,6 +136,12 @@ the cap reset on `switch_model` or estimator replacement. `TurnReport` and
 - Reservation and model switching run in one store-owned atomic section. Within one
   process, a single reservation lifecycle owns admission, lease renewal, finalization,
   and recovery of abandoned owners.
+- A session stores a default output mode: a JSON schema, or none for plain text. A run
+  or turn may select another mode without changing it.
+- Per-turn host instructions follow the turn's input, after the system prompt and
+  replayed history, so they never change the cached prompt prefix. They are journaled
+  with the turn and sent with each of its requests, but later turns replay it without
+  them, so they never steer another turn.
 - Each turn records its effective options, comparison identity, and model provenance
   before execution. Write and command intents persist before their effects.
 - `host_id`/`recover` bind host-assigned request IDs to a fingerprint of the effective

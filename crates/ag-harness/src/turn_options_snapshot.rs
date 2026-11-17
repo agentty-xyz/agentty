@@ -8,6 +8,7 @@ use sha2::{Digest, Sha256};
 use thiserror::Error;
 
 use crate::comparison::ComparisonIdentity;
+use crate::request_option::GenerationParams;
 use crate::{OutputSchema, OutputSchemaError, ToolPolicy, TurnOptions};
 
 /// Versioned durable metadata, independent of live repository validation.
@@ -20,10 +21,18 @@ pub struct StoredTurnOptions {
     comparison_base: Option<ComparisonIdentity>,
     #[serde(default)]
     fingerprint: Option<String>,
+    /// Provider generation parameters of the turn, recorded from version 6
+    /// as one object holding only the set parameters.
+    #[serde(default)]
+    generation: Option<GenerationParams>,
+    /// Host instructions of the turn, recorded from version 6.
+    #[serde(default)]
+    instructions: Option<String>,
     /// Removed per-turn tool-call limit, retained only so legacy v1-v4
     /// snapshots keep validating against their recorded fingerprints.
     #[serde(default)]
     max_tool_calls: Option<NonZeroUsize>,
+    /// Output schema, or, from version 6, `null` for a plain-text turn.
     output_schema: Value,
     tool_policy: ToolPolicy,
     version: u8,
@@ -38,10 +47,14 @@ impl StoredTurnOptions {
                 .comparison_base()
                 .map(|base| base.identity().clone()),
             fingerprint: None,
+            generation: Some(options.generation()),
+            instructions: options.instructions().map(str::to_string),
             max_tool_calls: None,
-            output_schema: options.schema().value().clone(),
+            output_schema: options
+                .schema()
+                .map_or(Value::Null, |schema| schema.value().clone()),
             tool_policy: options.tool_policy(),
-            version: 5,
+            version: 6,
         };
         let mut snapshot = stored.effective_options();
         snapshot["fingerprint"] = json!(stored.fingerprint());
@@ -56,15 +69,21 @@ impl StoredTurnOptions {
     /// schemas, comparison identities, or fingerprints.
     pub fn decode(snapshot: &str) -> Result<Self, StoredTurnOptionsError> {
         let stored: Self = serde_json::from_str(snapshot).map_err(StoredTurnOptionsError::Json)?;
-        if !matches!(stored.version, 1..=5)
+        let text_output = stored.output_schema.is_null();
+        if !matches!(stored.version, 1..=6)
             || (stored.version < 4 && stored.bash.is_some())
             || (stored.version < 5) != stored.max_tool_calls.is_some()
+            || (stored.version < 6
+                && (text_output || stored.instructions.is_some() || stored.generation.is_some()))
         {
             return Err(StoredTurnOptionsError::InvalidData {
                 reason: format!("unsupported turn options version {}", stored.version),
             });
         }
-        OutputSchema::new(stored.output_schema.clone()).map_err(StoredTurnOptionsError::Schema)?;
+        if !text_output {
+            OutputSchema::new(stored.output_schema.clone())
+                .map_err(StoredTurnOptionsError::Schema)?;
+        }
         let valid = if stored.version == 1 {
             stored.comparison_base.is_none() && stored.fingerprint.is_none()
         } else {
@@ -103,6 +122,10 @@ impl StoredTurnOptions {
         };
         if self.version >= 4 {
             value["bash"] = json!(self.bash);
+        }
+        if self.version >= 6 {
+            value["instructions"] = json!(self.instructions);
+            value["generation"] = json!(self.generation);
         }
 
         value

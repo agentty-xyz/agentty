@@ -762,6 +762,32 @@ fn fit_reduces_history_or_fails_typed_when_feedback_overflows_a_tool_free_reques
 }
 
 #[test]
+fn fit_keeps_turn_instructions_ahead_of_dropped_rounds() {
+    // Arrange
+    let instructions = ModelMessage::Instructions("i".repeat(100));
+    let mut request =
+        request(Vec::new(), Vec::new(), "loop").with_instructions(Some(&"i".repeat(100)));
+    for index in 0..4 {
+        record_read_round(&mut request, &format!("r{index}"), 300);
+    }
+    let budget_weight = weigh(&request) - 1;
+
+    // Act
+    let (fitted, activity) = fit_owned(&mut ContextFit::default(), budget(budget_weight), &request)
+        .expect("fits after dropping rounds");
+
+    // Assert
+    let fitted = fitted.expect("reduced copy");
+    assert!(activity.dropped_tool_calls() >= 1);
+    assert_eq!(request.rounds_start(), 2);
+    assert_eq!(fitted.messages()[1], instructions);
+    let ModelMessage::User(note) = &fitted.messages()[2] else {
+        std::panic::resume_unwind(Box::new("dropped-round note expected"));
+    };
+    assert!(note.starts_with("[harness] "));
+}
+
+#[test]
 fn fit_drops_feedback_that_precedes_a_dropped_round_with_that_round() {
     // Arrange
     let mut request = request(Vec::new(), Vec::new(), "loop");

@@ -101,8 +101,9 @@ fn declared_heuristic_weights_use_their_rates_and_fixed_tokens() {
     let message = estimator.message_weight(&ModelMessage::User("x".repeat(1_000)));
     let tool =
         estimator.tool_definition_weight(&ToolDefinition::bash(Enforcement::FileSystemAndNetwork));
-    let request = estimator.request_weight(&schema);
-    let request_with_schema = in_prompt.request_weight(&schema);
+    let request = estimator.request_weight(Some(&schema));
+    let request_with_schema = in_prompt.request_weight(Some(&schema));
+    let text_request = in_prompt.request_weight(None);
 
     // Assert
     assert_eq!(message, 265);
@@ -118,8 +119,10 @@ fn declared_heuristic_weights_use_their_rates_and_fixed_tokens() {
     // `{"type":"object"}` is 17 bytes: 4 tokens at 225 per 1,000, plus the
     // 40 every message carries.
     assert_eq!(request_with_schema, 464);
+    // A plain-text request states no schema.
+    assert_eq!(text_request, 420);
     assert_eq!(
-        HeuristicContextEstimator::DEFAULT.request_weight(&schema),
+        HeuristicContextEstimator::DEFAULT.request_weight(Some(&schema)),
         0
     );
     assert_eq!(
@@ -145,6 +148,31 @@ fn mandatory_admission_includes_the_fixed_request_weight() {
     // Assert
     // The input message weighs 1 + 4 and the request 3, leaving 2 of 10.
     assert_eq!(remaining.expect("fits"), 2);
+}
+
+#[test]
+fn turn_instructions_count_toward_mandatory_admission() {
+    // Arrange
+    let estimator = HeuristicContextEstimator::DEFAULT.with_request_tokens(3);
+    let input = TurnInput::text("abcd");
+    let instructed = options_with(ToolPolicy::default()).with_instructions("abcdefgh");
+
+    // Act
+    let plain = admit_mandatory_content(
+        &estimator,
+        budget(10),
+        None,
+        &input,
+        &options_with(ToolPolicy::default()),
+    );
+    let rejected = admit_mandatory_content(&estimator, budget(10), None, &input, &instructed);
+
+    // Assert
+    assert_eq!(plain.expect("fits"), 2);
+    assert!(
+        rejected.is_err(),
+        "the instructions do not fit beside the input"
+    );
 }
 
 #[test]

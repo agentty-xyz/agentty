@@ -24,7 +24,7 @@ use crate::event::{EventSink, EventStream};
 use crate::input::TurnInput;
 use crate::model::CompletionUsage;
 use crate::policy::ToolPolicy;
-use crate::schema_contract::OutputSchema;
+use crate::request_option::{GenerationParams, OutputMode};
 use crate::session::SessionError;
 use crate::store::SessionStore;
 use crate::turn::{TurnOptions, TurnReport};
@@ -35,15 +35,17 @@ use crate::write_journal::{WriteRecord, WriteStatus};
 ///
 /// Every option applies to this run only and never changes a session's
 /// stored defaults. An unset option keeps the default: the session's stored
-/// output schema and the harness's default tool policy.
+/// output mode and the harness's default tool policy.
 #[derive(Clone)]
 #[must_use = "a run request does nothing until a run is started with it"]
 #[non_exhaustive]
 pub struct RunRequest {
     bash: Option<BashConfig>,
     comparison_base: Option<ComparisonBase>,
+    generation: GenerationParams,
     input: TurnInput,
-    output: Option<OutputSchema>,
+    instructions: Option<String>,
+    output: Option<OutputMode>,
     tool_policy: Option<ToolPolicy>,
 }
 
@@ -53,16 +55,37 @@ impl RunRequest {
         Self {
             bash: None,
             comparison_base: None,
+            generation: GenerationParams::default(),
             input: input.into(),
+            instructions: None,
             output: None,
             tool_policy: None,
         }
     }
 
-    /// Validates the run's final output against `schema` instead of the
-    /// session's stored schema. Required by [`crate::Harness::run`].
-    pub fn output(mut self, schema: OutputSchema) -> Self {
-        self.output = Some(schema);
+    /// Selects the form of the run's final answer instead of the session's
+    /// stored default: an [`crate::OutputSchema`] or [`OutputMode::Json`] for
+    /// validated JSON, or [`OutputMode::Text`] for plain text. Required by
+    /// [`crate::Harness::run`].
+    pub fn output(mut self, output: impl Into<OutputMode>) -> Self {
+        self.output = Some(output.into());
+
+        self
+    }
+
+    /// Adds host instructions for this run, like
+    /// [`TurnOptions::with_instructions`]: they follow the cached prompt
+    /// prefix, are stored with the run's turn, and are left out when later
+    /// runs replay that turn.
+    pub fn instructions(mut self, instructions: impl Into<String>) -> Self {
+        self.instructions = Some(instructions.into());
+
+        self
+    }
+
+    /// Sets provider generation parameters for this run's model requests.
+    pub fn generation(mut self, generation: GenerationParams) -> Self {
+        self.generation = generation;
 
         self
     }
@@ -91,27 +114,31 @@ impl RunRequest {
         self
     }
 
-    /// Resolves the input and turn options, using `default_schema` and
+    /// Resolves the input and turn options, using `default_output` and
     /// `default_policy` for unset options.
     ///
     /// # Errors
     /// Returns a [`ErrorKind::Config`] failure when neither the request nor
-    /// the caller supplies an output schema.
+    /// the caller supplies an output mode.
     pub(crate) fn into_turn(
         self,
-        default_schema: Option<&OutputSchema>,
+        default_output: Option<&OutputMode>,
         default_policy: ToolPolicy,
     ) -> Result<(TurnInput, TurnOptions), RunError> {
-        let schema = self
+        let output = self
             .output
-            .or_else(|| default_schema.cloned())
+            .or_else(|| default_output.cloned())
             .ok_or_else(|| RunError::with_kind(ErrorKind::Config, OutputRequired))?;
-        let mut options = TurnOptions::new(schema, self.tool_policy.unwrap_or(default_policy));
+        let mut options = TurnOptions::new(output, self.tool_policy.unwrap_or(default_policy))
+            .with_generation(self.generation);
         if let Some(configuration) = self.bash {
             options = options.with_bash(configuration);
         }
         if let Some(base) = self.comparison_base {
             options = options.with_comparison_base(base);
+        }
+        if let Some(instructions) = self.instructions {
+            options = options.with_instructions(instructions);
         }
 
         Ok((self.input, options))
@@ -198,7 +225,7 @@ impl Run {
             Ok(outcome) => {
                 let (output, report) = outcome.into_parts();
 
-                (Ok(RunOutput::Json(output)), report)
+                (Ok(journal.output(output)), report)
             }
             Err(error) => {
                 let report = report.unwrap_or_else(|| {
@@ -360,11 +387,9 @@ impl From<WriteRecord> for FileChange {
 #[serde(tag = "type", content = "value", rename_all = "snake_case")]
 #[non_exhaustive]
 pub enum RunOutput {
-    /// JSON output validated against the run's output schema; every run
-    /// produces this while runs require an output schema.
+    /// JSON output validated against the run's output schema.
     Json(Value),
-    /// Plain text output, reserved for a text output mode that a later
-    /// request option selects.
+    /// The final assistant text of a run in text output mode.
     Text(String),
 }
 
@@ -503,11 +528,13 @@ impl Usage {
     }
 }
 
-/// Locates the durable records of one run's turn.
+/// Locates the durable records of one run's turn, and records whether the
+/// turn answers in text.
 pub(crate) struct RunJournal {
     bash: bool,
     session_id: String,
     store: Arc<dyn SessionStore>,
+    text: bool,
 }
 
 impl RunJournal {
@@ -519,12 +546,22 @@ impl RunJournal {
         session_id: String,
         turn: &Result<(TurnInput, TurnOptions), RunError>,
     ) -> Self {
+        let options = turn.as_ref().ok().map(|(_, options)| options);
+
         Self {
-            bash: turn
-                .as_ref()
-                .is_ok_and(|(_, options)| options.bash().is_some()),
+            bash: options.is_some_and(|options| options.bash().is_some()),
             session_id,
             store,
+            text: options.is_some_and(|options| options.output() == &OutputMode::Text),
+        }
+    }
+
+    /// Wraps the validated output of the run's turn: a text turn's output is
+    /// a JSON string holding its text.
+    fn output(&self, output: Value) -> RunOutput {
+        match output {
+            Value::String(text) if self.text => RunOutput::Text(text),
+            output => RunOutput::Json(output),
         }
     }
 
@@ -553,5 +590,5 @@ impl RunJournal {
 
 /// A one-shot run without an output schema.
 #[derive(Debug, Error)]
-#[error("run requires an output schema; call `RunRequest::output`")]
+#[error("run requires an output mode; call `RunRequest::output`")]
 struct OutputRequired;

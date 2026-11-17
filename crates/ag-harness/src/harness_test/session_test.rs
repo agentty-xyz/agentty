@@ -631,7 +631,7 @@ async fn building_handles_and_running_once_leave_storage_uninitialized() {
     let explicit = harness
         .turn(
             "explicit ephemeral",
-            harness.default_options(object_schema()),
+            harness.default_options(object_schema().into()),
         )
         .await
         .expect("explicit one-shot turn");

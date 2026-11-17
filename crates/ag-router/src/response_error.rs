@@ -33,6 +33,13 @@ macro_rules! define_model_response_error {
                 /// Provider limitation.
                 reason: String,
             },
+            /// The provider cannot apply the requested generation settings,
+            /// such as an output-token bound it rejects.
+            #[error("provider cannot apply these generation settings: {reason}")]
+            UnsupportedGeneration {
+                /// Provider limitation.
+                reason: String,
+            },
             /// The provider cannot use the requested image input.
             #[error("model does not support image input: {reason}")]
             UnsupportedImageInput {

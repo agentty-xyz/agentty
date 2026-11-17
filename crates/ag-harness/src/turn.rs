@@ -22,6 +22,7 @@ use crate::lifecycle::{ModelResponseType, ToolUnavailableReason, TurnErrorType};
 use crate::model::{CompletionMetadata, ModelError};
 use crate::policy::ToolPolicy;
 use crate::read::ReadError;
+use crate::request_option::{GenerationParams, OutputMode};
 use crate::schema_contract::OutputSchema;
 use crate::tool::{ReadAction, Tool};
 use crate::write::WriteError;
@@ -37,19 +38,64 @@ use crate::write::WriteError;
 pub struct TurnOptions {
     bash: Option<BashConfig>,
     comparison_base: Option<ComparisonBase>,
-    schema: OutputSchema,
+    generation: GenerationParams,
+    instructions: Option<String>,
+    output: OutputMode,
     tool_policy: ToolPolicy,
 }
 
 impl TurnOptions {
-    /// Resolves a required schema and explicit permissions.
-    pub fn new(schema: OutputSchema, tool_policy: ToolPolicy) -> Self {
+    /// Resolves an output mode, usually a JSON [`OutputSchema`], and
+    /// explicit permissions.
+    pub fn new(output: impl Into<OutputMode>, tool_policy: ToolPolicy) -> Self {
         Self {
             bash: None,
             comparison_base: None,
-            schema,
+            generation: GenerationParams::default(),
+            instructions: None,
+            output: output.into(),
             tool_policy,
         }
+    }
+
+    /// Adds host instructions for this turn only.
+    ///
+    /// They follow the turn's input, after the system prompt and replayed
+    /// history, so changing them between turns keeps that prefix cacheable.
+    /// Every model request of the turn carries them, and they are journaled
+    /// with the turn, but later turns replay its history without them, so
+    /// they never steer another turn. Built-in providers send them as a
+    /// `developer` message to the Responses API and append them, marked as
+    /// the application's, to the user message they follow on Chat
+    /// Completions.
+    #[must_use]
+    pub fn with_instructions(mut self, instructions: impl Into<String>) -> Self {
+        self.instructions = Some(instructions.into());
+
+        self
+    }
+
+    /// Returns this turn's host instructions, if any.
+    pub fn instructions(&self) -> Option<&str> {
+        self.instructions.as_deref()
+    }
+
+    /// Sets provider generation parameters for this turn's model requests.
+    #[must_use]
+    pub fn with_generation(mut self, generation: GenerationParams) -> Self {
+        self.generation = generation;
+
+        self
+    }
+
+    /// Returns this turn's provider generation parameters.
+    pub fn generation(&self) -> GenerationParams {
+        self.generation
+    }
+
+    /// Returns the form of the turn's final answer.
+    pub fn output(&self) -> &OutputMode {
+        &self.output
     }
 
     /// Selects immutable Bash host policy for this turn. The separate Bash
@@ -66,9 +112,10 @@ impl TurnOptions {
         self.bash.as_ref()
     }
 
-    /// Returns the schema required for every terminal model output.
-    pub fn schema(&self) -> &OutputSchema {
-        &self.schema
+    /// Returns the schema the final output must match, or `None` when the
+    /// turn answers in plain text.
+    pub fn schema(&self) -> Option<&OutputSchema> {
+        self.output.schema()
     }
 
     /// Returns the complete permissions for this turn.
@@ -98,7 +145,8 @@ pub struct TurnOutcome {
 }
 
 impl TurnOutcome {
-    /// Returns the locally validated structured model output.
+    /// Returns the locally validated structured model output; a turn in
+    /// [`OutputMode::Text`] returns its text as a JSON string.
     pub fn output(&self) -> &Value {
         &self.output
     }

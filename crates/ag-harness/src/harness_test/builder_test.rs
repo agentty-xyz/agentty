@@ -133,7 +133,7 @@ fn build_derives_budget_and_estimator_from_the_declared_profile() {
         harness
             .inner
             .context_estimator
-            .request_weight(&object_schema()),
+            .request_weight(Some(&object_schema())),
         PROFILE_REQUEST_TOKENS
     );
     assert!(harness.model_registration().is_none());
@@ -156,7 +156,7 @@ fn explicit_budget_overrides_the_declared_profile() {
         harness
             .inner
             .context_estimator
-            .request_weight(&object_schema()),
+            .request_weight(Some(&object_schema())),
         PROFILE_REQUEST_TOKENS
     );
 }
@@ -195,7 +195,7 @@ fn build_resolves_the_catalog_selector_under_the_cataloged_profile() {
         harness
             .inner
             .context_estimator
-            .request_weight(&object_schema()),
+            .request_weight(Some(&object_schema())),
         PROFILE_REQUEST_TOKENS
     );
 }
@@ -347,7 +347,12 @@ async fn build_applies_every_configured_option() {
     );
     assert_eq!(config.max_history_bytes, 64);
     assert_eq!(config.model_reasoning_effort, Some(ReasoningEffort::High));
-    assert_eq!(config.context_estimator.request_weight(&object_schema()), 5);
+    assert_eq!(
+        config
+            .context_estimator
+            .request_weight(Some(&object_schema())),
+        5
+    );
     assert_eq!(config.context_summaries, ContextSummaryPolicy::Enabled);
     assert_eq!(config.execution_identity, Some(identity));
 }

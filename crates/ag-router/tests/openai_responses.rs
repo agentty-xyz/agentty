@@ -3,6 +3,7 @@
 //! replay, usage, and failure classification.
 
 use std::fmt::Write as _;
+use std::num::NonZeroU32;
 
 use ag_router::{
     Completion, ErrorClass, ImageContent, ImageMediaType, InputBlock, JsonSchemaFormat, ModelError,
@@ -255,6 +256,48 @@ async fn streams_a_stateless_request_and_validates_the_output()
                 "strict": false
             }]
         })
+    );
+
+    Ok(())
+}
+
+#[tokio::test]
+async fn streams_a_text_request_with_turn_instructions_and_an_output_bound()
+-> Result<(), Box<dyn std::error::Error>> {
+    // Arrange
+    let server = MockServer::start().await;
+    mount_stream(
+        &server,
+        &[
+            item_done(message_item("Ada, from the record.")),
+            completed(json!({"input_tokens": 40, "output_tokens": 6})),
+        ],
+    )
+    .await;
+    let mut request = ModelRequest::text_chat(
+        "openai/gpt-6.1-sol",
+        vec![
+            ModelMessage::User("Who wrote it?".to_string()),
+            ModelMessage::Instructions("Answer in one sentence.".to_string()),
+        ],
+        Vec::new(),
+    );
+    request.options.max_output_tokens = NonZeroU32::new(256);
+
+    // Act
+    let completion = router(&server)?.execute(request).await?;
+
+    // Assert
+    let Completion::Text { text, .. } = completion else {
+        return Err("terminal text expected".into());
+    };
+    assert_eq!(text, "Ada, from the record.");
+    let body = received_body(&server, 0).await?;
+    assert_eq!(body["max_output_tokens"], 256);
+    assert!(body.get("text").is_none());
+    assert_eq!(
+        body["input"][1],
+        json!({"type": "message", "role": "developer", "content": "Answer in one sentence."})
     );
 
     Ok(())

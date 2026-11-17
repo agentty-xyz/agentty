@@ -107,7 +107,7 @@ fn harness_models_weigh_requests_with_measured_estimators() {
     for (model, estimator) in harness_models.iter().zip(&estimators) {
         assert_ne!(*estimator, HeuristicContextEstimator::DEFAULT, "{model:?}");
         // Every measured provider renders the output schema into the prompt.
-        assert!(estimator.request_weight(&schema) > 0, "{model:?}");
+        assert!(estimator.request_weight(Some(&schema)) > 0, "{model:?}");
     }
     for model in AgentKind::Codex.models() {
         let profile = declared(*model).expect("Codex models declare compaction profiles");

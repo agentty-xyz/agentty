@@ -37,6 +37,7 @@ use crate::model_registry::{ModelRegistration, ModelRegistry, ModelRegistryError
 use crate::policy::ToolPolicy;
 use crate::recovery::{ExecutionIdentity, HostRequest, HostTurnAcquisition, HostTurnRecord};
 use crate::repository::Repository;
+use crate::request_option::OutputMode;
 use crate::reservation;
 use crate::run::{Run, RunJournal, RunRequest};
 use crate::schema_contract::OutputSchema;
@@ -62,7 +63,7 @@ pub struct Session {
     history: SessionHistory,
     id: String,
     model_generation: i64,
-    schema: OutputSchema,
+    output: OutputMode,
     system_prompt: Option<String>,
 }
 
@@ -89,9 +90,8 @@ impl Session {
         key: &str,
     ) -> Result<(), SessionError> {
         let registration = registry.resolve(key)?.clone();
-        registration
-            .model()
-            .validate_schema(&self.schema)
+        self.output
+            .check_model(registration.model().as_ref())
             .map_err(TurnError::from)?;
         let generation = reservation::switch_model(
             Arc::clone(&self.database),
@@ -311,13 +311,14 @@ impl Session {
     /// Starts one durable run of `request`; await the returned [`Run`] for
     /// its [`crate::RunOutcome`].
     ///
-    /// Unset request options use the stored session schema and the captured
-    /// default tool policy; request options never change the stored ones.
+    /// Unset request options use the stored session output mode and the
+    /// captured default tool policy; request options never change the
+    /// stored ones.
     /// The run executes on its own task with a copy of this handle, like
     /// [`SessionTurn::start`], and owns its cancellation. Its turn joins the
     /// session history that later runs and turns replay.
     pub fn run(&self, request: RunRequest) -> Run {
-        let turn = request.into_turn(Some(&self.schema), self.harness.inner.policy);
+        let turn = request.into_turn(Some(&self.output), self.harness.inner.policy);
         let journal = RunJournal::new(Arc::clone(&self.database), self.id.clone(), &turn);
         let mut session = self.detached();
 
@@ -352,7 +353,7 @@ impl Session {
             history: SessionHistory::new(self.history.max_bytes),
             id: self.id.clone(),
             model_generation: self.model_generation,
-            schema: self.schema.clone(),
+            output: self.output.clone(),
             system_prompt: self.system_prompt.clone(),
         }
     }
@@ -402,7 +403,7 @@ impl Session {
             "version": 1,
             "input": input_identity,
             "options": {
-                "schema": options.schema().value(),
+                "schema": options.schema().map(OutputSchema::value),
                 "permissions": options.tool_policy(),
                 "max_tool_calls": LEGACY_FINGERPRINT_MAX_TOOL_CALLS,
                 "comparison": options.comparison_base().map(crate::ComparisonBase::identity),
@@ -430,6 +431,14 @@ impl Session {
         }
         if let Some(bash) = options.bash() {
             configuration["options"]["bash"] = bash.fingerprint();
+        }
+        // Later options join only when set, so earlier recorded requests
+        // stay recognizable.
+        if let Some(instructions) = options.instructions() {
+            configuration["options"]["instructions"] = json!(instructions);
+        }
+        if !options.generation().is_default() {
+            configuration["options"]["generation"] = json!(options.generation());
         }
 
         HostRequest::from_configuration(id, configuration)
@@ -494,6 +503,7 @@ impl Session {
             return record.into_outcome();
         }
         self.harness.check_input_capability(&input)?;
+        self.harness.check_output_capability(options)?;
         let available_history_weight = self
             .harness
             .admit_mandatory_content(self.system_prompt.as_deref(), &input, options)
@@ -653,7 +663,9 @@ impl Session {
             messages.extend(turn.replay());
         }
         let retained_messages = messages.len();
-        let request = ModelRequest::with_history(messages, input, options.schema().clone())
+        let request = ModelRequest::with_history(messages, input, options.output().clone())
+            .with_instructions(options.instructions())
+            .with_generation(options.generation())
             .with_history_turn_starts(history_turn_starts)
             .with_cache_key(self.cache_key());
 
@@ -731,7 +743,7 @@ impl Session {
 pub struct SessionBuilder {
     harness: Harness,
     id: String,
-    schema: OutputSchema,
+    output: OutputMode,
     system_prompt: Option<String>,
 }
 
@@ -753,7 +765,7 @@ impl SessionBuilder {
     pub async fn create(self) -> Result<Session, SessionError> {
         let database = self.harness.open_database().await?;
         let harness_config = &self.harness.inner;
-        let config = NewSession::new(self.id, self.schema)
+        let config = NewSession::new(self.id, self.output)
             .with_optional_system_prompt(self.system_prompt)
             .with_registration_identity(
                 harness_config
@@ -777,7 +789,7 @@ impl SessionBuilder {
             history,
             id: config.id().to_string(),
             model_generation: 0,
-            schema: config.schema().clone(),
+            output: config.output().clone(),
             system_prompt: config.system_prompt().map(str::to_string),
         })
     }
@@ -882,7 +894,7 @@ impl<'a> SessionTurn<'a> {
         let options = self.options.clone().unwrap_or_else(|| {
             self.session
                 .harness
-                .default_options(self.session.schema.clone())
+                .default_options(self.session.output.clone())
         });
         let request = self
             .host_id
@@ -1174,9 +1186,9 @@ impl Harness {
     pub async fn run_once(
         &self,
         input: impl Into<TurnInput>,
-        schema: OutputSchema,
+        output: impl Into<OutputMode>,
     ) -> Result<TurnOutcome, TurnError> {
-        self.turn(input, self.default_options(schema)).await
+        self.turn(input, self.default_options(output.into())).await
     }
 
     /// Starts one stateless run of `request`, the run-level counterpart of
@@ -1203,7 +1215,7 @@ impl Harness {
             ControlledTurn::new(move |control| async move {
                 let (input, options) = turn?;
                 let mut session = harness
-                    .session(id, options.schema().clone())
+                    .session(id, options.output().clone())
                     .create()
                     .await?;
 
@@ -1228,24 +1240,25 @@ impl Harness {
         }
     }
 
-    /// Builds a durable session with `schema` as its default output contract.
+    /// Builds a durable session with `output`, usually a JSON
+    /// [`OutputSchema`], as its default output mode.
     ///
-    /// Explicit turn options may select a different schema without changing
-    /// the stored default. Captures current configuration without opening
-    /// the database.
-    pub fn session(&self, id: impl Into<String>, schema: OutputSchema) -> SessionBuilder {
+    /// Explicit turn options and run requests may select a different mode
+    /// without changing the stored default. Captures current configuration
+    /// without opening the database.
+    pub fn session(&self, id: impl Into<String>, output: impl Into<OutputMode>) -> SessionBuilder {
         SessionBuilder {
             harness: self.clone(),
             id: id.into(),
-            schema,
+            output: output.into(),
             system_prompt: None,
         }
     }
 
     /// Resumes a durable session and restores its bounded finished history.
     ///
-    /// Captures current harness defaults while retaining the stored schema,
-    /// system prompt, and history budget.
+    /// Captures current harness defaults while retaining the stored output
+    /// mode, system prompt, and history budget.
     ///
     /// # Errors
     ///
@@ -1265,7 +1278,7 @@ impl Harness {
             history,
             id: id.to_string(),
             model_generation: loaded.model_generation,
-            schema: loaded.schema,
+            output: loaded.output,
             system_prompt: loaded.system_prompt,
         })
     }
@@ -1297,9 +1310,12 @@ impl Harness {
         effects: Effects,
     ) -> Result<TurnOutcome, TurnError> {
         self.check_input_capability(&input)?;
+        self.check_output_capability(&options)?;
         self.admit_mandatory_content(None, &input, &options)?;
         let _effects = effects.retain();
-        let request = ModelRequest::new(input, options.schema().clone())
+        let request = ModelRequest::new(input, options.output().clone())
+            .with_instructions(options.instructions())
+            .with_generation(options.generation())
             .with_cache_key(Self::turn_cache_key());
         let turn = self.inner.lifecycle.start_turn();
         let turn_id = turn.as_ref().map(TurnLifecycle::id);
@@ -1357,7 +1373,7 @@ impl Harness {
                 compaction::GENERATION_INSTRUCTIONS.to_string(),
             )],
             input,
-            options.schema().clone(),
+            options.output().clone(),
         );
         let turn = self.inner.lifecycle.start_turn();
         let turn_id = turn.as_ref().map(TurnLifecycle::id);
@@ -1465,8 +1481,21 @@ impl Harness {
         Ok(())
     }
 
-    fn default_options(&self, schema: OutputSchema) -> TurnOptions {
-        TurnOptions::new(schema, self.inner.policy)
+    /// Rejects a turn before execution when the model cannot answer in its
+    /// output mode or apply its generation settings.
+    fn check_output_capability(&self, options: &TurnOptions) -> Result<(), TurnError> {
+        let model = self.inner.model.as_ref();
+        options.output().require_text_support_if_text(model)?;
+        let generation = options.generation();
+        if !generation.is_default() {
+            model.validate_generation(&generation)?;
+        }
+
+        Ok(())
+    }
+
+    fn default_options(&self, output: OutputMode) -> TurnOptions {
+        TurnOptions::new(output, self.inner.policy)
     }
 
     /// Returns an engine for a durable turn that reports to `control`, and

@@ -11,6 +11,7 @@ use super::support::{
 };
 use crate::context::HistoryTurn;
 use crate::model::{ModelMessage, ModelMetadata};
+use crate::request_option::OutputMode;
 use crate::session::{Database, EncodedMessage, NewSession, SessionError, TimestampSource};
 use crate::store::{SessionCheckpoint, SessionStore as _};
 use crate::store_fixture::image_input;
@@ -27,7 +28,7 @@ fn session_config_exposes_values_and_system_prompt() {
 
     // Assert
     assert_eq!(config.id(), "session-a");
-    assert_eq!(config.schema(), &schema);
+    assert_eq!(config.schema(), Some(&schema));
     assert_eq!(config.system_prompt(), Some("persistent instructions"));
 }
 
@@ -303,7 +304,7 @@ LIMIT 1
     // Assert
     assert_eq!(loaded.provider.as_deref(), Some("provider"));
     assert_eq!(loaded.model.as_deref(), Some("model"));
-    assert_eq!(loaded.schema, schema());
+    assert_eq!(loaded.output, OutputMode::Json(schema()));
     assert_eq!(
         loaded.system_prompt.as_deref(),
         Some("persistent instructions")

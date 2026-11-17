@@ -314,7 +314,9 @@ pub(crate) async fn run() -> Result<(), DynError> {
         let request = probe.request(&routed_model)?;
         let usage = match tokio::time::timeout(REQUEST_TIMEOUT, router.execute(request)).await {
             Ok(Ok(
-                Completion::Output { metadata, .. } | Completion::ToolCalls { metadata, .. },
+                Completion::Output { metadata, .. }
+                | Completion::Text { metadata, .. }
+                | Completion::ToolCalls { metadata, .. },
             )) => Ok(metadata),
             Ok(Err(error)) => error
                 .metadata()

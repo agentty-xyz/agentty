@@ -24,6 +24,7 @@ use crate::context::{self, HistoryProjection, HistoryTurn, ReplayForm, TurnStop}
 use crate::input::{StoredTurnInput, TurnInput};
 use crate::model::{ModelMessage, ModelMetadata};
 use crate::recovery::{ExecutionIdentity, HostRequest, HostTurnRecord, HostTurnStatus};
+use crate::request_option::OutputMode;
 use crate::reservation::{TURN_LEASE_SECONDS, lease_deadline};
 use crate::store::SessionStore;
 use crate::tool::{MalformedArguments, ReadArguments, ToolCall, UnknownToolCall, WriteArguments};
@@ -138,7 +139,7 @@ struct SessionRow {
     max_history_bytes: i64,
     model: Option<String>,
     model_generation: i64,
-    output_schema: String,
+    output_schema: Option<String>,
     provider: Option<String>,
     registration_key: Option<String>,
     registration_revision: Option<String>,
@@ -229,18 +230,19 @@ impl SessionInfo {
 #[derive(Clone, Debug)]
 pub struct NewSession {
     id: String,
+    output: OutputMode,
     registration_identity: Option<ExecutionIdentity>,
-    schema: OutputSchema,
     system_prompt: Option<String>,
 }
 
 impl NewSession {
-    /// Creates a persistent-session configuration.
-    pub fn new(id: impl Into<String>, schema: OutputSchema) -> Self {
+    /// Creates a persistent-session configuration whose default output mode
+    /// is `output`, usually a JSON [`OutputSchema`].
+    pub fn new(id: impl Into<String>, output: impl Into<OutputMode>) -> Self {
         Self {
             id: id.into(),
+            output: output.into(),
             registration_identity: None,
-            schema,
             system_prompt: None,
         }
     }
@@ -273,9 +275,15 @@ impl NewSession {
         self.registration_identity.as_ref()
     }
 
-    /// Returns the structured-output schema retained by the session.
-    pub fn schema(&self) -> &OutputSchema {
-        &self.schema
+    /// Returns the default output mode retained by the session.
+    pub fn output(&self) -> &OutputMode {
+        &self.output
+    }
+
+    /// Returns the default output schema retained by the session, or `None`
+    /// when it answers in plain text by default.
+    pub fn schema(&self) -> Option<&OutputSchema> {
+        self.output.schema()
     }
 
     /// Returns the optional session system prompt.
@@ -856,7 +864,7 @@ impl SessionStore for Database {
             i64::try_from(max_history_bytes).map_err(|_| SessionError::InvalidData {
                 reason: "history byte limit exceeds SQLite integer range".to_string(),
             })?;
-        let output_schema = config.schema.value().to_string();
+        let output_schema = config.schema().map(|schema| schema.value().to_string());
         let system_prompt = config.system_prompt.as_deref();
         let (provider, model) = metadata.as_ref().map_or((None, None), |metadata| {
             (Some(metadata.provider()), Some(metadata.model()))
@@ -923,12 +931,21 @@ WHERE id = ?
         .session_context("load persistent session")?
         .ok_or_else(|| SessionError::NotFound { id: id.to_string() })?;
         let max_history_bytes = decode_max_history_bytes(id, row.max_history_bytes)?;
-        let output_schema = serde_json::from_str::<Value>(&row.output_schema).map_err(|error| {
-            SessionError::InvalidData {
-                reason: format!("session `{id}` has invalid output-schema JSON: {error}"),
+        let output = match row.output_schema {
+            Some(output_schema) => {
+                let output_schema =
+                    serde_json::from_str::<Value>(&output_schema).map_err(|error| {
+                        SessionError::InvalidData {
+                            reason: format!(
+                                "session `{id}` has invalid output-schema JSON: {error}"
+                            ),
+                        }
+                    })?;
+
+                OutputMode::Json(OutputSchema::new(output_schema)?)
             }
-        })?;
-        let schema = OutputSchema::new(output_schema)?;
+            None => OutputMode::Text,
+        };
         if let Some(snapshot) = row.turn_options {
             StoredTurnOptions::decode(&snapshot)?;
         }
@@ -942,10 +959,10 @@ WHERE id = ?
             model_generation: row.model_generation,
             max_history_bytes,
             model: row.model,
+            output,
             projection: history.projection,
             provider: row.provider,
             registration_identity,
-            schema,
             system_prompt: row.system_prompt,
             turns: history.turns,
         })
@@ -1559,6 +1576,8 @@ pub struct LoadedSession {
     pub model: Option<String>,
     /// Monotonic model selection generation used to reject stale handles.
     pub model_generation: i64,
+    /// Session's default output mode.
+    pub output: OutputMode,
     /// Projection `turns` follow: the session's stored projection, or, once
     /// the turns it replays outgrow the byte budget, the projection they
     /// were re-projected to.
@@ -1568,8 +1587,6 @@ pub struct LoadedSession {
     /// Current registration key/revision, or `None` for direct/legacy
     /// sessions.
     pub registration_identity: Option<ExecutionIdentity>,
-    /// Session's default output schema.
-    pub schema: OutputSchema,
     /// Session's retained system prompt.
     pub system_prompt: Option<String>,
     /// Recent finished turns after the checkpoint boundary that `projection`
@@ -1754,6 +1771,7 @@ impl EncodedMessage {
                     .collect::<Result<Vec<_>, _>>()
                     .and_then(|calls| serialize_payload(&calls)),
             ),
+            ModelMessage::Instructions(content) => ("instructions", serialize_payload(content)),
             ModelMessage::System(_) => {
                 return Err(SessionError::InvalidData {
                     reason: "system prompts must be stored on the session".to_string(),
@@ -1806,6 +1824,7 @@ impl EncodedMessage {
                 .map(StoredToolCall::into_call)
                 .collect::<Result<Vec<_>, _>>()
                 .map(ModelMessage::AssistantToolCalls),
+            "instructions" => deserialize_payload(payload).map(ModelMessage::Instructions),
             "tool_result" => {
                 let result = deserialize_payload::<StoredToolResultOwned>(payload)?;
 

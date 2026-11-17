@@ -202,6 +202,7 @@ fn render_source_encodes_every_message_kind_as_json_lines_without_reasoning() {
     let turn = vec![
         ModelMessage::System("policy".to_string()),
         ModelMessage::User("plain \"quoted\"\nnext line".to_string()),
+        ModelMessage::Instructions("answer tersely".to_string()),
         ModelMessage::UserInput(
             TurnInput::from_blocks(vec![
                 InputBlock::Text("look".to_string()),
@@ -250,6 +251,7 @@ fn render_source_encodes_every_message_kind_as_json_lines_without_reasoning() {
             "messages": [
                 {"role": "system", "text": "policy"},
                 {"role": "user", "text": "plain \"quoted\"\nnext line"},
+                {"role": "instructions", "text": "answer tersely"},
                 {"role": "user", "text": format!("look [image image/png sha256:{digest}]")},
                 {"role": "assistant", "tool_calls": [
                     {"call": 1, "tool": "read", "arguments": {"path": "a"}}

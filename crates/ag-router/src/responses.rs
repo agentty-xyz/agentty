@@ -8,6 +8,7 @@
 //! reasoning content, such as text the caller cleared to save context or
 //! another provider's reasoning, is omitted.
 
+use std::num::NonZeroU32;
 use std::sync::Arc;
 use std::time::Duration;
 
@@ -27,6 +28,8 @@ const REQUEST_TIMEOUT: Duration = Duration::from_mins(30);
 /// Longest silence tolerated on an open stream, matching Codex CLI's default
 /// stream idle timeout.
 const STREAM_IDLE_TIMEOUT: Duration = Duration::from_mins(5);
+/// Smallest `max_output_tokens` the Responses API accepts.
+const MIN_MAX_OUTPUT_TOKENS: u32 = 16;
 /// Stream events whose `response` ends the stream.
 const TERMINAL_EVENTS: [&str; 3] = [
     "response.completed",
@@ -41,6 +44,9 @@ pub(crate) struct ResponsesProviderPolicy {
     /// overflow, checked beside the markers every provider shares.
     pub(crate) context_overflow_markers: &'static [&'static str],
     pub(crate) display_name: &'static str,
+    /// Whether the backend accepts `max_output_tokens`; the ChatGPT-plan
+    /// backend rejects it.
+    pub(crate) max_output_tokens: bool,
     pub(crate) reasoning_effort: fn(model::ReasoningEffort) -> &'static str,
     pub(crate) unsupported_schema_reason: &'static str,
 }
@@ -86,15 +92,48 @@ impl ResponsesBackend {
         Ok(())
     }
 
-    /// Generates raw structured output from one streamed response.
+    /// Rejects an output-token bound the backend does not accept: any bound
+    /// where the policy forbids one, and one below
+    /// [`MIN_MAX_OUTPUT_TOKENS`], which the Responses API answers with a
+    /// `400`.
+    pub(crate) fn validate_generation(
+        &self,
+        options: &model::GenerationOptions,
+    ) -> Result<(), model::ModelError> {
+        let Some(max_output_tokens) = options.max_output_tokens else {
+            return Ok(());
+        };
+        let reason = if !self.policy.max_output_tokens {
+            format!(
+                "{} does not accept an output-token bound",
+                self.policy.display_name
+            )
+        } else if max_output_tokens.get() < MIN_MAX_OUTPUT_TOKENS {
+            format!(
+                "{} requires an output-token bound of at least {MIN_MAX_OUTPUT_TOKENS}",
+                self.policy.display_name
+            )
+        } else {
+            return Ok(());
+        };
+
+        Err(model::ModelError::UnsupportedGeneration { reason })
+    }
+
+    /// Generates raw structured output, or plain text for a request without
+    /// a response format, from one streamed response.
     pub(crate) async fn generate(
         &self,
         request: &model::ModelRequest,
     ) -> Result<GeneratedResponse, model::ModelError> {
-        self.validate_schema(request.schema())?;
+        if let Some(schema) = request.schema() {
+            self.validate_schema(schema)?;
+        }
+        self.validate_generation(&request.options)?;
         let payload = ResponsesPayload {
             include: ["reasoning.encrypted_content"],
             input: Self::input(request),
+            max_output_tokens: request.options.max_output_tokens.map(NonZeroU32::get),
             model: &self.model,
             parallel_tool_calls: true,
             prompt_cache_key: request.options.prompt_cache_key.as_deref(),
@@ -105,14 +144,14 @@ impl ResponsesBackend {
                 }),
             store: false,
             stream: true,
-            text: TextPayload {
+            text: request.response_format.as_ref().map(|format| TextPayload {
                 format: TextFormat {
                     kind: "json_schema",
-                    name: request.response_format.name(),
-                    schema: request.schema().value(),
+                    name: format.name(),
+                    schema: format.schema().value(),
                     strict: false,
                 },
-            },
+            }),
             tools: request.tools().iter().map(FunctionTool::from).collect(),
         };
         let payload = serde_json::to_value(payload).map_err(model::ModelError::request)?;
@@ -163,7 +202,8 @@ impl ResponsesBackend {
                 model::ModelMessage::AssistantToolCalls(calls) => {
                     items.extend(Self::tool_call_items(calls));
                 }
-                model::ModelMessage::System(content) => {
+                model::ModelMessage::Instructions(content)
+                | model::ModelMessage::System(content) => {
                     items.push(InputItem::message("developer", content));
                 }
                 model::ModelMessage::ToolResult {
@@ -536,6 +576,8 @@ struct StreamedFailure {
 struct ResponsesPayload<'a> {
     include: [&'static str; 1],
     input: Vec<InputItem>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    max_output_tokens: Option<u32>,
     model: &'a str,
     parallel_tool_calls: bool,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -544,7 +586,8 @@ struct ResponsesPayload<'a> {
     reasoning: Option<ReasoningPayload>,
     store: bool,
     stream: bool,
-    text: TextPayload<'a>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    text: Option<TextPayload<'a>>,
     #[serde(skip_serializing_if = "Vec::is_empty")]
     tools: Vec<FunctionTool<'a>>,
 }

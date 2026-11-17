@@ -120,7 +120,7 @@ fn job_requests_a_tool_free_summary_of_its_source() {
     );
     assert_eq!(job.request().prompt(), "source text");
     assert_eq!(job.request().tools(), []);
-    assert_eq!(job.request().schema(), &schema);
+    assert_eq!(job.request().schema(), Some(&schema));
     assert_eq!(
         job.request().model_reasoning_effort(),
         Some(ReasoningEffort::Low)
@@ -197,7 +197,7 @@ fn continuing_job_appends_its_instruction_to_the_last_sent_request() {
     );
     assert_eq!(request.cache_key(), Some("session-1"));
     assert_eq!(request.prefix_schema(), Some(&turn_schema));
-    assert_eq!(request.schema(), &schema);
+    assert_eq!(request.schema(), Some(&schema));
     assert_eq!(job.range(), 2..9);
     assert_eq!(job.source_bytes(), 700);
     assert_eq!(job.max_summary_bytes(), 512);

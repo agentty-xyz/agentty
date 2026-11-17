@@ -1,6 +1,7 @@
 //! Shared structured-output backend and provider policy for
 //! `OpenAI`-compatible Chat Completions APIs.
 
+use std::num::NonZeroU32;
 use std::sync::Arc;
 use std::time::Duration;
 
@@ -29,6 +30,17 @@ pub(crate) const TOOL_AWARE_STRUCTURED_OUTPUT_INSTRUCTION: &str = concat!(
     "return only one JSON object that validates against this JSON Schema, with no Markdown ",
     "fences or other text.\n\nJSON Schema:\n",
 );
+
+/// Heading of the block carrying [`model::ModelMessage::Instructions`],
+/// which marks the application's instructions apart from the user's input
+/// and from the harness's own `[harness]` notes. Chat Completions has no
+/// host-only role that every provider template accepts mid-conversation, so
+/// the block joins the user message it follows: as its own text part, or
+/// after [`TURN_INSTRUCTIONS_SEPARATOR`] in plain text.
+pub(crate) const TURN_INSTRUCTIONS_HEADING: &str = "[application instructions for this turn]\n";
+/// Separator between a plain-text user message and the instructions block
+/// appended to it.
+pub(crate) const TURN_INSTRUCTIONS_SEPARATOR: &str = "\n\n";
 
 /// Structured-output representation selected by one Chat Completions provider.
 #[derive(Clone, Copy)]
@@ -75,6 +87,8 @@ pub(crate) struct ChatCompletionProviderPolicy {
     pub(crate) context_overflow_markers: &'static [&'static str],
     pub(crate) display_name: &'static str,
     pub(crate) image_input: bool,
+    /// Body field that carries [`model::GenerationOptions::max_output_tokens`].
+    pub(crate) max_tokens_field: MaxTokensField,
     /// Whether the provider accepts `prompt_cache_key`; providers that
     /// reject unknown body fields must leave it off.
     pub(crate) prompt_cache_key: bool,
@@ -82,6 +96,15 @@ pub(crate) struct ChatCompletionProviderPolicy {
     pub(crate) response_format_with_tools: bool,
     pub(crate) structured_output: StructuredOutputMode,
     pub(crate) unsupported_schema_reason: &'static str,
+}
+
+/// Chat Completions body field a provider reads as its output-token bound.
+#[derive(Clone, Copy)]
+pub(crate) enum MaxTokensField {
+    /// The current `OpenAI` name, `max_completion_tokens`.
+    MaxCompletionTokens,
+    /// The original `max_tokens`, which most compatible servers read.
+    MaxTokens,
 }
 
 /// Provider wire representation for a requested reasoning depth.
@@ -142,21 +165,34 @@ impl ChatCompletionBackend {
         Ok(())
     }
 
-    /// Generates raw structured output through the shared wire lifecycle.
+    /// Generates raw structured output, or plain text for a request without
+    /// a response format, through the shared wire lifecycle.
     pub(crate) async fn generate(
         &self,
         request: &model::ModelRequest,
     ) -> Result<GeneratedResponse, model::ModelError> {
-        self.validate_schema(request.schema())?;
+        if let Some(schema) = request.schema() {
+            self.validate_schema(schema)?;
+        }
         let tools: Vec<_> = request
             .tools()
             .iter()
             .map(ChatCompletionTool::from)
             .collect();
-        let response_format = (tools.is_empty() || self.policy.response_format_with_tools)
-            .then(|| self.response_format(&request.response_format));
+        let response_format = request
+            .response_format
+            .as_ref()
+            .filter(|_| tools.is_empty() || self.policy.response_format_with_tools)
+            .map(|format| self.response_format(format));
+        let max_output_tokens = request.options.max_output_tokens.map(NonZeroU32::get);
+        let (max_completion_tokens, max_tokens) = match self.policy.max_tokens_field {
+            MaxTokensField::MaxCompletionTokens => (max_output_tokens, None),
+            MaxTokensField::MaxTokens => (None, max_output_tokens),
+        };
         let payload = ChatCompletionPayload {
             enable_thinking: self.enable_thinking(request),
+            max_completion_tokens,
+            max_tokens,
             messages: self.messages(request)?,
             model: &self.model,
             prompt_cache_key: self
@@ -242,12 +278,14 @@ impl ChatCompletionBackend {
         request: &model::ModelRequest,
     ) -> Result<Vec<ChatCompletionMessagePayload>, model::ModelError> {
         let mut messages = Vec::with_capacity(request.messages().len() + 1);
-        if self.keeps_prefix_across_schemas() {
-            let schema = request
-                .options
-                .prefix_schema
-                .as_ref()
-                .unwrap_or_else(|| request.schema());
+        let prompt_schema = request
+            .options
+            .prefix_schema
+            .as_ref()
+            .or_else(|| request.schema());
+        if self.keeps_prefix_across_schemas()
+            && let Some(schema) = prompt_schema
+        {
             let instruction = match self.policy.structured_output {
                 StructuredOutputMode::SchemaPrompt => TOOL_AWARE_STRUCTURED_OUTPUT_INSTRUCTION,
                 StructuredOutputMode::JsonObject { .. } | StructuredOutputMode::JsonSchema => {
@@ -276,6 +314,9 @@ impl ChatCompletionBackend {
                         reasoning_content: reasoning_content.clone(),
                         role: "assistant",
                     });
+                }
+                model::ModelMessage::Instructions(content) => {
+                    Self::push_instructions(&mut messages, content);
                 }
                 model::ModelMessage::System(content) => {
                     messages.push(ChatCompletionMessagePayload::Text {
@@ -318,6 +359,33 @@ impl ChatCompletionBackend {
         }
 
         Ok(messages)
+    }
+
+    /// Appends turn `instructions` to the user message they follow, so
+    /// templates that require alternating roles never see two user messages
+    /// in a row; without a preceding user message they form their own.
+    fn push_instructions(messages: &mut Vec<ChatCompletionMessagePayload>, instructions: &str) {
+        let block = format!("{TURN_INSTRUCTIONS_HEADING}{instructions}");
+        match messages.last_mut() {
+            Some(ChatCompletionMessagePayload::Text {
+                content,
+                role: "user",
+            }) => {
+                content.push_str(TURN_INSTRUCTIONS_SEPARATOR);
+                content.push_str(&block);
+            }
+            Some(ChatCompletionMessagePayload::Parts {
+                content,
+                role: "user",
+            }) => content.push(ChatCompletionContentPart::Text {
+                kind: "text",
+                text: block,
+            }),
+            _ => messages.push(ChatCompletionMessagePayload::Text {
+                content: block,
+                role: "user",
+            }),
+        }
     }
 
     fn user_input_message(
@@ -607,6 +675,10 @@ impl ChatCompletionClient for ReqwestChatCompletionClient {
 struct ChatCompletionPayload<'a> {
     #[serde(skip_serializing_if = "Option::is_none")]
     enable_thinking: Option<bool>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    max_completion_tokens: Option<u32>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    max_tokens: Option<u32>,
     messages: Vec<ChatCompletionMessagePayload>,
     model: &'a str,
     #[serde(skip_serializing_if = "Option::is_none")]
