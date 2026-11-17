@@ -9,7 +9,7 @@ use ratatui::text::{Line, Span};
 use ratatui::widgets::{Paragraph, Widget};
 
 use crate::text_util::{
-    borrowed_paint_lines, format_duration_coarse, format_duration_compact, format_token_count,
+    borrowed_paint_line, format_duration_coarse, format_duration_compact, format_token_count,
     inline_text, paint_line, span_display_width, split_line_at_width, truncate_spans_with_ellipsis,
     truncate_with_ellipsis, wrap_lines, wrap_lines_breaking_long_words, wrap_styled_line,
 };
@@ -239,28 +239,23 @@ fn test_wrap_styled_line_returns_one_empty_line_for_whitespace_only_spans() {
 }
 
 #[test]
-fn test_borrowed_paint_lines_borrow_cached_span_text() {
+fn test_borrowed_paint_line_borrows_cached_span_text() {
     // Arrange
-    let lines = vec![
-        Line::from(vec![
-            Span::styled("cached".to_string(), Style::default().fg(Color::Red)),
-            Span::raw(" row".to_string()),
-        ])
-        .alignment(Alignment::Center)
-        .style(Style::default().bg(Color::Blue)),
-        Line::from("second".to_string()),
-    ];
+    let line = Line::from(vec![
+        Span::styled("cached".to_string(), Style::default().fg(Color::Red)),
+        Span::raw(" row".to_string()),
+    ])
+    .alignment(Alignment::Center)
+    .style(Style::default().bg(Color::Blue));
 
     // Act
-    let borrowed = borrowed_paint_lines(&lines);
+    let borrowed = borrowed_paint_line(&line);
 
     // Assert
-    assert_eq!(borrowed, lines);
-    for (borrowed_line, cached_line) in borrowed.iter().zip(&lines) {
-        for (borrowed_span, cached_span) in borrowed_line.spans.iter().zip(&cached_line.spans) {
-            assert!(matches!(borrowed_span.content, Cow::Borrowed(_)));
-            assert_eq!(borrowed_span.content.as_ptr(), cached_span.content.as_ptr());
-        }
+    assert_eq!(borrowed, line);
+    for (borrowed_span, cached_span) in borrowed.spans.iter().zip(&line.spans) {
+        assert!(matches!(borrowed_span.content, Cow::Borrowed(_)));
+        assert_eq!(borrowed_span.content.as_ptr(), cached_span.content.as_ptr());
     }
 }
 

@@ -44,8 +44,4 @@ pub use review::{
     FocusedReview, FocusedReviewDecision, FocusedReviewEvidence, FocusedReviewSeverity,
     FocusedReviewSide, FocusedReviewSuggestion,
 };
-pub use schema::{
-    SchemaRequiredPolicy, agent_response_json_schema_json, agent_response_output_schema,
-    agent_response_output_schema_json, focused_review_json_schema_json,
-    focused_review_output_schema, protocol_output_schema,
-};
+pub use schema::{SchemaRequiredPolicy, agent_response_output_schema, protocol_output_schema};

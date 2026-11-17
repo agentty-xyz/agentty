@@ -1,5 +1,5 @@
 //! `Clipboard` facade tests covering the disable environment variable,
-//! backend injection, error propagation, and RGBA image reads.
+//! backend injection, error propagation, and image reads.
 
 use std::path::PathBuf;
 use std::process::Command;
@@ -8,7 +8,7 @@ use image::codecs::png::PngEncoder;
 use image::{ExtendedColorType, ImageEncoder};
 
 use crate::error::ClipboardError;
-use crate::image_data::{ClipboardImage, RgbaImageData};
+use crate::image_data::ClipboardImage;
 use crate::{Clipboard, DISABLE_CLIPBOARD_ENV, backend};
 
 const DISABLED_CONSTRUCTOR_CHILD_ENV: &str = "AGENTTY_TEST_DISABLED_CONSTRUCTOR_CHILD";
@@ -128,36 +128,6 @@ fn test_new_with_backend_accepts_infallible_backend() {
 }
 
 #[test]
-fn test_read_image_rgba_decodes_png_payload() {
-    // Arrange
-    let mut clipboard = Clipboard::from_backend(Box::new(TestClipboardBackend::with_png()));
-
-    // Act
-    let image_data = clipboard
-        .read_image_rgba()
-        .expect("PNG payload should decode");
-
-    // Assert
-    assert_eq!(image_data, red_pixel_image_data());
-}
-
-#[test]
-fn test_read_image_rgba_returns_decoded_payload_unchanged() {
-    // Arrange
-    let mut clipboard = Clipboard::from_backend(Box::new(TestClipboardBackend {
-        image: ClipboardImage::Rgba(red_pixel_image_data()),
-    }));
-
-    // Act
-    let image_data = clipboard
-        .read_image_rgba()
-        .expect("RGBA payload should be returned");
-
-    // Assert
-    assert_eq!(image_data, red_pixel_image_data());
-}
-
-#[test]
 fn test_from_backend_reads_through_injected_backend() {
     // Arrange
     let backend = Box::new(TestClipboardBackend::with_png());
@@ -201,12 +171,4 @@ fn red_pixel_png_bytes() -> Vec<u8> {
         .expect("test PNG should encode");
 
     png_bytes
-}
-
-fn red_pixel_image_data() -> RgbaImageData {
-    RgbaImageData {
-        height: 1,
-        rgba_bytes: RED_PIXEL_RGBA.to_vec(),
-        width: 1,
-    }
 }

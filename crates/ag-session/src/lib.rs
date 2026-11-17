@@ -35,7 +35,7 @@ pub use agent::{
     AgentKind, AgentModel, AgentSelection, AgentSelectionMetadata, ServedModel,
     parse_persisted_session_agent_model, resolve_agent_kind_for_model,
     resolve_agent_selection_for_model, resolve_model_for_available_agent_kinds,
-    resolve_prompt_model_agent_kind, selectable_models_for_agent_kinds,
+    resolve_prompt_model_agent_kind,
 };
 pub use agent_profile::{
     AGENT_PROFILE_PROMPT_MAX_BYTES, AgentDefinition, AgentDefinitionParseError,
@@ -94,5 +94,5 @@ pub use task_execution::{
     TaskAgentHistory, TaskAgentInput, TaskAgentTurn,
 };
 pub use task_plan::AcceptTaskPlanRequest;
-pub use task_role::{AgentContextRequirement, AgentOutputKind, TaskAgentRole};
+pub use task_role::TaskAgentRole;
 pub use transcript_notice::TranscriptNotice;

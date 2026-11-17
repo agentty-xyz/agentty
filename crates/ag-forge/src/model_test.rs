@@ -138,12 +138,12 @@ fn forge_kind_round_trips_and_describes_each_forge() {
         (
             "GitHub",
             ForgeKind::GitHub,
-            ["gh", "gh auth login", "GitHub pull request", "PR"],
+            ["gh", "gh auth login", "GitHub", "pull request", "PR"],
         ),
         (
             "GitLab",
             ForgeKind::GitLab,
-            ["glab", "glab auth login", "GitLab merge request", "MR"],
+            ["glab", "glab auth login", "GitLab", "merge request", "MR"],
         ),
     ];
 
@@ -158,12 +158,13 @@ fn forge_kind_round_trips_and_describes_each_forge() {
         assert_eq!(forge_kind.to_string(), raw_forge_kind);
         assert_eq!(
             [
-                forge_kind.cli_name().to_string(),
-                forge_kind.auth_login_command().to_string(),
-                forge_kind.review_request_display_name(),
-                forge_kind.review_request_short_name().to_string(),
+                forge_kind.cli_name(),
+                forge_kind.auth_login_command(),
+                forge_kind.display_name(),
+                forge_kind.review_request_name(),
+                forge_kind.review_request_short_name(),
             ],
-            expected_copy.map(str::to_string)
+            expected_copy
         );
     }
     assert_eq!(

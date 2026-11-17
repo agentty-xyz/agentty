@@ -4,11 +4,10 @@
 use ratatui::layout::Rect;
 
 use super::{
-    DEFAULT_REVIEW_COMMENT, DiffLine, DiffLineKind, DiffRenderLayout, FileTreeItem,
-    build_review_text, diff_header_new_path, diff_header_paths, diff_line_change_totals,
-    diff_line_gutter_width, diff_page_areas, diff_view_max_scroll_offset, filter_diff_lines,
-    max_diff_line_number, parse_diff_lines, parse_git_path_token, parse_hunk_header,
-    rendered_diff_line_count, wrap_diff_content,
+    DiffLine, DiffLineKind, DiffRenderLayout, FileTreeItem, diff_header_new_path,
+    diff_header_paths, diff_line_gutter_width, diff_page_areas, diff_view_max_scroll_offset,
+    filter_diff_lines, max_diff_line_number, parse_diff_lines, parse_git_path_token,
+    parse_hunk_header, rendered_diff_line_count, wrap_diff_content,
 };
 
 const DIFF_MAIN_HEADER: &str = "diff --git a/src/main.rs b/src/main.rs";
@@ -276,42 +275,6 @@ fn test_diff_line_gutter_width_matches_largest_line_number() {
 }
 
 #[test]
-fn test_diff_line_change_totals() {
-    // Arrange
-    let diff = "\
-diff --git a/src/main.rs b/src/main.rs
-@@ -1,3 +1,4 @@
- line1
-+added
- line2
--removed";
-    let lines = parse_diff_lines(diff);
-
-    // Act
-    let totals = diff_line_change_totals(&lines);
-
-    // Assert
-    assert_eq!(totals, (1, 1));
-}
-
-#[test]
-fn test_diff_line_change_totals_ignores_headers() {
-    // Arrange
-    let diff = "\
-diff --git a/src/main.rs b/src/main.rs
-index abc..def 100644
---- a/src/main.rs
-+++ b/src/main.rs";
-    let lines = parse_diff_lines(diff);
-
-    // Act
-    let totals = diff_line_change_totals(&lines);
-
-    // Assert
-    assert_eq!(totals, (0, 0));
-}
-
-#[test]
 fn test_filter_diff_lines_by_file() {
     // Arrange
     let diff = format!(
@@ -536,102 +499,4 @@ fn test_diff_view_max_scroll_offset_counts_wrapped_overflow() {
 
     // Assert
     assert!(max_scroll_offset > 0);
-}
-
-#[test]
-fn test_build_review_text_includes_critical_highlights() {
-    // Arrange
-    let diff = "\
-diff --git a/src/auth.rs b/src/auth.rs
-@@ -8,1 +8,1 @@
--let can_merge = false;
-+let can_merge = user.role == \"admin\";
-@@ -20,1 +20,1 @@
--let value = maybe_value.unwrap();
-+let value = maybe_value.expect(\"missing value\");";
-    // Act
-    let review = build_review_text(diff);
-
-    // Assert
-    assert!(review.contains("## Review"));
-    assert!(review.contains(DEFAULT_REVIEW_COMMENT));
-    assert!(review.contains("Authorization or security-sensitive logic changed."));
-    assert!(review.contains("Runtime safety or error handling changed."));
-    assert!(review.contains("src/auth.rs"));
-}
-
-#[test]
-fn test_build_review_text_highlights_containerfile_configuration() {
-    // Arrange
-    let diff = "\
-diff --git a/container/e2e.Containerfile b/container/e2e.Containerfile
-@@ -1,1 +1,1 @@
--FROM scratch
-+FROM debian";
-
-    // Act
-    let review = build_review_text(diff);
-
-    // Assert
-    assert!(review.contains("container/e2e.Containerfile"));
-    assert!(review.contains("Build or runtime configuration changed."));
-}
-
-#[test]
-fn test_build_review_text_uses_fallback_when_critical_hits_missing() {
-    // Arrange
-    let diff = "\
-diff --git a/src/main.rs b/src/main.rs
-@@ -1,1 +1,1 @@
--let old_value = 1;
-+let new_value = 2;";
-
-    // Act
-    let review = build_review_text(diff);
-
-    // Assert
-    assert!(review.contains(DEFAULT_REVIEW_COMMENT));
-    assert!(review.contains("General code change; inspect full diff for context."));
-    assert!(review.contains("src/main.rs"));
-}
-
-#[test]
-fn test_build_review_text_tracks_context_lines_and_skips_blank_changes() {
-    // Arrange
-    let long_value = "lorem ipsum ".repeat(12);
-    let diff = format!(
-        "diff --git a/src/lib.rs b/src/lib.rs\nindex 1111111..2222222 100644\n--- \
-         a/src/lib.rs\n+++ b/src/lib.rs\n@@ -10,4 +10,5 @@\n fn context() {{}}\n-   \n+   \n+let \
-         summary = \"{long_value}\";\n fn trailing_context() {{}}\n\\ No newline at end of \
-         file\n+let tail = 1;"
-    );
-
-    // Act
-    let review = build_review_text(&diff);
-
-    // Assert
-    let highlight_lines = review
-        .lines()
-        .filter(|line| line.starts_with("- `src/lib.rs`"))
-        .collect::<Vec<_>>();
-    assert_eq!(highlight_lines.len(), 2);
-    assert!(highlight_lines[0].starts_with("- `src/lib.rs`:12 + `let summary = \"lorem ipsum"));
-    assert!(highlight_lines[0].contains("...` — General code change"));
-    assert_eq!(
-        highlight_lines[1],
-        "- `src/lib.rs`:14 + `let tail = 1;` — General code change; inspect full diff for context."
-    );
-}
-
-#[test]
-fn test_build_review_text_handles_empty_diff() {
-    // Arrange
-    let diff = "";
-
-    // Act
-    let review = build_review_text(diff);
-
-    // Assert
-    assert!(review.contains(DEFAULT_REVIEW_COMMENT));
-    assert!(review.contains("No changes found in the current diff."));
 }

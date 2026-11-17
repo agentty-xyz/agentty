@@ -16,32 +16,8 @@ const MAX_DEPTH: usize = 10;
 /// directories. Directories sort before files; within each group, results are
 /// sorted alphabetically by path.
 pub fn list_files(root: &Path) -> Vec<FileEntry> {
-    list_files_with_limits(root, Some(MAX_DEPTH), None)
-}
-
-/// Lists files and directories recursively under `root` for project-explorer
-/// rendering with optional traversal and result limits.
-///
-/// Passing `None` for `max_depth` and `max_entries` provides an unbounded
-/// gitignore-aware traversal. Directories sort before files; within each
-/// group, results are sorted alphabetically by path.
-pub fn list_files_for_explorer(
-    root: &Path,
-    max_depth: Option<usize>,
-    max_entries: Option<usize>,
-) -> Vec<FileEntry> {
-    list_files_with_limits(root, max_depth, max_entries)
-}
-
-/// Lists files and directories recursively under `root` with optional
-/// traversal and result limits.
-fn list_files_with_limits(
-    root: &Path,
-    max_depth: Option<usize>,
-    max_entries: Option<usize>,
-) -> Vec<FileEntry> {
     let walker = WalkBuilder::new(root)
-        .max_depth(max_depth)
+        .max_depth(Some(MAX_DEPTH))
         .hidden(false)
         .build();
 
@@ -66,14 +42,6 @@ fn list_files_with_limits(
         })
         .collect();
 
-    sort_and_limit_entries(&mut entries, max_entries);
-
-    entries
-}
-
-/// Sorts entries with directories first and optionally truncates to
-/// `max_entries`.
-fn sort_and_limit_entries(entries: &mut Vec<FileEntry>, max_entries: Option<usize>) {
     entries.sort_by(|first, second| {
         second
             .is_dir
@@ -81,9 +49,7 @@ fn sort_and_limit_entries(entries: &mut Vec<FileEntry>, max_entries: Option<usiz
             .then(first.path.cmp(&second.path))
     });
 
-    if let Some(max_entries) = max_entries {
-        entries.truncate(max_entries);
-    }
+    entries
 }
 
 #[cfg(test)]

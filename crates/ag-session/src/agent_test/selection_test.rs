@@ -1,12 +1,11 @@
-//! Agent selection tests for speed compatibility, selectable models, and
-//! resolution against available providers.
+//! Agent selection tests for speed compatibility and resolution against
+//! available providers.
 
 use ag_contracts::SpeedMode;
 
 use crate::agent::{
     AgentKind, AgentModel, AgentSelection, resolve_agent_selection_for_model,
     resolve_model_for_available_agent_kinds, resolve_prompt_model_agent_kind,
-    selectable_models_for_agent_kinds,
 };
 
 #[test]
@@ -91,51 +90,6 @@ fn test_agent_selection_speed_compatibility() {
         );
         assert_eq!(selection.supports_fast_mode(), supports_fast_mode);
     }
-}
-
-#[test]
-/// Ensures selectable-model ordering follows the provided provider order.
-fn test_selectable_models_for_agent_kinds_uses_provider_order() {
-    // Arrange
-    let agent_kinds = [AgentKind::Codex, AgentKind::Antigravity];
-
-    // Act
-    let selectable_models = selectable_models_for_agent_kinds(&agent_kinds);
-
-    // Assert
-    assert_eq!(
-        selectable_models,
-        vec![
-            AgentModel::Gpt6Astra,
-            AgentModel::Gpt61Sol,
-            AgentModel::Gpt6Luna,
-            AgentModel::Gpt56Terra,
-            AgentModel::Gpt53CodexSpark,
-            AgentModel::Gemini4Argon,
-            AgentModel::Gemini4Hydrogen,
-            AgentModel::GeminiProOrchestrator,
-            AgentModel::Gemini38Flash,
-            AgentModel::ClaudeOpus55,
-            AgentModel::ClaudeSonnet55,
-            AgentModel::GptOss120b,
-        ]
-    );
-}
-
-#[test]
-/// Ensures Codex models shared with the harness appear once even when both
-/// providers are available.
-fn test_selectable_models_for_agent_kinds_deduplicates_shared_models() {
-    // Arrange
-    let agent_kinds = [AgentKind::Harness, AgentKind::Codex];
-    let mut expected_models = AgentKind::Harness.models().to_vec();
-    expected_models.push(AgentModel::Gpt53CodexSpark);
-
-    // Act
-    let selectable_models = selectable_models_for_agent_kinds(&agent_kinds);
-
-    // Assert
-    assert_eq!(selectable_models, expected_models);
 }
 
 #[test]

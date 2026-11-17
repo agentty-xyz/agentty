@@ -63,11 +63,6 @@ impl ForgeKind {
         }
     }
 
-    /// Returns the combined forge and review-request name for user-facing copy.
-    pub fn review_request_display_name(self) -> String {
-        format!("{} {}", self.display_name(), self.review_request_name())
-    }
-
     /// Returns the short UI indicator label for one review request.
     pub fn review_request_short_name(self) -> &'static str {
         match self {

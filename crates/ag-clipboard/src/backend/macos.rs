@@ -9,7 +9,7 @@ use objc2_app_kit::NSPasteboard;
 use objc2_foundation::NSString;
 
 use super::ClipboardBackend;
-use crate::{ClipboardError, ClipboardImage, format, uri};
+use crate::{ClipboardError, ClipboardImage, RgbaImageData, format, uri};
 
 const PASTEBOARD_TYPE_FILE_URL: &str = "public.file-url";
 const PASTEBOARD_TYPE_PNG: &str = "public.png";
@@ -59,6 +59,22 @@ impl MacosClipboard {
                 .ok_or(ClipboardError::ContentUnavailable)
         })
     }
+
+    /// Decodes TIFF pasteboard data into RGBA pixels.
+    fn decode_tiff_rgba(tiff_bytes: &[u8]) -> Result<RgbaImageData, ClipboardError> {
+        let decoded_image = image::load_from_memory_with_format(tiff_bytes, ImageFormat::Tiff)
+            .map_err(|error| {
+                ClipboardError::image_conversion("failed to decode clipboard image", error)
+            })?
+            .into_rgba8();
+        let (width, height) = decoded_image.dimensions();
+
+        Ok(RgbaImageData {
+            height,
+            rgba_bytes: decoded_image.into_raw(),
+            width,
+        })
+    }
 }
 
 impl ClipboardBackend for MacosClipboard {
@@ -98,7 +114,7 @@ impl ClipboardBackend for MacosClipboard {
         let tiff_type = NSString::from_str(PASTEBOARD_TYPE_TIFF);
         let tiff_bytes = self.read_data_for_type(&tiff_type)?;
 
-        format::decode_image_rgba(&tiff_bytes, ImageFormat::Tiff).map(ClipboardImage::Rgba)
+        Self::decode_tiff_rgba(&tiff_bytes).map(ClipboardImage::Rgba)
     }
 }
 

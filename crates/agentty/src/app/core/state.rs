@@ -1423,17 +1423,6 @@ impl App {
             .await;
     }
 
-    /// Opens the selected session worktree in tmux and optionally runs the
-    /// first configured launch configuration. This is a no-op when Agentty
-    /// was launched outside tmux.
-    pub async fn open_session_worktree_in_tmux(&mut self) {
-        let selected_launch_configuration =
-            self.configured_launch_configurations().into_iter().next();
-
-        self.open_session_worktree_in_tmux_with_command(selected_launch_configuration.as_deref())
-            .await;
-    }
-
     /// Opens the selected session worktree in tmux and optionally runs one
     /// provided launch configuration.
     ///

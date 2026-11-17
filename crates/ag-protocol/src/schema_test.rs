@@ -3,13 +3,11 @@
 
 use serde_json::Value;
 
-use crate::model::questions_field_description;
+use crate::model::{ProtocolRequestProfile, questions_field_description};
 use crate::schema::{
-    SchemaRequiredPolicy, agent_response_json_schema, agent_response_json_schema_json,
-    agent_response_output_schema, agent_response_output_schema_json,
-    focused_review_json_schema_json, focused_review_output_schema,
-    inject_additional_properties_false, inject_dynamic_schema_guidance,
-    inject_minimum_required_protocol_key, normalize_required_for_codex,
+    SchemaRequiredPolicy, agent_response_json_schema, agent_response_output_schema,
+    focused_review_json_schema, inject_additional_properties_false, inject_dynamic_schema_guidance,
+    inject_minimum_required_protocol_key, normalize_required_for_codex, protocol_output_schema,
 };
 
 #[test]
@@ -268,24 +266,9 @@ fn test_agent_response_output_schema_ref_objects_have_no_sibling_keywords() {
 }
 
 #[test]
-/// Exposes a parseable pretty JSON schema string for prompt templating.
-fn test_agent_response_json_schema_json_is_parseable_value() {
-    // Arrange / Act
-    let schema_json = agent_response_json_schema_json();
-    let parsed_schema: Value =
-        serde_json::from_str(&schema_json).expect("schema string should parse as JSON");
-    let schema_value = agent_response_json_schema();
-
-    // Assert
-    assert_eq!(parsed_schema, schema_value);
-}
-
-#[test]
 fn focused_review_json_schema_describes_structured_findings() {
     // Arrange / Act
-    let schema_json = focused_review_json_schema_json();
-    let schema: Value =
-        serde_json::from_str(&schema_json).expect("focused review schema should parse");
+    let schema = focused_review_json_schema();
     let properties = schema
         .get("properties")
         .and_then(Value::as_object)
@@ -315,12 +298,21 @@ fn focused_review_json_schema_describes_structured_findings() {
         schema["$defs"]["FocusedReviewSuggestion"]["additionalProperties"],
         Value::Bool(false)
     );
+    assert!(
+        schema["$defs"]["FocusedReviewDecision"]["required"]
+            .as_array()
+            .expect("prompt decision required fields should exist")
+            .contains(&serde_json::json!("suggestion_index"))
+    );
 }
 
 #[test]
 fn focused_review_output_schema_is_transport_compatible() {
     // Arrange / Act
-    let schema = focused_review_output_schema();
+    let schema = protocol_output_schema(
+        ProtocolRequestProfile::FocusedReview,
+        SchemaRequiredPolicy::AllProperties,
+    );
 
     // Assert
     assert_eq!(schema.get("$schema"), None);
@@ -487,20 +479,6 @@ fn test_agent_response_json_schema_keeps_optional_question_options() {
             .all(|field| field.as_str() != Some("options")),
         "question schema should keep `options` optional for omitted empty lists"
     );
-}
-
-#[test]
-/// Exposes a parseable pretty JSON schema string for transport-level
-/// schema enforcement.
-fn test_agent_response_output_schema_json_is_parseable_value() {
-    // Arrange / Act
-    let schema_json = agent_response_output_schema_json(SchemaRequiredPolicy::MinimumProtocolKeys);
-    let parsed_schema: Value =
-        serde_json::from_str(&schema_json).expect("schema string should parse as JSON");
-    let schema_value = agent_response_output_schema(SchemaRequiredPolicy::MinimumProtocolKeys);
-
-    // Assert
-    assert_eq!(parsed_schema, schema_value);
 }
 
 /// Recursively checks whether one JSON value tree contains a schema key.

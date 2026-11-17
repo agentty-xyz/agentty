@@ -9,10 +9,9 @@ use ratatui::style::{Modifier, Style};
 use ratatui::widgets::Borders;
 
 use super::{
-    QuestionPanelLayout, app_frame_areas, centered_content_rect, centered_horizontal_layout,
-    prompt_panel_areas, question_at_mention_max_visible, question_options_height,
-    question_panel_areas, question_panel_layout, question_panel_reserved_height,
-    session_chat_areas, tab_page_area,
+    QuestionPanelLayout, app_frame_areas, prompt_panel_areas, question_at_mention_max_visible,
+    question_options_height, question_panel_areas, question_panel_layout,
+    question_panel_reserved_height, session_chat_areas, tab_page_area,
 };
 use crate::domain::agent::AgentKind;
 use crate::domain::file_entry::FileEntry;
@@ -1120,30 +1119,6 @@ fn test_session_output_status_lines_for_merging_use_status_label() {
 }
 
 #[test]
-fn test_centered_content_rect_centers_requested_size() {
-    // Arrange
-    let area = Rect::new(10, 5, 40, 12);
-
-    // Act
-    let centered_area = centered_content_rect(area, 20, 5);
-
-    // Assert
-    assert_eq!(centered_area, Rect::new(20, 8, 20, 5));
-}
-
-#[test]
-fn test_centered_content_rect_clamps_requested_size_to_available_area() {
-    // Arrange
-    let area = Rect::new(3, 2, 12, 4);
-
-    // Act
-    let centered_area = centered_content_rect(area, 20, 6);
-
-    // Assert
-    assert_eq!(centered_area, area);
-}
-
-#[test]
 fn test_tab_page_area_keeps_side_insets_and_full_height() {
     // Arrange
     let cases = [
@@ -1234,21 +1209,6 @@ fn test_question_panel_layout_drops_spacer_before_last_question_line() {
             spacer_height: 0,
         }
     );
-}
-
-#[test]
-fn test_centered_horizontal_layout_splits_gutters_around_content_column() {
-    // Arrange
-    let area = Rect::new(0, 0, 100, 10);
-
-    // Act
-    let columns = centered_horizontal_layout(area);
-
-    // Assert
-    assert_eq!(columns.len(), 3);
-    assert_eq!(columns[1], Rect::new(10, 0, 80, 10));
-    assert_eq!(columns[0].width + columns[1].width + columns[2].width, 100);
-    assert!(columns[0].width >= 2 && columns[2].width >= 2);
 }
 
 #[test]

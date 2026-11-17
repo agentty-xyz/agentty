@@ -233,6 +233,26 @@ fn test_read_image_decodes_tiff_only_payload() {
 }
 
 #[test]
+fn test_read_image_reports_image_conversion_failure_for_invalid_tiff() {
+    // Arrange
+    let test_pasteboard = TestPasteboard::with_items(&[&[(
+        PASTEBOARD_TYPE_TIFF,
+        PasteboardValue::Data(b"not a tiff".to_vec()),
+    )]]);
+    let mut clipboard = test_pasteboard.clipboard();
+
+    // Act
+    let result = clipboard.read_image();
+
+    // Assert
+    assert!(matches!(
+        result,
+        Err(ClipboardError::ImageConversion { reason })
+            if reason.starts_with("failed to decode clipboard image: ")
+    ));
+}
+
+#[test]
 fn test_read_image_reports_content_unavailable_without_image_data() {
     // Arrange
     let test_pasteboard =

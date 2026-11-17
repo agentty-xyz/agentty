@@ -502,7 +502,7 @@ async fn apply_app_events_git_status_updated_updates_project_and_session_state()
     .await;
 
     // Assert
-    assert_eq!(app.git_status_info(), Some((1, 3)));
+    assert_eq!(app.projects.render_parts().git_status, Some((1, 3)));
     assert_eq!(
         app.sessions
             .render_parts()
@@ -537,7 +537,7 @@ async fn apply_app_events_git_status_updated_ignores_stale_generation() {
     .await;
 
     // Assert
-    assert_eq!(app.git_status_info(), None);
+    assert_eq!(app.projects.render_parts().git_status, None);
     assert!(app.sessions.render_parts().session_git_statuses.is_empty());
 }
 

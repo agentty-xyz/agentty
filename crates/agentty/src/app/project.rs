@@ -112,11 +112,6 @@ impl ProjectManager {
         self.git_branch.is_some()
     }
 
-    /// Returns the latest ahead/behind snapshot.
-    pub(crate) fn git_status(&self) -> Option<(u32, u32)> {
-        self.git_status
-    }
-
     /// Returns the active project working directory.
     pub(crate) fn working_dir(&self) -> &Path {
         self.working_dir.as_path()

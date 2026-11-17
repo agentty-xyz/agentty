@@ -25,7 +25,7 @@ use crate::presentation::app_mode::{
 use crate::test_support::SessionFixtureBuilder;
 use crate::ui::component::file_explorer::FileExplorer;
 use crate::ui::component::vertical_scrollbar::{SCROLLBAR_THUMB_SYMBOL, SCROLLBAR_TRACK_SYMBOL};
-use crate::ui::diff_util::{parse_diff_lines, selected_diff_lines};
+use crate::ui::diff_util::parse_diff_lines;
 use crate::ui::{Page, diff_util, markdown, style};
 
 const SAMPLE_DIFF: &str = concat!(
@@ -1756,39 +1756,6 @@ fn test_render_diff_title_uses_persisted_session_line_totals() {
     assert!(text.contains("(+9 -4) Diff — Diff Session"));
     assert_eq!(text.matches("+1/-0").count(), 2);
     assert!(!text.contains("(+1 -0) Diff — Diff Session"));
-}
-
-#[test]
-fn test_selected_diff_lines_returns_filtered_section_for_selected_file() {
-    // Arrange
-    let parsed_lines = parse_diff_lines(SAMPLE_DIFF);
-    let tree_items = FileExplorer::file_tree_items(&parsed_lines);
-
-    // Act
-    let selected_lines = selected_diff_lines(&parsed_lines, &tree_items, 1);
-
-    // Assert
-    assert_eq!(selected_lines.len(), 2);
-    assert_eq!(
-        selected_lines[0].content,
-        "diff --git a/src/main.rs b/src/main.rs"
-    );
-    assert_eq!(selected_lines[1].content, "added in main");
-}
-
-#[test]
-fn test_selected_diff_lines_returns_full_diff_when_index_is_out_of_bounds() {
-    // Arrange
-    let parsed_lines = parse_diff_lines(SAMPLE_DIFF);
-    let tree_items = FileExplorer::file_tree_items(&parsed_lines);
-
-    // Act
-    let selected_lines = selected_diff_lines(&parsed_lines, &tree_items, usize::MAX);
-
-    // Assert
-    assert_eq!(selected_lines.len(), parsed_lines.len());
-    assert_eq!(selected_lines[0].content, parsed_lines[0].content);
-    assert_eq!(selected_lines[3].content, parsed_lines[3].content);
 }
 
 #[test]

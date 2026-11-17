@@ -7,7 +7,7 @@ use std::{fs, io};
 
 use tempfile::TempDir;
 
-use super::{MAX_DEPTH, list_files, list_files_for_explorer, sort_and_limit_entries};
+use super::{MAX_DEPTH, list_files};
 use crate::domain::file_entry::FileEntry;
 
 const TEST_MAX_ENTRIES: usize = 500;
@@ -70,7 +70,7 @@ fn test_list_files_empty_directory() {
     let entries = list_files(temp_dir.path());
 
     // Assert
-    assert_eq!(entries, [] as [crate::domain::file_entry::FileEntry; 0]);
+    assert_eq!(entries, [] as [FileEntry; 0]);
 }
 
 #[test]
@@ -223,64 +223,6 @@ fn test_list_files_keeps_files_when_many_directories_exist() {
     // Assert
     assert!(entries.iter().any(|entry| entry.path == "z_last_file.rs"));
     assert!(entries.len() > TEST_MAX_ENTRIES);
-}
-
-#[test]
-fn test_list_files_for_explorer_can_be_unbounded() {
-    // Arrange
-    let temp_dir = TempDir::new().expect("test expectation should hold");
-    for index in 0..TEST_MAX_ENTRIES + 50 {
-        fs::write(temp_dir.path().join(format!("file_{index:04}.txt")), "")
-            .expect("test expectation should hold");
-    }
-
-    // Act
-    let entries = list_files_for_explorer(temp_dir.path(), None, None);
-
-    // Assert
-    assert_eq!(entries.len(), TEST_MAX_ENTRIES + 50);
-}
-
-#[test]
-fn test_list_files_for_explorer_respects_custom_limits() {
-    // Arrange
-    let temp_dir = TempDir::new().expect("test expectation should hold");
-    for index in 0..20 {
-        fs::write(temp_dir.path().join(format!("file_{index:04}.txt")), "")
-            .expect("test expectation should hold");
-    }
-
-    // Act
-    let entries = list_files_for_explorer(temp_dir.path(), Some(3), Some(7));
-
-    // Assert
-    assert_eq!(entries.len(), 7);
-}
-
-#[test]
-fn test_sort_and_limit_entries_truncates_after_sort() {
-    // Arrange
-    let mut entries: Vec<FileEntry> = (0..TEST_MAX_ENTRIES + 20)
-        .rev()
-        .map(|index| FileEntry {
-            is_dir: false,
-            path: format!("file_{index:04}.txt"),
-        })
-        .collect();
-
-    // Act
-    sort_and_limit_entries(&mut entries, Some(TEST_MAX_ENTRIES));
-
-    // Assert
-    assert_eq!(entries.len(), TEST_MAX_ENTRIES);
-    assert_eq!(
-        entries.first().map(|entry| entry.path.as_str()),
-        Some("file_0000.txt")
-    );
-    assert_eq!(
-        entries.last().map(|entry| entry.path.as_str()),
-        Some("file_0499.txt")
-    );
 }
 
 #[test]

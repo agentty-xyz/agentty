@@ -86,40 +86,6 @@ pub fn heatmap_month_markers(end_day_key: i64) -> Vec<(usize, &'static str)> {
     markers
 }
 
-/// Builds the month-label row displayed above heatmap week columns.
-///
-/// `day_label_width` is the prefix width reserved for weekday labels and
-/// `cell_width` is the width of each heatmap week column in characters.
-pub fn build_heatmap_month_row(
-    end_day_key: i64,
-    day_label_width: usize,
-    cell_width: usize,
-) -> String {
-    let total_width = day_label_width + (HEATMAP_WEEK_COUNT * cell_width);
-    let mut row_characters = vec![' '; total_width];
-    let mut last_label_end = 0_usize;
-
-    for (week_index, month_label) in heatmap_month_markers(end_day_key) {
-        let label_start = day_label_width + (week_index * cell_width);
-        if label_start < last_label_end {
-            continue;
-        }
-
-        for (label_offset, character) in month_label.chars().enumerate() {
-            let write_index = label_start + label_offset;
-            if write_index >= row_characters.len() {
-                break;
-            }
-
-            row_characters[write_index] = character;
-        }
-
-        last_label_end = label_start + month_label.len();
-    }
-
-    row_characters.into_iter().collect()
-}
-
 /// Returns how many trailing heatmap week columns fit in `available_width`.
 ///
 /// The returned value is clamped between `1` and `53` so the heatmap always
