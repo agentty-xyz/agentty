@@ -42,6 +42,8 @@
 //!   cancellation through [`TurnControl`].
 //! - [`Tool`]s are denied until allowed with [`Harness::allow`] or a
 //!   [`ToolPolicy`].
+//! - [`RunError`] and [`HarnessError`] classify any [`TurnError`] or
+//!   [`SessionError`] by [`ErrorKind`] and whether a retry may succeed.
 //!
 //! # Modules
 //!
@@ -92,6 +94,7 @@ mod context;
 mod context_projection_test;
 mod effect;
 mod engine;
+mod error;
 mod execution;
 mod file_system;
 mod harness;
@@ -122,6 +125,7 @@ mod write;
 mod write_journal;
 
 pub use comparison::{ComparisonBase, ComparisonBaseError};
+pub use error::{ErrorKind, HarnessError, RunError};
 pub use harness::{Harness, Session, SessionBuilder};
 pub use input::{ImageContent, ImageMediaType, InputBlock, TurnInput, TurnInputError};
 pub use model::{Model, ModelError};

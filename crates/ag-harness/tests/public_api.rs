@@ -72,9 +72,10 @@ use ag_harness::recovery::ExecutionIdentity;
 use ag_harness::store::{MemoryStore, SessionInfo, SessionStore, WriteStatus};
 use ag_harness::tool::{FileSystem, LocalFileSystem, ToolCall, ToolDefinition};
 use ag_harness::{
-    ComparisonBase, Harness, ImageContent, ImageMediaType, InputBlock, Model, ModelError,
-    OutputSchema, OutputSchemaError, Repository, RepositoryError, Session, SessionBuilder,
-    SessionError, Tool, ToolPolicy, TurnError, TurnInput, TurnInputError, TurnOptions,
+    ComparisonBase, ErrorKind, Harness, HarnessError, ImageContent, ImageMediaType, InputBlock,
+    Model, ModelError, OutputSchema, OutputSchemaError, Repository, RepositoryError, RunError,
+    Session, SessionBuilder, SessionError, Tool, ToolPolicy, TurnError, TurnInput, TurnInputError,
+    TurnOptions,
 };
 use async_trait::async_trait;
 use serde_json::json;
@@ -1733,6 +1734,61 @@ async fn external_executor_runs_bash_through_the_public_contract() -> Result<(),
         "the bash description states the executor's enforcement"
     );
     let _explicit: Arc<dyn BashExecutor> = Arc::new(UnsandboxedExecutor::without_isolation());
+
+    Ok(())
+}
+
+/// Custom provider that always reports a rate limit with a retry delay.
+struct RateLimitedModel;
+
+#[async_trait]
+impl Model for RateLimitedModel {
+    async fn complete(&self, _request: ModelRequest) -> Result<ModelCompletion, ModelError> {
+        Err(ModelError::provider(
+            429,
+            Some(std::time::Duration::from_secs(2)),
+            io::Error::other("slow down"),
+        ))
+    }
+}
+
+#[tokio::test]
+async fn session_and_turn_failures_classify_through_the_crate_root() -> Result<(), Box<dyn Error>> {
+    // Arrange
+    let harness =
+        Harness::new(ExternalModel, unbounded_context_budget()).store(Arc::new(MemoryStore::new()));
+    let rate_limited = Harness::new(RateLimitedModel, unbounded_context_budget());
+
+    // Act
+    let missing = match harness.resume("missing").await {
+        Ok(_) => return Err("a missing session should not resume".into()),
+        Err(error) => HarnessError::from(error),
+    };
+    let rate_limited = match rate_limited
+        .run_once("extract", request()?.schema().clone())
+        .await
+    {
+        Ok(_) => return Err("a rate-limited model should fail the turn".into()),
+        Err(error) => RunError::from(error),
+    };
+
+    // Assert
+    assert_eq!(missing.kind(), ErrorKind::NotFound);
+    assert!(!missing.is_retryable());
+    assert_eq!(
+        missing.to_string(),
+        "persistent session `missing` does not exist"
+    );
+    assert_eq!(rate_limited.kind(), ErrorKind::RateLimited);
+    assert!(rate_limited.is_retryable());
+    assert_eq!(
+        rate_limited.retry_after(),
+        Some(std::time::Duration::from_secs(2))
+    );
+    assert!(matches!(
+        rate_limited.get_ref().downcast_ref::<TurnError>(),
+        Some(TurnError::Model(error)) if error.http_status() == Some(429)
+    ));
 
     Ok(())
 }

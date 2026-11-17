@@ -407,6 +407,20 @@ provider rejection of input beyond the model's window reports
 `ModelErrorType::ContextOverflow` (`ModelError::is_context_overflow`); custom models
 report it with `ModelError::context_overflow`.
 
+## Errors
+
+Use `RunError::from` for a turn's `TurnError`, `SessionError`, or `ModelError`, and
+`HarnessError::from` for session operations and build-time errors. Both classify by one
+`ErrorKind` and `is_retryable()`, keep the original message and source chain, and return
+the original error through `get_ref()` and `into_inner()`. Only `RateLimited` (`429`),
+`Overloaded` (`500`, `502`-`504`, `529`), `Transport`, and `Busy` (including a locked or
+saturated store) are retryable; a retryable provider failure also carries its
+`Retry-After` in seconds as `retry_after()`, capped at sixty. A spent quota (`402`, or a
+`429` with OpenAI's `insufficient_quota` or Kimi's `exceeded_current_quota_error`) is
+`QuotaExceeded`, not retryable, and not retried internally; `401`/`403` are `Auth`.
+Custom models report the same classes with `ModelError::provider` and
+`ModelError::quota_exceeded`. `TurnErrorType` stays the telemetry label.
+
 ## Stores
 
 SQLite is the default (`Harness::database`, or `store::SqliteStore` explicitly).
@@ -434,8 +448,9 @@ calibrated capacity it was fitted into (`budget_weight`) and its weight before
 ## Where things live
 
 The crate root holds what a typical host needs: `Harness`, `Session`, `TurnOptions`,
-`TurnOutcome`, `TurnError`, `SessionError`, `OutputSchema`, `Tool`, `ToolPolicy`,
-`Repository`, `TurnInput`, and `Model`. Everything else is grouped by topic:
+`TurnOutcome`, `TurnError`, `SessionError`, `RunError`, `HarnessError`, `ErrorKind`,
+`OutputSchema`, `Tool`, `ToolPolicy`, `Repository`, `TurnInput`, and `Model`. Everything
+else is grouped by topic:
 
 | Module      | Contents                                                 |
 | ----------- | -------------------------------------------------------- |

@@ -205,11 +205,14 @@ or automatic provider fallback.
 
 Durable sessions send a stable prompt-cache key where the provider policy enables it.
 Requests have bounded timeouts and limited retries for connection failures and `429`
-responses. Provider context-overflow rejections map to `ErrorClass::ContextOverflow` so
-the engine can refit. Invalid final output is re-requested a bounded number of times
-with request-only feedback, and tool calls with undecodable arguments are answered with
-a rejected result instead of failing the response. Diagnostics never include model
-content.
+responses; a spent quota (`402`, or a `429` reporting an exhausted quota) is not
+retried. The harness `ErrorKind`, exposed through `RunError` and `HarnessError`, maps
+these failures to `RateLimited`, `Overloaded`, `QuotaExceeded`, and `Auth` with a
+retryable flag and a `Retry-After` capped at sixty seconds. Provider context-overflow
+rejections map to `ErrorClass::ContextOverflow` so the engine can refit. Invalid final
+output is re-requested a bounded number of times with request-only feedback, and tool
+calls with undecodable arguments are answered with a rejected result instead of failing
+the response. Diagnostics never include model content.
 
 ## Input and output
 

@@ -54,6 +54,35 @@ pub(crate) fn is_context_overflow(
     has_context_overflow_marker(body, provider_markers)
 }
 
+/// Lowercase markers that, in a `429` body, mean the account's quota or
+/// credit is spent rather than its request rate exceeded: the
+/// `insufficient_quota` code and "exceeded your current quota" message of
+/// the `OpenAI` API, and the `exceeded_current_quota_error` type of the
+/// Moonshot (Kimi) API.
+const QUOTA_EXCEEDED_MARKERS: [&str; 3] = [
+    "insufficient_quota",
+    "exceeded your current quota",
+    "exceeded_current_quota",
+];
+
+/// Returns whether an unsuccessful response reports a spent quota or
+/// credit balance, which waiting does not fix: any `402`, or a `429` whose
+/// body carries a quota marker.
+pub(crate) fn is_quota_exceeded(status: reqwest::StatusCode, body: &str) -> bool {
+    if status == reqwest::StatusCode::PAYMENT_REQUIRED {
+        return true;
+    }
+    if status != reqwest::StatusCode::TOO_MANY_REQUESTS {
+        return false;
+    }
+
+    let body = body.to_lowercase();
+
+    QUOTA_EXCEEDED_MARKERS
+        .iter()
+        .any(|marker| body.contains(marker))
+}
+
 /// Returns whether `text`, read case-insensitively, carries a shared or one
 /// of `provider_markers` of a context-window overflow.
 pub(crate) fn has_context_overflow_marker(text: &str, provider_markers: &[&str]) -> bool {
@@ -150,7 +179,8 @@ impl HttpTransport {
     }
 
     /// Sends `request` and returns its successful response with the body
-    /// unread, retrying rate limits and one connection failure.
+    /// unread, retrying rate limits and one connection failure. A `429`
+    /// whose body reports a spent quota is returned without a retry.
     ///
     /// A timed-out request is reported without a retry, since a reasoning
     /// model that ran out the bound would likely run it out again.
@@ -184,27 +214,31 @@ impl HttpTransport {
                 Err(error) => return Err(TransportError::transport(error)),
             };
 
-            if response.status() == reqwest::StatusCode::TOO_MANY_REQUESTS
-                && rate_limit_retries < MAX_RATE_LIMIT_RETRIES
-            {
-                let delay = rate_limit_retry_delay(
-                    response.headers(),
-                    rate_limit_retries,
-                    self.retry_delay,
-                    self.max_retry_delay,
-                );
-                rate_limit_retries += 1;
-                drop(response);
-                tokio::time::sleep(delay).await;
-
-                continue;
-            }
             if let Err(source) = response.error_for_status_ref() {
                 let status = response.status();
+                let retry_after = retry_after(response.headers());
                 let body = error_body_summary(&mut response).await;
+
+                if status == reqwest::StatusCode::TOO_MANY_REQUESTS
+                    && rate_limit_retries < MAX_RATE_LIMIT_RETRIES
+                    && !is_quota_exceeded(status, &body)
+                {
+                    let delay = rate_limit_retry_delay(
+                        retry_after,
+                        rate_limit_retries,
+                        self.retry_delay,
+                        self.max_retry_delay,
+                    );
+                    rate_limit_retries += 1;
+                    drop(response);
+                    tokio::time::sleep(delay).await;
+
+                    continue;
+                }
 
                 return Err(TransportError::Http {
                     body,
+                    retry_after,
                     source,
                     status,
                 });
@@ -230,21 +264,27 @@ where
 }
 
 fn rate_limit_retry_delay(
-    headers: &reqwest::header::HeaderMap,
+    provider_delay: Option<Duration>,
     retry: usize,
     retry_delay: Duration,
     max_retry_delay: Duration,
 ) -> Duration {
-    let provider_delay = headers
-        .get(reqwest::header::RETRY_AFTER)
-        .and_then(|value| value.to_str().ok())
-        .and_then(|value| value.parse::<u64>().ok())
-        .map_or_default(Duration::from_secs);
     let backoff = retry_delay
         .saturating_mul(1_u32 << retry.min(31))
         .min(max_retry_delay);
 
-    provider_delay.min(MAX_PROVIDER_RETRY_DELAY).max(backoff)
+    provider_delay.unwrap_or_default().max(backoff)
+}
+
+/// Returns the provider's `Retry-After` delay, read as whole delta-seconds
+/// and capped at [`MAX_PROVIDER_RETRY_DELAY`]; an HTTP-date or other value
+/// reads as absent.
+fn retry_after(headers: &reqwest::header::HeaderMap) -> Option<Duration> {
+    headers
+        .get(reqwest::header::RETRY_AFTER)
+        .and_then(|value| value.to_str().ok())
+        .and_then(|value| value.parse::<u64>().ok())
+        .map(|seconds| Duration::from_secs(seconds).min(MAX_PROVIDER_RETRY_DELAY))
 }
 
 async fn error_body_summary(response: &mut reqwest::Response) -> String {
@@ -320,6 +360,8 @@ pub(crate) enum TransportError {
     #[error("model API returned HTTP {status}: {body}")]
     Http {
         body: String,
+        /// Provider-declared `Retry-After` of the final response.
+        retry_after: Option<Duration>,
         #[source]
         source: reqwest::Error,
         status: reqwest::StatusCode,
@@ -347,18 +389,17 @@ impl TransportError {
         match self {
             Self::Http {
                 body,
+                retry_after,
                 source,
                 status,
             } => {
-                let context_overflow = is_context_overflow(status, &body, overflow_markers);
+                let classification = model::ProviderRejection {
+                    context_overflow: is_context_overflow(status, &body, overflow_markers),
+                    quota_exceeded: is_quota_exceeded(status, &body),
+                    retry_after,
+                };
 
-                model::ModelError::provider_request(
-                    provider,
-                    body,
-                    source,
-                    status,
-                    context_overflow,
-                )
+                model::ModelError::provider_request(provider, body, source, status, classification)
             }
             error @ Self::InvalidResponse(_) => model::ModelError::classified_request(
                 model::ModelErrorType::InvalidProviderResponse,
