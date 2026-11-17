@@ -7,6 +7,45 @@ this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
 
 ## [Unreleased]
 
+## [v0.19.2] - 2026-11-16
+
+### Added
+
+- `agentty`: show MCP tool calls in turn activity summaries as `server/tool`.
+- `agentty`: add the `--disable-telemetry` launch flag to turn off PostHog usage
+  telemetry.
+- `agentty`: trace startup, background sync, slow foreground cycles, and Git and forge
+  CLI commands, and root background workflow traces so their phases nest.
+- `ag-telemetry`: export OTLP metrics beside traces, and attach the installation ID to
+  OTLP trace resources.
+
+### Changed
+
+- `ag-harness`: return denied and unknown tool calls to the model as correctable results
+  instead of failing the turn, and describe the `bash` tool's real enforcement to the
+  model.
+- `agentty`: compute post-turn diff stats with `git diff --numstat`, reduce the cost of
+  the fallback session reload poll, parse each CLI stdout line as JSON once, and hash
+  appended transcript messages incrementally.
+- workspace: tune SQLite indexes for unfinished operations and cascades, remove
+  production code that only tests call, move marketing GIF generators to a dedicated
+  showcase binary, and make user, architecture, and contributor docs more concise.
+- release: bump workspace crate metadata and lockfile package versions to `0.19.2`.
+
+### Removed
+
+- `agentty`: remove the `AGENTTY_TELEMETRY_ENABLED` environment variable in favor of
+  `--disable-telemetry`.
+
+### Fixed
+
+- workspace: make the `ag-harness` test baseline green.
+
+### Contributors
+
+- @andagaev
+- @minev-dev
+
 ## [v0.19.1] - 2026-11-15
 
 ### Added
