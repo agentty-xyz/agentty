@@ -22,12 +22,13 @@ During iteration:
 Before handoff (the task's final state, not each reply in a multi-turn session), choose
 one validation rung covering every touched file and all affected dependents:
 
-| Impact                              | Required final checks                                                                        |
-| ----------------------------------- | -------------------------------------------------------------------------------------------- |
-| Markdown                            | `mdformat` and default hooks for touched paths                                               |
-| Docs site                           | Markdown checks plus `zola-check`; format touched templates with `djlint-reformat`           |
-| Rust                                | `rustfmt-fix`, `clippy`, and unrestricted `test-focused` for changed packages and dependents |
-| Manifests, migrations, hook catalog | Add their dedicated checks from `.pre-commit-config.yaml`                                    |
+| Impact                              | Required final checks                                                                                    |
+| ----------------------------------- | -------------------------------------------------------------------------------------------------------- |
+| Markdown                            | `mdformat` and default hooks for touched paths                                                           |
+| Docs site                           | Markdown checks plus `zola-check`; format touched templates with `djlint-reformat`                       |
+| Rust                                | `rustfmt-fix`, `clippy`, `ast-grep`, and unrestricted `test-focused` for changed packages and dependents |
+| Manifests, migrations, hook catalog | Add their dedicated checks from `.pre-commit-config.yaml`                                                |
+| ast-grep rules (`lint/`)            | `ast-grep` and `ast-grep-test`                                                                           |
 
 Final Rust selection must retain public-contract integration tests; source-only hooks do
 not replace them. Remove test-name restrictions for affected packages, or use

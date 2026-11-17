@@ -1,0 +1,7 @@
+id: imports-at-file-scope
+valid:
+  - "use std::io::Seek;\nfn seek() {}"
+  - 'mod tests { use super::seek; }'
+invalid:
+  - 'fn seek() { use std::io::Seek; }'
+  - 'impl File { fn seek(&self) { use std::io::Seek; } }'

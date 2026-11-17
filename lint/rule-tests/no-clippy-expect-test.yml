@@ -1,0 +1,9 @@
+id: no-clippy-expect
+valid:
+  - "#[expect(unsafe_code, reason = \"the kernel API has no wrapper\")]\nfn confine() {}"
+  - "#[cfg_attr(test, mockall::automock)]\ntrait Clock {}"
+invalid:
+  - "#[expect(clippy::too_many_lines)]\nfn render() {}"
+  - "#[expect(dead_code, clippy::unused_self)]\nfn render() {}"
+  - "#[cfg_attr(test, expect(clippy::panic))]\nfn render() {}"
+  - '#![expect(clippy::pedantic)]'

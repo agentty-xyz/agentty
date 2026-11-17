@@ -1051,6 +1051,7 @@ async fn test_run_rebase_assist_loop_core_aborts_after_pre_commit_repairs_are_ex
 /// detail repeats after the initial conflict state.
 #[tokio::test]
 async fn test_run_rebase_assist_loop_core_stops_on_repeated_conflict_detail() {
+    // Act & Assert
     for (is_project, error_prefix) in [
         (false, "Rebase assistance"),
         (true, "Sync rebase assistance"),
@@ -1205,6 +1206,7 @@ async fn test_run_rebase_assist_loop_tracks_initial_rebase_conflict_detail() {
 /// is exhausted.
 #[tokio::test]
 async fn test_run_rebase_assist_loop_core_reports_retry_exhaustion_detail() {
+    // Act & Assert
     for (is_project, error_prefix) in [(false, "Rebase"), (true, "Sync rebase")] {
         assert_retry_exhaustion_reports_final_conflict(is_project, error_prefix).await;
     }

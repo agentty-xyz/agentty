@@ -12,6 +12,7 @@ use std::ops::Deref;
 use std::sync::Arc;
 use std::time::Duration;
 
+use ag_router::ModelMessage as RoutedMessage;
 pub use ag_router::{CompletionMetadata, CompletionUsage};
 use async_trait::async_trait;
 use serde::Serialize;
@@ -386,38 +387,39 @@ impl ModelClient {
         Ok(routed)
     }
 
-    fn to_router_message(message: &ModelMessage) -> Result<ag_router::ModelMessage, ModelError> {
-        use ag_router::ModelMessage as Routed;
+    fn to_router_message(message: &ModelMessage) -> Result<RoutedMessage, ModelError> {
         Ok(match message {
-            ModelMessage::Assistant(content) => Routed::Assistant(content.clone()),
+            ModelMessage::Assistant(content) => RoutedMessage::Assistant(content.clone()),
             ModelMessage::AssistantReasoning {
                 content,
                 reasoning_content,
-            } => Routed::AssistantReasoning {
+            } => RoutedMessage::AssistantReasoning {
                 content: content.clone(),
                 reasoning_content: reasoning_content.clone(),
             },
             ModelMessage::AssistantToolCall(call) => {
-                Routed::AssistantToolCall(Self::to_router_call(call)?)
+                RoutedMessage::AssistantToolCall(Self::to_router_call(call)?)
             }
-            ModelMessage::AssistantToolCalls(calls) => Routed::AssistantToolCalls(
+            ModelMessage::AssistantToolCalls(calls) => RoutedMessage::AssistantToolCalls(
                 calls
                     .iter()
                     .map(Self::to_router_call)
                     .collect::<Result<_, _>>()?,
             ),
-            ModelMessage::System(content) => Routed::System(content.clone()),
+            ModelMessage::System(content) => RoutedMessage::System(content.clone()),
             ModelMessage::ToolResult {
                 call_id,
                 content,
                 name,
-            } => Routed::ToolResult {
+            } => RoutedMessage::ToolResult {
                 call_id: call_id.clone(),
                 content: content.clone(),
                 name: name.clone(),
             },
-            ModelMessage::User(content) => Routed::User(content.clone()),
-            ModelMessage::UserInput(input) => Routed::UserInput(Self::to_router_input(input)?),
+            ModelMessage::User(content) => RoutedMessage::User(content.clone()),
+            ModelMessage::UserInput(input) => {
+                RoutedMessage::UserInput(Self::to_router_input(input)?)
+            }
         })
     }
 

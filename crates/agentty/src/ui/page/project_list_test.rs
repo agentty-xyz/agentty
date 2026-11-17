@@ -479,7 +479,7 @@ fn test_build_heatmap_lines_uses_persisted_activity_for_intensity() {
     assert!(heatmap_lines.iter().any(|line| {
         line.spans
             .iter()
-            .any(|span| span.style.bg == Some(ProjectListPage::heatmap_color(4)))
+            .any(|span| span.style.bg == Some(style::heatmap_color(4)))
     }));
 }
 
@@ -511,9 +511,7 @@ fn test_build_heatmap_lines_paints_each_activity_intensity_with_its_own_color() 
         .flat_map(|line| line.spans.iter())
         .filter_map(|span| span.style.bg)
         .collect::<Vec<_>>();
-    let intensity_colors = (0..=4)
-        .map(ProjectListPage::heatmap_color)
-        .collect::<Vec<_>>();
+    let intensity_colors = (0..=4).map(style::heatmap_color).collect::<Vec<_>>();
     for intensity_color in &intensity_colors {
         assert!(painted_colors.contains(intensity_color));
     }

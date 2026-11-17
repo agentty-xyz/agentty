@@ -1,0 +1,7 @@
+id: no-rule-suppression
+valid:
+  - "// Mentions ast-grep-ignore in prose only.\nfn render() {}"
+invalid:
+  - "// ast-grep-ignore\nfn render() {}"
+  - "// ast-grep-ignore: imports-at-file-scope\nfn render() {}"
+  - "/* ast-grep-ignore */\nfn render() {}"

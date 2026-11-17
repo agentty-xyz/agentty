@@ -16,8 +16,8 @@ source of truth for the member and module inventory.
 
 - Order code for top-to-bottom reading: public before restricted before private, with
   callees ordered by first use.
-- Keep imports at file scope. Prefer module-oriented internal imports, use direct item
-  imports only when clearer, and do not mix imported-module and fully qualified styles.
+- Prefer module-oriented internal imports, use direct item imports only when clearer,
+  and do not mix imported-module and fully qualified styles.
 - Add `new()` or `Default` only for meaningful initialization. Prefer associated
   constructors over free construction helpers.
 - Put an inherent `impl` directly below its struct and trait implementations after it.
@@ -28,7 +28,6 @@ source of truth for the member and module inventory.
   returns except in a one-expression block.
 - Introduce abstractions only for reuse, reduced complexity, or testability. Inline
   pass-through wrappers that add no behavior or boundary.
-- Do not silence Clippy with `#[allow(...)]`; resolve the underlying issue.
 
 ### Tests and Boundaries
 
@@ -40,12 +39,8 @@ source of truth for the member and module inventory.
   through their support module. Test-module routers declare child modules; each child
   imports its own dependencies instead of relying on imports forwarded through the
   router. Preserve production visibility when importing private internals.
-- Give every touched test explicit `// Arrange`, `// Act`, and `// Assert` sections;
-  combine labels only when that improves a very small test.
-- Keep production and test code in separate files. Load sibling `*_test.rs` unit suites
-  with `#[cfg(test)]`, `#[path = "<module>_test.rs"]`, and `mod tests;`. Split large
-  suites by behavior behind a test-module router; keep access to private internals
-  through child modules rather than widening production visibility.
+- Split large `*_test.rs` suites by behavior behind a test-module router; keep access to
+  private internals through child modules rather than widening production visibility.
 - Keep test-only imports, helpers, builders, and implementations in test files. Do not
   vary production fields, trait contracts, defaults, or control flow with test
   configuration; inject dependencies for deterministic tests. Mockable traits may retain

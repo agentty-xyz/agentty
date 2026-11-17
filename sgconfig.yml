@@ -1,0 +1,6 @@
+# ast-grep configuration for repository structure rules; see
+# `skills/enforce-rules/SKILL.md` for when a rule belongs here.
+ruleDirs:
+  - lint/rules
+testConfigs:
+  - testDir: lint/rule-tests

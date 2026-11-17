@@ -426,6 +426,22 @@ repos:
         language: system
         files: (^|/)Cargo\.toml$
         pass_filenames: false
+      - id: ast-grep
+        name: ast-grep rules
+        description: Enforce the repository structure rules in `lint/rules/` across Rust sources.
+        entry: ast-grep scan
+        language: python
+        additional_dependencies: [ast-grep-cli==0.51.1]
+        files: (\.rs|^lint/.*\.yml|^sgconfig\.yml)$
+        pass_filenames: false
+      - id: ast-grep-test
+        name: ast-grep rule tests
+        description: Check each rule in `lint/rules/` against its valid and invalid cases in `lint/rule-tests/`.
+        entry: ast-grep test --skip-snapshot-tests
+        language: python
+        additional_dependencies: [ast-grep-cli==0.51.1]
+        files: ^(lint/.*\.yml|sgconfig\.yml)$
+        pass_filenames: false
       - id: check-migrations
         name: check migrations
         description: Verify SQL migration files have unique prefix numbers and that migrations existing at the fork point from `origin/main` (or `AGENTTY_MIGRATION_BASE`) are unchanged.

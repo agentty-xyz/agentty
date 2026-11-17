@@ -1,0 +1,14 @@
+id: agentty-domain-purity
+valid:
+  - 'use crate::domain::session::Session;'
+  - 'use ag_session::SessionStatus;'
+  - 'fn size() -> usize { crate::domain::session::MAX }'
+invalid:
+  - 'use crate::infra::db::Database;'
+  - 'use crate::ui::style;'
+  - 'use ratatui::text::Line;'
+  - 'use sqlx::SqlitePool;'
+  - 'use ag_store::Database;'
+  - 'use tokio::fs;'
+  - 'fn draw() { crossterm::terminal::size(); }'
+  - 'fn probe() { crate::runtime::poll(); }'
