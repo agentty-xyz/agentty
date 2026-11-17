@@ -19,7 +19,7 @@ behavior.
   fixed at first launch.
 - Feed the harness's typed events, usage, and cost into durable graph state and the TUI
   without hand-folded reports.
-- Share budgets and provider concurrency across parallel nodes.
+- Share budgets and model concurrency across parallel nodes.
 - Keep the
   [execution boundary](@/docs/core-components/execution-components/execution-boundary.md)
   unchanged: **Run Worker → Agent Runtime → Harness → LLM**. Only `ag-agent` sees
@@ -43,48 +43,57 @@ flowchart LR
   G[GraphExecutor] -->|admitted node| W[Run Worker]
   W -->|request, policy, budget| R[Agent Runtime]
   R -->|AgentKind::Harness| A[ag-agent native adapter]
-  A -->|RunRequest| H[shared Harness]
+  A -->|RunRequest| H[Harness clone per Agentty session]
   H -->|Run: EventStream + RunHandle| A
   A -.->|TurnEvent| W
   A -.->|TurnResult with usage and cost| W
   W -.->|execution settlement| S[(ag-store)]
 ```
 
-The adapter holds **one shared `Harness` per process** (cloned handle over one inner)
-instead of one per session. That shared handle carries the `ModelCatalog` with
-per-provider concurrency caps, so parallel nodes on the same provider queue for the same
-permits.
+The adapter shares **one `Arc<ModelCatalog>` and the budget ledgers per process**. Each
+Agentty session gets its own `Harness` clone configured with that session's database,
+because a harness store is configured per builder. The catalog carries **per-model
+concurrency caps** (one permit pool per catalog entry), so parallel nodes on the same
+model queue for the same permits. Two models of one provider do not share permits; a
+provider-wide cap is an `ag-harness` follow-up, listed under open decisions.
 
 ## Node to Run Mapping
 
-| Graph concept                     | Harness concept                                                   |
-| --------------------------------- | ----------------------------------------------------------------- |
-| `GraphContext::TaskConversation`  | One durable `Session` per task, keyed by the task context ID      |
-| Task attempt or continuation      | One `Session::run` on that task's session                         |
-| `GraphContext::Fresh` utility run | `Harness::run_once` (memory store), or a throwaway session        |
-| Node execution ID                 | `host_id` of the run, for idempotent recovery                     |
-| Node model selection              | `ModelSelector::Id` resolved through the catalog                  |
-| Node protocol schema              | Per-run `OutputMode` (JSON schema); output read with `parse`      |
-| Node instructions and objective   | Per-run `instructions` after the cached prefix                    |
-| Node generation/execution limits  | `RunLimits` (model requests, tool calls, tokens, wall time)       |
-| Node permission ceiling           | Per-run `ToolSet`, `ToolPolicy`, and sandbox enforcement          |
-| Shared budget ID                  | One `BudgetLedger` shared by every run that names that budget     |
-| Branch from an earlier task state | `Harness::fork` at the last settled turn, into a new task session |
+| Graph concept                      | Harness concept                                                    |
+| ---------------------------------- | ------------------------------------------------------------------ |
+| Task execution lineage             | One durable `Session`, mapped from the source execution ID         |
+| Task attempt or continuation       | One run appended to that lineage's session                         |
+| Retry from an earlier settled turn | `Harness::fork` into a session derived from the retry execution ID |
+| `GraphContext::Fresh` utility run  | `Harness::run(RunRequest)` on an in-process memory store           |
+| Task node execution ID             | Host ID of the run, for idempotent redelivery and recovery         |
+| Node model selection               | Exact model ID from the approved snapshot, resolved in the catalog |
+| Node protocol schema               | Per-run `OutputMode` (JSON schema); output read with `parse`       |
+| Node instructions and objective    | Per-run `instructions` after the cached prefix                     |
+| Node generation/execution limits   | `RunLimits` (model requests, tool calls, tokens, wall time)        |
+| Node permission ceiling            | Per-run `ToolSet`, `ToolPolicy`, and sandbox enforcement           |
+| Shared budget ID                   | One `BudgetLedger` shared by every run that names that budget      |
 
 Rules:
 
-- **One session, one model.** Each task node uses one session for its whole life. A node
-  never switches models mid-session; a different model is a different node. This keeps
-  the provider prompt cache stable and avoids cross-provider history projection.
+- **Sessions follow execution lineage.** The worker persists the mapping from source
+  execution ID to harness session ID with the execution record. An ordinary continuation
+  (`continue_execution_graph_node`) appends a turn to the same session: appending never
+  rewrites earlier attempts and keeps the prompt cache.
+- **Fork only to branch.** A retry that branches from an earlier settled turn forks at
+  that turn. The fork's `SessionId` is derived from the retry's execution ID, so a retry
+  after a crash between fork and dispatch reopens the existing fork instead of failing
+  with `Conflict`. Forked host records cannot collide, because execution IDs are unique.
+  Forks only work within one database, so branches stay inside one Agentty session.
+- **One session, one model.** A node never switches models mid-session; a different
+  model is a different node. This keeps the cache stable and avoids cross-provider
+  history projection. Compaction is the only other model a session sees (see Model Roles
+  per Node).
 - **Handoffs stay outputs.** Dependents receive the exact schema-validated output
   version that admission pinned, never a transcript. Transcripts stay readable through
   `Session::transcript` for display and debugging.
-- **Forks for branches.** Continuing a settled task while keeping its earlier attempt
-  intact forks the task's session at its last settled turn into a new session. The
-  source session is never rewritten, matching the rule that continuations never rewrite
-  earlier attempts. A fork gets its own prompt-cache key.
-- **Fresh nodes stay fresh.** Fresh utility nodes keep no history between runs, so the
-  memory-backed `run_once` path fits; only task conversations need durable sessions.
+- **Fresh nodes stay fresh.** Fresh utility nodes keep no history, so the memory-backed
+  `Harness::run` path fits. They have no durable host record: an interrupted fresh node
+  always fails and retries with a new execution ID.
 
 ## Events, Usage, and Cost
 
@@ -114,20 +123,37 @@ flowchart LR
 
 ## Cancellation, Crash Recovery, and Idempotency
 
+Host-ID idempotency and record-based recovery apply only to task-conversation nodes,
+whose sessions are durable. Fresh nodes fail and retry on recovery.
+
 - **Cancellation.** Worker cancellation (caller drop, `cancel_execution_graph`, session
   cleanup, shutdown) calls the run's `CancelToken`. The adapter then awaits the run's
-  outcome, which includes write and command settlement, before the worker releases the
-  node's Env lease and capacity. Graph cancellation fans out one token per running node.
+  outcome, including write and command settlement, **up to a settlement deadline**. When
+  the deadline expires, the adapter kills the command's process group, the session stays
+  `Unsettled`, and the worker releases the Env lease and capacity with the node failed
+  in the settlement phase. Graph cancellation fans out one token per running node.
 - **Leases.** The harness's renewable session lease fences concurrent processes on the
   same task session. Agentty's root lock already prevents two live instances, so the
   lease is a second line of defense, not the primary fence.
-- **Idempotency.** Every harness run carries the node execution ID as its `host_id`.
-  Redelivering the same execution returns the recorded outcome instead of running again.
-- **Crash recovery.** Startup recovery stays explicit and never dispatches work. For a
-  harness execution left running, recovery asks the harness for the `host_id` record:
-  - a completed, settled run settles the execution from its recorded outcome;
-  - anything else (interrupted, unsettled effects, missing) fails the execution as
-    today, and `resume_execution_graph` or a node retry starts a new execution ID.
+- **Host record lifecycle.** Every task run carries its node execution ID as host ID.
+  The harness creates the record atomically at admission, before any provider call, as
+  `InProgress`. Redelivering the same host ID never runs again; it returns the record:
+  - `Completed`: the recorded outcome, without a model call;
+  - `Failed` or `Interrupted`: that failure, which fails the execution;
+  - `InProgress`: never a second execution; after a crash it is treated as interrupted.
+- **Crash recovery.** Startup recovery stays explicit, never dispatches work, and holds
+  no Env lease, so it cannot run Agentty's post-run effects (worktree commit, output
+  validation, output pinning). It therefore never settles an execution from a harness
+  record. It fails every harness execution left running, as today. A task execution
+  whose record is `Completed` is marked **recoverable**: an explicit
+  `resume_execution_graph` re-dispatches it under the same execution ID, reacquires the
+  Env lease, receives the recorded output through redelivery (saving the provider call),
+  and then runs validation and effects in the normal order. Any other record, and every
+  fresh node, retries with a new execution ID.
+- **Recovery seam.** Graph code cannot read harness records. The runtime gains a
+  backend-neutral recovery query in `ag-contracts` terms: given an execution ID, it
+  classifies the run as completed, interrupted, unsettled, or missing. `ag-agent`
+  implements it with `Session::recover`; external backends always answer missing.
 - **Settlement failures.** An unsettled run (`Unsettled`) keeps blocking new turns on
   that session; the node fails with the settlement phase, and the retry path re-awaits
   settlement before the session accepts another run.
@@ -138,47 +164,68 @@ Graphs keep their existing durable provider-call budgets. The harness `BudgetLed
 becomes the bridge:
 
 - The adapter wraps the request's `ProviderCallBudget` in a `BudgetLedger`. Each
-  `reserve` consumes one provider call; a refused call ends the run with
-  `BudgetExhausted`, which the node reports as an exhausted budget. `commit` records
-  usage and cost but charges no further calls. This replaces the native harness's
-  current per-request charging hook, so retries, repairs, summaries, and resends all
-  draw from the same graph budget.
-- Because the graph's durable ledger already records every charge and refund, a restart
-  still never replenishes spent calls.
+  `reserve` consumes one provider call; `commit` records usage and cost but charges no
+  further calls. This replaces the native harness's current per-request charging hook,
+  so retries, repairs, summaries, and resends all draw from the same graph budget.
+- **When a call is spent.** The harness acquires the model's concurrency permit first
+  and reserves budget only after it. A run cancelled while waiting for a permit
+  therefore charges nothing. Once reserved, the request counts as sent: if it fails or
+  is dropped in flight, the harness commits it as an unreported request, because the
+  provider may have billed it. A `Reservation` dropped without being sent or committed
+  runs its release function, which refunds the call to the graph ledger.
+- **Telling budgets apart.** A refused reserve ends the run with
+  `BudgetExhausted(LimitKind)`, and the closest kind is `ModelRequests`, the same kind a
+  per-run `RunLimits` stop reports. The bridge records its own refusals, and the adapter
+  reports a graph budget refusal as an exhausted shared budget and anything else as a
+  node limit. A dedicated upstream `LimitKind` variant is the alternative (`LimitKind`
+  is already `#[non_exhaustive]`).
+- Because the graph's durable ledger records every charge and refund, a restart still
+  never replenishes spent calls.
 - A cost or token budget per graph (`LimitKind::Cost`, `LimitKind::Tokens`) is a
   follow-up behind an owner decision; it would reuse the same ledger bridge with a
   durable cost ledger.
 - **Concurrency layers.** Worker capacity bounds concurrent utility runs; the Scheduler
-  bounds session turns; the catalog's per-provider cap bounds concurrent provider
-  requests across every node in the process. A node waiting for a provider permit
-  already holds its worker slot and Env lease, so caps should be set high enough not to
-  starve focused-review waves.
+  bounds session turns; the catalog's per-model cap bounds concurrent requests to one
+  model across every node in the process. A node waiting for a model permit already
+  holds its worker slot and Env lease, so caps should be set high enough not to starve
+  focused-review waves.
 
 ## Model Roles per Node
 
-Graph proposals may name a role (for example `SMART` or `CHEAP`) or an exact model.
-Roles resolve to an exact model ID through the catalog **during proposal resolution**,
-before approval, so the approved snapshot is exact and a restart cannot change which
-model a node uses. Resolution fails a proposal whose role cannot be satisfied or whose
-required capabilities (for example image input) are missing. Compaction and in-turn
-summaries use the catalog's `CHEAP` role through `ContextPolicy`.
+Proposals do not name models or roles: `GraphProposalExecution` carries no model, Env,
+task, or budget IDs. The host keeps capturing an exact model in the snapshot, as today.
+When the host picks a node's model from a role (for example the session's `SMART` model
+or a `CHEAP` utility model), it resolves the role through a role-resolver port in
+`ag-contracts` that `ag-agent` implements over the catalog. Resolution happens when the
+snapshot is captured, before approval, so a restart cannot change which model a node
+uses, and it fails when a role cannot be satisfied or required capabilities (for example
+image input) are missing.
+
+Compaction and in-turn summaries use a compaction model that is resolved at the same
+time, pinned in the snapshot, and restricted to the node model's provider and
+compatibility profile; when no such cheap model exists, the node's own model compacts.
+This keeps the one-session-one-model rule free of cross-provider projection.
 
 ## Tools, Approvals, and Sandbox
 
 - **Tools.** The node's intersected permissions select the run's `ToolSet`: `SharedRead`
-  and `BackgroundRead` nodes get `read` only; `ExclusiveWrite` task nodes add `write`
-  and `bash`. Host-provided `ToolHandler`s (such as a future delegation tool) are added
-  per node only when the node's agent definition allows them.
-- **Approvals.** Graph nodes run unattended. Their `ApprovalHandler` decides from the
-  node's permission ceiling and never waits for a person: anything outside the ceiling
-  is denied with feedback the model can correct. Interactive approvals belong to
-  ordinary session chat. A decision timeout ends a stuck run with `ApprovalTimeout` so
-  the session lease is never held forever.
-- **Sandbox.** Read-only nodes run `bash`, if granted, with filesystem enforcement;
-  writer nodes keep the session worktree writable and Git metadata read-only; networking
-  is never granted. When the native launcher is unavailable, the harness fails the run
-  with `SandboxUnavailable` before any model call instead of silently running
-  unsandboxed.
+  and `BackgroundRead` nodes get `read` only, never `bash`; `ExclusiveWrite` task nodes
+  add `write` and `bash`. Host-provided `ToolHandler`s (such as a future delegation
+  tool) are added per node only when the node's agent definition allows them.
+- **Approvals.** Graph nodes run unattended. Their `ApprovalHandler` decides
+  synchronously from the node's permission ceiling and never waits for a person:
+  anything outside the ceiling is denied with feedback the model can correct.
+  Interactive approvals belong to ordinary session chat.
+- **Sandbox.** Writer nodes run `bash` in the native sandbox with the session worktree
+  writable and Git metadata read-only. When the native launcher is unavailable, the
+  harness fails the run with `SandboxUnavailable` before any model call instead of
+  silently running unsandboxed.
+- **Sandbox is a breaking change.** Edit modes run `bash` unsandboxed with network
+  today. Sandboxing writers breaks commands that fetch dependencies (for example
+  `cargo build` or `npm install`) unless writers get a network grant, and fails harness
+  writer nodes on hosts without the launcher. It therefore has its own setting, separate
+  from `--experimental-harness`, so users can turn it off; whether writers get network
+  is an open decision.
 
 ## Sequencing with the Migration Plan
 
@@ -186,81 +233,122 @@ The harness API lands in `ag-harness` first (core contract, then extension point
 `ag-agent` migration steps M1–M7 then move the native adapter onto it, and A9 seals the
 old surface. Graph integration rides on those steps:
 
-| Integration step                         | Needs                       | Visible change                           |
-| ---------------------------------------- | --------------------------- | ---------------------------------------- |
-| Typed errors map to node failure reasons | M1                          | Clearer node failure messages            |
-| Shared harness and catalog in `ag-agent` | M2 (catalog, roles)         | None; provider caps across nodes         |
-| Run, event stream, usage, and cost       | M3                          | Streaming text, per-node usage and cost  |
-| Ledger bridge and per-node `RunLimits`   | Budget ledger, run limits   | Budget exhaustion reported per node      |
-| `host_id` recovery for graph executions  | Idempotent host requests    | Settled runs survive a crash             |
-| Transcript reads and forks for branches  | M4                          | Branch continuations keep source history |
-| Auto-compaction on the cheap role        | M5                          | Compaction notice                        |
-| Per-node `ToolSet`, approvals, sandbox   | M6, tool handlers, approval | Sandboxed graph `bash`                   |
+| Integration step                         | Needs              | Visible change                          |
+| ---------------------------------------- | ------------------ | --------------------------------------- |
+| Typed errors map to node failure reasons | M1 (A1)            | Clearer node failure messages           |
+| Shared catalog in `ag-agent`             | M2 (A2, B1)        | None; model caps across nodes           |
+| Run, event stream, usage, and cost       | M3 (A4a, A4b, A3b) | Streaming text, per-node usage and cost |
+| Ledger bridge and per-node `RunLimits`   | A6a, A6b           | Budget exhaustion reported per node     |
+| Host-ID recovery for task executions     | A5, host ID on run | Recoverable executions resume           |
+| Transcript reads and forks for branches  | M4 (A7)            | Branch retries keep source history      |
+| Auto-compaction on the pinned model      | M5 (C2, C3)        | Compaction notice                       |
+| Per-node `ToolSet`, approvals, sandbox   | M6 (S1, D1a, D2)   | Sandboxed graph `bash`                  |
 
-Every step is additive and gated by `--experimental-harness`; nothing changes for
-external backends except optional cost fields, which they leave empty. M3 and M5 change
-recorded TUI output and are never in flight together.
+M7 (`ag-harness-cli`) has no graph impact. Recovery uses the existing
+`Session::recover`, but `RunRequest` does not carry a host ID on the open branches yet;
+that upstream addition (the plan's `idempotency_key`) is a prerequisite.
+
+Every step is gated by `--experimental-harness`, and every step except the sandbox is
+additive; nothing changes for external backends except optional cost fields, which they
+leave empty. M3 and M5 change recorded TUI output and are never in flight together.
 
 ## Migration and Rollback
 
 - **Flag.** Without `--experimental-harness`, harness nodes fail before execution as
-  they do today; turning the flag off is the rollback.
-- **Storage.** New columns (per-execution cost) are nullable and additive. Older
-  databases load with unknown usage; a downgrade ignores the extra columns. Harness
-  session databases stay per Agentty session under the data root and are removed with
-  the session.
-- **Compatibility.** Each step lands while the old adapter paths still compile behind
-  deprecation, so a step can be reverted alone. Sealing (A9) happens only after every
-  step has shipped.
+  they do today; turning the flag off on the same or a newer binary is the rollback.
+- **Sandbox.** Writer sandboxing rolls back through its own setting, not the flag.
+- **Storage.** New columns (per-execution cost) are nullable and additive, and older
+  databases load with unknown usage. `ag-store` and `ag-harness` run their migrators
+  without ignoring missing versions, so an older binary refuses a database with a newer
+  migration (`VersionMissing`). A binary downgrade after the cost migration is
+  unsupported without restoring a backup.
+- **Session databases.** Harness session databases stay per Agentty session under the
+  data root and are removed with the session.
+- **Old paths.** Each step deletes the old adapter path it replaces instead of keeping
+  both under the coverage gate. Rollback is `--experimental-harness` or `git revert` of
+  the step. Sealing (A9) happens only after every step has shipped.
 
 ## Test Plan
 
 Prove each behavior once at the lowest level, following the test pyramid skill. Every
 test uses deterministic fake models: the harness's scripted `Model` in `ag-agent` tests
-and the scripted provider in worker and E2E tests. No live provider runs in CI; live
-smoke tests stay manual or nightly behind an explicit opt-in.
+and the scripted provider in worker and E2E tests. Waits use `tokio::time::pause` or
+barriers, never wall-clock sleeps. No live provider runs in CI; live checks stay manual,
+through the `prompt-evaluation` hook (`--hook-stage manual`).
 
-- **Pure unit (`ag-agent`, `ag-session`).**
+- **Pure unit (`ag-agent`).**
   - Event mapping: each `RunEventKind` to its `TurnEvent`, including the terminal event
     and ignored kinds.
+  - Each `HarnessError` kind and retry class to its node failure reason.
   - Permission ceiling to `ToolSet`, `ToolPolicy`, and sandbox enforcement.
-  - Node limits to `RunLimits`; model selection and role to catalog selector, including
-    unsatisfiable roles and missing capabilities.
-  - Ledger bridge: reserve charges one call, refusal maps to `BudgetExhausted`, commit
-    charges nothing.
+  - Node limits to `RunLimits`; role to catalog selector, including unsatisfiable roles,
+    missing capabilities, and the same-provider compaction model.
+  - Ledger bridge: reserve charges one call; a refusal is reported as a shared budget,
+    not a node limit; commit charges nothing; a dropped unsent reservation refunds.
+- **Pure unit (`ag-session`, `agentty`).** Permission intersection in `ag-contracts`
+  terms, and graph status rendering unknown, not `$0`, for nodes without cost.
 - **Boundary unit (`ag-agent` native adapter with a scripted model).**
   - A task run reports usage and cost from `RunOutcome` and returns only after
     settlement.
-  - Cancellation awaits settlement; an unsettled run blocks the next run.
-  - Redelivering a `host_id` returns the recorded outcome without a model call.
-  - A fork leaves the source session's transcript unchanged.
+  - Cancellation awaits settlement; a paused-time settlement deadline fails the node and
+    leaves the session `Unsettled`; an unsettled run blocks the next run.
+  - A run cancelled while waiting for a model permit charges no call.
+  - Redelivering a host ID returns the recorded outcome per state, without a model call.
+  - Recovery seam over a real on-disk session database: drop a run mid-flight, reopen,
+    and classify the record as completed, interrupted, unsettled, or missing.
+  - A fork leaves the source transcript unchanged, and a repeated fork for the same
+    retry reopens the existing fork.
+  - Auto-compaction selects the pinned compaction model and emits the notice event.
+  - Unattended approvals: a case table of calls inside and outside the ceiling (allow,
+    or deny with feedback).
+  - Sandbox: an injected launcher that reports unavailable ends the run with
+    `SandboxUnavailable` and zero scripted-model requests.
+  - Prompt delivery: instruction placement after the cached prefix, the schema chosen
+    for each request profile, and the denial-feedback wording.
+- **Gated sandbox suite.** Enforcement cases (writers cannot modify Git metadata,
+  networking is denied) join the existing `crates/ag-harness/tests/sandbox.rs`, run by
+  `harness-sandbox.yml` and `coverage-ag-harness-sandbox`, not a new binary.
 - **Crate contract (`ag-worker`, `ag-store`).**
-  - N parallel nodes sharing one budget stop at a deterministic total.
-  - Startup recovery settles a completed harness execution from its record and fails an
-    interrupted one, without dispatching.
+  - Recovery with a fake of the recovery seam: a completed record marks the execution
+    recoverable, every other case fails it, and nothing is dispatched; resume reuses the
+    recorded output and then runs validation and effects.
+  - Shared budget, owned by `ag-worker` with the real bridge: a gated scripted model
+    holds every run at a barrier on a current-thread runtime, so ordering is forced. The
+    total charged equals the budget, each losing reserve gets exactly one refusal, and
+    nothing over-commits.
+  - A model cap below worker capacity does not deadlock a focused-review wave (gated
+    model, paused time).
+  - External adapters (Codex, Claude) report no cost.
   - Loading a database from before the cost columns reports unknown usage, not zero.
-- **FeatureTest E2E (`crates/agentty/tests/e2e/`).** One scenario: an approved `/graph`
-  with two parallel harness nodes and a join, driven by the scripted provider, showing
-  node progress, streamed text, and per-node usage. Cancellation and recovery
-  permutations stay at lower levels. Recording refreshes follow the feature-recording
-  skill when captured output changes.
+- **FeatureTest E2E.** One scenario, extending the existing
+  `crates/agentty/tests/e2e/session/harness.rs` and `graph_proposal.rs` fixtures
+  (wiremock scripted provider): an approved `/graph` with two parallel harness nodes and
+  a join. It asserts stable end states (node status, join output, per-node usage) with
+  `wait_for_text`, not transient streamed frames. The compaction notice and streaming
+  text are covered by the M5 and M3 scenarios, not repeated here. Neither fixture
+  publishes a `.zola` capture today, so this scenario needs no recording refresh.
+- **Prompt evaluation.** PRs 3 and 7 each record a manual baseline and candidate
+  `prompt-evaluation` run on the Run Worker → Agent Runtime → Harness → LLM path, or
+  report "not run" when credentials are missing, per `docs/contributing/prompts.md`.
 - **Coverage.** Every step keeps 100% line and function coverage, without exclusions.
 
 ## Implementation PR Breakdown
 
 1. **Contracts:** optional cost in micro-USD on `TurnResult` and `TurnEvent::Completed`,
-   persisted per execution with a nullable column and an old-database test.
-1. **Shared harness:** one cloned `Harness` with the catalog in `ag-agent`; per-provider
-   caps shared across sessions (with M2).
+   persisted per execution with a nullable column; old-database, external no-cost, and
+   unknown-cost rendering tests.
+1. **Shared catalog:** one `Arc<ModelCatalog>` and per-session harness clones in
+   `ag-agent`; per-model caps shared across sessions (with M2).
 1. **Run adapter:** native adapter on `Run`, `EventStream`, and `RunOutcome`; event
-   mapping and usage (with M3). FeatureTest for streaming text.
+   mapping, usage, and prompt delivery (with M3, whose FeatureTest covers streaming).
 1. **Budgets and limits:** ledger bridge over `ProviderCallBudget` and per-node
-   `RunLimits`; parallel-budget contract test.
-1. **Recovery:** execution ID as `host_id`; startup recovery consults the harness
-   record.
-1. **Branches:** transcript reads and fork-based continuations (with M4).
-1. **Tools and sandbox:** per-node `ToolSet`, unattended `ApprovalHandler`, and sandbox
-   enforcement (with M6 and the approval handler).
+   `RunLimits`; shared-budget and cap-starvation contract tests.
+1. **Recovery:** execution ID as host ID, the `ag-contracts` recovery seam, and
+   recoverable executions resumed through `resume_execution_graph`.
+1. **Branches:** lineage-to-session mapping, transcript reads, and fork-based retries
+   (with M4).
+1. **Tools and sandbox:** per-node `ToolSet`, unattended `ApprovalHandler`, sandbox
+   enforcement and its setting, and the gated sandbox cases (with M6 and D2).
 1. **Graph E2E and docs:** the graph FeatureTest above, then updates to
    [Execution Graphs](@/docs/architecture/execution-graphs.md),
    [Runtime Flow](@/docs/architecture/runtime-flow.md),
@@ -276,23 +364,35 @@ Open decisions for the owner; **(recommended)** marks the suggested option.
     durable cost budget later.
   - Switch graph budgets to cost immediately.
 - **Crash recovery of harness executions.**
-  - **(recommended)** Settle only completed, settled runs from their record; fail the
-    rest as today.
-  - Always fail and retry, ignoring harness records.
+  - **(recommended)** Fail at startup; resume completed task runs under the same
+    execution ID through `resume_execution_graph`, reusing the recorded output and
+    re-running validation and effects. This lets a resume keep an execution ID, which
+    the graph contract must allow.
+  - Always fail and retry with a new execution ID, ignoring harness records.
 - **Approvals in graph nodes.**
   - **(recommended)** Unattended: decide from the permission ceiling, never prompt.
-  - Prompt the user through the session's question flow, pausing the node.
+  - Prompt the user through the session's question flow, pausing the node. A decision
+    timeout (`ApprovalTimeout`) would then end a stuck run and release the session
+    lease, tested under paused time.
 - **Role resolution time.**
-  - **(recommended)** At proposal resolution, so approved snapshots are exact.
+  - **(recommended)** When the snapshot is captured, so approved snapshots are exact.
   - At dispatch, following catalog changes.
 - **Sandbox fallback.**
   - **(recommended)** Fail closed with `SandboxUnavailable`.
   - Fall back to the current unsandboxed executor with a visible warning.
+- **Writer network access.**
+  - **(recommended)** Grant writers network so dependency fetches keep working, with the
+    filesystem still confined.
+  - Deny network and accept the breakage.
+- **Provider-wide concurrency.**
+  - **(recommended)** Per-model caps now; add a provider-wide cap in `ag-harness` only
+    if rate limits show it is needed.
+  - Add a provider-wide cap before integration.
 
 Risks:
 
-- **Provider cap starvation.** A low per-provider cap can hold worker slots and Env
-  leases while nodes wait. Mitigate with default caps above worker capacity and a
+- **Cap starvation.** A low per-model cap can hold worker slots and Env leases while
+  nodes wait. Mitigate with default caps above worker capacity and the cap-starvation
   contract test.
 - **Two budgets drifting.** Call budgets and harness limits could disagree. Keep the
   graph budget authoritative and derive `RunLimits` from node limits only.
