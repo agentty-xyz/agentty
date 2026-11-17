@@ -1,5 +1,7 @@
 //! Unit tests for `Harness` turns and sessions, split by behavior.
 
+#[path = "harness_test/builder_test.rs"]
+mod builder;
 #[path = "harness_test/calibration_test.rs"]
 mod calibration;
 #[path = "harness_test/cancellation_test.rs"]

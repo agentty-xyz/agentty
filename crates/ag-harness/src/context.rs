@@ -163,9 +163,12 @@ pub(crate) const ELIDED_SOURCE_LIMIT_FACTOR: usize = 8;
 ///
 /// Weights are deterministic approximations produced by a [`ContextEstimator`];
 /// they never claim exact provider token counts. Every harness requires one:
-/// pass it to `Harness::new` or derive it from a registration's
-/// [`crate::model::ModelProfile`]. Like the profile, the budget never enters
-/// request fingerprints or stored history. The budget governs
+/// [`crate::HarnessBuilder`] derives it from the model's declared
+/// [`crate::model::Model::profile`] unless
+/// [`crate::HarnessBuilder::context_budget`] overrides it, `Harness::new`
+/// takes it explicitly, and a registration's [`crate::model::ModelProfile`]
+/// supplies it for `Harness::from_registry`. Like the profile, the budget
+/// never enters request fingerprints or stored history. The budget governs
 /// every provider request of a turn: the initial request replays the session's
 /// history in its sticky [`HistoryProjection`], re-projected only once that
 /// history outgrows what the budget leaves for it. Within a turn, requests only

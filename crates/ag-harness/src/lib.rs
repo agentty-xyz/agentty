@@ -7,10 +7,10 @@
 //! # Quickstart
 //!
 //! ```no_run
-//! use std::num::NonZeroU64;
+//! use std::env;
+//! use std::sync::Arc;
 //!
-//! use ag_harness::model::ContextBudget;
-//! use ag_harness::provider::{MUSE_SPARK_1_3, Muse};
+//! use ag_harness::provider::{GPT_6_LUNA, ModelConfiguration, ModelProvider};
 //! use ag_harness::{Harness, OutputSchema};
 //! use serde_json::json;
 //!
@@ -20,9 +20,9 @@
 //!     "properties": { "summary": { "type": "string" } },
 //!     "required": ["summary"],
 //! }))?;
-//! let budget = ContextBudget::new(NonZeroU64::new(128_000).ok_or("budget")?)
-//!     .with_reserved_output(16_384)?;
-//! let harness = Harness::new(Muse::from_env(MUSE_SPARK_1_3)?, budget);
+//! let model = ModelConfiguration::new(ModelProvider::OpenAi, GPT_6_LUNA)
+//!     .client_from_environment(|name| env::var(name))?;
+//! let harness = Harness::builder().model(Arc::new(model)).build()?;
 //!
 //! let outcome = harness.run_once("Summarize Cargo.toml", schema).await?;
 //! println!("{}", outcome.output()["summary"]);
@@ -33,7 +33,8 @@
 //! # Concepts
 //!
 //! - [`Harness`] holds the model, its required context budget, tool defaults,
-//!   repository, and store.
+//!   repository, and store. It is a cheap `Clone + Send + Sync` handle built
+//!   with [`Harness::builder`].
 //! - [`Session`] is a durable conversation: `harness.session(id, schema)`
 //!   creates one and `harness.resume(id)` reopens it in any process.
 //! - A turn is one prompt run to a schema-valid answer. `run_once` and
@@ -126,7 +127,7 @@ mod write_journal;
 
 pub use comparison::{ComparisonBase, ComparisonBaseError};
 pub use error::{ErrorKind, HarnessError, RunError};
-pub use harness::{Harness, Session, SessionBuilder};
+pub use harness::{Harness, HarnessBuildError, HarnessBuilder, Session, SessionBuilder};
 pub use input::{ImageContent, ImageMediaType, InputBlock, TurnInput, TurnInputError};
 pub use model::{Model, ModelError};
 pub use policy::ToolPolicy;

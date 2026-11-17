@@ -12,10 +12,10 @@ Structured LLM turns with deny-by-default tools and durable sessions.
 ## Quickstart
 
 ```rust
-use std::num::NonZeroU64;
+use std::env;
+use std::sync::Arc;
 
-use ag_harness::model::ContextBudget;
-use ag_harness::provider::{MUSE_SPARK_1_3, Muse};
+use ag_harness::provider::{GPT_6_LUNA, ModelConfiguration, ModelProvider};
 use ag_harness::{Harness, OutputSchema};
 use serde_json::json;
 
@@ -24,27 +24,40 @@ let schema = OutputSchema::new(json!({
     "properties": { "summary": { "type": "string" } },
     "required": ["summary"],
 }))?;
-let budget = ContextBudget::new(NonZeroU64::new(128_000).ok_or("budget")?)
-    .with_reserved_output(16_384)?;
-let harness = Harness::new(Muse::from_env(MUSE_SPARK_1_3)?, budget);
+let model = ModelConfiguration::new(ModelProvider::OpenAi, GPT_6_LUNA)
+    .client_from_environment(|name| env::var(name))?;
+let harness = Harness::builder().model(Arc::new(model)).build()?;
 
 let outcome = harness.run_once("Summarize Cargo.toml", schema).await?;
 println!("{}", outcome.output()["summary"]);
 ```
 
 Every harness needs a `ContextBudget`: the approximate request weight the model's
-context window allows, in roughly token-sized units. `run_once` keeps no history. For a
-conversation, use a session.
+context window allows, in roughly token-sized units. The builder derives it from the
+model's declared `ModelProfile`: built-in `OpenAI`, `ChatGPT`, and Qwen flash models
+declare one. For other models, set it with `context_budget`. `build` checks only the
+model, the budget, and that allowed repository tools have a repository, and reports a
+failure as a `HarnessError`; storage opens on first session use. `run_once` keeps no
+history. For a conversation, use a session.
+
+A `Harness` is a cheap, `Clone + Send + Sync` handle: clones share one configuration and
+one SQLite connection pool, so one harness can serve many concurrent sessions and turns.
+Separate harnesses or processes may share a SQLite file once it exists, but let one of
+them open a new file first: concurrent first opens can race on schema migration.
+`Harness::new` and `Harness::from_registry` remain available.
 
 ## Sessions
 
 ```rust
 use ag_harness::{Harness, Repository, Tool};
 
-let harness = Harness::new(model, budget)
-    .database("harness.db")
+let harness = Harness::builder()
+    .model(model)
+    .context_budget(budget)
+    .sqlite("harness.db")
     .repository(Repository::new(".", git_executable)?)
-    .allow(Tool::Read);
+    .allow(Tool::Read)
+    .build()?;
 
 let mut session = harness
     .session("review-42", schema)

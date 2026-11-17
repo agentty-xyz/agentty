@@ -121,7 +121,7 @@ async fn handles_capture_configuration_and_isolate_explicit_turn_options() {
         .with_lifecycle_observer(move |event: LifecycleEvent| {
             recorded.lock().expect("events lock").push(event);
         });
-    let old_file_system = Arc::clone(&harness.file_system);
+    let old_file_system = Arc::clone(&harness.inner.file_system);
     let builder = harness
         .session("built", object_schema())
         .system_prompt("captured");
@@ -183,19 +183,25 @@ async fn handles_capture_configuration_and_isolate_explicit_turn_options() {
     let requests = requests.lock().expect("requests lock");
     assert_captured_turn_options(&requests, &snapshots);
     for handle in [&built, &session, &resumed] {
-        assert_eq!(handle.harness.repository, Some(Repository::fixture("old")));
-        assert!(Arc::ptr_eq(&handle.harness.file_system, &old_file_system));
+        assert_eq!(
+            handle.harness.inner.repository,
+            Some(Repository::fixture("old"))
+        );
+        assert!(Arc::ptr_eq(
+            &handle.harness.inner.file_system,
+            &old_file_system
+        ));
         assert_eq!(handle.history.max_bytes, 1024);
     }
     assert_eq!(new_resumed.history.max_bytes, 1024);
     assert_eq!(new_session.history.max_bytes, 1);
     assert_eq!(new_session.history.turns(), []);
     assert_eq!(
-        new_resumed.harness.repository,
+        new_resumed.harness.inner.repository,
         Some(Repository::fixture("new"))
     );
     assert!(!Arc::ptr_eq(
-        &new_resumed.harness.file_system,
+        &new_resumed.harness.inner.file_system,
         &old_file_system
     ));
     assert_eq!(old_events.lock().expect("old events").len(), 16);

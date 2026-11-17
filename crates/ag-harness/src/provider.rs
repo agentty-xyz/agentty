@@ -40,6 +40,7 @@ pub use ag_router::{LocalInventory, LocalModel, LocalServer, LocalServerError, L
 pub use catalog::{
     CostTier, ModelConfiguration, ModelConfigurationError, ModelProvider, ModelProviderParseError,
 };
+pub(crate) use chatgpt::profile as chatgpt_profile;
 pub use chatgpt::{
     AuthFileUnavailable, CHATGPT_AUTH_FILE_ENV, CHATGPT_GPT_5_6_LUNA, CHATGPT_GPT_5_6_SOL,
     CHATGPT_GPT_5_6_TERRA, CHATGPT_GPT_6_1_SOL, CHATGPT_GPT_6_1_TERRA, CHATGPT_GPT_6_ASTRA,
@@ -51,6 +52,7 @@ pub use chatgpt_sign_in::{
 };
 pub use kimi::{KIMI_K2_6, KIMI_K3, KimiConfig};
 pub use muse::{MUSE_SPARK_1_3, MUSE_SPARK_1_3_CONTRIBUTOR, Muse, MuseConfig};
+pub(crate) use openai::profile as openai_profile;
 pub use openai::{
     GPT_5_3_CODEX, GPT_5_6_TERRA, GPT_6_1_SOL, GPT_6_ASTRA, GPT_6_LUNA, OpenAiConfig,
 };
@@ -58,4 +60,5 @@ pub use openai_compatible::{
     DEFAULT_CONTEXT_WINDOW_TOKENS, DEFAULT_MAX_OUTPUT_TOKENS, OPENAI_COMPATIBLE_CONTEXT_WINDOW_ENV,
     OPENAI_COMPATIBLE_MAX_OUTPUT_TOKENS_ENV, OpenAiCompatibleConfig,
 };
+pub(crate) use qwen::profile as qwen_profile;
 pub use qwen::{QWEN_PLUS, QWEN3_7_FLASH, QWEN3_8_FLASH, QWEN3_8_MAX, QwenConfig};

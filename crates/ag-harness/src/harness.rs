@@ -12,17 +12,19 @@ use std::time::Instant;
 
 use serde_json::json;
 use sha2::{Digest, Sha256};
+use thiserror::Error;
 use tokio::sync::OnceCell;
 
 use crate::calibration::ContextCalibration;
 use crate::cancellation::{ControlledTurn, TurnControl};
 use crate::compaction::{self, CompactionSource, MAX_SUMMARY_BYTES, SessionCheckpoint};
 use crate::context::{
-    self, ContextBudget, ContextEstimator, ContextSummaryPolicy, HeuristicContextEstimator,
-    HistoryLimit, HistoryProjection, HistoryTurn, ReplayedHistory,
+    self, ContextBudget, ContextBudgetError, ContextEstimator, ContextSummaryPolicy,
+    HeuristicContextEstimator, HistoryLimit, HistoryProjection, HistoryTurn, ReplayedHistory,
 };
 use crate::effect::Effects;
 use crate::engine::{Engine, EngineFailure, FinishedTurn};
+use crate::error::HarnessError;
 use crate::file_system::{FileSystem, LocalFileSystem};
 use crate::input::{InputBlock, TurnInput};
 use crate::lifecycle::{LifecycleEmitter, LifecycleObserver, TurnErrorType, TurnLifecycle};
@@ -93,22 +95,19 @@ impl Session {
             registration.clone(),
         )
         .await?;
-        self.harness.model = registration.model();
-        self.harness.context_budget = registration.context_budget();
-        self.harness.context_calibration = ContextCalibration::default();
-        self.harness.context_estimator = Arc::new(registration.capabilities().profile.estimator());
-        if self.harness.execution_identity.is_none()
-            || self
-                .harness
-                .model_registration
-                .as_ref()
-                .is_some_and(|previous| {
-                    self.harness.execution_identity.as_ref() == Some(previous.identity())
-                })
+        let config = self.harness.config_mut();
+        config.model = registration.model();
+        config.context_budget = registration.context_budget();
+        config.context_calibration = ContextCalibration::default();
+        config.context_estimator = Arc::new(registration.capabilities().profile.estimator());
+        if config.execution_identity.is_none()
+            || config.model_registration.as_ref().is_some_and(|previous| {
+                config.execution_identity.as_ref() == Some(previous.identity())
+            })
         {
-            self.harness.execution_identity = Some(registration.identity().clone());
+            config.execution_identity = Some(registration.identity().clone());
         }
-        self.harness.model_registration = Some(registration);
+        config.model_registration = Some(registration);
         self.model_generation = generation;
 
         Ok(())
@@ -318,7 +317,7 @@ impl Session {
         Self {
             checkpoint: self.checkpoint.clone(),
             database: Arc::clone(&self.database),
-            harness: self.harness.snapshot(),
+            harness: self.harness.clone(),
             history: SessionHistory::new(self.history.max_bytes),
             id: self.id.clone(),
             model_generation: self.model_generation,
@@ -333,13 +332,13 @@ impl Session {
         input: &TurnInput,
         options: &TurnOptions,
     ) -> Result<HostRequest, SessionError> {
-        let identity = self
-            .harness
+        let config = &self.harness.inner;
+        let identity = config
             .execution_identity
             .as_ref()
             .ok_or(SessionError::ExecutionIdentityRequired)?;
-        let metadata = self.harness.model.metadata();
-        let repository = self.harness.repository.as_ref().map(|repository| {
+        let metadata = config.model.metadata();
+        let repository = config.repository.as_ref().map(|repository| {
             json!({
                 "root": repository.root().as_os_str().as_encoded_bytes(),
                 "git": repository.git_executable().as_os_str().as_encoded_bytes(),
@@ -379,12 +378,12 @@ impl Session {
             },
             "repository": repository,
             "system_prompt": self.system_prompt,
-            "reasoning": self.harness.model_reasoning_effort,
+            "reasoning": config.model_reasoning_effort,
             "execution_identity": identity,
             "model": metadata.as_ref().map(|metadata| (metadata.provider(), metadata.model())),
             "max_history_bytes": self.history.max_bytes,
         });
-        if let Some(registration) = &self.harness.model_registration {
+        if let Some(registration) = &config.model_registration {
             let capabilities = registration.capabilities();
             configuration["model_registration"] = json!({
                 "identity": registration.identity(),
@@ -414,7 +413,7 @@ impl Session {
     ) -> Result<TurnOutcome, SessionError> {
         let started_at = Instant::now();
         let mut turn = if request.is_none() {
-            self.harness.lifecycle.start_turn()
+            self.harness.inner.lifecycle.start_turn()
         } else {
             None
         };
@@ -489,7 +488,7 @@ impl Session {
         self.checkpoint = checkpoint;
         let host_request = request.is_some();
         if host_request {
-            *turn = self.harness.lifecycle.start_turn();
+            *turn = self.harness.inner.lifecycle.start_turn();
         }
         let turn_id = turn.as_ref().map(TurnLifecycle::id);
         self.history.replace(&turns, projection);
@@ -562,7 +561,7 @@ impl Session {
         options: &TurnOptions,
         available_history_weight: u64,
     ) -> (ModelRequest, usize, HistoryActivity, ReplayedHistory) {
-        let estimator = self.harness.context_estimator.as_ref();
+        let estimator = self.harness.inner.context_estimator.as_ref();
         let checkpoint_message = self
             .checkpoint
             .as_ref()
@@ -700,10 +699,11 @@ impl SessionBuilder {
     /// already exists, or the store cannot create the session.
     pub async fn create(self) -> Result<Session, SessionError> {
         let database = self.harness.open_database().await?;
+        let harness_config = &self.harness.inner;
         let config = NewSession::new(self.id, self.schema)
             .with_optional_system_prompt(self.system_prompt)
             .with_registration_identity(
-                self.harness
+                harness_config
                     .model_registration
                     .as_ref()
                     .map(|registration| registration.identity().clone()),
@@ -711,11 +711,11 @@ impl SessionBuilder {
         database
             .create_session(
                 &config,
-                self.harness.model.metadata(),
-                self.harness.max_history_bytes,
+                harness_config.model.metadata(),
+                harness_config.max_history_bytes,
             )
             .await?;
-        let history = SessionHistory::new(self.harness.max_history_bytes);
+        let history = SessionHistory::new(harness_config.max_history_bytes);
 
         Ok(Session {
             checkpoint: None,
@@ -875,7 +875,7 @@ impl<'a> OneShotTurn<'a> {
     ///
     /// The future returns [`TurnError`], including [`TurnError::Cancelled`].
     pub fn start(self) -> ControlledTurn<'a, TurnError> {
-        let harness = self.harness.snapshot();
+        let harness = self.harness.clone();
         let Self { input, options, .. } = self;
 
         ControlledTurn::new(move |control| async move {
@@ -910,30 +910,45 @@ impl<'a> IntoFuture for OneShotTurn<'a> {
 /// structured output.
 /// Session builders and resumed sessions capture this configuration; later
 /// reconfiguration affects only newly obtained handles.
+///
+/// A harness is a cheap, shareable handle: cloning it shares one immutable
+/// configuration, one lazily opened SQLite pool, and one in-memory context
+/// calibration, so a host can hand clones to many concurrent sessions and
+/// turns across tasks. Prefer [`Harness::builder`] for construction; see
+/// [`HarnessBuilder::build`] for what it checks up front.
+#[derive(Clone)]
 pub struct Harness {
-    context_budget: ContextBudget,
-    context_calibration: ContextCalibration,
-    context_estimator: Arc<dyn ContextEstimator>,
-    context_summaries: ContextSummaryPolicy,
-    database: Arc<OnceCell<Database>>,
-    database_path: Option<PathBuf>,
-    execution_identity: Option<ExecutionIdentity>,
-    file_system: Arc<dyn FileSystem>,
-    lifecycle: LifecycleEmitter,
-    max_history_bytes: usize,
-    model: Arc<dyn Model>,
-    model_reasoning_effort: Option<ReasoningEffort>,
-    model_registration: Option<ModelRegistration>,
-    policy: ToolPolicy,
-    repository: Option<Repository>,
-    store: Option<Arc<dyn SessionStore>>,
+    inner: Arc<HarnessConfig>,
 }
 
 impl Harness {
+    /// Starts a model-first harness configuration, checked by
+    /// [`HarnessBuilder::build`].
+    ///
+    /// This is the preferred construction path; [`Self::new`] and
+    /// [`Self::from_registry`] remain available.
+    pub fn builder() -> HarnessBuilder {
+        HarnessBuilder {
+            context_budget: None,
+            context_estimator: None,
+            context_summaries: ContextSummaryPolicy::Disabled,
+            execution_identity: None,
+            file_system: None,
+            lifecycle: LifecycleEmitter::default(),
+            max_history_bytes: None,
+            model: None,
+            model_reasoning_effort: None,
+            policy: ToolPolicy::default(),
+            repository: None,
+            storage: None,
+        }
+    }
+
     /// Creates a deny-by-default harness backed by the local filesystem.
     ///
     /// `context_budget` bounds every provider request of every turn; declare
-    /// it from the model's context window.
+    /// it from the model's context window. Prefer [`Self::builder`], which
+    /// can derive the budget from the model's declared [`Model::profile`].
     pub fn new(model: impl Model + 'static, context_budget: ContextBudget) -> Self {
         Self::from_shared_model(Arc::new(model), context_budget)
     }
@@ -950,18 +965,13 @@ impl Harness {
     /// Returns [`ModelRegistryError::UnknownKey`] for an unregistered key.
     pub fn from_registry(registry: &ModelRegistry, key: &str) -> Result<Self, ModelRegistryError> {
         let registration = registry.resolve(key)?.clone();
-        let mut harness =
-            Self::from_shared_model(registration.model(), registration.context_budget());
-        harness.context_estimator = Arc::new(registration.capabilities().profile.estimator());
-        harness.execution_identity = Some(registration.identity().clone());
-        harness.model_registration = Some(registration);
 
-        Ok(harness)
+        Ok(Self::from_registration(registration))
     }
 
     /// Returns the captured registration, or `None` for direct construction.
     pub fn model_registration(&self) -> Option<&ModelRegistration> {
-        self.model_registration.as_ref()
+        self.inner.model_registration.as_ref()
     }
 
     /// Identifies all execution configuration not captured by explicit options.
@@ -971,7 +981,7 @@ impl Harness {
     /// retains the selected registration in request fingerprints.
     #[must_use]
     pub fn execution_identity(mut self, identity: ExecutionIdentity) -> Self {
-        self.execution_identity = Some(identity);
+        self.config_mut().execution_identity = Some(identity);
 
         self
     }
@@ -983,9 +993,10 @@ impl Harness {
     /// future handles; existing handles retain their shared database.
     #[must_use]
     pub fn database(mut self, path: impl Into<PathBuf>) -> Self {
-        self.store = None;
-        self.database = Arc::new(OnceCell::new());
-        self.database_path = Some(path.into());
+        let config = self.config_mut();
+        config.store = None;
+        config.database = Arc::new(OnceCell::new());
+        config.database_path = Some(path.into());
 
         self
     }
@@ -997,9 +1008,10 @@ impl Harness {
     /// satisfy the atomic lifecycle contract of [`SessionStore`].
     #[must_use]
     pub fn store(mut self, store: Arc<dyn SessionStore>) -> Self {
-        self.store = Some(store);
-        self.database = Arc::new(OnceCell::new());
-        self.database_path = None;
+        let config = self.config_mut();
+        config.store = Some(store);
+        config.database = Arc::new(OnceCell::new());
+        config.database_path = None;
 
         self
     }
@@ -1008,7 +1020,7 @@ impl Harness {
     /// tools.
     #[must_use]
     pub fn repository(mut self, repository: Repository) -> Self {
-        self.repository = Some(repository);
+        self.config_mut().repository = Some(repository);
 
         self
     }
@@ -1018,7 +1030,8 @@ impl Harness {
     /// Explicit turn options replace this default policy completely.
     #[must_use]
     pub fn allow(mut self, tool: Tool) -> Self {
-        self.policy = self.policy.allow(tool);
+        let config = self.config_mut();
+        config.policy = config.policy.allow(tool);
 
         self
     }
@@ -1026,7 +1039,7 @@ impl Harness {
     /// Replaces the local filesystem implementation.
     #[must_use]
     pub fn file_system(mut self, file_system: impl FileSystem + 'static) -> Self {
-        self.file_system = Arc::new(file_system);
+        self.config_mut().file_system = Arc::new(file_system);
 
         self
     }
@@ -1034,9 +1047,10 @@ impl Harness {
     /// Sends metadata-only turn, model, and tool events to `observer`.
     ///
     /// This observer owns model events for requests made through the harness.
+    /// [`HarnessBuilder::lifecycle_observer`] is the preferred spelling.
     #[must_use]
     pub fn with_lifecycle_observer(mut self, observer: impl LifecycleObserver + 'static) -> Self {
-        self.lifecycle = LifecycleEmitter::new(observer);
+        self.config_mut().lifecycle = LifecycleEmitter::new(observer);
 
         self
     }
@@ -1047,7 +1061,7 @@ impl Harness {
     /// native tool-call and tool-result messages are never split.
     #[must_use]
     pub fn max_history_bytes(mut self, max_history_bytes: NonZeroUsize) -> Self {
-        self.max_history_bytes = max_history_bytes.get();
+        self.config_mut().max_history_bytes = max_history_bytes.get();
 
         self
     }
@@ -1055,7 +1069,7 @@ impl Harness {
     /// Sets the reasoning depth for model calls that do not specify one.
     #[must_use]
     pub fn model_reasoning_effort(mut self, reasoning_effort: ReasoningEffort) -> Self {
-        self.model_reasoning_effort = Some(reasoning_effort);
+        self.config_mut().model_reasoning_effort = Some(reasoning_effort);
 
         self
     }
@@ -1070,8 +1084,9 @@ impl Harness {
     /// the estimator discards that calibration.
     #[must_use]
     pub fn context_estimator(mut self, estimator: impl ContextEstimator + 'static) -> Self {
-        self.context_estimator = Arc::new(estimator);
-        self.context_calibration = ContextCalibration::default();
+        let config = self.config_mut();
+        config.context_estimator = Arc::new(estimator);
+        config.context_calibration = ContextCalibration::default();
 
         self
     }
@@ -1086,7 +1101,7 @@ impl Harness {
     /// policy of the harness that built them.
     #[must_use]
     pub fn context_summaries(mut self, policy: ContextSummaryPolicy) -> Self {
-        self.context_summaries = policy;
+        self.config_mut().context_summaries = policy;
 
         self
     }
@@ -1129,7 +1144,7 @@ impl Harness {
     /// the database.
     pub fn session(&self, id: impl Into<String>, schema: OutputSchema) -> SessionBuilder {
         SessionBuilder {
-            harness: self.snapshot(),
+            harness: self.clone(),
             id: id.into(),
             schema,
             system_prompt: None,
@@ -1155,7 +1170,7 @@ impl Harness {
         Ok(Session {
             checkpoint: loaded.checkpoint,
             database,
-            harness: self.snapshot(),
+            harness: self.clone(),
             history,
             id: id.to_string(),
             model_generation: loaded.model_generation,
@@ -1165,24 +1180,23 @@ impl Harness {
     }
 
     fn from_shared_model(model: Arc<dyn Model>, context_budget: ContextBudget) -> Self {
+        Self::from_config(HarnessConfig::new(model, context_budget))
+    }
+
+    fn from_registration(registration: ModelRegistration) -> Self {
+        Self::from_config(HarnessConfig::registered(registration))
+    }
+
+    fn from_config(config: HarnessConfig) -> Self {
         Self {
-            context_budget,
-            context_calibration: ContextCalibration::default(),
-            context_estimator: Arc::new(HeuristicContextEstimator::DEFAULT),
-            context_summaries: ContextSummaryPolicy::Disabled,
-            database: Arc::new(OnceCell::new()),
-            database_path: None,
-            execution_identity: None,
-            file_system: Arc::new(LocalFileSystem),
-            lifecycle: LifecycleEmitter::default(),
-            max_history_bytes: DEFAULT_MAX_HISTORY_BYTES,
-            model,
-            model_reasoning_effort: None,
-            model_registration: None,
-            policy: ToolPolicy::default(),
-            repository: None,
-            store: None,
+            inner: Arc::new(config),
         }
+    }
+
+    /// Returns this handle's configuration for reconfiguration, copying it
+    /// first when other handles share it so they keep their configuration.
+    fn config_mut(&mut self) -> &mut HarnessConfig {
+        Arc::make_mut(&mut self.inner)
     }
 
     async fn run_once_observed(
@@ -1196,7 +1210,7 @@ impl Harness {
         let _effects = effects.retain();
         let request = ModelRequest::new(input, options.schema().clone())
             .with_cache_key(Self::turn_cache_key());
-        let turn = self.lifecycle.start_turn();
+        let turn = self.inner.lifecycle.start_turn();
         let turn_id = turn.as_ref().map(TurnLifecycle::id);
         let mut engine = self.engine(&options);
         engine.effects = effects;
@@ -1223,19 +1237,20 @@ impl Harness {
         input: &TurnInput,
         options: &TurnOptions,
     ) -> Result<u64, TurnError> {
-        let (budget, calibration) = self
+        let config = &self.inner;
+        let (budget, calibration) = config
             .context_calibration
-            .effective_budget(self.context_budget);
+            .effective_budget(config.context_budget);
 
         context::admit_mandatory_content(
-            self.context_estimator.as_ref(),
+            config.context_estimator.as_ref(),
             budget,
             system_prompt,
             input,
             options,
         )
         .map_err(|error| {
-            ContextCalibration::declared_failure(self.context_budget, calibration, error)
+            ContextCalibration::declared_failure(config.context_budget, calibration, error)
         })
     }
 
@@ -1253,7 +1268,7 @@ impl Harness {
             input,
             options.schema().clone(),
         );
-        let turn = self.lifecycle.start_turn();
+        let turn = self.inner.lifecycle.start_turn();
         let turn_id = turn.as_ref().map(TurnLifecycle::id);
         let engine = self.engine(options);
         let result = engine.run(request, turn_id, None).await;
@@ -1286,37 +1301,18 @@ impl Harness {
         }
     }
 
-    fn snapshot(&self) -> Self {
-        Self {
-            context_budget: self.context_budget,
-            context_calibration: self.context_calibration.clone(),
-            context_estimator: Arc::clone(&self.context_estimator),
-            context_summaries: self.context_summaries,
-            database: Arc::clone(&self.database),
-            database_path: self.database_path.clone(),
-            execution_identity: self.execution_identity.clone(),
-            file_system: Arc::clone(&self.file_system),
-            lifecycle: self.lifecycle.clone(),
-            max_history_bytes: self.max_history_bytes,
-            model: Arc::clone(&self.model),
-            model_reasoning_effort: self.model_reasoning_effort,
-            model_registration: self.model_registration.clone(),
-            policy: self.policy,
-            repository: self.repository.clone(),
-            store: self.store.clone(),
-        }
-    }
-
     async fn open_database(&self) -> Result<Arc<dyn SessionStore>, SessionError> {
-        if let Some(store) = &self.store {
+        let config = &self.inner;
+        if let Some(store) = &config.store {
             return Ok(Arc::clone(store));
         }
-        let path = self
+        let path = config
             .database_path
             .as_deref()
             .ok_or(SessionError::StorageRequired)?;
 
-        self.database
+        config
+            .database
             .get_or_try_init(|| Database::open(path))
             .await
             .map(|database| Arc::new(database.clone()) as Arc<dyn SessionStore>)
@@ -1325,6 +1321,7 @@ impl Harness {
     fn validate_session_model(&self, id: &str, loaded: &LoadedSession) -> Result<(), SessionError> {
         if loaded.registration_identity.as_ref()
             != self
+                .inner
                 .model_registration
                 .as_ref()
                 .map(ModelRegistration::identity)
@@ -1340,7 +1337,7 @@ impl Harness {
                 reason: format!("session `{id}` has incomplete model identity"),
             });
         };
-        let metadata = self.model.metadata();
+        let metadata = self.inner.model.metadata();
         let (actual_provider, actual_model) = metadata.as_ref().map_or(
             ("unavailable".to_string(), "unavailable".to_string()),
             |metadata| {
@@ -1364,9 +1361,9 @@ impl Harness {
     }
 
     fn check_input_capability(&self, input: &TurnInput) -> Result<(), TurnError> {
-        self.model.validate_input(input)?;
+        self.inner.model.validate_input(input)?;
         if input.has_images()
-            && let Some(registration) = &self.model_registration
+            && let Some(registration) = &self.inner.model_registration
             && !registration.capabilities().image_input
         {
             return Err(TurnError::Model(ModelError::UnsupportedImageInput {
@@ -1378,23 +1375,311 @@ impl Harness {
     }
 
     fn default_options(&self, schema: OutputSchema) -> TurnOptions {
-        TurnOptions::new(schema, self.policy)
+        TurnOptions::new(schema, self.inner.policy)
     }
 
     fn engine<'a>(&'a self, options: &'a TurnOptions) -> Engine<'a> {
+        let config = &self.inner;
+
         Engine {
-            context_budget: self.context_budget,
-            context_calibration: &self.context_calibration,
-            context_estimator: self.context_estimator.as_ref(),
-            context_summaries: self.context_summaries,
+            context_budget: config.context_budget,
+            context_calibration: &config.context_calibration,
+            context_estimator: config.context_estimator.as_ref(),
+            context_summaries: config.context_summaries,
             effects: Effects::default(),
-            file_system: &self.file_system,
-            lifecycle: &self.lifecycle,
-            model: &self.model,
-            model_reasoning_effort: self.model_reasoning_effort,
+            file_system: &config.file_system,
+            lifecycle: &config.lifecycle,
+            model: &config.model,
+            model_reasoning_effort: config.model_reasoning_effort,
             options,
-            repository: self.repository.as_ref(),
+            repository: config.repository.as_ref(),
         }
+    }
+}
+
+/// Model-first configuration of a [`Harness`].
+///
+/// Start with [`Harness::builder`], select a model with [`Self::model`], and
+/// finish with [`Self::build`]. Each setter replaces its earlier value; unset
+/// options keep the [`Harness::new`] defaults: deny-by-default tools, the
+/// local filesystem, and no store. Registered models still use
+/// [`Harness::from_registry`].
+#[must_use = "a builder does nothing until built"]
+pub struct HarnessBuilder {
+    context_budget: Option<ContextBudget>,
+    context_estimator: Option<Arc<dyn ContextEstimator>>,
+    context_summaries: ContextSummaryPolicy,
+    execution_identity: Option<ExecutionIdentity>,
+    file_system: Option<Arc<dyn FileSystem>>,
+    lifecycle: LifecycleEmitter,
+    max_history_bytes: Option<NonZeroUsize>,
+    model: Option<Arc<dyn Model>>,
+    model_reasoning_effort: Option<ReasoningEffort>,
+    policy: ToolPolicy,
+    repository: Option<Repository>,
+    storage: Option<StorageSource>,
+}
+
+impl HarnessBuilder {
+    /// Selects the model every turn uses.
+    ///
+    /// Without [`Self::context_budget`], the request budget and estimator
+    /// come from the model's declared [`Model::profile`].
+    pub fn model(mut self, model: Arc<dyn Model>) -> Self {
+        self.model = Some(model);
+
+        self
+    }
+
+    /// Bounds every provider request with `context_budget`, overriding the
+    /// budget the model's profile declares.
+    pub fn context_budget(mut self, context_budget: ContextBudget) -> Self {
+        self.context_budget = Some(context_budget);
+
+        self
+    }
+
+    /// Stores durable sessions in the SQLite database at `path`, like
+    /// [`Harness::database`]. Replaces an earlier [`Self::store`].
+    ///
+    /// Clones of the built harness share one lazily opened connection pool.
+    pub fn sqlite(mut self, path: impl Into<PathBuf>) -> Self {
+        self.storage = Some(StorageSource::Sqlite(path.into()));
+
+        self
+    }
+
+    /// Stores durable sessions in a host-provided store, like
+    /// [`Harness::store`]. Replaces an earlier [`Self::sqlite`].
+    pub fn store(mut self, store: Arc<dyn SessionStore>) -> Self {
+        self.storage = Some(StorageSource::Store(store));
+
+        self
+    }
+
+    /// Configures the repository used by tools, like [`Harness::repository`].
+    pub fn repository(mut self, repository: Repository) -> Self {
+        self.repository = Some(repository);
+
+        self
+    }
+
+    /// Allows one built-in tool by default, like [`Harness::allow`].
+    pub fn allow(mut self, tool: Tool) -> Self {
+        self.policy = self.policy.allow(tool);
+
+        self
+    }
+
+    /// Replaces the local filesystem, like [`Harness::file_system`].
+    pub fn file_system(mut self, file_system: impl FileSystem + 'static) -> Self {
+        self.file_system = Some(Arc::new(file_system));
+
+        self
+    }
+
+    /// Sends metadata-only events to `observer`, like
+    /// [`Harness::with_lifecycle_observer`].
+    pub fn lifecycle_observer(mut self, observer: impl LifecycleObserver + 'static) -> Self {
+        self.lifecycle = LifecycleEmitter::new(observer);
+
+        self
+    }
+
+    /// Overrides the retained chat-history payload budget, like
+    /// [`Harness::max_history_bytes`].
+    pub fn max_history_bytes(mut self, max_history_bytes: NonZeroUsize) -> Self {
+        self.max_history_bytes = Some(max_history_bytes);
+
+        self
+    }
+
+    /// Sets the default reasoning depth, like
+    /// [`Harness::model_reasoning_effort`].
+    pub fn model_reasoning_effort(mut self, reasoning_effort: ReasoningEffort) -> Self {
+        self.model_reasoning_effort = Some(reasoning_effort);
+
+        self
+    }
+
+    /// Replaces the content estimator, like [`Harness::context_estimator`],
+    /// including one derived from the model's profile or registration.
+    pub fn context_estimator(mut self, estimator: impl ContextEstimator + 'static) -> Self {
+        self.context_estimator = Some(Arc::new(estimator));
+
+        self
+    }
+
+    /// Selects in-turn round summaries, like [`Harness::context_summaries`].
+    pub fn context_summaries(mut self, policy: ContextSummaryPolicy) -> Self {
+        self.context_summaries = policy;
+
+        self
+    }
+
+    /// Identifies the execution configuration, like
+    /// [`Harness::execution_identity`].
+    pub fn execution_identity(mut self, identity: ExecutionIdentity) -> Self {
+        self.execution_identity = Some(identity);
+
+        self
+    }
+
+    /// Checks the configuration and returns a shareable harness.
+    ///
+    /// `build` checks only that a model is selected, that a budget is set or
+    /// the model declares a valid profile, and that a repository is set when
+    /// the default policy allows a repository tool. Storage is not touched:
+    /// the SQLite database or host store is first opened by a session's
+    /// `create` or `resume`, which reports its failures as [`SessionError`].
+    ///
+    /// # Errors
+    ///
+    /// Returns a [`HarnessError`] of kind [`crate::ErrorKind::Config`]
+    /// wrapping the failed [`HarnessBuildError`] check.
+    pub fn build(self) -> Result<Harness, HarnessError> {
+        let Some(model) = self.model else {
+            return Err(HarnessBuildError::ModelRequired.into());
+        };
+        let repository_tool_allowed = [Tool::Bash, Tool::Read, Tool::Write]
+            .into_iter()
+            .any(|tool| self.policy.allows(tool));
+        if repository_tool_allowed && self.repository.is_none() {
+            return Err(HarnessBuildError::RepositoryRequired.into());
+        }
+        let mut config = Self::direct_config(model, self.context_budget)?;
+        if let Some(context_estimator) = self.context_estimator {
+            config.context_estimator = context_estimator;
+        }
+        if let Some(identity) = self.execution_identity {
+            config.execution_identity = Some(identity);
+        }
+        if let Some(file_system) = self.file_system {
+            config.file_system = file_system;
+        }
+        if let Some(max_history_bytes) = self.max_history_bytes {
+            config.max_history_bytes = max_history_bytes.get();
+        }
+        match self.storage {
+            Some(StorageSource::Sqlite(path)) => config.database_path = Some(path),
+            Some(StorageSource::Store(store)) => config.store = Some(store),
+            None => {}
+        }
+        config.context_summaries = self.context_summaries;
+        config.lifecycle = self.lifecycle;
+        config.model_reasoning_effort = self.model_reasoning_effort;
+        config.policy = self.policy;
+        config.repository = self.repository;
+
+        Ok(Harness::from_config(config))
+    }
+
+    /// Returns the configuration of a directly supplied model, bounded by
+    /// `context_budget` or else by its declared profile, whose estimator it
+    /// adopts.
+    fn direct_config(
+        model: Arc<dyn Model>,
+        context_budget: Option<ContextBudget>,
+    ) -> Result<HarnessConfig, HarnessBuildError> {
+        let profile = model.profile();
+        let context_budget = match (context_budget, profile) {
+            (Some(context_budget), _) => context_budget,
+            (None, Some(profile)) => profile
+                .context_budget()
+                .map_err(HarnessBuildError::InvalidProfile)?,
+            (None, None) => return Err(HarnessBuildError::ContextBudgetRequired),
+        };
+        let mut config = HarnessConfig::new(model, context_budget);
+        if let Some(profile) = profile {
+            config.context_estimator = Arc::new(profile.estimator());
+        }
+
+        Ok(config)
+    }
+}
+
+/// Invalid [`HarnessBuilder`] configuration, reported by
+/// [`HarnessBuilder::build`] inside a [`HarnessError`].
+#[derive(Debug, Error)]
+#[non_exhaustive]
+pub enum HarnessBuildError {
+    /// No model was selected.
+    #[error("harness requires a model; call `model`")]
+    ModelRequired,
+    /// No budget was set and the model declares no context profile.
+    #[error("model declares no context profile; call `context_budget`")]
+    ContextBudgetRequired,
+    /// The model's declared profile leaves no request capacity.
+    #[error("model's declared context profile is invalid")]
+    InvalidProfile(#[source] ContextBudgetError),
+    /// The default policy allows a repository tool but no repository is set.
+    #[error("allowed repository tools require a repository; call `repository`")]
+    RepositoryRequired,
+}
+
+/// Session storage selected on a [`HarnessBuilder`].
+enum StorageSource {
+    /// SQLite database path.
+    Sqlite(PathBuf),
+    /// Host-provided store.
+    Store(Arc<dyn SessionStore>),
+}
+
+/// Configuration shared by clones of one [`Harness`]; a reconfiguring
+/// method copies it first when other handles still share it.
+#[derive(Clone)]
+struct HarnessConfig {
+    context_budget: ContextBudget,
+    context_calibration: ContextCalibration,
+    context_estimator: Arc<dyn ContextEstimator>,
+    context_summaries: ContextSummaryPolicy,
+    database: Arc<OnceCell<Database>>,
+    database_path: Option<PathBuf>,
+    execution_identity: Option<ExecutionIdentity>,
+    file_system: Arc<dyn FileSystem>,
+    lifecycle: LifecycleEmitter,
+    max_history_bytes: usize,
+    model: Arc<dyn Model>,
+    model_reasoning_effort: Option<ReasoningEffort>,
+    model_registration: Option<ModelRegistration>,
+    policy: ToolPolicy,
+    repository: Option<Repository>,
+    store: Option<Arc<dyn SessionStore>>,
+}
+
+impl HarnessConfig {
+    /// Returns the deny-by-default configuration for a directly supplied
+    /// model, backed by the local filesystem.
+    fn new(model: Arc<dyn Model>, context_budget: ContextBudget) -> Self {
+        Self {
+            context_budget,
+            context_calibration: ContextCalibration::default(),
+            context_estimator: Arc::new(HeuristicContextEstimator::DEFAULT),
+            context_summaries: ContextSummaryPolicy::Disabled,
+            database: Arc::new(OnceCell::new()),
+            database_path: None,
+            execution_identity: None,
+            file_system: Arc::new(LocalFileSystem),
+            lifecycle: LifecycleEmitter::default(),
+            max_history_bytes: DEFAULT_MAX_HISTORY_BYTES,
+            model,
+            model_reasoning_effort: None,
+            model_registration: None,
+            policy: ToolPolicy::default(),
+            repository: None,
+            store: None,
+        }
+    }
+
+    /// Returns the configuration for a captured registration: its model,
+    /// budget, profile estimator, and execution identity.
+    fn registered(registration: ModelRegistration) -> Self {
+        let mut config = Self::new(registration.model(), registration.context_budget());
+        config.context_estimator = Arc::new(registration.capabilities().profile.estimator());
+        config.execution_identity = Some(registration.identity().clone());
+        config.model_registration = Some(registration);
+
+        config
     }
 }
 
