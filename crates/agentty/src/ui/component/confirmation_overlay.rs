@@ -59,7 +59,7 @@ impl<'a> ConfirmationOverlay<'a> {
 }
 
 impl Component for ConfirmationOverlay<'_> {
-    fn render(&self, f: &mut Frame, area: Rect) {
+    fn render(&self, frame: &mut Frame, area: Rect) {
         let option_width = self.first_option_label.chars().count()
             + self.second_option_label.chars().count()
             + OPTION_LAYOUT_CHROME;
@@ -104,8 +104,8 @@ impl Component for ConfirmationOverlay<'_> {
         .alignment(Alignment::Center)
         .block(overlay::overlay_block(self.title, palette::warning()));
 
-        overlay::clear_popup_area(f, popup_area);
-        f.render_widget(paragraph, popup_area);
+        overlay::clear_popup_area(frame, popup_area);
+        frame.render_widget(paragraph, popup_area);
     }
 }
 

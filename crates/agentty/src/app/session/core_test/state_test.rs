@@ -194,7 +194,7 @@ async fn test_load_sessions_uses_persisted_size_for_non_terminal_status() {
         .iter()
         .find(|session| session.id == session_id)
         .expect("missing persisted session");
-    assert_eq!(reloaded_session.size, SessionSize::S);
+    assert_eq!(reloaded_session.size, SessionSize::Small);
     assert_eq!(reloaded_session.stats.added_lines, 8);
     assert_eq!(reloaded_session.stats.deleted_lines, 3);
     assert_eq!(db_session.added_lines, 8);
@@ -265,7 +265,7 @@ async fn test_load_sessions_uses_persisted_size_for_done_status() {
         .find(|session| session.id == session_id)
         .expect("missing persisted session");
     assert_eq!(reloaded_session.status, Status::Done);
-    assert_eq!(reloaded_session.size, SessionSize::L);
+    assert_eq!(reloaded_session.size, SessionSize::Large);
     assert_eq!(reloaded_session.stats.added_lines, 21);
     assert_eq!(reloaded_session.stats.deleted_lines, 9);
     assert_eq!(db_session.added_lines, 21);
@@ -488,7 +488,7 @@ async fn test_reply_turn_completion_persists_session_size() {
         .iter()
         .find(|db_session| db_session.id == session_id)
         .expect("missing persisted session");
-    assert_eq!(session.size, SessionSize::S);
+    assert_eq!(session.size, SessionSize::Small);
     assert_eq!(session.stats.added_lines, 20);
     assert_eq!(session.stats.deleted_lines, 0);
     assert_eq!(db_session.added_lines, 20);

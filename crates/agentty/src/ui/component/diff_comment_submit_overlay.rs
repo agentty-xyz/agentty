@@ -96,7 +96,7 @@ impl<'a> DiffCommentSubmitOverlay<'a> {
 }
 
 impl Component for DiffCommentSubmitOverlay<'_> {
-    fn render(&self, f: &mut Frame, area: Rect) {
+    fn render(&self, frame: &mut Frame, area: Rect) {
         let (popup_area, preview_lines) = self.popup_area_and_preview(area);
         let block = overlay::overlay_block(OVERLAY_TITLE, palette::warning());
         let inner_area = block.inner(popup_area);
@@ -111,10 +111,10 @@ impl Component for DiffCommentSubmitOverlay<'_> {
         let preview_paragraph =
             Paragraph::new(preview_lines).style(Style::default().fg(palette::text()));
 
-        overlay::clear_popup_area(f, popup_area);
-        f.render_widget(block, popup_area);
-        f.render_widget(preview_paragraph, preview_area);
-        f.render_widget(Paragraph::new(self.option_line()), option_area);
+        overlay::clear_popup_area(frame, popup_area);
+        frame.render_widget(block, popup_area);
+        frame.render_widget(preview_paragraph, preview_area);
+        frame.render_widget(Paragraph::new(self.option_line()), option_area);
     }
 }
 

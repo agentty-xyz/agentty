@@ -269,7 +269,7 @@ impl<'a> InfoOverlay<'a> {
 }
 
 impl Component for InfoOverlay<'_> {
-    fn render(&self, f: &mut Frame, area: Rect) {
+    fn render(&self, frame: &mut Frame, area: Rect) {
         let width = self.popup_width(area);
         let message_width = overlay::overlay_content_width(width);
         let border_color = self.border_color();
@@ -288,12 +288,12 @@ impl Component for InfoOverlay<'_> {
             height,
         );
 
-        overlay::clear_popup_area(f, popup_area);
-        f.render_widget(paragraph, popup_area);
+        overlay::clear_popup_area(frame, popup_area);
+        frame.render_widget(paragraph, popup_area);
 
         if self.is_loading {
             TachyonLoaderEffect::apply_to_last_glyph(
-                f.buffer_mut(),
+                frame.buffer_mut(),
                 popup_area,
                 self.spinner_frame,
             );

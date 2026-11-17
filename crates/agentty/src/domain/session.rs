@@ -42,11 +42,11 @@ pub enum SessionSize {
     #[default]
     Xs,
     /// Between 11 and 30 changed lines.
-    S,
+    Small,
     /// Between 31 and 80 changed lines.
-    M,
+    Medium,
     /// Between 81 and 200 changed lines.
-    L,
+    Large,
     /// Between 201 and 500 changed lines.
     Xl,
     /// More than 500 changed lines.
@@ -57,9 +57,9 @@ impl SessionSize {
     /// Ordered list of all session size buckets from smallest to largest.
     pub const ALL: [SessionSize; 6] = [
         SessionSize::Xs,
-        SessionSize::S,
-        SessionSize::M,
-        SessionSize::L,
+        SessionSize::Small,
+        SessionSize::Medium,
+        SessionSize::Large,
         SessionSize::Xl,
         SessionSize::Xxl,
     ];
@@ -75,9 +75,9 @@ impl SessionSize {
     fn from_changed_line_count(changed_line_count: usize) -> Self {
         match changed_line_count {
             0..=10 => SessionSize::Xs,
-            11..=30 => SessionSize::S,
-            31..=80 => SessionSize::M,
-            81..=200 => SessionSize::L,
+            11..=30 => SessionSize::Small,
+            31..=80 => SessionSize::Medium,
+            81..=200 => SessionSize::Large,
             201..=500 => SessionSize::Xl,
             _ => SessionSize::Xxl,
         }
@@ -87,9 +87,9 @@ impl SessionSize {
     pub fn label(self) -> &'static str {
         match self {
             SessionSize::Xs => "XS",
-            SessionSize::S => "S",
-            SessionSize::M => "M",
-            SessionSize::L => "L",
+            SessionSize::Small => "S",
+            SessionSize::Medium => "M",
+            SessionSize::Large => "L",
             SessionSize::Xl => "XL",
             SessionSize::Xxl => "XXL",
         }
@@ -153,9 +153,9 @@ impl FromStr for SessionSize {
     fn from_str(s: &str) -> Result<Self, Self::Err> {
         match s {
             "XS" | "Xs" | "xs" => Ok(SessionSize::Xs),
-            "S" | "s" => Ok(SessionSize::S),
-            "M" | "m" => Ok(SessionSize::M),
-            "L" | "l" => Ok(SessionSize::L),
+            "S" | "s" => Ok(SessionSize::Small),
+            "M" | "m" => Ok(SessionSize::Medium),
+            "L" | "l" => Ok(SessionSize::Large),
             "XL" | "Xl" | "xl" => Ok(SessionSize::Xl),
             "XXL" | "Xxl" | "xxl" => Ok(SessionSize::Xxl),
             _ => Err(format!("Unknown session size: {s}")),

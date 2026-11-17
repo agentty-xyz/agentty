@@ -149,9 +149,9 @@ fn size_color_uses_expected_palette() {
     let _theme_scope = scoped_active_theme(ColorTheme::Current);
     let test_cases = [
         (SessionSize::Xs, palette::success()),
-        (SessionSize::S, palette::success_soft()),
-        (SessionSize::M, palette::warning()),
-        (SessionSize::L, palette::warning_soft()),
+        (SessionSize::Small, palette::success_soft()),
+        (SessionSize::Medium, palette::warning()),
+        (SessionSize::Large, palette::warning_soft()),
         (SessionSize::Xl, palette::danger_soft()),
         (SessionSize::Xxl, palette::danger()),
     ];

@@ -4,7 +4,6 @@ Runtime composition, harness dispatch, and provider lifecycle.
 
 ## Boundaries
 
-- Only `ag-worker` may depend on this crate. Only this crate may depend on `ag-agent`.
 - Use `ag-contracts` for shared execution interfaces and data. Keep frontend policy,
   mailbox scheduling, and persistence out of this crate.
 - Construct concrete adapters here and retain them behind runtime objects. Never return

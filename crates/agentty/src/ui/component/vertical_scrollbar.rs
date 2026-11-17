@@ -49,7 +49,7 @@ impl VerticalScrollbar {
 }
 
 impl Component for VerticalScrollbar {
-    fn render(&self, f: &mut Frame, area: Rect) {
+    fn render(&self, frame: &mut Frame, area: Rect) {
         if !self.has_scrollable_overflow(area.height) {
             return;
         }
@@ -76,7 +76,7 @@ impl Component for VerticalScrollbar {
             scrollbar_lines.push(Line::from(Span::styled(symbol, symbol_style)));
         }
 
-        f.render_widget(Paragraph::new(scrollbar_lines), area);
+        frame.render_widget(Paragraph::new(scrollbar_lines), area);
     }
 }
 

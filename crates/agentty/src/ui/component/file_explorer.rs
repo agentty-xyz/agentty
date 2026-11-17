@@ -515,7 +515,7 @@ impl FileExplorer {
 }
 
 impl Component for FileExplorer {
-    fn render(&self, f: &mut Frame, area: Rect) {
+    fn render(&self, frame: &mut Frame, area: Rect) {
         let content_width = usize::from(
             area.width
                 .saturating_sub(FILE_EXPLORER_HORIZONTAL_BORDER_WIDTH),
@@ -546,7 +546,7 @@ impl Component for FileExplorer {
         let mut state = ListState::default();
         state.select(Some(self.selected_index));
 
-        f.render_stateful_widget(list, area, &mut state);
+        frame.render_stateful_widget(list, area, &mut state);
     }
 }
 

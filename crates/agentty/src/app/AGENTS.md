@@ -23,8 +23,7 @@ presentation-state refreshes.
   Compose worker configuration and host services here; runtime factories and concrete
   adapters remain behind the worker boundary. Keep workflow policy in hosts.
 - Import shared execution contracts from `ag-contracts` and selections from
-  `ag-session`. Never depend directly on `ag-runtime` or `ag-agent`, including in test
-  dependencies. Use worker test facilities to inject scripted providers.
+  `ag-session`. Use worker test facilities to inject scripted providers.
 - Await utility children directly through `RunClient`, without queuing them behind their
   waiting parent; the worker bounds utility concurrency.
 - Capture `RunScope` with `scoped_client` before spawning background work. Preserve

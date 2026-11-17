@@ -233,14 +233,14 @@ impl<'a> ChatInput<'a> {
 
     /// Clears an input rectangle and optionally renders an empty styled block
     /// so overlay-hosted input cells keep semantic colors.
-    fn clear_area(f: &mut Frame, area: Rect, clear_style: Option<Style>) {
-        f.render_widget(Clear, area);
+    fn clear_area(frame: &mut Frame, area: Rect, clear_style: Option<Style>) {
+        frame.render_widget(Clear, area);
 
         let Some(clear_style) = clear_style else {
             return;
         };
 
-        f.render_widget(Block::default().style(clear_style), area);
+        frame.render_widget(Block::default().style(clear_style), area);
     }
 
     /// Renders the suggestion dropdown using the shared chat input chrome.
@@ -248,7 +248,7 @@ impl<'a> ChatInput<'a> {
     /// This method is also used by the question-mode panel to render the
     /// at-mention file dropdown as an overlay above the input area.
     pub(crate) fn render_suggestion_dropdown(
-        f: &mut Frame,
+        frame: &mut Frame,
         area: Rect,
         suggestion_list: &SuggestionList,
     ) {
@@ -301,12 +301,12 @@ impl<'a> ChatInput<'a> {
             .block(Self::dropdown_block(&suggestion_list.title))
             .scroll((u16::try_from(first_visible_row).unwrap_or(u16::MAX), 0));
 
-        Self::clear_area(f, area, None);
-        f.render_widget(dropdown, area);
+        Self::clear_area(frame, area, None);
+        frame.render_widget(dropdown, area);
     }
 
     /// Render the prompt input with an internally scrollable viewport.
-    fn render_input(&self, f: &mut Frame, area: Rect) {
+    fn render_input(&self, frame: &mut Frame, area: Rect) {
         let block = self.input_block(area.width);
 
         if self.input.is_empty() {
@@ -330,10 +330,10 @@ impl<'a> ChatInput<'a> {
             let widget = Paragraph::new(display_lines)
                 .style(Self::input_text_style())
                 .block(block);
-            Self::clear_area(f, area, self.clear_style);
-            f.render_widget(widget, area);
+            Self::clear_area(frame, area, self.clear_style);
+            frame.render_widget(widget, area);
             if self.active {
-                f.set_cursor_position(placeholder_cursor_position(area));
+                frame.set_cursor_position(placeholder_cursor_position(area));
             }
 
             return;
@@ -353,10 +353,10 @@ impl<'a> ChatInput<'a> {
             .scroll((scroll_offset, 0))
             .block(block);
 
-        Self::clear_area(f, area, self.clear_style);
-        f.render_widget(widget, area);
+        Self::clear_area(frame, area, self.clear_style);
+        frame.render_widget(widget, area);
         if self.active {
-            f.set_cursor_position(input_cursor_position(area, cursor_x, cursor_row));
+            frame.set_cursor_position(input_cursor_position(area, cursor_x, cursor_row));
         }
     }
 
@@ -371,20 +371,20 @@ impl<'a> ChatInput<'a> {
 }
 
 impl Component for ChatInput<'_> {
-    fn render(&self, f: &mut Frame, area: Rect) {
+    fn render(&self, frame: &mut Frame, area: Rect) {
         if let Some(suggestion_list) = &self.suggestion_list {
             let dropdown_height = suggestion_dropdown_height(suggestion_list.items.len());
             let sections = Layout::default()
                 .constraints([Constraint::Length(dropdown_height), Constraint::Min(0)])
                 .split(area);
 
-            Self::render_suggestion_dropdown(f, sections[0], suggestion_list);
-            self.render_input(f, sections[1]);
+            Self::render_suggestion_dropdown(frame, sections[0], suggestion_list);
+            self.render_input(frame, sections[1]);
 
             return;
         }
 
-        self.render_input(f, area);
+        self.render_input(frame, area);
     }
 }
 

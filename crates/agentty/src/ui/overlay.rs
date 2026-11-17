@@ -68,13 +68,13 @@ pub(crate) fn sync_popup_message(
 
 /// Clears popup-local cells and immediately reapplies the overlay surface
 /// style so modal content never falls back to terminal-default colors.
-pub(crate) fn clear_popup_area(f: &mut Frame, area: Rect) {
+pub(crate) fn clear_popup_area(frame: &mut Frame, area: Rect) {
     let popup_style = Style::default()
         .fg(palette::text())
         .bg(palette::surface_overlay());
 
-    f.render_widget(Clear, area);
-    f.render_widget(Block::default().style(popup_style), area);
+    frame.render_widget(Clear, area);
+    frame.render_widget(Block::default().style(popup_style), area);
 }
 
 /// Returns a centered popup rectangle constrained by bounds and minimum size.

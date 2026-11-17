@@ -14,8 +14,7 @@ before dependents in the publish plan.
 - Define all dependencies, including development and build dependencies, under
   `[workspace.dependencies]` in the root `Cargo.toml`. Member manifests use
   `workspace = true` for shared package metadata and dependencies.
-- Use singular Rust file names. For nested modules, prefer `module.rs` plus `module/`;
-  do not add `mod.rs`.
+- Use singular Rust file names.
 - A `module.rs` paired with `module/` is router-only: declarations and re-exports, with
   no runtime types, constants, functions, or implementations.
 
@@ -30,8 +29,7 @@ before dependents in the publish plan.
 - Put an inherent `impl` directly below its struct and trait implementations after it.
   Keep helpers used by one type inside that type's `impl`.
 - Put public struct fields before private fields and alphabetize within each group.
-- Use descriptive names; avoid single-letter names and near-identical names in one
-  scope.
+- Use descriptive names; avoid near-identical names in one scope.
 - Separate logical blocks with blank lines, including before explicit or implicit
   returns except in a one-expression block.
 - Introduce abstractions only for reuse, reduced complexity, or testability. Inline
@@ -45,10 +43,9 @@ before dependents in the publish plan.
 - In `*_test.rs` files, explicitly import the modules, items, traits, and fixtures each
   file uses at file scope. Use `crate::` paths to the owning production module, or named
   `super::` imports for private items in the parent module. Import sibling fixtures
-  through their support module. Never use glob imports, including `use super::*;` or
-  fixture globs. Test-module routers declare child modules; each child imports its own
-  dependencies instead of relying on imports forwarded through the router. Preserve
-  production visibility when importing private internals.
+  through their support module. Test-module routers declare child modules; each child
+  imports its own dependencies instead of relying on imports forwarded through the
+  router. Preserve production visibility when importing private internals.
 - Give every touched test explicit `// Arrange`, `// Act`, and `// Assert` sections;
   combine labels only when that improves a very small test.
 - Keep production and test code in separate files. Load sibling `*_test.rs` unit suites

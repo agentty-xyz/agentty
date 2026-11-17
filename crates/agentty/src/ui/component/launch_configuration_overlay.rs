@@ -89,7 +89,7 @@ impl<'a> LaunchConfigurationOverlay<'a> {
 }
 
 impl Component for LaunchConfigurationOverlay<'_> {
-    fn render(&self, f: &mut Frame, area: Rect) {
+    fn render(&self, frame: &mut Frame, area: Rect) {
         let popup_area = OVERLAY_DIMENSIONS.centered_popup_area(area);
         let command_width = overlay::overlay_content_width(popup_area.width)
             .saturating_sub(1)
@@ -104,8 +104,8 @@ impl Component for LaunchConfigurationOverlay<'_> {
                 palette::accent(),
             ));
 
-        overlay::clear_popup_area(f, popup_area);
-        f.render_widget(paragraph, popup_area);
+        overlay::clear_popup_area(frame, popup_area);
+        frame.render_widget(paragraph, popup_area);
     }
 }
 

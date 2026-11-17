@@ -11,8 +11,8 @@ Headless serial scheduling, cancellation, heartbeat coordination, and restart re
 
 ## Integration
 
-- Import shared data and interfaces from `ag-contracts`. Only this crate depends on
-  `ag-runtime`; applications receive worker handles and configuration.
+- Import shared data and interfaces from `ag-contracts`. Applications receive worker
+  handles and configuration.
 - Keep raw runtime adapters inside `SessionRunClient` and utility execution. Hosts
   submit model work through worker clients; `ag-runtime` alone constructs adapters.
 - Use `SessionWorkerHandle` for mailbox creation and task ownership. Implement

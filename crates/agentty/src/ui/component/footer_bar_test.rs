@@ -81,8 +81,8 @@ fn test_footer_bar_render_skips_zero_width_area() {
 
     // Act
     terminal
-        .draw(|f| {
-            Component::render(&footer, f, Rect::new(0, 0, 0, 1));
+        .draw(|frame| {
+            Component::render(&footer, frame, Rect::new(0, 0, 0, 1));
         })
         .expect("failed to draw");
 
@@ -106,9 +106,9 @@ fn test_footer_bar_render_omits_branch_that_does_not_fit() {
 
     // Act
     terminal
-        .draw(|f| {
-            let area = f.area();
-            Component::render(&footer, f, area);
+        .draw(|frame| {
+            let area = frame.area();
+            Component::render(&footer, frame, area);
         })
         .expect("failed to draw");
 
@@ -133,9 +133,9 @@ fn test_footer_bar_render_hides_workspace_context() {
 
     // Act
     terminal
-        .draw(|f| {
-            let area = f.area();
-            Component::render(&footer, f, area);
+        .draw(|frame| {
+            let area = frame.area();
+            Component::render(&footer, frame, area);
         })
         .expect("failed to draw");
 
@@ -167,9 +167,9 @@ fn test_footer_bar_render_with_git_branch() {
 
     // Act
     terminal
-        .draw(|f| {
-            let area = f.area();
-            Component::render(&footer, f, area);
+        .draw(|frame| {
+            let area = frame.area();
+            Component::render(&footer, frame, area);
         })
         .expect("failed to draw");
 
@@ -194,9 +194,9 @@ fn test_footer_bar_render_uses_path_color_for_branch_text() {
 
     // Act
     terminal
-        .draw(|f| {
-            let area = f.area();
-            Component::render(&footer, f, area);
+        .draw(|frame| {
+            let area = frame.area();
+            Component::render(&footer, frame, area);
         })
         .expect("failed to draw");
 
@@ -222,9 +222,9 @@ fn test_footer_bar_render_with_git_status() {
 
     // Act
     terminal
-        .draw(|f| {
-            let area = f.area();
-            Component::render(&footer, f, area);
+        .draw(|frame| {
+            let area = frame.area();
+            Component::render(&footer, frame, area);
         })
         .expect("failed to draw");
 
@@ -247,9 +247,9 @@ fn test_footer_bar_render_with_git_upstream_reference() {
 
     // Act
     terminal
-        .draw(|f| {
-            let area = f.area();
-            Component::render(&footer, f, area);
+        .draw(|frame| {
+            let area = frame.area();
+            Component::render(&footer, frame, area);
         })
         .expect("failed to draw");
 
@@ -274,9 +274,9 @@ fn test_footer_bar_render_with_base_and_remote_statuses() {
 
     // Act
     terminal
-        .draw(|f| {
-            let area = f.area();
-            Component::render(&footer, f, area);
+        .draw(|frame| {
+            let area = frame.area();
+            Component::render(&footer, frame, area);
         })
         .expect("failed to draw");
 
@@ -300,9 +300,9 @@ fn test_footer_bar_render_with_base_and_local_statuses_without_upstream() {
 
     // Act
     terminal
-        .draw(|f| {
-            let area = f.area();
-            Component::render(&footer, f, area);
+        .draw(|frame| {
+            let area = frame.area();
+            Component::render(&footer, frame, area);
         })
         .expect("failed to draw");
 
@@ -324,9 +324,9 @@ fn test_footer_bar_render_without_git_branch() {
 
     // Act
     terminal
-        .draw(|f| {
-            let area = f.area();
-            Component::render(&footer, f, area);
+        .draw(|frame| {
+            let area = frame.area();
+            Component::render(&footer, frame, area);
         })
         .expect("failed to draw");
 
@@ -348,9 +348,9 @@ fn test_footer_bar_render_shows_git_status_when_unicode_width_exactly_fits() {
 
     // Act
     terminal
-        .draw(|f| {
-            let area = f.area();
-            Component::render(&footer, f, area);
+        .draw(|frame| {
+            let area = frame.area();
+            Component::render(&footer, frame, area);
         })
         .expect("failed to draw");
 
@@ -374,15 +374,15 @@ fn test_footer_bar_render_clears_stale_branch_cells_on_redraw() {
 
     // Act
     terminal
-        .draw(|f| {
-            let area = f.area();
-            Component::render(&footer_with_branch, f, area);
+        .draw(|frame| {
+            let area = frame.area();
+            Component::render(&footer_with_branch, frame, area);
         })
         .expect("failed to draw");
     terminal
-        .draw(|f| {
-            let area = f.area();
-            Component::render(&footer_without_branch, f, area);
+        .draw(|frame| {
+            let area = frame.area();
+            Component::render(&footer_without_branch, frame, area);
         })
         .expect("failed to draw");
 
@@ -406,9 +406,9 @@ fn test_footer_bar_render_keeps_one_space_after_branch_name() {
 
     // Act
     terminal
-        .draw(|f| {
-            let area = f.area();
-            Component::render(&footer, f, area);
+        .draw(|frame| {
+            let area = frame.area();
+            Component::render(&footer, frame, area);
         })
         .expect("failed to draw");
 

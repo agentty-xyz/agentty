@@ -50,7 +50,7 @@ impl Tabs {
 impl Component for Tabs {
     /// Renders the tabs and right-aligns the process stats in the space left
     /// beside them. Tabs keep priority on narrow terminals.
-    fn render(&self, f: &mut Frame, area: Rect) {
+    fn render(&self, frame: &mut Frame, area: Rect) {
         let line = Line::from(tab_spans(self.current_tab));
         let block = Block::default()
             .borders(Borders::BOTTOM)
@@ -61,13 +61,13 @@ impl Component for Tabs {
             usize::from(inner_area.width).saturating_sub(line.width() + PROCESS_STATS_GAP);
         let stats = process_stats_label(self.process_resources, stats_width);
 
-        f.render_widget(Paragraph::new(line).block(block), area);
+        frame.render_widget(Paragraph::new(line).block(block), area);
         if let Some(stats) = stats
             && inner_area.height > 0
         {
             let stats_line = Line::styled(stats, Style::default().fg(style::palette::text_muted()))
                 .right_aligned();
-            f.render_widget(
+            frame.render_widget(
                 Paragraph::new(stats_line),
                 Rect {
                     height: 1,

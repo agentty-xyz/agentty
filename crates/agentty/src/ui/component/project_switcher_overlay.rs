@@ -150,7 +150,7 @@ impl<'a> ProjectSwitcherOverlay<'a> {
 }
 
 impl Component for ProjectSwitcherOverlay<'_> {
-    fn render(&self, f: &mut Frame, area: Rect) {
+    fn render(&self, frame: &mut Frame, area: Rect) {
         let popup_area = self.popup_area(area);
         let label_width = overlay::overlay_content_width(popup_area.width)
             .saturating_sub(ACTIVE_COUNT_WIDTH + 3)
@@ -159,8 +159,8 @@ impl Component for ProjectSwitcherOverlay<'_> {
             .alignment(Alignment::Left)
             .block(overlay::overlay_block("Projects", palette::accent()));
 
-        overlay::clear_popup_area(f, popup_area);
-        f.render_widget(paragraph, popup_area);
+        overlay::clear_popup_area(frame, popup_area);
+        frame.render_widget(paragraph, popup_area);
     }
 }
 

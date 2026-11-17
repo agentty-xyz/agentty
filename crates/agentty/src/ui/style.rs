@@ -464,9 +464,9 @@ pub fn status_color(status: Status) -> Color {
 pub fn size_color(size: SessionSize) -> Color {
     match size {
         SessionSize::Xs => palette::success(),
-        SessionSize::S => palette::success_soft(),
-        SessionSize::M => palette::warning(),
-        SessionSize::L => palette::warning_soft(),
+        SessionSize::Small => palette::success_soft(),
+        SessionSize::Medium => palette::warning(),
+        SessionSize::Large => palette::warning_soft(),
         SessionSize::Xl => palette::danger_soft(),
         SessionSize::Xxl => palette::danger(),
     }

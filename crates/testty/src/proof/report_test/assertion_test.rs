@@ -136,11 +136,17 @@ fn soft_assertions_attach_each_failure_to_active_capture() {
     assert!(!assertions[0].description.contains('\n'));
     assert!(!assertions[1].description.contains('\n'));
     assert!(matches!(
-        assertions[0].failure.as_deref().map(|f| &f.expected),
+        assertions[0]
+            .failure
+            .as_deref()
+            .map(|failure| &failure.expected),
         Some(Expected::TextInRegion { .. })
     ));
     assert!(matches!(
-        assertions[1].failure.as_deref().map(|f| &f.expected),
+        assertions[1]
+            .failure
+            .as_deref()
+            .map(|failure| &failure.expected),
         Some(Expected::NotVisible { .. })
     ));
 }

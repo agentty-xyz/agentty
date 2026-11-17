@@ -46,7 +46,7 @@ impl<'a> SettingsPage<'a> {
 impl Page for SettingsPage<'_> {
     /// Renders the global and project settings tables with compact tab-page
     /// spacing.
-    fn render(&mut self, f: &mut Frame, area: Rect) {
+    fn render(&mut self, frame: &mut Frame, area: Rect) {
         let main_area = layout::tab_page_area(area);
 
         let selected_style = style::selection_style();
@@ -102,12 +102,12 @@ impl Page for SettingsPage<'_> {
 
         let mut global_table_state = global_table_state;
         let mut project_table_state = project_table_state;
-        f.render_stateful_widget(global_table, table_chunks[0], &mut global_table_state);
-        f.render_stateful_widget(project_table, table_chunks[1], &mut project_table_state);
+        frame.render_stateful_widget(global_table, table_chunks[0], &mut global_table_state);
+        frame.render_stateful_widget(project_table, table_chunks[1], &mut project_table_state);
 
         if let Some(selector_dropdown) = &self.snapshot.selector_dropdown {
             render_settings_selector_dropdown(
-                f,
+                frame,
                 main_area,
                 &table_chunks,
                 global_row_count,
@@ -119,7 +119,7 @@ impl Page for SettingsPage<'_> {
             component::launch_configuration_list_editor::LaunchConfigurationListEditor::new(
                 launch_configuration_editor,
             )
-            .render(f, main_area);
+            .render(frame, main_area);
         }
     }
 }
@@ -184,7 +184,7 @@ fn settings_name_column_width(table_width: u16, sections: &[&[(&'static str, Str
 /// Renders the open settings selector dropdown over the active settings
 /// section.
 fn render_settings_selector_dropdown(
-    f: &mut Frame,
+    frame: &mut Frame,
     main_area: Rect,
     table_chunks: &[Rect],
     global_row_count: usize,
@@ -207,8 +207,8 @@ fn render_settings_selector_dropdown(
             style::palette::accent(),
         ));
 
-    overlay::clear_popup_area(f, popup_area);
-    f.render_widget(dropdown, popup_area);
+    overlay::clear_popup_area(frame, popup_area);
+    frame.render_widget(dropdown, popup_area);
 }
 
 /// Calculates the dropdown panel area from the selected row and section.

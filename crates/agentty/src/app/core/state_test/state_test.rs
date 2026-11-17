@@ -205,11 +205,11 @@ fn app_event_batch_collect_event_keeps_latest_same_session_updates() {
         session_id: "session-a".into(),
     });
     event_batch.collect_event(AppEvent::SessionDiffStatsUpdated {
-        diff_stats: known_session_diff_stats(1, 2, SessionSize::S),
+        diff_stats: known_session_diff_stats(1, 2, SessionSize::Small),
         session_id: "session-a".into(),
     });
     event_batch.collect_event(AppEvent::SessionDiffStatsUpdated {
-        diff_stats: known_session_diff_stats(8, 13, SessionSize::L),
+        diff_stats: known_session_diff_stats(8, 13, SessionSize::Large),
         session_id: "session-a".into(),
     });
     event_batch.collect_event(AppEvent::SessionTitleGenerationFinished {
@@ -259,7 +259,7 @@ fn app_event_batch_collect_event_keeps_latest_same_session_updates() {
     );
     assert_eq!(
         event_batch.session_diff_stats_updates.get("session-a"),
-        Some(&known_session_diff_stats(8, 13, SessionSize::L))
+        Some(&known_session_diff_stats(8, 13, SessionSize::Large))
     );
     assert_eq!(
         event_batch.session_update_versions.get("session-a"),

@@ -33,13 +33,13 @@ pub struct SessionReviewSnapshot<'a> {
 /// A trait for UI pages that enforces a standard rendering interface.
 pub trait Page {
     /// Renders a page in the provided frame and area.
-    fn render(&mut self, f: &mut Frame, area: Rect);
+    fn render(&mut self, frame: &mut Frame, area: Rect);
 }
 
 /// A trait for UI components that enforces a standard rendering interface.
 pub trait Component {
     /// Renders a component in the provided frame and area.
-    fn render(&self, f: &mut Frame, area: Rect);
+    fn render(&self, frame: &mut Frame, area: Rect);
 }
 
 /// Immutable data required to draw a single UI frame.
@@ -158,12 +158,12 @@ struct FooterBarRenderContext<'a> {
 }
 
 /// Renders a complete frame including status bar, content area, and footer.
-pub fn render(f: &mut Frame, context: RenderContext<'_>) {
+pub fn render(frame: &mut Frame, context: RenderContext<'_>) {
     let layout::AppFrameAreas {
         content_area,
         footer_bar_area,
         status_bar_area,
-    } = layout::app_frame_areas(f.area());
+    } = layout::app_frame_areas(frame.area());
 
     component::status_bar::StatusBar::new(context.current_version_display_text.to_string())
         .latest_available_version(
@@ -177,9 +177,9 @@ pub fn render(f: &mut Frame, context: RenderContext<'_>) {
         ))
         .project_sync_status(context.project_sync_status.cloned())
         .update_status(context.update_status.cloned())
-        .render(f, status_bar_area);
+        .render(frame, status_bar_area);
     render_footer_bar(
-        f,
+        frame,
         footer_bar_area,
         FooterBarRenderContext {
             current_tab: context.current_tab,
@@ -197,7 +197,7 @@ pub fn render(f: &mut Frame, context: RenderContext<'_>) {
         },
     );
 
-    router::route_frame(f, content_area, context);
+    router::route_frame(frame, content_area, context);
 }
 
 /// Renders the footer bar with directory, branch, and project- or
@@ -206,7 +206,11 @@ pub fn render(f: &mut Frame, context: RenderContext<'_>) {
 /// Project branches show upstream-tracking counts. Session branches reuse the
 /// same footer widget but inject counts relative to each session's base
 /// branch and, when available, its tracked remote branch.
-fn render_footer_bar(f: &mut Frame, footer_bar_area: Rect, context: FooterBarRenderContext<'_>) {
+fn render_footer_bar(
+    frame: &mut Frame,
+    footer_bar_area: Rect,
+    context: FooterBarRenderContext<'_>,
+) {
     let FooterBarRenderContext {
         current_tab,
         mode,
@@ -299,7 +303,7 @@ fn render_footer_bar(f: &mut Frame, footer_bar_area: Rect, context: FooterBarRen
         .git_upstream_ref(footer_upstream_ref)
         .git_status(footer_status)
         .workspace_context_visible(workspace_context_visible)
-        .render(f, footer_bar_area);
+        .render(frame, footer_bar_area);
 }
 
 #[cfg(test)]

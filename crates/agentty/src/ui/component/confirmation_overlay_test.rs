@@ -29,9 +29,9 @@ fn test_confirmation_overlay_render_hides_bottom_navigation_hints() {
 
     // Act
     terminal
-        .draw(|f| {
-            let area = f.area();
-            Component::render(&overlay, f, area);
+        .draw(|frame| {
+            let area = frame.area();
+            Component::render(&overlay, frame, area);
         })
         .expect("failed to draw");
 
@@ -57,9 +57,9 @@ fn test_confirmation_overlay_render_preserves_choices_for_long_message() {
 
     // Act
     terminal
-        .draw(|f| {
-            let area = f.area();
-            Component::render(&overlay, f, area);
+        .draw(|frame| {
+            let area = frame.area();
+            Component::render(&overlay, frame, area);
         })
         .expect("failed to draw");
 

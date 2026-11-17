@@ -235,10 +235,10 @@ impl<'a> FrameResources<'a> {
 }
 
 /// Routes the content-area render path by active `AppMode`.
-pub(crate) fn route_frame(f: &mut Frame, area: Rect, context: RenderContext<'_>) {
+pub(crate) fn route_frame(frame: &mut Frame, area: Rect, context: RenderContext<'_>) {
     if let AppMode::ExecutionGraph(view) = context.mode {
         page::execution_graph::render(
-            f,
+            frame,
             area,
             view,
             context.render_cache_store.markdown_render_cache(),
@@ -313,8 +313,8 @@ pub(crate) fn route_frame(f: &mut Frame, area: Rect, context: RenderContext<'_>)
         frame_time,
     };
 
-    render_surface(f, area, surface_for_mode(mode), &mut shared, resources);
-    render_mode_overlay(f, area, mode, &shared, resources);
+    render_surface(frame, area, surface_for_mode(mode), &mut shared, resources);
+    render_mode_overlay(frame, area, mode, &shared, resources);
 }
 
 /// Resolves the stable base-page identity for terminal transition handling.
@@ -483,20 +483,20 @@ fn surface_for_help_context(context: &HelpContext) -> Surface<'_> {
 
 /// Paints one base surface through the only page-construction boundary.
 fn render_surface(
-    f: &mut Frame,
+    frame: &mut Frame,
     area: Rect,
     surface: Surface<'_>,
     shared: &mut RouteSharedContext<'_>,
     resources: FrameResources<'_>,
 ) {
     match surface {
-        Surface::List => render_list_background(f, area, shared, resources.frame_time),
+        Surface::List => render_list_background(frame, area, shared, resources.frame_time),
         Surface::Session {
             mode,
             scroll_offset,
             session_id,
         } => render_session_surface(
-            f,
+            frame,
             area,
             mode,
             scroll_offset,
@@ -510,7 +510,7 @@ fn render_surface(
         } => {
             let preview = DiffPreview::default();
             render_diff_surface(
-                f,
+                frame,
                 area,
                 DiffSurfaceInput {
                     diff: "Loading diff...",
@@ -543,7 +543,7 @@ fn render_surface(
             session_id,
             sidebar_focus,
         } => render_diff_surface(
-            f,
+            frame,
             area,
             DiffSurfaceInput {
                 diff,
@@ -567,7 +567,7 @@ fn render_surface(
 
 /// Paints the overlay portion of modes after their base surface.
 fn render_mode_overlay(
-    f: &mut Frame,
+    frame: &mut Frame,
     area: Rect,
     mode: &AppMode,
     shared: &RouteSharedContext<'_>,
@@ -581,9 +581,9 @@ fn render_mode_overlay(
         | AppMode::Question { .. }
         | AppMode::DiffLoading { .. } => {}
         AppMode::Diff { line_comments, .. } => {
-            render_diff_comment_submit_overlay(f, area, line_comments);
+            render_diff_comment_submit_overlay(frame, area, line_comments);
         }
-        AppMode::ProjectCatalog { dialog } => ProjectCatalogOverlay { dialog }.render(f, area),
+        AppMode::ProjectCatalog { dialog } => ProjectCatalogOverlay { dialog }.render(frame, area),
         AppMode::SessionCreation {
             selected_option_index,
         } => component::session_creation_overlay::SessionCreationOverlay::new(
@@ -593,19 +593,19 @@ fn render_mode_overlay(
             shared.harness_availability,
             !shared.available_agent_kinds.is_empty(),
         )
-        .render(f, area),
+        .render(frame, area),
         AppMode::StackAppendParentSelection {
-            selected_parent_index,
+            selected_parent_index: parent_index,
             session_id,
         } => {
-            render_stack_append_parent_overlay(f, area, shared, session_id, *selected_parent_index);
+            render_stack_append_parent_overlay(frame, area, shared, session_id, *parent_index);
         }
         AppMode::PreCommitHookWarning { message } => {
-            InfoOverlay::new("Pre-commit hook warning", message).render(f, area);
+            InfoOverlay::new("Pre-commit hook warning", message).render(frame, area);
         }
         AppMode::ProjectSwitcher {
             selected_option_index,
-        } => render_project_switcher_overlay(f, area, shared, *selected_option_index),
+        } => render_project_switcher_overlay(frame, area, shared, *selected_option_index),
         AppMode::Confirmation {
             confirmation_message,
             confirmation_title,
@@ -613,7 +613,7 @@ fn render_mode_overlay(
             ..
         } => ConfirmationOverlay::new(confirmation_title, confirmation_message)
             .selected_first(*selected_confirmation_index == 0)
-            .render(f, area),
+            .render(frame, area),
         AppMode::SyncBlockedPopup {
             default_branch,
             is_loading,
@@ -629,7 +629,7 @@ fn render_mode_overlay(
             let popup = InfoOverlay::new(title, &popup_message)
                 .is_loading(*is_loading)
                 .loading_label("Sync in progress...");
-            render_information_overlay(f, area, popup, resources.frame_time);
+            render_information_overlay(frame, area, popup, resources.frame_time);
         }
         AppMode::ViewInfoPopup {
             is_loading,
@@ -641,24 +641,24 @@ fn render_mode_overlay(
             let popup = InfoOverlay::new(title, message)
                 .is_loading(*is_loading)
                 .loading_label(loading_label);
-            render_information_overlay(f, area, popup, resources.frame_time);
+            render_information_overlay(frame, area, popup, resources.frame_time);
         }
         AppMode::ChatGptSignIn { dialog } => {
-            render_chatgpt_sign_in_overlay(f, area, dialog, resources.frame_time);
+            render_chatgpt_sign_in_overlay(frame, area, dialog, resources.frame_time);
         }
         AppMode::Help {
             context: help_context,
             scroll_offset,
         } => component::help_overlay::HelpOverlay::new(help_context)
             .scroll_offset(*scroll_offset)
-            .render(f, area),
+            .render(frame, area),
         AppMode::LaunchConfigurationSelector {
             commands,
             selected_command_index,
             ..
         } => component::launch_configuration_overlay::LaunchConfigurationOverlay::new(commands)
             .selected_command_index(*selected_command_index)
-            .render(f, area),
+            .render(frame, area),
         AppMode::PublishBranchInput {
             default_branch_name,
             input,
@@ -669,7 +669,7 @@ fn render_mode_overlay(
             default_branch_name,
             locked_upstream_ref.as_deref(),
         )
-        .render(f, area),
+        .render(frame, area),
     }
 }
 
@@ -718,7 +718,7 @@ fn render_chatgpt_sign_in_overlay(
 
 /// Renders the eligible parent choices for the session being appended.
 fn render_stack_append_parent_overlay(
-    f: &mut Frame,
+    frame: &mut Frame,
     area: Rect,
     shared: &RouteSharedContext<'_>,
     session_id: &SessionId,
@@ -729,12 +729,12 @@ fn render_stack_append_parent_overlay(
         &parent_sessions,
         selected_parent_index,
     )
-    .render(f, area);
+    .render(frame, area);
 }
 
 /// Renders the project switcher with projects in most-recently-used order.
 fn render_project_switcher_overlay(
-    f: &mut Frame,
+    frame: &mut Frame,
     area: Rect,
     shared: &RouteSharedContext<'_>,
     selected_option_index: usize,
@@ -745,12 +745,12 @@ fn render_project_switcher_overlay(
         shared.active_project_id,
         selected_option_index,
     )
-    .render(f, area);
+    .render(frame, area);
 }
 
 /// Renders a session surface in either interactive or restored-view mode.
 fn render_session_surface(
-    f: &mut Frame,
+    frame: &mut Frame,
     area: Rect,
     mode: SessionSurfaceMode<'_>,
     scroll_offset: Option<usize>,
@@ -760,7 +760,7 @@ fn render_session_surface(
 ) {
     match mode {
         SessionSurfaceMode::Interactive(mode) => render_session_chat(
-            f,
+            frame,
             area,
             resources.session_chat(sessions, mode, session_id, scroll_offset),
         ),
@@ -770,7 +770,7 @@ fn render_session_surface(
                 session_id: session_id.into(),
             };
             render_session_chat(
-                f,
+                frame,
                 area,
                 resources.session_chat(sessions, &view_mode, session_id, scroll_offset),
             );
@@ -797,7 +797,7 @@ struct DiffSurfaceInput<'a> {
 
 /// Renders a diff page for a resolved session.
 fn render_diff_surface(
-    f: &mut Frame,
+    frame: &mut Frame,
     area: Rect,
     input: DiffSurfaceInput<'_>,
     sessions: &[Session],
@@ -826,14 +826,14 @@ fn render_diff_surface(
         sidebar_focus: input.sidebar_focus,
     });
     if input.is_loading {
-        page.loading().render(f, area);
+        page.loading().render(frame, area);
     } else {
-        page.render(f, area);
+        page.render(frame, area);
     }
 }
 
 /// Renders the session chat page for all session-chat modes.
-fn render_session_chat(f: &mut Frame, area: Rect, context: SessionChatRenderContext<'_>) {
+fn render_session_chat(frame: &mut Frame, area: Rect, context: SessionChatRenderContext<'_>) {
     let SessionChatRenderContext {
         graph_chat,
         greeting_animated,
@@ -892,12 +892,12 @@ fn render_session_chat(f: &mut Frame, area: Rect, context: SessionChatRenderCont
 
     page::session_chat::SessionChatPage::new(page_input)
         .graph_chat(graph_chat.filter(|snapshot| snapshot.proposal.input.session_id == session_id))
-        .render(f, area);
+        .render(frame, area);
 }
 
 /// Renders base list tabs and the currently selected list tab content.
 fn render_list_background(
-    f: &mut Frame,
+    frame: &mut Frame,
     content_area: Rect,
     shared: &mut RouteSharedContext<'_>,
     frame_time: FrameTime,
@@ -911,7 +911,7 @@ fn render_list_background(
 
     component::tab::Tabs::new(shared.current_tab)
         .process_stats(shared.process_resources)
-        .render(f, chunks[0]);
+        .render(frame, chunks[0]);
 
     match shared.current_tab {
         Tab::Projects => {
@@ -926,7 +926,7 @@ fn render_list_background(
                     frame_time.local_utc_offset_seconds(),
                 ),
             )
-            .render(f, chunks[1]);
+            .render(frame, chunks[1]);
         }
         Tab::Sessions => {
             page::session_list::SessionListPage::new(
@@ -939,14 +939,14 @@ fn render_list_background(
             .has_more_archived_sessions(shared.has_more_archived_sessions)
             .is_archive_expanded(shared.is_archive_expanded)
             .session_git_statuses(shared.session_git_statuses)
-            .render(f, chunks[1]);
+            .render(frame, chunks[1]);
         }
         Tab::Settings => {
             let active_project_name =
                 active_project_name(shared.active_project_id, shared.projects);
             if let Some(settings_screen) = shared.settings_screen {
                 page::setting::SettingsPage::new(settings_screen, active_project_name)
-                    .render(f, chunks[1]);
+                    .render(frame, chunks[1]);
             }
         }
     }

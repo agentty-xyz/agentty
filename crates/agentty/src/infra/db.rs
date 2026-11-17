@@ -5,7 +5,21 @@ use std::io;
 use std::path::Path;
 use std::sync::Arc;
 
-pub use ag_store::*;
+pub use ag_store::{
+    ActivityRepository, AppRepositories, Database, DbError, ForkSessionSnapshot, GraphEvidence,
+    GraphExecutionRecord, GraphNodeHistory, GraphProposalReplyRecord, GraphProposalRepository,
+    GraphRepository, LEGACY_SESSION_AGENT_CLEAR_MARKER, NewSessionReviewCommentResolution,
+    OperationRepository, PersistedSessionCreation, ProjectListRow, ProjectRepository, ProjectRow,
+    ReviewRepository, SessionAgentModelRow, SessionDetailRow, SessionFocusedReviewRow,
+    SessionListRow, SessionMessageRow, SessionOperationRow, SessionPreparationRepository,
+    SessionPreparationRow, SessionPreparationState, SessionRepository, SessionReviewAuditRow,
+    SessionReviewCommentResolutionRow, SessionReviewRequestRow, SessionReviewWatchRow, SessionRow,
+    SessionTurnMetadata, SessionUsageRow, SettingRepository, StoredGraphEvidence,
+    StoredGraphResult, TaskAgentContextRow, TaskAgentHistoryRow, TaskAgentTurnMetadata,
+    TaskAgentTurnRow, TaskRepository, TimestampSource, UsageRepository,
+};
+#[cfg(test)]
+pub use ag_store::{MockGraphProposalRepository, MockGraphRepository, MockTaskRepository};
 
 use crate::infra::clock;
 
