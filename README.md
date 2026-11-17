@@ -151,6 +151,7 @@ Launch Agentty from the repository you want to work in:
 ```sh
 agentty              # Launch with auto-update enabled (default)
 agentty --no-update  # Launch without automatic updates
+agentty --disable-telemetry  # Launch without PostHog usage telemetry
 agentty --otlp-endpoint http://localhost:4318/v1/traces  # Export session traces
 agentty --experimental-harness  # Offer preview Harness sessions
 agentty --experimental-graph  # Enable /graph proposals
@@ -173,8 +174,9 @@ agentty --version    # Show the installed Agentty version
   traces URL. A URL ending in `/v1/traces` also sends usage events as OTLP log records
   to the sibling `/v1/logs` URL, even when telemetry is disabled. See
   [session traces](https://agentty.xyz/docs/usage/workflow/#session-traces).
-- **Telemetry**: enabled by default; release builds send events to the Agentty PostHog
-  project. Set `AGENTTY_TELEMETRY_ENABLED=0` to disable it. See the
+- **Telemetry**: enabled by default; release builds send usage events to the Agentty
+  PostHog project. Pass `--disable-telemetry` to disable it; this is separate from OTLP
+  export, which only sends data to your own `--otlp-endpoint`. See the
   [telemetry details](https://agentty.xyz/docs/usage/workflow/#telemetry).
 
 ## Documentation

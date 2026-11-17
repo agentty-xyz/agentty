@@ -137,6 +137,18 @@ fn cli_requires_an_explicit_otlp_endpoint() {
 }
 
 #[test]
+fn cli_enables_posthog_telemetry_unless_disabled() {
+    // Arrange / Act
+    let default = Cli::try_parse_from(["agentty"]).expect("default arguments");
+    let disabled =
+        Cli::try_parse_from(["agentty", "--disable-telemetry"]).expect("telemetry opt-out");
+
+    // Assert
+    assert!(!default.disable_telemetry);
+    assert!(disabled.disable_telemetry);
+}
+
+#[test]
 fn cli_rejects_unknown_arguments() {
     // Arrange / Act
     let error =
@@ -214,6 +226,7 @@ async fn run_reports_instance_lock_parent_creation_failure() {
     if env::var_os(LOCK_FAILURE_CHILD_ENV).is_some() {
         // Arrange
         let cli = Cli {
+            disable_telemetry: false,
             experimental: ExperimentalFeatures::default(),
             no_update: false,
             otlp_capture_content: false,
@@ -262,6 +275,7 @@ async fn run_reports_instance_lock_parent_creation_failure() {
 async fn run_rejects_an_incomplete_otlp_endpoint_before_startup() {
     // Arrange
     let cli = Cli {
+        disable_telemetry: false,
         experimental: ExperimentalFeatures::default(),
         no_update: false,
         otlp_capture_content: false,
@@ -283,6 +297,7 @@ async fn run_exports_nothing_when_startup_fails_before_the_database_opens() {
     if env::var_os(TRACED_STARTUP_CHILD_ENV).is_some() {
         // Arrange
         let cli = Cli {
+            disable_telemetry: false,
             experimental: ExperimentalFeatures::default(),
             no_update: false,
             otlp_capture_content: false,
@@ -344,6 +359,7 @@ async fn run_rejects_an_owned_root_before_opening_the_database() {
         // Arrange / Act
         let error = run(
             Cli {
+                disable_telemetry: false,
                 experimental: ExperimentalFeatures::default(),
                 no_update: true,
                 otlp_capture_content: false,
@@ -396,6 +412,7 @@ async fn run_releases_instance_lock_after_database_open_failure() {
         // Arrange / Act
         let error = run(
             Cli {
+                disable_telemetry: false,
                 experimental: ExperimentalFeatures::default(),
                 no_update: true,
                 otlp_capture_content: false,
@@ -446,6 +463,7 @@ async fn startup_from_a_deleted_directory_falls_back_to_the_filesystem_root() {
         // Act
         let result = run(
             Cli {
+                disable_telemetry: false,
                 experimental: ExperimentalFeatures::default(),
                 no_update: true,
                 otlp_capture_content: false,
@@ -498,6 +516,7 @@ async fn startup_runs_application_through_telemetry_wrapper() {
         // Arrange / Act
         let error = run(
             Cli {
+                disable_telemetry: true,
                 experimental: ExperimentalFeatures::default(),
                 no_update: true,
                 otlp_capture_content: env::var_os("AGENTTY_TEST_CAPTURE_CONTENT").is_some(),

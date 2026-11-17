@@ -24,9 +24,6 @@ const POSTHOG_PROJECT_TOKEN: &str = "phc_DoaheXXuZ8t7jnkvb9SYuhhpvYFmYr8AMaAHJra
 /// Ingestion host for the Agentty `PostHog` project.
 const POSTHOG_API_HOST: &str = "https://us.i.posthog.com";
 
-/// Environment variable that controls telemetry; `0` disables it.
-pub const TELEMETRY_ENABLED_ENV: &str = "AGENTTY_TELEMETRY_ENABLED";
-
 /// Environment variables that mark a CI run. Most providers, including
 /// GitHub Actions, GitLab CI/CD, `CircleCI`, Buildkite, and Bitbucket
 /// Pipelines, set `CI`; the others identify GitHub Actions explicitly and the
@@ -40,8 +37,7 @@ const CI_ENVIRONMENT_VARIABLES: [&str; 5] = [
 ];
 
 /// A telemetry sender for `PostHog`, a local OTLP event log, or both.
-/// Callers check [`Analytics::is_enabled`] before building the `PostHog`
-/// destination.
+/// Callers skip the `PostHog` destination when `--disable-telemetry` is set.
 #[derive(Clone)]
 pub struct Analytics {
     environment: LaunchEnvironment,
@@ -266,13 +262,6 @@ impl LaunchEnvironment {
 }
 
 impl Analytics {
-    /// Returns whether a `TELEMETRY_ENABLED_ENV` value allows telemetry.
-    ///
-    /// Unset and `1` enable it; any other value, including `0`, disables it.
-    pub fn is_enabled(value: Option<&OsStr>) -> bool {
-        value.is_none_or(|value| value == "1")
-    }
-
     /// Builds a sender for the bundled Agentty `PostHog` project, identified
     /// by this installation's [`Self::installation_id`].
     pub fn posthog(installation_id: &str) -> Option<Self> {

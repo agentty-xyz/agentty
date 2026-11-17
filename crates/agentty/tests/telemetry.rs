@@ -1,6 +1,5 @@
 //! Public telemetry contract and captured HTTP payloads.
 
-use std::ffi::OsStr;
 use std::io::{self, Read, Write};
 use std::net::TcpListener;
 use std::time::{Duration, Instant};
@@ -19,16 +18,6 @@ const INSTALLATION_ID: &str = "4f1c2e8a-5b6d-4c3e-9f0a-1b2c3d4e5f60";
 
 /// Launch-environment properties sent with launch and failure events.
 const ENVIRONMENT_FLAGS: [&str; 2] = ["ci", "interactive"];
-
-#[test]
-fn telemetry_is_enabled_unless_environment_opts_out() {
-    // Arrange / Act / Assert
-    assert!(Analytics::is_enabled(None));
-    assert!(Analytics::is_enabled(Some(OsStr::new("1"))));
-    assert!(!Analytics::is_enabled(Some(OsStr::new("0"))));
-    assert!(!Analytics::is_enabled(Some(OsStr::new("false"))));
-    assert!(!Analytics::is_enabled(Some(OsStr::new(""))));
-}
 
 #[tokio::test]
 async fn outbound_events_contain_only_allowlisted_properties() -> TestResult<()> {
