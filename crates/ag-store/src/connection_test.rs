@@ -7,6 +7,9 @@ mod connection;
 #[path = "connection_test/migration_test.rs"]
 mod migration;
 
+#[path = "connection_test/schema_test.rs"]
+mod schema;
+
 #[path = "connection_test/session_test.rs"]
 mod session;
 

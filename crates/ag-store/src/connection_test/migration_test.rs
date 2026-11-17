@@ -596,6 +596,7 @@ ORDER BY queued_at ASC, id ASC
     assert_eq!(
         indexes,
         [
+            ("agent_run", "agent_run_project_id_idx"),
             ("agent_run", "agent_run_session_id_idx"),
             ("agent_run", "idx_agent_run_unfinished"),
             (
