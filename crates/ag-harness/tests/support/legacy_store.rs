@@ -121,7 +121,7 @@ async fn version_13_sessions_keep_their_schema_history_and_accept_text_runs()
     drop(harness);
 
     // Assert
-    assert_eq!(migration_version(&database).await?, 14);
+    assert_eq!(migration_version(&database).await?, 15);
     assert!(!output_schema_required(&database).await?);
     assert_eq!(
         structured.result?,
