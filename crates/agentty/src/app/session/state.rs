@@ -8,6 +8,7 @@ use std::time::Instant;
 use crate::app::session::{Clock, SESSION_REFRESH_INTERVAL};
 use crate::domain::selection::SelectionState;
 use crate::domain::session::{Session, SessionDiffStats, SessionHandles, SessionId, Status};
+use crate::domain::session_message::SessionTranscript;
 use crate::domain::session_order::{self, ArchiveAction};
 use crate::domain::transient_message::{TransientMessage, TransientMessageSlot};
 
@@ -224,6 +225,34 @@ impl SessionState {
 
         self.session_index_by_id = Self::build_session_index_by_id(&sessions);
         self.sessions = sessions;
+    }
+
+    /// Moves render transcripts out of the loaded snapshots, keyed by session
+    /// id, so a reload can reuse unchanged ones instead of cloning them again
+    /// from live handles.
+    ///
+    /// Pair with [`Self::replace_sessions`] on success or
+    /// [`Self::restore_session_transcripts`] when the reload fails.
+    pub(in crate::app::session) fn take_session_transcripts(
+        &mut self,
+    ) -> HashMap<SessionId, SessionTranscript> {
+        self.sessions
+            .iter_mut()
+            .filter_map(|session| Some((session.id.clone(), session.transcript.take()?)))
+            .collect()
+    }
+
+    /// Returns transcripts taken by [`Self::take_session_transcripts`] to the
+    /// snapshots that are still loaded after a failed reload.
+    pub(in crate::app::session) fn restore_session_transcripts(
+        &mut self,
+        mut transcripts: HashMap<SessionId, SessionTranscript>,
+    ) {
+        for session in &mut self.sessions {
+            if let Some(transcript) = transcripts.remove(&session.id) {
+                session.transcript = Some(transcript);
+            }
+        }
     }
 
     /// Returns whether the archive window extends beyond its first page.

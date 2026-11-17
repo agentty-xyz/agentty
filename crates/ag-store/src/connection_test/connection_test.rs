@@ -37,7 +37,7 @@ async fn query_on_dropped_table_returns_db_error_query() {
         .expect("failed to drop table");
 
     // Act
-    let result = database.sessions().load_sessions_metadata().await;
+    let result = database.sessions().load_sessions_metadata(1).await;
 
     // Assert
     assert!(
@@ -58,7 +58,7 @@ async fn db_error_display_includes_underlying_message() {
         .expect("failed to drop table");
 
     // Act
-    let result = database.sessions().load_sessions_metadata().await;
+    let result = database.sessions().load_sessions_metadata(1).await;
 
     // Assert
     let error = result.expect_err("expected query on dropped table to fail");

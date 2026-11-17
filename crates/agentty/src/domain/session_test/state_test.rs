@@ -4,7 +4,7 @@ use std::sync::{Arc, Mutex};
 
 use ag_session::SessionStatus as Status;
 
-use super::super::super::session_message::SessionTranscript;
+use super::super::super::session_message::{SessionMessage, SessionMessageKind, SessionTranscript};
 use super::super::SessionHandles;
 use crate::domain::session::SessionDiffState;
 use crate::test_support::SessionFixtureBuilder;
@@ -59,10 +59,37 @@ fn test_transcript_snapshot_with_loaded_returns_none_for_poisoned_transcript_loc
     assert!(poison_result.is_err());
 
     // Act
-    let snapshot = handles.transcript_snapshot_with_loaded(None);
+    let snapshot = handles.transcript_snapshot_with_loaded(None, None);
 
     // Assert
     assert_eq!(snapshot, None);
+}
+
+#[test]
+fn test_transcript_snapshot_with_loaded_reuses_only_a_matching_previous_snapshot() {
+    // Arrange
+    let live_transcript = SessionTranscript::new(vec![SessionMessage::conversation(
+        0,
+        SessionMessageKind::AssistantAnswer,
+        "live answer",
+    )]);
+    let stale_transcript = SessionTranscript::new(vec![SessionMessage::conversation(
+        0,
+        SessionMessageKind::AssistantAnswer,
+        "stale answer",
+    )]);
+    let handles = SessionHandles::new_with_transcript(Status::Review, live_transcript.clone());
+    let previous_snapshot = live_transcript.clone();
+    let previous_messages = previous_snapshot.messages().as_ptr();
+
+    // Act
+    let reused_snapshot = handles.transcript_snapshot_with_loaded(None, Some(previous_snapshot));
+    let refreshed_snapshot = handles.transcript_snapshot_with_loaded(None, Some(stale_transcript));
+
+    // Assert
+    let reused_snapshot = reused_snapshot.expect("live transcript should be returned");
+    assert_eq!(reused_snapshot.messages().as_ptr(), previous_messages);
+    assert_eq!(refreshed_snapshot, Some(live_transcript));
 }
 
 #[test]

@@ -146,7 +146,8 @@ async fn test_workflow_notice_append_survives_hydration_during_persistence() {
         .expect("persistence should start");
 
     // Act
-    let hydrated_transcript = handles.transcript_snapshot_with_loaded(Some(&loaded_transcript));
+    let hydrated_transcript =
+        handles.transcript_snapshot_with_loaded(Some(&loaded_transcript), None);
     release_persistence_tx
         .send(())
         .expect("persistence should still be waiting");

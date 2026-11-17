@@ -15,7 +15,6 @@ use super::{
     merge_loaded_session_status, migrate_active_sessions_off_retired_models,
     migrate_session_off_retired_model, parse_questions_json, parse_review_request,
     should_skip_missing_folder_session, status_and_transcript_from_existing_handle,
-    sync_handle_transcript_with_loaded,
 };
 use crate::app::SessionManager;
 use crate::domain::agent::AgentModel;
@@ -580,6 +579,106 @@ async fn test_load_sessions_reads_persisted_detail_for_active_session() {
             options: vec!["Yes".to_string()],
             text: "persisted question?".to_string(),
         }]
+    );
+}
+
+/// Ensures a reload of a hydrated active session reads its detail but keeps
+/// the previous render transcript instead of reading or cloning history.
+#[tokio::test]
+async fn test_reload_reuses_previous_transcript_for_hydrated_active_session() {
+    // Arrange
+    let db = AppRepositories::in_memory().await.expect("db should open");
+    let project_id = db
+        .projects()
+        .upsert_project("/tmp/test", None)
+        .await
+        .expect("failed to upsert project");
+    let session_id = "hydrated-session";
+    db.sessions()
+        .insert_session(session_id, "gemini-3.8-flash", "main", "Review", project_id)
+        .await
+        .expect("failed to insert session");
+    db.sessions()
+        .update_session_prompt(session_id, "persisted prompt")
+        .await
+        .expect("failed to update session prompt");
+    let base_path = Path::new("/virtual/session-base");
+    let mock_fs_client = create_folder_lookup_mock(vec![session_folder(base_path, session_id)]);
+    let live_transcript = assistant_transcript("Live Output");
+    let mut handles: HashMap<SessionId, SessionHandles> = HashMap::new();
+    handles.insert(
+        session_id.into(),
+        SessionHandles::new_with_transcript(Status::Review, live_transcript.clone()),
+    );
+    let previous_transcript = live_transcript.clone();
+    let previous_messages = previous_transcript.messages().as_ptr();
+    let mut previous_transcripts = HashMap::from([(session_id.into(), previous_transcript)]);
+
+    // Act
+    let (sessions, _, _, _) = SessionManager::try_load_sessions_with_fs_client(
+        SessionLoadInput {
+            archive_limit: 10,
+            active_project_id: project_id,
+            active_session_id: Some(session_id),
+            base: base_path,
+            clock: &RealClock,
+            db: &db,
+            fs_client: &mock_fs_client,
+            working_dir: Path::new("/tmp/test"),
+        },
+        &mut handles,
+        &mut previous_transcripts,
+    )
+    .await
+    .expect("sessions should load");
+
+    // Assert
+    let session = sessions.first().expect("missing reloaded session");
+    let transcript = session.transcript.as_ref().expect("live transcript");
+    assert_eq!(transcript, &live_transcript);
+    assert_eq!(transcript.messages().as_ptr(), previous_messages);
+    assert_eq!(session.prompt, "persisted prompt");
+    assert!(previous_transcripts.is_empty());
+}
+
+/// Ensures active detail skips the saved transcript unless the handle still
+/// needs hydration, while always returning the detail row.
+#[tokio::test]
+async fn test_active_session_detail_reads_messages_only_when_requested() {
+    // Arrange
+    let db = AppRepositories::in_memory().await.expect("db should open");
+    let project_id = db
+        .projects()
+        .upsert_project("/tmp/test", None)
+        .await
+        .expect("failed to upsert project");
+    let session_id = "detail-session";
+    db.sessions()
+        .insert_session(session_id, "gemini-3.8-flash", "main", "Review", project_id)
+        .await
+        .expect("failed to insert session");
+    db.sessions()
+        .append_session_message(
+            session_id,
+            SessionMessageKind::AssistantAnswer,
+            "persisted output",
+        )
+        .await
+        .expect("failed to append session message");
+
+    // Act
+    let (hydrated_detail, hydrated_transcript) =
+        load_active_session_detail(&db, Some(session_id), session_id, false).await;
+    let (unhydrated_detail, unhydrated_transcript) =
+        load_active_session_detail(&db, Some(session_id), session_id, true).await;
+
+    // Assert
+    assert!(hydrated_detail.is_some());
+    assert_eq!(hydrated_transcript, None);
+    assert!(unhydrated_detail.is_some());
+    assert_eq!(
+        unhydrated_transcript.and_then(|transcript| transcript.replay_text()),
+        Some(assistant_replay_text("persisted output"))
     );
 }
 
@@ -1203,7 +1302,7 @@ fn existing_handle_with_poisoned_status_uses_persisted_status() {
 
     // Act
     let (status, transcript) =
-        status_and_transcript_from_existing_handle(&handles, Status::Review, None);
+        status_and_transcript_from_existing_handle(&handles, Status::Review, None, None);
 
     // Assert
     assert_eq!(status, Status::Review);
@@ -1220,7 +1319,7 @@ async fn active_session_detail_is_empty_when_detail_row_is_missing() {
 
     // Act
     let (detail, transcript) =
-        load_active_session_detail(&db, Some("missing-session"), "missing-session").await;
+        load_active_session_detail(&db, Some("missing-session"), "missing-session", true).await;
 
     // Assert
     assert!(detail.is_none());
@@ -1277,7 +1376,7 @@ fn merge_loaded_session_status_prefers_handle_for_non_terminal_db_status() {
 #[test]
 /// Verifies loaded message rows do not replace an existing live
 /// transcript snapshot.
-fn sync_handle_transcript_with_loaded_keeps_existing_live_transcript() {
+fn transcript_snapshot_with_loaded_keeps_existing_live_transcript() {
     // Arrange
     let live_transcript = SessionTranscript::new(vec![
         SessionMessage::conversation(0, SessionMessageKind::UserPrompt, "prompt"),
@@ -1287,7 +1386,7 @@ fn sync_handle_transcript_with_loaded_keeps_existing_live_transcript() {
     let loaded_transcript = assistant_transcript("loaded answer");
 
     // Act
-    let transcript = sync_handle_transcript_with_loaded(&handles, Some(&loaded_transcript));
+    let transcript = handles.transcript_snapshot_with_loaded(Some(&loaded_transcript), None);
 
     // Assert
     assert_eq!(transcript, Some(live_transcript.clone()));
@@ -1300,7 +1399,7 @@ fn sync_handle_transcript_with_loaded_keeps_existing_live_transcript() {
 #[test]
 /// Verifies persisted history merges with a partial workflow notice
 /// appended before a lazy transcript was hydrated.
-fn sync_handle_transcript_with_loaded_merges_partial_unloaded_transcript() {
+fn transcript_snapshot_with_loaded_merges_partial_unloaded_transcript() {
     // Arrange
     let handles = SessionHandles::new_unloaded(Status::Review);
     handles
@@ -1327,7 +1426,7 @@ fn sync_handle_transcript_with_loaded_merges_partial_unloaded_transcript() {
     ]);
 
     // Act
-    let transcript = sync_handle_transcript_with_loaded(&handles, Some(&loaded_transcript));
+    let transcript = handles.transcript_snapshot_with_loaded(Some(&loaded_transcript), None);
 
     // Assert
     assert_eq!(transcript, Some(expected_transcript.clone()));
@@ -1340,7 +1439,7 @@ fn sync_handle_transcript_with_loaded_merges_partial_unloaded_transcript() {
 #[test]
 /// Verifies hydration deduplicates a persisted live append while retaining
 /// an unpersisted message whose temporary position conflicts.
-fn sync_handle_transcript_with_loaded_merges_matching_and_conflicting_messages() {
+fn transcript_snapshot_with_loaded_merges_matching_and_conflicting_messages() {
     // Arrange
     let handles = SessionHandles::new_unloaded(Status::Review);
     let persisted_notice = SessionMessage::new(
@@ -1367,7 +1466,8 @@ fn sync_handle_transcript_with_loaded_merges_matching_and_conflicting_messages()
     ]);
 
     // Act
-    let transcript = sync_handle_transcript_with_loaded(&handles, Some(&loaded_transcript))
+    let transcript = handles
+        .transcript_snapshot_with_loaded(Some(&loaded_transcript), None)
         .expect("merged transcript should be available");
 
     // Assert

@@ -83,7 +83,7 @@ async fn draft_creation_uses_the_active_project_and_requires_a_git_branch() {
             assert_eq!(
                 database
                     .sessions()
-                    .load_sessions_metadata()
+                    .load_sessions_metadata(project_id)
                     .await
                     .expect("session count")
                     .0,
@@ -404,7 +404,7 @@ async fn creation_and_fork_reserve_metadata_before_checkout() {
         assert_eq!(
             database
                 .sessions()
-                .load_sessions_metadata()
+                .load_sessions_metadata(project_id)
                 .await
                 .expect("session count")
                 .0,
@@ -784,7 +784,7 @@ async fn creation_rejects_unowned_projects_existing_folders_and_unsaved_metadata
         assert_eq!(
             database
                 .sessions()
-                .load_sessions_metadata()
+                .load_sessions_metadata(project_id)
                 .await
                 .expect("session count")
                 .0,

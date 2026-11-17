@@ -20,6 +20,10 @@ impl SessionManager {
     /// This is a low-frequency fallback safety poll; primary refreshes should
     /// come from explicit `RefreshSessions` events. Returns `true` when the
     /// poll detected persisted changes and refreshed the in-memory snapshots.
+    ///
+    /// The metadata compares the session count across every project, which
+    /// feeds the global activity heatmap, with the active project's latest
+    /// update, so session updates in other projects do not trigger a reload.
     pub async fn refresh_sessions_if_needed(
         &mut self,
         mode: &mut AppMode,
@@ -32,7 +36,12 @@ impl SessionManager {
 
         self.state.refresh_deadline = self.next_refresh_deadline();
 
-        let Ok(sessions_metadata) = services.db().sessions().load_sessions_metadata().await else {
+        let Ok(sessions_metadata) = services
+            .db()
+            .sessions()
+            .load_sessions_metadata(projects.active_project_id())
+            .await
+        else {
             return false;
         };
         let (sessions_row_count, sessions_updated_at_max) = sessions_metadata;
@@ -55,7 +64,12 @@ impl SessionManager {
         projects: &ProjectManager,
         services: &AppServices,
     ) {
-        let sessions_metadata = services.db().sessions().load_sessions_metadata().await.ok();
+        let sessions_metadata = services
+            .db()
+            .sessions()
+            .load_sessions_metadata(projects.active_project_id())
+            .await
+            .ok();
         self.reload_sessions(mode, projects, services, sessions_metadata)
             .await;
         self.state.refresh_deadline = self.next_refresh_deadline();
@@ -172,6 +186,7 @@ impl SessionManager {
         let archive_limit = self.state.archive_limit;
         let clock = services.clock();
         let fs_client = services.fs_client();
+        let mut previous_transcripts = self.state.take_session_transcripts();
         let (sessions, stats_activity, session_worktree_availability, archive_page) =
             match Self::try_load_sessions_with_fs_client(
                 SessionLoadInput {
@@ -185,12 +200,14 @@ impl SessionManager {
                     working_dir: projects.working_dir(),
                 },
                 self.state.handles_mut(),
+                &mut previous_transcripts,
             )
             .await
             {
                 Ok(loaded_sessions) => loaded_sessions,
                 Err(error) => {
                     warn!(%error, "preserving active session state after refresh failure");
+                    self.state.restore_session_transcripts(previous_transcripts);
 
                     return false;
                 }
@@ -222,7 +239,8 @@ impl SessionManager {
             self.state.row_count = sessions_row_count;
             self.state.updated_at_max = sessions_updated_at_max;
         } else {
-            self.update_sessions_metadata_cache(services).await;
+            self.update_sessions_metadata_cache(services, projects.active_project_id())
+                .await;
         }
 
         true
@@ -360,9 +378,16 @@ impl SessionManager {
     }
 
     /// Refreshes cached session metadata used by incremental list reloads.
-    pub(crate) async fn update_sessions_metadata_cache(&mut self, services: &AppServices) {
-        if let Ok((sessions_row_count, sessions_updated_at_max)) =
-            services.db().sessions().load_sessions_metadata().await
+    pub(crate) async fn update_sessions_metadata_cache(
+        &mut self,
+        services: &AppServices,
+        active_project_id: i64,
+    ) {
+        if let Ok((sessions_row_count, sessions_updated_at_max)) = services
+            .db()
+            .sessions()
+            .load_sessions_metadata(active_project_id)
+            .await
         {
             self.state.row_count = sessions_row_count;
             self.state.updated_at_max = sessions_updated_at_max;

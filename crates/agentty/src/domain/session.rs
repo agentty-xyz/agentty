@@ -1101,9 +1101,14 @@ impl SessionHandles {
 
     /// Returns the live transcript, hydrating an unloaded handle from the
     /// persisted snapshot even when background notices made it non-empty.
+    ///
+    /// `previous_snapshot` is a render copy taken from the snapshot being
+    /// replaced. It is returned as-is when it still equals the live
+    /// transcript, so a reload does not deep-clone unchanged history.
     pub(crate) fn transcript_snapshot_with_loaded(
         &self,
         loaded_transcript: Option<&SessionTranscript>,
+        previous_snapshot: Option<SessionTranscript>,
     ) -> Option<SessionTranscript> {
         let Ok(mut transcript) = self.transcript.lock() else {
             return None;
@@ -1118,7 +1123,11 @@ impl SessionHandles {
             return None;
         }
 
-        Some(transcript.clone())
+        Some(
+            previous_snapshot
+                .filter(|previous_snapshot| *previous_snapshot == *transcript)
+                .unwrap_or_else(|| transcript.clone()),
+        )
     }
 
     /// Reserves the next shared submission order for queued session work.

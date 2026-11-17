@@ -1265,6 +1265,74 @@ async fn test_retire_gemini_agent_moves_default_agent_settings_to_antigravity() 
     );
 }
 
+/// Verifies blank archived diffs become `NULL`, so session loaders can report
+/// archive availability without reading the text, while real diffs and their
+/// surrounding whitespace stay untouched.
+#[tokio::test]
+async fn test_clear_blank_archived_diff_keeps_only_real_diffs() {
+    // Arrange
+    let database = Database::open_in_memory()
+        .await
+        .expect("database should open");
+    let project_id = database
+        .projects()
+        .upsert_project("/tmp/blank-archive", None)
+        .await
+        .expect("project should exist");
+    let archives = [
+        ("missing", None),
+        ("empty", Some("")),
+        ("blank", Some(" \t\r\n ")),
+        ("diff", Some("\ndiff --git a/file b/file\n+change\n")),
+    ];
+    for (session_id, archived_diff) in archives {
+        insert_session_fixture(&database, session_id, "main", "Done", project_id).await;
+        sqlx::query("UPDATE session SET archived_diff = ? WHERE id = ?")
+            .bind(archived_diff)
+            .bind(session_id)
+            .execute(database.pool())
+            .await
+            .expect("legacy archived diff should be stored");
+    }
+
+    // Act
+    rerun_embedded_migration(database.pool(), 117).await;
+    let stored_archives = sqlx::query_as::<_, (String, Option<String>)>(
+        "SELECT id, archived_diff FROM session ORDER BY id",
+    )
+    .fetch_all(database.pool())
+    .await
+    .expect("archived diffs should load");
+    let sessions = database
+        .sessions()
+        .load_sessions_for_project(project_id)
+        .await
+        .expect("sessions should load");
+
+    // Assert
+    assert_eq!(
+        stored_archives,
+        vec![
+            ("blank".to_string(), None),
+            (
+                "diff".to_string(),
+                Some("\ndiff --git a/file b/file\n+change\n".to_string())
+            ),
+            ("empty".to_string(), None),
+            ("missing".to_string(), None),
+        ]
+    );
+    assert_eq!(sessions.len(), archives.len());
+    for session in sessions {
+        assert_eq!(
+            session.has_archived_diff,
+            session.id == "diff",
+            "{}",
+            session.id
+        );
+    }
+}
+
 /// Seeds Codex and Gemini sessions and task contexts with saved provider
 /// conversations for the Gemini retirement migration.
 async fn seed_gemini_retirement_conversations(database: &Database, project_id: i64) {
