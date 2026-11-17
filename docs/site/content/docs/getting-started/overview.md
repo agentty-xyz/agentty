@@ -13,42 +13,36 @@ for AI-assisted software development in your terminal.
 
 ## What Agentty Provides
 
-<a id="overview-operational-lift"></a> When you start a session, Agentty:
+<a id="overview-operational-lift"></a> For every session, Agentty:
 
-- Spawns a clean worktree branch for every live session.
-- Runs agent-driven edits in isolation from your base branch.
-- Keeps terminal output, diffs, and generated changes in one reviewable stream.
-- Keeps already-published session branches synced after later completed turns.
+- Creates an isolated worktree branch for agent edits.
+- Keeps agent output, diffs, and generated changes in one reviewable stream.
+- Keeps published session branches updated after later completed turns.
 
 ## Typical Flow
 
-A session takes your prompt through agent-driven edits to a reviewable diff. You decide
-whether to merge or discard the changes.
-
-Follow [Installation](@/docs/getting-started/installation.md#start-a-session) for your
-first session. Sessions can also be staged as drafts or stacked on top of another
-session; see [Workflow](@/docs/usage/workflow.md) for those options.
+A session takes your prompt through agent edits to a reviewable diff; you decide whether
+to merge or discard it. Follow
+[Installation](@/docs/getting-started/installation.md#start-a-session) for your first
+session. Sessions can also be staged as drafts or stacked on another session; see
+[Workflow](@/docs/usage/workflow.md).
 
 ## Worktree Isolation
 
 <a id="overview-worktree-isolation"></a> Every session runs in its own
-[git worktree](https://git-scm.com/docs/git-worktree), created automatically when the
-live session starts:
-
-The session starts from your local active branch, even if it is behind the remote. Sync
-the project first to include remote changes. Agentty checks the worktree before each
-turn and keeps session edits separate from your base branch until you merge.
+[git worktree](https://git-scm.com/docs/git-worktree), created from your local base
+branch even if it is behind the remote; sync the project first to include remote
+changes. Session edits stay separate from your base branch until you merge.
 Bare-repository projects are also supported.
 
 <a id="overview-worktree-cleanup"></a> Worktrees are stored under `~/.agentty/wt/` and
-are cleaned up automatically when a session reaches `Done` or `Canceled`, or when you
-delete a session.
+removed when a session reaches `Done` or `Canceled`, or when you delete it.
 
 ## Auto-Update
 
-<a id="overview-auto-update"></a> Agentty checks for updates at startup and hourly.
-Installed agent CLIs are also refreshed at startup. See
-[Auto-Update](@/docs/usage/workflow.md#auto-update) for status messages and controls.
+<a id="overview-auto-update"></a> Agentty checks for its own updates at startup and
+hourly, and refreshes installed agent CLIs at startup. See
+[Auto-Update](@/docs/usage/workflow.md#auto-update).
 
 ## Key Concepts
 
@@ -57,16 +51,14 @@ Installed agent CLIs are also refreshed at startup. See
 - **Session**: An isolated unit of work: a conversation, a worktree branch, and a
   reviewable diff. See [Workflow](@/docs/usage/workflow.md) and
   [Keybindings](@/docs/usage/keybindings.md).
-- **Project**: A git repository registered in Agentty. Select between projects with the
-  Projects tab.
+- **Project**: A Git repository registered in Agentty, selected in the **Projects** tab.
 - **Diff view**: The changes an agent made in a session, ready for your review.
 
 ## Development Status
 
 Agentty is in active development. Releases follow Semantic Versioning, but the current
-`0.y.z` series may still introduce breaking changes as workflows, integrations, and
-safeguards evolve. Always review and verify changes before relying on them in your
-repositories.
+`0.y.z` series may still introduce breaking changes. Always review and verify changes
+before relying on them in your repositories.
 
 ## Next Steps
 

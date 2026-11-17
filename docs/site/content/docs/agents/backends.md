@@ -11,8 +11,8 @@ CLIs running in session worktrees. Install and authenticate at least one backend
 
 ## Supported Backends
 
-<a id="backends-supported-backends"></a> Agentty supports three agent backends. Each
-requires its respective CLI to be installed and available on your `PATH`.
+<a id="backends-supported-backends"></a> Each backend's CLI must be on your `PATH`;
+Agentty fails at startup with an install hint when none is found.
 
 - Codex (`codex`, recommended; supports subscription usage): install the
   [Codex CLI](https://github.com/openai/codex), then run `codex login`.
@@ -20,43 +20,10 @@ requires its respective CLI to be installed and available on your `PATH`.
   then run `claude auth login`.
 - Antigravity (`agy` 1.1.18 or newer): install the
   [Antigravity CLI](https://github.com/google-antigravity/antigravity-cli), then run
-  `agy` and follow its sign-in flow. Agentty excludes older versions from provider
-  selection and reports `agy update` as the recovery step if a session encounters an
-  outdated executable.
+  `agy` and follow its sign-in flow.
 
-All CLI backends accept pasted local prompt images from the Agentty composer (`Ctrl+V`,
-`Ctrl+Shift+V`, or `Alt+V` in prompt mode) and run their turns non-interactively inside
-the session worktree.
-
-Codex and Claude `Auto Edit` turns run commands with full access, outside the provider
-sandbox, so browser tests, local services, PTY tools, container runtimes, and tool
-caches remain available. This also means commands are not confined to the session
-worktree; review the session diff and use `Read Only` for inspection-only work.
-
-Codex `Read Only` turns, including read-only graph nodes, allow shell network requests
-for external research while keeping filesystem writes and permission escalation denied.
-
-Claude `Read Only` turns, including read-only graph nodes, reviews, and review-request
-metadata, run without a shell. They inspect the workspace with `Read`, `Glob`, and
-`Grep`, research with `WebSearch` and `WebFetch`, and Agentty's instructions tell the
-model not to attempt shell or Git commands when no shell tool is offered.
-
-Claude turns also allow Claude Code's `WebSearch` and `WebFetch` tools, so prompts that
-need current external information can use the web without an interactive permission
-grant. Claude's file-edit tool still cannot edit the main checkout.
-
-Agentty's instructions keep project edits inside the session worktree. Required build,
-test, and recording commands may use documented external caches, temporary files, and
-container runtime storage when execution permissions allow writes. This support-state
-exception applies to parent and delegated agents and does not expand `Read Only`
-permissions.
-
-Treat fetched web content as untrusted context. Claude still has edit-capable tools
-during the turn, so keep web-backed prompts specific and review the session diff before
-merging.
-
-Agentty requires at least one supported backend CLI on `PATH` at startup and fails with
-an install hint when none is found.
+All CLI backends run their turns non-interactively inside the session worktree and
+accept pasted prompt images.
 
 Agentty uses each provider's official non-interactive CLI or app-server surface
 (`claude -p`, `agy --input-format stream-json`, or `codex app-server`) after you
@@ -64,202 +31,29 @@ authenticate with that provider's CLI. It does not implement OAuth flows, read p
 OAuth tokens directly, or call private provider APIs. You are responsible for choosing
 an authentication method permitted for your account, plan, and usage pattern.
 
-## Harness Sessions (Preview)
+### Permissions
 
-<a id="backends-harness"></a> Start Agentty with `agentty --experimental-harness` to add
-a **Harness** session type that runs Agentty's built-in agent loop instead of an
-external CLI. It talks directly to a free local model server or to a paid hosted
-provider:
-
-| Provider     | Cost | Key                                  | Endpoint                              |
-| ------------ | ---- | ------------------------------------ | ------------------------------------- |
-| Local server | Free | Optional `OPENAI_COMPATIBLE_API_KEY` | Optional `OPENAI_COMPATIBLE_BASE_URL` |
-| Muse         | Paid | `MODEL_API_KEY`                      | Optional `MODEL_API_BASE_URL`         |
-| Kimi         | Paid | `KIMI_API_KEY`                       | Required `KIMI_BASE_URL`              |
-| Qwen         | Paid | `DASHSCOPE_API_KEY`                  | Required `DASHSCOPE_BASE_URL`         |
-| OpenAI       | Paid | `OPENAI_API_KEY`                     | Optional `OPENAI_BASE_URL`            |
-| ChatGPT plan | Plan | `ag-harness login chatgpt` sign-in   | Optional `CHATGPT_BASE_URL`           |
-
-### Choosing a Model
-
-<a id="backends-harness-model"></a> Type `/model` in a Harness session to open its model
-list. Local models come first, marked `[local]` and free; hosted models follow, marked
-`[paid]` with their price class, with the OpenAI models last:
-
-```text
-[local] qwen3:latest              free · Ollama · runs 32k ctx
-[local] gemma:latest              free · Ollama · no tool calls
-[paid] muse-spark-1.3             standard · Muse · 1024k ctx
-[paid] muse-spark-1.3-contributor cheap · Muse · trains on prompts · 1024k ctx
-[paid] kimi-k3                    premium · Kimi · needs KIMI_API_KEY
-[paid] qwen3.8-flash              cheap · Qwen · 976k ctx
-[paid] chatgpt/gpt-6.1-sol         plan · ChatGPT plan · needs ag-harness login chatgpt
-[paid] gpt-6.1-sol                standard · OpenAI · needs OPENAI_API_KEY
-```
-
-The price class comes from each provider's published list price per million output
-tokens: `cheap` costs at most $2.50, `premium` at least $15, and `standard` lies
-between. The cheap models are `muse-spark-1.3-contributor`, `qwen-plus`,
-`qwen3.8-flash`, `qwen3.7-flash`, and `gpt-6-luna`; they suit simple work such as titles
-and commit messages. Meta may train on the prompts and completions of
-`muse-spark-1.3-contributor`, its discounted tier, so the row says `trains on prompts`.
-
-Rows that cannot run a turn, such as a model without tool calls or a provider without
-its key, say what is missing and stay unselected when you press `Enter`. The list is
-refreshed each time you open it or the session-type picker, so models you pull or a
-server you start later appear without restarting Agentty.
-
-The model you pick is saved with the session and becomes the model new Harness sessions
-start on. Until you pick one, new sessions prefer a ready local model over a paid one,
-and among paid models take the first ready one in list order, so an exported API key
-never makes a paid provider the default over a local model, and an `OPENAI_API_KEY` set
-for other tools never wins over another configured provider. A remembered local model
-stays the default even while its server is stopped; a remembered paid model whose key is
-gone gives way to the next ready model. Choosing a harness model never changes the
-project's default model for other session types.
-
-### OpenAI Models
-
-<a id="backends-harness-openai"></a> The harness runs `gpt-6.1-sol`, `gpt-6-astra`,
-`gpt-6-luna`, and `gpt-5.6-terra`, the GPT models Codex uses, through OpenAI's Responses
-API with a paid OpenAI Platform API key:
-
-```sh
-export OPENAI_API_KEY=sk-...
-agentty --experimental-harness   # then choose a gpt-* model in the Harness /model list
-```
-
-- Usage is billed to the API key's organization, not to a ChatGPT plan. To use a ChatGPT
-  subscription, pick a `chatgpt/` model
-  ([ChatGPT Plan Models](#backends-harness-chatgpt)) or run a **Codex** session.
-- `OPENAI_BASE_URL` (default `https://api.openai.com/v1`) points the harness at another
-  Responses API endpoint.
-- OpenAI stores no responses for the harness; each request resends the session history,
-  which OpenAI's prompt cache bills at the cached-input rate. OpenAI charges prompts
-  over 272,000 input tokens at twice the input rate, which long sessions can reach.
-- New Harness sessions start on an OpenAI model only when you pick one or no local or
-  other hosted model is ready, so an `OPENAI_API_KEY` set for other tools never moves
-  sessions to paid OpenAI usage on its own.
-
-### ChatGPT Plan Models
-
-<a id="backends-harness-chatgpt"></a> Models listed with a `chatgpt/` prefix, such as
-`chatgpt/gpt-6.1-sol`, run through the same Responses API billed to your ChatGPT plan
-instead of API credits. Sign in once; the harness stores and refreshes the sign-in in
-`~/.agentty/auth/chatgpt.json` (or `$AGENTTY_ROOT/auth/chatgpt.json`, or
-`CHATGPT_AUTH_FILE`):
-
-```sh
-ag-harness login chatgpt
-agentty --experimental-harness   # then choose a chatgpt/ model in the Harness /model list
-```
-
-- The rows say `plan` instead of a price class, and `needs ag-harness login chatgpt`
-  until the sign-in exists. Usage counts against your plan's limits. When OpenAI ends
-  the sign-in, such as after a revocation, the rows ask for a sign-in again.
-- You can also sign in from Agentty: pressing `Enter` on such a row, or sending a prompt
-  on a signed-out `chatgpt/` model, opens a sign-in popup that opens your browser and
-  then switches the session to the model.
-- A `chatgpt/` model always uses the plan and a bare `gpt-*` model always uses
-  `OPENAI_API_KEY`; neither falls back to the other.
-
-### Local and Self-Hosted Models
-
-<a id="backends-harness-local"></a> Agentty lists the models served by an
-OpenAI-compatible Chat Completions endpoint, by default Ollama at
-`http://127.0.0.1:11434/v1`, so a running Ollama needs no configuration. For Ollama it
-reads each model's context window, tool support, and the window a loaded model runs
-with; other servers, such as llama.cpp `llama-server`, LM Studio, or vLLM, are listed
-through their models endpoint.
-
-```sh
-OLLAMA_CONTEXT_LENGTH=32768 ollama serve   # or raise the Ollama app's context length
-agentty --experimental-harness
-```
-
-| Variable                              | Default                     | Meaning                                    |
-| ------------------------------------- | --------------------------- | ------------------------------------------ |
-| `OPENAI_COMPATIBLE_BASE_URL`          | `http://127.0.0.1:11434/v1` | Endpoint including `/v1`; Ollama's default |
-| `OPENAI_COMPATIBLE_API_KEY`           | None                        | Bearer token, such as vLLM's `--api-key`   |
-| `OPENAI_COMPATIBLE_MODEL`             | None                        | Model to list when the server lists none   |
-| `OPENAI_COMPATIBLE_CONTEXT_WINDOW`    | `32768`                     | Tokens the server runs the model with      |
-| `OPENAI_COMPATIBLE_MAX_OUTPUT_TOKENS` | A quarter of the window     | Tokens reserved for each response, ≤ 8192  |
-
-- The model must support tool calls. Use base URLs such as `http://127.0.0.1:8080/v1`
-  for `llama-server`, `http://127.0.0.1:1234/v1` for LM Studio, and
-  `http://127.0.0.1:8000/v1` for vLLM.
-- A model's maximum window is not the window the server runs it with. Ollama loads
-  models with a 4,096-token window unless `OLLAMA_CONTEXT_LENGTH` or the app setting
-  raises it, and silently drops the start of longer requests. Before each turn on
-  Ollama, Agentty loads the model if needed, reads the window it runs with, and fits
-  requests to it. Below 16,384 tokens it stops the turn and asks you to raise the window
-  rather than let Ollama truncate the conversation. The picker shows the running window
-  of a loaded model, as in `runs 4k ctx, needs 16k`, and otherwise the model's maximum,
-  as in `up to 40k ctx`.
-- Where the server reports no running window, Agentty uses
-  `OPENAI_COMPATIBLE_CONTEXT_WINDOW`, so declare the window the server actually runs.
-- Agentty has no measured token estimate for unknown models, so it budgets input with a
-  50% margin: a 32,768-token window with the default reserve leaves a 17,246-token input
-  budget. The reasoning level is not sent, since servers reject it for models without
-  thinking; the model uses its server default.
-
-Without the flag the session type is hidden; with the flag but no runnable model it is
-shown disabled. With a runnable model, Agentty starts even when no backend CLI is
-installed; the other session types are then disabled and the selector opens on
-**Harness**. A Harness session's `/model` lists only harness models, and other sessions
-never list them.
-
-- `Read Only` turns can read the worktree. `Auto Edit` turns can also write files and
-  run unsandboxed `bash`, which can reach the network and paths outside the worktree,
-  like Codex full access. Provider keys and endpoints are removed from the `bash`
-  environment.
-- Answers arrive in one piece; the activity footer shows tool calls while a turn runs.
-- Commit messages and titles use the project's default fast or smart model when one is
-  set and its agent CLI is installed, otherwise the session's harness model. Focused
-  review likewise falls back to the session's harness model when the review model's CLI
-  is not installed.
-- <a id="backends-harness-fast-model"></a> With the flag, **Settings → Default Fast
-  Model** also lists every ready harness model with its price class, such as
-  `harness/qwen3.8-flash · cheap`. Choosing one runs commit messages and titles on it
-  for every session type of the project. Agentty never picks a harness model for this on
-  its own; while the chosen model is not ready, or without the flag, the Fast default
-  falls back as if unset.
-- History is stored per session under `~/.agentty/harness/` and removed with the
-  session. Image attachments are not supported yet; a prompt with pasted images fails
-  before reaching the model.
-- Each completed turn's content-free harness report, with per-request token usage,
-  context fitting, corrections, and tool activity, is kept in the `harness_turn_report`
-  table of Agentty's database for later analysis, including after the session is
-  deleted.
-- Switching away from `kimi-k3`, `kimi-k2.6`, `qwen3.8-max`, or `qwen3.8-flash` is
-  rejected once the session has their reasoning history. Switching to another provider
-  needs only that provider's key.
-
-## Subagent Limits
-
-Agentty requests a limit of two concurrent subagents per Codex or Claude session,
-excluding the parent agent. Change it with the global `Max Subagents` setting (`1`, `2`,
-`4`, or `8`). Agentty reads the setting at startup and applies the limit when starting
-the provider process, including when resuming a saved session, so restart Agentty after
-changing it.
-
-Codex limits concurrently open child-agent threads. Claude limits ordinary subagent
-spawning, but provider exceptions such as resumed subagents can exceed the limit.
-Enforcement depends on the installed CLI supporting its native setting. Antigravity has
-no verified concurrency setting, so Agentty does not cap its internal subagents.
-
-These are per-session provider limits, not host-wide CPU or memory limits. Multiple
-sessions each have their own allowance, and builds or tests can consume additional
-resources.
+- **Auto Edit**: Codex and Claude run commands with full access, outside the provider
+  sandbox, so browser tests, local services, PTY tools, container runtimes, and tool
+  caches work. Commands are therefore not confined to the session worktree; review the
+  diff, and use `Read Only` for inspection-only work.
+- **Read Only**: Codex denies filesystem writes and permission escalation but allows
+  shell network requests. Claude runs without a shell, using `Read`, `Glob`, `Grep`,
+  `WebSearch`, and `WebFetch`. This also applies to read-only graph nodes.
+- Claude turns can always use `WebSearch` and `WebFetch` without a permission prompt,
+  and Claude's file-edit tool cannot edit the main checkout. Treat fetched web content
+  as untrusted, keep web-backed prompts specific, and review the diff before merging.
+- Agentty instructs agents to keep project edits inside the worktree. When permissions
+  allow writes, build, test, and recording commands may still use external caches,
+  temporary files, and container storage.
 
 ## Authentication and Usage
 
 ### Codex
 
-<a id="backends-codex-authentication"></a> Codex is the recommended backend when you
-want subscription-backed usage. The CLI supports signing in with ChatGPT through
-`codex login`, and Agentty uses the supported `codex app-server` integration surface.
-Usage remains subject to the
+<a id="backends-codex-authentication"></a> Codex supports signing in with ChatGPT
+through `codex login` for subscription-backed usage, and Agentty uses the supported
+`codex app-server` surface. Usage remains subject to the
 [OpenAI Terms of Use](https://openai.com/policies/terms-of-use/).
 
 ### Claude
@@ -272,7 +66,7 @@ describes subscription OAuth as intended for Claude Code and native Anthropic
 applications, while developer integrations should use API keys or supported cloud
 providers.
 
-If Claude session turns or utility prompts fail with `authentication_error`,
+If Claude turns or utility prompts fail with `authentication_error`,
 `Failed to authenticate`, or `OAuth token has expired`, refresh the CLI session and
 retry:
 
@@ -284,16 +78,17 @@ claude auth status
 ### Antigravity
 
 <a id="backends-antigravity-authentication"></a> For Agentty usage through `agy`
-headless mode, prefer authentication backed by a Google Cloud project or API key rather
-than Google Account subscription sign-in. The
+headless mode, prefer authentication backed by a Google Cloud project or API key over a
+Google Account subscription sign-in. The
 [Antigravity terms](https://antigravity.google/terms) do not currently explain how
 subscription access applies when third-party tools invoke headless sessions.
 
-Antigravity retains conversation context between turns and resumes it after a restart.
+Older `agy` versions are excluded from provider selection; if a session hits one, run
+`agy update`. Antigravity keeps conversation context between turns and after a restart.
 
 <a id="backends-gemini-cli-sessions"></a> Agentty no longer runs the Gemini CLI.
 Sessions and project defaults saved with the Gemini backend now use Antigravity with the
-same `gemini-*` models. Their next turn starts a fresh conversation. Install and
+same `gemini-*` models, starting a fresh conversation on their next turn. Install and
 authenticate `agy` (see
 [Prepare an Agent Backend](@/docs/getting-started/installation.md#prepare-an-agent-backend))
 to keep using them.
@@ -301,27 +96,22 @@ to keep using them.
 ## Project Instruction Files
 
 <a id="backends-project-instruction-files"></a> Agentty relies on each backend's native
-project-instruction discovery instead of inlining repository guidance into prompts.
-
-- Codex loads `AGENTS.md`.
-- Claude Code loads `CLAUDE.md`.
-- Antigravity CLI loads `AGENTS.md` and `GEMINI.md` from the active workspace.
-
-Keeping `CLAUDE.md` and `GEMINI.md` as symlinks to a canonical `AGENTS.md` gives all
-backends the same repository guidance.
+project-instruction discovery: Codex loads `AGENTS.md`, Claude Code loads `CLAUDE.md`,
+and Antigravity loads `AGENTS.md` and `GEMINI.md`. Symlink `CLAUDE.md` and `GEMINI.md`
+to a canonical `AGENTS.md` to give every backend the same guidance.
 
 ## Selecting a Backend
 
-<a id="backends-selecting-a-backend"></a> Use `/model` to choose a locally available
-backend, then one of its models.
+<a id="backends-selecting-a-backend"></a> Use `/model` to choose an installed backend,
+then one of its models.
 
-The **Projects** tab shows installed CLI versions and `updating...` during startup
-refresh through each CLI's native updater. If an Antigravity executable changes while
+The **Projects** tab shows installed CLI versions, and `updating...` while each CLI's
+native updater refreshes it at startup. If an Antigravity executable changes while
 Agentty is running, wait for discovery or restart before retrying a turn.
 
 <a id="backends-persistent-defaults"></a> In **Settings**, choose a model and reasoning
-level for each project role. Claude and Codex also offer `Normal` or `Fast` response
-speed. Unavailable backend defaults fall back to an installed backend.
+level for each project role; Claude and Codex also offer `Normal` or `Fast` speed.
+Unavailable backend defaults fall back to an installed backend.
 
 <a id="backends-reasoning-level"></a>
 
@@ -331,19 +121,32 @@ speed. Unavailable backend defaults fall back to an installed backend.
 | Fast   | Titles and commit messages |
 | Review | Focused reviews            |
 
-Session overrides take precedence. Changing defaults does not alter existing sessions.
-`Default Response Style` initializes new sessions as `Concise`, `Balanced`, or
+Session overrides take precedence, and changing defaults does not alter existing
+sessions. `Default Response Style` starts new sessions as `Concise`, `Balanced`, or
 `Detailed`.
 
 Antigravity maps `xhigh` and `max` reasoning to `high`, except `gemini-4-hydrogen`,
-which uses `xhigh`. `gpt-oss-120b` always uses `medium`, and the orchestrator ignores
-the reasoning level. Claude maps both to `max`, which is supported by `claude-opus-5-5`.
-Codex supports a distinct `max` effort.
+which uses `xhigh`; `gpt-oss-120b` always uses `medium`, and
+`gemini-pro-orchestrator-g1-pro` ignores the level. Claude maps both to `max`, which
+`claude-opus-5-5` supports. Codex supports a distinct `max` effort.
+
+## Subagent Limits
+
+Agentty limits each Codex or Claude session to two concurrent subagents, excluding the
+parent. Change this with the global `Max Subagents` setting (`1`, `2`, `4`, or `8`) and
+restart Agentty to apply it.
+
+Codex limits concurrently open child-agent threads. Claude limits ordinary subagent
+spawning, though provider exceptions such as resumed subagents can exceed it.
+Enforcement depends on the installed CLI. Antigravity subagents are not capped. These
+are per-session provider limits, not host-wide CPU or memory limits.
 
 ## Available Models
 
-<a id="backends-available-models"></a> Each backend exposes one or more selectable model
-entries with different trade-offs between speed, quality, and cost.
+<a id="backends-available-models"></a> Pickers show only the models below. Stored
+project defaults and active sessions that reference a superseded model, such as
+`gemini-3.1-pro-preview` or `gemini-3.5-flash-lite`, are upgraded to its replacement;
+finished sessions keep their historical model.
 
 ### Antigravity Models
 
@@ -354,9 +157,6 @@ entries with different trade-offs between speed, quality, and cost.
 - `gemini-3.8-flash`: Fast Gemini model for agentic and multimodal tasks.
 - `claude-opus-5-5` and `claude-sonnet-5-5`: Claude models served through Antigravity.
 - `gpt-oss-120b`: Open-weight GPT-OSS 120B model served through Antigravity.
-
-Saved `gemini-3.1-pro-preview` selections load as `gemini-4-argon`, and
-`gemini-3.5-flash-lite` selections load as `gemini-3.8-flash`.
 
 ### Claude Models
 
@@ -375,58 +175,184 @@ Saved `gemini-3.1-pro-preview` selections load as `gemini-4-argon`, and
 
 ### Harness Models
 
-Available only in Harness sessions; see [Choosing a Model](#backends-harness-model) for
-which one new sessions start on. Besides the local models a server serves, stored as
-`openai-compatible/<model>`, the paid catalog lists:
+Available only in [Harness sessions](@/docs/agents/backends.md#backends-harness),
+alongside local models stored as `openai-compatible/<model>`:
 
-- `muse-spark-1.3`: Muse Spark model.
-- `kimi-k3`: Latest Kimi model.
-- `kimi-k2.6`: Previous Kimi model.
-- `qwen3.8-max`: Most capable Qwen model.
-- `qwen-plus`: Balanced Qwen model.
-- `gpt-6.1-sol`, `gpt-6-astra`, `gpt-6-luna`, `gpt-5.6-terra`: OpenAI models with an
-  `OPENAI_API_KEY`; see [OpenAI Models](#backends-harness-openai).
+- Muse: `muse-spark-1.3` and the discounted `muse-spark-1.3-contributor`.
+- Kimi: `kimi-k3` (latest) and `kimi-k2.6`.
+- Qwen: `qwen3.8-max`, `qwen-plus`, `qwen3.8-flash`, and `qwen3.7-flash`.
+- ChatGPT plan: `chatgpt/gpt-6.1-sol`, `chatgpt/gpt-6.1-terra`, `chatgpt/gpt-6-astra`,
+  `chatgpt/gpt-6-sol`, `chatgpt/gpt-6-luna`, `chatgpt/gpt-5.6-sol`,
+  `chatgpt/gpt-5.6-terra`, and `chatgpt/gpt-5.6-luna`.
+- OpenAI API: `gpt-6.1-sol`, `gpt-6-astra`, `gpt-6-luna`, and `gpt-5.6-terra`.
 
-Each request stays within an input budget below the model's context window. Because
-Agentty estimates tokens from text size, it holds back the model's output reserve plus a
-margin sized to how far that model's estimate was measured to fall short. Older turns
-that no longer fit are left out; after switching to a model with a smaller window, the
-next turn fits history to that model's budget.
-
-| Model            | Context window | Input budget |
-| ---------------- | -------------- | ------------ |
-| `muse-spark-1.3` | 1,048,576      | 818,469      |
-| `kimi-k3`        | 1,048,576      | 825,464      |
-| `kimi-k2.6`      | 262,144        | 206,366      |
-| `qwen3.8-max`    | 1,000,000      | 795,357      |
-| `qwen-plus`      | 1,000,000      | 877,705      |
-| `gpt-*` models   | 1,050,000      | 647,017      |
-
-Local models take their window from the server or the environment; see
-[Local and Self-Hosted Models](#backends-harness-local).
-
-### Stored Model Upgrades
-
-Model pickers show only the current models listed above. When a stored project default
-or active session references a superseded model, Agentty upgrades and persists its
-replacement automatically. Finished sessions preserve their historical model data.
+Each request fits within an input budget below the model's context window, leaving out
+older turns that no longer fit, including after switching to a smaller model.
 
 ## Switching Models
 
 <a id="backends-switching-models"></a> Use `/model` to change the current session's
 backend and model, `/reasoning` to change reasoning effort, and `/style` to choose
-answer length. See [Slash Commands](@/docs/usage/workflow.md#slash-commands) for
-response styles and permission modes. While a turn runs, model and speed changes wait
-for [queued work](@/docs/usage/workflow.md#active-turns-and-the-message-queue).
+answer length; see [Slash Commands](@/docs/usage/workflow.md#slash-commands). While a
+turn runs, model and speed changes wait for
+[queued work](@/docs/usage/workflow.md#active-turns-and-the-message-queue).
 
-Claude and Codex also support `/fast`. Press `Enter` on the command to toggle the
-current session between `Normal` and `Fast`. `Fast` reduces latency at higher provider
-cost. On a model without Fast support, such as `claude-haiku-5-5` or Codex Spark,
-`/fast` shows an error and keeps the current model; use `/model` to pick a supported
-one. Choosing an incompatible model resets speed to `Normal`. These changes do not alter
-project defaults. Antigravity has no speed control. See the provider guides for
+`/fast` toggles the session between `Normal` and `Fast` speed, which reduces latency at
+higher provider cost. It is supported by `claude-opus-5-5` and every Codex model except
+`gpt-5.3-codex-spark`; on other models it shows an error and keeps the current model.
+Choosing an incompatible model resets speed to `Normal`. Antigravity has no speed
+control. See the provider guides for
 [Codex fast mode](https://learn.chatgpt.com/docs/agent-configuration/speed) and
 [Claude Code fast mode](https://code.claude.com/docs/en/fast-mode).
 
-<a id="backends-switching-default-model"></a> To change defaults for future sessions,
-use **Settings**. See [Settings Scope](@/docs/usage/workflow.md#settings-scope).
+<a id="backends-switching-default-model"></a> Session changes do not alter project
+defaults; change those in [Settings](@/docs/usage/workflow.md#settings-scope).
+
+## Harness Sessions (Preview)
+
+<a id="backends-harness"></a> Start Agentty with `agentty --experimental-harness` to add
+a **Harness** session type that runs Agentty's built-in agent loop instead of an
+external CLI, against a free local model server or a paid hosted provider:
+
+| Provider     | Cost | Key                                  | Endpoint                              |
+| ------------ | ---- | ------------------------------------ | ------------------------------------- |
+| Local server | Free | Optional `OPENAI_COMPATIBLE_API_KEY` | Optional `OPENAI_COMPATIBLE_BASE_URL` |
+| Muse         | Paid | `MODEL_API_KEY`                      | Optional `MODEL_API_BASE_URL`         |
+| Kimi         | Paid | `KIMI_API_KEY`                       | Required `KIMI_BASE_URL`              |
+| Qwen         | Paid | `DASHSCOPE_API_KEY`                  | Required `DASHSCOPE_BASE_URL`         |
+| OpenAI       | Paid | `OPENAI_API_KEY`                     | Optional `OPENAI_BASE_URL`            |
+| ChatGPT plan | Plan | `ag-harness login chatgpt` sign-in   | Optional `CHATGPT_BASE_URL`           |
+
+Without the flag the session type is hidden; with it but no runnable model, it is shown
+disabled. With a runnable model, Agentty starts even when no backend CLI is installed,
+disabling the other session types.
+
+- `Read Only` turns can read the worktree. `Auto Edit` turns can also write files and
+  run unsandboxed `bash`, which can reach the network and paths outside the worktree.
+  Provider keys and endpoints are removed from the `bash` environment.
+- Answers arrive in one piece; the activity footer shows tool calls while a turn runs.
+- Commit messages, titles, and focused reviews use the project's default models when
+  their agent CLI is installed, otherwise the session's harness model.
+- History is stored per session under `~/.agentty/harness/` and removed with the
+  session. Pasted images are not supported yet; such prompts fail before reaching the
+  model.
+- A content-free report of each completed turn (token usage, context fitting,
+  corrections, and tool activity) is kept in the `harness_turn_report` database table,
+  including after the session is deleted.
+- Once a session has reasoning history from `kimi-k3`, `kimi-k2.6`, `qwen3.8-max`, or
+  `qwen3.8-flash`, switching away from that model is rejected.
+
+<a id="backends-harness-fast-model"></a> With the flag, **Settings → Default Fast
+Model** also lists every ready harness model with its price class, such as
+`harness/qwen3.8-flash · cheap`, to run commit messages and titles for every session
+type. Agentty never picks a harness model for this itself; while the chosen model is not
+ready, or without the flag, the Fast default falls back as if unset.
+
+### Choosing a Model
+
+<a id="backends-harness-model"></a> In a Harness session, `/model` lists only harness
+models: local models first, marked `[local]`, then hosted models marked `[paid]` with
+their price class, with OpenAI models last:
+
+```text
+[local] qwen3:latest              free · Ollama · runs 32k ctx
+[local] gemma:latest              free · Ollama · no tool calls
+[paid] muse-spark-1.3-contributor cheap · Muse · trains on prompts · 1024k ctx
+[paid] kimi-k3                    premium · Kimi · needs KIMI_API_KEY
+[paid] gpt-6.1-sol                standard · OpenAI · needs OPENAI_API_KEY
+```
+
+Price classes follow each provider's list price per million output tokens: `cheap` is at
+most $2.50, `premium` at least $15, and `standard` in between. The cheap models,
+`muse-spark-1.3-contributor`, `qwen-plus`, `qwen3.8-flash`, `qwen3.7-flash`, and
+`gpt-6-luna`, suit simple work such as titles and commit messages. Meta may train on
+prompts and completions sent to `muse-spark-1.3-contributor`.
+
+Rows that cannot run a turn, such as a model without tool calls or a provider without
+its key, say what is missing and cannot be selected. The list refreshes each time you
+open it, so newly pulled models and started servers appear without a restart.
+
+The model you pick becomes the default for new Harness sessions; it never changes the
+project default for other session types. Until you pick one, new sessions prefer a ready
+local model, then the first ready paid model in list order, so an exported API key, such
+as `OPENAI_API_KEY` set for other tools, never makes a paid provider the default. A
+remembered local model stays the default while its server is stopped; a remembered paid
+model whose key is gone gives way to the next ready model.
+
+### OpenAI Models
+
+<a id="backends-harness-openai"></a> The harness runs `gpt-6.1-sol`, `gpt-6-astra`,
+`gpt-6-luna`, and `gpt-5.6-terra` through OpenAI's Responses API with a paid OpenAI
+Platform API key:
+
+```sh
+export OPENAI_API_KEY=sk-...
+agentty --experimental-harness   # then choose a gpt-* model in the Harness /model list
+```
+
+- Usage is billed to the key's organization. To use a ChatGPT subscription instead, pick
+  a `chatgpt/` model
+  ([ChatGPT Plan Models](@/docs/agents/backends.md#backends-harness-chatgpt)) or run a
+  **Codex** session.
+- `OPENAI_BASE_URL` (default `https://api.openai.com/v1`) selects another Responses API
+  endpoint.
+- Each request resends the session history, billed at OpenAI's cached-input rate where
+  cached. Prompts over 272,000 input tokens cost twice the input rate, which long
+  sessions can reach.
+
+### ChatGPT Plan Models
+
+<a id="backends-harness-chatgpt"></a> Models with a `chatgpt/` prefix, such as
+`chatgpt/gpt-6.1-sol`, use the same Responses API billed to your ChatGPT plan instead of
+API credits. Sign in once; the harness stores and refreshes the sign-in in
+`~/.agentty/auth/chatgpt.json` (or `$AGENTTY_ROOT/auth/chatgpt.json`, or
+`CHATGPT_AUTH_FILE`):
+
+```sh
+ag-harness login chatgpt
+agentty --experimental-harness   # then choose a chatgpt/ model in the Harness /model list
+```
+
+- The rows show `plan` instead of a price class, and `needs ag-harness login chatgpt`
+  until you sign in or after OpenAI revokes the sign-in. Usage counts against your
+  plan's limits.
+- Pressing `Enter` on such a row, or sending a prompt on a signed-out `chatgpt/` model,
+  opens a sign-in popup that opens your browser and then switches the session to the
+  model.
+- A `chatgpt/` model always uses the plan and a bare `gpt-*` model always uses
+  `OPENAI_API_KEY`; neither falls back to the other.
+
+### Local and Self-Hosted Models
+
+<a id="backends-harness-local"></a> Agentty lists the models served by an
+OpenAI-compatible Chat Completions endpoint, by default Ollama at
+`http://127.0.0.1:11434/v1`, so a running Ollama needs no configuration. Other servers,
+such as llama.cpp `llama-server`, LM Studio, or vLLM, are listed through their models
+endpoint.
+
+```sh
+OLLAMA_CONTEXT_LENGTH=32768 ollama serve   # or raise the Ollama app's context length
+agentty --experimental-harness
+```
+
+| Variable                              | Default                     | Meaning                                    |
+| ------------------------------------- | --------------------------- | ------------------------------------------ |
+| `OPENAI_COMPATIBLE_BASE_URL`          | `http://127.0.0.1:11434/v1` | Endpoint including `/v1`; Ollama's default |
+| `OPENAI_COMPATIBLE_API_KEY`           | None                        | Bearer token, such as vLLM's `--api-key`   |
+| `OPENAI_COMPATIBLE_MODEL`             | None                        | Model to list when the server lists none   |
+| `OPENAI_COMPATIBLE_CONTEXT_WINDOW`    | `32768`                     | Tokens the server runs the model with      |
+| `OPENAI_COMPATIBLE_MAX_OUTPUT_TOKENS` | A quarter of the window     | Tokens reserved for each response, ≤ 8192  |
+
+- The model must support tool calls. Typical base URLs are `http://127.0.0.1:8080/v1`
+  for `llama-server`, `http://127.0.0.1:1234/v1` for LM Studio, and
+  `http://127.0.0.1:8000/v1` for vLLM.
+- Ollama loads models with a 4,096-token window unless `OLLAMA_CONTEXT_LENGTH` or the
+  app setting raises it, and silently drops the start of longer requests. Agentty reads
+  the window an Ollama model runs with before each turn, fits requests to it, and stops
+  the turn below 16,384 tokens, asking you to raise the window. The picker shows a
+  loaded model's running window, as in `runs 4k ctx, needs 16k`, or otherwise its
+  maximum, as in `up to 40k ctx`.
+- For servers that report no running window, set `OPENAI_COMPATIBLE_CONTEXT_WINDOW` to
+  the window the server actually uses. Agentty budgets input for these models with a 50%
+  margin.
+- The reasoning level is not sent; the model uses its server default.

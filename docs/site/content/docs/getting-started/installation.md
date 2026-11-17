@@ -11,44 +11,42 @@ and launch your first session.
 
 ## Install
 
-<a id="installation-options"></a>
+<a id="installation-options"></a> Agentty requires [Git](https://git-scm.com/) on your
+`PATH`.
 
 {{ install_methods() }}
 
-If `pnpm` reports a global bin-directory error, run `pnpm setup`, reopen your terminal,
-and retry.
+- If `pnpm` reports a global bin-directory error, run `pnpm setup`, reopen your
+  terminal, and retry.
+- If package install scripts are blocked, the first launch downloads the binary from
+  GitHub Releases, so keep network access available.
+- Cargo installs on macOS need Xcode Command Line Tools for native process bindings.
 
-If package install scripts are blocked, the first launch downloads the binary from
-GitHub Releases. Keep network access available for that launch.
-
-To update manually, use the same method you originally installed with:
+Global `npm`, Bun, and `pnpm` installs update automatically; see
+[Auto-Update](@/docs/usage/workflow.md#auto-update). To update manually, use your
+original method:
 
 | Method | Update command                        |
 | ------ | ------------------------------------- |
 | npm    | `npm install --global agentty@latest` |
 | Bun    | `bun add --global agentty@latest`     |
 | pnpm   | `pnpm add --global agentty@latest`    |
+| npx    | `npx agentty@latest`                  |
 | Cargo  | `cargo install agentty --locked`      |
 | Shell  | Rerun the shell installer above.      |
-
-With `npx`, run `npx agentty@latest` to use the latest release without a global install.
-
-For Cargo installation on macOS, install Xcode Command Line Tools for native process
-bindings.
 
 <details id="verify-a-github-release">
 <summary>Verify a GitHub Release</summary>
 
-Install the [GitHub CLI](https://cli.github.com/), then download a GitHub release
-artifact. Each artifact has keyless Sigstore build provenance that identifies Agentty's
-release workflow:
+Install the [GitHub CLI](https://cli.github.com/) and download a release artifact. Each
+artifact has keyless Sigstore build provenance identifying Agentty's release workflow:
 
 ```bash
 gh attestation verify PATH_TO_ARTIFACT --repo agentty-xyz/agentty
 ```
 
-Release immutability also protects the published tag and complete asset set. Verify a
-specific release and a downloaded asset with:
+Release immutability also protects the published tag and asset set. Verify a release and
+a downloaded asset with:
 
 ```bash
 gh release verify vX.Y.Z --repo agentty-xyz/agentty
@@ -59,8 +57,8 @@ gh release verify-asset vX.Y.Z PATH_TO_ARTIFACT --repo agentty-xyz/agentty
 
 ## Prepare an Agent Backend
 
-Agentty also requires at least one supported agent CLI on your `PATH`. Install and
-authenticate one backend before launching Agentty:
+Install and authenticate at least one supported agent CLI on your `PATH` before
+launching Agentty:
 
 - **Codex** (`codex`, recommended; supports subscription usage): install the
   [Codex CLI](https://github.com/openai/codex), then run `codex login`.
@@ -71,29 +69,26 @@ authenticate one backend before launching Agentty:
   [Antigravity CLI](https://github.com/google-antigravity/antigravity-cli), then run
   `agy` and follow its sign-in flow.
 
-See [Agents & Models](@/docs/agents/backends.md) before choosing credentials. Provider
-subscription and OAuth rules differ, and not every interactive CLI sign-in is suitable
-for third-party invocation through Agentty.
+Provider subscription and OAuth rules differ, and not every interactive sign-in suits
+third-party invocation. See
+[Authentication and Usage](@/docs/agents/backends.md#authentication-and-usage) before
+choosing credentials.
 
 ## Start a Session
 
-Agentty automatically discovers Git repositories under your home directory.
-
-1. Run `agentty` from any directory.
-1. In the **Projects** tab, select a repository and press `Enter`.
+1. Run `agentty` from the Git repository you want to work in. From elsewhere, add a
+   repository in the **Projects** tab with `a` and press `Enter` to select it.
 1. In the **Sessions** tab, press `a` and choose `Regular`.
-1. Type your first prompt and press `Enter` to start the agent.
-1. Let the agent modify files in its dedicated worktree branch.
+1. Type your first prompt and press `Enter`. The agent works in its own worktree branch.
 
-Only one Agentty instance can use a given Agentty root at a time. If startup reports
-that another instance is running, close that instance first. A crash releases ownership
-automatically; do not delete the lock file. Separate `AGENTTY_ROOT` directories can run
-independently.
+Only one Agentty instance can use an Agentty root at a time. If startup reports another
+running instance, close it first; a crash releases the lock automatically, so do not
+delete the lock file. Separate `AGENTTY_ROOT` directories run independently.
 
 ## Review Changes
 
-<a id="installation-review-changes"></a> Inside `agentty`, open the diff view (`d`) to
-inspect the generated `git diff` before you keep or discard edits.
+<a id="installation-review-changes"></a> In session view, press `d` to inspect the diff
+before you merge, publish, or discard the changes.
 
 ## Next Steps
 

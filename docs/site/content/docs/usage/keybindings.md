@@ -5,79 +5,19 @@ weight = 2
 +++
 
 <a id="usage-keybindings-introduction"></a> This page lists keyboard shortcuts for each
-Agentty view. In the app, press `?`, shown as `?: help` at the right of the top bar, to
-list the shortcuts available on the current page. The popup fits its shortcut list, and
-its bottom border shows `Esc/q: close`. When the list is taller than the terminal, the
-border also shows `j/k: scroll`.
+Agentty view. In the app, press `?`, shown as `?: help` in the top bar, to list the
+shortcuts available on the current page; close it with `Esc` or `q`, and scroll long
+lists with `j` / `k`.
 
-For session states and transition behavior, see [Workflow](@/docs/usage/workflow.md).
+For session states and behavior, see [Workflow](@/docs/usage/workflow.md).
 
 <!-- more -->
-
-## Execution Graph Inspector
-
-Press `w` from session view to open saved graphs. Actions appear only when supported by
-the displayed snapshot. See
-[Workflow](@/docs/usage/workflow.md#execution-graph-inspector) for acceptance and
-restart behavior.
-
-| Key                              | Action                                           |
-| -------------------------------- | ------------------------------------------------ |
-| `[` / `]`                        | Previous / next graph                            |
-| `j` / `k`, `Down` / `Up`         | Select node                                      |
-| `r`                              | Refresh graph state                              |
-| `o`                              | Inspect next output                              |
-| `J` / `K`, `PageDown` / `PageUp` | Scroll details                                   |
-| `Home`                           | Scroll to top                                    |
-| `a`                              | Accept the displayed output version              |
-| `e`                              | Reply to or revise the selected task             |
-| `t`                              | Retry selected failed node                       |
-| `s`                              | Resume paused graph dispatch                     |
-| `x`                              | Confirm cancellation of the whole graph          |
-| `Enter`                          | Submit graph input                               |
-| `Ctrl+r`                         | Refresh and reconcile a rejected draft           |
-| `PageUp` / `PageDown` in input   | Scroll the editor notice                         |
-| `Alt+Enter` / `Shift+Enter`      | Insert newline in graph input                    |
-| `Esc`                            | Cancel graph input, or return to session view    |
-| `q`                              | Return to session view while outside graph input |
-
-## Shared Text Editing
-
-Prompt, question, graph, publish-branch, and launch-configuration inputs share these
-keys. Completion menus and question options take precedence when open.
-
-| Key                                      | Action                              |
-| ---------------------------------------- | ----------------------------------- |
-| `Left` / `Right`                         | Move one character                  |
-| `Option+Left` / `Shift+Left` / `Alt+B`   | Move to previous word               |
-| `Option+Right` / `Shift+Right` / `Alt+F` | Move to next word                   |
-| `Home` / `End`                           | Move to start / end of input        |
-| `Ctrl+A` / `Ctrl+E`                      | Move to start / end of current line |
-| `Backspace` / `Delete`                   | Delete backward / forward           |
-| `Option+Backspace` / `Shift+Backspace`   | Delete previous word                |
-| `Ctrl+W`                                 | Delete previous word                |
-| `Cmd+Backspace` / `Ctrl+U`               | Delete current line                 |
-| `Ctrl+K`                                 | Delete to end of current line       |
-| `Ctrl+Z`                                 | Undo                                |
-| `Ctrl+Y` / `Ctrl+Shift+Z`                | Redo                                |
-| paste                                    | Insert text at the cursor           |
-
-On macOS, undo still uses `Ctrl+Z`, not `Cmd+Z`. Terminal applications such as Ghostty
-may consume `Cmd+Z` before Agentty or a surrounding `tmux` session receives it.
-
-`Cmd+Backspace`, `Option+Backspace`, and `Alt+Enter` require the terminal to forward the
-shortcut. If a terminal consumes a shortcut, use `Ctrl+U` to delete the line, `Ctrl+W`
-to delete the previous word, or `Ctrl+J` to insert a newline in multiline inputs.
-
-Multiline prompt and question inputs also share vertical cursor movement and newline
-insertion. Single-line publish and launch-configuration inputs keep only the first line
-of pasted text.
 
 ## Session List
 
 | Key                 | Action                                               |
 | ------------------- | ---------------------------------------------------- |
-| `q`                 | Quit                                                 |
+| `q`                 | Quit after confirmation                              |
 | `a`                 | Check hooks, then open the session creation selector |
 | `s`                 | Sync active project branch                           |
 | `c`                 | Cancel selected session after confirmation           |
@@ -87,31 +27,24 @@ of pasted text.
 | `Tab` / `Shift+Tab` | Switch to next / previous tab                        |
 | `?`                 | Help                                                 |
 
-The archive starts with the 10 most recently updated sessions. Select `Load more...` and
-press `Enter` to load the next 10. Once more than 10 are loaded, select `Show less...`
-and press `Enter` to hide them again and return to the first 10. The archive heading
-shows the project's total archived sessions across all pages. Switching projects resets
-the archive window.
+The archive shows the 10 most recently updated sessions; `Load more...` adds 10 more and
+`Show less...` returns to the first 10. The archive heading counts all archived sessions
+in the project. Switching projects resets the archive window.
 
-`a` opens the session-type selector, with a warning first if configured hooks are
-missing. `Enter` continues past that warning; `Esc` / `q` cancels. New-session setup
-runs in the background; `s` retries failed setup from session view.
+If configured hooks are missing, `a` warns first: `Enter` continues and `Esc` / `q`
+cancels. See [Session Types](@/docs/usage/workflow.md#session-types) and
+[Project Sync](@/docs/usage/workflow.md#project-sync).
 
-For draft and stacked eligibility, see
-[Session Types](@/docs/usage/workflow.md#session-types). Project sync leaves navigation
-available; see [Project Sync](@/docs/usage/workflow.md#project-sync).
-
-<a id="usage-session-list-project-switcher"></a> The `p` popup lists registered projects
-in most-recently-opened order with the active project marked by a `* ` prefix. Each row
-shows `▶ N` for projects with running sessions and stays blank otherwise. Use `j` / `k`
-to move, `Enter` to switch the active project without leaving the Sessions view, and
-`Esc` or `q` to close.
+<a id="usage-session-list-project-switcher"></a> The `p` popup lists projects in
+most-recently-opened order, marks the active one with `* `, and shows `▶ N` for projects
+with running sessions. Use `j` / `k` to move, `Enter` to switch projects, and `Esc` or
+`q` to close.
 
 ## Project List
 
 | Key                 | Action                        |
 | ------------------- | ----------------------------- |
-| `q`                 | Quit                          |
+| `q`                 | Quit after confirmation       |
 | `s`                 | Sync active project branch    |
 | `a`                 | Add project by path           |
 | `d`                 | Discover projects in a folder |
@@ -120,15 +53,13 @@ to move, `Enter` to switch the active project without leaving the Sessions view,
 | `Tab` / `Shift+Tab` | Switch to next / previous tab |
 | `?`                 | Help                          |
 
-Project sync follows the same rules as in the Sessions list. In project path popups,
-`Enter` submits and `Esc` cancels. In discovery results, `j` / `k` navigate, `Space`
-selects a repository, `Enter` saves selected repositories, and `Esc` discards results.
-The startup discovery suggestion defaults to **No**; `y` starts the home scan and `n` /
-`Esc` skips it. See
-[Projects and Discovery](@/docs/usage/workflow.md#projects-and-discovery).
+In path popups, `Enter` submits and `Esc` cancels. In discovery results, `j` / `k`
+navigate, `Space` selects a repository, `Enter` saves the selection, and `Esc` discards
+it. In the startup discovery popup, `y` scans your home directory and `n` / `Esc` skips.
+See [Projects and Discovery](@/docs/usage/workflow.md#projects-and-discovery).
 
-<a id="usage-project-list-active-highlight"></a> The currently active project is
-highlighted in the table with a `* ` prefix and accented row text.
+<a id="usage-project-list-active-highlight"></a> The active project has a `* ` prefix
+and accented row text.
 
 ## Settings
 
@@ -147,13 +78,12 @@ highlighted in the table with a `* ` prefix and accented row text.
 | `?`                 | Help                                              |
 
 <a id="usage-settings-options"></a> Role pickers ask for model, reasoning, and, for
-Claude or Codex, speed. Launch commands use the shared text editor. See
-[Settings Scope](@/docs/usage/workflow.md#settings-scope) for available settings.
+Claude or Codex, speed. See [Settings Scope](@/docs/usage/workflow.md#settings-scope).
 
 ## Session View
 
 <a id="usage-session-view-actions"></a> Available actions depend on the session state.
-The full set in **Review** state, subject to session and forge availability:
+The full set in **Review**, subject to session and forge availability:
 
 | Key                 | Action                                              |
 | ------------------- | --------------------------------------------------- |
@@ -178,34 +108,53 @@ The full set in **Review** state, subject to session and forge availability:
 State-specific differences:
 
 - **AgentReview**: `r` cancels the pending review and starts sync.
-- **Watching**: Same actions as **Review**; `W` stops watching. See
+- **Watching**: Same as **Review**; `W` stops watching. See
   [Watching a Review Request](@/docs/usage/workflow.md#usage-review-request-watch).
-- **InProgress**: `Enter`, `r`, and `p` queue messages, sync, and publishing. `Ctrl+C`
-  retracts the newest queued message; with none left, it stops the turn. `d` opens an
-  available diff while work continues.
-- **InProgress / Rebasing**: Slash commands offer only setting commands; see
+- **InProgress**: `Enter`, `r`, and `p` queue a message, sync, or publishing. `Ctrl+C`
+  retracts the newest queued message, then stops the turn. `d` opens an available diff.
+- **InProgress / Rebasing**: Slash commands offer only settings; see
   [Active Turns](@/docs/usage/workflow.md#active-turns-and-the-message-queue).
 - **Rebasing**: `Enter` and `p` queue work; cancellation is unavailable.
-- **Draft**: `Enter` stages, `s` starts, and image-paste keys open the composer. Stacked
-  drafts require a review-ready parent and idle stack.
+- **Draft**: `Enter` stages, `s` starts, and image-paste keys open the composer.
 - **Question**: Answer through the question panel; `r` is hidden.
-- **Stacked child**: No `F`. Idle review-ready parents retain reply, slash, merge, and
-  sync actions.
+- **Stacked child**: No `F`.
 - **Linked review request**: `c` opens comments; local `m` is unavailable.
 - **Merged**: Read-only chat, comments, and diff until manual target sync completes.
-- **Done / Canceled**: `c` confirms a continuation draft; linked comments are hidden.
-- **Queued / Merging**: Navigation, scrolling, and help remain available.
+- **Done / Canceled**: `c` confirms a continuation draft and linked comments are hidden;
+  `d` needs an archived diff.
+- **Queued / Merging**: Navigation, scrolling, and help only.
 
-A known-empty diff hides `d`. `o` requires `tmux` and runs the configured launch command
-or opens a command selector. See [Workflow](@/docs/usage/workflow.md) for lifecycle
-details.
+## Execution Graph Inspector
+
+Press `w` from session view. Actions appear only when the displayed snapshot supports
+them; see [Workflow](@/docs/usage/workflow.md#execution-graph-inspector).
+
+| Key                              | Action                                           |
+| -------------------------------- | ------------------------------------------------ |
+| `[` / `]`                        | Previous / next graph                            |
+| `p`                              | Return to the pending proposal                   |
+| `j` / `k`, `Down` / `Up`         | Select node                                      |
+| `r`                              | Refresh graph state                              |
+| `o`                              | Inspect next output                              |
+| `J` / `K`, `PageDown` / `PageUp` | Scroll details                                   |
+| `Home`                           | Scroll to top                                    |
+| `a`                              | Accept the displayed output version              |
+| `e`                              | Reply to or revise the selected task             |
+| `t`                              | Retry selected failed node                       |
+| `s`                              | Resume paused graph dispatch                     |
+| `x`                              | Confirm cancellation of the whole graph          |
+| `Enter`                          | Submit graph input                               |
+| `Ctrl+r`                         | Refresh and reconcile a rejected draft           |
+| `PageUp` / `PageDown` in input   | Scroll the editor notice                         |
+| `Alt+Enter` / `Shift+Enter`      | Insert newline in graph input                    |
+| `Esc`                            | Cancel graph input, or return to session view    |
+| `q`                              | Return to session view while outside graph input |
 
 ## Review Comments in Diff Mode
 
-Use `c` to open linked review comments or `d` to open Files. Comments are grouped as
-unresolved, outdated, resolved, and standalone. The right pane shows the selected
-conversation and available line context; outdated or file-level comments explain why
-line context is absent.
+Press `c` in session view to open linked review comments, grouped as unresolved,
+outdated, resolved, and standalone. The right pane shows the selected conversation and
+any available line context.
 
 | Key           | Action                                   |
 | ------------- | ---------------------------------------- |
@@ -216,47 +165,14 @@ line context is absent.
 | `Space`       | Toggle the selected actionable thread    |
 | `Enter`       | Submit all selected threads to the agent |
 
-`[ ]` marks an actionable thread; `[x]` marks a selection. Submission requires a
-reply-capable session and at least one selected thread. During active work or sync,
-`Enter` queues the batch behind earlier work. Outdated unresolved threads remain
-actionable; resolved threads and standalone comments are read-only. See
-[Addressing Review Comments](@/docs/usage/workflow.md#addressing-review-comments) for
-reply and resolution behavior.
-
-## Publish Popup
-
-| Key                      | Action                                             |
-| ------------------------ | -------------------------------------------------- |
-| `Enter`                  | Publish typed or default target in the background  |
-| `Esc`                    | Cancel and return to session view                  |
-| shared text-editing keys | Edit, paste, move, delete, undo, or redo           |
-| text keys                | Edit remote branch name, including the character q |
-
-## ChatGPT Sign-In Popup
-
-Opens from the Harness `/model` list on a `chatgpt/` model that needs a sign-in, or when
-sending a prompt on such a model. While it waits, the popup shows the sign-in URL in
-case the browser does not open.
-
-| Key     | Action                                                       |
-| ------- | ------------------------------------------------------------ |
-| `Enter` | Open the browser sign-in, or close the finished result       |
-| `Esc`   | Cancel, including a running sign-in, and return to the draft |
-
-## Launch Configuration Selector
-
-| Key         | Action                                 |
-| ----------- | -------------------------------------- |
-| `j` / `k`   | Move selection                         |
-| `Enter`     | Open worktree and run selected command |
-| `Esc` / `q` | Cancel and return to session view      |
+`[ ]` marks an actionable thread and `[x]` a selected one. Submitting needs a
+reply-capable session. See
+[Addressing Review Comments](@/docs/usage/workflow.md#addressing-review-comments).
 
 ## Diff Mode
 
-`d` opens Files. Focus a patch with `Enter` or `l`, add feedback on changed lines, then
-submit the batch with `s`. `Shift+V` starts a range selection; move to extend it and
-press `Enter` to comment, or `Esc` to cancel. `Shift+C` opens whole-file feedback and
-clears a range selection.
+`d` opens Files. Focus a patch with `Enter` or `l`, comment on changed lines, then
+submit all comments with `s`.
 
 | Key                         | Action                                         |
 | --------------------------- | ---------------------------------------------- |
@@ -276,63 +192,101 @@ clears a range selection.
 | `s`                         | Submit all diff comments                       |
 | `?`                         | Help                                           |
 
-<a id="usage-diff-totals"></a> The panel and file tree show added/removed line totals.
-The tree fits its longest row, including badges and totals, up to `30%` of the available
-width and `60` columns. Totals align at that shared edge. Filenames retain their
-extensions when shortened, while tree connectors stay aligned across folders and files.
-`A`, `M`, `D`, and `R` mark added, modified, deleted, and renamed files; binary files
-show `Binary`. Totals disappear when names need the space. File comments sit above the
-patch; inline comments retain their old/new line context.
+After `Shift+V`, move to extend the range and press `Enter` to comment or `Esc` to
+cancel. Finish a comment with `Enter` or `Esc`; finishing with empty text deletes it. In
+comments, `@` opens file lookup: arrows choose, `Tab` / `Enter` insert, and `Esc`
+dismisses. Leaving with unsent comments opens a `Submit diff comments?` preview: `Yes`
+submits, `No` leaves and keeps them, and `Esc` stays. Read-only diffs hide commenting.
 
-Press `Enter` on a comment to edit it and `Enter` or `Esc` to finish. Finish with empty
-text to delete it. `@` opens file lookup: arrows choose, `Tab` / `Enter` insert, and
-`Esc` dismisses. Completed comments survive navigation. `s` combines them with existing
-draft text and images; a new turn clears them. Retracting a queued batch preserves them.
-Leaving with comments shows them in a `Submit diff comments?` preview: `Yes` submits,
-`No` leaves and keeps them, and `Esc` stays in Diff mode. Read-only diffs hide comment
-editing and submission.
+<a id="usage-diff-totals"></a> The panel and file tree show added and removed line
+totals, hidden when names need the space. `A`, `M`, `D`, and `R` mark added, modified,
+deleted, and renamed files; binary files show `Binary`.
 
-For Markdown, `p` previews the complete post-change file and stays enabled across file
-navigation. Other file types keep showing diffs; unavailable files show a notice. Press
-`p` again to return to the patch.
+For Markdown files, `p` previews the complete post-change file and stays on while you
+switch files; other files keep showing diffs.
+
+## Shared Text Editing
+
+Prompt, question, graph, publish-branch, and launch-configuration inputs share these
+keys. Open completion menus and question options take precedence.
+
+| Key                                      | Action                              |
+| ---------------------------------------- | ----------------------------------- |
+| `Left` / `Right`                         | Move one character                  |
+| `Option+Left` / `Shift+Left` / `Alt+B`   | Move to previous word               |
+| `Option+Right` / `Shift+Right` / `Alt+F` | Move to next word                   |
+| `Home` / `End`                           | Move to start / end of input        |
+| `Cmd+Left` / `Cmd+Right`                 | Move to start / end of current line |
+| `Ctrl+A` / `Ctrl+E`                      | Move to start / end of current line |
+| `Backspace` / `Delete`, `Ctrl+D`         | Delete backward / forward           |
+| `Option+Backspace` / `Shift+Backspace`   | Delete previous word                |
+| `Ctrl+W`                                 | Delete previous word                |
+| `Cmd+Backspace` / `Ctrl+U`               | Delete current line                 |
+| `Ctrl+K`                                 | Delete to end of current line       |
+| `Ctrl+Z`                                 | Undo                                |
+| `Ctrl+Y` / `Ctrl+Shift+Z`                | Redo                                |
+
+On macOS, undo uses `Ctrl+Z`; terminals such as Ghostty may consume `Cmd+Z`. `Cmd`,
+`Option`, and modified `Enter` shortcuts need the terminal to forward them. Otherwise
+use `Ctrl+U`, `Ctrl+W`, or `Ctrl+J` for a newline. Single-line inputs keep only the
+first line of pasted text.
+
+## Publish Popup
+
+| Key       | Action                                                |
+| --------- | ----------------------------------------------------- |
+| `Enter`   | Publish the typed or default branch in the background |
+| `Esc`     | Cancel and return to session view                     |
+| text keys | Edit the remote branch name, including `q`            |
+
+## ChatGPT Sign-In Popup
+
+Opens from the Harness `/model` list on a `chatgpt/` model that needs a sign-in, or when
+sending a prompt on such a model. It shows the sign-in URL in case the browser does not
+open.
+
+| Key     | Action                                                       |
+| ------- | ------------------------------------------------------------ |
+| `Enter` | Open the browser sign-in, or close the finished result       |
+| `Esc`   | Cancel, including a running sign-in, and return to the draft |
+
+## Launch Configuration Selector
+
+| Key         | Action                                 |
+| ----------- | -------------------------------------- |
+| `j` / `k`   | Move selection                         |
+| `Enter`     | Open worktree and run selected command |
+| `Esc` / `q` | Cancel and return to session view      |
 
 ## Prompt Input
 
-| Key                                 | Action                              |
-| ----------------------------------- | ----------------------------------- |
-| `Enter`                             | Send prompt or stage it in a draft  |
-| `Alt+Enter` / `Shift+Enter`         | Insert newline                      |
-| `Ctrl+J` / `Ctrl+M`                 | Insert newline (terminal fallback)  |
-| `Ctrl+V` / `Ctrl+Shift+V` / `Alt+V` | Paste image as `[Image #n]`         |
-| `Cmd+Left` / `Cmd+Right`            | Move to start / end of current line |
-| `Option+Left` / `Option+Right`      | Move to previous / next word        |
-| `Option+Backspace`                  | Delete previous word                |
-| `Cmd+Backspace`                     | Delete current line                 |
-| `Ctrl+Z`                            | Undo                                |
-| `Ctrl+Y` / `Ctrl+Shift+Z`           | Redo                                |
-| `Esc`                               | Cancel                              |
-| `Tab`                               | Focus chat output for scrolling     |
-| `Shift+Tab`                         | Cycle the session permission mode   |
-| `@`                                 | Open file picker                    |
-| `/`                                 | Open slash commands                 |
-| `j` / `k` / `Up` / `Down`           | Navigate and wrap slash menu        |
+Prompt input also supports
+[shared text editing](@/docs/usage/keybindings.md#shared-text-editing).
 
-Use `/mode` to select `Auto Edit`, `Auto Edit + Auto Address Comments`, or `Read Only`.
-`Shift+Tab` cycles those modes in that order.
+| Key                                 | Action                                  |
+| ----------------------------------- | --------------------------------------- |
+| `Enter`                             | Send prompt or stage it in a draft      |
+| `Alt+Enter` / `Shift+Enter`         | Insert newline                          |
+| `Ctrl+J` / `Ctrl+M`                 | Insert newline (terminal fallback)      |
+| `Up` / `Down`                       | Move between lines, then browse history |
+| `Ctrl+V` / `Ctrl+Shift+V` / `Alt+V` | Paste image as `[Image #n]`             |
+| `Esc` / `Ctrl+C`                    | Cancel                                  |
+| `Tab`                               | Focus chat output for scrolling         |
+| `Shift+Tab`                         | Cycle the session permission mode       |
+| `@`                                 | Open file picker                        |
+| `/`                                 | Open slash commands                     |
+| `j` / `k` / `Up` / `Down`           | Navigate and wrap slash menu            |
 
-With `agentty --experimental-graph`, `/graph` arms the composer; `Enter` submits your
-task and `Esc` disarms it while preserving the draft. It has no subcommands. Chat
-remains on the left with the live preview on the right. Reply in chat to approve,
-revise, or cancel a pending proposal; `w` shows its details. See
-[generated graph proposals](@/docs/usage/workflow.md#generated-graph-proposals).
+`Shift+Tab` cycles `Auto Edit`, `Auto Edit + Auto Address Comments`, and `Read Only`.
+With `--experimental-graph`, `/graph` arms the composer: `Enter` submits your task and
+`Esc` disarms it, keeping the draft. See
+[Generated Graph Proposals](@/docs/usage/workflow.md#generated-graph-proposals).
 
-With chat focused, scroll using `j` / `k` or arrows, jump with `g` / `G`, or move half a
-page with `Ctrl+D` / `Ctrl+U`. `d` previews available changes, `Tab` returns to input,
-and `q` returns to the list with the draft saved. `Ctrl+C` is ignored in chat focus.
-
-Text uses normal terminal paste. Image shortcuts attach an image as `[Image #n]`; see
-[Prompt Input Extras](@/docs/usage/workflow.md#prompt-input-extras). If modified Enter
-keys do not reach Agentty, use `Ctrl+J` or `Ctrl+M` for newlines.
+With chat focused, scroll with `j` / `k` or arrows, jump with `g` / `G`, or move half a
+page with `Ctrl+D` / `Ctrl+U`. `d` previews changes, `Tab` returns to input, and `q`
+returns to the list with the draft saved. Other keys, including `Ctrl+C`, are ignored.
+See [Prompt Input Extras](@/docs/usage/workflow.md#prompt-input-extras) for images and
+file lookup.
 
 ## Question Input — Option Selection
 
@@ -348,8 +302,8 @@ When predefined options are shown:
 
 ## Question Input — Free Text
 
-After moving above or below the predefined option list, or when no predefined options
-exist:
+After moving past the option list, or when there are no options, the answer input
+supports [shared text editing](@/docs/usage/keybindings.md#shared-text-editing) and:
 
 | Key                                 | Action                               |
 | ----------------------------------- | ------------------------------------ |
@@ -357,27 +311,13 @@ exist:
 | `Alt+Enter` / `Shift+Enter`         | Insert newline                       |
 | `Ctrl+J` / `Ctrl+M`                 | Insert newline (terminal fallback)   |
 | `Ctrl+V` / `Ctrl+Shift+V` / `Alt+V` | Paste image as `[Image #n]`          |
+| `@`                                 | Look up files                        |
 | `Ctrl+C`                            | End turn or close graph panel        |
-| `Left` / `Right` / `Up` / `Down`    | Move cursor                          |
-| `Backspace` / `Delete`              | Delete character                     |
-| `Home` / `End`                      | Move to start / end                  |
-| `Cmd+Left` / `Cmd+Right`            | Move to start / end of current line  |
-| `Option+Left` / `Option+Right`      | Move to previous / next word         |
-| `Option+Backspace` / `Ctrl+W`       | Delete previous word                 |
-| `Cmd+Backspace`                     | Delete current line                  |
-| `Ctrl+K`                            | Delete to end of current line        |
-| `Ctrl+D`                            | Delete character forward             |
-| `Ctrl+Z`                            | Undo                                 |
-| `Ctrl+Y` / `Ctrl+Shift+Z`           | Redo                                 |
 | `Tab`                               | Focus chat output for scrolling      |
 
-Type `@` and a filename fragment to look up files. Arrows select a match; `Tab` /
-`Enter` insert it without sending the answer. With no matches, those keys close the
-lookup. `Esc` dismisses it; modified Enter still inserts a newline.
-
-In free-text mode every other printable character — including `q` — is inserted into the
-answer. To leave without answering, press `Tab` to focus the chat output and then `q`,
-or press `Ctrl+C` while the answer input is focused.
+In file lookup, arrows select a match, `Tab` / `Enter` insert it without sending, and
+`Esc` dismisses. Every other printable character, including `q`, goes into the answer;
+to leave without answering, press `Tab` and then `q`, or press `Ctrl+C`.
 
 ## Question Input — Chat Scroll
 
@@ -392,9 +332,7 @@ When chat output is focused (press `Tab` to switch):
 | `Tab`                     | Return focus to answer input      |
 | `q`                       | Return to sessions list           |
 
-<a id="usage-question-input-submit-flow"></a> After the last question is answered,
-Agentty sends one follow-up message with each question and its response, then returns to
-session view. Pressing `q` (outside free-text input) returns to the sessions list while
-leaving the session in **Question** state; answers already submitted and the current
-free-text draft are kept, so reopening the session resumes at the next unanswered
-question.
+<a id="usage-question-input-submit-flow"></a> After the last answer, Agentty sends one
+follow-up with every question and response. Leaving with `q` keeps the session in
+**Question** with submitted answers and the current draft, so reopening resumes at the
+next unanswered question.
