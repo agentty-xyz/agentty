@@ -37,6 +37,51 @@ pub struct BranchPushOutcome {
     pub upstream_reference: String,
 }
 
+/// Line totals for a worktree diff, read from `git diff --numstat`.
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
+pub struct DiffStats {
+    /// Added text lines across all changed files; binary files add none.
+    pub added_lines: u64,
+    /// Deleted text lines across all changed files; binary files add none.
+    pub deleted_lines: u64,
+    /// Whether any file changed, including binary-only and metadata-only
+    /// changes such as mode changes, pure renames, and empty new files.
+    pub has_changes: bool,
+}
+
+impl DiffStats {
+    /// Sums `git diff --numstat` rows, counting binary `-` columns as zero
+    /// lines just as their `Binary files differ` patch contributes none.
+    fn from_numstat(output: &str) -> Result<Self, GitError> {
+        output
+            .lines()
+            .filter(|line| !line.is_empty())
+            .try_fold(Self::default(), |stats, line| {
+                let malformed =
+                    || GitError::OutputParse(format!("Malformed `git diff --numstat` row: {line}"));
+                let (added_lines, row_rest) = line.split_once('\t').ok_or_else(malformed)?;
+                let (deleted_lines, _path) = row_rest.split_once('\t').ok_or_else(malformed)?;
+                let added_lines = Self::numstat_count(added_lines).ok_or_else(malformed)?;
+                let deleted_lines = Self::numstat_count(deleted_lines).ok_or_else(malformed)?;
+
+                Ok(Self {
+                    added_lines: stats.added_lines.saturating_add(added_lines),
+                    deleted_lines: stats.deleted_lines.saturating_add(deleted_lines),
+                    has_changes: true,
+                })
+            })
+    }
+
+    /// Parses one numstat count column, where `-` marks a binary file.
+    fn numstat_count(column: &str) -> Option<u64> {
+        if column == "-" {
+            return Some(0);
+        }
+
+        column.parse().ok()
+    }
+}
+
 const COMMIT_ALL_HOOK_RETRY_ATTEMPTS: usize = 5;
 const MAX_WORKTREE_FILE_BYTE_COUNT: usize = 1024 * 1024;
 const PRE_COMMIT_CONFIG_FILES: [&str; 2] = [".pre-commit-config.yaml", ".pre-commit-config.yml"];
@@ -332,7 +377,7 @@ pub(crate) async fn delete_branch(repo_path: PathBuf, branch_name: String) -> Re
 /// Returns a [`GitError`] if preparing the temporary index or generating the
 /// diff fails.
 pub(crate) async fn diff(repo_path: PathBuf, base_branch: String) -> Result<String, GitError> {
-    diff_output(repo_path, base_branch, false).await
+    diff_output(repo_path, base_branch, DiffOutputFormat::Patch).await
 }
 
 /// Captures source-coordinate patches from committed trees only. Pinning the
@@ -463,7 +508,7 @@ pub(crate) async fn diff_changed_files(
     repo_path: PathBuf,
     base_branch: String,
 ) -> Result<Vec<String>, GitError> {
-    let output = diff_output(repo_path, base_branch, true).await?;
+    let output = diff_output(repo_path, base_branch, DiffOutputFormat::NameOnly).await?;
 
     Ok(output
         .lines()
@@ -473,12 +518,52 @@ pub(crate) async fn diff_changed_files(
         .collect())
 }
 
-/// Generates either a patch or name-only output without mutating the real
+/// Returns added and deleted line totals using the same isolated index and
+/// fork-point semantics as [`diff`], without generating patch text.
+///
+/// `git diff --numstat` counts the same body lines as the patch, including
+/// renames, intent-to-add untracked files, and binary files as zero lines.
+///
+/// # Errors
+/// Returns a [`GitError`] if preparing the temporary index or generating the
+/// numstat output fails, or a numstat row cannot be parsed.
+pub(crate) async fn diff_stats(
+    repo_path: PathBuf,
+    base_branch: String,
+) -> Result<DiffStats, GitError> {
+    let output = diff_output(repo_path, base_branch, DiffOutputFormat::NumStat).await?;
+
+    DiffStats::from_numstat(&output)
+}
+
+/// Output shape requested from the shared isolated-index diff pipeline.
+#[derive(Clone, Copy)]
+enum DiffOutputFormat {
+    /// Changed repository-relative paths only.
+    NameOnly,
+    /// Per-file added and deleted line counts.
+    NumStat,
+    /// Full unified patch text.
+    Patch,
+}
+
+impl DiffOutputFormat {
+    /// Returns the `git diff` flag selecting this output, if any.
+    fn flag(self) -> Option<&'static str> {
+        match self {
+            Self::NameOnly => Some("--name-only"),
+            Self::NumStat => Some("--numstat"),
+            Self::Patch => None,
+        }
+    }
+}
+
+/// Generates patch, name-only, or numstat output without mutating the real
 /// repository index.
 async fn diff_output(
     repo_path: PathBuf,
     base_branch: String,
-    name_only: bool,
+    format: DiffOutputFormat,
 ) -> Result<String, GitError> {
     spawn_blocking(move || -> Result<String, GitError> {
         let index_path = resolve_diff_index_path(&repo_path)?;
@@ -489,7 +574,7 @@ async fn diff_output(
             repo_path.join(index_path)
         };
 
-        diff_output_after_index_resolution(&repo_path, &base_branch, name_only, &index_path)
+        diff_output_after_index_resolution(&repo_path, &base_branch, format, &index_path)
     })
     .await?
 }
@@ -498,7 +583,7 @@ async fn diff_output(
 fn diff_output_after_index_resolution(
     repo_path: &Path,
     base_branch: &str,
-    name_only: bool,
+    format: DiffOutputFormat,
     index_path: &Path,
 ) -> Result<String, GitError> {
     let result = (|| -> Result<String, GitError> {
@@ -538,9 +623,7 @@ fn diff_output_after_index_resolution(
             "--src-prefix=a/",
             "--dst-prefix=b/",
         ];
-        if name_only {
-            args.push("--name-only");
-        }
+        args.extend(format.flag());
         args.push(diff_target.as_str());
 
         run_git_command_with_index_sync(repo_path, &args, &temporary_index, "Git diff failed")

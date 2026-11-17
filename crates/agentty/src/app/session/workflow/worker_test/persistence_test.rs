@@ -6,7 +6,7 @@ use std::sync::{Arc, Mutex};
 
 use ag_contracts::{AgentRequestKind, MockAgentChannel, TurnResult};
 use ag_forge as forge;
-use ag_git::MockGitClient;
+use ag_git::{DiffStats, MockGitClient};
 use ag_protocol::AgentResponse;
 use ag_session::test_support as model_fixture;
 use ag_worker::SessionRunClient;
@@ -414,8 +414,8 @@ async fn test_run_channel_turn_persists_failure_when_main_checkout_snapshot_fail
     let main_repo_root = base_dir.path().join("main");
     let mut mock_git_client = mock_git_client_detecting_main_repo(main_repo_root);
     mock_git_client
-        .expect_diff()
-        .returning(|_, _| Box::pin(async { Ok(String::new()) }));
+        .expect_diff_stats()
+        .returning(|_, _| Box::pin(async { Ok(DiffStats::default()) }));
     mock_git_client
         .expect_is_worktree_clean()
         .returning(|_| Box::pin(async { Ok(true) }));

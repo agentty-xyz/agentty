@@ -7,7 +7,7 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use ag_contracts::{AgentRequestKind, MockAgentChannel, TurnResult};
-use ag_git::MockGitClient;
+use ag_git::{DiffStats, MockGitClient};
 use ag_protocol::{AgentResponse, QuestionItem, TurnPrompt};
 use ag_session::{
     ContinueGraphNodeRequest, ExecutionGraph, ExecutionGraphProgress, ExecutionGraphStatus,
@@ -98,6 +98,8 @@ async fn clarification_app() -> (
         .returning(|_| Box::pin(async { Ok(None) }));
     git.expect_diff()
         .returning(|_, _| Box::pin(async { Ok(String::new()) }));
+    git.expect_diff_stats()
+        .returning(|_, _| Box::pin(async { Ok(DiffStats::default()) }));
     app.services.set_git_client(Arc::new(git));
     seed_session(&mut app.sessions, app.services.db()).await;
 

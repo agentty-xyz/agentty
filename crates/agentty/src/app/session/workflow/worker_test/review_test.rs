@@ -8,7 +8,7 @@ use std::time::Duration;
 
 use ag_contracts::{MockAgentChannel, TurnResult};
 use ag_forge as forge;
-use ag_git::{BranchPushOutcome, MockGitClient};
+use ag_git::{BranchPushOutcome, DiffStats, MockGitClient};
 use ag_protocol::{AgentResponse, ReviewCommentOutcome, ReviewCommentResolution};
 use ag_worker::SessionRunClient;
 use mockall::Sequence;
@@ -100,8 +100,8 @@ async fn test_process_queued_message_auto_pushes_after_last_published_branch_fol
         .times(1)
         .returning(|_| Box::pin(async { Ok(None) }));
     mock_git_client
-        .expect_diff()
-        .returning(|_, _| Box::pin(async { Ok(String::new()) }));
+        .expect_diff_stats()
+        .returning(|_, _| Box::pin(async { Ok(DiffStats::default()) }));
     mock_git_client
         .expect_push_current_branch_to_remote_branch_with_outcome()
         .times(1)
@@ -1544,8 +1544,8 @@ async fn stopped_follow_up_finishes_while_previous_branch_effects_keep_the_lock(
     let mut git = MockGitClient::new();
     git.expect_main_checkout_working_tree().never();
     git.expect_tracked_worktree_status().never();
-    git.expect_diff()
-        .returning(|_, _| Box::pin(async { Ok(String::new()) }));
+    git.expect_diff_stats()
+        .returning(|_, _| Box::pin(async { Ok(DiffStats::default()) }));
     context.git_client = Arc::new(git);
     let guard = Arc::clone(&context.branch_operation_lock)
         .lock_owned()

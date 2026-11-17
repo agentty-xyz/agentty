@@ -13,7 +13,7 @@ use crate::merge::{SquashMergeOutcome, squash_merge};
 use crate::rebase::{RebaseStepResult, abort_rebase, rebase_onto_start};
 use crate::repo::main_repo_root;
 use crate::sync::{
-    PullRebaseResult, SingleCommitMessageStrategy, WorktreeFileContent,
+    DiffStats, PullRebaseResult, SingleCommitMessageStrategy, WorktreeFileContent,
     commit_all_preserving_single_commit, diff, is_worktree_clean, list_local_commit_titles,
     list_upstream_commit_titles, pull_rebase, push_current_branch,
     push_current_branch_to_remote_branch, ref_hash, tracked_worktree_status, worktree_status,
@@ -164,6 +164,31 @@ async fn test_real_git_client_lists_changed_files() {
 
     // Assert
     assert_eq!(changed_files, vec!["new.txt".to_string()]);
+}
+
+#[tokio::test]
+async fn test_real_git_client_reports_diff_stats() {
+    // Arrange
+    let dir = tempdir().expect("failed to create temp dir");
+    setup_test_git_repo(dir.path());
+    fs::write(dir.path().join("new.txt"), "new content\n").expect("failed to write changed file");
+    let client = RealGitClient;
+
+    // Act
+    let stats = client
+        .diff_stats(dir.path().to_path_buf(), "main".to_string())
+        .await
+        .expect("failed to load diff stats");
+
+    // Assert
+    assert_eq!(
+        stats,
+        DiffStats {
+            added_lines: 1,
+            deleted_lines: 0,
+            has_changes: true,
+        }
+    );
 }
 
 #[tokio::test]

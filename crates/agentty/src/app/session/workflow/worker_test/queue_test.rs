@@ -7,7 +7,7 @@ use std::time::Duration;
 
 use ag_contracts::{AgentError, AgentRequestKind, MockAgentChannel, OneShotError, TurnResult};
 use ag_forge as forge;
-use ag_git::MockGitClient;
+use ag_git::{DiffStats, MockGitClient};
 use ag_protocol::AgentResponse;
 use ag_telemetry::{KeyValue, Span, TraceContextExt as _};
 use ag_worker::{MockRunClient, RunClient, SessionRunClient, WorkerHost as _};
@@ -899,8 +899,17 @@ async fn auto_commit_cancellation_context() -> (
     git.expect_is_worktree_clean()
         .once()
         .returning(|_| Box::pin(async { Ok(false) }));
+    git.expect_diff_stats().once().returning(|_, _| {
+        Box::pin(async {
+            Ok(DiffStats {
+                added_lines: 0,
+                deleted_lines: 0,
+                has_changes: true,
+            })
+        })
+    });
     git.expect_diff()
-        .times(2)
+        .once()
         .returning(|_, _| Box::pin(async { Ok("diff --git a/a.rs b/a.rs".into()) }));
     git.expect_has_commits_since()
         .once()

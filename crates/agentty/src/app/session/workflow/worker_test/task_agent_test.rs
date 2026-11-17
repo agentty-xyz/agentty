@@ -7,7 +7,7 @@ use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
 use ag_contracts::{AgentError, AgentRequestKind, MockAgentChannel, PermissionMode, TurnRequest};
-use ag_git::MockGitClient;
+use ag_git::{DiffStats, MockGitClient};
 use ag_protocol::{AgentResponse, QuestionItem};
 use ag_session::{
     AgentKind, AgentModel, AgentSelection, DurableMessageVisibility, SessionDiffState,
@@ -996,13 +996,13 @@ async fn implementer_projects_diff_before_commit_finishes_and_refreshes_afterwar
     git.expect_main_checkout_working_tree()
         .once()
         .returning(|_| Box::pin(async { Ok(None) }));
-    git.expect_diff().times(2).returning(|_, _| {
+    git.expect_diff_stats().times(2).returning(|_, _| {
         Box::pin(async {
-            Ok(
-                "diff --git a/search.txt b/search.txt\n--- a/search.txt\n+++ b/search.txt\n@@ -1 \
-                 +1 @@\n-old search\n+indexed search\n"
-                    .to_string(),
-            )
+            Ok(DiffStats {
+                added_lines: 1,
+                deleted_lines: 1,
+                has_changes: true,
+            })
         })
     });
     let started = Arc::clone(&commit_started);
@@ -1500,8 +1500,8 @@ fn execution_git_client(commit_failure: bool) -> MockGitClient {
         .returning(|_| Box::pin(async { Some("wt/sess".to_string()) }));
     git.expect_main_checkout_working_tree()
         .returning(|_| Box::pin(async { Ok(None) }));
-    git.expect_diff()
-        .returning(|_, _| Box::pin(async { Ok(String::new()) }));
+    git.expect_diff_stats()
+        .returning(|_, _| Box::pin(async { Ok(DiffStats::default()) }));
     git.expect_is_worktree_clean().returning(move |_| {
         Box::pin(async move {
             if commit_failure {

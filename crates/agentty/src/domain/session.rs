@@ -64,9 +64,8 @@ impl SessionSize {
         SessionSize::Xxl,
     ];
 
-    /// Classifies one git diff into a session size bucket.
-    pub fn from_diff(diff: &str) -> Self {
-        let (added_lines, deleted_lines) = SessionStats::line_change_counts(diff);
+    /// Classifies added and deleted line totals into a session size bucket.
+    pub fn from_line_counts(added_lines: u64, deleted_lines: u64) -> Self {
         let changed_line_count =
             usize::try_from(added_lines.saturating_add(deleted_lines)).unwrap_or(usize::MAX);
 
@@ -102,9 +101,9 @@ impl SessionSize {
 pub enum SessionDiffStats {
     /// The worktree diff was loaded successfully.
     Known {
-        /// Added line count parsed from the diff.
+        /// Added line count across the worktree diff.
         added_lines: u64,
-        /// Deleted line count parsed from the diff.
+        /// Deleted line count across the worktree diff.
         deleted_lines: u64,
         /// Whether the diff contains any content, including binary-only or
         /// metadata-only changes.
@@ -117,15 +116,16 @@ pub enum SessionDiffStats {
 }
 
 impl SessionDiffStats {
-    /// Derives known diff metadata from one successful Git diff response.
-    pub fn from_diff(diff: &str) -> Self {
-        let (added_lines, deleted_lines) = SessionStats::line_change_counts(diff);
-
+    /// Derives known diff metadata from successful worktree line totals.
+    ///
+    /// `has_diff` covers binary-only and metadata-only changes, which add no
+    /// text lines.
+    pub fn from_line_counts(added_lines: u64, deleted_lines: u64, has_diff: bool) -> Self {
         Self::Known {
             added_lines,
             deleted_lines,
-            has_diff: !diff.trim().is_empty(),
-            session_size: SessionSize::from_diff(diff),
+            has_diff,
+            session_size: SessionSize::from_line_counts(added_lines, deleted_lines),
         }
     }
 

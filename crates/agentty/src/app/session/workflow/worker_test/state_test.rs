@@ -9,7 +9,7 @@ use ag_contracts::{
     TurnResult,
 };
 use ag_forge as forge;
-use ag_git::MockGitClient;
+use ag_git::{DiffStats, MockGitClient};
 use ag_protocol::AgentResponse;
 use ag_worker::SessionRunClient;
 use tempfile::tempdir;
@@ -271,8 +271,8 @@ async fn test_run_channel_turn_warns_when_main_checkout_status_changes() {
             })
         });
     mock_git_client
-        .expect_diff()
-        .returning(|_, _| Box::pin(async { Ok(String::new()) }));
+        .expect_diff_stats()
+        .returning(|_, _| Box::pin(async { Ok(DiffStats::default()) }));
     mock_git_client
         .expect_is_worktree_clean()
         .returning(|_| Box::pin(async { Ok(true) }));

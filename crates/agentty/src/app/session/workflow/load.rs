@@ -604,11 +604,15 @@ impl SessionManager {
 
         let folder = folder.to_path_buf();
         let base_branch = base_branch.to_string();
-        let Ok(diff) = git_client.diff(folder, base_branch).await else {
+        let Ok(stats) = git_client.diff_stats(folder, base_branch).await else {
             return SessionDiffStats::Unknown;
         };
 
-        SessionDiffStats::from_diff(&diff)
+        SessionDiffStats::from_line_counts(
+            stats.added_lines,
+            stats.deleted_lines,
+            stats.has_changes,
+        )
     }
 
     /// Loads transcript-scale detail for one session into the in-memory

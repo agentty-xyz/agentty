@@ -10,7 +10,7 @@ use ag_contracts::{
     AgentError, AgentRequestKind, MockAgentChannel, OneShotSubmission, PermissionMode, TurnResult,
 };
 use ag_forge as forge;
-use ag_git::{BranchPushOutcome, MockGitClient, RebaseStepResult};
+use ag_git::{BranchPushOutcome, DiffStats, MockGitClient, RebaseStepResult};
 use ag_protocol::{
     AgentResponse, ReviewCommentOutcome, ReviewCommentResolution, TurnPromptAttachment,
 };
@@ -211,8 +211,8 @@ pub(super) fn expect_clean_main_checkout_snapshot(
         .once()
         .returning(|_| Box::pin(async { Ok(String::new()) }));
     mock_git_client
-        .expect_diff()
-        .returning(|_, _| Box::pin(async { Ok(String::new()) }));
+        .expect_diff_stats()
+        .returning(|_, _| Box::pin(async { Ok(DiffStats::default()) }));
 }
 
 pub(super) fn transcript_text(transcript: &Arc<Mutex<SessionTranscript>>) -> String {
@@ -1601,8 +1601,8 @@ pub(super) async fn queue_test_context(
         .times(0..)
         .returning(|_| Box::pin(async { Ok(String::new()) }));
     mock_git_client
-        .expect_diff()
-        .returning(|_, _| Box::pin(async { Ok(String::new()) }));
+        .expect_diff_stats()
+        .returning(|_, _| Box::pin(async { Ok(DiffStats::default()) }));
     mock_git_client
         .expect_is_worktree_clean()
         .returning(|_| Box::pin(async { Ok(true) }));

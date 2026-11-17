@@ -12,7 +12,7 @@ use ag_contracts::{
     TurnResult,
 };
 use ag_forge as forge;
-use ag_git::MockGitClient;
+use ag_git::{DiffStats, MockGitClient};
 use ag_protocol::AgentResponse;
 use ag_worker::SessionRunClient;
 use tempfile::tempdir;
@@ -740,8 +740,8 @@ async fn test_run_channel_turn_proceeds_read_only_after_previous_cancellation() 
         .times(2)
         .returning(|_| Box::pin(async { Ok(String::new()) }));
     mock_git_client
-        .expect_diff()
-        .returning(|_, _| Box::pin(async { Ok(String::new()) }));
+        .expect_diff_stats()
+        .returning(|_, _| Box::pin(async { Ok(DiffStats::default()) }));
     mock_git_client
         .expect_is_worktree_clean()
         .returning(|_| Box::pin(async { Ok(true) }));
@@ -846,8 +846,8 @@ async fn test_run_channel_turn_skips_warning_when_main_checkout_is_clean_after_t
         });
     mock_git_client.expect_head_hash().times(0);
     mock_git_client
-        .expect_diff()
-        .returning(|_, _| Box::pin(async { Ok(String::new()) }));
+        .expect_diff_stats()
+        .returning(|_, _| Box::pin(async { Ok(DiffStats::default()) }));
     mock_git_client
         .expect_is_worktree_clean()
         .returning(|_| Box::pin(async { Ok(true) }));
@@ -937,8 +937,8 @@ async fn test_run_channel_turn_skips_warning_when_main_checkout_stays_dirty() {
         .returning(|_| Box::pin(async { Ok(" M README.md\n".to_string()) }));
     mock_git_client.expect_head_hash().times(0);
     mock_git_client
-        .expect_diff()
-        .returning(|_, _| Box::pin(async { Ok(String::new()) }));
+        .expect_diff_stats()
+        .returning(|_, _| Box::pin(async { Ok(DiffStats::default()) }));
     mock_git_client
         .expect_is_worktree_clean()
         .returning(|_| Box::pin(async { Ok(true) }));
@@ -1034,8 +1034,8 @@ async fn test_run_channel_turn_skips_main_checkout_snapshot_for_bare_repo() {
         .returning(|_| Box::pin(async { Ok(None) }));
     mock_git_client.expect_tracked_worktree_status().times(0);
     mock_git_client
-        .expect_diff()
-        .returning(|_, _| Box::pin(async { Ok(String::new()) }));
+        .expect_diff_stats()
+        .returning(|_, _| Box::pin(async { Ok(DiffStats::default()) }));
     mock_git_client
         .expect_is_worktree_clean()
         .returning(|_| Box::pin(async { Ok(true) }));

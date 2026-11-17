@@ -6,7 +6,7 @@ use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::time::{Instant, SystemTime};
 
-use ag_git::{GitError, MockGitClient};
+use ag_git::{DiffStats, GitError, MockGitClient};
 use ag_session::test_support as model_fixture;
 
 use super::super::session_folder;
@@ -215,14 +215,21 @@ async fn session_diff_stats_preserve_binary_presence_and_git_errors() {
     let existing_folder_client = create_folder_lookup_mock(vec![folder.clone()]);
     let missing_folder_client = create_folder_lookup_mock(Vec::new());
     let mut binary_diff_client = MockGitClient::new();
-    binary_diff_client.expect_diff().times(1).returning(|_, _| {
-        Box::pin(async {
-            Ok("diff --git a/image.png b/image.png\nBinary files differ\n".to_string())
-        })
-    });
+    binary_diff_client
+        .expect_diff_stats()
+        .times(1)
+        .returning(|_, _| {
+            Box::pin(async {
+                Ok(DiffStats {
+                    added_lines: 0,
+                    deleted_lines: 0,
+                    has_changes: true,
+                })
+            })
+        });
     let mut failing_diff_client = MockGitClient::new();
     failing_diff_client
-        .expect_diff()
+        .expect_diff_stats()
         .times(1)
         .returning(|_, _| {
             Box::pin(async { Err(GitError::OutputParse("diff failed".to_string())) })

@@ -455,6 +455,18 @@ pub(super) async fn synthetic_diff_from_session_folder(folder: &Path) -> String 
     synthetic_added_line_diff(line_count)
 }
 
+/// Builds synthetic diff stats matching [`synthetic_diff_from_session_folder`].
+pub(super) async fn synthetic_diff_stats_from_session_folder(folder: &Path) -> git::DiffStats {
+    let fs_client = create_passthrough_mock_fs_client();
+    let line_count = count_worktree_lines(&fs_client, folder).await;
+
+    git::DiffStats {
+        added_lines: u64::try_from(line_count).expect("line count should fit"),
+        deleted_lines: 0,
+        has_changes: line_count > 0,
+    }
+}
+
 /// Counts lines across every file in one worktree.
 pub(super) async fn count_worktree_lines(fs_client: &dyn fs::FsClient, root: &Path) -> usize {
     let mut pending_entries = vec![root.to_path_buf()];
@@ -536,6 +548,9 @@ pub(super) fn setup_mock_commit_and_branch_expectations(mock: &mut git::MockGitC
         .returning(|_, _| Box::pin(async { Ok(()) }));
     mock.expect_diff().times(0..).returning(|folder, _| {
         Box::pin(async move { Ok(synthetic_diff_from_session_folder(&folder).await) })
+    });
+    mock.expect_diff_stats().times(0..).returning(|folder, _| {
+        Box::pin(async move { Ok(synthetic_diff_stats_from_session_folder(&folder).await) })
     });
     mock.expect_is_worktree_clean()
         .times(0..)

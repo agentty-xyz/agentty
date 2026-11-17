@@ -426,16 +426,16 @@ fn test_branch_reservations_follow_stack_membership() {
 #[test]
 fn session_diff_stats_distinguish_empty_and_binary_diffs() {
     // Arrange
-    let empty_diff = "";
-    let binary_diff = "diff --git a/image.png b/image.png\nBinary files differ\n";
+    let empty_diff = SessionDiffStats::from_line_counts(0, 0, false);
+    let binary_only_diff = SessionDiffStats::from_line_counts(0, 0, true);
 
     // Act
-    let empty_stats = SessionDiffStats::from_diff(empty_diff);
-    let binary_stats = SessionDiffStats::from_diff(binary_diff);
+    let empty_availability = empty_diff.diff_state();
+    let binary_availability = binary_only_diff.diff_state();
 
     // Assert
-    assert_eq!(empty_stats.diff_state(), SessionDiffState::Empty);
-    assert_eq!(binary_stats.diff_state(), SessionDiffState::Present);
+    assert_eq!(empty_availability, SessionDiffState::Empty);
+    assert_eq!(binary_availability, SessionDiffState::Present);
 }
 
 #[test]

@@ -7,7 +7,7 @@ use std::path::PathBuf;
 use std::sync::Arc;
 
 use ag_contracts::{MockAgentChannel, PermissionMode, TurnRequest, TurnResult};
-use ag_git::MockGitClient;
+use ag_git::{DiffStats, MockGitClient};
 use ag_protocol::{
     AgentResponse, ProtocolRequestProfile, QuestionItem, TurnPrompt, TurnPromptAttachment,
 };
@@ -506,6 +506,8 @@ fn install_graph_environment(
         .returning(|_| Box::pin(async { Ok(None) }));
     git.expect_diff()
         .returning(|_, _| Box::pin(async { Ok(String::new()) }));
+    git.expect_diff_stats()
+        .returning(|_, _| Box::pin(async { Ok(DiffStats::default()) }));
     let entered = effects_entered.clone();
     let release = effects_release.clone();
     git.expect_is_worktree_clean().once().returning(move |_| {
