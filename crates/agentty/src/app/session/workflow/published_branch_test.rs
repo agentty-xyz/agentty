@@ -10,6 +10,8 @@ use ag_forge::{MockReviewRequestClient, ReviewCommentAnchorSide, ReviewCommentTh
 use ag_git::{BranchPushOutcome, GitError, MockGitClient};
 use ag_protocol::{ReviewCommentOutcome, ReviewCommentResolution};
 use ag_session::test_support as model_fixture;
+use ag_telemetry::{KeyValue, Span, TraceContextExt as _};
+use opentelemetry::trace::SpanId;
 use tokio::sync::mpsc;
 use tokio_util::sync::CancellationToken;
 
@@ -32,6 +34,7 @@ use crate::domain::session_message::SessionTranscript;
 use crate::infra::clock::RealClock;
 use crate::infra::db::AppRepositories;
 use crate::test_support::enable_tracing_log_fallback;
+use crate::test_support::telemetry::{assert_span_attributes, capture_spans, finished_span};
 
 #[test]
 fn task_publish_notices_do_not_enter_ordinary_session_replay() {
@@ -215,6 +218,66 @@ async fn spawned_push_preserves_cancellation_inner_failures_and_join_errors() {
     handle.abort();
     let join = handle.await.expect_err("join error remains observable");
     assert!(join.is_cancelled());
+}
+
+#[tokio::test]
+async fn spawned_push_runs_under_a_linked_auto_push_root_with_its_push_interval() {
+    // Arrange
+    let (_provider_guard, exporter) = capture_spans().await;
+    let db = linked_review_request_db().await;
+    let mut git_client = push_git_client();
+    expect_successful_push(&mut git_client);
+    let pushed_input = push_start_input(db.clone(), git_client).await;
+    let initiator = Span::root("session.turn", Vec::new());
+    let initiator_trace = initiator.context().span().span_context().trace_id();
+
+    // Act
+    // The push starts while the initiator is current, as a turn starts it.
+    let pushed = initiator
+        .scope(async {
+            start_task_published_branch_auto_push(pushed_input, CancellationToken::new()).await
+        })
+        .await
+        .expect("push task joins");
+
+    // Assert
+    pushed.expect("push succeeds");
+    let root = finished_span(&exporter, "session.auto_push", SpanId::INVALID);
+    assert_span_attributes(
+        &root,
+        "completed",
+        &[KeyValue::new("agentty.session.id", "session-id")],
+    );
+    assert!(
+        root.links
+            .links
+            .iter()
+            .any(|link| link.span_context.trace_id() == initiator_trace)
+    );
+    assert_span_attributes(
+        &finished_span(&exporter, "branch.push", root.span_context.span_id()),
+        "completed",
+        &[],
+    );
+
+    // Arrange
+    exporter.reset();
+    let cancel = CancellationToken::new();
+    cancel.cancel();
+    let canceled_input = push_start_input(db, MockGitClient::new()).await;
+
+    // Act
+    let canceled = start_task_published_branch_auto_push(canceled_input, cancel)
+        .await
+        .expect("canceled task joins");
+
+    // Assert
+    assert!(matches!(canceled, Err(SessionError::StoppedByUser(_))));
+    assert_span_attributes(
+        &finished_span(&exporter, "session.auto_push", SpanId::INVALID),
+        "canceled",
+        &[KeyValue::new("agentty.session.id", "session-id")],
+    );
 }
 
 #[tokio::test]

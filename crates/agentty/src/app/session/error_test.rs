@@ -125,3 +125,22 @@ fn with_context_preserves_typed_infrastructure_variants() {
     );
     assert_eq!(contextual.to_string(), "bad");
 }
+
+#[test]
+fn trace_outcome_reports_user_stops_as_cancellations() {
+    // Arrange
+    let stopped = SessionError::StoppedByUser("[Stopped] canceled".to_string());
+    let failed = SessionError::Workflow("push rejected".to_string());
+
+    // Act
+    let outcomes = (stopped.trace_outcome(), failed.trace_outcome());
+
+    // Assert
+    assert!(matches!(
+        outcomes,
+        (
+            ag_telemetry::Outcome::Canceled,
+            ag_telemetry::Outcome::Failed
+        )
+    ));
+}

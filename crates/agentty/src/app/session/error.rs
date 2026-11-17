@@ -69,6 +69,15 @@ impl SessionError {
             other => other,
         }
     }
+
+    /// Classifies this failure for an execution span: a user stop is a
+    /// cancellation, and every other error is a failure.
+    pub(crate) fn trace_outcome(&self) -> ag_telemetry::Outcome {
+        match self {
+            Self::StoppedByUser(_) => ag_telemetry::Outcome::Canceled,
+            _ => ag_telemetry::Outcome::Failed,
+        }
+    }
 }
 
 #[cfg(test)]

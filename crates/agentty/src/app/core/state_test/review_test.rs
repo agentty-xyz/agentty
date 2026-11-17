@@ -11,12 +11,14 @@ use std::time::Duration;
 use ag_forge as forge;
 use ag_git::BranchPushOutcome;
 use ag_session::test_support as model_fixture;
+use ag_telemetry::KeyValue;
 use app::branch_publish::{
     BranchPublishTaskContext, BranchPublishTaskFailure, BranchPublishTaskSession,
     push_session_branch, run_branch_publish_action,
 };
 use app::review::ReviewCacheEntry;
 use app::sync;
+use opentelemetry::trace::SpanId;
 use tempfile::tempdir;
 
 use super::super::{App, SyncReviewRequestTaskResult};
@@ -49,6 +51,7 @@ use crate::presentation::app_mode::{
     AppMode, ConfirmationViewMode, DiffReviewComments, DiffSidebarFocus,
 };
 use crate::runtime::mode::diff;
+use crate::test_support::telemetry::{assert_span_attributes, capture_spans, finished_span};
 
 #[tokio::test]
 async fn review_output_reports_failures_and_caches_updates_for_unloaded_sessions() {
@@ -1151,6 +1154,7 @@ async fn test_switch_immediately_after_response_recovers_in_progress_review() {
 #[tokio::test]
 async fn push_action_still_dispatches_through_background_publish_path() {
     // Arrange
+    let (_provider_guard, exporter) = capture_spans().await;
     let (mut app, _temp_dir) = crate::test_support::new_git_test_app().await;
     let session_id = app
         .create_session()
@@ -1205,6 +1209,11 @@ async fn push_action_still_dispatches_through_background_publish_path() {
                     if message == "Session must be in review to push the branch."
             )
     ));
+    assert_span_attributes(
+        &finished_span(&exporter, "session.push", SpanId::INVALID),
+        "failed",
+        &[KeyValue::new("agentty.session.id", session_id)],
+    );
 }
 
 #[tokio::test]

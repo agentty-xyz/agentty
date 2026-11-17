@@ -10,8 +10,10 @@ use ag_contracts::{AgentRequestKind, OneShotRequest, PermissionMode, ReasoningLe
 use ag_forge::MockReviewRequestClient;
 use ag_git::MockGitClient;
 use ag_session::test_support as model_fixture;
+use ag_telemetry::KeyValue;
 use ag_worker::test_support::{AppServerError, MockAppServerClient};
 use app::sync;
+use opentelemetry::trace::SpanId;
 use tempfile::tempdir;
 use tokio::sync::oneshot;
 use tokio::time;
@@ -23,10 +25,12 @@ use crate::domain::session::Status;
 use crate::infra::db::AppRepositories;
 use crate::infra::tmux::MockTmuxClient;
 use crate::presentation::app_mode::AppMode;
+use crate::test_support::telemetry::{assert_span_attributes, capture_spans, finished_span};
 
 #[tokio::test]
 async fn deferred_delete_without_selected_session_keeps_loaded_sessions() {
     // Arrange
+    let (_provider_guard, exporter) = capture_spans().await;
     let mut app = crate::test_support::new_test_app_without_retained_base_dir().await;
     app.sessions.push_session(
         crate::test_support::SessionFixtureBuilder::new()
@@ -42,6 +46,35 @@ async fn deferred_delete_without_selected_session_keeps_loaded_sessions() {
     // Assert
     assert_eq!(app.sessions.sessions().len(), 1);
     assert_eq!(app.sessions.sessions()[0].id, "unselected-session");
+    let root = finished_span(&exporter, "session.delete", SpanId::INVALID);
+    assert_span_attributes(&root, "canceled", &[]);
+}
+
+#[tokio::test]
+async fn deferred_delete_traces_removal_and_background_cleanup_as_one_root() {
+    // Arrange
+    let (_provider_guard, exporter) = capture_spans().await;
+    let mut app = crate::test_support::new_test_app_without_retained_base_dir().await;
+    app.sessions.push_session(
+        crate::test_support::SessionFixtureBuilder::new()
+            .id("deleted-session")
+            .status(Status::Review)
+            .build(),
+    );
+    app.sessions.select_session_index(Some(0));
+
+    // Act
+    app.delete_selected_session_deferred_cleanup().await;
+    app.wait_for_background_cleanup_tasks().await;
+
+    // Assert
+    assert!(app.sessions.sessions().is_empty());
+    let root = finished_span(&exporter, "session.delete", SpanId::INVALID);
+    assert_span_attributes(
+        &root,
+        "completed",
+        &[KeyValue::new("agentty.session.id", "deleted-session")],
+    );
 }
 
 #[tokio::test]

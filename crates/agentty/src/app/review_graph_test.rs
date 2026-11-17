@@ -15,12 +15,15 @@ use ag_session::{
     EnvId, ExecutionGraph, ExecutionGraphStatus, GraphCompletionGate, GraphExecutionRef,
     GraphWorkspaceAccess,
 };
+use ag_telemetry::KeyValue;
 use ag_worker::{GraphInputValue, GraphNodeRunner, GraphRunRequest, MockRunClient};
+use opentelemetry::trace::SpanId;
 
 use super::test_support::{ReviewGraphFixture, SESSION_ID};
 use super::{ReviewNodeRunner, ReviewPhase, ReviewState};
 use crate::app::review_prompt::MAX_REVIEW_PROVIDER_CALLS;
 use crate::infra::review_deadline::ReviewDeadlineClient;
+use crate::test_support::telemetry::{assert_span_attributes, capture_spans, finished_span};
 
 fn request() -> OneShotRequest {
     OneShotRequest {
@@ -88,6 +91,7 @@ async fn only_graph(fixture: &ReviewGraphFixture) -> ExecutionGraph {
 #[tokio::test]
 async fn reviews_run_as_parallel_fragment_readers_joined_by_cross_file_and_consolidation() {
     // Arrange
+    let (_provider_guard, exporter) = capture_spans().await;
     let fixture = ReviewGraphFixture::new().await;
     let calls = Arc::new(AtomicUsize::new(0));
 
@@ -156,6 +160,31 @@ async fn reviews_run_as_parallel_fragment_readers_joined_by_cross_file_and_conso
     assert_eq!(progress.status, ExecutionGraphStatus::Completed);
     assert!(progress.nodes.iter().all(|node| node.executions.len() == 1));
     assert!(calls.load(Ordering::SeqCst) > batch_ids.len() * 2);
+    let root = finished_span(&exporter, "review.graph", SpanId::INVALID);
+    assert_span_attributes(
+        &root,
+        "completed",
+        &[
+            KeyValue::new("agentty.graph.id", graph.id.clone()),
+            KeyValue::new(
+                "agentty.graph.nodes",
+                i64::try_from(graph.nodes.len()).expect("node count"),
+            ),
+            KeyValue::new("agentty.session.id", SESSION_ID),
+        ],
+    );
+    let coordinated_nodes = exporter
+        .get_finished_spans()
+        .expect("finished spans")
+        .into_iter()
+        .filter(|span| span.name == "utility.coordinate")
+        .map(|span| span.parent_span_id)
+        .collect::<Vec<_>>();
+    assert_eq!(
+        coordinated_nodes,
+        vec![root.span_context.span_id(); graph.nodes.len()],
+        "every node nests under the review graph"
+    );
 }
 
 #[tokio::test]
@@ -202,6 +231,7 @@ async fn failed_discovery_keeps_findings_and_closes_the_generation_graph() {
 #[tokio::test]
 async fn graph_persistence_failures_end_the_review_without_provider_work() {
     // Arrange: the owning session disappears before its graph is saved.
+    let (_provider_guard, exporter) = capture_spans().await;
     let fixture = ReviewGraphFixture::new().await;
     fixture
         .database
@@ -226,6 +256,11 @@ async fn graph_persistence_failures_end_the_review_without_provider_work() {
         .await
         .expect("graphs");
     assert_eq!(graphs, []);
+    let root = finished_span(&exporter, "review.graph", SpanId::INVALID);
+    assert!(
+        root.attributes
+            .contains(&KeyValue::new("agentty.outcome", "failed"))
+    );
 }
 
 #[tokio::test]

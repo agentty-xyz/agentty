@@ -13,16 +13,18 @@ use ag_contracts::{
 use ag_forge as forge;
 use ag_git::MockGitClient;
 use ag_protocol::AgentResponse;
-use ag_worker::SessionRunClient;
+use ag_telemetry::KeyValue;
+use ag_worker::{SessionRunClient, WorkerHost as _};
 use mockall::Sequence;
+use opentelemetry::trace::SpanId;
 use tempfile::tempdir;
-use tokio::sync::{Notify, mpsc};
+use tokio::sync::{Notify, mpsc, watch};
 use tokio_util::sync::CancellationToken;
 
 use super::super::{
     CREATE_REVIEW_REQUEST_OPERATION_KIND, REBASE_OPERATION_KIND, ScheduledSessionCommand,
-    SessionCommand, SessionWorkerContext, SessionWorkerRebaseAssistClient, SessionWorkerService,
-    TurnMetadata,
+    ScheduledSessionWork, SessionCommand, SessionWorkerContext, SessionWorkerHost,
+    SessionWorkerRebaseAssistClient, SessionWorkerService, TurnMetadata,
 };
 use super::support::{
     apply_worker_turn_result, auto_commit_git_client, auto_commit_git_client_with_push_failure,
@@ -31,7 +33,7 @@ use super::support::{
     mock_successful_conflict_rebase_git_client, queue_helper_context, queue_test_context,
     queued_review_request_command, rebase_assist_worker_harness, review_metadata_sync_client,
     seed_existing_session_rebase_metadata, seed_recovery_test_operation, successful_turn_result,
-    transcript_text, write_rebase_conflict_file,
+    test_graph_resources, transcript_text, write_rebase_conflict_file,
 };
 use crate::app::AppEvent;
 use crate::app::graph_activity::GraphActivityRegistry;
@@ -41,6 +43,7 @@ use crate::domain::agent::{AgentKind, AgentModel, AgentSelection};
 use crate::domain::session::{PublishedBranchSyncStatus, Status};
 use crate::infra::db::AppRepositories;
 use crate::infra::fs;
+use crate::test_support::telemetry::{assert_span_attributes, capture_spans, finished_span};
 use crate::test_support::{enable_tracing_log_fallback, poison_lock};
 
 #[tokio::test]
@@ -423,6 +426,62 @@ async fn test_run_rebase_command_uses_existing_session_channel_for_conflicts() {
     assert!(output_text.contains("- src/lib.rs"));
     assert!(output_text.contains("Resolved conflicts inside existing session."));
     assert!(output_text.contains("[Sync] Successfully synced wt/sess1 onto main"));
+}
+
+#[tokio::test]
+/// Verifies a queued sync's `session.sync` root parents its conflicted
+/// rebase step without exporting branch names or conflict paths.
+async fn test_session_sync_root_parents_its_conflicted_rebase_step() {
+    // Arrange
+    let (_provider_guard, exporter) = capture_spans().await;
+    let base_dir = tempdir().expect("failed to create temp dir");
+    write_rebase_conflict_file(base_dir.path());
+    let db = AppRepositories::in_memory().await.expect("db should open");
+    seed_existing_session_rebase_metadata(&db, None).await;
+    db.sessions()
+        .update_session_permission_mode("sess1", PermissionMode::ReadOnly)
+        .await
+        .expect("failed to set chat permission mode");
+    db.operations()
+        .insert_session_operation("op-traced-sync", "sess1", REBASE_OPERATION_KIND)
+        .await
+        .expect("rebase operation should be inserted");
+    let harness = rebase_assist_worker_harness(
+        base_dir.path().to_path_buf(),
+        db,
+        mock_successful_conflict_rebase_git_client,
+    );
+    let host = SessionWorkerHost {
+        context: harness.context,
+        graph_resources: test_graph_resources(),
+        graph_wake: watch::channel(0).0,
+        message_traces: Arc::default(),
+        run_client: auto_commit_run_client(),
+    };
+
+    // Act
+    host.execute(ScheduledSessionWork::Command(
+        ScheduledSessionCommand::immediate(SessionCommand::Rebase {
+            base_branch: "main".to_string(),
+            operation_id: "op-traced-sync".to_string(),
+        }),
+    ))
+    .await;
+
+    // Assert
+    let root = finished_span(&exporter, "session.sync", SpanId::INVALID);
+    assert!(
+        root.attributes
+            .contains(&KeyValue::new("agentty.outcome", "completed")),
+        "{:?}",
+        root.attributes
+    );
+    let rebase_step = finished_span(&exporter, "rebase.step", root.span_context.span_id());
+    assert_span_attributes(
+        &rebase_step,
+        "completed",
+        &[KeyValue::new("agentty.git.rebase.result", "conflict")],
+    );
 }
 
 #[tokio::test]

@@ -6,6 +6,7 @@ use std::sync::{Arc, Mutex};
 
 use ag_forge as forge;
 use ag_git::GitClient;
+use ag_telemetry::Span;
 use ag_worker::RunClient;
 use tokio::sync::{OwnedMutexGuard, mpsc};
 use tokio_util::sync::CancellationToken;
@@ -126,29 +127,34 @@ fn start_published_branch_auto_push_inner(
         sync_operation_id,
         transcript: input.transcript,
     };
+    let trace = auto_push_trace(&auto_push_input.session_id);
     tokio::spawn(async move {
         let _branch_operation_guard = branch_operation_guard;
         // Drop in-flight Git/forge futures before releasing serialization.
         // Their command runners kill child processes on drop; persisted posting
         // markers retain any remote result that may already have taken effect.
-        tokio::select! {
-            biased;
-            () = cancel_token.cancelled() => {
-                let _ = auto_push_input.app_event_tx.send(AppEvent::PublishedBranchSyncUpdated {
-                    persistent_notice: persistent_notice(&auto_push_input.transcript, TranscriptNotice::BranchPushError.format(
-                        "Publishing stopped; unfinished review thread updates remain pending.",
-                    )),
-                    session_id: auto_push_input.session_id.clone(),
-                    sync_operation_id: auto_push_input.sync_operation_id.clone(),
-                    sync_status: PublishedBranchSyncStatus::Failed,
-                });
+        let push = async {
+            tokio::select! {
+                biased;
+                () = cancel_token.cancelled() => {
+                    let _ = auto_push_input.app_event_tx.send(AppEvent::PublishedBranchSyncUpdated {
+                        persistent_notice: persistent_notice(&auto_push_input.transcript, TranscriptNotice::BranchPushError.format(
+                            "Publishing stopped; unfinished review thread updates remain pending.",
+                        )),
+                        session_id: auto_push_input.session_id.clone(),
+                        sync_operation_id: auto_push_input.sync_operation_id.clone(),
+                        sync_status: PublishedBranchSyncStatus::Failed,
+                    });
 
-                Err(SessionError::StoppedByUser(
-                    "[Stopped] Publishing canceled; unfinished thread updates remain pending.".to_string(),
-                ))
+                    Err(SessionError::StoppedByUser(
+                        "[Stopped] Publishing canceled; unfinished thread updates remain pending.".to_string(),
+                    ))
+                }
+                result = run_published_branch_auto_push_task(&auto_push_input, finish_review_comments) => result,
             }
-            result = run_published_branch_auto_push_task(&auto_push_input, finish_review_comments) => result,
-        }
+        };
+
+        trace.run(push, SessionError::trace_outcome).await
     })
 }
 
@@ -235,9 +241,27 @@ pub(super) struct ReviewRequestMetadataEvaluationInput {
 }
 
 /// Runs one detached auto-push for a previously published session branch and
-/// reports its state through the app event pipeline.
-pub(super) async fn run_published_branch_auto_push(input: PublishedBranchAutoPushInput) {
-    let _ = run_published_branch_auto_push_task(&input, true).await;
+/// reports its state through the app event pipeline. `trace`, from
+/// [`auto_push_trace`], ends with the push outcome.
+pub(super) async fn run_published_branch_auto_push(
+    input: PublishedBranchAutoPushInput,
+    trace: Span,
+) {
+    let _ = trace
+        .run(
+            run_published_branch_auto_push_task(&input, true),
+            SessionError::trace_outcome,
+        )
+        .await;
+}
+
+/// Starts the independent `session.auto_push` workflow trace before its task
+/// is spawned, so it links the operation that requested the push.
+pub(super) fn auto_push_trace(session_id: &SessionId) -> Span {
+    let mut trace = Span::root("session.auto_push", Vec::new());
+    trace.identify("agentty.session.id", session_id.to_string());
+
+    trace
 }
 
 /// Executes one detached published-branch auto-push from owned task inputs.

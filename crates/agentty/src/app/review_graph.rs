@@ -21,6 +21,7 @@ use ag_session::{
     GraphWorkspaceAccess,
 };
 use ag_store::AppRepositories;
+use ag_telemetry::{KeyValue, Outcome, Span};
 use ag_worker::{
     GraphDispatch, GraphExecutor, GraphNodeRunner, GraphResources, GraphRunRequest, RunClient,
     RunInfo, RunScope, RunWorker,
@@ -100,10 +101,36 @@ impl ReviewGraphHost {
     /// bounds Env and dispatch waits, and lifecycle cancellation or session
     /// cleanup cancels running nodes and their calls.
     ///
+    /// The generation runs under an independent `review.graph` root trace, so
+    /// context preparation and every node's recorded utility nest beneath it.
+    ///
     /// # Errors
     /// Returns render, persistence, and preparation failures, and discovery
     /// failures before any fragment review completed.
     pub(super) async fn submit(
+        &self,
+        client: Arc<dyn RunClient>,
+        launch: ReviewGraphRequest,
+        render: ReviewRender,
+        progress: ReviewProgressSink,
+    ) -> Result<String, OneShotError> {
+        let mut trace = Span::root(
+            "review.graph",
+            vec![KeyValue::new("agentty.graph.id", launch.graph_id.clone())],
+        );
+        trace.identify("agentty.session.id", launch.session_id.clone());
+
+        // Boxing keeps callers' futures small while the root owns the review.
+        let review = Box::pin(self.review(client, launch, render, progress));
+
+        trace.run(review, |_| Outcome::Failed).await
+    }
+
+    /// Prepares, persists, and drives one review generation's graph.
+    ///
+    /// # Errors
+    /// Returns the failures documented on [`Self::submit`].
+    async fn review(
         &self,
         client: Arc<dyn RunClient>,
         launch: ReviewGraphRequest,
@@ -144,6 +171,10 @@ impl ReviewGraphHost {
         };
         let leaves = review_prompt::partition(&launch.diff, &context, render.as_ref());
         let graph = review_graph(&launch.graph_id, &env_id, launch.agent, leaves.len());
+        ag_telemetry::current_attribute(
+            "agentty.graph.nodes",
+            i64::try_from(graph.nodes.len()).unwrap_or(i64::MAX),
+        );
         self.repositories
             .graphs()
             .save_graph(&graph, None)

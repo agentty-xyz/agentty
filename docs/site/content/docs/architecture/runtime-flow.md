@@ -326,9 +326,15 @@ one shared five-second grace period; unfinished records remain for startup recov
 
 The application owns optional OTLP export. Turn and utility spans keep their initiating
 trace context across queues and background tasks, and the turn span includes ordered
-post-processing and settlement. Provider adapters export only allowlisted categories and
-numeric metadata; prompt and reasoning content never enter traces, and tool content is
-captured only when the host opts in. Incomplete provider events are labeled rather than
-inferred. The exporter shuts down after worker cleanup and terminal restoration. See
+post-processing and settlement. Workflows spawned outside the worker queue start a root
+before spawning and carry it into the task: `session.create` or `session.fork`,
+`session.merge`, `session.delete`, `session.push`, `session.auto_push`, and
+`review.graph`, each linked to its initiating operation. Their phases, such as
+`rebase.step`, `merge.squash`, and `branch.push`, and their utilities nest beneath that
+root, as they do beneath queued `session.sync` and `session.publish` roots. Provider
+adapters export only allowlisted categories and numeric metadata; prompt and reasoning
+content never enter traces, and tool content is captured only when the host opts in.
+Incomplete provider events are labeled rather than inferred. The exporter shuts down
+after worker cleanup and terminal restoration. See
 [Session Traces](@/docs/usage/workflow.md#session-traces) and
 [Local Usage Events](@/docs/usage/workflow.md#local-usage-events).

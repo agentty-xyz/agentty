@@ -1,17 +1,102 @@
-//! Local HTTP capture fixture for lifecycle telemetry tests.
+//! Local HTTP capture fixture for lifecycle telemetry tests, and in-memory
+//! span capture for workflow trace tests.
 
 use std::io::{Read, Write};
 use std::net::{TcpListener, TcpStream};
 use std::thread::{self, JoinHandle};
 use std::time::{Duration, Instant};
 
+use ag_telemetry::KeyValue;
+use opentelemetry::global;
+use opentelemetry::trace::SpanId;
+use opentelemetry_sdk::trace::{InMemorySpanExporter, SdkTracerProvider, SpanData};
 use serde_json::{Value, json};
+use tokio::sync::MutexGuard;
 
 use crate::analytics::Analytics;
 
 /// Serializes tests that replace the process-global trace provider across
 /// awaits.
 pub(crate) static TRACER_PROVIDER_LOCK: tokio::sync::Mutex<()> = tokio::sync::Mutex::const_new(());
+
+/// Installs an in-memory exporter as the process-global trace provider. The
+/// returned guard holds [`TRACER_PROVIDER_LOCK`] for the test's duration.
+pub(crate) async fn capture_spans() -> (MutexGuard<'static, ()>, InMemorySpanExporter) {
+    let guard = TRACER_PROVIDER_LOCK.lock().await;
+    let exporter = InMemorySpanExporter::default();
+    global::set_tracer_provider(
+        SdkTracerProvider::builder()
+            .with_simple_exporter(exporter.clone())
+            .build(),
+    );
+
+    (guard, exporter)
+}
+
+/// Returns the only finished span named `name` whose parent is `parent`.
+pub(crate) fn finished_span(
+    exporter: &InMemorySpanExporter,
+    name: &str,
+    parent: SpanId,
+) -> SpanData {
+    let spans = exporter
+        .get_finished_spans()
+        .expect("finished spans")
+        .into_iter()
+        .filter(|span| span.name == name && span.parent_span_id == parent)
+        .collect::<Vec<_>>();
+    assert_eq!(spans.len(), 1, "expected one `{name}` span: {spans:?}");
+
+    spans.into_iter().next().expect("one span")
+}
+
+/// Waits for [`finished_span`] when the span ends in a background task after
+/// its observable effects.
+pub(crate) async fn wait_for_finished_span(
+    exporter: &InMemorySpanExporter,
+    name: &str,
+    parent: SpanId,
+) -> SpanData {
+    tokio::time::timeout(Duration::from_secs(5), async {
+        while !exporter
+            .get_finished_spans()
+            .expect("finished spans")
+            .iter()
+            .any(|span| span.name == name && span.parent_span_id == parent)
+        {
+            tokio::time::sleep(Duration::from_millis(10)).await;
+        }
+    })
+    .await
+    .expect("span must finish");
+
+    finished_span(exporter, name, parent)
+}
+
+/// Asserts a span ended with `outcome` and records exactly the expected
+/// attributes besides its terminal classification, so no content leaks.
+pub(crate) fn assert_span_attributes(span: &SpanData, outcome: &str, expected: &[KeyValue]) {
+    let mut attributes = span
+        .attributes
+        .iter()
+        .filter(|attribute| {
+            attribute.key.as_str() != "agentty.outcome" && attribute.key.as_str() != "error.type"
+        })
+        .cloned()
+        .collect::<Vec<_>>();
+    attributes.sort_by(|left, right| left.key.as_str().cmp(right.key.as_str()));
+    let mut expected = expected.to_vec();
+    expected.sort_by(|left, right| left.key.as_str().cmp(right.key.as_str()));
+
+    assert!(
+        span.attributes
+            .contains(&KeyValue::new("agentty.outcome", outcome.to_string())),
+        "`{}` outcome: {:?}",
+        span.name,
+        span.attributes
+    );
+    assert_eq!(attributes, expected, "`{}` attributes", span.name);
+}
 
 /// Configures a local sender and captures exactly the expected event count.
 pub(crate) fn capture_events(count: usize) -> (Analytics, JoinHandle<Vec<Value>>) {

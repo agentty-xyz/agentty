@@ -5,6 +5,7 @@ use std::sync::{Arc, Mutex};
 
 use ag_forge as forge;
 use ag_git::{BranchPushOutcome, GitClient};
+use ag_telemetry::{Outcome, Span};
 use ag_worker::RunClient;
 use tokio::sync::mpsc;
 
@@ -124,6 +125,12 @@ impl BranchPublishTaskFailure {
                 }
             },
         }
+    }
+
+    /// Classifies a failure for its execution span. Blocked publications did
+    /// not complete, so they are failures too.
+    pub(crate) fn trace_outcome(_failure: &Self) -> Outcome {
+        Outcome::Failed
     }
 }
 
@@ -470,21 +477,29 @@ async fn publish_pull_request(
         branch_publish_session.published_upstream_ref.as_deref(),
     )
     .await?;
-    let remote = review_request_remote(
-        branch_publish_session,
-        Arc::clone(generator.git_client),
-        review_request_client.as_ref(),
-    )
-    .await?;
-    let review_request = create_or_refresh_review_request(
-        branch_publish_session,
-        &clock,
-        review_request_client,
-        generator,
-        remote,
-        branch_name.clone(),
-    )
-    .await?;
+    let review_request = Span::child("review_request.publish")
+        .run(
+            async {
+                let remote = review_request_remote(
+                    branch_publish_session,
+                    Arc::clone(generator.git_client),
+                    review_request_client.as_ref(),
+                )
+                .await?;
+
+                create_or_refresh_review_request(
+                    branch_publish_session,
+                    &clock,
+                    review_request_client,
+                    generator,
+                    remote,
+                    branch_name.clone(),
+                )
+                .await
+            },
+            BranchPublishTaskFailure::trace_outcome,
+        )
+        .await?;
 
     Ok(BranchPublishTaskSuccess::PullRequestPublished {
         branch_name,
@@ -503,7 +518,34 @@ async fn publish_pull_request(
 /// still refusing a concurrent remote creation. Without a caller-supplied
 /// branch name, the default session branch name is still pushed explicitly so
 /// Git does not reuse an inherited base-branch upstream such as `origin/main`.
+/// The push is traced as a `branch.push` interval of the current workflow.
 pub(crate) async fn push_session_branch_to_remote(
+    db: &db::AppRepositories,
+    folder: PathBuf,
+    git_client: Arc<dyn GitClient>,
+    publish_branch_action: PublishBranchAction,
+    session_id: &str,
+    remote_branch_name: Option<&str>,
+    published_upstream_ref: Option<&str>,
+) -> Result<BranchPushOutcome, BranchPublishTaskFailure> {
+    Span::child("branch.push")
+        .run(
+            push_and_record_session_branch(
+                db,
+                folder,
+                git_client,
+                publish_branch_action,
+                session_id,
+                remote_branch_name,
+                published_upstream_ref,
+            ),
+            BranchPublishTaskFailure::trace_outcome,
+        )
+        .await
+}
+
+/// Performs the untraced push described by [`push_session_branch_to_remote`].
+async fn push_and_record_session_branch(
     db: &db::AppRepositories,
     folder: PathBuf,
     git_client: Arc<dyn GitClient>,
