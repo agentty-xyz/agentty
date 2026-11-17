@@ -11,7 +11,6 @@
 
 mod common;
 mod confirmation;
-mod demo;
 mod navigation;
 mod project;
 mod resource;
@@ -20,5 +19,7 @@ mod session;
 mod setting;
 mod update;
 
+#[path = "../support/clock.rs"]
+mod clock;
 #[path = "../support/database.rs"]
 mod test_support;

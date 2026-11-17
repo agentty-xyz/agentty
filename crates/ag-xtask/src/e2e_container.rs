@@ -22,28 +22,28 @@ const FEATURE_GIFS: &str = "docs/site/static/features";
 /// Label on every container this command starts.
 const LABEL: &str = "agentty.e2e-container=1";
 
-/// Agentty test targets the container may run.
-const TEST_TARGETS: [&str; 2] = ["e2e", "showcase"];
+/// Marketing assets the `showcase` generator target can record.
+const MARKETING_ASSETS: [&str; 3] = ["demo", "sessions", "tab_tour"];
 
-/// Runs an Agentty PTY target inside the pinned image.
+/// Runs the Agentty `e2e` target or the marketing asset generators inside
+/// the pinned image.
 ///
-/// `AGENTTY_TEST_TARGET` selects `e2e` (default) or `showcase`,
-/// `AGENTTY_RUN_IGNORED=only` runs only that target's ignored asset
-/// generators, `TESTTY_GIF_MODE` selects the freshness mode (default
-/// `check`), `AGENTTY_TEST_FILTER` optionally narrows the run with a nextest
-/// filterset, and `AGENTTY_E2E_IMAGE` replaces the pinned image with a local
-/// candidate without pulling it. Runs sharing a cache directory wait for each
-/// other.
+/// `TESTTY_GIF_MODE` selects the freshness mode (default `check`),
+/// `AGENTTY_TEST_FILTER` optionally narrows the run with a nextest filterset,
+/// `AGENTTY_MARKETING_ASSETS` instead re-records the named marketing assets,
+/// and `AGENTTY_E2E_IMAGE` replaces the pinned image with a local candidate
+/// without pulling it. Runs sharing a cache directory wait for each other.
 pub(crate) fn run() -> Result<(), String> {
     let settings = Settings {
         architecture: std::env::consts::ARCH,
         cache: cache_root(std::env::var_os("XDG_CACHE_HOME"), std::env::var_os("HOME"))?,
         candidate: variable("AGENTTY_E2E_IMAGE"),
-        filter: variable("AGENTTY_TEST_FILTER"),
-        ignored_only: ignored_only(variable("AGENTTY_RUN_IGNORED").as_deref())?,
         mode: variable("TESTTY_GIF_MODE").unwrap_or_else(|| "check".into()),
         pinned: pinned_image(WORKFLOW)?,
-        target: test_target(variable("AGENTTY_TEST_TARGET").as_deref())?,
+        selection: selection(
+            variable("AGENTTY_MARKETING_ASSETS").as_deref(),
+            variable("AGENTTY_TEST_FILTER"),
+        )?,
         workspace: std::env::current_dir().map_err(error_text)?,
     };
 
@@ -69,17 +69,6 @@ fn variable(name: &str) -> Option<String> {
     std::env::var(name).ok().filter(|value| !value.is_empty())
 }
 
-/// Resolves `AGENTTY_RUN_IGNORED`, whose only accepted value is `only`.
-fn ignored_only(value: Option<&str>) -> Result<bool, String> {
-    match value {
-        None => Ok(false),
-        Some("only") => Ok(true),
-        Some(other) => Err(format!(
-            "AGENTTY_RUN_IGNORED must be `only` when set, not `{other}`"
-        )),
-    }
-}
-
 /// Reads the digest-pinned image from the E2E workflow.
 fn pinned_image(workflow: &str) -> Result<String, String> {
     let workflow: serde_yaml_ng::Value = serde_yaml_ng::from_str(workflow).map_err(error_text)?;
@@ -91,21 +80,37 @@ fn pinned_image(workflow: &str) -> Result<String, String> {
         .ok_or_else(|| "The E2E workflow must pin `jobs.test.container.image` by digest".into())
 }
 
-/// Resolves `AGENTTY_TEST_TARGET`, defaulting to the `e2e` target.
-fn test_target(value: Option<&str>) -> Result<&'static str, String> {
-    let Some(value) = value else {
-        return Ok(TEST_TARGETS[0]);
+/// Resolves what the container runs from `AGENTTY_MARKETING_ASSETS` and
+/// `AGENTTY_TEST_FILTER`.
+///
+/// Asset names are whitespace-separated and validated before a container
+/// starts; a nextest filter cannot narrow a generator run.
+fn selection(assets: Option<&str>, filter: Option<String>) -> Result<Selection, String> {
+    let Some(assets) = assets else {
+        return Ok(Selection::Tests(filter));
     };
-
-    TEST_TARGETS
-        .into_iter()
-        .find(|target| *target == value)
-        .ok_or_else(|| {
-            format!(
-                "AGENTTY_TEST_TARGET must be one of {}, not `{value}`",
-                TEST_TARGETS.join(", ")
-            )
+    if filter.is_some() {
+        return Err("AGENTTY_MARKETING_ASSETS cannot be combined with AGENTTY_TEST_FILTER".into());
+    }
+    let expected = MARKETING_ASSETS.join(", ");
+    let assets = assets
+        .split_whitespace()
+        .map(|asset| {
+            MARKETING_ASSETS
+                .into_iter()
+                .find(|known| *known == asset)
+                .ok_or_else(|| {
+                    format!("AGENTTY_MARKETING_ASSETS names `{asset}`; expected {expected}")
+                })
         })
+        .collect::<Result<Vec<_>, _>>()?;
+    if assets.is_empty() {
+        return Err(format!(
+            "AGENTTY_MARKETING_ASSETS must name at least one of {expected}"
+        ));
+    }
+
+    Ok(Selection::Assets(assets))
 }
 
 /// Inputs resolved from the invoking environment.
@@ -113,12 +118,18 @@ struct Settings {
     architecture: &'static str,
     cache: PathBuf,
     candidate: Option<String>,
-    filter: Option<String>,
-    ignored_only: bool,
     mode: String,
     pinned: String,
-    target: &'static str,
+    selection: Selection,
     workspace: PathBuf,
+}
+
+/// Work the container runs.
+enum Selection {
+    /// Marketing asset generators of the `showcase` target, in order.
+    Assets(Vec<&'static str>),
+    /// The `e2e` target, optionally narrowed by a nextest filterset.
+    Tests(Option<String>),
 }
 
 trait Guard {}
@@ -205,24 +216,33 @@ impl Runner<'_> {
         ] {
             arguments.extend(["--env", variable]);
         }
-        arguments.extend([
-            image,
-            "cargo",
-            "nextest",
-            "run",
-            "--locked",
-            "--profile",
-            "ci",
-            "-p",
-            "agentty",
-            "--test",
-            settings.target,
-        ]);
-        if settings.ignored_only {
-            arguments.extend(["--run-ignored", "only"]);
-        }
-        if let Some(filter) = &settings.filter {
-            arguments.extend(["-E", filter]);
+        arguments.push(image);
+        match &settings.selection {
+            // The generators are a plain binary, so `cargo test` runs it
+            // with the asset names as its arguments.
+            Selection::Assets(assets) => {
+                arguments.extend([
+                    "cargo", "test", "--locked", "-p", "agentty", "--test", "showcase", "--",
+                ]);
+                arguments.extend(assets);
+            }
+            Selection::Tests(filter) => {
+                arguments.extend([
+                    "cargo",
+                    "nextest",
+                    "run",
+                    "--locked",
+                    "--profile",
+                    "ci",
+                    "-p",
+                    "agentty",
+                    "--test",
+                    "e2e",
+                ]);
+                if let Some(filter) = filter {
+                    arguments.extend(["-E", filter]);
+                }
+            }
         }
         self.host.status("podman", &arguments)?;
         // VHS can exit successfully without finalizing a usable GIF.

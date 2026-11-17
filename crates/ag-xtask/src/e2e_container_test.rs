@@ -5,7 +5,7 @@ use std::fs;
 use std::path::{Path, PathBuf};
 
 use crate::e2e_container::{
-    Guard, Host, ProcessHost, Runner, Settings, cache_root, ignored_only, pinned_image, test_target,
+    Guard, Host, ProcessHost, Runner, Selection, Settings, cache_root, pinned_image, selection,
 };
 
 const PINNED: &str = "ghcr.io/example/e2e@sha256:abc";
@@ -87,11 +87,9 @@ fn settings() -> Settings {
         architecture: "aarch64",
         cache: "/cache-root".into(),
         candidate: None,
-        filter: Some("test(help)".into()),
-        ignored_only: false,
         mode: "generate".into(),
         pinned: PINNED.into(),
-        target: "e2e",
+        selection: Selection::Tests(Some("test(help)".into())),
         workspace: "/workspace".into(),
     }
 }
@@ -135,7 +133,7 @@ fn candidate_images_run_without_pulling_or_filtering() {
     let settings = Settings {
         architecture: "x86_64",
         candidate: Some("sha256:candidate".into()),
-        filter: None,
+        selection: Selection::Tests(None),
         ..settings()
     };
 
@@ -155,13 +153,11 @@ fn candidate_images_run_without_pulling_or_filtering() {
 }
 
 #[test]
-fn ignored_generators_run_in_the_selected_target_before_the_filter() {
+fn marketing_assets_run_the_showcase_generators_with_their_names() {
     // Arrange
     let host = ScriptedHost::new();
     let settings = Settings {
-        filter: Some("test(=feature_tab_tour)".into()),
-        ignored_only: true,
-        target: "showcase",
+        selection: Selection::Assets(vec!["demo", "tab_tour"]),
         ..settings()
     };
 
@@ -170,43 +166,36 @@ fn ignored_generators_run_in_the_selected_target_before_the_filter() {
 
     // Assert
     assert_eq!(result, Ok(()));
-    assert!(host.calls()[5].ends_with(
-        " cargo nextest run --locked --profile ci -p agentty --test showcase --run-ignored only \
-         -E test(=feature_tab_tour)"
-    ));
+    let calls = host.calls();
+    assert!(calls[5].ends_with(" cargo test --locked -p agentty --test showcase -- demo tab_tour"));
+    assert_eq!(calls[6], "pages /workspace/docs/site/content/features");
 }
 
 #[test]
-fn test_target_defaults_to_e2e_and_accepts_only_known_targets() {
+fn selection_runs_tests_unless_marketing_assets_are_named() {
     // Arrange, Act
-    let default = test_target(None);
-    let e2e = test_target(Some("e2e"));
-    let showcase = test_target(Some("showcase"));
-    let unknown = test_target(Some("prompt_evaluation"));
+    let tests = selection(None, Some("test(help)".into()));
+    let assets = selection(Some(" sessions\ttab_tour demo "), None);
+    let filtered = selection(Some("demo"), Some("test(help)".into()));
+    let unknown = selection(Some("demo hero"), None);
+    let blank = selection(Some(" "), None);
 
     // Assert
-    assert_eq!(default, Ok("e2e"));
-    assert_eq!(e2e, Ok("e2e"));
-    assert_eq!(showcase, Ok("showcase"));
-    assert_eq!(
-        unknown,
-        Err("AGENTTY_TEST_TARGET must be one of e2e, showcase, not `prompt_evaluation`".into())
+    assert!(matches!(tests, Ok(Selection::Tests(Some(filter))) if filter == "test(help)"));
+    assert!(
+        matches!(assets, Ok(Selection::Assets(names)) if names == ["sessions", "tab_tour", "demo"])
     );
-}
-
-#[test]
-fn ignored_only_is_opt_in_and_accepts_only_the_only_value() {
-    // Arrange, Act
-    let unset = ignored_only(None);
-    let only = ignored_only(Some("only"));
-    let all = ignored_only(Some("all"));
-
-    // Assert
-    assert_eq!(unset, Ok(false));
-    assert_eq!(only, Ok(true));
     assert_eq!(
-        all,
-        Err("AGENTTY_RUN_IGNORED must be `only` when set, not `all`".into())
+        filtered.err(),
+        Some("AGENTTY_MARKETING_ASSETS cannot be combined with AGENTTY_TEST_FILTER".into())
+    );
+    assert_eq!(
+        unknown.err(),
+        Some("AGENTTY_MARKETING_ASSETS names `hero`; expected demo, sessions, tab_tour".into())
+    );
+    assert_eq!(
+        blank.err(),
+        Some("AGENTTY_MARKETING_ASSETS must name at least one of demo, sessions, tab_tour".into())
     );
 }
 
