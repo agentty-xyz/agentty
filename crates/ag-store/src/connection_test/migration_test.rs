@@ -549,6 +549,83 @@ async fn test_session_schema_omits_summary_column() {
     assert!(!column_names.iter().any(|name| name == "summary"));
 }
 
+/// Verifies index tuning indexes unfinished operations and cascaded foreign
+/// keys while dropping indexes that duplicate another index's prefix.
+#[tokio::test]
+async fn index_tuning_replaces_redundant_indexes_with_lookup_indexes() {
+    // Arrange
+    let database = Database::open_in_memory()
+        .await
+        .expect("database should open");
+
+    // Act
+    let indexes = sqlx::query_as::<_, (String, String)>(
+        r"
+SELECT tbl_name, name
+FROM sqlite_master
+WHERE type = 'index'
+  AND sql IS NOT NULL
+  AND tbl_name IN (
+      'agent_run', 'execution_graph_continuation', 'execution_graph_input',
+      'execution_graph_task_turn', 'session_activity', 'session_message',
+      'session_operation', 'session_usage'
+  )
+ORDER BY tbl_name, name
+",
+    )
+    .fetch_all(database.pool())
+    .await
+    .expect("indexes should load");
+    let unfinished_plan = sqlx::query_as::<_, (i64, i64, i64, String)>(
+        r"
+EXPLAIN QUERY PLAN
+SELECT id
+FROM session_operation
+WHERE status IN ('queued', 'running')
+ORDER BY queued_at ASC, id ASC
+",
+    )
+    .fetch_all(database.pool())
+    .await
+    .expect("unfinished operation plan should load")
+    .into_iter()
+    .map(|(_, _, _, detail)| detail)
+    .collect::<Vec<_>>();
+
+    // Assert
+    assert_eq!(
+        indexes,
+        [
+            ("agent_run", "agent_run_session_id_idx"),
+            ("agent_run", "idx_agent_run_unfinished"),
+            (
+                "execution_graph_continuation",
+                "execution_graph_continuation_execution_graph_id_idx"
+            ),
+            (
+                "execution_graph_input",
+                "execution_graph_input_execution_graph_result_id_idx"
+            ),
+            (
+                "execution_graph_task_turn",
+                "execution_graph_task_turn_session_message_id_idx"
+            ),
+            ("session_activity", "session_activity_created_at_idx"),
+            ("session_message", "session_message_session_id_position_idx"),
+            (
+                "session_operation",
+                "session_operation_session_id_status_idx"
+            ),
+            ("session_operation", "session_operation_unfinished_idx"),
+        ]
+        .map(|(table, index)| (table.to_string(), index.to_string()))
+    );
+    assert_eq!(
+        unfinished_plan,
+        ["SCAN session_operation USING INDEX session_operation_unfinished_idx"]
+    );
+}
+
 /// Verifies the diff-presence migration preserves ambiguous legacy rows.
 #[tokio::test]
 async fn test_add_session_diff_presence_backfills_legacy_rows() {
