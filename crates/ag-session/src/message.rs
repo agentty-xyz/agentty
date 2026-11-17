@@ -266,6 +266,10 @@ impl SessionTranscript {
     /// [`Self::new`] sorts persisted input before this method derives the next
     /// position, so the message slice and its cached content hash retain the
     /// same ordering as a newly reconstructed transcript.
+    ///
+    /// The content hash is extended with only the appended message, so each
+    /// append costs time proportional to that message rather than the whole
+    /// transcript.
     pub fn append_message(&mut self, kind: SessionMessageKind, content: &str) {
         let content = stored_message_content(kind, content);
         if content.trim().is_empty() {
@@ -276,10 +280,10 @@ impl SessionTranscript {
             .messages
             .last()
             .map_or(0, |message| message.position.saturating_add(1));
-        self.total_content_len = self.total_content_len.saturating_add(content.len());
-        self.messages
-            .push(SessionMessage::new(position, kind, content));
-        self.content_hash = Self::content_hash_for_messages(&self.messages);
+        let message = SessionMessage::new(position, kind, content);
+        self.content_hash = Self::chained_content_hash(self.content_hash, &message);
+        self.total_content_len = self.total_content_len.saturating_add(message.content.len());
+        self.messages.push(message);
     }
 
     /// Returns formatted transcript text for replay when content exists.
@@ -334,16 +338,26 @@ impl SessionTranscript {
     /// Computes one ordered identity across message positions, kinds, and raw
     /// content so render caches can compare transcripts without rescanning them
     /// on every frame.
+    ///
+    /// The identity chains one per-message hash onto the previous value,
+    /// starting from `0`, the derived [`Default`] hash of an empty transcript.
+    /// [`Self::append_message`] therefore extends a cached hash in place and
+    /// still matches a transcript rebuilt from the same messages. The value is
+    /// an in-process cache key; it is never persisted or compared across
+    /// processes.
     fn content_hash_for_messages(messages: &[SessionMessage]) -> u64 {
-        let mut hasher = FxHasher::default();
+        messages.iter().fold(0, Self::chained_content_hash)
+    }
 
-        for message in messages {
-            hasher.write_i64(message.position);
-            hasher.write(message.kind.as_str().as_bytes());
-            hasher.write_u8(0xff);
-            hasher.write(message.content.as_bytes());
-            hasher.write_u8(0xfe);
-        }
+    /// Extends one transcript content hash with the next ordered message.
+    fn chained_content_hash(previous_hash: u64, message: &SessionMessage) -> u64 {
+        let mut hasher = FxHasher::default();
+        hasher.write_u64(previous_hash);
+        hasher.write_i64(message.position);
+        hasher.write(message.kind.as_str().as_bytes());
+        hasher.write_u8(0xff);
+        hasher.write(message.content.as_bytes());
+        hasher.write_u8(0xfe);
 
         hasher.finish()
     }
