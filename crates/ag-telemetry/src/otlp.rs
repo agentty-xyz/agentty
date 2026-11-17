@@ -1,5 +1,5 @@
-//! Opt-in OTLP HTTP/protobuf trace and event-log export for host composition
-//! roots.
+//! Opt-in OTLP HTTP/protobuf trace, metric, and event-log export for host
+//! composition roots.
 
 use std::sync::Arc;
 use std::sync::atomic::{AtomicU64, Ordering};
@@ -7,12 +7,15 @@ use std::time::{Duration, SystemTime};
 
 use opentelemetry::logs::{AnyValue, LogRecord as _, Logger as _, LoggerProvider as _, Severity};
 use opentelemetry::{KeyValue, global};
-use opentelemetry_otlp::{LogExporter, Protocol, SpanExporter, WithExportConfig};
+use opentelemetry_otlp::{LogExporter, MetricExporter, Protocol, SpanExporter, WithExportConfig};
 use opentelemetry_sdk::Resource;
 use opentelemetry_sdk::error::OTelSdkResult;
 use opentelemetry_sdk::logs::{
     LogBatch, LogExporter as SdkLogExporter, SdkLogger, SdkLoggerProvider,
 };
+use opentelemetry_sdk::metrics::data::ResourceMetrics;
+use opentelemetry_sdk::metrics::exporter::PushMetricExporter;
+use opentelemetry_sdk::metrics::{SdkMeterProvider, Temporality};
 use opentelemetry_sdk::trace::{
     BatchConfigBuilder, BatchSpanProcessor, Sampler, SdkTracerProvider, SpanData,
     SpanExporter as SdkSpanExporter,
@@ -78,6 +81,8 @@ impl EventLog {
 pub struct OtlpExport {
     diagnostics: Arc<AtomicU64>,
     events: Option<SdkLoggerProvider>,
+    metric_rejections: Arc<AtomicU64>,
+    metrics: Option<SdkMeterProvider>,
     provider: SdkTracerProvider,
 }
 
@@ -86,6 +91,12 @@ impl OtlpExport {
     /// variables alone never enable tracing or override the endpoint;
     /// `OTEL_EXPORTER_OTLP_TRACES_HEADERS` and `OTEL_EXPORTER_OTLP_HEADERS`
     /// still supply authentication headers.
+    ///
+    /// When the traces URL path ends in `/v1/traces`, metrics recorded through
+    /// the installed global meter provider are also exported to the sibling
+    /// `/v1/metrics` path with the same resource identity. Their
+    /// authentication headers come from `OTEL_EXPORTER_OTLP_METRICS_HEADERS`
+    /// or `OTEL_EXPORTER_OTLP_HEADERS`.
     ///
     /// # Errors
     /// Returns a bounded error for an invalid endpoint or exporter setup.
@@ -96,11 +107,11 @@ impl OtlpExport {
         Self::start_signals(endpoint, service, false).await
     }
 
-    /// Starts trace export like [`Self::start`] and, when the traces URL path
-    /// ends in `/v1/traces`, also exports [`EventLog`] records to the sibling
-    /// `/v1/logs` path with the same resource identity. Other traces URLs
-    /// export traces only. Event-log authentication headers come from
-    /// `OTEL_EXPORTER_OTLP_LOGS_HEADERS` or `OTEL_EXPORTER_OTLP_HEADERS`.
+    /// Starts trace and metric export like [`Self::start`] and, when the
+    /// traces URL path ends in `/v1/traces`, also exports [`EventLog`] records
+    /// to the sibling `/v1/logs` path with the same resource identity. Other
+    /// traces URLs export traces only. Event-log authentication headers come
+    /// from `OTEL_EXPORTER_OTLP_LOGS_HEADERS` or `OTEL_EXPORTER_OTLP_HEADERS`.
     ///
     /// # Errors
     /// Returns a bounded error for an invalid endpoint or exporter setup.
@@ -128,25 +139,28 @@ impl OtlpExport {
             .map(|events| EventLog(events.logger("ag-telemetry")))
     }
 
-    /// Installs the process-wide provider and, when no subscriber exists yet,
-    /// a diagnostic subscriber that counts exporter warnings without retaining
-    /// their text. Repeated installs replace the provider and never fail.
-    /// Rejected export batches and shutdown failures are always counted by
-    /// this export itself. The subscriber adds only other SDK warnings and
-    /// errors, such as dropped spans, and only for the first export installed
-    /// in the process.
+    /// Installs the process-wide tracer and meter providers and, when no
+    /// subscriber exists yet, a diagnostic subscriber that counts exporter
+    /// warnings without retaining their text. Repeated installs replace the
+    /// providers and never fail. Rejected export batches and shutdown failures
+    /// are always counted by this export itself. The subscriber adds only
+    /// other SDK warnings and errors, such as dropped spans, and only for the
+    /// first export installed in the process.
     pub fn install(&self) {
         let _ = Registry::default()
             .with(Diagnostics(Arc::clone(&self.diagnostics)))
             .try_init();
         global::set_tracer_provider(self.provider.clone());
+        if let Some(metrics) = &self.metrics {
+            global::set_meter_provider(metrics.clone());
+        }
     }
 
-    /// Flushes finished spans and events concurrently. Export failure never
-    /// changes the host result. Returns the number of rejected export batches,
-    /// plus one per signal provider whose shutdown failed, plus the other SDK
-    /// warnings and errors described on [`Self::install`]. Each failure is
-    /// counted once; zero means every export succeeded.
+    /// Flushes finished spans, events, and metrics concurrently. Export
+    /// failure never changes the host result. Returns the number of rejected
+    /// export batches, plus one per signal provider whose shutdown failed,
+    /// plus the other SDK warnings and errors described on [`Self::install`].
+    /// Each failure is counted once; zero means every export succeeded.
     pub async fn shutdown(self) -> u64 {
         let provider = self.provider;
         let traces = tokio::task::spawn_blocking(move || {
@@ -157,9 +171,23 @@ impl OtlpExport {
                 events.shutdown_with_timeout(Duration::from_secs(3))
             })
         });
+        let rejected_before_flush = self.metric_rejections.load(Ordering::Relaxed);
+        let metrics = self.metrics.map(|metrics| {
+            tokio::task::spawn_blocking(move || {
+                metrics.shutdown_with_timeout(Duration::from_secs(3))
+            })
+        });
         let mut failures = u64::from(!matches!(traces.await, Ok(Ok(()))));
         if let Some(events) = events {
             failures += u64::from(!matches!(events.await, Ok(Ok(()))));
+        }
+        if let Some(metrics) = metrics {
+            let shutdown_failed = !matches!(metrics.await, Ok(Ok(())));
+            let rejections = self.metric_rejections.load(Ordering::Relaxed);
+            // A rejected final flush also fails the meter provider's shutdown;
+            // count that failure once, as the rejected export.
+            failures +=
+                rejections + u64::from(shutdown_failed && rejections == rejected_before_flush);
         }
 
         self.diagnostics.fetch_add(failures, Ordering::Relaxed) + failures
@@ -174,13 +202,17 @@ impl OtlpExport {
             return Ok(None);
         };
         let endpoint = Self::validate_endpoint(endpoint)?;
-        let events_endpoint = events.then(|| Self::events_endpoint(&endpoint)).flatten();
+        let events_endpoint = events
+            .then(|| Self::signal_endpoint(&endpoint, "logs"))
+            .flatten();
+        let metrics_endpoint = Self::signal_endpoint(&endpoint, "metrics");
         let endpoint = endpoint.to_string();
 
         Self::initialize(move || {
             Self::build(
                 &endpoint,
                 events_endpoint.as_ref().map(Url::as_str),
+                metrics_endpoint.as_ref().map(Url::as_str),
                 service,
             )
         })
@@ -212,23 +244,26 @@ impl OtlpExport {
         Ok(url)
     }
 
-    /// Maps a standard signal path to its logs sibling, keeping any prefix
-    /// and query; other paths have no unambiguous logs URL.
-    fn events_endpoint(traces: &Url) -> Option<Url> {
+    /// Maps a standard traces path to its `signal` sibling, such as `logs` or
+    /// `metrics`, keeping any prefix and query; other paths have no
+    /// unambiguous sibling URL.
+    fn signal_endpoint(traces: &Url, signal: &str) -> Option<Url> {
         let prefix = traces.path().strip_suffix("/v1/traces")?;
-        let mut events = traces.clone();
-        events.set_path(&format!("{prefix}/v1/logs"));
+        let mut sibling = traces.clone();
+        sibling.set_path(&format!("{prefix}/v1/{signal}"));
 
-        Some(events)
+        Some(sibling)
     }
 
     fn build(
         endpoint: &str,
         events_endpoint: Option<&str>,
+        metrics_endpoint: Option<&str>,
         service: Service,
     ) -> Result<Self, OtlpError> {
         let _ = rustls::crypto::ring::default_provider().install_default();
         let diagnostics = Arc::new(AtomicU64::new(0));
+        let metric_rejections = Arc::new(AtomicU64::new(0));
         let exporter = SpanExporter::builder()
             .with_http()
             .with_protocol(Protocol::HttpBinary)
@@ -281,10 +316,32 @@ impl OtlpExport {
                     })
                     .build()
             });
+        let metrics = metrics_endpoint
+            .map(|metrics_endpoint| {
+                MetricExporter::builder()
+                    .with_http()
+                    .with_protocol(Protocol::HttpBinary)
+                    .with_endpoint(metrics_endpoint)
+                    .with_timeout(Duration::from_secs(2))
+                    .build()
+            })
+            .transpose()
+            .map_err(|_| OtlpError::Configuration)?
+            .map(|exporter| {
+                SdkMeterProvider::builder()
+                    .with_resource(resource.clone())
+                    .with_periodic_exporter(CountedExporter {
+                        exporter,
+                        failures: Arc::clone(&metric_rejections),
+                    })
+                    .build()
+            });
 
         Ok(Self {
             diagnostics,
             events,
+            metric_rejections,
+            metrics,
             provider: SdkTracerProvider::builder()
                 .with_resource(resource)
                 .with_sampler(Sampler::AlwaysOn)
@@ -379,6 +436,28 @@ impl<Exporter: SdkLogExporter> SdkLogExporter for CountedExporter<Exporter> {
 
     fn set_resource(&mut self, resource: &Resource) {
         self.exporter.set_resource(resource);
+    }
+}
+
+impl<Exporter: PushMetricExporter> PushMetricExporter for CountedExporter<Exporter> {
+    async fn export(&self, metrics: &ResourceMetrics) -> OTelSdkResult {
+        self.count(self.exporter.export(metrics).await)
+    }
+
+    fn force_flush(&self) -> OTelSdkResult {
+        self.exporter.force_flush()
+    }
+
+    fn shutdown_with_timeout(&self, timeout: Duration) -> OTelSdkResult {
+        self.exporter.shutdown_with_timeout(timeout)
+    }
+
+    fn shutdown(&self) -> OTelSdkResult {
+        self.exporter.shutdown()
+    }
+
+    fn temporality(&self) -> Temporality {
+        self.exporter.temporality()
     }
 }
 

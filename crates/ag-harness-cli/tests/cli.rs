@@ -9,6 +9,7 @@ use std::{fs, io};
 use ag_harness::provider::{KIMI_K2_6, ModelProvider, QWEN_PLUS};
 use ag_harness::tool::ToolDefinition;
 use assert_cmd::cargo::cargo_bin;
+use opentelemetry_proto::tonic::collector::metrics::v1::ExportMetricsServiceRequest;
 use opentelemetry_proto::tonic::collector::trace::v1::ExportTraceServiceRequest;
 use prost::Message as _;
 use serde_json::json;
@@ -1526,7 +1527,7 @@ async fn comparison_repository(root: &Path) -> io::Result<(String, String)> {
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn otlp_endpoint_exports_content_free_turn_traces() {
+async fn otlp_endpoint_exports_content_free_turn_traces_and_metrics() {
     // Arrange
     let model_server = MockServer::start().await;
     Mock::given(method("POST"))
@@ -1560,11 +1561,13 @@ async fn otlp_endpoint_exports_content_free_turn_traces() {
         .mount(&model_server)
         .await;
     let collector = MockServer::start().await;
-    Mock::given(method("POST"))
-        .and(path("/v1/traces"))
-        .respond_with(ResponseTemplate::new(200))
-        .mount(&collector)
-        .await;
+    for signal in ["traces", "metrics"] {
+        Mock::given(method("POST"))
+            .and(path(format!("/v1/{signal}")))
+            .respond_with(ResponseTemplate::new(200))
+            .mount(&collector)
+            .await;
+    }
     let endpoint = format!("{}/v1/traces", collector.uri());
     let (_storage, mut command) = harness_command().expect("temporary storage should exist");
 
@@ -1587,11 +1590,25 @@ async fn otlp_endpoint_exports_content_free_turn_traces() {
     let requests = collector.received_requests().await.expect("requests");
     assert!(!requests.is_empty());
     let mut span_names = Vec::new();
+    let mut metric_names = Vec::new();
     for request in &requests {
         let body = String::from_utf8_lossy(&request.body);
         assert!(!body.contains("private"));
         assert!(!body.contains("Cargo.toml"));
         assert!(!body.contains("[package]"));
+        if request.url.path() == "/v1/metrics" {
+            let payload = ExportMetricsServiceRequest::decode(request.body.as_slice())
+                .expect("OTLP metrics protobuf");
+            metric_names.extend(
+                payload
+                    .resource_metrics
+                    .iter()
+                    .flat_map(|resource| &resource.scope_metrics)
+                    .flat_map(|scope| &scope.metrics)
+                    .map(|metric| metric.name.clone()),
+            );
+            continue;
+        }
         let payload =
             ExportTraceServiceRequest::decode(request.body.as_slice()).expect("OTLP protobuf");
         span_names.extend(
@@ -1606,6 +1623,8 @@ async fn otlp_endpoint_exports_content_free_turn_traces() {
     assert!(span_names.contains(&"invoke_agent".to_string()));
     assert!(span_names.contains(&"chat muse-test".to_string()));
     assert!(span_names.contains(&"execute_tool read".to_string()));
+    assert!(metric_names.contains(&"gen_ai.client.operation.duration".to_string()));
+    assert!(metric_names.contains(&"gen_ai.client.token.usage".to_string()));
 }
 
 #[test]
