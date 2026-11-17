@@ -36,4 +36,4 @@ Document public API and CLI changes in `crates/testty/README.md` and framework d
 record breaking changes in `crates/testty/docs/upgrading.md`.
 
 `testty` shares the workspace version and release. Do not version or publish it
-independently; keep `.github/workflows/publish-crates-io.yml` ordered correctly.
+independently.

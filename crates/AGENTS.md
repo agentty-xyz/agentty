@@ -3,17 +3,11 @@
 `crates/` contains the Rust workspace members. Treat manifests and module roots as the
 source of truth for the member and module inventory.
 
-When adding or removing a crate required by a published workspace crate, update
-`.github/workflows/publish-crates-io.yml` in the same change and keep dependencies
-before dependents in the publish plan.
-
 ## Rust Conventions
 
 ### Workspace and Modules
 
-- Define all dependencies, including development and build dependencies, under
-  `[workspace.dependencies]` in the root `Cargo.toml`. Member manifests use
-  `workspace = true` for shared package metadata and dependencies.
+- Member manifests inherit shared package metadata with `workspace = true`.
 - Use singular Rust file names.
 - A `module.rs` paired with `module/` is router-only: declarations and re-exports, with
   no runtime types, constants, functions, or implementations.
@@ -74,7 +68,7 @@ before dependents in the publish plan.
 ## Tokio
 
 - Keep the codebase async; do not create a runtime merely to call `block_on()`.
-- Enable only required Tokio features, never `full`.
+- Enable only required Tokio features.
 - Use `tokio::process::Command` for streamed subprocesses and
   `tokio::task::spawn_blocking` for blocking synchronous work.
 - Prefer variable shadowing or a scoped block when cloning values into spawned `move`

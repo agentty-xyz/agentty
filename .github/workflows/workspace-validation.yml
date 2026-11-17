@@ -45,6 +45,9 @@ jobs:
       - name: Checkout
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
+          # The first parent is the base the migration-edit check compares
+          # against: the target branch for a pull request's merge commit.
+          fetch-depth: 2
           persist-credentials: false
 
       - name: Setup Rust and `prek`
@@ -58,6 +61,8 @@ jobs:
       # With every file selected, the `clippy` hook lints all workspace targets
       # and features plus Agentty's PTY suites, so it also type-checks them.
       - name: Default validation hooks
+        env:
+          AGENTTY_MIGRATION_BASE: HEAD^1
         run: prek run --all-files
 
       - name: Dependency advisory audit

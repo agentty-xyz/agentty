@@ -302,6 +302,7 @@ dependencies = [
  "serde_yaml_ng",
  "sha2 0.11.1",
  "tempfile",
+ "toml",
  "tracing",
  "tracing-subscriber",
 ]
