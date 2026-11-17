@@ -216,6 +216,34 @@ fn registry(model: &ScriptedModel) -> Result<ModelRegistry, Box<dyn Error>> {
     Ok(registry)
 }
 
+/// Asserts that every settled turn of `all`, one completed, one stopped by a
+/// limit after its first request, one cancelled before any response, and
+/// one completed, kept the usage of its completed requests, and that the
+/// unpriced session's totals sum them.
+async fn assert_recorded_usage(
+    session: &Session,
+    all: &[TurnRecord],
+) -> Result<(), Box<dyn Error>> {
+    let usage: Vec<_> = all
+        .iter()
+        .map(|record| record.usage.map(|usage| (usage.input, usage.output)))
+        .collect();
+    assert_eq!(
+        usage,
+        [Some((10, 5)), Some((10, 5)), Some((0, 0)), Some((10, 5))],
+        "every settled turn keeps the usage of its completed requests"
+    );
+    assert!(all.iter().all(|record| record.cost.is_none()), "unpriced");
+    let totals = session.usage().await?;
+    assert_eq!(
+        (totals.turns, totals.unknown_turns, totals.unpriced_turns),
+        (4, 0, 4)
+    );
+    assert_eq!((totals.usage.input, totals.usage.output), (30, 15));
+
+    Ok(())
+}
+
 #[tokio::test]
 async fn transcript_records_completed_failed_and_interrupted_turns() -> Result<(), Box<dyn Error>> {
     for store in journaled_stores().await? {
@@ -306,7 +334,7 @@ async fn transcript_records_completed_failed_and_interrupted_turns() -> Result<(
                 output: RunOutput::Text("plain last".to_string())
             }]
         );
-        assert_eq!(all[3].usage, None, "only host-request turns keep usage");
+        assert_recorded_usage(&session, &all).await?;
     }
 
     Ok(())
@@ -339,9 +367,7 @@ async fn transcript_survives_sqlite_resume_with_answered_calls_and_usage()
     // Assert
     assert_eq!(after, before);
     assert_eq!(after.len(), 1);
-    let usage = after[0]
-        .usage
-        .ok_or("a host-request turn keeps its usage")?;
+    let usage = after[0].usage.ok_or("the turn keeps its usage")?;
     assert_eq!((usage.input, usage.output), (20, 10));
     let calls = tool_calls(&after[0]);
     assert_eq!(calls.len(), 2);
@@ -412,6 +438,16 @@ async fn forked_sessions_continue_independently_under_their_own_cache_keys()
             .collect();
         assert_eq!(fork_inputs, [text("one"), text("two"), text("four")]);
         assert_eq!(source.transcript(TurnRange::All).await?.len(), 4);
+        let fork_totals = fork.usage().await?;
+        assert_eq!(
+            (
+                fork_totals.turns,
+                fork_totals.unknown_turns,
+                fork_totals.usage.input
+            ),
+            (3, 0, 30),
+            "copied turns keep their usage"
+        );
     }
 
     Ok(())

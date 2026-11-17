@@ -1,6 +1,6 @@
 {
   "db_name": "SQLite",
-  "query": "\nSELECT turn_position AS \"turn_position!: i64\", status AS \"status!: String\", error_type,\n       turn_options, terminal_outcome, created_at AS \"created_at!: i64\",\n       updated_at AS \"updated_at!: i64\"\nFROM session_turn\nWHERE session_id = ? AND status IN ('completed', 'failed', 'interrupted')\n  AND turn_position >= ? AND turn_position < ?\nORDER BY turn_position DESC\nLIMIT ?\n",
+  "query": "\nSELECT turn_position AS \"turn_position!: i64\", status AS \"status!: String\", error_type,\n       turn_options, terminal_outcome, created_at AS \"created_at!: i64\",\n       updated_at AS \"updated_at!: i64\", usage\nFROM session_turn\nWHERE session_id = ? AND status IN ('completed', 'failed', 'interrupted')\n  AND turn_position >= ? AND turn_position < ?\nORDER BY turn_position DESC\nLIMIT ?\n",
   "describe": {
     "columns": [
       {
@@ -79,6 +79,17 @@
             "name": "updated_at"
           }
         }
+      },
+      {
+        "name": "usage",
+        "ordinal": 7,
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "session_turn",
+            "name": "usage"
+          }
+        }
       }
     ],
     "parameters": {
@@ -91,8 +102,9 @@
       true,
       true,
       false,
-      false
+      false,
+      true
     ]
   },
-  "hash": "b202e9de7596a26b79e661968f85eda80fffbe3512b4aa545577024e9ee67aff"
+  "hash": "4902e21f5bdc22c1051e0c7718406ccd0fe7636af634358c608a991e5905208a"
 }

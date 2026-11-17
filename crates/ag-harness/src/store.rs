@@ -31,6 +31,7 @@ pub use crate::session_model::RecordedModel;
 use crate::transcript::{TurnRange, TurnStatus};
 use crate::turn::{TurnError, TurnOutcome};
 pub use crate::turn_options_snapshot::{StoredTurnOptions, StoredTurnOptionsError};
+pub use crate::usage::TurnUsage;
 pub use crate::write_journal::{WriteRecord, WriteStatus};
 
 /// Stores supply atomic record operations; the harness applies admission
@@ -127,6 +128,40 @@ pub trait SessionStore: Send + Sync {
         Err(SessionError::InvalidData {
             reason: "session forking unsupported".into(),
         })
+    }
+
+    /// Replaces the running turn's recorded usage with `usage` under an
+    /// unexpired owner, as [`Self::append_messages`] validates it. The
+    /// harness records a turn's usage when it starts and after each model
+    /// request completes, so a failed or interrupted turn keeps the usage of
+    /// its completed requests. Keep the recorded usage when the turn
+    /// settles, return it as [`StoredTurn::usage`], and copy it with forked
+    /// turns. The default records nothing, so such a store's turns have
+    /// unknown usage unless a stored outcome gives it, as [`Self::load_usage`]
+    /// describes.
+    async fn record_usage(
+        &self,
+        _owner: &TurnOwner,
+        _usage: &TurnUsage,
+    ) -> Result<(), SessionError> {
+        Ok(())
+    }
+
+    /// Returns the usage of every settled turn, oldest first: its recorded
+    /// usage, else the unpriced usage of its stored outcome, else `None`.
+    /// Recover expired turns first; never include a running turn. Missing
+    /// sessions return `NotFound`.
+    ///
+    /// The default derives it from [`Self::load_transcript`], so a store
+    /// without transcript support fails closed here too; a store overrides
+    /// it only to avoid loading messages.
+    async fn load_usage(&self, session_id: &str) -> Result<Vec<Option<TurnUsage>>, SessionError> {
+        Ok(self
+            .load_transcript(session_id, &TurnRange::All)
+            .await?
+            .iter()
+            .map(|turn| TurnUsage::settled(turn.usage, turn.outcome.as_ref()))
+            .collect())
     }
 
     /// Independent handles for the same backing store share this identity.
@@ -308,12 +343,15 @@ pub struct StoredTurn {
     /// [`StoredTurnOptions::text_output`] reports; `false` for a turn
     /// recorded without an options snapshot.
     pub text_output: bool,
+    /// Usage last recorded with [`SessionStore::record_usage`], or `None`
+    /// when none was recorded.
+    pub usage: Option<TurnUsage>,
 }
 
 impl StoredTurn {
     /// Returns the turn at `position`, admitted at `started_at` and settled
     /// with `status` at `finished_at`, holding `messages`, without error
-    /// classification or outcome, in JSON output mode.
+    /// classification, outcome, or usage, in JSON output mode.
     pub fn new(
         position: i64,
         status: TurnStatus,
@@ -330,6 +368,7 @@ impl StoredTurn {
             started_at,
             status,
             text_output: false,
+            usage: None,
         }
     }
 
@@ -353,6 +392,14 @@ impl StoredTurn {
     #[must_use]
     pub fn with_text_output(mut self, text_output: bool) -> Self {
         self.text_output = text_output;
+
+        self
+    }
+
+    /// Sets the turn's recorded usage.
+    #[must_use]
+    pub fn with_usage(mut self, usage: Option<TurnUsage>) -> Self {
+        self.usage = usage;
 
         self
     }

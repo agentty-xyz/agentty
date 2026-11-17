@@ -116,12 +116,23 @@
           ]
         },
         {
-          "description": "A model request completed, with the tokens its provider reported.\nThe usage of these events sums to the run outcome's\n[`crate::RunOutcome::usage`].",
+          "description": "A model request completed, with the tokens its provider reported.\nThe usage and cost of these events sum to the run outcome's\n[`crate::RunOutcome::usage`] and [`crate::RunOutcome::cost`].\nLater per-request fields may be added, so match it with `..`.",
           "type": "object",
           "properties": {
             "type": {
               "type": "string",
               "const": "model_request_completed"
+            },
+            "cost": {
+              "description": "Price of `usage`, or `None` when the run's model has no\n[`crate::catalog::Pricing`].",
+              "anyOf": [
+                {
+                  "$ref": "#/$defs/Cost"
+                },
+                {
+                  "type": "null"
+                }
+              ]
             },
             "usage": {
               "description": "Tokens of this request.",
@@ -391,8 +402,48 @@
         "summary"
       ]
     },
+    "Cost": {
+      "description": "Price of some [`Usage`] in integer micro-USD, one millionth of a US\ndollar, with where its prices came from.\n\n[`Self::of`] prices usage as follows, given that the [`Usage`] counts\noverlap: `cache_read` and a known `cache_write` are part of `input`, and\n`reasoning` is part of `output`.\n\n- Input tokens neither read from nor written to the cache bill at the input\n  price.\n- `cache_read` tokens bill at [`Pricing::cache_read_per_mtok_micro_usd`] and\n  `cache_write` tokens at [`Pricing::cache_write_per_mtok_micro_usd`]; both\n  fall back to the input price when the pricing declares no cache price, as\n  built-in prices do not yet.\n- Output tokens, reasoning included, bill at the output price.\n\nThe exact sum is rounded once to the nearest micro-USD, halves up, so a\nrun's cost, the sum of its requests' costs, can differ from pricing its\nsummed usage by less than one micro-USD per request. Arithmetic never\noverflows: a cost beyond `u64::MAX` micro-USD saturates at it. A sum of\ncosts priced from different sources is [`PricingSource::Mixed`].\n\nA model without [`Pricing`], such as a host model nobody priced, an\nOpenAI-compatible server, or a plan-billed `ChatGPT` model whose marginal\nrequests are not metered, has no cost: `Option<Cost>` is `None` there.\nOn the wire it is `{\"micro_usd\": 1250, \"pricing\": \"built_in\"}`.",
+      "type": "object",
+      "properties": {
+        "micro_usd": {
+          "description": "Price in micro-USD.",
+          "type": "integer",
+          "format": "uint64",
+          "minimum": 0
+        },
+        "pricing": {
+          "description": "Where the prices came from.",
+          "$ref": "#/$defs/PricingSource"
+        }
+      },
+      "required": [
+        "micro_usd",
+        "pricing"
+      ]
+    },
+    "PricingSource": {
+      "description": "Where a [`Pricing`] came from.\n\nOn the wire it is `built_in`, `host`, or `mixed`.",
+      "oneOf": [
+        {
+          "description": "The harness's built-in list prices, as the providers published them\non 2026-10-29 at their lowest input tier.",
+          "type": "string",
+          "const": "built_in"
+        },
+        {
+          "description": "Prices the host supplied, such as a negotiated rate.",
+          "type": "string",
+          "const": "host"
+        },
+        {
+          "description": "Prices from more than one source, only on a summed\n[`crate::Cost`], such as a session total over turns of differently\npriced models; no [`Pricing`] has it.",
+          "type": "string",
+          "const": "mixed"
+        }
+      ]
+    },
     "Usage": {
-      "description": "Provider-reported tokens, summed over a run's model requests.\n\nThe counts overlap: `cache_read` is part of `input`, and `reasoning` is\npart of `output`. A count a provider omitted adds zero; a request whose\nprovider reported no input or output count is counted in\n`unreported_requests`, so totals with unreported requests are lower\nbounds. Requests the provider rejected as exceeding its context window,\nand a request in flight when the run was cancelled, are not counted.",
+      "description": "Provider-reported tokens, summed over a run's model requests.\n\nThe counts overlap: `cache_read` and a known `cache_write` are part of\n`input`, and `reasoning` is part of `output`; [`crate::Cost`] prices them\naccordingly. A count a provider omitted adds zero; a request whose\nprovider reported no input or output count is counted in\n`unreported_requests`, so totals with unreported requests are lower\nbounds. Requests the provider rejected as exceeding its context window,\nand a request in flight when the run was cancelled, are not counted.",
       "type": "object",
       "properties": {
         "input": {
@@ -414,7 +465,7 @@
           "minimum": 0
         },
         "cache_write": {
-          "description": "Input tokens written to the provider's prompt cache, or `None` when\nunknown; no supported provider reports them yet.",
+          "description": "Input tokens written to the provider's prompt cache, part of `input`,\nor `None` when unknown; no supported provider reports them yet.",
           "type": [
             "integer",
             "null"
@@ -658,6 +709,17 @@
       "description": "How a run finished, carried by [`RunEventKind::Completed`].",
       "type": "object",
       "properties": {
+        "cost": {
+          "description": "Price of [`Self::usage`], as in [`crate::RunOutcome::cost`].",
+          "anyOf": [
+            {
+              "$ref": "#/$defs/Cost"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
         "error": {
           "description": "Why the run failed, or `None` when it produced its output.",
           "anyOf": [

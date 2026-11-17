@@ -2,13 +2,13 @@
 
 use std::path::Path;
 use std::sync::Arc;
-use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 
 use ag_harness::model::{ModelMessage, ModelMetadata};
 use ag_harness::recovery::HostTurnRecord;
 use ag_harness::store::{
     HistoryProjection, LoadedSession, ModelSwitch, NewSession, Reservation, SessionStore,
-    StoreIdentity, TurnAdmission, TurnOwner, WriteRecord,
+    StoreIdentity, TurnAdmission, TurnOwner, TurnUsage, WriteRecord,
 };
 use ag_harness::{SessionError, TurnError, TurnOutcome};
 use async_trait::async_trait;
@@ -19,6 +19,8 @@ pub(crate) struct Gate {
     pub(crate) after_commit: bool,
     pub(crate) entered: Notify,
     pub(crate) fail_cleanup: AtomicBool,
+    /// Usage records that succeed before every later one fails.
+    pub(crate) usage_records: AtomicUsize,
     pub(crate) identity: StoreIdentity,
     pub(crate) interrupted: Notify,
     pub(crate) panic_acquire: AtomicBool,
@@ -35,6 +37,7 @@ impl Gate {
             after_commit,
             entered: Notify::new(),
             fail_cleanup: AtomicBool::new(false),
+            usage_records: AtomicUsize::new(usize::MAX),
             identity: store.identity().clone(),
             interrupted: Notify::new(),
             panic_acquire: AtomicBool::new(false),
@@ -156,6 +159,26 @@ impl SessionStore for Gate {
         messages: &[ModelMessage],
     ) -> Result<(), SessionError> {
         self.store.append_messages(owner, messages).await
+    }
+
+    async fn record_usage(&self, owner: &TurnOwner, usage: &TurnUsage) -> Result<(), SessionError> {
+        let remaining = self
+            .usage_records
+            .try_update(Ordering::SeqCst, Ordering::SeqCst, |left| {
+                left.checked_sub(1)
+            });
+        if remaining.is_err() {
+            return Err(SessionError::Store {
+                operation: "record usage",
+                source: Box::new(std::io::Error::other("injected usage failure")),
+            });
+        }
+
+        self.store.record_usage(owner, usage).await
+    }
+
+    async fn load_usage(&self, id: &str) -> Result<Vec<Option<TurnUsage>>, SessionError> {
+        self.store.load_usage(id).await
     }
 
     async fn complete_turn(

@@ -3,6 +3,7 @@ use std::time::{Duration, UNIX_EPOCH};
 use serde_json::json;
 
 use super::{TranscriptInput, TurnErrorKind, TurnRange, TurnRecord, TurnStatus};
+use crate::catalog::Pricing;
 use crate::error::ErrorKind;
 use crate::event::{Item, ToolCallItem, ToolCallStatus, TurnIndex};
 use crate::input::{ImageContent, ImageMediaType, InputBlock, TurnInput};
@@ -13,6 +14,7 @@ use crate::run::{RunOutput, Usage};
 use crate::store::StoredTurn;
 use crate::tool::ToolCall;
 use crate::turn::{TurnOutcome, TurnReport};
+use crate::usage::{Cost, TurnUsage};
 
 /// Committed JSON schema of [`TurnRecord`]; regenerate it from the failure
 /// message of [`turn_record_schema_matches_the_committed_snapshot`].
@@ -147,6 +149,23 @@ fn ranges_round_trip_as_tagged_objects() -> Result<(), serde_json::Error> {
 }
 
 #[test]
+fn record_of_a_turn_without_recorded_usage_reads_its_stored_outcome_unpriced() {
+    // Arrange
+    let outcome = TurnOutcome::new(
+        json!({"answer": "done"}),
+        TurnReport::new(Duration::ZERO, Vec::new(), Vec::new()),
+    );
+    let turn = stored(vec![ModelMessage::User("question".to_string())]).with_outcome(Some(outcome));
+
+    // Act
+    let record = TurnRecord::from_stored(turn);
+
+    // Assert
+    assert_eq!(record.usage, Some(Usage::default()));
+    assert_eq!(record.cost, None);
+}
+
+#[test]
 fn record_orders_reasoning_text_calls_results_and_json_output() {
     // Arrange
     let turn = stored(vec![
@@ -169,6 +188,15 @@ fn record_orders_reasoning_text_calls_results_and_json_output() {
         json!({"answer": "done"}),
         TurnReport::new(Duration::ZERO, Vec::new(), Vec::new()),
     )));
+    let usage = Usage {
+        input: 3_000,
+        ..Usage::default()
+    };
+    let recorded = TurnUsage {
+        cost: Some(Cost::of(&usage, Pricing::new(1_000_000, 0))),
+        usage,
+    };
+    let turn = turn.with_usage(Some(recorded));
 
     // Act
     let record = TurnRecord::from_stored(turn);
@@ -184,7 +212,8 @@ fn record_orders_reasoning_text_calls_results_and_json_output() {
         }]
     );
     assert_eq!(record.instructions.as_deref(), Some("be brief"));
-    assert_eq!(record.usage, Some(Usage::default()));
+    assert_eq!(record.usage, Some(usage));
+    assert_eq!(record.cost.map(|cost| cost.micro_usd), Some(3_000));
     assert_eq!(record.started_at, UNIX_EPOCH + Duration::from_secs(8));
     assert_eq!(record.finished_at, UNIX_EPOCH + Duration::from_secs(9));
     assert_eq!(
@@ -250,6 +279,7 @@ fn record_keeps_text_output_unanswered_calls_and_image_input() {
         ]
     );
     assert_eq!(text_record.usage, None);
+    assert_eq!(text_record.cost, None);
     assert_eq!(
         text_record.items,
         [

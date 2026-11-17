@@ -1,0 +1,33 @@
+{
+  "db_name": "SQLite",
+  "query": "\nSELECT usage, CASE WHEN usage IS NULL THEN terminal_outcome END AS terminal_outcome\nFROM session_turn\nWHERE session_id = ? AND status IN ('completed', 'failed', 'interrupted')\nORDER BY turn_position\n",
+  "describe": {
+    "columns": [
+      {
+        "name": "usage",
+        "ordinal": 0,
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "session_turn",
+            "name": "usage"
+          }
+        }
+      },
+      {
+        "name": "terminal_outcome",
+        "ordinal": 1,
+        "type_info": "Text",
+        "origin": "Expression"
+      }
+    ],
+    "parameters": {
+      "Right": 1
+    },
+    "nullable": [
+      true,
+      true
+    ]
+  },
+  "hash": "5374b551ffd0021f60f990fc9bbc2a1d42d8186b7ce04550c94eb6c77714d47e"
+}

@@ -961,6 +961,15 @@ pub enum TurnError {
         #[source]
         source: Box<crate::SessionError>,
     },
+    /// Recording the turn's usage, when it starts or after a model request
+    /// completes, failed; the turn stops before any further model or tool
+    /// call, so a session's usage totals never miss a completed request.
+    #[error("usage journal failed: {source}")]
+    UsageJournal {
+        /// Underlying transactional store error.
+        #[source]
+        source: Box<crate::SessionError>,
+    },
     /// Cancellation stopped the waiter; persistence may still be settling.
     #[error("turn cancelled")]
     Cancelled,
@@ -1029,7 +1038,7 @@ impl TurnError {
             Self::ContextBudgetExceeded { .. } => TurnErrorType::ContextBudget,
             Self::RepeatedToolCalls { .. } => TurnErrorType::RepeatedToolCalls,
             Self::LimitReached { limit } => TurnErrorType::RunLimit(*limit),
-            Self::MessageJournal { .. } => TurnErrorType::Session,
+            Self::MessageJournal { .. } | Self::UsageJournal { .. } => TurnErrorType::Session,
         }
     }
 

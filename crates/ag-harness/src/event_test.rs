@@ -8,13 +8,14 @@ use super::{
     EVENT_BUFFER, EventSink, EventStream, Item, ItemId, ItemKind, RunEvent, RunEventKind,
     RunFailure, RunSummary, SessionId, ToolCallItem, ToolCallStatus, TurnIndex,
 };
-use crate::catalog::ModelId;
+use crate::catalog::{ModelId, Pricing};
 use crate::error::{ErrorKind, RunError};
 use crate::lifecycle::ToolUnavailableReason;
 use crate::limit::LimitKind;
 use crate::run::{RunOutcome, RunOutput, Usage};
 use crate::tool::{ReadAction, Tool, ToolCall};
 use crate::turn::{ContextActivity, ToolActivity, TurnError, TurnReport};
+use crate::usage::Cost;
 
 /// Committed JSON schema of [`RunEvent`]; regenerate it from the failure
 /// message of [`run_event_schema_matches_the_committed_snapshot`].
@@ -24,6 +25,7 @@ const RUN_EVENT_SCHEMA: &str = include_str!("../schema/run_event.json");
 fn outcome(result: Result<RunOutput, RunError>) -> RunOutcome {
     RunOutcome {
         commands: Vec::new(),
+        cost: None,
         files_changed: Vec::new(),
         records_error: None,
         report: TurnReport::new(Duration::ZERO, Vec::new(), Vec::new()),
@@ -39,6 +41,7 @@ fn cancelled() -> Result<RunOutput, RunError> {
 
 fn request_completed() -> RunEventKind {
     RunEventKind::ModelRequestCompleted {
+        cost: None,
         usage: Usage::default(),
     }
 }
@@ -176,9 +179,8 @@ fn tool_activity_maps_to_how_the_call_was_answered() {
     assert_eq!(statuses, expected);
 }
 
-#[test]
-fn run_event_round_trips_through_json_matching_its_schema() -> Result<(), Box<dyn Error>> {
-    // Arrange
+/// Returns a completed `read` call item.
+fn read_call_item() -> Result<Item, Box<dyn Error>> {
     let call = ToolCall::from_json("call-1".into(), "read", r#"{"path":"a.txt"}"#, None)?;
     let activity = ToolActivity::Read {
         duration: Duration::from_millis(3),
@@ -187,9 +189,29 @@ fn run_event_round_trips_through_json_matching_its_schema() -> Result<(), Box<dy
         start_line: 1,
         truncated: false,
     };
+
+    Ok(Item::ToolCall(ToolCallItem::new(&call, "1: hi", &activity)))
+}
+
+/// Returns usage of 500 input tokens, one written to the cache, and its
+/// cost at $2 per million input tokens.
+fn priced_usage() -> (Usage, Cost) {
+    let usage = Usage {
+        input: 500,
+        cache_write: Some(1),
+        ..Usage::default()
+    };
+
+    (usage, Cost::of(&usage, Pricing::new(2_000_000, 0)))
+}
+
+#[test]
+fn run_event_round_trips_through_json_matching_its_schema() -> Result<(), Box<dyn Error>> {
+    // Arrange
     let (sink, _stream) = EventSink::channel();
     let session = SessionId::new("s");
     let turn = TurnIndex::from_position(2);
+    let (usage, cost) = priced_usage();
     let kinds = vec![
         RunEventKind::Started {
             model: Some(ModelId::new("openai/gpt")),
@@ -202,7 +224,7 @@ fn run_event_round_trips_through_json_matching_its_schema() -> Result<(), Box<dy
         },
         RunEventKind::ItemCompleted {
             id: ItemId(0),
-            item: Item::ToolCall(ToolCallItem::new(&call, "1: hi", &activity)),
+            item: read_call_item()?,
         },
         RunEventKind::ItemCompleted {
             id: ItemId(1),
@@ -229,16 +251,18 @@ fn run_event_round_trips_through_json_matching_its_schema() -> Result<(), Box<dy
             },
         },
         RunEventKind::ContextReduced(ContextActivity::default()),
+        RunEventKind::ModelRequestCompleted {
+            cost: Some(cost),
+            usage,
+        },
         RunEventKind::Completed(RunSummary {
+            cost: Some(cost),
             error: Some(RunFailure {
                 kind: ErrorKind::Cancelled,
                 message: "turn was cancelled".into(),
                 retryable: false,
             }),
-            usage: Usage {
-                cache_write: Some(1),
-                ..Usage::default()
-            },
+            usage,
         }),
     ];
     let at = UNIX_EPOCH + Duration::from_millis(1_700_000_000_123);
@@ -281,7 +305,12 @@ fn run_event_round_trips_through_json_matching_its_schema() -> Result<(), Box<dy
     assert_eq!(encoded[3]["kind"]["item"]["text"], "Reading");
     assert_eq!(encoded[5]["kind"]["item"]["output"]["type"], "json");
     assert_eq!(encoded[6]["kind"]["item"]["output"]["type"], "text");
-    assert_eq!(encoded[8]["kind"]["error"]["kind"], "cancelled");
+    let priced = json!({"micro_usd": 1000, "pricing": "host"});
+    assert_eq!(encoded[8]["kind"]["cost"], priced);
+    assert_eq!(encoded[9]["kind"]["cost"], priced);
+    assert_eq!(encoded[9]["kind"]["error"]["kind"], "cancelled");
+    let unpriced = serde_json::to_value(request_completed())?;
+    assert_eq!(unpriced["cost"], json!(null));
 
     Ok(())
 }
