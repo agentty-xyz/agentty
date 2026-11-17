@@ -1,5 +1,5 @@
 //! Sessions stored before the default output mode became optional keep
-//! working, and their turns from before migration 015 read as unknown usage.
+//! working, and their turns from before migration 016 read as unknown usage.
 //!
 //! `tests/fixtures/session_v13.sqlite` was written by `ag-harness` at
 //! migration 13 (commit `1427a767`, before migration 014) with a scripted
@@ -125,7 +125,7 @@ async fn version_13_sessions_keep_their_schema_history_and_accept_text_runs_with
     drop(harness);
 
     // Assert
-    assert_eq!(migration_version(&database).await?, 15);
+    assert_eq!(migration_version(&database).await?, 16);
     assert_eq!(
         (totals.turns, totals.unknown_turns),
         (5, 3),

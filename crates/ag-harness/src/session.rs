@@ -973,7 +973,7 @@ WHERE session_id = ? AND turn_position = ? AND owner_token = ? AND status = 'run
             .session_context("load session usage")?;
         require_session(&mut connection, session_id).await?;
         // Only a turn without recorded usage reads its outcome, which turns
-        // stored before migration 015 with a host request ID still carry.
+        // stored before migration 016 with a host request ID still carry.
         let rows = sqlx::query!(
             r"
 SELECT usage, CASE WHEN usage IS NULL THEN terminal_outcome END AS terminal_outcome

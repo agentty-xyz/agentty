@@ -370,7 +370,7 @@ async fn sqlite_turns_without_recorded_usage_read_their_stored_outcome()
         .await?;
     let outcome = session.turn("plain").host_id("request").await?;
     session.run(RunRequest::new("plain")).await.result?;
-    // Turns stored before migration 015 have no usage record; only the
+    // Turns stored before migration 016 have no usage record; only the
     // host-request turn kept its outcome.
     let pool = sqlx::SqlitePool::connect_with(
         sqlx::sqlite::SqliteConnectOptions::new().filename(&database),
