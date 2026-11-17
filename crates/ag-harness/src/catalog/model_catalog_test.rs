@@ -4,9 +4,14 @@
 
 #[cfg(all(feature = "providers-compat", feature = "providers-openai"))]
 use std::collections::BTreeMap;
-#[cfg(all(feature = "providers-compat", feature = "providers-openai"))]
+#[cfg(all(
+    any(feature = "providers-compat", feature = "providers-openai"),
+    not(all(feature = "providers-compat", feature = "providers-openai"))
+))]
+use std::env::VarError;
+#[cfg(any(feature = "providers-compat", feature = "providers-openai"))]
 use std::ffi::OsString;
-#[cfg(all(feature = "providers-compat", feature = "providers-openai"))]
+#[cfg(any(feature = "providers-compat", feature = "providers-openai"))]
 use std::os::unix::ffi::OsStringExt as _;
 use std::sync::Arc;
 #[cfg(all(feature = "providers-compat", feature = "providers-openai"))]
@@ -24,7 +29,9 @@ use crate::chatgpt_sign_in_fixture::save_chatgpt_sign_in;
 use crate::context::ContextBudgetError;
 use crate::model::{MockModel, Model, ModelProfile};
 #[cfg(all(feature = "providers-compat", feature = "providers-openai"))]
-use crate::provider::{ModelConfigurationError, ModelProvider};
+use crate::provider::ModelConfigurationError;
+#[cfg(any(feature = "providers-compat", feature = "providers-openai"))]
+use crate::provider::ModelProvider;
 
 const TEXT: &str = "host/text";
 const VISION: &str = "host/vision";
@@ -644,12 +651,6 @@ fn process_environment_catalog_delegates_to_the_process_environment() {
 ))]
 #[test]
 fn environment_skips_a_disabled_family_with_broken_credentials() {
-    use std::env::VarError;
-    use std::ffi::OsString;
-    use std::os::unix::ffi::OsStringExt as _;
-
-    use crate::provider::ModelProvider;
-
     // Arrange
     let mut disabled_lookups = Vec::new();
     let environment = |name: &str| {

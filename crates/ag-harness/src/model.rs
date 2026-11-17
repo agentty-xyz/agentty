@@ -13,6 +13,7 @@ use std::ops::Deref;
 use std::sync::Arc;
 use std::time::Duration;
 
+#[cfg(any(feature = "providers-compat", feature = "providers-openai"))]
 use ag_router::ModelMessage as RoutedMessage;
 pub use ag_router::{CompletionMetadata, CompletionUsage};
 use async_trait::async_trait;
