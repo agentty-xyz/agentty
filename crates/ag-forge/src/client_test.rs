@@ -2,15 +2,18 @@
 //! of operations to the `GitHub` and `GitLab` adapters.
 
 use std::sync::Arc;
+use std::time::Duration;
 
 use mockall::Sequence;
+use opentelemetry::Value;
 
 use crate::client::{RealReviewRequestClient, ReviewRequestClient};
-use crate::command::{ForgeCommand, ForgeCommandOutput, MockForgeCommandRunner};
+use crate::command::{ForgeCommand, ForgeCommandError, ForgeCommandOutput, MockForgeCommandRunner};
 use crate::model::{
     CreateReviewRequestInput, ForgeKind, ForgeRemote, ReviewRequestAttention, ReviewRequestError,
     ReviewRequestMetadata, ReviewRequestState, ReviewRequestSummary, UpdateReviewRequestInput,
 };
+use crate::telemetry_support::{SpanCapture, attribute, attribute_keys};
 
 #[test]
 fn detect_remote_delegates_to_remote_parser() {
@@ -285,6 +288,132 @@ async fn review_request_metadata_authenticates_before_github_lookup() {
             body: "Current body".to_string(),
             title: "Current title".to_string(),
         }
+    );
+}
+
+#[tokio::test]
+async fn traced_operations_record_auth_check_and_command_spans_without_content() {
+    // Arrange
+    let capture = SpanCapture::install().await;
+    let mut command_runner = MockForgeCommandRunner::new();
+    command_runner.expect_run().times(4).returning(|command| {
+        Box::pin(async move {
+            if command.arguments[..2] == ["auth", "status"] {
+                return Ok(success_output(String::new()));
+            }
+
+            Ok(success_output(
+                r#"{"title":"Private title","body":"Private body"}"#.to_string(),
+            ))
+        })
+    });
+    let client = RealReviewRequestClient::new(Arc::new(command_runner));
+    client
+        .review_request_metadata(github_remote(), "#42".to_string())
+        .await
+        .expect("untraced metadata lookup should succeed");
+
+    // Act
+    let (metadata, trace) = capture
+        .trace(client.review_request_metadata(github_remote(), "#42".to_string()))
+        .await;
+
+    // Assert
+    assert_eq!(metadata.expect("metadata").title, "Private title");
+    assert_eq!(capture.finished_spans().len(), trace.spans.len());
+    let auth_checks = trace.named("forge.auth_check");
+    let commands = trace.named("forge.command");
+    assert_eq!(auth_checks.len(), 1);
+    assert_eq!(commands.len(), 2);
+    let auth_check = auth_checks[0];
+    assert_eq!(auth_check.parent_span_id, trace.root_id);
+    assert_eq!(
+        attribute_keys(auth_check),
+        ["agentty.forge.kind", "agentty.outcome"]
+    );
+    assert_eq!(
+        attribute(auth_check, "agentty.outcome"),
+        Some(&Value::from("completed"))
+    );
+    assert_eq!(
+        commands[0].parent_span_id,
+        auth_check.span_context.span_id()
+    );
+    assert_eq!(commands[1].parent_span_id, trace.root_id);
+    for command in commands {
+        assert_eq!(
+            attribute_keys(command),
+            [
+                "agentty.forge.kind",
+                "agentty.forge.operation",
+                "agentty.outcome",
+                "agentty.timed_out",
+                "process.exit.code",
+            ]
+        );
+        assert_eq!(
+            attribute(command, "agentty.forge.kind"),
+            Some(&Value::from("GitHub"))
+        );
+        assert_eq!(
+            attribute(command, "agentty.forge.operation"),
+            Some(&Value::from("review_request_metadata"))
+        );
+        assert_eq!(
+            attribute(command, "process.exit.code"),
+            Some(&Value::I64(0))
+        );
+    }
+    let exported = format!("{:?}", trace.spans);
+    for private_text in ["Private", "agentty-xyz", "#42", "github.com"] {
+        assert!(!exported.contains(private_text), "{private_text}");
+    }
+}
+
+#[tokio::test]
+async fn traced_authentication_timeout_fails_auth_check_and_command_spans() {
+    // Arrange
+    let capture = SpanCapture::install().await;
+    let mut command_runner = MockForgeCommandRunner::new();
+    command_runner.expect_run().once().returning(|_| {
+        Box::pin(async {
+            Err(ForgeCommandError::TimedOut {
+                executable: "glab".to_string(),
+                timeout: Duration::from_secs(30),
+            })
+        })
+    });
+    let client = RealReviewRequestClient::new(Arc::new(command_runner));
+
+    // Act
+    let (result, trace) = capture
+        .trace(client.refresh_review_request(gitlab_remote(), "!42".to_string()))
+        .await;
+
+    // Assert
+    assert!(result.is_err());
+    let auth_check = trace.named("forge.auth_check")[0];
+    let command = trace.named("forge.command")[0];
+    assert_eq!(
+        attribute(auth_check, "error.type"),
+        Some(&Value::from("execution"))
+    );
+    assert_eq!(command.parent_span_id, auth_check.span_context.span_id());
+    assert_eq!(
+        (
+            attribute(command, "agentty.forge.kind"),
+            attribute(command, "agentty.forge.operation"),
+            attribute(command, "agentty.timed_out"),
+            attribute(command, "agentty.outcome"),
+            attribute(command, "error.type"),
+        ),
+        (
+            Some(&Value::from("GitLab")),
+            Some(&Value::from("refresh_review_request")),
+            Some(&Value::Bool(true)),
+            Some(&Value::from("failed")),
+            Some(&Value::from("timeout")),
+        )
     );
 }
 

@@ -3,10 +3,12 @@
 use std::path::{Path, PathBuf};
 
 use tempfile::tempdir;
-use tokio::task::spawn_blocking;
 
 use super::error::GitError;
-use super::repo::{command_output_detail, run_git_command_output_sync, run_git_command_sync};
+use super::repo::{
+    command_output_detail, run_git_command_output_sync, run_git_command_sync,
+    spawn_blocking_in_context,
+};
 use super::worktree::detect_git_info_sync;
 
 /// Outcome of attempting a squash merge operation.
@@ -98,7 +100,7 @@ pub(crate) async fn has_merge_conflicts(
     source_branch: String,
     target_branch: String,
 ) -> Result<bool, GitError> {
-    spawn_blocking(move || {
+    spawn_blocking_in_context(move || {
         let output = run_git_command_output_sync(
             &repo_path,
             &[
@@ -311,7 +313,7 @@ pub(crate) async fn squash_merge_diff(
     source_branch: String,
     target_branch: String,
 ) -> Result<String, GitError> {
-    spawn_blocking(move || {
+    spawn_blocking_in_context(move || {
         let revision_range = format!("{target_branch}..{source_branch}");
 
         run_git_command_sync(
@@ -352,7 +354,7 @@ pub(crate) async fn squash_merge(
     target_branch: String,
     commit_message: String,
 ) -> Result<SquashMergeOutcome, GitError> {
-    spawn_blocking(move || {
+    spawn_blocking_in_context(move || {
         // Verify that `repo_path` is already on the target branch.
         let current_branch = detect_git_info_sync(&repo_path).ok_or_else(|| {
             GitError::OutputParse(format!(

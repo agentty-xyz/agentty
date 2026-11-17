@@ -8,8 +8,9 @@ use std::pin::Pin;
 use std::process::{Command, Output, Stdio};
 use std::time::Duration;
 
+use ag_telemetry::{Context, Outcome, Span, TraceContextExt};
 use tokio::process::Command as AsyncCommand;
-use tokio::task::spawn_blocking;
+use tokio::task::{JoinError, spawn_blocking};
 use tokio::time;
 
 use super::error::GitError;
@@ -27,6 +28,68 @@ const NETWORK_GIT_COMMAND_TIMEOUT: Duration = Duration::from_mins(5);
 /// Git subcommands that talk to a remote and use
 /// [`NETWORK_GIT_COMMAND_TIMEOUT`].
 const NETWORK_GIT_SUBCOMMANDS: [&str; 4] = ["fetch", "ls-remote", "pull", "push"];
+
+/// Known git subcommands exported verbatim as `git.subcommand` on
+/// `git.command` spans. Any other subcommand, such as an alias, is exported
+/// as `other`, keeping the attribute bounded.
+const TRACED_GIT_SUBCOMMANDS: [&str; 56] = [
+    "add",
+    "am",
+    "apply",
+    "branch",
+    "cat-file",
+    "check-ignore",
+    "checkout",
+    "cherry",
+    "cherry-pick",
+    "clean",
+    "clone",
+    "commit",
+    "commit-tree",
+    "config",
+    "describe",
+    "diff",
+    "diff-index",
+    "diff-tree",
+    "fetch",
+    "for-each-ref",
+    "gc",
+    "grep",
+    "hash-object",
+    "hook",
+    "init",
+    "log",
+    "ls-files",
+    "ls-remote",
+    "ls-tree",
+    "merge",
+    "merge-base",
+    "merge-tree",
+    "mv",
+    "pull",
+    "push",
+    "read-tree",
+    "rebase",
+    "remote",
+    "reset",
+    "restore",
+    "rev-list",
+    "rev-parse",
+    "revert",
+    "rm",
+    "show",
+    "show-ref",
+    "stash",
+    "status",
+    "switch",
+    "symbolic-ref",
+    "tag",
+    "update-index",
+    "update-ref",
+    "version",
+    "worktree",
+    "write-tree",
+];
 
 /// One asynchronous git invocation with owned process inputs.
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -71,24 +134,31 @@ impl AsyncGitCommand {
         }
     }
 
-    /// Returns the git subcommand, skipping leading `-c <name>=<value>`
-    /// configuration overrides and other global options.
+    /// Returns the git subcommand. See [`git_subcommand`].
     fn subcommand(&self) -> Option<&str> {
-        let mut arguments = self.arguments.iter();
-        while let Some(argument) = arguments.next() {
-            if argument == "-c" {
-                arguments.next();
+        git_subcommand(self.arguments.iter().map(String::as_str))
+    }
+}
 
-                continue;
-            }
+/// Returns the git subcommand, skipping leading `-c <name>=<value>`
+/// configuration overrides and other global options.
+fn git_subcommand<'argument>(
+    arguments: impl IntoIterator<Item = &'argument str>,
+) -> Option<&'argument str> {
+    let mut arguments = arguments.into_iter();
+    while let Some(argument) = arguments.next() {
+        if argument == "-c" {
+            arguments.next();
 
-            if !argument.starts_with('-') {
-                return Some(argument);
-            }
+            continue;
         }
 
-        None
+        if !argument.starts_with('-') {
+            return Some(argument);
+        }
     }
+
+    None
 }
 
 /// Captured output from one asynchronous git subprocess.
@@ -199,7 +269,7 @@ pub(crate) async fn main_repo_root(repo_path: PathBuf) -> Result<PathBuf, GitErr
 pub(crate) async fn main_checkout_working_tree(
     repo_path: PathBuf,
 ) -> Result<Option<PathBuf>, GitError> {
-    spawn_blocking(move || main_checkout_working_tree_sync(&repo_path)).await?
+    spawn_blocking_in_context(move || main_checkout_working_tree_sync(&repo_path)).await?
 }
 
 /// Resolves the main working checkout for `repo_path` in synchronous code.
@@ -337,12 +407,89 @@ pub(super) async fn run_git_command_with_runner(
     Ok(String::from_utf8_lossy(&output.stdout).into_owned())
 }
 
+/// Runs blocking git work on Tokio's blocking pool inside the caller's trace
+/// context, so its `git.command` spans join the initiating trace.
+///
+/// # Errors
+/// Returns the [`JoinError`] when the blocking task panics or is canceled.
+pub(super) async fn spawn_blocking_in_context<Work, T>(work: Work) -> Result<T, JoinError>
+where
+    Work: FnOnce() -> T + Send + 'static,
+    T: Send + 'static,
+{
+    let context = Context::current();
+
+    spawn_blocking(move || {
+        let _context = context.attach();
+
+        work()
+    })
+    .await
+}
+
+/// Content-free `git.command` span for one git subprocess.
+///
+/// Records only beneath an active trace, so untraced background polling
+/// starts no traces. Arguments, paths, and output text are never exported.
+struct GitCommandSpan(Option<Span>);
+
+impl GitCommandSpan {
+    /// Starts a span for one git invocation when the current context is
+    /// traced, exporting only its allowlisted subcommand.
+    fn start<'argument>(arguments: impl IntoIterator<Item = &'argument str>) -> Self {
+        if !Context::current().has_active_span() {
+            return Self(None);
+        }
+
+        let span = Span::child("git.command");
+        let subcommand = git_subcommand(arguments)
+            .and_then(|subcommand| {
+                TRACED_GIT_SUBCOMMANDS
+                    .into_iter()
+                    .find(|known| *known == subcommand)
+            })
+            .unwrap_or("other");
+        span.attribute("git.subcommand", subcommand);
+
+        Self(Some(span))
+    }
+
+    /// Completes the span for a process that ran to exit. A nonzero exit
+    /// still completes, because callers decide whether it is a failure.
+    fn exited(self, exit_code: Option<i32>, output_bytes: usize) {
+        let Some(span) = self.0 else {
+            return;
+        };
+
+        if let Some(exit_code) = exit_code {
+            span.attribute("process.exit.code", i64::from(exit_code));
+        }
+        span.attribute("agentty.timed_out", false);
+        span.attribute(
+            "agentty.output.bytes",
+            i64::try_from(output_bytes).unwrap_or(i64::MAX),
+        );
+        span.finish(Outcome::Completed);
+    }
+
+    /// Fails the span when the process timed out or could not be spawned.
+    fn failed(self, timed_out: bool) {
+        let Some(span) = self.0 else {
+            return;
+        };
+
+        span.attribute("agentty.timed_out", timed_out);
+        span.fail(if timed_out { "timeout" } else { "spawn" });
+    }
+}
+
 /// Runs a cancellable git subprocess with an explicit runtime bound.
 async fn run_git_command_with_timeout(
     command: AsyncGitCommand,
     timeout: Duration,
 ) -> Result<AsyncGitCommandOutput, GitError> {
     let git_invocation = format_git_invocation_from_strings(&command.arguments);
+    let span = GitCommandSpan::start(command.arguments.iter().map(String::as_str));
     let mut process = AsyncCommand::new("git");
     process
         .args(&command.arguments)
@@ -354,16 +501,29 @@ async fn run_git_command_with_timeout(
         process.env(key, value);
     }
 
-    let output = time::timeout(timeout, process.output())
-        .await
-        .map_err(|_| GitError::CommandTimedOut {
-            command: git_invocation.clone(),
-            timeout,
-        })?
-        .map_err(|error| GitError::CommandFailed {
-            command: git_invocation.clone(),
-            stderr: error.to_string(),
-        })?;
+    let output = match time::timeout(timeout, process.output()).await {
+        Ok(Ok(output)) => output,
+        Ok(Err(error)) => {
+            span.failed(false);
+
+            return Err(GitError::CommandFailed {
+                command: git_invocation,
+                stderr: error.to_string(),
+            });
+        }
+        Err(_) => {
+            span.failed(true);
+
+            return Err(GitError::CommandTimedOut {
+                command: git_invocation,
+                timeout,
+            });
+        }
+    };
+    span.exited(
+        output.status.code(),
+        output.stdout.len().saturating_add(output.stderr.len()),
+    );
 
     Ok(AsyncGitCommandOutput {
         exit_code: output.status.code(),
@@ -478,10 +638,25 @@ where
         command.env(key, value);
     }
 
-    command.output().map_err(|error| GitError::CommandFailed {
-        command: format_git_invocation(args),
-        stderr: error.to_string(),
-    })
+    let span = GitCommandSpan::start(args.iter().copied());
+    match command.output() {
+        Ok(output) => {
+            span.exited(
+                output.status.code(),
+                output.stdout.len().saturating_add(output.stderr.len()),
+            );
+
+            Ok(output)
+        }
+        Err(error) => {
+            span.failed(false);
+
+            Err(GitError::CommandFailed {
+                command: format_git_invocation(args),
+                stderr: error.to_string(),
+            })
+        }
+    }
 }
 
 /// Disables optional index writes and interactive prompts for Git subprocesses.

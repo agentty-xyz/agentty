@@ -331,12 +331,14 @@ before spawning and carry it into the task: `session.create` or `session.fork`,
 `session.merge`, `session.delete`, `session.push`, `session.auto_push`, and
 `review.graph`, each linked to its initiating operation. Their phases, such as
 `rebase.step`, `merge.squash`, and `branch.push`, and their utilities nest beneath that
-root, as they do beneath queued `session.sync` and `session.publish` roots. Provider
-adapters export only allowlisted categories and numeric metadata; prompt and reasoning
-content never enter traces, and tool content is captured only when the host opts in.
-Incomplete provider events are labeled rather than inferred. The exporter shuts down
-after worker cleanup and terminal restoration. See
-[Session Traces](@/docs/usage/workflow.md#session-traces) and
+root, as they do beneath queued `session.sync` and `session.publish` roots. `ag-git` and
+`ag-forge` record each Git and forge CLI subprocess at their command boundaries only
+beneath an active trace, carrying the caller's context into blocking Git work, so
+untraced background polling starts no traces. Provider adapters export only allowlisted
+categories and numeric metadata; prompt and reasoning content never enter traces, and
+tool content is captured only when the host opts in. Incomplete provider events are
+labeled rather than inferred. The exporter shuts down after worker cleanup and terminal
+restoration. See [Session Traces](@/docs/usage/workflow.md#session-traces) and
 [Local Usage Events](@/docs/usage/workflow.md#local-usage-events).
 
 Host work outside turns has its own roots. Export starts after the database opens, so

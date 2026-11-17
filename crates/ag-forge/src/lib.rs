@@ -8,6 +8,11 @@ mod gitlab;
 mod model;
 mod remote;
 
+/// Crate-wide span capture for telemetry tests.
+#[cfg(test)]
+#[path = "telemetry_support_test.rs"]
+mod telemetry_support;
+
 pub(crate) use adapter_common::{
     ReviewRequestMetadataEdit, ReviewRequestOperations, SyncReviewRequestMetadataConfig,
     map_parse_error, normalize_provider_label, operation_failed, status_summary_parts,
@@ -17,8 +22,8 @@ pub use client::MockReviewRequestClient;
 pub(crate) use client::ReviewRequestAdapter;
 pub use client::{RealReviewRequestClient, ReviewRequestClient};
 pub(crate) use command::{
-    ForgeCommand, ForgeCommandError, ForgeCommandOutput, ForgeCommandRunner,
-    RealForgeCommandRunner, command_output_detail,
+    ForgeCommand, ForgeCommandError, ForgeCommandOutput, ForgeCommandRunner, ForgeCommandSpan,
+    ForgeOperation, RealForgeCommandRunner, command_output_detail,
 };
 pub(crate) use github::GitHubReviewRequestAdapter;
 pub(crate) use gitlab::GitLabReviewRequestAdapter;

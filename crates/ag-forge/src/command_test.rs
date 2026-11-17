@@ -4,10 +4,103 @@
 use std::path::PathBuf;
 use std::time::Duration;
 
+use opentelemetry::Value;
+
 use crate::command::{
-    ForgeCommand, ForgeCommandError, ForgeCommandOutput, ForgeCommandRunner,
+    ForgeCommand, ForgeCommandError, ForgeCommandOutput, ForgeCommandRunner, ForgeCommandSpan,
     RealForgeCommandRunner, command_output_detail,
 };
+use crate::model::ForgeKind;
+use crate::telemetry_support::{SpanCapture, attribute, attribute_keys};
+
+#[tokio::test]
+async fn forge_command_spans_classify_exits_and_spawn_failures_without_content() {
+    // Arrange
+    let capture = SpanCapture::install().await;
+    let results = [
+        Ok(ForgeCommandOutput {
+            exit_code: Some(1),
+            stderr: "private stderr".to_string(),
+            stdout: "private stdout".to_string(),
+        }),
+        Ok(ForgeCommandOutput {
+            exit_code: None,
+            stderr: String::new(),
+            stdout: String::new(),
+        }),
+        Err(ForgeCommandError::ExecutableNotFound {
+            executable: "glab".to_string(),
+        }),
+        Err(ForgeCommandError::SpawnFailed {
+            executable: "glab".to_string(),
+            message: "private spawn message".to_string(),
+        }),
+        Err(ForgeCommandError::TimedOut {
+            executable: "glab".to_string(),
+            timeout: Duration::from_secs(30),
+        }),
+    ];
+    ForgeCommandSpan::start(ForgeKind::GitLab).finish(&results[0]);
+
+    // Act
+    let ((), trace) = capture
+        .trace(async {
+            for result in &results {
+                ForgeCommandSpan::start(ForgeKind::GitLab).finish(result);
+            }
+        })
+        .await;
+
+    // Assert
+    let commands = trace.named("forge.command");
+    assert_eq!(
+        capture
+            .finished_spans()
+            .iter()
+            .filter(|span| span.name == "forge.command")
+            .count(),
+        commands.len()
+    );
+    let observed: Vec<_> = commands
+        .iter()
+        .map(|command| {
+            (
+                attribute(command, "process.exit.code").cloned(),
+                attribute(command, "agentty.timed_out").cloned(),
+                attribute(command, "agentty.outcome").cloned(),
+                attribute(command, "error.type").cloned(),
+            )
+        })
+        .collect();
+    assert_eq!(
+        observed,
+        [
+            expected_command_span(Some(1), false, "completed", None),
+            expected_command_span(None, false, "completed", None),
+            expected_command_span(None, false, "failed", Some("not_found")),
+            expected_command_span(None, false, "failed", Some("spawn")),
+            expected_command_span(None, true, "failed", Some("timeout")),
+        ]
+    );
+    for command in &commands {
+        assert_eq!(command.parent_span_id, trace.root_id);
+        assert_eq!(
+            attribute(command, "agentty.forge.kind"),
+            Some(&Value::from("GitLab"))
+        );
+        assert!(attribute_keys(command).iter().all(|key| {
+            [
+                "agentty.forge.kind",
+                "agentty.outcome",
+                "agentty.timed_out",
+                "error.type",
+                "process.exit.code",
+            ]
+            .contains(key)
+        }));
+    }
+    assert!(!format!("{:?}", trace.spans).contains("private"));
+}
 
 #[test]
 fn forge_command_builders_set_environment_and_working_directory() {
@@ -218,4 +311,23 @@ async fn real_runner_reports_non_executable_path() {
         matches!(error, ForgeCommandError::SpawnFailed { executable, message }
         if executable == "." && !message.is_empty())
     );
+}
+
+/// Exit code, timeout flag, outcome, and error type recorded on one
+/// `forge.command` span.
+type CommandSpanRecord = (Option<Value>, Option<Value>, Option<Value>, Option<Value>);
+
+/// Builds the expected metadata of one `forge.command` span.
+fn expected_command_span(
+    exit_code: Option<i64>,
+    timed_out: bool,
+    outcome: &'static str,
+    error_type: Option<&'static str>,
+) -> CommandSpanRecord {
+    (
+        exit_code.map(Value::I64),
+        Some(Value::Bool(timed_out)),
+        Some(Value::from(outcome)),
+        error_type.map(Value::from),
+    )
 }

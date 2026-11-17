@@ -2,9 +2,11 @@
 
 use std::sync::Arc;
 
+use ag_telemetry::{Context, FutureExt as _, Outcome, Span, TraceContextExt};
+
 use super::{
-    CreateReviewRequestInput, ForgeCommandRunner, ForgeFuture, ForgeKind, ForgeRemote,
-    GitHubReviewRequestAdapter, GitLabReviewRequestAdapter, RealForgeCommandRunner,
+    CreateReviewRequestInput, ForgeCommandRunner, ForgeFuture, ForgeKind, ForgeOperation,
+    ForgeRemote, GitHubReviewRequestAdapter, GitLabReviewRequestAdapter, RealForgeCommandRunner,
     ReviewCommentSnapshot, ReviewRequestAttention, ReviewRequestError, ReviewRequestMetadata,
     ReviewRequestSummary, UpdateReviewRequestInput, detect_remote,
 };
@@ -181,9 +183,15 @@ impl RealReviewRequestClient {
     }
 
     /// Runs `call` on an authenticated adapter selected for `remote`.
+    ///
+    /// `operation` names the public method in the execution context so its
+    /// `forge.command` spans are attributable. Beneath an active trace, the
+    /// authentication check that precedes every call records
+    /// `forge.auth_check`.
     fn call_with_authenticated_adapter<T>(
         &self,
         remote: ForgeRemote,
+        operation: &'static str,
         call: impl FnOnce(
             Arc<dyn ReviewRequestAdapter>,
             ForgeRemote,
@@ -197,10 +205,32 @@ impl RealReviewRequestClient {
         let adapter = self.adapter_for(remote.forge_kind);
 
         Box::pin(async move {
-            adapter.ensure_authenticated(&remote).await?;
+            let context = Context::current().with_value(ForgeOperation(operation));
 
-            call(adapter, remote).await
+            async move {
+                Self::check_authentication(adapter.ensure_authenticated(&remote), &remote).await?;
+
+                call(adapter, remote).await
+            }
+            .with_context(context)
+            .await
         })
+    }
+
+    /// Awaits one adapter authentication check, inside a `forge.auth_check`
+    /// span when the current context is traced.
+    async fn check_authentication(
+        check: ForgeFuture<Result<(), ReviewRequestError>>,
+        remote: &ForgeRemote,
+    ) -> Result<(), ReviewRequestError> {
+        if !Context::current().has_active_span() {
+            return check.await;
+        }
+
+        let span = Span::child("forge.auth_check");
+        span.attribute("agentty.forge.kind", remote.forge_kind.as_str());
+
+        span.run(check, |_| Outcome::Failed).await
     }
 
     /// Returns one adapter implementation for `forge_kind`.
@@ -232,9 +262,13 @@ impl ReviewRequestClient for RealReviewRequestClient {
         remote: ForgeRemote,
         source_branch: String,
     ) -> ForgeFuture<Result<Option<ReviewRequestSummary>, ReviewRequestError>> {
-        self.call_with_authenticated_adapter(remote, move |adapter, remote| {
-            adapter.find_authenticated_by_source_branch(remote, source_branch)
-        })
+        self.call_with_authenticated_adapter(
+            remote,
+            "find_by_source_branch",
+            move |adapter, remote| {
+                adapter.find_authenticated_by_source_branch(remote, source_branch)
+            },
+        )
     }
 
     fn create_review_request(
@@ -242,9 +276,11 @@ impl ReviewRequestClient for RealReviewRequestClient {
         remote: ForgeRemote,
         input: CreateReviewRequestInput,
     ) -> ForgeFuture<Result<ReviewRequestSummary, ReviewRequestError>> {
-        self.call_with_authenticated_adapter(remote, move |adapter, remote| {
-            adapter.create_authenticated_review_request(remote, input)
-        })
+        self.call_with_authenticated_adapter(
+            remote,
+            "create_review_request",
+            move |adapter, remote| adapter.create_authenticated_review_request(remote, input),
+        )
     }
 
     fn refresh_review_request(
@@ -252,9 +288,11 @@ impl ReviewRequestClient for RealReviewRequestClient {
         remote: ForgeRemote,
         display_id: String,
     ) -> ForgeFuture<Result<ReviewRequestSummary, ReviewRequestError>> {
-        self.call_with_authenticated_adapter(remote, move |adapter, remote| {
-            adapter.refresh_authenticated_review_request(remote, display_id)
-        })
+        self.call_with_authenticated_adapter(
+            remote,
+            "refresh_review_request",
+            move |adapter, remote| adapter.refresh_authenticated_review_request(remote, display_id),
+        )
     }
 
     fn review_request_metadata(
@@ -262,9 +300,13 @@ impl ReviewRequestClient for RealReviewRequestClient {
         remote: ForgeRemote,
         display_id: String,
     ) -> ForgeFuture<Result<ReviewRequestMetadata, ReviewRequestError>> {
-        self.call_with_authenticated_adapter(remote, move |adapter, remote| {
-            adapter.authenticated_review_request_metadata(remote, display_id)
-        })
+        self.call_with_authenticated_adapter(
+            remote,
+            "review_request_metadata",
+            move |adapter, remote| {
+                adapter.authenticated_review_request_metadata(remote, display_id)
+            },
+        )
     }
 
     fn sync_review_request_metadata(
@@ -273,9 +315,13 @@ impl ReviewRequestClient for RealReviewRequestClient {
         display_id: String,
         input: UpdateReviewRequestInput,
     ) -> ForgeFuture<Result<ReviewRequestSummary, ReviewRequestError>> {
-        self.call_with_authenticated_adapter(remote, move |adapter, remote| {
-            adapter.sync_authenticated_review_request_metadata(remote, display_id, input)
-        })
+        self.call_with_authenticated_adapter(
+            remote,
+            "sync_review_request_metadata",
+            move |adapter, remote| {
+                adapter.sync_authenticated_review_request_metadata(remote, display_id, input)
+            },
+        )
     }
 
     fn review_request_web_url(
@@ -297,9 +343,13 @@ impl ReviewRequestClient for RealReviewRequestClient {
         remote: ForgeRemote,
         display_id: String,
     ) -> ForgeFuture<Result<ReviewCommentSnapshot, ReviewRequestError>> {
-        self.call_with_authenticated_adapter(remote, move |adapter, remote| {
-            adapter.fetch_authenticated_review_comment_snapshot(remote, display_id)
-        })
+        self.call_with_authenticated_adapter(
+            remote,
+            "fetch_review_comment_snapshot",
+            move |adapter, remote| {
+                adapter.fetch_authenticated_review_comment_snapshot(remote, display_id)
+            },
+        )
     }
 
     fn fetch_review_request_attention(
@@ -308,9 +358,17 @@ impl ReviewRequestClient for RealReviewRequestClient {
         display_id: String,
         trusted_bots: Vec<String>,
     ) -> ForgeFuture<Result<ReviewRequestAttention, ReviewRequestError>> {
-        self.call_with_authenticated_adapter(remote, move |adapter, remote| {
-            adapter.fetch_authenticated_review_request_attention(remote, display_id, trusted_bots)
-        })
+        self.call_with_authenticated_adapter(
+            remote,
+            "fetch_review_request_attention",
+            move |adapter, remote| {
+                adapter.fetch_authenticated_review_request_attention(
+                    remote,
+                    display_id,
+                    trusted_bots,
+                )
+            },
+        )
     }
 
     fn rerun_failed_checks(
@@ -325,9 +383,13 @@ impl ReviewRequestClient for RealReviewRequestClient {
             }
         }
 
-        self.call_with_authenticated_adapter(remote, move |adapter, remote| {
-            adapter.rerun_authenticated_failed_checks(remote, distinct_rerun_ids)
-        })
+        self.call_with_authenticated_adapter(
+            remote,
+            "rerun_failed_checks",
+            move |adapter, remote| {
+                adapter.rerun_authenticated_failed_checks(remote, distinct_rerun_ids)
+            },
+        )
     }
 
     fn reply_to_thread(
@@ -337,7 +399,7 @@ impl ReviewRequestClient for RealReviewRequestClient {
         thread_id: String,
         body: String,
     ) -> ForgeFuture<Result<(), ReviewRequestError>> {
-        self.call_with_authenticated_adapter(remote, move |adapter, remote| {
+        self.call_with_authenticated_adapter(remote, "reply_to_thread", move |adapter, remote| {
             adapter.reply_to_authenticated_thread(remote, display_id, thread_id, body)
         })
     }
@@ -348,7 +410,7 @@ impl ReviewRequestClient for RealReviewRequestClient {
         display_id: String,
         thread_id: String,
     ) -> ForgeFuture<Result<(), ReviewRequestError>> {
-        self.call_with_authenticated_adapter(remote, move |adapter, remote| {
+        self.call_with_authenticated_adapter(remote, "resolve_thread", move |adapter, remote| {
             adapter.resolve_authenticated_thread(remote, display_id, thread_id)
         })
     }

@@ -6,16 +6,20 @@ use std::path::Path;
 use std::process::Command;
 use std::time::Duration;
 
+use opentelemetry::Value;
+use opentelemetry_sdk::trace::SpanData;
 use tempfile::tempdir;
 
 use crate::error::GitError;
 use crate::repo::{
     AsyncGitCommand, GIT_COMMAND_TIMEOUT, NETWORK_GIT_COMMAND_TIMEOUT,
     apply_non_interactive_environment, batch_mode_ssh_command, command_output_detail,
-    format_git_invocation, main_checkout_working_tree_sync, main_repo_root, normalize_repo_url,
-    parse_git_directory_paths, parse_repo_root, repo_root_from_git_dir_async, resolve_git_dir,
-    run_git_command_sync, run_git_command_with_timeout,
+    format_git_invocation, main_checkout_working_tree, main_checkout_working_tree_sync,
+    main_repo_root, normalize_repo_url, parse_git_directory_paths, parse_repo_root,
+    repo_root_from_git_dir_async, resolve_git_dir, run_git_command_sync,
+    run_git_command_with_timeout,
 };
+use crate::telemetry_support::{SpanCapture, attribute, attribute_keys};
 
 #[test]
 fn test_apply_non_interactive_environment_sets_git_prompt_controls() {
@@ -504,4 +508,201 @@ fn test_format_git_invocation_joins_args_after_git() {
         format_git_invocation(&["diff", "--cached", "--quiet"]),
         "git diff --cached --quiet"
     );
+}
+
+#[tokio::test]
+async fn test_git_command_spans_join_blocking_callers_with_content_free_metadata() {
+    // Arrange
+    let capture = SpanCapture::install().await;
+    let temp_dir = tempdir().expect("failed to create temp dir");
+    run_setup_git(temp_dir.path(), &["init", "--quiet"]);
+    let repo_path = temp_dir.path().to_path_buf();
+    let untraced = main_checkout_working_tree(repo_path.clone()).await;
+
+    // Act
+    let (traced, trace) = capture
+        .trace(main_checkout_working_tree(repo_path.clone()))
+        .await;
+
+    // Assert
+    assert_eq!(
+        untraced.expect("untraced lookup"),
+        traced.expect("traced lookup")
+    );
+    let commands = trace.named("git.command");
+    assert!(commands.len() >= 2, "{}", commands.len());
+    assert_eq!(
+        capture
+            .finished_spans()
+            .iter()
+            .filter(|span| span.name == "git.command")
+            .count(),
+        commands.len()
+    );
+    for command in commands {
+        assert_eq!(command.parent_span_id, trace.root_id);
+        assert_eq!(
+            attribute_keys(command),
+            [
+                "agentty.outcome",
+                "agentty.output.bytes",
+                "agentty.timed_out",
+                "git.subcommand",
+                "process.exit.code",
+            ]
+        );
+        assert_eq!(
+            attribute(command, "git.subcommand"),
+            Some(&Value::from("rev-parse"))
+        );
+        assert_eq!(
+            attribute(command, "process.exit.code"),
+            Some(&Value::I64(0))
+        );
+        assert_eq!(
+            attribute(command, "agentty.timed_out"),
+            Some(&Value::Bool(false))
+        );
+        assert!(matches!(
+            attribute(command, "agentty.output.bytes"),
+            Some(Value::I64(bytes)) if *bytes > 0
+        ));
+        assert_eq!(
+            attribute(command, "agentty.outcome"),
+            Some(&Value::from("completed"))
+        );
+    }
+    let repo_path_text = repo_path.to_string_lossy().into_owned();
+    assert!(!format!("{:?}", trace.spans).contains(&repo_path_text));
+}
+
+#[tokio::test]
+async fn test_async_git_command_spans_classify_exits_timeouts_and_spawn_failures() {
+    // Arrange
+    let capture = SpanCapture::install().await;
+    let temp_dir = tempdir().expect("failed to create temp dir");
+    run_setup_git(temp_dir.path(), &["init", "--quiet"]);
+    let repo_path = temp_dir.path().to_path_buf();
+    let completed = async_command(&repo_path, &["-c", "color.ui=never", "status", "--short"]);
+    let rejected = async_command(
+        &repo_path,
+        &["rev-parse", "--verify", "agentty-missing-ref"],
+    );
+    let hung = async_command(
+        &repo_path,
+        &["-c", "alias.agentty-hang=!exec sleep 1", "agentty-hang"],
+    );
+    let signaled = async_command(
+        &repo_path,
+        &[
+            "-c",
+            "alias.agentty-signal=!kill -9 $PPID",
+            "agentty-signal",
+        ],
+    );
+    let unspawnable = async_command(&repo_path.join("missing"), &["status"]);
+
+    // Act
+    let (results, trace) = capture
+        .trace(async {
+            [
+                run_git_command_with_timeout(completed, Duration::from_secs(5)).await,
+                run_git_command_with_timeout(rejected, Duration::from_secs(5)).await,
+                run_git_command_with_timeout(signaled, Duration::from_secs(5)).await,
+                run_git_command_with_timeout(hung, Duration::from_millis(25)).await,
+                run_git_command_with_timeout(unspawnable, Duration::from_secs(5)).await,
+            ]
+        })
+        .await;
+
+    // Assert
+    assert!(matches!(
+        &results,
+        [
+            Ok(completed),
+            Ok(rejected),
+            Ok(signaled),
+            Err(GitError::CommandTimedOut { .. }),
+            Err(GitError::CommandFailed { .. }),
+        ] if completed.success()
+            && rejected.exit_code == Some(128)
+            && signaled.exit_code.is_none()
+    ));
+    let commands = trace.named("git.command");
+    let observed: Vec<_> = commands
+        .iter()
+        .map(|command| command_span_record(command))
+        .collect();
+    assert_eq!(
+        observed,
+        [
+            expected_command_span("status", Some(0), false, "completed", None),
+            expected_command_span("rev-parse", Some(128), false, "completed", None),
+            expected_command_span("other", None, false, "completed", None),
+            expected_command_span("other", None, true, "failed", Some("timeout")),
+            expected_command_span("status", None, false, "failed", Some("spawn")),
+        ]
+    );
+    assert!(
+        commands
+            .iter()
+            .all(|command| command.parent_span_id == trace.root_id)
+    );
+    let exported = format!("{:?}", trace.spans);
+    for private_text in [
+        "agentty-hang",
+        "agentty-missing-ref",
+        "agentty-signal",
+        "color.ui",
+        "--short",
+        &repo_path.to_string_lossy(),
+    ] {
+        assert!(!exported.contains(private_text), "{private_text}");
+    }
+}
+
+/// Subcommand, exit code, timeout flag, outcome, and error type recorded on
+/// one `git.command` span.
+type CommandSpanRecord = (
+    Option<Value>,
+    Option<Value>,
+    Option<Value>,
+    Option<Value>,
+    Option<Value>,
+);
+
+/// Builds one asynchronous git command from borrowed arguments.
+fn async_command(repo_path: &Path, arguments: &[&str]) -> AsyncGitCommand {
+    AsyncGitCommand::new(
+        repo_path.to_path_buf(),
+        arguments.iter().map(ToString::to_string).collect(),
+    )
+}
+
+/// Returns the content-free metadata recorded on one `git.command` span.
+fn command_span_record(command: &SpanData) -> CommandSpanRecord {
+    (
+        attribute(command, "git.subcommand").cloned(),
+        attribute(command, "process.exit.code").cloned(),
+        attribute(command, "agentty.timed_out").cloned(),
+        attribute(command, "agentty.outcome").cloned(),
+        attribute(command, "error.type").cloned(),
+    )
+}
+
+/// Builds the expected metadata of one `git.command` span.
+fn expected_command_span(
+    subcommand: &'static str,
+    exit_code: Option<i64>,
+    timed_out: bool,
+    outcome: &'static str,
+    error_type: Option<&'static str>,
+) -> CommandSpanRecord {
+    (
+        Some(Value::from(subcommand)),
+        exit_code.map(Value::I64),
+        Some(Value::Bool(timed_out)),
+        Some(Value::from(outcome)),
+        error_type.map(Value::from),
+    )
 }

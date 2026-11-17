@@ -5,6 +5,7 @@ use std::fs;
 #[cfg(unix)]
 use std::path::{Path, PathBuf};
 
+use opentelemetry::Value;
 use tempfile::tempdir;
 
 #[cfg(unix)]
@@ -15,6 +16,7 @@ use crate::sync::{
     SingleCommitMessageStrategy, commit_all, commit_all_preserving_single_commit,
     head_commit_message, parse_commit_count, parse_resolved_hash, stage_all,
 };
+use crate::telemetry_support::{CapturedTrace, SpanCapture, attribute};
 
 #[test]
 fn parse_resolved_hash_trims_output_and_rejects_empty_output() {
@@ -55,9 +57,15 @@ async fn commit_all_reports_no_changes_for_clean_worktree() {
     // Arrange
     let temp_dir = tempdir().expect("failed to create temp dir");
     setup_test_git_repo(temp_dir.path());
+    let capture = SpanCapture::install().await;
 
     // Act
-    let result = commit_all(temp_dir.path().to_path_buf(), "No changes".to_string()).await;
+    let (result, trace) = capture
+        .trace(commit_all(
+            temp_dir.path().to_path_buf(),
+            "No changes".to_string(),
+        ))
+        .await;
 
     // Assert
     assert!(matches!(
@@ -68,6 +76,24 @@ async fn commit_all_reports_no_changes_for_clean_worktree() {
     assert_eq!(
         git_command_stdout(temp_dir.path(), &["rev-list", "--count", "HEAD"]),
         "1"
+    );
+    assert_eq!(
+        commit_attempt_results(&trace),
+        [commit_attempt_result(
+            "nothing_to_commit",
+            "completed",
+            None
+        )]
+    );
+    assert!(
+        trace
+            .named("git.command")
+            .iter()
+            .any(
+                |command| attribute(command, "git.subcommand") == Some(&Value::from("commit"))
+                    && command.parent_span_id
+                        == trace.named("git.commit.attempt")[0].span_context.span_id()
+            )
     );
 }
 
@@ -84,9 +110,12 @@ async fn commit_all_restages_and_retries_after_hook_modifies_files() {
          modified by this hook' >&2\n  exit 1\nfi\n",
     );
     fs::write(repo_path.join("README.md"), "changed\n").expect("failed to write worktree change");
+    let capture = SpanCapture::install().await;
 
     // Act
-    let result = commit_all(repo_path.clone(), "Change README".to_string()).await;
+    let (result, trace) = capture
+        .trace(commit_all(repo_path.clone(), "Change README".to_string()))
+        .await;
 
     // Assert
     assert!(result.is_ok(), "{result:?}");
@@ -95,6 +124,13 @@ async fn commit_all_restages_and_retries_after_hook_modifies_files() {
         "formatted"
     );
     assert_eq!(hook_attempt_count(&attempt_log), 2);
+    assert_eq!(
+        commit_attempt_results(&trace),
+        [
+            commit_attempt_result("hook_modified", "completed", None),
+            commit_attempt_result("committed", "completed", None),
+        ]
+    );
 }
 
 #[cfg(unix)]
@@ -139,9 +175,12 @@ async fn commit_all_preserves_hook_rejection_output() {
         "echo 'lint failed' >&2\nexit 1\n",
     );
     fs::write(repo_path.join("README.md"), "changed\n").expect("failed to write worktree change");
+    let capture = SpanCapture::install().await;
 
     // Act
-    let result = commit_all(repo_path.clone(), "Change README".to_string()).await;
+    let (result, trace) = capture
+        .trace(commit_all(repo_path.clone(), "Change README".to_string()))
+        .await;
 
     // Assert
     assert!(matches!(
@@ -150,6 +189,10 @@ async fn commit_all_preserves_hook_rejection_output() {
             if command == "git commit" && stderr.contains("lint failed")
     ));
     assert_eq!(hook_attempt_count(&attempt_log), 1);
+    assert_eq!(
+        commit_attempt_results(&trace),
+        [commit_attempt_result("failed", "failed", Some("execution"))]
+    );
 }
 
 #[tokio::test]
@@ -263,6 +306,37 @@ fn configure_counting_pre_commit_hook(
     );
 
     attempt_log
+}
+
+/// Result, outcome, and error type recorded on one `git.commit.attempt`.
+type CommitAttemptRecord = (Option<Value>, Option<Value>, Option<Value>);
+
+/// Returns the records of every commit attempt in `trace`, in order.
+fn commit_attempt_results(trace: &CapturedTrace) -> Vec<CommitAttemptRecord> {
+    trace
+        .named("git.commit.attempt")
+        .into_iter()
+        .map(|attempt| {
+            (
+                attribute(attempt, "agentty.git.commit.result").cloned(),
+                attribute(attempt, "agentty.outcome").cloned(),
+                attribute(attempt, "error.type").cloned(),
+            )
+        })
+        .collect()
+}
+
+/// Builds the expected record of one commit attempt.
+fn commit_attempt_result(
+    result: &'static str,
+    outcome: &'static str,
+    error_type: Option<&'static str>,
+) -> CommitAttemptRecord {
+    (
+        Some(Value::from(result)),
+        Some(Value::from(outcome)),
+        error_type.map(Value::from),
+    )
 }
 
 /// Returns how many times the counting `pre-commit` hook ran.

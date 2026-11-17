@@ -68,7 +68,10 @@ dependencies = [
 name = "ag-forge"
 version = "0.19.1"
 dependencies = [
+ "ag-telemetry",
  "mockall",
+ "opentelemetry",
+ "opentelemetry_sdk",
  "serde",
  "serde_json",
  "tokio",
@@ -81,6 +84,8 @@ version = "0.19.1"
 dependencies = [
  "ag-telemetry",
  "mockall",
+ "opentelemetry",
+ "opentelemetry_sdk",
  "rustix",
  "tempfile",
  "thiserror 2.0.21",
