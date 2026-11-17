@@ -116,6 +116,10 @@ impl TurnOutcome {
         Self { output, report }
     }
 
+    pub(crate) fn into_parts(self) -> (Value, TurnReport) {
+        (self.output, self.report)
+    }
+
     pub(crate) fn set_duration(&mut self, duration: Duration) {
         self.report.duration = duration;
     }

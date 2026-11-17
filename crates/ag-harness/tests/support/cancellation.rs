@@ -1,6 +1,6 @@
 //! Public cancellation contract, also run as a source coverage suite.
 
-use std::future::{Future, pending};
+use std::future::{Future, IntoFuture as _, pending};
 use std::io;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
@@ -9,7 +9,8 @@ use std::time::Duration;
 
 use ag_harness::lifecycle::TurnErrorType;
 use ag_harness::model::{
-    ModelCompletion, ModelMessage, ModelMetadata, ModelRequest, ModelResponse,
+    CompletionMetadata, CompletionUsage, ModelCompletion, ModelMessage, ModelMetadata,
+    ModelRequest, ModelResponse,
 };
 use ag_harness::recovery::HostTurnRecord;
 use ag_harness::store::{
@@ -17,10 +18,10 @@ use ag_harness::store::{
     SessionStore, SqliteStore, StoreIdentity, TurnAdmission, TurnOwner, WriteRecord, WriteStatus,
 };
 use ag_harness::tool::{FileSystem, LocalFileSystem, ToolCall};
-use ag_harness::turn::SettlementPhase;
+use ag_harness::turn::{SettlementError, SettlementPhase};
 use ag_harness::{
-    Harness, Model, ModelError, OutputSchema, SessionError, Tool, ToolPolicy, TurnControl,
-    TurnError, TurnOptions, TurnOutcome,
+    ErrorKind, Harness, Model, ModelError, OutputSchema, RunOutput, RunRequest, SessionError, Tool,
+    ToolPolicy, TurnControl, TurnError, TurnOptions, TurnOutcome,
 };
 use async_trait::async_trait;
 use serde_json::json;
@@ -102,19 +103,35 @@ impl Model for TestModel {
         match request.prompt() {
             "wait" => pending().await,
             "panic" => std::panic::resume_unwind(Box::new("injected model panic")),
-            "write" => Ok(ModelCompletion::from_response(ModelResponse::ToolCall(
-                ToolCall::from_json(
-                    "write".into(),
-                    "write",
-                    &json!({
-                        "path":"file.txt",
-                        "patch":"--- /dev/null\n+++ b/file.txt\n@@ -0,0 +1 @@\n+new\n"
-                    })
-                    .to_string(),
+            "write" => Ok(ModelCompletion::new(
+                CompletionMetadata::new(
+                    "tool_calls".into(),
                     None,
-                )
-                .expect("write call"),
-            ))),
+                    None,
+                    None,
+                    Some(CompletionUsage::new(
+                        None,
+                        None,
+                        Some(30),
+                        Some(5),
+                        None,
+                        None,
+                    )),
+                ),
+                ModelResponse::ToolCall(
+                    ToolCall::from_json(
+                        "write".into(),
+                        "write",
+                        &json!({
+                            "path":"file.txt",
+                            "patch":"--- /dev/null\n+++ b/file.txt\n@@ -0,0 +1 @@\n+new\n"
+                        })
+                        .to_string(),
+                        None,
+                    )
+                    .expect("write call"),
+                ),
+            )),
             "fail" => Err(ModelError::InvalidResponse),
             _ => Ok(ModelCompletion::from_response(ModelResponse::Output(
                 json!({}),
@@ -139,10 +156,12 @@ enum Phase {
 }
 
 struct Gate {
+    cleanup_attempts: AtomicUsize,
     entered: Notify,
     fail_append: AtomicBool,
     fail_cleanup: AtomicBool,
     fail_outcome: AtomicBool,
+    fail_writes: AtomicBool,
     lookup: Notify,
     phase: Phase,
     release: Notify,
@@ -152,10 +171,12 @@ struct Gate {
 impl Gate {
     fn new(store: Arc<dyn SessionStore>, phase: Phase) -> Self {
         Self {
+            cleanup_attempts: AtomicUsize::new(0),
             entered: Notify::new(),
             fail_append: AtomicBool::new(false),
             fail_cleanup: AtomicBool::new(false),
             fail_outcome: AtomicBool::new(false),
+            fail_writes: AtomicBool::new(false),
             lookup: Notify::new(),
             phase,
             release: Notify::new(),
@@ -295,6 +316,8 @@ impl SessionStore for Gate {
     async fn interrupt(&self, owner: &TurnOwner) -> Result<(), SessionError> {
         self.pause(Phase::Cleanup).await;
         if self.fail_cleanup.load(Ordering::SeqCst) {
+            self.cleanup_attempts.fetch_add(1, Ordering::SeqCst);
+
             return Err(SessionError::Store {
                 operation: "cleanup",
                 source: Box::new(std::io::Error::other("injected cleanup failure")),
@@ -304,6 +327,12 @@ impl SessionStore for Gate {
     }
 
     async fn load_writes(&self, id: &str) -> Result<Vec<WriteRecord>, SessionError> {
+        if self.fail_writes.load(Ordering::SeqCst) {
+            return Err(SessionError::Store {
+                operation: "load writes",
+                source: Box::new(io::Error::other("injected write journal failure")),
+            });
+        }
         self.store.load_writes(id).await
     }
 
@@ -1590,4 +1619,219 @@ async fn host_acquisition_panic_releases_admission_without_execution() {
         assert!(recovered.is_none());
         assert_eq!(probe.calls.load(Ordering::SeqCst), 0);
     }
+}
+
+#[tokio::test]
+async fn run_cancelled_during_a_write_settles_it_before_reporting() {
+    // Arrange
+    let root = tempfile::tempdir().expect("repository");
+    let entered = Arc::new(Notify::new());
+    let finished = Arc::new(Notify::new());
+    let release = Arc::new(Notify::new());
+    let harness = Harness::new(
+        TestModel(Arc::new(Probe::default())),
+        unbounded_context_budget(),
+    )
+    .store(Arc::new(MemoryStore::new()))
+    .repository(repository_with_host_git(root.path()))
+    .file_system(DeferredReplacement {
+        entered: Arc::clone(&entered),
+        finished: Arc::clone(&finished),
+        release: Arc::clone(&release),
+    });
+    let session = harness
+        .session("write", schema())
+        .create()
+        .await
+        .expect("session");
+    let run =
+        session.run(RunRequest::new("write").tool_policy(ToolPolicy::default().allow(Tool::Write)));
+    let token = run.cancel_token();
+    let outcome = tokio::spawn(run.into_future());
+    bounded(entered.notified()).await;
+
+    // Act
+    token.cancel();
+    release.notify_one();
+    let outcome = bounded(outcome).await.expect("run task");
+
+    // Assert
+    let error = outcome.result.expect_err("cancelled");
+    assert_eq!(error.kind(), ErrorKind::Cancelled);
+    assert_eq!(outcome.report.model_requests().len(), 1);
+    assert_eq!((outcome.usage.input, outcome.usage.output), (30, 5));
+    assert!(outcome.settlement.is_ok());
+    assert_eq!(outcome.files_changed.len(), 1);
+    assert_eq!(outcome.files_changed[0].path, "file.txt");
+    assert_eq!(outcome.files_changed[0].status, WriteStatus::Applied);
+    assert_eq!(
+        tokio::fs::read(root.path().join("file.txt"))
+            .await
+            .expect("settled replacement"),
+        b"new\n"
+    );
+}
+
+#[tokio::test]
+async fn run_reports_persistence_that_fails_after_one_retry_as_retryable() {
+    // Arrange
+    let gate = Arc::new(Gate::new(Arc::new(MemoryStore::new()), Phase::None));
+    gate.fail_cleanup.store(true, Ordering::SeqCst);
+    let probe = Arc::new(Probe::default());
+    let harness =
+        Harness::new(TestModel(Arc::clone(&probe)), unbounded_context_budget()).store(gate.clone());
+    let session = harness
+        .session("session", schema())
+        .create()
+        .await
+        .expect("session");
+    let run = session.run(RunRequest::new("wait"));
+    let token = run.cancel_token();
+    let outcome = tokio::spawn(run.into_future());
+    bounded(probe.entered.notified()).await;
+
+    // Act
+    token.cancel();
+    let outcome = bounded(outcome).await.expect("run task");
+    let attempts = gate.cleanup_attempts.load(Ordering::SeqCst);
+    let unsettled = outcome.settlement.expect_err("persistence failed");
+    let blocked = session.run(RunRequest::new("ok")).await.result;
+    let still_failing = bounded(unsettled.retry())
+        .await
+        .expect_err("persistence still fails");
+    let kind = still_failing.error().kind();
+    let phase = still_failing
+        .error()
+        .get_ref()
+        .downcast_ref::<SettlementError>()
+        .map(SettlementError::phase);
+    let debug = format!("{still_failing:?}");
+    gate.fail_cleanup.store(false, Ordering::SeqCst);
+    let retried = bounded(still_failing.retry()).await;
+
+    // Assert
+    assert_eq!(attempts, 2, "settlement retried exactly once");
+    assert_eq!(
+        outcome.result.map_err(|error| error.kind()).err(),
+        Some(ErrorKind::Cancelled)
+    );
+    assert!(blocked.is_err(), "unsettled cleanup blocks new runs");
+    assert_eq!(kind, ErrorKind::Store);
+    assert_eq!(phase, Some(SettlementPhase::Persistence));
+    assert!(debug.starts_with("Unsettled"), "{debug}");
+    assert!(retried.is_ok(), "{retried:?}");
+    assert!(
+        session.run(RunRequest::new("ok")).await.result.is_ok(),
+        "a successful retry readmits the session"
+    );
+}
+
+#[tokio::test]
+async fn run_retries_failed_cleanup_before_reporting_cancellation() {
+    // Arrange
+    let gate = Arc::new(Gate::new(Arc::new(MemoryStore::new()), Phase::Cleanup));
+    gate.fail_cleanup.store(true, Ordering::SeqCst);
+    let probe = Arc::new(Probe::default());
+    let harness =
+        Harness::new(TestModel(Arc::clone(&probe)), unbounded_context_budget()).store(gate.clone());
+    let session = harness
+        .session("session", schema())
+        .create()
+        .await
+        .expect("session");
+    let run = session.run(RunRequest::new("wait"));
+    let token = run.cancel_token();
+    let outcome = tokio::spawn(run.into_future());
+    bounded(probe.entered.notified()).await;
+
+    // Act
+    token.cancel();
+    bounded(gate.entered.notified()).await;
+    gate.release.notify_one();
+    bounded(gate.entered.notified()).await;
+    gate.fail_cleanup.store(false, Ordering::SeqCst);
+    gate.release.notify_one();
+    let outcome = bounded(outcome).await.expect("run task");
+
+    // Assert
+    let error = outcome.result.expect_err("cancelled");
+    assert_eq!(error.kind(), ErrorKind::Cancelled);
+    assert!(
+        session.run(RunRequest::new("ok")).await.result.is_ok(),
+        "the retried cleanup readmits the session"
+    );
+}
+
+#[tokio::test]
+async fn run_keeps_its_output_when_its_records_cannot_be_read() {
+    // Arrange
+    let gate = Arc::new(Gate::new(Arc::new(MemoryStore::new()), Phase::None));
+    gate.fail_writes.store(true, Ordering::SeqCst);
+    let harness = Harness::new(
+        TestModel(Arc::new(Probe::default())),
+        unbounded_context_budget(),
+    )
+    .store(gate.clone());
+    let session = harness
+        .session("session", schema())
+        .create()
+        .await
+        .expect("session");
+
+    // Act
+    let outcome = bounded(session.run(RunRequest::new("ok")).into_future()).await;
+
+    // Assert
+    assert_eq!(outcome.result.ok(), Some(RunOutput::Json(json!({}))));
+    assert_eq!(
+        outcome.records_error.map(|error| error.kind()),
+        Some(ErrorKind::Store)
+    );
+    assert_eq!(outcome.files_changed, []);
+    assert_eq!(outcome.report.model_requests().len(), 1);
+}
+
+#[tokio::test]
+async fn run_reports_an_unsettled_write_beside_its_own_result() {
+    // Arrange
+    let root = tempfile::tempdir().expect("repository");
+    let gate = Arc::new(Gate::new(Arc::new(MemoryStore::new()), Phase::Outcome));
+    gate.fail_outcome.store(true, Ordering::SeqCst);
+    let harness = Harness::new(
+        TestModel(Arc::new(Probe::default())),
+        unbounded_context_budget(),
+    )
+    .store(gate.clone())
+    .repository(repository_with_host_git(root.path()));
+    let session = harness
+        .session("outcome", schema())
+        .create()
+        .await
+        .expect("session");
+    let run =
+        session.run(RunRequest::new("write").tool_policy(ToolPolicy::default().allow(Tool::Write)));
+    let token = run.cancel_token();
+    let outcome = tokio::spawn(run.into_future());
+    bounded(gate.entered.notified()).await;
+
+    // Act
+    token.cancel();
+    gate.release.notify_one();
+    let outcome = bounded(outcome).await.expect("run task");
+
+    // Assert
+    assert_eq!(
+        outcome.result.map_err(|error| error.kind()).err(),
+        Some(ErrorKind::Cancelled)
+    );
+    let unsettled = outcome.settlement.expect_err("write outcome failed");
+    assert_eq!(unsettled.error().kind(), ErrorKind::ToolFailed);
+    assert_eq!(
+        unsettled
+            .error()
+            .get_ref()
+            .downcast_ref::<SettlementError>()
+            .map(SettlementError::phase),
+        Some(SettlementPhase::Writes)
+    );
 }
