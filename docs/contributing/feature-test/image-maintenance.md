@@ -3,7 +3,9 @@
 Only maintainers changing `container/e2e.Containerfile` should build and publish a
 replacement image. Build both supported platforms into one manifest, run affected
 focused feature tests against the native candidate for each available architecture, then
-push `latest`. The preferred path is the manual **Publish E2E Image** workflow in
+push `latest`.
+
+Prefer the manual **Publish E2E Image** workflow in
 `.github/workflows/publish-e2e-image.yml`, dispatched from the repository's default
 branch. It builds and runs the E2E suite on native `ubuntu-24.04` AMD64 and
 `ubuntu-24.04-arm` ARM64 runners, publishes architecture-specific candidates, assembles
@@ -12,32 +14,30 @@ the digest in the workflow summary.
 
 Before its first run, a package administrator must connect the existing `agentty-e2e`
 package to this repository or grant this repository write access under the package's
-**Manage Actions access** settings. The package predates this workflow, so the
-workflow's `packages: write` permission cannot authorize an unconnected package by
-itself. `container/e2e.Containerfile` carries the `org.opencontainers.image.source`
-label to preserve the repository association on subsequent publications.
+**Manage Actions access** settings: the package predates the workflow, so its
+`packages: write` permission alone cannot authorize the unconnected package. The
+Containerfile's `org.opencontainers.image.source` label preserves the repository
+association on later publications.
 
 Copy the reported digest into the `container.image` value in
-`.github/workflows/e2e.yml`; the `e2e-container` hook reads its local image from that
-value. The pinned digest must remain an image index with both platforms; do not update
-the repository when either native test or either platform pull fails. Re-record every
+`.github/workflows/e2e.yml`, which is also the `e2e-container` hook's local image. The
+pinned digest must remain an image index with both platforms; do not update the
+repository when either native test or either platform pull fails. Re-record every
 feature affected by a tool, browser, font, or rendering change and refresh its PNG
-poster before updating the digest and artifacts together.
+poster, then update the digest and artifacts together.
 
-The following local flow remains available to maintainers with GHCR package-write
-permission. Use an explicit registry destination so a later single-image push cannot be
-confused with the manifest-list publication. Because the Containerfile contains `RUN`
-instructions, the combined build requires binfmt/QEMU emulation for the non-native
-platform; without it, use the manual workflow instead.
+Maintainers with GHCR package-write permission can also publish locally. Use an explicit
+registry destination so a later single-image push cannot be confused with the
+manifest-list publication. Because the Containerfile contains `RUN` instructions, the
+combined build requires binfmt/QEMU emulation for the non-native platform; without it,
+use the workflow. Publication verification also requires `jq` on the maintainer host.
 
-When testing a locally built candidate, set `AGENTTY_E2E_IMAGE` to the candidate's image
-ID from `podman image inspect --format '{{.Id}}'` when running the `e2e-container` hook
-from `docs/contributing/feature-test/recording.md`; the hook then skips its pull and
-runs the image with `--pull=never`. Pulling a tag, or running `--platform` with one,
-re-resolves it against the registry and silently replaces the local build with a
-previously published image.
-
-The publication verification command also requires `jq` on the maintainer host.
+To test a locally built candidate, set `AGENTTY_E2E_IMAGE` to its image ID from
+`podman image inspect --format '{{.Id}}'` when running the `e2e-container` hook from
+`docs/contributing/feature-test/recording.md`; the hook then skips its pull and runs the
+image with `--pull=never`. Pulling a tag, or running `--platform` with one, re-resolves
+it against the registry and silently replaces the local build with a previously
+published image.
 
 ```sh
 e2e_repository=ghcr.io/agentty-xyz/agentty-e2e
@@ -62,11 +62,11 @@ trap - EXIT
 e2e_published_image="${e2e_repository}@${e2e_digest}"
 ```
 
-Before copying the digest reported by `podman manifest push`, inspect its
-digest-qualified remote reference and require both Linux platforms. Using the digest
-instead of `latest` prevents Podman from satisfying the inspection with the local
-pre-push manifest. This check rejects a single-image manifest even if that image itself
-is `linux/amd64` or `linux/arm64`:
+Before copying the pushed digest, log out so the inspection and pulls exercise the same
+anonymous access that forked pull-request CI requires, then inspect the digest-qualified
+remote reference and require both Linux platforms. The digest, unlike `latest`, keeps
+Podman from answering with the local pre-push manifest, and the check rejects a
+single-image manifest even when that image is `linux/amd64` or `linux/arm64`:
 
 ```sh
 podman logout ghcr.io
@@ -85,6 +85,4 @@ podman pull --platform linux/amd64 "${e2e_published_image}"
 podman pull --platform linux/arm64 "${e2e_published_image}"
 ```
 
-Do not update the repository when logout, inspection, or either platform pull fails. The
-logout makes the inspection and pulls exercise the same anonymous access that forked
-pull-request CI requires.
+Do not update the repository when logout, inspection, or either platform pull fails.
