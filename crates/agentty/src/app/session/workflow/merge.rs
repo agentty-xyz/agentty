@@ -26,7 +26,7 @@ use crate::app::graph_activity::GraphActivityRegistry;
 use crate::app::service::{HarnessModels, SessionUpdateVersionMap};
 use crate::app::session::{Clock, SessionError};
 use crate::app::sync::SyncMainEventContext;
-use crate::app::{AppEvent, AppServices, ProjectManager, SessionManager};
+use crate::app::{AppEvent, AppServices, ProjectManager, SessionManager, spawn};
 use crate::domain::agent::{AgentKind, AgentModel, AgentSelection, ReasoningLevel};
 use crate::domain::session::{PublishedBranchSyncStatus, SessionId, Status};
 use crate::domain::session_message::SessionTranscript;
@@ -805,7 +805,7 @@ impl SessionMergeService {
         };
         let mut trace = Span::root("session.merge", Vec::new());
         trace.identify("agentty.session.id", id.to_string());
-        tokio::spawn(async move {
+        spawn::spawn_detached(async move {
             let _environment = environment;
             SessionManager::run_merge_task(merge_task_input, trace).await;
         });
@@ -2429,7 +2429,7 @@ impl SessionManager {
         };
 
         let trace = published_branch::auto_push_trace(&auto_push_input.session_id);
-        tokio::spawn(async move {
+        spawn::spawn_detached(async move {
             let _branch_operation_guard = branch_operation_guard;
             published_branch::run_published_branch_auto_push(auto_push_input, trace).await;
         });

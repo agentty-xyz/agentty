@@ -16,9 +16,9 @@ use tokio::time::{self, Instant};
 use tracing::{debug, warn};
 
 use crate::analytics::{Analytics, SessionType, TurnOutcome, TurnSelection};
-use crate::app::AppEvent;
 use crate::app::prompt_intent::PromptImagePasteUpdate;
 use crate::app::session::SessionManager;
+use crate::app::{AppEvent, spawn};
 use crate::db::AppRepositories;
 use crate::domain::agent::{
     AgentCliInfo, AgentKind, AgentModel, AgentSelection, HarnessModelOption,
@@ -202,7 +202,7 @@ impl AppServices {
         }
         let probe = Arc::clone(&self.harness_model_probe);
         let event_tx = self.event_tx.clone();
-        tokio::spawn(async move {
+        spawn::spawn_detached(async move {
             let options = probe.native_harness_models().await;
             let _ = event_tx.send(AppEvent::HarnessModelsUpdated { options });
         });
@@ -221,7 +221,7 @@ impl AppServices {
     /// Reports a session reservation without delaying the lifecycle workflow.
     pub(crate) fn record_session_start(&self, session_type: SessionType, agent: AgentSelection) {
         if let Some(analytics) = self.analytics.clone() {
-            self.track_telemetry_task(tokio::spawn(async move {
+            self.track_telemetry_task(spawn::spawn_detached(async move {
                 analytics.record_session_start(session_type, agent).await;
             }));
         }
@@ -230,7 +230,7 @@ impl AppServices {
     /// Reports an accepted turn without delaying foreground event reduction.
     pub(crate) fn record_turn_start(&self, turn: TurnSelection) {
         if let Some(analytics) = self.analytics.clone() {
-            self.track_telemetry_task(tokio::spawn(async move {
+            self.track_telemetry_task(spawn::spawn_detached(async move {
                 analytics.record_turn_start(turn).await;
             }));
         }
@@ -239,7 +239,7 @@ impl AppServices {
     /// Reports a settled turn without delaying foreground event reduction.
     pub(crate) fn record_turn_end(&self, turn: TurnSelection, outcome: TurnOutcome) {
         if let Some(analytics) = self.analytics.clone() {
-            self.track_telemetry_task(tokio::spawn(async move {
+            self.track_telemetry_task(spawn::spawn_detached(async move {
                 analytics.record_turn_end(turn, outcome).await;
             }));
         }
@@ -323,7 +323,7 @@ impl AppServices {
         self.run_worker.cancel_session(session_id);
         let worker = Arc::clone(&self.run_worker);
         let session_id = session_id.to_string();
-        self.track_cleanup_task(tokio::spawn(async move {
+        self.track_cleanup_task(spawn::spawn_detached(async move {
             worker.cancel_session_and_wait(&session_id).await;
         }));
     }

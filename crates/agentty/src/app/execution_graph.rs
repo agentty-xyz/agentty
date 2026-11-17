@@ -19,7 +19,7 @@ use tokio_util::sync::CancellationToken;
 use crate::app::graph_budget::GraphBudgetLedger;
 use crate::app::review_graph::ReviewGraphHost;
 use crate::app::session::SessionTaskService;
-use crate::app::{App, AppServices, SessionRuntimeHandle};
+use crate::app::{App, AppServices, SessionRuntimeHandle, spawn};
 use crate::domain::session::Status;
 use crate::infra::db::GraphEvidence;
 
@@ -512,7 +512,7 @@ impl AppServices {
         }
         let activity = GraphDriverActivity(running);
         let services = self.clone();
-        self.track_cleanup_task(tokio::spawn(async move {
+        self.track_cleanup_task(spawn::spawn_detached(async move {
             let _activity = activity;
             services
                 .drive_graph(&graph, &cancellation, &executor, &folder, || {

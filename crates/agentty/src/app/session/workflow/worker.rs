@@ -33,7 +33,7 @@ use crate::app::branch_publish::{
 use crate::app::graph_activity::{GRAPH_ACTIVITY_OPERATION_KIND, GraphActivityRegistry};
 use crate::app::service::{HarnessModels, SessionUpdateVersionMap};
 use crate::app::session::{Clock, SessionError, unix_timestamp_from_system_time};
-use crate::app::{AppEvent, AppServices, SessionManager};
+use crate::app::{AppEvent, AppServices, SessionManager, spawn};
 use crate::domain::agent::{AgentKind, AgentSelection};
 use crate::domain::session::{
     PublishBranchAction, QueuedMessage, ReviewRequest, SessionId, SessionStats, Status,
@@ -745,7 +745,7 @@ impl SessionWorkerRebaseAssistClient {
             speed_mode,
         };
         let (event_tx, event_rx) = mpsc::unbounded_channel::<TurnEvent>();
-        let consumer = tokio::spawn(turn::consume_turn_events(
+        let consumer = spawn::spawn_detached(turn::consume_turn_events(
             event_rx,
             self.app_event_tx.clone(),
             self.session_id.clone(),

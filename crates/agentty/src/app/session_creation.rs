@@ -6,7 +6,7 @@ use tokio::sync::oneshot;
 use uuid::Uuid;
 
 use crate::app::session::{self, SessionCreationSettings};
-use crate::app::{App, AppError, AppEvent, SessionManager};
+use crate::app::{App, AppError, AppEvent, SessionManager, spawn};
 use crate::domain::input::InputState;
 use crate::domain::session::{Session, Status};
 use crate::domain::turn_prompt::TurnPrompt;
@@ -143,7 +143,7 @@ impl App {
             vec![KeyValue::new("agentty.session.stacked", stacked)],
         );
         trace.identify("agentty.session.id", session_id.clone());
-        let task = tokio::spawn(async move {
+        let task = spawn::spawn_detached(async move {
             let result = trace
                 .run(
                     SessionManager::prepare_reserved_session(&services, &session_id),

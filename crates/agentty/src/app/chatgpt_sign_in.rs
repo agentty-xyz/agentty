@@ -7,7 +7,7 @@ use ag_session::ChatGptSignInOutcome;
 use tokio::task::JoinHandle;
 
 use crate::app::prompt_intent::PromptModelChange;
-use crate::app::{App, AppEvent};
+use crate::app::{App, AppEvent, spawn};
 use crate::domain::agent::{AgentKind, AgentSelection, HarnessModelStatus};
 use crate::infra::browser::BrowserClient;
 use crate::presentation::app_mode::{AppMode, PromptModeSnapshot};
@@ -113,7 +113,7 @@ impl App {
         let browser = Arc::clone(&self.chatgpt_sign_in.browser);
         let probe = self.services.harness_model_probe();
         let event_tx = self.services.event_sender();
-        self.chatgpt_sign_in.task = Some(tokio::spawn(async move {
+        self.chatgpt_sign_in.task = Some(spawn::spawn_detached(async move {
             let url_tx = event_tx.clone();
             let on_url = Box::new(move |url: String| {
                 browser.open(&url);

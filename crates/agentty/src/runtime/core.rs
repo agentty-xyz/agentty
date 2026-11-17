@@ -13,7 +13,7 @@ use ratatui::Terminal;
 use ratatui::backend::{Backend, ClearType, CrosstermBackend};
 use tokio::sync::mpsc;
 
-use crate::app::{App, AppError};
+use crate::app::{App, AppError, spawn};
 use crate::infra::clock::{self, Clock};
 use crate::runtime::latency::CycleTiming;
 use crate::runtime::{FRAME_INTERVAL, PresentationState, event, terminal};
@@ -74,7 +74,7 @@ impl EventReaderTask {
     /// Requests reader shutdown and waits for the blocking thread to finish.
     async fn shutdown(self) -> io::Result<()> {
         self.shutdown.store(true, Ordering::Relaxed);
-        let join_result = tokio::task::spawn_blocking(move || self.join_handle.join()).await;
+        let join_result = spawn::spawn_blocking_detached(move || self.join_handle.join()).await;
 
         Self::map_join_result(join_result)
     }

@@ -20,6 +20,7 @@ use super::worker::{SessionWorkerContext, TurnMetadata};
 use super::{StatusTransition, isolation, post_turn, turn};
 use crate::app::service::SessionRunFactory;
 use crate::app::session::SessionError;
+use crate::app::spawn;
 use crate::domain::permission::PermissionMode;
 use crate::domain::session::Status;
 use crate::domain::session_message::{SessionMessage, SessionMessageKind, SessionTranscript};
@@ -188,7 +189,7 @@ async fn execute(
         .create_graph_task(attempt_id, &context.session_id, dispatch.node.agent.kind())
         .map_err(turn::session_error_from_agent_error)?;
     let (event_tx, event_rx) = mpsc::unbounded_channel();
-    let consumer = tokio::spawn(turn::consume_turn_events(
+    let consumer = spawn::spawn_detached(turn::consume_turn_events(
         event_rx,
         context.app_event_tx.clone(),
         context.session_id.clone(),

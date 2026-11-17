@@ -1,0 +1,10 @@
+id: agentty-spawn-trace-context
+valid:
+  - 'fn start() { spawn::spawn_traced(work()); }'
+  - 'fn start() { spawn::spawn_blocking_detached(move || work()); }'
+  - 'fn start() { runtime.spawn_session(work()); }'
+invalid:
+  - 'fn start() { tokio::spawn(work()); }'
+  - 'fn start() { tokio::task::spawn_blocking(move || work()); }'
+  - 'fn start() { spawn_blocking(move || work()); }'
+  - 'fn start() { tokio::task::spawn_local(work()); }'

@@ -41,7 +41,7 @@ use crate::app;
 use crate::app::graph_question::{GraphQuestionState, GraphQuestionTarget};
 use crate::app::prompt_intent::DeferredSessionSettings;
 use crate::app::session_diff::PendingSessionDiffRequest;
-use crate::app::{AppError, session};
+use crate::app::{AppError, session, spawn};
 use crate::domain::agent::{AgentKind, ReasoningLevel};
 use crate::domain::input::InputState;
 use crate::domain::question::{
@@ -1550,7 +1550,7 @@ impl App {
 
         let mut trace = Span::root("session.push", Vec::new());
         trace.identify("agentty.session.id", event_session_id.to_string());
-        tokio::spawn(async move {
+        spawn::spawn_detached(async move {
             let result = trace
                 .run(
                     run_branch_publish_action(

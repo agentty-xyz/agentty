@@ -24,10 +24,10 @@ use ag_session::{
 use tokio_util::sync::CancellationToken;
 use uuid::Uuid;
 
-use crate::app::App;
 use crate::app::graph_output_decision::{GraphOutputReply, GraphOutputReplyDecision};
 use crate::app::prompt_intent::PromptWorkflowOutcome;
 use crate::app::session::SessionTaskService;
+use crate::app::{App, spawn};
 use crate::domain::session::SessionId;
 use crate::domain::session_message::SessionTranscript;
 use crate::domain::transcript_notice::TranscriptNotice;
@@ -254,7 +254,7 @@ impl App {
             .ok()
             .map(|handles| Arc::clone(&handles.status));
         let attachments = prompt.attachments.clone();
-        tokio::spawn(async move {
+        spawn::spawn_detached(async move {
             let activity = services.begin_graph_activity(&session_id, status).await;
             let node_id = output.node.id.clone();
             let reply = if attachments.is_empty() {

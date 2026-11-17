@@ -5,6 +5,7 @@ use std::time::{Duration, Instant};
 
 use tokio::task::JoinHandle;
 
+use crate::app::spawn;
 use crate::domain::resource::SessionResources;
 use crate::infra::resource::{self, ProcessSample, ResourceClient};
 
@@ -52,7 +53,7 @@ impl ResourceMonitor {
         if self.pending.is_none() && self.deadline.is_none_or(|deadline| now >= deadline) {
             self.deadline = Some(now + SAMPLE_INTERVAL);
             let client = Arc::clone(&self.client);
-            self.pending = Some(tokio::spawn(async move { client.sample().await }));
+            self.pending = Some(spawn::spawn_detached(async move { client.sample().await }));
         }
 
         previous != self.resources

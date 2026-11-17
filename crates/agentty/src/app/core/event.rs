@@ -2908,7 +2908,7 @@ impl App {
         let session_id = SessionId::from(session_id);
         let session_update_versions = self.services.session_update_versions();
         let transcript = Arc::clone(&handles.transcript);
-        let cleanup_task = tokio::spawn(async move {
+        let cleanup_task = app::spawn::spawn_detached(async move {
             if let Err(error) =
                 crate::app::session::SessionManager::cleanup_merged_session_worktree(
                     folder,
