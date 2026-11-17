@@ -86,7 +86,7 @@ impl<'a> HelpOverlay<'a> {
 }
 
 impl Component for HelpOverlay<'_> {
-    fn render(&self, f: &mut Frame, area: Rect) {
+    fn render(&self, frame: &mut Frame, area: Rect) {
         let bindings = self.context.keybindings();
         let title = self.context.title();
 
@@ -104,7 +104,7 @@ impl Component for HelpOverlay<'_> {
 
         let popup_area = Self::popup_area(area, title, row_width, bindings.len());
 
-        overlay::clear_popup_area(f, popup_area);
+        overlay::clear_popup_area(frame, popup_area);
 
         let content_width = overlay::overlay_content_width(popup_area.width);
         let indent = " ".repeat(content_width.saturating_sub(row_width) / 2);
@@ -133,7 +133,7 @@ impl Component for HelpOverlay<'_> {
             .block(block)
             .scroll((self.scroll_offset, SCROLL_X_OFFSET));
 
-        f.render_widget(paragraph, popup_area);
+        frame.render_widget(paragraph, popup_area);
     }
 }
 

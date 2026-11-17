@@ -196,7 +196,7 @@ impl SessionCreationOverlay {
 }
 
 impl Component for SessionCreationOverlay {
-    fn render(&self, f: &mut Frame, area: Rect) {
+    fn render(&self, frame: &mut Frame, area: Rect) {
         let dimensions = if self.harness_availability.is_visible() {
             HARNESS_OVERLAY_DIMENSIONS
         } else {
@@ -207,8 +207,8 @@ impl Component for SessionCreationOverlay {
             .alignment(Alignment::Left)
             .block(overlay::overlay_block("New Session", palette::accent()));
 
-        overlay::clear_popup_area(f, popup_area);
-        f.render_widget(paragraph, popup_area);
+        overlay::clear_popup_area(frame, popup_area);
+        frame.render_widget(paragraph, popup_area);
     }
 }
 

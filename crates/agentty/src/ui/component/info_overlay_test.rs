@@ -47,9 +47,9 @@ fn test_info_overlay_render_uses_the_custom_action_label() {
 
     // Act
     terminal
-        .draw(|f| {
-            let area = f.area();
-            Component::render(&overlay, f, area);
+        .draw(|frame| {
+            let area = frame.area();
+            Component::render(&overlay, frame, area);
         })
         .expect("failed to draw");
 
@@ -74,9 +74,9 @@ fn test_info_overlay_render_includes_ok_indicator() {
 
     // Act
     terminal
-        .draw(|f| {
-            let area = f.area();
-            Component::render(&overlay, f, area);
+        .draw(|frame| {
+            let area = frame.area();
+            Component::render(&overlay, frame, area);
         })
         .expect("failed to draw");
 
@@ -97,9 +97,9 @@ fn test_info_overlay_render_includes_loading_indicator_when_loading() {
 
     // Act
     terminal
-        .draw(|f| {
-            let area = f.area();
-            Component::render(&overlay, f, area);
+        .draw(|frame| {
+            let area = frame.area();
+            Component::render(&overlay, frame, area);
         })
         .expect("failed to draw");
 
@@ -151,9 +151,9 @@ fn test_info_overlay_render_keeps_ok_indicator_for_multiline_message() {
 
     // Act
     terminal
-        .draw(|f| {
-            let area = f.area();
-            Component::render(&overlay, f, area);
+        .draw(|frame| {
+            let area = frame.area();
+            Component::render(&overlay, frame, area);
         })
         .expect("failed to draw");
 

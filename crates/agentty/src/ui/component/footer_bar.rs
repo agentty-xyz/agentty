@@ -154,7 +154,7 @@ impl FooterBar {
 impl Component for FooterBar {
     /// Renders the footer background plus optional workspace path and git
     /// context.
-    fn render(&self, f: &mut Frame, area: Rect) {
+    fn render(&self, frame: &mut Frame, area: Rect) {
         if area.width == 0 {
             return;
         }
@@ -164,7 +164,7 @@ impl Component for FooterBar {
         if !self.workspace_context_visible {
             let footer = Paragraph::new(Line::from(" ".repeat(total_width)))
                 .style(Style::default().bg(style::palette::surface()));
-            f.render_widget(footer, area);
+            frame.render_widget(footer, area);
 
             return;
         }
@@ -207,7 +207,7 @@ impl Component for FooterBar {
         let footer =
             Paragraph::new(Line::from(spans)).style(Style::default().bg(style::palette::surface()));
 
-        f.render_widget(footer, area);
+        frame.render_widget(footer, area);
     }
 }
 

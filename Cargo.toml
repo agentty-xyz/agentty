@@ -121,6 +121,13 @@ exit = "warn"
 rc_mutex = "warn"
 rc_buffer = "warn"
 
+# Repository conventions enforced instead of documented
+allow_attributes = "warn"
+allow_attributes_without_reason = "warn"
+ignore_without_reason = "warn"
+min_ident_chars = "warn"
+mod_module_files = "warn"
+
 # Practical cleanup/perf
 redundant_clone = "warn"
 unused_async = "warn"

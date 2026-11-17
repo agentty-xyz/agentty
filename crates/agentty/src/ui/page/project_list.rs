@@ -80,7 +80,7 @@ impl<'a> ProjectListPage<'a> {
 impl Page for ProjectListPage<'_> {
     /// Renders the projects page with separate activity and work-pace dashboard
     /// panels, project rows, and compact tab-page spacing.
-    fn render(&mut self, f: &mut Frame, area: Rect) {
+    fn render(&mut self, frame: &mut Frame, area: Rect) {
         let content_chunks = Layout::vertical([
             Constraint::Length(PROJECT_DASHBOARD_PANEL_HEIGHT),
             Constraint::Min(0),
@@ -151,10 +151,10 @@ impl Page for ProjectListPage<'_> {
             )
             .row_highlight_style(selected_style);
 
-        f.render_stateful_widget(table, project_area, self.table_state);
-        f.render_widget(heatmap_panel, heatmap_area);
-        f.render_widget(details_panel, details_area);
-        f.render_widget(agent_cli_panel, agent_cli_area);
+        frame.render_stateful_widget(table, project_area, self.table_state);
+        frame.render_widget(heatmap_panel, heatmap_area);
+        frame.render_widget(details_panel, details_area);
+        frame.render_widget(agent_cli_panel, agent_cli_area);
     }
 }
 

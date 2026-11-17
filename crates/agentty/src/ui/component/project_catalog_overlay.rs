@@ -21,7 +21,7 @@ pub(crate) struct ProjectCatalogOverlay<'a> {
 
 impl ProjectCatalogOverlay<'_> {
     /// Paints the scope explanation, highlighted home path, and Yes/No choices.
-    fn render_suggestion(f: &mut Frame, area: Rect, root: &Path, selected: usize) {
+    fn render_suggestion(frame: &mut Frame, area: Rect, root: &Path, selected: usize) {
         let width = area.width.min(70);
         let content_width = overlay::overlay_content_width(width);
         let mut lines = wrap_lines(
@@ -77,32 +77,32 @@ impl ProjectCatalogOverlay<'_> {
             Constraint::Length(1),
         ])
         .areas(inner);
-        overlay::clear_popup_area(f, popup);
-        f.render_widget(block, popup);
-        f.render_widget(
+        overlay::clear_popup_area(frame, popup);
+        frame.render_widget(block, popup);
+        frame.render_widget(
             Paragraph::new(lines).wrap(Wrap { trim: true }),
             message_area,
         );
-        f.render_widget(
+        frame.render_widget(
             Paragraph::new(Line::from(labels)).alignment(Alignment::Center),
             choices_area,
         );
     }
 
     /// Paints a standard dialog frame and help, returning its content areas.
-    fn render_dialog_frame(f: &mut Frame, area: Rect, title: &str, help: &str) -> [Rect; 2] {
+    fn render_dialog_frame(frame: &mut Frame, area: Rect, title: &str, help: &str) -> [Rect; 2] {
         let popup = overlay::centered_popup_area(area, 80, 65, 50, 12);
         let block = overlay::overlay_block(title, palette::accent());
         let inner = block.inner(popup);
-        overlay::clear_popup_area(f, popup);
-        f.render_widget(block, popup);
+        overlay::clear_popup_area(frame, popup);
+        frame.render_widget(block, popup);
         let [content_area, details_area, help_area] = Layout::vertical([
             Constraint::Min(3),
             Constraint::Length(3),
             Constraint::Length(1),
         ])
         .areas(inner);
-        f.render_widget(
+        frame.render_widget(
             Paragraph::new(help).style(Style::default().fg(palette::text_muted())),
             help_area,
         );
@@ -113,7 +113,7 @@ impl ProjectCatalogOverlay<'_> {
     /// Paints result selection and any registration failure without saving
     /// rows.
     fn render_results(
-        f: &mut Frame,
+        frame: &mut Frame,
         list_area: Rect,
         message_area: Rect,
         paths: &[(PathBuf, bool)],
@@ -138,8 +138,8 @@ impl ProjectCatalogOverlay<'_> {
             )
             .highlight_symbol("> ");
         let mut state = ListState::default().with_selected(Some(selected));
-        f.render_stateful_widget(list, list_area, &mut state);
-        f.render_widget(
+        frame.render_stateful_widget(list, list_area, &mut state);
+        frame.render_widget(
             Paragraph::new(error.unwrap_or(
                 "Only selected repositories will be saved. Hidden/inaccessible folders may be \
                  skipped; limit: 5 levels / 200 repos.",
@@ -151,10 +151,10 @@ impl ProjectCatalogOverlay<'_> {
 }
 
 impl Component for ProjectCatalogOverlay<'_> {
-    fn render(&self, f: &mut Frame, area: Rect) {
+    fn render(&self, frame: &mut Frame, area: Rect) {
         match self.dialog {
             ProjectCatalogDialog::SuggestHome { root, selected } => {
-                Self::render_suggestion(f, area, root, *selected);
+                Self::render_suggestion(frame, area, root, *selected);
             }
             ProjectCatalogDialog::PathInput {
                 discover,
@@ -167,7 +167,7 @@ impl Component for ProjectCatalogOverlay<'_> {
                     "Add project"
                 };
                 let [message_area, input_area] =
-                    Self::render_dialog_frame(f, area, title, "Enter: submit | Esc: cancel");
+                    Self::render_dialog_frame(frame, area, title, "Enter: submit | Esc: cancel");
                 let message = error.as_deref().unwrap_or(if *discover {
                     "Scan only this folder and its subfolders. This may trigger folder-access \
                      prompts. Select results before saving."
@@ -175,20 +175,20 @@ impl Component for ProjectCatalogOverlay<'_> {
                     "Enter a Git repository root. Relative paths start from the current project; ~ \
                      means your home directory."
                 });
-                f.render_widget(
+                frame.render_widget(
                     Paragraph::new(message).wrap(Wrap { trim: true }),
                     message_area,
                 );
-                ChatInput::new("Path", input.text(), input.cursor).render(f, input_area);
+                ChatInput::new("Path", input.text(), input.cursor).render(frame, input_area);
             }
             ProjectCatalogDialog::Scanning { root } => {
                 let [message_area, _] = Self::render_dialog_frame(
-                    f,
+                    frame,
                     area,
                     "Discovering repositories",
                     "Esc: cancel scan",
                 );
-                f.render_widget(
+                frame.render_widget(
                     Paragraph::new(format!(
                         "Scanning {}\nUp to 5 levels and 200 repositories. Hidden and \
                          inaccessible folders may be skipped.",
@@ -204,13 +204,13 @@ impl Component for ProjectCatalogOverlay<'_> {
                 error,
             } => {
                 let [list_area, message_area] = Self::render_dialog_frame(
-                    f,
+                    frame,
                     area,
                     "Select repositories to add",
                     "j/k: navigate | Space: select | Enter: add selected | Esc: cancel",
                 );
                 Self::render_results(
-                    f,
+                    frame,
                     list_area,
                     message_area,
                     paths,
@@ -220,8 +220,8 @@ impl Component for ProjectCatalogOverlay<'_> {
             }
             ProjectCatalogDialog::Message { message } => {
                 let [message_area, _] =
-                    Self::render_dialog_frame(f, area, "Projects", "Enter/Esc: close");
-                f.render_widget(
+                    Self::render_dialog_frame(frame, area, "Projects", "Enter/Esc: close");
+                frame.render_widget(
                     Paragraph::new(message.as_str()).wrap(Wrap { trim: true }),
                     message_area,
                 );

@@ -191,8 +191,8 @@ impl NerpaGreeting {
     /// The wag changes glyphs, so the art animates whenever it fits a blank
     /// `area`, with or without colors. Callers use the result to skip
     /// frame-rate redraws while the art is hidden.
-    pub fn render_animated(&self, f: &mut Frame, area: Rect) -> bool {
-        self.paint(f.buffer_mut(), area)
+    pub fn render_animated(&self, frame: &mut Frame, area: Rect) -> bool {
+        self.paint(frame.buffer_mut(), area)
     }
 
     /// Paints the nerpa into `buffer` when it fits inside a blank `area`,
@@ -314,8 +314,8 @@ impl NerpaGreeting {
 }
 
 impl Component for NerpaGreeting {
-    fn render(&self, f: &mut Frame, area: Rect) {
-        self.render_animated(f, area);
+    fn render(&self, frame: &mut Frame, area: Rect) {
+        self.render_animated(frame, area);
     }
 }
 

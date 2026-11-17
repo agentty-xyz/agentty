@@ -279,7 +279,7 @@ impl Page for SessionListPage<'_> {
     /// The table has no frame because the active `Sessions` tab already names
     /// the page. The header bar and selected row span the full page width
     /// while column text keeps the page inset.
-    fn render(&mut self, f: &mut Frame, area: Rect) {
+    fn render(&mut self, frame: &mut Frame, area: Rect) {
         let table_area = layout::tab_page_area(area);
 
         let selected_style = style::row_selection_style();
@@ -355,8 +355,8 @@ impl Page for SessionListPage<'_> {
 
         let previous_selection = self.table_state.selected();
         prepare_grouped_table_state(self.table_state, selected_row);
-        f.render_stateful_widget(table, table_area, self.table_state);
-        extend_row_backgrounds_to_page_edges(f.buffer_mut(), area, table_area);
+        frame.render_stateful_widget(table, table_area, self.table_state);
+        extend_row_backgrounds_to_page_edges(frame.buffer_mut(), area, table_area);
         self.table_state.select(previous_selection);
     }
 }

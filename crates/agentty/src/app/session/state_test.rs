@@ -259,7 +259,7 @@ fn apply_session_diff_stats_updated_updates_matching_session() {
             added_lines: 12,
             deleted_lines: 4,
             has_diff: true,
-            session_size: SessionSize::S,
+            session_size: SessionSize::Small,
         },
     );
     state.apply_session_diff_stats_updated(&session_id, SessionDiffStats::Unknown);
@@ -269,7 +269,7 @@ fn apply_session_diff_stats_updated_updates_matching_session() {
             added_lines: 99,
             deleted_lines: 99,
             has_diff: true,
-            session_size: SessionSize::L,
+            session_size: SessionSize::Large,
         },
     );
 
@@ -281,7 +281,7 @@ fn apply_session_diff_stats_updated_updates_matching_session() {
         state.sessions[0].stats.diff_state,
         SessionDiffState::Unknown
     );
-    assert_eq!(state.sessions[0].size, SessionSize::S);
+    assert_eq!(state.sessions[0].size, SessionSize::Small);
 }
 
 #[test]

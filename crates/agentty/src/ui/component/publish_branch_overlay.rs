@@ -79,7 +79,7 @@ impl<'a> PublishBranchOverlay<'a> {
 
     /// Renders a non-editable branch field when the session already tracks one
     /// remote branch.
-    fn render_locked_branch_field(&self, f: &mut Frame, area: Rect) {
+    fn render_locked_branch_field(&self, frame: &mut Frame, area: Rect) {
         let title = format!(" {INPUT_TITLE} ");
         let block = Block::default()
             .borders(Borders::ALL)
@@ -99,13 +99,13 @@ impl<'a> PublishBranchOverlay<'a> {
             .style(Self::locked_branch_text_style())
             .block(block);
 
-        overlay::clear_popup_area(f, area);
-        f.render_widget(paragraph, area);
+        overlay::clear_popup_area(frame, area);
+        frame.render_widget(paragraph, area);
     }
 }
 
 impl Component for PublishBranchOverlay<'_> {
-    fn render(&self, f: &mut Frame, area: Rect) {
+    fn render(&self, frame: &mut Frame, area: Rect) {
         let popup_area = OVERLAY_DIMENSIONS.centered_popup_area(area);
         let block = overlay::overlay_block(REVIEW_REQUEST_TITLE, palette::accent());
         let inner_area = block.inner(popup_area);
@@ -128,11 +128,11 @@ impl Component for PublishBranchOverlay<'_> {
             .alignment(Alignment::Center),
         );
 
-        overlay::clear_popup_area(f, popup_area);
-        f.render_widget(block, popup_area);
-        f.render_widget(message, sections[0]);
+        overlay::clear_popup_area(frame, popup_area);
+        frame.render_widget(block, popup_area);
+        frame.render_widget(message, sections[0]);
         if self.locked_upstream_ref.is_some() {
-            self.render_locked_branch_field(f, sections[1]);
+            self.render_locked_branch_field(frame, sections[1]);
         } else {
             let placeholder = self.placeholder();
             let input = ChatInput::new(INPUT_TITLE, self.input.text(), self.input.cursor)
@@ -143,9 +143,9 @@ impl Component for PublishBranchOverlay<'_> {
                         .bg(palette::surface_overlay()),
                 );
 
-            input.render(f, sections[1]);
+            input.render(frame, sections[1]);
         }
-        f.render_widget(help, sections[2]);
+        frame.render_widget(help, sections[2]);
     }
 }
 

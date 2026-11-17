@@ -146,7 +146,7 @@ impl StatusBar {
     /// narrow.
     fn render_project_name(
         &self,
-        f: &mut Frame,
+        frame: &mut Frame,
         area: Rect,
         left_width: usize,
         right_width: usize,
@@ -178,7 +178,7 @@ impl StatusBar {
                 .add_modifier(Modifier::BOLD),
         );
 
-        f.render_widget(
+        frame.render_widget(
             Paragraph::new(Line::from(label)).style(Style::default().bg(style::palette::surface())),
             column_slice(area, label_offset, label_width),
         );
@@ -186,7 +186,7 @@ impl StatusBar {
 }
 
 impl Component for StatusBar {
-    fn render(&self, f: &mut Frame, area: Rect) {
+    fn render(&self, frame: &mut Frame, area: Rect) {
         let mut version_spans = vec![Span::styled(
             format!(" Agentty {}", self.current_version),
             Style::default()
@@ -228,8 +228,8 @@ impl Component for StatusBar {
         let status_width = status_line.width();
         let required_width = status_width.saturating_add(help_hint.width());
         if required_width > usize::from(area.width) {
-            f.render_widget(Paragraph::new(status_line).style(bar_style), area);
-            self.render_project_name(f, area, status_width, 0);
+            frame.render_widget(Paragraph::new(status_line).style(bar_style), area);
+            self.render_project_name(frame, area, status_width, 0);
 
             return;
         }
@@ -241,9 +241,9 @@ impl Component for StatusBar {
         ])
         .areas(area);
 
-        f.render_widget(Paragraph::new(status_line).style(bar_style), status_area);
-        f.render_widget(Paragraph::new(help_hint).style(bar_style), help_hint_area);
-        self.render_project_name(f, area, status_width, help_hint_width);
+        frame.render_widget(Paragraph::new(status_line).style(bar_style), status_area);
+        frame.render_widget(Paragraph::new(help_hint).style(bar_style), help_hint_area);
+        self.render_project_name(frame, area, status_width, help_hint_width);
     }
 }
 

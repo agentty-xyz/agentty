@@ -1469,7 +1469,7 @@ impl<'a> DiffPage<'a> {
     /// aggregate change totals prefixed in the title.
     fn render_diff_content(
         &self,
-        f: &mut Frame,
+        frame: &mut Frame,
         area: Rect,
         content: &DiffContentSnapshot,
         total_added_lines: u64,
@@ -1542,14 +1542,14 @@ impl<'a> DiffPage<'a> {
                 .border_style(self.content_border_style()),
         );
 
-        f.render_widget(paragraph, area);
+        frame.render_widget(paragraph, area);
 
         if layout.show_scrollbar {
             let scrollbar_area =
                 diff_util::diff_scrollbar_area(area, layout.render_layout.viewport_height);
 
             VerticalScrollbar::new(usize::from(scroll_offset), layout.line_count)
-                .render(f, scrollbar_area);
+                .render(frame, scrollbar_area);
         }
     }
 
@@ -2024,7 +2024,7 @@ impl DiffPage<'_> {
     }
 
     /// Paints repository suggestions adjacent to the active comment input.
-    fn render_comment_lookup(&self, f: &mut Frame, diff_area: Rect) {
+    fn render_comment_lookup(&self, frame: &mut Frame, diff_area: Rect) {
         let Some(state) = &self.line_comments.at_mention_state else {
             return;
         };
@@ -2076,7 +2076,7 @@ impl DiffPage<'_> {
             && let Some(area) =
                 lookup_area(input_layout::suggestion_dropdown_height(menu.items.len()))
         {
-            ChatInput::render_suggestion_dropdown(f, area, &menu);
+            ChatInput::render_suggestion_dropdown(frame, area, &menu);
             "Up/Down: navigate  Tab/Enter: select  Esc: dismiss lookup"
         } else {
             "Esc: dismiss lookup"
@@ -2089,7 +2089,7 @@ impl DiffPage<'_> {
             diff_area.width.saturating_sub(2),
             diff_area.height.min(1),
         );
-        f.render_widget(
+        frame.render_widget(
             Paragraph::new(
                 Line::styled(
                     format!(" {help} "),
@@ -2103,14 +2103,14 @@ impl DiffPage<'_> {
 }
 
 impl Page for DiffPage<'_> {
-    fn render(&mut self, f: &mut Frame, area: Rect) {
+    fn render(&mut self, frame: &mut Frame, area: Rect) {
         let content = self.diff_layout_cache.content(self.diff);
         let areas = diff_util::diff_page_areas(area, content.file_list_width);
         let sidebar_areas =
             diff_util::diff_sidebar_areas(areas.file_list_area, self.review_comments.is_some());
 
         self.file_explorer(&content)
-            .render(f, sidebar_areas.file_list_area);
+            .render(frame, sidebar_areas.file_list_area);
 
         let review_comment_page = self.review_comments.map(|review_comments| {
             let rows = review_comments
@@ -2133,7 +2133,7 @@ impl Page for DiffPage<'_> {
                     session: self.session,
                 });
             page.render_comment_list(
-                f,
+                frame,
                 sidebar_areas.comment_list_area,
                 &rows,
                 self.sidebar_focus == DiffSidebarFocus::Comments,
@@ -2145,14 +2145,14 @@ impl Page for DiffPage<'_> {
         if let Some((review_comment_page, rows)) = review_comment_page
             && self.sidebar_focus == DiffSidebarFocus::Comments
         {
-            review_comment_page.render_comment_detail(f, areas.diff_area, &rows);
+            review_comment_page.render_comment_detail(frame, areas.diff_area, &rows);
         } else if let Some(path) =
             preview_path_for_selection(self.preview, &content, self.file_explorer_selected_index)
         {
-            self.render_preview_content(f, areas.diff_area, path);
+            self.render_preview_content(frame, areas.diff_area, path);
         } else {
             self.render_diff_content(
-                f,
+                frame,
                 areas.diff_area,
                 &content,
                 self.session.stats.added_lines,
@@ -2160,7 +2160,7 @@ impl Page for DiffPage<'_> {
             );
         }
 
-        self.render_comment_lookup(f, areas.diff_area);
+        self.render_comment_lookup(frame, areas.diff_area);
     }
 }
 

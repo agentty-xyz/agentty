@@ -233,10 +233,10 @@ impl<'a> SessionChatPage<'a> {
 
     /// Renders the session header, output panel, and context-aware bottom
     /// panel.
-    fn render_session(&self, f: &mut Frame, area: Rect, session: &Session) {
+    fn render_session(&self, frame: &mut Frame, area: Rect, session: &Session) {
         let (area, graph_area) = graph_chat::areas(area, self.mode, self.graph_chat.is_some());
         if let Some(graph_area) = graph_area {
-            graph_chat::render(f, graph_area, self.graph_chat);
+            graph_chat::render(frame, graph_area, self.graph_chat);
         }
         let layout_plan = SessionChatLayoutPlan::new(SessionChatLayoutInput {
             area,
@@ -260,14 +260,14 @@ impl<'a> SessionChatPage<'a> {
         if let Some(active_progress) = self.active_progress {
             output = output.active_progress(active_progress);
         }
-        output.render(f, layout_plan.areas.output_area);
+        output.render(frame, layout_plan.areas.output_area);
         if session.awaits_first_message() {
             let transcript_area = Block::default()
                 .borders(session_format::session_output_panel_borders())
                 .inner(layout_plan.areas.output_area);
             let greeting_animated = NerpaGreeting::new(self.frame_time.unix_millis())
                 .color_support(self.color_support)
-                .render_animated(f, transcript_area);
+                .render_animated(frame, transcript_area);
             self.greeting_animated.set(greeting_animated);
         }
         let timing_padding = if matches!(session.status, Status::Done | Status::Canceled) {
@@ -284,15 +284,23 @@ impl<'a> SessionChatPage<'a> {
                 .width
                 .saturating_sub(timing_padding),
         );
-        self.render_bottom_panel(f, session, &layout_plan, &timing_label);
-        Self::render_session_header(f, layout_plan.areas.header_area, layout_plan.header_lines);
+        self.render_bottom_panel(frame, session, &layout_plan, &timing_label);
+        Self::render_session_header(
+            frame,
+            layout_plan.areas.header_area,
+            layout_plan.header_lines,
+        );
     }
 
     /// Renders the header above the output panel border.
-    fn render_session_header(f: &mut Frame, header_area: Rect, header_lines: Vec<Line<'static>>) {
+    fn render_session_header(
+        frame: &mut Frame,
+        header_area: Rect,
+        header_lines: Vec<Line<'static>>,
+    ) {
         let header = Paragraph::new(header_lines);
 
-        f.render_widget(header, header_area);
+        frame.render_widget(header, header_area);
     }
 
     /// Renders the composer, the active prompt composer and its footer, or the
@@ -302,7 +310,7 @@ impl<'a> SessionChatPage<'a> {
     /// the active-work timer when the session age does not fit alongside it.
     fn render_bottom_panel(
         &self,
-        f: &mut Frame,
+        frame: &mut Frame,
         session: &Session,
         layout_plan: &SessionChatLayoutPlan,
         timing_label: &str,
@@ -310,7 +318,7 @@ impl<'a> SessionChatPage<'a> {
         let bottom_area = layout_plan.areas.bottom_area;
 
         if matches!(session.status, Status::Done | Status::Canceled) {
-            f.render_widget(
+            frame.render_widget(
                 Paragraph::new(
                     Line::styled(
                         timing_label,
@@ -329,7 +337,13 @@ impl<'a> SessionChatPage<'a> {
         if let AppMode::Prompt { input, .. } = self.mode
             && let Some(prepared_prompt_panel) = layout_plan.prompt_panel.as_ref()
         {
-            self.render_prompt_composer(f, bottom_area, prepared_prompt_panel, input, timing_label);
+            self.render_prompt_composer(
+                frame,
+                bottom_area,
+                prepared_prompt_panel,
+                input,
+                timing_label,
+            );
 
             return;
         }
@@ -346,7 +360,7 @@ impl<'a> SessionChatPage<'a> {
         } = self.mode
         {
             render_question_panel(
-                f,
+                frame,
                 bottom_area,
                 layout_plan.question_panel_areas,
                 &QuestionPanelState {
@@ -372,7 +386,7 @@ impl<'a> SessionChatPage<'a> {
             .status(&status)
             .footer(timing_label)
             .active(false)
-            .render(f, bottom_area);
+            .render(frame, bottom_area);
     }
 
     /// Renders the active composer, its suggestion dropdown, and its footer.
@@ -381,7 +395,7 @@ impl<'a> SessionChatPage<'a> {
     /// armed `/graph` variants.
     fn render_prompt_composer(
         &self,
-        f: &mut Frame,
+        frame: &mut Frame,
         bottom_area: Rect,
         prepared_prompt_panel: &PreparedPromptPanel,
         input: &input::InputState,
@@ -399,21 +413,21 @@ impl<'a> SessionChatPage<'a> {
         }
 
         if bottom_area.height <= 1 {
-            chat_input.render(f, bottom_area);
+            chat_input.render(frame, bottom_area);
 
             return;
         }
 
         let panel_areas = layout::prompt_panel_areas(bottom_area);
 
-        chat_input.render(f, panel_areas.input_area);
-        f.render_widget(
+        chat_input.render(frame, panel_areas.input_area);
+        frame.render_widget(
             Paragraph::new(prepared_prompt_panel.footer_text.clone()),
             panel_areas.footer_area,
         );
         if prepared_prompt_panel.is_pasting_image {
             TachyonLoaderEffect::apply_to_last_glyph(
-                f.buffer_mut(),
+                frame.buffer_mut(),
                 panel_areas.footer_area,
                 Icon::spinner_frame_from_millis(self.frame_time.unix_millis()),
             );
@@ -637,7 +651,7 @@ struct QuestionPanelState<'a> {
 /// Renders the question-mode bottom panel with question text, options, input,
 /// and help footer.
 fn render_question_panel(
-    f: &mut Frame,
+    frame: &mut Frame,
     bottom_area: Rect,
     panel_areas: Option<layout::QuestionPanelAreas>,
     state: &QuestionPanelState<'_>,
@@ -671,11 +685,11 @@ fn render_question_panel(
             is_chat_focused,
             bottom_area.width,
         ));
-        f.render_widget(question_para, panel_areas.question_area);
+        frame.render_widget(question_para, panel_areas.question_area);
     }
 
     if panel_areas.options_area.height > 0 {
-        f.render_widget(
+        frame.render_widget(
             Paragraph::new(question_format::question_option_lines(
                 options,
                 selected_option_index,
@@ -716,7 +730,7 @@ fn render_question_panel(
         .footer(timing_label)
         .active(is_free_text_mode && !is_chat_focused);
     if panel_areas.input_area.height > 0 {
-        chat_input.render(f, panel_areas.input_area);
+        chat_input.render(frame, panel_areas.input_area);
     }
 
     let is_at_mention_open =
@@ -730,9 +744,9 @@ fn render_question_panel(
     } else {
         question_format::QuestionLookupState::Empty
     };
-    render_question_at_mention_overlay(f, bottom_area, panel_areas.input_area, at_mention_menu);
+    render_question_at_mention_overlay(frame, bottom_area, panel_areas.input_area, at_mention_menu);
     render_question_help_footer(
-        f,
+        frame,
         panel_areas.help_area,
         &QuestionFooterState {
             focus,
@@ -766,7 +780,7 @@ struct QuestionFooterState {
 /// and navigation when the prepared suggestion list contains matches. A
 /// leading loader advertises a clipboard image capture that is still running
 /// and animates at `spinner_frame`, like the prompt footer loader.
-fn render_question_help_footer(f: &mut Frame, area: Rect, footer_state: &QuestionFooterState) {
+fn render_question_help_footer(frame: &mut Frame, area: Rect, footer_state: &QuestionFooterState) {
     if area.height == 0 {
         return;
     }
@@ -781,9 +795,13 @@ fn render_question_help_footer(f: &mut Frame, area: Rect, footer_state: &Questio
         prompt_format::prepend_pasting_image_indicator(&mut footer_line);
     }
     let help_para = Paragraph::new(footer_line).alignment(ratatui::layout::Alignment::Left);
-    f.render_widget(help_para, area);
+    frame.render_widget(help_para, area);
     if footer_state.is_pasting_image {
-        TachyonLoaderEffect::apply_to_last_glyph(f.buffer_mut(), area, footer_state.spinner_frame);
+        TachyonLoaderEffect::apply_to_last_glyph(
+            frame.buffer_mut(),
+            area,
+            footer_state.spinner_frame,
+        );
     }
 }
 
@@ -792,7 +810,7 @@ fn render_question_help_footer(f: &mut Frame, area: Rect, footer_state: &Questio
 /// The dropdown covers the options section so the file list is fully visible
 /// without pushing the input line out of view.
 fn render_question_at_mention_overlay(
-    f: &mut Frame,
+    frame: &mut Frame,
     bottom_area: Rect,
     input_area: Rect,
     at_mention_menu: Option<SuggestionList>,
@@ -806,14 +824,14 @@ fn render_question_at_mention_overlay(
             suggestion_dropdown_height(menu.items.len()),
         )
     {
-        ChatInput::render_suggestion_dropdown(f, dropdown_area, &menu);
+        ChatInput::render_suggestion_dropdown(frame, dropdown_area, &menu);
     }
 }
 
 impl Page for SessionChatPage<'_> {
-    fn render(&mut self, f: &mut Frame, area: Rect) {
+    fn render(&mut self, frame: &mut Frame, area: Rect) {
         if let Some(session) = self.sessions.get(self.session_index) {
-            self.render_session(f, area, session);
+            self.render_session(frame, area, session);
         }
     }
 }

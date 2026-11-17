@@ -912,7 +912,7 @@ impl Component for SessionOutput<'_> {
     ///
     /// Session status/title headers are rendered by the page layer so this
     /// component keeps the output border title-free.
-    fn render(&self, f: &mut Frame, output_area: Rect) {
+    fn render(&self, frame: &mut Frame, output_area: Rect) {
         let status = self.session.status;
         let spinner_frame = self.spinner_frame;
         let viewport_height = Self::session_output_inner_area(output_area).height;
@@ -949,13 +949,13 @@ impl Component for SessionOutput<'_> {
             .borders(session_format::session_output_panel_borders())
             .border_style(session_format::session_output_panel_border_style(status));
         let inner_area = block.inner(output_area);
-        f.render_widget(block, output_area);
+        frame.render_widget(block, output_area);
         for (line, row) in layout
             .lines
             .visible_lines(final_scroll, usize::from(inner_area.height))
             .zip(inner_area.rows())
         {
-            text_util::paint_line(line, row, f.buffer_mut());
+            text_util::paint_line(line, row, frame.buffer_mut());
         }
 
         if resolved_layout.show_scrollbar {
@@ -968,20 +968,20 @@ impl Component for SessionOutput<'_> {
                 viewport_height,
             );
 
-            VerticalScrollbar::new(final_scroll, layout.lines.len()).render(f, scrollbar_area);
+            VerticalScrollbar::new(final_scroll, layout.lines.len()).render(frame, scrollbar_area);
         }
 
         if let Some(loader_area) = active_loader_area {
-            self.apply_tachyon_loader_effect(f.buffer_mut(), loader_area, spinner_frame);
+            self.apply_tachyon_loader_effect(frame.buffer_mut(), loader_area, spinner_frame);
         }
         if let Some(loader_area) = transient_loader_area {
-            TachyonLoaderEffect::apply_stateless(f.buffer_mut(), loader_area, spinner_frame);
+            TachyonLoaderEffect::apply_stateless(frame.buffer_mut(), loader_area, spinner_frame);
         }
         for line_index in layout.queued_line_indices.iter() {
             if let Some(area) =
                 Self::indicator_area(output_area, *line_index, final_scroll, QUEUED_ACTION_WIDTH)
             {
-                QueuePulseEffect::apply_stateless(f.buffer_mut(), area, spinner_frame);
+                QueuePulseEffect::apply_stateless(frame.buffer_mut(), area, spinner_frame);
             }
         }
     }

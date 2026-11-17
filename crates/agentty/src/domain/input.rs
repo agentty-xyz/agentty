@@ -302,7 +302,7 @@ impl InputState {
             .text
             .chars()
             .skip(prev_line_start)
-            .take_while(|&c| c != '\n')
+            .take_while(|&character| character != '\n')
             .count();
         self.cursor = prev_line_start + column.min(prev_line_len);
     }
@@ -310,7 +310,12 @@ impl InputState {
     /// Moves the cursor to the next line while preserving visual column.
     pub fn move_down(&mut self) {
         let (line, column) = self.line_column();
-        let line_count = self.text.chars().filter(|&c| c == '\n').count() + 1;
+        let line_count = self
+            .text
+            .chars()
+            .filter(|&character| character == '\n')
+            .count()
+            + 1;
 
         if line >= line_count - 1 {
             self.cursor = self.text.chars().count();
@@ -336,7 +341,7 @@ impl InputState {
             .text
             .chars()
             .skip(next_line_start)
-            .take_while(|&c| c != '\n')
+            .take_while(|&character| character != '\n')
             .count();
         self.cursor = next_line_start + column.min(next_line_len);
     }

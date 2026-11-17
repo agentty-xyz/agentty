@@ -321,7 +321,7 @@ fn test_session_size_from_line_counts_sums_added_and_deleted_lines() {
     let session_size = SessionSize::from_line_counts(added_lines, deleted_lines);
 
     // Assert
-    assert_eq!(session_size, SessionSize::S);
+    assert_eq!(session_size, SessionSize::Small);
 }
 
 #[test]
@@ -379,9 +379,9 @@ fn test_session_size_buckets_labels_and_parsing_cover_every_size() {
     // Arrange
     let bucket_cases = [
         (10, SessionSize::Xs),
-        (30, SessionSize::S),
-        (80, SessionSize::M),
-        (200, SessionSize::L),
+        (30, SessionSize::Small),
+        (80, SessionSize::Medium),
+        (200, SessionSize::Large),
         (500, SessionSize::Xl),
         (501, SessionSize::Xxl),
     ];
