@@ -594,6 +594,9 @@ async fn startup_runs_application_through_telemetry_wrapper() {
         };
         assert_eq!(exported_events(&requests), expected_events);
         installation_ids.extend(exported_user_ids(&requests));
+        if response_status == Some(200) {
+            assert_startup_trace(&exported_spans(&requests));
+        }
     }
     let installation_id = installation_ids
         .pop_first()
@@ -601,6 +604,51 @@ async fn startup_runs_application_through_telemetry_wrapper() {
         .expect("exported installation ID");
     assert!(installation_ids.is_empty(), "every batch shares one ID");
     assert!(Uuid::parse_str(&installation_id).is_ok());
+}
+
+/// Exported span names with their span and parent span identifiers and
+/// attribute keys.
+type ExportedSpan = (String, Vec<u8>, Vec<u8>, Vec<String>);
+
+/// Returns every span exported to the traces path.
+fn exported_spans(requests: &[Request]) -> Vec<ExportedSpan> {
+    requests
+        .iter()
+        .filter(|request| request.url.path() == "/v1/traces")
+        .flat_map(|request| {
+            ExportTraceServiceRequest::decode(request.body.as_slice())
+                .expect("OTLP traces")
+                .resource_spans
+        })
+        .flat_map(|resource| resource.scope_spans)
+        .flat_map(|scope| scope.spans)
+        .map(|span| {
+            let keys = span
+                .attributes
+                .into_iter()
+                .map(|attribute| attribute.key)
+                .collect();
+
+            (span.name, span.span_id, span.parent_span_id, keys)
+        })
+        .collect()
+}
+
+/// Asserts startup exported one root `app.startup` trace that records the
+/// database open time and whose phases nest beneath it.
+fn assert_startup_trace(spans: &[ExportedSpan]) {
+    let find = |name: &str| {
+        spans
+            .iter()
+            .find(|(span_name, _, _, _)| span_name == name)
+            .expect("exported startup span")
+    };
+    let (_, startup_id, startup_parent, startup_keys) = find("app.startup");
+    assert!(startup_parent.is_empty(), "startup is a root");
+    assert!(startup_keys.iter().any(|key| key == "agentty.db.open_ms"));
+    for phase in ["project.load", "sessions.load"] {
+        assert_eq!(&find(phase).2, startup_id, "`{phase}` parent");
+    }
 }
 
 /// Returns the string `user.id` resource attribute of every exported trace

@@ -1,14 +1,15 @@
 //! Agentty command-line entry point and terminal runtime bootstrap.
 
+use std::fs::File;
 use std::future::Future;
 use std::io::{self, Write};
 use std::path::PathBuf;
 use std::process::ExitCode;
-use std::time::Duration;
+use std::time::{Duration, Instant, SystemTime};
 
 use ag_git::{GitClient, RealGitClient};
 use ag_telemetry::otlp::{OtlpError, OtlpExport, Service};
-use ag_telemetry::{CaptureToolContent, Context, FutureExt as _};
+use ag_telemetry::{CaptureToolContent, Context, FutureExt as _, KeyValue, Outcome, Span};
 use agentty::analytics::Analytics;
 #[cfg(not(debug_assertions))]
 use agentty::analytics::TELEMETRY_ENABLED_ENV;
@@ -135,33 +136,25 @@ async fn run_with_analytics(
 /// Opens the Agentty root, then starts OTLP export after the database so its
 /// resource carries the stored installation ID, and flushes it after the
 /// runtime ends.
+///
+/// One independent `app.startup` trace covers startup through application
+/// assembly, failing when assembly fails; the runtime runs outside it. Export
+/// only starts after the database opens, so the root is backdated to the
+/// launch and records the database open time as `agentty.db.open_ms`;
+/// failures before export starts are not traced.
 async fn run_application(
     cli: Cli,
     runtime: impl for<'a> AsyncFnOnce(&'a mut App) -> Result<(), AppError>,
 ) -> Result<(), AppError> {
-    let home = agentty_home();
-    let _instance_lock = acquire_instance_lock(&home).await.map_err(|error| {
-        let message = if error.kind() == io::ErrorKind::WouldBlock {
-            "Another Agentty instance is already using this Agentty root. Close it before starting \
-             another instance."
-                .to_string()
-        } else {
-            format!("Failed to acquire the Agentty instance lock: {error}")
-        };
-
-        AppError::Workflow(message)
-    })?;
-    let base_path = home.join(AGENTTY_WT_DIR);
-    let working_dir = std::env::current_dir().unwrap_or_else(|_| PathBuf::from("/"));
-    let git_client = RealGitClient;
-    let working_dir = git_client
-        .find_git_repo_root(working_dir.clone())
-        .await
-        .unwrap_or(working_dir);
-    let git_branch = git_client.detect_git_info(working_dir.clone()).await;
-
-    let db_path = home.join(DB_DIR).join(DB_FILE);
-    let db = Database::open_with_timestamp_source(&db_path, environment_timestamp_source()).await?;
+    let launch_started = SystemTime::now();
+    let Launch {
+        base_path,
+        db,
+        db_open,
+        git_branch,
+        instance_lock: _instance_lock,
+        working_dir,
+    } = Launch::open().await?;
     // Debug builds, including tests, never report to the public project.
     #[cfg(debug_assertions)]
     let reports_to_posthog = false;
@@ -190,11 +183,20 @@ async fn run_application(
     if let Some(telemetry) = &telemetry {
         telemetry.install();
     }
+    let startup = Span::root_at(
+        "app.startup",
+        vec![KeyValue::new(
+            "agentty.db.open_ms",
+            i64::try_from(db_open.as_millis()).unwrap_or(i64::MAX),
+        )],
+        launch_started,
+    );
+    let trace = startup.context();
     let analytics = Analytics::mirror(posthog, telemetry.as_ref().and_then(OtlpExport::event_log));
 
     let result = run_with_analytics(
         Box::pin(async {
-            let mut app = App::new(
+            let app = App::new(
                 !cli.no_update,
                 cli.experimental.harness,
                 cli.experimental.graph,
@@ -203,7 +205,10 @@ async fn run_application(
                 git_branch,
                 db,
             )
-            .await?;
+            .with_context(trace)
+            .await;
+            startup.finish(app.as_ref().map_or(Outcome::Failed, |_| Outcome::Completed));
+            let mut app = app?;
             app.set_analytics(analytics.clone());
 
             runtime(&mut app).await
@@ -223,6 +228,64 @@ async fn run_application(
     }
 
     result
+}
+
+/// Startup state acquired before the application is assembled.
+struct Launch {
+    base_path: PathBuf,
+    db: Database,
+    /// Time spent opening and migrating the database.
+    db_open: Duration,
+    git_branch: Option<String>,
+    /// Held until the application stops; see [`acquire_instance_lock`].
+    instance_lock: File,
+    working_dir: PathBuf,
+}
+
+impl Launch {
+    /// Acquires the instance lock, resolves the launch repository, and opens
+    /// the migrated database, timing the database open.
+    ///
+    /// # Errors
+    /// Returns an error when another instance owns the Agentty root, or the
+    /// lock or database cannot be opened.
+    async fn open() -> Result<Self, AppError> {
+        let home = agentty_home();
+        let instance_lock = acquire_instance_lock(&home).await.map_err(|error| {
+            let message = if error.kind() == io::ErrorKind::WouldBlock {
+                "Another Agentty instance is already using this Agentty root. Close it before \
+                 starting another instance."
+                    .to_string()
+            } else {
+                format!("Failed to acquire the Agentty instance lock: {error}")
+            };
+
+            AppError::Workflow(message)
+        })?;
+        let base_path = home.join(AGENTTY_WT_DIR);
+        let working_dir = std::env::current_dir().unwrap_or_else(|_| PathBuf::from("/"));
+        let git_client = RealGitClient;
+        let working_dir = git_client
+            .find_git_repo_root(working_dir.clone())
+            .await
+            .unwrap_or(working_dir);
+        let git_branch = git_client.detect_git_info(working_dir.clone()).await;
+
+        let db_path = home.join(DB_DIR).join(DB_FILE);
+        let db_open_started = Instant::now();
+        let db =
+            Database::open_with_timestamp_source(&db_path, environment_timestamp_source()).await?;
+        let db_open = db_open_started.elapsed();
+
+        Ok(Self {
+            base_path,
+            db,
+            db_open,
+            git_branch,
+            instance_lock,
+            working_dir,
+        })
+    }
 }
 
 #[cfg(test)]

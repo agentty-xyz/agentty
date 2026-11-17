@@ -198,6 +198,50 @@ async fn spans_preserve_context_results_and_terminal_outcomes() {
 }
 
 #[tokio::test]
+async fn measured_roots_start_at_the_observed_time_and_link_the_initiator() {
+    // Arrange
+    let _provider_guard = PROVIDER_LOCK.lock().await;
+    let exporter = InMemorySpanExporter::default();
+    global::set_tracer_provider(
+        SdkTracerProvider::builder()
+            .with_simple_exporter(exporter.clone())
+            .build(),
+    );
+    let initiator = Span::root("initiator", Vec::new());
+    let initiator_context = initiator.context();
+
+    // Act
+    async {
+        Span::root_at(
+            "measured",
+            vec![KeyValue::new("agentty.measured", true)],
+            SystemTime::UNIX_EPOCH,
+        )
+        .finish(Outcome::Completed);
+    }
+    .with_context(initiator_context.clone())
+    .await;
+    initiator.finish(Outcome::Completed);
+
+    // Assert
+    let spans = exporter.get_finished_spans().expect("spans");
+    let measured = spans
+        .iter()
+        .find(|span| span.name == "measured")
+        .expect("measured span");
+    let initiator = initiator_context.span().span_context().clone();
+    assert_eq!(measured.start_time, SystemTime::UNIX_EPOCH);
+    assert_eq!(measured.parent_span_id, SpanId::INVALID);
+    assert_ne!(measured.span_context.trace_id(), initiator.trace_id());
+    assert_eq!(measured.links.links[0].span_context, initiator);
+    assert!(
+        measured
+            .attributes
+            .contains(&KeyValue::new("agentty.measured", true))
+    );
+}
+
+#[tokio::test]
 async fn live_unsampled_parents_preserve_sampling_and_finished_owned_parents_detach() {
     // Arrange
     let _provider_guard = PROVIDER_LOCK.lock().await;

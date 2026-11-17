@@ -6,6 +6,7 @@
 mod core;
 mod event;
 mod key_handler;
+mod latency;
 pub mod mode;
 mod presentation;
 mod terminal;

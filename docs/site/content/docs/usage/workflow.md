@@ -690,6 +690,11 @@ no command arguments, tool output, or project paths. Tool spans repeat the run's
 `agentty.harness`, `agentty.session.id`, `agentty.purpose`, `agentty.run.id`, and
 `gen_ai.request.model` attributes for grouping.
 
+Separate traces cover startup (`app.startup`), each background remote-status pass
+(`sync.refresh`), manual project sync (`project.sync_main`), and foreground cycles that
+take at least 50 ms between waking and drawing (`ui.slow_cycle`), with per-phase
+durations to help diagnose unresponsive frames.
+
 Add `--otlp-capture-content` to also export tool commands, arguments, and results as
 previews of at most 4 KiB per attribute, keeping their beginning and end. Oversized
 structured values use `agentty.tool.input.preview` and `agentty.tool.output.preview`
