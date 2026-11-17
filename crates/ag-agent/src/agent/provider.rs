@@ -7,6 +7,7 @@ use ag_protocol::{
     format_protocol_parse_debug_details, parse_protocol_response_strict,
 };
 use ag_session::AgentKind;
+use serde_json::Value;
 
 use super::backend::{
     AgentBackend, AgentBackendError, AgentPromptTransport, AgentTransport, AppServerThoughtPolicy,
@@ -39,15 +40,14 @@ pub(crate) fn parse_response(kind: AgentKind, stdout: &str, stderr: &str) -> Par
     (provider_descriptor(kind).parse_response)(stdout, stderr)
 }
 
-/// Parses one stream line into incremental text and content classification.
+/// Classifies one parsed stream-line payload into incremental text and
+/// content classification.
 ///
 /// Returns `(text, is_response_content)` where `is_response_content` is `true`
-/// for model-authored content and `false` for progress updates.
-pub(crate) fn parse_stream_output_line(
-    kind: AgentKind,
-    stdout_line: &str,
-) -> Option<(String, bool)> {
-    (provider_descriptor(kind).parse_stream_output_line)(stdout_line)
+/// for model-authored content and `false` for progress updates. Lines that
+/// are not JSON carry no stream text for any provider.
+pub(crate) fn parse_stream_payload(kind: AgentKind, payload: &Value) -> Option<(String, bool)> {
+    (provider_descriptor(kind).parse_stream_payload)(payload)
 }
 
 /// Returns transport mode for the selected provider.
@@ -135,7 +135,7 @@ struct AgentProviderDescriptor {
     app_server_thought_policy: AppServerThoughtPolicy,
     backend_factory: fn() -> Box<dyn AgentBackend>,
     parse_response: fn(&str, &str) -> ParsedResponse,
-    parse_stream_output_line: fn(&str) -> Option<(String, bool)>,
+    parse_stream_payload: fn(&Value) -> Option<(String, bool)>,
     prompt_transport: AgentPromptTransport,
     protocol_schema_instruction_mode: ProtocolSchemaInstructionMode,
     transport: AgentTransport,
@@ -153,7 +153,7 @@ fn provider_descriptor(kind: AgentKind) -> AgentProviderDescriptor {
             app_server_thought_policy: AppServerThoughtPolicy::None,
             backend_factory: || Box::new(super::antigravity::AntigravityBackend::new()),
             parse_response: super::response_parser::parse_antigravity_response_with_fallback,
-            parse_stream_output_line: super::response_parser::parse_antigravity_stream_output_line,
+            parse_stream_payload: super::response_parser::parse_antigravity_stream_payload,
             prompt_transport: AgentPromptTransport::Argv,
             protocol_schema_instruction_mode: ProtocolSchemaInstructionMode::TransportSchema,
             transport: AgentTransport::AppServer,
@@ -163,7 +163,7 @@ fn provider_descriptor(kind: AgentKind) -> AgentProviderDescriptor {
             app_server_thought_policy: AppServerThoughtPolicy::None,
             backend_factory: || Box::new(super::claude::ClaudeBackend),
             parse_response: super::response_parser::parse_claude_response_with_fallback,
-            parse_stream_output_line: super::response_parser::parse_claude_stream_output_line,
+            parse_stream_payload: super::response_parser::parse_claude_stream_payload,
             prompt_transport: AgentPromptTransport::Stdin,
             protocol_schema_instruction_mode: ProtocolSchemaInstructionMode::TransportSchema,
             transport: AgentTransport::Cli,
@@ -178,7 +178,7 @@ fn provider_descriptor(kind: AgentKind) -> AgentProviderDescriptor {
             app_server_thought_policy: AppServerThoughtPolicy::PhaseLabel,
             backend_factory: || Box::new(super::codex::CodexBackend),
             parse_response: super::response_parser::parse_codex_response_with_fallback,
-            parse_stream_output_line: super::response_parser::parse_codex_stream_output_line,
+            parse_stream_payload: super::response_parser::parse_codex_stream_payload,
             prompt_transport: AgentPromptTransport::Argv,
             protocol_schema_instruction_mode: ProtocolSchemaInstructionMode::TransportSchema,
             transport: AgentTransport::AppServer,
@@ -188,7 +188,7 @@ fn provider_descriptor(kind: AgentKind) -> AgentProviderDescriptor {
             app_server_thought_policy: AppServerThoughtPolicy::None,
             backend_factory: || Box::new(super::harness::HarnessBackend),
             parse_response: super::harness::parse_response,
-            parse_stream_output_line: super::harness::parse_stream_output_line,
+            parse_stream_payload: super::harness::parse_stream_payload,
             prompt_transport: AgentPromptTransport::Argv,
             protocol_schema_instruction_mode: ProtocolSchemaInstructionMode::TransportSchema,
             transport: AgentTransport::Native,

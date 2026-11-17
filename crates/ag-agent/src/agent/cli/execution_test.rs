@@ -19,13 +19,15 @@ use opentelemetry::global;
 use opentelemetry::trace::Status;
 use opentelemetry_sdk::trace::{InMemorySpanExporter, SdkTracerProvider};
 use rustix::process::{self, Pid, WaitId, WaitIdOptions};
+use serde_json::{Value, json};
 use tempfile::tempdir;
 use tokio::io::{AsyncRead, ReadBuf};
 
 use crate::agent::backend::{AgentBackendError, BuildCommandRequest, MockAgentBackend};
 use crate::agent::cli::execution::{
-    CliExecutionError, CliExecutionObserver, CliExitStatus, ProcessGroupGuard, capture_stderr,
-    capture_stdout, execute_cli_command, finish_cli_execution, require_pipe,
+    CliExecutionError, CliExecutionObserver, CliExitStatus, CliStdoutPayload, ProcessGroupGuard,
+    capture_stderr, capture_stdout, decode_lossy, execute_cli_command, finish_cli_execution,
+    require_pipe,
 };
 use crate::telemetry::TRACER_PROVIDER_LOCK;
 
@@ -35,20 +37,25 @@ pub(crate) struct CollectingCliObserver;
 impl CliExecutionObserver for CollectingCliObserver {
     fn pid_updated(&self, _child_pid: Option<u32>) {}
 
-    fn stdout_line(&self, _line: &str) {}
+    fn stdout_line(&self, _line: &str, _payload: &CliStdoutPayload) {}
 }
 
 /// Observer that records all streaming callbacks for assertions.
 struct RecordingObserver {
     lines: Mutex<Vec<String>>,
+    payloads: Mutex<Vec<RecordedPayload>>,
     pid_updates: Mutex<Vec<Option<u32>>>,
 }
+
+/// Exact and trimmed JSON views delivered with one stdout line.
+type RecordedPayload = (Option<Value>, Option<Value>);
 
 impl RecordingObserver {
     /// Creates an empty callback recorder.
     fn new() -> Self {
         Self {
             lines: Mutex::new(Vec::new()),
+            payloads: Mutex::new(Vec::new()),
             pid_updates: Mutex::new(Vec::new()),
         }
     }
@@ -62,11 +69,15 @@ impl CliExecutionObserver for RecordingObserver {
             .push(child_pid);
     }
 
-    fn stdout_line(&self, line: &str) {
+    fn stdout_line(&self, line: &str, payload: &CliStdoutPayload) {
         self.lines
             .lock()
             .expect("line lock should be available")
             .push(line.to_string());
+        self.payloads
+            .lock()
+            .expect("payload lock should be available")
+            .push((payload.exact().cloned(), payload.trimmed().cloned()));
     }
 }
 
@@ -599,6 +610,136 @@ async fn test_capture_stderr_returns_read_error() {
 
     // Assert
     assert!(matches!(error, CliExecutionError::StderrRead(_)));
+}
+
+#[test]
+fn stdout_payload_matches_each_consumer_framing() {
+    // Arrange
+    let lines = [
+        "",
+        "   ",
+        "plain diagnostic text",
+        "{not json",
+        r#"{"type":"result","result":"done"}"#,
+        " \t{\"type\":\"result\"}\t\r\n",
+        "[1, 2]",
+        "\u{a0}{\"type\":\"result\"}",
+        "{\"type\":\"result\"}\u{2028}",
+        "\u{c}{\"type\":\"result\"}",
+    ];
+
+    for line in lines {
+        // Act
+        let payload = CliStdoutPayload::parse(line);
+
+        // Assert
+        // Activity and trace observers parse the exact line; stream parsers
+        // parse it after Unicode whitespace trimming.
+        assert_eq!(
+            payload.exact(),
+            serde_json::from_str::<Value>(line).ok().as_ref(),
+            "exact framing for {line:?}"
+        );
+        assert_eq!(
+            payload.trimmed(),
+            serde_json::from_str::<Value>(line.trim()).ok().as_ref(),
+            "trimmed framing for {line:?}"
+        );
+    }
+}
+
+#[tokio::test]
+async fn capture_stdout_traces_only_valid_utf8_lines_and_reports_lossy_payloads() {
+    // Arrange
+    let _provider_guard = TRACER_PROVIDER_LOCK.lock().await;
+    let exporter = InMemorySpanExporter::default();
+    global::set_tracer_provider(
+        SdkTracerProvider::builder()
+            .with_simple_exporter(exporter.clone())
+            .build(),
+    );
+    let stream = |value: &[u8]| {
+        [
+            &br#"{"type":"assistant","message":{"content":[{"type":"tool_use","id":"call","name":"Bash","input":{"command":""#[..],
+            value,
+            b"\"}}]}}\r\nplain text\n",
+            br#"{"type":"user","message":{"content":[{"type":"tool_result","tool_use_id":"call","content":""#,
+            value,
+            b"\"}]}}",
+        ]
+        .concat()
+    };
+
+    for (value, expected_tools) in [(&b"ok"[..], 1), (&b"\xff"[..], 0)] {
+        exporter.reset();
+        let raw = stream(value);
+        let observer = RecordingObserver::new();
+
+        // Act
+        let output = Span::root("test.cli.capture", Vec::new())
+            .scope(capture_stdout(
+                tokio::io::BufReader::new(&raw[..]),
+                &observer,
+                AgentKind::Claude,
+            ))
+            .await
+            .expect("stdout capture");
+
+        // Assert
+        let decoded = String::from_utf8_lossy(&raw);
+        assert_eq!(output, decoded);
+        let lines = decoded.lines().collect::<Vec<_>>();
+        assert_eq!(
+            *observer
+                .lines
+                .lock()
+                .expect("line lock should be available"),
+            lines
+        );
+        let expected_payloads = lines
+            .iter()
+            .map(|line| {
+                (
+                    serde_json::from_str::<Value>(line).ok(),
+                    serde_json::from_str::<Value>(line.trim()).ok(),
+                )
+            })
+            .collect::<Vec<_>>();
+        let payloads = observer
+            .payloads
+            .lock()
+            .expect("payload lock should be available");
+        assert_eq!(*payloads, expected_payloads);
+        assert_eq!(
+            payloads[0]
+                .0
+                .as_ref()
+                .and_then(|payload| payload.pointer("/message/content/0/input/command").cloned()),
+            Some(json!(String::from_utf8_lossy(value)))
+        );
+        assert_eq!(payloads[1], (None, None));
+        let tools = exporter
+            .get_finished_spans()
+            .expect("spans")
+            .into_iter()
+            .filter(|span| span.name == "agent.tool")
+            .count();
+        assert_eq!(tools, expected_tools, "traced tools for {value:?}");
+    }
+}
+
+#[test]
+fn decode_lossy_reuses_valid_utf8_and_replaces_invalid_bytes() {
+    // Arrange
+    let cases: [&[u8]; 3] = [b"", "plain \u{e9}\n".as_bytes(), b"bad \xff byte"];
+
+    for bytes in cases {
+        // Act
+        let decoded = decode_lossy(bytes.to_vec());
+
+        // Assert
+        assert_eq!(decoded, String::from_utf8_lossy(bytes));
+    }
 }
 
 #[tokio::test]

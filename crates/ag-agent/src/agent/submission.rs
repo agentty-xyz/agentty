@@ -25,7 +25,9 @@ use tokio_util::sync::CancellationToken;
 
 use super::backend::{AgentBackend, BuildCommandRequest};
 use super::cli::error;
-use super::cli::execution::{self, CliExecutionError, CliExecutionObserver, CliExitStatus};
+use super::cli::execution::{
+    self, CliExecutionError, CliExecutionObserver, CliExitStatus, CliStdoutPayload,
+};
 use super::native::NativeHarnessConfig;
 use super::submission_pool::{SubmissionLease, SubmissionPool};
 use super::{ParsedResponse, create_app_server_client, create_backend, parse_response};
@@ -613,11 +615,13 @@ impl CliExecutionObserver for OneShotCliObserver {
         }
     }
 
-    fn stdout_line(&self, line: &str) {
-        self.activity
-            .lock()
-            .unwrap_or_else(std::sync::PoisonError::into_inner)
-            .observe_line(self.kind, line);
+    fn stdout_line(&self, _line: &str, payload: &CliStdoutPayload) {
+        if let Some(value) = payload.exact() {
+            self.activity
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner)
+                .observe(self.kind, value);
+        }
     }
 }
 

@@ -12,8 +12,7 @@ use tempfile::tempdir;
 use crate::agent::backend::{AgentBackendError, AgentTransport, BuildCommandRequest};
 use crate::agent::harness::HARNESS_UNAVAILABLE_MESSAGE;
 use crate::agent::provider::{
-    create_app_server_client, create_backend, parse_response, parse_stream_output_line,
-    transport_mode,
+    create_app_server_client, create_backend, parse_response, parse_stream_payload, transport_mode,
 };
 use crate::app_server::{AppServerClient, MockAppServerClient};
 
@@ -97,7 +96,10 @@ fn test_harness_parsers_return_no_content() {
 
     // Act
     let response = parse_response(AgentKind::Harness, output, "");
-    let stream_line = parse_stream_output_line(AgentKind::Harness, output);
+    let stream_line = parse_stream_payload(
+        AgentKind::Harness,
+        &serde_json::from_str(output).expect("json"),
+    );
 
     // Assert
     assert_eq!(response.content, "");

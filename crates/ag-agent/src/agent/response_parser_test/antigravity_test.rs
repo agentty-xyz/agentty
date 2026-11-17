@@ -1,11 +1,20 @@
 //! Antigravity response and stream-line parsing unit tests.
 
 use ag_contracts::{SessionDiffState, SessionStats};
+use ag_protocol::{FocusedReview, ReviewMetadata, UtilityResponse};
 
+use crate::agent::cli::execution::CliStdoutPayload;
 use crate::agent::response_parser::{
-    antigravity_value_text, parse_antigravity_response_with_fallback,
-    parse_antigravity_stream_output_line,
+    antigravity_protocol_payload, antigravity_value_text, parse_antigravity_response_with_fallback,
+    parse_antigravity_stream_payload,
 };
+
+/// Classifies one stdout line through the shared CLI payload parse.
+fn parse_stream_line(line: &str) -> Option<(String, bool)> {
+    CliStdoutPayload::parse(line)
+        .trimmed()
+        .and_then(parse_antigravity_stream_payload)
+}
 
 #[test]
 /// Ensures the supported Antigravity final stream envelope exposes its
@@ -192,7 +201,7 @@ fn test_antigravity_stream_output_line_classifies_reasoning() {
     let stdout_line = r#"{"event":"reasoning","value":"Inspecting files"}"#;
 
     // Act
-    let parsed_line = parse_antigravity_stream_output_line(stdout_line);
+    let parsed_line = parse_stream_line(stdout_line);
 
     // Assert
     assert_eq!(parsed_line, Some(("Inspecting files".to_string(), false)));
@@ -206,7 +215,7 @@ fn test_antigravity_stream_output_line_classifies_response_content() {
     let stdout_line = r#"{"event":"response","text":"partial output"}"#;
 
     // Act
-    let parsed_line = parse_antigravity_stream_output_line(stdout_line);
+    let parsed_line = parse_stream_line(stdout_line);
 
     // Assert
     assert_eq!(parsed_line, Some(("partial output".to_string(), true)));
@@ -219,7 +228,7 @@ fn test_antigravity_stream_output_line_classifies_tool_progress() {
     let stdout_line = r#"{"event":"tool","tool_name":"web_search"}"#;
 
     // Act
-    let parsed_line = parse_antigravity_stream_output_line(stdout_line);
+    let parsed_line = parse_stream_line(stdout_line);
 
     // Assert
     assert_eq!(parsed_line, Some(("Searching the web".to_string(), false)));
@@ -288,5 +297,35 @@ fn direct_utility_and_metadata_objects_survive_provider_extraction() {
             serde_json::from_str::<serde_json::Value>(&parsed.content).expect("json"),
             payload
         );
+    }
+}
+
+#[test]
+fn protocol_payload_detection_matches_owned_deserialization() {
+    // Arrange
+    let payloads = [
+        serde_json::json!({"answer":"Done","questions":[]}),
+        serde_json::json!({"answer":"Utility"}),
+        serde_json::json!({"answer":"Utility","extra":true}),
+        serde_json::json!({"project_impact":[],"suggestions":[]}),
+        serde_json::json!({"candidate_decisions":[{"candidate_index":0,"reason":"Duplicate","suggestion_index":null}],"project_impact":[],"suggestions":[]}),
+        serde_json::json!({"candidate_decisions":[{"candidate_index":0,"reason":"Missing"}],"project_impact":[],"suggestions":[]}),
+        serde_json::json!({"title":"Title","description":"Text","is_title_change_significant":true}),
+        serde_json::json!({"title":"Title"}),
+        serde_json::json!("plain text"),
+        serde_json::json!([{"answer":"Utility"}]),
+    ];
+
+    for payload in payloads {
+        // Act
+        let detected = antigravity_protocol_payload(&payload);
+
+        // Assert
+        let owned_detection = (payload.get("answer").is_some()
+            && payload.get("questions").is_some())
+            || serde_json::from_value::<FocusedReview>(payload.clone()).is_ok()
+            || serde_json::from_value::<UtilityResponse>(payload.clone()).is_ok()
+            || serde_json::from_value::<ReviewMetadata>(payload.clone()).is_ok();
+        assert_eq!(detected, owned_detection, "payload: {payload}");
     }
 }
