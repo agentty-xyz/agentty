@@ -11,8 +11,6 @@ use ag_git::{GitClient, RealGitClient};
 use ag_telemetry::otlp::{OtlpError, OtlpExport, Service};
 use ag_telemetry::{CaptureToolContent, Context, FutureExt as _, KeyValue, Outcome, Span};
 use agentty::analytics::Analytics;
-#[cfg(not(debug_assertions))]
-use agentty::analytics::TELEMETRY_ENABLED_ENV;
 use agentty::app::{AGENTTY_WT_DIR, App, AppError, agentty_home};
 use agentty::infra::db::{
     AppRepositories, DB_DIR, DB_FILE, Database, acquire_instance_lock,
@@ -24,6 +22,10 @@ use clap::Parser;
 #[derive(Debug, Parser)]
 #[command(version, about)]
 struct Cli {
+    /// Disables `PostHog` usage telemetry; OTLP export to `--otlp-endpoint` is
+    /// unaffected.
+    #[arg(long)]
+    disable_telemetry: bool,
     /// Preview features enabled for this launch.
     #[command(flatten)]
     experimental: ExperimentalFeatures,
@@ -156,11 +158,7 @@ async fn run_application(
         working_dir,
     } = Launch::open().await?;
     // Debug builds, including tests, never report to the public project.
-    #[cfg(debug_assertions)]
-    let reports_to_posthog = false;
-    #[cfg(not(debug_assertions))]
-    let reports_to_posthog =
-        Analytics::is_enabled(std::env::var_os(TELEMETRY_ENABLED_ENV).as_deref());
+    let reports_to_posthog = cfg!(not(debug_assertions)) && !cli.disable_telemetry;
     let installation_id = if reports_to_posthog || cli.otlp_endpoint.is_some() {
         Some(Analytics::installation_id(&AppRepositories::from(db.clone())).await)
     } else {

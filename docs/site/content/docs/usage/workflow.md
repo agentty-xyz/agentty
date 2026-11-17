@@ -585,15 +585,25 @@ resume, or cancel graphs through `SessionService`; see
 
 ## Telemetry
 
-<a id="telemetry"></a> Telemetry is enabled by default and sends events to the Agentty
-PostHog project at `https://us.i.posthog.com`. Release builds bundle its public,
-write-only project token; debug builds, including tests, send nothing. Set
-`AGENTTY_TELEMETRY_ENABLED=0` before launching to disable it; only unset or `1` keeps it
-enabled.
+<a id="telemetry"></a> Agentty has two independent telemetry channels:
+
+| Channel        | Default  | Destination                      | Contents                              | Control               |
+| -------------- | -------- | -------------------------------- | ------------------------------------- | --------------------- |
+| PostHog events | Enabled  | Agentty PostHog project          | The usage events below                | `--disable-telemetry` |
+| OTLP export    | Disabled | Your `--otlp-endpoint` collector | Session traces, metrics, usage events | `--otlp-endpoint URL` |
+
+PostHog telemetry sends events to the Agentty PostHog project at
+`https://us.i.posthog.com`. Release builds bundle its public, write-only project token;
+debug builds, including tests, send nothing. Pass `--disable-telemetry` to turn it off
+for a launch:
 
 ```bash
-AGENTTY_TELEMETRY_ENABLED=0 agentty
+agentty --disable-telemetry
 ```
+
+`--disable-telemetry` does not affect OTLP export; see
+[Local Usage Events](@/docs/usage/workflow.md#local-usage-events) and
+[Session Traces](@/docs/usage/workflow.md#session-traces).
 
 Every event includes `app_source` (`cli`), `app_version`, and `install_method` (`npm`,
 `sh`, `cargo`, or `unknown`).
@@ -632,7 +642,7 @@ When `--otlp-endpoint` ends in `/v1/traces`, Agentty also exports each event abo
 OTLP log record to the sibling `/v1/logs` URL, keeping any path prefix and query; for
 example, `http://localhost:4318/v1/traces` sends events to
 `http://localhost:4318/v1/logs`. This mirror is independent of PostHog, so it also runs
-in debug builds and with `AGENTTY_TELEMETRY_ENABLED=0`.
+in debug builds and with `--disable-telemetry`.
 
 Records use the event name as their body, `INFO` severity, and the PostHog properties,
 plus `service.name`, `service.version`, a per-launch `service.instance.id`, and the
