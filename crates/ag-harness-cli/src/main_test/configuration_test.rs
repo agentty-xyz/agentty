@@ -181,10 +181,15 @@ fn chat_mode_accounts_for_both_terminal_streams_and_initial_prompt() {
     let login = parse_cli(["ag-harness", "login", "chatgpt"]).expect("login should parse");
     let unknown_login = parse_cli(["ag-harness", "login", "openai"])
         .expect_err("only account providers support login");
+    let serve = parse_cli(["ag-harness", "serve"]).expect("serve should parse");
 
     // Act and Assert
     assert_eq!(
         ChatMode::detect(&login, true, false),
+        ChatMode::NonInteractive
+    );
+    assert_eq!(
+        ChatMode::detect(&serve, true, false),
         ChatMode::NonInteractive
     );
     assert_eq!(unknown_login.kind(), clap::error::ErrorKind::InvalidValue);

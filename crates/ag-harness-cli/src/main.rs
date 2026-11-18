@@ -32,6 +32,7 @@ use thiserror::Error;
 use tokio::io::{AsyncBufRead, AsyncBufReadExt as _, AsyncWrite, AsyncWriteExt as _, BufReader};
 
 mod login;
+mod serve;
 
 const CHAT_COMMAND_HELP: &str = concat!(
     "commands:\n",
@@ -117,6 +118,25 @@ struct Cli {
     command: Command,
 }
 
+impl Cli {
+    /// Returns a set global option that `serve` does not use, since its
+    /// requests choose each session's model and store.
+    fn option_serve_ignores(&self) -> Option<&'static str> {
+        if !matches!(self.command, Command::Serve(_)) {
+            return None;
+        }
+
+        [
+            ("--comparison-base", self.comparison_base.is_some()),
+            ("--database", self.database.is_some()),
+            ("--git-executable", self.git_executable.is_some()),
+            ("--otlp-endpoint", self.otlp_endpoint.is_some()),
+        ]
+        .into_iter()
+        .find_map(|(option, set)| set.then_some(option))
+    }
+}
+
 /// Supported harness commands.
 #[derive(Debug, Subcommand)]
 enum Command {
@@ -126,6 +146,31 @@ enum Command {
     Resume(ResumeArgs),
     /// Signs in to a provider that uses an account instead of an API key.
     Login(LoginArgs),
+    /// Serves an UNSTABLE JSON-RPC 2.0 protocol over standard input and
+    /// output for non-Rust hosts.
+    #[command(long_about = SERVE_HELP)]
+    Serve(ServeArgs),
+}
+
+const SERVE_HELP: &str = concat!(
+    "Serves an UNSTABLE JSON-RPC 2.0 protocol over standard input and output for non-Rust ",
+    "hosts.\n\n",
+    "Each line is one JSON message. Requests: session/create, session/resume, run/start, ",
+    "run/cancel, session/transcript, session/usage, and shutdown. A message without an id is ",
+    "executed but never answered. Each run streams its events as run/event notifications, ",
+    "ending with its completed event. Tools are denied. The end of input cancels runs in flight ",
+    "and exits.\n\n",
+    "Requests choose each session's model and store, so of the global options only ",
+    "--reasoning-effort applies; the others are rejected.\n\n",
+    "The protocol and its schema, which --print-schema prints, may change in any release."
+);
+
+/// Arguments for serving the unstable protocol.
+#[derive(Debug, Args)]
+struct ServeArgs {
+    /// Prints the JSON Schema of every protocol message and exits.
+    #[arg(long)]
+    print_schema: bool,
 }
 
 /// Arguments for signing in to a provider.
@@ -276,7 +321,7 @@ impl ChatMode {
         let initial_prompt = match &cli.command {
             Command::Run(args) => &args.prompt,
             Command::Resume(args) => &args.prompt,
-            Command::Login(_) => &None,
+            Command::Login(_) | Command::Serve(_) => &None,
         };
         if stdin_is_terminal && initial_prompt.is_some() {
             return Self::OneShot;
@@ -484,6 +529,9 @@ where
     Input: AsyncBufRead + Unpin,
     Output: AsyncWrite + Unpin,
 {
+    if let Some(option) = cli.option_serve_ignores() {
+        return Err(CliError::ServeOption(option));
+    }
     let telemetry = OtlpExport::start(
         cli.otlp_endpoint.as_deref(),
         Service {
@@ -534,12 +582,12 @@ where
     Input: AsyncBufRead + Unpin,
     Output: AsyncWrite + Unpin,
 {
-    let database = database_path(cli.database, &mut environment)?;
     let git_executable = cli.git_executable;
     let reasoning_effort = cli.reasoning_effort;
     let trace = cli.otlp_endpoint.is_some();
     match cli.command {
         Command::Run(args) => {
+            let database = database_path(cli.database, &mut environment)?;
             let session_id = args
                 .session
                 .unwrap_or_else(|| uuid::Uuid::new_v4().simple().to_string());
@@ -586,6 +634,7 @@ where
             .await
         }
         Command::Resume(args) => {
+            let database = database_path(cli.database, &mut environment)?;
             let info = SessionInfo::load(&database, &args.session).await?;
             let (provider, model) = stored_model_identity(&info)?;
             let mut models = ModelSwitcher {
@@ -631,7 +680,29 @@ where
         )
         .await
         .map_err(CliError::from),
+        Command::Serve(args) => run_serve(args, reasoning_effort, environment, input, output).await,
     }
+}
+
+/// Serves the protocol, or prints its schema.
+async fn run_serve<Input, Output>(
+    args: ServeArgs,
+    reasoning_effort: ReasoningEffort,
+    environment: impl FnMut(&str) -> Result<String, env::VarError>,
+    input: Input,
+    mut output: Output,
+) -> Result<(), CliError>
+where
+    Input: AsyncBufRead + Unpin,
+    Output: AsyncWrite + Unpin,
+{
+    if args.print_schema {
+        output.write_all(serve::PROTOCOL_SCHEMA.as_bytes()).await?;
+
+        return Ok(output.flush().await?);
+    }
+
+    Ok(serve::serve(input, output, environment, reasoning_effort).await?)
 }
 
 async fn announce_session(
@@ -1144,6 +1215,8 @@ enum CliError {
     OutputSchema(#[from] ag_harness::OutputSchemaError),
     #[error(transparent)]
     Repository(#[from] ag_harness::RepositoryError),
+    #[error("{0} does not apply to `serve`; requests choose each session's model and store")]
+    ServeOption(&'static str),
     #[error(transparent)]
     Session(#[from] ag_harness::SessionError),
     #[error(transparent)]

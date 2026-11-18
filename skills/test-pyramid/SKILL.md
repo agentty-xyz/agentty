@@ -37,8 +37,9 @@ iteration most.
    crate's public API in process. Leave argument permutations and error branches to
    levels 1–2.
 1. **CLI subprocess** (crate `tests/` that spawn the built binary, such as
-   `crates/ag-harness-cli/tests/cli.rs`; ≈0.5–1 s). One test per command-line contract:
-   arguments, exit status, and output streams. Keep parsing and branch logic below.
+   `crates/ag-harness-cli/tests/cli/main.rs`; ≈0.5–1 s). One test per command-line
+   contract: arguments, exit status, and output streams. Keep parsing and branch logic
+   below.
 1. **PTY scenario** (`crates/agentty/tests/e2e/`, `FeatureTest`; ≈1–12 s). One scenario
    per user-visible journey, asserting rendering and wiring. Do not re-check ordering,
    validation, or error permutations already pinned below.

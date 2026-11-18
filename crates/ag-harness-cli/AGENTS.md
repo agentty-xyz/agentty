@@ -24,4 +24,4 @@ Interactive command-line host for structured model turns and durable harness ses
 
 Keep `crates/ag-harness-cli/README.md` aligned with CLI behavior. Refer to
 `crates/ag-harness/README.md` for library integration and
-`crates/ag-harness-cli/tests/cli.rs` for the process-level contract.
+`crates/ag-harness-cli/tests/cli/main.rs` for the process-level contract.

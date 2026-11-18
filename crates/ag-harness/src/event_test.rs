@@ -62,6 +62,7 @@ async fn sink_numbers_events_and_items_and_ends_with_the_output() {
     let output = RunOutput::Json(json!({"name": "Ada"}));
 
     // Act
+    let run = stream.run_id().clone();
     let first = sink.start_item(ItemKind::Message).await;
     let second = sink.start_item(ItemKind::Reasoning).await;
     sink.complete(&outcome(Ok(output.clone()))).await;
@@ -72,7 +73,7 @@ async fn sink_numbers_events_and_items_and_ends_with_the_output() {
     assert_eq!([first.get(), second.get()], [0, 1]);
     let sequence: Vec<u64> = events.iter().map(|event| event.seq).collect();
     assert_eq!(sequence, [0, 1, 2, 3, 4]);
-    assert!(events.iter().all(|event| event.run == events[0].run));
+    assert!(events.iter().all(|event| event.run == run));
     assert_eq!(events[0].run.as_str().len(), 36, "a hyphenated UUID");
     assert_eq!(
         events[2].kind,
