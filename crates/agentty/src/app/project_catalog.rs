@@ -67,7 +67,7 @@ impl App {
             return;
         }
         self.mode = AppMode::ProjectCatalog {
-            dialog: ProjectCatalogDialog::SuggestHome { root, selected: 1 },
+            dialog: ProjectCatalogDialog::SuggestHome { root, selected: 0 },
         };
     }
 
