@@ -6,8 +6,8 @@ use std::time::Duration;
 use serde_json::json;
 
 use super::{
-    ContextActivity, HistoryActivity, ModelRequestActivity, ModelRequestPurpose, ToolActivity,
-    TurnError, TurnOutcome, TurnReport,
+    ContextActivity, HistoryActivity, HostToolOutcome, ModelRequestActivity, ModelRequestPurpose,
+    ToolActivity, TurnError, TurnOutcome, TurnReport,
 };
 use crate::lifecycle::{ModelResponseType, ToolUnavailableReason, TurnErrorType};
 use crate::model::{CompletionMetadata, CompletionUsage};
@@ -41,6 +41,54 @@ fn unavailable_activity_names_the_called_tool_without_a_path() {
     assert_eq!(activity.path(), "");
     assert_eq!(activity.duration(), Duration::ZERO);
     assert_eq!(activity.to_string(), "read_file (unavailable; <1 ms)");
+}
+
+#[test]
+fn host_tool_activity_names_its_tool_and_outcome_without_a_path() {
+    // Arrange
+    let host = |duration, outcome, tool: &str| ToolActivity::Host {
+        duration,
+        outcome,
+        tool: tool.to_string(),
+    };
+    let completed = host(
+        Duration::from_millis(4),
+        HostToolOutcome::Completed,
+        "fetch",
+    );
+    let answered = [
+        HostToolOutcome::Rejected,
+        HostToolOutcome::InvalidArguments,
+        HostToolOutcome::ResultTooLarge,
+    ]
+    .map(|outcome| host(Duration::ZERO, outcome, "fe\ntch").to_string());
+
+    // Act / Assert
+    assert_eq!(completed.name(), "fetch");
+    assert_eq!(completed.path(), "");
+    assert_eq!(completed.duration(), Duration::from_millis(4));
+    assert_eq!(completed.to_string(), "fetch (completed; 4 ms)");
+    assert_eq!(
+        answered,
+        [
+            "fe\u{fffd}tch (rejected; <1 ms)",
+            "fe\u{fffd}tch (invalid arguments; <1 ms)",
+            "fe\u{fffd}tch (result too large; <1 ms)",
+        ]
+    );
+}
+
+#[test]
+fn a_host_tool_failure_is_a_tool_error() {
+    // Arrange
+    let error = TurnError::ToolFailed {
+        source: "connection refused".into(),
+        tool: "fetch".to_string(),
+    };
+
+    // Act / Assert
+    assert_eq!(error.error_type(), TurnErrorType::Tool);
+    assert_eq!(error.to_string(), "tool `fetch` failed: connection refused");
 }
 
 #[test]

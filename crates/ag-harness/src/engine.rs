@@ -2,21 +2,28 @@
 //! with context fitting, summaries, and overflow recovery.
 
 use std::collections::HashMap;
+use std::future::Future;
+use std::panic::{self, AssertUnwindSafe};
+use std::pin::Pin;
 use std::sync::Arc;
+use std::task::{Context as TaskContext, Poll};
 use std::time::{Duration, Instant};
 
 use serde_json::{Value, json};
 use tokio::sync::Semaphore;
 use tokio::time::timeout_at;
 
-use crate::bash::{BashArguments, BashError};
+use crate::bash::BashError;
 use crate::budget::{BudgetLedger, Estimate, Reservation};
+use crate::builtin_tool::{BashHandler, ReadHandler, WriteHandler, read_summary};
 use crate::calibration::{Calibration, ContextCalibration};
 use crate::cancellation::TurnControl;
 use crate::catalog::Pricing;
-use crate::context::{ContextSummaryPolicy, FitStep, SentHistory};
+use crate::context::{ContextEstimator, ContextSummaryPolicy, FitStep, SentHistory};
 use crate::effect::Effects;
-use crate::event::{EventSink, Item, ItemId, ItemKind, RunEventKind, ToolCallItem};
+use crate::event::{
+    EventSink, Item, ItemId, ItemKind, RunEventKind, SessionId, ToolCallItem, ToolCallStatus,
+};
 use crate::execution::BashTool;
 use crate::file_system::FileSystem;
 use crate::lifecycle::{
@@ -28,22 +35,24 @@ use crate::model::{
     CompletionMetadata, Model, ModelError, ModelMessage, ModelRequest, ModelResponse,
     ReasoningEffort, ensure_unique_tool_call_ids,
 };
-use crate::read::{self, ReadError, ReadTool, ResultFits};
+use crate::read::ReadTool;
 use crate::repetition::{self, RepeatedCalls, Repetition};
 use crate::repository::Repository;
 use crate::reservation::WriteJournal;
 use crate::round_summary::RoundSummaryJob;
 use crate::run::Usage;
 use crate::tool::{
-    MalformedArguments, ReadAction, ReadArguments, Tool, ToolCall, ToolCallArguments,
-    ToolDefinition, WriteArguments,
+    MAX_TOOL_RESULT_BYTES, MalformedArguments, ReadArguments, Tool, ToolCall, ToolCallArguments,
+    ToolDefinition, UnknownToolCall,
 };
+use crate::tool_handler::{SharedResultFits, ToolContext, ToolEntry, ToolErrorKind, ToolHandler};
 use crate::turn::{
-    ContextActivity, ModelRequestActivity, ModelRequestPurpose, ToolActivity, TurnError,
-    TurnOptions, TurnOutcome, TurnReport, sanitize_report_text, sanitized_completion_metadata,
+    ContextActivity, HostToolOutcome, ModelRequestActivity, ModelRequestPurpose, ToolActivity,
+    TurnError, TurnOptions, TurnOutcome, TurnReport, sanitize_report_text,
+    sanitized_completion_metadata,
 };
 use crate::usage::{Cost, TurnUsage};
-use crate::write::{WriteError, WriteTool};
+use crate::write::WriteTool;
 use crate::{compaction, context, schema_contract};
 
 /// Final outputs a turn may have rejected for invalid JSON or a schema
@@ -66,6 +75,10 @@ pub(crate) const MAX_CONSECUTIVE_MALFORMED_TOOL_RESPONSES: usize = 3;
 /// stops after a bounded number of wasted requests.
 pub(crate) const MAX_CONTEXT_OVERFLOW_RECOVERIES: usize = 2;
 
+/// Status of the error result answering a host tool call that ran but whose
+/// result was too large to send.
+const OUTPUT_TOO_LARGE_STATUS: &str = "output_too_large";
+
 /// Request-only feedback after a summary request that continues the turn,
 /// tools included, was answered with tool calls; the calls never run.
 const SUMMARY_TOOL_CALL_FEEDBACK: &str = "[harness] Those tool calls were not run: this reply \
@@ -81,7 +94,7 @@ pub(crate) struct Engine<'a> {
     pub(crate) concurrency: Option<&'a Semaphore>,
     pub(crate) context_budget: context::ContextBudget,
     pub(crate) context_calibration: &'a ContextCalibration,
-    pub(crate) context_estimator: &'a dyn context::ContextEstimator,
+    pub(crate) context_estimator: &'a Arc<dyn ContextEstimator>,
     pub(crate) context_summaries: ContextSummaryPolicy,
     /// Control that receives the report of a turn dropped before it
     /// finished, such as a cancelled one.
@@ -100,6 +113,8 @@ pub(crate) struct Engine<'a> {
     /// Prices of the model, which give every request its cost.
     pub(crate) pricing: Option<Pricing>,
     pub(crate) repository: Option<&'a Repository>,
+    /// Session whose turn this is, given to tool handlers.
+    pub(crate) session: Option<SessionId>,
 }
 
 impl Engine<'_> {
@@ -112,14 +127,13 @@ impl Engine<'_> {
         journal: Option<WriteJournal>,
     ) -> Result<FinishedTurn, EngineFailure> {
         let started_at = Instant::now();
-        let recorder = journal.clone();
         let (request, tools) = self
-            .prepare_request(request, journal)
+            .prepare_request(request, journal.as_ref())
             .map_err(EngineFailure::unreported)?;
         // Host instructions are journaled after the input, so the turn
         // replays with them.
         if let Some(instructions) = request.instructions_message() {
-            Self::persist(recorder.as_ref(), instructions)
+            Self::persist(journal.as_ref(), instructions)
                 .await
                 .map_err(EngineFailure::unreported)?;
         }
@@ -132,7 +146,7 @@ impl Engine<'_> {
             control: self.control,
             started_at,
             state: TurnState::new(
-                ToolRounds::new(tools, recorder),
+                ToolRounds::new(tools, journal),
                 context::ContextFit::new(shared_prefix_summaries),
                 self.pricing,
             ),
@@ -215,7 +229,7 @@ impl Engine<'_> {
                 .effective_budget(self.context_budget);
             let step = state
                 .context_fit
-                .fit(self.context_estimator, budget, &request, summary_trigger)
+                .fit(&**self.context_estimator, budget, &request, summary_trigger)
                 .map_err(|error| {
                     state
                         .overflow
@@ -471,7 +485,7 @@ impl Engine<'_> {
         let (budget, _) = self
             .context_calibration
             .effective_budget(self.context_budget);
-        let mut share = RoundShare::new(self.context_estimator, budget);
+        let mut share = RoundShare::new(Arc::clone(self.context_estimator), budget);
         let mut repetition = Repetition::None;
         for call in calls {
             let repeated = rounds.reads.repeat_of(call, context_fit);
@@ -485,9 +499,13 @@ impl Engine<'_> {
             let mut deferred = is_read && matches!(shortcut, Some(ReadShortcut::Defer));
             let item = self.start_item(ItemKind::ToolCall).await;
             let (mut result, mut activity) = self
-                .execute_tool_call(call, &rounds.tools, turn_id, shortcut, &|content: &str| {
-                    share.result_fits(call, content)
-                })
+                .execute_tool_call(
+                    call,
+                    &rounds.tools,
+                    turn_id,
+                    shortcut,
+                    share.result_fits(call),
+                )
                 .await?;
             let unavailable = matches!(activity, ToolActivity::Unavailable { .. });
             if !share.keeps(call, &result, ran_read && !unavailable)
@@ -599,7 +617,7 @@ impl Engine<'_> {
         let lifecycle = self.lifecycle.start_context_summary(job.trigger(), turn_id);
         let installed = match self.request_summary(job, turn_id, requests).await {
             Ok(summary) => context_fit
-                .install_summary(self.context_estimator, request, job, summary)
+                .install_summary(self.context_estimator.as_ref(), request, job, summary)
                 .ok_or(ContextSummaryErrorType::Rejected),
             Err(SummaryFailure::Failed(error_type)) => Err(error_type),
             Err(SummaryFailure::Refused(limit)) => {
@@ -835,7 +853,7 @@ impl Engine<'_> {
     fn prepare_request(
         &self,
         mut request: ModelRequest,
-        journal: Option<WriteJournal>,
+        journal: Option<&WriteJournal>,
     ) -> Result<(ModelRequest, Tools), TurnError> {
         if self.lifecycle.is_enabled() {
             request.mark_lifecycle_observed();
@@ -852,60 +870,85 @@ impl Engine<'_> {
         {
             return Err(TurnError::ComparisonRepositoryMismatch);
         }
-        let read_allowed = self.options.tool_policy().allows(Tool::Read);
-        let write_allowed = self.options.tool_policy().allows(Tool::Write);
-        let bash_allowed = self.options.tool_policy().allows(Tool::Bash);
-        if !read_allowed && !write_allowed && !bash_allowed {
-            return Ok((request, Tools::default()));
-        }
-        let repository = self
-            .repository
-            .as_ref()
-            .ok_or(TurnError::RepositoryRequired)?;
-        for tool in context::advertised_tools(self.options) {
-            request = request.with_tool(tool);
-        }
-        let read_tool = read_allowed.then(|| {
-            ReadTool::with_git(
-                Arc::clone(self.file_system),
-                repository.root().to_path_buf(),
-                repository.git_executable().to_path_buf(),
-                self.options.comparison_base().cloned(),
-            )
-        });
-        let write_tool = write_allowed.then(|| {
-            let mut tool = WriteTool::new(
-                Arc::clone(self.file_system),
-                repository.root().to_path_buf(),
-            );
-            tool.journal.clone_from(&journal);
-            tool.effects = self.effects.clone();
-
-            tool
-        });
-
-        let bash_tool = if bash_allowed {
-            Some(BashTool::new(
-                self.options
-                    .bash()
-                    .cloned()
-                    .ok_or(BashError::InvalidPolicy)?,
-                repository.root().to_path_buf(),
-                self.effects.commands().clone(),
-                journal,
-            )?)
+        let policy = self.options.tool_policy();
+        let builtin_enabled = self
+            .options
+            .tools()
+            .entries()
+            .iter()
+            .any(|entry| matches!(entry, ToolEntry::Builtin(tool) if policy.allows(*tool)));
+        let repository = if builtin_enabled {
+            Some(self.repository.ok_or(TurnError::RepositoryRequired)?)
         } else {
             None
         };
+        let mut tools = Tools::default();
+        for entry in self.options.tools().entries() {
+            let (definition, handler) = match (entry, repository) {
+                (
+                    ToolEntry::Handler {
+                        definition,
+                        handler,
+                    },
+                    _,
+                ) => (definition.clone(), Arc::clone(handler)),
+                (ToolEntry::Builtin(tool), Some(repository)) if policy.allows(*tool) => {
+                    let handler = self.builtin_handler(*tool, repository, journal)?;
 
-        Ok((
-            request,
-            Tools {
-                read: read_tool,
-                write: write_tool,
-                bash: bash_tool,
-            },
-        ))
+                    (handler.definition(), handler)
+                }
+                (ToolEntry::Builtin(_), _) => continue,
+            };
+            tools
+                .handlers
+                .push((definition.name().to_string(), handler));
+            request = request.with_tool(definition);
+        }
+
+        Ok((request, tools))
+    }
+
+    /// Binds the built-in `tool` to this turn's `repository`, `journal`, and
+    /// options.
+    fn builtin_handler(
+        &self,
+        tool: Tool,
+        repository: &Repository,
+        journal: Option<&WriteJournal>,
+    ) -> Result<Arc<dyn ToolHandler>, TurnError> {
+        let definition = context::builtin_definition(tool, self.options);
+        let root = repository.root().to_path_buf();
+
+        Ok(match tool {
+            Tool::Read => Arc::new(ReadHandler {
+                definition,
+                tool: ReadTool::with_git(
+                    Arc::clone(self.file_system),
+                    root,
+                    repository.git_executable().to_path_buf(),
+                    self.options.comparison_base().cloned(),
+                ),
+            }),
+            Tool::Write => {
+                let mut tool = WriteTool::new(Arc::clone(self.file_system), root);
+                tool.journal = journal.cloned();
+                tool.effects = self.effects.clone();
+
+                Arc::new(WriteHandler { tool })
+            }
+            Tool::Bash => Arc::new(BashHandler {
+                definition,
+                tool: BashTool::new(
+                    self.options
+                        .bash()
+                        .cloned()
+                        .ok_or(BashError::InvalidPolicy)?,
+                    root,
+                    self.effects.commands().clone(),
+                    journal.cloned(),
+                )?,
+            }),
+        })
     }
 
     /// Sends `request`, estimated at `estimated_weight` under
@@ -1054,41 +1097,35 @@ impl Engine<'_> {
         }
     }
 
-    /// Runs `call` under the turn's tool policy, bounding a `read` result to
-    /// what `fits` accepts, or answers an allowed `read` with `shortcut`
-    /// without running it.
+    /// Runs `call` with the turn's handler of its name, bounding a `read`
+    /// result to what `fits` accepts, or answers an allowed `read` with
+    /// `shortcut` without running it.
     async fn execute_tool_call(
         &self,
         call: &ToolCall,
         tools: &Tools,
         turn_id: Option<LifecycleId>,
         shortcut: Option<ReadShortcut<'_>>,
-        fits: ResultFits<'_>,
+        fits: SharedResultFits,
     ) -> Result<(String, ToolActivity), TurnError> {
         let started_at = Instant::now();
         let mut tool_lifecycle =
             self.lifecycle
                 .request_tool(call.id().to_string(), call.name().to_string(), turn_id);
+        let handler = tools.handler_for(call);
         let execution = match call.arguments() {
-            ToolCallArguments::Bash(arguments) => tools
-                .bash
-                .as_ref()
-                .map(|tool| ToolExecution::Bash(tool, arguments)),
-            ToolCallArguments::Read(arguments) => tools.read.as_ref().map(|tool| match shortcut {
+            ToolCallArguments::Read(arguments) => handler.map(|handler| match shortcut {
                 Some(ReadShortcut::Repeat(earlier)) => {
                     ToolExecution::RepeatedRead(arguments, earlier)
                 }
                 Some(ReadShortcut::Defer) => ToolExecution::DeferredRead(arguments),
-                None => ToolExecution::Read(tool, arguments, fits),
+                None => ToolExecution::Handler(handler, self.tool_context(call, Some(fits))),
             }),
-            ToolCallArguments::Write(arguments) => tools
-                .write
-                .as_ref()
-                .map(|tool| ToolExecution::Write(tool, arguments)),
-            ToolCallArguments::Malformed(arguments) => tools
-                .allows(arguments.tool())
+            ToolCallArguments::Malformed(arguments) => handler
+                .is_some()
                 .then_some(ToolExecution::Malformed(arguments, self.options)),
-            ToolCallArguments::Unknown(_) => None,
+            _ => handler
+                .map(|handler| ToolExecution::Handler(handler, self.tool_context(call, None))),
         };
         let Some(execution) = execution else {
             let reason = if call.unknown_tool().is_some() {
@@ -1112,13 +1149,27 @@ impl Engine<'_> {
         if let Some(tool_lifecycle) = tool_lifecycle.as_mut() {
             tool_lifecycle.started();
         }
-        let operation = execute_tool(execution, call.id());
+        let operation = execute_tool(execution, call);
         let result = match tool_lifecycle.as_ref() {
             Some(tool_lifecycle) => tool_lifecycle.scope(operation).await,
             None => operation.await,
         };
 
         Self::finish_tool_call(result, tool_lifecycle)
+    }
+
+    /// Describes `call` to its handler; `fits` bounds a built-in `read`.
+    fn tool_context(&self, call: &ToolCall, fits: Option<SharedResultFits>) -> ToolContext {
+        ToolContext {
+            call_id: call.id().to_string(),
+            control: self.control.cloned(),
+            fits,
+            run: self.control.and_then(TurnControl::run_id).cloned(),
+            session: self.session.clone(),
+            workspace: self
+                .repository
+                .map(|repository| repository.root().to_path_buf()),
+        }
     }
 
     fn finish_tool_call(
@@ -1128,13 +1179,7 @@ impl Engine<'_> {
         match result {
             Ok(result) => {
                 if let Some(tool_lifecycle) = tool_lifecycle {
-                    if matches!(
-                        &result.1,
-                        ToolActivity::MalformedArguments { .. }
-                            | ToolActivity::ReadInspectionRejected { .. }
-                            | ToolActivity::ReadRejected { .. }
-                            | ToolActivity::WriteRejected { .. }
-                    ) {
+                    if ToolCallStatus::from(&result.1) == ToolCallStatus::Rejected {
                         tool_lifecycle.failed(ToolErrorType::Execution);
                     } else {
                         tool_lifecycle.completed();
@@ -1532,21 +1577,33 @@ struct ExecutedRead {
     result_index: usize,
 }
 
+/// The handlers one turn offers, by name, in advertised order.
 #[derive(Default)]
 struct Tools {
-    bash: Option<BashTool>,
-    read: Option<ReadTool>,
-    write: Option<WriteTool>,
+    handlers: Vec<(String, Arc<dyn ToolHandler>)>,
 }
 
 impl Tools {
-    /// Whether the turn's tool policy enabled `tool`.
-    fn allows(&self, tool: Tool) -> bool {
-        match tool {
-            Tool::Bash => self.bash.is_some(),
-            Tool::Read => self.read.is_some(),
-            Tool::Write => self.write.is_some(),
+    /// Returns the handler of the tool named `name`, if the turn offers it.
+    fn handler(&self, name: &str) -> Option<&Arc<dyn ToolHandler>> {
+        self.handlers
+            .iter()
+            .find_map(|(handler_name, handler)| (handler_name == name).then_some(handler))
+    }
+
+    /// Returns the handler of the tool `call` names exactly; a name
+    /// rewritten for replay never runs one.
+    fn handler_for(&self, call: &ToolCall) -> Option<&Arc<dyn ToolHandler>> {
+        if call.unknown_tool().is_some_and(UnknownToolCall::renamed) {
+            return None;
         }
+
+        self.handler(call.name())
+    }
+
+    /// Whether the turn offers the built-in `tool`.
+    fn allows(&self, tool: Tool) -> bool {
+        self.handler(tool.name()).is_some()
     }
 }
 
@@ -1567,17 +1624,17 @@ enum ReadShortcut<'a> {
 /// `read` result that would exceed it, and every `read` after it, is
 /// replaced by the exact call that fetches it in a later response. Results
 /// of other tools count toward the share but are always kept.
-struct RoundShare<'a> {
+struct RoundShare {
     /// Whether a `read` of this round no longer fits the share.
     deferring: bool,
-    estimator: &'a dyn context::ContextEstimator,
+    estimator: Arc<dyn ContextEstimator>,
     result_cap: u64,
     round_cap: u64,
     used: u64,
 }
 
-impl<'a> RoundShare<'a> {
-    fn new(estimator: &'a dyn context::ContextEstimator, budget: context::ContextBudget) -> Self {
+impl RoundShare {
+    fn new(estimator: Arc<dyn ContextEstimator>, budget: context::ContextBudget) -> Self {
         let capacity = budget.max_request_weight().get() - budget.reserved_output_weight();
 
         Self {
@@ -1589,10 +1646,17 @@ impl<'a> RoundShare<'a> {
         }
     }
 
-    /// Whether a `read` result `content` for `call` weighs at most the
-    /// share one result may take.
-    fn result_fits(&self, call: &ToolCall, content: &str) -> bool {
-        self.weight(call, content) <= self.result_cap
+    /// Returns whether a `read` result for `call` weighs at most the share
+    /// one result may take.
+    fn result_fits(&self, call: &ToolCall) -> SharedResultFits {
+        let estimator = Arc::clone(&self.estimator);
+        let call_id = call.id().to_string();
+        let name = call.name().to_string();
+        let result_cap = self.result_cap;
+
+        Arc::new(move |content: &str| {
+            result_weight(estimator.as_ref(), &call_id, &name, content) <= result_cap
+        })
     }
 
     /// Counts the `result` of `call` toward the round and returns whether
@@ -1614,45 +1678,46 @@ impl<'a> RoundShare<'a> {
     /// Weighs `content` as the result message the request records for
     /// `call`, under that call's own tool name.
     fn weight(&self, call: &ToolCall, content: &str) -> u64 {
-        self.estimator.message_weight(&ModelMessage::ToolResult {
-            call_id: call.id().to_string(),
-            content: content.to_string(),
-            name: call.name().to_string(),
-        })
+        result_weight(self.estimator.as_ref(), call.id(), call.name(), content)
     }
 }
 
+/// Weighs `content` as the result message of call `call_id` to `name`.
+fn result_weight(
+    estimator: &dyn ContextEstimator,
+    call_id: &str,
+    name: &str,
+    content: &str,
+) -> u64 {
+    estimator.message_weight(&ModelMessage::ToolResult {
+        call_id: call_id.to_string(),
+        content: content.to_string(),
+        name: name.to_string(),
+    })
+}
+
 enum ToolExecution<'a> {
-    Bash(&'a BashTool, &'a BashArguments),
     /// A `read` whose round had no room for its result, answered with the
     /// exact call that fetches it, without running.
     DeferredRead(&'a ReadArguments),
-    Read(&'a ReadTool, &'a ReadArguments, ResultFits<'a>),
+    /// A call the turn's handler of its name runs.
+    Handler(&'a Arc<dyn ToolHandler>, ToolContext),
     /// A call whose arguments its tool could not decode, answered with an
     /// error result that lists the tool's argument fields.
     Malformed(&'a MalformedArguments, &'a TurnOptions),
     /// A `read` repeating the named earlier call, answered without running.
     RepeatedRead(&'a ReadArguments, &'a str),
-    Write(&'a WriteTool, &'a WriteArguments),
 }
 
 async fn execute_tool(
     execution: ToolExecution<'_>,
-    call_id: &str,
+    call: &ToolCall,
 ) -> Result<(String, ToolActivity), TurnError> {
     let started_at = Instant::now();
 
     match execution {
-        ToolExecution::Bash(tool, arguments) => {
-            let outcome = tool.execute(arguments, call_id).await?;
-            let result = serde_json::to_string(&outcome).map_err(|_| BashError::Execution)?;
-
-            Ok((
-                result,
-                ToolActivity::Bash {
-                    duration: started_at.elapsed(),
-                },
-            ))
+        ToolExecution::Handler(handler, context) => {
+            run_handler(handler.as_ref(), call, context, started_at).await
         }
         ToolExecution::DeferredRead(arguments) => Ok((
             context::deferred_read_result(arguments),
@@ -1662,9 +1727,6 @@ async fn execute_tool(
                 summary: sanitize_report_text(read_summary(arguments)),
             },
         )),
-        ToolExecution::Read(read_tool, arguments, fits) => {
-            execute_read_tool(read_tool, arguments, fits, started_at).await
-        }
         ToolExecution::Malformed(arguments, options) => Ok((
             malformed_arguments_result(arguments, options),
             ToolActivity::MalformedArguments {
@@ -1681,170 +1743,121 @@ async fn execute_tool(
                 summary: sanitize_report_text(read_summary(arguments)),
             },
         )),
-        ToolExecution::Write(write_tool, arguments) => {
-            execute_write_tool(write_tool, arguments, started_at, call_id).await
-        }
     }
 }
 
-async fn execute_read_tool(
-    read_tool: &ReadTool,
-    arguments: &ReadArguments,
-    fits: ResultFits<'_>,
+/// Runs `call` with `handler`. A built-in handler reports its own result
+/// and activity. A host handler's result is bounded: arguments that are not
+/// a JSON object and a rejection are answered with an error result, and an
+/// oversized result is dropped. A panic fails the turn as a tool failure.
+async fn run_handler(
+    handler: &dyn ToolHandler,
+    call: &ToolCall,
+    tool_context: ToolContext,
     started_at: Instant,
 ) -> Result<(String, ToolActivity), TurnError> {
-    if let Some(error) = arguments.validation_error() {
-        return reject_invalid_read_arguments(arguments, error, started_at);
-    }
-    if arguments.action() == ReadAction::File {
-        return execute_file_read(read_tool, arguments, fits, started_at).await;
-    }
-
-    execute_repository_inspection(read_tool, arguments, fits, started_at).await
-}
-
-fn reject_invalid_read_arguments(
-    arguments: &ReadArguments,
-    error: &str,
-    started_at: Instant,
-) -> Result<(String, ToolActivity), TurnError> {
-    let summary = read_summary(arguments);
-    let result = read::invalid_arguments_tool_result(error, summary).map_err(ReadError::from)?;
-    let activity = if arguments.action() == ReadAction::File {
-        ToolActivity::ReadRejected {
-            duration: started_at.elapsed(),
-            path: sanitize_report_text(summary),
-        }
-    } else {
-        ToolActivity::ReadInspectionRejected {
-            action: arguments.action(),
-            duration: started_at.elapsed(),
-            summary: sanitize_report_text(summary),
+    let name = call.name();
+    let arguments = match call.arguments_value() {
+        Ok(arguments) => arguments,
+        Err(reason) => {
+            return Ok(rejected_call(
+                name,
+                HostToolOutcome::InvalidArguments,
+                &reason,
+                started_at,
+            ));
         }
     };
-
-    Ok((result, activity))
-}
-
-async fn execute_file_read(
-    read_tool: &ReadTool,
-    arguments: &ReadArguments,
-    fits: ResultFits<'_>,
-    started_at: Instant,
-) -> Result<(String, ToolActivity), TurnError> {
-    match read_tool.execute(arguments).await {
-        Ok(output) => match output.to_tool_result_within(fits) {
-            Ok((result, shown)) => Ok((
-                result,
-                ToolActivity::Read {
-                    duration: started_at.elapsed(),
-                    end_line: shown.end_line(),
-                    path: sanitize_report_text(shown.path()),
-                    start_line: shown.start_line(),
-                    truncated: shown.truncated(),
-                },
+    let result = CatchUnwind(handler.call(arguments, tool_context))
+        .await
+        .map_err(|_| TurnError::ToolFailed {
+            source: "the handler panicked".into(),
+            tool: name.to_string(),
+        })?;
+    match result {
+        Ok(output) => Ok(match output.into_parts() {
+            (content, Some(activity)) => (content, activity),
+            (content, None) if content.len() > MAX_TOOL_RESULT_BYTES => (
+                oversized_result(content.len()),
+                host_activity(name, HostToolOutcome::ResultTooLarge, started_at),
+            ),
+            (content, None) => (
+                content,
+                host_activity(name, HostToolOutcome::Completed, started_at),
+            ),
+        }),
+        Err(error) => match error.kind {
+            ToolErrorKind::Rejected(feedback) => Ok(rejected_call(
+                name,
+                HostToolOutcome::Rejected,
+                &feedback,
+                started_at,
             )),
-            Err(error) => error
-                .to_tool_result(output.path())
-                .map_err(ReadError::from)
-                .map_err(TurnError::from)
-                .map(|result| {
-                    (
-                        result,
-                        ToolActivity::ReadRejected {
-                            duration: started_at.elapsed(),
-                            path: sanitize_report_text(output.path()),
-                        },
-                    )
-                }),
+            ToolErrorKind::Failed(source) => Err(TurnError::ToolFailed {
+                source,
+                tool: name.to_string(),
+            }),
+            ToolErrorKind::Turn(error) => Err(*error),
         },
-        Err(error) if error.is_model_correctable() => error
-            .to_tool_result(arguments.path())
-            .map_err(ReadError::from)
-            .map_err(TurnError::from)
-            .map(|result| {
-                (
-                    result,
-                    ToolActivity::ReadRejected {
-                        duration: started_at.elapsed(),
-                        path: sanitize_report_text(arguments.path()),
-                    },
-                )
-            }),
-        Err(error) => Err(error.into()),
     }
 }
 
-async fn execute_repository_inspection(
-    read_tool: &ReadTool,
-    arguments: &ReadArguments,
-    fits: ResultFits<'_>,
-    started_at: Instant,
-) -> Result<(String, ToolActivity), TurnError> {
-    let fallback_summary = read_summary(arguments);
-    match read_tool.execute_inspection(arguments, fits).await {
-        Ok((result, summary)) => Ok((
-            result,
-            ToolActivity::ReadInspection {
-                action: arguments.action(),
-                arguments: serde_json::to_string(arguments).map_err(ReadError::from)?,
-                duration: started_at.elapsed(),
-                summary: sanitize_report_text(&summary),
-            },
-        )),
-        Err(error) if error.is_model_correctable() => error
-            .to_tool_result(fallback_summary)
-            .map_err(ReadError::from)
-            .map_err(TurnError::from)
-            .map(|result| {
-                (
-                    result,
-                    ToolActivity::ReadInspectionRejected {
-                        action: arguments.action(),
-                        duration: started_at.elapsed(),
-                        summary: sanitize_report_text(fallback_summary),
-                    },
-                )
-            }),
-        Err(error) => Err(error.into_read_error(fallback_summary.to_string()).into()),
-    }
-}
+/// Polls a tool call, resolving to the panic that interrupted it instead
+/// of unwinding through the turn.
+struct CatchUnwind<'a, T>(Pin<Box<dyn Future<Output = T> + Send + 'a>>);
 
-async fn execute_write_tool(
-    write_tool: &WriteTool,
-    arguments: &WriteArguments,
-    started_at: Instant,
-    call_id: &str,
-) -> Result<(String, ToolActivity), TurnError> {
-    match write_tool.execute(arguments, call_id).await {
-        Ok(output) => {
-            let activity = ToolActivity::Write {
-                bytes_written: output.bytes_written(),
-                duration: started_at.elapsed(),
-                path: sanitize_report_text(output.path()),
-            };
-            let result = output
-                .to_tool_result()
-                .map_err(WriteError::from)
-                .map_err(TurnError::from)?;
+impl<T> Future for CatchUnwind<'_, T> {
+    type Output = std::thread::Result<T>;
 
-            Ok((result, activity))
+    fn poll(mut self: Pin<&mut Self>, context: &mut TaskContext<'_>) -> Poll<Self::Output> {
+        let future = &mut self.0;
+        match panic::catch_unwind(AssertUnwindSafe(|| future.as_mut().poll(context))) {
+            Ok(Poll::Pending) => Poll::Pending,
+            Ok(Poll::Ready(output)) => Poll::Ready(Ok(output)),
+            Err(payload) => Poll::Ready(Err(payload)),
         }
-        Err(error) if error.is_model_correctable() => error
-            .to_tool_result(arguments.path())
-            .map_err(WriteError::from)
-            .map_err(TurnError::from)
-            .map(|result| {
-                (
-                    result,
-                    ToolActivity::WriteRejected {
-                        duration: started_at.elapsed(),
-                        path: sanitize_report_text(arguments.path()),
-                    },
-                )
-            }),
-        Err(error) => Err(error.into()),
     }
+}
+
+/// Reports a host tool call to `name` answered with `outcome`.
+fn host_activity(name: &str, outcome: HostToolOutcome, started_at: Instant) -> ToolActivity {
+    ToolActivity::Host {
+        duration: started_at.elapsed(),
+        outcome,
+        tool: name.to_string(),
+    }
+}
+
+/// Answers a host tool call to `name` that did not run, or that its handler
+/// rejected, with an error result naming `reason`.
+fn rejected_call(
+    name: &str,
+    outcome: HostToolOutcome,
+    reason: &str,
+    started_at: Instant,
+) -> (String, ToolActivity) {
+    let result = json!({
+        "error": schema_contract::bounded_diagnostic(reason),
+        "status": "rejected",
+    })
+    .to_string();
+
+    (result, host_activity(name, outcome, started_at))
+}
+
+/// Tells the model a host tool ran but its `bytes`-byte result was
+/// dropped, so it does not repeat the call's effects to see it.
+fn oversized_result(bytes: usize) -> String {
+    json!({
+        "error": format!(
+            "the tool ran, but its {bytes}-byte result is over the {MAX_TOOL_RESULT_BYTES}-byte \
+             limit and was dropped"
+        ),
+        "hint": "The call's effects already happened; do not repeat it to see the result. Ask \
+                 for less output if the tool supports it.",
+        "status": OUTPUT_TOO_LARGE_STATUS,
+    })
+    .to_string()
 }
 
 /// Counts the malformed calls of one response and the run of responses
@@ -1852,8 +1865,10 @@ async fn execute_write_tool(
 /// [`MAX_CONSECUTIVE_MALFORMED_TOOL_RESPONSES`]. A malformed call is
 /// journaled and answered with an error result like any other call; only a
 /// model that sends nothing else for several responses in a row fails the
-/// turn, unjournaled. A malformed call to a tool `tools` does not enable is
-/// answered as unavailable and bounded by the repetition guard instead.
+/// turn, unjournaled. A host tool call whose arguments are not a JSON
+/// object counts as malformed too. A malformed call to a tool `tools` does
+/// not enable is answered as unavailable and bounded by the repetition guard
+/// instead.
 fn count_malformed(
     calls: &[ToolCall],
     tools: &Tools,
@@ -1861,20 +1876,17 @@ fn count_malformed(
 ) -> Result<usize, TurnError> {
     let malformed = calls
         .iter()
-        .filter_map(ToolCall::malformed_arguments)
-        .filter(|arguments| tools.allows(arguments.tool()))
+        .filter_map(|call| malformed_call(call, tools))
         .collect::<Vec<_>>();
     if malformed.len() < calls.len() {
         *consecutive = 0;
     } else {
         *consecutive += 1;
         if *consecutive == MAX_CONSECUTIVE_MALFORMED_TOOL_RESPONSES {
+            let (name, reason) = &malformed[0];
+
             return Err(ModelError::InvalidToolArguments {
-                reason: schema_contract::bounded_diagnostic(format!(
-                    "`{}`: {}",
-                    malformed[0].tool().name(),
-                    malformed[0].reason()
-                )),
+                reason: schema_contract::bounded_diagnostic(format!("`{name}`: {reason}")),
             }
             .into());
         }
@@ -1883,13 +1895,22 @@ fn count_malformed(
     Ok(malformed.len())
 }
 
-/// Returns the bounded report summary of a `read`: its path, else its
-/// query, else the tool name.
-fn read_summary(arguments: &ReadArguments) -> &str {
-    arguments
-        .path_filter()
-        .or_else(|| arguments.query())
-        .unwrap_or("read")
+/// Returns the tool name and decoding failure of `call` when it calls a
+/// tool `tools` offers with arguments that tool cannot decode.
+fn malformed_call(call: &ToolCall, tools: &Tools) -> Option<(String, String)> {
+    if let Some(arguments) = call.malformed_arguments() {
+        let tool = arguments.tool();
+
+        return tools
+            .allows(tool)
+            .then(|| (tool.name().to_string(), arguments.reason().to_string()));
+    }
+    call.unknown_tool()?;
+    tools.handler_for(call)?;
+
+    call.arguments_value()
+        .err()
+        .map(|reason| (call.name().to_string(), reason))
 }
 
 /// Renders the bounded feedback that re-requests a rejected final output.

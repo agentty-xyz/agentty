@@ -7,7 +7,7 @@ use serde_json::{Value, json};
 use super::{
     MAX_PATCH_BYTES, MAX_PATH_BYTES, MAX_QUERY_BYTES, MAX_TOOL_CALL_ID_BYTES, READ_DESCRIPTION,
     ReadAction, ReadArguments, ReadSide, Tool, ToolCall, ToolCallArguments, ToolDefinition,
-    WriteArguments,
+    ToolDefinitionError, WriteArguments,
 };
 use crate::bash::Enforcement;
 use crate::{ComparisonBase, model, schema_contract};
@@ -858,4 +858,115 @@ fn tool_call_from_json_keeps_unknown_tools_verbatim() {
             .unknown_tool()
             .is_none()
     );
+}
+
+#[test]
+fn host_definitions_need_a_replayable_name_and_an_object_schema() {
+    // Arrange
+    let parameters = json!({"type": "object", "properties": {"url": {"type": "string"}}});
+
+    // Act
+    let definition = ToolDefinition::new("fetch-url_2", "Fetch a URL.", parameters.clone());
+    let invalid_name = ToolDefinition::new("fetch.url", "Fetch a URL.", parameters.clone());
+    let empty_name = ToolDefinition::new("", "Fetch a URL.", parameters);
+    let invalid_parameters =
+        ToolDefinition::new("fetch", "Fetch a URL.", json!({"type": "string"}));
+
+    // Assert
+    let definition = definition.expect("valid definition");
+    assert_eq!(definition.name(), "fetch-url_2");
+    assert_eq!(definition.description(), "Fetch a URL.");
+    assert_eq!(
+        definition.parameters()["properties"]["url"]["type"],
+        "string"
+    );
+    let invalid_name = invalid_name.expect_err("invalid name");
+    assert_eq!(
+        invalid_name,
+        ToolDefinitionError::InvalidName {
+            name: "fetch.url".to_string()
+        }
+    );
+    assert_eq!(
+        invalid_name.to_string(),
+        "tool name `fetch.url` must be 1 to 64 ASCII letters, digits, `_`, or `-`"
+    );
+    assert!(matches!(
+        empty_name,
+        Err(ToolDefinitionError::InvalidName { .. })
+    ));
+    let invalid_parameters = invalid_parameters.expect_err("invalid parameters");
+    assert_eq!(invalid_parameters, ToolDefinitionError::InvalidParameters);
+    assert_eq!(
+        invalid_parameters.to_string(),
+        r#"tool parameters must be a JSON Schema object with "type": "object""#
+    );
+}
+
+#[test]
+fn arguments_value_is_what_a_handler_receives() {
+    // Arrange
+    let call = |name: &str, raw: &str| {
+        ToolCall::from_json("call-id".to_string(), name, raw, None).expect("tool call")
+    };
+    let read = call("read", r#"{"path":"a.txt","limit":"5"}"#);
+    let write = call("write", r#"{"path":"a.txt","patch":"+x"}"#);
+    let bash = call("bash", r#"{"command":"true"}"#);
+    let host = call("fetch", r#"{"url":"https://example.com"}"#);
+    let malformed = call("read", r#"{"path":"a.txt","extra":1}"#);
+    let unparsable = call("fetch", r#"{"url""#);
+    let blank = call("fetch", " ");
+    let not_object = call("fetch", "[1]");
+
+    // Act / Assert
+    assert_eq!(
+        read.arguments_value().expect("read"),
+        json!({"path": "a.txt", "limit": 5})
+    );
+    assert_eq!(
+        write.arguments_value().expect("write"),
+        json!({"path": "a.txt", "patch": "+x"})
+    );
+    assert_eq!(
+        bash.arguments_value().expect("bash"),
+        json!({"command": "true"})
+    );
+    assert_eq!(
+        host.arguments_value().expect("host"),
+        json!({"url": "https://example.com"})
+    );
+    assert_eq!(
+        malformed.arguments_value().expect("malformed but JSON"),
+        json!({"path": "a.txt", "extra": 1})
+    );
+    assert!(
+        unparsable
+            .arguments_value()
+            .expect_err("not JSON")
+            .starts_with("failed to parse function arguments: ")
+    );
+    assert_eq!(blank.arguments_value().expect("blank"), json!({}));
+    assert_eq!(
+        not_object.arguments_value().expect_err("not an object"),
+        "function arguments must be a JSON object"
+    );
+}
+
+#[test]
+fn only_a_name_providers_cannot_replay_is_marked_renamed() {
+    // Arrange
+    let call = |name: &str| {
+        ToolCall::from_json("call-id".to_string(), name, "{}", None).expect("tool call")
+    };
+
+    // Act
+    let renamed = [
+        call("lookup.issue"),
+        call(&"x".repeat(65)),
+        call("lookup_issue"),
+    ]
+    .map(|call| call.unknown_tool().expect("unknown tool").renamed());
+
+    // Assert
+    assert_eq!(renamed, [true, true, false]);
 }

@@ -22,7 +22,7 @@ use crate::cancellation::{
 use crate::catalog::Pricing;
 use crate::comparison::ComparisonBase;
 use crate::error::{ErrorKind, RunError};
-use crate::event::{EventSink, EventStream};
+use crate::event::{EventSink, EventStream, RunId};
 use crate::input::TurnInput;
 use crate::limit::RunLimits;
 use crate::model::CompletionUsage;
@@ -30,6 +30,7 @@ use crate::policy::ToolPolicy;
 use crate::request_option::{GenerationParams, OutputMode};
 use crate::session::SessionError;
 use crate::store::SessionStore;
+use crate::tool::ToolSet;
 use crate::turn::{ModelRequestActivity, TurnOptions, TurnReport};
 use crate::usage::Cost;
 use crate::write_journal::{WriteRecord, WriteStatus};
@@ -39,7 +40,7 @@ use crate::write_journal::{WriteRecord, WriteStatus};
 ///
 /// Every option applies to this run only and never changes a session's
 /// stored defaults. An unset option keeps the default: the session's stored
-/// output mode and the harness's default tool policy.
+/// output mode and the harness's default tool policy and tool set.
 #[derive(Clone)]
 #[must_use = "a run request does nothing until a run is started with it"]
 #[non_exhaustive]
@@ -53,6 +54,7 @@ pub struct RunRequest {
     limits: RunLimits,
     output: Option<OutputMode>,
     tool_policy: Option<ToolPolicy>,
+    tools: Option<ToolSet>,
 }
 
 impl RunRequest {
@@ -68,6 +70,7 @@ impl RunRequest {
             limits: RunLimits::default(),
             output: None,
             tool_policy: None,
+            tools: None,
         }
     }
 
@@ -80,6 +83,16 @@ impl RunRequest {
     /// before the run starts.
     pub fn limits(mut self, limits: RunLimits) -> Self {
         self.limits = limits;
+
+        self
+    }
+
+    /// Replaces the harness's default tool set for this run, like
+    /// [`TurnOptions::with_tools`]; built-ins in it still need the tool
+    /// policy. The sets are never merged: to add a tool to a default, such
+    /// as [`ToolSet::builtins`], extend it with [`ToolSet::to_builder`].
+    pub fn tools(mut self, tools: ToolSet) -> Self {
+        self.tools = Some(tools);
 
         self
     }
@@ -152,8 +165,8 @@ impl RunRequest {
         self.budget.clone()
     }
 
-    /// Resolves the input and turn options, using `default_output` and
-    /// `default_policy` for unset options.
+    /// Resolves the input and turn options, using `default_output`,
+    /// `default_policy`, and `default_tools` for unset options.
     ///
     /// # Errors
     /// Returns a [`ErrorKind::Config`] failure when neither the request nor
@@ -162,6 +175,7 @@ impl RunRequest {
         self,
         default_output: Option<&OutputMode>,
         default_policy: ToolPolicy,
+        default_tools: &ToolSet,
     ) -> Result<(TurnInput, TurnOptions), RunError> {
         if self.limits.is_unsatisfiable() {
             return Err(RunError::with_kind(ErrorKind::Config, ZeroWallTime));
@@ -170,9 +184,11 @@ impl RunRequest {
             .output
             .or_else(|| default_output.cloned())
             .ok_or_else(|| RunError::with_kind(ErrorKind::Config, OutputRequired))?;
+        let tools = self.tools.unwrap_or_else(|| default_tools.clone());
         let mut options = TurnOptions::new(output, self.tool_policy.unwrap_or(default_policy))
             .with_generation(self.generation)
-            .with_limits(self.limits);
+            .with_limits(self.limits)
+            .with_tools(tools);
         if let Some(configuration) = self.bash {
             options = options.with_bash(configuration);
         }
@@ -201,6 +217,7 @@ pub struct Run {
     cancel: CancelToken,
     events: Option<Arc<EventSink>>,
     journal: RunJournal,
+    id: RunId,
     turn: ControlledTurn<'static, RunError>,
 }
 
@@ -223,10 +240,9 @@ impl Run {
     /// the stream concurrently: the run waits while too many events are
     /// unread, although cancelling it still resolves its outcome. Dropping
     /// the stream discards later events without stalling or cancelling the
-    /// run. Only a split run has a [`crate::event::RunId`], carried by its
-    /// events.
+    /// run. Every event carries the run's [`RunId`].
     pub fn into_parts(mut self) -> (EventStream, RunHandle) {
-        let (sink, stream) = EventSink::channel();
+        let (sink, stream) = EventSink::channel(self.id.clone());
         self.cancel.control.attach_events(&sink);
         self.events = Some(sink);
 
@@ -235,11 +251,14 @@ impl Run {
 
     /// Wraps a controlled turn whose durable records `journal` locates.
     pub(crate) fn new(turn: ControlledTurn<'static, RunError>, journal: RunJournal) -> Self {
+        let control = turn.control();
+        let id = RunId::generate();
+        control.assign_run(id.clone());
+
         Self {
-            cancel: CancelToken {
-                control: turn.control(),
-            },
+            cancel: CancelToken { control },
             events: None,
+            id,
             journal,
             turn,
         }
@@ -253,6 +272,7 @@ impl Run {
             events,
             journal,
             turn,
+            ..
         } = self;
         let started_at = Instant::now();
         let result = turn.await;

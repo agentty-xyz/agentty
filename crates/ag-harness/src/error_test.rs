@@ -196,6 +196,13 @@ fn classifies_every_turn_failure() {
             TurnError::limit_reached(LimitKind::ToolCalls),
             ErrorKind::BudgetExhausted(LimitKind::ToolCalls),
         ),
+        (
+            TurnError::ToolFailed {
+                source: "connection refused".into(),
+                tool: "fetch".to_string(),
+            },
+            ErrorKind::ToolFailed,
+        ),
     ];
 
     for (error, expected) in cases {

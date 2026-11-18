@@ -1,0 +1,221 @@
+{
+  "read": [
+    "read",
+    "Inspect repository worktree text with file, list, or search, or use show with side head for committed text. No comparison base is configured; diff and show(base) are unavailable. File and show accept path and optional offset/limit; list accepts optional path/limit; search requires a literal query (not a regex) and accepts optional path/limit. File/show offsets are one-based lines. On truncation follow next_offset for file/show; narrow other requests.",
+    {
+      "type": "object",
+      "properties": {
+        "action": {
+          "type": "string",
+          "enum": [
+            "file",
+            "list",
+            "search",
+            "show"
+          ]
+        },
+        "path": {
+          "type": [
+            "string",
+            "null"
+          ],
+          "minLength": 1,
+          "maxLength": 4096,
+          "pattern": "^(?:[^./\\\\\\u0000][^/\\\\\\u0000]*|\\.[^./\\\\\\u0000][^/\\\\\\u0000]*|\\.\\.[^/\\\\\\u0000]+)(?:/(?:[^./\\\\\\u0000][^/\\\\\\u0000]*|\\.[^./\\\\\\u0000][^/\\\\\\u0000]*|\\.\\.[^/\\\\\\u0000]+))*$",
+          "not": {
+            "type": "string",
+            "pattern": "(^|/)\\.[gG][iI][tT](/|$)"
+          }
+        },
+        "query": {
+          "type": [
+            "string",
+            "null"
+          ],
+          "minLength": 1,
+          "maxLength": 4096,
+          "pattern": "^[^\\u0000]*$"
+        },
+        "side": {
+          "type": [
+            "string",
+            "null"
+          ],
+          "enum": [
+            "head",
+            null
+          ]
+        },
+        "offset": {
+          "type": [
+            "integer",
+            "null"
+          ],
+          "minimum": 1,
+          "maximum": 18446744073709551615
+        },
+        "limit": {
+          "type": [
+            "integer",
+            "null"
+          ],
+          "minimum": 1,
+          "maximum": 18446744073709551615
+        }
+      },
+      "additionalProperties": false
+    }
+  ],
+  "write": [
+    "write",
+    "Apply one unified diff to one repository-relative text file. Hunk line counts are taken from the hunk body. A hunk whose context and removed lines do not match at its `@@` start line applies only where they match exactly one place in the file; copy those lines exactly and add context when they repeat. A hunk with only `+` lines needs a `-N,0` header to insert after line N. To create an empty file, use only `--- /dev/null` and `+++ b/<path>` headers.",
+    {
+      "type": "object",
+      "properties": {
+        "path": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 4096,
+          "pattern": "^(?:[^./\\\\\\u0000][^/\\\\\\u0000]*|\\.[^./\\\\\\u0000][^/\\\\\\u0000]*|\\.\\.[^/\\\\\\u0000]+)(?:/(?:[^./\\\\\\u0000][^/\\\\\\u0000]*|\\.[^./\\\\\\u0000][^/\\\\\\u0000]*|\\.\\.[^/\\\\\\u0000]+))*$",
+          "not": {
+            "type": "string",
+            "pattern": "(^|/)\\.[gG][iI][tT](/|$)"
+          }
+        },
+        "patch": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 1048576
+        }
+      },
+      "required": [
+        "path",
+        "patch"
+      ],
+      "additionalProperties": false
+    }
+  ],
+  "bash_none": [
+    "bash",
+    "Run Bash directly on the host without a sandbox. Commands run with the host process's own access; writes and network access are not restricted by the harness. Output and duration are bounded; long output keeps each stream's start and end. Applied writes are not rolled back.",
+    {
+      "type": "object",
+      "properties": {
+        "command": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 65536
+        }
+      },
+      "required": [
+        "command"
+      ],
+      "additionalProperties": false
+    }
+  ],
+  "read_with_base": [
+    "read",
+    "Inspect the repository with one bounded read-only action. Use `file` with `path` and optional `offset`/`limit` for worktree text; `list` with optional `path`/`limit`; `search` with `query` and optional `path`/`limit`; `diff` with optional `path` for changes from the host-selected commit; or `show` with `path`, `side` (`base` or `head`), and optional `offset`/`limit`. Search queries are literal strings, not regular expressions. File/show offsets are one-based line numbers and limits count lines. If truncated, continue file/show at next_offset; narrow list/search/diff when no continuation is supplied. Comparison base OID: 1111111111111111111111111111111111111111.",
+    {
+      "type": "object",
+      "properties": {
+        "action": {
+          "type": "string",
+          "enum": [
+            "file",
+            "list",
+            "search",
+            "diff",
+            "show"
+          ]
+        },
+        "path": {
+          "type": [
+            "string",
+            "null"
+          ],
+          "minLength": 1,
+          "maxLength": 4096,
+          "pattern": "^(?:[^./\\\\\\u0000][^/\\\\\\u0000]*|\\.[^./\\\\\\u0000][^/\\\\\\u0000]*|\\.\\.[^/\\\\\\u0000]+)(?:/(?:[^./\\\\\\u0000][^/\\\\\\u0000]*|\\.[^./\\\\\\u0000][^/\\\\\\u0000]*|\\.\\.[^/\\\\\\u0000]+))*$",
+          "not": {
+            "type": "string",
+            "pattern": "(^|/)\\.[gG][iI][tT](/|$)"
+          }
+        },
+        "query": {
+          "type": [
+            "string",
+            "null"
+          ],
+          "minLength": 1,
+          "maxLength": 4096,
+          "pattern": "^[^\\u0000]*$"
+        },
+        "side": {
+          "type": [
+            "string",
+            "null"
+          ],
+          "enum": [
+            "base",
+            "head",
+            null
+          ]
+        },
+        "offset": {
+          "type": [
+            "integer",
+            "null"
+          ],
+          "minimum": 1,
+          "maximum": 18446744073709551615
+        },
+        "limit": {
+          "type": [
+            "integer",
+            "null"
+          ],
+          "minimum": 1,
+          "maximum": 18446744073709551615
+        }
+      },
+      "additionalProperties": false
+    }
+  ],
+  "bash_file_system": [
+    "bash",
+    "Run Bash inside a host filesystem sandbox. Workspace reads are allowed; writes require host grants. Network access is not restricted by the harness. Output and duration are bounded; long output keeps each stream's start and end. Applied writes are not rolled back.",
+    {
+      "type": "object",
+      "properties": {
+        "command": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 65536
+        }
+      },
+      "required": [
+        "command"
+      ],
+      "additionalProperties": false
+    }
+  ],
+  "bash_file_system_and_network": [
+    "bash",
+    "Run Bash inside the host sandbox. Workspace reads are allowed; writes require host grants. Network access is denied. Output and duration are bounded; long output keeps each stream's start and end. Applied writes are not rolled back.",
+    {
+      "type": "object",
+      "properties": {
+        "command": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 65536
+        }
+      },
+      "required": [
+        "command"
+      ],
+      "additionalProperties": false
+    }
+  ]
+}

@@ -122,12 +122,12 @@ use ag_harness::store::{SessionInfo, WriteStatus};
 use ag_harness::tool::LocalFileSystem;
 use ag_harness::tool::{FileSystem, ToolCall, ToolDefinition};
 #[cfg(feature = "sqlite")]
-use ag_harness::{ComparisonBase, RunOutput, RunRequest, Session, SessionBuilder};
+use ag_harness::{ComparisonBase, Session, SessionBuilder};
 use ag_harness::{
     ErrorKind, Harness, HarnessBuildError, HarnessError, ImageContent, ImageMediaType, InputBlock,
     Model, ModelCatalog, ModelError, ModelSelector, OutputSchema, OutputSchemaError, Repository,
-    RepositoryError, Role, RunError, SessionError, Tool, ToolPolicy, TurnError, TurnInput,
-    TurnInputError, TurnOptions,
+    RepositoryError, Role, RunError, RunOutput, RunRequest, SessionError, Tool, ToolPolicy,
+    TurnError, TurnInput, TurnInputError, TurnOptions,
 };
 use async_trait::async_trait;
 use serde_json::json;
@@ -457,7 +457,95 @@ struct ExternalMetadataModel;
 const _: fn() = || {
     fn assert_shareable<T: Clone + Send + Sync + 'static>() {}
     assert_shareable::<Harness>();
+    assert_shareable::<ag_harness::ToolSet>();
+    assert_shareable::<ag_harness::tool::ToolContext>();
 };
+
+/// A host tool an external crate defines.
+struct Clock(ag_harness::tool::ToolDefinition);
+
+#[async_trait]
+impl ag_harness::ToolHandler for Clock {
+    fn definition(&self) -> ag_harness::tool::ToolDefinition {
+        self.0.clone()
+    }
+
+    fn effects(&self) -> ag_harness::tool::ToolEffects {
+        ag_harness::tool::ToolEffects::ReadOnly
+    }
+
+    async fn call(
+        &self,
+        _arguments: serde_json::Value,
+        context: ag_harness::tool::ToolContext,
+    ) -> Result<ag_harness::tool::ToolOutput, ag_harness::tool::ToolError> {
+        Ok(ag_harness::tool::ToolOutput::new(
+            json!({"call": context.call_id()}).to_string(),
+        ))
+    }
+}
+
+/// Calls `clock` once, then answers with the call's result.
+struct ClockModel;
+
+#[async_trait]
+impl Model for ClockModel {
+    async fn complete(&self, request: ModelRequest) -> Result<ModelCompletion, ModelError> {
+        let response = match request.messages().last() {
+            Some(ModelMessage::ToolResult { content, .. }) => ModelResponse::Output(json!({
+                "clock": serde_json::from_str::<serde_json::Value>(content)
+                    .map_err(ModelError::request)?,
+            })),
+            _ => ModelResponse::ToolCall(ToolCall::from_json(
+                "call_1".to_string(),
+                "clock",
+                "{}",
+                None,
+            )?),
+        };
+
+        Ok(ModelCompletion::from_response(response))
+    }
+}
+
+#[tokio::test]
+async fn external_consumer_runs_a_turn_with_its_tool_handler() -> Result<(), Box<dyn Error>> {
+    // Arrange
+    let definition = ToolDefinition::new("clock", "Read the clock.", json!({"type": "object"}))?;
+    let tools = ag_harness::ToolSet::builder()
+        .read()
+        .handler(Arc::new(Clock(definition)))
+        .build()?;
+    let harness = Harness::builder()
+        .model(Arc::new(ClockModel))
+        .context_budget(unbounded_context_budget())
+        .tools(tools)
+        .build()?;
+
+    // Act
+    let outcome = harness
+        .run(
+            RunRequest::new("What time is it?")
+                .output(OutputSchema::new(json!({"type": "object"}))?),
+        )
+        .await;
+
+    // Assert
+    assert!(matches!(
+        outcome.result?,
+        RunOutput::Json(output) if output == json!({"clock": {"call": "call_1"}})
+    ));
+    assert!(matches!(
+        outcome.report.tool_calls(),
+        [ag_harness::turn::ToolActivity::Host {
+            outcome: ag_harness::turn::HostToolOutcome::Completed,
+            tool,
+            ..
+        }] if tool == "clock"
+    ));
+
+    Ok(())
+}
 
 #[test]
 fn builder_requires_a_budget_for_a_model_without_a_declared_profile() {

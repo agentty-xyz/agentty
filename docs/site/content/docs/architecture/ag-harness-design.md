@@ -27,8 +27,11 @@ flowchart LR
 
 ## Core features
 
-- **Three built-in tools** — `read`, `write` (git-style patches), and sandboxed `bash`.
-- **Deny-by-default permissions** — every tool call passes an explicit per-turn policy.
+- **Open tool handlers** — every tool is a `ToolHandler` in an ordered, name-unique
+  `ToolSet`; the built-in `read`, `write` (git-style patches), and sandboxed `bash` are
+  handlers bound to the turn's repository and journal.
+- **Deny-by-default permissions** — built-ins also pass an explicit per-turn policy;
+  host handlers run only when the host adds them to the turn's set.
 - **Structured output** — every turn validates against a caller-supplied JSON schema.
 - **Durable sessions** — SQLite by default; memory and custom stores share the same
   public contract.
@@ -70,8 +73,10 @@ explicitly. `ag-router` stays unsplit: it compiles every provider transport eith
   and gives it its own prompt-cache key; the source is never changed. Transcripts reuse
   the live `event::Item` shape. Durable and stateless turns can be awaited or started
   for a `TurnControl`.
-- `TurnOptions` fixes the schema, `ToolPolicy`, and optional `ComparisonBase` for one
-  execution. Explicit options replace defaults; they are never merged.
+- `TurnOptions` fixes the output mode, `ToolPolicy`, `ToolSet`, and optional
+  `ComparisonBase` for one execution. Explicit options replace defaults; they are never
+  merged. The engine dispatches each call by name to the turn's handler; read repeats,
+  deferrals, and malformed or unavailable calls are answered before any handler runs.
 - `Model` is the object-safe provider boundary. `ModelRegistry` resolves built-in or
   injected models by stable host keys; each registration's `ModelProfile` declares its
   context window and estimator parameters. Hosts own per-model values; the harness holds

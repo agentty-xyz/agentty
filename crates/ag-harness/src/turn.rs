@@ -25,7 +25,7 @@ use crate::policy::ToolPolicy;
 use crate::read::ReadError;
 use crate::request_option::{GenerationParams, OutputMode};
 use crate::schema_contract::OutputSchema;
-use crate::tool::{ReadAction, Tool};
+use crate::tool::{ReadAction, Tool, ToolSet};
 use crate::write::WriteError;
 
 /// Fully resolved configuration, fixed for the lifetime of one engine run.
@@ -45,11 +45,12 @@ pub struct TurnOptions {
     limits: RunLimits,
     output: OutputMode,
     tool_policy: ToolPolicy,
+    tools: ToolSet,
 }
 
 impl TurnOptions {
     /// Resolves an output mode, usually a JSON [`OutputSchema`], and
-    /// explicit permissions.
+    /// explicit permissions, offering the built-in tools the policy allows.
     pub fn new(output: impl Into<OutputMode>, tool_policy: ToolPolicy) -> Self {
         Self {
             bash: None,
@@ -59,6 +60,7 @@ impl TurnOptions {
             limits: RunLimits::default(),
             output: output.into(),
             tool_policy,
+            tools: ToolSet::builtins(),
         }
     }
 
@@ -67,6 +69,16 @@ impl TurnOptions {
     #[must_use]
     pub(crate) fn with_limits(mut self, limits: RunLimits) -> Self {
         self.limits = limits;
+
+        self
+    }
+
+    /// Offers `tools` in this turn instead of [`ToolSet::builtins`]. A
+    /// built-in in the set is still offered only while the tool policy
+    /// allows it.
+    #[must_use]
+    pub fn with_tools(mut self, tools: ToolSet) -> Self {
+        self.tools = tools;
 
         self
     }
@@ -114,6 +126,11 @@ impl TurnOptions {
     /// Returns the form of the turn's final answer.
     pub fn output(&self) -> &OutputMode {
         &self.output
+    }
+
+    /// Returns the tools this turn may offer.
+    pub fn tools(&self) -> &ToolSet {
+        &self.tools
     }
 
     /// Selects immutable Bash host policy for this turn. The separate Bash
@@ -771,6 +788,52 @@ pub enum ToolActivity {
         /// Repository-relative path that was rejected.
         path: String,
     },
+    /// A call to a host [`crate::ToolHandler`]. Arguments and results are
+    /// never reported.
+    #[non_exhaustive]
+    Host {
+        /// Elapsed tool-execution time.
+        duration: Duration,
+        /// How the call was answered.
+        outcome: HostToolOutcome,
+        /// Function name of the handler's tool.
+        tool: String,
+    },
+}
+
+/// How the harness answered a call to a host [`crate::ToolHandler`].
+#[derive(Clone, Copy, Debug, Deserialize, Eq, Hash, PartialEq, Serialize)]
+#[serde(rename_all = "snake_case")]
+#[non_exhaustive]
+pub enum HostToolOutcome {
+    /// The handler ran and its output was sent to the model.
+    Completed,
+    /// The handler rejected the call with [`crate::tool::ToolError::rejected`],
+    /// and the model was told why.
+    Rejected,
+    /// The arguments were not a JSON object, so the handler did not run.
+    InvalidArguments,
+    /// The handler ran, but its output was over 64 KiB and was dropped; the
+    /// model was told the call ran.
+    ResultTooLarge,
+}
+
+impl HostToolOutcome {
+    /// Returns whether the handler did not run or rejected the call, so the
+    /// model was told to correct it.
+    pub(crate) fn is_rejected(self) -> bool {
+        matches!(self, Self::Rejected | Self::InvalidArguments)
+    }
+
+    /// Returns the outcome as a report phrase.
+    fn label(self) -> &'static str {
+        match self {
+            Self::Completed => "completed",
+            Self::Rejected => "rejected",
+            Self::InvalidArguments => "invalid arguments",
+            Self::ResultTooLarge => "result too large",
+        }
+    }
 }
 
 impl ToolActivity {
@@ -787,7 +850,8 @@ impl ToolActivity {
             | Self::MalformedArguments { duration, .. }
             | Self::Unavailable { duration, .. }
             | Self::Write { duration, .. }
-            | Self::WriteRejected { duration, .. } => *duration,
+            | Self::WriteRejected { duration, .. }
+            | Self::Host { duration, .. } => *duration,
         }
     }
 
@@ -803,15 +867,18 @@ impl ToolActivity {
             Self::Write { .. } | Self::WriteRejected { .. } => "write",
             Self::Bash { .. } => "bash",
             Self::MalformedArguments { tool, .. } => tool.name(),
-            Self::Unavailable { tool, .. } => tool,
+            Self::Unavailable { tool, .. } | Self::Host { tool, .. } => tool,
         }
     }
 
     /// Returns the repository-relative target or bounded inspection summary;
-    /// empty for `bash`, malformed, and unavailable calls.
+    /// empty for `bash`, malformed, unavailable, and host tool calls.
     pub fn path(&self) -> &str {
         match self {
-            Self::Bash { .. } | Self::MalformedArguments { .. } | Self::Unavailable { .. } => "",
+            Self::Bash { .. }
+            | Self::MalformedArguments { .. }
+            | Self::Unavailable { .. }
+            | Self::Host { .. } => "",
             Self::Read { path, .. }
             | Self::ReadRejected { path, .. }
             | Self::Write { path, .. }
@@ -903,12 +970,9 @@ impl fmt::Display for ToolActivity {
                 sanitize_report_text(reason),
                 format_report_duration(*duration)
             ),
-            Self::Unavailable { duration, tool, .. } => write!(
-                formatter,
-                "{} (unavailable; {})",
-                sanitize_report_text(tool),
-                format_report_duration(*duration)
-            ),
+            Self::Unavailable { duration, tool, .. } | Self::Host { duration, tool, .. } => {
+                self.write_call(formatter, tool, *duration)
+            }
             Self::Write {
                 bytes_written,
                 duration,
@@ -926,6 +990,29 @@ impl fmt::Display for ToolActivity {
                 format_report_duration(*duration)
             ),
         }
+    }
+}
+
+impl ToolActivity {
+    /// Writes an unavailable or host tool call to `tool` with how it was
+    /// answered.
+    fn write_call(
+        &self,
+        formatter: &mut fmt::Formatter<'_>,
+        tool: &str,
+        duration: Duration,
+    ) -> fmt::Result {
+        let outcome = match self {
+            Self::Host { outcome, .. } => outcome.label(),
+            _ => "unavailable",
+        };
+
+        write!(
+            formatter,
+            "{} ({outcome}; {})",
+            sanitize_report_text(tool),
+            format_report_duration(duration)
+        )
     }
 }
 
@@ -988,6 +1075,16 @@ pub enum TurnError {
     /// A repository write failed.
     #[error(transparent)]
     Write(#[from] WriteError),
+    /// A host [`crate::ToolHandler`] failed the turn with
+    /// [`crate::tool::ToolError::failed`], or panicked.
+    #[error("tool `{tool}` failed: {source}")]
+    ToolFailed {
+        /// The handler's failure.
+        #[source]
+        source: Box<dyn std::error::Error + Send + Sync>,
+        /// Function name of the handler's tool.
+        tool: String,
+    },
     /// Request content exceeds the effective model's declared context
     /// budget: mandatory content before any history is considered, or a
     /// grown in-turn request that still does not fit after every allowed
@@ -1040,7 +1137,8 @@ impl TurnError {
             | Self::Write(_)
             | Self::Bash(_)
             | Self::CommandJournal { .. }
-            | Self::CommandFailed { .. } => TurnErrorType::Tool,
+            | Self::CommandFailed { .. }
+            | Self::ToolFailed { .. } => TurnErrorType::Tool,
             Self::RepositoryRequired => TurnErrorType::RepositoryRequired,
             Self::ComparisonRepositoryMismatch => TurnErrorType::ComparisonRepositoryMismatch,
             Self::ContextBudgetExceeded { .. } => TurnErrorType::ContextBudget,
