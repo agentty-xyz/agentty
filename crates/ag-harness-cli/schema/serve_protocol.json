@@ -463,7 +463,7 @@
     },
     "RunId": {
       "type": "string",
-      "description": "Identifier of one run, unique across processes.\n\nOnly a run split with [`crate::Run::into_parts`] has one; every event of\nits stream carries it."
+      "description": "Identifier of one run, unique across processes.\n\nEvery [`crate::Run`] has one: each event of its stream carries it, and\neach of its tool calls sees it in [`crate::tool::ToolContext::run_id`]."
     },
     "SessionTranscriptParams": {
       "type": "object",
@@ -1115,7 +1115,7 @@
         {
           "type": "string",
           "const": "completed",
-          "description": "The tool ran; a `bash` result reports the command's own exit status."
+          "description": "The tool ran; a `bash` result reports the command's own exit status,\nand a host tool's oversized output is dropped."
         },
         {
           "type": "string",

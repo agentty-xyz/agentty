@@ -432,7 +432,7 @@
       "description": "How a tool call was answered.",
       "oneOf": [
         {
-          "description": "The tool ran; a `bash` result reports the command's own exit status.",
+          "description": "The tool ran; a `bash` result reports the command's own exit status,\nand a host tool's oversized output is dropped.",
           "type": "string",
           "const": "completed"
         },
