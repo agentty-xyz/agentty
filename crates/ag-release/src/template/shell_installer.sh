@@ -10,7 +10,8 @@
 #   {{ variable_prefix }}_NO_MODIFY_PATH: 1 leaves PATH and shell startup files unchanged.
 #
 # Every command runs inside main, which the last line calls, so a truncated
-# download runs nothing.
+# download runs nothing. Functions name their arguments with local, which
+# POSIX leaves out but dash, bash, BusyBox ash, and zsh all provide.
 
 APP_NAME={{ app_name }}
 APP_VERSION={{ app_version }}
@@ -160,7 +161,7 @@ check_libc() {
 }
 
 is_number() {
-    _value=$1
+    local _value="$1"
     case "$_value" in
         '' | *[!0-9]*) return 1 ;;
     esac
@@ -168,8 +169,8 @@ is_number() {
 
 # Downloads the URL in the first argument to the file in the second.
 download() {
-    _url=$1
-    _output=$2
+    local _url="$1"
+    local _output="$2"
     if command -v curl >/dev/null 2>&1; then
         curl --fail --location --silent --show-error --output "$_output" "$_url" ||
             fail "cannot download $_url"
@@ -183,7 +184,7 @@ download() {
 # Fails unless the file in the first argument has the SHA-256 the release
 # recorded.
 verify_sha256() {
-    _downloaded=$1
+    local _downloaded="$1"
     if command -v sha256sum >/dev/null 2>&1; then
         _sum=$(sha256sum "$_downloaded") || fail "cannot compute the SHA-256 of $_archive"
     elif command -v shasum >/dev/null 2>&1; then
@@ -201,7 +202,7 @@ verify_sha256() {
 # Creates the directory in the first argument and sets _absolute to its
 # absolute path.
 absolute_directory() {
-    _wanted=$1
+    local _wanted="$1"
     mkdir -p "$_wanted" || fail "cannot create $_wanted"
     _absolute=$(CDPATH='' cd -- "$_wanted" && pwd) || fail "cannot enter $_wanted"
 }
@@ -209,8 +210,8 @@ absolute_directory() {
 # Moves each binary from the directory in the first argument into the one in
 # the second with an atomic rename, so a running binary is never written over.
 install_binaries() {
-    _from=$1
-    _to=$2
+    local _from="$1"
+    local _to="$2"
     for _binary in {{ binaries }}; do
         _staged=$(mktemp "$_to/.$_binary.XXXXXX") ||
             fail "cannot create a temporary file in $_to"
@@ -265,8 +266,9 @@ update_path() {
     add_line "$_zsh_rc" "$_sh_line" "$_sh_alternative"
     _fish_dir=${XDG_CONFIG_HOME:-$HOME/.config}/fish/conf.d
     mkdir -p "$_fish_dir" || fail "cannot create $_fish_dir"
-    add_line "$_fish_dir/$APP_NAME.env.fish" "source \"$_env_expression.fish\"" \
-        ". \"$_env_expression.fish\""
+    _fish_line="source \"$_env_expression.fish\""
+    _fish_alternative=". \"$_env_expression.fish\""
+    add_line "$_fish_dir/$APP_NAME.env.fish" "$_fish_line" "$_fish_alternative"
     if [ -n "${GITHUB_PATH:-}" ]; then
         printf '%s\n' "$_bin_dir" >>"$GITHUB_PATH" || fail "cannot update $GITHUB_PATH"
         say "  added $_bin_dir to $GITHUB_PATH"
@@ -275,13 +277,13 @@ update_path() {
     say "To add $_bin_expression to PATH, restart your shell or run:"
     say ""
     say "    $_sh_alternative (sh, bash, zsh)"
-    say "    source \"$_env_expression.fish\" (fish)"
+    say "    $_fish_line (fish)"
 }
 
 # Prints the path in the first argument with a leading $HOME/ in place of the
 # home directory.
 home_expression() {
-    _path=$1
+    local _path="$1"
     case "$_path" in
         "$HOME"/*)
             # shellcheck disable=SC2016
@@ -321,9 +323,9 @@ EOF
 # Appends the line in the second argument to the file in the first, unless
 # the file holds that line or the equivalent line in the third argument.
 add_line() {
-    _startup_file=$1
-    _line=$2
-    _equivalent=$3
+    local _startup_file="$1"
+    local _line="$2"
+    local _equivalent="$3"
     if grep -qF -- "$_line" "$_startup_file" 2>/dev/null ||
         grep -qF -- "$_equivalent" "$_startup_file" 2>/dev/null; then
         return 0

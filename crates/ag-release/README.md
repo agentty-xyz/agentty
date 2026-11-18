@@ -146,8 +146,9 @@ archive's entries carry the commit time that `git archive` records.
 curl -LsSf https://github.com/<owner>/<name>/releases/latest/download/<app>-installer.sh | sh
 ```
 
-The script is POSIX `sh` with the release's values baked in, and its whole body is a
-function called on the last line, so a truncated download runs nothing. It:
+The script is POSIX `sh` plus `local` (which dash, bash, BusyBox ash, and zsh provide)
+with the release's values baked in, and its whole body is a function called on the last
+line, so a truncated download runs nothing. It:
 
 1. Maps `uname -s` and `uname -m` to a configured target, preferring
    `aarch64-apple-darwin` under Rosetta 2. On Linux it rejects musl and, when
