@@ -5,11 +5,11 @@ use std::time::Duration;
 
 use serde_json::json;
 
-use super::support::{FixedEstimator, budget, read_call, result};
+use super::support::{ByteEstimator, FixedEstimator, budget, read_call, result};
 use crate::bash::{BashConfig, Enforcement};
 use crate::context::{
     ContextBudgetError, ContextEstimator, HeuristicContextEstimator, HistoryTurn, TurnStop,
-    admit_mandatory_content, advertised_tools,
+    admit_mandatory_content, advertised_tools, window_history_bytes,
 };
 use crate::input::{ImageContent, ImageMediaType, InputBlock, TurnInput};
 use crate::model::ModelMessage;
@@ -262,6 +262,132 @@ fn mandatory_content_admission_accounts_for_every_component() {
     // Reserved 5 + system 7 + input message 7 + two tool definitions 4 = 23
     // of 25.
     assert_eq!(remaining.expect("fits"), 2);
+}
+
+/// Safety cap passed to [`window_history_bytes`] by tests that stay below it.
+const HISTORY_CAP: usize = 256 * 1024;
+
+#[test]
+fn window_history_bytes_convert_the_weight_left_after_fixed_parts() {
+    // Arrange
+    let estimator = HeuristicContextEstimator::DEFAULT
+        .with_messages(500, 4)
+        .with_request_tokens(3);
+    let budget = budget(10_000).with_reserved_output(1_000).expect("reserve");
+    let options = options_with(ToolPolicy::default().allow(Tool::Read).allow(Tool::Write));
+    let tools_weight: u64 = advertised_tools(&options)
+        .iter()
+        .map(|tool| estimator.tool_definition_weight(tool))
+        .sum();
+
+    // Act
+    let bytes = window_history_bytes(&estimator, budget, Some("system"), &options, HISTORY_CAP);
+
+    // Assert
+    // Of the 9,000 left after reserved output, uncalibrated requests fill
+    // 8,100; 900 stay for the input, and request 3 plus the six-byte system
+    // prompt 3 + 4 leave the rest for history at two bytes per weight unit.
+    let history_weight = 8_100 - 900 - 3 - 7 - tools_weight;
+    let expected = usize::try_from(history_weight * 2).expect("small budget");
+    assert_eq!(bytes, Some(expected));
+}
+
+#[test]
+fn window_history_bytes_need_an_estimator_that_weighs_bytes() {
+    // Arrange
+    let options = options_with(ToolPolicy::default());
+
+    // Act
+    let bytes = window_history_bytes(&FixedEstimator, budget(1_000), None, &options, HISTORY_CAP);
+
+    // Assert
+    assert_eq!(bytes, None);
+}
+
+#[test]
+fn window_history_bytes_are_absent_when_fixed_parts_fill_the_window() {
+    // Arrange
+    let budget = budget(1_000).with_reserved_output(900).expect("reserve");
+    let options = options_with(ToolPolicy::default());
+
+    // Act
+    let bytes = window_history_bytes(
+        &HeuristicContextEstimator::DEFAULT,
+        budget,
+        Some(&"a system prompt longer than the window ".repeat(20)),
+        &options,
+        HISTORY_CAP,
+    );
+
+    // Assert
+    assert_eq!(bytes, None);
+}
+
+#[test]
+fn window_history_bytes_stop_at_the_safety_cap() {
+    // Arrange
+    let options = options_with(ToolPolicy::default());
+
+    // Act
+    let bytes = window_history_bytes(
+        &ByteEstimator,
+        budget(u64::MAX),
+        None,
+        &options,
+        HISTORY_CAP,
+    );
+
+    // Assert
+    assert_eq!(bytes, Some(HISTORY_CAP));
+}
+
+#[test]
+fn window_history_bytes_probe_mixed_content_for_tokenizer_estimators() {
+    // Arrange
+    let options = options_with(ToolPolicy::default());
+
+    // Act
+    let bytes = window_history_bytes(
+        &RunCompressingEstimator,
+        budget(1_000),
+        None,
+        &options,
+        HISTORY_CAP,
+    );
+
+    // Assert
+    // A probe of one repeated character would weigh a single unit and hit the
+    // cap; the mixed probe keeps about one byte per weight unit, so the 800
+    // history weight left by the margin and input share holds under 1,000.
+    let bytes = bytes.expect("history fits");
+    assert!((800..1_000).contains(&bytes), "{bytes}");
+}
+
+/// Weighs each run of one repeated character as a single unit, like a
+/// tokenizer that merges long runs, and every other byte as one unit.
+struct RunCompressingEstimator;
+
+impl ContextEstimator for RunCompressingEstimator {
+    fn message_weight(&self, message: &ModelMessage) -> u64 {
+        let ModelMessage::User(text) = message else {
+            return 0;
+        };
+        let mut previous = None;
+        let runs = text
+            .chars()
+            .filter(|character| previous.replace(*character) != Some(*character))
+            .count();
+
+        u64::try_from(runs).expect("run count fits u64")
+    }
+
+    fn tool_definition_weight(&self, _tool: &ToolDefinition) -> u64 {
+        0
+    }
+
+    fn request_weight(&self, _schema: Option<&OutputSchema>) -> u64 {
+        0
+    }
 }
 
 #[test]

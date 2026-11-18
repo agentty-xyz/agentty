@@ -11,6 +11,7 @@ use serde_json::{Map, Value, json};
 use thiserror::Error;
 
 use crate::bash::{BashConfig, Enforcement};
+use crate::calibration::UNCALIBRATED_CAPACITY_PERCENT;
 use crate::input::TurnInput;
 use crate::lifecycle::ContextSummaryTrigger;
 use crate::model::{ModelMessage, ModelRequest};
@@ -186,7 +187,10 @@ pub(crate) const ELIDED_SOURCE_LIMIT_FACTOR: usize = 8;
 /// it. With [`ContextSummaryPolicy::Enabled`], earlier tool rounds may instead
 /// be replaced by a model-written summary before those steps.
 /// The stored byte-based replay budget still bounds how much history is
-/// loaded. Provider-reported input tokens calibrate the weights against this
+/// loaded. For a model with a declared context window, a new session's stored
+/// byte budget is derived from this request budget, capped at 256 KiB (see
+/// [`crate::Harness::max_history_bytes`]).
+/// Provider-reported input tokens calibrate the weights against this
 /// budget in memory; until a provider reports usage, requests use 90% of the
 /// capacity left after reserved output.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -987,21 +991,14 @@ pub(crate) fn admit_mandatory_content(
     input: &TurnInput,
     options: &TurnOptions,
 ) -> Result<u64, TurnError> {
+    let user_message = input.clone().into_user_message();
     let mut required = budget
         .reserved_output_weight()
-        .saturating_add(estimator.request_weight(options.schema()));
-    if let Some(system_prompt) = system_prompt {
-        let message = ModelMessage::System(system_prompt.to_string());
-        required = required.saturating_add(estimator.message_weight(&message));
-    }
-    let user_message = input.clone().into_user_message();
-    required = required.saturating_add(estimator.message_weight(&user_message));
+        .saturating_add(instruction_weight(estimator, system_prompt, options))
+        .saturating_add(estimator.message_weight(&user_message));
     if let Some(instructions) = options.instructions() {
         let message = ModelMessage::Instructions(instructions.to_string());
         required = required.saturating_add(estimator.message_weight(&message));
-    }
-    for tool in advertised_tools(options) {
-        required = required.saturating_add(estimator.tool_definition_weight(&tool));
     }
     let budget_weight = budget.max_request_weight().get();
     if required > budget_weight {
@@ -1012,6 +1009,82 @@ pub(crate) fn admit_mandatory_content(
     }
 
     Ok(budget_weight - required)
+}
+
+/// Mixed prose and code whose repetition probes an estimator's byte rate.
+/// A single repeated character would let a tokenizer-backed estimator
+/// compress the probe and overstate the bytes each weight unit holds.
+const HISTORY_RATE_SAMPLE: &str = "Fix `parse(&input)?` in src/lib.rs: it returns Err(e) \
+                                   early.\nfn main() { let total: u32 = [1, 2].iter().sum(); }\n";
+
+/// Repetitions of [`HISTORY_RATE_SAMPLE`] in the rate probe.
+const HISTORY_RATE_SAMPLE_REPEATS: usize = 100;
+
+/// Share, in percent, of the request capacity left after reserved output
+/// that a derived history budget leaves for the current turn's input.
+const HISTORY_INPUT_RESERVE_PERCENT: u128 = 10;
+
+/// Derives the retained-byte budget of a new session's history from the
+/// model's request budget, at most `max_bytes`, or returns `None` when no
+/// history fits or `estimator` gives payload bytes no weight, so weight
+/// cannot convert to bytes.
+///
+/// The history may use the share of the request capacity left after the
+/// reserved output that uncalibrated requests fill
+/// ([`crate::calibration::UNCALIBRATED_CAPACITY_PERCENT`]), less
+/// [`HISTORY_INPUT_RESERVE_PERCENT`] of that capacity for the current input
+/// and less the fixed request cost, the system prompt, and the tool
+/// definitions that `options` advertise. That weight converts to bytes at
+/// the estimator's marginal message rate, measured on a probe of mixed prose
+/// and code, so the result approximates an upper bound; per-request weight
+/// fitting still decides what each request carries.
+pub(crate) fn window_history_bytes(
+    estimator: &dyn ContextEstimator,
+    budget: ContextBudget,
+    system_prompt: Option<&str>,
+    options: &TurnOptions,
+    max_bytes: usize,
+) -> Option<usize> {
+    let empty = estimator.message_weight(&ModelMessage::User(String::new()));
+    let probe = HISTORY_RATE_SAMPLE.repeat(HISTORY_RATE_SAMPLE_REPEATS);
+    let probe_bytes = probe.len() as u128;
+    let probe_weight = estimator
+        .message_weight(&ModelMessage::User(probe))
+        .saturating_sub(empty);
+    if probe_weight == 0 {
+        return None;
+    }
+    let capacity = u128::from(budget.max_request_weight().get() - budget.reserved_output_weight());
+    let usable = capacity * u128::from(UNCALIBRATED_CAPACITY_PERCENT) / 100;
+    let fixed = capacity * HISTORY_INPUT_RESERVE_PERCENT / 100
+        + u128::from(instruction_weight(estimator, system_prompt, options));
+    let history_weight = usable.saturating_sub(fixed);
+    if history_weight == 0 {
+        return None;
+    }
+    let bytes = (history_weight * probe_bytes / u128::from(probe_weight)).min(max_bytes as u128);
+
+    Some(usize::try_from(bytes).unwrap_or(max_bytes))
+}
+
+/// Weighs what every request carries besides history and the current
+/// input: the fixed request cost, the system prompt, and the tool
+/// definitions `options` advertise.
+fn instruction_weight(
+    estimator: &dyn ContextEstimator,
+    system_prompt: Option<&str>,
+    options: &TurnOptions,
+) -> u64 {
+    let mut weight = estimator.request_weight(options.schema());
+    if let Some(system_prompt) = system_prompt {
+        let message = ModelMessage::System(system_prompt.to_string());
+        weight = weight.saturating_add(estimator.message_weight(&message));
+    }
+    for tool in advertised_tools(options) {
+        weight = weight.saturating_add(estimator.tool_definition_weight(&tool));
+    }
+
+    weight
 }
 
 /// Monotonic record of how earlier requests of one turn were reduced, with

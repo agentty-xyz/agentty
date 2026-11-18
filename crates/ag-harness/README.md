@@ -72,17 +72,21 @@ let outcome = session.send("Now focus on error handling").await?;
 ```
 
 Every request replays finished turns within the context budget and the history byte
-limit; the provider never holds conversation state. An older turn may replay with its
-tool results, reasoning, and `write` patches replaced by short notices, or else as its
-input and final answer, and a turn larger than eight times the byte limit loads only as
-its input and final answer. Those forms are sticky: each turn repeats the history the
-previous turn sent and appends that turn, so provider prompt caches keep the prefix, and
-only history that outgrows a limit is shortened, newest first, to half of it. Each model
-response and tool result is stored as soon as it finishes. A failed or interrupted turn
-replays what it recorded plus a note naming why it stopped and any writes or commands
-whose outcome is unknown; when it does not fit, it replays with its tool traffic
-replaced by notices, or else as only its input and note. Sessions run concurrently, with
-one active turn per session. The library never picks a database location for you.
+limit; the provider never holds conversation state. Unless `max_history_bytes` sets it,
+a new session's byte limit is about what the model's declared context window leaves for
+history, at most 256 KiB, when the context budget comes from that window; otherwise it
+is 256 KiB. Sessions keep their limit on resume and model switches. An older turn may
+replay with its tool results, reasoning, and `write` patches replaced by short notices,
+or else as its input and final answer, and a turn larger than eight times the byte limit
+loads only as its input and final answer. Those forms are sticky: each turn repeats the
+history the previous turn sent and appends that turn, so provider prompt caches keep the
+prefix, and only history that outgrows a limit is shortened, newest first, to half of
+it. Each model response and tool result is stored as soon as it finishes. A failed or
+interrupted turn replays what it recorded plus a note naming why it stopped and any
+writes or commands whose outcome is unknown; when it does not fit, it replays with its
+tool traffic replaced by notices, or else as only its input and note. Sessions run
+concurrently, with one active turn per session. The library never picks a database
+location for you.
 
 ### Transcripts and forks
 

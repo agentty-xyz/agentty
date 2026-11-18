@@ -18,8 +18,9 @@ const PERMYRIAD: u64 = 10_000;
 /// [`HeuristicContextEstimator`]. Construction is `const`, so hosts can
 /// declare one profile per model as a constant.
 ///
-/// A profile only shapes how new requests are fitted: request fingerprints,
-/// stored history, and recorded outcomes never depend on it, and in-memory
+/// A profile only shapes how new requests are fitted and the history byte
+/// budget a new session stores: the fingerprints and stored history of
+/// existing sessions and recorded outcomes never depend on it, and in-memory
 /// calibration restarts with every harness. Revising a profile therefore
 /// needs no new [`crate::recovery::ExecutionIdentity`] revision, which would
 /// instead strand every session stored under the previous one; resumed

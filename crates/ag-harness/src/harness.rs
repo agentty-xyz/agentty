@@ -58,6 +58,10 @@ use crate::usage::{TurnUsage, UsageTotals};
 use crate::write_journal::WriteRecord;
 use crate::{reservation, session_model};
 
+/// Retained history bytes of a new session whose model declares no context
+/// window, whose window leaves no room for history, or whose estimator
+/// cannot convert weight into bytes; also the safety cap of every budget
+/// derived from a context window.
 const DEFAULT_MAX_HISTORY_BYTES: usize = 256 * 1024;
 /// Former default per-turn tool-call limit, still hashed into host-request
 /// fingerprints so requests recorded before its removal stay recognizable.
@@ -100,7 +104,10 @@ impl Session {
     /// no cataloged maximum output for budget estimates.
     /// Ordinary completed messages and tool groups remain intact. Recovery
     /// lookup remains usable on stale handles; new execution requires a fresh
-    /// handle.
+    /// handle. The session keeps its stored history byte budget (see
+    /// [`Harness::max_history_bytes`]); it is not re-derived from the new
+    /// model's context window, while per-request weight fitting follows the
+    /// new budget.
     ///
     /// # Errors
     /// Returns an error for an unknown key, active turn or unsettled effect,
@@ -851,6 +858,8 @@ impl SessionBuilder {
     pub async fn create(self) -> Result<Session, SessionError> {
         let database = self.harness.open_database().await?;
         let harness_config = &self.harness.inner;
+        let max_history_bytes =
+            harness_config.session_history_bytes(self.system_prompt.as_deref(), &self.output);
         let config = NewSession::new(self.id, self.output)
             .with_optional_system_prompt(self.system_prompt)
             .with_registration_identity(
@@ -860,13 +869,9 @@ impl SessionBuilder {
                     .map(|registration| registration.identity().clone()),
             );
         database
-            .create_session(
-                &config,
-                harness_config.model.metadata(),
-                harness_config.max_history_bytes,
-            )
+            .create_session(&config, harness_config.model.metadata(), max_history_bytes)
             .await?;
-        let history = SessionHistory::new(harness_config.max_history_bytes);
+        let history = SessionHistory::new(max_history_bytes);
 
         Ok(Session {
             checkpoint: None,
@@ -1213,13 +1218,28 @@ impl Harness {
         self
     }
 
-    /// Overrides the retained chat-history payload budget.
+    /// Overrides the retained chat-history payload budget of new sessions.
     ///
+    /// Without an override, a session of a harness whose context budget comes
+    /// from the model's declared context window (built through
+    /// [`Harness::builder`] from the model's [`ModelProfile`] or catalog
+    /// handle without an explicit context budget, or through
+    /// [`Harness::from_registry`]) keeps
+    /// the history bytes that window leaves after the reserved output, the
+    /// uncalibrated request margin, a tenth of the capacity for the current
+    /// input, the fixed request cost, the system prompt, and the default
+    /// policy's tool definitions, as the context estimator converts them,
+    /// at most 256 KiB. Other sessions, including every session of a harness
+    /// built with [`Harness::new`] or an explicit context budget, keep
+    /// 256 KiB, as do sessions whose window leaves no room for history.
+    /// Sessions store their budget and keep it on resume and across
+    /// [`Session::switch_model`]; a revised window affects only sessions
+    /// created afterwards.
     /// Complete oldest turns are evicted when the budget is exceeded, so
     /// native tool-call and tool-result messages are never split.
     #[must_use]
     pub fn max_history_bytes(mut self, max_history_bytes: NonZeroUsize) -> Self {
-        self.config_mut().max_history_bytes = max_history_bytes.get();
+        self.config_mut().history_budget = HistoryBudget::Fixed(max_history_bytes.get());
 
         self
     }
@@ -1842,8 +1862,9 @@ impl HarnessBuilder {
         self
     }
 
-    /// Overrides the retained chat-history payload budget, like
-    /// [`Harness::max_history_bytes`].
+    /// Overrides the retained chat-history payload budget of new sessions,
+    /// which otherwise derives from the model's declared context window when
+    /// no explicit context budget is set, like [`Harness::max_history_bytes`].
     pub fn max_history_bytes(mut self, max_history_bytes: NonZeroUsize) -> Self {
         self.max_history_bytes = Some(max_history_bytes);
 
@@ -1932,7 +1953,7 @@ impl HarnessBuilder {
             config.file_system = file_system;
         }
         if let Some(max_history_bytes) = self.max_history_bytes {
-            config.max_history_bytes = max_history_bytes.get();
+            config.history_budget = HistoryBudget::Fixed(max_history_bytes.get());
         }
         match self.storage {
             #[cfg(feature = "sqlite")]
@@ -1966,14 +1987,21 @@ impl HarnessBuilder {
         profile: Option<ModelProfile>,
         context_budget: Option<ContextBudget>,
     ) -> Result<HarnessConfig, HarnessBuildError> {
-        let context_budget = match (context_budget, profile) {
-            (Some(context_budget), _) => context_budget,
-            (None, Some(profile)) => profile
-                .context_budget()
-                .map_err(HarnessBuildError::InvalidProfile)?,
+        let (context_budget, history_budget) = match (context_budget, profile) {
+            (Some(context_budget), _) => (
+                context_budget,
+                HistoryBudget::Fixed(DEFAULT_MAX_HISTORY_BYTES),
+            ),
+            (None, Some(profile)) => (
+                profile
+                    .context_budget()
+                    .map_err(HarnessBuildError::InvalidProfile)?,
+                HistoryBudget::Window,
+            ),
             (None, None) => return Err(HarnessBuildError::ContextBudgetRequired),
         };
         let mut config = HarnessConfig::new(model, context_budget);
+        config.history_budget = history_budget;
         if let Some(profile) = profile {
             config.context_estimator = Arc::new(profile.estimator());
         }
@@ -2040,8 +2068,8 @@ struct HarnessConfig {
     database_path: Option<PathBuf>,
     execution_identity: Option<ExecutionIdentity>,
     file_system: Arc<dyn FileSystem>,
+    history_budget: HistoryBudget,
     lifecycle: LifecycleEmitter,
-    max_history_bytes: usize,
     /// Cataloged maximum output of [`Self::model`], which bounds each
     /// request's budget estimate; `None` for any other model.
     max_output: Option<u64>,
@@ -2076,8 +2104,8 @@ impl HarnessConfig {
             database_path: None,
             execution_identity: None,
             file_system: Arc::new(LocalFileSystem),
+            history_budget: HistoryBudget::Fixed(DEFAULT_MAX_HISTORY_BYTES),
             lifecycle: LifecycleEmitter::default(),
-            max_history_bytes: DEFAULT_MAX_HISTORY_BYTES,
             max_output: None,
             model,
             model_id: None,
@@ -2096,10 +2124,42 @@ impl HarnessConfig {
         let mut config = Self::new(registration.model(), registration.context_budget());
         config.context_estimator = Arc::new(registration.capabilities().profile.estimator());
         config.execution_identity = Some(registration.identity().clone());
+        config.history_budget = HistoryBudget::Window;
         config.model_registration = Some(registration);
 
         config
     }
+
+    /// Returns the retained history bytes of a new session with
+    /// `system_prompt` and default `schema`: the configured budget, or the
+    /// one derived from the model's context window, capped at
+    /// [`DEFAULT_MAX_HISTORY_BYTES`] and falling back to it when the window
+    /// leaves no room for history or the estimator cannot convert weight
+    /// into bytes.
+    fn session_history_bytes(&self, system_prompt: Option<&str>, output: &OutputMode) -> usize {
+        match self.history_budget {
+            HistoryBudget::Fixed(max_history_bytes) => max_history_bytes,
+            HistoryBudget::Window => context::window_history_bytes(
+                self.context_estimator.as_ref(),
+                self.context_budget,
+                system_prompt,
+                &TurnOptions::new(output.clone(), self.policy),
+                DEFAULT_MAX_HISTORY_BYTES,
+            )
+            .unwrap_or(DEFAULT_MAX_HISTORY_BYTES),
+        }
+    }
+}
+
+/// How a [`Harness`] chooses the retained history bytes of new sessions.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum HistoryBudget {
+    /// A host override, or the default when the context budget does not come
+    /// from the model's declared context window.
+    Fixed(usize),
+    /// Derived from the model's declared context window when the session is
+    /// created, at most [`DEFAULT_MAX_HISTORY_BYTES`].
+    Window,
 }
 
 async fn cancelled(control: Option<&TurnControl>) {
