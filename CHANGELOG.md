@@ -7,6 +7,56 @@ this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
 
 ## [Unreleased]
 
+## [v0.19.3] - 2026-11-17
+
+### Added
+
+- `ag-harness`: stream typed run events, and add per-run instructions, output modes,
+  generation parameters, and limits.
+- `ag-harness`: add session transcripts and forking, project session history across
+  model switches, and persist per-turn usage with run cost reported in micro-USD.
+- `ag-harness`: add a shared budget ledger with per-provider concurrency caps, and Cargo
+  feature flags.
+- `ag-harness`: add the open `ToolHandler` trait and `ToolSet`, with the built-in tools
+  reimplemented as handlers.
+- `ag-harness-cli`: add an unstable JSON-RPC serve mode.
+- `agentty`: show an approval notice in the graph chat when a step that needs user input
+  waits for approval.
+
+### Changed
+
+- `ag-harness`: route all tool dispatch through `ToolHandler` and deprecate the closed
+  tool enum and `ToolPolicy`.
+- `ag-harness`: run compaction and in-turn summaries on the resolved cheap model role
+  when the catalog has one, and budget replayed session history from the model's context
+  window.
+- `agentty`: add one commit per file-changing turn on published session branches instead
+  of amending the session commit, and list follow-up commit titles in local squash-merge
+  messages.
+- `agentty`: show Draft sessions as in progress during graph proposal and reply work,
+  and switch to in progress as soon as a chat message is queued.
+- `agentty`: wrap long graph node descriptions, highlight graph status labels, and
+  animate graph progress while nodes run.
+- `agentty`: write review replies in the language of each thread's latest reviewer
+  comment, and refine generated review request metadata.
+- `agentty`: select Yes by default in the startup repository discovery invitation.
+- workspace: enforce module, naming, import, and suppression conventions with Clippy,
+  ast-grep, and `ag-xtask` checks, guard `ag-store` foreign keys and checked queries
+  against full scans, and bump `sqlx` to `0.9.1`.
+- workspace: move contributor workflows from `docs/contributing/` into skills, and
+  require the `Project impact` section in pull request descriptions.
+- release: bump workspace crate metadata and lockfile package versions to `0.19.3`.
+
+### Fixed
+
+- `agentty`: make the published demo end on the completed Claude session.
+
+### Contributors
+
+- @andagaev
+- @dependabot
+- @minev-dev
+
 ## [v0.19.2] - 2026-11-16
 
 ### Added
