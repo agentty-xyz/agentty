@@ -1148,7 +1148,7 @@ async fn round_summaries_go_to_the_cataloged_summary_model_and_are_attributed_to
     assert!(outcome.report.model_requests().iter().all(|request| {
         let expected = match request.purpose() {
             ModelRequestPurpose::ContextSummary => "host/cheap",
-            ModelRequestPurpose::Turn => "host/smart",
+            _ => "host/smart",
         };
 
         request.model().map(ModelId::as_str) == Some(expected)

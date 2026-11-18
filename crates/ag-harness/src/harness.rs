@@ -9,9 +9,9 @@ use std::num::NonZeroUsize;
 #[cfg(feature = "sqlite")]
 use std::path::PathBuf;
 use std::pin::Pin;
-use std::sync::Arc;
 use std::sync::atomic::{AtomicU64, Ordering};
-use std::time::Instant;
+use std::sync::{Arc, Mutex, MutexGuard, PoisonError};
+use std::time::{Duration, Instant};
 
 use serde_json::json;
 use sha2::{Digest, Sha256};
@@ -28,16 +28,21 @@ use crate::catalog::{
 };
 use crate::compaction::{self, CompactionSource, MAX_SUMMARY_BYTES, SessionCheckpoint};
 use crate::context::{
-    self, ContextBudget, ContextBudgetError, ContextEstimator, ContextSummaryPolicy,
+    self, ContextBudget, ContextBudgetError, ContextEstimator, ContextPolicy, ContextSummaryPolicy,
     HeuristicContextEstimator, HistoryLimit, HistoryProjection, HistoryTurn, ReplayedHistory,
 };
 use crate::effect::Effects;
-use crate::engine::{Engine, EngineFailure, FinishedTurn};
-use crate::error::HarnessError;
-use crate::event::{RunEventKind, SessionId, TurnIndex};
+use crate::engine::{Engine, EngineFailure, FinishedTurn, PriorRequests};
+use crate::error::{HarnessError, RunError};
+use crate::event::{
+    CompactionOutcome, CompactionReport, RunEventKind, RunFailure, SessionId, TurnIndex,
+};
 use crate::file_system::{FileSystem, LocalFileSystem};
 use crate::input::{InputBlock, TurnInput};
-use crate::lifecycle::{LifecycleEmitter, LifecycleObserver, TurnErrorType, TurnLifecycle};
+use crate::lifecycle::{
+    LifecycleEmitter, LifecycleId, LifecycleObserver, TurnErrorType, TurnLifecycle,
+};
+use crate::limit::RunLimits;
 use crate::memory_store::MemoryStore;
 use crate::model::{Model, ModelError, ModelMessage, ModelRequest, ReasoningEffort};
 use crate::model_profile::ModelProfile;
@@ -45,7 +50,8 @@ use crate::model_registry::{ModelRegistration, ModelRegistry, ModelRegistryError
 use crate::recovery::{ExecutionIdentity, HostRequest, HostTurnAcquisition, HostTurnRecord};
 use crate::repository::Repository;
 use crate::request_option::OutputMode;
-use crate::run::{Run, RunJournal, RunRequest};
+use crate::reservation::TurnGuard;
+use crate::run::{Run, RunJournal, RunRequest, Usage};
 use crate::schema_contract::OutputSchema;
 use crate::session::{LoadedSession, ModelSelectionError, NewSession, SessionError};
 use crate::session_model::ReplayTarget;
@@ -58,8 +64,11 @@ use crate::tool::Tool;
 use crate::tool::ToolSet;
 use crate::tool_handler::ToolSelection;
 use crate::transcript::{TurnRange, TurnRecord};
-use crate::turn::{HistoryActivity, TurnError, TurnOptions, TurnOutcome};
-use crate::usage::{TurnUsage, UsageTotals};
+use crate::turn::{
+    HistoryActivity, ModelRequestActivity, ModelRequestPurpose, TurnError, TurnOptions,
+    TurnOutcome, TurnReport,
+};
+use crate::usage::{Cost, TurnUsage, UsageTotals};
 use crate::write_journal::WriteRecord;
 use crate::{reservation, session_model};
 
@@ -78,6 +87,8 @@ const LEGACY_FINGERPRINT_MAX_TOOL_CALLS: usize = 8;
 /// creating harness and move into a spawned task.
 pub struct Session {
     checkpoint: Option<SessionCheckpoint>,
+    /// Shared with the copies that run this handle's streamed turns.
+    compaction_backoff: Arc<Mutex<CompactionBackoff>>,
     database: Arc<dyn SessionStore>,
     harness: Harness,
     history: SessionHistory,
@@ -273,13 +284,122 @@ impl Session {
         &mut self,
         summary_model: Option<SummaryModel>,
     ) -> Result<Option<SessionCheckpoint>, SessionError> {
+        let mut requests = CompactionRequests::default();
+
+        self.compact_reporting(summary_model.as_ref(), None, &mut requests)
+            .await
+    }
+
+    /// Under [`ContextPolicy::AutoCompact`], publishes a checkpoint on the
+    /// harness's summary model inside the admitted turn at `turn_position`
+    /// when its uncovered history weighs more than the policy's threshold
+    /// of `available_history_weight` after the current checkpoint, unless a
+    /// recent failure backs it off, and drops the turns the session's
+    /// checkpoint then covers from the loaded history. Returns `None` when
+    /// no compaction was due, and otherwise what it did with the requests
+    /// it completed, attributed as [`ModelRequestPurpose::Compaction`].
+    async fn auto_compact(
+        &mut self,
+        enclosing: EnclosingTurn<'_>,
+        turn_position: i64,
+        available_history_weight: u64,
+    ) -> Option<AutoCompaction> {
+        if turn_position < self.backoff().retry_at {
+            return None;
+        }
+        let estimator = self.harness.inner.context_estimator.as_ref();
+        let (_, remaining_weight) = self.checkpoint_room(available_history_weight);
+        let threshold = self
+            .harness
+            .inner
+            .context_policy
+            .compaction_threshold(remaining_weight)?;
+        let history_weight = context::projected_history_weight(
+            self.history.turns(),
+            self.history.projection,
+            estimator,
+        );
+        if history_weight <= threshold {
+            return None;
+        }
+        let summary_model = self.harness.inner.summary_model.clone();
+        let model = summary_model
+            .as_ref()
+            .map_or(self.harness.inner.model_id.clone(), |summary| {
+                Some(summary.id.clone())
+            });
+        let started_at = tokio::time::Instant::now();
+        let mut requests = CompactionRequests::default();
+        let result = self
+            .compact_reporting(summary_model.as_ref(), Some(enclosing), &mut requests)
+            .await;
+        if let Some(covered_through) = self
+            .checkpoint
+            .as_ref()
+            .map(SessionCheckpoint::covered_through)
+        {
+            self.history
+                .turns
+                .retain(|(position, _)| *position > covered_through);
+        }
+        let outcome = match result {
+            Ok(checkpoint) => {
+                *self.backoff() = CompactionBackoff::default();
+
+                checkpoint.map_or(CompactionOutcome::NothingToCover, |checkpoint| {
+                    CompactionOutcome::Compacted {
+                        covered_through: TurnIndex::from_position(checkpoint.covered_through()),
+                        model,
+                    }
+                })
+            }
+            Err(error) => {
+                self.backoff().failed(turn_position);
+
+                CompactionOutcome::Failed(RunFailure::from(&RunError::from(error)))
+            }
+        };
+
+        requests.activities = requests
+            .activities
+            .into_iter()
+            .map(|activity| activity.with_purpose(ModelRequestPurpose::Compaction))
+            .collect();
+
+        Some(AutoCompaction {
+            outcome,
+            requests,
+            started_at,
+        })
+    }
+
+    /// Locks the automatic compaction backoff this handle shares with its
+    /// streamed turns.
+    fn backoff(&self) -> MutexGuard<'_, CompactionBackoff> {
+        self.compaction_backoff
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+    }
+
+    /// Generates and publishes a compaction checkpoint with `summary_model`,
+    /// or the session's model when `None`, and appends the generation's
+    /// completed model requests to `requests`. Inside an `enclosing` turn,
+    /// the generation shares that turn's lifecycle turn and control and
+    /// leaves the newest loaded turn uncovered when the source reaches it
+    /// and another turn is uncovered.
+    async fn compact_reporting(
+        &mut self,
+        summary_model: Option<&SummaryModel>,
+        enclosing: Option<EnclosingTurn<'_>>,
+        requests: &mut CompactionRequests,
+    ) -> Result<Option<SessionCheckpoint>, SessionError> {
         let loaded = self.database.load_session(&self.id).await?;
         crate::session_model::check_generation(
             &self.id,
             loaded.model_generation,
             self.model_generation,
         )?;
-        let source = self
+        let mut source = self
             .database
             .load_compaction_source(&self.id, loaded.max_history_bytes)
             .await?;
@@ -288,15 +408,23 @@ impl Session {
 
             return Ok(None);
         }
+        let newest_loaded = self.history.turns().last().map(|(position, _)| *position);
+        if enclosing.is_some()
+            && source.turns.len() > 1
+            && source.turns.last().map(|(position, _)| *position) == newest_loaded
+        {
+            source.turns.pop();
+        }
         let schema = compaction::summary_schema().map_err(SessionError::Schema)?;
-        let options = TurnOptions::from_output(schema);
         // Selection already checked that a summary model serves the schema.
-        let summary_model = summary_model.as_ref();
+        // Inside a turn, compaction requests count toward the turn's limits.
+        let options = TurnOptions::from_output(schema)
+            .with_limits(enclosing.map_or_else(RunLimits::default, |enclosing| enclosing.limits));
         let (input, covered_through, source_bytes) =
             self.compaction_input(summary_model, &source, &options)?;
         let outcome = self
             .harness
-            .run_compaction(summary_model, input, &options)
+            .run_compaction(summary_model, input, &options, enclosing, requests)
             .await?;
         compaction::accept_summary(outcome.output(), MAX_SUMMARY_BYTES, source_bytes)?;
         // Provenance names the generating model; one reporting no metadata
@@ -506,6 +634,7 @@ impl Session {
     fn detached(&self) -> Self {
         Self {
             checkpoint: self.checkpoint.clone(),
+            compaction_backoff: Arc::clone(&self.compaction_backoff),
             database: Arc::clone(&self.database),
             harness: self.harness.clone(),
             history: SessionHistory::new(self.history.max_bytes),
@@ -698,14 +827,26 @@ impl Session {
         }
         let turn_id = turn.as_ref().map(TurnLifecycle::id);
         self.history.replace(&turns, projection);
-        let (request, retained_messages, history, replayed) =
-            self.build_request(input, options, available_history_weight);
         guard
             .record_admitted_usage(TurnUsage::new(self.harness.inner.pricing))
             .await?;
+        let enclosing = EnclosingTurn {
+            control,
+            lifecycle: turn_id,
+            limits: options.limits(),
+        };
+        let compaction = self
+            .start_admitted(&mut guard, enclosing, available_history_weight)
+            .await?;
+        let (request, retained_messages, history, replayed) =
+            self.build_request(input, options, available_history_weight);
+        let prior_requests =
+            compaction.map(|compaction| compaction.into_prior(history.evicted_turns()));
         let journal = guard.write_journal();
-        let engine = Harness::controlled_engine(&self.harness, options, control, effects, &self.id);
-        let started = self.started_event(guard.owner().turn_position);
+        let engine = Engine {
+            prior_requests: prior_requests.as_ref(),
+            ..Harness::controlled_engine(&self.harness, options, control, effects, &self.id)
+        };
         let result = tokio::select! {
             biased;
             () = cancelled(control) => return Err(TurnError::Cancelled.into()),
@@ -714,32 +855,16 @@ impl Session {
 
                 return Err(error);
             }
-            result = async {
-                engine.publish(started).await;
-
-                engine.run(request, turn_id, Some(journal)).await
-            } => result,
+            result = engine.run(request, turn_id, Some(journal)) => result,
         };
         let FinishedTurn {
             history: sent_history,
             mut messages,
             mut outcome,
+            ..
         } = match result {
             Ok(result) => result,
-            Err(EngineFailure {
-                error,
-                interrupted,
-                report,
-            }) => {
-                if let (Some(control), Some(report)) = (control, report.as_deref()) {
-                    control.record_report(report);
-                }
-                if let Some(turn) = turn.as_mut() {
-                    turn.set_failure_report(report);
-                }
-
-                return Err(guard.settle_failure(error, interrupted).await);
-            }
+            Err(failure) => return Err(Self::fail_turn(&mut guard, control, turn, failure).await),
         };
         outcome.set_history(history);
         let turn = messages.split_off(retained_messages);
@@ -765,6 +890,91 @@ impl Session {
         Ok(outcome)
     }
 
+    /// Records the failed turn's report on `control` and its lifecycle
+    /// `turn`, settles the failure, and returns the error to report.
+    async fn fail_turn(
+        guard: &mut TurnGuard,
+        control: Option<&TurnControl>,
+        turn: &mut Option<TurnLifecycle>,
+        failure: EngineFailure,
+    ) -> SessionError {
+        let EngineFailure {
+            error,
+            interrupted,
+            report,
+            ..
+        } = failure;
+        if let (Some(control), Some(report)) = (control, report.as_deref()) {
+            control.record_report(report);
+        }
+        if let Some(turn) = turn.as_mut() {
+            turn.set_failure_report(report);
+        }
+
+        guard.settle_failure(error, interrupted).await
+    }
+
+    /// Emits the admitted turn's [`RunEventKind::Started`] when its run
+    /// streams events and runs any compaction its [`ContextPolicy`] makes
+    /// due inside the `enclosing` turn, stopping when the turn is cancelled
+    /// or loses its lease. The compaction requests completed so far are
+    /// recorded on the turn's control and, while the turn holds its lease,
+    /// as its stored usage, so a run that stops before its first request
+    /// still counts their usage.
+    async fn start_admitted(
+        &mut self,
+        guard: &mut TurnGuard,
+        enclosing: EnclosingTurn<'_>,
+        available_history_weight: u64,
+    ) -> Result<Option<AutoCompaction>, SessionError> {
+        let turn_position = guard.owner().turn_position;
+        let started = self.started_event(turn_position);
+        let control = enclosing.control;
+        let events = control.and_then(TurnControl::events);
+        let result = tokio::select! {
+            biased;
+            () = cancelled(control) => Err(TurnError::Cancelled.into()),
+            error = guard.ownership_failure() => {
+                guard.mark_interrupted();
+
+                Err(error)
+            }
+            compaction = async {
+                if let Some(events) = &events {
+                    events.emit(started).await;
+                }
+
+                self.auto_compact(enclosing, turn_position, available_history_weight)
+                    .await
+            } => Ok(compaction),
+        };
+        let report = match &result {
+            Ok(Some(compaction)) => Some(compaction_report(
+                Duration::ZERO,
+                compaction.requests.activities.clone(),
+            )),
+            Ok(None) => None,
+            // A stopped generation recorded its requests on drop.
+            Err(_) => control.and_then(TurnControl::report).map(|report| {
+                compaction_report(report.duration(), report.model_requests().to_vec())
+            }),
+        };
+        if let Some(report) = report {
+            if let Some(control) = control {
+                control.record_report(&report);
+            }
+            let usage = TurnUsage {
+                cost: Cost::of_report(&report, self.harness.inner.pricing),
+                usage: Usage::from_report(&report),
+            };
+            // A turn that lost its lease cannot record usage; it reports its
+            // own failure.
+            let _ = guard.write_journal().record_usage(&usage).await;
+        }
+
+        result
+    }
+
     /// Describes the admitted turn at `turn_position` for a streamed run.
     fn started_event(&self, turn_position: i64) -> RunEventKind {
         RunEventKind::Started {
@@ -785,24 +995,8 @@ impl Session {
         available_history_weight: u64,
     ) -> (ModelRequest, usize, HistoryActivity, ReplayedHistory) {
         let estimator = self.harness.inner.context_estimator.as_ref();
-        let checkpoint_message = self
-            .checkpoint
-            .as_ref()
-            .map(SessionCheckpoint::history_message);
         let loaded_turns = self.history.turns().len();
-        // The summary is admitted ahead of recent turns; when even it cannot
-        // fit, projection falls back to recent history alone.
-        let (checkpoint_message, remaining_weight) = match checkpoint_message {
-            Some(message) => {
-                let weight = estimator.message_weight(&message);
-                if weight <= available_history_weight {
-                    (Some(message), available_history_weight - weight)
-                } else {
-                    (None, available_history_weight)
-                }
-            }
-            None => (None, available_history_weight),
-        };
+        let (checkpoint_message, remaining_weight) = self.checkpoint_room(available_history_weight);
         let (turns, projection) = context::project_history(
             self.history.turns(),
             self.history.projection,
@@ -847,6 +1041,30 @@ impl Session {
                 turns,
             },
         )
+    }
+
+    /// Returns the checkpoint message a turn replays within
+    /// `available_history_weight`, with the weight it leaves for recent
+    /// turns. The summary is admitted ahead of recent turns; when even it
+    /// cannot fit, projection falls back to recent history alone.
+    fn checkpoint_room(&self, available_history_weight: u64) -> (Option<ModelMessage>, u64) {
+        let estimator = self.harness.inner.context_estimator.as_ref();
+        let checkpoint_message = self
+            .checkpoint
+            .as_ref()
+            .map(SessionCheckpoint::history_message);
+
+        match checkpoint_message {
+            Some(message) => {
+                let weight = estimator.message_weight(&message);
+                if weight <= available_history_weight {
+                    (Some(message), available_history_weight - weight)
+                } else {
+                    (None, available_history_weight)
+                }
+            }
+            None => (None, available_history_weight),
+        }
     }
 
     /// Returns the prompt-cache key shared by every turn request of this
@@ -955,6 +1173,7 @@ impl SessionBuilder {
 
         Ok(Session {
             checkpoint: None,
+            compaction_backoff: Arc::default(),
             database,
             harness: self.harness,
             history,
@@ -963,6 +1182,88 @@ impl SessionBuilder {
             output: config.output().clone(),
             system_prompt: config.system_prompt().map(str::to_string),
         })
+    }
+}
+
+/// The admitted turn an automatic compaction runs inside.
+#[derive(Clone, Copy)]
+struct EnclosingTurn<'a> {
+    /// Control of the turn's run, which keeps the report of a generation
+    /// the run stops.
+    control: Option<&'a TurnControl>,
+    /// The turn's lifecycle turn, which owns the generation's requests.
+    lifecycle: Option<LifecycleId>,
+    /// The turn's limits, which bound the generation too.
+    limits: RunLimits,
+}
+
+/// Model requests a compaction generation completed, whether or not it
+/// succeeded.
+#[derive(Default)]
+struct CompactionRequests {
+    activities: Vec<ModelRequestActivity>,
+    /// Lifecycle model request indexes the generation took.
+    lifecycle_requests: u64,
+}
+
+/// Turns a session handle skips automatic compaction for after it failed.
+#[derive(Default)]
+struct CompactionBackoff {
+    /// Consecutive failed automatic compactions.
+    failures: u32,
+    /// First turn position that may compact automatically again.
+    retry_at: i64,
+}
+
+impl CompactionBackoff {
+    /// Doublings after which the skipped turns stop growing, at 32.
+    const MAX_DOUBLINGS: u32 = 5;
+
+    /// Records a failure in the turn at `turn_position`: the next turn is
+    /// skipped, and twice as many after each further consecutive failure,
+    /// up to 32.
+    fn failed(&mut self, turn_position: i64) {
+        let skipped = 1_i64 << self.failures.min(Self::MAX_DOUBLINGS);
+        self.failures = self.failures.saturating_add(1);
+        self.retry_at = turn_position.saturating_add(1).saturating_add(skipped);
+    }
+}
+
+/// Returns a report of compaction `requests` that took `duration`, each
+/// attributed as [`ModelRequestPurpose::Compaction`].
+fn compaction_report(duration: Duration, requests: Vec<ModelRequestActivity>) -> TurnReport {
+    let requests = requests
+        .into_iter()
+        .map(|activity| activity.with_purpose(ModelRequestPurpose::Compaction))
+        .collect();
+
+    TurnReport::new(duration, requests, Vec::new())
+}
+
+/// What automatic compaction did before a turn's first request.
+struct AutoCompaction {
+    outcome: CompactionOutcome,
+    /// Completed compaction requests, attributed as
+    /// [`ModelRequestPurpose::Compaction`], which lead the turn's report.
+    requests: CompactionRequests,
+    /// When compaction started, from which the turn's wall-clock limit runs.
+    started_at: tokio::time::Instant,
+}
+
+impl AutoCompaction {
+    /// Returns the requests that lead the turn's own, with the
+    /// [`RunEventKind::ContextCompacted`] report that follows their events,
+    /// naming the `evicted_turns` the turn's first request still evicted.
+    fn into_prior(self, evicted_turns: usize) -> PriorRequests {
+        PriorRequests {
+            activities: self.requests.activities,
+            lifecycle_requests: self.requests.lifecycle_requests,
+            report: CompactionReport {
+                outcome: self.outcome,
+                evicted_turns: u64::try_from(evicted_turns).unwrap_or(u64::MAX),
+            },
+            started_at: self.started_at,
+        }
     }
 }
 
@@ -1169,6 +1470,7 @@ impl Harness {
             catalog: None,
             context_budget: None,
             context_estimator: None,
+            context_policy: ContextPolicy::Evict,
             context_summaries: ContextSummaryPolicy::Disabled,
             execution_identity: None,
             file_system: None,
@@ -1390,6 +1692,22 @@ impl Harness {
         self
     }
 
+    /// Selects what durable sessions do once their replayed history
+    /// outgrows the weight a turn's first request leaves for it:
+    /// [`ContextPolicy::Evict`] by default, or
+    /// [`ContextPolicy::AutoCompact`] to publish a compaction checkpoint on
+    /// the summary model first, as [`Session::compact`] does.
+    ///
+    /// Compaction requests count toward any provider-call budget of the
+    /// model that answers them. Sessions keep the policy of the harness that
+    /// built them.
+    #[must_use]
+    pub fn context_policy(mut self, policy: ContextPolicy) -> Self {
+        self.config_mut().context_policy = policy;
+
+        self
+    }
+
     /// Runs one turn with the harness defaults and no stored history.
     ///
     /// Plain strings are text input; use [`TurnInput`] for ordered text and
@@ -1495,6 +1813,7 @@ impl Harness {
 
         Ok(Session {
             checkpoint: loaded.checkpoint,
+            compaction_backoff: Arc::default(),
             database,
             harness: self.clone(),
             history,
@@ -1652,12 +1971,19 @@ impl Harness {
     /// A `summary_model` answers it in place of the session model: sized
     /// by and calibrating its own estimates at its own reasoning depth,
     /// metered by its own concurrency cap, and priced at its prices, as the
-    /// turn's only model.
+    /// turn's only model. Its requests reserve from the harness's budget
+    /// ledger, which a run's own ledger replaces. Inside an `enclosing`
+    /// turn, the generation runs under that turn's lifecycle turn instead
+    /// of its own and records its report on that turn's control if it is
+    /// stopped. Appends the model requests the turn completed to
+    /// `requests`, whether or not it succeeded.
     async fn run_compaction(
         &self,
         summary_model: Option<&SummaryModel>,
         input: TurnInput,
         options: &TurnOptions,
+        enclosing: Option<EnclosingTurn<'_>>,
+        requests: &mut CompactionRequests,
     ) -> Result<TurnOutcome, TurnError> {
         let request = ModelRequest::with_history(
             vec![ModelMessage::System(
@@ -1666,8 +1992,14 @@ impl Harness {
             input,
             options.output().clone(),
         );
-        let turn = self.inner.lifecycle.start_turn();
-        let turn_id = turn.as_ref().map(TurnLifecycle::id);
+        let (turn, turn_id, control) = if let Some(enclosing) = enclosing {
+            (None, enclosing.lifecycle, enclosing.control)
+        } else {
+            let turn = self.inner.lifecycle.start_turn();
+            let turn_id = turn.as_ref().map(TurnLifecycle::id);
+
+            (turn, turn_id, None)
+        };
         let engine = match summary_model {
             Some(summary) => Engine {
                 concurrency: summary.concurrency.as_deref(),
@@ -1680,14 +2012,31 @@ impl Harness {
                 model_reasoning_effort: summary.reasoning_effort,
                 pricing: summary.pricing,
                 summary_model: None,
+                control,
                 ..self.engine(options)
             },
             None => Engine {
                 summary_model: None,
+                control,
                 ..self.engine(options)
             },
         };
         let result = engine.run(request, turn_id, None).await;
+        let (completed, next_request_index) = match &result {
+            Ok(finished) => (
+                finished.outcome.report().model_requests(),
+                finished.next_request_index,
+            ),
+            Err(failure) => (
+                failure
+                    .report
+                    .as_deref()
+                    .map_or(&[][..], TurnReport::model_requests),
+                failure.next_request_index,
+            ),
+        };
+        requests.activities.extend_from_slice(completed);
+        requests.lifecycle_requests = next_request_index;
 
         Self::finish_turn(turn, result)
     }
@@ -1861,6 +2210,7 @@ impl Harness {
             model_reasoning_effort: config.model_reasoning_effort,
             options,
             pricing: config.pricing,
+            prior_requests: None,
             repository: config.repository.as_ref(),
             session: None,
             summary_model: config.summary_model.as_ref(),
@@ -1882,6 +2232,7 @@ pub struct HarnessBuilder {
     catalog: Option<Arc<ModelCatalog>>,
     context_budget: Option<ContextBudget>,
     context_estimator: Option<Arc<dyn ContextEstimator>>,
+    context_policy: ContextPolicy,
     context_summaries: ContextSummaryPolicy,
     execution_identity: Option<ExecutionIdentity>,
     file_system: Option<Arc<dyn FileSystem>>,
@@ -2107,6 +2458,14 @@ impl HarnessBuilder {
         self
     }
 
+    /// Selects automatic compaction or eviction, like
+    /// [`Harness::context_policy`].
+    pub fn context_policy(mut self, policy: ContextPolicy) -> Self {
+        self.context_policy = policy;
+
+        self
+    }
+
     /// Identifies the execution configuration, like
     /// [`Harness::execution_identity`].
     pub fn execution_identity(mut self, identity: ExecutionIdentity) -> Self {
@@ -2201,6 +2560,7 @@ impl HarnessBuilder {
             };
             config.catalog = Some(catalog);
         }
+        config.context_policy = self.context_policy;
         config.context_summaries = self.context_summaries;
         config.lifecycle = self.lifecycle;
         config.model_reasoning_effort = self.model_reasoning_effort;
@@ -2340,6 +2700,7 @@ struct HarnessConfig {
     context_budget: ContextBudget,
     context_calibration: ContextCalibration,
     context_estimator: Arc<dyn ContextEstimator>,
+    context_policy: ContextPolicy,
     context_summaries: ContextSummaryPolicy,
     #[cfg(feature = "sqlite")]
     database: Arc<OnceCell<Database>>,
@@ -2385,6 +2746,7 @@ impl HarnessConfig {
             context_budget,
             context_calibration: ContextCalibration::default(),
             context_estimator: Arc::new(HeuristicContextEstimator::DEFAULT),
+            context_policy: ContextPolicy::Evict,
             context_summaries: ContextSummaryPolicy::Disabled,
             #[cfg(feature = "sqlite")]
             database: Arc::new(OnceCell::new()),

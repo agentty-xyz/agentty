@@ -22,7 +22,7 @@ use serde_json::Value;
 use thiserror::Error;
 
 pub use crate::context::{
-    ContextBudget, ContextBudgetError, ContextEstimator, ContextSummaryPolicy,
+    ContextBudget, ContextBudgetError, ContextEstimator, ContextPolicy, ContextSummaryPolicy,
     HeuristicContextEstimator,
 };
 use crate::input::TurnInput;

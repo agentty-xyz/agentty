@@ -22,8 +22,9 @@ use tokio::time::Instant;
 #[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
 #[non_exhaustive]
 pub struct RunLimits {
-    /// Model requests the run may send, counting re-sent requests and
-    /// context summaries. Checked before each request of the run's
+    /// Model requests the run may send, counting re-sent requests, context
+    /// summaries, and the automatic compaction requests before the run's
+    /// first request. Checked before each request of the run's
     /// conversation, so one context summary started below the limit may
     /// still send up to three requests past it.
     pub max_model_requests: Option<NonZeroU32>,
@@ -121,11 +122,11 @@ impl RunLimits {
         Ok(())
     }
 
-    /// Returns when a run starting now reaches its wall-clock limit, if it
-    /// has one that the clock can represent.
-    pub(crate) fn deadline(self) -> Option<Instant> {
+    /// Returns when a run that started at `started_at` reaches its
+    /// wall-clock limit, if it has one that the clock can represent.
+    pub(crate) fn deadline(self, started_at: Instant) -> Option<Instant> {
         self.max_wall_time
-            .and_then(|wall_time| Instant::now().checked_add(wall_time))
+            .and_then(|wall_time| started_at.checked_add(wall_time))
     }
 }
 

@@ -11,7 +11,7 @@ use std::time::{Duration, Instant};
 
 use serde_json::{Value, json};
 use tokio::sync::Semaphore;
-use tokio::time::timeout_at;
+use tokio::time::{self, timeout_at};
 
 use crate::bash::BashError;
 use crate::budget::{BudgetLedger, Estimate, Reservation};
@@ -22,7 +22,8 @@ use crate::catalog::{ModelId, Pricing};
 use crate::context::{ContextEstimator, ContextSummaryPolicy, FitStep, SentHistory};
 use crate::effect::Effects;
 use crate::event::{
-    EventSink, Item, ItemId, ItemKind, RunEventKind, SessionId, ToolCallItem, ToolCallStatus,
+    CompactionReport, EventSink, Item, ItemId, ItemKind, RunEventKind, SessionId, ToolCallItem,
+    ToolCallStatus,
 };
 use crate::execution::BashTool;
 use crate::file_system::FileSystem;
@@ -116,6 +117,9 @@ pub(crate) struct Engine<'a> {
     pub(crate) options: &'a TurnOptions,
     /// Prices of the model, which give every request its cost.
     pub(crate) pricing: Option<Pricing>,
+    /// Requests the turn's session sent for it before its first request,
+    /// such as automatic compaction, which lead the turn's report.
+    pub(crate) prior_requests: Option<&'a PriorRequests>,
     pub(crate) repository: Option<&'a Repository>,
     /// Session whose turn this is, given to tool handlers.
     pub(crate) session: Option<SessionId>,
@@ -160,7 +164,14 @@ impl Engine<'_> {
                 self.pricing,
             ),
         };
-        let deadline = self.options.limits().deadline();
+        if let Some(prior) = self.prior_requests {
+            progress.state.prepend(prior);
+        }
+        // A turn's wall-clock limit also covers the compaction before it.
+        let deadline = self.options.limits().deadline(
+            self.prior_requests
+                .map_or_else(time::Instant::now, |prior| prior.started_at),
+        );
         let driven = self.drive(request, turn_id, &mut progress.state);
         // Reaching the wall-clock limit drops the turn's pending request or
         // tool call, as cancellation does, and fails the turn; one that
@@ -178,11 +189,13 @@ impl Engine<'_> {
         match driven {
             Ok((output, request)) => {
                 let history = progress.state.context_fit.sent_history(&request);
+                let next_request_index = progress.state.model_request_index;
                 let report = progress.finish();
 
                 Ok(FinishedTurn {
                     history,
                     messages: request.into_messages(),
+                    next_request_index,
                     outcome: TurnOutcome::new(output, report),
                 })
             }
@@ -196,6 +209,7 @@ impl Engine<'_> {
                 Err(EngineFailure {
                     error,
                     interrupted,
+                    next_request_index: progress.state.model_request_index,
                     report: Some(Box::new(progress.finish())),
                 })
             }
@@ -219,6 +233,13 @@ impl Engine<'_> {
     ) -> Result<(Value, ModelRequest), TurnError> {
         let summary_trigger = (self.context_summaries == ContextSummaryPolicy::Enabled)
             .then_some(ContextSummaryTrigger::Proactive);
+        // Compaction requests the session sent for the turn are published
+        // before what compaction did.
+        if let Some(prior) = self.prior_requests {
+            self.publish_requests(state).await?;
+            self.publish(RunEventKind::ContextCompacted(prior.report.clone()))
+                .await;
+        }
 
         loop {
             // Summary requests and rejected outputs recorded since the last
@@ -1395,6 +1416,8 @@ impl RequestFailure {
 pub(crate) struct FinishedTurn {
     pub(crate) history: SentHistory,
     pub(crate) messages: Vec<ModelMessage>,
+    /// Lifecycle index the turn's next model request would have taken.
+    pub(crate) next_request_index: u64,
     pub(crate) outcome: TurnOutcome,
 }
 
@@ -1404,6 +1427,8 @@ pub(crate) struct FinishedTurn {
 pub(crate) struct EngineFailure {
     pub(crate) error: TurnError,
     pub(crate) interrupted: bool,
+    /// Lifecycle index the turn's next model request would have taken.
+    pub(crate) next_request_index: u64,
     pub(crate) report: Option<Box<TurnReport>>,
 }
 
@@ -1412,9 +1437,26 @@ impl EngineFailure {
         Self {
             error,
             interrupted: false,
+            next_request_index: 0,
             report: None,
         }
     }
+}
+
+/// Model requests a session sent for a turn before the turn's first
+/// request, each attributed to and priced at the model that answered it,
+/// with the report of the automatic compaction that sent them.
+pub(crate) struct PriorRequests {
+    pub(crate) activities: Vec<ModelRequestActivity>,
+    /// Lifecycle model request indexes they took, from zero; the turn's own
+    /// requests continue from here.
+    pub(crate) lifecycle_requests: u64,
+    /// Published after the requests' own events, before the turn's first
+    /// request.
+    pub(crate) report: CompactionReport,
+    /// When the compaction started, from which the turn's wall-clock limit
+    /// runs.
+    pub(crate) started_at: time::Instant,
 }
 
 /// Everything one turn did so far; its report is built from this whether
@@ -1486,6 +1528,14 @@ impl TurnState {
         .with_repetition_nudges(self.repetition_nudges)
         .with_context_overflow_recoveries(self.overflow.recoveries)
         .with_context_summary_failures(self.context_fit.summary_failures())
+    }
+
+    /// Records `prior` requests ahead of the turn's own, which publishes
+    /// them before its first request and counts them toward its limits;
+    /// its lifecycle request indexes continue after theirs.
+    fn prepend(&mut self, prior: &PriorRequests) {
+        self.model_requests.extend_from_slice(&prior.activities);
+        self.model_request_index = prior.lifecycle_requests;
     }
 }
 

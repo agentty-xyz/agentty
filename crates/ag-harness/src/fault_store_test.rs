@@ -30,6 +30,8 @@ pub(crate) enum Fault {
     FinishCommand,
     /// Loads report a provider without its model name.
     IncompleteModel,
+    /// Turn lease renewals fail, so the turn loses its lease.
+    Renew,
     WriteIntent,
 }
 
@@ -200,6 +202,7 @@ impl SessionStore for FaultStore {
     }
 
     async fn renew(&self, owner: &TurnOwner) -> Result<Instant, SessionError> {
+        self.check(Fault::Renew, "renew turn lease")?;
         self.inner.renew(owner).await
     }
 

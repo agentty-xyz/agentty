@@ -91,10 +91,6 @@ pub(crate) const SUMMARY_MIN_SOURCE_PERCENT: u64 = 20;
 /// that one summary may use, bounded by [`compaction::MAX_SUMMARY_BYTES`].
 pub(crate) const SUMMARY_MAX_PERCENT: u64 = 15;
 
-/// Payload bytes per weight unit that convert a summary's share of the
-/// capacity into its byte limit, at the default estimator's rate.
-const SUMMARY_BYTES_PER_WEIGHT: u64 = 4;
-
 /// Failed summaries after which a turn stops requesting them and only
 /// reduces its requests deterministically.
 pub(crate) const MAX_SUMMARY_FAILURES_PER_TURN: usize = 2;
@@ -294,6 +290,90 @@ pub enum ContextSummaryPolicy {
     /// rounds before it within a quarter of the capacity whole, when the
     /// rounds not yet summarized weigh at least a fifth of the capacity.
     Enabled,
+}
+
+/// Share, in percent, of the weight left for history that
+/// [`ContextPolicy::auto_compact`] lets replayed history fill before it
+/// compacts, so compaction runs shortly before re-projection would shorten
+/// or evict turns.
+pub(crate) const DEFAULT_AUTO_COMPACT_THRESHOLD_PERCENT: u8 = 90;
+
+/// What a durable session does with finished turns once its replayed
+/// history no longer fits the weight a turn's first request leaves for it.
+///
+/// A session replays a published compaction checkpoint ahead of the turns
+/// it does not cover (see [`crate::Session::compact`]). Without a newer
+/// checkpoint, history that outgrows its share of the [`ContextBudget`] is
+/// re-projected: older turns replay in shorter forms and the oldest are
+/// evicted from the request, which [`crate::turn::HistoryActivity`] counts.
+/// Sessions keep the policy of the harness that built them.
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
+#[non_exhaustive]
+pub enum ContextPolicy {
+    /// Re-projects and evicts history without a model call.
+    #[default]
+    Evict,
+    /// Compacts before re-projection: when the uncovered history, in the
+    /// forms it replays in, weighs more than `threshold_percent` of the
+    /// weight the turn's first request leaves for history after the
+    /// checkpoint, the turn first publishes a new checkpoint like
+    /// [`crate::Session::compact`], on the same summary model and prompt,
+    /// covering the oldest uncovered turns that fit its source but never the
+    /// newest one while another is uncovered, and then admits the turn
+    /// against the new checkpoint. When compaction fails or the history
+    /// still does not fit, the turn falls back to eviction. After a failed
+    /// compaction the session's handle skips automatic compaction for the
+    /// next turn, and for twice as many turns after each further
+    /// consecutive failure, up to 32, so a failing summary model is not
+    /// asked again before every turn. A streamed run reports each attempt
+    /// as [`crate::RunEventKind::ContextCompacted`], and its
+    /// [`crate::TurnReport`] lists the compaction requests as
+    /// [`crate::turn::ModelRequestPurpose::Compaction`], so their usage
+    /// counts toward the run's. Lifecycle observers see the compaction
+    /// requests inside the turn's own lifecycle turn, at its first model
+    /// request indexes, rather than as a separate turn.
+    ///
+    /// Build it with [`Self::auto_compact`] or [`Self::auto_compact_at`].
+    #[non_exhaustive]
+    AutoCompact {
+        /// Share, from `1` to `100` percent, of the weight left for history
+        /// that replayed history may fill before compaction runs. `100`
+        /// compacts only when the turn would otherwise re-project its
+        /// history; lower values compact earlier.
+        threshold_percent: u8,
+    },
+}
+
+impl ContextPolicy {
+    /// Returns [`Self::AutoCompact`] at a threshold of 90 percent, so
+    /// compaction runs shortly before re-projection would shorten or evict
+    /// turns. The default threshold may be retuned.
+    pub const fn auto_compact() -> Self {
+        Self::AutoCompact {
+            threshold_percent: DEFAULT_AUTO_COMPACT_THRESHOLD_PERCENT,
+        }
+    }
+
+    /// Returns [`Self::AutoCompact`] at `threshold_percent`, or `None`
+    /// unless it is from `1` to `100`.
+    pub const fn auto_compact_at(threshold_percent: u8) -> Option<Self> {
+        if threshold_percent == 0 || threshold_percent > 100 {
+            return None;
+        }
+
+        Some(Self::AutoCompact { threshold_percent })
+    }
+
+    /// Returns the history weight above which this policy compacts within
+    /// `available` history weight, or `None` when it never compacts.
+    pub(crate) fn compaction_threshold(self, available: u64) -> Option<u64> {
+        match self {
+            Self::Evict => None,
+            Self::AutoCompact { threshold_percent } => {
+                Some(available.saturating_mul(u64::from(threshold_percent)) / 100)
+            }
+        }
+    }
 }
 
 /// Injectable approximate weighing of provider request content.
@@ -873,6 +953,26 @@ pub(crate) fn project_history(
     (kept, projection)
 }
 
+/// Returns the weight `estimator` gives the turns from
+/// [`HistoryProjection::start`] in the forms `projection` replays them in,
+/// which [`project_history`] compares with its limit before re-projecting.
+pub(crate) fn projected_history_weight(
+    turns: &[(i64, HistoryTurn)],
+    projection: HistoryProjection,
+    estimator: &dyn ContextEstimator,
+) -> u64 {
+    let limit = HistoryLimit::weight(u64::MAX, estimator);
+
+    turns
+        .iter()
+        .filter_map(|(position, turn)| projection.form(*position).map(|form| (turn, form)))
+        .fold(0_u64, |total, (turn, form)| {
+            let (turn, _) = turn.in_form(form, limit.elided_source_bytes);
+
+            total.saturating_add(limit.measure(&turn))
+        })
+}
+
 /// Re-projects `turns` that outgrew `limit` in their projected forms, as
 /// [`project_history`] describes.
 fn reproject(
@@ -1048,6 +1148,27 @@ pub(crate) fn window_history_bytes(
     options: &TurnOptions,
     max_bytes: usize,
 ) -> Option<usize> {
+    let capacity = u128::from(budget.max_request_weight().get() - budget.reserved_output_weight());
+    let usable = capacity * u128::from(UNCALIBRATED_CAPACITY_PERCENT) / 100;
+    let fixed = capacity * HISTORY_INPUT_RESERVE_PERCENT / 100
+        + u128::from(instruction_weight(estimator, system_prompt, options));
+    let history_weight = usable.saturating_sub(fixed);
+    if history_weight == 0 {
+        return None;
+    }
+    let bytes = payload_bytes_within(estimator, history_weight)?.min(max_bytes as u128);
+
+    Some(usize::try_from(bytes).unwrap_or(max_bytes))
+}
+
+/// Returns the payload bytes `estimator` weighs within `weight` at its
+/// marginal message rate, measured on [`HISTORY_RATE_SAMPLE`] repeated, or
+/// `None` when `estimator` gives payload bytes no weight, so weight cannot
+/// convert to bytes. A share of the capacity, such as the derived history
+/// budget or the size a round summary may take, thereby converts at the
+/// estimator's own rate for representative mixed text rather than a fixed
+/// one.
+pub(crate) fn payload_bytes_within(estimator: &dyn ContextEstimator, weight: u128) -> Option<u128> {
     let empty = estimator.message_weight(&ModelMessage::User(String::new()));
     let probe = HISTORY_RATE_SAMPLE.repeat(HISTORY_RATE_SAMPLE_REPEATS);
     let probe_bytes = probe.len() as u128;
@@ -1057,17 +1178,8 @@ pub(crate) fn window_history_bytes(
     if probe_weight == 0 {
         return None;
     }
-    let capacity = u128::from(budget.max_request_weight().get() - budget.reserved_output_weight());
-    let usable = capacity * u128::from(UNCALIBRATED_CAPACITY_PERCENT) / 100;
-    let fixed = capacity * HISTORY_INPUT_RESERVE_PERCENT / 100
-        + u128::from(instruction_weight(estimator, system_prompt, options));
-    let history_weight = usable.saturating_sub(fixed);
-    if history_weight == 0 {
-        return None;
-    }
-    let bytes = (history_weight * probe_bytes / u128::from(probe_weight)).min(max_bytes as u128);
 
-    Some(usize::try_from(bytes).unwrap_or(max_bytes))
+    Some(weight.saturating_mul(probe_bytes) / u128::from(probe_weight))
 }
 
 /// Weighs what every request carries besides history and the current
@@ -1626,12 +1738,15 @@ impl ContextFit {
         {
             return None;
         }
-        let max_summary_bytes = usize::try_from(
-            (capacity.saturating_mul(SUMMARY_MAX_PERCENT) / 100)
-                .saturating_mul(SUMMARY_BYTES_PER_WEIGHT),
+        let max_summary_bytes = payload_bytes_within(
+            estimator,
+            u128::from(capacity.saturating_mul(SUMMARY_MAX_PERCENT) / 100),
         )
-        .unwrap_or(usize::MAX)
-        .min(compaction::MAX_SUMMARY_BYTES);
+        .map_or(compaction::MAX_SUMMARY_BYTES, |bytes| {
+            usize::try_from(bytes)
+                .unwrap_or(usize::MAX)
+                .min(compaction::MAX_SUMMARY_BYTES)
+        });
         let schema = compaction::summary_schema().ok()?;
         if let Some(sent) = sent.filter(|_| self.shared_prefix_summaries) {
             let job = RoundSummaryJob::continuing(

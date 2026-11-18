@@ -7,8 +7,9 @@ use std::path::{Path, PathBuf};
 use std::sync::Arc;
 #[cfg(feature = "sqlite")]
 use std::sync::atomic::{AtomicUsize, Ordering};
+use std::time::Duration;
 #[cfg(feature = "sqlite")]
-use std::time::{Duration, Instant};
+use std::time::Instant;
 
 use async_trait::async_trait;
 use mockall::Sequence;
@@ -284,7 +285,6 @@ pub(super) async fn send_with_resumed_session(
     session.send(prompt).await
 }
 
-#[cfg(feature = "sqlite")]
 pub(super) async fn wait_for_fixture(notify: &Notify, description: &str) {
     let result = tokio::time::timeout(Duration::from_secs(5), notify.notified()).await;
 

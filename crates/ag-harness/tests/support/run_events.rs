@@ -4,19 +4,23 @@
 use std::error::Error;
 use std::future::{pending, poll_fn};
 use std::io;
+use std::num::NonZeroU64;
 use std::path::{Path, PathBuf};
 use std::pin::Pin;
 use std::sync::Arc;
 use std::time::Duration;
 
 use ag_harness::catalog::{ModelId, ModelSpec};
-use ag_harness::event::{Item, ItemKind, RunSummary, ToolCallItem, ToolCallStatus};
-use ag_harness::model::{
-    CompletionMetadata, CompletionUsage, ModelCompletion, ModelMessage, ModelMetadata,
-    ModelRequest, ModelResponse,
+use ag_harness::event::{
+    CompactionOutcome, Item, ItemKind, RunSummary, ToolCallItem, ToolCallStatus,
 };
-use ag_harness::store::MemoryStore;
+use ag_harness::model::{
+    CompletionMetadata, CompletionUsage, ContextBudget, ContextPolicy, ModelCompletion,
+    ModelMessage, ModelMetadata, ModelRequest, ModelResponse,
+};
+use ag_harness::store::{MemoryStore, SessionCheckpoint};
 use ag_harness::tool::{FileSystem, LocalFileSystem, ToolCall};
+use ag_harness::turn::{ModelRequestActivity, ModelRequestPurpose};
 use ag_harness::{
     ErrorKind, EventStream, Harness, Model, ModelCatalog, ModelError, OutputSchema, Role, Run,
     RunEvent, RunEventKind, RunOutcome, RunOutput, RunRequest, ToolSet,
@@ -607,6 +611,104 @@ async fn stream_dropped_while_the_run_waits_on_it_releases_the_run() -> Result<(
     assert_eq!(
         outcome.result.map_err(|error| error.kind()).err(),
         Some(ErrorKind::Repetition)
+    );
+
+    Ok(())
+}
+
+/// Payload bytes of each compacting turn's input, about a quarter of
+/// [`COMPACTING_BUDGET`].
+const COMPACTING_INPUT_BYTES: usize = 8_000;
+
+/// Weight budget that holds a turn's input beside two finished turns of
+/// history, but not three.
+const COMPACTING_BUDGET: u64 = 8_000;
+
+/// Answers checkpoint requests with a summary and turn requests with a
+/// name.
+struct CompactingModel;
+
+#[async_trait]
+impl Model for CompactingModel {
+    async fn complete(&self, request: ModelRequest) -> Result<ModelCompletion, ModelError> {
+        let compaction = request
+            .schema()
+            .is_some_and(|schema| schema.value()["properties"].get("decisions").is_some());
+        let response = if compaction {
+            json!({"context": "earlier turns named Ada", "decisions": [], "state": "named"})
+        } else {
+            json!({"name": "Ada"})
+        };
+
+        Ok(completion(ModelResponse::Output(response), 5))
+    }
+}
+
+fn compacting_input(number: usize) -> String {
+    format!("turn-{number} {}", "x".repeat(COMPACTING_INPUT_BYTES))
+}
+
+#[tokio::test]
+async fn auto_compaction_streams_its_requests_and_report_before_the_turn()
+-> Result<(), Box<dyn Error>> {
+    // Arrange
+    let policy = ContextPolicy::auto_compact();
+    assert!(matches!(
+        policy,
+        ContextPolicy::AutoCompact {
+            threshold_percent: 90,
+            ..
+        }
+    ));
+    assert_eq!(ContextPolicy::default(), ContextPolicy::Evict);
+    let harness = Harness::new(
+        CompactingModel,
+        ContextBudget::new(NonZeroU64::new(COMPACTING_BUDGET).ok_or("nonzero budget")?),
+    )
+    .store(Arc::new(MemoryStore::new()))
+    .context_policy(policy);
+    let mut session = harness
+        .session("compacting", name_schema()?)
+        .create()
+        .await?;
+    for number in 1..=3 {
+        session.send(compacting_input(number)).await?;
+    }
+
+    // Act
+    let (events, outcome) = streamed(session.run(RunRequest::new(compacting_input(4)))).await;
+
+    // Assert
+    assert!(outcome.result.is_ok());
+    assert_eq!(
+        labels(&events)[..3],
+        ["started", "request", "other"].map(String::from)
+    );
+    let Some(RunEventKind::ContextCompacted(report)) = events.get(2).map(|event| &event.kind)
+    else {
+        return Err("the third event must be `ContextCompacted`".into());
+    };
+    assert!(matches!(
+        &report.outcome,
+        CompactionOutcome::Compacted { covered_through, model: None } if covered_through.get() == 1
+    ));
+    assert_eq!(report.evicted_turns, 0);
+    let purposes: Vec<_> = outcome
+        .report
+        .model_requests()
+        .iter()
+        .map(ModelRequestActivity::purpose)
+        .collect();
+    assert_eq!(
+        purposes,
+        [ModelRequestPurpose::Compaction, ModelRequestPurpose::Turn]
+    );
+    assert_eq!(last_summary(&events)?.usage, outcome.usage);
+    assert_eq!(outcome.usage.input, 20);
+    let resumed = harness.resume("compacting").await?;
+    assert_eq!(
+        resumed.checkpoint().map(SessionCheckpoint::covered_through),
+        Some(1)
     );
 
     Ok(())
