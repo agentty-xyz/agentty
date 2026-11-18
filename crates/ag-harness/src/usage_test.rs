@@ -121,24 +121,39 @@ fn cost_of_cache_reads_beyond_the_input_count_bills_no_uncached_input() {
 }
 
 #[test]
-fn report_cost_sums_each_requests_rounded_cost_and_needs_pricing() {
+fn report_cost_sums_each_requests_own_cost_and_needs_every_price() {
     // Arrange
-    let report = TurnReport::new(
-        Duration::ZERO,
-        vec![request(1, 0), request(1, 0)],
-        Vec::new(),
-    );
-    let empty = TurnReport::new(Duration::ZERO, Vec::new(), Vec::new());
     let pricing = Pricing::new(500_000, 0);
+    let summary_pricing = Pricing::new(2_000_000, 0);
+    let priced_at = |pricing: Option<Pricing>| {
+        let activity = request(1, 0);
+        let usage = Usage::from_report(&TurnReport::new(
+            Duration::ZERO,
+            vec![activity.clone()],
+            Vec::new(),
+        ));
+
+        activity.with_answerer(None, pricing.map(|pricing| Cost::of(&usage, pricing)))
+    };
+    let report =
+        |requests: Vec<ModelRequestActivity>| TurnReport::new(Duration::ZERO, requests, Vec::new());
+    let mixed = report(vec![
+        priced_at(Some(pricing)),
+        priced_at(Some(pricing)),
+        priced_at(Some(summary_pricing)),
+    ]);
+    let partly_unpriced = report(vec![priced_at(Some(pricing)), priced_at(None)]);
 
     // Act
-    let priced = Cost::of_report(&report, Some(pricing));
-    let unpriced = Cost::of_report(&report, None);
-    let nothing = Cost::of_report(&empty, Some(pricing));
+    let priced = Cost::of_report(&mixed, Some(pricing));
+    let unpriced_run = Cost::of_report(&mixed, None);
+    let unpriced_request = Cost::of_report(&partly_unpriced, Some(pricing));
+    let nothing = Cost::of_report(&report(Vec::new()), Some(pricing));
 
     // Assert
-    assert_eq!(priced.map(|cost| cost.micro_usd), Some(2));
-    assert_eq!(unpriced, None);
+    assert_eq!(priced.map(|cost| cost.micro_usd), Some(4));
+    assert_eq!(unpriced_run, None);
+    assert_eq!(unpriced_request, None);
     assert_eq!(nothing.map(|cost| cost.micro_usd), Some(0));
 }
 

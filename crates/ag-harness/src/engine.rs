@@ -18,7 +18,7 @@ use crate::budget::{BudgetLedger, Estimate, Reservation};
 use crate::builtin_tool::{BashHandler, ReadHandler, WriteHandler, read_summary};
 use crate::calibration::{Calibration, ContextCalibration};
 use crate::cancellation::TurnControl;
-use crate::catalog::Pricing;
+use crate::catalog::{ModelId, Pricing};
 use crate::context::{ContextEstimator, ContextSummaryPolicy, FitStep, SentHistory};
 use crate::effect::Effects;
 use crate::event::{
@@ -41,6 +41,7 @@ use crate::repository::Repository;
 use crate::reservation::WriteJournal;
 use crate::round_summary::RoundSummaryJob;
 use crate::run::Usage;
+use crate::summary_model::SummaryModel;
 use crate::tool::{
     Builtin, MAX_TOOL_RESULT_BYTES, MalformedArguments, ReadArguments, ToolCall, ToolCallArguments,
     ToolDefinition, UnknownToolCall,
@@ -108,6 +109,9 @@ pub(crate) struct Engine<'a> {
     /// entry, which bounds a request's output estimate.
     pub(crate) max_output: Option<u64>,
     pub(crate) model: &'a Arc<dyn Model>,
+    /// Catalog identifier of [`Self::model`], when the harness selected it
+    /// from a catalog.
+    pub(crate) model_id: Option<&'a ModelId>,
     pub(crate) model_reasoning_effort: Option<ReasoningEffort>,
     pub(crate) options: &'a TurnOptions,
     /// Prices of the model, which give every request its cost.
@@ -115,6 +119,9 @@ pub(crate) struct Engine<'a> {
     pub(crate) repository: Option<&'a Repository>,
     /// Session whose turn this is, given to tool handlers.
     pub(crate) session: Option<SessionId>,
+    /// Model that answers the turn's round summary requests in place of
+    /// [`Self::model`], when the harness resolved one.
+    pub(crate) summary_model: Option<&'a SummaryModel>,
 }
 
 impl Engine<'_> {
@@ -138,8 +145,10 @@ impl Engine<'_> {
                 .map_err(EngineFailure::unreported)?;
         }
         // Only a turn that may summarize asks the model how to; a text turn
-        // states no schema in its prefix, so its summaries never share it.
+        // states no schema in its prefix, so its summaries never share it,
+        // and only the turn's own model can continue its cached prefix.
         let shared_prefix_summaries = self.context_summaries == ContextSummaryPolicy::Enabled
+            && self.summary_model.is_none()
             && self.model.keeps_prefix_across_schemas()
             && request.schema().is_some();
         let mut progress = Progress {
@@ -266,6 +275,7 @@ impl Engine<'_> {
             };
             let completed = self
                 .metered_request(
+                    self.turn_answerer(),
                     fitted.as_ref().unwrap_or(&request),
                     (sent.estimated_weight, calibration),
                     state.model_request_index,
@@ -433,38 +443,79 @@ impl Engine<'_> {
         activity: ModelRequestActivity,
         sent: &SentRequest,
     ) {
-        state.model_requests.push(
-            self.accepted_request(
-                activity
-                    .with_context(sent.context)
-                    .with_fit(sent.budget_weight, sent.unreduced_weight),
-                sent.estimated_weight,
-                sent.calibration,
-            ),
-        );
+        state.model_requests.push(Self::accepted_request(
+            self.turn_answerer(),
+            activity
+                .with_context(sent.context)
+                .with_fit(sent.budget_weight, sent.unreduced_weight),
+            sent.estimated_weight,
+            sent.calibration,
+        ));
     }
 
-    /// Calibrates later estimates against an answered request of
-    /// `estimated_weight` and returns its activity with that estimate and
-    /// the token count `calibration` predicted for it.
+    /// Returns the turn's own model with everything that sizes, meters,
+    /// and prices its requests.
+    fn turn_answerer(&self) -> Answerer<'_> {
+        Answerer {
+            concurrency: self.concurrency,
+            context_budget: self.context_budget,
+            context_calibration: self.context_calibration,
+            context_estimator: self.context_estimator.as_ref(),
+            id: self.model_id,
+            max_output: self.max_output,
+            model: self.model,
+            pricing: self.pricing,
+            summary: None,
+        }
+    }
+
+    /// Returns the model that answers the summary `request`: the summary
+    /// model when the harness resolved one and the request fits its
+    /// calibrated budget, and otherwise the turn's own model, whose budget
+    /// sized the request.
+    fn summary_answerer(&self, request: &ModelRequest) -> Answerer<'_> {
+        self.summary_model
+            .map(|summary| Answerer {
+                concurrency: summary.concurrency.as_deref(),
+                context_budget: summary.context_budget,
+                context_calibration: &summary.context_calibration,
+                context_estimator: summary.context_estimator.as_ref(),
+                id: Some(&summary.id),
+                max_output: summary.max_output,
+                model: &summary.model,
+                pricing: summary.pricing,
+                summary: Some(summary),
+            })
+            .filter(|answerer| answerer.fits(request))
+            .unwrap_or_else(|| self.turn_answerer())
+    }
+
+    /// Calibrates `answerer`'s later estimates against a request it
+    /// answered of `estimated_weight` and returns its activity with that
+    /// estimate, the token count `calibration` predicted for it, and the
+    /// answering model with the cost of its usage at that model's prices.
     fn accepted_request(
-        &self,
+        answerer: Answerer<'_>,
         activity: ModelRequestActivity,
         estimated_weight: u64,
         calibration: Calibration,
     ) -> ModelRequestActivity {
-        self.context_calibration.observe(
-            self.context_budget,
+        answerer.context_calibration.observe(
+            answerer.context_budget,
             estimated_weight,
             activity.completion(),
         );
+        let usage = Usage::from_request(activity.completion().and_then(CompletionMetadata::usage));
+        let cost = answerer.pricing.map(|pricing| Cost::of(&usage, pricing));
 
-        activity.with_estimate(
-            estimated_weight,
-            calibration
-                .envelope()
-                .map(|envelope| envelope.tokens(estimated_weight)),
-        )
+        activity
+            .with_estimate(
+                estimated_weight,
+                calibration
+                    .envelope()
+                    .map(|envelope| envelope.tokens(estimated_weight)),
+            )
+            .with_answerer(answerer.id.cloned(), cost)
     }
 
     /// Executes one response's journaled `calls` in order and journals each
@@ -651,7 +702,11 @@ impl Engine<'_> {
     /// times, and returns a summary that satisfies the summary schema, fits
     /// the job's size limit, and is smaller than its source. Every answered
     /// request is reported with [`ModelRequestPurpose::ContextSummary`] and
-    /// calibrates later estimates.
+    /// calibrates later estimates of the model that answered it: the
+    /// summary model when one is set and the request, grown by any
+    /// correction, still fits its budget, or else the turn's own model.
+    /// That model's estimate reserves the request from the budget ledger,
+    /// its concurrency cap meters it, and its prices give it its cost.
     async fn request_summary(
         &self,
         job: &RoundSummaryJob,
@@ -664,24 +719,18 @@ impl Engine<'_> {
         }
         let mut corrections = 0;
         loop {
-            let (_, calibration) = self
+            // Each correction grows the request, so it may outgrow the
+            // summary model's budget.
+            let answerer = self.summary_answerer(&request);
+            let (_, calibration) = answerer
                 .context_calibration
-                .effective_budget(self.context_budget);
-            // A continued request states the turn's schema in its prompt and
-            // advertises the turn's tools.
-            let prompt_schema = request.prefix_schema().or(request.schema());
-            let fixed = request.tools().iter().fold(
-                self.context_estimator.request_weight(prompt_schema),
-                |weight, tool| {
-                    weight.saturating_add(self.context_estimator.tool_definition_weight(tool))
-                },
-            );
-            let estimated_weight = request.messages().iter().fold(fixed, |weight, message| {
-                weight.saturating_add(self.context_estimator.message_weight(message))
-            });
+                .effective_budget(answerer.context_budget);
+            let estimated_weight = answerer.request_weight(&request);
+            let summary_request = answerer.summary.map(|summary| summary.request(&request));
             let completed = self
                 .metered_request(
-                    &request,
+                    answerer,
+                    summary_request.as_ref().unwrap_or(&request),
                     (estimated_weight, calibration),
                     *model_request_index,
                     turn_id,
@@ -696,15 +745,14 @@ impl Engine<'_> {
                         error @ (ModelError::InvalidJson { .. } | ModelError::SchemaViolation { .. }),
                     activity,
                 }) => {
-                    model_requests.push(
-                        self.accepted_request(
-                            activity
-                                .rejected()
-                                .with_purpose(ModelRequestPurpose::ContextSummary),
-                            estimated_weight,
-                            calibration,
-                        ),
-                    );
+                    model_requests.push(Self::accepted_request(
+                        answerer,
+                        activity
+                            .rejected()
+                            .with_purpose(ModelRequestPurpose::ContextSummary),
+                        estimated_weight,
+                        calibration,
+                    ));
                     if corrections == MAX_OUTPUT_CORRECTIONS {
                         return Err(ContextSummaryErrorType::InvalidOutput.into());
                     }
@@ -715,7 +763,8 @@ impl Engine<'_> {
                 }
                 Err(_) => return Err(ContextSummaryErrorType::Model.into()),
             };
-            model_requests.push(self.accepted_request(
+            model_requests.push(Self::accepted_request(
+                answerer,
                 activity.with_purpose(ModelRequestPurpose::ContextSummary),
                 estimated_weight,
                 calibration,
@@ -741,8 +790,9 @@ impl Engine<'_> {
     }
 
     /// Emits a [`RunEventKind::ModelRequestCompleted`] for every model
-    /// request `state` recorded since the last call, so the events' usage
-    /// and cost sum to the run outcome's, then records the turn's usage so
+    /// request `state` recorded since the last call, attributed to the model
+    /// that answered it and priced at its prices, so the events' usage and
+    /// cost sum to the run outcome's, then records the turn's usage so
     /// far on its durable turn. The session recorded zero usage when it
     /// admitted the turn, so a turn stopped before its first response never
     /// reads as unknown.
@@ -759,13 +809,14 @@ impl Engine<'_> {
         for activity in &state.model_requests[state.published_requests..] {
             let usage =
                 Usage::from_request(activity.completion().and_then(CompletionMetadata::usage));
-            let cost = self.pricing.map(|pricing| Cost::of(&usage, pricing));
-            state.cost = state
-                .cost
-                .zip(cost)
-                .map(|(total, cost)| total.saturating_add(cost));
-            self.publish(RunEventKind::ModelRequestCompleted { usage, cost })
-                .await;
+            let cost = activity.cost();
+            state.cost = Cost::sum(state.cost, cost);
+            self.publish(RunEventKind::ModelRequestCompleted {
+                cost,
+                model: activity.model().cloned(),
+                usage,
+            })
+            .await;
         }
         state.published_requests = completed;
         let Some(recorder) = &state.rounds.recorder else {
@@ -936,21 +987,22 @@ impl Engine<'_> {
         })
     }
 
-    /// Sends `request`, estimated at `estimated_weight` under
-    /// `calibration`, once a permit of the model's concurrency cap is free
+    /// Sends `request` to `answerer`, estimated at `estimated_weight` under
+    /// `calibration`, once a permit of that model's concurrency cap is free
     /// and the budget ledger then reserved its [`Estimate`], so a request
     /// queued for a permit holds no budget. The permit is held only while
     /// the request is in flight. Once sent, the request is always charged:
-    /// with its actual usage and cost when the provider answered with
-    /// usage, and with its whole estimate otherwise, including when this
-    /// future is dropped in flight by cancellation or a wall-clock limit.
-    /// Dropping this future releases its permit.
+    /// with its actual usage and cost at that model's prices when the
+    /// provider answered with usage, and with its whole estimate otherwise,
+    /// including when this future is dropped in flight by cancellation or a
+    /// wall-clock limit. Dropping this future releases its permit.
     ///
     /// # Errors
     ///
     /// Returns the cap the ledger refused the request at; nothing is sent.
     async fn metered_request(
         &self,
+        answerer: Answerer<'_>,
         request: &ModelRequest,
         (estimated_weight, calibration): (u64, Calibration),
         model_request_index: u64,
@@ -958,20 +1010,20 @@ impl Engine<'_> {
     ) -> Result<Result<CompletedRequest, RequestFailure>, LimitKind> {
         // The semaphore is never closed, so acquiring it fails only in
         // theory; a request then runs without a permit.
-        let permit = match self.concurrency {
+        let permit = match answerer.concurrency {
             Some(concurrency) => concurrency.acquire().await.ok(),
             None => None,
         };
         let reservation = self
             .budget
-            .reserve(self.estimate(estimated_weight, calibration))
+            .reserve(self.estimate(answerer, estimated_weight, calibration))
             .await?;
         let charge = SentCharge {
             budget: self.budget,
             reservation: Some(reservation),
         };
         let completed = self
-            .complete_model_request(request, model_request_index, turn_id)
+            .complete_model_request(answerer.model, request, model_request_index, turn_id)
             .await;
         drop(permit);
         let activity = match &completed {
@@ -980,36 +1032,48 @@ impl Engine<'_> {
         };
         if let Some(completion) = activity.completion() {
             let usage = Usage::from_request(completion.usage());
-            let cost = self.pricing.map(|pricing| Cost::of(&usage, pricing));
+            let cost = answerer.pricing.map(|pricing| Cost::of(&usage, pricing));
             charge.commit(&usage, cost);
         }
 
         Ok(completed)
     }
 
-    /// Estimates a request of `estimated_weight`: input tokens calibrated by
-    /// `calibration`, or the weight itself before any usage report, and
-    /// output tokens up to the turn's maximum output, or else the model's
-    /// cataloged maximum output, or else the output weight the context
-    /// budget reserves, calibrated like input; priced when the model has
-    /// prices.
-    fn estimate(&self, estimated_weight: u64, calibration: Calibration) -> Estimate {
+    /// Estimates a request to `answerer` of `estimated_weight`: input
+    /// tokens calibrated by `calibration`, or the weight itself before any
+    /// usage report, and output tokens up to the turn's maximum output for
+    /// the turn's own model, or else the answering model's cataloged
+    /// maximum output, or else the output weight its context budget
+    /// reserves, calibrated like input; priced when that model has prices.
+    fn estimate(
+        &self,
+        answerer: Answerer<'_>,
+        estimated_weight: u64,
+        calibration: Calibration,
+    ) -> Estimate {
         let tokens = |weight: u64| {
             calibration
                 .envelope()
                 .map_or(weight, |envelope| envelope.tokens(weight))
         };
         let input = tokens(estimated_weight);
-        let output = match (self.options.generation().max_output_tokens, self.max_output) {
+        // A summary model's request carries none of the turn's generation
+        // settings.
+        let turn_max_output = answerer
+            .summary
+            .is_none()
+            .then(|| self.options.generation().max_output_tokens)
+            .flatten();
+        let output = match (turn_max_output, answerer.max_output) {
             (Some(tokens), _) => u64::from(tokens.get()),
             (None, Some(max_output)) => max_output,
             (None, None) => tokens(
-                estimated_weight.saturating_add(self.context_budget.reserved_output_weight()),
+                estimated_weight.saturating_add(answerer.context_budget.reserved_output_weight()),
             )
             .saturating_sub(input),
         };
         let estimate = Estimate::new(input, output);
-        let Some(pricing) = self.pricing else {
+        let Some(pricing) = answerer.pricing else {
             return estimate;
         };
         let usage = Usage {
@@ -1021,8 +1085,11 @@ impl Engine<'_> {
         estimate.with_cost(Cost::of(&usage, pricing))
     }
 
+    /// Sends `request` to `model`, reporting it to the lifecycle under that
+    /// model's metadata, and validates an output against the request.
     async fn complete_model_request(
         &self,
+        model: &Arc<dyn Model>,
         request: &ModelRequest,
         model_request_index: u64,
         turn_id: Option<LifecycleId>,
@@ -1030,8 +1097,8 @@ impl Engine<'_> {
         let started_at = Instant::now();
         let model_lifecycle =
             self.lifecycle
-                .start_model_request(self.model.metadata(), model_request_index, turn_id);
-        let operation = self.model.complete(request.clone());
+                .start_model_request(model.metadata(), model_request_index, turn_id);
+        let operation = model.complete(request.clone());
         let completion = match model_lifecycle.as_ref() {
             Some(model_lifecycle) => model_lifecycle.scope(operation).await,
             None => operation.await,
@@ -1181,6 +1248,54 @@ impl Engine<'_> {
                 Err(error)
             }
         }
+    }
+}
+
+/// Model that answers a request, with everything that sizes, meters, and
+/// prices its requests and learns from its usage.
+#[derive(Clone, Copy)]
+struct Answerer<'a> {
+    concurrency: Option<&'a Semaphore>,
+    context_budget: context::ContextBudget,
+    context_calibration: &'a ContextCalibration,
+    context_estimator: &'a dyn ContextEstimator,
+    id: Option<&'a ModelId>,
+    max_output: Option<u64>,
+    model: &'a Arc<dyn Model>,
+    pricing: Option<Pricing>,
+    /// The summary model this answerer is, which sets its own reasoning
+    /// depth and is not bound by the turn's output cap; `None` for the
+    /// turn's own model.
+    summary: Option<&'a SummaryModel>,
+}
+
+impl Answerer<'_> {
+    /// Returns whether `request` fits this model's calibrated budget.
+    fn fits(&self, request: &ModelRequest) -> bool {
+        let (budget, _) = self
+            .context_calibration
+            .effective_budget(self.context_budget);
+
+        self.request_weight(request)
+            <= budget.max_request_weight().get() - budget.reserved_output_weight()
+    }
+
+    /// Approximates `request` with this model's estimator: its prompt
+    /// schema, advertised tools, and messages.
+    fn request_weight(&self, request: &ModelRequest) -> u64 {
+        // A continued request states the turn's schema in its prompt and
+        // advertises the turn's tools.
+        let prompt_schema = request.prefix_schema().or(request.schema());
+        let fixed = request.tools().iter().fold(
+            self.context_estimator.request_weight(prompt_schema),
+            |weight, tool| {
+                weight.saturating_add(self.context_estimator.tool_definition_weight(tool))
+            },
+        );
+
+        request.messages().iter().fold(fixed, |weight, message| {
+            weight.saturating_add(self.context_estimator.message_weight(message))
+        })
     }
 }
 

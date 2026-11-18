@@ -42,6 +42,7 @@ fn cancelled() -> Result<RunOutput, RunError> {
 fn request_completed() -> RunEventKind {
     RunEventKind::ModelRequestCompleted {
         cost: None,
+        model: None,
         usage: Usage::default(),
     }
 }
@@ -225,6 +226,16 @@ fn priced_usage() -> (Usage, Cost) {
     (usage, Cost::of(&usage, Pricing::new(2_000_000, 0)))
 }
 
+/// Returns a completed request of `usage` at `cost` that the cataloged
+/// summary model `host/cheap` answered.
+fn summary_request_completed(usage: Usage, cost: Cost) -> RunEventKind {
+    RunEventKind::ModelRequestCompleted {
+        cost: Some(cost),
+        model: Some(ModelId::new("host/cheap")),
+        usage,
+    }
+}
+
 #[test]
 fn run_event_round_trips_through_json_matching_its_schema() -> Result<(), Box<dyn Error>> {
     // Arrange
@@ -271,10 +282,7 @@ fn run_event_round_trips_through_json_matching_its_schema() -> Result<(), Box<dy
             },
         },
         RunEventKind::ContextReduced(ContextActivity::default()),
-        RunEventKind::ModelRequestCompleted {
-            cost: Some(cost),
-            usage,
-        },
+        summary_request_completed(usage, cost),
         RunEventKind::Completed(RunSummary {
             cost: Some(cost),
             error: Some(RunFailure {
@@ -327,10 +335,12 @@ fn run_event_round_trips_through_json_matching_its_schema() -> Result<(), Box<dy
     assert_eq!(encoded[6]["kind"]["item"]["output"]["type"], "text");
     let priced = json!({"micro_usd": 1000, "pricing": "host"});
     assert_eq!(encoded[8]["kind"]["cost"], priced);
+    assert_eq!(encoded[8]["kind"]["model"], "host/cheap");
     assert_eq!(encoded[9]["kind"]["cost"], priced);
     assert_eq!(encoded[9]["kind"]["error"]["kind"], "cancelled");
     let unpriced = serde_json::to_value(request_completed())?;
     assert_eq!(unpriced["cost"], json!(null));
+    assert_eq!(unpriced["model"], json!(null));
 
     Ok(())
 }

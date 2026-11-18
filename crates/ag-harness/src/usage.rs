@@ -6,7 +6,7 @@ use serde::{Deserialize, Serialize};
 
 use crate::catalog::{Pricing, PricingSource};
 use crate::run::Usage;
-use crate::turn::{TurnOutcome, TurnReport};
+use crate::turn::{ModelRequestActivity, TurnOutcome, TurnReport};
 
 /// Tokens per million, the unit [`Pricing`] prices are quoted in.
 const TOKENS_PER_MTOK: u128 = 1_000_000;
@@ -71,26 +71,24 @@ impl Cost {
         }
     }
 
-    /// Returns the summed cost of every model request in `report`, priced
-    /// one by one, or `None` without `pricing`.
+    /// Returns the summed [`crate::turn::ModelRequestActivity::cost`] of
+    /// every model request in `report`, each priced at the prices of the
+    /// model that answered it, or `None` without the run model's `pricing`
+    /// or when any request's model had none.
     pub(crate) fn of_report(report: &TurnReport, pricing: Option<Pricing>) -> Option<Self> {
-        let pricing = pricing?;
+        report
+            .model_requests()
+            .iter()
+            .map(ModelRequestActivity::cost)
+            .fold(pricing.map(Self::zero), Self::sum)
+    }
 
-        Some(
-            report
-                .model_requests()
-                .iter()
-                .map(|request| {
-                    let usage = Usage::from_request(
-                        request
-                            .completion()
-                            .and_then(|completion| completion.usage()),
-                    );
-
-                    Self::of(&usage, pricing)
-                })
-                .fold(Self::zero(pricing), Self::saturating_add),
-        )
+    /// Adds a request's `cost` to a running `total`, which stays `None`
+    /// once either is unpriced.
+    pub(crate) fn sum(total: Option<Self>, cost: Option<Self>) -> Option<Self> {
+        total
+            .zip(cost)
+            .map(|(total, cost)| total.saturating_add(cost))
     }
 
     /// Returns the zero cost of prices from `pricing`.

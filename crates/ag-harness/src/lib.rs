@@ -166,6 +166,7 @@ mod session_model;
 #[cfg(feature = "sqlite")]
 mod sqlite_store;
 pub mod store;
+mod summary_model;
 mod telemetry;
 pub mod tool;
 mod tool_handler;

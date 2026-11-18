@@ -210,9 +210,15 @@ pub enum RunEventKind {
     /// Later per-request fields may be added, so match it with `..`.
     #[non_exhaustive]
     ModelRequestCompleted {
-        /// Price of `usage`, or `None` when the run's model has no
+        /// Price of `usage` at the prices of `model`, the model that
+        /// answered this request, or `None` when that model has no
         /// [`crate::catalog::Pricing`].
         cost: Option<Cost>,
+        /// Catalog identifier of the model that answered this request, such
+        /// as the summary model answering a round summary request, when the
+        /// harness selected it from a [`crate::ModelCatalog`]; `None` for a
+        /// model the host supplied directly.
+        model: Option<ModelId>,
         /// Tokens of this request.
         usage: Usage,
     },

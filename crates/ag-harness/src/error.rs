@@ -506,6 +506,7 @@ impl Classification {
             SessionError::Migration(_) | SessionError::QueryContext { .. } => ErrorKind::Store,
             SessionError::UnsupportedModelHistory { .. }
             | SessionError::Registry(_)
+            | SessionError::ModelSelection(_)
             | SessionError::RegistrationMismatch { .. }
             | SessionError::ExecutionIdentityRequired
             | SessionError::ModelMismatch { .. }

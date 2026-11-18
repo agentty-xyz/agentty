@@ -172,6 +172,10 @@ pub enum SessionError {
     /// The host selected a key absent from its registry.
     #[error(transparent)]
     Registry(#[from] crate::model::ModelRegistryError),
+    /// [`crate::Session::compact_with`] could not select its model: the
+    /// harness has no catalog, or the catalog cannot resolve the selector.
+    #[error("cannot select the compaction model")]
+    ModelSelection(#[source] crate::HarnessBuildError),
     /// The harness's registration differs from the session's current
     /// selection.
     #[error("persistent session `{id}` has a different model registration")]

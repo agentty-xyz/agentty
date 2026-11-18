@@ -124,10 +124,21 @@
               "const": "model_request_completed"
             },
             "cost": {
-              "description": "Price of `usage`, or `None` when the run's model has no\n[`crate::catalog::Pricing`].",
+              "description": "Price of `usage` at the prices of `model`, the model that\nanswered this request, or `None` when that model has no\n[`crate::catalog::Pricing`].",
               "anyOf": [
                 {
                   "$ref": "#/$defs/Cost"
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            },
+            "model": {
+              "description": "Catalog identifier of the model that answered this request, such\nas the summary model answering a round summary request, when the\nharness selected it from a [`crate::ModelCatalog`]; `None` for a\nmodel the host supplied directly.",
+              "anyOf": [
+                {
+                  "$ref": "#/$defs/ModelId"
                 },
                 {
                   "type": "null"

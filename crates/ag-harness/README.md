@@ -330,9 +330,10 @@ let outcome = session
   request is the turn's last request with the summary instruction appended and
   `ModelRequest::prefix_schema` set, so the provider serves it from the cached prefix;
   otherwise, or when that does not fit, it is a tool-free request of its own at low
-  reasoning effort. Invalid output is corrected like a final output; a failed summary
-  falls back to the steps above, and the turn stops asking after two failures. Summary
-  requests count toward the turn's model requests
+  reasoning effort. A cataloged summary model (see [Model catalog](#model-catalog))
+  always gets a request of its own. Invalid output is corrected like a final output; a
+  failed summary falls back to the steps above, and the turn stops asking after two
+  failures. Summary requests count toward the turn's model requests
   (`ModelRequestPurpose::ContextSummary`); `ContextActivity::summarized_tool_calls`,
   `TurnReport::context_summary_failures`, and `ContextSummary*` lifecycle events report
   them. Summaries are disabled by default.
@@ -588,7 +589,20 @@ let harness = Harness::builder().model(vision.model()).build()?;
 
 The catalog is optional. `HarnessBuilder::catalog` with `model_selector` (default
 `Role::SMART`) resolves the model at build time; an explicit `model` replaces the
-catalog, and setting both `model` and `model_selector` fails the build.
+catalog, and setting `model` together with `model_selector` or `summary_model_selector`
+fails the build. When the model comes from the catalog, the catalog also resolves the
+summary model, which writes compaction checkpoints and in-turn round summaries:
+`summary_model_selector`, or by default the first `Role::CHEAP` model with structured
+output that the session model's provider serves, so session content stays with that
+provider. Summaries stay on the session model when nothing else resolves. An explicit
+`context_budget` and `context_estimator` size the summary model too; otherwise its own
+profile does. It asks for low reasoning effort only when it declares reasoning. A round
+summary that does not fit the summary model's budget goes to the session model. A
+request the summary model answers is priced at its own `Pricing` and summed into the
+run's cost, reserves its own estimate from the run's budget ledger, takes a permit of
+its own `max_concurrency`, and counts toward `RunLimits` like any other request. Each
+`ModelRequestCompleted` event and `ModelRequestActivity` names the cataloged model that
+answered it, with its cost.
 
 Built-in clients call `ag-router` for provider transport and schema validation. Hosts
 can also use `ag-router` directly for structured chat calls without a harness. Implement
@@ -628,7 +642,11 @@ let harness = Harness::from_registry(&models, "review-model")?;
   stored history is unchanged, so switching back replays it natively. Every switch,
   including one between models of the same provider, loses the provider's prompt cache.
   `session.compact()` stores a schema-validated summary of the oldest uncovered turns
-  that fit, which later turns replay first; call it again to cover the rest.
+  that fit, which later turns replay first; call it again to cover the rest. It runs on
+  the harness's summary model, and `session.compact_with(selector)` runs it on the model
+  the selector resolves from the harness's catalog instead. The checkpoint records the
+  model that wrote it. A switched session compacts and summarizes on its registered
+  model.
 - Bump the registration revision whenever configuration or credentials scope changes.
   Never put secrets in it. A revised `ModelProfile` alone needs no new revision: it only
   shapes how new requests are fitted, while a new revision would strand stored sessions.

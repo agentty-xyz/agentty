@@ -54,11 +54,13 @@ fn preserves_request_reasoning_effort_over_harness_default() {
         lifecycle: &lifecycle,
         max_output: None,
         model: &model,
+        model_id: None,
         model_reasoning_effort: Some(ReasoningEffort::Low),
         options: &options,
         pricing: None,
         repository: None,
         session: None,
+        summary_model: None,
     };
     let request = ModelRequest::new("reply", object_schema())
         .with_model_reasoning_effort(ReasoningEffort::High);
@@ -121,11 +123,13 @@ async fn run_scripted(
         lifecycle: &lifecycle,
         max_output: None,
         model: &model,
+        model_id: None,
         model_reasoning_effort: None,
         options: &options,
         pricing: None,
         repository: None,
         session: None,
+        summary_model: None,
     };
     let outcome = engine
         .run(ModelRequest::new("reply", object_schema()), None, None)
