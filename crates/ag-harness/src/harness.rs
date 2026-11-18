@@ -2632,7 +2632,7 @@ impl HarnessBuilder {
             handle
                 .model()
                 .metadata()
-                .map(|metadata| metadata.provider())
+                .map(|metadata| metadata.provider().to_string())
         };
 
         host_provider(summary).is_some_and(|provider| host_provider(session) == Some(provider))

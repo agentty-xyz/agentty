@@ -1,18 +1,24 @@
-//! Shared structured-output backend and provider policy for
-//! `OpenAI`-compatible Chat Completions APIs.
+//! Shared structured-output backend for `OpenAI`-compatible Chat
+//! Completions APIs.
 
 use std::num::NonZeroU32;
 use std::sync::Arc;
 use std::time::Duration;
 
 use async_trait::async_trait;
+use reqwest::header::HeaderMap;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
 use crate::http::{HttpTransport, ProviderRequest, TransportError, deserialize_optional};
 use crate::model::GeneratedResponse;
+use crate::provider_spec::{
+    MaxTokensField, ProviderSpec, ReasoningMapping, StructuredOutputMode, ThinkingOptions,
+};
 use crate::{input, model, schema as schema_contract, tool};
 
+/// Path of the Chat Completions endpoint under a provider base URL.
+pub(crate) const ENDPOINT_PATH: &str = "chat/completions";
 /// Bound for one Chat Completions request. Reasoning models can spend more
 /// than a minute on a single completion, so a timed-out request is reported
 /// without a retry instead of doubling the wait.
@@ -42,133 +48,30 @@ pub(crate) const TURN_INSTRUCTIONS_HEADING: &str = "[application instructions fo
 /// appended to it.
 pub(crate) const TURN_INSTRUCTIONS_SEPARATOR: &str = "\n\n";
 
-/// Structured-output representation selected by one Chat Completions provider.
-#[derive(Clone, Copy)]
-pub(crate) enum StructuredOutputMode {
-    JsonObject {
-        assistant_reasoning_content: bool,
-        tool_result_name: bool,
-    },
-    JsonSchema,
-    /// States the schema in a leading system message, like `JsonObject`,
-    /// and constrains requests without tools by the `json_schema` format,
-    /// the one structured-output form every common OpenAI-compatible server
-    /// accepts. History carries no reasoning and no tool-result names.
-    SchemaPrompt,
-}
-
-impl StructuredOutputMode {
-    fn assistant_reasoning_content(self) -> bool {
-        matches!(
-            self,
-            Self::JsonObject {
-                assistant_reasoning_content: true,
-                ..
-            }
-        )
-    }
-
-    fn tool_result_name(self) -> bool {
-        matches!(
-            self,
-            Self::JsonObject {
-                tool_result_name: true,
-                ..
-            }
-        )
-    }
-}
-
-/// Provider policy applied by the shared Chat Completions backend.
-#[derive(Clone, Copy)]
-pub(crate) struct ChatCompletionProviderPolicy {
-    /// Lowercase provider-specific body markers of a context-window
-    /// overflow, checked beside the markers every provider shares.
-    pub(crate) context_overflow_markers: &'static [&'static str],
-    pub(crate) display_name: &'static str,
-    pub(crate) image_input: bool,
-    /// Body field that carries [`model::GenerationOptions::max_output_tokens`].
-    pub(crate) max_tokens_field: MaxTokensField,
-    /// Whether the provider accepts `prompt_cache_key`; providers that
-    /// reject unknown body fields must leave it off.
-    pub(crate) prompt_cache_key: bool,
-    pub(crate) reasoning_format: ReasoningFormat,
-    pub(crate) response_format_with_tools: bool,
-    pub(crate) structured_output: StructuredOutputMode,
-    pub(crate) unsupported_schema_reason: &'static str,
-}
-
-/// Chat Completions body field a provider reads as its output-token bound.
-#[derive(Clone, Copy)]
-pub(crate) enum MaxTokensField {
-    /// The current `OpenAI` name, `max_completion_tokens`.
-    MaxCompletionTokens,
-    /// The original `max_tokens`, which most compatible servers read.
-    MaxTokens,
-}
-
-/// Provider wire representation for a requested reasoning depth.
-#[derive(Clone, Copy)]
-pub(crate) enum ReasoningFormat {
-    Effort(fn(model::ReasoningEffort) -> &'static str),
-    EnableThinking,
-    None,
-    Thinking {
-        disable_supported: bool,
-        preserve_reasoning: bool,
-    },
-}
-
 /// Shared structured-output backend for OpenAI-compatible Chat Completions
-/// APIs.
-pub(crate) struct ChatCompletionBackend {
-    api_key: Option<String>,
-    base_url: String,
+/// APIs, applying the request policy of one [`ProviderSpec`].
+pub(crate) struct ChatCompletionBackend<'spec> {
     client: Arc<dyn ChatCompletionClient>,
+    headers: HeaderMap,
     model: String,
-    policy: ChatCompletionProviderPolicy,
+    policy: &'spec ProviderSpec,
 }
 
-impl ChatCompletionBackend {
-    pub(crate) fn validate_schema(
-        &self,
-        schema: &schema_contract::OutputSchema,
-    ) -> Result<(), model::ModelError> {
-        if !schema.has_object_root() {
-            return Err(model::ModelError::UnsupportedOutputSchema {
-                reason: self.policy.unsupported_schema_reason.to_string(),
-            });
+impl<'spec> ChatCompletionBackend<'spec> {
+    /// Creates a backend sending `headers` through an injected transport
+    /// client.
+    pub(crate) fn new(
+        policy: &'spec ProviderSpec,
+        model: String,
+        headers: HeaderMap,
+        client: Arc<dyn ChatCompletionClient>,
+    ) -> Self {
+        Self {
+            client,
+            headers,
+            model,
+            policy,
         }
-        Ok(())
-    }
-
-    /// Returns whether this provider states the output schema in a leading
-    /// system message rather than constraining output natively.
-    pub(crate) fn keeps_prefix_across_schemas(&self) -> bool {
-        matches!(
-            self.policy.structured_output,
-            StructuredOutputMode::JsonObject { .. } | StructuredOutputMode::SchemaPrompt
-        )
-    }
-
-    /// Returns whether replayed assistant messages carry their plain-text
-    /// reasoning as `reasoning_content`.
-    pub(crate) fn replays_reasoning_text(&self) -> bool {
-        self.policy.structured_output.assistant_reasoning_content()
-    }
-
-    /// Rejects image content unless this configuration documents support.
-    pub(crate) fn validate_input(&self, input: &input::TurnInput) -> Result<(), model::ModelError> {
-        if input.has_images() && !self.policy.image_input {
-            return Err(model::ModelError::UnsupportedImageInput {
-                reason: format!(
-                    "{} configuration `{}` does not accept image content",
-                    self.policy.display_name, self.model
-                ),
-            });
-        }
-
-        Ok(())
     }
 
     /// Generates raw structured output, or plain text for a request without
@@ -177,9 +80,6 @@ impl ChatCompletionBackend {
         &self,
         request: &model::ModelRequest,
     ) -> Result<GeneratedResponse, model::ModelError> {
-        if let Some(schema) = request.schema() {
-            self.validate_schema(schema)?;
-        }
         let tools: Vec<_> = request
             .tools()
             .iter()
@@ -191,9 +91,12 @@ impl ChatCompletionBackend {
             .filter(|_| tools.is_empty() || self.policy.response_format_with_tools)
             .map(|format| self.response_format(format));
         let max_output_tokens = request.options.max_output_tokens.map(NonZeroU32::get);
+        // The router rejects a bound the provider does not accept before any
+        // request, so an unsupported field sends none.
         let (max_completion_tokens, max_tokens) = match self.policy.max_tokens_field {
-            MaxTokensField::MaxCompletionTokens => (max_output_tokens, None),
-            MaxTokensField::MaxTokens => (None, max_output_tokens),
+            Some(MaxTokensField::MaxCompletionTokens) => (max_output_tokens, None),
+            Some(MaxTokensField::MaxTokens) => (None, max_output_tokens),
+            Some(MaxTokensField::MaxOutputTokens) | None => (None, None),
         };
         let payload = ChatCompletionPayload {
             enable_thinking: self.enable_thinking(request),
@@ -215,8 +118,8 @@ impl ChatCompletionBackend {
         let completion = self
             .client
             .complete(ProviderRequest::new(
-                self.api_key.as_deref(),
-                endpoint(&self.base_url),
+                self.headers.clone(),
+                self.policy.endpoint(ENDPOINT_PATH),
                 payload,
             ))
             .await
@@ -234,8 +137,8 @@ impl ChatCompletionBackend {
                     output,
                     reasoning_content: self
                         .policy
-                        .structured_output
-                        .assistant_reasoning_content()
+                        .replay
+                        .reasoning_text
                         .then_some(reasoning_content)
                         .flatten(),
                 },
@@ -244,8 +147,8 @@ impl ChatCompletionBackend {
             "tool_calls" => Ok(Self::decode_tool_call(
                 content.as_deref(),
                 self.policy
-                    .structured_output
-                    .assistant_reasoning_content()
+                    .replay
+                    .reasoning_text
                     .then_some(reasoning_content.as_deref())
                     .flatten(),
                 tool_calls,
@@ -262,23 +165,6 @@ impl ChatCompletionBackend {
         }
     }
 
-    /// Creates a structured-output backend with an injected transport client.
-    pub(crate) fn with_client(
-        api_key: Option<String>,
-        base_url: String,
-        model: String,
-        policy: ChatCompletionProviderPolicy,
-        client: Arc<dyn ChatCompletionClient>,
-    ) -> Self {
-        Self {
-            api_key,
-            base_url,
-            client,
-            model,
-            policy,
-        }
-    }
-
     fn messages(
         &self,
         request: &model::ModelRequest,
@@ -289,12 +175,12 @@ impl ChatCompletionBackend {
             .prefix_schema
             .as_ref()
             .or_else(|| request.schema());
-        if self.keeps_prefix_across_schemas()
+        if self.policy.keeps_prefix_across_schemas()
             && let Some(schema) = prompt_schema
         {
             let instruction = match self.policy.structured_output {
                 StructuredOutputMode::SchemaPrompt => TOOL_AWARE_STRUCTURED_OUTPUT_INSTRUCTION,
-                StructuredOutputMode::JsonObject { .. } | StructuredOutputMode::JsonSchema => {
+                StructuredOutputMode::JsonObject | StructuredOutputMode::JsonSchema => {
                     STRUCTURED_OUTPUT_INSTRUCTION
                 }
             };
@@ -352,11 +238,7 @@ impl ChatCompletionBackend {
                 } => {
                     messages.push(ChatCompletionMessagePayload::ToolResult {
                         content: content.clone(),
-                        name: self
-                            .policy
-                            .structured_output
-                            .tool_result_name()
-                            .then(|| name.clone()),
+                        name: self.policy.replay.tool_result_name.then(|| name.clone()),
                         role: "tool",
                         tool_call_id: call_id.clone(),
                     });
@@ -398,7 +280,7 @@ impl ChatCompletionBackend {
         &self,
         input: &input::TurnInput,
     ) -> Result<ChatCompletionMessagePayload, model::ModelError> {
-        self.validate_input(input)?;
+        self.policy.validate_input(&self.model, input)?;
         let content = input
             .blocks()
             .iter()
@@ -428,8 +310,8 @@ impl ChatCompletionBackend {
     ) -> ChatCompletionMessagePayload {
         let reasoning_content = self
             .policy
-            .structured_output
-            .assistant_reasoning_content()
+            .replay
+            .reasoning_text
             .then(|| {
                 calls
                     .first()
@@ -462,7 +344,7 @@ impl ChatCompletionBackend {
 
     fn response_format<'a>(&self, format: &'a model::JsonSchemaFormat) -> ResponseFormat<'a> {
         match self.policy.structured_output {
-            StructuredOutputMode::JsonObject { .. } => ResponseFormat {
+            StructuredOutputMode::JsonObject => ResponseFormat {
                 json_schema: None,
                 kind: "json_object",
             },
@@ -479,31 +361,33 @@ impl ChatCompletionBackend {
     }
 
     fn enable_thinking(&self, request: &model::ModelRequest) -> Option<bool> {
-        match self.policy.reasoning_format {
-            ReasoningFormat::EnableThinking => {
+        match self.policy.reasoning {
+            ReasoningMapping::EnableThinking => {
                 request.model_reasoning_effort().map(reasoning_enabled)
             }
-            ReasoningFormat::Effort(_)
-            | ReasoningFormat::None
-            | ReasoningFormat::Thinking { .. } => None,
+            ReasoningMapping::Effort(_)
+            | ReasoningMapping::None
+            | ReasoningMapping::Thinking(_) => None,
         }
     }
 
-    fn reasoning_effort(&self, request: &model::ModelRequest) -> Option<&'static str> {
-        match self.policy.reasoning_format {
-            ReasoningFormat::Effort(name) => request.model_reasoning_effort().map(name),
-            ReasoningFormat::EnableThinking
-            | ReasoningFormat::None
-            | ReasoningFormat::Thinking { .. } => None,
+    fn reasoning_effort(&self, request: &model::ModelRequest) -> Option<&'spec str> {
+        match &self.policy.reasoning {
+            ReasoningMapping::Effort(names) => request
+                .model_reasoning_effort()
+                .map(|effort| names.name(effort)),
+            ReasoningMapping::EnableThinking
+            | ReasoningMapping::None
+            | ReasoningMapping::Thinking(_) => None,
         }
     }
 
     fn thinking(&self, request: &model::ModelRequest) -> Option<Thinking> {
-        match self.policy.reasoning_format {
-            ReasoningFormat::Thinking {
+        match self.policy.reasoning {
+            ReasoningMapping::Thinking(ThinkingOptions {
                 disable_supported,
                 preserve_reasoning,
-            } => {
+            }) => {
                 let enabled = request
                     .model_reasoning_effort()
                     .map_or(preserve_reasoning, |reasoning_effort| {
@@ -517,17 +401,14 @@ impl ChatCompletionBackend {
                     }
                 })
             }
-            ReasoningFormat::Effort(_)
-            | ReasoningFormat::EnableThinking
-            | ReasoningFormat::None => None,
+            ReasoningMapping::Effort(_)
+            | ReasoningMapping::EnableThinking
+            | ReasoningMapping::None => None,
         }
     }
 
     fn map_completion_error(&self, error: TransportError) -> model::ModelError {
-        error.into_model_error(
-            self.policy.display_name,
-            self.policy.context_overflow_markers,
-        )
+        error.into_model_error(&self.policy.display_name, &self.policy.overflow_markers)
     }
 
     fn decode_tool_call(
@@ -635,13 +516,8 @@ impl ChatCompletion {
 pub(crate) trait ChatCompletionClient: Send + Sync {
     async fn complete(
         &self,
-        request: ProviderRequest<'_>,
+        request: ProviderRequest,
     ) -> Result<Option<ChatCompletion>, TransportError>;
-}
-
-/// Builds the Chat Completions endpoint for a provider base URL.
-pub(crate) fn endpoint(base_url: &str) -> String {
-    format!("{}/chat/completions", base_url.trim_end_matches('/'))
 }
 
 /// Creates the production Chat Completions client implementation.
@@ -659,7 +535,7 @@ struct ReqwestChatCompletionClient {
 impl ChatCompletionClient for ReqwestChatCompletionClient {
     async fn complete(
         &self,
-        request: ProviderRequest<'_>,
+        request: ProviderRequest,
     ) -> Result<Option<ChatCompletion>, TransportError> {
         let response = self
             .http
@@ -690,7 +566,7 @@ struct ChatCompletionPayload<'a> {
     #[serde(skip_serializing_if = "Option::is_none")]
     prompt_cache_key: Option<&'a str>,
     #[serde(skip_serializing_if = "Option::is_none")]
-    reasoning_effort: Option<&'static str>,
+    reasoning_effort: Option<&'a str>,
     #[serde(skip_serializing_if = "Option::is_none")]
     response_format: Option<ResponseFormat<'a>>,
     #[serde(skip_serializing_if = "Option::is_none")]

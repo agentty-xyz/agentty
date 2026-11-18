@@ -327,7 +327,10 @@ impl TraceState {
                 telemetry::ATTRIBUTE_OPERATION_NAME,
                 telemetry::OPERATION_CHAT,
             ),
-            KeyValue::new(telemetry::ATTRIBUTE_PROVIDER_NAME, model.provider()),
+            KeyValue::new(
+                telemetry::ATTRIBUTE_PROVIDER_NAME,
+                model.provider().to_string(),
+            ),
             KeyValue::new(
                 telemetry::ATTRIBUTE_REQUEST_MODEL,
                 model.model().to_string(),

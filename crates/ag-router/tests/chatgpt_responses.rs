@@ -8,8 +8,8 @@ use std::num::NonZeroU32;
 use std::sync::{Arc, Mutex};
 
 use ag_router::{
-    BearerCredential, Completion, ErrorClass, JsonSchemaFormat, ModelError, ModelMessage,
-    ModelRequest, OutputSchema, Provider, ProviderConfig, Router,
+    Completion, CredentialSource, ErrorClass, JsonSchemaFormat, ModelError, ModelMessage,
+    ModelRequest, OutputSchema, Router, preset,
 };
 use async_trait::async_trait;
 use serde_json::{Value, json};
@@ -31,7 +31,7 @@ impl ScriptedCredential {
 }
 
 #[async_trait]
-impl BearerCredential for ScriptedCredential {
+impl CredentialSource for ScriptedCredential {
     async fn bearer_token(&self) -> Result<String, Box<dyn Error + Send + Sync>> {
         self.tokens
             .lock()
@@ -58,13 +58,12 @@ fn request() -> Result<ModelRequest, Box<dyn Error>> {
     ))
 }
 
-fn router(server: &MockServer, credential: Arc<ScriptedCredential>) -> Result<Router, ModelError> {
-    Router::new([ProviderConfig {
-        provider: Provider::ChatGpt,
-        api_key: None,
-        base_url: format!("{}/v1", server.uri()),
-        credential: Some(credential),
-    }])
+fn router(server: &MockServer, credential: Arc<ScriptedCredential>) -> Router {
+    Router::new([preset::chatgpt(
+        format!("{}/v1", server.uri()),
+        credential,
+        "gpt-6-luna",
+    )])
 }
 
 /// Serializes `events` as a server-sent event stream.
@@ -121,7 +120,7 @@ async fn authenticates_each_request_with_a_token_from_the_credential() -> Result
     let router = router(
         &server,
         ScriptedCredential::new(&["plan-token-1", "plan-token-2"]),
-    )?;
+    );
 
     // Act
     let first = router.execute(request()?).await?;
@@ -142,7 +141,7 @@ async fn authenticates_each_request_with_a_token_from_the_credential() -> Result
 async fn reports_a_credential_failure_without_sending_a_request() -> Result<(), Box<dyn Error>> {
     // Arrange
     let server = MockServer::start().await;
-    let router = router(&server, ScriptedCredential::new(&[]))?;
+    let router = router(&server, ScriptedCredential::new(&[]));
 
     // Act
     let Err(error) = router.execute(request()?).await else {
@@ -166,7 +165,7 @@ async fn reports_a_credential_failure_without_sending_a_request() -> Result<(), 
 async fn rejects_an_output_bound_without_sending_a_request() -> Result<(), Box<dyn Error>> {
     // Arrange
     let server = MockServer::start().await;
-    let router = router(&server, ScriptedCredential::new(&["plan-token-1"]))?;
+    let router = router(&server, ScriptedCredential::new(&["plan-token-1"]));
     let mut bounded = request()?;
     bounded.options.max_output_tokens = NonZeroU32::new(512);
 

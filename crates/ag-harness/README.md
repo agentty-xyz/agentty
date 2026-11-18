@@ -539,6 +539,56 @@ the one-hour access token shortly before it expires, serializing rotating refres
 across processes with a lock file. Its models report `openai_chatgpt` as their provider,
 so resumed sessions keep plan billing.
 
+### Custom providers
+
+`provider::ProviderSpec` describes any OpenAI-compatible Chat Completions or Responses
+provider as data, and `ModelClient::from_spec` serves one of its models without new
+code. A specification names its `WireProtocol`, base URL, `Auth` (none, a bearer key, a
+named header, or a refreshing `CredentialSource`), extra headers and query parameters,
+and request policy: structured-output mode, reasoning mapping, reasoning-text replay,
+output-bound field, image input, prompt cache key, and context-overflow markers. Its
+`ReasoningFamily` decides which recorded turns its models replay with their provider
+reasoning intact after a model switch; other turns replay their reasoning as short
+notes. `ProviderSpec::new` starts from a conservative policy for the protocol. Keys are
+literal values the host resolved, so the harness reads no environment variables for a
+specification. The built-in providers are presets of the same type, such as
+`ProviderSpec::kimi`, behind their family's `providers-*` feature, and the `ModelClient`
+constructors send exactly what their preset does. A preset serves its configured model
+under a policy tailored to it; a custom specification names its model with
+`ProviderSpec::for_model`:
+
+```rust
+use ag_harness::model::ModelClient;
+use ag_harness::provider::{Auth, ProviderSpec, WireProtocol};
+
+let spec = ProviderSpec::new(
+    "azure_openai",
+    WireProtocol::Responses,
+    "https://example.openai.azure.com/openai/v1",
+)
+.with_auth(Auth::Header {
+    name: "api-key".to_string(),
+    value: std::env::var("AZURE_OPENAI_API_KEY")?,
+})
+.with_query("api-version", "preview")
+.for_model("gpt-6-luna");
+let model = ModelClient::from_spec(spec)?;
+```
+
+The provider name, here `azure_openai`, is what telemetry, persisted sessions, and
+provider errors record, and a built-in provider name keeps its built-in
+`ReasoningFamily` unless `ProviderSpec::with_reasoning_family` replaces it.
+`ModelClient::from_spec` runs `ProviderSpec::validate` and fails with
+`ProviderSpecError::Invalid`, naming the field, for a specification no request can be
+sent with: a base URL that is not an absolute `http(s)` URL without credentials or a
+query, a blank key, an invalid header or one the harness sets itself, a blank effort
+name or overflow marker, or an option its protocol cannot express. It fails with
+`ProviderSpecError::MissingModel` for a specification that names no model. Header and
+query values are sent as secrets: debug output and errors never print them, nor
+credentials or a query in the base URL, and requests follow no redirect.
+`ModelClient::from_spec` declares no context profile, so hosts set the budget
+explicitly.
+
 `ModelProvider::pricing` returns each per-token model's list prices as
 `catalog::Pricing` in integer micro-USD per million tokens, and
 `ModelProvider::capabilities` its image, reasoning, native structured output, and tool
@@ -609,9 +659,10 @@ unpriced model reports no cost, so a selected summary model without prices leave
 runs it summarizes in unpriced. Each `ModelRequestCompleted` event and
 `ModelRequestActivity` names the cataloged model that answered it, with its own cost.
 
-Built-in clients call `ag-router` for provider transport and schema validation. Hosts
-can also use `ag-router` directly for structured chat calls without a harness. Implement
-the `model::Model` trait to bring any other provider into `ag-harness`.
+Built-in and specification-defined clients call `ag-router` for provider transport and
+schema validation. Hosts can also use `ag-router` directly for structured chat calls
+without a harness. Implement the `model::Model` trait to bring a provider whose wire
+protocol no `ProviderSpec` describes into `ag-harness`.
 
 `model::ModelRegistry` selects models by stable host keys with declared capabilities:
 
@@ -740,15 +791,16 @@ host-selected Bash executors such as `UnsandboxedExecutor`.
 | `providers-anthropic` | no      | Reserved for the Anthropic Messages client; enables nothing yet                           |
 | `unstable-protocol`   | no      | Reserved for the unstable `serve` protocol types; enables nothing yet                     |
 
-Either provider feature builds the `provider` module, `ModelClient`, and
-`ModelCatalog::from_environment` with every provider's catalog entries.
-`ModelProvider::is_enabled` reports whether the build includes a provider's family; a
-client whose family is off fails with `ModelConfigurationError::ProviderDisabled` before
-any credential is read, and `ModelCatalog::from_environment` skips it. Without
-`native-sandbox`, `BashConfig::new` is absent and Bash requires
-`BashConfig::for_executor`. Without `sqlite`, durable sessions require `Harness::store`.
-Features are additive: error enums whose variants depend on them are
-`#[non_exhaustive]`.
+Either provider feature builds the `provider` module, `ModelClient`, `ProviderSpec` with
+`ModelClient::from_spec` for both wire protocols, and `ModelCatalog::from_environment`
+with every provider's catalog entries; each `ProviderSpec` preset needs its family's
+feature. `ModelProvider::is_enabled` reports whether the build includes a provider's
+family; a client whose family is off fails with
+`ModelConfigurationError::ProviderDisabled` before any credential is read, and
+`ModelCatalog::from_environment` skips it. Without `native-sandbox`, `BashConfig::new`
+is absent and Bash requires `BashConfig::for_executor`. Without `sqlite`, durable
+sessions require `Harness::store`. Features are additive: error enums whose variants
+depend on them are `#[non_exhaustive]`.
 
 ## Where things live
 

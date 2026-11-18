@@ -28,6 +28,12 @@
 //! [`crate::catalog::ModelCatalog::from_environment`] catalogs these models
 //! by role.
 //!
+//! [`ProviderSpec`] opens the list: a host describes any OpenAI-compatible
+//! Chat Completions or Responses provider by its [`WireProtocol`], base URL,
+//! [`Auth`], extra headers and query parameters, and request policy, and
+//! serves it through [`crate::model::ModelClient::from_spec`]. The built-in
+//! providers are presets of the same type, such as [`ProviderSpec::kimi`].
+//!
 //! This module requires a `providers-*` feature. Every provider's catalog
 //! entries, profiles, and prices are available with either feature; building
 //! a client needs its family's feature: `providers-openai` for
@@ -46,6 +52,7 @@ mod muse;
 mod openai;
 mod openai_compatible;
 mod qwen;
+mod spec;
 #[cfg(test)]
 #[cfg(feature = "providers-compat")]
 mod test_support;
@@ -94,6 +101,10 @@ pub use qwen::QwenConfig;
 #[cfg(feature = "providers-compat")]
 pub(crate) use qwen::profile as qwen_profile;
 pub use qwen::{QWEN_PLUS, QWEN3_7_FLASH, QWEN3_8_FLASH, QWEN3_8_MAX};
+pub use spec::{
+    Auth, CredentialSource, EffortNames, MaxTokensField, ProviderSpec, ProviderSpecError,
+    ReasoningMapping, StructuredOutputMode, ThinkingOptions, WireProtocol,
+};
 
 #[doc(no_inline)]
 pub use crate::catalog::CostTier;

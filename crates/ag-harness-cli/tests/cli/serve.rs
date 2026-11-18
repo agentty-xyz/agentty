@@ -65,6 +65,26 @@ async fn provider() -> MockServer {
     server
 }
 
+/// Waits until `provider` received a prompt containing `text`, so a run
+/// waiting on it has already recorded its turn.
+async fn requested(provider: &MockServer, text: &str) -> TestResult<()> {
+    tokio::time::timeout(READ_TIMEOUT, async {
+        loop {
+            let received = provider.received_requests().await.unwrap_or_default();
+            if received
+                .iter()
+                .any(|request| String::from_utf8_lossy(&request.body).contains(text))
+            {
+                return;
+            }
+            tokio::time::sleep(Duration::from_millis(10)).await;
+        }
+    })
+    .await?;
+
+    Ok(())
+}
+
 fn request(id: i64, method: &str, params: Value) -> Value {
     let mut request = json!({"jsonrpc": "2.0", "id": id, "method": method});
     request["params"] = params;
@@ -271,6 +291,7 @@ async fn serve_runs_sessions_and_stops_runs_over_stdio() -> TestResult<()> {
     let answered_run = answered["result"]["run"].clone();
     let waiting_run = waiting["result"]["run"].clone();
     let answered_completed = server.completed(&answered_run).await?;
+    requested(&provider, "Wait").await?;
     let cancel = server
         .call(5, "run/cancel", json!({"run": waiting_run}))
         .await?;

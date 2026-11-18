@@ -7,8 +7,8 @@ use std::num::NonZeroU32;
 
 use ag_router::{
     Completion, ErrorClass, ImageContent, ImageMediaType, InputBlock, JsonSchemaFormat, ModelError,
-    ModelMessage, ModelRequest, OutputSchema, Provider, ProviderConfig, ReasoningEffort, Router,
-    ToolCall, ToolDefinition, TurnInput,
+    ModelMessage, ModelRequest, OutputSchema, ReasoningEffort, Router, ToolCall, ToolDefinition,
+    TurnInput, preset,
 };
 use serde_json::{Value, json};
 use wiremock::matchers::{bearer_token, method, path};
@@ -59,13 +59,14 @@ fn user_request(model: &str) -> Result<ModelRequest, Box<dyn std::error::Error>>
     )
 }
 
-fn router(server: &MockServer) -> Result<Router, ModelError> {
-    Router::new([ProviderConfig {
-        provider: Provider::OpenAi,
-        api_key: Some("sk-test".to_string()),
-        base_url: format!("{}/v1/", server.uri()),
-        credential: None,
-    }])
+/// Returns a router holding the `OpenAI` preset tailored to the
+/// `openai/<model>` identifier `model`.
+fn router(server: &MockServer, model: &str) -> Router {
+    Router::new([preset::openai(
+        format!("{}/v1/", server.uri()),
+        "sk-test",
+        model.trim_start_matches("openai/"),
+    )])
 }
 
 /// Serializes `events` as a server-sent event stream.
@@ -164,7 +165,7 @@ async fn streamed_failure(
     let server = MockServer::start().await;
     mount_stream(&server, events).await;
 
-    match router(&server)?.execute(request).await {
+    match router(&server, &request.model).execute(request).await {
         Ok(_) => Err("the response must fail".into()),
         Err(error) => Ok(error),
     }
@@ -204,7 +205,7 @@ async fn streams_a_stateless_request_and_validates_the_output()
     request.options.reasoning_effort = Some(ReasoningEffort::Max);
 
     // Act
-    let completion = router(&server)?.execute(request).await?;
+    let completion = router(&server, &request.model).execute(request).await?;
 
     // Assert
     let Completion::Output {
@@ -285,7 +286,7 @@ async fn streams_a_text_request_with_turn_instructions_and_an_output_bound()
     request.options.max_output_tokens = NonZeroU32::new(256);
 
     // Act
-    let completion = router(&server)?.execute(request).await?;
+    let completion = router(&server, &request.model).execute(request).await?;
 
     // Assert
     let Completion::Text { text, .. } = completion else {
@@ -320,7 +321,7 @@ async fn decodes_parallel_calls_and_replays_them_after_their_reasoning()
         ],
     )
     .await;
-    let router = router(&server)?;
+    let router = router(&server, "openai/gpt-6.1-sol");
 
     // Act
     let completion = router.execute(user_request("openai/gpt-6.1-sol")?).await?;
@@ -438,7 +439,7 @@ async fn replays_stored_reasoning_and_omits_cleared_or_foreign_reasoning()
     ];
 
     // Act
-    let completion = router(&server)?
+    let completion = router(&server, "openai/gpt-5.3-codex")
         .execute(request("openai/gpt-5.3-codex", history)?)
         .await?;
 
@@ -484,8 +485,7 @@ async fn replays_stored_reasoning_and_omits_cleared_or_foreign_reasoning()
 }
 
 #[tokio::test]
-async fn sends_xhigh_for_max_effort_to_models_without_max() -> Result<(), Box<dyn std::error::Error>>
-{
+async fn one_router_maps_max_effort_per_model() -> Result<(), Box<dyn std::error::Error>> {
     // Arrange
     let server = MockServer::start().await;
     mount_stream(
@@ -496,16 +496,30 @@ async fn sends_xhigh_for_max_effort_to_models_without_max() -> Result<(), Box<dy
         ],
     )
     .await;
-    let mut request = user_request("openai/gpt-5.3-codex")?;
-    request.options.reasoning_effort = Some(ReasoningEffort::Max);
+    let base_url = format!("{}/v1/", server.uri());
+    let router = Router::new([
+        preset::openai(base_url.clone(), "sk-test", "gpt-5.3-codex"),
+        preset::openai(base_url, "sk-test", "gpt-6-luna"),
+    ]);
+    let max_effort = |model| -> Result<ModelRequest, Box<dyn std::error::Error>> {
+        let mut request = user_request(model)?;
+        request.options.reasoning_effort = Some(ReasoningEffort::Max);
+
+        Ok(request)
+    };
 
     // Act
-    router(&server)?.execute(request).await?;
+    router.execute(max_effort("openai/gpt-5.3-codex")?).await?;
+    router.execute(max_effort("openai/gpt-6-luna")?).await?;
 
     // Assert
     assert_eq!(
         received_body(&server, 0).await?["reasoning"],
         json!({"effort": "xhigh"})
+    );
+    assert_eq!(
+        received_body(&server, 1).await?["reasoning"],
+        json!({"effort": "max"})
     );
 
     Ok(())
@@ -534,7 +548,7 @@ async fn decodes_the_terminal_output_when_no_item_events_arrive()
     .await;
 
     // Act
-    let completion = router(&server)?
+    let completion = router(&server, "openai/gpt-6-luna")
         .execute(user_request("openai/gpt-6-luna")?)
         .await?;
 
@@ -585,7 +599,7 @@ async fn classifies_context_overflow_before_and_after_the_stream_starts()
     })];
 
     // Act
-    let rejected = router(&server)?
+    let rejected = router(&server, "openai/gpt-6.1-sol")
         .execute(user_request("openai/gpt-6.1-sol")?)
         .await
         .err()
@@ -720,7 +734,7 @@ async fn returns_unadvertised_and_unreplayable_names_for_the_caller_to_answer()
         ],
     )
     .await;
-    let router = router(&server)?;
+    let router = router(&server, "openai/gpt-6.1-sol");
 
     // Act
     let completion = router.execute(user_request("openai/gpt-6.1-sol")?).await?;

@@ -31,7 +31,7 @@ pub(crate) use label::{
     ERROR_TRANSPORT, ERROR_UNSUPPORTED_INPUT, ERROR_UNSUPPORTED_OUTPUT, PROVIDER_OPENAI,
     PROVIDER_OPENAI_CHATGPT, PROVIDER_OPENAI_COMPATIBLE,
 };
-#[cfg(any(test, feature = "providers-compat", feature = "providers-openai"))]
+#[cfg(any(test, feature = "providers-compat"))]
 pub(crate) use label::{PROVIDER_ALIBABA_CLOUD, PROVIDER_META, PROVIDER_MOONSHOT_AI};
 #[cfg(feature = "otel")]
 pub use metric::LifecycleMetrics;
