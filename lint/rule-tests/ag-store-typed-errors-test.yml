@@ -1,0 +1,7 @@
+id: ag-store-typed-errors
+valid:
+  - 'pub async fn load(pool: &SqlitePool) -> Result<Row, DbError> { query(pool).await.map_err(DbError::from) }'
+  - 'async fn fetch(pool: &SqlitePool) -> Result<Row, sqlx::Error> { query(pool).await }'
+invalid:
+  - 'pub async fn load(pool: &SqlitePool) -> Result<Row, sqlx::Error> { query(pool).await }'
+  - 'trait Repository { fn load(&self) -> Result<Row, sqlx::Error>; }'

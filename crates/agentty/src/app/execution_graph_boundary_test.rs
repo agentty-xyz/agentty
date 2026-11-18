@@ -15,6 +15,7 @@ use ag_session::{
     GraphControlRequest, GraphExecutionRef, GraphNode, GraphNodeContinuation, GraphNodeStatus,
     GraphResultRef, ResumeExecutionGraphRequest, StartExecutionGraphRequest,
 };
+use ag_store::MockGraphRepository;
 use ag_worker::test_support::{AppServerTurnResponse, MockAppServerClient};
 use ag_worker::{GraphExecutor, GraphNodeRunner, GraphRunRequest};
 use async_trait::async_trait;
@@ -24,7 +25,7 @@ use tokio_util::sync::CancellationToken;
 
 use super::{driver_session, graph, run_request, seed_session, wait_result};
 use crate::app::App;
-use crate::infra::db::{Database, DbError, MockGraphRepository};
+use crate::infra::db::{Database, DbError};
 use crate::test_support::{new_test_app, new_test_app_with_clients, test_app_clients};
 
 #[tokio::test]

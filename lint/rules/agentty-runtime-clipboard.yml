@@ -1,0 +1,22 @@
+id: agentty-runtime-clipboard
+language: rust
+severity: error
+message: Keep clipboard access out of the Agentty runtime layer.
+note: |
+  The runtime dispatches user intent; clipboard reads happen behind the `app` and `infra`
+  boundaries. Emit the paste intent and read `ag-clipboard` from there.
+files:
+  - crates/agentty/src/runtime/**/*.rs
+  - crates/agentty/src/runtime.rs
+ignores:
+  - "**/*_test.rs"
+  - "**/*_test/**"
+rule:
+  any:
+    - kind: use_declaration
+    - kind: scoped_identifier
+      not:
+        inside:
+          kind: use_declaration
+          stopBy: end
+  regex: "^(use\\s+)?(::)?ag_clipboard\\b"

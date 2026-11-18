@@ -1,0 +1,24 @@
+id: command-runner-boundary
+language: rust
+severity: error
+message: Run subprocesses through the crate's command boundary, not `Command` directly.
+note: |
+  `ag-forge` launches forge CLIs only through `crates/ag-forge/src/command.rs`, and
+  `ag-git` launches Git only through `crates/ag-git/src/repo.rs`, so consumers can inject
+  deterministic mocks. Add the operation to that boundary and call it from here.
+files:
+  - crates/ag-forge/src/**/*.rs
+  - crates/ag-git/src/**/*.rs
+ignores:
+  - crates/ag-forge/src/command.rs
+  - crates/ag-git/src/repo.rs
+  - "**/*_test.rs"
+  - "**/*_test/**"
+rule:
+  any:
+    - kind: call_expression
+      has:
+        field: function
+        regex: "(^|::)process::Command::new$|^Command::new$"
+    - kind: use_declaration
+      regex: "^use (std|tokio)::process::(\\{[^}]*)?\\bCommand\\b"

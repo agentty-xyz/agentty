@@ -1,4 +1,5 @@
-//! Migration discovery, duplicate-prefix, and edit-history check unit tests.
+//! Migration discovery, naming, duplicate-prefix, and edit-history check unit
+//! tests.
 
 use std::ffi::OsString;
 #[cfg(unix)]
@@ -87,7 +88,7 @@ fn unique_prefixes_ignore_non_sql_files_and_accept_empty_directories() {
         };
 
         // Act
-        let result = check.check_prefixes(Path::new("migration"));
+        let result = check.check_names(Path::new("migration"));
 
         // Assert
         assert_eq!(result, Ok(()));
@@ -105,12 +106,44 @@ fn duplicate_prefix_errors_are_sorted_and_include_file_names() {
     };
 
     // Act
-    let result = check.check_prefixes(Path::new("migration"));
+    let result = check.check_names(Path::new("migration"));
 
     // Assert
     assert_eq!(
         result,
         Err("Duplicate migration prefix `001` in migration: 001_a.sql, 001_z.sql".to_string())
+    );
+}
+
+#[test]
+fn misnamed_migrations_are_reported_before_duplicate_prefixes() {
+    // Arrange
+    let file_system = prefix_file_system(&[
+        "001_First.sql",
+        "001_.sql",
+        "abc_name.sql",
+        "01_short.sql",
+        "002.sql",
+        "003_valid_name_2.sql",
+    ]);
+    let git = MockGit::new();
+    let check = MigrationCheck {
+        file_system: &file_system,
+        git: &git,
+    };
+
+    // Act
+    let result = check.check_names(Path::new("migration"));
+
+    // Assert
+    assert_eq!(
+        result,
+        Err(
+            "Rename migrations in migration to `NNN_description.sql`, with a three-digit number \
+             and a lowercase `snake_case` description: 001_.sql, 001_First.sql, 002.sql, \
+             01_short.sql, abc_name.sql"
+                .to_string()
+        )
     );
 }
 
@@ -262,7 +295,7 @@ fn discovery_and_validation_report_read_failures() {
         let result = if is_root {
             check.run(Path::new("crates"), "origin/main")
         } else {
-            check.check_prefixes(Path::new("crates"))
+            check.check_names(Path::new("crates"))
         };
 
         // Assert

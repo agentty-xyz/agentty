@@ -1,0 +1,10 @@
+id: no-runtime-block-on
+valid:
+  - 'async fn run() { work().await; }'
+  - 'fn build() { let runtime = SessionRuntime::new(manager); }'
+invalid:
+  - 'fn run() { let runtime = tokio::runtime::Runtime::new().unwrap(); }'
+  - 'fn run() { let runtime = Builder::new_current_thread().build(); }'
+  - 'fn run() { tokio::runtime::Builder::new_multi_thread().build(); }'
+  - 'fn run() { runtime.block_on(work()); }'
+  - 'fn run() { futures::executor::block_on(work()); }'

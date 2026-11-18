@@ -1,0 +1,31 @@
+id: test-only-items-in-test-files
+language: rust
+severity: error
+message: Keep test-only items in test files; use `#[cfg(test)]` in production code only to declare a test module.
+note: |
+  Move test-only imports, helpers, and implementations into the sibling `*_test.rs` file
+  or a test-gated support module, and inject dependencies instead of branching on
+  `cfg!(test)`. `#[cfg_attr(test, mockall::automock)]` and `extern crate self` stay
+  available.
+files:
+  - crates/*/src/**/*.rs
+ignores:
+  - "**/*_test.rs"
+  - "**/*_test/**"
+rule:
+  any:
+    - kind: attribute_item
+      regex: "^#\\[\\s*cfg\\s*\\(\\s*(not\\s*\\(\\s*)?test\\s*\\)"
+      not:
+        precedes:
+          stopBy:
+            not:
+              any:
+                - kind: attribute_item
+                - kind: line_comment
+                - kind: block_comment
+          any:
+            - kind: mod_item
+            - kind: extern_crate_declaration
+    - kind: macro_invocation
+      regex: "^cfg!\\s*\\(\\s*(not\\s*\\(\\s*)?test\\s*\\)"

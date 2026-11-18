@@ -98,7 +98,7 @@ async fn rejects_oversized_success_body_before_decoding() {
 async fn rejects_oversized_response_content() {
     // Arrange
     let server = MockServer::start().await;
-    let content = "x".repeat(schema_contract::RESPONSE_CONTENT_LIMIT_BYTES + 1);
+    let content = "x".repeat(ag_router::RESPONSE_CONTENT_LIMIT_BYTES + 1);
     Mock::given(method("POST"))
         .and(path("/chat/completions"))
         .respond_with(ResponseTemplate::new(200).set_body_json(json!({

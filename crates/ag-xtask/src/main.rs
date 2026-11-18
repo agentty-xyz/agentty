@@ -7,6 +7,7 @@ mod check_execution_boundary;
 mod check_instruction;
 mod check_manifest;
 mod check_migration;
+mod check_module_router;
 mod e2e_container;
 mod format_changed;
 mod slow_test;
@@ -40,14 +41,18 @@ enum Command {
     /// Validates instruction references, aliases, and documented hook names.
     #[command(name = "check-instructions")]
     Instructions,
-    /// Validates that member manifests inherit workspace dependencies and do
-    /// not enable Tokio's `full` feature.
+    /// Validates that member manifests inherit workspace dependencies, do not
+    /// enable Tokio's `full` feature, and avoid banned dependencies.
     #[command(name = "check-manifests")]
     Manifests,
-    /// Validates SQL migration numbering across workspace crates and rejects
-    /// edits to migrations that exist at the branch fork point.
+    /// Validates SQL migration names and numbering across workspace crates and
+    /// rejects edits to migrations that exist at the branch fork point.
     #[command(name = "check-migrations")]
     Migrations,
+    /// Validates that module files paired with a same-named directory only
+    /// declare child modules and re-exports.
+    #[command(name = "check-module-routers")]
+    ModuleRouters,
     /// Compares repeated CI timing artifacts with matching provenance.
     CompareTimings(timing::Options),
     /// Runs Agentty E2E tests in the pinned image, one local run at a time.
@@ -73,6 +78,7 @@ fn main() -> ExitCode {
         Some(Command::Instructions) => check_instruction::run(),
         Some(Command::Manifests) => check_manifest::run(),
         None | Some(Command::Migrations) => check_migration::run(),
+        Some(Command::ModuleRouters) => check_module_router::run(),
         Some(Command::CompareTimings(options)) => timing::run(&options),
         Some(Command::E2eContainer) => e2e_container::run(),
         Some(Command::Fmt(options)) => format_changed::run(&options),

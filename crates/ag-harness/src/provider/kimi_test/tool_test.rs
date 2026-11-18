@@ -5,7 +5,7 @@ use serde_json::json;
 use wiremock::MockServer;
 
 use super::support::{kimi, mount_tool_response, read_request};
-use crate::{model, schema_contract};
+use crate::model;
 
 #[tokio::test]
 async fn advertises_and_decodes_read_tool_call() {
@@ -109,7 +109,7 @@ async fn rejects_oversized_read_arguments() {
     let server = MockServer::start().await;
     let arguments = format!(
         r#"{{"path":"{}"}}"#,
-        "x".repeat(schema_contract::RESPONSE_CONTENT_LIMIT_BYTES)
+        "x".repeat(ag_router::RESPONSE_CONTENT_LIMIT_BYTES)
     );
     mount_tool_response(
         &server,

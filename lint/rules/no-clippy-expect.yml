@@ -9,4 +9,4 @@ rule:
   any:
     - kind: attribute_item
     - kind: inner_attribute_item
-  regex: "^#!?\\[\\s*(cfg_attr\\s*\\([^,]*,\\s*)?expect\\s*\\([^)]*\\bclippy::"
+  regex: "^#!?\\[\\s*(cfg_attr\\s*\\((?s:.*),\\s*)?expect\\s*\\([^)]*\\bclippy::"

@@ -1,0 +1,7 @@
+id: struct-field-visibility-order
+valid:
+  - 'struct Batch { pub name: String, pub(super) status: Status, cache: Cache }'
+  - 'struct Point { x: i32, y: i32 }'
+invalid:
+  - 'struct Batch { cache: Cache, pub name: String }'
+  - 'struct Batch { cache: Cache, pub(super) status: Status }'

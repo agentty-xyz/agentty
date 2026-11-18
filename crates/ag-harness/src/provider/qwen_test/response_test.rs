@@ -6,10 +6,10 @@ use wiremock::matchers::{method, path};
 use wiremock::{Mock, MockServer, ResponseTemplate};
 
 use super::support::{escaped_value_schema, qwen, request};
+use crate::model;
 use crate::provider::qwen::QwenConfig;
 use crate::provider::test_support::RESPONSE_ENVELOPE_LIMIT_BYTES;
 use crate::schema_contract::OutputSchema;
-use crate::{model, schema_contract};
 
 #[test]
 fn rejects_empty_model_during_construction() {
@@ -89,8 +89,7 @@ async fn accepts_near_limit_escaped_structured_output() {
     let server = MockServer::start().await;
     let empty_content =
         serde_json::to_string(&json!({ "value": "" })).expect("content should serialize");
-    let value =
-        "\\".repeat((schema_contract::RESPONSE_CONTENT_LIMIT_BYTES - empty_content.len()) / 2);
+    let value = "\\".repeat((ag_router::RESPONSE_CONTENT_LIMIT_BYTES - empty_content.len()) / 2);
     let content =
         serde_json::to_string(&json!({ "value": value })).expect("content should serialize");
     let body = serde_json::to_vec(&json!({
@@ -100,10 +99,8 @@ async fn accepts_near_limit_escaped_structured_output() {
         }]
     }))
     .expect("response should serialize");
-    assert!(schema_contract::RESPONSE_CONTENT_LIMIT_BYTES - content.len() <= 1);
-    assert!(
-        body.len() > schema_contract::RESPONSE_CONTENT_LIMIT_BYTES + RESPONSE_ENVELOPE_LIMIT_BYTES
-    );
+    assert!(ag_router::RESPONSE_CONTENT_LIMIT_BYTES - content.len() <= 1);
+    assert!(body.len() > ag_router::RESPONSE_CONTENT_LIMIT_BYTES + RESPONSE_ENVELOPE_LIMIT_BYTES);
     Mock::given(method("POST"))
         .and(path("/chat/completions"))
         .respond_with(ResponseTemplate::new(200).set_body_bytes(body))

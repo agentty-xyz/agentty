@@ -1,0 +1,23 @@
+id: no-blocking-sleep-in-async
+language: rust
+severity: error
+message: Use `tokio::time::sleep(...).await` instead of `thread::sleep` in async code.
+note: |
+  `std::thread::sleep` blocks the Tokio worker thread and stalls every task scheduled on
+  it. Await `tokio::time::sleep`, or move blocking work into `spawn_blocking`.
+rule:
+  kind: call_expression
+  has:
+    field: function
+    regex: "(^|::)thread::sleep$"
+  inside:
+    stopBy:
+      any:
+        - kind: closure_expression
+        - kind: function_item
+    any:
+      - kind: async_block
+      - kind: function_item
+        has:
+          kind: function_modifiers
+          regex: "\\basync\\b"

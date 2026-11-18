@@ -39,6 +39,7 @@ fn package(manifest: &str, dependencies: Vec<Dependency>) -> Package {
         dependencies,
         manifest: manifest.to_string(),
         manifest_path: PathBuf::from("crates/example/Cargo.toml"),
+        name: "example".to_string(),
     }
 }
 
@@ -116,6 +117,34 @@ dependencies = "invalid"
                 .to_string(),
         ]
         .join("\n"))
+    );
+}
+
+#[test]
+fn banned_dependencies_are_reported_only_for_their_package() {
+    // Arrange
+    let clipboard = Package {
+        name: "ag-clipboard".to_string(),
+        manifest_path: PathBuf::from("crates/ag-clipboard/Cargo.toml"),
+        ..package(
+            INHERITED_MANIFEST,
+            vec![dependency("wayland-client", &[]), dependency("serde", &[])],
+        )
+    };
+    let other = package(INHERITED_MANIFEST, vec![dependency("wayland-client", &[])]);
+
+    // Act
+    let result = check_packages(vec![clipboard, other]);
+
+    // Assert
+    assert_eq!(
+        result,
+        Err(
+            "Manifest violations:\ncrates/ag-clipboard/Cargo.toml: `ag-clipboard` must not depend \
+             on `wayland-client`; read the Wayland clipboard through the audited `wl-paste` \
+             subprocess backend instead"
+                .to_string()
+        )
     );
 }
 
@@ -206,6 +235,7 @@ fn metadata_parsing_keeps_outside_paths_and_rejects_unreadable_inputs() {
             "packages": [{
                 "dependencies": [{"features": ["time"], "name": "tokio"}],
                 "manifest_path": path,
+                "name": "example",
             }],
             "workspace_root": "/elsewhere",
         })
@@ -225,6 +255,7 @@ fn metadata_parsing_keeps_outside_paths_and_rejects_unreadable_inputs() {
             dependencies: vec![dependency("tokio", &["time"])],
             manifest: "[package]\n".to_string(),
             manifest_path,
+            name: "example".to_string(),
         }])
     );
     assert!(

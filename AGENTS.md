@@ -59,8 +59,7 @@ rules.
 - Every coverable line and function of production Rust code stays at 100% automated test
   coverage. CI enforces this with the `coverage` hook, which generates a fresh report
   and lists every gap; `coverage-focused` checks one package locally. Never add coverage
-  exclusions, such as `coverage(off)`, ignore patterns, or service-side exclusions, to
-  satisfy it.
+  ignore patterns or service-side exclusions to satisfy it.
 - Never bypass `prek`-managed hooks with `--no-verify`, `--no-gpg-sign`, or an
   equivalent flag. Fix the failure.
 - Prefer removing obsolete behavior within the requested scope. Ask only when choosing
@@ -136,11 +135,11 @@ Follow the nearest documentation guide for exact routing and integrity rules.
   change routing, or documentation synchronization.
 - Do not duplicate inherited rules, implementation inventories, or facts readily
   recoverable from manifests, module routers, tests, or CLI help.
-- Do not use parent-directory-relative paths in an `AGENTS.md`.
 - Do not restate a rule that Clippy or a repository hook already enforces.
 - The `check-instructions` hook checks literal repository paths, local Markdown links,
-  instruction aliases, and hook names in `prek run` examples. Keep its regression tests
-  aligned when changing the instruction format.
+  parent-relative paths in `AGENTS.md`, instruction aliases, and hook names in
+  `prek run` examples. Keep its regression tests aligned when changing the instruction
+  format.
 
 ## Canonical References
 

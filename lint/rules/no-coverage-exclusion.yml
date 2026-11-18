@@ -1,0 +1,13 @@
+id: no-coverage-exclusion
+language: rust
+severity: error
+message: Do not exclude code from coverage; add the test that covers it.
+note: |
+  Every coverable line and function of production Rust code stays at 100% automated
+  coverage. Remove the `coverage(...)` attribute and cover the code through its owning
+  test suite; see the root `AGENTS.md`.
+rule:
+  any:
+    - kind: attribute_item
+    - kind: inner_attribute_item
+  regex: "\\bcoverage\\s*\\(\\s*off\\b"

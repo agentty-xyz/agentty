@@ -1,0 +1,8 @@
+id: no-coverage-exclusion
+valid:
+  - "#[cfg(test)]\nmod tests;"
+  - "#[cfg_attr(coverage_nightly, allow(unused))]\nfn render() {}"
+invalid:
+  - "#[coverage(off)]\nfn render() {}"
+  - "#[cfg_attr(coverage_nightly, coverage(off))]\nfn render() {}"
+  - '#![coverage(off)]'

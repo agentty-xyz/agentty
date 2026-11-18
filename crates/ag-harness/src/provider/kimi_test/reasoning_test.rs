@@ -16,8 +16,8 @@ use super::support::{
 use crate::context_budget_fixture::unbounded_context_budget;
 #[cfg(feature = "sqlite")]
 use crate::harness::Harness;
+use crate::model;
 use crate::provider::test_support::STRUCTURED_OUTPUT_INSTRUCTION;
-use crate::{model, schema_contract};
 
 #[tokio::test]
 async fn preserves_reasoning_text_and_named_tool_result_for_continuation() {
@@ -326,7 +326,7 @@ async fn rejects_oversized_reasoning_content() {
         json!({
             "content": null,
             "reasoning_content":
-                "x".repeat(schema_contract::RESPONSE_CONTENT_LIMIT_BYTES + 1),
+                "x".repeat(ag_router::RESPONSE_CONTENT_LIMIT_BYTES + 1),
             "tool_calls": [{
                 "id": "call_oversized_reasoning",
                 "type": "function",

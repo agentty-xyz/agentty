@@ -13,9 +13,8 @@ presentation-state refreshes.
 - Serialize session commands through post-processing. Enqueue long-running commands so
   the terminal loop remains responsive.
 - Persist recoverable operation state and reconcile interrupted work at startup.
-- Do not probe the host filesystem or invoke processes directly. Route discovery,
-  metadata, path checks, clocks, Git, and other external work through injected infra
-  traits.
+- Route discovery, metadata, path checks, Git, and other external work through injected
+  infra traits.
 
 ## Model Work Integration
 

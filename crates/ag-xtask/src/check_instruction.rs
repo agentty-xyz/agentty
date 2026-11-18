@@ -1,5 +1,6 @@
 //! Check that instruction files reference existing paths, local links, and
-//! hooks, and that each `AGENTS.md` has a `CLAUDE.md` symlink alias.
+//! hooks, that each `AGENTS.md` has a `CLAUDE.md` symlink alias, and that
+//! `AGENTS.md` files use no parent-directory-relative paths.
 
 use std::collections::BTreeSet;
 use std::io;
@@ -155,10 +156,20 @@ impl<'host> InstructionCheck<'host> {
         hook_ids: &BTreeSet<String>,
         errors: &mut Vec<String>,
     ) -> Result<(), String> {
+        let is_guide = document.file_name().is_some_and(|name| name == "AGENTS.md");
         for matched in self.inline.find_iter(text) {
             let target = &text[matched.start() + 1..matched.end() - 1];
             let preceding = text[..matched.start()].ends_with('`');
             let following = text[matched.end()..].starts_with('`');
+            if is_guide
+                && !preceding
+                && !following
+                && self.literal.is_match(target)
+                && Self::is_parent_relative(target)
+            {
+                Self::report_parent_relative(errors, document, text, matched.start(), target);
+                continue;
+            }
             if !preceding
                 && !following
                 && self.is_root_reference(target)
@@ -181,6 +192,10 @@ impl<'host> InstructionCheck<'host> {
             let link = dest_url.as_ref();
             let path = link.split(['?', '#']).next().unwrap_or_default();
             if path.is_empty() || link.starts_with("//") || self.scheme.is_match(link) {
+                continue;
+            }
+            if is_guide && Self::is_parent_relative(path) {
+                Self::report_parent_relative(errors, document, text, range.start, link);
                 continue;
             }
             let decoded = percent_decode_str(path).decode_utf8_lossy();
@@ -234,6 +249,27 @@ impl<'host> InstructionCheck<'host> {
         self.literal.is_match(target)
             && !target.contains("NNN_")
             && (FILES.contains(&target) || PREFIXES.iter().any(|prefix| target.starts_with(prefix)))
+    }
+
+    /// Returns whether a slash-separated path contains a `..` component.
+    fn is_parent_relative(path: &str) -> bool {
+        path.contains('/') && path.split('/').any(|component| component == "..")
+    }
+
+    fn report_parent_relative(
+        errors: &mut Vec<String>,
+        document: &Path,
+        text: &str,
+        offset: usize,
+        target: &str,
+    ) {
+        Self::report(
+            errors,
+            document,
+            text,
+            offset,
+            &format!("parent-relative path {target}; write it from the repository root"),
+        );
     }
 
     fn resolve(&self, path: &Path) -> Result<Option<PathBuf>, String> {

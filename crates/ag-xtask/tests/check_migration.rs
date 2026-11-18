@@ -36,7 +36,7 @@ fn check_migrations(directory: &Path) -> io::Result<Output> {
 }
 
 #[test]
-fn cli_validates_migrations_and_reports_duplicate_edited_and_unreadable_roots()
+fn cli_validates_migrations_and_reports_duplicate_misnamed_edited_and_unreadable_roots()
 -> Result<(), Box<dyn Error>> {
     // Arrange
     let directory = tempdir()?;
@@ -60,6 +60,9 @@ fn cli_validates_migrations_and_reports_duplicate_edited_and_unreadable_roots()
     fs::write(migrations.join("002_duplicate.sql"), "")?;
     let duplicate = check_migrations(root)?;
     fs::remove_file(migrations.join("002_duplicate.sql"))?;
+    fs::write(migrations.join("3_Misnamed.sql"), "")?;
+    let misnamed = check_migrations(root)?;
+    fs::remove_file(migrations.join("3_Misnamed.sql"))?;
     fs::write(
         migrations.join("001_first.sql"),
         "CREATE TABLE first (id TEXT);",
@@ -74,6 +77,8 @@ fn cli_validates_migrations_and_reports_duplicate_edited_and_unreadable_roots()
     assert!(valid.status.success());
     assert!(!duplicate.status.success());
     assert!(String::from_utf8_lossy(&duplicate.stdout).contains("Duplicate migration prefix"));
+    assert!(!misnamed.status.success());
+    assert!(String::from_utf8_lossy(&misnamed.stdout).contains("NNN_description.sql"));
     assert!(!edited.status.success());
     assert!(
         String::from_utf8_lossy(&edited.stdout)

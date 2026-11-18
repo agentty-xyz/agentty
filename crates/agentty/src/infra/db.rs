@@ -18,8 +18,6 @@ pub use ag_store::{
     StoredGraphResult, TaskAgentContextRow, TaskAgentHistoryRow, TaskAgentTurnMetadata,
     TaskAgentTurnRow, TaskRepository, TimestampSource, UsageRepository,
 };
-#[cfg(test)]
-pub use ag_store::{MockGraphProposalRepository, MockGraphRepository, MockTaskRepository};
 
 use crate::infra::clock;
 

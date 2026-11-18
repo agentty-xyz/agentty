@@ -10,7 +10,7 @@ use super::{
     ToolDefinition, ToolDefinitionError, WriteArguments,
 };
 use crate::bash::Enforcement;
-use crate::{ComparisonBase, model, schema_contract};
+use crate::{ComparisonBase, model};
 
 #[test]
 fn every_deprecated_tool_maps_to_the_built_in_of_its_name() {
@@ -148,7 +148,7 @@ fn tool_call_from_json_rejects_empty_names_and_keeps_malformed_arguments() {
 #[test]
 fn tool_call_from_json_bounds_arguments_and_reasoning() {
     // Arrange
-    let oversized = "x".repeat(schema_contract::RESPONSE_CONTENT_LIMIT_BYTES + 1);
+    let oversized = "x".repeat(ag_router::RESPONSE_CONTENT_LIMIT_BYTES + 1);
     let inputs = [
         (oversized.as_str(), None),
         (r#"{"path":"name.txt"}"#, Some(oversized.clone())),
@@ -829,7 +829,7 @@ fn keeps_bounded_assistant_text_and_drops_blank_text() {
     // Arrange
     let call =
         || ToolCall::from_json("id".to_string(), "read", r#"{"path":"a.rs"}"#, None).expect("read");
-    let oversized = "x".repeat(schema_contract::RESPONSE_CONTENT_LIMIT_BYTES + 1);
+    let oversized = "x".repeat(ag_router::RESPONSE_CONTENT_LIMIT_BYTES + 1);
 
     // Act
     let noted = call()

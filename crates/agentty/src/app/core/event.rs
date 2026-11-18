@@ -474,8 +474,8 @@ pub(super) struct AppEventBatch {
     pub(super) stacked_parent_turns_completed: HashSet<SessionId>,
     pub(super) sync_main_completion: Option<SyncMainCompletion>,
     pub(super) sync_main_conflict: Option<(ProjectSyncContext, Vec<String>)>,
-    project_discovery_completions: Vec<crate::app::project_catalog::ProjectDiscoveryCompletion>,
     pub(super) update_status: Option<UpdateStatus>,
+    project_discovery_completions: Vec<crate::app::project_catalog::ProjectDiscoveryCompletion>,
 }
 
 impl AppEventBatch {
