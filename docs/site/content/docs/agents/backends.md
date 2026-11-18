@@ -43,6 +43,8 @@ an authentication method permitted for your account, plan, and usage pattern.
 - Claude turns can always use `WebSearch` and `WebFetch` without a permission prompt,
   and Claude's file-edit tool cannot edit the main checkout. Treat fetched web content
   as untrusted, keep web-backed prompts specific, and review the diff before merging.
+- Codex and Claude load the MCP servers configured for their CLI, including plugin
+  servers and Claude.ai connectors. MCP tools follow the provider's own approval rules.
 - Agentty instructs agents to keep project edits inside the worktree. When permissions
   allow writes, build, test, and recording commands may still use external caches,
   temporary files, and container storage.
